@@ -1,0 +1,74 @@
+[
+  {
+    "kind": "identity",
+    "output": [
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-EncodedCommand",
+      "JAB1AD0ATgBlAHcALQBPAGIAagBlAGMAdAAgAFQAZQB4AHQALgBVAFQARgA4AEUAbgBjAG8AZABpAG4AZwAoACQAZgBhAGwAcwBlACkAOwAgAFsAQwBvAG4AcwBvAGwAZQBdADoAOgBPAHUAdABwAHUAdABFAG4AYwBvAGQAaQBuAGcAPQAkAHUAOwAgAFsAQwBvAG4AcwBvAGwAZQBdADoAOgBJAG4AcAB1AHQARQBuAGMAbwBkAGkAbgBnAD0AJAB1ADsAIAAkAEUAcgByAG8AcgBBAGMAdABpAG8AbgBQAHIAZQBmAGUAcgBlAG4AYwBlAD0AJwBTAHQAbwBwACcAOwAgACQAZgBxAGQAbgA9ACQAZQBuAHYAOgBDAE8ATQBQAFUAVABFAFIATgBBAE0ARQA7ACAAdAByAHkAIAB7ACAAJABmAHEAZABuAD0AWwBOAGUAdAAuAEQAbgBzAF0AOgA6AEcAZQB0AEgAbwBzAHQARQBuAHQAcgB5ACgAJABlAG4AdgA6AEMATwBNAFAAVQBUAEUAUgBOAEEATQBFACkALgBIAG8AcwB0AE4AYQBtAGUAIAB9ACAAYwBhAHQAYwBoACAAewB9ADsAIAAkAGwAYQBuAD0ARwBlAHQALQBOAGUAdABJAFAAQwBvAG4AZgBpAGcAdQByAGEAdABpAG8AbgAgAHwAIABXAGgAZQByAGUALQBPAGIAagBlAGMAdAAgAHsAIAAkAF8ALgBJAFAAdgA0AEQAZQBmAGEAdQBsAHQARwBhAHQAZQB3AGEAeQAgAC0AYQBuAGQAIAAkAF8ALgBOAGUAdABBAGQAYQBwAHQAZQByAC4AUwB0AGEAdAB1AHMAIAAtAGUAcQAgACcAVQBwACcAIAB9ACAAfAAgAFMAZQBsAGUAYwB0AC0ATwBiAGoAZQBjAHQAIAAtAEYAaQByAHMAdAAgADEAOwAgAEAAewBhAGQAbQBpAG4AVQBzAGUAcgA9AFsAUwBlAGMAdQByAGkAdAB5AC4AUAByAGkAbgBjAGkAcABhAGwALgBXAGkAbgBkAG8AdwBzAEkAZABlAG4AdABpAHQAeQBdADoAOgBHAGUAdABDAHUAcgByAGUAbgB0ACgAKQAuAE4AYQBtAGUAOwBoAG8AcwB0AE4AYQBtAGUAPQAkAGYAcQBkAG4AOwBpAHAAPQAoACQAbABhAG4ALgBJAFAAdgA0AEEAZABkAHIAZQBzAHMALgBJAFAAQQBkAGQAcgBlAHMAcwAgAHwAIABTAGUAbABlAGMAdAAtAE8AYgBqAGUAYwB0ACAALQBGAGkAcgBzAHQAIAAxACkAfQAgAHwAIABDAG8AbgB2AGUAcgB0AFQAbwAtAEoAcwBvAG4AIAAtAEMAbwBtAHAAcgBlAHMAcwA="
+    ]
+  },
+  {
+    "input": null,
+    "kind": "host",
+    "output": false
+  },
+  {
+    "input": "host.example",
+    "kind": "host",
+    "output": true
+  },
+  {
+    "input": "HOST",
+    "kind": "host",
+    "output": true
+  },
+  {
+    "input": "192.168.1.2",
+    "kind": "host",
+    "output": true
+  },
+  {
+    "input": "a..b",
+    "kind": "host",
+    "output": false
+  },
+  {
+    "input": "a'b",
+    "kind": "host",
+    "output": false
+  },
+  {
+    "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "kind": "host",
+    "output": false
+  },
+  {
+    "kind": "launch",
+    "output": "$ErrorActionPreference='Stop'; try { $p=Start-Process powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList '-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand JgAgACcAQwA6AC8AQwBvAG4AcwB0AHIAdQBjAHQALwBzAGUAcgB2AGkAYwBlAC8AaABvAHMAdAAvAEMAbwBuAHYAZQByAHQAVABvAC0AQwBvAG4AcwB0AHIAdQBjAHQASABvAHMAdAAuAHAAcwAxACcAIAAtAFAAbABhAG4AQgA2ADQAIAAnAGUAeQBKAGgAWgBHADEAcABiAGwAVgB6AFoAWABJAGkATwBpAEoAUQBRADEAeABjAGIAMwBkAHUAWgBYAEkAaQBMAEMASgBwAFoAQwBJADYASQBqAEEAeABNAGoATQAwAE4AVABZADMATwBEAGwAaABZAG0ATgBrAFoAVwBZAHcATQBUAEkAegBOAEQAVQAyAE4AegBnADUAWQBXAEoAagBaAEcAVgBtAEkAaQB3AGkAYgBtAEYAdABaAFMASQA2AEkAbgBkAHYAYwBtAHMAdABkAG0AMABpAEwAQwBKAHcAZABXAEoAcwBhAFcATgBJAGIAMwBOADAASQBqAG8AaQBhAEcAOQB6AGQAQwA1AGwAZQBHAEYAdABjAEcAeABsAEkAaQB3AGkAYwBIAFYAaQBiAEcAbABqAFMAMgBWADUAVwBHADEAcwBJAGoAbwBpAFAARgBKAFQAUQBVAHQAbABlAFYAWgBoAGIASABWAGwATAB6ADQAaQBMAEMASgB5AFoAWABOADEAYgBIAFIAUQBZAFgAUgBvAEkAagBvAGkAUQB6AG8AdgBkAEcAVgB0AGMAQwA5AGoAYgAyADUAMgBaAFgASgB6AGEAVwA5AHUATABuAEoAbABjADMAVgBzAGQAQwBJAHMASQBuAE4AagBjAG0AbAB3AGQASABOAEUAYQBYAEkAaQBPAGkASgBEAE8AaQA5AEQAYgAyADUAegBkAEgASgAxAFkAMwBRAGkAZgBRAD0APQAnADsAIABlAHgAaQB0ACAAJABMAEEAUwBUAEUAWABJAFQAQwBPAEQARQA='; exit $p.ExitCode } catch { Write-Error 'Host setup could not start. The UAC request may have been cancelled.'; exit 1 }",
+    "plan": {
+      "adminUser": "PC\\owner",
+      "id": "0123456789abcdef0123456789abcdef",
+      "name": "work-vm",
+      "publicHost": "host.example",
+      "publicKeyXml": "<RSAKeyValue/>",
+      "resultPath": "C:/temp/conversion.result",
+      "scriptsDir": "C:/Construct"
+    }
+  },
+  {
+    "kind": "launch",
+    "output": "$ErrorActionPreference='Stop'; try { $p=Start-Process powershell.exe -Verb RunAs -Wait -PassThru -ArgumentList '-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand JgAgACcAQwA6AC8AVQBzAGUAcgBzAC8ATwAnACcATgBlAGkAbAAvAIRn+l4vAHMAZQByAHYAaQBjAGUALwBoAG8AcwB0AC8AQwBvAG4AdgBlAHIAdABUAG8ALQBDAG8AbgBzAHQAcgB1AGMAdABIAG8AcwB0AC4AcABzADEAJwAgAC0AUABsAGEAbgBCADYANAAgACcAZQB5AEoAaABaAEcAMQBwAGIAbABWAHoAWgBYAEkAaQBPAGkASgBRAFEAMQB4AGMAYgAzAGQAdQBaAFgASQBpAEwAQwBKAHAAWgBDAEkANgBJAGoAQQB4AE0AagBNADAATgBUAFkAMwBPAEQAbABoAFkAbQBOAGsAWgBXAFkAdwBNAFQASQB6AE4ARABVADIATgB6AGcANQBZAFcASgBqAFoARwBWAG0ASQBpAHcAaQBiAG0ARgB0AFoAUwBJADYASQBuAGQAdgBjAG0AcwB0AGQAbQAwAGkATABDAEoAdwBkAFcASgBzAGEAVwBOAEkAYgAzAE4AMABJAGoAbwBpAGEARwA5AHoAZABDADUAbABlAEcARgB0AGMARwB4AGwASQBpAHcAaQBjAEgAVgBpAGIARwBsAGoAUwAyAFYANQBXAEcAMQBzAEkAagBvAGkAUABGAEoAVABRAFUAdABsAGUAVgBaAGgAYgBIAFYAbABMAHoANABpAEwAQwBKAHkAWgBYAE4AMQBiAEgAUgBRAFkAWABSAG8ASQBqAG8AaQBRAHoAbwB2AGQARwBWAHQAYwBDADkAagBiADIANQAyAFoAWABKAHoAYQBXADkAdQBMAG4ASgBsAGMAMwBWAHMAZABDAEkAcwBJAG4ATgBqAGMAbQBsAHcAZABIAE4ARQBhAFgASQBpAE8AaQBKAEQATwBpADkAVgBjADIAVgB5AGMAeQA5AFAASgAwADUAbABhAFcAdwB2ADUAcAA2AEUANQBiAHUANgBJAG4AMAA9ACcAOwAgAGUAeABpAHQAIAAkAEwAQQBTAFQARQBYAEkAVABDAE8ARABFAA=='; exit $p.ExitCode } catch { Write-Error 'Host setup could not start. The UAC request may have been cancelled.'; exit 1 }",
+    "plan": {
+      "adminUser": "PC\\owner",
+      "id": "0123456789abcdef0123456789abcdef",
+      "name": "work-vm",
+      "publicHost": "host.example",
+      "publicKeyXml": "<RSAKeyValue/>",
+      "resultPath": "C:/temp/conversion.result",
+      "scriptsDir": "C:/Users/O'Neil/构建"
+    }
+  }
+]

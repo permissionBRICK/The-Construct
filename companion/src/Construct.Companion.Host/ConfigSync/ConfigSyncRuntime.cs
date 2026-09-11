@@ -99,6 +99,17 @@ public sealed class ConfigSyncRuntime : IAsyncDisposable
         lock(gate) return new(git.Present,state.Repo,state.Conflict,state.ConflictFiles,state.MergeInProgress,lastAt,
             last == null ? null : last.Ok ? "ok" : last.Conflict ? "conflict" : last.Blocked ? "blocked" : "error",last?.BlockedReason,last?.Warnings.ToArray() ?? [],git.Present ? remotes.ReadRemotes().Select(r=>new ConfigRemote(ConfigSyncRules.DisplayRemoteUrl(r.Url))).ToArray() : []);
     }
+    public async Task<bool> LifecycleBlockedAsync(string branch, CancellationToken ct)
+    {
+        await repositoryQueue.WaitAsync(ct);
+        try
+        {
+            await repo.CompletePendingMergeAsync(branch, ct);
+            var state = await repo.StateAsync(ct);
+            return state.Conflict || state.MergeInProgress;
+        }
+        finally { repositoryQueue.Release(); }
+    }
     public async ValueTask DisposeAsync()
     {
         lock(gate) { if (disposed) return; disposed=true; watch?.Dispose(); watch=null; }

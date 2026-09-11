@@ -113,16 +113,7 @@ function buildCloneScript(url, dest, root) {
   // Trim the URL defensively: surrounding whitespace is never meaningful in a git
   // URL and would make `git clone` fail, so it must never reach git regardless of
   // what the caller passed (repoNameFromUrl already trims, so the name stays consistent).
-  return [
-    "set -u",
-    "root='" + r + "'",
-    "url=$(printf %s '" + enc(String(url).trim()) + "' | base64 -d)",
-    "dest=$(printf %s '" + enc(dest) + "' | base64 -d)",
-    'mkdir -p "$root"',
-    'target="$root/$dest"',
-    'if [ -e "$target" ]; then printf "EXISTS\\t%s\\n" "$target" >&2; exit 3; fi',
-    'git clone -- "$url" "$target"',
-  ].join("\n");
+  return require("./guest-scripts").render("project-clone", { root: r, url: enc(String(url).trim()), dest: enc(dest) });
 }
 
 /**

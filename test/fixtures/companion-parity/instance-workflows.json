@@ -1,0 +1,888 @@
+[
+  {
+    "host": "work-vm.mshome.net",
+    "kind": "register",
+    "name": "",
+    "output": {
+      "ok": false,
+      "reason": "Not a usable instance name: 1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved."
+    },
+    "text": "{}"
+  },
+  {
+    "host": "WORK-VM.MSHOME.NET.",
+    "kind": "register",
+    "name": "",
+    "output": {
+      "ok": false,
+      "reason": "Not a usable instance name: 1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved."
+    },
+    "text": "{}"
+  },
+  {
+    "host": "other-vm",
+    "kind": "register",
+    "name": "",
+    "output": {
+      "ok": false,
+      "reason": "Not a usable instance name: 1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved."
+    },
+    "text": "{}"
+  },
+  {
+    "host": "elsewhere",
+    "kind": "register",
+    "name": "",
+    "output": {
+      "ok": false,
+      "reason": "Not a usable instance name: 1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved."
+    },
+    "text": "{}"
+  },
+  {
+    "host": "work-vm.mshome.net",
+    "kind": "register",
+    "name": "bad name",
+    "output": {
+      "ok": false,
+      "reason": "Not a usable instance name: 1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved."
+    },
+    "text": "{}"
+  },
+  {
+    "host": "WORK-VM.MSHOME.NET.",
+    "kind": "register",
+    "name": "bad name",
+    "output": {
+      "ok": false,
+      "reason": "Not a usable instance name: 1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved."
+    },
+    "text": "{}"
+  },
+  {
+    "host": "other-vm",
+    "kind": "register",
+    "name": "bad name",
+    "output": {
+      "ok": false,
+      "reason": "Not a usable instance name: 1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved."
+    },
+    "text": "{}"
+  },
+  {
+    "host": "elsewhere",
+    "kind": "register",
+    "name": "bad name",
+    "output": {
+      "ok": false,
+      "reason": "Not a usable instance name: 1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved."
+    },
+    "text": "{}"
+  },
+  {
+    "host": "work-vm.mshome.net",
+    "kind": "register",
+    "name": "agent-vm",
+    "output": {
+      "ok": false,
+      "reason": "This PC already has an instance named \"agent-vm\"."
+    },
+    "text": "{}"
+  },
+  {
+    "host": "WORK-VM.MSHOME.NET.",
+    "kind": "register",
+    "name": "agent-vm",
+    "output": {
+      "ok": false,
+      "reason": "This PC already has an instance named \"agent-vm\"."
+    },
+    "text": "{}"
+  },
+  {
+    "host": "other-vm",
+    "kind": "register",
+    "name": "agent-vm",
+    "output": {
+      "ok": false,
+      "reason": "This PC already has an instance named \"agent-vm\"."
+    },
+    "text": "{}"
+  },
+  {
+    "host": "elsewhere",
+    "kind": "register",
+    "name": "agent-vm",
+    "output": {
+      "ok": false,
+      "reason": "This PC already has an instance named \"agent-vm\"."
+    },
+    "text": "{}"
+  },
+  {
+    "host": "work-vm.mshome.net",
+    "kind": "register",
+    "name": "work-vm",
+    "output": {
+      "entry": {
+        "backend": "hyperv-local",
+        "hostAlias": "work-vm",
+        "keyName": "construct_work-vm_ed25519",
+        "sshHost": "work-vm.mshome.net",
+        "sshPort": 22,
+        "vmName": "work-vm"
+      },
+      "name": "work-vm",
+      "ok": true
+    },
+    "text": "{}"
+  },
+  {
+    "host": "WORK-VM.MSHOME.NET.",
+    "kind": "register",
+    "name": "work-vm",
+    "output": {
+      "entry": {
+        "backend": "hyperv-local",
+        "hostAlias": "work-vm",
+        "keyName": "construct_work-vm_ed25519",
+        "sshHost": "work-vm.mshome.net",
+        "sshPort": 22,
+        "vmName": "work-vm"
+      },
+      "name": "work-vm",
+      "ok": true
+    },
+    "text": "{}"
+  },
+  {
+    "host": "other-vm",
+    "kind": "register",
+    "name": "work-vm",
+    "output": {
+      "ok": false,
+      "reason": "This window is attached to \"other-vm\", but a local Hyper-V instance named \"work-vm\" answers at \"work-vm.mshome.net\" (or \"work-vm\"). The registry cannot describe that machine as a \"hyperv-local\" instance — a VM on another host is added through \"Add remote host\" instead."
+    },
+    "text": "{}"
+  },
+  {
+    "host": "elsewhere",
+    "kind": "register",
+    "name": "work-vm",
+    "output": {
+      "ok": false,
+      "reason": "This window is attached to \"elsewhere\", but a local Hyper-V instance named \"work-vm\" answers at \"work-vm.mshome.net\" (or \"work-vm\"). The registry cannot describe that machine as a \"hyperv-local\" instance — a VM on another host is added through \"Add remote host\" instead."
+    },
+    "text": "{}"
+  },
+  {
+    "host": "work-vm.mshome.net",
+    "kind": "register",
+    "name": "other-vm",
+    "output": {
+      "ok": false,
+      "reason": "This window is attached to \"work-vm.mshome.net\", but a local Hyper-V instance named \"other-vm\" answers at \"other-vm.mshome.net\" (or \"other-vm\"). The registry cannot describe that machine as a \"hyperv-local\" instance — a VM on another host is added through \"Add remote host\" instead."
+    },
+    "text": "{}"
+  },
+  {
+    "host": "WORK-VM.MSHOME.NET.",
+    "kind": "register",
+    "name": "other-vm",
+    "output": {
+      "ok": false,
+      "reason": "This window is attached to \"WORK-VM.MSHOME.NET.\", but a local Hyper-V instance named \"other-vm\" answers at \"other-vm.mshome.net\" (or \"other-vm\"). The registry cannot describe that machine as a \"hyperv-local\" instance — a VM on another host is added through \"Add remote host\" instead."
+    },
+    "text": "{}"
+  },
+  {
+    "host": "other-vm",
+    "kind": "register",
+    "name": "other-vm",
+    "output": {
+      "entry": {
+        "backend": "hyperv-local",
+        "hostAlias": "other-vm",
+        "keyName": "construct_other-vm_ed25519",
+        "sshHost": "other-vm.mshome.net",
+        "sshPort": 22,
+        "vmName": "other-vm"
+      },
+      "name": "other-vm",
+      "ok": true
+    },
+    "text": "{}"
+  },
+  {
+    "host": "elsewhere",
+    "kind": "register",
+    "name": "other-vm",
+    "output": {
+      "ok": false,
+      "reason": "This window is attached to \"elsewhere\", but a local Hyper-V instance named \"other-vm\" answers at \"other-vm.mshome.net\" (or \"other-vm\"). The registry cannot describe that machine as a \"hyperv-local\" instance — a VM on another host is added through \"Add remote host\" instead."
+    },
+    "text": "{}"
+  },
+  {
+    "confirmation": "",
+    "kind": "remove",
+    "name": "",
+    "output": {
+      "backend": "",
+      "confirmationOk": true,
+      "deletesVm": false,
+      "keeps": [],
+      "name": null,
+      "ok": false,
+      "refusal": "No instance was named.",
+      "removes": [],
+      "requiresTypedConfirmation": false
+    },
+    "text": "{}"
+  },
+  {
+    "confirmation": "",
+    "kind": "remove",
+    "name": "",
+    "output": {
+      "backend": "",
+      "confirmationOk": true,
+      "deletesVm": false,
+      "keeps": [],
+      "name": null,
+      "ok": false,
+      "refusal": "No instance was named.",
+      "removes": [],
+      "requiresTypedConfirmation": false
+    },
+    "text": "{}"
+  },
+  {
+    "confirmation": "",
+    "kind": "remove",
+    "name": "missing",
+    "output": {
+      "backend": "",
+      "confirmationOk": true,
+      "deletesVm": false,
+      "keeps": [],
+      "name": "missing",
+      "ok": false,
+      "refusal": "\"missing\" is not an instance on this PC.",
+      "removes": [],
+      "requiresTypedConfirmation": false
+    },
+    "text": "{}"
+  },
+  {
+    "confirmation": "missing",
+    "kind": "remove",
+    "name": "missing",
+    "output": {
+      "backend": "",
+      "confirmationOk": true,
+      "deletesVm": false,
+      "keeps": [],
+      "name": "missing",
+      "ok": false,
+      "refusal": "\"missing\" is not an instance on this PC.",
+      "removes": [],
+      "requiresTypedConfirmation": false
+    },
+    "text": "{}"
+  },
+  {
+    "confirmation": "",
+    "kind": "remove",
+    "name": "agent-vm",
+    "output": {
+      "backend": "hyperv-local",
+      "confirmationOk": true,
+      "deletesVm": false,
+      "keeps": [],
+      "name": "agent-vm",
+      "ok": false,
+      "refusal": "\"agent-vm\" is the only instance on this PC. Removing it would leave Construct describing a VM whose client state had just been deleted. Add another instance first, or uninstall Construct.",
+      "removes": [],
+      "requiresTypedConfirmation": false
+    },
+    "text": "{}"
+  },
+  {
+    "confirmation": "agent-vm",
+    "kind": "remove",
+    "name": "agent-vm",
+    "output": {
+      "backend": "hyperv-local",
+      "confirmationOk": true,
+      "deletesVm": false,
+      "keeps": [],
+      "name": "agent-vm",
+      "ok": false,
+      "refusal": "\"agent-vm\" is the only instance on this PC. Removing it would leave Construct describing a VM whose client state had just been deleted. Add another instance first, or uninstall Construct.",
+      "removes": [],
+      "requiresTypedConfirmation": false
+    },
+    "text": "{}"
+  },
+  {
+    "confirmation": "",
+    "kind": "remove",
+    "name": "remote-vm",
+    "output": {
+      "backend": "",
+      "confirmationOk": true,
+      "deletesVm": false,
+      "keeps": [],
+      "name": "remote-vm",
+      "ok": false,
+      "refusal": "\"remote-vm\" is not an instance on this PC.",
+      "removes": [],
+      "requiresTypedConfirmation": false
+    },
+    "text": "{}"
+  },
+  {
+    "confirmation": "remote-vm",
+    "kind": "remove",
+    "name": "remote-vm",
+    "output": {
+      "backend": "",
+      "confirmationOk": true,
+      "deletesVm": false,
+      "keeps": [],
+      "name": "remote-vm",
+      "ok": false,
+      "refusal": "\"remote-vm\" is not an instance on this PC.",
+      "removes": [],
+      "requiresTypedConfirmation": false
+    },
+    "text": "{}"
+  },
+  {
+    "confirmation": "",
+    "kind": "remove",
+    "name": "work-vm",
+    "output": {
+      "backend": "",
+      "confirmationOk": true,
+      "deletesVm": false,
+      "keeps": [],
+      "name": "work-vm",
+      "ok": false,
+      "refusal": "\"work-vm\" is not an instance on this PC.",
+      "removes": [],
+      "requiresTypedConfirmation": false
+    },
+    "text": "{}"
+  },
+  {
+    "confirmation": "work-vm",
+    "kind": "remove",
+    "name": "work-vm",
+    "output": {
+      "backend": "",
+      "confirmationOk": true,
+      "deletesVm": false,
+      "keeps": [],
+      "name": "work-vm",
+      "ok": false,
+      "refusal": "\"work-vm\" is not an instance on this PC.",
+      "removes": [],
+      "requiresTypedConfirmation": false
+    },
+    "text": "{}"
+  },
+  {
+    "host": "work-vm.mshome.net",
+    "kind": "register",
+    "name": "",
+    "output": {
+      "ok": false,
+      "reason": "Not a usable instance name: 1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved."
+    },
+    "text": "{\"instances\":{\"work-vm\":{},\"remote-vm\":{\"backend\":\"hyperv-remote\",\"sshHost\":\"guest.example\",\"service\":{\"url\":\"http://localhost:7462\",\"auth\":\"negotiate\"}}}}"
+  },
+  {
+    "host": "WORK-VM.MSHOME.NET.",
+    "kind": "register",
+    "name": "",
+    "output": {
+      "ok": false,
+      "reason": "Not a usable instance name: 1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved."
+    },
+    "text": "{\"instances\":{\"work-vm\":{},\"remote-vm\":{\"backend\":\"hyperv-remote\",\"sshHost\":\"guest.example\",\"service\":{\"url\":\"http://localhost:7462\",\"auth\":\"negotiate\"}}}}"
+  },
+  {
+    "host": "other-vm",
+    "kind": "register",
+    "name": "",
+    "output": {
+      "ok": false,
+      "reason": "Not a usable instance name: 1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved."
+    },
+    "text": "{\"instances\":{\"work-vm\":{},\"remote-vm\":{\"backend\":\"hyperv-remote\",\"sshHost\":\"guest.example\",\"service\":{\"url\":\"http://localhost:7462\",\"auth\":\"negotiate\"}}}}"
+  },
+  {
+    "host": "elsewhere",
+    "kind": "register",
+    "name": "",
+    "output": {
+      "ok": false,
+      "reason": "Not a usable instance name: 1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved."
+    },
+    "text": "{\"instances\":{\"work-vm\":{},\"remote-vm\":{\"backend\":\"hyperv-remote\",\"sshHost\":\"guest.example\",\"service\":{\"url\":\"http://localhost:7462\",\"auth\":\"negotiate\"}}}}"
+  },
+  {
+    "host": "work-vm.mshome.net",
+    "kind": "register",
+    "name": "bad name",
+    "output": {
+      "ok": false,
+      "reason": "Not a usable instance name: 1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved."
+    },
+    "text": "{\"instances\":{\"work-vm\":{},\"remote-vm\":{\"backend\":\"hyperv-remote\",\"sshHost\":\"guest.example\",\"service\":{\"url\":\"http://localhost:7462\",\"auth\":\"negotiate\"}}}}"
+  },
+  {
+    "host": "WORK-VM.MSHOME.NET.",
+    "kind": "register",
+    "name": "bad name",
+    "output": {
+      "ok": false,
+      "reason": "Not a usable instance name: 1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved."
+    },
+    "text": "{\"instances\":{\"work-vm\":{},\"remote-vm\":{\"backend\":\"hyperv-remote\",\"sshHost\":\"guest.example\",\"service\":{\"url\":\"http://localhost:7462\",\"auth\":\"negotiate\"}}}}"
+  },
+  {
+    "host": "other-vm",
+    "kind": "register",
+    "name": "bad name",
+    "output": {
+      "ok": false,
+      "reason": "Not a usable instance name: 1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved."
+    },
+    "text": "{\"instances\":{\"work-vm\":{},\"remote-vm\":{\"backend\":\"hyperv-remote\",\"sshHost\":\"guest.example\",\"service\":{\"url\":\"http://localhost:7462\",\"auth\":\"negotiate\"}}}}"
+  },
+  {
+    "host": "elsewhere",
+    "kind": "register",
+    "name": "bad name",
+    "output": {
+      "ok": false,
+      "reason": "Not a usable instance name: 1-63 lowercase letters, digits or hyphens, starting and ending with a letter or digit; names starting with \"construct-\" are reserved."
+    },
+    "text": "{\"instances\":{\"work-vm\":{},\"remote-vm\":{\"backend\":\"hyperv-remote\",\"sshHost\":\"guest.example\",\"service\":{\"url\":\"http://localhost:7462\",\"auth\":\"negotiate\"}}}}"
+  },
+  {
+    "host": "work-vm.mshome.net",
+    "kind": "register",
+    "name": "agent-vm",
+    "output": {
+      "ok": false,
+      "reason": "This PC already has an instance named \"agent-vm\"."
+    },
+    "text": "{\"instances\":{\"work-vm\":{},\"remote-vm\":{\"backend\":\"hyperv-remote\",\"sshHost\":\"guest.example\",\"service\":{\"url\":\"http://localhost:7462\",\"auth\":\"negotiate\"}}}}"
+  },
+  {
+    "host": "WORK-VM.MSHOME.NET.",
+    "kind": "register",
+    "name": "agent-vm",
+    "output": {
+      "ok": false,
+      "reason": "This PC already has an instance named \"agent-vm\"."
+    },
+    "text": "{\"instances\":{\"work-vm\":{},\"remote-vm\":{\"backend\":\"hyperv-remote\",\"sshHost\":\"guest.example\",\"service\":{\"url\":\"http://localhost:7462\",\"auth\":\"negotiate\"}}}}"
+  },
+  {
+    "host": "other-vm",
+    "kind": "register",
+    "name": "agent-vm",
+    "output": {
+      "ok": false,
+      "reason": "This PC already has an instance named \"agent-vm\"."
+    },
+    "text": "{\"instances\":{\"work-vm\":{},\"remote-vm\":{\"backend\":\"hyperv-remote\",\"sshHost\":\"guest.example\",\"service\":{\"url\":\"http://localhost:7462\",\"auth\":\"negotiate\"}}}}"
+  },
+  {
+    "host": "elsewhere",
+    "kind": "register",
+    "name": "agent-vm",
+    "output": {
+      "ok": false,
+      "reason": "This PC already has an instance named \"agent-vm\"."
+    },
+    "text": "{\"instances\":{\"work-vm\":{},\"remote-vm\":{\"backend\":\"hyperv-remote\",\"sshHost\":\"guest.example\",\"service\":{\"url\":\"http://localhost:7462\",\"auth\":\"negotiate\"}}}}"
+  },
+  {
+    "host": "work-vm.mshome.net",
+    "kind": "register",
+    "name": "work-vm",
+    "output": {
+      "ok": false,
+      "reason": "This PC already has an instance named \"work-vm\"."
+    },
+    "text": "{\"instances\":{\"work-vm\":{},\"remote-vm\":{\"backend\":\"hyperv-remote\",\"sshHost\":\"guest.example\",\"service\":{\"url\":\"http://localhost:7462\",\"auth\":\"negotiate\"}}}}"
+  },
+  {
+    "host": "WORK-VM.MSHOME.NET.",
+    "kind": "register",
+    "name": "work-vm",
+    "output": {
+      "ok": false,
+      "reason": "This PC already has an instance named \"work-vm\"."
+    },
+    "text": "{\"instances\":{\"work-vm\":{},\"remote-vm\":{\"backend\":\"hyperv-remote\",\"sshHost\":\"guest.example\",\"service\":{\"url\":\"http://localhost:7462\",\"auth\":\"negotiate\"}}}}"
+  },
+  {
+    "host": "other-vm",
+    "kind": "register",
+    "name": "work-vm",
+    "output": {
+      "ok": false,
+      "reason": "This PC already has an instance named \"work-vm\"."
+    },
+    "text": "{\"instances\":{\"work-vm\":{},\"remote-vm\":{\"backend\":\"hyperv-remote\",\"sshHost\":\"guest.example\",\"service\":{\"url\":\"http://localhost:7462\",\"auth\":\"negotiate\"}}}}"
+  },
+  {
+    "host": "elsewhere",
+    "kind": "register",
+    "name": "work-vm",
+    "output": {
+      "ok": false,
+      "reason": "This PC already has an instance named \"work-vm\"."
+    },
+    "text": "{\"instances\":{\"work-vm\":{},\"remote-vm\":{\"backend\":\"hyperv-remote\",\"sshHost\":\"guest.example\",\"service\":{\"url\":\"http://localhost:7462\",\"auth\":\"negotiate\"}}}}"
+  },
+  {
+    "host": "work-vm.mshome.net",
+    "kind": "register",
+    "name": "other-vm",
+    "output": {
+      "ok": false,
+      "reason": "This window is attached to \"work-vm.mshome.net\", but a local Hyper-V instance named \"other-vm\" answers at \"other-vm.mshome.net\" (or \"other-vm\"). The registry cannot describe that machine as a \"hyperv-local\" instance — a VM on another host is added through \"Add remote host\" instead."
+    },
+    "text": "{\"instances\":{\"work-vm\":{},\"remote-vm\":{\"backend\":\"hyperv-remote\",\"sshHost\":\"guest.example\",\"service\":{\"url\":\"http://localhost:7462\",\"auth\":\"negotiate\"}}}}"
+  },
+  {
+    "host": "WORK-VM.MSHOME.NET.",
+    "kind": "register",
+    "name": "other-vm",
+    "output": {
+      "ok": false,
+      "reason": "This window is attached to \"WORK-VM.MSHOME.NET.\", but a local Hyper-V instance named \"other-vm\" answers at \"other-vm.mshome.net\" (or \"other-vm\"). The registry cannot describe that machine as a \"hyperv-local\" instance — a VM on another host is added through \"Add remote host\" instead."
+    },
+    "text": "{\"instances\":{\"work-vm\":{},\"remote-vm\":{\"backend\":\"hyperv-remote\",\"sshHost\":\"guest.example\",\"service\":{\"url\":\"http://localhost:7462\",\"auth\":\"negotiate\"}}}}"
+  },
+  {
+    "host": "other-vm",
+    "kind": "register",
+    "name": "other-vm",
+    "output": {
+      "entry": {
+        "backend": "hyperv-local",
+        "hostAlias": "other-vm",
+        "keyName": "construct_other-vm_ed25519",
+        "sshHost": "other-vm.mshome.net",
+        "sshPort": 22,
+        "vmName": "other-vm"
+      },
+      "name": "other-vm",
+      "ok": true
+    },
+    "text": "{\"instances\":{\"work-vm\":{},\"remote-vm\":{\"backend\":\"hyperv-remote\",\"sshHost\":\"guest.example\",\"service\":{\"url\":\"http://localhost:7462\",\"auth\":\"negotiate\"}}}}"
+  },
+  {
+    "host": "elsewhere",
+    "kind": "register",
+    "name": "other-vm",
+    "output": {
+      "ok": false,
+      "reason": "This window is attached to \"elsewhere\", but a local Hyper-V instance named \"other-vm\" answers at \"other-vm.mshome.net\" (or \"other-vm\"). The registry cannot describe that machine as a \"hyperv-local\" instance — a VM on another host is added through \"Add remote host\" instead."
+    },
+    "text": "{\"instances\":{\"work-vm\":{},\"remote-vm\":{\"backend\":\"hyperv-remote\",\"sshHost\":\"guest.example\",\"service\":{\"url\":\"http://localhost:7462\",\"auth\":\"negotiate\"}}}}"
+  },
+  {
+    "confirmation": "",
+    "kind": "remove",
+    "name": "",
+    "output": {
+      "backend": "",
+      "confirmationOk": true,
+      "deletesVm": false,
+      "keeps": [],
+      "name": null,
+      "ok": false,
+      "refusal": "No instance was named.",
+      "removes": [],
+      "requiresTypedConfirmation": false
+    },
+    "text": "{\"instances\":{\"work-vm\":{},\"remote-vm\":{\"backend\":\"hyperv-remote\",\"sshHost\":\"guest.example\",\"service\":{\"url\":\"http://localhost:7462\",\"auth\":\"negotiate\"}}}}"
+  },
+  {
+    "confirmation": "",
+    "kind": "remove",
+    "name": "",
+    "output": {
+      "backend": "",
+      "confirmationOk": true,
+      "deletesVm": false,
+      "keeps": [],
+      "name": null,
+      "ok": false,
+      "refusal": "No instance was named.",
+      "removes": [],
+      "requiresTypedConfirmation": false
+    },
+    "text": "{\"instances\":{\"work-vm\":{},\"remote-vm\":{\"backend\":\"hyperv-remote\",\"sshHost\":\"guest.example\",\"service\":{\"url\":\"http://localhost:7462\",\"auth\":\"negotiate\"}}}}"
+  },
+  {
+    "confirmation": "",
+    "kind": "remove",
+    "name": "missing",
+    "output": {
+      "backend": "",
+      "confirmationOk": true,
+      "deletesVm": false,
+      "keeps": [],
+      "name": "missing",
+      "ok": false,
+      "refusal": "\"missing\" is not an instance on this PC.",
+      "removes": [],
+      "requiresTypedConfirmation": false
+    },
+    "text": "{\"instances\":{\"work-vm\":{},\"remote-vm\":{\"backend\":\"hyperv-remote\",\"sshHost\":\"guest.example\",\"service\":{\"url\":\"http://localhost:7462\",\"auth\":\"negotiate\"}}}}"
+  },
+  {
+    "confirmation": "missing",
+    "kind": "remove",
+    "name": "missing",
+    "output": {
+      "backend": "",
+      "confirmationOk": true,
+      "deletesVm": false,
+      "keeps": [],
+      "name": "missing",
+      "ok": false,
+      "refusal": "\"missing\" is not an instance on this PC.",
+      "removes": [],
+      "requiresTypedConfirmation": false
+    },
+    "text": "{\"instances\":{\"work-vm\":{},\"remote-vm\":{\"backend\":\"hyperv-remote\",\"sshHost\":\"guest.example\",\"service\":{\"url\":\"http://localhost:7462\",\"auth\":\"negotiate\"}}}}"
+  },
+  {
+    "confirmation": "",
+    "kind": "remove",
+    "name": "agent-vm",
+    "output": {
+      "backend": "hyperv-local",
+      "confirmationOk": true,
+      "deletesVm": false,
+      "keeps": [
+        "The Hyper-V VM itself is NOT deleted; Reinstall and Redownload keep working and write the client state again.",
+        "The shared config store and this VM's config-sync branch are kept: they hold agent configuration, not client state."
+      ],
+      "name": "agent-vm",
+      "ok": true,
+      "refusal": "",
+      "removes": [
+        "the ~/.ssh/config Host block and known_hosts entries for \"agent-vm\"",
+        "the private key ~/.ssh/agent_vm_ed25519",
+        "\"agent-vm\" from VS Code's remote.SSH.remotePlatform",
+        "the OpenCode server entry for \"agent-vm\"",
+        "this VM's T3 Code certificate authority (file and Root store)",
+        "the per-instance state file instances\\agent-vm.json",
+        "\"agent-vm\" from instances.json"
+      ],
+      "requiresTypedConfirmation": false
+    },
+    "text": "{\"instances\":{\"work-vm\":{},\"remote-vm\":{\"backend\":\"hyperv-remote\",\"sshHost\":\"guest.example\",\"service\":{\"url\":\"http://localhost:7462\",\"auth\":\"negotiate\"}}}}"
+  },
+  {
+    "confirmation": "agent-vm",
+    "kind": "remove",
+    "name": "agent-vm",
+    "output": {
+      "backend": "hyperv-local",
+      "confirmationOk": true,
+      "deletesVm": false,
+      "keeps": [
+        "The Hyper-V VM itself is NOT deleted; Reinstall and Redownload keep working and write the client state again.",
+        "The shared config store and this VM's config-sync branch are kept: they hold agent configuration, not client state."
+      ],
+      "name": "agent-vm",
+      "ok": true,
+      "refusal": "",
+      "removes": [
+        "the ~/.ssh/config Host block and known_hosts entries for \"agent-vm\"",
+        "the private key ~/.ssh/agent_vm_ed25519",
+        "\"agent-vm\" from VS Code's remote.SSH.remotePlatform",
+        "the OpenCode server entry for \"agent-vm\"",
+        "this VM's T3 Code certificate authority (file and Root store)",
+        "the per-instance state file instances\\agent-vm.json",
+        "\"agent-vm\" from instances.json"
+      ],
+      "requiresTypedConfirmation": false
+    },
+    "text": "{\"instances\":{\"work-vm\":{},\"remote-vm\":{\"backend\":\"hyperv-remote\",\"sshHost\":\"guest.example\",\"service\":{\"url\":\"http://localhost:7462\",\"auth\":\"negotiate\"}}}}"
+  },
+  {
+    "confirmation": "",
+    "kind": "remove",
+    "name": "remote-vm",
+    "output": {
+      "backend": "hyperv-remote",
+      "confirmationOk": false,
+      "deletesVm": true,
+      "keeps": [
+        "The shared config store and this VM's config-sync branch are kept: they hold agent configuration, not client state."
+      ],
+      "name": "remote-vm",
+      "ok": false,
+      "refusal": "Removing \"remote-vm\" DELETES the VM on http://localhost:7462, including its disk. Type the instance name exactly (\"remote-vm\") to confirm.",
+      "removes": [
+        "the VM \"remote-vm\" on http://localhost:7462 — including its disk",
+        "the ~/.ssh/config Host block and known_hosts entries for \"remote-vm\"",
+        "the private key ~/.ssh/construct_remote-vm_ed25519",
+        "\"remote-vm\" from VS Code's remote.SSH.remotePlatform",
+        "the OpenCode server entry for \"remote-vm\"",
+        "this VM's T3 Code certificate authority (file and Root store)",
+        "the per-instance state file instances\\remote-vm.json",
+        "\"remote-vm\" from instances.json"
+      ],
+      "requiresTypedConfirmation": true
+    },
+    "text": "{\"instances\":{\"work-vm\":{},\"remote-vm\":{\"backend\":\"hyperv-remote\",\"sshHost\":\"guest.example\",\"service\":{\"url\":\"http://localhost:7462\",\"auth\":\"negotiate\"}}}}"
+  },
+  {
+    "confirmation": "remote-vm",
+    "kind": "remove",
+    "name": "remote-vm",
+    "output": {
+      "backend": "hyperv-remote",
+      "confirmationOk": true,
+      "deletesVm": true,
+      "keeps": [
+        "The shared config store and this VM's config-sync branch are kept: they hold agent configuration, not client state."
+      ],
+      "name": "remote-vm",
+      "ok": true,
+      "refusal": "",
+      "removes": [
+        "the VM \"remote-vm\" on http://localhost:7462 — including its disk",
+        "the ~/.ssh/config Host block and known_hosts entries for \"remote-vm\"",
+        "the private key ~/.ssh/construct_remote-vm_ed25519",
+        "\"remote-vm\" from VS Code's remote.SSH.remotePlatform",
+        "the OpenCode server entry for \"remote-vm\"",
+        "this VM's T3 Code certificate authority (file and Root store)",
+        "the per-instance state file instances\\remote-vm.json",
+        "\"remote-vm\" from instances.json"
+      ],
+      "requiresTypedConfirmation": true
+    },
+    "text": "{\"instances\":{\"work-vm\":{},\"remote-vm\":{\"backend\":\"hyperv-remote\",\"sshHost\":\"guest.example\",\"service\":{\"url\":\"http://localhost:7462\",\"auth\":\"negotiate\"}}}}"
+  },
+  {
+    "confirmation": "",
+    "kind": "remove",
+    "name": "work-vm",
+    "output": {
+      "backend": "hyperv-local",
+      "confirmationOk": true,
+      "deletesVm": false,
+      "keeps": [
+        "The Hyper-V VM itself is NOT deleted; Reinstall and Redownload keep working and write the client state again.",
+        "The shared config store and this VM's config-sync branch are kept: they hold agent configuration, not client state."
+      ],
+      "name": "work-vm",
+      "ok": true,
+      "refusal": "",
+      "removes": [
+        "the ~/.ssh/config Host block and known_hosts entries for \"work-vm\"",
+        "the private key ~/.ssh/construct_work-vm_ed25519",
+        "\"work-vm\" from VS Code's remote.SSH.remotePlatform",
+        "the OpenCode server entry for \"work-vm\"",
+        "this VM's T3 Code certificate authority (file and Root store)",
+        "the per-instance state file instances\\work-vm.json",
+        "\"work-vm\" from instances.json"
+      ],
+      "requiresTypedConfirmation": false
+    },
+    "text": "{\"instances\":{\"work-vm\":{},\"remote-vm\":{\"backend\":\"hyperv-remote\",\"sshHost\":\"guest.example\",\"service\":{\"url\":\"http://localhost:7462\",\"auth\":\"negotiate\"}}}}"
+  },
+  {
+    "confirmation": "work-vm",
+    "kind": "remove",
+    "name": "work-vm",
+    "output": {
+      "backend": "hyperv-local",
+      "confirmationOk": true,
+      "deletesVm": false,
+      "keeps": [
+        "The Hyper-V VM itself is NOT deleted; Reinstall and Redownload keep working and write the client state again.",
+        "The shared config store and this VM's config-sync branch are kept: they hold agent configuration, not client state."
+      ],
+      "name": "work-vm",
+      "ok": true,
+      "refusal": "",
+      "removes": [
+        "the ~/.ssh/config Host block and known_hosts entries for \"work-vm\"",
+        "the private key ~/.ssh/construct_work-vm_ed25519",
+        "\"work-vm\" from VS Code's remote.SSH.remotePlatform",
+        "the OpenCode server entry for \"work-vm\"",
+        "this VM's T3 Code certificate authority (file and Root store)",
+        "the per-instance state file instances\\work-vm.json",
+        "\"work-vm\" from instances.json"
+      ],
+      "requiresTypedConfirmation": false
+    },
+    "text": "{\"instances\":{\"work-vm\":{},\"remote-vm\":{\"backend\":\"hyperv-remote\",\"sshHost\":\"guest.example\",\"service\":{\"url\":\"http://localhost:7462\",\"auth\":\"negotiate\"}}}}"
+  },
+  {
+    "kind": "git",
+    "name": "",
+    "url": "",
+    "valid": false
+  },
+  {
+    "kind": "git",
+    "name": "a",
+    "url": "https://host/a.git",
+    "valid": true
+  },
+  {
+    "kind": "git",
+    "name": "project",
+    "url": "git@host:project.git",
+    "valid": true
+  },
+  {
+    "kind": "git",
+    "name": "a",
+    "url": "ssh://host/a.GIT/",
+    "valid": true
+  },
+  {
+    "kind": "git",
+    "name": "a",
+    "url": " https://host/a.git?q=1#x ",
+    "valid": true
+  },
+  {
+    "kind": "git",
+    "name": "nope",
+    "url": "nope",
+    "valid": false
+  },
+  {
+    "kind": "git",
+    "name": "a b",
+    "url": "https://a b",
+    "valid": false
+  },
+  {
+    "kind": "git",
+    "name": "..",
+    "url": "git@host:..",
+    "valid": true
+  }
+]

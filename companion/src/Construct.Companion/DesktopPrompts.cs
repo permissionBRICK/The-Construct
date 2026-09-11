@@ -24,7 +24,7 @@ internal sealed class DesktopPrompts(Control dispatcher) : IPrompts
     public Task<string?> InputAsync(InputPrompt prompt,CancellationToken cancellationToken=default) => OnUi(() =>
     {
         using var form=Dialog(prompt.Title);
-        var field=new TextBox { Dock=DockStyle.Top,Text=prompt.Value ?? "",UseSystemPasswordChar=prompt.Password,Margin=new Padding(12) };
+        var field=new TextBox { Dock=DockStyle.Top,Text=prompt.Value ?? "",UseSystemPasswordChar=prompt.Password,PlaceholderText=prompt.Placeholder ?? "",Margin=new Padding(12) };
         form.Controls.Add(field); form.Controls.Add(new Label { Dock=DockStyle.Top,Text=prompt.Prompt,Height=80,Padding=new Padding(10) });
         Buttons(form,new Button { Text="OK",DialogResult=DialogResult.OK,AutoSize=true });
         form.Shown+=(_,_)=>field.Focus();
@@ -52,10 +52,27 @@ internal sealed class DesktopPrompts(Control dispatcher) : IPrompts
         var chosen=prompt.Multiple ? list.CheckedItems.Cast<ListViewItem>() : list.SelectedItems.Cast<ListViewItem>();
         return chosen.Select(r=>(PickItem)r.Tag!).Where(i=>!i.Disabled && !i.Separator).Select(i=>i.Id).ToArray();
     },cancellationToken);
-    public Task<bool> ConfirmAsync(string title,string message,CancellationToken cancellationToken=default) => OnUi(()=>
+    public Task<bool> ConfirmAsync(string title,string message,CancellationToken cancellationToken=default) => ConfirmAsync(new ConfirmationPrompt(title, message, "Confirm"), cancellationToken);
+    public Task<bool> ConfirmAsync(ConfirmationPrompt prompt,CancellationToken cancellationToken=default) => OnUi(()=>
     {
-        using var form=Dialog(title); form.Controls.Add(new Label { Dock=DockStyle.Fill,Text=message,Padding=new Padding(14) });
-        Buttons(form,new Button { Text="Confirm",DialogResult=DialogResult.OK,AutoSize=true }); return Show(form,cancellationToken)==DialogResult.OK;
+        using var form=Dialog(prompt.Title); form.Controls.Add(new Label { Dock=DockStyle.Fill,Text=prompt.Message,Padding=new Padding(14) });
+        Buttons(form,new Button { Text=prompt.Action,DialogResult=DialogResult.OK,AutoSize=true }); return Show(form,cancellationToken)==DialogResult.OK;
+    },cancellationToken);
+    public Task ShowSecretOnceAsync(string title, Secret value, string note, CancellationToken cancellationToken=default) => OnUi(()=>
+    {
+        using var form=Dialog(title); form.Height=390;
+        var field=new TextBox { Dock=DockStyle.Fill,Text=value.Reveal(),ReadOnly=true,Multiline=true,ScrollBars=ScrollBars.Vertical };
+        var close=new Button { Text="Close",DialogResult=DialogResult.OK,AutoSize=true };
+        var copy=new Button { Text="Copy to clipboard",AutoSize=true };
+        var bar=new FlowLayoutPanel { Dock=DockStyle.Bottom,Height=45,FlowDirection=FlowDirection.RightToLeft,Padding=new Padding(6) };
+        bar.Controls.Add(close); bar.Controls.Add(copy);
+        copy.Click+=(_,_)=> { try { Clipboard.SetText(field.Text); } catch (System.Runtime.InteropServices.ExternalException) { MessageBox.Show(form,"Could not copy: the clipboard is unavailable.",title); } };
+        form.Controls.Add(field);
+        form.Controls.Add(new Label { Dock=DockStyle.Top,Text=note,Height=90,Padding=new Padding(10) });
+        form.Controls.Add(new Label { Dock=DockStyle.Bottom,Text="This is shown once and is not stored anywhere by The Construct.",Height=48,Padding=new Padding(10) });
+        form.Controls.Add(bar); form.AcceptButton=close; form.CancelButton=close;
+        try { Show(form,cancellationToken); } finally { field.Clear(); }
+        return true;
     },cancellationToken);
     public Task<string?> SaveFileAsync(SaveFilePrompt prompt,CancellationToken cancellationToken=default) => OnUi(()=>
     {

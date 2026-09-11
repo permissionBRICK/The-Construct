@@ -12,7 +12,7 @@ namespace Construct.Companion.Tests.Parity;
 
 public sealed class PlanningParityTests
 {
-    public static IEnumerable<object[]> Rows => new[] { "registry-state", "lifecycle-invocations", "lifecycle-launches", "vm-power", "probe-parsing", "usage-parsing", "updates-planning", "remote-identity", "t3-pure", "state-json-bytes", "agent-update-scripts", "usage-exports", "instance-fingerprints" }.SelectMany(area => ParityTests.Rows(area).Select(row => new object[] { area, row[0] }));
+    public static IEnumerable<object[]> Rows => new[] { "remote-vm-launches", "host-conversion-launches", "instance-workflows", "registry-state", "lifecycle-invocations", "lifecycle-launches", "vm-power", "project-import", "probe-parsing", "usage-parsing", "updates-planning", "remote-identity", "t3-pure", "state-json-bytes", "agent-update-scripts", "usage-exports", "instance-fingerprints" }.SelectMany(area => ParityTests.Rows(area).Select(row => new object[] { area, row[0] }));
     [Theory, MemberData(nameof(Rows))]
     public async Task MatchesJavaScript(string area, JsonElement element)
     {
@@ -27,6 +27,21 @@ public sealed class PlanningParityTests
             case "usage-exports": Value("output", UsageParser.BuildExportPayload(StateJson.Text(row["input"]), S("savedAt"))); break;
             case "instance-fingerprints": Value("output", Instances.TargetFingerprint(O("input"))); break;
             case "state-json-bytes": Value("output", System.Text.Encoding.UTF8.GetString(StateJson.Bytes(row["input"]!))); break;
+            case "remote-vm-launches":
+                var spec = RemoteVmLaunch.ArgSpec(S("url"), S("auth"), S("name"), (int)StateJson.Number(row["cpu"])!, (int)StateJson.Number(row["ram"])!, (int)StateJson.Number(row["disk"])!, StateJson.Boolean(row["supportsCpu"]) == true, (row["projects"] as JsonArray)?.Select(StateJson.String).ToArray());
+                Equal("argSpec", spec); Value("args", RemoteVmLaunch.Arguments(spec));
+                var remoteLaunch = PowerShellLaunch.BuildHostLaunch(S("script"), RemoteVmLaunch.Arguments(spec), argSpec: spec);
+                Equal("output", new JsonObject { ["file"] = remoteLaunch.File, ["spawnArgs"] = JsonSerializer.SerializeToNode(remoteLaunch.SpawnArgs), ["command"] = remoteLaunch.Command });
+                break;
+            case "host-conversion-launches":
+                if (S("kind") == "identity") Value("output", HostConversionLaunch.MachineIdentity().Arguments);
+                else if (S("kind") == "host") Value("output", HostConversionLaunch.ValidHost(StateJson.Text(row["input"])));
+                else Value("output", HostConversionLaunch.Script(O("plan")!));
+                break;
+            case "instance-workflows":
+                if (S("kind") == "git") { Value("valid", InstanceWorkflowPlans.IsGitUrl(S("url"))); Value("name", InstanceWorkflowPlans.RepoName(S("url"))); }
+                else Equal("output", S("kind") == "register" ? InstanceWorkflowPlans.Register(InstanceRegistry.Parse(S("text")), S("name"), S("host")) : InstanceWorkflowPlans.Remove(InstanceRegistry.Parse(S("text")), S("name"), S("confirmation")));
+                break;
             case "registry-state":
                 var registry = InstanceRegistry.Parse(S("text")); Value("problems", registry.Problems); Equal("document", registry.ToFileDocument()); Equal("active", registry.ResolveActive("missing", "dev")); break;
             case "lifecycle-invocations":
@@ -39,8 +54,13 @@ public sealed class PlanningParityTests
                 Equal("output", new JsonObject { ["file"] = launch.File, ["spawnArgs"] = JsonSerializer.SerializeToNode(launch.SpawnArgs), ["command"] = launch.Command });
                 Value("child", PowerShellLaunch.BuildChildCommandLine(S("script"), args, StateJson.Boolean(launchOpts["keepOpen"]) == true));
                 var runner = new FakeProcessRunner(); await runner.RunAsync(launch.Invocation()); Assert.Equal(launch.SpawnArgs, runner.Invocations.Single().Arguments); break;
+            case "project-import":
+                if (S("kind") == "parse") Equal("output", ProjectImport.ParseScan(S("stdout")));
+                else Equal("output", ProjectImport.Plan(row["scan"]!.AsArray(), O("existing")!, (row["options"]?["ignoredNames"] as JsonArray)?.Select(StateJson.String), (row["options"]?["ignoredUrls"] as JsonArray)?.Select(StateJson.String)));
+                break;
             case "vm-power":
                 if (S("kind") == "shutdown") Value("output", VmPower.ShutdownCommand);
+                else if (S("kind") == "resources") Equal("output", VmResourcePlan.Create(O("saved"), O("live")));
                 else if (S("kind") == "parse") { Value("state", VmPower.ParseVmState(S("input"))); Value("checkpoints", VmPower.ParseAutoCheckpoints(S("input"))); }
                 else
                 {

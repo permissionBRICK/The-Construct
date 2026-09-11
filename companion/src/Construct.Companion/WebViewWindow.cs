@@ -30,6 +30,8 @@ internal sealed class WebViewWindow : Form
     private bool darkPalette;
     private bool initialized;
     private bool ready;
+    private bool openingRefresh = true;
+    private bool openingSnapshotOnly;
     private bool exiting;
     public event Action? PopupDeactivated;
     public WebViewWindow(string view, string scope, Platform platform, IMessageSink sink, IpcSettings settings, Func<WebViewWindow, string, JsonElement, Task<bool>> localMessage)
@@ -80,16 +82,24 @@ internal sealed class WebViewWindow : Form
         if (view == "popup" || WindowState != FormWindowState.Normal) return;
         if (settings.TrySaveBounds(view, new(Left, Top, Width, Height)) is { } failure) platform.Log.Write(DesktopLogEvent.SettingsFailed, failure);
     }
-    public void Present()
+    public void Present(bool refreshScheduled = false)
     {
         if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
-        Show(); Activate(); if (ready) _ = OpenRequestedViewAsync();
+        openingRefresh = !refreshScheduled; openingSnapshotOnly = refreshScheduled;
+        Show(); Activate();
+        if (ready)
+        {
+            _ = OpenRequestedViewAsync();
+            if (!refreshScheduled && view is "popup" or "panel" or "settings")
+                _ = sink.PostAsync(scope, JsonSerializer.SerializeToElement(new { type = "ready", surfaceOpened = true }, IpcJson.Options), subscription.Token);
+            openingRefresh = false; openingSnapshotOnly = false;
+        }
     }
-    public async Task ChangeScopeAsync(string value)
+    public async Task ChangeScopeAsync(string value, bool notify = true)
     {
         if (scope == value) return;
         subscription.Cancel(); subscription.Dispose(); subscription = new(); scope = value; pending.Clear();
-        if (web.CoreWebView2 is not null) { _ = ListenAsync(subscription.Token); await sink.PostAsync(scope, JsonSerializer.SerializeToElement(new { type = view == "hostadmin" ? "hostadmin.ready" : "ready" }, IpcJson.Options)); }
+        if (web.CoreWebView2 is not null) { _ = ListenAsync(subscription.Token); if (notify) await sink.PostAsync(scope, JsonSerializer.SerializeToElement(new { type = view == "hostadmin" ? "hostadmin.ready" : "ready" }, IpcJson.Options)); }
     }
     private async Task InitializeAsync()
     {
@@ -118,7 +128,12 @@ internal sealed class WebViewWindow : Form
                 {
                     using var message = JsonDocument.Parse(e.WebMessageAsJson);
                     if (message.RootElement.ValueKind != JsonValueKind.Object) return;
-                    if (!await localMessage(this, scope, message.RootElement.Clone())) await sink.PostAsync(scope, message.RootElement.Clone(), subscription.Token);
+                    if (message.RootElement.TryGetProperty("type", out var type) && type.GetString() == "ready")
+                    {
+                        await sink.PostAsync(scope, JsonSerializer.SerializeToElement(new { type = "ready", surfaceOpened = openingRefresh, snapshotOnly = openingSnapshotOnly }, IpcJson.Options), subscription.Token);
+                        openingRefresh = false; openingSnapshotOnly = false;
+                    }
+                    else if (!await localMessage(this, scope, message.RootElement.Clone())) await sink.PostAsync(scope, message.RootElement.Clone(), subscription.Token);
                 }
                 catch (OperationCanceledException) { }
                 catch (Exception ex)
