@@ -253,8 +253,8 @@ public sealed class HostAdminHttpTests
         using var response = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.action", action, args = new { name = "build" } });
         var restart = action == "restartVm";
         Assert.Contains(((restart ? "Restart" : "Start") + " \"build\"?", restart
-            ? "Construct will ask Ubuntu to shut down, apply any pending CPU count, then start the VM. Running work will be interrupted."
-            : "Construct will apply any pending CPU count before starting this powered-off VM."), prompts.Shown);
+            ? "Construct will ask Ubuntu to shut down, apply any pending CPU and RAM settings, then start the VM. Running work will be interrupted."
+            : "Construct will apply any pending CPU and RAM settings before starting this powered-off VM."), prompts.Shown);
         var requests = api.Requests.Where(r => r.Url.AbsolutePath == "/api/v1/vms/build/lifecycle").ToArray();
         if (confirm) Assert.Equal(restart ? "restart" : "start", Assert.Single(requests).Body!.Value.GetProperty("action").GetString());
         else Assert.Empty(requests);

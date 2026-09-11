@@ -1585,6 +1585,31 @@ anywhere in the module (those stay per instance), no host filesystem access, no 
 command that assumes the service is local, no child start / resume / console / sharing
 for ordinary users in the panel (the CLI has them).
 
+### Form-control palette
+
+Shared `media/palette.js` sets the root `color-scheme` from the rendered background
+for the native theme and keeps classic/terminal dark. It follows live palette/style
+changes in VS Code and the Companion; both documents include it through `paletteUri`.
+Inputs use `--vscode-input-*`, and selects/options use `--vscode-dropdown-*`, including
+the panel header/idle selectors and host-admin forms. Browser smoke applies both actual
+Companion palettes and checks control contrast and the native popup scheme.
+
+### Primary VM settings
+
+`media/hostadmin.html` owns the **VM settings…** modal; its controller posts
+`loadVmSettings` / `setVmSettings` through `hostadmin.action`. The adapter returns
+`hostadmin.vmSettings` with `name`, `requestId`, `settings`, `saved`, and `error`.
+Request IDs discard late replies, and inventory polling preserves form edits.
+The model reads current CPU/memory/idle limits before saving, validates every field
+before the first write, and sends changed settings sequentially. On failure the adapter
+reloads all values and keeps the modal open; there is no multi-route transaction.
+`primary-cpu`/`primary-memory` gate hardware fields independently. Current versus
+pending values explain full stop/start semantics; idle policy is immediate. The existing
+Start/Restart native confirmation now names both CPU and RAM. The service remains the
+authority for owner allowances, idle caps and admission. Companion Core routes and view
+projections use the same shipped `remote-routes`, `hostadmin-ipc`, and `desktop-webviews`
+fixtures; Companion Host dispatch handles the same webview messages.
+
 ### Confirmations (§10.4) — text is data, dialogs are the adapter's
 
 `cascadeConfirmation({ primary, problem })` turns a `409 cascade-confirmation-required`

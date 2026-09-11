@@ -98,7 +98,7 @@ internal static class ApiHelpers
     }
 
     public static IdlePolicyResponse ToResponse(IdlePolicy policy, IdleOptions idle, bool clamped) =>
-        new(policy.TimeoutMinutes, policy.Action, idle.MaxTimeoutMinutes, clamped);
+        new(policy.TimeoutMinutes, policy.Action, idle.MaxTimeoutMinutes, clamped, idle.ForceEnabled);
 
     /// <summary>Parses an enum sent as a (case-insensitive) string in a request body.</summary>
     public static bool TryParseEnum<TEnum>(string? value, out TEnum parsed)

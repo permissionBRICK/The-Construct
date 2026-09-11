@@ -94,7 +94,9 @@ public static class IdleEndpoints
                       !string.Equals(policy.Action.ToString(), request.Action, StringComparison.OrdinalIgnoreCase);
 
         var vm = lookup.Vm!;
-        await repository.UpdateAsync(vm with { IdlePolicy = policy }, cancellationToken).ConfigureAwait(false);
+        var result = await http.RequestServices.GetRequiredService<IAdmissionStore>().MutateAsync(null,
+            scope => scope.UpdateIdlePolicyAsync(vm.Name, policy, vm.PowerGeneration), cancellationToken);
+        if (result.Outcome != AdmissionOutcome.Accepted) return LifecycleEndpoints.Problem("power-state-changed");
 
         http.SetAuditDetail($"timeoutMinutes={policy.TimeoutMinutes}, action={policy.Action}, clamped={clamped}");
         return TypedResults.Ok(ApiHelpers.ToResponse(policy, options.Idle, clamped));

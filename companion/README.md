@@ -90,9 +90,12 @@ five minutes (one minute on failure), matching the JavaScript TTL fixtures.
 Construct update detection uses the complete published main release manifest;
 custom refs remain manual. Guest inventory includes accessible shared VMs and emits
 `{type:"children", instance, children}` independently of the SSH status refresh.
-Host administration supports CPU counts (including `max`) and confirmed full
-restart/start to apply pending CPU changes. CPU input gets one attempt; invalid input
-shows a notice and the user can reopen the action (`IPrompts` has no live validator).
+Host administration offers the shared **VM settings…** dialog for CPU, fixed RAM,
+idle timeout and idle action. Hardware stays pending until a confirmed full stop/start;
+idle applies immediately within the same host cap for admins and owners. Partial saves
+reload authoritative values and keep the dialog open. The `hostadmin.action` port
+handles `loadVmSettings` / `setVmSettings` and replies with `hostadmin.vmSettings`
+(`name`, `requestId`, `settings`, `saved`, `error`); older hosts disable unavailable hardware fields.
 Guest browser consoles and T3 pairing
 allow 90 seconds for gateway forwarding. Console tickets are never logged or stored.
 Per-instance command queues keep long operations alive after client disconnects.
@@ -229,3 +232,10 @@ views and runtime messages use IPC). The limitations of the implemented rows are
 | extension command | `construct.removeRemoteHost` | implemented |
 | extension command | `construct.openHostAdmin` | implemented |
 | extension command | `construct.installCompanion` | implemented |
+
+The VM settings action protocol is shared with VS Code:
+
+| Host action | Reply | Behavior |
+|---|---|---|
+| `loadVmSettings` | `hostadmin.vmSettings` | Load CPU, RAM and idle policy with feature/cap metadata. |
+| `setVmSettings` | `hostadmin.vmSettings` | Validate changed hardware and idle policy, save sequentially, reload on partial failure. |
