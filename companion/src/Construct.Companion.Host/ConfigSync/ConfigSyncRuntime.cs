@@ -12,11 +12,9 @@ public sealed class ConfigSyncRuntime : IAsyncDisposable
     private TaskCompletionSource<SyncResult>? active; private TaskCompletionSource<SyncResult>? followup; private Task drain = Task.CompletedTask;
     private readonly SemaphoreSlim watchSignal = new(0,1); private IDisposable? watch; private Task watching = Task.CompletedTask;
     private long changedAt; private long? lastAt; private SyncResult? last; private bool disposed;
-    public event Action<SyncResult>? Synced;
-    public ConfigSyncRuntime(ConfigSyncEngine engine, ConfigRepository repo, ConfigRemotes remotes, IClock clock, SemaphoreSlim? repositoryQueue = null) { this.engine=engine; this.repo=repo; this.remotes=remotes; this.clock=clock; this.repositoryQueue=repositoryQueue ?? new(1,1); }
+    public ConfigSyncRuntime(ConfigSyncEngine engine, ConfigRepository repo, ConfigRemotes remotes, IClock clock, SemaphoreSlim repositoryQueue) { this.engine=engine; this.repo=repo; this.remotes=remotes; this.clock=clock; this.repositoryQueue=repositoryQueue; }
     public bool DueForAuto { get { lock(gate) return lastAt == null || clock.UtcNow.ToUnixTimeMilliseconds()-lastAt >= 300000; } }
-    public Task<SyncResult?> TickAutoAsync(CancellationToken ct = default) => Auto(ct);
-    private async Task<SyncResult?> Auto(CancellationToken ct) => DueForAuto ? await SyncNowAsync(ct) : null;
+    public async Task<SyncResult?> TickAutoAsync(CancellationToken ct = default) => DueForAuto ? await SyncNowAsync(ct) : null;
     public Task<SyncResult> SyncNowAsync(CancellationToken ct = default)
     {
         lock(gate)
@@ -40,10 +38,10 @@ public sealed class ConfigSyncRuntime : IAsyncDisposable
                 try { result = await engine.SyncTickAsync(lifetime.Token); }
                 finally { repositoryQueue.Release(); }
                 lock(gate) { last=result; lastAt=clock.UtcNow.ToUnixTimeMilliseconds(); }
-                Synced?.Invoke(result); completion.TrySetResult(result);
+                completion.TrySetResult(result);
             }
             catch (OperationCanceledException) { completion.TrySetCanceled(); }
-            catch (Exception) { completion.TrySetException(new ConfigSyncException("Config sync failed.")); }
+            catch (Exception) { completion.TrySetException(new ConfigSyncException("Config sync failed.")); } // git output may carry paths or remotes: fixed text outward
             lock(gate)
             {
                 active=followup; followup=null;

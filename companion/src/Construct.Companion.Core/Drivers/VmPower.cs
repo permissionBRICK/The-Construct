@@ -16,8 +16,6 @@ public static class VmPower
     public static string BuildAutoCheckpointProbeCommand(string? name) => "try { $vm = Get-VM -Name " + PowerShellLaunch.SingleQuote(string.IsNullOrEmpty(name) ? "Agent-VM" : name) + " -ErrorAction Stop; $p = $vm.PSObject.Properties['AutomaticCheckpointsEnabled']; if ($p -and $null -ne $p.Value) { Write-Output ('VMAUTOCHK=' + [bool]$p.Value) } else { Write-Output 'VMAUTOCHK=unsupported' } } catch { if ($_.FullyQualifiedErrorId -like 'InvalidParameter*') { Write-Output 'VMAUTOCHK=absent' } else { Write-Output 'VMAUTOCHK=unknown' } }";
     public static HostLaunch BuildAutoCheckpointProbeLaunch(string? name) => PowerShellLaunch.Probe(BuildAutoCheckpointProbeCommand(name));
     public static string ParseAutoCheckpoints(string? stdout) => Regex.Match(stdout ?? "", @"VMAUTOCHK=(\S+)", RegexOptions.ECMAScript).Groups[1].Value.ToLowerInvariant() switch { "true" => "on", "false" => "off", "absent" => "absent", "unsupported" => "unsupported", _ => "unknown" };
-    public static bool ShouldShowStart(bool online, string? state) => !online && state is not ("absent" or "running");
-    public static bool ShouldOfferCheckpointApply(string actual, bool wantEnabled, bool? applied) => actual switch { "absent" or "unsupported" => false, "on" => !wantEnabled, "off" => wantEnabled, _ => applied != wantEnabled };
     public static string RefineSavedState(string state, string? backend, string? rawState) => state == "off" && Instances.IsRemoteBackend(backend) && StateJson.Trim(rawState ?? "").Equals("saved", StringComparison.OrdinalIgnoreCase) ? "saved" : state;
     public static string? LifecycleRefusal(string? backend, string action)
     {

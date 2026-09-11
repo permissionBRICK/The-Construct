@@ -240,6 +240,56 @@
     "output": true
   },
   {
+    "input": " ",
+    "kind": "safeName",
+    "output": false
+  },
+  {
+    "input": "",
+    "kind": "safeName",
+    "output": true
+  },
+  {
+    "input": "﻿",
+    "kind": "safeName",
+    "output": false
+  },
+  {
+    "input": "x",
+    "kind": "safeName",
+    "output": true
+  },
+  {
+    "input": "x",
+    "kind": "safeName",
+    "output": true
+  },
+  {
+    "input": "﻿x",
+    "kind": "safeName",
+    "output": false
+  },
+  {
+    "input": "x﻿",
+    "kind": "safeName",
+    "output": false
+  },
+  {
+    "input": "　x",
+    "kind": "safeName",
+    "output": false
+  },
+  {
+    "input": "x　",
+    "kind": "safeName",
+    "output": false
+  },
+  {
+    "input": "a b",
+    "kind": "safeName",
+    "output": true
+  },
+  {
     "input": "",
     "kind": "credentials",
     "output": false

@@ -15,11 +15,11 @@ public sealed class CachedUpdateSource(IUpdateSource source, IClock clock) : IUp
 {
     private sealed class Entry
     {
-        public SemaphoreSlim Serial { get; } = new(1,1);
+        public SemaphoreSlim Serial { get; } = new(1, 1);
         public DateTimeOffset? At;
         public JsonNode? Value;
     }
-    private readonly ConcurrentDictionary<string,Entry> cache = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, Entry> cache = new(StringComparer.Ordinal);
     public async Task<JsonNode?> GetJsonAsync(Uri url, CancellationToken cancellationToken = default)
     {
         var entry = cache.GetOrAdd(url.AbsoluteUri, _ => new());
@@ -28,8 +28,8 @@ public sealed class CachedUpdateSource(IUpdateSource source, IClock clock) : IUp
         {
             var now = clock.UtcNow;
             var success = entry.Value is not null && !(entry.Value is JsonObject value && StateJson.Boolean(value["notFound"]) == true);
-            if (entry.At is {} at && RefreshCachePolicy.Fresh("updates",success,(now-at).TotalMilliseconds)) return entry.Value?.DeepClone();
-            entry.Value = (await source.GetJsonAsync(url,cancellationToken).ConfigureAwait(false))?.DeepClone();
+            if (entry.At is {} at && RefreshCachePolicy.Fresh("updates", success, (now - at).TotalMilliseconds)) return entry.Value?.DeepClone();
+            entry.Value = (await source.GetJsonAsync(url, cancellationToken).ConfigureAwait(false))?.DeepClone();
             entry.At = now; return entry.Value?.DeepClone();
         }
         finally { entry.Serial.Release(); }

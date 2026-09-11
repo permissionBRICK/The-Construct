@@ -6,31 +6,35 @@ passthrough, and instance monitoring available when VS Code is closed. It hosts 
 same control panel assets as the extension, for all registered instances. It needs
 neither administrator rights nor a separately installed .NET runtime.
 
-**Delivery status:** S3 connects the desktop app to the full authenticated IPC host,
-real dispatcher and per-instance runtimes. Linux fake-mode end-to-end tests exercise
-mixed local/remote and remote-only registries, forwards, notifications, audio and
-settings. See [implementation coverage](../companion/README.md#message-matrix) for
-explicit unsupported workflows. Windows tray, microphone and toast field validation
-remains pending; a successful Linux build is not a Windows runtime test.
+**Delivery status:** the desktop app runs against the authenticated IPC host, the real
+dispatcher and per-instance runtimes; Linux fake-mode tests cover mixed local/remote and
+remote-only registries, forwards, notifications, audio and settings. See the
+[message matrix](../companion/README.md#message-matrix) for the workflows that are still
+refused. Windows tray, microphone and toast behaviour has not been field-validated; a
+successful Linux build is not a Windows runtime test.
 
 ## Install and update
 
 Run `Auto-Install.ps1` from a normal, non-elevated PowerShell window. Its per-user
 pre-step installs the Companion alongside the VS Code extension before the VM
-installation asks for elevation. `Update-Construct.ps1` and plain `Provision-AgentVM.ps1` reprovision also install or update it.
+installation asks for elevation. `Update-Construct.ps1` and a plain
+`Provision-AgentVM.ps1` reprovision also install or update it.
 
 Remote installs install the Companion on **your client PC**, too. Forwards, toasts
 and microphone capture terminate there, regardless of which host runs the VM. A PC
 that only added a remote VM through VS Code receives a once-per-session install
 offer in fallback mode; **Construct: Install Construct Companion** opens the same
 installer in a visible, non-elevated console.
-An optional Companion failure prints its safe diagnostic and allows the VM/extension
-work to continue. Local build failures include the native exit status and MSBuild
-error codes; inspect full build output locally by running
-`dotnet publish companion/src/Construct.Companion -c Release -r win-x64 --self-contained true`
-from the scripts directory, since dependency output can contain credentials. If a caller runs Update Construct elevated, the Companion step warns;
-retry it from a normal PowerShell window. ISO-only and remove-instance operations
-skip the Auto-Install pre-step.
+
+The Companion step never blocks the VM or extension work:
+
+- A failure prints its safe diagnostic and the installation continues.
+- A local build failure reports the native exit status and MSBuild error codes only,
+  because dependency output can contain credentials; run
+  `dotnet publish companion/src/Construct.Companion -c Release -r win-x64 --self-contained true`
+  from the scripts directory to see the full output.
+- An elevated Update Construct warns and skips the step; retry from a normal
+  PowerShell window. ISO-only and remove-instance operations skip the pre-step.
 
 For a manual install, from your downloaded Construct scripts directory:
 
@@ -51,9 +55,7 @@ marker written by the Construct install/update step for a local build.
 An identical installed commit is a no-op. `-Force` rebuilds/reinstalls it. Downloads
 stream to disk; the detached manifest, ZIP SHA-256, checksum-list hash and every
 payload file are checked before asking the app to quit. The installer waits at
-most 15 seconds for graceful exit and never kills a process. Quit discovery supports
-both the full host's `endpoint.json` and the bootstrap's private `ui-endpoint.json`.
-It swaps the install
+most 15 seconds for graceful exit and never kills a process. It swaps the install
 through `.previous`, restores the prior files/registration values on replacement
 failure, then starts `ConstructCompanion.exe --background` detached. Successful
 process creation is the commit point; it is not a runtime health check.

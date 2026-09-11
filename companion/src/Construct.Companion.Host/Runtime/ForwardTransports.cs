@@ -6,8 +6,9 @@ using Construct.Companion.Core.Runtime;
 
 namespace Construct.Companion.Host.Runtime;
 
-public sealed class LocalForwardTransport(ISshTransport ssh, string claimId, string directory = ForwardProtocol.SpoolDirectory) : IForwardTransport
+public sealed class LocalForwardTransport(ISshTransport ssh, string claimId) : IForwardTransport
 {
+    private const string directory = ForwardProtocol.SpoolDirectory;
     public bool IsRemote => false;
     private bool ownsClaim;
     public async Task<string> CheckCapabilityAsync(CancellationToken cancellationToken)
@@ -93,4 +94,21 @@ public sealed class RemoteForwardTransport(ISshTransport ssh, IRemoteApi api, Ur
     }
     public IRunningProcess SpawnTunnel(TunnelSpec spec, CancellationToken cancellationToken) => ssh.SpawnTunnel(spec, cancellationToken);
     public Task<bool> ProbePortAsync(int port, string bindHost, CancellationToken cancellationToken) => ssh.ProbePortAsync(port, bindHost, cancellationToken);
+}
+
+// Remote transports need the enrolled user credential (async); construction waits for the first capability check.
+public sealed class DeferredForwardTransport(Func<CancellationToken, Task<IForwardTransport>> create) : IForwardTransport
+{
+    private IForwardTransport? inner;
+    public bool IsRemote => inner?.IsRemote ?? false;
+    public async Task<string> CheckCapabilityAsync(CancellationToken ct) { inner ??= await create(ct); return await inner.CheckCapabilityAsync(ct); }
+    private IForwardTransport Inner => inner ?? throw new InvalidOperationException("Forward transport has not started.");
+    public IRunningProcess SpawnWatch(CancellationToken ct) => Inner.SpawnWatch(ct);
+    public Task<JsonObject?> ReadAsync(CancellationToken ct) => Inner.ReadAsync(ct);
+    public Task WriteAckAsync(string id, JsonObject document, CancellationToken ct) => Inner.WriteAckAsync(id, document, ct);
+    public Task SweepAsync(string sub, string id, CancellationToken ct) => Inner.SweepAsync(sub, id, ct);
+    public Task CloseAsync(string id, CancellationToken ct) => Inner.CloseAsync(id, ct);
+    public Task ReleaseAsync(CancellationToken ct) => inner?.ReleaseAsync(ct) ?? Task.CompletedTask;
+    public IRunningProcess SpawnTunnel(TunnelSpec spec, CancellationToken ct) => Inner.SpawnTunnel(spec, ct);
+    public Task<bool> ProbePortAsync(int port, string bindHost, CancellationToken ct) => Inner.ProbePortAsync(port, bindHost, ct);
 }

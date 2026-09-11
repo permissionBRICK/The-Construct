@@ -2,7 +2,7 @@ name: Companion release
 on:
   push:
     branches: [main]
-    paths: ['companion/**', 'extension/media/**', 'extension/vm/**', 'extension/src/**', 'extension/test/**', 'test/fixtures/companion-parity/**', 'lib/Construct.Companion.ps1', 'test/companion-*.test.ps1', 'Auto-Install.ps1', 'Update-Construct.ps1', '.github/workflows/companion-release.yml']
+    paths: ['companion/**', 'extension/media/**', 'extension/vm/**', 'extension/src/**', 'extension/test/**', 'test/fixtures/companion-parity/**', 'lib/Construct.Companion.ps1', 'Install-ConstructCompanion.ps1', 'test/companion-*.test.ps1', 'Auto-Install.ps1', 'Update-Construct.ps1', 'Provision-AgentVM.ps1', '.github/workflows/companion-release.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -25,7 +25,11 @@ jobs:
       - run: dotnet build companion/Construct.Companion.sln -warnaserror
       - run: dotnet test companion/Construct.Companion.sln --no-build
       - run: node extension/test/parity.test.js
+      - run: node extension/test/companion.test.js
+      - run: node extension/test/companion-install.test.js
+      - run: node extension/test/companion-host.test.js
       - run: pwsh -NoProfile -File test/companion-install.test.ps1
+      - run: pwsh -NoProfile -File test/companion-entrypoints.test.ps1
       - run: pwsh -NoProfile -File test/companion-package.test.ps1
   publish:
     needs: test-linux

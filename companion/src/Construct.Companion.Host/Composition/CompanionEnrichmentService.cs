@@ -4,6 +4,8 @@ using Construct.Companion.Host.Ipc;
 using Microsoft.Extensions.Hosting;
 namespace Construct.Companion.Host.Composition;
 
+// Every 30 s: registry-driven instance list events, the config-sync auto tick and the cached
+// update/usage enrichment of each idle instance (never a probe: that is the runtime's job).
 internal sealed class CompanionEnrichmentService(CompanionInstances instances, MessageDispatcher dispatcher,
     IpcEvents events, IpcSettings settings, IpcLogs logs, IClock clock) : BackgroundService
 {

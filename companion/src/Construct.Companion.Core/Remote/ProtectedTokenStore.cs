@@ -1,8 +1,9 @@
 using System.Security.Cryptography;
 using System.Text;
 using Construct.Companion.Core.Abstractions;
-namespace Construct.Companion.Core.Desktop;
+namespace Construct.Companion.Core.Remote;
 
+// The remote/<slug>.token format of lib/AgentVm.Remote.ps1: DPAPI CurrentUser bytes, base64 text.
 public sealed class ProtectedTokenStore(IFileSystem files, IDataProtection protection, string directory) : ITokenStore
 {
     private string PathFor(string slug)

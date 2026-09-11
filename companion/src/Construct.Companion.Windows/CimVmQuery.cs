@@ -12,7 +12,7 @@ public sealed class CimVmQuery : ICimVmQuery
         // Enumerate VM rows and compare the name as data, avoiding WQL interpolation.
         using var query = new ManagementObjectSearcher(new ManagementScope(@"\\.\root\virtualization\v2"),
             new ObjectQuery("SELECT ElementName, EnabledState FROM Msvm_ComputerSystem WHERE Caption = 'Virtual Machine'"),
-            new System.Management.EnumerationOptions { Timeout = TimeSpan.FromSeconds(10), ReturnImmediately = false });
+            new System.Management.EnumerationOptions { Timeout = TimeSpan.FromSeconds(10), ReturnImmediately = false }); // shorter than the caller's 15 s Get-VM fallback budget
         using var rows = query.Get();
         CimVmState? result = null;
         foreach (ManagementBaseObject row in rows)
