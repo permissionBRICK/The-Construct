@@ -85,9 +85,9 @@ public sealed partial class SqliteVmRepository(SqliteDatabase database, IClock? 
             insert.Transaction = transaction;
             insert.CommandText = """
                 INSERT INTO vms (name, owner, cpu, ram_gb, disk_gb, created, state, ssh_forward_port,
-                                 vm_token_hash, idle_timeout_minutes, idle_action, deleting, power_generation, kind, parent, sharing, vm_token_kind, ram_mb, incarnation, lease_requested_text, lease_requested_seconds, lease_activated_at, lease_expires_at, lease_state, lease_version, lease_last_attempt_at, lease_last_outcome, hardware_json, guest_construct_commit, guest_provisioned_at, guest_reinstalled_at, guest_reported_at, guest_provenance, guest_last_attempt_at, guest_last_attempt_outcome, observed_created_at, observed_last_boot_at, observed_addresses_json, observed_storage_problem, child_creation_closed, current_job_id)
+                                 vm_token_hash, idle_timeout_minutes, idle_action, deleting, power_generation, kind, parent, sharing, vm_token_kind, ram_mb, incarnation, lease_requested_text, lease_requested_seconds, lease_activated_at, lease_expires_at, lease_state, lease_version, lease_last_attempt_at, lease_last_outcome, hardware_json, guest_construct_commit, guest_provisioned_at, guest_reinstalled_at, guest_reported_at, guest_provenance, guest_last_attempt_at, guest_last_attempt_outcome, observed_created_at, observed_last_boot_at, observed_addresses_json, observed_storage_problem, child_creation_closed, current_job_id, source_commit)
                 VALUES (@name, @owner, @cpu, @ramGb, @diskGb, @created, @state, @sshForwardPort,
-                        @vmTokenHash, @idleTimeout, @idleAction, @deleting, @power_generation, @kind, @parent, @sharing, @vm_token_kind, @ram_mb, @incarnation, @lease_requested_text, @lease_requested_seconds, @lease_activated_at, @lease_expires_at, @lease_state, @lease_version, @lease_last_attempt_at, @lease_last_outcome, @hardware_json, @guest_construct_commit, @guest_provisioned_at, @guest_reinstalled_at, @guest_reported_at, @guest_provenance, @guest_last_attempt_at, @guest_last_attempt_outcome, @observed_created_at, @observed_last_boot_at, @observed_addresses_json, @observed_storage_problem, @child_creation_closed, @current_job_id);
+                        @vmTokenHash, @idleTimeout, @idleAction, @deleting, @power_generation, @kind, @parent, @sharing, @vm_token_kind, @ram_mb, @incarnation, @lease_requested_text, @lease_requested_seconds, @lease_activated_at, @lease_expires_at, @lease_state, @lease_version, @lease_last_attempt_at, @lease_last_outcome, @hardware_json, @guest_construct_commit, @guest_provisioned_at, @guest_reinstalled_at, @guest_reported_at, @guest_provenance, @guest_last_attempt_at, @guest_last_attempt_outcome, @observed_created_at, @observed_last_boot_at, @observed_addresses_json, @observed_storage_problem, @child_creation_closed, @current_job_id, @source_commit);
                 """;
             Bind(insert, vm);
             await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
@@ -225,7 +225,8 @@ public sealed partial class SqliteVmRepository(SqliteDatabase database, IClock? 
         .With("@observed_addresses_json", WireJson.Serialize(vm.Observed?.Addresses))
         .With("@observed_storage_problem", vm.Observed?.StorageProblem)
         .With("@child_creation_closed", vm.ChildCreationClosed ? 1 : 0)
-        .With("@current_job_id", vm.CurrentJobId);
+        .With("@current_job_id", vm.CurrentJobId)
+        .With("@source_commit", vm.SourceCommit);
 
     private static Vm Read(SqliteDataReader reader) => new(
         reader.GetString("name"),
@@ -254,7 +255,8 @@ public sealed partial class SqliteVmRepository(SqliteDatabase database, IClock? 
         ReadGuest(reader),
         ReadObservation(reader),
         reader.GetBool("child_creation_closed"),
-        reader.GetStringOrNull("current_job_id"));
+        reader.GetStringOrNull("current_job_id"),
+        reader.GetStringOrNull("source_commit"));
 
     private static Lease? ReadLease(SqliteDataReader r) => r.GetStringOrNull("lease_requested_text") is string text
         ? new(text, r.GetLongOrNull("lease_requested_seconds"), r.GetTime("lease_activated_at"), r.GetTime("lease_expires_at"),

@@ -60,7 +60,7 @@ try {
     }
     finally { $ProgressPreference = $oldPP }
     Expand-Archive -LiteralPath $zip -DestinationPath $work -Force
-    Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+    # Keep the verified ZIP until the external source manifest has been recorded.
 
     $expectedRootName = (($Repo -split '/')[-1] + '-' + (($Ref -replace '/', '-')))
     $root = Get-Item -LiteralPath (Join-Path $work $expectedRootName) -ErrorAction SilentlyContinue
@@ -72,6 +72,12 @@ try {
 
     try { . (Join-Path $root.FullName "lib\AgentVm.Common.ps1") }
     catch { Write-Warning "Could not load helpers: $($_.Exception.Message)" }
+
+    if ($release) {
+        try { [void](Write-ConstructSourceManifest -Zip $zip -Commit $release.commit) }
+        catch { Write-Warning "Could not record the source manifest ($($_.Exception.GetType().Name)); the host cache is unavailable until the next update." }
+    }
+    Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
 
     # Reinstall the control-panel extension (repackage + code --install-extension). Both a
     # MISSING helper (the dot-source above failed) and a falsey return are real failures -

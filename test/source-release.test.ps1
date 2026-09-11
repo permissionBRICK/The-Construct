@@ -19,13 +19,24 @@ function Set-ConstructInstalledMarker {
     return $Commit
 }
 '@
+    $commonAst = [Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'lib/AgentVm.Common.ps1'),[ref]$null,[ref]$null)
+    foreach ($name in @('Test-ConstructSourceRelativePath','Write-ConstructSourceManifest')) {
+        $fn = $commonAst.Find({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true)
+        Add-Content (Join-Path $fixture 'lib/AgentVm.Common.ps1') $fn.Extent.Text
+    }
+    Add-Content (Join-Path $fixture 'lib/AgentVm.Common.ps1') 'function Get-ConstructConfigDir { Join-Path $env:LOCALAPPDATA "The-Construct/config" }'
     Compress-Archive -Path $fixture -DestinationPath (Join-Path $taskDir 'source.zip')
     $harness = Join-Path $taskDir 'run.ps1'
     Set-Content $harness @'
-param($Entry, $Corrupt)
+param($Entry, $Corrupt, $ManifestFault)
 $ErrorActionPreference = 'Stop'
 $env:LOCALAPPDATA = Join-Path $env:CONSTRUCT_SOURCE_TEST_DIR ([guid]::NewGuid().ToString('N'))
 $env:CONSTRUCT_UPDATE_RESULT = Join-Path $env:LOCALAPPDATA 'result'
+$manifestDir = Join-Path $env:LOCALAPPDATA 'The-Construct/source-manifests'
+if ($ManifestFault -eq 'yes') {
+    [IO.Directory]::CreateDirectory((Split-Path $manifestDir -Parent)) | Out-Null
+    [IO.File]::WriteAllText($manifestDir, 'blocked')
+}
 $global:manifestCalls = 0
 function Invoke-RestMethod {
     param($Uri, [switch]$UseBasicParsing, $TimeoutSec)
@@ -48,19 +59,27 @@ function Invoke-WebRequest {
 & $Entry -Repo 'owner/repo'
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
 if ($global:manifestCalls -ne 1) { throw 'Missing release lookup.' }
+$manifest = Join-Path $manifestDir (('a'*40)+'.sha256')
+if ($ManifestFault -ne 'yes') {
+    if (-not (Test-Path $manifest -PathType Leaf)) { throw 'External source manifest missing.' }
+    if (@(Get-Content $manifest | Where-Object { $_ -cnotmatch '^[a-f0-9]{64}  \S.*$' }).Count) { throw 'Manifest line malformed.' }
+    $copies = @(Get-ChildItem (Join-Path $env:LOCALAPPDATA 'The-Construct') -Filter '*.sha256' -Recurse)
+    if ($copies.Count -ne 1 -or $copies[0].FullName -ne $manifest) { throw 'Manifest must live outside the checkout.' }
+} elseif (-not (Test-Path $manifestDir -PathType Leaf)) { throw 'Manifest fault fixture changed.' }
 '@
     foreach ($entry in @('install.ps1', 'Update-Construct.ps1')) {
-        foreach ($corrupt in @('no', 'yes')) {
+        foreach ($scenario in @(@('no','no'),@('yes','no'),@('no','yes'))) {
+            $corrupt=$scenario[0];$manifestFault=$scenario[1]
             $installed = Join-Path $taskDir 'installed'
             if (Test-Path $installed) { Remove-Item $installed }
-            & pwsh -NoProfile -NonInteractive -File $harness (Join-Path $repoRoot $entry) $corrupt *> (Join-Path $taskDir 'output.log')
+            & pwsh -NoProfile -NonInteractive -File $harness (Join-Path $repoRoot $entry) $corrupt $manifestFault *> (Join-Path $taskDir 'output.log')
             $code = $LASTEXITCODE
             if ($corrupt -eq 'no') {
                 if ($code -ne 0 -or -not (Test-Path $installed)) { Get-Content (Join-Path $taskDir 'output.log'); throw "$entry failed valid release." }
             } elseif ($code -eq 0 -or (Test-Path $installed)) {
                 throw "$entry accepted a corrupt release."
             }
-            Write-Host "PASS $entry corrupt=$corrupt"
+            Write-Host "PASS $entry corrupt=$corrupt manifestFault=$manifestFault"
         }
     }
 } finally {

@@ -13,6 +13,11 @@ public class RouteCoverageTests
 {
     private static readonly string[] ExpectedRoutes =
     [
+        "POST /api/v1/vms/{name}/source",
+        "GET /api/v1/vms/{name}/source/{commit}",
+        "GET /api/v1/host/source-cache",
+        "POST /api/v1/host/source-cache/cleanup",
+        "DELETE /api/v1/host/source-cache/{commit}",
         "GET /api/v1/host/updates/status",
         "POST /api/v1/host/updates/check",
         "POST /api/v1/host/updates/stage",
