@@ -13,8 +13,8 @@ public static class TrayModel
     public static TrayAppearance Appearance(TrayState state)
     {
         var missing = state.Instance is null || !state.ScriptsFound;
-        var color = missing ? TrayColor.Grey : state.Busy ? TrayColor.Yellow : state.Online ? TrayColor.Green :
-            state.ProbeError || state.VmState == "absent" || (state.VmState == "unknown" && state.UnknownFor > TimeSpan.FromMinutes(2)) ? TrayColor.Red :
+        var color = missing ? TrayColor.Grey : state.ProbeError ? TrayColor.Red : state.Busy ? TrayColor.Yellow : state.Online ? TrayColor.Green :
+            state.VmState == "absent" || (state.VmState == "unknown" && state.UnknownFor > TimeSpan.FromMinutes(2)) ? TrayColor.Red :
             state.VmState is "off" or "saved" or "paused" ? TrayColor.Grey : TrayColor.Yellow;
         var status = missing ? "not configured" : state.Busy ? "working" : state.Online ? "online" : state.VmState;
         var tooltip = $"{state.Instance ?? "Construct"} · {status} · {state.ForwardCount} forwards · mic {(state.Mic ? "on" : "off")}";
