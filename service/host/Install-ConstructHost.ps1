@@ -1152,7 +1152,7 @@ if ($AclOnly) {
         @{Path=(Split-Path $DataDir -Parent);Kind='Data';Name='service root'},
         @{Path=$DataDir;Kind='Data';Name='-DataDir'}
     )
-    foreach ($extra in @($aclSettings.Constructd.HostAdmin.Media.RootDir, $aclSettings.Constructd.Iso.CacheDir)) {
+    foreach ($extra in @($aclSettings.Constructd.HostAdmin.Media.RootDir, $aclSettings.Constructd.HostAdmin.Source.RootDir, $aclSettings.Constructd.Iso.CacheDir)) {
         if ($extra) { $aclEntries += @{Path=$extra;Kind='Data';Name='media/cache root'} }
     }
     foreach ($entry in (Sort-ConstructHardeningOrder -Entries $aclEntries)) {
@@ -1254,7 +1254,25 @@ if (-not (Test-Path -LiteralPath $bootstrapKey)) {
 
 Write-Step "Preparing the data directory"
 $isoCacheDir = Join-Path $DataDir "iso"
-foreach ($dir in @($serviceRoot, $DataDir, $isoCacheDir)) {
+$sourceRootDir = Join-Path $DataDir 'source'
+# Preserve the existing bootstrap section, including an operator's source cap/root.
+$savedHostAdmin = [pscustomobject]@{}
+$priorSettingsPath = Join-Path $PublishDir 'appsettings.Production.json'
+if (Test-Path -LiteralPath $priorSettingsPath) {
+    $priorSettings = Get-Content -LiteralPath $priorSettingsPath -Raw | ConvertFrom-Json
+    if ($priorSettings.Constructd -and $priorSettings.Constructd.PSObject.Properties['HostAdmin']) {
+        $savedHostAdmin = $priorSettings.Constructd.HostAdmin
+    }
+}
+if (-not $savedHostAdmin.PSObject.Properties['Source']) {
+    $savedHostAdmin | Add-Member -NotePropertyName Source -NotePropertyValue ([pscustomobject]@{})
+}
+if ($savedHostAdmin.Source.PSObject.Properties['RootDir'] -and $savedHostAdmin.Source.RootDir) {
+    $sourceRootDir = [string]$savedHostAdmin.Source.RootDir
+} else {
+    $savedHostAdmin.Source | Add-Member -NotePropertyName RootDir -NotePropertyValue $sourceRootDir -Force
+}
+foreach ($dir in @($serviceRoot, $DataDir, $isoCacheDir, $sourceRootDir)) {
     if (-not (Test-Path -LiteralPath $dir)) {
         if ($PSCmdlet.ShouldProcess($dir, "Create the directory")) {
             New-Item -ItemType Directory -Path $dir -Force | Out-Null
@@ -1286,6 +1304,7 @@ if ($SkipAclHardening) {
     # C:\Construct\service\publish are too, and a checkout copied onto a stock C:\
     # (where Authenticated Users inherit Modify) installs without a manual ACL fix.
     $hardening = @(
+        @{ Path = $sourceRootDir; Kind = 'Data'; Name = "construct source cache" }
         @{ Path = $serviceRoot; Kind = 'Data'; Name = "the service root" }
         @{ Path = $PublishDir;  Kind = 'Code'; Name = "-PublishDir" }
         @{ Path = $ScriptsDir;  Kind = 'Code'; Name = "-ScriptsDir" }
@@ -1437,6 +1456,7 @@ $settings = [ordered]@{
         }
     }
     Constructd = [ordered]@{
+        HostAdmin        = $savedHostAdmin
         BrowserConsoleEnabled = $browserConsoleEnabled
         Persistence      = "Sqlite"
         DatabasePath     = (Join-Path $DataDir "constructd.db")

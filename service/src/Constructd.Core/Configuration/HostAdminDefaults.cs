@@ -17,7 +17,17 @@ public sealed class HostAdminOptions
     public HostAdminCapacityOptions Capacity { get; set; } = new();
     public HostAdminUpdatesOptions Updates { get; set; } = new();
     public HostAdminMediaOptions Media { get; set; } = new();
+    public HostAdminSourceOptions Source { get; set; } = new();
 }
 public sealed class HostAdminCapacityOptions { public CapacityMode Mode { get; set; } = CapacityMode.Observe; }
 public sealed class HostAdminUpdatesOptions { public string? Repository { get; set; } }
 public sealed class HostAdminMediaOptions { public string? RootDir { get; set; } }
+
+public sealed class HostAdminSourceOptions
+{
+    public bool Enabled { get; set; } = true;
+    public string? RootDir { get; set; }
+    public long MaxItemBytes { get; set; } = 256L << 20;
+    public long MaxTotalBytes { get; set; } = 2L << 30;
+    public string? FakeReleaseDir { get; set; }
+}
