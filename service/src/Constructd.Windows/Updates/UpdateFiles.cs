@@ -4,7 +4,7 @@ using System.Text.Json.Serialization;
 namespace Constructd.Windows.Updates;
 
 public sealed record UpdateFile(string Path, string Sha256);
-public sealed record VerifiedFiles(string UpdateId, string Commit, DateTimeOffset VerifiedAt, IReadOnlyList<UpdateFile> Files);
+public sealed record VerifiedFiles(string UpdateId, string Commit, DateTimeOffset VerifiedAt, IReadOnlyList<UpdateFile> Files, string Source = "self-contained");
 public sealed record InstallRecord(string Commit, string PackageVersion, DateTimeOffset InstalledAt, string? PreviousCommit, string? UpdateId, IReadOnlyList<UpdateFile> Files);
 public static class UpdateFiles
 {

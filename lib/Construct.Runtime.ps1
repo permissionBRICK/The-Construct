@@ -70,6 +70,7 @@ function Assert-ConstructArchiveLengths {
     if ($Archive.Entries.Count -gt 20000) { throw 'Too many archive entries.' }
     $total=0L
     foreach ($entry in $Archive.Entries) {
+        if ($entry.FullName -and $entry.FullName.EndsWith('/')) { throw 'Archive directory entries are not supported.' }
         if ($entry.Length -lt 0 -or $entry.Length -gt 256MB) { throw 'Archive entry exceeds extraction limit.' }
         $total+=$entry.Length
         if ($total -gt 1GB -or ($null -ne $DeclaredTotal -and $total -gt $DeclaredTotal)) { throw 'Archive exceeds declared extraction limit.' }

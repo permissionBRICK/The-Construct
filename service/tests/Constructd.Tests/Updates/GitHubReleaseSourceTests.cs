@@ -99,6 +99,29 @@ public sealed class GitHubReleaseSourceTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new GitHubReleaseSource(client).ListHostReleasesAsync("owner/repo", cancelled.Token));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Fdd_asset_is_allowed_only_with_complete_additive_metadata(bool broken)
+    {
+        var row = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(Manifest()))!.AsObject();
+        row["frameworkDependentAsset"] = "construct-host-aaaaaaa-win-x64-fdd.zip";
+        row["frameworkDependentSha256"] = new string('d', 64);
+        row["frameworkDependentSumsSha256"] = new string('e', 64);
+        row["frameworkDependentSizeBytes"] = 3;
+        row["frameworkDependentUncompressedSizeBytes"] = 100;
+        row["runtimes"] = System.Text.Json.Nodes.JsonNode.Parse("""[{"name":"Microsoft.NETCore.App","majorVersion":10},{"name":"Microsoft.AspNetCore.App","majorVersion":10}]""");
+        if (broken) row.Remove("frameworkDependentSumsSha256");
+        using var client = new HttpClient(new Handler(request => new(HttpStatusCode.OK) { Content = request.RequestUri!.AbsolutePath.EndsWith("manifest.json") ? new StringContent(row.ToJsonString()) : new ByteArrayContent([1, 2, 3]) }));
+        var source = new GitHubReleaseSource(client);
+        if (broken) { await Assert.ThrowsAsync<UpdateException>(() => source.ListHostReleasesAsync("owner/repo", default)); return; }
+        var release = Assert.Single(await source.ListHostReleasesAsync("owner/repo", default));
+        Assert.Equal(3, release.Assets.Count);
+        var asset = Assert.Single(release.Assets, a => a.Name.EndsWith("-fdd.zip"));
+        var destination = Path.GetTempFileName();
+        try { await source.DownloadAsync(asset, destination, null, default); Assert.Equal(new byte[] { 1, 2, 3 }, await File.ReadAllBytesAsync(destination)); }
+        finally { File.Delete(destination); }
+    }
     private static object Manifest(string commit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") => new
     {
         schemaVersion = 1, repository = "owner/repo", @ref = "refs/heads/main", commit,

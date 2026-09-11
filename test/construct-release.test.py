@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Local release publication regressions; deliberately outside Actions."""
+import hashlib
 import importlib.util
 import json
 import os
@@ -11,6 +12,19 @@ from unittest.mock import patch
 spec = importlib.util.spec_from_file_location('publisher', Path(__file__).parents[1] / 'scripts/publish-construct-release.py')
 publisher = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(publisher)
+
+
+def fixture(output, commit):
+    manifest = dict(commit=commit, repository='owner/repo', releaseTag='host-' + commit)
+    for key, name in [('payload', f'construct-host-{commit[:7]}-win-x64.zip'),
+                      ('frameworkDependent', f'construct-host-{commit[:7]}-win-x64-fdd.zip'),
+                      ('source', f'construct-source-{commit}.zip')]:
+        data = key.encode()
+        (output / name).write_bytes(data)
+        manifest.update({key + 'Asset': name, key + 'SizeBytes': len(data), key + 'Sha256': hashlib.sha256(data).hexdigest()})
+    (output / 'manifest.json').write_text(json.dumps(manifest))
+    (output / 'SHA256SUMS').write_text('fixture sums')
+    return ['manifest.json', manifest['payloadAsset'], manifest['frameworkDependentAsset'], manifest['sourceAsset'], 'SHA256SUMS']
 
 
 class ReleaseTests(unittest.TestCase):
@@ -28,9 +42,7 @@ class ReleaseTests(unittest.TestCase):
         commit = 'a' * 40
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
-            (output / 'manifest.json').write_text(json.dumps(dict(commit=commit, repository='owner/repo', payloadAsset='host.zip', sourceAsset='source.zip')))
-            (output / 'host.zip').write_bytes(b'host')
-            (output / 'source.zip').write_bytes(b'source')
+            names = fixture(output, commit)
             commands = []
             def run(command, **kwargs):
                 commands.append(command)
@@ -49,9 +61,7 @@ class ReleaseTests(unittest.TestCase):
         commit = 'a' * 40
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
-            (output / 'manifest.json').write_text(json.dumps(dict(commit=commit, repository='owner/repo', payloadAsset='host.zip', sourceAsset='source.zip')))
-            (output / 'host.zip').write_bytes(b'host')
-            (output / 'source.zip').write_bytes(b'source')
+            names = fixture(output, commit)
             with patch.dict(os.environ, GITHUB_SHA=commit, GITHUB_REPOSITORY='owner/repo'), \
                  patch.object(publisher, 'api', return_value=None), \
                  patch.object(publisher.subprocess, 'check_output', return_value=commit + '\trefs/heads/main'), \
@@ -59,6 +69,10 @@ class ReleaseTests(unittest.TestCase):
                 publisher.publish(output)
             commands = [call.args[0] for call in run.call_args_list]
             self.assertEqual([command[2] for command in commands], ['create', 'upload', 'edit', 'edit'])
+            self.assertEqual(commands[0], ['gh','release','create','host-'+commit,'--draft','--target',commit,'--title','Construct '+commit[:7],'--notes','Source and Windows host artifacts from the same main commit. See docs/host-release.md.'])
+            self.assertEqual(commands[1], ['gh','release','upload','host-'+commit,'--clobber',*[str(output / name) for name in names]])
+            self.assertEqual(commands[2], ['gh','release','edit','host-'+commit,'--draft=false','--latest=false'])
+            self.assertEqual(commands[3], ['gh','release','edit','host-'+commit,'--latest'])
             self.assertIn('--latest=false', commands[-2])
             self.assertIn('--latest', commands[-1])
 
@@ -66,10 +80,7 @@ class ReleaseTests(unittest.TestCase):
         commit = 'a' * 40
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
-            names = ['manifest.json', 'host.zip', 'source.zip']
-            (output / names[0]).write_text(json.dumps(dict(commit=commit, repository='owner/repo', payloadAsset=names[1], sourceAsset=names[2])))
-            for name in names[1:]:
-                (output / name).write_bytes(b'package')
+            names = fixture(output, commit)
             release = dict(tag_name='host-' + commit, draft=False, assets=[dict(name=name) for name in names])
             with patch.dict(os.environ, GITHUB_SHA=commit, GITHUB_REPOSITORY='owner/repo'), \
                  patch.object(publisher, 'api', return_value=release), \
@@ -78,6 +89,24 @@ class ReleaseTests(unittest.TestCase):
                 publisher.publish(output)
             self.assertEqual(len(run.call_args_list), 1)
             self.assertEqual(run.call_args.args[0][1:3], ['release', 'edit'])
+
+    def test_missing_or_corrupt_fdd_never_creates_release(self):
+        for scenario in ('missing', 'corrupt', 'wrong-name'):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory)
+                names = fixture(output, 'a' * 40)
+                if scenario == 'missing':
+                    (output / names[2]).unlink()
+                elif scenario == 'corrupt':
+                    (output / names[2]).write_bytes(b'corrupted')
+                else:
+                    manifest = json.loads((output / 'manifest.json').read_text())
+                    manifest['frameworkDependentAsset'] = '../outside.zip'
+                    (output / 'manifest.json').write_text(json.dumps(manifest))
+                with patch.dict(os.environ, GITHUB_SHA='a' * 40, GITHUB_REPOSITORY='owner/repo'), patch.object(publisher, 'api') as api:
+                    with self.assertRaises(ValueError):
+                        publisher.publish(output)
+                    api.assert_not_called()
 
 
 if __name__ == '__main__':

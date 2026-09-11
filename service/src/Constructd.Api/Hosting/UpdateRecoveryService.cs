@@ -206,8 +206,10 @@ public sealed class UpdateRecoveryService(HostUpdateJob work,IHostUpdateStore st
             var backup=Path.Combine(h.DataDir,"updates","backup-"+h.UpdateId);
             IReadOnlyList<UpdateFile>? files;
             var old=await UpdateFiles.ReadAsync<InstallRecord>(Path.Combine(backup,"previous-install.json"),ct);
+            var previousFiles=old?.Files is {Count: > 0} ? old.Files :
+                (requireLedger ? null : await UpdateFiles.ReadAsync<UpdateFile[]>(Path.Combine(backup,"files.json"),ct));
             if(current) files=(await UpdateFiles.ReadAsync<VerifiedFiles>(Path.Combine(h.StagedPath,"verified.json"),ct))?.Files;
-            else files=old?.Files ?? (requireLedger ? null : await UpdateFiles.ReadAsync<UpdateFile[]>(Path.Combine(backup,"files.json"),ct));
+            else files=previousFiles;
             if(files is null || files.Count==0) return false;
             string Target(string p)=>Path.Combine(p.StartsWith("service/",StringComparison.Ordinal) ? h.PublishDir : h.ScriptsDir,p[8..]);
             foreach(var file in files.Where(f=>f.Path.StartsWith("service/",StringComparison.Ordinal)||f.Path.StartsWith("scripts/",StringComparison.Ordinal)))
@@ -216,8 +218,9 @@ public sealed class UpdateRecoveryService(HostUpdateJob work,IHostUpdateStore st
                 var target=Target(file.Path);UpdateFiles.NoLinks(target);
                 if(!File.Exists(target)||UpdateFiles.Sha256(target)!=file.Sha256) return false;
             }
-            if(current && old is not null)
-                foreach(var file in old.Files.Where(f=>!files.Any(n=>n.Path.Equals(f.Path,StringComparison.OrdinalIgnoreCase))))
+            if(current && previousFiles is not null)
+                foreach(var file in previousFiles.Where(f=>(f.Path.StartsWith("service/",StringComparison.Ordinal)||f.Path.StartsWith("scripts/",StringComparison.Ordinal)) &&
+                    !files.Any(n=>n.Path.Equals(f.Path,StringComparison.OrdinalIgnoreCase))))
                     if(!ZipEntryRules.IsPreserved(file.Path) && (!ZipEntryRules.IsSafe(file.Path)||File.Exists(Target(file.Path)))) return false;
             return true;
         }

@@ -1804,6 +1804,16 @@ and phase history persist in migration 600's `host_updates` table. Staging/appli
 acceptance persists the queued job, replay key and update transition in one SQLite
 transaction. The job's operation ID remains readable after reconnecting.
 
+Host releases contain compressed self-contained and framework-dependent ZIPs.
+Conversion and staging prefer FDD when `dotnet --list-runtimes` reports the
+manifest's required shared frameworks, currently .NET 10 and ASP.NET Core 10.
+Missing runtimes or older manifests select self-contained. The selected source is
+recorded in `install.json`; the installer validates a supplied FDD publish directory
+and preserves any existing updater-owned ledger.
+Archive verification checks compressed size, SHA-256, per-file hashes, a 256 MiB
+entry limit and the declared inflated total capped at 1 GiB. The self-contained
+manifest fields retain their original names and meaning.
+
 `Update-ConstructHost.ps1` is an independent Windows PowerShell 5.1 scheduled task. It
 performs list-based replacement, retains complete verified backups, preserves production
 settings/data, checks the TLS-pinned loopback health handshake and `admin db check
