@@ -24,9 +24,12 @@ public sealed class CompanionInstance(JsonObject definition, InstanceStateStore 
     public SemaphoreSlim Serial { get; } = new(1, 1);
     public InstanceRuntime? Runtime { get; set; }
     public ConfigSyncArea? ConfigSync { get; set; }
+    public SemaphoreSlim EnrichmentSerial { get; } = new(1, 1);
+    public Dictionary<string, (DateTimeOffset At, string? Raw)> UsageCache { get; } = new();
     public string UsagePeriod { get; set; } = "daily";
     public JsonObject? Usage { get; set; }
     public string? UsageRaw { get; set; }
+    public JsonObject Enrichment { get; set; } = new();
     public JsonNode? ConfigState { get; set; }
 }
 public sealed class CompanionInstances(IStateFileSystem files, IpcSettings settings, IInstanceConnections connections,
@@ -37,7 +40,12 @@ public sealed class CompanionInstances(IStateFileSystem files, IpcSettings setti
     
     private readonly ConcurrentDictionary<string, CompanionInstance> entries = new(StringComparer.Ordinal);
     public HostState Host { get; } = new(files);
-    public InstanceRegistry Registry => InstanceRegistry.Load(files);
+    public InstanceRegistry Registry
+    {
+        get { var value = InstanceRegistry.Load(files);
+            if (value.Synthesized && Host.ResolveScriptsDirectory(overrideDirectory: settings.Read().ScriptsDir) is null) value.ByName.Clear();
+            return value; }
+    }
     public string[] Names => Registry.List().Select(i => StateJson.String(i["name"])).ToArray();
     public CompanionInstance Get(string name)
     {
@@ -84,6 +92,7 @@ public sealed class CompanionInstances(IStateFileSystem files, IpcSettings setti
             changed => new Forwarder(definition.Name, new DeferredForwardTransport(ct => connections.ForwardsAsync(current, entry.Ssh, ct)), runtimeProcesses, ports, clock, changed),
             () => new(definition.Name, entry.Ssh, runtimeProcesses, toasts, clock),
             changed => new(entry.Ssh, runtimeProcesses, audioServers, capture, changed), new RepatchJob(entry.Ssh), bus);
+        entry.ConfigSync?.Runtime.StartWatching();
         entry.Runtime = runtime; return runtime;
     }
     private void EnsureConfig(CompanionInstance entry)
@@ -99,8 +108,8 @@ public sealed class CompanionInstances(IStateFileSystem files, IpcSettings setti
         {
             entry.Runtime = null;
             var current = Registry.Resolve(name);
-            if (!JsonNode.DeepEquals(current, entry.Definition) && entry.ConfigSync is { } area)
-            { await area.DisposeAsync(); entry.ConfigSync = null; entry.ConfigState = null; }
+            if ((!Registry.ByName.ContainsKey(name) || !JsonNode.DeepEquals(current, entry.Definition)) && entry.ConfigSync is { } area)
+            { await area.DisposeAsync(); entry.ConfigSync = null; entry.ConfigState = null; entry.UsageCache.Clear(); }
             return new RetargetLease(entry.Serial);
         }
         catch { entry.Serial.Release(); throw; }

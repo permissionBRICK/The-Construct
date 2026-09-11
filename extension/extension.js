@@ -114,9 +114,35 @@ async function migrateCompanion() {
       secrets: extensionContext.secrets, fs, env: process.env, libPath: remoteLibPath(), run: runCompanionMigration });
   } catch (_) { logLine("companion: migration incomplete; will retry on the next connection."); }
 }
+let companionInstallOffered = false;
+function installCompanion() {
+  const scriptsDir = resolveScriptsDir();
+  if (!scriptsDir || !fs.existsSync(path.join(scriptsDir, "Install-ConstructCompanion.ps1"))) {
+    vscode.window.showWarningMessage("Update Construct to obtain Install-ConstructCompanion.ps1, then run Install Construct Companion again.");
+    return;
+  }
+  return lifecycle.launchHostScript({ scriptsDir, script: "Install-ConstructCompanion.ps1",
+    label: "Install Construct Companion", elevate: false });
+}
+async function maybeOfferCompanionInstall() {
+  const scriptsDir = resolveScriptsDir();
+  const registry = registryNow();
+  const manifest = companion.installManifestPath(process.env);
+  if (!companion.shouldOfferInstall({ platform: process.platform, deferred: companionDeferred(),
+    offered: companionInstallOffered, installed: !manifest || fs.existsSync(manifest),
+    setting: vscode.workspace.getConfiguration("construct").get("companion", "auto"),
+    preference: scriptsDir ? host.readRawSettings(scriptsDir).companion : undefined,
+    registered: registry.exists ? instances.list(registry).length : 0 })) return;
+  companionInstallOffered = true;
+  const choice = await vscode.window.showInformationMessage(
+    "Install Construct Companion on this PC to keep forwards, notifications and microphone passthrough available with VS Code closed.",
+    "Install Construct Companion", "Not now");
+  if (choice === "Install Construct Companion") installCompanion();
+}
 function startFallback(context) {
   if (companionDisposed || companionDeferred() || fallbackStarted) return;
   fallbackStarted = true;
+  void maybeOfferCompanionInstall().catch(companionError);
   audioTargetInstance = activeInstance().name;
   void requestAudioEnable(context, undefined, { auto: true });
   const later = (work) => {
@@ -302,6 +328,7 @@ function registryNow(force) {
   }
   registryCache = { at: now, registry: reg };
   reportRegistryProblems(reg);
+  if (force && !companionStarting && !companionDisposed) void Promise.resolve().then(maybeOfferCompanionInstall).catch(companionError);
   return reg;
 }
 
@@ -5234,6 +5261,7 @@ async function activate(context) {
       webviewOptions: { retainContextWhenHidden: true },
     }),
     vscode.commands.registerCommand("construct.openPanel", () => openPanel(context)),
+    vscode.commands.registerCommand("construct.installCompanion", installCompanion),
     vscode.commands.registerCommand("construct.openPanelHere", () => openPanelHere(context)),
     vscode.commands.registerCommand("construct.refresh", () => companionReady.then(() => companionDeferred() ? proxyCompanion({ type: "command", id: "refresh" }) : refreshAll())),
     vscode.commands.registerCommand("construct.showLogs", () => showLogs()),

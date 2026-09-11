@@ -41,6 +41,7 @@
 #>
 [CmdletBinding()]
 param(
+    [switch]$SkipCompanion,
     [double]$MemoryGB  = 0,
     [int]$DiskSizeGB   = 0,
     # vCPU count for the VM. If omitted (0), auto-scales to ALL of the host's
@@ -394,6 +395,7 @@ if ((Test-ConstructVmPresent -Name $VmName) -eq $true) {
         if ($PSBoundParameters.ContainsKey('Repo') -or $PSBoundParameters.ContainsKey('Ref')) {
             $provArgs['Repo'] = $Repo; $provArgs['Ref'] = $Ref
         }
+        if ($SkipCompanion -and (Get-Command -Name $provisionScript -CommandType ExternalScript -ErrorAction Stop).Parameters.ContainsKey('SkipCompanion')) { $provArgs['SkipCompanion'] = $true }
         Invoke-DeElevatedProvision -ScriptPath $provisionScript -ProvisionParams $provArgs
         return
     }
@@ -649,6 +651,7 @@ if ($isAutoinstall) {
             if ($PSBoundParameters.ContainsKey('Repo') -or $PSBoundParameters.ContainsKey('Ref')) {
                 $provArgs['Repo'] = $Repo; $provArgs['Ref'] = $Ref
             }
+            if ($SkipCompanion -and (Get-Command -Name $provisionScript -CommandType ExternalScript -ErrorAction Stop).Parameters.ContainsKey('SkipCompanion')) { $provArgs['SkipCompanion'] = $true }
             Invoke-DeElevatedProvision -ScriptPath $provisionScript -ProvisionParams $provArgs
         }
     }

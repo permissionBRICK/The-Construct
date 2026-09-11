@@ -100,6 +100,7 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
         var model = Get(slug); await model.Serial.WaitAsync(ct);
         try
         {
+            var visibility = Volatile.Read(ref model.Visibility);
             var type = Text(message["type"]);
             if (type == "hostadmin.signIn")
             {
@@ -120,7 +121,7 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
                 case "hostadmin.action": await Action(model, client, Text(message["action"]), message["args"] as JsonObject ?? [], ct); break;
                 default: Notice(model, "This host-administration message is unsupported."); break;
             }
-            model.Opened = true;
+            if (visibility == Volatile.Read(ref model.Visibility)) model.Opened = true;
         }
         catch (RemoteApiException e) { Refusal(model, e); }
         catch (IpcFailure e) { Notice(model, e.Message); throw; }
@@ -273,6 +274,7 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
         }
         await RefreshExtrasAsync(entry, ct);
     }
+    public void Close(string slug) { if (models.TryGetValue(slug, out var model)) { Interlocked.Increment(ref model.Visibility); model.Opened = false; } }
     public async Task PollAsync(CancellationToken ct)
     {
         try
@@ -301,6 +303,7 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
     {
         public HostRecord Host = host;
         public volatile bool Opened;
+        public int Visibility;
         public JsonObject View = new() { ["mode"] = "unavailable" };
         public DateTimeOffset LastPoll;
         public DateTimeOffset LastDetection;

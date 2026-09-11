@@ -25,9 +25,11 @@ public sealed class ProcessSupervisorTests
     public async Task HeartbeatsExtendDeadlineAndSilenceKillsWatcher()
     {
         var clock = new FakeClock(); FakeRunningProcess? child = null;
-        await using var process = new SshProcessSupervisor(clock).Start(ct => child = new(ct), new(TimeSpan.Zero, TimeSpan.FromSeconds(90)), _ => { });
+        var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var process = new SshProcessSupervisor(clock).Start(ct => child = new(ct), new(TimeSpan.Zero, TimeSpan.FromSeconds(90)), _ => { }, (_, _) => { received.TrySetResult(); return Task.CompletedTask; });
         Assert.True(await process.FirstAttempt); clock.Advance(TimeSpan.FromSeconds(60)); child!.Emit("#\n");
-        await Task.Delay(20); clock.Advance(TimeSpan.FromSeconds(30)); await Task.Delay(20); Assert.False(child.Stopped);
+        await received.Task.WaitAsync(TimeSpan.FromSeconds(3)); clock.Advance(TimeSpan.FromSeconds(30));
+        await Eventually(() => clock.PendingDelays == 1); Assert.False(child.Stopped);
         clock.Advance(TimeSpan.FromSeconds(60)); await Eventually(() => child.Stopped && process.State.Failures == 1);
     }
     [Fact]
@@ -36,7 +38,7 @@ public sealed class ProcessSupervisorTests
         var clock = new FakeClock(); var children = new List<FakeRunningProcess>();
         await using var process = new SshProcessSupervisor(clock).Start(ct => { var p = new FakeRunningProcess(ct); children.Add(p); return p; }, new(TimeSpan.FromMilliseconds(1200)), _ => { });
         children[0].Exit(255); Assert.False(await process.FirstAttempt);
-        await Eventually(() => clock.PendingDelays == 1); Assert.Equal("failed", process.State.State);
+        await Eventually(() => clock.PendingDelays == 1 && process.State.Failures == 1); Assert.Equal("failed", process.State.State);
         clock.Advance(TimeSpan.FromSeconds(2)); await Eventually(() => children.Count == 2 && clock.PendingDelays >= 1);
         clock.Advance(TimeSpan.FromMilliseconds(1200)); await Eventually(() => process.State.State == "up");
         clock.Advance(TimeSpan.FromSeconds(60)); children[1].Exit(); await Eventually(() => process.State.Failures == 1 && process.State.State == "starting");

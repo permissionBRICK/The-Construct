@@ -39,6 +39,10 @@
     },
     "commands": [
       {
+        "command": "construct.installCompanion",
+        "title": "Construct: Install Construct Companion"
+      },
+      {
         "command": "construct.openPanelHere",
         "title": "Open Control Panel Here",
         "category": "The Construct"

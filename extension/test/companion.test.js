@@ -85,6 +85,15 @@ test("SSE handles fragmented CRLF, comments, multiline JSON, default event and u
   for (const text of [": hi\r", "\nevent: message\r\ndata: {\r\n", "data: \"text\":\"🎤\"}\r", "\n\r", "\ndata: next\n\n"]) parse(text);
   assert.deepEqual(events, [["message", '{\n"text":"🎤"}'], ["message", "next"]]);
 });
+test("Host narrow snapshot envelopes are unwrapped for panel state", () => {
+  const snapshot = { state: { type: "state", state: {} },
+    children: { type: "children", children: { items: [] } },
+    idlePolicy: { type: "idlePolicy", idlePolicy: { timeoutMinutes: 10 } },
+    hostAdminOffer: { type: "hostAdminOffer", offer: { host: "remote" } } };
+  assert.deepEqual(c.snapshotMessages(snapshot, null)[0].state, {
+    connectedInstance: null, children: { items: [] }, idlePolicy: { timeoutMinutes: 10 }, hostAdminOffer: { host: "remote" }
+  });
+});
 test("snapshot emits existing message shapes and overlays window connection without mutation", () => {
   const snapshot = { state: { type: "state", state: { instance: "a", connectedInstance: null } }, audio: { type: "audio", enabled: true }, children: [], idlePolicy: null, hostAdminOffer: null };
   const messages = c.snapshotMessages(snapshot, "b");

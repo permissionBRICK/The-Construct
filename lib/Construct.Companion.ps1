@@ -319,9 +319,16 @@ function Uninstall-ConstructCompanion {
     } finally { $lock.Dispose() }
 }
 
+function Test-ConstructCompanionElevated {
+    if ($env:OS -ne 'Windows_NT') { return $false }
+    $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
 function Invoke-ConstructCompanionInstallHook {
     [CmdletBinding()]
-    param([string]$ScriptsDir,[switch]$SkipCompanion)
+    param([string]$ScriptsDir,[switch]$SkipCompanion,[switch]$SkipWhenElevated)
+    if (-not $SkipCompanion -and $SkipWhenElevated -and (Test-ConstructCompanionElevated)) { Write-Verbose 'Companion installation belongs to the non-elevated client pre-step.'; return }
     try { Install-ConstructCompanion -ScriptsDir $ScriptsDir -SkipCompanion:$SkipCompanion | Out-Host }
     catch {
         $reason='An unexpected dependency failure occurred. Retry Install-ConstructCompanion in a non-elevated PowerShell window for diagnostics.'

@@ -55,6 +55,16 @@ internal sealed class WebViewWindow : Form
         Shown += async (_,_) => { if (!initialized) { initialized=true; await InitializeAsync(); } else await OpenRequestedViewAsync(); };
         Deactivate += (_,_) => { if (view == "popup") { PopupDeactivated?.Invoke(); Hide(); } };
         FormClosing += (_,e) => { if (!exiting && e.CloseReason == CloseReason.UserClosing) { e.Cancel=true; SaveBounds(); Hide(); } };
+        VisibleChanged += (_,_) =>
+        {
+            if (view != "hostadmin" || !initialized || web.CoreWebView2 is null) return;
+            if (!Visible) subscription.Cancel();
+            else if (subscription.IsCancellationRequested)
+            {
+                subscription.Dispose(); subscription = new(); _=ListenAsync(subscription.Token);
+                _=sink.PostAsync(scope,JsonSerializer.SerializeToElement(new {type="hostadmin.ready"},IpcJson.Options),subscription.Token);
+            }
+        };
         ResizeEnd += (_,_)=>SaveBounds();
     }
     private void SaveBounds()

@@ -48,7 +48,7 @@ public sealed class AudioSession(ISshTransport ssh, IRuntimeProcesses processes,
             var response = await ssh.RunRemoteScriptAsync(AudioProtocol.EnableScript(), TimeSpan.FromSeconds(60), linked.Token).ConfigureAwait(false);
             if (response.Code != 0) { Publish(new(Error: response.Code < 0 ? "unreachable" : "enable-failed")); return false; }
             remoteEnabled = true;
-            linked.Token.ThrowIfCancellationRequested();
+            lifetime.Token.ThrowIfCancellationRequested(); linked.Token.ThrowIfCancellationRequested();
             var gatePatched = AudioProtocol.ConfirmPatched("CONSTRUCT_GATE_PATCHED", response.Stdout);
             sessionStop = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
             server = await servers.ListenAsync(linked.Token).ConfigureAwait(false); linked.Token.ThrowIfCancellationRequested();
