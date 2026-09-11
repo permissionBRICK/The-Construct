@@ -185,13 +185,11 @@ function Expand-ConstructCompanionPayload {
 
 function Stop-ConstructCompanionForInstall {
     param([string]$StateDir,[hashtable]$Seams,[ValidateSet('update','user')][string]$Reason='update')
-    # The standalone desktop uses a private endpoint until full runtime composition.
-    foreach ($endpointName in @('endpoint.json','ui-endpoint.json')) {
-        $endpoint=Read-ConstructCompanionJson (Join-Path $StateDir $endpointName)
-        if (-not $endpoint) { continue }
+    $endpoint=Read-ConstructCompanionJson (Join-Path $StateDir 'endpoint.json')
+    if ($endpoint) {
         if ($endpoint.v -ne 1 -or $endpoint.ipcApiVersion -ne 1 -or ($endpoint.port -isnot [int] -and $endpoint.port -isnot [long]) -or $endpoint.port -lt 1 -or $endpoint.port -gt 65535 -or
             ($endpoint.pid -isnot [int] -and $endpoint.pid -isnot [long]) -or $endpoint.pid -le 0 -or $endpoint.pid -gt [int]::MaxValue -or $endpoint.token -cnotmatch '^[0-9a-fA-F]{64}$') { Throw-ConstructCompanionError 'Invalid Companion endpoint; close the Companion from its tray menu and retry.' }
-        if (-not (& $Seams.Alive $endpoint.pid)) { continue }
+        if (-not (& $Seams.Alive $endpoint.pid)) { return }
         $timer=[Diagnostics.Stopwatch]::StartNew()
         & $Seams.Quit $endpoint $Reason
         # Poll count also bounds injected clocks; wall time includes the HTTP request.
@@ -328,7 +326,8 @@ function Test-ConstructCompanionElevated {
 function Invoke-ConstructCompanionInstallHook {
     [CmdletBinding()]
     param([string]$ScriptsDir,[switch]$SkipCompanion,[switch]$SkipWhenElevated)
-    if (-not $SkipCompanion -and $SkipWhenElevated -and (Test-ConstructCompanionElevated)) { Write-Verbose 'Companion installation belongs to the non-elevated client pre-step.'; return }
+    # An elevated reprovision is the installer's own child; the non-elevated client pre-step owns the Companion.
+    if (-not $SkipCompanion -and $SkipWhenElevated -and (Test-ConstructCompanionElevated)) { return }
     try { Install-ConstructCompanion -ScriptsDir $ScriptsDir -SkipCompanion:$SkipCompanion | Out-Host }
     catch {
         $reason='An unexpected dependency failure occurred. Retry Install-ConstructCompanion in a non-elevated PowerShell window for diagnostics.'

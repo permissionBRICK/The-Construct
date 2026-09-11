@@ -2737,7 +2737,6 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
                 $reprovArgs.Remove('OpenCodeBackgroundWatcher')
             }
         } catch {
-            $reprovArgs.Remove('SkipCompanion')
             $reprovArgs.Remove('T3CodeChannel')
             $reprovArgs.Remove('T3CodeLimitResume')
             $reprovArgs.Remove('OpenCodeBackgroundWatcher')
@@ -3093,7 +3092,6 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
                     $acReprovArgs.Remove('OpenCodeBackgroundWatcher')
                 }
             } catch {
-                $acReprovArgs.Remove('SkipCompanion')
                 $acReprovArgs.Remove('T3CodeChannel')
                 $acReprovArgs.Remove('T3CodeLimitResume')
                 $acReprovArgs.Remove('OpenCodeBackgroundWatcher')

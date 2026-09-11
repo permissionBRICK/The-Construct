@@ -60,17 +60,14 @@ dotnet run --project companion/src/Construct.Companion.Host -- --fake --remote-o
 ```
 
 It prints a test-only endpoint document once; its state filesystem is in memory.
-`--fake` seeds one local and one remote instance; `--remote-only` suppresses the
-legacy local default. Both are tested through `extension/src/companion.js`. Quit via
+`--fake` seeds one local and one remote instance; `--remote-only` seeds only the remote
+one. Both are tested through `extension/src/companion.js`. Quit via
 the authenticated API; tests always stop and dispose their servers and child processes.
 
 ## Composition and lifetime
 
-Core has no package references. Effect interfaces live in `Core/Abstractions` and
-recording/in-memory implementations in Fakes. Host owns Kestrel, the dispatcher,
-process supervision and portable filesystem/HTTP adapters. Windows contains the
-platform APIs. The app marshals activations, dialogs and clipboard work to its STA
-thread and binds the shared webview media through `DispatcherMessageSink`.
+The app marshals activations, dialogs and clipboard work to its STA thread and binds the
+shared webview media through `DispatcherMessageSink`, the in-process twin of the HTTP routes.
 
 `CompanionInstances` normalizes registry records and creates an SSH transport,
 forwarder, notifier, audio session, repatch job and config-sync area for each instance.
@@ -106,7 +103,7 @@ into Core and used by JavaScript too. Golden fixtures in
 node extension/test/export-parity-fixtures.js
 ```
 
-Each exporter owns one area. C# and Node consume the same committed bytes. The S3
+Each exporter owns one area. C# and Node consume the same committed bytes. The
 `integration-settings` area runs the actual JS writer and compares default/named
 instance files against writes through the real HTTP dispatcher. External launches
 use argv arrays and existing parity-tested builders. Secrets are never logged or
@@ -114,12 +111,9 @@ placed in process arguments.
 
 ## Installation
 
-See [the user guide](../docs/companion.md). `Install-ConstructCompanion.ps1` wraps the
-per-user installer, including source selection, force and uninstall. Auto-Install's
-non-elevated pre-step covers local and remote installs; Update-Construct and plain
-Provision-AgentVM reprovision call the same opt-out-aware, non-blocking hook.
-The VS Code fallback offer covers PCs that only registered a remote VM through the
-extension. Installation always targets the client PC.
+See [the user guide](../docs/companion.md): `Install-ConstructCompanion.ps1` wraps the
+per-user library; `Auto-Install.ps1`, `Update-Construct.ps1` and a plain reprovision reach
+the same non-blocking, opt-out-aware hook. Installation always targets the client PC.
 
 ## Unsupported messages
 
@@ -130,16 +124,16 @@ These specific workflows remain explicit refusals:
 | Command | Reason / alternative |
 |---|---|
 | `registerThisVm` | Companion has no attached Remote-SSH window identity. Use the VS Code registration command (which stays local in client mode). |
-| `addProject` | S2a exposes profile storage but does not expose the clone/register/open project workflow. Save a profile or use Add Project in VS Code fallback mode. |
-| `removeInstance` | S2a has registry edits and launch builders, but no complete removal planner/confirmation workflow. Use the local VS Code removal command. |
+| `addProject` | Profile storage is available, but not the clone/register/open project workflow. Save a profile or use Add Project in VS Code fallback mode. |
+| `removeInstance` | Registry edits and launch builders exist, but not the removal planner/confirmation workflow. Use the local VS Code removal command. |
 | `convertToHost` | Initiation depends on the attached VM identity; pending VS Code conversions keep their RSA private key in that VS Code profile's SecretStorage. Companion shows pending status and never finishes it automatically. Review/finish in that profile. |
-| `createFirstVm` | The service-backed creation wizard is not exposed by S2a. Use New Remote VM in VS Code. |
+| `createFirstVm` | The service-backed creation wizard is not exposed. Use New Remote VM in VS Code. |
 | `updateConstruct` | The install-wide result-file/update/reload workflow is not yet wired. Run the installed `Update-Construct.ps1`. |
 | `hostadmin.action: issueToken`, `rotateVmToken` | `IPrompts` has no one-time secret display operation. Refused before requesting any new token; use the host CLI. |
 | `hostadmin.action: createFirstVm` | Same missing creation wizard as the panel command above. |
 | `saveSettings` automatic checkpoint apply | The preference is saved, but the elevated apply/result workflow is not wired. A visible refusal directs the user to VS Code or the installer checkpoint action. |
 | Lifecycle preflight / live project fallback | The dispatcher uses the persisted project selection. The extension's import-scan/config-sync/continue-anyway preflight and probe fallback are not wired; sync and select projects explicitly before launching lifecycle actions. |
-| `saveProject` malformed legacy values | Uses S2a strict validation and canonicalization rather than the extension modal's legacy schema coercion. Invalid or reserved profiles are refused before writing. |
+| `saveProject` malformed legacy values | Uses the strict validation and canonicalization gate rather than the extension modal's legacy schema coercion. Invalid or reserved profiles are refused before writing. |
 
 Other panel command IDs are routed in `Host/Dispatch/MessageDispatcher.cs`; host-admin
 messages/actions are routed in `Host/Dispatch/HostAdministration.cs`. Bad names, form
@@ -149,76 +143,80 @@ values and routes return RFC 7807 problems. Host-admin refusals also publish a v
 
 ## Message matrix
 
-The known dispatcher set is checked against this table and the extension source.
+The known dispatcher sets (`MessageDispatcher.KnownMessages`/`KnownCommands`) are checked
+against this table and the extension source by `ProtocolMatrixTests`. Panel messages and
+commands run through the dispatcher and the desktop seams; host messages through
+`HostAdministration`; extension commands stay in VS Code (registry edits are local, Companion
+views and runtime messages use IPC). The limitations of the implemented rows are listed above.
 
-| Kind | Message or command | Status | Details |
-|---|---|---|---|
-| message | `command` | implemented | Dispatcher; saveSettings checkpoint apply and lifecycle preflight limitations are listed above. |
-| message | `customRebuild` | implemented | Dispatcher; saveSettings checkpoint apply and lifecycle preflight limitations are listed above. |
-| message | `openPanel` | implemented | Dispatcher; saveSettings checkpoint apply and lifecycle preflight limitations are listed above. |
-| message | `ready` | implemented | Dispatcher; saveSettings checkpoint apply and lifecycle preflight limitations are listed above. |
-| message | `saveIdlePolicy` | implemented | Dispatcher; saveSettings checkpoint apply and lifecycle preflight limitations are listed above. |
-| message | `saveProject` | implemented | Dispatcher; saveSettings checkpoint apply and lifecycle preflight limitations are listed above. |
-| message | `saveSettings` | implemented | Dispatcher; saveSettings checkpoint apply and lifecycle preflight limitations are listed above. |
-| message | `setAudio` | implemented | Dispatcher; saveSettings checkpoint apply and lifecycle preflight limitations are listed above. |
-| message | `setInstance` | implemented | Dispatcher; saveSettings checkpoint apply and lifecycle preflight limitations are listed above. |
-| message | `setUsagePeriod` | implemented | Dispatcher; saveSettings checkpoint apply and lifecycle preflight limitations are listed above. |
-| command | `addConfigRemote` | implemented | Dispatcher and desktop seams. |
-| command | `addProject` | unsupported | Clone/register wizard remains in VS Code. |
-| command | `addRemoteAndPublish` | implemented | Dispatcher and desktop seams. |
-| command | `childDelete` | implemented | Dispatcher and desktop seams. |
-| command | `childShutdown` | implemented | Dispatcher and desktop seams. |
-| command | `chooseMicDevice` | implemented | Dispatcher and desktop seams. |
-| command | `chooseTheme` | implemented | Dispatcher and desktop seams. |
-| command | `closeForward` | implemented | Dispatcher and desktop seams. |
-| command | `connect` | implemented | Dispatcher and desktop seams. |
-| command | `convertToHost` | unsupported | Review and explicitly finish in the originating VS Code profile. |
-| command | `createFirstVm` | unsupported | Use the VS Code remote VM creation wizard. |
-| command | `deleteProject` | implemented | Dispatcher and desktop seams. |
-| command | `editProject` | implemented | Dispatcher and desktop seams. |
-| command | `exportConfig` | implemented | Dispatcher and desktop seams. |
-| command | `exportUsage` | implemented | Dispatcher and desktop seams. |
-| command | `importRemoteConfigs` | implemented | Dispatcher and desktop seams. |
-| command | `installGit` | implemented | Dispatcher and desktop seams. |
-| command | `openAgentWeb` | implemented | Dispatcher and desktop seams. |
-| command | `openConfigRepo` | implemented | Dispatcher and desktop seams. |
-| command | `openForward` | implemented | Dispatcher and desktop seams. |
-| command | `openHostAdmin` | implemented | Dispatcher and desktop seams. |
-| command | `openProject` | implemented | Dispatcher and desktop seams. |
-| command | `openProjectFolder` | implemented | Dispatcher and desktop seams. |
-| command | `publishConfigProfiles` | implemented | Dispatcher and desktop seams. |
-| command | `pushConfigUpstream` | implemented | Dispatcher and desktop seams. |
-| command | `redownload` | implemented | Dispatcher and desktop seams. |
-| command | `refresh` | implemented | Dispatcher and desktop seams. |
-| command | `registerThisVm` | unsupported | Requires an attached VS Code Remote-SSH identity. |
-| command | `reinstall` | implemented | Dispatcher and desktop seams. |
-| command | `removeConfigRemote` | implemented | Dispatcher and desktop seams. |
-| command | `removeInstance` | unsupported | Use the local VS Code removal command. |
-| command | `reprovision` | implemented | Dispatcher and desktop seams. |
-| command | `selectProfiles` | implemented | Dispatcher and desktop seams. |
-| command | `shareConfigs` | implemented | Dispatcher and desktop seams. |
-| command | `showLogs` | implemented | Dispatcher and desktop seams. |
-| command | `shutdown` | implemented | Dispatcher and desktop seams. |
-| command | `startConnect` | implemented | Dispatcher and desktop seams. |
-| command | `syncConfigNow` | implemented | Dispatcher and desktop seams. |
-| command | `updateAgent` | implemented | Dispatcher and desktop seams. |
-| command | `updateAgents` | implemented | Dispatcher and desktop seams. |
-| command | `updateConstruct` | unsupported | Run Update-Construct.ps1; update/reload result workflow remains in VS Code. |
-| host message | `hostadmin.ready` | implemented | HostAdministration; one-time token display and creation wizard limitations are listed above. |
-| host message | `hostadmin.refresh` | implemented | HostAdministration; one-time token display and creation wizard limitations are listed above. |
-| host message | `hostadmin.tab` | implemented | HostAdministration; one-time token display and creation wizard limitations are listed above. |
-| host message | `hostadmin.signIn` | implemented | HostAdministration; one-time token display and creation wizard limitations are listed above. |
-| host message | `hostadmin.action` | implemented | HostAdministration; one-time token display and creation wizard limitations are listed above. |
-| extension command | `construct.openPanelHere` | implemented | Registered by the extension; registry edits stay local, Companion views/runtime messages use IPC. |
-| extension command | `construct.openPanel` | implemented | Registered by the extension; registry edits stay local, Companion views/runtime messages use IPC. |
-| extension command | `construct.refresh` | implemented | Registered by the extension; registry edits stay local, Companion views/runtime messages use IPC. |
-| extension command | `construct.showLogs` | implemented | Registered by the extension; registry edits stay local, Companion views/runtime messages use IPC. |
-| extension command | `construct.chooseTheme` | implemented | Registered by the extension; registry edits stay local, Companion views/runtime messages use IPC. |
-| extension command | `construct.switchInstance` | implemented | Registered by the extension; registry edits stay local, Companion views/runtime messages use IPC. |
-| extension command | `construct.addRemoteHost` | implemented | Registered by the extension; registry edits stay local, Companion views/runtime messages use IPC. |
-| extension command | `construct.newRemoteVm` | implemented | Registered by the extension; registry edits stay local, Companion views/runtime messages use IPC. |
-| extension command | `construct.registerThisVm` | implemented | Registered by the extension; registry edits stay local, Companion views/runtime messages use IPC. |
-| extension command | `construct.removeInstance` | implemented | Registered by the extension; registry edits stay local, Companion views/runtime messages use IPC. |
-| extension command | `construct.removeRemoteHost` | implemented | Registered by the extension; registry edits stay local, Companion views/runtime messages use IPC. |
-| extension command | `construct.openHostAdmin` | implemented | Registered by the extension; registry edits stay local, Companion views/runtime messages use IPC. |
-| extension command | `construct.installCompanion` | implemented | Registered by the extension; registry edits stay local, Companion views/runtime messages use IPC. |
+| Kind | Message or command | Status |
+|---|---|---|
+| message | `command` | implemented |
+| message | `customRebuild` | implemented |
+| message | `openPanel` | implemented |
+| message | `ready` | implemented |
+| message | `saveIdlePolicy` | implemented |
+| message | `saveProject` | implemented |
+| message | `saveSettings` | implemented |
+| message | `setAudio` | implemented |
+| message | `setInstance` | implemented |
+| message | `setUsagePeriod` | implemented |
+| command | `addConfigRemote` | implemented |
+| command | `addProject` | unsupported: Clone/register wizard remains in VS Code. |
+| command | `addRemoteAndPublish` | implemented |
+| command | `childDelete` | implemented |
+| command | `childShutdown` | implemented |
+| command | `chooseMicDevice` | implemented |
+| command | `chooseTheme` | implemented |
+| command | `closeForward` | implemented |
+| command | `connect` | implemented |
+| command | `convertToHost` | unsupported: Review and explicitly finish in the originating VS Code profile. |
+| command | `createFirstVm` | unsupported: Use the VS Code remote VM creation wizard. |
+| command | `deleteProject` | implemented |
+| command | `editProject` | implemented |
+| command | `exportConfig` | implemented |
+| command | `exportUsage` | implemented |
+| command | `importRemoteConfigs` | implemented |
+| command | `installGit` | implemented |
+| command | `openAgentWeb` | implemented |
+| command | `openConfigRepo` | implemented |
+| command | `openForward` | implemented |
+| command | `openHostAdmin` | implemented |
+| command | `openProject` | implemented |
+| command | `openProjectFolder` | implemented |
+| command | `publishConfigProfiles` | implemented |
+| command | `pushConfigUpstream` | implemented |
+| command | `redownload` | implemented |
+| command | `refresh` | implemented |
+| command | `registerThisVm` | unsupported: Requires an attached VS Code Remote-SSH identity. |
+| command | `reinstall` | implemented |
+| command | `removeConfigRemote` | implemented |
+| command | `removeInstance` | unsupported: Use the local VS Code removal command. |
+| command | `reprovision` | implemented |
+| command | `selectProfiles` | implemented |
+| command | `shareConfigs` | implemented |
+| command | `showLogs` | implemented |
+| command | `shutdown` | implemented |
+| command | `startConnect` | implemented |
+| command | `syncConfigNow` | implemented |
+| command | `updateAgent` | implemented |
+| command | `updateAgents` | implemented |
+| command | `updateConstruct` | unsupported: Run Update-Construct.ps1; update/reload result workflow remains in VS Code. |
+| host message | `hostadmin.ready` | implemented |
+| host message | `hostadmin.refresh` | implemented |
+| host message | `hostadmin.tab` | implemented |
+| host message | `hostadmin.signIn` | implemented |
+| host message | `hostadmin.action` | implemented |
+| extension command | `construct.openPanelHere` | implemented |
+| extension command | `construct.openPanel` | implemented |
+| extension command | `construct.refresh` | implemented |
+| extension command | `construct.showLogs` | implemented |
+| extension command | `construct.chooseTheme` | implemented |
+| extension command | `construct.switchInstance` | implemented |
+| extension command | `construct.addRemoteHost` | implemented |
+| extension command | `construct.newRemoteVm` | implemented |
+| extension command | `construct.registerThisVm` | implemented |
+| extension command | `construct.removeInstance` | implemented |
+| extension command | `construct.removeRemoteHost` | implemented |
+| extension command | `construct.openHostAdmin` | implemented |
+| extension command | `construct.installCompanion` | implemented |
