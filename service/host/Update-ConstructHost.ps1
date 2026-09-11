@@ -59,7 +59,7 @@ function Get-UpdateTarget([string]$Path, $H, $Settings) {
     else { throw 'Not an installation file.' }
     $target = [IO.Path]::GetFullPath((Join-Path $root $relative))
     if (-not (Test-UpdateUnder $target $root)) { throw 'Target escaped its root.' }
-    foreach ($protected in @($H.dataDir, $Settings.Constructd.Iso.CacheDir, $Settings.Constructd.HostAdmin.Media.RootDir,
+    foreach ($protected in @($H.dataDir, $Settings.Constructd.Iso.CacheDir, $Settings.Constructd.HostAdmin.Media.RootDir, $Settings.Constructd.HostAdmin.Source.RootDir,
         (Join-Path $H.scriptsDir '.construct-tools'), (Join-Path $H.scriptsDir 'keys'), (Join-Path $H.scriptsDir 'projects'))) {
         if ($protected -and (Test-UpdateUnder $target $protected)) { throw 'Target intersects preserved data.' }
     }
@@ -276,7 +276,8 @@ function Invoke-ConstructHostUpdate([string]$HandoffPath, [bool]$IsResume, [bool
                                 if ($pair[0] -eq 'scripts' -and ((Test-UpdateUnder $file.FullName $h.publishDir) -or (Test-UpdateUnder $file.FullName $h.dataDir))) { continue }
                                 # Preserved roots are skipped, not handed to the copying primitive.
                                 if (($settings.Constructd.Iso.CacheDir -and (Test-UpdateUnder $file.FullName $settings.Constructd.Iso.CacheDir)) -or
-                                    ($settings.Constructd.HostAdmin.Media.RootDir -and (Test-UpdateUnder $file.FullName $settings.Constructd.HostAdmin.Media.RootDir))) { continue }
+                                    ($settings.Constructd.HostAdmin.Media.RootDir -and (Test-UpdateUnder $file.FullName $settings.Constructd.HostAdmin.Media.RootDir)) -or
+                                    ($settings.Constructd.HostAdmin.Source.RootDir -and (Test-UpdateUnder $file.FullName $settings.Constructd.HostAdmin.Source.RootDir))) { continue }
                                 $copyFiles += [pscustomobject]@{path=$path}
                             }
                         }
