@@ -721,8 +721,9 @@ try {
         $cloneDir = Update-ConstructStagingClone -SourceRepo $srcRepo
         ok "staging: initial clone succeeds" (Test-Path -LiteralPath (Join-Path $cloneDir ".git"))
 
-        # Break the clone's origin so the next fetch fails.
-        & git -C $cloneDir remote set-url origin (Join-Path $impBase "does-not-exist-repo") 2>$null | Out-Null
+        # Remove the requested remote so the next fetch fails. The staging
+        # refresh deliberately uses that URL, avoiding stale origin userinfo.
+        Move-Item -LiteralPath $srcRepo -Destination ($srcRepo + '-offline')
 
         # A refresh WITHOUT -NoFetch must now throw (fail closed), not return stale content.
         $fetchThrew = $false
@@ -2752,7 +2753,8 @@ try {
 
     # The real thing, against a lazily created empty bare repo.
     $pubBare = Join-Path $pubBase "remote.git"
-    & git init --bare $pubBare 2>$null | Out-Null
+    # This fixture asserts main; do not inherit the machine's init.defaultBranch.
+    & git init --bare --initial-branch=main $pubBare 2>$null | Out-Null
     $pubUrl = "file://$pubBare"
 
     $pubRes = Publish-ConstructConfigProfiles -ConfigDir $pubConfigDir -RemoteUrl $pubUrl
