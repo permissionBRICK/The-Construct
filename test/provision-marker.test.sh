@@ -143,9 +143,11 @@ ok "a later versioned reprovision records the commit again" is "4444444" "$(key_
 ok "...still exactly one CONSTRUCT_COMMIT line" is "1" "$(grep -c '^CONSTRUCT_COMMIT=' "${m4}")"
 
 # ── 5. The probe reads exactly this file and key ──────────────────────────────
-PROBE="${ROOT}/extension/src/probe.js"
-ok "extension/src/probe.js reads CONSTRUCT_COMMIT from provisioned.env" \
+PROBE="${ROOT}/extension/vm/probe.sh"
+ok "shared probe reads CONSTRUCT_COMMIT from provisioned.env" \
   grep -q "emit CONSTRUCT_COMMIT .*CONSTRUCT_COMMIT=" "${PROBE}"
+ok "extension probe renders the shared guest contract" \
+  grep -Fq 'guestScripts.render("probe")' "${ROOT}/extension/src/probe.js"
 
 printf '\n  provision marker tests — %d passed, %d failed\n\n' "${pass}" "${fail}"
 [[ "${fail}" -eq 0 ]]
