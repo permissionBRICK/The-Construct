@@ -39,7 +39,7 @@ public sealed class HostUpdateJob(IHostUpdateStore store, IReleaseSource source,
             {
                 await runner.SetPhaseAsync(jobId,"check",token);
                 var settings=await checker.SettingsAsync(token);
-                var latest=(await source.ListHostReleasesAsync(settings.Repository,token)).OrderByDescending(r=>r.PublishedAt).FirstOrDefault(r=>tag is null || r.Tag==tag)
+                var latest=(await source.ListHostReleasesAsync(settings.Repository,token,tag)).OrderByDescending(r=>r.PublishedAt).FirstOrDefault(r=>tag is null || r.Tag==tag)
                     ?? throw new UpdateException("release-source-unreachable");
                 row=await PhaseAsync(row with { Commit=latest.Commit, ReleaseTag=latest.Tag },HostUpdateState.Checking,"check");
                 var progress=new PhaseProgress(async phase=>

@@ -12,6 +12,7 @@ param(
     [string]$Ref  = "main"
 )
 $ErrorActionPreference = "Stop"
+$release = $null
 try { Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force } catch { }
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
 
@@ -24,7 +25,27 @@ if (-not (Test-Path -LiteralPath $work)) { New-Item -ItemType Directory -Path $w
 
 Write-Host "==> Downloading $Repo ($Ref) ..." -ForegroundColor Cyan
 $oldPP = $ProgressPreference; $ProgressPreference = "SilentlyContinue"
-try { Invoke-WebRequest -Uri "https://codeload.github.com/$Repo/zip/refs/heads/$Ref" -OutFile $zip -UseBasicParsing }
+try {
+    if ($Repo -notmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') { throw 'Invalid Construct repository.' }
+    if ($Ref -eq 'main') {
+        $release = Invoke-RestMethod -Uri "https://github.com/$Repo/releases/latest/download/manifest.json" -UseBasicParsing -TimeoutSec 30
+        if ($release.schemaVersion -ne 1 -or $release.repository -cne $Repo -or $release.ref -cne 'refs/heads/main' -or
+            $release.commit -cnotmatch '^[0-9a-f]{40}$' -or $release.releaseTag -cne ('host-' + $release.commit) -or
+            $release.sourceAsset -cne ('construct-source-' + $release.commit + '.zip') -or $release.sourceSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+            $release.sourceSizeBytes -le 0 -or $release.sourceSizeBytes -gt 1GB -or
+            $release.payloadAsset -cne ('construct-host-' + $release.commit.Substring(0,7) + '-win-x64.zip') -or
+            $release.payloadSha256 -cnotmatch '^[0-9a-f]{64}$' -or $release.payloadSizeBytes -le 0 -or $release.payloadSizeBytes -gt 1GB) {
+            throw 'No complete published Construct release is available.'
+        }
+        $url = "https://github.com/$Repo/releases/download/$($release.releaseTag)/$($release.sourceAsset)"
+        Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing -TimeoutSec 300
+        if ((Get-Item -LiteralPath $zip).Length -ne $release.sourceSizeBytes -or
+            (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash -ne $release.sourceSha256) { throw 'Construct source checksum mismatch.' }
+    } else {
+        # Explicit development branches bypass the published main stream.
+        Invoke-WebRequest -Uri "https://codeload.github.com/$Repo/zip/refs/heads/$Ref" -OutFile $zip -UseBasicParsing -TimeoutSec 300
+    }
+}
 finally { $ProgressPreference = $oldPP }
 Expand-Archive -LiteralPath $zip -DestinationPath $work -Force
 Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue

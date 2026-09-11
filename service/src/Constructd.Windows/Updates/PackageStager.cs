@@ -15,7 +15,7 @@ public sealed class PackageStager(IReleaseSource source, IHostConfigStore config
     public async Task<CheckedRelease?> CheckAsync(string? releaseTag, CancellationToken ct)
     {
         var settings = await SettingsAsync(ct);
-        var releases = await source.ListHostReleasesAsync(settings.Repository, ct);
+        var releases = await source.ListHostReleasesAsync(settings.Repository, ct, releaseTag);
         var release = releases.OrderByDescending(r => r.PublishedAt).FirstOrDefault(r => releaseTag is null || r.Tag == releaseTag);
         if (release is null) return null;
         var temporary = Path.Combine(UpdatesDir, "check-" + Guid.NewGuid().ToString("n"));
