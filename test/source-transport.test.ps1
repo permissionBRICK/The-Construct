@@ -129,6 +129,11 @@ try {
     Check 'archive equivalent' ((Get-ConstructSourceIdentity -Root $tree -ManifestDir $manifests).TreeState -eq 'equivalent')
     [IO.File]::WriteAllText((Join-Path $tree 'ignored.local'),'ignored')
     Check 'ignored extra still equivalent' ((Get-ConstructSourceIdentity -Root $tree -ManifestDir $manifests).TreeState -eq 'equivalent')
+    foreach ($built in 'companion/src/App/obj/x.dll','companion/src/App/bin/Release/y.dll','extension/test/node_modules/z/index.js') {
+        [IO.Directory]::CreateDirectory((Split-Path -Parent (Join-Path $tree $built))) | Out-Null
+        [IO.File]::WriteAllText((Join-Path $tree $built),'built')
+    }
+    Check 'build outputs and node_modules are not local changes' ((Get-ConstructSourceIdentity -Root $tree -ManifestDir $manifests).TreeState -eq 'equivalent')
     [IO.File]::WriteAllText((Join-Path $tree 'extra'),'extra')
     Check 'archive extra divergent' ((Get-ConstructSourceIdentity -Root $tree -ManifestDir $manifests).TreeState -eq 'divergent')
     Remove-Item -LiteralPath (Join-Path $tree 'extra');[IO.File]::WriteAllText((Join-Path $tree 'file'),'changed')

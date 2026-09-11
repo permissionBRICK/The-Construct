@@ -78,7 +78,7 @@ try {
     Assert ($script:registry['HKCU:\Software\Classes\AppUserModelId\PermissionBrick.TheConstruct|DisplayName'] -eq 'Construct Companion') 'AUMID'
     Assert ($script:starts.Count -eq 1 -and ($script:starts[0].argv -join '|') -eq '--background') 'Detached argv'
     $publish=@($script:nativeCalls | Where-Object { $_.argv[0] -eq 'publish' })[0]
-    $expected=@('publish',(Join-Path $repo 'companion/src/Construct.Companion/Construct.Companion.csproj'),'-c','Release','-r','win-x64','--self-contained','true',('-p:InformationalVersion=1.0.0+'+$sha),'-p:IncludeSourceRevisionInInformationalVersion=false','-o',$publish.argv[-1])
+    $expected=@('publish',(Join-Path $repo 'companion/src/Construct.Companion/Construct.Companion.csproj'),'-c','Release','-r','win-x64','--self-contained','true',('-p:InformationalVersion=1.0.0+'+$sha),'-p:IncludeSourceRevisionInInformationalVersion=false','--artifacts-path',(Join-Path (Split-Path -Parent $publish.argv[-1]) 'artifacts'),'-o',$publish.argv[-1])
     Assert (($publish.argv -join '|') -eq ($expected -join '|')) 'Exact publish argv, including spaced path'
     $before=$script:nativeCalls.Count
     Assert ((Install-ConstructCompanion $repo -LocalAppData $local -Seams $seams) -eq 'unchanged') 'Identical commit is no-op'
