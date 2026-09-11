@@ -150,6 +150,43 @@ ok("setCheckpoints: non-boolean enabled -> null",
 ok("setCheckpoints: labels say which way it went", chkOn.label === "Enable automatic checkpoints" && chkOff.label === "Disable automatic checkpoints");
 ok("setCheckpoints: passes -FromPanel (no pause on success)", chkOff.args.includes("-FromPanel"));
 
+// ── setResources: restart the live VM with a new RAM size / vCPU count ──────
+const resBoth = life.buildInvocation("setResources", { ram: 16, cpu: 8 });
+ok("setResources: uses the resources script", resBoth.script === life.RESOURCES && life.RESOURCES === "Set-AgentVmResources.ps1");
+ok("setResources: elevated (Hyper-V needs admin), not modal-destructive (the extension confirmed)",
+  resBoth.elevate === true && resBoth.destructive === false);
+ok("setResources: -VmMemoryGB and -VmCpuCount", has(resBoth.args, "-VmMemoryGB", "16") && has(resBoth.args, "-VmCpuCount", "8"));
+ok("setResources: passes -FromPanel", resBoth.args.includes("-FromPanel"));
+ok("setResources: label", resBoth.label === "Apply VM resources");
+const resRam = life.buildInvocation("setResources", { ram: "6.5" });
+ok("setResources: RAM alone (a form string, fractional) -> only -VmMemoryGB",
+  has(resRam.args, "-VmMemoryGB", "6.5") && !resRam.args.includes("-VmCpuCount"));
+const resCpu = life.buildInvocation("setResources", { cpu: "4" });
+ok("setResources: CPUs alone -> only -VmCpuCount", has(resCpu.args, "-VmCpuCount", "4") && !resCpu.args.includes("-VmMemoryGB"));
+ok("setResources: nothing set -> null (never powers a VM off for nothing)",
+  life.buildInvocation("setResources", {}) === null &&
+  life.buildInvocation("setResources", { ram: "", cpu: "" }) === null &&
+  life.buildInvocation("setResources", { ram: 0, cpu: 0 }) === null);
+ok("setResources: garbage is not a value",
+  life.buildInvocation("setResources", { ram: "lots", cpu: "NaN" }) === null &&
+  life.buildInvocation("setResources", { ram: -4 }) === null &&
+  life.buildInvocation("setResources", { cpu: 2.5 }) === null &&
+  life.buildInvocation("setResources", { cpu: true }) === null);
+ok("setResources: a fractional CPU count is dropped but the RAM still applies",
+  has(life.buildInvocation("setResources", { ram: 8, cpu: 2.5 }).args, "-VmMemoryGB", "8") &&
+  !life.buildInvocation("setResources", { ram: 8, cpu: 2.5 }).args.includes("-VmCpuCount"));
+ok("resourceNumber: the rule itself",
+  life.resourceNumber("16", false) === 16 && life.resourceNumber(" 8 ", true) === 8 &&
+  life.resourceNumber("2.5", true) === null && life.resourceNumber("2.5", false) === 2.5 &&
+  life.resourceNumber("", false) === null && life.resourceNumber(null, false) === null &&
+  life.resourceNumber(undefined, true) === null && life.resourceNumber("0", false) === null);
+ok("setResources: scriptForAction names the script", life.scriptForAction("setResources") === life.RESOURCES);
+ok("setResources: instance params are the VM name (legacy) / the instance name (name-only)",
+  JSON.stringify(life.INSTANCE_PARAMS.setResources) === JSON.stringify(["VmName"]) &&
+  JSON.stringify(life.NAME_TARGET_PARAMS.setResources) === JSON.stringify(["InstanceName"]) &&
+  JSON.stringify(life.REQUIRED_INSTANCE_PARAMS.setResources) === JSON.stringify(["VmName"]) &&
+  JSON.stringify(life.REQUIRED_NAME_TARGET_PARAMS.setResources) === JSON.stringify(["InstanceName"]));
+
 // scriptSupportsCheckpoints reads the real parameter, against a fake scripts dir.
 const fs = require("fs"), os = require("os"), path = require("path");
 const sd = fs.mkdtempSync(path.join(os.tmpdir(), "construct-life-"));
@@ -505,7 +542,7 @@ deepEq("remote: reprovision keeps the endpoint identity, unchanged",
 deepEq("local: the rebuild set is unchanged by B7",
   life.instanceArgs("reinstall", LOCAL_INST, LEGACY_PARAM), ["-VmName", "work-vm"]);
 // THE ZERO-CHANGE BAR: the default instance emits nothing at all, on every action.
-for (const action of ["reprovision", "exportConfig", "reinstall", "redownload", "setCheckpoints"]) {
+for (const action of ["reprovision", "exportConfig", "reinstall", "redownload", "setCheckpoints", "setResources"]) {
   deepEq(`zero-change: the default instance emits no target args (${action})`,
     life.instanceArgs(action, DEFAULT_INST, EVERY_PARAM), []);
   deepEq(`zero-change: no instance at all emits none either (${action})`,
@@ -549,6 +586,13 @@ deepEq("name-only: redownload emits the name too",
   life.instanceArgs("redownload", LOCAL_INST, NAME_PARAM), ["-InstanceName", "work-vm"]);
 deepEq("name-only: setCheckpoints emits the name instead of -VmName",
   life.instanceArgs("setCheckpoints", LOCAL_INST, ["InstanceName"]), ["-InstanceName", "work-vm"]);
+deepEq("name-only: setResources emits the name instead of -VmName",
+  life.instanceArgs("setResources", LOCAL_INST, ["InstanceName"]), ["-InstanceName", "work-vm"]);
+deepEq("legacy: setResources emits -VmName for a non-default local instance",
+  life.instanceArgs("setResources", LOCAL_INST, ["VmName"]), ["-VmName", "work-vm"]);
+const resRemote = life.buildInvocation("setResources", { ram: 8, instance: REMOTE_INST, instanceParams: ["VmName", "InstanceName"] });
+ok("setResources: a remote instance is REFUSED (the script would resize a local VM of the same name)",
+  !!resRemote && resRemote.blocked === true && /host service/i.test(resRemote.reason));
 deepEq("name-only: a reprovision of a REMOTE instance is name-targeted too (the entry has its endpoint)",
   life.instanceArgs("reprovision", REMOTE_INST, NAME_PARAM), ["-InstanceName", "work-vm"]);
 deepEq("name-only: an explicit branch still rides along",
@@ -561,7 +605,7 @@ deepEq("name-only: a remote REBUILD keeps -Backend/-ServiceUrl beside the name",
   ["-Backend", "hyperv-remote", "-ServiceUrl", "https://buildbox.example.local:7462",
    "-InstanceName", "work-vm"]);
 // THE ZERO-CHANGE BAR is unchanged by any of this.
-for (const action of ["reprovision", "exportConfig", "reinstall", "redownload", "setCheckpoints"]) {
+for (const action of ["reprovision", "exportConfig", "reinstall", "redownload", "setCheckpoints", "setResources"]) {
   deepEq(`name-only: the default instance still emits nothing (${action})`,
     life.instanceArgs(action, DEFAULT_INST, NAME_PARAM), []);
 }
@@ -644,6 +688,8 @@ for (const action of ["reinstall", "redownload"]) {
 // checkpoints capability), so its elevation is unchanged.
 ok("elevate: setCheckpoints is untouched by the backend rule",
   life.buildInvocation("setCheckpoints", { settings: {}, enabled: true }).elevate === true);
+ok("elevate: setResources elevates too (local Hyper-V only)",
+  life.buildInvocation("setResources", { settings: {}, ram: 8 }).elevate === true);
 
 // ── run(): the CAPTURED TARGET is re-verified on the other side of the modal ──
 // The destructive confirmation opens INSIDE run(). Callers check their captured

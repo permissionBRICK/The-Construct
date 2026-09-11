@@ -39,7 +39,9 @@ const MAX_OUT = 64 * 1024;
  *  Create-AgentVM.ps1 / Set-AgentVmCheckpoints.ps1) create, delete and reconfigure
  *  this backend's VMs — they drive the LOCAL Hyper-V, which is exactly this driver.
  *  drivers/index.js gates the VM-destroying lifecycle actions on it. */
-const CAPABILITIES = { checkpoints: true, console: "vmconnect", suspend: true, hostLifecycle: true };
+/** `resources`: Set-AgentVmResources.ps1 can restart this backend's VMs with a new RAM
+ *  size / vCPU count (the driver's Set-ConstructVmMemory / Set-ConstructVmCpuCount). */
+const CAPABILITIES = { checkpoints: true, console: "vmconnect", suspend: true, hostLifecycle: true, resources: true };
 
 /** The VM name for an instance (contract: normalized instance object), or the default. */
 function vmNameOf(instance) {

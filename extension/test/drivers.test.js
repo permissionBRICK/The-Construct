@@ -106,8 +106,8 @@ ok("unknown: no capabilities are claimed",
 // declaring `hostLifecycle`, not by editing lifecycle.js.
 ok("caps: local Hyper-V declares hostLifecycle (the host scripts manage it)", caps.hostLifecycle === true);
 ok("caps: an unknown backend claims no hostLifecycle", unk.capabilities.hostLifecycle === false);
-ok("gate: the hypervisor actions are exactly reinstall/redownload/setCheckpoints",
-  JSON.stringify(drivers.HYPERVISOR_ACTIONS) === JSON.stringify(["reinstall", "redownload", "setCheckpoints"]));
+ok("gate: the hypervisor actions are exactly reinstall/redownload/setCheckpoints/setResources",
+  JSON.stringify(drivers.HYPERVISOR_ACTIONS) === JSON.stringify(["reinstall", "redownload", "setCheckpoints", "setResources"]));
 for (const action of drivers.HYPERVISOR_ACTIONS) {
   ok(`gate: hyperv-local may ${action}`, drivers.lifecycleSupport("hyperv-local", action).ok === true);
   const denied = drivers.lifecycleSupport("proxmox", action);
@@ -125,6 +125,17 @@ ok("gate: ...and blames the missing capability, not the missing driver",
   /no checkpoints/i.test(noChk.reason) && !/remote driver/i.test(noChk.reason));
 ok("gate: ACTION_CAPABILITY maps setCheckpoints onto the checkpoints capability",
   drivers.ACTION_CAPABILITY.setCheckpoints === "checkpoints");
+// setResources (Set-AgentVmResources.ps1): the local driver resizes its own VMs in place;
+// a remote primary is resized by its host service, so the script must never touch it.
+ok("caps: local Hyper-V declares resources (in-place RAM/vCPU resize)", caps.resources === true);
+ok("caps: hyperv-remote declares NO resources (the service resizes its VMs)", rcaps.resources === false);
+ok("caps: an unknown backend claims no resources", unk.capabilities.resources === false);
+ok("gate: ACTION_CAPABILITY maps setResources onto the resources capability",
+  drivers.ACTION_CAPABILITY.setResources === "resources");
+const noRes = drivers.lifecycleSupport("hyperv-remote", "setResources");
+ok("gate: hyperv-remote may NOT setResources", noRes.ok === false);
+ok("gate: ...and points at the host service, not at a missing driver",
+  /host service/i.test(noRes.reason) && !/remote driver/i.test(noRes.reason));
 for (const action of ["reprovision", "exportConfig"]) {
   ok(`gate: ${action} is SSH-only, so every backend may run it`,
     drivers.lifecycleSupport("hyperv-local", action).ok === true &&

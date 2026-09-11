@@ -1559,6 +1559,11 @@ if (fs.existsSync(path.join(repoRoot, life.PROVISION))) {
   for (const p2 of ["VmName", "InstanceName"]) {
     ok(`probe: Set-AgentVmCheckpoints.ps1 declares -${p2}`, life.scriptSupportsParam(repoRoot, life.CHECKPOINTS, p2));
   }
+  for (const p2 of ["VmName", "InstanceName", "VmMemoryGB", "VmCpuCount"]) {
+    ok(`probe: Set-AgentVmResources.ps1 declares -${p2}`, life.scriptSupportsParam(repoRoot, life.RESOURCES, p2));
+  }
+  deepEq("probe: setResources is the name alone",
+    life.instanceParamSupport(repoRoot, "setResources"), ["InstanceName"]);
   ok("probe: a made-up parameter is not found",
     !life.scriptSupportsParam(repoRoot, life.PROVISION, "TotallyNotAParameter"));
 } else {

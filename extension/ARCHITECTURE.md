@@ -180,7 +180,9 @@ extension/
                       importRemoteConfigs collision path
     lifecycle.js      reprovision/export -> Provision-AgentVM.ps1; reinstall/redownload ->
                       Auto-Install.ps1 -Action/-BackupMode; setCheckpoints ->
-                      Set-AgentVmCheckpoints.ps1 -Enabled (elevated, live VM); launches a host
+                      Set-AgentVmCheckpoints.ps1 -Enabled (elevated, live VM); setResources ->
+                      Set-AgentVmResources.ps1 -VmMemoryGB/-VmCpuCount (elevated, restarts the
+                      live VM with the new size); launches a host
                       console via child_process (pure buildInvocation/buildHostLaunch;
                       vscode lazy-required)
     updates.js        update checks (best-effort, cached, injectable fetch): Construct =
@@ -1145,6 +1147,7 @@ comment-stripped declaration probe the other capability gates use). Per script:
   "emit whatever the script declares" would break every non-default rebuild — hence an
   explicit per-action parameter list rather than one shared set.
 - **`Set-AgentVmCheckpoints.ps1`** (setCheckpoints) — `-VmName`; it only talks to Hyper-V.
+- **`Set-AgentVmResources.ps1`** (setResources) — `-VmName`; same shape, Hyper-V only.
 
 **Version skew fails CLOSED for a non-default instance.** Dropping an identity
 parameter the installed script doesn't declare does not "degrade gracefully" — it
@@ -2536,6 +2539,17 @@ says what will actually happen.
     the automatic checkpoints classified by `Get-ConstructVmAutomaticCheckpoint`
     (`Certain` unattended, `Probable` only after a per-checkpoint `yes` — see the design
     decision).
+  - `Set-AgentVmResources.ps1` — the panel's "Save & restart to apply" for RAM + vCPUs:
+    `-VmMemoryGB`/`-VmCpuCount` (+ `-VmName`, `-Backend`, `-InstanceName`,
+    `-ShutdownTimeoutSec`, `-StartAfter`, `-FromPanel`). Self-elevating; graceful shutdown
+    (resumes a saved/paused VM first, never a power cut) → `Set-ConstructVmMemory` /
+    `Set-ConstructVmCpuCount` while OFF → `Start-ConstructVm`; REFUSES when the backend
+    reports `Resources = $false`. Reports `running` / `ok` / `fail` through
+    `CONSTRUCT_RESOURCES_RESULT`; the extension sends the guest its SSH `poweroff` only
+    after `running` (a declined UAC must not leave the VM off with nothing applied), and
+    a remote instance goes through the host service instead (`PUT /vms/{name}/cpu` +
+    lifecycle restart; RAM is reported as still needing a Reinstall). Disk size stays a
+    rebuild job.
   - `Update-Construct.ps1` — the panel's "Update Construct" self-update: re-download the
     repo in place, record the update marker (`installedCommit` from the GitHub commits
     API + `constructRepo`/`constructRef` via `Set-ConstructInstalledMarker`), and

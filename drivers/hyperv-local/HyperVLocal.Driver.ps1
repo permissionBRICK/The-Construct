@@ -50,6 +50,8 @@ function Get-ConstructDriverCapabilities {
           Checkpoints : Hyper-V snapshots + the automatic-checkpoint policy
           Console     : 'vmconnect' | a URL | 'none'
           Suspend     : Save-VM / resume-on-start (state 'saved')
+          Resources   : Set-ConstructVmMemory / Set-ConstructVmCpuCount on an EXISTING
+                        (powered-off) VM -- what Set-AgentVmResources.ps1 drives
     #>
     [CmdletBinding()]
     param()
@@ -57,6 +59,7 @@ function Get-ConstructDriverCapabilities {
         Checkpoints = $true
         Console     = 'vmconnect'
         Suspend     = $true
+        Resources   = $true
         Backend     = 'hyperv-local'
     }
 }
@@ -271,6 +274,11 @@ function Remove-ConstructVm {
 }
 
 function Set-ConstructVmCpuCount {
+    <#
+        Change the vCPU count of an EXISTING VM (capability: Resources). Virtual
+        hardware, so the VM must be Off; the count is read back so a silently
+        ignored write is reported instead of assumed.
+    #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Name,
           [Parameter(Mandatory)][ValidateRange(1,64)][int]$ProcessorCount)
@@ -279,6 +287,29 @@ function Set-ConstructVmCpuCount {
     Set-VMProcessor -VM $vm -Count $ProcessorCount -ErrorAction Stop
     if ([int](Get-VMProcessor -VM $vm -ErrorAction Stop).Count -ne $ProcessorCount) {
         throw 'Hyper-V did not apply the requested CPU count.'
+    }
+}
+
+function Set-ConstructVmMemory {
+    <#
+        Change the RAM of an EXISTING VM (capability: Resources). Construct VMs run
+        with STATIC memory (New-ConstructVm's -StaticMemory: nested virtualization
+        needs it), so the startup size IS the VM's size and dynamic memory is kept
+        off. Virtual hardware, so the VM must be Off. The size is rounded down to
+        Hyper-V's 2 MB granularity and read back afterwards.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name,
+          [Parameter(Mandatory)][double]$MemoryGB)
+    if ($MemoryGB -le 0) { throw 'Set-ConstructVmMemory: -MemoryGB must be greater than zero.' }
+    $bytes = [int64][math]::Floor($MemoryGB * 1GB)
+    $bytes = $bytes - ($bytes % 2MB)
+    if ($bytes -lt 32MB) { throw 'Set-ConstructVmMemory: the VM needs at least 32 MB of RAM.' }
+    $vm = Get-VM -Name $Name -ErrorAction Stop
+    if ([string]$vm.State -ne 'Off') { throw 'Memory changes require a powered-off VM.' }
+    Set-VMMemory -VM $vm -DynamicMemoryEnabled $false -StartupBytes $bytes -ErrorAction Stop
+    if ([int64](Get-VMMemory -VM $vm -ErrorAction Stop).Startup -ne $bytes) {
+        throw 'Hyper-V did not apply the requested memory size.'
     }
 }
 

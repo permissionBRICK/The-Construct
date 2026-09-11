@@ -39,6 +39,7 @@ const remotehost = require("./src/remotehost");
 const forwarder = require("./src/forwarder");
 const forwarderui = require("./src/forwarder-ui");
 const hypervRemote = require("./src/drivers/hyperv-remote");
+const hostadmin = require("./src/hostadmin");
 const hostadminui = require("./src/hostadmin-ui");
 const hostconversion = require("./src/hostconversion");
 const companion = require("./src/companion");
@@ -564,12 +565,20 @@ function probeOnce(inst) {
   return promise;
 }
 
+// The VM's REAL size (probe.parseVmSpec: { ramGb, diskGb, cpus }) per instance, from the
+// last probe that reached it — what "Restart to apply" compares the saved VM-resources
+// settings against (vmpower.planResourceApply). Dropped when the VM stops answering: an
+// offline VM's size is "can't tell", never a number from before.
+const lastVmSpec = new Map();
+
 /** Record, once, the VM facts this instance's state never held (its size, its keep-saved
  *  config) from a fresh probe — instancestate.backfillFromProbe has the rule. Best-effort;
  *  a write re-pushes the settings so an open form stops showing its HTML defaults. */
 function backfillVmFacts(inst, probed) {
   try {
     const target = inst || activeInstance();
+    if (probed && probed.online && probed.vmSpec) lastVmSpec.set(target.name, probed.vmSpec);
+    else lastVmSpec.delete(target.name);
     const scriptsDir = resolveScriptsDirFor(target);
     if (!scriptsDir) return;
     const patch = instancestate.backfillFromProbe(stateStore(target, scriptsDir), probed);
@@ -2534,6 +2543,217 @@ async function offerApplyCheckpoints(scriptsDir, enabled, changed) {
   }, 1500);
 }
 
+/**
+ * "Restart to apply" for the VM-resources settings that don't need a rebuild: RAM and
+ * the vCPU count. (The disk size is deliberately left to Reinstall / Redownload — growing
+ * the VHDX also means growing the guest's partition and filesystem.)
+ *
+ * What to apply is decided by the pure vmpower.planResourceApply from the SAVED settings
+ * and the VM's last probed size: nothing set → nothing to do; everything already matching
+ * → say so and stop; otherwise confirm and run the backend's path:
+ *
+ *   hyperv-local   Set-AgentVmResources.ps1 in an ELEVATED host console (UAC): graceful
+ *                  shutdown → Set-VMMemory / Set-VMProcessor while off → Start-VM. The
+ *                  script reports through a result file (like the checkpoint apply); its
+ *                  first report, "running", means the console is up and elevated, and
+ *                  only THEN is the guest asked to power off over SSH — a declined UAC
+ *                  must not leave the VM shut down with nothing applied.
+ *   hyperv-remote  the host service: PUT /vms/{name}/cpu records the count, and a
+ *                  lifecycle restart (graceful shutdown + start) applies it on the way
+ *                  back up. The service has no memory resize, so RAM is reported as
+ *                  still needing a Reinstall.
+ */
+async function runApplyVmResources() {
+  const t = actionTarget();
+  const scriptsDir = resolveScriptsDirFor(t.instance);
+  if (!scriptsDir) { warnNoScriptsDir(); return; }
+  const store = stateStore(t.instance, scriptsDir);
+  let saved;
+  try { saved = instancestate.readSettings(store); }
+  catch (e) { vscode.window.showErrorMessage("Couldn't read the Construct settings: " + (e && e.message ? e.message : e)); return; }
+  const plan = vmpower.planResourceApply(saved, lastVmSpec.get(t.name) || null);
+  if (plan.none) {
+    vscode.window.showWarningMessage("Set a RAM size and/or a vCPU count under Settings → VM resources and save first — there is nothing to apply.");
+    return;
+  }
+  if (plan.pending === false) {
+    vscode.window.showInformationMessage(`The Construct VM already has ${plan.current} — nothing to apply.`);
+    return;
+  }
+  const backend = t.instance && t.instance.backend;
+  if (lifecycle.isRemoteBackend(backend)) return applyVmResourcesRemote(t, plan);
+  const drv = vmpower.driverFor({ instance: t.instance });
+  if (!drv.capabilities || drv.capabilities.resources !== true) {
+    vscode.window.showWarningMessage(`The “${drv.backend}” backend can't be resized from here. Reinstall the VM to change its size.`);
+    return;
+  }
+  return applyVmResourcesLocal(t, scriptsDir, store, plan);
+}
+
+/** Is this window attached to `t`'s VM over Remote-SSH? (It will lose its connection.) */
+function windowConnectedTo(t) {
+  try { return remote.isConnectedToVm(safeRemoteAuthority(), t.cfg); } catch (_) { return false; }
+}
+
+async function applyVmResourcesLocal(t, scriptsDir, store, plan) {
+  if (process.platform !== "win32") {
+    vscode.window.showWarningMessage("Resizing the Construct VM runs on the Windows host, which isn't available here. The saved size applies on the next rebuild.");
+    return;
+  }
+  if (!fs.existsSync(path.join(scriptsDir, lifecycle.RESOURCES))) {
+    vscode.window.showWarningMessage("This Construct install's host scripts are too old to resize the VM in place. Update Construct first, or Reinstall to apply the saved size.");
+    return;
+  }
+  const named = instanceLabel(t.instance);
+  const detail =
+    `The VM shuts down, is resized to ${plan.summary}, and starts again` +
+    (plan.current ? ` (it has ${plan.current} now).` : ".") +
+    (windowConnectedTo(t) ? " This window is connected over Remote-SSH and loses its connection until the VM is back." : "") +
+    " Needs administrator rights (a UAC prompt). The disk size is not changed by this — it still needs a Reinstall / Redownload.";
+  const pick = await vscode.window.showWarningMessage(
+    `Restart the Construct VM${named} with ${plan.summary}?`, { modal: true, detail }, "Restart & apply"
+  );
+  if (pick !== "Restart & apply") return;
+  if (targetSuperseded(t, "Apply VM resources")) return;
+  // Re-read after the modal: another window may have saved other values while it sat
+  // open, and the console must apply what the file says now, not what was confirmed.
+  let fresh = plan;
+  try { fresh = vmpower.planResourceApply(instancestate.readSettings(store), lastVmSpec.get(t.name) || null); } catch (_) { /* keep the confirmed plan */ }
+  if (fresh.ram !== plan.ram || fresh.cpu !== plan.cpu) {
+    vscode.window.showWarningMessage("The VM-resources settings were changed elsewhere while this prompt was open — nothing was applied. Try again.");
+    return;
+  }
+  const resultFile = path.join(os.tmpdir(), `construct-resources-${Date.now()}.result`);
+  try { fs.unlinkSync(resultFile); } catch (_) {}
+  if (lifecycle.run("setResources", {
+    scriptsDir, ram: plan.ram, cpu: plan.cpu, instance: t.instance,
+    stillCurrent: () => !targetSuperseded(t, "Apply VM resources"),
+    env: { CONSTRUCT_RESOURCES_RESULT: resultFile },
+  }) === false) return;
+  logLine(`resources: applying ${plan.summary} to "${t.name}" (result file ${resultFile})`);
+  const startedAt = Date.now();
+  let poweroffSent = false;
+  const timer = setInterval(() => {
+    let res = null;
+    try { res = fs.readFileSync(resultFile, "utf8").trim(); } catch (_) { /* not written yet */ }
+    if (res === "running" && !poweroffSent) {
+      // The console is up and elevated. Ask the guest to power off over SSH — the
+      // panel's own Shutdown, which needs no Hyper-V shutdown integration — while the
+      // script asks Hyper-V for the same thing; whichever lands first, the script waits
+      // for the VM to be OFF before it changes anything. Best-effort: an unreachable VM
+      // is simply one the script handles on its own.
+      poweroffSent = true;
+      ssh.runRemote(vmpower.SHUTDOWN_CMD, { timeoutMs: 20000, cfg: t.cfg })
+        .then((r) => logLine(`resources: guest poweroff over SSH exited ${r.code}`), (e) => logLine(`resources: guest poweroff over SSH failed — ${e && e.message ? e.message : e}`));
+      return;
+    }
+    if (res === "ok" || res === "fail") {
+      clearInterval(timer);
+      try { fs.unlinkSync(resultFile); } catch (_) {}
+      logLine(`resources: result=${res}`);
+      if (res === "ok") {
+        vscode.window.showInformationMessage(`The Construct VM${named} now has ${plan.summary} and is starting again.`);
+        waitForVmOnline(t);
+      } else {
+        vscode.window.showWarningMessage("Resizing the Construct VM didn't complete — see the console window for the error. If the VM stayed off, use “Start & connect”.");
+        refreshAll();
+      }
+    } else if (Date.now() - startedAt > 20 * 60 * 1000) {
+      // Gave up (a declined UAC never runs the script, so it never writes a result; a
+      // guest that refuses to shut down makes the script itself fail well before this).
+      clearInterval(timer);
+      try { fs.unlinkSync(resultFile); } catch (_) {}
+      logLine("resources: timed out waiting for a result (UAC declined, or the console is still open)");
+      refreshAll();
+    }
+  }, 1500);
+}
+
+/** After a restart: poll SSH until the VM answers, then refresh every dashboard. A window
+ *  attached over Remote-SSH reconnects on its own; nothing is opened here. */
+function waitForVmOnline(t) {
+  vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: "Waiting for the Construct VM to come back online…", cancellable: true },
+    async (_progress, token) => {
+      const intervalMs = 4000, maxMs = 240000;
+      let waited = 0;
+      while (waited < maxMs) {
+        if (token.isCancellationRequested) return;
+        if (await ssh.isReachable({ timeoutMs: 6000, cfg: t.cfg })) { refreshAll(); return; }
+        await delay(intervalMs);
+        waited += intervalMs;
+      }
+      vscode.window.showWarningMessage("The VM didn't come back online in time. Once it's up, use “Open on VM”.");
+      refreshAll();
+    }
+  );
+}
+
+async function applyVmResourcesRemote(t, plan) {
+  const inst = t.instance;
+  const hostName = (inst.service && inst.service.url) || "the host service";
+  if (plan.cpu === null) {
+    vscode.window.showWarningMessage(`The RAM of “${inst.name}” can't be changed through ${hostName}: the host service resizes only the vCPU count. A new RAM size needs a Reinstall.`);
+    return;
+  }
+  const ramNote = plan.ram !== null ? " The RAM size is NOT changed by the host service — it still needs a Reinstall." : "";
+  const pick = await vscode.window.showWarningMessage(
+    `Restart “${inst.name}” with ${plan.cpu} vCPU${plan.cpu === 1 ? "" : "s"}?`,
+    { modal: true, detail: `${hostName} records the new count, shuts the VM down gracefully and starts it again with it.${ramNote}` +
+      (windowConnectedTo(t) ? " This window is connected over Remote-SSH and loses its connection until the VM is back." : "") },
+    "Restart & apply"
+  );
+  if (pick !== "Restart & apply") return;
+  if (targetSuperseded(t, "Apply VM resources")) return;
+  const opts = await driverOpts(inst);
+  if (targetSuperseded(t, "Apply VM resources")) return;
+  const { client, problem } = hypervRemote.resolveClient(inst, opts);
+  if (!client) { vscode.window.showErrorMessage(`Couldn't reach ${hostName}: ${problem}`); return; }
+  const name = hypervRemote.vmNameOf(inst);
+  const rawState = async () => String(((await client.getState(name)) || {}).state || "").trim().toLowerCase();
+  await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: `Applying ${plan.cpu} vCPUs to “${inst.name}” on ${client.host}…`, cancellable: false },
+    async (progress) => {
+      try {
+        const saved = await client.setVmCpu(name, { cpus: plan.cpu });
+        if (saved && saved.pending === false) {
+          vscode.window.showInformationMessage(`“${inst.name}” already has ${plan.cpu} vCPUs on ${client.host} — nothing to apply.`);
+          return;
+        }
+        let state = await rawState();
+        if (state === "saved" || state === "paused") {
+          // The service applies a pending count only from OFF, and a start merely resumes
+          // a saved VM — so resume it first, then restart it like a running one.
+          progress.report({ message: "resuming the saved VM first…" });
+          await client.lifecycle(name, { action: "start" });
+          for (let i = 0; i < 60 && state !== "running"; i++) { await delay(2000); state = await rawState(); }
+          if (state !== "running") throw new Error(`the VM did not resume (state: ${state || "unknown"})`);
+        }
+        if (state === "running") {
+          progress.report({ message: "graceful shutdown and start…" });
+          const res = await client.lifecycle(name, { action: "restart" });
+          const jobId = res && res.jobId;
+          if (!jobId) throw new Error("the service accepted the restart without a job id");
+          const job = await hostadmin.awaitJob(client, jobId, { attempts: 300, delayMs: 2000 });
+          const st = String((job && job.state) || "").toLowerCase();
+          if (st !== "succeeded") throw new Error(`the restart job ended ${st || "without a result"}${job && job.error ? ` (${job.error})` : ""}`);
+        } else if (state === "off") {
+          progress.report({ message: "starting the VM…" });
+          await client.lifecycle(name, { action: "start" });
+        } else {
+          throw new Error(`the VM's state is ${state || "unknown"}; the count is recorded and applies on its next start`);
+        }
+        vscode.window.showInformationMessage(`“${inst.name}” restarted with ${plan.cpu} vCPU${plan.cpu === 1 ? "" : "s"}.${ramNote}`);
+        waitForVmOnline(t);
+      } catch (e) {
+        logLine(`resources: remote apply failed — ${e && e.message ? e.message : e}`);
+        vscode.window.showErrorMessage(`Couldn't apply the vCPU count on ${client.host}: ${e && e.message ? e.message : e}`);
+        refreshAll();
+      }
+    }
+  );
+}
+
 /** Patch toggles are provisioning-only: saving persists them, then this offers
  *  the lifecycle action that applies them. No VM-side SSH mutation happens in
  *  the settings-save path. */
@@ -4469,6 +4689,12 @@ function handleMessage(message, webview, context) {
       }
       return;
     }
+
+    case "applyVmResources":
+      // The panel's "Save & restart to apply" posts saveSettings first (handled above,
+      // synchronously up to the write), so the file already holds what to apply.
+      runApplyVmResources().catch((err) => logLine(`resources: ${err && err.message ? err.message : err}`));
+      return;
 
     case "customRebuild": {
       const buttonId = message.mode === "redownload" ? "customRedownload" : "customReinstall";
