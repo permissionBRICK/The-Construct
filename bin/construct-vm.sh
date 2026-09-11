@@ -34,7 +34,7 @@ Child VMs:
   identity [--json]
   create (--iso-url URL | --iso PATH | --media ID) [--aux-iso PATH | --aux-media ID]
          --cpus N (--ram-gb G | --ram-mb M) --disk-gb D --lifetime L [options]
-  list [--all-shared] [--json]
+  list [--owned-only] [--json]    Own children and accessible shared guests by default
   inspect NAME [--json]
   start NAME --lifetime L [--json]
   restart NAME [--no-wait] [--json]
@@ -485,11 +485,11 @@ cmd_identity() {
 }
 
 cmd_list() {
-  local json=false all_shared=false path own shared
-  while [[ $# -gt 0 ]]; do case "$1" in --json) json=true;; --all-shared) all_shared=true;; -h|--help) usage; return;; *) die "unknown list option: $1";; esac; shift; done
+  local json=false all_shared=true path own shared
+  while [[ $# -gt 0 ]]; do case "$1" in --json) json=true;; --all-shared) all_shared=true;; --owned-only) all_shared=false;; -h|--help) usage; return;; *) die "unknown list option: $1";; esac; shift; done
   path="/api/v1/vms?parent=$(urlencode "${INSTANCE_NAME}")"
   api_request GET "${path}"; expect_json array; own="${API_BODY}"
-  if [[ "${all_shared}" == true ]]; then api_request GET /api/v1/vms/shared; expect_json array; shared="${API_BODY}"; own="$(jq -cn --argjson own "${own}" --argjson shared "${shared}" '$own + $shared | unique_by(.name)')"; fi
+  if [[ "${all_shared}" == true ]]; then api_request GET /api/v1/vms/shared; expect_json array; shared="${API_BODY}"; own="$(jq -cn --argjson own "${own}" --argjson shared "${shared}" '$own + $shared | unique_by(.name | ascii_downcase)')"; fi
   if [[ "${json}" == true ]]; then printf '%s\n' "$(printf '%s' "${own}" | jq -c .)"; return; fi
   printf '%-24s %-10s %-22s %4s %8s %8s %-8s %s\n' NAME STATE LEASE CPU RAM DISK SHARING OPERATION
   printf '%s' "${own}" | jq -r '.[] | [(.name//"-"),(.state//"unknown"),((.lease.expiresAt // (if .lease.state=="unlimited" then "never" else "-" end)) + (if .lease.overdue then " overdue" else "" end)),(.hardware.cpus//.cpu//"-"),(.hardware.ramMb//(if .ramGb? then .ramGb*1024 else "-" end)),(.hardware.diskGb//.diskGb//"-"),(.sharing//"private"),(.currentOperation.jobId//"-")] | @tsv' \

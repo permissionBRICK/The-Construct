@@ -1,13 +1,12 @@
-name: Host release
+name: Construct release
 on:
   push:
     branches: [main]
-    paths: ['console-viewer/**', 'service/**', 'drivers/**', 'lib/**', 'bin/**', 'Provision-AgentVM.ps1', 'config/**', 'test/browser-console-install.test.ps1', '.github/workflows/host-release.yml']
   workflow_dispatch:
 permissions:
   contents: write
 concurrency:
-  group: host-release-${{ github.sha }}
+  group: construct-release-main
   cancel-in-progress: false
 jobs:
   release:
@@ -15,24 +14,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
-      - name: Browser console gateway tests
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq python3-aiohttp
-          /usr/bin/python3 -m unittest discover -s console-viewer -p 'test_*.py' -v
-          node --check console-viewer/static/viewer.js
-          bash -n console-viewer/install.sh bin/construct-vm.sh bin/provision.sh
-          pwsh -NoProfile -File test/browser-console-install.test.ps1
-      - run: dotnet test service/Constructd.sln -c Release
       - run: dotnet publish service/src/Constructd.Api -c Release -r win-x64 --self-contained true -p:InformationalVersion=1.0.0+${{ github.sha }} -p:IncludeSourceRevisionInInformationalVersion=false -o /tmp/host-publish
       - name: Package pinned commit
         shell: pwsh
-        run: ./service/host/New-ConstructHostPackage.ps1 -PublishDir /tmp/host-publish -OutputDir /tmp/host-release -Commit "${{ github.sha }}"
-      - name: Publish immutable release
+        run: ./service/host/New-ConstructHostPackage.ps1 -PublishDir /tmp/host-publish -OutputDir /tmp/host-release -Commit "${{ github.sha }}" -Repository "$env:GITHUB_REPOSITORY"
+      - name: Package source and generate shared manifest
+        run: python3 scripts/package-construct-release.py --output /tmp/host-release --commit "$GITHUB_SHA" --repository "$GITHUB_REPOSITORY"
+      - name: Publish complete release and advance latest
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "host-$GITHUB_SHA" --target "$GITHUB_SHA" --title "Construct host $GITHUB_SHA" --notes "Self-contained Windows x64 host release from main. See docs/host-release.md for deployment and recovery." /tmp/host-release/*.zip /tmp/host-release/manifest.json
+        run: python3 scripts/publish-construct-release.py /tmp/host-release

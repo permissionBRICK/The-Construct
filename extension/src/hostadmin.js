@@ -27,7 +27,7 @@
 //                  tab, perform an action — every step re-classifying on refusal
 
 /** The `apiFeatures` names a current service advertises (§3.4). */
-const FEATURE_NAMES = ["host-admin", "children", "media", "console", "updates", "network"];
+const FEATURE_NAMES = ["host-admin", "children", "media", "console", "updates", "network", "primary-cpu"];
 
 /** The exhaustive `ChildAction` enum of §2.2, for rendering `allowedActions`. */
 const CHILD_ACTIONS = [
@@ -115,6 +115,7 @@ function featureSet(health) {
     console: list.indexOf("console") >= 0,
     updates: list.indexOf("updates") >= 0,
     network: list.indexOf("network") >= 0,
+    primaryCpu: list.indexOf("primary-cpu") >= 0,
   };
 }
 
@@ -359,6 +360,7 @@ function toVmRow(vm, now) {
     tokenKind: str(v.tokenKind) || null,
     deleting: v.deleting === true,
     childCreationClosed: v.childCreationClosed === true,
+    pendingCpu: num(v.pendingCpu),
     resources: resourcesText(v.hardware || { cpus: v.cpu, ramMb: num(v.ramGb) === null ? null : v.ramGb * 1024, diskGb: v.diskGb }),
     usage: resourceUsageView(v.resourceUsage, now),
     lease: leaseText(v.lease, now),
@@ -536,6 +538,7 @@ function toIsoCatalogView(catalog) {
     entries: (Array.isArray(c.entries) ? c.entries : []).map((e) => ({
       fileName: str(e.fileName), size: formatBytes(e.sizeBytes), isCurrent: e.isCurrent === true,
       builtAt: formatWhen(e.builtAt), sidecarReadable: e.sidecarReadable !== false,
+      unpublished: e.sizeBytes === 0 && e.sidecarReadable === false,
     })),
     lastBuild: last ? { at: formatWhen(last.at), outcome: str(last.outcome), jobId: str(last.jobId) } : null,
   };
@@ -879,6 +882,7 @@ function childRows(children, now) {
         operation: c.deleting === true && !op ? "deleting" : op,
         // Presentation only (§2.2): the two panel actions, offered when the service says
         // the caller may, and greyed while an operation holds the VM.
+        canConsole: c.deleting !== true && (state === "running" || state === "paused") && allows(c, "console"),
         canShutdown: !op && c.deleting !== true && (state === "running" || state === "paused") && allows(c, "shutdown"),
         canDelete: !op && c.deleting !== true && allows(c, "delete"),
       };
@@ -908,7 +912,7 @@ function childrenCardState(input = {}) {
     visible: true,
     items: items || [],
     // A read that failed on a host that HAS the feature: say so, keep the last rows.
-    problem: items ? "" : (str(input.problem) || "could not read the child VMs"),
+    problem: str(input.problem) || (items ? "" : "could not read the child VMs"),
   };
 }
 
@@ -1235,6 +1239,22 @@ function createHostAdminModel(deps = {}) {
     notice(null, "");
     try {
       switch (a) {
+        case "loadVmCpu": {
+          return { ok: true, cpu: await client.vmCpu(str(args.name)) };
+        }
+        case "setVmCpu": {
+          const cpus = Number(args.cpus);
+          if (!Number.isInteger(cpus) || cpus < 1 || cpus > 64) throw new Error("Choose a whole CPU count from 1 to 64.");
+          const cpu = await client.setVmCpu(str(args.name), { cpus });
+          notice("info", cpu.pending ? `${args.name}: ${cpu.desiredCpus} vCPUs saved for the next full stop/start. The running VM is unchanged.` : `${args.name}: CPU setting matches the current ${cpu.currentCpus} vCPUs.`);
+          return { ok: true, cpu };
+        }
+        case "restartVm":
+        case "startVm": {
+          const res = await client.lifecycle(str(args.name), { action: a === "restartVm" ? "restart" : "start" });
+          notice("info", `${args.name}: ${a === "restartVm" ? "restart" : "start"} requested.`);
+          return { ok: true, jobId: str(res && res.jobId) };
+        }
         case "updatesUpdate": {
           await updater.start();
           return { ok: true };

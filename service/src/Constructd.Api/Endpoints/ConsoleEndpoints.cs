@@ -94,10 +94,9 @@ public static class ConsoleEndpoints
         if (session is null) return Expired();
         if (!options.BrowserConsoleEnabled) return Problem(409, "browser-console-disabled", "Browser console is not enabled on this host.");
         if (!sessions.TryTakeRate(sid, "connection", 1, clock.UtcNow)) return Rate(http);
-        // A primary token can only obtain credentials for itself and its own children. Shared-VM
-        // access remains available through the host-user API, never through another VM's gateway.
-        if (http.User.IsPrimaryToken() && !Ownership.SameName(Vm(http).Name, http.User.VmTokenName()) &&
-            !Ownership.SameName(Vm(http).Parent, http.User.VmTokenName())) return Results.Forbid();
+        // The group ConsoleOperator policy also authorizes host-shared children.
+        // Their trusted primary gateways use the same session-bound, VM-specific
+        // credentials and revocation/renewal checks as an owner's gateway.
         http.Response.Headers.CacheControl = "no-store";
         var result = await interactive.ConnectAsync(session, ct);
         if (Session(http, sid, sessions, clock) is null)

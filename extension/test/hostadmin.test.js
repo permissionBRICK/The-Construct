@@ -22,7 +22,7 @@ function apiErr(status, body, message) {
   return e;
 }
 
-const HEALTH_FULL = { status: "ok", schemaVersion: 7, apiFeatures: ["host-admin", "children", "media", "console", "updates", "network"] };
+const HEALTH_FULL = { status: "ok", schemaVersion: 7, apiFeatures: ["host-admin", "children", "media", "console", "updates", "network", "primary-cpu"] };
 const ME_ADMIN = { name: "DOMAIN\\alice", known: true, role: "admin", enabled: true, maxVms: 2, apiFeatures: HEALTH_FULL.apiFeatures };
 const ME_USER = { ...ME_ADMIN, name: "DOMAIN\\bob", role: "user" };
 
@@ -55,9 +55,9 @@ function fakeClient(answers = {}) {
 
 (async () => {
   console.log("\n=== feature detection ===");
-  deep("features: every flag false without apiFeatures", ha.featureSet({}), { hostAdmin: false, children: false, media: false, console: false, updates: false, network: false });
-  deep("features: the full list", ha.featureSet(HEALTH_FULL), { hostAdmin: true, children: true, media: true, console: true, updates: true, network: true });
-  deep("features: stage-1 service advertises host-admin only", ha.featureSet({ apiFeatures: ["host-admin"] }), { hostAdmin: true, children: false, media: false, console: false, updates: false, network: false });
+  deep("features: every flag false without apiFeatures", ha.featureSet({}), { hostAdmin: false, children: false, media: false, console: false, updates: false, network: false, primaryCpu: false });
+  deep("features: the full list", ha.featureSet(HEALTH_FULL), { hostAdmin: true, children: true, media: true, console: true, updates: true, network: true, primaryCpu: true });
+  deep("features: stage-1 service advertises host-admin only", ha.featureSet({ apiFeatures: ["host-admin"] }), { hostAdmin: true, children: false, media: false, console: false, updates: false, network: false, primaryCpu: false });
   ok("maintenance: a 503 maintenance error is recognised", ha.isMaintenanceError(apiErr(503, { code: "maintenance", phase: "draining" })));
   ok("maintenance: a 503 without a body is treated as maintenance", ha.isMaintenanceError(apiErr(503, null)));
   ok("maintenance: a 500 is not", !ha.isMaintenanceError(apiErr(500, { code: "maintenance" })));
@@ -410,6 +410,8 @@ function fakeClient(answers = {}) {
     const card = ha.childrenCardState({ backend: "hyperv-remote", supported: true, primary: "work-vm", items: [{ name: "work-vm-a1", state: "running" }], now: NOW });
     ok("card: supported renders the rows", card.visible && card.items.length === 1 && card.primary === "work-vm" && card.problem === "");
     const failed = ha.childrenCardState({ backend: "hyperv-remote", supported: true, primary: "work-vm", items: null, problem: "HTTP 500" });
+    const stale = ha.childrenCardState({ backend: "hyperv-remote", supported: true, primary: "work-vm", items: [{ name: "cached-child" }], problem: "shared inventory unavailable" });
+    ok("card: cached rows retain a failed shared-inventory warning", stale.items.length === 1 && stale.problem === "shared inventory unavailable");
     ok("card: a failed read on a supporting host keeps the card with the problem", failed.visible && failed.items.length === 0 && failed.problem === "HTTP 500");
   }
   {

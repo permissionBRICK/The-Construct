@@ -6,6 +6,7 @@ param(
     [Parameter(Mandatory=$true)][string]$OutputDir,
     [Parameter(Mandatory=$true)][ValidatePattern('^[0-9a-f]{40}$')][string]$Commit,
     [string]$RepositoryRoot = (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent),
+    [string]$Repository = 'permissionBRICK/The-Construct',
     [DateTimeOffset]$BuiltAt = [DateTimeOffset]::UtcNow
 )
 $ErrorActionPreference = 'Stop'
@@ -57,8 +58,9 @@ try {
         Copy-PayloadFile (Join-Path $RepositoryRoot $rel) ('scripts/' + $rel)
     }
     Copy-PayloadFile (Join-Path $RepositoryRoot 'service/host/Update-ConstructHost.ps1') 'updater/Update-ConstructHost.ps1'
+    [IO.File]::WriteAllText((Join-Path $payload 'scripts/.construct-revision'), ($Commit + "`n"), $utf8)
     $lines = @()
-    foreach ($file in (Get-ChildItem -LiteralPath $payload -Recurse -File | Sort-Object FullName)) {
+    foreach ($file in (Get-ChildItem -LiteralPath $payload -Recurse -File -Force | Sort-Object FullName)) {
         $rel = $file.FullName.Substring($payload.Length + 1).Replace('\','/')
         $lines += (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + $rel
     }
@@ -70,7 +72,7 @@ try {
     $manifest = [ordered]@{
         schemaVersion=1; commit=$Commit; ref='refs/heads/main'; packageVersion=($BuiltAt.ToString('yyyy.MM.dd') + '+' + $Commit.Substring(0,7)); builtAt=$BuiltAt.ToString('o')
         features=@('local-vm-adoption-v1')
-        repository='permissionBRICK/The-Construct'; releaseTag=('host-' + $Commit); payloadAsset=$asset
+        repository=$Repository; releaseTag=('host-' + $Commit); payloadAsset=$asset
         payloadSha256=(Get-FileHash (Join-Path $OutputDir $asset) -Algorithm SHA256).Hash.ToLowerInvariant()
         sumsSha256=(Get-FileHash (Join-Path $payload 'SHA256SUMS') -Algorithm SHA256).Hash.ToLowerInvariant()
         updaterPath='updater/Update-ConstructHost.ps1'; updaterSha256=(Get-FileHash (Join-Path $payload 'updater/Update-ConstructHost.ps1') -Algorithm SHA256).Hash.ToLowerInvariant()

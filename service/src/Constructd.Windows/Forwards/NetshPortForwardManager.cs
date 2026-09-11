@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Net;
+using System.Net.Sockets;
 using Constructd.Core.Abstractions;
 using Constructd.Core.Configuration;
 using Constructd.Core.Domain;
@@ -75,6 +77,7 @@ public sealed class NetshPortForwardManager : IPortForwardManager
     private readonly PortAllocator _sshPorts;
     private readonly PortAllocator _appPorts;
     private readonly string _listenAddress;
+    private readonly Func<int, bool> _portAvailable;
 
     private readonly ConcurrentDictionary<string, int> _sshForwards = new(StringComparer.OrdinalIgnoreCase);
 
@@ -91,7 +94,8 @@ public sealed class NetshPortForwardManager : IPortForwardManager
         IHostAddressResolver addresses,
         ITcpTableReader tcpTable,
         ConstructdOptions options,
-        ILogger<NetshPortForwardManager> logger)
+        ILogger<NetshPortForwardManager> logger,
+        Func<int, bool>? portAvailable = null)
     {
         ArgumentNullException.ThrowIfNull(options);
 
@@ -108,6 +112,7 @@ public sealed class NetshPortForwardManager : IPortForwardManager
         _sshPorts = new PortAllocator(options.SshForwardPorts.Start, options.SshForwardPorts.End);
         _appPorts = new PortAllocator(options.AppForwardPorts.Start, options.AppForwardPorts.End);
         _listenAddress = ArgumentGuard.IPv4(options.ListenAddress, "Constructd:ListenAddress");
+        _portAvailable = portAvailable ?? (port => CanBindPort(_listenAddress, port));
 
         // Two independent allocators over overlapping ranges would each consider a shared port free and
         // hand it to a different VM, and the second netsh rule would silently replace the first. There
@@ -153,7 +158,7 @@ public sealed class NetshPortForwardManager : IPortForwardManager
                 return stored;
             }
 
-            var port = _sshPorts.Allocate();
+            var port = _sshPorts.Allocate(_portAvailable);
             try
             {
                 await _vms.UpdateAsync(vm with { SshForwardPort = port }, cancellationToken).ConfigureAwait(false);
@@ -256,7 +261,7 @@ public sealed class NetshPortForwardManager : IPortForwardManager
                 return AddForwardResult.LimitReached;
             }
 
-            int? publicPort = target == ForwardTarget.Host ? _appPorts.Allocate() : null;
+            int? publicPort = target == ForwardTarget.Host ? _appPorts.Allocate(_portAvailable) : null;
             var forward = new PortForward(
                 Id: Guid.NewGuid().ToString("n"),
                 VmName: name,
@@ -623,6 +628,17 @@ public sealed class NetshPortForwardManager : IPortForwardManager
 
             return null;
         }
+    }
+
+    /// <summary>Check real listeners and Windows excluded/reserved ports before allocation.
+    /// This is a probe, not a reservation: netsh still owns the eventual listener.</summary>
+    public static bool CanBindPort(string listenAddress, int port)
+    {
+        using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        socket.ExclusiveAddressUse = true;
+        try { socket.Bind(new IPEndPoint(IPAddress.Parse(listenAddress), port)); return true; }
+        catch (SocketException ex) when (ex.SocketErrorCode is SocketError.AddressAlreadyInUse or SocketError.AccessDenied)
+        { return false; }
     }
 
     private async Task AddRuleAsync(

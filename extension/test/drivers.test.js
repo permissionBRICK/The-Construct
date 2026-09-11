@@ -244,16 +244,38 @@ ok("facade: getDriver is re-exported", vmpower.getDriver === drivers.getDriver);
     const fetchImpl = fakeFetch({
       "/api/v1/health": () => { healthCalls++; return { status: 200, text: JSON.stringify({ status: "ok", apiFeatures: ["host-admin", "children"] }) }; },
       "/api/v1/vms/work-vm/children": [{ name: "work-vm-a1", kind: "child", state: "running" }],
+      "/api/v1/vms/shared": [{ name: "WORK-VM-A1", kind: "child", shared: true }, { name: "other-user-guest", owner: "bob", parent: "bob-vm", kind: "child", shared: true, allowedActions: ["inspect", "shutdown"] }],
     });
     const opts = { auth: { kind: "token", token: "t" }, fetchImpl, now: () => 1000 };
     const caps = await hypervRemote.capabilitiesFor(REMOTE, opts);
     ok("features: children resolves to true when /health lists it", caps.children === true);
     ok("features: ...and the rest of the table is unchanged", caps.checkpoints === false && caps.hostLifecycle === true);
     const kids = await hypervRemote.queryChildren(REMOTE, opts);
-    ok("children: supported, one row", kids.supported === true && kids.items.length === 1 && kids.items[0].name === "work-vm-a1");
+    ok("children: own and shared guests appear together without duplicate names", kids.supported === true && kids.items.length === 2 && kids.items[0].name === "work-vm-a1");
+    ok("children: another user's shared guest retains its ownership and allowed actions", kids.items[1].owner === "bob" && kids.items[1].shared && !kids.items[1].allowedActions.includes("delete"));
     eq("features: the probe is cached per host (one /health for two questions)", healthCalls, 1);
     await hypervRemote.queryFeatures(REMOTE, { ...opts, now: () => 1000 + hypervRemote.FEATURE_TTL_MS + 1 });
     eq("features: ...and re-asked after the TTL", healthCalls, 2);
+  }
+  {
+    hypervRemote.resetFeatureCache();
+    const fetchImpl = fakeFetch({
+      "/api/v1/health": { status: "ok", apiFeatures: ["children"] },
+      "/api/v1/vms/work-vm/children": [],
+      "/api/v1/vms/shared": [{ name: "shared-only", parent: "other-parent", kind: "child", shared: true }],
+    });
+    const kids = await hypervRemote.queryChildren(REMOTE, { auth: { kind: "token", token: "t" }, fetchImpl });
+    ok("children: shared guests are visible when this primary has no children", kids.supported && kids.items.length === 1 && kids.items[0].name === "shared-only");
+  }
+  {
+    hypervRemote.resetFeatureCache();
+    const fetchImpl = fakeFetch({
+      "/api/v1/health": { status: "ok", apiFeatures: ["children"] },
+      "/api/v1/vms/work-vm/children": [{ name: "own-child" }],
+      "/api/v1/vms/shared": () => ({ status: 503, text: '{"title":"shared inventory unavailable"}' }),
+    });
+    const kids = await hypervRemote.queryChildren(REMOTE, { auth: { kind: "token", token: "t" }, fetchImpl });
+    ok("children: failure to load shared guests is reported rather than silently showing an incomplete list", kids.supported && kids.items === null && /shared inventory unavailable/.test(kids.problem));
   }
   {
     hypervRemote.resetFeatureCache();
@@ -276,6 +298,7 @@ ok("facade: getDriver is re-exported", vmpower.getDriver === drivers.getDriver);
     const fetchImpl = fakeFetch({
       "/api/v1/health": { status: "ok", apiFeatures: ["host-admin", "children"] },
       "/api/v1/vms/work-vm/children": () => ({ status: 500, text: '{"title":"boom"}' }),
+      "/api/v1/vms/shared": [],
     });
     const kids = await hypervRemote.queryChildren(REMOTE, { auth: { kind: "token", token: "t" }, fetchImpl });
     ok("children: a failed read on a supporting host is supported with items:null and a problem (not 'no children')",

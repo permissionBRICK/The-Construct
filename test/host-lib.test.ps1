@@ -391,6 +391,16 @@ try {
     ok "marker: successful switch writes the full new tuple" (
         ($sw2.constructRepo -eq "someone/a-fork") -and ($sw2.constructRef -eq "dev") -and ($sw2.installedCommit -eq "beef5678"))
 
+    # A source archive identifies itself even offline; an explicit downloaded commit wins.
+    Set-Content -LiteralPath (Join-Path $mkDir '.construct-revision') -Value ('a' * 40)
+    $localSha = Set-ConstructInstalledMarker -Root $mkDir -Repo 'owner/repo' -Ref 'main'
+    ok 'marker: archive revision is read without remote lookup' ($localSha -eq ('a' * 40))
+    $pinnedSha = Set-ConstructInstalledMarker -Root $mkDir -Repo 'owner/repo' -Ref 'main' -Commit ('b' * 40) -CommitFetcher { throw 'must not fetch HEAD' }
+    ok 'marker: explicit downloaded revision wins without HEAD request' ($pinnedSha -eq ('b' * 40))
+    Set-Content -LiteralPath (Join-Path $mkDir '.construct-revision') -Value '$Format:%H$'
+    $null = Set-ConstructInstalledMarker -Root $mkDir -Repo 'owner/repo' -Ref 'main'
+    ok 'marker: unexpanded archive placeholder preserves previous marker' ((Read-ConstructSettings -Dir $mkDir).installedCommit -eq ('b' * 40))
+
     # First-ever install with a failed fetch: no prior value, so installedCommit stays
     # absent/empty (banner hidden until a good record) -- never throws.
     $mkDir2 = Join-Path ([System.IO.Path]::GetTempPath()) ("cs-marker2-" + [guid]::NewGuid().ToString("N"))

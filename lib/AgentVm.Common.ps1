@@ -2381,43 +2381,33 @@ function Resolve-MarkerSource {
     }
 }
 function Set-ConstructInstalledMarker {
-    <#
-        Record which Construct repo/ref/commit is installed on this host, so the
-        control panel's update check has a base to diff against. The SHA fetch is
-        best-effort, and the (repo, ref, installedCommit) TUPLE is written ATOMICALLY:
-          * SHA fetched             -> write all three (a fresh, self-consistent marker).
-          * fetch failed, prior
-            commit exists           -> write NOTHING; preserve the whole prior tuple.
-          * fetch failed, no prior
-            commit                  -> record repo/ref only (no commit yet).
-        Why atomic: the panel diffs `compare(installedCommit...ref)` on `repo`, so a
-        preserved commit must never be paired with a newly-switched repo/ref (that
-        yields a permanent 404/null check). And a failed fetch must never blank a good
-        installedCommit -- writing "" was a real bug: one transient GitHub blip during
-        any (re)install/reprovision permanently hid the update banner (checkConstruct
-        treats "" as "no marker"), and only the -- now hidden -- Update button
-        re-records it. Returns the SHA ("" on failure). Never throws.
-        `-CommitFetcher` injects the SHA lookup for tests (default: GitHub API).
-    #>
+    <# Record the actual installed source, never the current remote HEAD. Preserve
+       the complete prior tuple if no source revision can be established. Archives
+       expand .construct-revision via git export-subst; checkouts use git HEAD.
+       CommitFetcher remains an injection seam for offline tests. #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Root,
         [Parameter(Mandatory)][string]$Repo,
         [Parameter(Mandatory)][string]$Ref,
-        [scriptblock]$CommitFetcher
+        [scriptblock]$CommitFetcher,
+        [string]$Commit = ""
     )
     $sha = ""
     try {
-        if ($CommitFetcher) {
+        if ($Commit) {
+            $sha = $Commit
+        } elseif ($CommitFetcher) {
             $sha = [string](& $CommitFetcher $Repo $Ref)
-        } else {
-            # -TimeoutSec so a slow/unreachable GitHub can't stall the install (this now
-            # runs on the fresh-install path too, before Auto-Install launches).
-            $sha = (Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/commits/$Ref" `
-                      -Headers @{ "User-Agent" = "construct-control-panel" } -UseBasicParsing -TimeoutSec 20).sha
+        } elseif (Test-Path -LiteralPath (Join-Path $Root '.git')) {
+            $sha = [string](& git -C $Root rev-parse HEAD 2>$null)
+            if ($LASTEXITCODE -ne 0) { $sha = "" }
+        } elseif (Test-Path -LiteralPath (Join-Path $Root '.construct-revision')) {
+            $sha = (Get-Content -LiteralPath (Join-Path $Root '.construct-revision') -Raw).Trim()
         }
+        if ($sha -notmatch '^[0-9a-f]{7,40}$') { $sha = "" }
     } catch {
-        Write-Host "    (couldn't fetch the commit id for the update marker: $($_.Exception.Message))" -ForegroundColor DarkGray
+        Write-Host "    (couldn't read the source commit for the update marker: $($_.Exception.Message))" -ForegroundColor DarkGray
     }
     try {
         if ($sha) {
