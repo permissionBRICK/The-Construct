@@ -332,6 +332,525 @@
     "state": "unknown"
   },
   {
+    "kind": "resources",
+    "live": null,
+    "output": {
+      "cpu": null,
+      "current": "",
+      "none": true,
+      "pending": null,
+      "ram": null,
+      "summary": ""
+    },
+    "saved": {}
+  },
+  {
+    "kind": "resources",
+    "live": {},
+    "output": {
+      "cpu": null,
+      "current": "",
+      "none": true,
+      "pending": null,
+      "ram": null,
+      "summary": ""
+    },
+    "saved": {}
+  },
+  {
+    "kind": "resources",
+    "live": {
+      "cpus": 8,
+      "ramGb": 16
+    },
+    "output": {
+      "cpu": null,
+      "current": "16 GB RAM, 8 vCPUs",
+      "none": true,
+      "pending": null,
+      "ram": null,
+      "summary": ""
+    },
+    "saved": {}
+  },
+  {
+    "kind": "resources",
+    "live": {
+      "cpus": 4,
+      "ramGb": 8
+    },
+    "output": {
+      "cpu": null,
+      "current": "8 GB RAM, 4 vCPUs",
+      "none": true,
+      "pending": null,
+      "ram": null,
+      "summary": ""
+    },
+    "saved": {}
+  },
+  {
+    "kind": "resources",
+    "live": {
+      "cpus": 1,
+      "ramGb": 16.5
+    },
+    "output": {
+      "cpu": null,
+      "current": "16.5 GB RAM, 1 vCPU",
+      "none": true,
+      "pending": null,
+      "ram": null,
+      "summary": ""
+    },
+    "saved": {}
+  },
+  {
+    "kind": "resources",
+    "live": null,
+    "output": {
+      "cpu": 8,
+      "current": "",
+      "none": false,
+      "pending": null,
+      "ram": 16,
+      "summary": "16 GB RAM, 8 vCPUs"
+    },
+    "saved": {
+      "cpu": "8",
+      "ram": "16"
+    }
+  },
+  {
+    "kind": "resources",
+    "live": {},
+    "output": {
+      "cpu": 8,
+      "current": "",
+      "none": false,
+      "pending": null,
+      "ram": 16,
+      "summary": "16 GB RAM, 8 vCPUs"
+    },
+    "saved": {
+      "cpu": "8",
+      "ram": "16"
+    }
+  },
+  {
+    "kind": "resources",
+    "live": {
+      "cpus": 8,
+      "ramGb": 16
+    },
+    "output": {
+      "cpu": 8,
+      "current": "16 GB RAM, 8 vCPUs",
+      "none": false,
+      "pending": false,
+      "ram": 16,
+      "summary": "16 GB RAM, 8 vCPUs"
+    },
+    "saved": {
+      "cpu": "8",
+      "ram": "16"
+    }
+  },
+  {
+    "kind": "resources",
+    "live": {
+      "cpus": 4,
+      "ramGb": 8
+    },
+    "output": {
+      "cpu": 8,
+      "current": "8 GB RAM, 4 vCPUs",
+      "none": false,
+      "pending": true,
+      "ram": 16,
+      "summary": "16 GB RAM, 8 vCPUs"
+    },
+    "saved": {
+      "cpu": "8",
+      "ram": "16"
+    }
+  },
+  {
+    "kind": "resources",
+    "live": {
+      "cpus": 1,
+      "ramGb": 16.5
+    },
+    "output": {
+      "cpu": 8,
+      "current": "16.5 GB RAM, 1 vCPU",
+      "none": false,
+      "pending": true,
+      "ram": 16,
+      "summary": "16 GB RAM, 8 vCPUs"
+    },
+    "saved": {
+      "cpu": "8",
+      "ram": "16"
+    }
+  },
+  {
+    "kind": "resources",
+    "live": null,
+    "output": {
+      "cpu": 1,
+      "current": "",
+      "none": false,
+      "pending": null,
+      "ram": 16.5,
+      "summary": "16.5 GB RAM, 1 vCPU"
+    },
+    "saved": {
+      "cpu": 1,
+      "ram": "16.5"
+    }
+  },
+  {
+    "kind": "resources",
+    "live": {},
+    "output": {
+      "cpu": 1,
+      "current": "",
+      "none": false,
+      "pending": null,
+      "ram": 16.5,
+      "summary": "16.5 GB RAM, 1 vCPU"
+    },
+    "saved": {
+      "cpu": 1,
+      "ram": "16.5"
+    }
+  },
+  {
+    "kind": "resources",
+    "live": {
+      "cpus": 8,
+      "ramGb": 16
+    },
+    "output": {
+      "cpu": 1,
+      "current": "16 GB RAM, 8 vCPUs",
+      "none": false,
+      "pending": true,
+      "ram": 16.5,
+      "summary": "16.5 GB RAM, 1 vCPU"
+    },
+    "saved": {
+      "cpu": 1,
+      "ram": "16.5"
+    }
+  },
+  {
+    "kind": "resources",
+    "live": {
+      "cpus": 4,
+      "ramGb": 8
+    },
+    "output": {
+      "cpu": 1,
+      "current": "8 GB RAM, 4 vCPUs",
+      "none": false,
+      "pending": true,
+      "ram": 16.5,
+      "summary": "16.5 GB RAM, 1 vCPU"
+    },
+    "saved": {
+      "cpu": 1,
+      "ram": "16.5"
+    }
+  },
+  {
+    "kind": "resources",
+    "live": {
+      "cpus": 1,
+      "ramGb": 16.5
+    },
+    "output": {
+      "cpu": 1,
+      "current": "16.5 GB RAM, 1 vCPU",
+      "none": false,
+      "pending": false,
+      "ram": 16.5,
+      "summary": "16.5 GB RAM, 1 vCPU"
+    },
+    "saved": {
+      "cpu": 1,
+      "ram": "16.5"
+    }
+  },
+  {
+    "kind": "resources",
+    "live": null,
+    "output": {
+      "cpu": null,
+      "current": "",
+      "none": true,
+      "pending": null,
+      "ram": null,
+      "summary": ""
+    },
+    "saved": {
+      "cpu": "max",
+      "ram": 0
+    }
+  },
+  {
+    "kind": "resources",
+    "live": {},
+    "output": {
+      "cpu": null,
+      "current": "",
+      "none": true,
+      "pending": null,
+      "ram": null,
+      "summary": ""
+    },
+    "saved": {
+      "cpu": "max",
+      "ram": 0
+    }
+  },
+  {
+    "kind": "resources",
+    "live": {
+      "cpus": 8,
+      "ramGb": 16
+    },
+    "output": {
+      "cpu": null,
+      "current": "16 GB RAM, 8 vCPUs",
+      "none": true,
+      "pending": null,
+      "ram": null,
+      "summary": ""
+    },
+    "saved": {
+      "cpu": "max",
+      "ram": 0
+    }
+  },
+  {
+    "kind": "resources",
+    "live": {
+      "cpus": 4,
+      "ramGb": 8
+    },
+    "output": {
+      "cpu": null,
+      "current": "8 GB RAM, 4 vCPUs",
+      "none": true,
+      "pending": null,
+      "ram": null,
+      "summary": ""
+    },
+    "saved": {
+      "cpu": "max",
+      "ram": 0
+    }
+  },
+  {
+    "kind": "resources",
+    "live": {
+      "cpus": 1,
+      "ramGb": 16.5
+    },
+    "output": {
+      "cpu": null,
+      "current": "16.5 GB RAM, 1 vCPU",
+      "none": true,
+      "pending": null,
+      "ram": null,
+      "summary": ""
+    },
+    "saved": {
+      "cpu": "max",
+      "ram": 0
+    }
+  },
+  {
+    "kind": "resources",
+    "live": null,
+    "output": {
+      "cpu": null,
+      "current": "",
+      "none": true,
+      "pending": null,
+      "ram": null,
+      "summary": ""
+    },
+    "saved": {
+      "cpu": 1.5,
+      "ram": true
+    }
+  },
+  {
+    "kind": "resources",
+    "live": {},
+    "output": {
+      "cpu": null,
+      "current": "",
+      "none": true,
+      "pending": null,
+      "ram": null,
+      "summary": ""
+    },
+    "saved": {
+      "cpu": 1.5,
+      "ram": true
+    }
+  },
+  {
+    "kind": "resources",
+    "live": {
+      "cpus": 8,
+      "ramGb": 16
+    },
+    "output": {
+      "cpu": null,
+      "current": "16 GB RAM, 8 vCPUs",
+      "none": true,
+      "pending": null,
+      "ram": null,
+      "summary": ""
+    },
+    "saved": {
+      "cpu": 1.5,
+      "ram": true
+    }
+  },
+  {
+    "kind": "resources",
+    "live": {
+      "cpus": 4,
+      "ramGb": 8
+    },
+    "output": {
+      "cpu": null,
+      "current": "8 GB RAM, 4 vCPUs",
+      "none": true,
+      "pending": null,
+      "ram": null,
+      "summary": ""
+    },
+    "saved": {
+      "cpu": 1.5,
+      "ram": true
+    }
+  },
+  {
+    "kind": "resources",
+    "live": {
+      "cpus": 1,
+      "ramGb": 16.5
+    },
+    "output": {
+      "cpu": null,
+      "current": "16.5 GB RAM, 1 vCPU",
+      "none": true,
+      "pending": null,
+      "ram": null,
+      "summary": ""
+    },
+    "saved": {
+      "cpu": 1.5,
+      "ram": true
+    }
+  },
+  {
+    "kind": "resources",
+    "live": null,
+    "output": {
+      "cpu": 4,
+      "current": "",
+      "none": false,
+      "pending": null,
+      "ram": 16,
+      "summary": "16 GB RAM, 4 vCPUs"
+    },
+    "saved": {
+      "cpu": "4",
+      "ram": "0x10"
+    }
+  },
+  {
+    "kind": "resources",
+    "live": {},
+    "output": {
+      "cpu": 4,
+      "current": "",
+      "none": false,
+      "pending": null,
+      "ram": 16,
+      "summary": "16 GB RAM, 4 vCPUs"
+    },
+    "saved": {
+      "cpu": "4",
+      "ram": "0x10"
+    }
+  },
+  {
+    "kind": "resources",
+    "live": {
+      "cpus": 8,
+      "ramGb": 16
+    },
+    "output": {
+      "cpu": 4,
+      "current": "16 GB RAM, 8 vCPUs",
+      "none": false,
+      "pending": true,
+      "ram": 16,
+      "summary": "16 GB RAM, 4 vCPUs"
+    },
+    "saved": {
+      "cpu": "4",
+      "ram": "0x10"
+    }
+  },
+  {
+    "kind": "resources",
+    "live": {
+      "cpus": 4,
+      "ramGb": 8
+    },
+    "output": {
+      "cpu": 4,
+      "current": "8 GB RAM, 4 vCPUs",
+      "none": false,
+      "pending": true,
+      "ram": 16,
+      "summary": "16 GB RAM, 4 vCPUs"
+    },
+    "saved": {
+      "cpu": "4",
+      "ram": "0x10"
+    }
+  },
+  {
+    "kind": "resources",
+    "live": {
+      "cpus": 1,
+      "ramGb": 16.5
+    },
+    "output": {
+      "cpu": 4,
+      "current": "16.5 GB RAM, 1 vCPU",
+      "none": false,
+      "pending": true,
+      "ram": 16,
+      "summary": "16 GB RAM, 4 vCPUs"
+    },
+    "saved": {
+      "cpu": "4",
+      "ram": "0x10"
+    }
+  },
+  {
     "kind": "shutdown",
     "output": "systemctl poweroff --no-block"
   }
