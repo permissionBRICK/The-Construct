@@ -565,6 +565,8 @@ for regression suite results, retries, unsupported workflows and Windows limitat
 
 ## Deviations
 
+- merge of main 2026-09-11: manifest-based updates, composed T3 pairing and forward readiness, guest consoles, shared inventory and CPU administration parity; Companion regressions moved to local checks, release stays separate; console failures deliberately omit raw SSH stderr/exception text to protect ticket credentials, while retaining distinct safe failure reasons.
+
 - S4 cleanup: `ConfigSyncRules.IsSafeProfileName` now shares `HostState.SafeProfileName` (the `configsync.js` formulation, ECMAScript `trim`), so edge U+0085 is accepted and edge U+FEFF rejected exactly as in JS; the `config-sync` fixture gained those cases (Core/ConfigSync/ConfigSyncRules.cs).
 - S4 cleanup (Host): `IConfigSyncStorage` is gone: its file members live on `IStateFileSystem` (plus `DeleteDirectory`) and its process members on the new `IProcessLiveness`; `ConfigSyncFileSystem`/`DesktopFileSystem` are one `HostFileSystem` and `ConfigSyncProcessRunner` is dropped in favour of the production `RuntimeProcessRunner` (its `RunAsync` throws on timeout where the removed runner returned -1; only `GitRunner`, which maps both to -1, and tests used it).
 - S4 cleanup (Host): the S2 `DesktopActivationServer`, `IUiActivation` and the app's private `ui-endpoint.json` are removed; that build never shipped, so activation and quit use `endpoint.json` only (the installer's `ui-endpoint.json` discovery is dropped in the installer increment).

@@ -2,6 +2,9 @@ using System.Text.Json.Nodes;
 namespace Construct.Companion.Core.Remote;
 public sealed partial class RemoteHostClient
 {
+    public Task<JsonNode?> VmDefaultsAsync(CancellationToken cancellationToken = default) => RequestAsync("GET", "/vm-defaults", cancellationToken: cancellationToken);
+    public Task<JsonNode?> VmCpuAsync(string name, CancellationToken cancellationToken = default) => RequestAsync("GET", $"/vms/{RemoteHost.Encode(name)}/cpu", cancellationToken: cancellationToken);
+    public Task<JsonNode?> SetVmCpuAsync(string name, JsonNode? body, CancellationToken cancellationToken = default) => RequestAsync("PUT", $"/vms/{RemoteHost.Encode(name)}/cpu", body, cancellationToken);
     public Task<JsonNode?> WhoamiAsync(CancellationToken cancellationToken = default) => RequestAsync("GET", "/whoami", null, cancellationToken);
     public Task<JsonNode?> ListVmsAsync(CancellationToken cancellationToken = default) => RequestAsync("GET", "/vms", null, cancellationToken);
     public Task<JsonNode?> GetVmAsync(string name, CancellationToken cancellationToken = default) => RequestAsync("GET", $"/vms/{RemoteHost.Encode(name)}", null, cancellationToken);

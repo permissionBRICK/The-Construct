@@ -9,6 +9,8 @@ regression checks locally before pushing. The ISO builder retains its separate
 
 The per-user tray app ships independently as `companion-<commit>`; see
 [Construct Companion](companion.md) for its installer, package layout and release gates.
+Its release is published with `--latest=false` so the complete Construct manifest
+remains at the latest-release URL. Companion discovery still selects its own tags.
 
 
 The immutable tag remains `host-<40-character commit>` for compatibility. Its assets

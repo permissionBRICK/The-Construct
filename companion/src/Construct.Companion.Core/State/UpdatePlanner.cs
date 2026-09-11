@@ -18,15 +18,23 @@ public static class UpdatePlanner
     public static string NormalizeCommit(string? value) { var s = StateJson.Trim(value ?? "").ToLowerInvariant(); return Regex.IsMatch(s, "^[0-9a-f]{7,64}$") ? s : ""; }
     public static string EffectiveProvisionedCommit(JsonObject markers, string? guestCommit = null) => NormalizeCommit(guestCommit) is { Length: > 0 } guest ? guest : StateJson.Text(markers["provisionedCommit"]) ?? "";
     public static bool IsProvisionStale(JsonObject markers, string? guestCommit = null) => StateJson.Text(markers["installedCommit"]) is { Length: > 0 } installed && EffectiveProvisionedCommit(markers, guestCommit) is { Length: > 0 } provisioned && installed != provisioned;
-    public static JsonObject? ConstructUpdateFromCompare(JsonObject? json)
+    public static JsonObject? ConstructUpdateFromManifest(JsonObject? json, JsonObject markers)
     {
-        if (StateJson.Boolean(json?["notFound"]) == true) return new JsonObject { ["available"] = true, ["count"] = null, ["unknownBase"] = true };
-        return StateJson.Number(json?["ahead_by"]) is {} count ? new JsonObject { ["available"] = count > 0, ["count"] = count } : null;
+        var commit = StateJson.Text(json?["commit"]) ?? "";
+        bool Hash(string key) => Regex.IsMatch(StateJson.Text(json?[key]) ?? "", @"\A[0-9a-f]{64}\z");
+        bool Size(string key) => StateJson.Number(json?[key]) is > 0 and <= 1073741824 and var n && Math.Floor(n) == n;
+        if (StateJson.Number(json?["schemaVersion"]) != 1 || StateJson.Text(json?["repository"]) != StateJson.Text(markers["repo"]) ||
+            StateJson.Text(json?["ref"]) != "refs/heads/main" || !Regex.IsMatch(commit, @"\A[0-9a-f]{40}\z") ||
+            StateJson.Text(json?["releaseTag"]) != "host-" + commit || StateJson.Text(json?["sourceAsset"]) != "construct-source-" + commit + ".zip" ||
+            !Hash("sourceSha256") || !Size("sourceSizeBytes") || StateJson.Text(json?["payloadAsset"]) != "construct-host-" + commit[..7] + "-win-x64.zip" ||
+            !Hash("payloadSha256") || !Size("payloadSizeBytes")) return null;
+        return new() { ["available"] = !commit.StartsWith(StateJson.String(markers["installedCommit"]), StringComparison.Ordinal), ["count"] = null, ["commit"] = commit };
     }
-    public static string? ConstructCompareUrl(JsonObject markers) => StateJson.Text(markers["installedCommit"]) is { Length: > 0 } commit ? $"https://api.github.com/repos/{StateJson.String(markers["repo"])}/compare/{commit}...{StateJson.String(markers["ref"])}" : null;
+    public static string? ConstructManifestUrl(JsonObject markers) => StateJson.Truthy(markers["installedCommit"]) && StateJson.Text(markers["ref"]) == "main" && Regex.IsMatch(StateJson.String(markers["repo"]), @"\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z")
+        ? $"https://github.com/{StateJson.String(markers["repo"])}/releases/latest/download/manifest.json" : null;
     public static async Task<JsonObject?> CheckConstructAsync(IUpdateSource source, JsonObject markers, CancellationToken cancellationToken = default)
     {
-        var url = ConstructCompareUrl(markers); return url is null ? null : ConstructUpdateFromCompare(await source.GetJsonAsync(new Uri(url), cancellationToken) as JsonObject);
+        var url = ConstructManifestUrl(markers); return url is null ? null : ConstructUpdateFromManifest(await source.GetJsonAsync(new Uri(url), cancellationToken) as JsonObject, markers);
     }
     public static string[] ConstructRefreshArgs(JsonObject markers) => ["-Repo", StateJson.String(markers["repo"]), "-Ref", StateJson.String(markers["ref"])];
     public static string T3CodeUrl(string? channel) => "https://registry.npmjs.org/t3/" + (channel == "nightly" ? "nightly" : "latest");

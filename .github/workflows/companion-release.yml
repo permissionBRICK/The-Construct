@@ -10,29 +10,7 @@ concurrency:
   group: companion-release-${{ github.sha }}
   cancel-in-progress: false
 jobs:
-  test-linux:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-        with:
-          persist-credentials: false
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
-        with:
-          dotnet-version: '10.0.x'
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: '22'
-      - run: dotnet build companion/Construct.Companion.sln -warnaserror
-      - run: dotnet test companion/Construct.Companion.sln --no-build
-      - run: node extension/test/parity.test.js
-      - run: node extension/test/companion.test.js
-      - run: node extension/test/companion-install.test.js
-      - run: node extension/test/companion-host.test.js
-      - run: pwsh -NoProfile -File test/companion-install.test.ps1
-      - run: pwsh -NoProfile -File test/companion-entrypoints.test.ps1
-      - run: pwsh -NoProfile -File test/companion-package.test.ps1
   publish:
-    needs: test-linux
     if: github.ref == 'refs/heads/main'
     runs-on: windows-latest
     permissions:
@@ -44,26 +22,11 @@ jobs:
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         with:
           dotnet-version: '10.0.x'
-      - run: dotnet build companion/Construct.Companion.sln -c Release -warnaserror
-      - run: dotnet test companion/Construct.Companion.sln -c Release --no-build
       - name: Publish self-contained Windows app
         shell: pwsh
         run: |
           dotnet publish companion/src/Construct.Companion/Construct.Companion.csproj -c Release -r win-x64 --self-contained true "-p:InformationalVersion=1.0.0+$env:GITHUB_SHA" -p:IncludeSourceRevisionInInformationalVersion=false -o "$env:RUNNER_TEMP/companion-publish"
           if ($LASTEXITCODE -ne 0) { throw 'Publish failed.' }
-      - name: Headless no-instances selftest
-        shell: pwsh
-        run: |
-          # Isolated per-user state; never use a runner's existing Construct registry.
-          $env:LOCALAPPDATA = Join-Path $env:RUNNER_TEMP 'companion-selftest'
-          New-Item -ItemType Directory -Path $env:LOCALAPPDATA -Force | Out-Null
-          $exe = Join-Path $env:RUNNER_TEMP 'companion-publish/ConstructCompanion.exe'
-          $stdout = Join-Path $env:RUNNER_TEMP 'companion-selftest.json'
-          $stderr = Join-Path $env:RUNNER_TEMP 'companion-selftest.err'
-          $process = Start-Process -FilePath $exe -ArgumentList @('--selftest','--json') -PassThru -Wait -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-          if ($process.ExitCode -ne 0) { throw 'Companion selftest failed.' }
-          $report = Get-Content -Raw -LiteralPath $stdout | ConvertFrom-Json
-          if ($report.ok -ne $true) { throw 'Selftest did not report success.' }
       - name: Package pinned commit
         shell: pwsh
         run: ./companion/host/New-ConstructCompanionPackage.ps1 -PublishDir "$env:RUNNER_TEMP/companion-publish" -OutputDir "$env:RUNNER_TEMP/companion-release" -Commit $env:GITHUB_SHA -Repository $env:GITHUB_REPOSITORY
@@ -73,5 +36,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $zip = (Get-ChildItem "$env:RUNNER_TEMP/companion-release/*.zip").FullName
-          gh release create "companion-$env:GITHUB_SHA" --target $env:GITHUB_SHA --title "Construct Companion $env:GITHUB_SHA" --notes "Self-contained Windows x64 Companion. See docs/companion.md for installation and recovery." $zip "$env:RUNNER_TEMP/companion-release/manifest.json"
+          gh release create "companion-$env:GITHUB_SHA" --latest=false --target $env:GITHUB_SHA --title "Construct Companion $env:GITHUB_SHA" --notes "Self-contained Windows x64 Companion. See docs/companion.md for installation and recovery." $zip "$env:RUNNER_TEMP/companion-release/manifest.json"
           if ($LASTEXITCODE -ne 0) { throw 'Release creation failed; existing immutable releases must not be overwritten.' }

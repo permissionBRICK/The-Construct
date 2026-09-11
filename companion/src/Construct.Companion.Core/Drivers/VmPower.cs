@@ -45,6 +45,15 @@ public static class VmPower
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception) { return "unknown"; }
     }
+    public static async Task<JsonArray> QueryChildrenAsync(RemoteHostClient client, string vmName, CancellationToken cancellationToken = default)
+    {
+        var children = client.ChildrenAsync(vmName, cancellationToken);
+        var shared = client.SharedVmsAsync(cancellationToken);
+        await Task.WhenAll(children, shared);
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        return new JsonArray((children.Result as JsonArray ?? []).Concat(shared.Result as JsonArray ?? [])
+            .OfType<JsonObject>().Where(vm => names.Add(StateJson.String(vm["name"]))).Select(vm => vm.DeepClone()).ToArray());
+    }
     public static async Task<string> QueryRemoteAsync(RemoteHostClient client, string vmName, CancellationToken cancellationToken = default)
     {
         try { var result = await client.GetStateAsync(vmName, cancellationToken); return RemoteHost.MapVmState(StateJson.Text((result as JsonObject)?["state"])); }

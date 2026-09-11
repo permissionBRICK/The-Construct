@@ -1,6 +1,42 @@
 [
   {
     "args": [],
+    "method": "vmDefaults",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/vm-defaults"
+    }
+  },
+  {
+    "args": [
+      "name /?ü"
+    ],
+    "method": "vmCpu",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC/cpu"
+    }
+  },
+  {
+    "args": [
+      "name /?ü",
+      {
+        "cpus": 8
+      }
+    ],
+    "method": "setVmCpu",
+    "output": {
+      "body": {
+        "cpus": 8
+      },
+      "method": "PUT",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC/cpu"
+    }
+  },
+  {
+    "args": [],
     "method": "whoami",
     "output": {
       "body": null,
