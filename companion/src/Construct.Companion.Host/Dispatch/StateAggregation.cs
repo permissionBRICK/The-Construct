@@ -19,7 +19,7 @@ public sealed class StateAggregation(CompanionInstances instances, RuntimeMessag
         var data = (probe["state"] as JsonObject ?? probe).DeepClone().AsObject(); data.Remove("type");
         foreach (var (key, value) in entry.Enrichment) data[key] = value?.DeepClone();
         data["instance"] = name; data["backend"] = entry.Definition["backend"]?.DeepClone(); data["connected"] = false; data["connectedInstance"] = null;
-        data["canConvertHost"] = false;
+        data["companion"] = true; data["canConvertHost"] = false;
         var pending = StateJson.ReadObject(files, HostConversion.PendingPath(instances.Host.LocalAppData));
         var resultPath = StateJson.Text(pending?["resultPath"]);
         data["hostConversionStatus"] = HostConversion.PendingStatus(name, pending, resultPath is null ? null : StateJson.ReadObject(files, resultPath));
@@ -28,7 +28,9 @@ public sealed class StateAggregation(CompanionInstances instances, RuntimeMessag
         if (entry.Definition["service"]?["url"] is JsonValue url && Uri.TryCreate(StateJson.Text(url), UriKind.Absolute, out var uri)) data["serviceHost"] = uri.Host;
         data["usagePeriod"] = entry.UsagePeriod;
         if (entry.Usage is not null) data["usage"] = entry.Usage.DeepClone();
-        data["registerOffer"] = null; data["removeOffer"] = null;
+        data["registerOffer"] = new JsonObject { ["host"] = "" };
+        var removal = InstanceWorkflowPlans.Remove(instances.Registry, name);
+        data["removeOffer"] = StateJson.Boolean(removal["ok"]) == true || StateJson.Boolean(removal["requiresTypedConfirmation"]) == true ? removal : null;
         if (entry.ConfigState is not null) data["configSync"] = entry.ConfigState.DeepClone();
         var selected = entry.Store.ReadSelectedProjects().Select(StateJson.String).ToHashSet(StringComparer.Ordinal);
         if (entry.Store.HasPersistedSelection()) data["projects"] = new JsonArray(instances.Host.ListProjectProfiles(instances.Host.ConfigDirectory ?? entry.Store.ScriptsDirectory).Select(p => (JsonNode)new JsonObject { ["name"] = p, ["selected"] = selected.Contains(p) }).ToArray());
