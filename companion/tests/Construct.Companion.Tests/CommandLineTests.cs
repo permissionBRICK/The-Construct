@@ -59,12 +59,11 @@ public sealed class CommandLineTests
     }
 
     [Fact]
-    public void SelfTestIsAnHonestHeadlessStub()
+    public void SelfTestExitOnlyDependsOnLocalRequiredChecks()
     {
-        var report = SelfTestReport.Stub();
-        Assert.False(report.Ok);
-        Assert.Equal(9, report.Checks.Count);
-        Assert.All(report.Checks, check => Assert.Equal("not implemented", check.Status));
+        var report = SelfTestReport.Create([new("paths", "passed"),new("ssh:dev","unreachable",false)]);
+        Assert.True(report.Ok); Assert.Equal(0,report.ExitCode);
+        Assert.Equal(1,SelfTestReport.Create([new("webView2","failed")]).ExitCode);
     }
 
     [Fact]
