@@ -831,3 +831,24 @@ The touch points that were built for this feature (kept for reference):
   here" guidance.
 - Docs — fold the model into [`docs/projects.md`](projects.md) and
   [`docs/backup-restore.md`](backup-restore.md), cross-link this spec.
+
+### Authentication during provisioning
+
+The installer's config-repository clone/fetch uses the same credential verified
+on its git credential screen. It runs `git ls-remote` before cloning the config
+source, then imports its profiles before project selection. Git receives the
+credential in-process through `GIT_ASKPASS`, with terminal prompts and inherited
+helpers disabled. Clone/fetch/import failures include Git's stderr with secrets
+redacted. URLs and link metadata never carry a token.
+
+The credential remains in the installer process for verification and the VM
+handoff; **it is not written to Windows Credential Manager**. There is no path
+from Windows Credential Manager to the guest. The panel's later config sync on
+the PC uses Git's own helper and **may ask once to authenticate**. Reinstall,
+reprovision and panel add-config on an existing VM do not open the installer's
+credential screen (add-config without a VM is an initial install and can prompt):
+if an HTTP(S) config source refuses anonymous access, its import is deferred and
+the installer explains that no profiles could be read from it on the PC. The
+remote link is retained for later sync. Project checkout can independently use
+the VM's existing credentials; the panel reports clone failures when those are
+missing. See [provisioning](provisioning.md#git-credential-preflight).
