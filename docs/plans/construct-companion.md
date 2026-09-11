@@ -537,3 +537,11 @@ extension methods in their own files), `extension/extension.js` (S2a extension o
 - S1: repatch already reads `construct-patch-status.sh`/`construct-partial-streaming-enable.sh`; embed and fixture those originals instead of creating redundant `repatch.sh`; pairing keeps separate default/instance templates, and validated numeric/ID fragments retain their byte-identical spelling.
 - S1: the app scaffold uses a named quit event until S2 supplies authenticated HTTP quit/activation; secondary view launches currently exit 0 without opening a view (documented in `companion/README.md`).
 - S1: notify keeps `claim()` in `notify-claim-function.sh`, composed into both claim/watch templates through `{{claim}}`; C# callers render that shared function first, preserving the existing single-source composition and bytes.
+
+## Integration notes (stage 1)
+
+- Merged `cc/s1-scaffold` (`91c8902`) into `cc/integ-1` from `feat/companion` (`4dbb0ea`) with `--no-ff`; no conflicts or skipped branches. No integration code changes or new design deviations.
+- Linux validation: Companion build 0 warnings/0 errors; Companion tests 230/230; service tests 1,261/1,261. Ran all 30 Node, 27 PowerShell, and 22 Bash suite files. Full counts, skips, and retry details: [stage 1 integration results](construct-companion-stage-1-integration.md).
+- Config-sync has an existing default-branch test dependency: Node aborts at invalid bare-remote `HEAD` (also with the documented `CONSTRUCT_*` variables unset); PowerShell initially passes 561/568. With a process-local `init.defaultBranch=main` override, Node passes 475/475 and PowerShell 568/568. No global/repository Git configuration changed.
+- Existing failures reproduced against untouched `4dbb0ea`: `test/contracts-compile.test.sh` passes 4/5 (frozen `HypervisorVmInfo` signature mismatch); `test/idle-report.test.sh` passes 100/103 (service-key count, URL, and instance-name assertions). Relevant code is unchanged; these baseline defects remain outside scaffold scope. The baseline idle test was repeated with Git HEAD available so its Git-dependent checks actually ran.
+- Regenerated all four parity areas with zero fixture drift; original baseline JavaScript builders also produce identical fixture bytes. No Windows runtime validation performed; the scaffold's documented pending runtime/UI/installer work remains pending.
