@@ -95,7 +95,9 @@ variant for a fresh installation. It preserves an existing updater-owned ledger
 byte for byte, including ISO timestamp strings on Windows PowerShell 5.1. It does
 not download or build the service. When a previous ledger has no non-empty file
 array, the updater scans the service/scripts trees for its backup and uses that
-verified backup's file list for stale-file removal and rollback. Health and rollback rules are
+verified backup's file list for stale-file removal and rollback. Configured source,
+ISO and media cache roots remain outside that code-file list, including custom
+paths outside the data directory. Health and rollback rules are
 unchanged.
 
 Host updates use GitHub Releases over HTTPS, matching the other Construct update paths.
