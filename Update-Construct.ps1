@@ -74,6 +74,10 @@ try {
     catch { Write-Warning "Could not load helpers: $($_.Exception.Message)" }
 
     if ($release) {
+        if (Get-Command Remove-ConstructStaleSourceFiles -ErrorAction SilentlyContinue) {
+            $stale = Remove-ConstructStaleSourceFiles -Root $root.FullName -Zip $zip
+            if ($stale -gt 0) { Write-Host "    removed $stale file(s) the release no longer ships" -ForegroundColor DarkGray }
+        }
         try { [void](Write-ConstructSourceManifest -Zip $zip -Commit $release.commit) }
         catch { Write-Warning "Could not record the source manifest ($($_.Exception.GetType().Name)); the host cache is unavailable until the next update." }
     }
