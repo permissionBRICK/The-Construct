@@ -27,8 +27,9 @@ where they can't touch your host PC.
 - 🔒 **Sandboxed by design** — a throwaway Hyper-V VM stands between the agents and your PC.
 - 🎛️ **One-screen control panel** — a VS Code extension on your host runs the whole VM:
   status, power, lifecycle, projects, updates, usage.
-- 🟢 **[Construct Companion](docs/companion.md)** — a per-user Windows tray app for
-  host jobs and the control panel with VS Code closed (integration in progress).
+- 🟢 **[Construct Companion](docs/companion.md)** — a Windows tray app that keeps port
+  forwards, notifications and the microphone alive with VS Code closed, and carries the
+  same control panel.
 - ♻️ **Disposable, not amnesiac** — reinstall the VM and your agent config comes back on its
   own: instructions, memory, skills, subscription auth, git & MCP credentials.
 - 📦 **Project profiles** — repos, SDKs, MCP servers, and setup commands in one JSON file,
@@ -39,16 +40,14 @@ where they can't touch your host PC.
   Remote-SSH.
 - 🔌 **Agents hand you links** — `construct expose 5173` on the VM opens that port on *your*
   PC — over an SSH tunnel the extension opens to that VM — and prints the URL to open.
-- 🧪 **Disposable child VMs** — from a service-managed primary, `construct vm create`
-  gives an agent a short-lived ISO-booted Windows or Linux test machine without placing
-  host credentials in the guest.
-- 🛠️ **Shared-host administration** — enrolled host admins get a dedicated VS Code view
-  for users and allowances, all VMs, capacity, child media, jobs, configuration and
-  host updates; ordinary users see only their primary's child list and safe actions.
-- 🖥️ **T3 Code, patched with extra features** — Patches the VM and Windows client for live
-  voice input for T3 code in the UI using Claude, auto-restore on session limit resets, as
-  well as deeper integration with the construct.
-- 🤷 **It just works™** — system prompts make agents just install whatever tool they need for the task automatically
+- 🧪 **Disposable child VMs** — on a shared host, `construct vm create` gives an agent a
+  short-lived Windows or Linux test machine booted from an ISO, with no host credentials
+  inside.
+- 🛠️ **Shared-host administration** — admins manage users, allowances, VMs, media, jobs,
+  configuration and host updates from one VS Code view. Users see their own VMs.
+- 🖥️ **T3 Code, patched** — the VM and the Windows client get a patched T3 Code build:
+  voice input, automatic resume after a session limit, Construct integration.
+- 🤷 **It just works™** — agents are told to install whatever tool a task needs.
 
 <sub>Bonus: auto-deploy MCP servers to all three agents · patched Claude Code extension for faster UI updates · no AI attribution by default.</sub>
 
@@ -90,17 +89,14 @@ during install:
 | **Windows file share** | `\\agent-vm.mshome.net\repo` — map to a drive with `-MountRepoShare true` |
 | **Terminal** | `ssh agent-vm` — direct root access |
 
-Ports go the other way too: an agent that starts a dev server runs `construct expose 5173`,
-which opens that port on **your** PC and prints the link to hand you — see
-[`construct expose`](docs/expose.md).
+Ports go the other way too. When an agent starts a dev server it runs `construct expose 5173`,
+which opens that port on **your** PC and prints the link. See [`construct expose`](docs/expose.md).
 
-Details in [Remote access & services](docs/remote-access.md). The addresses above are the
-*default* VM's; a second local VM has the same shape under its own name. A VM on a
-[remote host](docs/remote-host.md) is different: the host service publishes **its SSH port**
-(so `ssh <name>`, Remote-SSH and the Codex App workflow work under that instance's alias),
-and nothing else is forwarded automatically — reach its web ports with
-[`construct expose`](docs/expose.md), and note that the SMB share is a local-VM feature
-today.
+More in [Remote access & services](docs/remote-access.md). The addresses above belong to the
+default VM; a second local VM follows the same pattern under its own name. For a VM on a
+[remote host](docs/remote-host.md), the host service publishes the SSH port, so `ssh <name>`,
+Remote-SSH and the Codex App work under that instance's alias. Its web ports are reached with
+`construct expose`. The SMB share exists for local VMs only.
 
 ## ⚙️ Configure
 
@@ -116,47 +112,45 @@ Per-project setup is declared once in `projects/*.json` and reused on every (re)
 }
 ```
 
-VM-level settings live at `/etc/construct/config.env` (agent name, projects, tools,
-workspace root). Full reference: [Project profiles & configuration](docs/projects.md) and
-[Provisioning](docs/provisioning.md). Optional features—including microphone passthrough and
-the shared patched T3 Code server/Desktop build—are toggled in the
-[Construct control panel](docs/control-panel.md#patched-t3-code-server--desktop-build).
+VM-level settings live in `/etc/construct/config.env` (agent name, projects, tools,
+workspace root). Reference: [Project profiles & configuration](docs/projects.md) and
+[Provisioning](docs/provisioning.md). Optional features such as microphone passthrough and
+the patched T3 Code build are switched on in the
+[control panel](docs/control-panel.md#patched-t3-code-server--desktop-build).
 
 ## 🖧 Run it on a remote host
 
-The VM does not have to live on your own PC. An admin installs the `constructd` service
-once on a shared Hyper-V machine, and everyone creates and manages **their own** VMs on it
-from the same installer and the same control panel:
+The VM can live on a shared Hyper-V machine instead of your PC. An admin installs the
+`constructd` service there once. After that, everyone creates and manages their own VMs on
+it from the same installer and the same control panel:
 
 ```powershell
 .\Auto-Install.ps1 -Backend hyperv-remote -ServiceUrl https://buildbox.example.local:7462 -InstanceName work-vm
 ```
 
-On a fresh machine the installer simply asks — *local Hyper-V* (the default, unchanged) or
-*remote host*. The host builds the ISO, creates the VM and allocates an SSH port; your PC
-still runs the provisioning, so your git credentials, agent auth and backups never transit
-the service. Once it is up, the VM keeps running with your laptop closed — and a remote
-install needs no administrator rights on your own machine, because nothing is created there.
+On a fresh machine the installer asks: local Hyper-V, or remote host. With a remote host:
 
-An enrolled administrator can open **The Construct: Host Administration** without first
-creating a VM. User allowances govern child count, CPU, RAM, storage, lifetime and sharing;
-a service-managed primary with an upgraded `primary` token can then use
-[`construct vm`](docs/child-vms.md) to create and operate general-purpose child VMs. The
-host service and guest Construct are updated independently: host updates come from signed
-`main` releases in the Maintenance tab, while guest provisioning stays in the existing
-per-instance workflow.
+- The host builds the ISO, creates the VM and assigns an SSH port.
+- Your PC still runs the provisioning, so git credentials, agent auth and backups never
+  pass through the service.
+- No administrator rights are needed on your PC.
+- The VM keeps running with your laptop closed.
 
-Several VMs, local or remote, are just as fine: each is a named **instance** in a small
-registry on your PC (`%LOCALAPPDATA%\The-Construct\instances.json`), and the control panel
-gets a picker to switch the window between them. An install that only ever wants the one
-classic local VM never sees any of this — the default instance is implicit, and a missing
-registry means exactly today's behaviour.
+Administrators get **The Construct: Host Administration** in VS Code and in the Companion:
+users and their allowances (VM count, CPU, RAM, storage, lifetime, sharing), every VM with
+its settings, media, jobs, configuration and host updates. Host updates come from the
+published `main` releases in the Maintenance tab; guest provisioning stays per instance.
+From a VM on such a host, `construct vm` creates [child VMs](docs/child-vms.md) for tests.
 
-See **[Remote host](docs/remote-host.md)** for the admin setup, authentication
-(Kerberos or admin-issued tokens), certificate pinning and the idle policy, and
-**[Field test](docs/field-test-remote-host.md)** for the step-by-step first run on a
-domain. The host-administration and child-VM implementation is Linux-tested but still needs
-the separate **[host-admin Hyper-V field test](docs/field-test-host-admin.md)** before rollout.
+Several VMs, local or remote, are instances in a small registry on your PC
+(`%LOCALAPPDATA%\The-Construct\instances.json`). The control panel and the Companion switch
+between them. A single local VM never sees any of this.
+
+Admin setup, authentication (Kerberos or admin-issued tokens), certificate pinning and the
+idle policy: [Remote host](docs/remote-host.md). First run on a domain:
+[Field test](docs/field-test-remote-host.md). Host administration and child VMs are tested
+on Linux and still need the [Hyper-V field test](docs/field-test-host-admin.md) before
+rollout.
 
 ## 🔐 Know the trade
 
@@ -180,14 +174,14 @@ The Construct swaps guardrails for isolation:
 | [Manual setup](docs/manual-setup.md) | Blank Ubuntu VM to ready state by hand |
 | [Project profiles & configuration](docs/projects.md) | `config.env`, profile schema, MCP servers, checkouts |
 | [Remote access & services](docs/remote-access.md) | serve-web, tunnels, Codex remote, T3 Code, service lifecycle |
-| [Remote host](docs/remote-host.md) | Running the VM on a shared Hyper-V host: the `constructd` service, auth, pinning, idle policy |
-| [Field test checklist](docs/field-test-remote-host.md) | Step-by-step first run of the remote host on a domain, with what to check and where to look when it fails |
-| [Host-admin field test](docs/field-test-host-admin.md) | Owner-run Hyper-V validation for migration, children, console, sharing, expiry, cascade deletion, host update and rollback |
-| [`construct expose`](docs/expose.md) | Self-serve port forwards from the VM, the spool/API contract, the idle heartbeat |
-| [Child VMs](docs/child-vms.md) | `construct vm`: create, lifecycle, media, console, sharing, jobs and automation output |
-| [Hypervisor drivers](docs/drivers.md) | The backend contract (`hyperv-local`, `hyperv-remote`) and how to add one |
-| [Construct Companion](docs/companion.md) | Windows tray app, per-user install/update/uninstall, settings and troubleshooting |
-| [Control panel](docs/control-panel.md) | The VS Code operator console, optional voice and patched T3 Code features |
+| [Remote host](docs/remote-host.md) | The `constructd` service on a shared Hyper-V host: setup, auth, pinning, idle policy |
+| [Field test checklist](docs/field-test-remote-host.md) | First run of a remote host on a domain, step by step |
+| [Host-admin field test](docs/field-test-host-admin.md) | Hyper-V validation of host administration and child VMs |
+| [`construct expose`](docs/expose.md) | Port forwards from the VM to your PC or the host |
+| [Child VMs](docs/child-vms.md) | `construct vm`: create, run, share and remove test VMs |
+| [Hypervisor drivers](docs/drivers.md) | The backend contract and how to add one |
+| [Construct Companion](docs/companion.md) | The Windows tray app: install, settings, troubleshooting |
+| [Control panel](docs/control-panel.md) | The VS Code operator console |
 | [Backup & restore](docs/backup-restore.md) | Carrying agent config and auth across reinstalls |
 | [Config sync](docs/config-sync.md) | How project profiles survive a reinstall and sync between VM and host |
 
