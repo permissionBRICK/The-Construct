@@ -1,0 +1,493 @@
+[
+  {
+    "active": {
+      "instance": {
+        "backend": "hyperv-local",
+        "configBranch": "vm",
+        "hostAlias": "agent-vm",
+        "keyName": "agent_vm_ed25519",
+        "name": "agent-vm",
+        "owner": null,
+        "publicHost": null,
+        "scriptsDir": null,
+        "service": null,
+        "sshPort": 22,
+        "vmHost": "agent-vm.mshome.net",
+        "vmName": "Agent-VM"
+      },
+      "name": "agent-vm",
+      "problem": "instance \"missing\" (setting) is not in the registry — skipped",
+      "problems": [
+        "instance \"missing\" (setting) is not in the registry — skipped",
+        "instance \"dev\" (workspace) is not in the registry — skipped"
+      ],
+      "source": "default"
+    },
+    "document": {
+      "defaultInstance": "agent-vm",
+      "instances": {
+        "agent-vm": {
+          "backend": "hyperv-local",
+          "configBranch": "vm",
+          "hostAlias": "agent-vm",
+          "keyName": "agent_vm_ed25519",
+          "owner": null,
+          "scriptsDir": null,
+          "service": null,
+          "sshHost": "agent-vm.mshome.net",
+          "sshPort": 22,
+          "vmName": "Agent-VM"
+        }
+      },
+      "version": 1
+    },
+    "problems": [],
+    "text": ""
+  },
+  {
+    "active": {
+      "instance": {
+        "backend": "hyperv-local",
+        "configBranch": "vm",
+        "hostAlias": "agent-vm",
+        "keyName": "agent_vm_ed25519",
+        "name": "agent-vm",
+        "owner": null,
+        "publicHost": null,
+        "scriptsDir": null,
+        "service": null,
+        "sshPort": 22,
+        "vmHost": "agent-vm.mshome.net",
+        "vmName": "Agent-VM"
+      },
+      "name": "agent-vm",
+      "problem": "instance \"missing\" (setting) is not in the registry — skipped",
+      "problems": [
+        "instance \"missing\" (setting) is not in the registry — skipped",
+        "instance \"dev\" (workspace) is not in the registry — skipped"
+      ],
+      "source": "default"
+    },
+    "document": {
+      "defaultInstance": "agent-vm",
+      "instances": {
+        "agent-vm": {
+          "backend": "hyperv-local",
+          "configBranch": "vm",
+          "hostAlias": "agent-vm",
+          "keyName": "agent_vm_ed25519",
+          "owner": null,
+          "scriptsDir": null,
+          "service": null,
+          "sshHost": "agent-vm.mshome.net",
+          "sshPort": 22,
+          "vmName": "Agent-VM"
+        }
+      },
+      "version": 1
+    },
+    "problems": [],
+    "text": "{}"
+  },
+  {
+    "active": {
+      "instance": {
+        "backend": "hyperv-local",
+        "configBranch": "vm",
+        "hostAlias": "agent-vm",
+        "keyName": "agent_vm_ed25519",
+        "name": "agent-vm",
+        "owner": null,
+        "publicHost": null,
+        "scriptsDir": null,
+        "service": null,
+        "sshPort": 22,
+        "vmHost": "agent-vm.mshome.net",
+        "vmName": "Agent-VM"
+      },
+      "name": "agent-vm",
+      "problem": "instance \"missing\" (setting) is not in the registry — skipped",
+      "problems": [
+        "instance \"missing\" (setting) is not in the registry — skipped",
+        "instance \"dev\" (workspace) is not in the registry — skipped"
+      ],
+      "source": "default"
+    },
+    "document": {
+      "defaultInstance": "agent-vm",
+      "instances": {
+        "agent-vm": {
+          "backend": "hyperv-local",
+          "configBranch": "vm",
+          "hostAlias": "agent-vm",
+          "keyName": "agent_vm_ed25519",
+          "owner": null,
+          "scriptsDir": null,
+          "service": null,
+          "sshHost": "agent-vm.mshome.net",
+          "sshPort": 22,
+          "vmName": "Agent-VM"
+        }
+      },
+      "version": 1
+    },
+    "problems": [
+      "instances.json has version 2; this Construct only understands version 1 — ignoring the file and using the default instance (update Construct)"
+    ],
+    "text": "{\"version\":2}"
+  },
+  {
+    "active": {
+      "instance": {
+        "backend": "hyperv-local",
+        "configBranch": "vm",
+        "hostAlias": "agent-vm",
+        "keyName": "agent_vm_ed25519",
+        "name": "agent-vm",
+        "owner": null,
+        "publicHost": null,
+        "scriptsDir": null,
+        "service": null,
+        "sshPort": 22,
+        "vmHost": "agent-vm.mshome.net",
+        "vmName": "Agent-VM"
+      },
+      "name": "agent-vm",
+      "problem": "instance \"missing\" (setting) is not in the registry — skipped",
+      "problems": [
+        "instance \"missing\" (setting) is not in the registry — skipped",
+        "instance \"dev\" (workspace) is not in the registry — skipped"
+      ],
+      "source": "default"
+    },
+    "document": {
+      "defaultInstance": "agent-vm",
+      "instances": {
+        "agent-vm": {
+          "backend": "hyperv-local",
+          "configBranch": "vm",
+          "hostAlias": "agent-vm",
+          "keyName": "agent_vm_ed25519",
+          "owner": null,
+          "scriptsDir": null,
+          "service": null,
+          "sshHost": "agent-vm.mshome.net",
+          "sshPort": 22,
+          "vmName": "Agent-VM"
+        }
+      },
+      "version": 1
+    },
+    "problems": [
+      "instances.json has version \"1\"; this Construct only understands version 1 — ignoring the file and using the default instance (update Construct)"
+    ],
+    "text": "{\"version\":\"1\"}"
+  },
+  {
+    "active": {
+      "instance": {
+        "backend": "hyperv-local",
+        "configBranch": "vm",
+        "hostAlias": "agent-vm",
+        "keyName": "agent_vm_ed25519",
+        "name": "agent-vm",
+        "owner": null,
+        "publicHost": null,
+        "scriptsDir": null,
+        "service": null,
+        "sshPort": 22,
+        "vmHost": "agent-vm.mshome.net",
+        "vmName": "Agent-VM"
+      },
+      "name": "agent-vm",
+      "problem": "instance \"missing\" (setting) is not in the registry — skipped",
+      "problems": [
+        "instance \"missing\" (setting) is not in the registry — skipped",
+        "instance \"dev\" (workspace) is not in the registry — skipped"
+      ],
+      "source": "default"
+    },
+    "document": {
+      "defaultInstance": "agent-vm",
+      "instances": {
+        "agent-vm": {
+          "backend": "hyperv-local",
+          "configBranch": "vm",
+          "hostAlias": "agent-vm",
+          "keyName": "agent_vm_ed25519",
+          "owner": null,
+          "scriptsDir": null,
+          "service": null,
+          "sshHost": "agent-vm.mshome.net",
+          "sshPort": 22,
+          "vmName": "Agent-VM"
+        }
+      },
+      "version": 1
+    },
+    "problems": [
+      "instances.json: \"instances\" must be an object"
+    ],
+    "text": "{\"instances\":[]}"
+  },
+  {
+    "active": {
+      "instance": {
+        "backend": "hyperv-local",
+        "configBranch": "vm",
+        "hostAlias": "agent-vm",
+        "keyName": "agent_vm_ed25519",
+        "name": "agent-vm",
+        "owner": null,
+        "publicHost": null,
+        "scriptsDir": null,
+        "service": null,
+        "sshPort": 22,
+        "vmHost": "agent-vm.mshome.net",
+        "vmName": "Agent-VM"
+      },
+      "name": "agent-vm",
+      "problem": "instance \"missing\" (setting) is not in the registry — skipped",
+      "problems": [
+        "instance \"missing\" (setting) is not in the registry — skipped",
+        "instance \"dev\" (workspace) is not in the registry — skipped"
+      ],
+      "source": "default"
+    },
+    "document": {
+      "defaultInstance": "agent-vm",
+      "instances": {
+        "agent-vm": {
+          "backend": "hyperv-local",
+          "configBranch": "vm",
+          "hostAlias": "agent-vm",
+          "keyName": "agent_vm_ed25519",
+          "owner": null,
+          "scriptsDir": null,
+          "service": null,
+          "sshHost": "agent-vm.mshome.net",
+          "sshPort": 22,
+          "vmName": "Agent-VM"
+        }
+      },
+      "version": 1
+    },
+    "problems": [
+      "defaultInstance \"constructor\" has no entry in \"instances\" — using \"agent-vm\""
+    ],
+    "text": "{\"defaultInstance\":\"constructor\",\"instances\":{}}"
+  },
+  {
+    "active": {
+      "instance": {
+        "backend": "hyperv-local",
+        "configBranch": "vm-dev",
+        "hostAlias": "dev",
+        "keyName": "construct_dev_ed25519",
+        "name": "dev",
+        "owner": null,
+        "publicHost": null,
+        "scriptsDir": null,
+        "service": null,
+        "sshPort": 22,
+        "vmHost": "dev.mshome.net",
+        "vmName": "dev"
+      },
+      "name": "dev",
+      "problem": "instance \"missing\" (setting) is not in the registry — skipped",
+      "problems": [
+        "instance \"missing\" (setting) is not in the registry — skipped"
+      ],
+      "source": "workspace"
+    },
+    "document": {
+      "defaultInstance": "dev",
+      "instances": {
+        "agent-vm": null,
+        "dev": {
+          "backend": "hyperv-local",
+          "configBranch": "vm-dev",
+          "hostAlias": "dev",
+          "keyName": "construct_dev_ed25519",
+          "owner": null,
+          "scriptsDir": null,
+          "service": null,
+          "sshHost": "dev.mshome.net",
+          "sshPort": 22,
+          "vmName": "dev"
+        }
+      },
+      "version": 1
+    },
+    "problems": [],
+    "text": "{\"defaultInstance\":\"dev\",\"instances\":{\"dev\":{},\"agent-vm\":null}}"
+  },
+  {
+    "active": {
+      "instance": {
+        "backend": "hyperv-local",
+        "configBranch": "vm",
+        "hostAlias": "agent-vm",
+        "keyName": "agent_vm_ed25519",
+        "name": "agent-vm",
+        "owner": null,
+        "publicHost": null,
+        "scriptsDir": null,
+        "service": null,
+        "sshPort": 22,
+        "vmHost": "agent-vm.mshome.net",
+        "vmName": "Agent-VM"
+      },
+      "name": "agent-vm",
+      "problem": "instance \"missing\" (setting) is not in the registry — skipped",
+      "problems": [
+        "instance \"missing\" (setting) is not in the registry — skipped",
+        "instance \"dev\" (workspace) is not in the registry — skipped"
+      ],
+      "source": "default"
+    },
+    "document": {
+      "defaultInstance": "agent-vm",
+      "instances": {
+        "agent-vm": {
+          "backend": "hyperv-local",
+          "configBranch": "vm",
+          "hostAlias": "agent-vm",
+          "keyName": "agent_vm_ed25519",
+          "owner": null,
+          "scriptsDir": null,
+          "service": null,
+          "sshHost": "agent-vm.mshome.net",
+          "sshPort": 22,
+          "vmName": "Agent-VM"
+        }
+      },
+      "version": 1
+    },
+    "problems": [
+      "instances \"a\" and \"b\" share the same configBranch \"same\" — both skipped"
+    ],
+    "text": "{\"instances\":{\"a\":{\"configBranch\":\"same\"},\"b\":{\"configBranch\":\"same\"}}}"
+  },
+  {
+    "active": {
+      "instance": {
+        "backend": "hyperv-local",
+        "configBranch": "vm",
+        "hostAlias": "agent-vm",
+        "keyName": "agent_vm_ed25519",
+        "name": "agent-vm",
+        "owner": null,
+        "publicHost": null,
+        "scriptsDir": null,
+        "service": null,
+        "sshPort": 22,
+        "vmHost": "agent-vm.mshome.net",
+        "vmName": "Agent-VM"
+      },
+      "name": "agent-vm",
+      "problem": "instance \"missing\" (setting) is not in the registry — skipped",
+      "problems": [
+        "instance \"missing\" (setting) is not in the registry — skipped",
+        "instance \"dev\" (workspace) is not in the registry — skipped"
+      ],
+      "source": "default"
+    },
+    "document": {
+      "defaultInstance": "agent-vm",
+      "instances": {
+        "a": {
+          "backend": "proxmox",
+          "configBranch": "vm-a",
+          "hostAlias": "a",
+          "keyName": "construct_a_ed25519",
+          "owner": null,
+          "scriptsDir": null,
+          "service": null,
+          "sshHost": "a.mshome.net",
+          "sshPort": 22,
+          "vmName": "a"
+        },
+        "agent-vm": {
+          "backend": "hyperv-local",
+          "configBranch": "vm",
+          "hostAlias": "agent-vm",
+          "keyName": "agent_vm_ed25519",
+          "owner": null,
+          "scriptsDir": null,
+          "service": null,
+          "sshHost": "agent-vm.mshome.net",
+          "sshPort": 22,
+          "vmName": "Agent-VM"
+        }
+      },
+      "version": 1
+    },
+    "problems": [
+      "instance \"bad\": \"sshHost\" is missing (no sshHost) — a \"hyperv-remote\" instance's endpoint is the one its host service allocated, so it cannot be derived from the instance name — skipped",
+      "instance \"a\": \"publicHost\" \"bad/host\" is not a host name or IP address — ignored",
+      "instance \"a\" has an unknown backend \"proxmox\" — this Construct has no driver for it, so rebuild/checkpoint actions are unavailable for it (update Construct if a newer version created it)"
+    ],
+    "text": "{\"instances\":{\"bad\":{\"backend\":\"hyperv-remote\"},\"a\":{\"backend\":\"proxmox\",\"publicHost\":\"bad/host\"}}}"
+  },
+  {
+    "active": {
+      "instance": {
+        "backend": "hyperv-local",
+        "configBranch": "vm-dev",
+        "hostAlias": "dev",
+        "keyName": "construct_dev_ed25519",
+        "name": "dev",
+        "owner": null,
+        "publicHost": null,
+        "scriptsDir": null,
+        "service": null,
+        "sshPort": 22,
+        "vmHost": "dev.mshome.net",
+        "vmName": "dev"
+      },
+      "name": "dev",
+      "problem": "instance \"missing\" (setting) is not in the registry — skipped",
+      "problems": [
+        "instance \"missing\" (setting) is not in the registry — skipped"
+      ],
+      "source": "workspace"
+    },
+    "document": {
+      "defaultInstance": "agent-vm",
+      "instances": {
+        "agent-vm": {
+          "backend": "hyperv-local",
+          "configBranch": "vm",
+          "hostAlias": "agent-vm",
+          "keyName": "agent_vm_ed25519",
+          "owner": null,
+          "scriptsDir": null,
+          "service": null,
+          "sshHost": "agent-vm.mshome.net",
+          "sshPort": 22,
+          "vmName": "Agent-VM"
+        },
+        "dev": {
+          "backend": "hyperv-local",
+          "configBranch": "vm-dev",
+          "hostAlias": "dev",
+          "keyName": "construct_dev_ed25519",
+          "owner": null,
+          "scriptsDir": null,
+          "service": null,
+          "sshHost": "dev.mshome.net",
+          "sshPort": 22,
+          "vmName": "dev"
+        }
+      },
+      "version": 1
+    },
+    "problems": [
+      "instance \"dev\": \"scriptsDir\" must be a string — using the derived default",
+      "instance \"dev\" has an invalid sshPort — using 22",
+      "instance \"dev\": \"service.url\" must be a string — the service entry is ignored"
+    ],
+    "text": "{\"instances\":{\"dev\":{\"sshPort\":\"wrong\",\"service\":{\"auth\":\"wrong\",\"url\":42},\"scriptsDir\":42}}}"
+  }
+]
