@@ -270,7 +270,8 @@ public abstract class IsoBuilderBase : IIsoBuilder, IIsoMediaBuilder, IDisposabl
                 throw Fail(vmName, $"the configured source ISO is missing or empty: {configured}");
             }
 
-            VerifyChecksum(vmName, configured);
+            progress?.Report($"using the configured Ubuntu source ISO on the host: {configured}");
+            VerifyChecksum(vmName, configured, progress);
             return configured;
         }
 
@@ -301,13 +302,16 @@ public abstract class IsoBuilderBase : IIsoBuilder, IIsoMediaBuilder, IDisposabl
 
         if (redownload || !_files.FileExists(cached) || _files.FileLength(cached) <= 0)
         {
+            progress?.Report(redownload
+                ? "refreshing the Ubuntu source ISO in the host cache"
+                : $"Ubuntu source ISO is not cached on the host: {cached}");
             var pending = cached + "." + Guid.NewGuid().ToString("N") + ".download";
             try
             {
                 await _downloader.DownloadAsync(url, pending, progress, cancellationToken).ConfigureAwait(false);
                 if (!_files.FileExists(pending) || _files.FileLength(pending) <= 0)
                     throw Fail(vmName, "the downloaded source ISO is missing or empty");
-                VerifyChecksum(vmName, pending);
+                VerifyChecksum(vmName, pending, progress);
                 _files.MoveFile(pending, cached, overwrite: true);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -325,8 +329,11 @@ public abstract class IsoBuilderBase : IIsoBuilder, IIsoMediaBuilder, IDisposabl
                 throw Fail(vmName, $"the downloaded source ISO is missing or empty: {cached}");
             }
         }
-
-        VerifyChecksum(vmName, cached);
+        else
+        {
+            progress?.Report($"using the cached Ubuntu source ISO on the host: {cached}");
+            VerifyChecksum(vmName, cached, progress);
+        }
         return cached;
     }
 
@@ -334,7 +341,7 @@ public abstract class IsoBuilderBase : IIsoBuilder, IIsoMediaBuilder, IDisposabl
     /// Checked on every use, not only right after the download: a cache entry can be truncated by a
     /// full disk or replaced on a host several people administer.
     /// </summary>
-    private void VerifyChecksum(string? vmName, string isoPath)
+    private void VerifyChecksum(string? vmName, string isoPath, IProgress<string>? progress)
     {
         var expected = _options.Iso.Sha256?.Trim();
         if (string.IsNullOrEmpty(expected))
@@ -342,6 +349,7 @@ public abstract class IsoBuilderBase : IIsoBuilder, IIsoMediaBuilder, IDisposabl
             return;
         }
 
+        progress?.Report("verifying the Ubuntu source ISO SHA256 on the host");
         var actual = _files.ComputeSha256(isoPath);
         if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
         {
