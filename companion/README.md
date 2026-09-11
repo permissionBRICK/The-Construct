@@ -137,9 +137,6 @@ These specific workflows remain explicit refusals:
 
 | Command | Reason / alternative |
 |---|---|
-| `registerThisVm` | Companion has no attached Remote-SSH window identity. Use the VS Code registration command (which stays local in client mode). |
-| `addProject` | Profile storage is available, but not the clone/register/open project workflow. Save a profile or use Add Project in VS Code fallback mode. |
-| `removeInstance` | Registry edits and launch builders exist, but not the removal planner/confirmation workflow. Use the local VS Code removal command. |
 | `convertToHost` | Initiation depends on the attached VM identity; pending VS Code conversions keep their RSA private key in that VS Code profile's SecretStorage. Companion shows pending status and never finishes it automatically. Review/finish in that profile. |
 | `createFirstVm` | The service-backed creation wizard is not exposed. Use New Remote VM in VS Code. |
 | `hostadmin.action: issueToken`, `rotateVmToken` | `IPrompts` has no one-time secret display operation. Refused before requesting any new token; use the host CLI. |
@@ -177,7 +174,7 @@ views and runtime messages use IPC). The limitations of the implemented rows are
 | message | `setInstance` | implemented |
 | message | `setUsagePeriod` | implemented |
 | command | `addConfigRemote` | implemented |
-| command | `addProject` | unsupported: Clone/register wizard remains in VS Code. |
+| command | `addProject` | implemented |
 | command | `addRemoteAndPublish` | implemented |
 | command | `childConsole` | implemented |
 | command | `childDelete` | implemented |
@@ -204,10 +201,10 @@ views and runtime messages use IPC). The limitations of the implemented rows are
 | command | `pushConfigUpstream` | implemented |
 | command | `redownload` | implemented |
 | command | `refresh` | implemented |
-| command | `registerThisVm` | unsupported: Requires an attached VS Code Remote-SSH identity. |
+| command | `registerThisVm` | implemented |
 | command | `reinstall` | implemented |
 | command | `removeConfigRemote` | implemented |
-| command | `removeInstance` | unsupported: Use the local VS Code removal command. |
+| command | `removeInstance` | implemented |
 | command | `reprovision` | implemented |
 | command | `selectProfiles` | implemented |
 | command | `shareConfigs` | implemented |

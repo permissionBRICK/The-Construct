@@ -150,9 +150,9 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
                 await ConfigCommand(entry, id, m, ct); break;
             case "installGit": await launcher.StartDetachedAsync(PowerShellLaunch.BuildInstallGitLaunch().Invocation(), ct); break;
             // Documented unsupported workflows (companion/README.md): refused visibly, never ignored.
-            case "registerThisVm": Refuse(name, id, "Registration requires an attached Remote-SSH window. Use Register this VM in VS Code."); break;
-            case "addProject": Refuse(name, id, "Clone-and-register project creation is not yet ported. Save a project profile or use Add Project in VS Code fallback mode."); break;
-            case "removeInstance": Refuse(name, id, "Instance removal needs the installer removal planner. Use Remove Instance in VS Code."); break;
+            case "registerThisVm": await RegisterThisVm(ct); break;
+            case "addProject": await AddProject(entry, ct); break;
+            case "removeInstance": await RemoveInstance(entry, ct); break;
             case "convertToHost": Refuse(name, id, "Host conversion requires the attached VM identity and explicit finish workflow. Review or finish it in VS Code; Companion never finishes a pending conversion automatically."); break;
             case "createFirstVm": Refuse(name, id, "The remote VM creation wizard is not yet ported. Use New Remote VM in VS Code."); break;
             case "updateConstruct": await UpdateConstruct(entry, ct); break;

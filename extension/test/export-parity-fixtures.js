@@ -44,6 +44,10 @@ function guestScripts() {
     add("notify-watch", { dir: q(dir), claim, heartbeat: "60", fallback: "3" }, notify.buildWatchScript({ dir }));
   }
   add("probe", {}, probe.REMOTE_PROBE);
+  for (const url of ["https://example.test/repo.git", "git@host:a'b.git", " https://host/{{dest}}.git "]) {
+    const remote = require("../src/remote"), dest = remote.repoNameFromUrl(url);
+    add("project-clone", {root:"/root/repos",url:Buffer.from(url.trim()).toString("base64"),dest:Buffer.from(dest).toString("base64")},remote.buildCloneScript(url,dest));
+  }
   for (const root of ["/root/repos", "/tmp/a'b"]) add("project-scan", {root:root.replace(/'/g, "'\\''")}, require("../src/projects").buildScanScript(root));
   for (const text of ["", "#!/bin/bash\necho 'hello'\n# Unicode: ü\n"]) {
     add("audio-enable", { port: "8767", count: "8", shim: q(Buffer.from(text).toString("base64")), enable: q(Buffer.from(text).toString("base64")) }, audio.buildEnableScript(text, text));
@@ -470,6 +474,19 @@ function integrationSettings() {
     return rows;
   } finally { fs.rmSync(root, {recursive:true}); }
 }
+function instanceWorkflows() {
+  const rows = [], remote = require("../src/remote");
+  for (const document of [{}, {instances:{"work-vm":{},"remote-vm":{backend:"hyperv-remote",sshHost:"guest.example",service:{url:"http://localhost:7462",auth:"negotiate"}}}}]) {
+    const text = JSON.stringify(document), registry = instances.parseRegistry(text).registry;
+    for (const name of ["", "bad name", "agent-vm", "work-vm", "other-vm"])
+      for (const host of ["work-vm.mshome.net", "WORK-VM.MSHOME.NET.", "other-vm", "elsewhere"])
+        rows.push({kind:"register",text,name,host,output:instances.planLocalRegistration(registry,name,host)});
+    for (const name of ["", "missing", "agent-vm", "remote-vm", "work-vm"])
+      for (const confirmation of ["", name]) rows.push({kind:"remove",text,name,confirmation,output:instances.planRemoveInstance({registry,name,confirmation})});
+  }
+  for (const url of ["", "https://host/a.git", "git@host:project.git", "ssh://host/a.GIT/", " https://host/a.git?q=1#x ", "nope", "https://a b", "git@host:.."]) rows.push({kind:"git",url,valid:remote.isLikelyGitUrl(url),name:remote.repoNameFromUrl(url)});
+  return rows;
+}
 async function exportAll() {
   return {
     "refresh-cache": refreshCachePolicy(),
@@ -490,6 +507,7 @@ async function exportAll() {
     "settings-mapping": settingsMapping(),
     "instance-identity": instanceIdentity(),
     "registry-state": registryState(),
+    "instance-workflows": instanceWorkflows(),
     "lifecycle-invocations": lifecycleInvocations(),
     "lifecycle-launches": lifecycleLaunches(),
     "vm-power": vmPower(),

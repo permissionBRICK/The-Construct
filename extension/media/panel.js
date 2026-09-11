@@ -890,6 +890,7 @@
     if (s.registerOffer !== undefined) {
       const rb = $("registerBanner");
       if (rb) rb.hidden = !s.registerOffer;
+      if (s.companion === true) text("registerLabel", "Register another Construct VM");
       text("registerHost", s.registerOffer ? s.registerOffer.host : "");
     }
 

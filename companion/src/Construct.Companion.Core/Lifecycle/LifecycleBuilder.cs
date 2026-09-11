@@ -95,6 +95,12 @@ public static class LifecycleBuilder
             default: return null;
         }
     }
+    public static bool ScriptSupportsRemoveInstance(string source)
+    {
+        var code = Regex.Replace(Regex.Replace(source, @"<#[\s\S]*?#>", ""), @"^[ \t]*#.*$", "", RegexOptions.Multiline);
+        var match = Regex.Match(code, @"\[ValidateSet\(([^)]*)\)\]\s*\r?\n?\s*\[string\]\$Action\b", RegexOptions.IgnoreCase);
+        return match.Success && Regex.IsMatch(match.Groups[1].Value, "[\"']remove-instance[\"']", RegexOptions.IgnoreCase);
+    }
     public static bool ScriptSupportsParameter(string source, string parameter)
     {
         var code = Regex.Replace(Regex.Replace(source, @"<#[\s\S]*?#>", ""), @"^[ \t]*#.*$", "", RegexOptions.Multiline);
