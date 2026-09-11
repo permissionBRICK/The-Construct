@@ -681,3 +681,10 @@ Fake mode reads `HostAdmin:Source:FakeReleaseDir`: `FakeReleaseSource.GetSourceA
 - The cache is host-charged and invisible to `GET /host/capacity`; an operator whose `RootDir` volume also holds VM disks sets `MaxTotalBytes` accordingly.
 - Speed is not measured here: this environment has neither Hyper-V nor a Windows client. The saving is the pack (`tar.exe` over ~16 MB of checkout), the scp through the forwarded port, and the guest-side untar, replaced by one LAN download of ~4 MB (*measured* zip size at `253f3ce`) from the host the VM runs on, plus a local hash pass for archive installs whose duration is an estimate (expected sub-second) pending the field test.
 - The source zip is the tracked tree; anything the tar carried from an ignored path is not on the guest. §3.5 lists why no guest script depends on such a path; a future guest script must keep it that way.
+
+## Deviations
+
+- Corrected three pre-existing compiler/analyzer warnings in host-update code and tests to meet the zero-warning build gate.
+- The stale-inventory admission test uses the existing `IHypervisorInventory` seam; the contract calls it `IHostInventory`.
+- The host installer did not have the stated media directory/settings block; source settings now preserve the existing HostAdmin section and add Source.RootDir alongside the existing ISO setup.
+- Source ZIP checks also reject duplicate paths and file/directory collisions, matching safe extraction on Windows and Linux.

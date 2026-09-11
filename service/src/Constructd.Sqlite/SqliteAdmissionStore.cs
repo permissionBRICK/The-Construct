@@ -91,6 +91,12 @@ public sealed class SqliteAdmissionStore(SqliteCapacityLedger ledger, IClock clo
             command.With("@name", target).With("@job", plan.JobToInsert.Id);
             if (command.ExecuteNonQuery() != 1) return Result(AdmissionOutcome.VersionConflict);
         }
+        if (plan.VmSourceCommit is { } source)
+        {
+            using var command = Command(tx, "UPDATE vms SET source_commit=@commit WHERE name=@name AND deleting=0");
+            command.With("@name", source.VmName).With("@commit", source.Commit);
+            if (command.ExecuteNonQuery() != 1) return Result(AdmissionOutcome.VersionConflict);
+        }
         if (plan.JobToInsert is { } job)
         {
             using var exists = Command(tx, "SELECT COUNT(*) FROM jobs WHERE id=@id"); exists.With("@id", job.Id);
@@ -133,7 +139,7 @@ public sealed class SqliteAdmissionStore(SqliteCapacityLedger ledger, IClock clo
         await using var tx = await ledger.BeginMutationAsync(ct);
         using var exists = Command(tx, "SELECT COUNT(*) FROM jobs WHERE id=@id"); exists.With("@id", jobId);
         if (Convert.ToInt64(exists.ExecuteScalar()) == 0) throw new KeyNotFoundException("Unknown queued job.");
-        using var cmd = Command(tx, "UPDATE jobs SET state='Failed',error='Persisted job could not start.',finished=@at WHERE id=@id AND state='Queued'");
+        using var cmd = Command(tx, "UPDATE jobs SET state='Failed',error=CASE WHEN kind='source-fetch' THEN 'job-start-failed' ELSE 'Persisted job could not start.' END,finished=@at WHERE id=@id AND state='Queued'");
         cmd.With("@id", jobId).With("@at", SqliteDatabase.Text(clock.UtcNow)); cmd.ExecuteNonQuery(); tx.Commit();
     }
 

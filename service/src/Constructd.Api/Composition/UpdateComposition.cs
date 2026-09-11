@@ -15,7 +15,7 @@ public static class UpdateComposition
         var data=Path.GetDirectoryName(Path.GetFullPath(options.DatabasePath))!;
         if(options.Fake)
         {
-            services.AddSingleton<FakeReleaseSource>();services.AddSingleton<IReleaseSource>(sp=>sp.GetRequiredService<FakeReleaseSource>());
+            services.AddSingleton<FakeReleaseSource>(_ => new() { FakeReleaseDir = options.HostAdmin.Source.FakeReleaseDir, MaxSourceBytes = options.HostAdmin.Source.MaxItemBytes });services.AddSingleton<IReleaseSource>(sp=>sp.GetRequiredService<FakeReleaseSource>());
             services.AddSingleton<FakeUpdateStager>();services.AddSingleton<IUpdateStager>(sp=>sp.GetRequiredService<FakeUpdateStager>());
             services.AddSingleton<FakeUpdaterLauncher>();services.AddSingleton<IUpdaterLauncher>(sp=>sp.GetRequiredService<FakeUpdaterLauncher>());
             services.AddSingleton<FakeHostLock>();services.AddSingleton<IHostLock>(sp=>sp.GetRequiredService<FakeHostLock>());
@@ -23,7 +23,7 @@ public static class UpdateComposition
         else
         {
             services.AddSingleton<IHostLock>(new FileHostLock(data));
-            services.AddSingleton<IReleaseSource>(_=>new GitHubReleaseSource(new HttpClient(new HttpClientHandler{AllowAutoRedirect=false}){Timeout=TimeSpan.FromMinutes(30)}));
+            services.AddSingleton<IReleaseSource>(_=>new GitHubReleaseSource(new HttpClient(new HttpClientHandler{AllowAutoRedirect=false}){Timeout=TimeSpan.FromMinutes(30)}, options.HostAdmin.Source.MaxItemBytes));
             services.AddSingleton<IUpdateStager>(sp=>sp.GetRequiredService<PackageStager>());
             services.AddSingleton<IUpdaterLauncher>(sp=>new ScheduledTaskUpdaterLauncher(sp.GetRequiredService<IProcessRunner>(),sp.GetRequiredService<IHostLock>(),data));
         }

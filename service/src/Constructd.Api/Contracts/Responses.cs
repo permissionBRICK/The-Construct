@@ -134,7 +134,8 @@ public sealed record VmResponse(
     bool Shared = false, string? Incarnation = null, VmTokenKind? TokenKind = null, bool ChildCreationClosed = false,
     LeaseResponse? Lease = null, ChildHardware? Hardware = null, IReadOnlyList<object>? Media = null,
     GuestReport? Guest = null, HostObservation? Observed = null, VmReservationsResponse? Reservations = null,
-    CurrentOperationResponse? CurrentOperation = null, IReadOnlyList<string>? Children = null, IReadOnlyList<ChildAction>? AllowedActions = null, VmResourceUsageResponse? ResourceUsage = null, int? PendingCpu = null);
+    CurrentOperationResponse? CurrentOperation = null, IReadOnlyList<string>? Children = null, IReadOnlyList<ChildAction>? AllowedActions = null, VmResourceUsageResponse? ResourceUsage = null, int? PendingCpu = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? SourceCommit = null);
 
 /// <param name="PublicHost">
 /// The name this VM's web forwards are advertised under (plan §4.12). Equal to

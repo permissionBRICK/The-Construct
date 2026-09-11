@@ -90,6 +90,17 @@ public sealed partial class InMemoryVmRepository(IJobStore? jobs = null, IClock?
         }
     }
 
+    internal Task<bool> SetSourceCommitAsync(string name, string commit, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        lock (InMemoryTransaction.Gate)
+        {
+            if (!_vms.TryGetValue(name, out var vm) || vm.Deleting) return Task.FromResult(false);
+            _vms[name] = vm with { SourceCommit = commit };
+            return Task.FromResult(true);
+        }
+    }
+
     public Task<bool> RemoveAsync(string name, CancellationToken cancellationToken)
     {
         lock (InMemoryTransaction.Gate)
