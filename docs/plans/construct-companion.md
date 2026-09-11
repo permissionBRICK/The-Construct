@@ -533,6 +533,16 @@ extension methods in their own files), `extension/extension.js` (S2a extension o
 
 ## Deviations
 
+- S2b ipc: automatic checkpoint apply and lifecycle preflight/live-project fallback remain documented unsupported subflows; S2a has the pieces but not the complete dialog/result workflow, so users must sync/select explicitly and apply checkpoints through VS Code/installer.
+- S2b ipc: project modal saves use the existing S2a strict validation/canonicalization gate instead of legacy JS coercion; invalid/reserved profiles fail before writes.
+- S2b ipc: RuntimeSupervisor accepts an optional asynchronous retarget lease so IPC commands retain their instance target and config area while runtime settings are replaced.
+
+- S2b ipc: adds `ICompanionDesktop` and `IInstanceConnections` seams for app activation and per-instance transport composition; `RemoteApiException.Body` retains sanitized structured cascade problems for confirmations.
+- S2b ipc: stores Companion host enrollment in `companion/hosts.json` and pending host updates in `companion/host-update-<slug>.json` because the extension enrollment list is VS Code globalState; registry services are also discovered.
+- S2b ipc: adds an optional `error` display to the existing `lifecyclePrepared` handlers in panel.js/launcher.js; previously this message only cleared a spinner, so refusals were invisible.
+- S2b ipc: HTTP tests use real ephemeral Kestrel rather than TestServer, exercising actual Host/port checks and endpoint/quit lifetime; fake-mode console uses the in-memory filesystem.
+- S2b ipc: README records unported attached-window/creation/removal/update/secret-display workflows as visible refusals, plus pending automatic config-sync/enrichment and lifecycle-result wiring for integration.
+
 (Recorded by implementers; one line each: what, why, where.)
 - S2a state: adds `IStateFileSystem` (extends `IFileSystem`) for marker timestamps, directory existence and atomic create-if-absent profile writes; these host.js requirements cannot be expressed by the S1 seam.
 - S2a state: adds `IUpdateSource` for public release JSON under normal CA validation; `IRemoteApi` remains the credentialed certificate-pinned host-service transport.

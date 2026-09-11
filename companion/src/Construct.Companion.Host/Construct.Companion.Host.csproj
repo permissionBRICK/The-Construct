@@ -1,6 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><ShouldBeValidatedAsExecutableReference>false</ShouldBeValidatedAsExecutableReference></PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Construct.Companion.Core/Construct.Companion.Core.csproj" />
+    <ProjectReference Include="../Construct.Companion.Fakes/Construct.Companion.Fakes.csproj" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 </Project>

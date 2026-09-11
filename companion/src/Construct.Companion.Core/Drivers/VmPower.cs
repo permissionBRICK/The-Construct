@@ -9,6 +9,7 @@ namespace Construct.Companion.Core.Drivers;
 
 public static class VmPower
 {
+    public const string ShutdownCommand = "systemctl poweroff --no-block";
     public static string BuildStateProbeCommand(string? name) => "try { $vm = Get-VM -Name " + PowerShellLaunch.SingleQuote(string.IsNullOrEmpty(name) ? "Agent-VM" : name) + " -ErrorAction Stop; Write-Output ('VMSTATE=' + $vm.State) } catch { if ($_.FullyQualifiedErrorId -like 'InvalidParameter*') { Write-Output 'VMSTATE=absent' } else { Write-Output 'VMSTATE=unknown' } }";
     public static HostLaunch BuildStateProbeLaunch(string? name) => PowerShellLaunch.Probe(BuildStateProbeCommand(name));
     public static string ParseVmState(string? stdout) => RemoteHost.MapVmState(Regex.Match(stdout ?? "", @"VMSTATE=(\S+)", RegexOptions.ECMAScript).Groups[1].Value);
