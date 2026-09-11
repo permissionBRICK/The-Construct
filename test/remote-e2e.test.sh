@@ -96,6 +96,25 @@ PORT="${CONSTRUCT_E2E_PORT:-$(node -e 'const s=require("net").createServer();s.l
 BASE="http://127.0.0.1:${PORT}"
 ADMIN_TOKEN="e2e-$(date +%s)-$$"
 
+# One actual git archive and immutable manifest, served from the fake release directory.
+SOURCE_COMMIT="$(git -C "$ROOT" rev-parse HEAD)"
+SOURCE_RELEASES="$tmp/releases"
+export SOURCE_COMMIT SOURCE_RELEASES
+python3 - <<'PYSOURCE'
+import os,pathlib,subprocess,hashlib,json
+commit=os.environ['SOURCE_COMMIT']; folder=pathlib.Path(os.environ['SOURCE_RELEASES'])/('host-'+commit)
+folder.mkdir(parents=True)
+asset='construct-source-'+commit+'.zip'; archive=folder/asset
+subprocess.run(['git','-C',os.environ['ROOT'],'archive','--format=zip','--prefix=The-Construct-main/','HEAD','-o',str(archive)],check=True)
+data=archive.read_bytes()
+manifest=dict(schemaVersion=1,repository='permissionBRICK/The-Construct',ref='refs/heads/main',commit=commit,releaseTag='host-'+commit,
+    payloadAsset='construct-host-'+commit[:7]+'-win-x64.zip',payloadSha256='a'*64,payloadSizeBytes=123,builtAt='2026-09-11T00:00:00Z',
+    sourceAsset=asset,sourceSha256=hashlib.sha256(data).hexdigest(),sourceSizeBytes=len(data))
+(folder/'manifest.json').write_text(json.dumps(manifest))
+PYSOURCE
+# Build in the foreground; the managed fake service below is stopped by the EXIT trap.
+dotnet build "$SERVICE_PROJ" --nologo > "$tmp/build.log" 2>&1 || { cat "$tmp/build.log"; exit 1; }
+
 printf '  starting the fake service on %s ...\n' "${BASE}"
 (
   cd "${SERVICE_PROJ}" || exit 1
@@ -105,7 +124,8 @@ printf '  starting the fake service on %s ...\n' "${BASE}"
   Constructd__PublicHost="127.0.0.1" \
   Constructd__Persistence="Memory" \
   Constructd__Idle__SchedulerEnabled="false" \
-  dotnet run --project "${SERVICE_PROJ}" -- --fake
+  Constructd__HostAdmin__Source__FakeReleaseDir="$SOURCE_RELEASES" \
+  dotnet "${SERVICE_PROJ}/bin/Debug/net10.0/Constructd.Api.dll" --fake
 ) >"${tmp}/service.log" 2>&1 &
 SVC_PID=$!
 
@@ -353,6 +373,42 @@ ok "both: the PowerShell and JS clients derive the same host slug" \
 ok "both: ...and normalise a bare host name identically" \
   test "$(pwsh -NoProfile -Command '. (Join-Path $env:ROOT "lib/AgentVm.Remote.ps1"); ConvertTo-ConstructServiceUrl -Value "buildbox"' 2>/dev/null)" \
      = "$(node -e 'console.log(require(process.env.ROOT + "/extension/src/remotehost.js").normalizeServiceUrl("buildbox"))' 2>/dev/null)"
+
+# ── (4) Released source: real client helpers and guest script ─────────────────
+printf '\n  -- source cache and guest fetch --\n'
+SOURCE_OUT="$tmp/source.out"
+BASE="$BASE" TOKEN="$ADMIN_TOKEN" SOURCE_DIR="$tmp" SOURCE_COMMIT="$SOURCE_COMMIT" SOURCE_PHASE=ensure \
+  pwsh -NoProfile -File "$ROOT/test/fixtures/source-e2e.ps1" > "$SOURCE_OUT" 2>&1
+SOURCE_RC=$?
+ok "source: real client ensure, ready hit and queued replay" test "$SOURCE_RC" -eq 0
+if [[ "$SOURCE_RC" -ne 0 ]]; then cat "$SOURCE_OUT"; else
+  chmod 600 "$tmp/source-vm.token" "$tmp/source-other.token"
+  SOURCE_HASH="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["Sha256"])' "$tmp/source-result.json")"
+  SOURCE_SIZE="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["SizeBytes"])' "$tmp/source-result.json")"
+  CONSTRUCT_SERVICE_URL="$BASE" CONSTRUCT_INSTANCE_NAME=source-vm CONSTRUCT_VM_TOKEN_FILE="$tmp/source-vm.token" \
+    CONSTRUCT_SOURCE_COMMIT="$SOURCE_COMMIT" CONSTRUCT_SOURCE_SHA256="$SOURCE_HASH" CONSTRUCT_SOURCE_SIZE="$SOURCE_SIZE" \
+    CONSTRUCT_SEED_USER="$(id -un)" REPO_DIR="$tmp/opt/repo" bash "$ROOT/bin/fetch-construct-source.sh" > "$tmp/source-guest.out" 2>&1
+  ok "source: guest fetch succeeds" test "$?" -eq 0
+  ok "source: prefix stripped and executable mode retained" test -x "$tmp/opt/repo/bin/provision.sh"
+  ok "source: README mode restored" test "$(stat -c %a "$tmp/opt/repo/README.md")" = 644
+  ok "source: revision and ownership installed" test "$(cat "$tmp/opt/repo/.construct-revision")/$(stat -c %U "$tmp/opt/repo")" = "$SOURCE_COMMIT/$(id -un)"
+  printf 'Authorization: VmToken %s\n' "$(cat "$tmp/source-other.token")" > "$tmp/other-header"
+  chmod 600 "$tmp/other-header"
+  code="$(curl -s -H "@$tmp/other-header" -o "$tmp/denied.json" -w '%{http_code}' "$BASE/api/v1/vms/source-vm/source/$SOURCE_COMMIT")"
+  ok "source: another VM token is refused" test "$code" = 403
+  BASE="$BASE" TOKEN="$ADMIN_TOKEN" SOURCE_DIR="$tmp" SOURCE_COMMIT="$SOURCE_COMMIT" SOURCE_PHASE=delete \
+    pwsh -NoProfile -File "$ROOT/test/fixtures/source-e2e.ps1" >> "$SOURCE_OUT" 2>&1
+  ok "source: admin delete pin, force and subsequent download" test "$?" -eq 0
+  SOURCE_DIR="$tmp" TOKEN="$ADMIN_TOKEN" python3 - <<'PYSECRETS'
+import os,pathlib
+p=pathlib.Path(os.environ['SOURCE_DIR'])
+secrets=[os.environ['TOKEN']]+[(p/name).read_text() for name in ('source-vm.token','source-other.token')]
+for name in ('service.log','ps.out','js.out','source.out','source-guest.out','denied.json'):
+    value=(p/name).read_text()
+    assert all(secret and secret not in value for secret in secrets), 'secret in '+name
+PYSECRETS
+  ok "source: no token in service log or client output" test "$?" -eq 0
+fi
 
 printf '\n  %d passed, %d failed, %d skipped\n\n' "${pass}" "${fail}" "${skipped}"
 [[ "${fail}" -eq 0 ]]

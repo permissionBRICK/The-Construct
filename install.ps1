@@ -48,7 +48,7 @@ try {
 }
 finally { $ProgressPreference = $oldPP }
 Expand-Archive -LiteralPath $zip -DestinationPath $work -Force
-Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+# Keep the verified ZIP until the external source manifest has been recorded.
 
 # GitHub archives unpack to a single <name>-<ref> folder. Run the real .ps1 file (not
 # iex) so Auto-Install's self-elevation ($PSCommandPath) and $PSScriptRoot resolve.
@@ -63,6 +63,16 @@ if (-not $root) {
 if (-not $root) { throw "Downloaded archive looked empty: $work" }
 $auto = Join-Path $root.FullName "Auto-Install.ps1"
 if (-not (Test-Path -LiteralPath $auto)) { throw "Auto-Install.ps1 not found in $($root.FullName)." }
+
+if ($release) {
+    try {
+        . (Join-Path $root.FullName 'lib/AgentVm.Common.ps1')
+        [void](Write-ConstructSourceManifest -Zip $zip -Commit $release.commit)
+    } catch {
+        Write-Warning "Could not record the source manifest ($($_.Exception.GetType().Name)); the host cache is unavailable until the next update."
+    }
+}
+Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
 
 Write-Host "==> Launching Auto-Install.ps1" -ForegroundColor Cyan
 # Forward the repo/ref PAIR only when explicitly set (fork/mirror), so the marker is
