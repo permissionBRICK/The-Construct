@@ -50,6 +50,7 @@ Taken by the project owner on 2026-09-11. Record them; do not reopen.
 | D7 | .NET 10, self-contained win-x64, no runtime prerequisite. Built locally when a .NET 10 SDK is present on the host, otherwise downloaded from an immutable GitHub release, following the host-service release pattern. |
 | D8 | The webview assets (`extension/media/*`) are the single source of the panel, launcher and host-admin UI. The Companion hosts them unchanged in WebView2 through a message-bridge shim. No second UI implementation. |
 | D9 | Guest-side shell scripts and every pure decision (planners, parsers, argv builders, wire documents, settings mapping) exist once per language but are proven identical through shared golden fixtures generated from the JavaScript implementation. |
+| D11 | The Companion is installed on the client PC for remote installs too (`-Backend hyperv-remote`, Add Remote Host, New Remote VM), not only for local Hyper-V installs; the client PC is where forwards, toasts and the mic end up. |
 | D10 | No admin at any point: per-user install directory, HKCU Run key, HKCU protocol handler, loopback port. Elevated actions stay what they are today (UAC-prompted PowerShell consoles). |
 
 ## 3. What exists today
@@ -419,6 +420,13 @@ node) and wiring in `extension.js`:
   (token over stdin, never argv). The extension keeps reading SecretStorage for its own
   fallback mode.
 - **Toasts** are raised by the extension only in fallback mode, unchanged.
+- **Install offer (fallback mode only)**: when `install.json` is absent, `companion: false`
+  is not set, and at least one instance is registered (this is the state of a PC that added
+  a remote host or VM from the VS Code commands without ever running the installer's
+  pre-step), the extension shows one information message per session with an **Install
+  Construct Companion** button that launches `Install-ConstructCompanion.ps1` in a visible,
+  non-elevated console through the lifecycle launcher, and a "Not now" that suppresses it
+  for the session. The same action is reachable as the command `construct.installCompanion`.
 - `extension/ARCHITECTURE.md` gains a "Companion mode" section; `docs/control-panel.md` a
   short pointer.
 
@@ -456,10 +464,20 @@ delivery. Construct side: nothing beyond the command-line contract in §6.
   unless `-Force`.
 - `Uninstall-ConstructCompanion`: quit, remove Run key, protocol, AUMID, install dir; keeps
   the state dir.
-- Hooks: `Auto-Install.ps1` non-elevated pre-step (where the VSIX is installed) and
-  `Update-Construct.ps1`, both with `-SkipCompanion`; `.construct-settings.json` key
-  `companion: false` opts out persistently. Failures are reported, never hidden by `|| true`
-  equivalents, and never block the VM install.
+- Hooks. The Companion is installed on the **client PC for every install mode** (project
+  owner, 2026-09-11): client forwards, toasts and the microphone terminate on the user's
+  PC no matter where the VM runs, so a remote install needs it exactly as much as a local one.
+  (a) `Auto-Install.ps1` non-elevated pre-step, right next to the VSIX install; that step runs
+  before the local/remote decision and before any elevation, so it covers fresh local installs,
+  fresh remote installs (`-Backend hyperv-remote`) and further remote VMs added on a PC that
+  already has a registry. (b) `Update-Construct.ps1`. (c) The `install.ps1` one-liner reaches (a).
+  (d) A root script `Install-ConstructCompanion.ps1 [-Uninstall] [-Source auto|local|release] [-Force]`
+  (same convention as `Update-T3Code.ps1`) wrapping the library, for manual runs and for the
+  extension's offer in §10 on PCs that only ever added a remote host from VS Code. Both hooks
+  honour `-SkipCompanion`; `.construct-settings.json` key `companion: false` opts out
+  persistently. Failures are reported, never hidden, and never block the VM install. A pwsh
+  test per path asserts the hook is reached with a fake installer function, including the
+  remote path where the elevation relaunch never happens and the pre-step is the only step.
 - Packager `companion/host/New-ConstructCompanionPackage.ps1`: zip `construct-companion-<sha7>-win-x64.zip`
   (stored) containing `app\` (publish output incl. `media\`) and `SHA256SUMS`; detached
   `manifest.json` `{ schemaVersion:1, commit, ref, packageVersion, builtAt, repository,
@@ -487,10 +505,10 @@ warnings, all suites green, docs updated, deviations recorded under "Deviations"
 | S2a state | `cc/s2-state` | Core: paths, registry, instance state, settings form mapping, project profiles, update markers/checks, T3 artifacts, usage parsing, probe parsing, lifecycle invocations, remote-host client logic (pin, token seam, Negotiate seam, routes used by the panel and host admin), drivers (local via hypervisor seam, remote via API). Fixtures for all of these. |
 | S2a runtime | `cc/s2-runtime` | Core + Host: forwarder (planner, wire docs, Forwarder, local + remote transports), notifier (watch, claim, toast document), audio session (contract, scripts, tunnel, capture seam, fan-out), repatch, per-instance runtime + supervisor + registry watcher, ssh process supervision with backoff, SSE bus data model. Fixtures for all. Linux end-to-end test: fake guest spool + fake ssh → forwards open/ack/close; fake notify spool → toast seam called once per entry. |
 | S2a configsync | `cc/s2-configsync` | Core + Host: `configsync.js` port (git runner, repo state, sync tick with lock, remotes, staging clones, import/share/publish planners and flows), pickers through the prompts seam. Tests with a real `git` on Linux in temp repos (as the JS tests do). |
-| S2a extension | `cc/s2-extension` | `extension/src/companion.js`, wiring in `extension.js`, `package.json` setting + command, migrations, tests with a stub Companion HTTP server, ARCHITECTURE.md and control-panel.md updates. Must not depend on the C# code existing; the contract is §7. |
+| S2a extension | `cc/s2-extension` | `extension/src/companion.js`, wiring in `extension.js`, `package.json` setting + commands (`openPanelHere`, `installCompanion`), the install offer, migrations, tests with a stub Companion HTTP server, ARCHITECTURE.md and control-panel.md updates. Must not depend on the C# code existing; the contract is §7. |
 | S2b ipc | `cc/s2-ipc` | Host: Kestrel IPC server (§7 routes, auth, Host check, problem details, SSE), state aggregation, the message dispatcher (C# `handleMessage` for panel and host-admin protocols, calling the S2a modules), `hostadmin.js`/`hostadmin-ui.js` port, Linux fake-mode end-to-end test driving the dispatcher through HTTP. |
 | S2b app | `cc/s2-app` | App: tray, icons, popup, context menu, WebView2 windows and bridge shim, dialogs implementing the prompts seam, single instance, command line, `construct://`, `--selftest`, settings persistence; Windows project: DPAPI, CIM state, toast, WASAPI, Run key/protocol/AUMID registration, launchers (VS Code, T3, UAC). Argv-pinned tests for every external invocation; WinRT/COM code isolated behind the seams. |
-| S2b install (reviewer: Opus) | `cc/s2-install` | `lib/Construct.Companion.ps1`, hooks in `Auto-Install.ps1` and `Update-Construct.ps1`, packager, workflow, `docs/companion.md`, pwsh tests (`test/companion-install.test.ps1`: source resolution, manifest verification, swap/rollback, registry writes through a fake, quit handshake with a fake endpoint) and a Linux packaging layout test. |
+| S2b install (reviewer: Opus) | `cc/s2-install` | `lib/Construct.Companion.ps1`, root `Install-ConstructCompanion.ps1`, hooks in `Auto-Install.ps1` (pre-step, covering local and remote installs) and `Update-Construct.ps1`, packager, workflow, `docs/companion.md`, pwsh tests (`test/companion-install.test.ps1`: source resolution, manifest verification, swap/rollback, registry writes through a fake, quit handshake with a fake endpoint) and a Linux packaging layout test. |
 | S2b t3 (reviewer: Opus) | `cc/t3-companion` in `/root/repos/construct-t3-builds` | Both inventories: Settings button + bridge method, unit tests in the repo's style, patch-rule compliance. |
 | S3 integration | `cc/s3-integration` | Wire S2a and S2b together, complete the message matrix (every message type and command id implemented or listed), fake-mode Linux e2e through the real IPC server and the real dispatcher against fake seams, `--selftest` exercised on Linux where possible, docs finalized (`companion/README.md`, `docs/companion.md`, ARCHITECTURE.md), this document's status updated. |
 | S4 cleanup (dev: Fable, reviewer: Astra) | `cc/s4-cleanup` | Simplification pass over everything: remove over-engineering, duplicated abstractions, defensive noise and verbose comments; align names and structure with this design; no behaviour change without a recorded reason; all suites green. |
