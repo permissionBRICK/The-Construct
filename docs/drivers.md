@@ -84,7 +84,7 @@ future OIDC or Proxmox-token provider needs no driver change.
 
 | Function | Signature | Returns / notes |
 |---|---|---|
-| `Get-ConstructDriverCapabilities` | – | `@{ Checkpoints; Console; Suspend; Backend }` |
+| `Get-ConstructDriverCapabilities` | – | `@{ Checkpoints; Console; Suspend; Resources; Backend }` |
 | `Test-ConstructDriverPrereqs` | – | `$true`/`$false`; cheap, never throws, never elevates |
 | `Ensure-ConstructDriverPrereqs` | `-Scope Platform\|HostAccess\|All` | default `Platform`; assumes the caller is elevated |
 | `New-ConstructVm` | `-Descriptor <hashtable>` | creates **and configures**; leaves the VM off |
@@ -125,6 +125,19 @@ at all. `Enumerated = $false` must never be reported to a user as "there are non
 `Set-AgentVmCheckpoints.ps1` deliberately fails loudly there rather than claiming a
 cleanup it couldn't verify. Checkpoint objects carry at least `Name` and
 `CreationTime` and are handed straight back to `Remove-ConstructVmCheckpoint`.
+
+Capability-gated on `Capabilities.Resources` — in-place resizing of an EXISTING VM,
+what `Set-AgentVmResources.ps1` (the panel's "restart to apply" for RAM and vCPUs) drives:
+
+| Function | Signature | Returns / notes |
+|---|---|---|
+| `Set-ConstructVmMemory` | `-Name -MemoryGB <double>` | static memory, 2 MB-aligned, **Off only**; reads the size back and throws on a mismatch |
+| `Set-ConstructVmCpuCount` | `-Name -ProcessorCount <1..64>` | **Off only**; reads the count back and throws on a mismatch |
+
+`hyperv-local` declares `Resources = $true`; `hyperv-remote` declares `$false` because the
+service resizes its own VMs (the vCPU count through `PUT /vms/{name}/cpu`, applied on the
+next stop/start — the extension takes that route itself and never runs the script for a
+remote instance).
 
 One more function is local-only and **not** part of the portable contract:
 `Test-ConstructVmSshPort -SshHost -SshPort`, the raw-socket probe
@@ -204,7 +217,7 @@ const state = await driver.queryVmState(instance);   // 'running'|'off'|'absent'
 | Member | Signature | Notes |
 |---|---|---|
 | `backend` | string | the id this driver implements |
-| `capabilities` | `{ checkpoints, console, suspend, hostLifecycle, children? }` | `console`: `"vmconnect"` \| `"none"` \| a URL; `hostLifecycle`: the host's own PowerShell scripts create/delete/reconfigure this backend's VMs; optional `children` advertises the service-backed child inventory |
+| `capabilities` | `{ checkpoints, console, suspend, hostLifecycle, resources, children? }` | `console`: `"vmconnect"` \| `"none"` \| a URL; `hostLifecycle`: the host's own PowerShell scripts create/delete/reconfigure this backend's VMs; `resources`: `Set-AgentVmResources.ps1` can resize this backend's VMs in place (gates the `setResources` action); optional `children` advertises the service-backed child inventory |
 | `capabilitiesFor` | `(instance, opts) => Promise<object>` | optional effective-capability resolver; `hyperv-remote` probes `/health.apiFeatures` and caches successful answers for 60 seconds |
 | `queryVmState` | `(instance, opts) => Promise<string>` | `running\|off\|absent\|unknown` (`saved`/`paused` collapse to `off`: Start resumes them) |
 | `queryAutoCheckpoints` | `(instance, opts) => Promise<string>` | `on\|off\|absent\|unsupported\|unknown` |
@@ -223,7 +236,7 @@ panel already degrades gracefully on `unknown`.
 
 `capabilities.hostLifecycle` is what gates the VM-destroying lifecycle actions.
 `drivers/index.js` exposes `lifecycleSupport(backend, action)`: `reinstall`,
-`redownload` and `setCheckpoints` (the `HYPERVISOR_ACTIONS`) are refused unless the
+`redownload`, `setCheckpoints` and `setResources` (the `HYPERVISOR_ACTIONS`) are refused unless the
 driver declares it, because those actions run through the host's PowerShell scripts —
 and until a backend's remote path exists in those scripts they drive the LOCAL Hyper-V,
 so on a remote instance they would create or delete a LOCAL VM that merely shares the

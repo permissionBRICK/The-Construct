@@ -141,6 +141,64 @@ function planCheckpointOffer(payload, prev, merged) {
 }
 
 /**
+ * What "Restart to apply" would do for the VM-resources settings, and whether it is
+ * needed. Pure — the webview (media/panel.js) inlines the SAME rule for its badge, and
+ * this is the canonical definition the unit tests lock so the copies can't drift.
+ *
+ *   saved  the form-shaped settings ({ ram, cpu } — strings as the form stores them, or
+ *          numbers); anything else is "not set".
+ *   live   the VM's real size from the probe ({ ramGb, cpus }), or null when the VM is
+ *          offline / unprobed.
+ *
+ * Returns { ram, cpu, none, pending, summary, current }:
+ *   ram/cpu   the values to apply (null = leave as is). RAM may be fractional; the CPU
+ *             count must be a whole number ≥ 1. Zero, blank and garbage are "not set".
+ *   none      nothing is set at all — there is nothing to apply.
+ *   pending   true  when a set value differs from what the VM reports,
+ *             false when every set value already matches the VM,
+ *             null  when the VM's size is unknown (offline) — can't tell.
+ *   summary   "16 GB RAM, 8 vCPUs" — the set values, for the confirmation text.
+ *   current   the same for the VM's reported size ("8 GB RAM, 4 vCPUs"), "" if unknown.
+ *
+ * RAM compares against the probe's whole-GB rounding (probe.parseVmSpec): a 16 GB VM
+ * reports 16, so a saved 16 is not pending; a saved 16.5 against a VM reporting 16 IS
+ * (the panel can only round, and a deliberate fractional size is the user's to apply).
+ */
+function planResourceApply(saved, live) {
+  const num = (v, integer) => {
+    if (v === undefined || v === null || typeof v === "boolean") return null;
+    if (typeof v === "string" && v.trim() === "") return null;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    if (integer && !Number.isInteger(n)) return null;
+    return n;
+  };
+  const s = saved || {};
+  const ram = num(s.ram, false);
+  const cpu = num(s.cpu, true);
+  const none = ram === null && cpu === null;
+  const l = live && typeof live === "object" ? live : null;
+  const liveRam = l ? num(l.ramGb, false) : null;
+  const liveCpu = l ? num(l.cpus, true) : null;
+  const fmt = (r, c) => {
+    const parts = [];
+    if (r !== null) parts.push(`${r} GB RAM`);
+    if (c !== null) parts.push(`${c} vCPU${c === 1 ? "" : "s"}`);
+    return parts.join(", ");
+  };
+  let pending = null;
+  if (!none) {
+    const checks = [];
+    if (ram !== null) checks.push(liveRam === null ? null : ram !== liveRam);
+    if (cpu !== null) checks.push(liveCpu === null ? null : cpu !== liveCpu);
+    if (checks.some((c) => c === true)) pending = true;
+    else if (checks.every((c) => c === false)) pending = false;
+    else pending = null;
+  }
+  return { ram, cpu, none, pending, summary: fmt(ram, cpu), current: fmt(liveRam, liveCpu) };
+}
+
+/**
  * Whether the "Start & connect" affordance should be shown for a given probed state.
  * The webviews (media/panel.js, media/launcher.js) can't require() this module, so
  * they inline the SAME predicate — this is the canonical definition the unit tests
@@ -171,6 +229,7 @@ module.exports = {
   buildAutoCheckpointProbeLaunch: hypervLocal.buildAutoCheckpointProbeLaunch,
   parseAutoCheckpoints: hypervLocal.parseAutoCheckpoints,
   queryAutoCheckpoints, shouldOfferCheckpointApply, planCheckpointOffer,
+  planResourceApply,
   shouldShowStart,
   buildElevatedCommandLaunch: hypervLocal.buildElevatedCommandLaunch,
   buildStartCommand: hypervLocal.buildStartCommand,

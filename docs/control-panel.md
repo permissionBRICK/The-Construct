@@ -562,6 +562,47 @@ The agent password is never stored — it's entered in the elevated console at r
 See [Project profiles & configuration](projects.md) and [Provisioning](provisioning.md) for
 what each setting maps to.
 
+### VM resources: restart to apply RAM & vCPUs
+
+**Memory (RAM)** and **vCPUs** no longer need a rebuild. Enter the new size and press
+**Save & restart to apply** in the *VM resources* section: the form is saved, the VM is
+shut down gracefully, resized while it is off, and started again. A note next to the
+button compares what you entered with the size the running VM reports ("differs from the
+running VM (8 GB RAM, 4 vCPUs)" / "the VM already has this size"); while the VM is offline
+the panel can't tell and says nothing.
+
+- **Local Hyper-V VM** — one UAC prompt: `Set-AgentVmResources.ps1` runs in an elevated
+  console. It asks Hyper-V for a guest shutdown (the panel also sends `poweroff` over
+  SSH once the console reports it is up, so a declined UAC never leaves the VM off with
+  nothing applied), waits until the VM is **off**, applies `Set-VMMemory` /
+  `Set-VMProcessor` through the driver, and starts the VM. A saved or paused VM is
+  resumed first so the guest can shut down cleanly. It never forces a power cut: a guest
+  that doesn't power off within three minutes makes the script fail with nothing
+  changed. Values are sanity-checked against the host (vCPUs ≤ logical processors, RAM
+  below physical memory).
+- **Remote VM (host service)** — the vCPU count is recorded on the service
+  (`PUT /vms/{name}/cpu`) and applied by a graceful restart through its lifecycle route,
+  which is also where the host administration panel's "CPU count" lands. The service has
+  no memory resize, so a new **RAM** size on a remote VM still needs a Reinstall (the
+  panel says so instead of pretending).
+- **Disk size** stays a Reinstall / Redownload job — growing the virtual disk also means
+  growing the guest's partition and filesystem.
+
+A window attached over Remote-SSH loses its connection while the VM restarts and
+reconnects on its own once it is back; the panel waits for the VM to answer and refreshes.
+
+You can also run it by hand:
+
+```powershell
+.\Set-AgentVmResources.ps1 -VmMemoryGB 16 -VmCpuCount 8        # both
+.\Set-AgentVmResources.ps1 -VmCpuCount 4 -VmName build-vm       # another local VM
+.\Set-AgentVmResources.ps1 -VmMemoryGB 12 -StartAfter false     # resize and leave it off
+```
+
+It defaults to `-VmName Agent-VM -Backend hyperv-local`, takes `-InstanceName` like the
+other host scripts, and refuses to run when the backend reports no `Resources`
+capability rather than resizing some *local* VM that happens to share the name.
+
 ### Automatic checkpoints
 
 Hyper-V's **automatic checkpoints** snapshot a VM every time it starts. That's a sensible

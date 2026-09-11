@@ -146,6 +146,35 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("settings populate: automatic-checkpoints switch driven", (await page.getAttribute("#setAutoCheckpoints", "aria-checked")) === "true");
   check("settings populate: OpenCode watcher switch driven", (await page.getAttribute("#setOpenCodeBackgroundWatcher", "aria-checked")) === "true");
 
+  // "Restart to apply" (RAM + vCPUs): the note compares the entered size with the VM's
+  // real size (vmpower.planResourceApply, mirrored in panel.js), the button saves and then
+  // asks for the restart, and an offline VM is "can't tell", never the number from before.
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, vmSpec: { ramGb: 8, diskGb: 50, cpus: 4 } } }, "*"));
+  await page.waitForTimeout(60);
+  check("resources: a saved 16 GB against an 8 GB VM is flagged as differing",
+    /differs from the running VM \(8 GB RAM, 4 vCPUs\)/.test(await page.locator("#resApplyNote").innerText()));
+  check("resources: ...and the button is highlighted", (await page.getAttribute("#resApplyBtn", "class")).includes("start"));
+  await page.fill("#setRam", "8");
+  check("resources: a matching size says so", /already has this size/.test(await page.locator("#resApplyNote").innerText()));
+  check("resources: ...and the highlight is gone", !(await page.getAttribute("#resApplyBtn", "class")).includes("start"));
+  await page.fill("#setCpu", "8");
+  check("resources: a differing vCPU count is flagged", /differs from the running VM/.test(await page.locator("#resApplyNote").innerText()));
+  await page.click("#resApplyBtn");
+  posted = await page.evaluate(() => window.__posted);
+  const saveIdx = posted.map((m) => m.type).lastIndexOf("saveSettings");
+  const applyIdx = posted.map((m) => m.type).lastIndexOf("applyVmResources");
+  check("resources: the button saves the form FIRST, then asks for the restart",
+    saveIdx >= 0 && applyIdx > saveIdx && posted[saveIdx].settings.ram === "8" && posted[saveIdx].settings.cpu === "8");
+  check("resources: the button posts no generic command", !posted.some((m) => m.type === "command" && m.id === "applyVmResources"));
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: false, host: "h.example.net" } }, "*"));
+  await page.waitForTimeout(60);
+  check("resources: offline -> the note can't tell (no stale number)", (await page.locator("#resApplyNote").innerText()) === "");
+  await page.fill("#setRam", ""); await page.fill("#setCpu", "");
+  check("resources: nothing entered disables the button and says why",
+    (await page.locator("#resApplyBtn").isDisabled()) && /enter a RAM size or vCPU count/.test(await page.locator("#resApplyNote").innerText()));
+  await page.fill("#setRam", "16");
+  check("resources: re-entering a value re-enables it", await page.locator("#resApplyBtn").isEnabled());
+
   // Remove instance (B14): the section is absent until the extension offers it, carries
   // the plan's own wording, names the VM deletion for a remote instance, and posts the
   // command. A single-VM install pushes `removeOffer: null` and never sees it.
@@ -189,7 +218,8 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   // save -> extension: gather the form and post saveSettings.
   await page.click("#saveBtn");
   const savePosted = await page.evaluate(() => window.__posted);
-  const savedMsg = savePosted.find((m) => m.type === "saveSettings");
+  // The LAST saveSettings: the "restart to apply" button above posts one too.
+  const savedMsg = savePosted.filter((m) => m.type === "saveSettings").pop();
   check("save posts saveSettings carrying the form", savedMsg && savedMsg.settings && savedMsg.settings.gitName === "Neo");
   check("save carries the automatic-checkpoints toggle", savedMsg && savedMsg.settings.autoCheckpoints === true);
   check("save carries the OpenCode watcher toggle", savedMsg && savedMsg.settings.opencodeBackgroundWatcher === true);
