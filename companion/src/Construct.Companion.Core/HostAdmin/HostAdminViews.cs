@@ -53,6 +53,7 @@ public static partial class HostAdminViews
         r["kind"] = Default(v["kind"], "primary").ToLowerInvariant(); r["sharing"] = Default(v["sharing"], "private").ToLowerInvariant(); r["state"] = Default(v["state"], "unknown").ToLowerInvariant();
         foreach (var k in new[] { "shared", "deleting", "childCreationClosed" }) r[k] = StateJson.Boolean(v[k]) == true;
         r["pendingCpu"] = Number(v["pendingCpu"]);
+        r["pendingRamGb"] = Number(v["pendingRamGb"]);
         r["tokenKind"] = Text(v["tokenKind"]).Length > 0 ? Text(v["tokenKind"]) : null;
         var hw = v["hardware"] as JsonObject ?? new JsonObject { ["cpus"] = Copy(v["cpu"]), ["ramMb"] = Number(v["ramGb"]) * 1024, ["diskGb"] = Copy(v["diskGb"]) };
         var resources = new List<string>(); if (Number(hw["cpus"]).HasValue) resources.Add(Text(hw["cpus"]) + " vCPU"); if (Number(hw["ramMb"]) is { } ram) resources.Add(Bytes(JsonValue.Create(ram * 1048576))); if (Number(hw["diskGb"]).HasValue) resources.Add(Text(hw["diskGb"]) + " GB disk");

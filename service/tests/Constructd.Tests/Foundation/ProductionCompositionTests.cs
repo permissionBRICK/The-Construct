@@ -32,6 +32,7 @@ public sealed class ProductionCompositionTests
                     "Only the pre-existing Windows platform adapters are skipped on Linux; the production host-admin registrations must execute.");
                 services.AddSingleton<IHypervisorDriver, FakeHypervisorDriver>();
                 services.AddSingleton<IVmCpuDriver>(sp => (FakeHypervisorDriver)sp.GetRequiredService<IHypervisorDriver>());
+                services.AddSingleton<IVmMemoryDriver>(sp => (FakeHypervisorDriver)sp.GetRequiredService<IHypervisorDriver>());
                 services.AddSingleton<IProcessRunner, Constructd.Fakes.RecordingProcessRunner>();
                 services.AddSingleton<IJobEngine>(sp => new InProcessJobEngine(sp.GetRequiredService<IClock>(), sp.GetRequiredService<IJobStore>()));
                 services.AddSingleton<IPortForwardManager>(sp => new InMemoryPortForwardManager(sp.GetRequiredService<IClock>(),

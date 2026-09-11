@@ -108,6 +108,7 @@ function createHostAdminFeature(deps = {}) {
       .replace(/{{styleUri}}/g, mediaUri("panel.css"))
       .replace(/{{themeUri}}/g, mediaUri(theme))
       .replace(/{{adminStyleUri}}/g, mediaUri("hostadmin.css"))
+      .replace(/{{paletteUri}}/g, mediaUri("palette.js"))
       .replace(/{{scriptUri}}/g, mediaUri("hostadmin.js"))
       .replace(/{{nonce}}/g, typeof deps.nonce === "function" ? deps.nonce() : "nonce");
   }
@@ -260,31 +261,23 @@ function createHostAdminFeature(deps = {}) {
           await model.perform("renewVmLease", { name, lifetime });
           break;
         }
-        case "changeVmCpu": {
-          if (!name) return;
-          const loaded = await model.perform("loadVmCpu", { name });
-          if (!loaded.ok) break;
-          const cpu = loaded.cpu;
-          const value = await vscode.window.showInputBox({
-            title: `CPU count for ${name}`,
-            prompt: `Current: ${cpu.currentCpus}. Allowed maximum: ${cpu.maximumCpus}. Enter a count or max. Applies on the next full stop/start; an Ubuntu reboot is insufficient.`,
-            value: cpu.pending ? String(cpu.desiredCpus) : "max",
-            ignoreFocusOut: true,
-            validateInput: (v) => {
-              const n = v.trim().toLowerCase() === "max" ? cpu.recommendedCpus : Number(v);
-              return Number.isInteger(n) && n >= 1 && n <= cpu.maximumCpus ? null : `Enter max or a whole number from 1 to ${cpu.maximumCpus}.`;
-            },
-          });
-          if (value === undefined) return;
-          await model.perform("setVmCpu", { name, cpus: value.trim().toLowerCase() === "max" ? cpu.recommendedCpus : Number(value) });
+        case "changeVmCpu": // legacy action alias; the current row opens the shared dialog
+        case "loadVmSettings":
+        case "setVmSettings": {
+          reloadTab = action === "setVmSettings";
+          const saving = action === "setVmSettings";
+          const result = await model.perform(saving ? "setVmSettings" : "loadVmSettings", args);
+          const loaded = saving && !result.ok ? await model.perform("loadVmSettings", { name }) : result;
+          safePost(entry, { type: "hostadmin.vmSettings", name, requestId: args.requestId,
+            saved: saving && result.ok, settings: loaded.settings || null, error: result.ok ? "" : result.error });
           break;
         }
         case "restartVm":
         case "startVm": {
           const restart = action === "restartVm";
           if (!name || !(await modal(`${restart ? "Restart" : "Start"} "${name}"?`, restart
-            ? "Construct will ask Ubuntu to shut down, apply any pending CPU count, then start the VM. Running work will be interrupted."
-            : "Construct will apply any pending CPU count before starting this powered-off VM.", restart ? "Restart" : "Start"))) return;
+            ? "Construct will ask Ubuntu to shut down, apply any pending CPU and RAM settings, then start the VM. Running work will be interrupted."
+            : "Construct will apply any pending CPU and RAM settings before starting this powered-off VM.", restart ? "Restart" : "Start"))) return;
           await model.perform(action, { name });
           break;
         }
