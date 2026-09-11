@@ -627,15 +627,24 @@
       const row = document.createElement("div");
       row.className = "fwd-row child-row" + (item.overdue ? " error" : item.state === "running" ? " open" : " queued");
 
+      const info = document.createElement("div");
+      info.className = "child-info";
+      const heading = document.createElement("div");
+      heading.className = "child-heading";
+      info.appendChild(heading);
+      row.appendChild(info);
+      const actions = document.createElement("div");
+      actions.className = "child-actions";
+      row.appendChild(actions);
       const name = document.createElement("span");
       name.className = "fwd-port";
       name.textContent = item.name;
-      row.appendChild(name);
+      heading.appendChild(name);
 
       const state = document.createElement("span");
       state.className = "fwd-state";
       state.textContent = item.busy ? (item.operation || "busy") : item.state;
-      row.appendChild(state);
+      heading.appendChild(state);
 
       const sharing = document.createElement("span");
       sharing.className = "fwd-target";
@@ -645,13 +654,23 @@
       sharing.title = item.shared
         ? "Other users of this host may be using it"
         : "Only you and the host's administrators can operate it through Construct. This is not network isolation — VMs on the host's switch can still reach it.";
-      row.appendChild(sharing);
+      heading.appendChild(sharing);
 
       const lease = document.createElement("span");
       lease.className = "fwd-label";
       lease.textContent = item.lease || "";
       if (item.overdue) lease.title = "The lease expired and the graceful shutdown did not succeed; the service keeps retrying. Delete it, or fix the guest and shut it down.";
-      row.appendChild(lease);
+      info.appendChild(lease);
+
+      const connect = document.createElement("button");
+      connect.type = "button";
+      connect.className = "fwd-open child-console";
+      connect.textContent = "Connect VNC";
+      connect.disabled = !item.canConsole;
+      connect.title = item.canConsole ? "Create a fresh console link and open it in your browser" : "Requires a running VM and console access";
+      connect.setAttribute("aria-label", "Connect VNC to " + item.name);
+      connect.addEventListener("click", () => post({ type: "command", id: "childConsole", child: item.name }));
+      actions.appendChild(connect);
 
       const stop = document.createElement("button");
       stop.type = "button";
@@ -661,7 +680,7 @@
       stop.disabled = !item.canShutdown;
       stop.setAttribute("aria-label", "Shut down child VM " + item.name);
       stop.addEventListener("click", () => post({ type: "command", id: "childShutdown", child: item.name }));
-      row.appendChild(stop);
+      actions.appendChild(stop);
 
       const del = document.createElement("button");
       del.type = "button";
@@ -671,7 +690,7 @@
       del.disabled = !item.canDelete;
       del.setAttribute("aria-label", "Delete child VM " + item.name);
       del.addEventListener("click", () => post({ type: "command", id: "childDelete", child: item.name }));
-      row.appendChild(del);
+      actions.appendChild(del);
 
       host.appendChild(row);
     });
@@ -1097,8 +1116,8 @@
     // absent field of a partial state as "no reading" and blank the rest of the panel.
     else if (m.type === "hostAdminOffer") renderHostAdminOffer(m.offer);
     else if (m.type === "forwards") renderForwards(m.forwards);
-    else if (m.type === "idlePolicy") renderIdlePolicy(m.idlePolicy);
     else if (m.type === "children") renderChildren(m.children);
+    else if (m.type === "idlePolicy") renderIdlePolicy(m.idlePolicy);
     else if (m.type === "settings") applySettings(m.settings);
     else if (m.type === "editProject") populateModal(m.name, m.profile);
   });

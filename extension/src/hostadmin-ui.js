@@ -604,11 +604,23 @@ function createHostAdminFeature(deps = {}) {
       if (h && deps.newRemoteVm) await deps.newRemoteVm(h);
       return true;
     }
-    if (id !== "childShutdown" && id !== "childDelete") return false;
+    if (id !== "childConsole" && id !== "childShutdown" && id !== "childDelete") return false;
     const childName = str(message && message.child);
     const child = knownChild(inst, childName);
     if (!child) {
       vscode.window.showWarningMessage(`"${childName}" is not a child VM of ${inst ? inst.name : "this instance"} that this window listed. Refresh and try again.`);
+      return true;
+    }
+    if (id === "childConsole") {
+      if (!hostadmin.childRows([child], now())[0].canConsole) {
+        vscode.window.showWarningMessage(`Console access is unavailable for "${child.name}". Refresh and check that it is running and you have console access.`);
+        return true;
+      }
+      try {
+        await (deps.openGuestConsole || require("./guest-console").openGuestConsole)(inst, child.name, { _vscode: vscode });
+      } catch (e) {
+        vscode.window.showWarningMessage(`Could not open the console for "${child.name}": ${errText(e)}`);
+      }
       return true;
     }
     const { client, problem } = await deps.instanceClient(inst);

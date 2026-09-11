@@ -943,6 +943,9 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("idle policy: ...and shows no cap hint when there is no cap",
     (await page.locator("#idleHint").textContent()) === "");
 
+  check("idle policy: lives in Settings, not the main console", !(await page.locator("#idleModule").isVisible())
+    && await page.locator("#settingsView #idleModule").count() === 1);
+  await page.click("#gearBtn");
   // ── Idle policy card (B8, plan §4.7) ──────────────────────────────────────
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h",
     idlePolicy: { timeoutMinutes: 45, action: "shutdown", maxTimeoutMinutes: 120, clamped: false } } }, "*"));
@@ -998,6 +1001,8 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     return (await page.locator("#idleHint").textContent()).includes("clamped");
   })());
 
+  await page.click("#backBtn");
+
   // ── The `saved` VM state reads as a resume ────────────────────────────────
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: false, host: "h", vmState: "saved" } }, "*"));
   await page.waitForTimeout(60);
@@ -1022,7 +1027,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h",
     hostAdminOffer: { host: "buildbox.example.local", url: "https://buildbox.example.local:7462" },
     children: { primary: "work-vm", visible: true, problem: "", items: [
-      { name: "work-vm-a1b2", state: "running", lease: "expires in 2h 5m (2026-09-07 12:05 UTC)", overdue: false, sharing: "host", shared: true, busy: false, operation: "", canShutdown: true, canDelete: true },
+      { name: "work-vm-a1b2", state: "running", lease: "expires in 2h 5m (2026-09-07 12:05 UTC)", overdue: false, sharing: "host", shared: true, busy: false, operation: "", canConsole: true, canShutdown: true, canDelete: true },
       { name: "work-vm-c3d4", state: "off", lease: "OVERDUE — unavailable (shutdown due; retried)", overdue: true, sharing: "private", shared: false, busy: false, operation: "", canShutdown: false, canDelete: true },
       { name: "work-vm-e5f6", state: "running", lease: "no expiry", overdue: false, sharing: "private", shared: false, busy: true, operation: "vm-shutdown (wait)", canShutdown: false, canDelete: false },
     ] } } }, "*"));
@@ -1034,7 +1039,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("children: an overdue lease is rendered as an error row with its reason",
     (await page.locator("#childrenList .child-row").nth(1).getAttribute("class")).includes("error")
     && (await page.locator("#childrenList .child-row").nth(1).locator(".fwd-label").textContent()).includes("OVERDUE"));
-  check("children: exactly two actions per row", (await page.locator("#childrenList .child-row").nth(0).locator("button").count()) === 2);
+  check("children: console, shutdown and delete per row", (await page.locator("#childrenList .child-row").nth(0).locator("button").count()) === 3);
   check("children: an off child cannot be shut down but can be deleted",
     await page.locator("#childrenList .child-row").nth(1).locator(".child-shutdown").isDisabled()
     && !(await page.locator("#childrenList .child-row").nth(1).locator(".child-delete").isDisabled()));
@@ -1042,13 +1047,24 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     await page.locator("#childrenList .child-row").nth(2).locator(".child-shutdown").isDisabled()
     && await page.locator("#childrenList .child-row").nth(2).locator(".child-delete").isDisabled()
     && (await page.locator("#childrenList .child-row").nth(2).locator(".fwd-state").textContent()).includes("vm-shutdown"));
-  check("children: no start/resume/console/share control exists", (await page.locator("#childrenModule button").count()) === 6);
+  check("children: three actions per guest", (await page.locator("#childrenModule button").count()) === 9);
   check("children: Host button shown with an admin offer", await page.locator("#hostAdminBtn").isVisible());
   await page.evaluate(() => { window.__posted.length = 0; });
+  await page.locator("#childrenList .child-row").nth(0).locator(".child-console").click();
   await page.locator("#childrenList .child-row").nth(0).locator(".child-shutdown").click();
   await page.locator("#childrenList .child-row").nth(1).locator(".child-delete").click();
   await page.click("#hostAdminBtn");
   posted = await page.evaluate(() => window.__posted);
+  check("children: Connect VNC asks for a fresh console link", posted.some(m => m.id === "childConsole" && m.child === "work-vm-a1b2"));
+  const oldViewport = page.viewportSize();
+  await page.setViewportSize({ width: 420, height: 900 });
+  const guestLayout = await page.locator("#childrenList .child-row").first().evaluate(row => {
+    const lease = row.querySelector(".fwd-label").getBoundingClientRect();
+    const actions = row.querySelector(".child-actions").getBoundingClientRect();
+    return { width: lease.width, stacked: actions.top >= lease.bottom, overflow: row.scrollWidth > row.clientWidth };
+  });
+  check("children: narrow panel keeps expiry readable and stacks actions", guestLayout.width > 220 && guestLayout.stacked && !guestLayout.overflow, JSON.stringify(guestLayout));
+  await page.setViewportSize(oldViewport);
   check("children: Shut down posts childShutdown with the child's name",
     posted.some((m) => m.type === "command" && m.id === "childShutdown" && m.child === "work-vm-a1b2"));
   check("children: Delete posts childDelete with the child's name",

@@ -111,6 +111,7 @@ function makeFeature(opts = {}) {
     remoteHosts: () => opts.hosts || [HOST],
     clientFor: async () => (opts.noClient ? null : client),
     instanceClient: async () => (opts.noClient ? { client: null, problem: "the API token is gone" } : { client, problem: "" }),
+    openGuestConsole: async (inst, name) => { logs.push("console " + inst.name + " " + name); },
     queryChildren: async () => opts.children || { supported: true, items: [], problem: "" },
     registryList: () => opts.instances || [INST],
     activeInstance: () => INST,
@@ -389,6 +390,19 @@ const lastState = (entry) => [...entry.panel.posted].reverse().find((m) => m.typ
     const dlg = t.vscode.rec.warnings.find((x) => /Delete the child VM "work-vm-a1"\?/.test(x.message));
     ok("children: Delete confirms with the child's sharing and the permanent removal", handled && dlg && /SHARED HOST-WIDE/.test(dlg.detail) && /removed permanently/.test(dlg.detail));
     ok("children: ...then DELETEs the child and refreshes", client.calls.some((c) => c.method === "deleteVm" && c.args[0] === "work-vm-a1") && t.logs.indexOf("refreshAll") >= 0);
+    await t.feature.handlePanelCommand("childConsole", { child: "not-listed" }, INST);
+    await t.feature.handlePanelCommand("childConsole", { child: "work-vm-a1" }, INST);
+    ok("console: unlisted and denied guests never reach SSH", !t.logs.some(x => x.startsWith("console ")));
+    client.calls.length = 0;
+    const guest = t.feature.knownChild(INST, "work-vm-a1");
+    guest.allowedActions.push("console");
+    await t.feature.handlePanelCommand("childConsole", { child: guest.name }, INST);
+    await t.feature.handlePanelCommand("childConsole", { child: guest.name }, INST);
+    eq("console: every click mints a new link through the captured primary", t.logs.filter(x => x === "console work-vm work-vm-a1").length, 2);
+    ok("console: no lifecycle or deletion call", client.calls.length === 0);
+    guest.state = "off";
+    await t.feature.handlePanelCommand("childConsole", { child: guest.name }, INST);
+    eq("console: stopped guests cannot connect", t.logs.filter(x => x.startsWith("console ")).length, 2);
     eq("children: other command ids are not ours", await t.feature.handlePanelCommand("reprovision", {}, INST), false);
     ok("children: openHostAdmin opens the instance's host panel", await t.feature.handlePanelCommand("openHostAdmin", {}, INST) && t.vscode.rec.panels.length === 1);
   }
