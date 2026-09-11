@@ -346,3 +346,8 @@ test("messages posted during startup detection wait and then proxy exactly once"
   resolve(); await pending;
   assert.equal(calls.length, 1); assert.deepEqual(calls[0], ["agent-vm", message]);
 });
+
+test("independent children messages cross the proxy unchanged", () => {
+  const inventory = { type: "children", instance: "remote-vm", children: { primary: "remote-vm", visible: true, items: [{ name: "shared", canConsole: true }], problem: "" } };
+  assert.strictEqual(c.overlayMessage(inventory, "agent-vm"), inventory);
+});

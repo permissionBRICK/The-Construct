@@ -55,7 +55,7 @@ public sealed class PlanningParityTests
                 else { var n = row["input"]!.GetValue<double>(); Value("tokens", UsageParser.FormatTokens(n)); Value("cost", UsageParser.FormatCost(n)); } break;
             case "updates-planning":
                 if (S("kind") == "markers") { var markers = UpdatePlanner.ReadMarkers(O("raw"), O("state")); Equal("markers", markers); Value("stale", UpdatePlanner.IsProvisionStale(markers, StateJson.Text(row["guest"]))); Value("effective", UpdatePlanner.EffectiveProvisionedCommit(markers, StateJson.Text(row["guest"]))); Value("args", UpdatePlanner.ConstructRefreshArgs(markers)); }
-                else if (S("kind") == "compare") Equal("output", UpdatePlanner.ConstructUpdateFromCompare(O("input")));
+                else if (S("kind") == "manifest") Equal("output", UpdatePlanner.ConstructUpdateFromManifest(O("input"), O("markers")!));
                 else { Value("newer", UpdatePlanner.IsNewer(S("latest"), S("installed"))); Value("nightly", UpdatePlanner.IsNewerNightly(S("latest"), S("installed"))); } break;
             case "remote-identity":
                 if (S("kind") == "endpoint") Equal("output", RemoteHost.ReadEndpoint(row["input"]));

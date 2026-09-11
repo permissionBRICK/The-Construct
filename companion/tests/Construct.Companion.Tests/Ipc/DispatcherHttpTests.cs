@@ -14,6 +14,65 @@ namespace Construct.Companion.Tests.Ipc;
 public sealed class DispatcherHttpTests
 {
     [Fact]
+    public async Task T3ForwardNotReadyIsVisibleAndUsesNinetySeconds()
+    {
+        await using var h = await Harness.Start();
+        var entry = h.App.Services.GetRequiredService<CompanionInstances>().Get("agent-vm");
+        var ssh = (FakeSshTransport)entry.Ssh; ssh.ScriptHandler = (_, _) => Task.FromResult(new ProcessResult(7));
+        using var stream = await h.Client.GetAsync("/v1/events", HttpCompletionOption.ResponseHeadersRead);
+        using var reader = new StreamReader(await stream.Content.ReadAsStreamAsync()); await reader.ReadLineAsync(); await reader.ReadLineAsync();
+        using var response = await h.Post("/v1/instances/agent-vm/messages", new { type = "command", id = "openAgentWeb", agent = "t3code" });
+        var notice = await Until(reader, d => d["message"]?["error"] is not null);
+        Assert.Equal("T3 Code's port forward is not ready. Keep the Construct client connected and retry.", notice["message"]!["error"]!.GetValue<string>());
+        Assert.Equal(TimeSpan.FromSeconds(90), ssh.ScriptTimeouts[ssh.Scripts.IndexOf(T3Code.BuildPairingScript(entry.Definition))]);
+        Assert.Empty(h.Get<FakeLauncher, ILauncher>().Opened);
+    }
+    [Theory]
+    [InlineData(7, "https://host/#ticket-fixture", "Could not create a console link. Check that the primary VM and Construct client are connected.")]
+    [InlineData(0, "https://host/#one\nhttps://host/#two", "The console gateway did not return one browser link")]
+    [InlineData(0, "https://host/", "The console gateway returned an invalid browser link")]
+    public async Task ConsoleRefusalRetainsItsSafeFailureReason(int code, string stdout, string expected)
+    {
+        await using var h = await Harness.Start();
+        var entry = h.App.Services.GetRequiredService<CompanionInstances>().Get("agent-vm");
+        ((FakeSshTransport)entry.Ssh).ScriptHandler = (_, _) => Task.FromResult(new ProcessResult(code, stdout, "ticket-fixture"));
+        var bus = h.App.Services.GetRequiredService<Host.Runtime.RuntimeMessageBus>();
+        bus.Publish(entry.Name, new { type = "children", instance = entry.Name, children = new { items = new[] { new { name = "guest", canConsole = true } } } });
+        using var stream = await h.Client.GetAsync("/v1/events", HttpCompletionOption.ResponseHeadersRead);
+        using var reader = new StreamReader(await stream.Content.ReadAsStreamAsync()); await reader.ReadLineAsync(); await reader.ReadLineAsync();
+        using var response = await h.Post("/v1/instances/agent-vm/messages", new { type = "command", id = "childConsole", child = "guest" });
+        var notice = await Until(reader, d => d["message"]?["error"] is not null);
+        Assert.Equal("Could not open the console for \"guest\": " + expected, notice["message"]!["error"]!.GetValue<string>());
+        Assert.DoesNotContain("ticket-fixture", notice.ToJsonString());
+        Assert.Empty(h.Get<FakeLauncher, ILauncher>().Opened);
+    }
+    [Theory]
+    [InlineData(true)][InlineData(false)]
+    public async Task ChildConsoleUsesOnlyAnAuthorizedListedRow(bool allowed)
+    {
+        await using var h = await Harness.Start();
+        var entry = h.App.Services.GetRequiredService<CompanionInstances>().Get("agent-vm"); var ssh = (FakeSshTransport)entry.Ssh;
+        ssh.ScriptHandler = (_, _) => Task.FromResult(new ProcessResult(0, "https://host/console#ticket-fixture"));
+        var bus = h.App.Services.GetRequiredService<Host.Runtime.RuntimeMessageBus>();
+        bus.Publish(entry.Name, new { type = "children", instance = entry.Name, children = new { items = new[] { new { name = "guest", canConsole = allowed } } } });
+        using var stream = await h.Client.GetAsync("/v1/events", HttpCompletionOption.ResponseHeadersRead);
+        using var reader = new StreamReader(await stream.Content.ReadAsStreamAsync()); await reader.ReadLineAsync(); await reader.ReadLineAsync();
+        using var response = await h.Post("/v1/instances/agent-vm/messages", new { type = "command", id = "childConsole", child = "guest" });
+        var opened = h.Get<FakeLauncher, ILauncher>().Opened;
+        if (allowed)
+        {
+            Assert.Equal("https://host/console#ticket-fixture", Assert.Single(opened));
+            var index = ssh.Scripts.IndexOf("construct vm console 'guest' --web\n"); Assert.True(index >= 0); Assert.Equal(TimeSpan.FromSeconds(90), ssh.ScriptTimeouts[index]);
+        }
+        else
+        {
+            Assert.Empty(opened); Assert.DoesNotContain("construct vm console 'guest' --web\n", ssh.Scripts);
+            var notice = await Until(reader, d => d["message"]?["error"] is not null);
+            Assert.Equal("Console access is unavailable for \"guest\". Refresh and check that it is running and you have console access.", notice["message"]!["error"]!.GetValue<string>());
+        }
+        Assert.DoesNotContain("ticket-fixture", System.Text.Json.JsonSerializer.Serialize(bus.Snapshot(entry.Name)));
+    }
+    [Fact]
     public async Task QueuedDomainRefusalRetainsItsSafeTitle()
     {
         await using var h = await Harness.Start();

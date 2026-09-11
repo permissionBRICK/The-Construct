@@ -106,8 +106,9 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
                 break;
             case "openAgentWeb":
                 if (Text(m, "agent") != "t3code") { Refuse(name, id, "Only T3 Code exposes a web UI."); break; }
-                var pairing = await entry.Ssh.RunRemoteScriptAsync(T3Code.BuildPairingScript(entry.Definition), cancellationToken: ct);
+                var pairing = await entry.Ssh.RunRemoteScriptAsync(T3Code.BuildPairingScript(entry.Definition), TimeSpan.FromSeconds(90), ct);
                 var pairUrl = T3Code.ExtractPairUrl(pairing.Stdout);
+                if (pairing.Code == 7) { Refuse(name, id, "T3 Code's port forward is not ready. Keep the Construct client connected and retry."); break; }
                 if (pairing.Code != 0 || !Uri.TryCreate(pairUrl, UriKind.Absolute, out var pairUri) || pairUri.Scheme is not ("http" or "https")) Refuse(name, id, "T3 Code did not return a pairing link.");
                 else await launcher.OpenAsync(pairUrl, ct); break;
             case "updateAgents": case "updateAgent":
@@ -140,7 +141,7 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
                 var slug = RemoteHost.HostSlug(client.BaseUrl);
                 await hosts.DispatchAsync(slug, new() { ["type"] = "hostadmin.ready" }, ct);
                 await desktop.ActivateAsync(new("hostadmin", Host: slug), ct); break;
-            case "childShutdown": case "childDelete": await hosts.ChildActionAsync(entry, id, Text(m, "child"), ct); break;
+            case "childConsole": case "childShutdown": case "childDelete": await hosts.ChildActionAsync(entry, id, Text(m, "child"), ct); break;
             case "syncConfigNow": case "addConfigRemote": case "removeConfigRemote": case "importRemoteConfigs": case "shareConfigs": case "pushConfigUpstream": case "publishConfigProfiles": case "addRemoteAndPublish": case "openConfigRepo":
                 await ConfigCommand(entry, id, m, ct); break;
             case "installGit": await launcher.StartDetachedAsync(PowerShellLaunch.BuildInstallGitLaunch().Invocation(), ct); break;
@@ -161,8 +162,10 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
         await entry.EnrichmentSerial.WaitAsync(ct);
         try
         {
-            if (probe && entry.Runtime is { } runtime) await runtime.ProbeOnceAsync(ct);
-            await hosts.RefreshExtrasAsync(entry, ct);
+            // Host inventory publishes independently while SSH status is still in flight.
+            var extras = hosts.RefreshExtrasAsync(entry, ct);
+            var status = probe && entry.Runtime is { } runtime ? runtime.ProbeOnceAsync(ct) : Task.CompletedTask;
+            await Task.WhenAll(extras, status);
             if (collectUsage)
             {
                 var period = entry.UsagePeriod;

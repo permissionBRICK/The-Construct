@@ -95,7 +95,18 @@ function Uninstall-ConstructCompanion { $null = $script:calls.Add(@{uninstall=$t
     $downloaded = Join-Path $dir 'The-Construct/owner-repo-main/repo-main'
     New-Item -ItemType Directory -Path (Join-Path $downloaded 'lib') -Force | Out-Null
     Copy-Item (Join-Path $dir 'lib/*') (Join-Path $downloaded 'lib')
-    function Invoke-WebRequest { param($Uri, $OutFile, [switch]$UseBasicParsing) Set-Content $OutFile 'fixture' }
+    $script:sourceBytes = [Text.Encoding]::UTF8.GetBytes('fixture')
+    $hasher = [Security.Cryptography.SHA256]::Create()
+    try { $sourceHash = ([BitConverter]::ToString($hasher.ComputeHash($script:sourceBytes))).Replace('-', '').ToLowerInvariant() } finally { $hasher.Dispose() }
+    $script:fixtureManifest = @{schemaVersion=1;repository='owner/repo';ref='refs/heads/main';commit=('a'*40);releaseTag=('host-'+('a'*40));sourceAsset=('construct-source-'+('a'*40)+'.zip');sourceSha256=$sourceHash;sourceSizeBytes=$script:sourceBytes.Length;payloadAsset='construct-host-aaaaaaa-win-x64.zip';payloadSha256=('b'*64);payloadSizeBytes=10}
+    function Invoke-RestMethod { param($Uri, [switch]$UseBasicParsing, $TimeoutSec)
+        Assert ($Uri -eq 'https://github.com/owner/repo/releases/latest/download/manifest.json') 'Updater discovers the published main manifest'
+        return $script:fixtureManifest
+    }
+    function Invoke-WebRequest { param($Uri, $OutFile, [switch]$UseBasicParsing, $TimeoutSec)
+        Assert ($Uri -eq ('https://github.com/owner/repo/releases/download/host-'+('a'*40)+'/construct-source-'+('a'*40)+'.zip')) 'Updater downloads immutable manifest source'
+        [IO.File]::WriteAllBytes($OutFile, $script:sourceBytes)
+    }
     function Expand-Archive { param($LiteralPath, $DestinationPath, [switch]$Force) }
     $script:calls.Clear()
     . (Join-Path $repo 'Update-Construct.ps1') -Repo owner/repo -ResultFile (Join-Path $dir 'result')

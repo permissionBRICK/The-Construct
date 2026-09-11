@@ -52,6 +52,7 @@ public static partial class HostAdminViews
         foreach (var k in new[] { "name", "owner", "parent" }) r[k] = Text(v[k]);
         r["kind"] = Default(v["kind"], "primary").ToLowerInvariant(); r["sharing"] = Default(v["sharing"], "private").ToLowerInvariant(); r["state"] = Default(v["state"], "unknown").ToLowerInvariant();
         foreach (var k in new[] { "shared", "deleting", "childCreationClosed" }) r[k] = StateJson.Boolean(v[k]) == true;
+        r["pendingCpu"] = Number(v["pendingCpu"]);
         r["tokenKind"] = Text(v["tokenKind"]).Length > 0 ? Text(v["tokenKind"]) : null;
         var hw = v["hardware"] as JsonObject ?? new JsonObject { ["cpus"] = Copy(v["cpu"]), ["ramMb"] = Number(v["ramGb"]) * 1024, ["diskGb"] = Copy(v["diskGb"]) };
         var resources = new List<string>(); if (Number(hw["cpus"]).HasValue) resources.Add(Text(hw["cpus"]) + " vCPU"); if (Number(hw["ramMb"]) is { } ram) resources.Add(Bytes(JsonValue.Create(ram * 1048576))); if (Number(hw["diskGb"]).HasValue) resources.Add(Text(hw["diskGb"]) + " GB disk");
@@ -78,8 +79,15 @@ public static partial class HostAdminViews
     {
         var state = Default(v["state"], "unknown").ToLowerInvariant(); var op = Operation(v["currentOperation"]); var busy = op.Length > 0 || StateJson.Boolean(v["deleting"]) == true;
         bool Allows(string action) => v["allowedActions"] is not JsonArray a || a.Select(Text).Contains(action);
-        return (JsonNode)new JsonObject { ["name"] = Text(v["name"]), ["state"] = state, ["lease"] = Lease(v["lease"], now), ["overdue"] = StateJson.Boolean(v["lease"]?["overdue"]) == true || Text(v["lease"]?["state"]).ToLowerInvariant() == "overdue", ["sharing"] = Text(v["sharing"]).ToLowerInvariant(), ["shared"] = Text(v["sharing"]).ToLowerInvariant() == "host", ["busy"] = busy, ["operation"] = busy && op.Length == 0 ? "deleting" : op, ["canShutdown"] = !busy && state is "running" or "paused" && Allows("shutdown"), ["canDelete"] = !busy && Allows("delete") };
+        return (JsonNode)new JsonObject { ["name"] = Text(v["name"]), ["state"] = state, ["lease"] = Lease(v["lease"], now), ["overdue"] = StateJson.Boolean(v["lease"]?["overdue"]) == true || Text(v["lease"]?["state"]).ToLowerInvariant() == "overdue", ["sharing"] = Text(v["sharing"]).ToLowerInvariant(), ["shared"] = Text(v["sharing"]).ToLowerInvariant() == "host", ["busy"] = busy, ["operation"] = busy && op.Length == 0 ? "deleting" : op, ["canConsole"] = StateJson.Boolean(v["deleting"]) != true && state is "running" or "paused" && Allows("console"), ["canShutdown"] = !busy && state is "running" or "paused" && Allows("shutdown"), ["canDelete"] = !busy && Allows("delete") };
     }).ToArray());
+    public static JsonObject? ChildrenCard(JsonObject input, DateTimeOffset now)
+    {
+        if (Text(input["backend"]).ToLowerInvariant() != "hyperv-remote" || StateJson.Boolean(input["supported"]) != true) return null;
+        var items = input["items"] as JsonArray;
+        return new() { ["primary"] = Text(input["primary"]), ["visible"] = true, ["items"] = Children(items, now),
+            ["problem"] = Text(input["problem"]) is { Length: > 0 } problem ? problem : items is null ? "could not read the child VMs" : "" };
+    }
     public static JsonArray Config(JsonNode? config) => new(ConfigSections.Select(key =>
     {
         var section = config?[key] as JsonObject; var value = section?["value"] as JsonObject ?? section; var clean = value?.DeepClone().AsObject() ?? []; clean.Remove("source"); clean.Remove("updatedAt");

@@ -18,8 +18,9 @@ namespace Construct.Companion.Host.Dispatch;
 // The port of hostadmin.js + hostadmin-ui.js: enrolment, per-host admin models driven by
 // hostadmin.* messages, the host extras of an instance (children, offer, idle policy) and polling.
 public sealed class HostAdministration(IStateFileSystem files, ITokenStore tokens, IRemoteApi api,
-    IPrompts prompts, IClock clock, IpcSettings settings, IpcEvents events, RuntimeMessageBus bus, CompanionInstances instances)
+    IPrompts prompts, ILauncher launcher, IClock clock, IpcSettings settings, IpcEvents events, RuntimeMessageBus bus, CompanionInstances instances)
 {
+    private readonly ConcurrentDictionary<string, JsonArray> childCache = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim enrollment = new(1, 1);
     private readonly ConcurrentDictionary<string, Model> models = new(StringComparer.Ordinal);
 
@@ -135,12 +136,22 @@ public sealed class HostAdministration(IStateFileSystem files, ITokenStore token
                 finally { model.Serial.Release(); }
                 if (Text(model.View["mode"]) == "admin") offer = new JsonObject { ["url"] = client.BaseUrl, ["host"] = client.Host };
                 if (StateJson.Boolean(model.View["features"]?["children"]) == true)
-                    children = new JsonObject { ["primary"] = entry.Name, ["visible"] = true, ["items"] = HostAdminViews.Children(await client.ChildrenAsync(entry.Name, ct), clock.UtcNow), ["problem"] = "" };
+                {
+                    var input = new JsonObject { ["backend"] = "hyperv-remote", ["supported"] = true, ["primary"] = entry.Name };
+                    try { var rows = await Construct.Companion.Core.Drivers.VmPower.QueryChildrenAsync(client, entry.Name, ct); childCache[entry.Name] = rows; input["items"] = rows.DeepClone(); }
+                    catch (RemoteApiException e)
+                    {
+                        if (childCache.TryGetValue(entry.Name, out var previous)) input["items"] = previous.DeepClone();
+                        input["problem"] = e.Message;
+                    }
+                    children = HostAdminViews.ChildrenCard(input, clock.UtcNow);
+                }
+                bus.Publish(entry.Name, new { type = "children", instance = entry.Name, children });
                 idle = IdlePolicy(await client.RequestAsync("GET", "/vms/" + HostIdentity.Encode(entry.Name) + "/idle-policy", cancellationToken: ct));
             }
             catch (RemoteApiException) { } // extras are optional: an unreachable host leaves them null, as the extension does
         }
-        bus.Publish(entry.Name, new { type = "children", instance = entry.Name, children });
+        if (instances.Remote(entry) is null) { childCache.TryRemove(entry.Name, out _); bus.Publish(entry.Name, new { type = "children", instance = entry.Name, children }); }
         bus.Publish(entry.Name, new { type = "hostAdminOffer", instance = entry.Name, offer });
         bus.Publish(entry.Name, new { type = "idlePolicy", instance = entry.Name, idlePolicy = idle });
     }
@@ -149,6 +160,19 @@ public sealed class HostAdministration(IStateFileSystem files, ITokenStore token
         var snapshot = bus.Snapshot(entry.Name);
         var rows = snapshot.TryGetValue("children", out var cached) ? JsonNode.Parse(cached.GetRawText())?["children"]?["items"] as JsonArray : null;
         var row = rows?.OfType<JsonObject>().FirstOrDefault(r => Text(r["name"]) == child) ?? throw new IpcFailure(400, "unknownChild", "The child was not listed for this instance.");
+        if (action == "childConsole")
+        {
+            if (StateJson.Boolean(row["canConsole"]) != true)
+                events.Message(entry.Name, new { type = "lifecyclePrepared", id = action, error = $"Console access is unavailable for \"{child}\". Refresh and check that it is running and you have console access." });
+            else
+            {
+                try { await GuestConsole.OpenAsync(entry.Ssh, launcher, child, ct); }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (InvalidOperationException e) { events.Message(entry.Name, new { type = "lifecyclePrepared", id = action, error = $"Could not open the console for \"{child}\": {e.Message}" }); }
+                catch { events.Message(entry.Name, new { type = "lifecyclePrepared", id = action, error = $"Could not open the console for \"{child}\": Check that the primary VM and Construct client are connected and retry." }); }
+            }
+            return;
+        }
         var client = instances.Remote(entry) ?? throw new IpcFailure(409, "localInstance", "This instance has no host service.");
         if (action == "childDelete")
         { var confirmation = ChildDeleteConfirmation(row); if (await prompts.ConfirmAsync(Text(confirmation["title"]), Text(confirmation["detail"]), ct)) await client.DeleteVmAsync(child, null, ct); }
@@ -225,6 +249,26 @@ public sealed class HostAdministration(IStateFileSystem files, ITokenStore token
         if (ActionConfirmation(action, args, client.Host) is { } confirmation && !await prompts.ConfirmAsync(confirmation.Title, confirmation.Detail, ct)) return;
         switch (action)
         {
+            case "loadVmCpu":
+                result = await client.VmCpuAsync(name, ct);
+                events.HostAdmin(m.Host.Slug, new { type = "hostadmin.vmCpu", name, cpu = result }); return;
+            case "changeVmCpu":
+            {
+                if (name.Length == 0) return;
+                var cpu = await client.VmCpuAsync(name, ct);
+                var cpuInput = await prompts.InputAsync(new($"CPU count for {name}",
+                    $"Current: {Text(cpu?["currentCpus"])}. Allowed maximum: {Text(cpu?["maximumCpus"])}. Enter a count or max. Applies on the next full stop/start; an Ubuntu reboot is insufficient.",
+                    StateJson.Boolean(cpu?["pending"]) == true ? Text(cpu?["desiredCpus"]) : "max"), ct);
+                if (cpuInput is null) return;
+                var cpus = cpuInput.Trim().Equals("max", StringComparison.OrdinalIgnoreCase) ? StateJson.CoerceNumber(cpu?["recommendedCpus"]) : StateJson.CoerceNumber(JsonValue.Create(cpuInput));
+                if (!double.IsFinite(cpus) || cpus != Math.Floor(cpus) || cpus < 1 || !(cpus <= StateJson.CoerceNumber(cpu?["maximumCpus"])))
+                { Notice(m, $"Enter max or a whole number from 1 to {Text(cpu?["maximumCpus"])}."); return; }
+                await SetCpu(m, client, name, cpus, ct); return;
+            }
+            case "setVmCpu": await SetCpu(m, client, name, StateJson.CoerceNumber(args["cpus"]), ct); return;
+            case "restartVm": case "startVm":
+                result = await client.LifecycleAsync(name, new JsonObject { ["action"] = action == "restartVm" ? "restart" : "start" }, ct);
+                m.State["notice"] = new JsonObject { ["level"] = "info", ["text"] = $"{name}: {(action == "restartVm" ? "restart" : "start")} requested." }; return;
             case "refresh": await Detect(m, client, ct); break;
             case "capacityRefresh": result = await client.HostCapacityAsync(true, ct); break;
             case "shutdownVm": result = await client.LifecycleAsync(name, new JsonObject { ["action"] = "shutdown" }, ct); break;
@@ -270,6 +314,15 @@ public sealed class HostAdministration(IStateFileSystem files, ITokenStore token
         }
         m.State["notice"] = new JsonObject { ["level"] = "info", ["text"] = "Host action completed." };
         await Load(m, client, ct);
+    }
+    private static async Task SetCpu(Model m, RemoteHostClient client, string name, double cpus, CancellationToken ct)
+    {
+        if (!double.IsFinite(cpus) || cpus != Math.Floor(cpus) || cpus < 1 || cpus > 64)
+        { Notice(m, "Choose a whole CPU count from 1 to 64."); return; }
+        var cpu = await client.SetVmCpuAsync(name, new JsonObject { ["cpus"] = cpus }, ct);
+        m.State["notice"] = new JsonObject { ["level"] = "info", ["text"] = StateJson.Boolean(cpu?["pending"]) == true
+            ? $"{name}: {Text(cpu?["desiredCpus"])} vCPUs saved for the next full stop/start. The running VM is unchanged."
+            : $"{name}: CPU setting matches the current {Text(cpu?["currentCpus"])} vCPUs." };
     }
     // Host update workflow: the pending operation is persisted before each API call so a
     // Companion restart can resume or clear it (HostUpdatePlanner decides, this executes).

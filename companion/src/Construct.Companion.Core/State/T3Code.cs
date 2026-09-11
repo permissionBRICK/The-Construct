@@ -168,7 +168,8 @@ exit 0
 """;
     public static string BuildInstallScript(string? channel) => InstallTemplate.Replace("{{tag}}", channel == "nightly" ? "nightly" : "latest", StringComparison.Ordinal).Replace("{{channel}}", channel == "nightly" ? "nightly" : "stable", StringComparison.Ordinal);
     public static string BuildDisableScript() => Disable;
-    public static string BuildPairingScript(JsonObject? instance) => Instances.IsDefaultInstance(instance) ? GuestScripts.Render("t3-pairing") : GuestScripts.Render("t3-pairing-instance", new Dictionary<string, string> { ["instance"] = StateJson.Text(instance?["name"]) ?? "" });
+    public static string BuildPairingScript(JsonObject? instance) => GuestScripts.Render(Instances.IsDefaultInstance(instance) ? "t3-pairing" : "t3-pairing-instance",
+        new Dictionary<string, string> { ["instance"] = StateJson.Text(instance?["name"]) ?? "", ["pairingBase"] = GuestScripts.Render("construct-t3-pairing-base") });
     public static string ExtractPairUrl(string? stdout)
     {
         var obj = StateJson.ParseObject(stdout); if (StateJson.Text(obj?["pairUrl"]) is {} url) return url;

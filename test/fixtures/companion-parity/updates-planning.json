@@ -666,61 +666,1893 @@
     }
   },
   {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": {
+      "available": false,
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "count": null
+    }
+  },
+  {
     "input": null,
-    "kind": "compare",
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
     "output": null
   },
   {
     "input": {},
-    "kind": "compare",
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
     "output": null
   },
   {
     "input": {
       "notFound": true
     },
-    "kind": "compare",
-    "output": {
-      "available": true,
-      "count": null,
-      "unknownBase": true
-    }
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
   },
   {
     "input": {
-      "ahead_by": 0
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": null,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
     },
-    "kind": "compare",
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": null,
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": null,
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": null,
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": null,
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": null,
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": null,
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": null
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": null,
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": null,
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": null,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 0
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": -1
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1.5
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1073741825
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": "1024"
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 0,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": -1,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 1.5,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 1073741825,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": "1024",
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "other/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\n",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
     "output": {
       "available": false,
-      "count": 0
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "count": null
     }
   },
   {
-    "input": {
-      "ahead_by": 5
+    "input": null,
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
     },
-    "kind": "compare",
+    "output": null
+  },
+  {
+    "input": {},
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "notFound": true
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": null,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": null,
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": null,
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": null,
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": null,
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": null,
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": null,
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": null
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": null,
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": null,
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": null,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 0
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": -1
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1.5
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1073741825
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": "1024"
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 0,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": -1,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 1.5,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 1073741825,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": "1024",
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "other/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\n",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
     "output": {
       "available": true,
-      "count": 5
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "count": null
     }
   },
   {
-    "input": {
-      "ahead_by": -1
+    "input": null,
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "main",
+      "repo": "owner/repo"
     },
-    "kind": "compare",
-    "output": {
-      "available": false,
-      "count": -1
-    }
+    "output": null
+  },
+  {
+    "input": {},
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
   },
   {
     "input": {
-      "ahead_by": "4"
+      "notFound": true
     },
-    "kind": "compare",
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": null,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": null,
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": null,
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": null,
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": null,
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": null,
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": null,
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": null
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": null,
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": null,
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": null,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 0
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": -1
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1.5
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1073741825
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": "1024"
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 0,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": -1,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 1.5,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 1073741825,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": "1024",
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "other/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\n",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
+    "output": null
+  },
+  {
+    "input": {
+      "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+      "payloadAsset": "construct-host-aaaaaaa-win-x64.zip",
+      "payloadSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "payloadSizeBytes": 2048,
+      "ref": "refs/heads/main",
+      "releaseTag": "host-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "repository": "owner/repo",
+      "schemaVersion": 1,
+      "sourceAsset": "construct-source-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.zip",
+      "sourceSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "sourceSizeBytes": 1024
+    },
+    "kind": "manifest",
+    "markers": {
+      "installedCommit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "ref": "main",
+      "repo": "owner/repo"
+    },
     "output": null
   },
   {

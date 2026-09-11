@@ -163,6 +163,102 @@ public sealed class HostAdminHttpTests
         var resolved = Assert.Single(api.Requests, r => r.Url.AbsolutePath == "/api/v1/host/updates/resolve"); Assert.Equal(" abort ", resolved.Body!.Value.GetProperty("action").GetString()); Assert.Equal("u1", resolved.Body!.Value.GetProperty("updateId").GetString());
         using var badScope = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.action", action = "shareVm", args = new { name = "build", scope = "public" } }); Assert.Equal(HttpStatusCode.BadRequest, badScope.StatusCode);
     }
+    [Fact]
+    public async Task ChildrenPublishWhileSshProbeWaitsAndFailedReadsKeepRowsWithProblem()
+    {
+        var api = new RoutingRemoteApi(); var original = api.Handle; var fail = false;
+        api.Handle = r => r.Url.AbsolutePath.EndsWith("/children", StringComparison.Ordinal)
+            ? fail ? new(503) : new(200, JsonSerializer.SerializeToElement(new[] { new { name = "guest", state = "running", allowedActions = new[] { "console" } } }))
+            : original(r);
+        await using var h = await Harness.Start(s =>
+        {
+            s.AddSingleton<IRemoteApi>(api);
+            var files = (IStateFileSystem)s.Last(d => d.ServiceType == typeof(IStateFileSystem)).ImplementationInstance!;
+            files.WriteFileAtomic("/fake/local/The-Construct/instances.json", System.Text.Encoding.UTF8.GetBytes("{\"version\":1,\"defaultInstance\":\"agent-vm\",\"instances\":{\"agent-vm\":{\"backend\":\"hyperv-remote\",\"vmName\":\"agent-vm\",\"sshHost\":\"guest.host.example\",\"scriptsDir\":\"/fake/scripts\",\"service\":{\"url\":\"https://host.example:7462\",\"auth\":\"negotiate\"}}}}"));
+            RemoteHost.WritePin(files, "https://host.example:7462", new string('a', 64));
+        });
+        var entry = h.App.Services.GetRequiredService<CompanionInstances>().Get("agent-vm");
+        var ssh = (FakeSshTransport)entry.Ssh;
+        var pending = new TaskCompletionSource<ProcessResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var began = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ssh.ScriptHandler = (_, ct) => { began.TrySetResult(); return pending.Task.WaitAsync(ct); };
+        using var stream = await h.Client.GetAsync("/v1/events", HttpCompletionOption.ResponseHeadersRead);
+        using var reader = new StreamReader(await stream.Content.ReadAsStreamAsync()); await reader.ReadLineAsync(); await reader.ReadLineAsync();
+        var refresh = h.App.Services.GetRequiredService<MessageDispatcher>().RefreshAsync(entry, default, collectUsage: false);
+        try
+        {
+            await began.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            var message = (await Until(reader, d => d["message"]?["type"]?.GetValue<string>() == "children"))["message"]!;
+            Assert.Equal("agent-vm", message["instance"]!.GetValue<string>());
+            Assert.Equal(new[] { "children", "instance", "type" }, message.AsObject().Select(p => p.Key).Order());
+            Assert.Equal("guest", message["children"]!["items"]![0]!["name"]!.GetValue<string>());
+            Assert.True(message["children"]!["items"]![0]!["canConsole"]!.GetValue<bool>());
+            Assert.False(refresh.IsCompleted);
+        }
+        finally { pending.TrySetResult(new ProcessResult(255)); await refresh; }
+        fail = true;
+        await h.App.Services.GetRequiredService<HostAdministration>().RefreshExtrasAsync(entry, default);
+        var snapshot = await h.Client.GetFromJsonAsync<JsonObject>("/v1/instances/agent-vm/snapshot");
+        Assert.Equal("guest", snapshot!["children"]!["children"]!["items"]![0]!["name"]!.GetValue<string>());
+        Assert.Equal("The Construct host service answered HTTP 503 (GET /api/v1/vms/agent-vm/children)", snapshot["children"]!["children"]!["problem"]!.GetValue<string>());
+    }
+    [Theory]
+    [InlineData("max", 8, true)]
+    [InlineData("3", 3, true)]
+    [InlineData("9", 0, false)]
+    [InlineData("1.5", 0, false)]
+    [InlineData(null, 0, false)]
+    public async Task CpuPromptUsesDefaultsAndValidatesTheAllowance(string? input, int expected, bool saved)
+    {
+        var api = new RoutingRemoteApi(); var original = api.Handle;
+        api.Handle = r => r.Url.AbsolutePath.EndsWith("/cpu", StringComparison.Ordinal) ? new(200, JsonSerializer.SerializeToElement(new { currentCpus = 2, maximumCpus = 8, recommendedCpus = 8, pending = true, desiredCpus = 4 })) : original(r);
+        await using var h = await Enroll(api);
+        using var ready = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.ready" });
+        var prompts = h.Get<FakePrompts, IPrompts>(); prompts.Inputs.Enqueue(input);
+        using var response = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.action", action = "changeVmCpu", args = new { name = "build" } });
+        var prompt = Assert.Single(prompts.Shown.OfType<InputPrompt>());
+        Assert.Equal("CPU count for build", prompt.Title);
+        Assert.Equal("Current: 2. Allowed maximum: 8. Enter a count or max. Applies on the next full stop/start; an Ubuntu reboot is insufficient.", prompt.Prompt);
+        Assert.Equal("4", prompt.Value);
+        var writes = api.Requests.Where(r => r.Method == "PUT" && r.Url.AbsolutePath.EndsWith("/cpu", StringComparison.Ordinal)).ToArray();
+        if (saved)
+        {
+            Assert.Equal(expected, Assert.Single(writes).Body!.Value.GetProperty("cpus").GetDouble());
+            var snapshot = await h.Client.GetFromJsonAsync<JsonObject>("/v1/hosts/host.example_7462/snapshot");
+            Assert.Equal("build: 4 vCPUs saved for the next full stop/start. The running VM is unchanged.", snapshot!["state"]!["notice"]!["text"]!.GetValue<string>());
+        }
+        else Assert.Empty(writes);
+    }
+    [Theory]
+    [InlineData(0, false)][InlineData(1, true)][InlineData(64, true)][InlineData(65, false)][InlineData(2.5, false)]
+    public async Task DirectCpuActionEnforcesWholeCounts(double cpus, bool saved)
+    {
+        var api = new RoutingRemoteApi(); await using var h = await Enroll(api);
+        using var ready = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.ready" });
+        using var response = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.action", action = "setVmCpu", args = new { name = "build", cpus } });
+        Assert.Equal(saved, api.Requests.Any(r => r.Method == "PUT" && r.Url.AbsolutePath == "/api/v1/vms/build/cpu"));
+        if (!saved)
+        {
+            var snapshot = await h.Client.GetFromJsonAsync<JsonObject>("/v1/hosts/host.example_7462/snapshot");
+            Assert.Equal("Choose a whole CPU count from 1 to 64.", snapshot!["state"]!["notice"]!["text"]!.GetValue<string>());
+        }
+    }
+    [Theory]
+    [InlineData("restartVm", true)][InlineData("restartVm", false)][InlineData("startVm", true)][InlineData("startVm", false)]
+    public async Task CpuLifecycleRequiresConfirmation(string action, bool confirm)
+    {
+        var api = new RoutingRemoteApi(); await using var h = await Enroll(api);
+        using var ready = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.ready" });
+        var prompts = h.Get<FakePrompts, IPrompts>(); prompts.Confirmations.Enqueue(confirm);
+        using var response = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.action", action, args = new { name = "build" } });
+        var restart = action == "restartVm";
+        Assert.Contains(((restart ? "Restart" : "Start") + " \"build\"?", restart
+            ? "Construct will ask Ubuntu to shut down, apply any pending CPU count, then start the VM. Running work will be interrupted."
+            : "Construct will apply any pending CPU count before starting this powered-off VM."), prompts.Shown);
+        var requests = api.Requests.Where(r => r.Url.AbsolutePath == "/api/v1/vms/build/lifecycle").ToArray();
+        if (confirm) Assert.Equal(restart ? "restart" : "start", Assert.Single(requests).Body!.Value.GetProperty("action").GetString());
+        else Assert.Empty(requests);
+    }
     private static async Task<Harness> Enroll(RoutingRemoteApi api)
     { var h = await Harness.Start(s => s.AddSingleton<IRemoteApi>(api)); using var response = await h.Post("/v1/hosts", new { url = "host.example", fingerprint = new string('a', 64) }); Assert.Equal(HttpStatusCode.Created, response.StatusCode); return h; }
 }

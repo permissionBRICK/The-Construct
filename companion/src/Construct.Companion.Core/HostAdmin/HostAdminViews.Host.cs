@@ -37,7 +37,7 @@ public static partial class HostAdminViews
         var source = Strings(src, "path", "url"); source["sha256Configured"] = StateJson.Boolean(src["sha256Configured"]) == true; source["present"] = StateJson.Boolean(src["present"]) == true; source["size"] = Bytes(src["sizeBytes"]);
         JsonObject? current = null; if (c["current"] is JsonObject cur) { current = Strings(cur, "fileName", "sourceSha256", "bootstrapKeyFingerprint", "hostnameSource"); current["size"] = Bytes(cur["sizeBytes"]); current["builtAt"] = FormatWhen(cur["builtAt"]); }
         return new() { ["mode"] = Default(c["mode"], "unknown"), ["source"] = source, ["current"] = current,
-            ["entries"] = Map(c["entries"], e => new() { ["fileName"] = Text(e?["fileName"]), ["size"] = Bytes(e?["sizeBytes"]), ["isCurrent"] = StateJson.Boolean(e?["isCurrent"]) == true, ["builtAt"] = FormatWhen(e?["builtAt"]), ["sidecarReadable"] = StateJson.Boolean(e?["sidecarReadable"]) != false }),
+            ["entries"] = Map(c["entries"], e => new() { ["fileName"] = Text(e?["fileName"]), ["size"] = Bytes(e?["sizeBytes"]), ["isCurrent"] = StateJson.Boolean(e?["isCurrent"]) == true, ["builtAt"] = FormatWhen(e?["builtAt"]), ["sidecarReadable"] = StateJson.Boolean(e?["sidecarReadable"]) != false, ["unpublished"] = StateJson.Number(e?["sizeBytes"]) == 0 && StateJson.Boolean(e?["sidecarReadable"]) == false }),
             ["lastBuild"] = c["lastBuild"] is JsonObject last ? new JsonObject { ["at"] = FormatWhen(last["at"]), ["outcome"] = Text(last["outcome"]), ["jobId"] = Text(last["jobId"]) } : null };
     }
     public static JsonObject UpdateActions(JsonNode? status)

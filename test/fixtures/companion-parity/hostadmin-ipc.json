@@ -295,6 +295,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": false
       },
       "identity": null,
@@ -323,6 +324,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": false
       },
       "identity": null,
@@ -350,6 +352,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": false
       },
       "identity": null,
@@ -377,6 +380,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": false
       },
       "identity": null,
@@ -409,6 +413,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": false
       },
       "identity": null,
@@ -441,6 +446,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": false
       },
       "identity": null,
@@ -472,6 +478,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": false
       },
       "identity": null,
@@ -503,6 +510,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": false
       },
       "identity": null,
@@ -541,6 +549,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": false
       },
       "identity": null,
@@ -579,6 +588,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": false
       },
       "identity": null,
@@ -616,6 +626,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": false
       },
       "identity": null,
@@ -653,6 +664,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": false
       },
       "identity": null,
@@ -681,6 +693,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": false
       },
       "identity": null,
@@ -709,6 +722,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": false
       },
       "identity": null,
@@ -736,6 +750,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": false
       },
       "identity": null,
@@ -763,6 +778,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": false
       },
       "identity": null,
@@ -795,6 +811,7 @@
         "hostAdmin": true,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": false
       },
       "identity": {
@@ -834,6 +851,7 @@
         "hostAdmin": true,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": false
       },
       "identity": {
@@ -872,6 +890,7 @@
         "hostAdmin": true,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": false
       },
       "identity": {
@@ -910,6 +929,7 @@
         "hostAdmin": true,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": false
       },
       "identity": {
@@ -955,6 +975,7 @@
         "hostAdmin": true,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": true
       },
       "identity": {
@@ -1004,6 +1025,7 @@
         "hostAdmin": true,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": true
       },
       "identity": {
@@ -1052,6 +1074,7 @@
         "hostAdmin": true,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": true
       },
       "identity": {
@@ -1100,6 +1123,7 @@
         "hostAdmin": true,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": true
       },
       "identity": {
@@ -1143,6 +1167,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": false
       },
       "identity": null,
@@ -1175,6 +1200,7 @@
         "hostAdmin": true,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": false
       },
       "identity": null,
@@ -1207,6 +1233,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": false
       },
       "identity": null,
@@ -1239,6 +1266,7 @@
         "hostAdmin": true,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": false
       },
       "identity": null,
@@ -1271,6 +1299,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": false
       },
       "identity": null,
@@ -1303,6 +1332,7 @@
         "hostAdmin": true,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": false
       },
       "identity": null,
@@ -1335,6 +1365,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": false
       },
       "identity": null,
@@ -1367,6 +1398,7 @@
         "hostAdmin": true,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": false
       },
       "identity": null,
@@ -1399,6 +1431,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": false
       },
       "identity": {
@@ -1442,6 +1475,7 @@
         "hostAdmin": true,
         "media": false,
         "network": false,
+        "primaryCpu": false,
         "updates": false
       },
       "identity": {
@@ -1651,6 +1685,7 @@
       "hostAdmin": false,
       "media": false,
       "network": false,
+      "primaryCpu": false,
       "updates": false
     }
   },
@@ -1719,6 +1754,7 @@
       "hostAdmin": true,
       "media": false,
       "network": false,
+      "primaryCpu": false,
       "updates": false
     }
   },
@@ -1791,6 +1827,7 @@
       "hostAdmin": true,
       "media": false,
       "network": false,
+      "primaryCpu": false,
       "updates": true
     }
   },
@@ -1857,7 +1894,8 @@
         "media",
         "updates",
         "network",
-        "console"
+        "console",
+        "primary-cpu"
       ]
     },
     "kind": "features",
@@ -1868,6 +1906,7 @@
       "hostAdmin": true,
       "media": true,
       "network": true,
+      "primaryCpu": true,
       "updates": true
     }
   },
@@ -1879,7 +1918,8 @@
         "media",
         "updates",
         "network",
-        "console"
+        "console",
+        "primary-cpu"
       ]
     },
     "kind": "tabs",
@@ -3268,6 +3308,7 @@
       "overdue": false,
       "owner": "",
       "parent": "",
+      "pendingCpu": null,
       "reservations": "—",
       "resources": "—",
       "shared": false,
@@ -3325,6 +3366,7 @@
       "name": "build",
       "owner": "alice",
       "parent": "agent-vm",
+      "pendingCpu": 8,
       "resourceUsage": {
         "cpuUsagePercent": 25.5,
         "diskFileBytes": 123456789,
@@ -3356,6 +3398,7 @@
       "overdue": false,
       "owner": "alice",
       "parent": "agent-vm",
+      "pendingCpu": 8,
       "reservations": "—",
       "resources": "4 vCPU · 2.0 GiB · 80 GB disk",
       "shared": false,
@@ -3394,6 +3437,7 @@
       "name": "build",
       "owner": "alice",
       "parent": "agent-vm",
+      "pendingCpu": 8,
       "resourceUsage": {
         "cpuUsagePercent": 25.5,
         "diskFileBytes": 123456789,
@@ -3435,6 +3479,7 @@
         "name": "build",
         "owner": "alice",
         "parent": "agent-vm",
+        "pendingCpu": 8,
         "resourceUsage": {
           "cpuUsagePercent": 25.5,
           "diskFileBytes": 123456789,
@@ -3451,6 +3496,7 @@
     "output": [
       {
         "busy": false,
+        "canConsole": false,
         "canDelete": true,
         "canShutdown": true,
         "lease": "expires in 1h 0m (2026-09-11 13:00 UTC)",
@@ -3484,6 +3530,7 @@
       "name": "build",
       "owner": "alice",
       "parent": "agent-vm",
+      "pendingCpu": 8,
       "resourceUsage": {
         "cpuUsagePercent": 25.5,
         "diskFileBytes": 123456789,
@@ -3515,6 +3562,7 @@
       "overdue": true,
       "owner": "alice",
       "parent": "agent-vm",
+      "pendingCpu": 8,
       "reservations": "—",
       "resources": "4 vCPU · 2.0 GiB · 80 GB disk",
       "shared": false,
@@ -3553,6 +3601,7 @@
       "name": "build",
       "owner": "alice",
       "parent": "agent-vm",
+      "pendingCpu": 8,
       "resourceUsage": {
         "cpuUsagePercent": 25.5,
         "diskFileBytes": 123456789,
@@ -3594,6 +3643,7 @@
         "name": "build",
         "owner": "alice",
         "parent": "agent-vm",
+        "pendingCpu": 8,
         "resourceUsage": {
           "cpuUsagePercent": 25.5,
           "diskFileBytes": 123456789,
@@ -3610,6 +3660,7 @@
     "output": [
       {
         "busy": true,
+        "canConsole": false,
         "canDelete": false,
         "canShutdown": false,
         "lease": "OVERDUE — no integration (shutdown due; retried)",
@@ -3654,6 +3705,7 @@
       "overdue": false,
       "owner": "",
       "parent": "",
+      "pendingCpu": null,
       "reservations": "—",
       "resources": "—",
       "shared": false,
@@ -3711,6 +3763,7 @@
     "output": [
       {
         "busy": false,
+        "canConsole": false,
         "canDelete": true,
         "canShutdown": false,
         "lease": "",
@@ -3745,6 +3798,7 @@
         "name": "build",
         "owner": "alice",
         "parent": "agent-vm",
+        "pendingCpu": 8,
         "resourceUsage": {
           "cpuUsagePercent": 25.5,
           "diskFileBytes": 123456789,
@@ -3783,6 +3837,7 @@
         "overdue": false,
         "owner": "",
         "parent": "",
+        "pendingCpu": null,
         "reservations": "—",
         "resources": "—",
         "shared": false,
@@ -3818,6 +3873,7 @@
         "overdue": false,
         "owner": "alice",
         "parent": "agent-vm",
+        "pendingCpu": 8,
         "reservations": "—",
         "resources": "4 vCPU · 2.0 GiB · 80 GB disk",
         "shared": false,
@@ -3850,6 +3906,7 @@
         "overdue": false,
         "owner": "",
         "parent": "gone",
+        "pendingCpu": null,
         "reservations": "—",
         "resources": "—",
         "shared": false,
@@ -4165,6 +4222,1824 @@
     "kind": "allowanceText",
     "now": 1789128000000,
     "output": "— primaries · — children · CPU no budget · RAM no budget · storage no budget · lifetime ≤ unlimited · sharing · host forwards"
+  },
+  {
+    "input": {
+      "entries": [
+        {
+          "fileName": "test.iso",
+          "sidecarReadable": true,
+          "sizeBytes": 0
+        }
+      ]
+    },
+    "kind": "iso",
+    "now": 1789128000000,
+    "output": {
+      "current": null,
+      "entries": [
+        {
+          "builtAt": "—",
+          "fileName": "test.iso",
+          "isCurrent": false,
+          "sidecarReadable": true,
+          "size": "0 B",
+          "unpublished": false
+        }
+      ],
+      "lastBuild": null,
+      "mode": "unknown",
+      "source": {
+        "path": "",
+        "present": false,
+        "sha256Configured": false,
+        "size": "—",
+        "url": ""
+      }
+    }
+  },
+  {
+    "input": {
+      "entries": [
+        {
+          "fileName": "test.iso",
+          "sidecarReadable": false,
+          "sizeBytes": 0
+        }
+      ]
+    },
+    "kind": "iso",
+    "now": 1789128000000,
+    "output": {
+      "current": null,
+      "entries": [
+        {
+          "builtAt": "—",
+          "fileName": "test.iso",
+          "isCurrent": false,
+          "sidecarReadable": false,
+          "size": "0 B",
+          "unpublished": true
+        }
+      ],
+      "lastBuild": null,
+      "mode": "unknown",
+      "source": {
+        "path": "",
+        "present": false,
+        "sha256Configured": false,
+        "size": "—",
+        "url": ""
+      }
+    }
+  },
+  {
+    "input": {
+      "entries": [
+        {
+          "fileName": "test.iso",
+          "sidecarReadable": null,
+          "sizeBytes": 0
+        }
+      ]
+    },
+    "kind": "iso",
+    "now": 1789128000000,
+    "output": {
+      "current": null,
+      "entries": [
+        {
+          "builtAt": "—",
+          "fileName": "test.iso",
+          "isCurrent": false,
+          "sidecarReadable": true,
+          "size": "0 B",
+          "unpublished": false
+        }
+      ],
+      "lastBuild": null,
+      "mode": "unknown",
+      "source": {
+        "path": "",
+        "present": false,
+        "sha256Configured": false,
+        "size": "—",
+        "url": ""
+      }
+    }
+  },
+  {
+    "input": {
+      "entries": [
+        {
+          "fileName": "test.iso",
+          "sidecarReadable": true,
+          "sizeBytes": 1
+        }
+      ]
+    },
+    "kind": "iso",
+    "now": 1789128000000,
+    "output": {
+      "current": null,
+      "entries": [
+        {
+          "builtAt": "—",
+          "fileName": "test.iso",
+          "isCurrent": false,
+          "sidecarReadable": true,
+          "size": "1 B",
+          "unpublished": false
+        }
+      ],
+      "lastBuild": null,
+      "mode": "unknown",
+      "source": {
+        "path": "",
+        "present": false,
+        "sha256Configured": false,
+        "size": "—",
+        "url": ""
+      }
+    }
+  },
+  {
+    "input": {
+      "entries": [
+        {
+          "fileName": "test.iso",
+          "sidecarReadable": false,
+          "sizeBytes": 1
+        }
+      ]
+    },
+    "kind": "iso",
+    "now": 1789128000000,
+    "output": {
+      "current": null,
+      "entries": [
+        {
+          "builtAt": "—",
+          "fileName": "test.iso",
+          "isCurrent": false,
+          "sidecarReadable": false,
+          "size": "1 B",
+          "unpublished": false
+        }
+      ],
+      "lastBuild": null,
+      "mode": "unknown",
+      "source": {
+        "path": "",
+        "present": false,
+        "sha256Configured": false,
+        "size": "—",
+        "url": ""
+      }
+    }
+  },
+  {
+    "input": {
+      "entries": [
+        {
+          "fileName": "test.iso",
+          "sidecarReadable": null,
+          "sizeBytes": 1
+        }
+      ]
+    },
+    "kind": "iso",
+    "now": 1789128000000,
+    "output": {
+      "current": null,
+      "entries": [
+        {
+          "builtAt": "—",
+          "fileName": "test.iso",
+          "isCurrent": false,
+          "sidecarReadable": true,
+          "size": "1 B",
+          "unpublished": false
+        }
+      ],
+      "lastBuild": null,
+      "mode": "unknown",
+      "source": {
+        "path": "",
+        "present": false,
+        "sha256Configured": false,
+        "size": "—",
+        "url": ""
+      }
+    }
+  },
+  {
+    "input": {
+      "entries": [
+        {
+          "fileName": "test.iso",
+          "sidecarReadable": true,
+          "sizeBytes": "0"
+        }
+      ]
+    },
+    "kind": "iso",
+    "now": 1789128000000,
+    "output": {
+      "current": null,
+      "entries": [
+        {
+          "builtAt": "—",
+          "fileName": "test.iso",
+          "isCurrent": false,
+          "sidecarReadable": true,
+          "size": "0 B",
+          "unpublished": false
+        }
+      ],
+      "lastBuild": null,
+      "mode": "unknown",
+      "source": {
+        "path": "",
+        "present": false,
+        "sha256Configured": false,
+        "size": "—",
+        "url": ""
+      }
+    }
+  },
+  {
+    "input": {
+      "entries": [
+        {
+          "fileName": "test.iso",
+          "sidecarReadable": false,
+          "sizeBytes": "0"
+        }
+      ]
+    },
+    "kind": "iso",
+    "now": 1789128000000,
+    "output": {
+      "current": null,
+      "entries": [
+        {
+          "builtAt": "—",
+          "fileName": "test.iso",
+          "isCurrent": false,
+          "sidecarReadable": false,
+          "size": "0 B",
+          "unpublished": false
+        }
+      ],
+      "lastBuild": null,
+      "mode": "unknown",
+      "source": {
+        "path": "",
+        "present": false,
+        "sha256Configured": false,
+        "size": "—",
+        "url": ""
+      }
+    }
+  },
+  {
+    "input": {
+      "entries": [
+        {
+          "fileName": "test.iso",
+          "sidecarReadable": null,
+          "sizeBytes": "0"
+        }
+      ]
+    },
+    "kind": "iso",
+    "now": 1789128000000,
+    "output": {
+      "current": null,
+      "entries": [
+        {
+          "builtAt": "—",
+          "fileName": "test.iso",
+          "isCurrent": false,
+          "sidecarReadable": true,
+          "size": "0 B",
+          "unpublished": false
+        }
+      ],
+      "lastBuild": null,
+      "mode": "unknown",
+      "source": {
+        "path": "",
+        "present": false,
+        "sha256Configured": false,
+        "size": "—",
+        "url": ""
+      }
+    }
+  },
+  {
+    "input": {
+      "entries": [
+        {
+          "fileName": "test.iso",
+          "sidecarReadable": true,
+          "sizeBytes": null
+        }
+      ]
+    },
+    "kind": "iso",
+    "now": 1789128000000,
+    "output": {
+      "current": null,
+      "entries": [
+        {
+          "builtAt": "—",
+          "fileName": "test.iso",
+          "isCurrent": false,
+          "sidecarReadable": true,
+          "size": "—",
+          "unpublished": false
+        }
+      ],
+      "lastBuild": null,
+      "mode": "unknown",
+      "source": {
+        "path": "",
+        "present": false,
+        "sha256Configured": false,
+        "size": "—",
+        "url": ""
+      }
+    }
+  },
+  {
+    "input": {
+      "entries": [
+        {
+          "fileName": "test.iso",
+          "sidecarReadable": false,
+          "sizeBytes": null
+        }
+      ]
+    },
+    "kind": "iso",
+    "now": 1789128000000,
+    "output": {
+      "current": null,
+      "entries": [
+        {
+          "builtAt": "—",
+          "fileName": "test.iso",
+          "isCurrent": false,
+          "sidecarReadable": false,
+          "size": "—",
+          "unpublished": false
+        }
+      ],
+      "lastBuild": null,
+      "mode": "unknown",
+      "source": {
+        "path": "",
+        "present": false,
+        "sha256Configured": false,
+        "size": "—",
+        "url": ""
+      }
+    }
+  },
+  {
+    "input": {
+      "entries": [
+        {
+          "fileName": "test.iso",
+          "sidecarReadable": null,
+          "sizeBytes": null
+        }
+      ]
+    },
+    "kind": "iso",
+    "now": 1789128000000,
+    "output": {
+      "current": null,
+      "entries": [
+        {
+          "builtAt": "—",
+          "fileName": "test.iso",
+          "isCurrent": false,
+          "sidecarReadable": true,
+          "size": "—",
+          "unpublished": false
+        }
+      ],
+      "lastBuild": null,
+      "mode": "unknown",
+      "source": {
+        "path": "",
+        "present": false,
+        "sha256Configured": false,
+        "size": "—",
+        "url": ""
+      }
+    }
+  },
+  {
+    "input": [
+      {
+        "currentOperation": null,
+        "deleting": true,
+        "name": "guest",
+        "state": "running"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": true,
+        "canConsole": false,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "deleting",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "running"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "currentOperation": {
+          "kind": "provision"
+        },
+        "deleting": true,
+        "name": "guest",
+        "state": "running"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": true,
+        "canConsole": false,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "provision",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "running"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "allowedActions": [],
+        "currentOperation": null,
+        "deleting": true,
+        "name": "guest",
+        "state": "running"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": true,
+        "canConsole": false,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "deleting",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "running"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "allowedActions": [],
+        "currentOperation": {
+          "kind": "provision"
+        },
+        "deleting": true,
+        "name": "guest",
+        "state": "running"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": true,
+        "canConsole": false,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "provision",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "running"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "allowedActions": [
+          "console"
+        ],
+        "currentOperation": null,
+        "deleting": true,
+        "name": "guest",
+        "state": "running"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": true,
+        "canConsole": false,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "deleting",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "running"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "allowedActions": [
+          "console"
+        ],
+        "currentOperation": {
+          "kind": "provision"
+        },
+        "deleting": true,
+        "name": "guest",
+        "state": "running"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": true,
+        "canConsole": false,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "provision",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "running"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "currentOperation": null,
+        "deleting": false,
+        "name": "guest",
+        "state": "running"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": false,
+        "canConsole": true,
+        "canDelete": true,
+        "canShutdown": true,
+        "lease": "",
+        "name": "guest",
+        "operation": "",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "running"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "currentOperation": {
+          "kind": "provision"
+        },
+        "deleting": false,
+        "name": "guest",
+        "state": "running"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": true,
+        "canConsole": true,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "provision",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "running"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "allowedActions": [],
+        "currentOperation": null,
+        "deleting": false,
+        "name": "guest",
+        "state": "running"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": false,
+        "canConsole": false,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "running"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "allowedActions": [],
+        "currentOperation": {
+          "kind": "provision"
+        },
+        "deleting": false,
+        "name": "guest",
+        "state": "running"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": true,
+        "canConsole": false,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "provision",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "running"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "allowedActions": [
+          "console"
+        ],
+        "currentOperation": null,
+        "deleting": false,
+        "name": "guest",
+        "state": "running"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": false,
+        "canConsole": true,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "running"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "allowedActions": [
+          "console"
+        ],
+        "currentOperation": {
+          "kind": "provision"
+        },
+        "deleting": false,
+        "name": "guest",
+        "state": "running"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": true,
+        "canConsole": true,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "provision",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "running"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "currentOperation": null,
+        "deleting": true,
+        "name": "guest",
+        "state": "paused"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": true,
+        "canConsole": false,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "deleting",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "paused"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "currentOperation": {
+          "kind": "provision"
+        },
+        "deleting": true,
+        "name": "guest",
+        "state": "paused"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": true,
+        "canConsole": false,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "provision",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "paused"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "allowedActions": [],
+        "currentOperation": null,
+        "deleting": true,
+        "name": "guest",
+        "state": "paused"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": true,
+        "canConsole": false,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "deleting",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "paused"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "allowedActions": [],
+        "currentOperation": {
+          "kind": "provision"
+        },
+        "deleting": true,
+        "name": "guest",
+        "state": "paused"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": true,
+        "canConsole": false,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "provision",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "paused"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "allowedActions": [
+          "console"
+        ],
+        "currentOperation": null,
+        "deleting": true,
+        "name": "guest",
+        "state": "paused"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": true,
+        "canConsole": false,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "deleting",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "paused"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "allowedActions": [
+          "console"
+        ],
+        "currentOperation": {
+          "kind": "provision"
+        },
+        "deleting": true,
+        "name": "guest",
+        "state": "paused"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": true,
+        "canConsole": false,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "provision",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "paused"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "currentOperation": null,
+        "deleting": false,
+        "name": "guest",
+        "state": "paused"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": false,
+        "canConsole": true,
+        "canDelete": true,
+        "canShutdown": true,
+        "lease": "",
+        "name": "guest",
+        "operation": "",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "paused"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "currentOperation": {
+          "kind": "provision"
+        },
+        "deleting": false,
+        "name": "guest",
+        "state": "paused"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": true,
+        "canConsole": true,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "provision",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "paused"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "allowedActions": [],
+        "currentOperation": null,
+        "deleting": false,
+        "name": "guest",
+        "state": "paused"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": false,
+        "canConsole": false,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "paused"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "allowedActions": [],
+        "currentOperation": {
+          "kind": "provision"
+        },
+        "deleting": false,
+        "name": "guest",
+        "state": "paused"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": true,
+        "canConsole": false,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "provision",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "paused"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "allowedActions": [
+          "console"
+        ],
+        "currentOperation": null,
+        "deleting": false,
+        "name": "guest",
+        "state": "paused"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": false,
+        "canConsole": true,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "paused"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "allowedActions": [
+          "console"
+        ],
+        "currentOperation": {
+          "kind": "provision"
+        },
+        "deleting": false,
+        "name": "guest",
+        "state": "paused"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": true,
+        "canConsole": true,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "provision",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "paused"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "currentOperation": null,
+        "deleting": true,
+        "name": "guest",
+        "state": "off"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": true,
+        "canConsole": false,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "deleting",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "off"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "currentOperation": {
+          "kind": "provision"
+        },
+        "deleting": true,
+        "name": "guest",
+        "state": "off"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": true,
+        "canConsole": false,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "provision",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "off"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "allowedActions": [],
+        "currentOperation": null,
+        "deleting": true,
+        "name": "guest",
+        "state": "off"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": true,
+        "canConsole": false,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "deleting",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "off"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "allowedActions": [],
+        "currentOperation": {
+          "kind": "provision"
+        },
+        "deleting": true,
+        "name": "guest",
+        "state": "off"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": true,
+        "canConsole": false,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "provision",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "off"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "allowedActions": [
+          "console"
+        ],
+        "currentOperation": null,
+        "deleting": true,
+        "name": "guest",
+        "state": "off"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": true,
+        "canConsole": false,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "deleting",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "off"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "allowedActions": [
+          "console"
+        ],
+        "currentOperation": {
+          "kind": "provision"
+        },
+        "deleting": true,
+        "name": "guest",
+        "state": "off"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": true,
+        "canConsole": false,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "provision",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "off"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "currentOperation": null,
+        "deleting": false,
+        "name": "guest",
+        "state": "off"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": false,
+        "canConsole": false,
+        "canDelete": true,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "off"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "currentOperation": {
+          "kind": "provision"
+        },
+        "deleting": false,
+        "name": "guest",
+        "state": "off"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": true,
+        "canConsole": false,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "provision",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "off"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "allowedActions": [],
+        "currentOperation": null,
+        "deleting": false,
+        "name": "guest",
+        "state": "off"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": false,
+        "canConsole": false,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "off"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "allowedActions": [],
+        "currentOperation": {
+          "kind": "provision"
+        },
+        "deleting": false,
+        "name": "guest",
+        "state": "off"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": true,
+        "canConsole": false,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "provision",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "off"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "allowedActions": [
+          "console"
+        ],
+        "currentOperation": null,
+        "deleting": false,
+        "name": "guest",
+        "state": "off"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": false,
+        "canConsole": false,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "off"
+      }
+    ]
+  },
+  {
+    "input": [
+      {
+        "allowedActions": [
+          "console"
+        ],
+        "currentOperation": {
+          "kind": "provision"
+        },
+        "deleting": false,
+        "name": "guest",
+        "state": "off"
+      }
+    ],
+    "kind": "children",
+    "now": 1789128000000,
+    "output": [
+      {
+        "busy": true,
+        "canConsole": false,
+        "canDelete": false,
+        "canShutdown": false,
+        "lease": "",
+        "name": "guest",
+        "operation": "provision",
+        "overdue": false,
+        "shared": false,
+        "sharing": "",
+        "state": "off"
+      }
+    ]
+  },
+  {
+    "input": {
+      "backend": "hyperv-remote",
+      "items": [],
+      "now": 1789128000000,
+      "primary": "agent-vm",
+      "problem": "",
+      "supported": true
+    },
+    "kind": "childrenCard",
+    "now": 1789128000000,
+    "output": {
+      "items": [],
+      "primary": "agent-vm",
+      "problem": "",
+      "visible": true
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-remote",
+      "items": [],
+      "now": 1789128000000,
+      "primary": "agent-vm",
+      "problem": "",
+      "supported": false
+    },
+    "kind": "childrenCard",
+    "now": 1789128000000,
+    "output": null
+  },
+  {
+    "input": {
+      "backend": "hyperv-remote",
+      "items": [],
+      "now": 1789128000000,
+      "primary": "agent-vm",
+      "problem": "read failed",
+      "supported": true
+    },
+    "kind": "childrenCard",
+    "now": 1789128000000,
+    "output": {
+      "items": [],
+      "primary": "agent-vm",
+      "problem": "read failed",
+      "visible": true
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-remote",
+      "items": [],
+      "now": 1789128000000,
+      "primary": "agent-vm",
+      "problem": "read failed",
+      "supported": false
+    },
+    "kind": "childrenCard",
+    "now": 1789128000000,
+    "output": null
+  },
+  {
+    "input": {
+      "backend": "hyperv-remote",
+      "items": [
+        {
+          "allowedActions": [
+            "shutdown",
+            "delete",
+            "invented"
+          ],
+          "hardware": {
+            "cpus": 4,
+            "diskGb": 80,
+            "ramMb": 2048
+          },
+          "kind": "child",
+          "lease": {
+            "expiresAt": "2026-09-11T13:00:00Z",
+            "requested": "12h",
+            "state": "active"
+          },
+          "name": "build",
+          "owner": "alice",
+          "parent": "agent-vm",
+          "pendingCpu": 8,
+          "resourceUsage": {
+            "cpuUsagePercent": 25.5,
+            "diskFileBytes": 123456789,
+            "memoryAssignedBytes": 2147483648,
+            "memoryDemandBytes": 1073741824,
+            "observedAt": "2026-09-11T11:59:55Z"
+          },
+          "sharing": "host",
+          "state": "running"
+        }
+      ],
+      "now": 1789128000000,
+      "primary": "agent-vm",
+      "problem": "",
+      "supported": true
+    },
+    "kind": "childrenCard",
+    "now": 1789128000000,
+    "output": {
+      "items": [
+        {
+          "busy": false,
+          "canConsole": false,
+          "canDelete": true,
+          "canShutdown": true,
+          "lease": "expires in 1h 0m (2026-09-11 13:00 UTC)",
+          "name": "build",
+          "operation": "",
+          "overdue": false,
+          "shared": true,
+          "sharing": "host",
+          "state": "running"
+        }
+      ],
+      "primary": "agent-vm",
+      "problem": "",
+      "visible": true
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-remote",
+      "items": [
+        {
+          "allowedActions": [
+            "shutdown",
+            "delete",
+            "invented"
+          ],
+          "hardware": {
+            "cpus": 4,
+            "diskGb": 80,
+            "ramMb": 2048
+          },
+          "kind": "child",
+          "lease": {
+            "expiresAt": "2026-09-11T13:00:00Z",
+            "requested": "12h",
+            "state": "active"
+          },
+          "name": "build",
+          "owner": "alice",
+          "parent": "agent-vm",
+          "pendingCpu": 8,
+          "resourceUsage": {
+            "cpuUsagePercent": 25.5,
+            "diskFileBytes": 123456789,
+            "memoryAssignedBytes": 2147483648,
+            "memoryDemandBytes": 1073741824,
+            "observedAt": "2026-09-11T11:59:55Z"
+          },
+          "sharing": "host",
+          "state": "running"
+        }
+      ],
+      "now": 1789128000000,
+      "primary": "agent-vm",
+      "problem": "",
+      "supported": false
+    },
+    "kind": "childrenCard",
+    "now": 1789128000000,
+    "output": null
+  },
+  {
+    "input": {
+      "backend": "hyperv-remote",
+      "items": [
+        {
+          "allowedActions": [
+            "shutdown",
+            "delete",
+            "invented"
+          ],
+          "hardware": {
+            "cpus": 4,
+            "diskGb": 80,
+            "ramMb": 2048
+          },
+          "kind": "child",
+          "lease": {
+            "expiresAt": "2026-09-11T13:00:00Z",
+            "requested": "12h",
+            "state": "active"
+          },
+          "name": "build",
+          "owner": "alice",
+          "parent": "agent-vm",
+          "pendingCpu": 8,
+          "resourceUsage": {
+            "cpuUsagePercent": 25.5,
+            "diskFileBytes": 123456789,
+            "memoryAssignedBytes": 2147483648,
+            "memoryDemandBytes": 1073741824,
+            "observedAt": "2026-09-11T11:59:55Z"
+          },
+          "sharing": "host",
+          "state": "running"
+        }
+      ],
+      "now": 1789128000000,
+      "primary": "agent-vm",
+      "problem": "read failed",
+      "supported": true
+    },
+    "kind": "childrenCard",
+    "now": 1789128000000,
+    "output": {
+      "items": [
+        {
+          "busy": false,
+          "canConsole": false,
+          "canDelete": true,
+          "canShutdown": true,
+          "lease": "expires in 1h 0m (2026-09-11 13:00 UTC)",
+          "name": "build",
+          "operation": "",
+          "overdue": false,
+          "shared": true,
+          "sharing": "host",
+          "state": "running"
+        }
+      ],
+      "primary": "agent-vm",
+      "problem": "read failed",
+      "visible": true
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-remote",
+      "items": [
+        {
+          "allowedActions": [
+            "shutdown",
+            "delete",
+            "invented"
+          ],
+          "hardware": {
+            "cpus": 4,
+            "diskGb": 80,
+            "ramMb": 2048
+          },
+          "kind": "child",
+          "lease": {
+            "expiresAt": "2026-09-11T13:00:00Z",
+            "requested": "12h",
+            "state": "active"
+          },
+          "name": "build",
+          "owner": "alice",
+          "parent": "agent-vm",
+          "pendingCpu": 8,
+          "resourceUsage": {
+            "cpuUsagePercent": 25.5,
+            "diskFileBytes": 123456789,
+            "memoryAssignedBytes": 2147483648,
+            "memoryDemandBytes": 1073741824,
+            "observedAt": "2026-09-11T11:59:55Z"
+          },
+          "sharing": "host",
+          "state": "running"
+        }
+      ],
+      "now": 1789128000000,
+      "primary": "agent-vm",
+      "problem": "read failed",
+      "supported": false
+    },
+    "kind": "childrenCard",
+    "now": 1789128000000,
+    "output": null
+  },
+  {
+    "input": {
+      "backend": "hyperv-remote",
+      "items": null,
+      "now": 1789128000000,
+      "primary": "agent-vm",
+      "problem": "",
+      "supported": true
+    },
+    "kind": "childrenCard",
+    "now": 1789128000000,
+    "output": {
+      "items": [],
+      "primary": "agent-vm",
+      "problem": "could not read the child VMs",
+      "visible": true
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-remote",
+      "items": null,
+      "now": 1789128000000,
+      "primary": "agent-vm",
+      "problem": "",
+      "supported": false
+    },
+    "kind": "childrenCard",
+    "now": 1789128000000,
+    "output": null
+  },
+  {
+    "input": {
+      "backend": "hyperv-remote",
+      "items": null,
+      "now": 1789128000000,
+      "primary": "agent-vm",
+      "problem": "read failed",
+      "supported": true
+    },
+    "kind": "childrenCard",
+    "now": 1789128000000,
+    "output": {
+      "items": [],
+      "primary": "agent-vm",
+      "problem": "read failed",
+      "visible": true
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-remote",
+      "items": null,
+      "now": 1789128000000,
+      "primary": "agent-vm",
+      "problem": "read failed",
+      "supported": false
+    },
+    "kind": "childrenCard",
+    "now": 1789128000000,
+    "output": null
   },
   {
     "input": {
