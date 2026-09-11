@@ -28,9 +28,9 @@ They cannot touch your host PC.
 - ♻️ **Disposable.** Reinstall the VM and the agent configuration, auth and memory come back.
 - 📦 **Project profiles.** Repos, SDKs, MCP servers and setup commands in one JSON file,
   applied on every provision.
-- 🖧 **Local or hosted.** Run the VM on your own PC, or on a shared Hyper-V host and use it
+- 🛜 **Local or hosted.** Run the VM on your own PC, or on a shared Hyper-V host and use it
   from anywhere.
-- 🖥️ **T3 Code, patched.** The VM and the Windows client get a patched T3 Code build with voice
+- 🖥️ **T3 Code *plus*.** The VM and the Windows client get a patched T3 Code build with voice
   input, automatic resume after a session limit and Construct integration.
 - 🤷 **It just works.** The agents are trained to install whatever tool a task needs.
 
