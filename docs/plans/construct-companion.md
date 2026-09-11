@@ -534,6 +534,7 @@ extension methods in their own files), `extension/extension.js` (S2a extension o
 ## Deviations
 
 (Recorded by implementers; one line each: what, why, where.)
+- S2b install: elevated callers are refused by the per-user library and reported non-fatally by Update-Construct; retry from a normal desktop PowerShell window rather than installing into an administrator profile (D10). Updates also retain an explicit autostart=false setting; release pagination is capped at 20 pages with an explicit refusal if the result is incomplete.
 - S2a state: adds `IStateFileSystem` (extends `IFileSystem`) for marker timestamps, directory existence and atomic create-if-absent profile writes; these host.js requirements cannot be expressed by the S1 seam.
 - S2a state: adds `IUpdateSource` for public release JSON under normal CA validation; `IRemoteApi` remains the credentialed certificate-pinned host-service transport.
 - S2a state: registry parse/read failures report stable diagnostics rather than copying Node-version-specific parser or OS-specific exception text; fallback and rejection behavior are unchanged.
