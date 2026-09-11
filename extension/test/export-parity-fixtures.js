@@ -70,13 +70,50 @@ function hostLabel() {
 function shellQuoting() {
   return [null, "", "plain", "a'b", "'", "a\nline\r\n", "$(id); `id` \\ \"", "ü🧱", "{{dir}}"].map(input => ({ input, output: q(input) }));
 }
+function forwardRuntime() {
+  const rows = [];
+  const add = (kind, input, output) => rows.push({kind, input, output});
+  const ids = ["a", "child-2", "../bad", "", "x".repeat(129)];
+  const documents = [null, {}, {v:2,id:"a",vmPort:80}, {v:1,id:"b",vmPort:80}];
+  for (const v of [undefined, 1, "1", 2]) for (const port of [0, 1, "80", "1e2", 65535, 65536, true])
+    documents.push({v,id:"a",vmPort:port,label:" Hello\n ü ",status:"OPEN",localPort:port,hostLabel:"[::1]",message:" hello\n world "});
+  for (const target of [undefined,null,"","client","CLIENT","host"]) documents.push({v:1,id:"a",vmPort:80,target});
+  for (const id of ids) for (const doc of documents)
+    add("wire", {id,doc}, {request:forwards.parseRequest(id,doc),ack:forwards.parseAck(id,doc),close:forwards.parseClose(id,doc)});
+  for (const name of [null,"","agent-vm","dev","build","ü🧱"," work "])
+    add("slice", name, forwards.instancePortSlice(name));
+  for (const attempt of [-1,0,0.5,1,2,3,5,6,10,99]) add("delay",attempt,forwards.reconnectDelayMs(attempt));
+  for (const opts of [{},{prefer:18801,taken:[80,18802]},{base:65530,count:16},{base:19000,count:2},{prefer:80,taken:[80]}])
+    add("ports",{vmPort:80,opts},forwards.portCandidates(80,opts));
+  const request = {id:"a",vmPort:80,label:"web",target:"client"};
+  const dest = {vmName:"child",via:"primary",connectAddress:"10.0.0.2",connectPort:8080,verified:false};
+  for (const owner of [false,true]) for (const reopenAcked of [false,true])
+    for (const ack of [null,{id:"a",status:"open",localPort:80,hostLabel:"",message:""},{id:"a",status:"open",localPort:81,hostLabel:"pc",message:""},{id:"a",status:"error",localPort:null,message:"failed"}])
+      for (const tunnel of [null,...["starting","up","failed"].flatMap(state => [false,true].map(acked => ({id:"a",vmPort:80,localPort:80,state,acked,message:"failed"})))])
+        for (const closes of [[],["a"]]) for (const hostLabel of ["","pc","[::1]"]) {
+          const input = {owner,reopenAcked,requests:[request],acks:ack?[ack]:[],tunnels:tunnel?[tunnel]:[],closes,hostLabel,mode:reopenAcked?"local":"remote"};
+          add("plan",input,forwards.planActions(input)); add("snapshot",input,forwards.toSnapshot(input));
+        }
+  for (const input of [{requests:[{...request,destination:dest}],acks:[],tunnels:[]}, {requests:[],acks:[{id:"a"}],tunnels:[{id:"a"}]}, {requests:[{id:"../bad"}],closes:["../bad"]}]) add("plan",input,forwards.planActions(input));
+  for (const destination of [undefined,null,{},dest,{...dest,connectAddress:""},{...dest,vmName:"../bad"},{...dest,connectAddress:"[::1]"}])
+    for (const status of ["queued","open","error","closed"]) {
+      const list = [{...request,destination,status,localPort:18800,message:"guest address changed"},{id:"host",vmPort:443,target:"host",url:"https://host/"}];
+      const read = forwards.readForwardList(list); add("remote",list,read); add("snapshot",{...read,mode:"remote"},forwards.toSnapshot({...read,mode:"remote"}));
+    }
+  for (const enabled of [false,true]) for (const online of [false,true]) for (const armed of [null,"dev","other"]) for (const vmState of ["off","saved","running","unknown"])
+    { const input={enabled,online,armed,vmState,name:"dev"}; add("lifecycle",input,forwards.planLifecycle(input)); }
+  for (const outcome of ["supported","unsupported","unanswered","stood-down","running",""]) for (const current of [false,true])
+    add("outcome",{outcome,current},forwards.planStartOutcome({outcome,current}));
+  for (const ack of [{},{status:"error",message:"bad\nline"},{status:"open",localPort:80,hostLabel:"[::1]"}]) add("ack",{id:"a",ack},forwards.ackDocument("a",ack));
+  return rows;
+}
 function sortKeys(value) {
   if (Array.isArray(value)) return value.map(sortKeys);
   if (value && typeof value === "object") return Object.fromEntries(Object.keys(value).sort().map(key => [key, sortKeys(value[key])]));
   return value;
 }
 function serialize(value) { return JSON.stringify(sortKeys(value), null, 2) + "\n"; }
-function exportAll() { return { "guest-scripts": guestScripts(), "ssh-args": sshArgs(), "host-label": hostLabel(), "shell-quoting": shellQuoting() }; }
+function exportAll() { return { "forward-runtime": forwardRuntime(), "guest-scripts": guestScripts(), "ssh-args": sshArgs(), "host-label": hostLabel(), "shell-quoting": shellQuoting() }; }
 if (require.main === module) {
   fs.mkdirSync(directory, { recursive: true });
   for (const [area, value] of Object.entries(exportAll())) fs.writeFileSync(path.join(directory, area + ".json"), serialize(value));
