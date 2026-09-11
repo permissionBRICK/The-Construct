@@ -37,6 +37,7 @@ public static class HostAdminComposition
         services.AddSingleton<Constructd.Api.Jobs.PrimaryVmJobs>();
         services.AddSingleton<Constructd.Api.Jobs.LifecycleStart>();
         services.AddSingleton<Constructd.Api.Jobs.PrimaryCpuSettings>();
+        services.AddSingleton<Constructd.Api.Jobs.PrimaryMemorySettings>();
         services.AddSingleton<Constructd.Api.Jobs.ChildLifecycleJobs>();
         services.AddSingleton<Constructd.Api.Jobs.LifecycleJobAdmission>();
         services.AddSingleton<Constructd.Api.Jobs.CascadeJobs>();

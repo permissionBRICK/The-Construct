@@ -74,6 +74,9 @@ internal static class HyperVScript
     public static string StartVm(string scriptsDir, string vmName) =>
         Call(scriptsDir, "Start-ConstructVm", vmName);
 
+    public static string SetMemory(string scriptsDir, string vmName, int ramGb) => Build(scriptsDir,
+        $"Set-ConstructVmMemory -Name {PowerShellLiteral.Quote(ArgumentGuard.VmName(vmName))} -MemoryGB {ArgumentGuard.Positive(ramGb, "ramGb", 1024)}");
+
     public static string SetCpuCount(string scriptsDir, string vmName, int cpus) => Build(scriptsDir,
         $"Set-ConstructVmCpuCount -Name {PowerShellLiteral.Quote(ArgumentGuard.VmName(vmName))} -ProcessorCount {ArgumentGuard.Positive(cpus, "cpus", 64)}");
 
