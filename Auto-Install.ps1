@@ -149,6 +149,7 @@ param(
     # can also apply it to an existing VM via Set-AgentVmCheckpoints.ps1. "true"/"false".
     [ValidateSet("true", "false")]
     [string]$AutomaticCheckpoints = "false",
+    [switch]$SkipCompanion,
     [switch]$SkipChecksum,
     [switch]$SkipCreateVm,
     [switch]$Force,
@@ -771,6 +772,8 @@ if (-not $SkipCreateVm -and $Action -ne 'remove-instance') {
         } catch {
             Write-Warning "Could not set up the control panel on the host (continuing): $($_.Exception.Message)"
         }
+        try { . (Join-Path $PSScriptRoot 'lib/Construct.Companion.ps1'); Invoke-ConstructCompanionInstallHook -ScriptsDir $PSScriptRoot -SkipCompanion:$SkipCompanion }
+        catch { Write-Warning 'Could not load Companion installer helpers; continuing VM installation.' }
         # ── Local or remote? Decided BEFORE the relaunch ──────────────────────
         # A REMOTE install creates no local VM, so it needs no administrator rights --
         # and elevating would be actively harmful where UAC switches to a different

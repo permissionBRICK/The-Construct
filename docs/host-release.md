@@ -1,5 +1,8 @@
 # Host releases and deployment
 
+The per-user tray app ships independently as `companion-<commit>`; see
+[Construct Companion](companion.md) for its installer, package layout and release gates.
+
 Host releases use the immutable tag `host-<40-character commit>` in
 `permissionBRICK/The-Construct`. The workflow runs only on `main`, tests the service,
 publishes the self-contained Windows x64 executable, and packages the matching tracked
