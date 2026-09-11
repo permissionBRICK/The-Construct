@@ -51,6 +51,10 @@ a few questions at the start and then runs on its own.
 > **Requirements:** Windows 10 or 11 with local admin rights, free disk space, and about 15 minutes.
 
 <div align="center">
+  
+<img src="https://i.imgur.com/1vLKieH.png" alt="Construct integration into T3 Code" width="100%">
+
+<sub>*Construct integrated directly into T3-Code, zero-click setup.*</sub>
 
 <img src="https://i.imgur.com/GHg3XaD.png" alt="The Construct operator console, the one-screen VS Code control panel" width="100%">
 
