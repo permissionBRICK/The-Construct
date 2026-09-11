@@ -121,6 +121,13 @@ public sealed class InstanceRegistry
         if (failed) registry.Problems.Insert(0, "instances.json could not be read — using the default instance");
         return registry;
     }
+    // The synthesized legacy default is not a VM on a PC without an installed scripts directory.
+    public static InstanceRegistry LoadUsable(IStateFileSystem files, string? scriptsDirectoryOverride = null)
+    {
+        var registry = Load(files);
+        if (registry.Synthesized && new HostState(files).ResolveScriptsDirectory(overrideDirectory: scriptsDirectoryOverride) is null) registry.ByName.Clear();
+        return registry;
+    }
     public void Save(IFileSystem files, string? path = null)
     {
         path ??= FilePath; if (string.IsNullOrEmpty(path)) throw new InvalidOperationException("No instances.json path resolved");
@@ -154,9 +161,5 @@ public sealed class InstanceRegistry
         if (!ByName.ContainsKey(name)) throw new ArgumentException($"Unknown instance \"{name}\"");
         if (ByName.Count <= 1) throw new InvalidOperationException($"\"{name}\" is the only instance on this PC and cannot be removed");
         var next = Clone(); next.ByName.Remove(name); if (name == Instances.DefaultName) next.Removed.Add(name); next.RepairDefault(); return next;
-    }
-    public InstanceRegistry SetDefault(string name)
-    {
-        if (!ByName.ContainsKey(name)) throw new ArgumentException($"Unknown instance \"{name}\""); var next = Clone(); next.DefaultInstance = name; return next;
     }
 }

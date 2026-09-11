@@ -15,49 +15,33 @@ using Construct.Companion.Host.Ipc;
 using Construct.Companion.Host.Runtime;
 namespace Construct.Companion.Host.Composition;
 
-public sealed class CompanionInstance(JsonObject definition, InstanceStateStore store, ISshTransport ssh)
-{
-    public JsonObject Definition { get; set; } = definition;
-    public string Name => StateJson.String(Definition["name"]);
-    public InstanceStateStore Store { get; set; } = store;
-    public ISshTransport Ssh { get; set; } = ssh;
-    public SemaphoreSlim Serial { get; } = new(1, 1);
-    public InstanceRuntime? Runtime { get; set; }
-    public ConfigSyncArea? ConfigSync { get; set; }
-    public SemaphoreSlim EnrichmentSerial { get; } = new(1, 1);
-    public Dictionary<string, (DateTimeOffset At, string? Raw)> UsageCache { get; } = new();
-    public string UsagePeriod { get; set; } = "daily";
-    public JsonObject? Usage { get; set; }
-    public string? UsageRaw { get; set; }
-    public JsonObject Enrichment { get; set; } = new();
-    public JsonNode? ConfigState { get; set; }
-}
+// Registry of live instances: definitions, state stores, transports and config areas, plus the
+// IRuntimeRegistry projection the supervisor watches.
 public sealed class CompanionInstances(IStateFileSystem files, IpcSettings settings, IInstanceConnections connections,
     IClock clock, IHypervisorState hypervisor, IProcessRunner processes, IRemoteApi remote, ITokenStore tokens,
     IRuntimeProcesses runtimeProcesses, IPortReservations ports, IToastRaiser toasts, IAudioServerFactory audioServers,
     SharedAudioCapture capture, RuntimeMessageBus bus, ConfigSyncFactory config) : IRuntimeRegistry, IAsyncDisposable
 {
-    
     private readonly ConcurrentDictionary<string, CompanionInstance> entries = new(StringComparer.Ordinal);
     public HostState Host { get; } = new(files);
-    public InstanceRegistry Registry
-    {
-        get { var value = InstanceRegistry.Load(files);
-            if (value.Synthesized && Host.ResolveScriptsDirectory(overrideDirectory: settings.Read().ScriptsDir) is null) value.ByName.Clear();
-            return value; }
-    }
+    public InstanceRegistry Registry => InstanceRegistry.LoadUsable(files, settings.Read().ScriptsDir);
     public string[] Names => Registry.List().Select(i => StateJson.String(i["name"])).ToArray();
     public CompanionInstance Get(string name)
     {
         var registry = Registry;
         if (!registry.ByName.ContainsKey(name)) throw new IpcFailure(404, "instanceNotFound", "Unknown Construct instance.");
-        return entries.GetOrAdd(name, _ =>
-        {
-            var definition = registry.Resolve(name);
-            var directory = Host.ResolveScriptsDirectory(StateJson.Text(definition["scriptsDir"]), settings.Read().ScriptsDir);
-            var entry = new CompanionInstance(definition, new(files, name, directory), connections.Ssh(definition));
-            EnsureConfig(entry); return entry;
-        });
+        return entries.GetOrAdd(name, _ => Bind(null, registry.Resolve(name)));
+    }
+    // Binds (or rebinds after a registry change) the store and transport of a definition.
+    private CompanionInstance Bind(CompanionInstance? entry, JsonObject definition)
+    {
+        var store = new InstanceStateStore(files, StateJson.String(definition["name"]), Host.ResolveScriptsDirectory(StateJson.Text(definition["scriptsDir"]), settings.Read().ScriptsDir));
+        var ssh = connections.Ssh(definition);
+        if (entry is null) entry = new CompanionInstance(definition, store, ssh);
+        else { entry.Definition = definition; entry.Store = store; entry.Ssh = ssh; }
+        if (entry.ConfigSync is null && Host.ConfigDirectory is { } cfg)
+            entry.ConfigSync = config.Create(cfg, Path.Combine(Host.LocalAppData!, "The-Construct", "cache", "config-remotes"), entry.Ssh, StateJson.String(definition["configBranch"]));
+        return entry;
     }
     public RemoteHostClient? Remote(CompanionInstance instance)
     {
@@ -72,7 +56,7 @@ public sealed class CompanionInstances(IStateFileSystem files, IpcSettings setti
         {
             var name = StateJson.String(definition["name"]);
             var directory = Host.ResolveScriptsDirectory(StateJson.Text(definition["scriptsDir"]), preferences.ScriptsDir);
-            var store = new InstanceStateStore(files, name, directory); var form = store.ReadSettings();
+            var form = new InstanceStateStore(files, name, directory).ReadSettings();
             var revision = definition.ToJsonString() + "|" + directory + "|" + preferences.MicDevice;
             return new RuntimeInstance(name, revision, preferences.Forwards.Enabled, preferences.Forwards.HostLabel, preferences.Notifications,
                 StateJson.Boolean(form["mic"]) == true, StateJson.Boolean(form["partialStreaming"]) == true, preferences.RepatchDelaySeconds);
@@ -82,10 +66,8 @@ public sealed class CompanionInstances(IStateFileSystem files, IpcSettings setti
     public IDisposable Watch(Action changed) => files.Watch(Path.Combine(Host.LocalAppData!, "The-Construct"), changed);
     public InstanceRuntime CreateRuntime(RuntimeInstance definition)
     {
-        var entry = Get(definition.Name); var current = Registry.Resolve(definition.Name);
-        var directory = Host.ResolveScriptsDirectory(StateJson.Text(current["scriptsDir"]), settings.Read().ScriptsDir);
-        entry.Definition = current; entry.Store = new(files, definition.Name, directory); entry.Ssh = connections.Ssh(current);
-        EnsureConfig(entry);
+        var current = Registry.Resolve(definition.Name);
+        var entry = Bind(Get(definition.Name), current);
         var probe = new InstanceProbe(entry, this, hypervisor, processes);
         // Connection construction is asynchronous (remote user credential); lazy transport defers it until start.
         var runtime = new InstanceRuntime(definition, probe, clock,
@@ -94,11 +76,6 @@ public sealed class CompanionInstances(IStateFileSystem files, IpcSettings setti
             changed => new(entry.Ssh, runtimeProcesses, audioServers, capture, changed), new RepatchJob(entry.Ssh), bus);
         entry.ConfigSync?.Runtime.StartWatching();
         entry.Runtime = runtime; return runtime;
-    }
-    private void EnsureConfig(CompanionInstance entry)
-    {
-        if (entry.ConfigSync is null && Host.ConfigDirectory is { } cfg)
-            entry.ConfigSync = config.Create(cfg, Path.Combine(Host.LocalAppData!, "The-Construct", "cache", "config-remotes"), entry.Ssh, StateJson.String(entry.Definition["configBranch"]));
     }
     public async Task<IAsyncDisposable?> AcquireRetargetAsync(string name, CancellationToken ct)
     {
@@ -132,19 +109,4 @@ public sealed class CompanionInstances(IStateFileSystem files, IpcSettings setti
             return state;
         }
     }
-}
-internal sealed class DeferredForwardTransport(Func<CancellationToken, Task<IForwardTransport>> create) : IForwardTransport
-{
-    private IForwardTransport? inner;
-    public bool IsRemote => inner?.IsRemote ?? false;
-    public async Task<string> CheckCapabilityAsync(CancellationToken ct) { inner ??= await create(ct); return await inner.CheckCapabilityAsync(ct); }
-    private IForwardTransport Inner => inner ?? throw new InvalidOperationException("Forward transport has not started.");
-    public IRunningProcess SpawnWatch(CancellationToken ct) => Inner.SpawnWatch(ct);
-    public Task<JsonObject?> ReadAsync(CancellationToken ct) => Inner.ReadAsync(ct);
-    public Task WriteAckAsync(string id, JsonObject document, CancellationToken ct) => Inner.WriteAckAsync(id, document, ct);
-    public Task SweepAsync(string sub, string id, CancellationToken ct) => Inner.SweepAsync(sub, id, ct);
-    public Task CloseAsync(string id, CancellationToken ct) => Inner.CloseAsync(id, ct);
-    public Task ReleaseAsync(CancellationToken ct) => inner?.ReleaseAsync(ct) ?? Task.CompletedTask;
-    public IRunningProcess SpawnTunnel(TunnelSpec spec, CancellationToken ct) => Inner.SpawnTunnel(spec, ct);
-    public Task<bool> ProbePortAsync(int port, string bindHost, CancellationToken ct) => Inner.ProbePortAsync(port, bindHost, ct);
 }

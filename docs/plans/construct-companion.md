@@ -96,12 +96,13 @@ companion/
                                       wire docs, guest-script templating, notify claim + toast
                                       document, audio contract, probe parser, ssh argv builders,
                                       lifecycle invocations, config-sync planners, remote-host
-                                      client logic over an injected HTTP seam, IPC DTOs, the
-                                      message dispatcher over injected seams. Builds and tests on Linux.
+                                      client logic over an injected HTTP seam, IPC DTOs,
+                                      tray/activation/selftest decisions. Builds and tests on Linux.
   src/Construct.Companion.Host/       net10.0. The runtime: per-instance runtime supervisors,
                                       ssh process supervisor, git runner, Kestrel IPC server
                                       (FrameworkReference Microsoft.AspNetCore.App), SSE bus,
-                                      state aggregation, logging. Runs on Linux in fake mode for tests.
+                                      state aggregation, the message dispatcher (the C# handleMessage)
+                                      and host administration, logging. Runs on Linux in fake mode for tests.
   src/Construct.Companion.Windows/    net10.0 (NOT -windows). [SupportedOSPlatform("windows")] only:
                                       DPAPI token store, Hyper-V state via CIM, toast raising,
                                       WASAPI capture (NAudio), HKCU Run key + protocol registration,
@@ -564,6 +565,12 @@ for regression suite results, retries, unsupported workflows and Windows limitat
 
 ## Deviations
 
+- S4 cleanup: `ConfigSyncRules.IsSafeProfileName` now shares `HostState.SafeProfileName` (the `configsync.js` formulation, ECMAScript `trim`), so edge U+0085 is accepted and edge U+FEFF rejected exactly as in JS; the `config-sync` fixture gained those cases (Core/ConfigSync/ConfigSyncRules.cs).
+- S4 cleanup (Host): `IConfigSyncStorage` is gone: its file members live on `IStateFileSystem` (plus `DeleteDirectory`) and its process members on the new `IProcessLiveness`; `ConfigSyncFileSystem`/`DesktopFileSystem` are one `HostFileSystem` and `ConfigSyncProcessRunner` is dropped in favour of the production `RuntimeProcessRunner` (its `RunAsync` throws on timeout where the removed runner returned -1; only `GitRunner`, which maps both to -1, and tests used it).
+- S4 cleanup (Host): the S2 `DesktopActivationServer`, `IUiActivation` and the app's private `ui-endpoint.json` are removed; that build never shipped, so activation and quit use `endpoint.json` only (the installer's `ui-endpoint.json` discovery is dropped in the installer increment).
+- S4 cleanup (app): `connect` and `openProject` open the `vscode://vscode-remote/ssh-remote+…` deep link through ShellExecute only; the unused `code` CLI lookup of §8.5 (DesktopLauncher.FindVsCodeCli, never called by the dispatcher) is removed rather than wired.
+- S4 cleanup (app): `SettingsStore` is folded into the Host's `IpcSettings`, the single owner of `settings.json` for the routes, the dispatcher and the windows; an unparseable file reads as defaults (logged once) and is replaced by the next merge, while a parseable file with an unsupported version or invalid values is refused and never rewritten. `DesktopRegistration.Register` is dropped (the installer writes the protocol and toast keys); the app prints a reason when Windows is older than 1809 instead of exiting silently.
+- S4 cleanup (installer/extension): `Stop-ConstructCompanionForInstall` reads `endpoint.json` only (the never-shipped `ui-endpoint.json` discovery is gone); `companion.js` drops the impossible boolean `construct.companion` value and its unused exports and options; the release workflow now runs every gate the README lists.
 - owner amendment 2026-09-11: plain reprovision installs or updates the client Companion through the same non-blocking opt-out-aware hook in `Provision-AgentVM.ps1`, covering panel and T3 Desktop reprovision entry paths.
 
 - S2b ipc: automatic checkpoint apply and lifecycle preflight/live-project fallback remain documented unsupported subflows; S2a has the pieces but not the complete dialog/result workflow, so users must sync/select explicitly and apply checkpoints through VS Code/installer.

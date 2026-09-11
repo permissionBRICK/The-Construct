@@ -10,8 +10,20 @@ const ssh = require("../src/ssh");
 const t3 = require("../src/t3code");
 const usage = require("../src/usage");
 const probe = require("../src/probe");
+const instances = require("../src/instances");
+const updates = require("../src/updates");
+const remotehost = require("../src/remotehost");
+const forwarderui = require("../src/forwarder-ui");
 const q = forwards.shQuote;
 const directory = path.resolve(__dirname, "../../test/fixtures/companion-parity");
+// Every area is a plain row list; serialize() sorts keys, so row shape never affects bytes.
+function rowList() { const rows = []; return { rows, add: (kind, input, output) => rows.push({ kind, input, output }) }; }
+function sortKeys(value) {
+  if (Array.isArray(value)) return value.map(sortKeys);
+  if (value && typeof value === "object") return Object.fromEntries(Object.keys(value).sort().map(key => [key, sortKeys(value[key])]));
+  return value;
+}
+function serialize(value) { return JSON.stringify(sortKeys(value), null, 2) + "\n"; }
 
 function guestScripts() {
   const rows = [];
@@ -80,7 +92,7 @@ function settingsMapping() {
   return rows;
 }
 function instanceIdentity() {
-  const m = require("../src/instances");
+  const m = instances;
   const rows = [];
   for (const name of ["agent-vm", "dev", "constructor", "a".repeat(63), "a".repeat(64), "bad-", "Construct-x", "construct-x", "../x"]) {
     for (const raw of [{}, { backend: "hyperv-remote", sshHost: "host.example", sshPort: "2222", vmName: name }, { backend: "HYPERV-LOCAL", vmName: "other", sshHost: "-x", hostAlias: "../bad", keyName: "CON.txt", configBranch: "main" }, { backend: 42, vmName: 42, sshPort: "1e3" }, { backend: "hyperv-remote" }, { backend: "proxmox", sshHost: "::1", keyName: "key.", publicHost: "web.example" }]) {
@@ -91,12 +103,12 @@ function instanceIdentity() {
   return rows;
 }
 function registryState() {
-  const m = require("../src/instances");
+  const m = instances;
   const docs = [null, {}, {version:2}, {version:"1"}, {instances:[]}, {defaultInstance:"constructor",instances:{}}, {defaultInstance:"dev",instances:{dev:{}, "agent-vm":null}}, {instances:{a:{configBranch:"same"},b:{configBranch:"same"}}}, {instances:{bad:{backend:"hyperv-remote"},a:{backend:"proxmox",publicHost:"bad/host"}}}, {instances:{dev:{sshPort:"wrong",service:{auth:"wrong",url:42},scriptsDir:42}}}];
   return docs.map(input => { const text = input === null ? "" : JSON.stringify(input); const p=m.parseRegistry(text); return {text, problems:p.problems, document:m.toFileDocument(p.registry), active:m.resolveActive({registry:p.registry,setting:"missing",workspaceValue:"dev"})}; });
 }
 function lifecycleInvocations() {
-  const m=require("../src/lifecycle"), i=require("../src/instances"); const rows=[];
+  const m=require("../src/lifecycle"), i=instances; const rows=[];
   const settings={gitName:"-someone 'ü'",gitEmail:"a@b",ram:"12",disk:"100",cpu:"6",ubuntu:"24.04",serveWeb:true,tunnel:false,smb:false,partialStreaming:true,mic:false,opencodeBackgroundWatcher:true,t3code:true,t3codeChannel:"nightly",t3codeLimitResume:false,autoCheckpoints:false};
   const targets=[null,i.deriveDefaults("agent-vm",{}),i.deriveDefaults("dev",{}),i.deriveDefaults("dev",{configBranch:"custom"}),i.deriveDefaults("dev",{backend:"hyperv-remote",sshHost:"host",service:{url:"https://host:7462",auth:"token"}}),i.deriveDefaults("dev",{backend:"hyperv-remote",sshHost:"host"}),i.deriveDefaults("dev",{backend:"unknown"})];
   for(const action of ["reprovision","exportConfig","reinstall","redownload","setCheckpoints","removeInstance","unknown"]) for(const instance of targets) for(const declared of [null,[],["VmName"],["VmHost","HostAlias","SshPort","LocalKeyName"],["VmHost","HostAlias","SshPort","LocalKeyName","VmName","ConfigBranch"],["InstanceName"],["InstanceName","ConfigBranch"],["Backend","ServiceUrl","InstanceName"],["Backend","ServiceUrl","InstanceName","ConfigBranch"]]) for(const legacy of [false,true]) {
@@ -119,39 +131,39 @@ function vmPower() {
   rows.push({kind:"shutdown",output:m.SHUTDOWN_CMD}); return rows;
 }
 function probeParsing() {
-  const m=require("../src/probe");
+  const m=probe;
   const texts=["", "AGENT_NAME\tdev\nAI_TOOLS\tclaude-code,codex,opencode\nV_CLAUDE\tClaude 2.1.3\nMEM_GB\t7.6\nDISK_DEV_BYTES\t85899345920\nVM_CPUS\t6\nDISK_PCT\t41%\nPROJECTS\tapi, ui\nCONSTRUCT_COMMIT\t'ABCDEF1234'\nINSTALLED_AT\t2026-09-11T00:00:00Z", "T3CODE\ttrue\nV_T3\t0.0.12-nightly.1.2\nT3CODE_CHANNEL\tnightly\nT3CODE_PUBLIC_BASE_URL\t'https://[::1]:5178'\nT3_INSTALLATION_MODE\tprebuilt\nT3_BUILD_HASH\tabc\nT3_ACTIVE\tactive\nT3CODE_LIMIT_RESUME\t'TRUE'", "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://bad/path\nMEM_GB\t-1\nVM_CPUS\twrong\nDISK_PCT\t101%\nOPENCODE_BACKGROUND_WATCHER\tfalse", "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://host\nT3CODE_HTTPS_PORT\t\nMEM_GB\t0x10\nPROJECTS\ta,a\nUBUNTU\told\nUBUNTU\t24.04"];
   return texts.flatMap(input=>[null,"vm.example","::1"].map(host=>{const map=m.parseProbe(input);return{input,host,map,output:m.toState(map,{host})};}));
 }
 function usageParsing() {
- const m=require("../src/usage"); const rows=[];
+ const m=usage; const rows=[];
  for(const input of [null,{}, {tools:{claude:{error:0,totals:{totalTokens:123}}}}, {tools:{}},{tools:{claude:{totals:{totalTokens:12345,totalCost:12.34}},codex:{totals:{totalTokens:"2000000",costUSD:2000.1}},opencode:{totals:{totalTokens:42,totalCost:-1}}}},{tools:{claude:{error:"no",totals:{totalTokens:1}},codex:{totals:{totalTokens:0}},opencode:{totals:{totalTokens:"bad"}}}}]) rows.push({kind:"parse",input,output:m.parseUsage(input)});
  for(const input of [0,-1,1,999,1000,1500,999999,1000000,1e9,1234.567,1.005,2.675])rows.push({kind:"format",input,tokens:m.formatTokens(input),cost:m.formatCost(input)});
  return rows;
 }
 function updatesPlanning() {
- const m=require("../src/updates");const rows=[];
+ const m=updates;const rows=[];
  for(const raw of [{},{installedCommit:false,constructRepo:0,constructRef:false,provisionedCommit:0},{installedCommit:"abcdef1234",provisionedCommit:"old",constructRef:"dev",constructRepo:"owner/repo"}])for(const state of [null,{provisionedCommit:"abcdef1234"},{provisionedCommit:"1234567"}])for(const guest of [null,"ABCDEF1234","bad"]){const markers=m.readMarkers(raw,state);rows.push({kind:"markers",raw,state,guest,markers,stale:m.isProvisionStale(markers,guest),effective:m.effectiveProvisionedCommit(markers,guest),args:m.constructRefreshArgs(markers)});}
  for(const input of [null,{}, {notFound:true},{ahead_by:0},{ahead_by:5},{ahead_by:-1},{ahead_by:"4"}]) rows.push({kind:"compare",input,output:m.constructUpdateFromCompare(input)});
  for(const latest of ["1.2.3","1.3.0","1.2.3-nightly.2.1","1.2.3-beta.2","bad"])for(const installed of ["1.2.3","1.2.2","1.2.3-nightly.1.9","1.2.3-beta.1","bad"])rows.push({kind:"version",latest,installed,newer:m.isNewer(latest,installed),nightly:m.isNewerNightly(latest,installed)});
  return rows;
 }
 function remoteIdentity() {
- const m=require("../src/remotehost");const rows=[];
+ const m=remotehost;const rows=[];
  for(const input of [null,{}, {sshHost:"host",sshPort:"1e3"},{sshHost:"host",sshPort:true},{sshHost:"host",sshPort:65536},{sshHost:"host",sshPort:"2222",publicHost:"web"}])rows.push({kind:"endpoint",input,output:m.readEndpoint(input)});
  for(const input of ["host.example","HTTPS://HOST.EXAMPLE/path","https://host:443","http://localhost:8080","https://[::1]:7462","https://[2001:db8::1]:7443"]) rows.push({kind:"url",input,normalized:m.normalizeServiceUrl(input),slug:m.hostSlug(input),pin:m.pinPath(input,{LOCALAPPDATA:"/local"})});
  for(const input of [null,"", "ab".repeat(32),"AB:".repeat(31)+"AB","aa".repeat(31),"zz".repeat(32)]) rows.push({kind:"fingerprint",input,output:m.formatFingerprint(input)});
  return rows;
 }
 function t3Pure() {
- const m=require("../src/t3code");const rows=[];
+ const m=t3;const rows=[];
  for(const channel of ["stable","nightly","bad"])rows.push({kind:"install",channel,output:m.buildInstallScript(channel)});
  rows.push({kind:"disable",output:m.buildDisableScript()});
  for(const input of [null,"",'{"pairUrl":"https://host/pair?token=example"}','noise {"pairUrl":"https://host"}'])rows.push({kind:"pair",input,output:m.extractPairUrl(input)});
  return rows;
 }
 function remoteRoutes() {
- const m=require("../src/remotehost"), rows=[]; const value="name /?ü";
+ const m=remotehost, rows=[]; const value="name /?ü";
  const calls=[
  ["whoami"],["listVms"],["getVm",value],["getState",value],["getEndpoint",value],["power",value,"start"],["createVm",{name:"dev"}],["deleteVm",value,{force:true}],["getJob",value],["health"],["hostCapabilities"],["vmIdentity",value],["vmCapabilities",value],["hostStatus"],["hostCapacity",true],["hostConfig"],["putHostConfig",{mode:"x"}],["isoCatalog"],
  ["users"],["getUser",value],["createUser",{name:"x"}],["updateUser",value,{role:"admin"}],["deleteUser",value],["userAllowance",value],["putUserAllowance",value,{maxVms:2}],["userTokens",value],["issueUserToken",value,null],["revokeUserToken",value,"id /"],
@@ -161,7 +173,7 @@ function remoteRoutes() {
  return rows;
 }
 async function t3Discovery() {
- const m=require("../src/updates"), rows=[];
+ const m=updates, rows=[];
  const hash="a".repeat(64), other="b".repeat(64);
  const assets=["manifest.json","SHA256SUMS","T3Code-Construct-Setup.exe","t3code-server-linux-x64.tar.gz"].map(name=>({name}));
  const release={draft:false,prerelease:true,tag_name:"t3-1.2.3-nightly.1.2-"+hash,published_at:"2026-09-11",assets};
@@ -177,7 +189,7 @@ function forwardRuntime() {
   const rows = [];
   const add = (kind, input, output) => {
     rows.push({kind, input, output});
-    if (kind === "snapshot") rows.push({kind:"panel", input:output, output:require("../src/forwarder-ui").toPanelForwards(output)});
+    if (kind === "snapshot") rows.push({kind:"panel", input:output, output:forwarderui.toPanelForwards(output)});
   };
   const ids = ["a", "child-2", "../bad", "", "x".repeat(129)];
   const documents = [null, {}, {v:2,id:"a",vmPort:80}, {v:1,id:"b",vmPort:80}];
@@ -214,8 +226,7 @@ function forwardRuntime() {
   return rows;
 }
 function notifyRuntime() {
-  const rows = [];
-  const add=(kind,input,output)=>rows.push({kind,input,output});
+  const { rows, add } = rowList();
   for(const dir of ["/run/construct/notify","/tmp/a'b"]) {
     add("claim",dir,notify.buildClaimScript(dir)); add("watch",dir,notify.buildWatchScript({dir}));
   }
@@ -233,7 +244,7 @@ function notifyRuntime() {
   return rows;
 }
 function audioRuntime() {
-  const rows=[];const add=(kind,input,output)=>rows.push({kind,input,output});
+  const { rows, add } = rowList();
   for(const text of ["","#!/bin/bash\necho 'ü'\n"])
     for(const port of [0,8767,65535,-1]) for(const count of [0,8,17]) {
       add("enable",{text,port,count},audio.buildEnableScript(text,text,port,count));
@@ -257,7 +268,7 @@ function audioRuntime() {
   return rows;
 }
 function repatchRuntime() {
-  const r=require("../src/repatch"); const rows=[];const add=(kind,input,output)=>rows.push({kind,input,output});
+  const r=require("../src/repatch"); const { rows, add } = rowList();
   for(const partial of [null,"stock","patched","unknown","absent"]) for(const gate of [null,"stock","patched","unknown","absent"]) {
     const status={partial,gate};
     const stdout=(partial?"CONSTRUCT_PARTIAL_STATUS="+partial+"\n":"")+(gate?"CONSTRUCT_GATE_STATUS="+gate+"\n":"");
@@ -272,11 +283,12 @@ function repatchRuntime() {
 }
 function configSync() {
   const c = require('../src/configsync');
-  const rows = [];
-  const add = (kind, input, output) => rows.push({kind, input, output});
+  const { rows, add } = rowList();
   for (const name of ['', 'vm', 'VM', 'main', 'master', 'HEAD', 'WORK', 'vm-other', 'CON.txt', 'con-work', 'a..b', 'a.lock', 'a.', 'topic/x', 'topic/.hidden', '-bad']) {
     add('vmBranch', name, c.isValidVmBranch(name)); add('publishBranch', name, c.isValidPublishBranch(name)); add('safeName', name, c.isSafeProfileName(name));
   }
+  // Edge whitespace follows String.prototype.trim (U+FEFF trimmed, U+0085 not), which the C# port must mirror.
+  for (const name of [' ', '\u0085', '\ufeff', '\u0085x', 'x\u0085', '\ufeffx', 'x\ufeff', '\u3000x', 'x\u3000', 'a b']) add('safeName', name, c.isSafeProfileName(name));
   for (const url of ['', ' https://alice:fixture-secret@host/x ', 'https://alice@host/x', 'ssh://git@host/x', 'git@host:x', '--upload-pack=x', 'https://ggpat_fixture@host/x', 'https://gitgud-project.long.name@host/x']) {
     add('credentials', url, c.urlHasCredentials(url)); add('url', url, c.validateConfigRemoteUrl(url, require('../src/remote').isLikelyGitUrl)); add('redact', url, c.redactGitOutput(url)); add('slug', url, c.remoteSlug(url));
   }
@@ -309,14 +321,8 @@ function configSync() {
   add('manifest',manifestInput,JSON.stringify(c.publishManifestEntry(manifestInput),null,2)+'\n');
   return rows;
 }
-function sortKeys(value) {
-  if (Array.isArray(value)) return value.map(sortKeys);
-  if (value && typeof value === "object") return Object.fromEntries(Object.keys(value).sort().map(key => [key, sortKeys(value[key])]));
-  return value;
-}
-function serialize(value) { return JSON.stringify(sortKeys(value), null, 2) + "\n"; }
 async function agentUpdates() {
- const m=require("../src/updates"),rows=[];
+ const m=updates,rows=[];
  for(const id of ["claude-code","codex","opencode","t3code"])for(const channel of id==="t3code"?["stable","nightly"]:[null])for(const scenario of ["new","same","old","invalid","missing"]){
   const nightly=channel==="nightly"; const version=nightly?"1.2.3-nightly.1.2":"1.2.3";
   const latest=scenario==="new"?(nightly?"1.2.3-nightly.2.1":"1.3.0"):scenario==="same"?version:scenario==="old"?(nightly?"1.2.3-nightly.1.1":"1.2.2"):"invalid";
@@ -327,21 +333,21 @@ async function agentUpdates() {
  return rows;
 }
 function agentUpdateScripts() {
- const m=require("../src/updates"),ids=["claude-code","codex","opencode","t3code"];
+ const m=updates,ids=["claude-code","codex","opencode","t3code"];
  return [null,["unknown"],...Array.from({length:16},(_,mask)=>ids.filter((_,i)=>mask&(1<<i)))].map(input=>({input,output:m.buildAgentUpdateScript(input)}));
 }
 function usageExports() {
- const m=require("../src/usage"),savedAt="2026-09-11T12:00:00.000Z";
+ const m=usage,savedAt="2026-09-11T12:00:00.000Z";
  return [JSON.stringify({report:"daily🧱\u2028",tools:{claude:{totals:{totalTokens:1234,totalCost:1.23},note:"\u001f"}}}),"invalid",null].map(input=>({input,savedAt,output:m.buildExportPayload(input,{savedAt})}));
 }
 function instanceFingerprints() {
- const m=require("../src/instances");return ["1e3",0,"bad",true].map(port=>{const input={...m.deriveDefaults("dev",{}),sshPort:port,service:{url:42,auth:false}};return{input,output:m.targetFingerprint(input)};});
+ const m=instances;return ["1e3",0,"bad",true].map(port=>{const input={...m.deriveDefaults("dev",{}),sshPort:port,service:{url:42,auth:false}};return{input,output:m.targetFingerprint(input)};});
 }
 function stateJsonBytes() {
  return [{z:"🧱ü\u2028",a:"\u0001\n\t\\\""},{values:[1e-7,1e-6,1e20,1e21,-0,1.0,123.45]}, {"10":"ten","2":"two",version:1,instance:"dev"}].map(value=>{const input=sortKeys(value);return{input,output:JSON.stringify(input,null,2)+"\n"};});
 }
 function hostAdminIpc() {
- const m=require("../src/hostadmin"), f=require("../src/forwarder-ui"), rows=[], now=Date.parse("2026-09-11T12:00:00Z");
+ const m=require("../src/hostadmin"), f=forwarderui, rows=[], now=Date.parse("2026-09-11T12:00:00Z");
  const add=(kind,input,output)=>rows.push({kind,input,output,now});
  for(const input of [null,{}, {repos:[]},{repos:[{url:"https://example.test/a.git"}]},{repos:[{url:"git@host:repo.git"}]},{repos:[{directory:"a/b",url:"x"}]},{repos:[{directory:"../escape",url:"x"}]},{repos:[{directory:"a#b",url:"x"}]},{repos:[{url:"a"},{url:"b"}]}])add("projectOpenPath",input,require("../src/remote").projectOpenPath(input));
  for(const code of ["cascade-confirmation-required","cascade-scope-changed","cascade-token-expired","other"])for(const status of [409,400]) add("cascadeKind",{code,status},m.cascadeKindOf({code,status}));
@@ -418,9 +424,43 @@ function integrationSettings() {
     return rows;
   } finally { fs.rmSync(root, {recursive:true}); }
 }
-async function exportAll() { return { "refresh-cache": refreshCachePolicy(), "integration-settings": integrationSettings(), "desktop-webviews": desktopWebviews(), "hostadmin-ipc": hostAdminIpc(), "config-sync": configSync(), "notify-runtime": notifyRuntime(), "audio-runtime": audioRuntime(), "repatch-runtime": repatchRuntime(), "forward-runtime": forwardRuntime(), "guest-scripts": guestScripts(), "ssh-args": sshArgs(), "host-label": hostLabel(), "shell-quoting": shellQuoting(), "settings-mapping": settingsMapping(), "instance-identity": instanceIdentity(), "registry-state": registryState(), "lifecycle-invocations": lifecycleInvocations(), "lifecycle-launches": lifecycleLaunches(), "vm-power": vmPower(), "probe-parsing": probeParsing(), "usage-parsing": usageParsing(), "updates-planning": updatesPlanning(), "remote-identity": remoteIdentity(), "t3-pure": t3Pure(), "remote-routes": remoteRoutes(), "t3-discovery": await t3Discovery(), "state-json-bytes": stateJsonBytes(), "agent-updates": await agentUpdates(), "agent-update-scripts": agentUpdateScripts(), "usage-exports": usageExports(), "instance-fingerprints": instanceFingerprints() }; }
+async function exportAll() {
+  return {
+    "refresh-cache": refreshCachePolicy(),
+    "integration-settings": integrationSettings(),
+    "desktop-webviews": desktopWebviews(),
+    "hostadmin-ipc": hostAdminIpc(),
+    "config-sync": configSync(),
+    "notify-runtime": notifyRuntime(),
+    "audio-runtime": audioRuntime(),
+    "repatch-runtime": repatchRuntime(),
+    "forward-runtime": forwardRuntime(),
+    "guest-scripts": guestScripts(),
+    "ssh-args": sshArgs(),
+    "host-label": hostLabel(),
+    "shell-quoting": shellQuoting(),
+    "settings-mapping": settingsMapping(),
+    "instance-identity": instanceIdentity(),
+    "registry-state": registryState(),
+    "lifecycle-invocations": lifecycleInvocations(),
+    "lifecycle-launches": lifecycleLaunches(),
+    "vm-power": vmPower(),
+    "probe-parsing": probeParsing(),
+    "usage-parsing": usageParsing(),
+    "updates-planning": updatesPlanning(),
+    "remote-identity": remoteIdentity(),
+    "t3-pure": t3Pure(),
+    "remote-routes": remoteRoutes(),
+    "t3-discovery": await t3Discovery(),
+    "state-json-bytes": stateJsonBytes(),
+    "agent-updates": await agentUpdates(),
+    "agent-update-scripts": agentUpdateScripts(),
+    "usage-exports": usageExports(),
+    "instance-fingerprints": instanceFingerprints(),
+  };
+}
 if (require.main === module) (async () => {
   fs.mkdirSync(directory, { recursive: true });
   for (const [area, value] of Object.entries(await exportAll())) fs.writeFileSync(path.join(directory, area + ".json"), serialize(value));
 })().catch(error => { console.error(error); process.exitCode = 1; });
-module.exports = { guestScripts, sshArgs, hostLabel, shellQuoting, exportAll, serialize, directory };
+module.exports = { exportAll, serialize, directory };

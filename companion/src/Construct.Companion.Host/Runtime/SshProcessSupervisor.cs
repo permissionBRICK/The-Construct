@@ -70,8 +70,8 @@ public sealed class SshProcessSupervisor(IClock clock) : IRuntimeProcesses
                         await attempt.CancelAsync().ConfigureAwait(false);
                         if (child is not null)
                         {
-                            try { await child.DisposeAsync().ConfigureAwait(false); } catch { }
-                            try { await child.Completion.ConfigureAwait(false); } catch { }
+                            try { await child.DisposeAsync().ConfigureAwait(false); } catch { } // see IgnoreAsync
+                            await IgnoreAsync(child.Completion).ConfigureAwait(false);
                         }
                         await IgnoreAsync(stdout).ConfigureAwait(false); await IgnoreAsync(stderr).ConfigureAwait(false); await IgnoreAsync(heartbeat).ConfigureAwait(false);
                     }
@@ -101,6 +101,7 @@ public sealed class SshProcessSupervisor(IClock clock) : IRuntimeProcesses
         { await foreach (var chunk in source.WithCancellation(token).ConfigureAwait(false)) await consume(chunk).ConfigureAwait(false); }
         private static async Task FaultOnly(Task task, CancellationToken token)
         { await task.ConfigureAwait(false); await Task.Delay(Timeout.Infinite, token).ConfigureAwait(false); }
+        // Attempt cleanup: faults were already turned into the "failed" state above.
         private static async Task IgnoreAsync(Task task) { try { await task.ConfigureAwait(false); } catch { } }
         public async ValueTask DisposeAsync() { await stop.CancelAsync().ConfigureAwait(false); await run.ConfigureAwait(false); }
     }

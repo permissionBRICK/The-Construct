@@ -8,7 +8,6 @@ public static partial class HostAdminViews
 {
     private static JsonNode? Copy(JsonNode? n) => n?.DeepClone();
     private static JsonArray Array(JsonNode? n) => n as JsonArray ?? [];
-    private static double? Number(JsonNode? n) => n is null || Text(n) == "" ? null : double.IsFinite(StateJson.CoerceNumber(n)) ? StateJson.CoerceNumber(n) : null;
     private static string N(double n) => n.ToString(CultureInfo.InvariantCulture);
     private static string Default(JsonNode? n, string fallback) => Text(n) is { Length: > 0 } s ? s : fallback;
     private static double Round(double n) => Math.Floor(n + .5);

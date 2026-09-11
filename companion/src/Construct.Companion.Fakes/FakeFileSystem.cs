@@ -2,10 +2,15 @@ using Construct.Companion.Core.Abstractions;
 
 namespace Construct.Companion.Fakes;
 
-public sealed class FakeFileSystem : IFileSystem
+// Write timestamps come from the clock when one is given (the config-sync lock TTL reads them);
+// without a clock, files not listed in Modified read as the Unix epoch.
+public sealed class FakeFileSystem(IClock? clock = null) : IStateFileSystem
 {
     private readonly object gate = new();
     public Dictionary<FileSystemRoot, string> Roots { get; } = [];
+    public Dictionary<string, DateTimeOffset> Modified { get; } = new(StringComparer.OrdinalIgnoreCase);
+    // When set, every write throws it (a read-only or ACL-denied state directory).
+    public Exception? WriteFailure { get; set; }
     private readonly Dictionary<string, byte[]> files = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> directories = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<(string Directory, Action Changed)> watches = [];
@@ -16,7 +21,8 @@ public sealed class FakeFileSystem : IFileSystem
     public byte[]? ReadFile(string path) { lock (gate) return files.TryGetValue(Key(path), out var value) ? value.ToArray() : null; }
     public void WriteFileAtomic(string path, ReadOnlySpan<byte> contents)
     {
-        var key = Key(path); lock (gate) { CreateDirectory(Parent(key)); files[key] = contents.ToArray(); } Changed(key);
+        if (WriteFailure is { } failure) throw failure;
+        var key = Key(path); lock (gate) { CreateDirectory(Parent(key)); files[key] = contents.ToArray(); if (clock is not null) Modified[path] = clock.UtcNow; } Changed(key);
     }
     public void DeleteFile(string path) { bool removed; lock (gate) removed = files.Remove(Key(path)); if (removed) Changed(Key(path)); }
     public void CreateDirectory(string path)
@@ -26,6 +32,21 @@ public sealed class FakeFileSystem : IFileSystem
     }
     public IReadOnlyList<string> EnumerateFiles(string directory) { lock (gate) return files.Keys.Where(p => string.Equals(Parent(p), Key(directory), StringComparison.OrdinalIgnoreCase)).Order().ToArray(); }
     public IReadOnlyList<string> EnumerateDirectories(string directory) { lock (gate) return directories.Where(p => string.Equals(Parent(p), Key(directory), StringComparison.OrdinalIgnoreCase)).Order().ToArray(); }
+    public bool DirectoryExists(string path) { lock (gate) return directories.Contains(Key(path)); }
+    public DateTimeOffset? LastWriteTime(string path) => FileExists(path) ? Modified.GetValueOrDefault(path, clock?.UtcNow ?? DateTimeOffset.UnixEpoch) : null;
+    public bool WriteFileIfAbsent(string path, ReadOnlySpan<byte> contents)
+    {
+        lock (gate) { if (FileExists(path)) return false; WriteFileAtomic(path, contents); return true; }
+    }
+    public void DeleteDirectory(string path)
+    {
+        var key = Key(path);
+        lock (gate)
+        {
+            foreach (var file in files.Keys.Where(p => p.StartsWith(key + "/", StringComparison.OrdinalIgnoreCase)).ToArray()) files.Remove(file);
+            directories.RemoveWhere(p => p.Equals(key, StringComparison.OrdinalIgnoreCase) || p.StartsWith(key + "/", StringComparison.OrdinalIgnoreCase));
+        }
+    }
     public IDisposable Watch(string directory, Action changed)
     {
         var watch = (Key(directory), changed); lock (gate) watches.Add(watch); return new Subscription(() => { lock (gate) watches.Remove(watch); });

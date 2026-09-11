@@ -10,18 +10,18 @@ public sealed class PopupGesture
     private bool show;
     public void FocusLost(bool leftButtonOnTray)
     {
-        if (!leftButtonOnTray) { dismissedBeforePress=false; return; }
-        if (pressActive) show=false;
-        else dismissedBeforePress=true;
+        if (!leftButtonOnTray) { dismissedBeforePress = false; return; }
+        if (pressActive) show = false;
+        else dismissedBeforePress = true;
     }
     public void Press(bool popupVisible)
     {
-        show=!popupVisible && !dismissedBeforePress;
-        dismissedBeforePress=false; pressActive=true;
+        show = !popupVisible && !dismissedBeforePress;
+        dismissedBeforePress = false; pressActive = true;
     }
     public bool Click()
     {
-        var result=show; Reset(); return result;
+        var result = show; Reset(); return result;
     }
-    public void Reset() { pressActive=false; dismissedBeforePress=false; show=false; }
+    public void Reset() { pressActive = false; dismissedBeforePress = false; show = false; }
 }

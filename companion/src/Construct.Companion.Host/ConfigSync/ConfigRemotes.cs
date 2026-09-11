@@ -47,7 +47,7 @@ public sealed class ConfigRemotes(ConfigRepository repo, string stagingRoot)
     }
     public IReadOnlyList<ImportCandidate> ListImportCandidates(string directory)
     {
-        var useProjects = repo.Storage.DirectoryExists(Path.Combine(directory,"projects")); var scan = useProjects ? Path.Combine(directory,"projects") : directory;
+        var useProjects = repo.Files.DirectoryExists(Path.Combine(directory,"projects")); var scan = useProjects ? Path.Combine(directory,"projects") : directory;
         return repo.Files.EnumerateFiles(scan).Where(p=>p.EndsWith(".json",StringComparison.OrdinalIgnoreCase)).Select(p=>new ImportCandidate(Path.GetFileNameWithoutExtension(p),(useProjects ? "projects/" : "")+Path.GetFileName(p))).Where(c=>!ConfigSyncRules.IsReserved(c.Name) && ConfigSyncRules.IsSafeProfileName(c.Name)).ToArray();
     }
     public async Task<CloneResult> EnsureStagingCloneAsync(string url, CancellationToken ct = default)
@@ -68,7 +68,7 @@ public sealed class ConfigRemotes(ConfigRepository repo, string stagingRoot)
     public async Task<CloneResult> EnsurePublishCloneAsync(string url, CancellationToken ct = default)
     {
         var dir = CloneDirectory(url); var marker = Path.Combine(dir,".git",PendingMarker);
-        if (repo.Storage.DirectoryExists(Path.Combine(dir,".git")))
+        if (repo.Files.DirectoryExists(Path.Combine(dir,".git")))
         {
             var set = await Git.RunAsync(dir,["remote","set-url","origin",url],cancellationToken:ct);
             if (set.Code != 0) { var add = await Git.RunAsync(dir,["remote","add","origin",url],cancellationToken:ct); if (add.Code != 0) return new(false,dir,Output:Safe(set.Stderr+"\n"+add.Stderr)); }
@@ -81,7 +81,7 @@ public sealed class ConfigRemotes(ConfigRepository repo, string stagingRoot)
         repo.Files.CreateDirectory(Path.GetDirectoryName(dir)!);
         var clone = await Git.RunAsync(Path.GetDirectoryName(dir)!,["clone",url,Path.GetFileName(dir)],network:true,cancellationToken:ct);
         if (clone.Code == 0) return new(true,dir);
-        repo.Storage.DeleteDirectory(dir); repo.Files.CreateDirectory(dir);
+        repo.Files.DeleteDirectory(dir); repo.Files.CreateDirectory(dir);
         var init = await Git.RunAsync(dir,["init"],cancellationToken:ct); if (init.Code != 0) return new(false,dir,Output:Safe(clone.Stderr+"\n"+init.Stderr));
         var remote = await Git.RunAsync(dir,["remote","add","origin",url],cancellationToken:ct); if (remote.Code != 0) return new(false,dir,Output:Safe(remote.Stderr));
         repo.WriteText(marker,PendingSentinel); return new(true,dir,true);
@@ -144,7 +144,7 @@ public sealed class ConfigRemotes(ConfigRepository repo, string stagingRoot)
             var r = await Git.RunAsync(temp,["merge-file","-p",Path.Combine(temp,"ours"),Path.Combine(temp,"base"),Path.Combine(temp,"theirs")],cancellationToken:ct);
             return new(r.Code == 0,r.Code == 0 ? r.Stdout : null,r.Code > 0);
         }
-        finally { repo.Storage.DeleteDirectory(temp); }
+        finally { repo.Files.DeleteDirectory(temp); }
     }
     public async Task<PushResult> PushUpstreamAsync(string dir, IEnumerable<UpstreamFile> files, string branch, string? message = null, CancellationToken ct = default)
     {

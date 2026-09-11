@@ -10,6 +10,7 @@ using Construct.Companion.Fakes;
 using Construct.Companion.Host.Composition;
 using Construct.Companion.Host.Desktop;
 using Construct.Companion.Host.Ipc;
+using Construct.Companion.Host.Runtime;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -61,19 +62,14 @@ public sealed class CompositionAdapterTests
         Assert.True(result!["notFound"]!.GetValue<bool>());
     }
     [Fact]
-    public async Task SharedDesktopSettingsPreserveBoundsAndClampIpcValues()
+    public async Task DesktopAndIpcShareOneSettingsStore()
     {
-        SettingsStore? store = null;
-        await using var h = await Harness.Start(s =>
-        {
-            var files = (IFileSystem)s.Last(d => d.ServiceType == typeof(IFileSystem)).ImplementationInstance!;
-            store = new(files, "/fake/local/The-Construct/companion/settings.json"); s.AddSingleton(store);
-        });
+        await using var h = await Harness.Start(); var store = h.App.Services.GetRequiredService<IpcSettings>();
         using var stream = await h.Client.GetAsync("/v1/events",HttpCompletionOption.ResponseHeadersRead);
         using var reader = new StreamReader(await stream.Content.ReadAsStreamAsync()); await reader.ReadLineAsync(); await reader.ReadLineAsync();
-        store!.SaveBounds("panel", new(1,2,300,400));
-        var published = await Until(reader, d => d["type"]?.GetValue<string>() == "settings");
-        Assert.NotNull(published["settings"]?["windows"]?["panel"]);
+        store.SaveBounds("panel", new(1,2,300,400));
+        var published = await Until(reader, d => d["type"]?.GetValue<string>() == "settings" && d["settings"]?["windows"]?["panel"] is not null);
+        Assert.Equal(300, published["settings"]!["windows"]!["panel"]!["width"]!.GetValue<int>());
         var changes = 0; store.Changed += _ => changes++;
         using var response = await h.Client.PutAsJsonAsync("/v1/settings", new { repatchDelaySeconds = 1000, uiTheme = "native" });
         response.EnsureSuccessStatusCode(); Assert.Equal(600, store.Read().RepatchDelaySeconds);
@@ -112,7 +108,7 @@ public sealed class CompositionAdapterTests
     public async Task DesktopWatcherSeesNestedSettingsReplacement()
     {
         var root = Path.Combine(Path.GetTempPath(),"companion-watch-"+Guid.NewGuid().ToString("N"));
-        var files = new DesktopFileSystem(); files.CreateDirectory(Path.Combine(root,"companion"));
+        var files = new HostFileSystem(); files.CreateDirectory(Path.Combine(root,"companion"));
         var changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         try
         {

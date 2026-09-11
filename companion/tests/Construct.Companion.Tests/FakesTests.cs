@@ -132,7 +132,7 @@ public sealed class FakesTests
     {
         var registry = new FakeRegistry(); registry.WriteString(@"Software\Classes\construct", null, "URL"); registry.WriteString(@"Software\Classes\construct\shell", "command", "exe");
         Assert.Equal("URL", registry.ReadString(@"software\classes\construct", ""));
-        registry.DeleteTree(@"Software\Classes\construct"); Assert.Null(registry.ReadString(@"Software\Classes\construct\shell", "command"));
+        registry.DeleteValue(@"Software\Classes\construct\shell", "command"); Assert.Null(registry.ReadString(@"Software\Classes\construct\shell", "command"));
     }
 
     [Fact]

@@ -29,11 +29,6 @@ public sealed record CompanionState(string? ActiveInstance, IReadOnlyList<string
 public sealed record Snapshot(JsonElement? State, JsonElement? Settings, JsonElement? Audio,
     JsonElement? Forwards, JsonElement? Children, JsonElement? IdlePolicy, JsonElement? HostAdminOffer);
 public sealed record InstanceMessage(string Instance, JsonElement Message);
-public sealed record HostAdminMessage(string Host, JsonElement Message);
-public sealed record CompanionEvent(string Type)
-{
-    [JsonExtensionData] public Dictionary<string, JsonElement> Data { get; init; } = [];
-}
 public sealed record AcceptedResponse(bool Accepted = true);
 public sealed record RemoteHost(string Slug, string Url, string Auth, bool Pinned, bool? Admin);
 public sealed record AddRemoteHost(string Url, string? Token = null, string? Fingerprint = null)

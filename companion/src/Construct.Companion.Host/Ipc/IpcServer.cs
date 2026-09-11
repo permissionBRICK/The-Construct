@@ -30,7 +30,7 @@ public static class IpcServer
         var files = app.Services.GetRequiredService<IFileSystem>();
         var clock = app.Services.GetRequiredService<IClock>();
         var settings = app.Services.GetRequiredService<IpcSettings>();
-        var backend = app.Services.GetRequiredService<IIpcBackend>();
+        var backend = app.Services.GetRequiredService<CompanionBackend>();
         var events = app.Services.GetRequiredService<IpcEvents>();
         var logs = app.Services.GetRequiredService<IpcLogs>();
         var desktop = app.Services.GetRequiredService<ICompanionDesktop>();
@@ -67,7 +67,11 @@ public static class IpcServer
             catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested) { }
             catch (IpcFailure e) when (!ctx.Response.HasStarted) { await ProblemAsync(ctx, e.Status, e.Code, e.Message); }
             catch (Exception e) when (!ctx.Response.HasStarted)
-            { logs.Failure("IPC request", e); await ProblemAsync(ctx, e is JsonException or Microsoft.AspNetCore.Http.BadHttpRequestException ? 400 : 500, e is JsonException or Microsoft.AspNetCore.Http.BadHttpRequestException ? "invalidRequest" : "operationFailed", e is JsonException or Microsoft.AspNetCore.Http.BadHttpRequestException ? "A JSON object is required." : "The operation failed. See Companion diagnostics."); }
+            {
+                logs.Failure("IPC request", e);
+                var malformed = e is JsonException or Microsoft.AspNetCore.Http.BadHttpRequestException;
+                await ProblemAsync(ctx, malformed ? 400 : 500, malformed ? "invalidRequest" : "operationFailed", malformed ? "A JSON object is required." : "The operation failed. See Companion diagnostics.");
+            }
         });
         app.MapGet("/v1/health", () => Json(new Health(true, version, pid, startedAt)));
         app.MapGet("/v1/state", async (CancellationToken ct) => Json(await backend.StateAsync(ct)));
