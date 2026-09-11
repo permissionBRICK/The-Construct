@@ -48,6 +48,10 @@ public sealed class RuntimeProcessRunner : IProcessRunner
                 RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true };
             if (invocation.WorkingDirectory is not null) info.WorkingDirectory = invocation.WorkingDirectory;
             foreach (var arg in invocation.Arguments) info.ArgumentList.Add(arg);
+            if (invocation.EnvironmentOverrides is { } overrides)
+                foreach (var pair in overrides)
+                    if (pair.Value is null) info.Environment.Remove(pair.Key);
+                    else info.Environment[pair.Key] = pair.Value;
             process = new Process { StartInfo = info };
             try { process.Start(); }
             catch { process.Dispose(); throw new InvalidOperationException("Could not start runtime child process."); }

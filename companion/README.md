@@ -1,6 +1,7 @@
 # Construct Companion
 
-Per-user Windows host agent: S1 scaffold plus the S2a state, runtime and config-sync packages. The frozen design
+Per-user Windows host agent: S1 scaffold plus the S2a state, runtime and config-sync
+packages, with the extension client in `extension/src/companion.js`. The frozen design
 is [construct-companion.md](../docs/plans/construct-companion.md). HTTP IPC, Windows
 platform adapters, and webview dispatch remain with subsequent work packages.
 
@@ -71,19 +72,25 @@ Run at most one dotnet build/test at a time. The app compiles on Linux using
 `EnableWindowsTargeting`; its WebView2 WPF assembly is explicitly excluded because this
 WinForms app does not use WPF and that reference otherwise produces MSB3277.
 Tests use xUnit 2.9.3, Test SDK 17.14.1 and the VS runner 3.1.4, matching the service.
-No Windows runtime execution has been performed for S1 or S2a runtime. Tray visibility, second-process
-quit, and redirected console output still require Windows field validation.
+No Windows runtime execution has been performed. Tray visibility, second-process quit,
+and redirected console output still require Windows field validation.
 
-The known baseline `configsync.test.js` failure is a bare test remote whose default branch
-has no valid HEAD. Retry environment-sensitive Node failures with inherited
+The S2a extension branch pins the Node config-sync bare test remotes to `main`, fixing
+the baseline invalid-HEAD test dependency. Retry environment-sensitive Node failures with inherited
 `CONSTRUCT_SERVICE_URL`, `CONSTRUCT_SERVICE_CA_FILE`, `CONSTRUCT_EXTERNAL_HOST`,
 `CONSTRUCT_EXTERNAL_SSH_PORT`, `CONSTRUCT_INSTANCE_NAME`, and `CONSTRUCT_T3_VOICE_INPUT` unset.
-Both the Node and PowerShell config-sync suites pass when their child Git processes also
-use `init.defaultBranch=main` (a process-local `GIT_CONFIG_COUNT` override; no global config
+The PowerShell config-sync suite still needs child Git processes to use
+`init.defaultBranch=main` (a process-local `GIT_CONFIG_COUNT` override; no global config
 change). The full S1 regression run additionally reproduced two existing failures on the
 untouched starting commit `4dbb0ea`: `contracts-compile.test.sh` disagrees with the frozen
 `HypervisorVmInfo` signature (4/5 checks pass), and `idle-report.test.sh` fails three
 service-key assertions (100/103 pass). These files and their production code are unchanged.
+
+The [stage 2 integration report](../docs/plans/construct-companion-stage-2-integration.md)
+records the combined validation: 4,332 Companion tests, 1,261 service tests, all 31 Node
+suites, all 27 PowerShell suites after the documented retry, and 20/22 Bash suites.
+The same two baseline Bash defects remain. All 4,192 parity rows in 27 areas regenerate
+without drift. Both runtime/config-sync registration orders preserve temporary Git indexes.
 
 ## Shared scripts and parity
 
@@ -103,8 +110,10 @@ node extension/test/export-parity-fixtures.js
 ```
 
 One exported function owns each area: guest scripts, SSH argv, host-label matrix, shell
-quoting, state/lifecycle decisions, config-sync planners/scripts/sharing, forward runtime, notification runtime, audio runtime, and repatch runtime. Fixtures live in `test/fixtures/companion-parity/*.json`. SSH fixture key paths use
-an explicit `/fixture/home` root rather than the machine's home. JS re-exports in memory and
+quoting, state/lifecycle decisions, config-sync planners/scripts/sharing, forwards,
+notifications, audio, and repatch. Fixtures live in `test/fixtures/companion-parity/*.json`.
+SSH fixture key paths use an explicit `/fixture/home` root rather than the machine's home.
+JS re-exports in memory and
 diffs the committed bytes; C# consumes the same files copied into test output. Guest tests
 also compare actual JS builder outputs with rendered fixtures. Add future areas to this
 exporter and commit fixture changes with the matching implementations.
