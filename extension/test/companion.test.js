@@ -224,16 +224,18 @@ function extensionHarness(overrides = {}) {
     },
   };
   const context = { subscriptions: [], globalState: state, workspaceState: state, secrets: { get: async () => null }, extensionUri: { fsPath: path.resolve(__dirname, "..") } };
-  const sandbox = { module: { exports: {} }, Buffer, console, process: { ...process, env: {} }, ...timers.timers,
+  const sandbox = { module: { exports: {} }, Buffer, console, process: { ...process, env: {}, ...(overrides.process || {}) }, ...timers.timers,
     require: id => id === "vscode" ? vscode : overrides.modules && overrides.modules[id] || realRequire(id), __dirname: path.dirname(filename) };
   vm.runInNewContext(fs.readFileSync(filename, "utf8") + `\nmodule.exports.test = {
-    handleMessage, refreshAll, syncAutoRefresh, startNotifyWatch, startForwarder,
+    handleMessage, refreshAll, syncAutoRefresh, startNotifyWatch, startForwarder, runCompanionMigration, deliverNotification,
     requestAudioEnable, scheduleStartupRepatch, runConfigSync, companionPresenceChanged,
     setClient: value => { companionClient = value; },
+    setActiveInstance: value => { activeInstance = () => value; },
     attach: webview => liveWebviews.add(webview),
     setSessions: (forward, audio) => { forwarderSession = forward; hostAudio = audio; },
     state: () => ({ autoRefreshTimer, notifyChild, repatchTimer, configWatcher, hostAudio, forwarderSession }),
     setContext: value => { extensionContext = value; },
+    holdDetection: ready => { companionStarting = true; companionReady = ready.then(() => { companionStarting = false; }); },
   };`, sandbox, { filename });
   return { extension: sandbox.module.exports, context, timers, commands, webviews, warnings, config, changed: () => configurationChanged({ affectsConfiguration: name => name === "construct.uiTheme" }) };
 }
@@ -245,7 +247,10 @@ test("actual extension activation with Companion starts no fallback jobs; editor
   await h.extension.activate(h.context);
   assert.equal(s.client.status, "alive"); assert.equal(h.timers.jobs.size, 0);
   await h.commands.get("construct.openPanel")();
+  h.extension.test.setActiveInstance({ name: "work-vm", service: { url: "https://host:7443" } });
   await h.commands.get("construct.openHostAdmin")();
+  assert.deepEqual(s.requests.filter(r => r.path === "/v1/ui/activate").at(-1).body, { view: "hostadmin", instance: "work-vm", host: "host_7443" });
+  h.extension.test.setActiveInstance(require("../src/instances").DEFAULT_INSTANCE);
   assert.equal(h.webviews.length, 0);
   h.commands.get("construct.openPanelHere")(); const webview = h.webviews[0];
   await webview.receive({ type: "ready" });
@@ -290,4 +295,46 @@ test("actual extension transitions fallback -> Companion -> grace -> fallback wi
   assert.equal(s.client.status, "absent"); assert.equal(h.timers.jobs.size, 3);
   s.setHealthy(true); await s.client.check();
   assert.equal(s.client.status, "alive"); assert.equal(h.timers.jobs.size, 0);
+});
+
+test("migration runner records argv/stdin and cancels its child on deactivate", async () => {
+  const { EventEmitter } = require("events");
+  const recorded = [];
+  const child = new EventEmitter(); child.stdin = new EventEmitter(); child.stdin.end = input => recorded.push({ input });
+  child.kill = () => { recorded.push({ killed: true }); child.emit("close", -1); };
+  const h = extensionHarness({ modules: { child_process: { spawn: (...args) => { recorded.push(args); return child; } } } });
+  const plan = c.planTokenMigration({ url: "https://host:7443", libPath: "/lib.ps1", env: { LOCALAPPDATA: "/user" } });
+  const promise = h.extension.test.runCompanionMigration(plan.file, plan.args, "private-value");
+  assert.equal(recorded[0][0], "powershell.exe"); assert.deepEqual(recorded[0][1], plan.args);
+  assert.equal(JSON.stringify(recorded[0][2]), JSON.stringify({ windowsHide: true, stdio: ["pipe", "ignore", "ignore"] }));
+  assert.equal(recorded[1].input, "private-value"); assert.equal(JSON.stringify(recorded[0]).includes("private-value"), false);
+  h.extension.deactivate(); assert.equal((await promise).code, -1); assert.equal(h.timers.jobs.size, 0);
+  assert.equal(recorded[2].killed, true);
+  await h.extension.test.runCompanionMigration(plan.file, plan.args, "private-value");
+  assert.equal(recorded.length, 3);
+});
+test("token migration removes URL userinfo and query before building argv", () => {
+  const plan = c.planTokenMigration({ url: "https://user:private-value@host:7443/?token=private-value", libPath: "/lib.ps1", env: { LOCALAPPDATA: "/user" } });
+  assert.equal(plan.args.join(" ").includes("private-value"), false);
+  assert.ok(plan.args.at(-1).includes("-BaseUrl 'https://host:7443'"));
+});
+test("late failed Windows toast cannot fall back to a VS Code notification after handoff", async () => {
+  const { EventEmitter } = require("events");
+  const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+  const h = extensionHarness({ process: { platform: "win32" }, modules: { child_process: { spawn: () => child } } });
+  const pending = h.extension.test.deliverNotification({ level: "warning", title: "test", body: "late" });
+  h.extension.test.setClient({ deferred: true, status: "alive" });
+  child.emit("close", 1); await pending;
+  assert.equal(h.warnings.length, 0); assert.equal(h.timers.jobs.size, 0);
+});
+test("messages posted during startup detection wait and then proxy exactly once", async () => {
+  const h = extensionHarness(); let resolve;
+  h.extension.test.holdDetection(new Promise(r => { resolve = r; }));
+  const calls = [];
+  h.extension.test.setClient({ status: "alive", deferred: true, proxy: async (...args) => calls.push(args) });
+  const message = { type: "saveSettings", form: { mic: true } };
+  const pending = h.extension.test.handleMessage(message, {}, h.context);
+  await tick(); assert.equal(calls.length, 0);
+  resolve(); await pending;
+  assert.equal(calls.length, 1); assert.deepEqual(calls[0], ["agent-vm", message]);
 });
