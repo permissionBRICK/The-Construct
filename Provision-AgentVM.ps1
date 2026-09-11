@@ -3189,8 +3189,8 @@ if ($ServiceUrl) {
     } elseif (Test-HostForwardDenied -Forwards $script:HostForwards -Key 'T3') {
         Write-Host ""
         Write-Host "T3 Code web GUI:" -ForegroundColor White
-        Write-Host "    (none -- the host service does not allow host forwards for this VM's owner)" -ForegroundColor Yellow
-        Write-Host "    Expose it yourself when you need it:  ssh $HostAlias `"construct expose <the T3 port>`"" -ForegroundColor DarkGray
+        Write-Host "    Host forwarding is disabled; T3 pairing will open a client forward instead." -ForegroundColor Yellow
+        Write-Host "    Keep the Construct client connected on this PC, then choose Link in T3 Code." -ForegroundColor DarkGray
     } elseif ($t3ForwardExists) {
         # The forward is real, but the VM advertises no origin on it -- the HTTPS setup did
         # not come up (offline apt, openssl, nginx), so the forwarded TLS port serves

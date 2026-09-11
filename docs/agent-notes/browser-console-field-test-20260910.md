@@ -157,3 +157,21 @@ for the patched asset hash and local test command. No new CI download job was ad
 Activation requires the updated `console-viewer/static` files on the company
 primary VM and a fresh console link/page. A Windows host service update does not
 activate these Linux-served browser assets. Deployment to the company VM is pending.
+
+## Follow-up: shared guest console from another user's primary (2026-09-11)
+
+The viewer could create a console session for a host-shared guest but received
+HTTP 403 at `/sessions/{sid}/connection` through another user's primary gateway.
+An extra ownership check in that endpoint rejected primary tokens for shared
+children after the common ConsoleOperator policy had already authorized them.
+The old viewer labelled this step "Waiting for Windows to grant console access",
+although the rejection occurred before the native Windows grant was attempted.
+
+The connection endpoint now follows the common console sharing policy, including
+principal-bound sessions, enabled users, parent fences, rate limits and renewal
+authorization. Native credentials remain restricted to one VM GUID and stay in
+the trusted primary gateway. CI covers cross-user shared connections and refusal
+after unsharing, owner/gateway disablement, gateway token rotation and parent
+deletion. The viewer's status text now identifies the host request accurately.
+The permission fix needs a host service update; the text change needs updated
+Linux gateway code. This regression has not been field-tested on WS009 here.

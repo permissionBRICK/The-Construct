@@ -67,3 +67,35 @@ Linux/PowerShell 7 and Windows/PowerShell 5.1 (run 34513759658).
 The host release build also passed.
 Activation on main-pc remains through Update Construct; its relay did not respond
 to the final discovery probe.
+
+## Remote host downloads (2026-09-11)
+
+WS009's first remote create stopped reporting after `downloading the source ISO
+from releases.ubuntu.com`. Screenshots confirmed the host catalog had no source,
+no current image, and a zero-byte reserved output. There was no live access to
+measure download speed or establish a network bottleneck. The service's former
+`HttpIsoDownloader` made one HTTP request and silently copied the response body;
+its HttpClient timeout covered header acquisition, with no body idle timeout.
+The client's flashing PowerShell progress was its JSON job polling, not ISO bytes.
+
+The host now compiles the same `lib/Construct.Download.cs` engine used by the local
+installer. The adapter reports progress every two seconds, uses eight streams,
+five-second body idle deadlines and six retries, and propagates job cancellation.
+Existing source checksum validation and atomic cache publication remain in place.
+Source selection, hashing and waiting behind another build report their stages.
+Client API polls suppress PowerShell's unrelated transfer popup. The media panel
+labels empty unpublished catalog reservations `not yet published`.
+
+The original local installer intentionally deletes its downloaded stock Ubuntu
+ISO after building VM-specific media. Conversion reuses a stock ISO if it remains
+and matches the configured release checksum; it does not import a VM-specific
+patched image as generic host media. The first remote create therefore may need
+one host-side download and build. Later creates reuse matching published media;
+rebuilds reuse the stock source cached on the host unless Redownload is requested.
+No Ubuntu ISO is downloaded to or uploaded from the remote install client.
+
+Validation includes real loopback HTTP tests of the host adapter for parallel
+downloads, single-stream fallback, stalled-range resumption, invalid ranges and
+cancellation/cleanup; the existing local downloader fault suite also passes.
+Activation requires updating the Windows host service. An already running create
+continues with its original downloader until it finishes or is cancelled.

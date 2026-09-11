@@ -1,20 +1,52 @@
 # Host releases and deployment
 
+Construct uses one published commit for source, the control panel, and the Windows
+host. Every push to `main` runs `.github/workflows/host-release.yml`: build the
+self-contained Windows x64 executable, package its scripts and the source archive,
+generate the manifest, then publish. **No tests run in GitHub Actions.** Run the
+regression checks locally before pushing. The ISO builder retains its separate
+`config/iso-builder.json` dependency pin.
+
 The per-user tray app ships independently as `companion-<commit>`; see
 [Construct Companion](companion.md) for its installer, package layout and release gates.
 
-Host releases use the immutable tag `host-<40-character commit>` in
-`permissionBRICK/The-Construct`. The workflow runs only on `main`, tests the service,
-publishes the self-contained Windows x64 executable, and packages the matching tracked
-host scripts. The ISO builder retains its separate `config/iso-builder.json` pin.
 
-The two release assets are `construct-host-<commit7>-win-x64.zip` and `manifest.json`. The ZIP contains `service/`,
-`scripts/`, `updater/Update-ConstructHost.ps1`, and `SHA256SUMS`; the manifest is detached
-so its ZIP hash is not circular. The manifest records the main commit, build time,
-package version, hashes, and database/config compatibility. ZIP entries use stored
-compression to guarantee the extraction ratio bound, including unusually compressible
-publish output. `SHA256SUMS` covers every payload file. Releases never include live
-settings, data, private keys, or the separately downloaded ISO executable.
+The immutable tag remains `host-<40-character commit>` for compatibility. Its assets
+are `construct-host-<commit7>-win-x64.zip`, `construct-source-<commit40>.zip`, and
+`manifest.json`. Both the panel and Windows host discover the current release at:
+
+```
+https://github.com/permissionBRICK/The-Construct/releases/latest/download/manifest.json
+```
+
+This direct asset download does not use GitHub's REST API quota. The manifest
+includes the repository, main ref, commit, immutable tag, build time, package
+version, both archive names, sizes and SHA-256 hashes, plus host database/config
+compatibility. Clients validate the identity and use `/releases/download/<tag>/...`
+for subsequent downloads, even when another release becomes latest mid-update.
+Installed source markers come from the downloaded revision or local checkout, never
+from a subsequent remote HEAD lookup. The panel says "update available" without a
+commit count. A hash difference also includes a local development build that differs
+from the published release; it does not establish which commit is newer. Explicit
+non-`main` source refs use manual branch downloads and no automatic main-release offer.
+Forks tracking `main` need their own complete releases using the same workflow.
+
+Publication is serialized across main runs. Assets upload to a draft first; only a
+complete release becomes public, then advances GitHub's latest pointer. Failed builds
+leave the previous release current. Ancestry checks prevent an older queued run or
+manual rerun from replacing a newer release. After a history rewrite, only the current
+main tip may replace an unrelated latest commit. Published assets are never overwritten
+on retry. GitHub may coalesce pending runs during rapid pushes; clients get the newest
+successfully published commit rather than every intermediate push.
+
+The host ZIP contains `service/`, `scripts/`, `updater/Update-ConstructHost.ps1`, and
+`SHA256SUMS`; the detached manifest avoids a circular ZIP hash. Stored compression
+guarantees the host extraction ratio bound. `SHA256SUMS` covers every host payload
+file. The source ZIP uses compressed tracked files and carries `.construct-revision`.
+The control panel packages its VSIX locally without Node or dependency installation.
+Releases never include live settings, data, private keys, or the separately downloaded
+ISO executable. Agent tool version checks (Codex, OpenCode, T3 nightly) are independent
+and can still use their upstream APIs.
 
 Host updates use GitHub Releases over HTTPS, matching the other Construct update paths.
 No signing keys or signing secrets are required on hosts, development VMs or CI.
@@ -23,6 +55,27 @@ Production downloads use the host-local `Constructd:HostAdmin:Updates:Repository
 The manifest identifies the repository, main ref and immutable commit tag. SHA-256
 checks cover the ZIP and every payload file; these checks detect corruption, while
 authenticity relies on HTTPS and control of the configured GitHub repository.
+
+Release-source failures report safe diagnostic codes: `release-source-rate-limited`,
+`release-source-http-<status>`, DNS/TLS/proxy/connection failures, timeout, invalid
+metadata, or asset size mismatch. Check responses include the upstream HTTP status
+and GitHub's rate-limit reset time when supplied. Raw response bodies, exception
+messages and signed asset URLs are never exposed. Staging failures retain their
+actual phase (`check`, `download`, or `verify`). Older builds labelled every staging
+failure `verify`; a blank commit in their failed update row means release selection
+did not complete, not that ZIP verification failed.
+
+To check release connectivity, run on the affected host:
+
+```powershell
+curl.exe -fsSL -D - -o NUL "https://github.com/permissionBRICK/The-Construct/releases/latest/download/manifest.json"
+```
+
+Older clients still query the REST release list until updated once. This checks the
+interactive account's network path; the Windows service can have different proxy
+or certificate settings. Successful access from a development machine does not
+establish access from the affected host. A failure during staging does not replace
+the service or interrupt VMs.
 
 Production apply requires `Constructd:CertThumbprint` for the updater's loopback health
 pin. A host configured only with `CertPath` is refused with
@@ -34,6 +87,7 @@ For a local package, publish to a new directory, then invoke:
 ```powershell
 .\service\host\New-ConstructHostPackage.ps1 -PublishDir C:\Temp\publish `
   -OutputDir C:\Temp\host-release -Commit <commit40>
+python scripts/package-construct-release.py --output C:\Temp\host-release --commit <commit40> --repository permissionBRICK/The-Construct
 ```
 
 The packager uses the current worktree's tracked scripts. A production package must
@@ -54,9 +108,10 @@ current update. Backups are pruned only after successful health verification and
 commit. Keep published GitHub host releases indefinitely by default; if repository
 storage requires manual pruning, keep at least the newest 20 releases and every release
 still installed or referenced by an outstanding staged update. Never delete/rewrite an
-existing `host-<commit>` release to replace its assets. The updater checks the newest 100
-repository releases; pin an available `host-*` release or prune unrelated old releases
-if host releases fall outside that window.
+existing `host-<commit>` release to replace its assets. Explicit recovery pins fetch
+the manifest directly from that immutable tag, with no release-list window. Old
+host-only tags remain usable as explicit pins: the updater obtains their payload
+size through an HTTPS HEAD request when the old manifest omits it.
 
 Recovery files are under `<DataDir>\updates`: `handoff.json` (contains a one-time health
 credential; do not copy it into logs), `last-update.json`, `fence.json`, the staged files,

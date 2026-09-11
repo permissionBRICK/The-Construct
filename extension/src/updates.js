@@ -1,11 +1,9 @@
 "use strict";
 // Update checks for the control panel.
 //
-// This batch: Construct self-update. Compare the installed Construct commit
-// (recorded in .construct-settings.json by Provision-AgentVM.ps1 at install time /
-// by Update-Construct.ps1 on refresh) against the latest commit on the tracked ref via the GitHub API,
-// and fold {update:{available,behind}} (+ a constructRev label) into the state.
-// Agent update detection + the update actions land in the next batch.
+// Compare the installed source revision with the complete published manifest.
+// Source and host updates share one release commit. No GitHub REST request or
+// commit-distance lookup is needed for Construct itself.
 //
 // Everything network is BEST-EFFORT: any failure (offline, rate-limited, or no
 // recorded marker) yields no update info, so the panel simply leaves the banner
@@ -17,8 +15,7 @@ const { extractVersion } = require("./probe");
 
 const DEFAULT_REPO = "permissionBRICK/The-Construct";
 const DEFAULT_REF = "main";
-const GH = "https://api.github.com";
-const TTL_MS = 10 * 60 * 1000; // cache a successful result for 10 min (GitHub unauth = 60 req/hr)
+const TTL_MS = 10 * 60 * 1000; // cache a successful result for 10 min
 const NEG_TTL_MS = 60 * 1000;  // cache a FAILURE (null) only briefly, so a transient
                                // offline/rate-limit blip doesn't hide the banner for 10 min
 
@@ -135,26 +132,28 @@ function fetchJson(url, opts = {}) {
   });
 }
 
-/** Shape a GitHub compare response (base=installed ... head=ref) into update info.
- *  `ahead_by` = commits the ref has that the installed commit doesn't = how many
- *  we're behind. Returns {available, count} or null when the response is unusable. */
-function constructUpdateFromCompare(json) {
-  // The installed commit is unknown to the remote (history rewritten, or the marker
-  // points at a commit that was force-pushed away): the only sane offer is "update",
-  // with no distance to show. Updating re-records a marker the remote does know.
-  if (json === NOT_FOUND || (json && json.notFound === true)) return { available: true, count: null, unknownBase: true };
-  if (!json || typeof json.ahead_by !== "number") return null;
-  const count = json.ahead_by;
-  return { available: count > 0, count };
+/** Compare the installed source with the complete published release. A different
+ * hash means a published version is available; it does not imply commit distance.
+ * Custom branches stay manual: the main release must never replace their source. */
+function constructUpdateFromManifest(json, markers) {
+  if (!json || json.schemaVersion !== 1 || json.repository !== markers.repo ||
+      json.ref !== 'refs/heads/main' || !/^[0-9a-f]{40}$/.test(json.commit) ||
+      json.releaseTag !== `host-${json.commit}` ||
+      json.sourceAsset !== `construct-source-${json.commit}.zip` ||
+      !/^[0-9a-f]{64}$/.test(json.sourceSha256) ||
+      !Number.isSafeInteger(json.sourceSizeBytes) || json.sourceSizeBytes <= 0 || json.sourceSizeBytes > 1073741824 ||
+      json.payloadAsset !== `construct-host-${json.commit.slice(0, 7)}-win-x64.zip` ||
+      !/^[0-9a-f]{64}$/.test(json.payloadSha256) ||
+      !Number.isSafeInteger(json.payloadSizeBytes) || json.payloadSizeBytes <= 0 || json.payloadSizeBytes > 1073741824) return null;
+  return { available: !json.commit.startsWith(markers.installedCommit), count: null, commit: json.commit };
 }
 
-/** Check the Construct repo for updates. Returns {available, count} or null
- *  (no marker -> null without any network call; network failure -> null). */
 async function checkConstruct(markers, opts = {}) {
-  if (!markers || !markers.installedCommit) return null;
+  if (!markers || !markers.installedCommit || markers.ref !== 'main' ||
+      !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(markers.repo)) return null;
   const fj = opts.fetchJson || fetchJson;
-  const url = `${GH}/repos/${markers.repo}/compare/${markers.installedCommit}...${markers.ref}`;
-  return constructUpdateFromCompare(await fj(url, opts));
+  const url = `https://github.com/${markers.repo}/releases/latest/download/manifest.json`;
+  return constructUpdateFromManifest(await fj(url, opts), markers);
 }
 
 // Memoize a best-effort lookup. Failures (null) get a short TTL so recovery is
@@ -457,7 +456,7 @@ function constructRefreshArgPairs(markers) {
 
 module.exports = {
   DEFAULT_REPO, DEFAULT_REF, TTL_MS, NEG_TTL_MS, AGENT_LATEST,
-  readMarkers, acceptFor, fetchJson, NOT_FOUND, constructUpdateFromCompare, checkConstruct, checkConstructCached,
+  readMarkers, acceptFor, fetchJson, NOT_FOUND, constructUpdateFromManifest, checkConstruct, checkConstructCached,
   behindText, semverParts, isNewer, isNewerNightly, prereleasePart, comparePrerelease,
   isProvisionStale, effectiveProvisionedCommit, normalizeCommit, t3codeUrl,
   fetchAgentLatest, augmentAgents, buildAgentUpdateScript,

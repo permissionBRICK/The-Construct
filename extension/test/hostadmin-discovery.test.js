@@ -7,6 +7,7 @@ const root = path.join(__dirname, "..");
 const source = fs.readFileSync(path.join(root, "extension.js"), "utf8");
 function section(start, end) { return source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start))); }
 const offerCode = section("async function refreshHostAdminOffer(", "/** Child inventory stays");
+const childrenCode = section("async function readHostAdminExtras(", "/** The panel\'s ");
 const refreshCode = section("async function refreshState(", "/** Probe once and broadcast");
 const remote = { name: "haus-vm", backend: "hyperv-remote" };
 const offer = { host: "standpc", url: "https://standpc:7462" };
@@ -22,24 +23,30 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
     instances: { captureTarget: () => ({ token: generation }) },
     probeOnce: () => probe.promise,
     hostAdminFeature: () => ({ hostAdminOfferFor: async () => { offerCalls++; return offer; },
-      childrenStateFor: () => { throw Error("Must not wait for child inventory"); } }),
+      childrenStateFor: async () => ({ visible: true, items: [{ name: "shared-guest" }] }) }),
     liveWebviews: new Set(["sidebar", "panel"]), safePost: (view, message) => messages.push({ view, ...message }),
     cachedChildren: null, cachedHostAdminOffer: null, cachedHostAdminInstance: null,
     logLine: message => { throw Error(message); },
   });
-  vm.runInContext(offerCode + refreshCode, context);
+  vm.runInContext(offerCode + childrenCode + refreshCode, context);
   const pendingRefresh = context.refreshState("panel");
   await flush();
   assert.equal(offerCalls, 1, "initial refresh discovers the host without waiting for VM status");
-  assert.equal(messages.length, 2, "both surfaces receive the early offer");
-  assert.ok(messages.every(m => m.type === "hostAdminOffer" && m.instance === "haus-vm" && m.offer === offer));
+  assert.equal(messages.length, 4, "both surfaces receive the early offer and guest inventory");
+  assert.ok(messages.filter(m => m.type === "hostAdminOffer").every(m => m.instance === "haus-vm" && m.offer === offer));
+  assert.equal(messages.filter(m => m.type === "children" && m.children.items[0].name === "shared-guest").length, 2, "inventory loads while the VM probe is still pending");
   generation++; probe.resolve({}); await pendingRefresh;
 
   const delayed = deferred();
   context.hostAdminFeature = () => ({ hostAdminOfferFor: () => delayed.promise });
   const pendingOffer = context.refreshHostAdminOffer(remote);
   generation++; delayed.resolve(offer); await pendingOffer;
-  assert.equal(messages.length, 2, "an answer after switching instances is discarded");
+  assert.equal(messages.length, 4, "an answer after switching instances is discarded");
+  const delayedChildren = deferred();
+  context.hostAdminFeature = () => ({ childrenStateFor: () => delayedChildren.promise });
+  const pendingChildren = context.readHostAdminExtras(remote);
+  generation++; delayedChildren.resolve({ visible: true, items: [] }); await pendingChildren;
+  assert.equal(messages.length, 4, "inventory from a previous instance is discarded too");
   await context.refreshHostAdminOffer({ name: "local", backend: "hyperv-local" });
   assert.equal(messages.at(-1).offer, null, "local instances clear the entry");
 

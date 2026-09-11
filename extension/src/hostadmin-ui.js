@@ -260,6 +260,34 @@ function createHostAdminFeature(deps = {}) {
           await model.perform("renewVmLease", { name, lifetime });
           break;
         }
+        case "changeVmCpu": {
+          if (!name) return;
+          const loaded = await model.perform("loadVmCpu", { name });
+          if (!loaded.ok) break;
+          const cpu = loaded.cpu;
+          const value = await vscode.window.showInputBox({
+            title: `CPU count for ${name}`,
+            prompt: `Current: ${cpu.currentCpus}. Allowed maximum: ${cpu.maximumCpus}. Enter a count or max. Applies on the next full stop/start; an Ubuntu reboot is insufficient.`,
+            value: cpu.pending ? String(cpu.desiredCpus) : "max",
+            ignoreFocusOut: true,
+            validateInput: (v) => {
+              const n = v.trim().toLowerCase() === "max" ? cpu.recommendedCpus : Number(v);
+              return Number.isInteger(n) && n >= 1 && n <= cpu.maximumCpus ? null : `Enter max or a whole number from 1 to ${cpu.maximumCpus}.`;
+            },
+          });
+          if (value === undefined) return;
+          await model.perform("setVmCpu", { name, cpus: value.trim().toLowerCase() === "max" ? cpu.recommendedCpus : Number(value) });
+          break;
+        }
+        case "restartVm":
+        case "startVm": {
+          const restart = action === "restartVm";
+          if (!name || !(await modal(`${restart ? "Restart" : "Start"} "${name}"?`, restart
+            ? "Construct will ask Ubuntu to shut down, apply any pending CPU count, then start the VM. Running work will be interrupted."
+            : "Construct will apply any pending CPU count before starting this powered-off VM.", restart ? "Restart" : "Start"))) return;
+          await model.perform(action, { name });
+          break;
+        }
         case "deleteVm":
           await deleteVmFlow(entry, name, str(args.kind), str(args.cascadeToken));
           break;
@@ -576,11 +604,23 @@ function createHostAdminFeature(deps = {}) {
       if (h && deps.newRemoteVm) await deps.newRemoteVm(h);
       return true;
     }
-    if (id !== "childShutdown" && id !== "childDelete") return false;
+    if (id !== "childConsole" && id !== "childShutdown" && id !== "childDelete") return false;
     const childName = str(message && message.child);
     const child = knownChild(inst, childName);
     if (!child) {
       vscode.window.showWarningMessage(`"${childName}" is not a child VM of ${inst ? inst.name : "this instance"} that this window listed. Refresh and try again.`);
+      return true;
+    }
+    if (id === "childConsole") {
+      if (!hostadmin.childRows([child], now())[0].canConsole) {
+        vscode.window.showWarningMessage(`Console access is unavailable for "${child.name}". Refresh and check that it is running and you have console access.`);
+        return true;
+      }
+      try {
+        await (deps.openGuestConsole || require("./guest-console").openGuestConsole)(inst, child.name, { _vscode: vscode });
+      } catch (e) {
+        vscode.window.showWarningMessage(`Could not open the console for "${child.name}": ${errText(e)}`);
+      }
       return true;
     }
     const { client, problem } = await deps.instanceClient(inst);
