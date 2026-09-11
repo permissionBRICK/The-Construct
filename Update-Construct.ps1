@@ -19,6 +19,7 @@
 param(
     [string]$Repo = "permissionBRICK/The-Construct",
     [string]$Ref  = "main",
+    [switch]$SkipCompanion,
     [string]$ResultFile = ""
 )
 $ErrorActionPreference = "Stop"
@@ -92,6 +93,8 @@ try {
     } else {
         Write-Warning "Refreshed the files but couldn't record the update marker (helpers unavailable)."
     }
+    try { . (Join-Path $root.FullName 'lib/Construct.Companion.ps1'); Invoke-ConstructCompanionInstallHook -ScriptsDir $root.FullName -SkipCompanion:$SkipCompanion }
+    catch { Write-Warning 'Could not load Companion installer helpers; continuing Construct update.' }
     $ok = $true
 } catch {
     Write-Warning "Update failed: $($_.Exception.Message)"

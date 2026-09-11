@@ -862,3 +862,10 @@ If a lifecycle action doesn't behave as expected:
 - **Keep consoles open.** Turn on **`construct.debug`** in VS Code settings to launch the host
   PowerShell consoles with `-NoExit` so they stay open instead of closing — any error stays on
   screen to read. Turn it back off for normal use.
+
+When **Construct Companion** is running, the extension automatically delegates host
+jobs and opens the Companion's control-panel window. **The Construct: Open Control
+Panel Here** keeps an editor tab available, connected to the same Companion.
+Set `construct.companion` to `off` to use the extension's built-in runtime. See
+[Companion mode](../extension/ARCHITECTURE.md#companion-mode) for detection, fallback,
+and migration details.

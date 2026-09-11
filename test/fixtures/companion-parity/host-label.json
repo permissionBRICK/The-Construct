@@ -1,0 +1,428 @@
+[
+  {
+    "bindHost": "127.0.0.1",
+    "input": null,
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": "",
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "localhost",
+    "normalized": "localhost",
+    "urlHost": "localhost"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": " PC name ",
+    "normalized": "PCname",
+    "urlHost": "PCname"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "host.example",
+    "normalized": "host.example",
+    "urlHost": "host.example"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "127.0.0.1",
+    "normalized": "127.0.0.1",
+    "urlHost": "127.0.0.1"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "a_b-c",
+    "normalized": "a_b-c",
+    "urlHost": "a_b-c"
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": "a/b",
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": "[]",
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": "[fe80::1",
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": "fe80::1]",
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": "[[::1]]",
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": "fe80::1%eth0",
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": "ab",
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": "host",
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": "host",
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "a﻿b",
+    "normalized": "ab",
+    "urlHost": "ab"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "normalized": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "urlHost": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "::",
+    "normalized": "::",
+    "urlHost": "[::]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "::1",
+    "normalized": "::1",
+    "urlHost": "[::1]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "fe80::1",
+    "normalized": "fe80::1",
+    "urlHost": "[fe80::1]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "2001:db8::8a2e:370:7334",
+    "normalized": "2001:db8::8a2e:370:7334",
+    "urlHost": "[2001:db8::8a2e:370:7334]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "1:2:3:4:5:6:7:8",
+    "normalized": "1:2:3:4:5:6:7:8",
+    "urlHost": "[1:2:3:4:5:6:7:8]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "0:0:0:0:0:0:0:0",
+    "normalized": "0:0:0:0:0:0:0:0",
+    "urlHost": "[0:0:0:0:0:0:0:0]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "1::",
+    "normalized": "1::",
+    "urlHost": "[1::]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "::2",
+    "normalized": "::2",
+    "urlHost": "[::2]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "0::0",
+    "normalized": "0::0",
+    "urlHost": "[0::0]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "::ffff:10.0.0.1",
+    "normalized": "::ffff:10.0.0.1",
+    "urlHost": "[::ffff:10.0.0.1]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "1:2:3:4:5:6:1.2.3.4",
+    "normalized": "1:2:3:4:5:6:1.2.3.4",
+    "urlHost": "[1:2:3:4:5:6:1.2.3.4]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "::1.2.3.4",
+    "normalized": "::1.2.3.4",
+    "urlHost": "[::1.2.3.4]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "1::1.2.3.4",
+    "normalized": "1::1.2.3.4",
+    "urlHost": "[1::1.2.3.4]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "1:2:3:4:5:6:7::",
+    "normalized": "1:2:3:4:5:6:7::",
+    "urlHost": "[1:2:3:4:5:6:7::]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "fe80::0204:61ff:fe9d:f156",
+    "normalized": "fe80::0204:61ff:fe9d:f156",
+    "urlHost": "[fe80::0204:61ff:fe9d:f156]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "ABCD::1",
+    "normalized": "ABCD::1",
+    "urlHost": "[ABCD::1]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "[::]",
+    "normalized": "::",
+    "urlHost": "[::]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "[::1]",
+    "normalized": "::1",
+    "urlHost": "[::1]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "[fe80::1]",
+    "normalized": "fe80::1",
+    "urlHost": "[fe80::1]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "[2001:db8::8a2e:370:7334]",
+    "normalized": "2001:db8::8a2e:370:7334",
+    "urlHost": "[2001:db8::8a2e:370:7334]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "[1:2:3:4:5:6:7:8]",
+    "normalized": "1:2:3:4:5:6:7:8",
+    "urlHost": "[1:2:3:4:5:6:7:8]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "[0:0:0:0:0:0:0:0]",
+    "normalized": "0:0:0:0:0:0:0:0",
+    "urlHost": "[0:0:0:0:0:0:0:0]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "[1::]",
+    "normalized": "1::",
+    "urlHost": "[1::]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "[::2]",
+    "normalized": "::2",
+    "urlHost": "[::2]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "[0::0]",
+    "normalized": "0::0",
+    "urlHost": "[0::0]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "[::ffff:10.0.0.1]",
+    "normalized": "::ffff:10.0.0.1",
+    "urlHost": "[::ffff:10.0.0.1]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "[1:2:3:4:5:6:1.2.3.4]",
+    "normalized": "1:2:3:4:5:6:1.2.3.4",
+    "urlHost": "[1:2:3:4:5:6:1.2.3.4]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "[::1.2.3.4]",
+    "normalized": "::1.2.3.4",
+    "urlHost": "[::1.2.3.4]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "[1::1.2.3.4]",
+    "normalized": "1::1.2.3.4",
+    "urlHost": "[1::1.2.3.4]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "[1:2:3:4:5:6:7::]",
+    "normalized": "1:2:3:4:5:6:7::",
+    "urlHost": "[1:2:3:4:5:6:7::]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "[fe80::0204:61ff:fe9d:f156]",
+    "normalized": "fe80::0204:61ff:fe9d:f156",
+    "urlHost": "[fe80::0204:61ff:fe9d:f156]"
+  },
+  {
+    "bindHost": "0.0.0.0",
+    "input": "[ABCD::1]",
+    "normalized": "ABCD::1",
+    "urlHost": "[ABCD::1]"
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": "::::",
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": "1::2::3",
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": "1:2:3:4:5:6:7:8:9",
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": "1.2.3:4",
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": "....:",
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": ":::",
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": ":1",
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": "1:",
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": "12345::1",
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": "::ffff:999.1.1.1",
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": "::ffff:1.2.3.004",
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": "1:2",
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": "1:2:3:4:5:6:7",
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": "1:::",
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": "1::2:3:4:5:6:7:8",
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": "::1.2.3.4.5",
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": "1:2:3:4:5:6:7:1.2.3.4",
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": "192.0.2.1::",
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": "192.0.2.1::1",
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": "1:192.0.2.1::",
+    "normalized": "",
+    "urlHost": ""
+  },
+  {
+    "bindHost": "127.0.0.1",
+    "input": "1.2.3.4::1:2",
+    "normalized": "",
+    "urlHost": ""
+  }
+]

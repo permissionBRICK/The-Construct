@@ -1,4 +1,5 @@
 "use strict";
+const guestScripts = require("./guest-scripts");
 // CLIENT PORT FORWARDER — the extension half of `construct expose` (plan §4.6, wire
 // format in docs/expose.md, module design in extension/ARCHITECTURE.md §Forwards).
 //
@@ -501,76 +502,7 @@ function buildReconcileScript(opts = {}) {
   const ttl = Number.isInteger(opts.ttlSeconds) && opts.ttlSeconds > 0 ? opts.ttlSeconds : OWNER_TTL_SEC;
   const lockTtl = Number.isInteger(opts.lockTtlSeconds) && opts.lockTtlSeconds > 0
     ? opts.lockTtlSeconds : CLAIM_LOCK_TTL_SEC;
-  return `set -u
-d=${dir}
-me=${me}
-ttl=${ttl}
-lockttl=${lockTtl}
-now=$(date +%s 2>/dev/null || echo 0)
-if [ ! -d "$d" ]; then printf 'OWNER=absent\\n'; exit 0; fi
-own="$d/${OWNER_FILE}"
-lock="$d/${OWNER_LOCK_DIR}"
-
-read_owner() {
-  cur=""
-  if [ -f "$own" ]; then cur=$(head -c 200 "$own" 2>/dev/null | tr -d '\\r\\n' || true); fi
-  who=\${cur%% *}
-  ts=\${cur#* }
-  case "$ts" in ''|*[!0-9]*) ts=0 ;; esac
-}
-
-# The lease transaction runs inside a real mutex. \`mkdir\` is the primitive: it either
-# creates the directory or fails, atomically, with no window in between — unlike a
-# write-then-read-back, where two windows can each read their own value and both believe
-# they won (A writes, A reads, B writes, B reads).
-#
-# A lock left behind by a window that died mid-transaction is removed once it is older
-# than lockttl; that is safe because the transaction it guards is three filesystem
-# operations long, so a live lock is never old.
-claim() {
-  if ! mkdir "$lock" 2>/dev/null; then
-    if [ -n "$(find "$lock" -maxdepth 0 -mmin +$((lockttl / 60 + 1)) 2>/dev/null)" ]; then
-      rmdir "$lock" 2>/dev/null || true
-      mkdir "$lock" 2>/dev/null || return 1
-    else
-      # Somebody else is claiming right now. Report what the record says and try again on
-      # the next reconcile — never guess, and never two owners.
-      return 1
-    fi
-  fi
-  read_owner
-  if [ -z "$who" ] || [ "$who" = "$me" ] || [ $((now - ts)) -ge "$ttl" ]; then
-    tmp="$d/${OWNER_FILE}.tmp.$$"
-    if printf '%s %s\\n' "$me" "$now" >"$tmp" 2>/dev/null; then
-      chmod 0644 "$tmp" 2>/dev/null || true
-      mv -f "$tmp" "$own" 2>/dev/null || rm -f "$tmp"
-    fi
-  fi
-  rmdir "$lock" 2>/dev/null || true
-  return 0
-}
-
-claim || true
-# The record is the single source of truth, read AFTER the transaction: a window that
-# could not take the lock, or could not write the file, reports what is actually there.
-read_owner
-if [ "$who" = "$me" ]; then printf 'OWNER=self\\n'; else printf 'OWNER=other\\n'; fi
-dump() {
-  kind="$1"; sub="$2"
-  [ -d "$d/$sub" ] || return 0
-  for f in "$d/$sub"/*.json; do
-    [ -e "$f" ] || continue
-    id=$(basename "$f" .json)
-    case "$id" in .*) continue ;; esac
-    b=$(head -c 4096 "$f" 2>/dev/null | base64 2>/dev/null | tr -d '\\n') || continue
-    [ -n "$b" ] || continue
-    printf '%s %s %s\\n' "$kind" "$id" "$b"
-  done
-}
-dump R requests
-dump A acks
-dump C close
-`;
+  return guestScripts.render("forwards-reconcile", { dir, me, ttl, lockTtl });
 }
 
 /**
@@ -583,15 +515,8 @@ dump C close
 function buildAckScript(id, doc, opts = {}) {
   if (!isSafeId(id)) throw new Error(`refusing to write an ack for an unusable id: ${id}`);
   const dir = shQuote((opts.dir || SPOOL_DIR) + "/acks");
-  const b64 = Buffer.from(JSON.stringify(doc) + "\n", "utf8").toString("base64");
-  return `set -u
-d=${dir}
-mkdir -p "$d" 2>/dev/null || true
-tmp="$d/.tmp.$$.ack"
-printf %s '${b64}' | base64 -d >"$tmp" 2>/dev/null || { rm -f "$tmp"; exit 1; }
-chmod 0644 "$tmp" 2>/dev/null || true
-mv -f "$tmp" "$d/${id}.json" || { rm -f "$tmp"; exit 1; }
-`;
+  const b64 = shQuote(Buffer.from(JSON.stringify(doc) + "\n", "utf8").toString("base64"));
+  return guestScripts.render("forwards-ack", { dir, b64, id });
 }
 
 /**
@@ -609,7 +534,7 @@ function buildRemoveScript(entries, opts = {}) {
     paths.push(shQuote(`${dir}/${sub}/${entry.id}.json`));
   }
   if (!paths.length) return "";
-  return `set -u\nrm -f ${paths.join(" ")} 2>/dev/null || true\nexit 0\n`;
+  return guestScripts.render("forwards-remove", { paths: paths.join(" ") });
 }
 
 /**
@@ -633,15 +558,7 @@ function buildRemoveScript(entries, opts = {}) {
  */
 function buildCapabilityScript(opts = {}) {
   const dir = shQuote(opts.dir || SPOOL_DIR);
-  return `set -u
-d=${dir}
-if [ -d "$d" ] && [ -d "$d/requests" ] && [ -d "$d/acks" ] && [ -d "$d/close" ]; then
-  printf '${SPOOL_YES}\\n'
-else
-  printf '${SPOOL_NO}\\n'
-fi
-exit 0
-`;
+  return guestScripts.render("forwards-capability", { dir });
 }
 
 /**
@@ -675,46 +592,7 @@ function buildWatchScript(opts = {}) {
   const dir = shQuote(opts.dir || SPOOL_DIR);
   const fallback = Number(opts.fallbackSeconds) > 0 ? Math.round(Number(opts.fallbackSeconds)) : WATCH_FALLBACK_SECONDS;
   const heartbeat = Number(opts.heartbeatSeconds) > 0 ? Math.round(Number(opts.heartbeatSeconds)) : WATCH_HEARTBEAT_SECONDS;
-  return `set -u
-d=${dir}
-iw=""
-cleanup() { if [ -n "$iw" ]; then kill "$iw" 2>/dev/null || true; fi; }
-trap 'cleanup; exit 0' EXIT HUP INT TERM PIPE
-last=$SECONDS
-beat() {
-  if [ $((SECONDS - last)) -ge ${heartbeat} ]; then last=$SECONDS; printf '${HEARTBEAT_LINE}\\n'; fi
-}
-watch_events() {
-  command -v inotifywait >/dev/null 2>&1 || return 1
-  [ -d "$d/requests" ] || return 1
-  [ -d "$d/close" ] || return 1
-  # A process substitution, not a pipeline: the loop must run in THIS shell, or the
-  # watcher's pid would be invisible to cleanup and survive us as an orphan.
-  exec 3< <(inotifywait -m -q -e close_write,moved_to,delete,moved_from --format '' "$d/requests" "$d/close" 2>/dev/null)
-  iw=$!
-  while :; do
-    IFS= read -r -t ${heartbeat} -u 3 _
-    rc=$?
-    # >128 = the read timed out (no events): beat and keep waiting.
-    # non-zero and <=128 = EOF: inotifywait died; hand back to the caller.
-    if [ "$rc" -ne 0 ] && [ "$rc" -le 128 ]; then break; fi
-    if [ "$rc" -eq 0 ]; then printf '${CHANGED_LINE}\\n'; fi
-    beat
-  done
-  cleanup
-  iw=""
-  exec 3<&-
-  return 0
-}
-# On connect: the host reconciles once, which is what re-opens everything still queued
-# after a reboot, a reconnect or a window switch.
-printf '${CHANGED_LINE}\\n'
-while :; do
-  watch_events || true
-  sleep ${fallback}
-  beat
-done
-`;
+  return guestScripts.render("forwards-watch", { dir, heartbeat, fallback });
 }
 
 // ── The remote list ──────────────────────────────────────────────────────────
@@ -1917,14 +1795,9 @@ class Forwarder {
    *  than after the TTL. Best-effort by design: if it fails, the TTL still covers us. */
   _releaseClaim() {
     if (this.mode !== "local" || !this._view.owner) return;
-    const script = `set -u
-own=${shQuote(`${this.dir}/${OWNER_FILE}`)}
-me=${shQuote(this.windowId)}
-cur=$(head -c 200 "$own" 2>/dev/null | tr -d '\\r\\n' || true)
-who=\${cur%% *}
-if [ "$who" = "$me" ]; then rm -f "$own" 2>/dev/null || true; fi
-exit 0
-`;
+    const script = guestScripts.render("forwards-release", {
+      own: shQuote(`${this.dir}/${OWNER_FILE}`), me: shQuote(this.windowId),
+    });
     Promise.resolve()
       .then(() => this._runScript(script))
       .catch(() => {});

@@ -1,0 +1,1771 @@
+[
+  {
+    "input": "",
+    "kind": "vmBranch",
+    "output": false
+  },
+  {
+    "input": "",
+    "kind": "publishBranch",
+    "output": false
+  },
+  {
+    "input": "",
+    "kind": "safeName",
+    "output": false
+  },
+  {
+    "input": "vm",
+    "kind": "vmBranch",
+    "output": true
+  },
+  {
+    "input": "vm",
+    "kind": "publishBranch",
+    "output": true
+  },
+  {
+    "input": "vm",
+    "kind": "safeName",
+    "output": true
+  },
+  {
+    "input": "VM",
+    "kind": "vmBranch",
+    "output": false
+  },
+  {
+    "input": "VM",
+    "kind": "publishBranch",
+    "output": true
+  },
+  {
+    "input": "VM",
+    "kind": "safeName",
+    "output": true
+  },
+  {
+    "input": "main",
+    "kind": "vmBranch",
+    "output": false
+  },
+  {
+    "input": "main",
+    "kind": "publishBranch",
+    "output": true
+  },
+  {
+    "input": "main",
+    "kind": "safeName",
+    "output": true
+  },
+  {
+    "input": "master",
+    "kind": "vmBranch",
+    "output": false
+  },
+  {
+    "input": "master",
+    "kind": "publishBranch",
+    "output": true
+  },
+  {
+    "input": "master",
+    "kind": "safeName",
+    "output": true
+  },
+  {
+    "input": "HEAD",
+    "kind": "vmBranch",
+    "output": false
+  },
+  {
+    "input": "HEAD",
+    "kind": "publishBranch",
+    "output": true
+  },
+  {
+    "input": "HEAD",
+    "kind": "safeName",
+    "output": true
+  },
+  {
+    "input": "WORK",
+    "kind": "vmBranch",
+    "output": true
+  },
+  {
+    "input": "WORK",
+    "kind": "publishBranch",
+    "output": true
+  },
+  {
+    "input": "WORK",
+    "kind": "safeName",
+    "output": true
+  },
+  {
+    "input": "vm-other",
+    "kind": "vmBranch",
+    "output": true
+  },
+  {
+    "input": "vm-other",
+    "kind": "publishBranch",
+    "output": true
+  },
+  {
+    "input": "vm-other",
+    "kind": "safeName",
+    "output": true
+  },
+  {
+    "input": "CON.txt",
+    "kind": "vmBranch",
+    "output": false
+  },
+  {
+    "input": "CON.txt",
+    "kind": "publishBranch",
+    "output": true
+  },
+  {
+    "input": "CON.txt",
+    "kind": "safeName",
+    "output": true
+  },
+  {
+    "input": "con-work",
+    "kind": "vmBranch",
+    "output": true
+  },
+  {
+    "input": "con-work",
+    "kind": "publishBranch",
+    "output": true
+  },
+  {
+    "input": "con-work",
+    "kind": "safeName",
+    "output": true
+  },
+  {
+    "input": "a..b",
+    "kind": "vmBranch",
+    "output": false
+  },
+  {
+    "input": "a..b",
+    "kind": "publishBranch",
+    "output": false
+  },
+  {
+    "input": "a..b",
+    "kind": "safeName",
+    "output": false
+  },
+  {
+    "input": "a.lock",
+    "kind": "vmBranch",
+    "output": false
+  },
+  {
+    "input": "a.lock",
+    "kind": "publishBranch",
+    "output": false
+  },
+  {
+    "input": "a.lock",
+    "kind": "safeName",
+    "output": true
+  },
+  {
+    "input": "a.",
+    "kind": "vmBranch",
+    "output": false
+  },
+  {
+    "input": "a.",
+    "kind": "publishBranch",
+    "output": false
+  },
+  {
+    "input": "a.",
+    "kind": "safeName",
+    "output": true
+  },
+  {
+    "input": "topic/x",
+    "kind": "vmBranch",
+    "output": false
+  },
+  {
+    "input": "topic/x",
+    "kind": "publishBranch",
+    "output": true
+  },
+  {
+    "input": "topic/x",
+    "kind": "safeName",
+    "output": false
+  },
+  {
+    "input": "topic/.hidden",
+    "kind": "vmBranch",
+    "output": false
+  },
+  {
+    "input": "topic/.hidden",
+    "kind": "publishBranch",
+    "output": true
+  },
+  {
+    "input": "topic/.hidden",
+    "kind": "safeName",
+    "output": false
+  },
+  {
+    "input": "-bad",
+    "kind": "vmBranch",
+    "output": false
+  },
+  {
+    "input": "-bad",
+    "kind": "publishBranch",
+    "output": false
+  },
+  {
+    "input": "-bad",
+    "kind": "safeName",
+    "output": true
+  },
+  {
+    "input": " ",
+    "kind": "safeName",
+    "output": false
+  },
+  {
+    "input": "",
+    "kind": "safeName",
+    "output": true
+  },
+  {
+    "input": "﻿",
+    "kind": "safeName",
+    "output": false
+  },
+  {
+    "input": "x",
+    "kind": "safeName",
+    "output": true
+  },
+  {
+    "input": "x",
+    "kind": "safeName",
+    "output": true
+  },
+  {
+    "input": "﻿x",
+    "kind": "safeName",
+    "output": false
+  },
+  {
+    "input": "x﻿",
+    "kind": "safeName",
+    "output": false
+  },
+  {
+    "input": "　x",
+    "kind": "safeName",
+    "output": false
+  },
+  {
+    "input": "x　",
+    "kind": "safeName",
+    "output": false
+  },
+  {
+    "input": "a b",
+    "kind": "safeName",
+    "output": true
+  },
+  {
+    "input": "",
+    "kind": "credentials",
+    "output": false
+  },
+  {
+    "input": "",
+    "kind": "url",
+    "output": "Enter an https://, ssh:// or git@host:path git URL."
+  },
+  {
+    "input": "",
+    "kind": "redact",
+    "output": ""
+  },
+  {
+    "input": "",
+    "kind": "slug",
+    "output": ""
+  },
+  {
+    "input": " https://alice:fixture-secret@host/x ",
+    "kind": "credentials",
+    "output": true
+  },
+  {
+    "input": " https://alice:fixture-secret@host/x ",
+    "kind": "url",
+    "output": "Remove the credentials from the URL -- let your git credential helper supply them."
+  },
+  {
+    "input": " https://alice:fixture-secret@host/x ",
+    "kind": "redact",
+    "output": " https://***@host/x "
+  },
+  {
+    "input": " https://alice:fixture-secret@host/x ",
+    "kind": "slug",
+    "output": "-https---alice-fixture-secret-host-x-"
+  },
+  {
+    "input": "https://alice@host/x",
+    "kind": "credentials",
+    "output": false
+  },
+  {
+    "input": "https://alice@host/x",
+    "kind": "url",
+    "output": null
+  },
+  {
+    "input": "https://alice@host/x",
+    "kind": "redact",
+    "output": "https://***@host/x"
+  },
+  {
+    "input": "https://alice@host/x",
+    "kind": "slug",
+    "output": "https---alice-host-x"
+  },
+  {
+    "input": "ssh://git@host/x",
+    "kind": "credentials",
+    "output": false
+  },
+  {
+    "input": "ssh://git@host/x",
+    "kind": "url",
+    "output": null
+  },
+  {
+    "input": "ssh://git@host/x",
+    "kind": "redact",
+    "output": "ssh://***@host/x"
+  },
+  {
+    "input": "ssh://git@host/x",
+    "kind": "slug",
+    "output": "ssh---git-host-x"
+  },
+  {
+    "input": "git@host:x",
+    "kind": "credentials",
+    "output": false
+  },
+  {
+    "input": "git@host:x",
+    "kind": "url",
+    "output": null
+  },
+  {
+    "input": "git@host:x",
+    "kind": "redact",
+    "output": "git@host:x"
+  },
+  {
+    "input": "git@host:x",
+    "kind": "slug",
+    "output": "git-host-x"
+  },
+  {
+    "input": "--upload-pack=x",
+    "kind": "credentials",
+    "output": false
+  },
+  {
+    "input": "--upload-pack=x",
+    "kind": "url",
+    "output": "Enter an https://, ssh:// or git@host:path git URL."
+  },
+  {
+    "input": "--upload-pack=x",
+    "kind": "redact",
+    "output": "--upload-pack=x"
+  },
+  {
+    "input": "--upload-pack=x",
+    "kind": "slug",
+    "output": "--upload-pack-x"
+  },
+  {
+    "input": "https://ggpat_fixture@host/x",
+    "kind": "credentials",
+    "output": true
+  },
+  {
+    "input": "https://ggpat_fixture@host/x",
+    "kind": "url",
+    "output": "Remove the credentials from the URL -- let your git credential helper supply them."
+  },
+  {
+    "input": "https://ggpat_fixture@host/x",
+    "kind": "redact",
+    "output": "https://***@host/x"
+  },
+  {
+    "input": "https://ggpat_fixture@host/x",
+    "kind": "slug",
+    "output": "https---ggpat_fixture-host-x"
+  },
+  {
+    "input": "https://gitgud-project.long.name@host/x",
+    "kind": "credentials",
+    "output": false
+  },
+  {
+    "input": "https://gitgud-project.long.name@host/x",
+    "kind": "url",
+    "output": null
+  },
+  {
+    "input": "https://gitgud-project.long.name@host/x",
+    "kind": "redact",
+    "output": "https://***@host/x"
+  },
+  {
+    "input": "https://gitgud-project.long.name@host/x",
+    "kind": "slug",
+    "output": "https---gitgud-project.long.name-host-x"
+  },
+  {
+    "input": {
+      "mainFiles": {
+        "a": "new",
+        "b": "new"
+      },
+      "vmFiles": {
+        "a": "old",
+        "c": "old"
+      }
+    },
+    "kind": "writeBack",
+    "output": [
+      {
+        "action": "write",
+        "content": "new",
+        "expect": "old",
+        "name": "a"
+      },
+      {
+        "action": "write",
+        "content": "new",
+        "expect": null,
+        "name": "b"
+      },
+      {
+        "action": "delete",
+        "expect": "old",
+        "name": "c"
+      }
+    ]
+  },
+  {
+    "input": {
+      "mainFiles": {
+        "a": "same"
+      },
+      "vmFiles": {
+        "a": "same"
+      }
+    },
+    "kind": "writeBack",
+    "output": []
+  },
+  {
+    "input": {
+      "mainFiles": {},
+      "vmFiles": {}
+    },
+    "kind": "writeBack",
+    "output": []
+  },
+  {
+    "input": "/opt/construct/projects",
+    "kind": "readScript",
+    "output": "set -u\nstore='/opt/construct/projects'\nif [ -d \"$store\" ]; then\n  for f in \"$store\"/*.json; do\n    [ -f \"$f\" ] || continue\n    name=$(basename \"$f\" .json)\n    data=$(base64 < \"$f\" | tr -d \"\\n\")\n    printf '%s\\t%s\\n' \"$name\" \"$data\"\n  done\nelse\n  printf 'STORE_ABSENT\\n'\nfi\nprintf 'END\\n'"
+  },
+  {
+    "input": {
+      "ops": [
+        {
+          "action": "write",
+          "content": "new",
+          "expect": "old",
+          "name": "a"
+        },
+        {
+          "action": "write",
+          "content": "ü\n",
+          "expect": null,
+          "name": "b"
+        },
+        {
+          "action": "delete",
+          "expect": "old",
+          "name": "c"
+        }
+      ],
+      "root": "/opt/construct/projects"
+    },
+    "kind": "writeScript",
+    "output": "set -u\nstore='/opt/construct/projects'\nmkdir -p \"$store\"\ncur=$(base64 < \"$store\"/'a.json' 2>/dev/null | tr -d '\\n')\nif [ \"$cur\" = 'b2xk' ]; then\n  printf '%s' 'bmV3' | base64 -d > \"$store\"/'a.json'\n  printf '%s\\t%s\\n' 'a' 'done'\nelse\n  printf '%s\\t%s\\n' 'a' 'skipped'\nfi\nif [ ! -f \"$store\"/'b.json' ]; then\n  printf '%s' 'w7wK' | base64 -d > \"$store\"/'b.json'\n  printf '%s\\t%s\\n' 'b' 'done'\nelse\n  printf '%s\\t%s\\n' 'b' 'skipped'\nfi\ncur=$(base64 < \"$store\"/'c.json' 2>/dev/null | tr -d '\\n')\nif [ \"$cur\" = 'b2xk' ]; then\n  rm -f \"$store\"/'c.json'\n  printf '%s\\t%s\\n' 'c' 'done'\nelse\n  printf '%s\\t%s\\n' 'c' 'skipped'\nfi\nprintf 'END\\n'"
+  },
+  {
+    "input": "/tmp/store 'quoted'",
+    "kind": "readScript",
+    "output": "set -u\nstore='/tmp/store '\\''quoted'\\'''\nif [ -d \"$store\" ]; then\n  for f in \"$store\"/*.json; do\n    [ -f \"$f\" ] || continue\n    name=$(basename \"$f\" .json)\n    data=$(base64 < \"$f\" | tr -d \"\\n\")\n    printf '%s\\t%s\\n' \"$name\" \"$data\"\n  done\nelse\n  printf 'STORE_ABSENT\\n'\nfi\nprintf 'END\\n'"
+  },
+  {
+    "input": {
+      "ops": [
+        {
+          "action": "write",
+          "content": "new",
+          "expect": "old",
+          "name": "a"
+        },
+        {
+          "action": "write",
+          "content": "ü\n",
+          "expect": null,
+          "name": "b"
+        },
+        {
+          "action": "delete",
+          "expect": "old",
+          "name": "c"
+        }
+      ],
+      "root": "/tmp/store 'quoted'"
+    },
+    "kind": "writeScript",
+    "output": "set -u\nstore='/tmp/store '\\''quoted'\\'''\nmkdir -p \"$store\"\ncur=$(base64 < \"$store\"/'a.json' 2>/dev/null | tr -d '\\n')\nif [ \"$cur\" = 'b2xk' ]; then\n  printf '%s' 'bmV3' | base64 -d > \"$store\"/'a.json'\n  printf '%s\\t%s\\n' 'a' 'done'\nelse\n  printf '%s\\t%s\\n' 'a' 'skipped'\nfi\nif [ ! -f \"$store\"/'b.json' ]; then\n  printf '%s' 'w7wK' | base64 -d > \"$store\"/'b.json'\n  printf '%s\\t%s\\n' 'b' 'done'\nelse\n  printf '%s\\t%s\\n' 'b' 'skipped'\nfi\ncur=$(base64 < \"$store\"/'c.json' 2>/dev/null | tr -d '\\n')\nif [ \"$cur\" = 'b2xk' ]; then\n  rm -f \"$store\"/'c.json'\n  printf '%s\\t%s\\n' 'c' 'done'\nelse\n  printf '%s\\t%s\\n' 'c' 'skipped'\nfi\nprintf 'END\\n'"
+  },
+  {
+    "input": "END\n",
+    "kind": "readResult",
+    "output": {
+      "entries": [],
+      "storeAbsent": false
+    }
+  },
+  {
+    "input": "STORE_ABSENT\nEND\n",
+    "kind": "readResult",
+    "output": {
+      "entries": [],
+      "storeAbsent": true
+    }
+  },
+  {
+    "input": "a\te30K\nEND\n",
+    "kind": "readResult",
+    "output": {
+      "entries": [
+        {
+          "content": "{}\n",
+          "name": "a"
+        }
+      ],
+      "storeAbsent": false
+    }
+  },
+  {
+    "input": "a\te30K!!\nEND\n",
+    "kind": "readResult",
+    "output": {
+      "entries": [
+        {
+          "content": "{}\n",
+          "name": "a"
+        }
+      ],
+      "storeAbsent": false
+    }
+  },
+  {
+    "input": "a\te30\nEND\n",
+    "kind": "readResult",
+    "output": {
+      "entries": [
+        {
+          "content": "{}",
+          "name": "a"
+        }
+      ],
+      "storeAbsent": false
+    }
+  },
+  {
+    "input": "a\t!\nEND\n",
+    "kind": "readResult",
+    "output": {
+      "entries": [
+        {
+          "content": "",
+          "name": "a"
+        }
+      ],
+      "storeAbsent": false
+    }
+  },
+  {
+    "input": "a\te30K\n",
+    "kind": "readResult",
+    "output": null
+  },
+  {
+    "input": "a\tdone\nb\tskipped\nEND\n",
+    "kind": "writeResult",
+    "output": {
+      "done": [
+        "a"
+      ],
+      "skipped": [
+        "b"
+      ]
+    }
+  },
+  {
+    "input": "a\tdone\n",
+    "kind": "writeResult",
+    "output": null
+  },
+  {
+    "input": {
+      "name": "a",
+      "raw": "{\"name\":\"a\"}"
+    },
+    "kind": "canonical",
+    "output": {
+      "content": "{\n  \"name\": \"a\",\n  \"repos\": [],\n  \"sdks\": {},\n  \"mcp\": [],\n  \"hostPackages\": [],\n  \"provisionCommands\": [],\n  \"tests\": {}\n}\n",
+      "ok": true
+    }
+  },
+  {
+    "input": {
+      "name": "a",
+      "raw": "{\"name\":\"a\",\"repos\":[{\"directory\":\"dir\",\"url\":\"https://host/x\"}],\"sdks\":{\"node\":[\"22\"],\"empty\":[]},\"mcp\":[{\"name\":\"m\",\"command\":\"npx\",\"args\":[],\"env\":{},\"agents\":[\"codex\"],\"enabled\":false}],\"hostPackages\":[\"git\"],\"provisionCommands\":[\"echo ü\"],\"tests\":{\"z\":true}}"
+    },
+    "kind": "canonical",
+    "output": {
+      "content": "{\n  \"name\": \"a\",\n  \"repos\": [\n    {\n      \"url\": \"https://host/x\",\n      \"directory\": \"dir\"\n    }\n  ],\n  \"sdks\": {\n    \"node\": [\n      \"22\"\n    ]\n  },\n  \"mcp\": [\n    {\n      \"name\": \"m\",\n      \"type\": \"stdio\",\n      \"command\": \"npx\",\n      \"agents\": [\n        \"codex\"\n      ],\n      \"enabled\": false\n    }\n  ],\n  \"hostPackages\": [\n    \"git\"\n  ],\n  \"provisionCommands\": [\n    \"echo ü\"\n  ],\n  \"tests\": {\n    \"z\": true\n  }\n}\n",
+      "ok": true
+    }
+  },
+  {
+    "input": {
+      "name": "a",
+      "raw": "{\"name\":\"b\"}"
+    },
+    "kind": "canonical",
+    "output": {
+      "ok": false,
+      "reason": "is not a valid profile: \"name\" is \"b\" but the profile file is \"a\""
+    }
+  },
+  {
+    "input": {
+      "name": "a",
+      "raw": "{\"name\":\"a\",\"extra\":1}"
+    },
+    "kind": "canonical",
+    "output": {
+      "ok": false,
+      "reason": "is not a valid profile: unknown key \"extra\""
+    }
+  },
+  {
+    "input": {
+      "name": "a",
+      "raw": "{\"name\":\"a\",\"repos\":[{\"url\":\" \"}]}"
+    },
+    "kind": "canonical",
+    "output": {
+      "ok": false,
+      "reason": "is not a valid profile: repos[0].url must be a non-empty string"
+    }
+  },
+  {
+    "input": {
+      "name": "a",
+      "raw": "{\"name\":\"a\",\"mcp\":[{\"name\":\"m\",\"type\":\"http\",\"url\":\"https://host\",\"headers\":{\"Z\":\"z\",\"A\":\"a\"},\"bearerTokenEnvVar\":\"TOKEN\"}]}"
+    },
+    "kind": "canonical",
+    "output": {
+      "content": "{\n  \"name\": \"a\",\n  \"repos\": [],\n  \"sdks\": {},\n  \"mcp\": [\n    {\n      \"name\": \"m\",\n      \"type\": \"http\",\n      \"url\": \"https://host\",\n      \"headers\": {\n        \"Z\": \"z\",\n        \"A\": \"a\"\n      },\n      \"bearerTokenEnvVar\": \"TOKEN\"\n    }\n  ],\n  \"hostPackages\": [],\n  \"provisionCommands\": [],\n  \"tests\": {}\n}\n",
+      "ok": true
+    }
+  },
+  {
+    "input": {
+      "name": "a",
+      "raw": "{\"name\":\"a\",\"mcp\":[{\"name\":\"m\",\"type\":\"bad\"}]}"
+    },
+    "kind": "canonical",
+    "output": {
+      "ok": false,
+      "reason": "is not a valid profile: mcp[0].type must be \"stdio\" or \"http\""
+    }
+  },
+  {
+    "input": {
+      "name": "a",
+      "raw": "{\"name\":\"a\",\"sdks\":4,\"tests\":[]}"
+    },
+    "kind": "canonical",
+    "output": {
+      "ok": false,
+      "reason": "is not a valid profile: \"sdks\" must be an object; \"tests\" must be an object"
+    }
+  },
+  {
+    "input": {
+      "name": "a",
+      "raw": "null"
+    },
+    "kind": "canonical",
+    "output": {
+      "ok": false,
+      "reason": "is not a valid profile: profile is not a JSON object"
+    }
+  },
+  {
+    "input": {
+      "name": "a",
+      "raw": "{\"name\":\"a\",\"tests\":{\"a\":1.0,\"b\":1e2,\"c\":-0,\"d\":1.5e300,\"e\":1e-7,\"f\":1e-6,\"g\":1e20}}"
+    },
+    "kind": "canonical",
+    "output": {
+      "content": "{\n  \"name\": \"a\",\n  \"repos\": [],\n  \"sdks\": {},\n  \"mcp\": [],\n  \"hostPackages\": [],\n  \"provisionCommands\": [],\n  \"tests\": {\n    \"a\": 1,\n    \"b\": 100,\n    \"c\": 0,\n    \"d\": 1.5e+300,\n    \"e\": 1e-7,\n    \"f\": 0.000001,\n    \"g\": 100000000000000000000\n  }\n}\n",
+      "ok": true
+    }
+  },
+  {
+    "input": {
+      "name": "a",
+      "raw": "{\"name\":\"a\",\"tests\":{\"del\":\"\",\"other\":\" \"}}"
+    },
+    "kind": "canonical",
+    "output": {
+      "content": "{\n  \"name\": \"a\",\n  \"repos\": [],\n  \"sdks\": {},\n  \"mcp\": [],\n  \"hostPackages\": [],\n  \"provisionCommands\": [],\n  \"tests\": {\n    \"del\": \"\",\n    \"other\": \" \"\n  }\n}\n",
+      "ok": true
+    }
+  },
+  {
+    "input": {
+      "name": "a",
+      "raw": "{\"name\":\"a\",\"tests\":{\"10\":1,\"2\":2},\"sdks\":{\"10\":\"v\",\"2\":\"v\"}}"
+    },
+    "kind": "canonical",
+    "output": {
+      "content": "{\n  \"name\": \"a\",\n  \"repos\": [],\n  \"sdks\": {\n    \"2\": \"v\",\n    \"10\": \"v\"\n  },\n  \"mcp\": [],\n  \"hostPackages\": [],\n  \"provisionCommands\": [],\n  \"tests\": {\n    \"2\": 2,\n    \"10\": 1\n  }\n}\n",
+      "ok": true
+    }
+  },
+  {
+    "input": {
+      "name": "a",
+      "raw": "{\"name\":\"a\",\"tests\":{\"controls\":\"\\u000b\\u001b\"}}"
+    },
+    "kind": "canonical",
+    "output": {
+      "content": "{\n  \"name\": \"a\",\n  \"repos\": [],\n  \"sdks\": {},\n  \"mcp\": [],\n  \"hostPackages\": [],\n  \"provisionCommands\": [],\n  \"tests\": {\n    \"controls\": \"\\u000b\\u001b\"\n  }\n}\n",
+      "ok": true
+    }
+  },
+  {
+    "input": {
+      "existingNames": [],
+      "manifest": {},
+      "selected": [
+        {
+          "content": "{}",
+          "name": "a",
+          "ref": "HEAD",
+          "relPath": "projects/a.json",
+          "remoteUrl": "https://host/repo"
+        }
+      ]
+    },
+    "kind": "import",
+    "output": {
+      "collisions": [],
+      "creates": [
+        {
+          "content": "{}",
+          "manifestEntry": {
+            "importedAs": "a",
+            "pathInRemote": "projects/a.json",
+            "ref": "HEAD",
+            "remoteUrl": "https://host/repo"
+          },
+          "name": "a"
+        }
+      ],
+      "updates": []
+    }
+  },
+  {
+    "input": {
+      "existingNames": [
+        "a",
+        "a-2"
+      ],
+      "manifest": {},
+      "selected": [
+        {
+          "content": "{}",
+          "name": "a",
+          "ref": "HEAD",
+          "relPath": "projects/a.json",
+          "remoteUrl": "https://host/repo"
+        }
+      ]
+    },
+    "kind": "import",
+    "output": {
+      "collisions": [
+        {
+          "name": "a",
+          "suggested": "a-3"
+        }
+      ],
+      "creates": [],
+      "updates": []
+    }
+  },
+  {
+    "input": {
+      "existingNames": [
+        "a"
+      ],
+      "manifest": {
+        "a": {
+          "pathInRemote": "projects/a.json",
+          "remoteUrl": "https://host/repo"
+        }
+      },
+      "selected": [
+        {
+          "content": "{}",
+          "name": "a",
+          "ref": "HEAD",
+          "relPath": "projects/a.json",
+          "remoteUrl": "https://host/repo"
+        }
+      ]
+    },
+    "kind": "import",
+    "output": {
+      "collisions": [],
+      "creates": [],
+      "updates": [
+        {
+          "baseContent": null,
+          "manifestEntry": {
+            "importedAs": "a",
+            "pathInRemote": "projects/a.json",
+            "ref": "HEAD",
+            "remoteUrl": "https://host/repo"
+          },
+          "name": "a",
+          "theirsContent": "{}"
+        }
+      ]
+    }
+  },
+  {
+    "input": {
+      "existingNames": [],
+      "manifest": {},
+      "selected": [
+        {
+          "content": "{}",
+          "name": "a",
+          "ref": "HEAD",
+          "relPath": "projects/a.json",
+          "remoteUrl": "https://host/repo"
+        },
+        {
+          "content": "{}",
+          "name": "a",
+          "ref": "HEAD",
+          "relPath": "projects/a.json",
+          "remoteUrl": "https://host/repo"
+        }
+      ]
+    },
+    "kind": "import",
+    "output": {
+      "collisions": [
+        {
+          "name": "a",
+          "suggested": "a-2"
+        }
+      ],
+      "creates": [
+        {
+          "content": "{}",
+          "manifestEntry": {
+            "importedAs": "a",
+            "pathInRemote": "projects/a.json",
+            "ref": "HEAD",
+            "remoteUrl": "https://host/repo"
+          },
+          "name": "a"
+        }
+      ],
+      "updates": []
+    }
+  },
+  {
+    "input": {
+      "manifest": {
+        "tracked": {
+          "remoteUrl": "https://user:fixture-secret@host/repo"
+        }
+      },
+      "profiles": [
+        {
+          "name": "a",
+          "raw": "{\"name\":\"a\"}"
+        },
+        {
+          "name": "default",
+          "raw": "{}"
+        },
+        {
+          "name": "../bad",
+          "raw": "{}"
+        },
+        {
+          "name": "invalid",
+          "raw": "{\"name\":\"invalid\",\"repos\":0}"
+        },
+        {
+          "name": "tracked",
+          "raw": "{}"
+        }
+      ],
+      "remoteFiles": {}
+    },
+    "kind": "publish",
+    "output": {
+      "invalid": [
+        {
+          "name": "../bad",
+          "reason": "is not a safe profile file name"
+        },
+        {
+          "name": "invalid",
+          "reason": "is not a valid profile: \"repos\" must be an array"
+        }
+      ],
+      "publish": [
+        {
+          "adopt": false,
+          "content": "{\n  \"name\": \"a\",\n  \"repos\": [],\n  \"sdks\": {},\n  \"mcp\": [],\n  \"hostPackages\": [],\n  \"provisionCommands\": [],\n  \"tests\": {}\n}\n",
+          "name": "a",
+          "pathInRemote": "projects/a.json"
+        }
+      ],
+      "reasons": {
+        "../bad": "is not a safe profile file name",
+        "invalid": "is not a valid profile: \"repos\" must be an array",
+        "tracked": "already tracked by https://***@host/repo -- use Push back"
+      },
+      "refuse": [],
+      "skipTracked": [
+        {
+          "name": "tracked",
+          "reason": "already tracked by https://***@host/repo -- use Push back"
+        }
+      ]
+    }
+  },
+  {
+    "input": {
+      "invalid": [
+        {
+          "name": "../bad",
+          "reason": "is not a safe profile file name"
+        },
+        {
+          "name": "invalid",
+          "reason": "is not a valid profile: \"repos\" must be an array"
+        }
+      ],
+      "publish": [
+        {
+          "adopt": false,
+          "content": "{\n  \"name\": \"a\",\n  \"repos\": [],\n  \"sdks\": {},\n  \"mcp\": [],\n  \"hostPackages\": [],\n  \"provisionCommands\": [],\n  \"tests\": {}\n}\n",
+          "name": "a",
+          "pathInRemote": "projects/a.json"
+        }
+      ],
+      "reasons": {
+        "../bad": "is not a safe profile file name",
+        "invalid": "is not a valid profile: \"repos\" must be an array",
+        "tracked": "already tracked by https://***@host/repo -- use Push back"
+      },
+      "refuse": [],
+      "skipTracked": [
+        {
+          "name": "tracked",
+          "reason": "already tracked by https://***@host/repo -- use Push back"
+        }
+      ]
+    },
+    "kind": "picker",
+    "output": [
+      {
+        "kind": "separator",
+        "label": "publish"
+      },
+      {
+        "blocked": false,
+        "description": "",
+        "label": "a",
+        "picked": true
+      },
+      {
+        "kind": "separator",
+        "label": "already tracked -- use Push back"
+      },
+      {
+        "blocked": true,
+        "description": "already tracked by https://***@host/repo -- use Push back",
+        "label": "tracked",
+        "picked": false
+      },
+      {
+        "kind": "separator",
+        "label": "cannot be published"
+      },
+      {
+        "blocked": true,
+        "description": "is not a safe profile file name",
+        "label": "../bad",
+        "picked": false
+      },
+      {
+        "blocked": true,
+        "description": "is not a valid profile: \"repos\" must be an array",
+        "label": "invalid",
+        "picked": false
+      }
+    ]
+  },
+  {
+    "input": {
+      "manifest": {
+        "tracked": {
+          "remoteUrl": "https://user:fixture-secret@host/repo"
+        }
+      },
+      "profiles": [
+        {
+          "name": "a",
+          "raw": "{\"name\":\"a\"}"
+        },
+        {
+          "name": "default",
+          "raw": "{}"
+        },
+        {
+          "name": "../bad",
+          "raw": "{}"
+        },
+        {
+          "name": "invalid",
+          "raw": "{\"name\":\"invalid\",\"repos\":0}"
+        },
+        {
+          "name": "tracked",
+          "raw": "{}"
+        }
+      ],
+      "remoteFiles": {
+        "a": "{\"name\":\"a\"}"
+      }
+    },
+    "kind": "publish",
+    "output": {
+      "invalid": [
+        {
+          "name": "../bad",
+          "reason": "is not a safe profile file name"
+        },
+        {
+          "name": "invalid",
+          "reason": "is not a valid profile: \"repos\" must be an array"
+        }
+      ],
+      "publish": [
+        {
+          "adopt": true,
+          "content": "{\n  \"name\": \"a\",\n  \"repos\": [],\n  \"sdks\": {},\n  \"mcp\": [],\n  \"hostPackages\": [],\n  \"provisionCommands\": [],\n  \"tests\": {}\n}\n",
+          "name": "a",
+          "pathInRemote": "projects/a.json"
+        }
+      ],
+      "reasons": {
+        "../bad": "is not a safe profile file name",
+        "invalid": "is not a valid profile: \"repos\" must be an array",
+        "tracked": "already tracked by https://***@host/repo -- use Push back"
+      },
+      "refuse": [],
+      "skipTracked": [
+        {
+          "name": "tracked",
+          "reason": "already tracked by https://***@host/repo -- use Push back"
+        }
+      ]
+    }
+  },
+  {
+    "input": {
+      "invalid": [
+        {
+          "name": "../bad",
+          "reason": "is not a safe profile file name"
+        },
+        {
+          "name": "invalid",
+          "reason": "is not a valid profile: \"repos\" must be an array"
+        }
+      ],
+      "publish": [
+        {
+          "adopt": true,
+          "content": "{\n  \"name\": \"a\",\n  \"repos\": [],\n  \"sdks\": {},\n  \"mcp\": [],\n  \"hostPackages\": [],\n  \"provisionCommands\": [],\n  \"tests\": {}\n}\n",
+          "name": "a",
+          "pathInRemote": "projects/a.json"
+        }
+      ],
+      "reasons": {
+        "../bad": "is not a safe profile file name",
+        "invalid": "is not a valid profile: \"repos\" must be an array",
+        "tracked": "already tracked by https://***@host/repo -- use Push back"
+      },
+      "refuse": [],
+      "skipTracked": [
+        {
+          "name": "tracked",
+          "reason": "already tracked by https://***@host/repo -- use Push back"
+        }
+      ]
+    },
+    "kind": "picker",
+    "output": [
+      {
+        "kind": "separator",
+        "label": "publish"
+      },
+      {
+        "blocked": false,
+        "description": "already upstream, identical -- adopt only",
+        "label": "a",
+        "picked": true
+      },
+      {
+        "kind": "separator",
+        "label": "already tracked -- use Push back"
+      },
+      {
+        "blocked": true,
+        "description": "already tracked by https://***@host/repo -- use Push back",
+        "label": "tracked",
+        "picked": false
+      },
+      {
+        "kind": "separator",
+        "label": "cannot be published"
+      },
+      {
+        "blocked": true,
+        "description": "is not a safe profile file name",
+        "label": "../bad",
+        "picked": false
+      },
+      {
+        "blocked": true,
+        "description": "is not a valid profile: \"repos\" must be an array",
+        "label": "invalid",
+        "picked": false
+      }
+    ]
+  },
+  {
+    "input": {
+      "manifest": {
+        "tracked": {
+          "remoteUrl": "https://user:fixture-secret@host/repo"
+        }
+      },
+      "profiles": [
+        {
+          "name": "a",
+          "raw": "{\"name\":\"a\"}"
+        },
+        {
+          "name": "default",
+          "raw": "{}"
+        },
+        {
+          "name": "../bad",
+          "raw": "{}"
+        },
+        {
+          "name": "invalid",
+          "raw": "{\"name\":\"invalid\",\"repos\":0}"
+        },
+        {
+          "name": "tracked",
+          "raw": "{}"
+        }
+      ],
+      "remoteFiles": {
+        "A": "{}"
+      }
+    },
+    "kind": "publish",
+    "output": {
+      "invalid": [
+        {
+          "name": "../bad",
+          "reason": "is not a safe profile file name"
+        },
+        {
+          "name": "invalid",
+          "reason": "is not a valid profile: \"repos\" must be an array"
+        }
+      ],
+      "publish": [],
+      "reasons": {
+        "../bad": "is not a safe profile file name",
+        "a": "the remote already has projects/A.json, which is the SAME file as projects/a.json on Windows -- rename one of them, or import it first",
+        "invalid": "is not a valid profile: \"repos\" must be an array",
+        "tracked": "already tracked by https://***@host/repo -- use Push back"
+      },
+      "refuse": [
+        {
+          "name": "a",
+          "reason": "the remote already has projects/A.json, which is the SAME file as projects/a.json on Windows -- rename one of them, or import it first"
+        }
+      ],
+      "skipTracked": [
+        {
+          "name": "tracked",
+          "reason": "already tracked by https://***@host/repo -- use Push back"
+        }
+      ]
+    }
+  },
+  {
+    "input": {
+      "invalid": [
+        {
+          "name": "../bad",
+          "reason": "is not a safe profile file name"
+        },
+        {
+          "name": "invalid",
+          "reason": "is not a valid profile: \"repos\" must be an array"
+        }
+      ],
+      "publish": [],
+      "reasons": {
+        "../bad": "is not a safe profile file name",
+        "a": "the remote already has projects/A.json, which is the SAME file as projects/a.json on Windows -- rename one of them, or import it first",
+        "invalid": "is not a valid profile: \"repos\" must be an array",
+        "tracked": "already tracked by https://***@host/repo -- use Push back"
+      },
+      "refuse": [
+        {
+          "name": "a",
+          "reason": "the remote already has projects/A.json, which is the SAME file as projects/a.json on Windows -- rename one of them, or import it first"
+        }
+      ],
+      "skipTracked": [
+        {
+          "name": "tracked",
+          "reason": "already tracked by https://***@host/repo -- use Push back"
+        }
+      ]
+    },
+    "kind": "picker",
+    "output": [
+      {
+        "kind": "separator",
+        "label": "already tracked -- use Push back"
+      },
+      {
+        "blocked": true,
+        "description": "already tracked by https://***@host/repo -- use Push back",
+        "label": "tracked",
+        "picked": false
+      },
+      {
+        "kind": "separator",
+        "label": "cannot be published"
+      },
+      {
+        "blocked": true,
+        "description": "the remote already has projects/A.json, which is the SAME file as projects/a.json on Windows -- rename one of them, or import it first",
+        "label": "a",
+        "picked": false
+      },
+      {
+        "blocked": true,
+        "description": "is not a safe profile file name",
+        "label": "../bad",
+        "picked": false
+      },
+      {
+        "blocked": true,
+        "description": "is not a valid profile: \"repos\" must be an array",
+        "label": "invalid",
+        "picked": false
+      }
+    ]
+  },
+  {
+    "input": {
+      "manifest": {
+        "tracked": {
+          "remoteUrl": "https://user:fixture-secret@host/repo"
+        }
+      },
+      "profiles": [
+        {
+          "name": "a",
+          "raw": "{\"name\":\"a\"}"
+        },
+        {
+          "name": "default",
+          "raw": "{}"
+        },
+        {
+          "name": "../bad",
+          "raw": "{}"
+        },
+        {
+          "name": "invalid",
+          "raw": "{\"name\":\"invalid\",\"repos\":0}"
+        },
+        {
+          "name": "tracked",
+          "raw": "{}"
+        }
+      ],
+      "remoteFiles": {
+        "a": "{\"name\":\"a\",\"repos\":[{\"url\":\"x\"}]}"
+      }
+    },
+    "kind": "publish",
+    "output": {
+      "invalid": [
+        {
+          "name": "../bad",
+          "reason": "is not a safe profile file name"
+        },
+        {
+          "name": "invalid",
+          "reason": "is not a valid profile: \"repos\" must be an array"
+        }
+      ],
+      "publish": [],
+      "reasons": {
+        "../bad": "is not a safe profile file name",
+        "a": "the remote already has projects/a.json with different content -- import it first, then push back",
+        "invalid": "is not a valid profile: \"repos\" must be an array",
+        "tracked": "already tracked by https://***@host/repo -- use Push back"
+      },
+      "refuse": [
+        {
+          "name": "a",
+          "reason": "the remote already has projects/a.json with different content -- import it first, then push back"
+        }
+      ],
+      "skipTracked": [
+        {
+          "name": "tracked",
+          "reason": "already tracked by https://***@host/repo -- use Push back"
+        }
+      ]
+    }
+  },
+  {
+    "input": {
+      "invalid": [
+        {
+          "name": "../bad",
+          "reason": "is not a safe profile file name"
+        },
+        {
+          "name": "invalid",
+          "reason": "is not a valid profile: \"repos\" must be an array"
+        }
+      ],
+      "publish": [],
+      "reasons": {
+        "../bad": "is not a safe profile file name",
+        "a": "the remote already has projects/a.json with different content -- import it first, then push back",
+        "invalid": "is not a valid profile: \"repos\" must be an array",
+        "tracked": "already tracked by https://***@host/repo -- use Push back"
+      },
+      "refuse": [
+        {
+          "name": "a",
+          "reason": "the remote already has projects/a.json with different content -- import it first, then push back"
+        }
+      ],
+      "skipTracked": [
+        {
+          "name": "tracked",
+          "reason": "already tracked by https://***@host/repo -- use Push back"
+        }
+      ]
+    },
+    "kind": "picker",
+    "output": [
+      {
+        "kind": "separator",
+        "label": "already tracked -- use Push back"
+      },
+      {
+        "blocked": true,
+        "description": "already tracked by https://***@host/repo -- use Push back",
+        "label": "tracked",
+        "picked": false
+      },
+      {
+        "kind": "separator",
+        "label": "cannot be published"
+      },
+      {
+        "blocked": true,
+        "description": "the remote already has projects/a.json with different content -- import it first, then push back",
+        "label": "a",
+        "picked": false
+      },
+      {
+        "blocked": true,
+        "description": "is not a safe profile file name",
+        "label": "../bad",
+        "picked": false
+      },
+      {
+        "blocked": true,
+        "description": "is not a valid profile: \"repos\" must be an array",
+        "label": "invalid",
+        "picked": false
+      }
+    ]
+  },
+  {
+    "input": {
+      "manifest": {},
+      "profiles": [
+        {
+          "name": "a",
+          "raw": "{\"name\":\"a\"}"
+        },
+        {
+          "name": "default",
+          "raw": "{}"
+        },
+        {
+          "name": "../bad",
+          "raw": "{}"
+        },
+        {
+          "name": "invalid",
+          "raw": "{\"name\":\"invalid\",\"repos\":0}"
+        },
+        {
+          "name": "tracked",
+          "raw": "{}"
+        }
+      ],
+      "remoteFiles": {},
+      "selected": [
+        "a"
+      ]
+    },
+    "kind": "publish",
+    "output": {
+      "invalid": [],
+      "publish": [
+        {
+          "adopt": false,
+          "content": "{\n  \"name\": \"a\",\n  \"repos\": [],\n  \"sdks\": {},\n  \"mcp\": [],\n  \"hostPackages\": [],\n  \"provisionCommands\": [],\n  \"tests\": {}\n}\n",
+          "name": "a",
+          "pathInRemote": "projects/a.json"
+        }
+      ],
+      "reasons": {},
+      "refuse": [],
+      "skipTracked": []
+    }
+  },
+  {
+    "input": [
+      {
+        "blocked": false,
+        "label": "yes"
+      },
+      {
+        "blocked": true,
+        "label": "no"
+      },
+      {
+        "kind": "separator",
+        "label": "heading"
+      }
+    ],
+    "kind": "filterPicker",
+    "output": [
+      {
+        "blocked": false,
+        "label": "yes"
+      }
+    ]
+  },
+  {
+    "input": {
+      "remotes": [
+        {
+          "url": "https://host/x"
+        },
+        {
+          "url": "https://user:fixture-secret@host/x"
+        }
+      ],
+      "wanted": "https://host/x"
+    },
+    "kind": "resolveRemote",
+    "output": "https://host/x"
+  },
+  {
+    "input": {
+      "remotes": [
+        {
+          "url": "https://host/x"
+        },
+        {
+          "url": "https://user:fixture-secret@host/x"
+        }
+      ],
+      "wanted": "https://***@host/x"
+    },
+    "kind": "resolveRemote",
+    "output": "https://user:fixture-secret@host/x"
+  },
+  {
+    "input": {
+      "remotes": [
+        {
+          "url": "https://host/x"
+        },
+        {
+          "url": "https://user:fixture-secret@host/x"
+        }
+      ],
+      "wanted": "missing"
+    },
+    "kind": "resolveRemote",
+    "output": ""
+  },
+  {
+    "input": "vm",
+    "kind": "resolveBranch",
+    "output": {
+      "branch": "vm",
+      "warnings": []
+    }
+  },
+  {
+    "input": "vm-other",
+    "kind": "resolveBranch",
+    "output": {
+      "branch": "vm-other",
+      "warnings": []
+    }
+  },
+  {
+    "input": "main",
+    "kind": "resolveBranch",
+    "output": {
+      "branch": "vm",
+      "warnings": [
+        "invalid config-sync branch name \"main\"; falling back to \"vm\""
+      ]
+    }
+  },
+  {
+    "input": {
+      "configRepoUrl": "https://host/config",
+      "installRef": "main",
+      "installRepo": "permissionBRICK/The-Construct",
+      "names": [
+        "a",
+        "b"
+      ]
+    },
+    "kind": "share",
+    "output": "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/permissionBRICK/The-Construct/main/install.ps1'))) -ConfigRepo 'https://host/config' -ImportConfigs 'a,b' -Action add-config"
+  },
+  {
+    "input": {
+      "configRepoUrl": "https://host/config",
+      "installRef": "main",
+      "installRepo": "permissionBRICK/The-Construct",
+      "names": [
+        "a",
+        "b"
+      ]
+    },
+    "kind": "deploy",
+    "output": "# Bootstraps Construct and imports the config files bundled next to this script.\n& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/permissionBRICK/The-Construct/main/install.ps1'))) -ConfigDir \"$PSScriptRoot\" -Action add-config\n"
+  },
+  {
+    "input": {
+      "configRepoUrl": "https://host/config",
+      "installRef": "topic/config",
+      "installRepo": "permissionBRICK/The-Construct",
+      "names": [
+        "a",
+        "b"
+      ]
+    },
+    "kind": "share",
+    "output": "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/permissionBRICK/The-Construct/topic/config/install.ps1'))) -ConfigRepo 'https://host/config' -ImportConfigs 'a,b' -Action add-config -Ref 'topic/config'"
+  },
+  {
+    "input": {
+      "configRepoUrl": "https://host/config",
+      "installRef": "topic/config",
+      "installRepo": "permissionBRICK/The-Construct",
+      "names": [
+        "a",
+        "b"
+      ]
+    },
+    "kind": "deploy",
+    "output": "# Bootstraps Construct and imports the config files bundled next to this script.\n& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/permissionBRICK/The-Construct/topic/config/install.ps1'))) -ConfigDir \"$PSScriptRoot\" -Action add-config -Ref 'topic/config'\n"
+  },
+  {
+    "input": {
+      "configRepoUrl": "https://host/config",
+      "installRef": "main",
+      "installRepo": "fork/construct",
+      "names": [
+        "a",
+        "b"
+      ]
+    },
+    "kind": "share",
+    "output": "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/fork/construct/main/install.ps1'))) -ConfigRepo 'https://host/config' -ImportConfigs 'a,b' -Action add-config -Repo 'fork/construct'"
+  },
+  {
+    "input": {
+      "configRepoUrl": "https://host/config",
+      "installRef": "main",
+      "installRepo": "fork/construct",
+      "names": [
+        "a",
+        "b"
+      ]
+    },
+    "kind": "deploy",
+    "output": "# Bootstraps Construct and imports the config files bundled next to this script.\n& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/fork/construct/main/install.ps1'))) -ConfigDir \"$PSScriptRoot\" -Action add-config -Repo 'fork/construct'\n"
+  },
+  {
+    "input": {
+      "configRepoUrl": "https://host/config",
+      "installRef": "topic/config",
+      "installRepo": "fork/construct",
+      "names": [
+        "a",
+        "b"
+      ]
+    },
+    "kind": "share",
+    "output": "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/fork/construct/topic/config/install.ps1'))) -ConfigRepo 'https://host/config' -ImportConfigs 'a,b' -Action add-config -Repo 'fork/construct' -Ref 'topic/config'"
+  },
+  {
+    "input": {
+      "configRepoUrl": "https://host/config",
+      "installRef": "topic/config",
+      "installRepo": "fork/construct",
+      "names": [
+        "a",
+        "b"
+      ]
+    },
+    "kind": "deploy",
+    "output": "# Bootstraps Construct and imports the config files bundled next to this script.\n& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/fork/construct/topic/config/install.ps1'))) -ConfigDir \"$PSScriptRoot\" -Action add-config -Repo 'fork/construct' -Ref 'topic/config'\n"
+  },
+  {
+    "input": {
+      "configRepoUrl": "https://host/team's/config",
+      "installRef": "topic/it's-config",
+      "installRepo": "fork/construct",
+      "names": [
+        "a'b",
+        "second"
+      ]
+    },
+    "kind": "share",
+    "output": "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/fork/construct/topic/it''s-config/install.ps1'))) -ConfigRepo 'https://host/team''s/config' -ImportConfigs 'a''b,second' -Action add-config -Repo 'fork/construct' -Ref 'topic/it''s-config'"
+  },
+  {
+    "input": {
+      "configRepoUrl": "https://host/team's/config",
+      "installRef": "topic/it's-config",
+      "installRepo": "fork/construct",
+      "names": [
+        "a'b",
+        "second"
+      ]
+    },
+    "kind": "deploy",
+    "output": "# Bootstraps Construct and imports the config files bundled next to this script.\n& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/fork/construct/topic/it''s-config/install.ps1'))) -ConfigDir \"$PSScriptRoot\" -Action add-config -Repo 'fork/construct' -Ref 'topic/it''s-config'\n"
+  },
+  {
+    "input": {
+      "baseBlobSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "baseCommit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "name": "a",
+      "ref": "main",
+      "remoteUrl": "https://host/repo"
+    },
+    "kind": "manifest",
+    "output": "{\n  \"remoteUrl\": \"https://host/repo\",\n  \"ref\": \"main\",\n  \"pathInRemote\": \"projects/a.json\",\n  \"importedAs\": \"a\",\n  \"baseCommit\": \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\n  \"baseBlobSha\": \"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"\n}\n"
+  }
+]

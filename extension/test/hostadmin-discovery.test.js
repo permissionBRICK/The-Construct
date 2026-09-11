@@ -17,6 +17,7 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
   const messages = [], probe = deferred();
   let generation = 0, offerCalls = 0;
   const context = vm.createContext({
+    companionDeferred: () => false,
     activeInstance: () => remote,
     instanceGate: { token: () => generation, valid: token => token === generation },
     instances: { captureTarget: () => ({ token: generation }) },

@@ -27,6 +27,8 @@ where they can't touch your host PC.
 - 🔒 **Sandboxed by design** — a throwaway Hyper-V VM stands between the agents and your PC.
 - 🎛️ **One-screen control panel** — a VS Code extension on your host runs the whole VM:
   status, power, lifecycle, projects, updates, usage.
+- 🟢 **[Construct Companion](docs/companion.md)** — a per-user Windows tray app for
+  host jobs and the control panel with VS Code closed (integration in progress).
 - ♻️ **Disposable, not amnesiac** — reinstall the VM and your agent config comes back on its
   own: instructions, memory, skills, subscription auth, git & MCP credentials.
 - 📦 **Project profiles** — repos, SDKs, MCP servers, and setup commands in one JSON file,
@@ -184,6 +186,7 @@ The Construct swaps guardrails for isolation:
 | [`construct expose`](docs/expose.md) | Self-serve port forwards from the VM, the spool/API contract, the idle heartbeat |
 | [Child VMs](docs/child-vms.md) | `construct vm`: create, lifecycle, media, console, sharing, jobs and automation output |
 | [Hypervisor drivers](docs/drivers.md) | The backend contract (`hyperv-local`, `hyperv-remote`) and how to add one |
+| [Construct Companion](docs/companion.md) | Windows tray app, per-user install/update/uninstall, settings and troubleshooting |
 | [Control panel](docs/control-panel.md) | The VS Code operator console, optional voice and patched T3 Code features |
 | [Backup & restore](docs/backup-restore.md) | Carrying agent config and auth across reinstalls |
 | [Config sync](docs/config-sync.md) | How project profiles survive a reinstall and sync between VM and host |
