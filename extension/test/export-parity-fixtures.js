@@ -377,7 +377,24 @@ function hostAdminIpc() {
  }
  return rows;
 }
-async function exportAll() { return { "hostadmin-ipc": hostAdminIpc(), "config-sync": configSync(), "notify-runtime": notifyRuntime(), "audio-runtime": audioRuntime(), "repatch-runtime": repatchRuntime(), "forward-runtime": forwardRuntime(), "guest-scripts": guestScripts(), "ssh-args": sshArgs(), "host-label": hostLabel(), "shell-quoting": shellQuoting(), "settings-mapping": settingsMapping(), "instance-identity": instanceIdentity(), "registry-state": registryState(), "lifecycle-invocations": lifecycleInvocations(), "lifecycle-launches": lifecycleLaunches(), "vm-power": vmPower(), "probe-parsing": probeParsing(), "usage-parsing": usageParsing(), "updates-planning": updatesPlanning(), "remote-identity": remoteIdentity(), "t3-pure": t3Pure(), "remote-routes": remoteRoutes(), "t3-discovery": await t3Discovery(), "state-json-bytes": stateJsonBytes(), "agent-updates": await agentUpdates(), "agent-update-scripts": agentUpdateScripts(), "usage-exports": usageExports(), "instance-fingerprints": instanceFingerprints() }; }
+function desktopWebviews() {
+  const themes = require('../src/themes');
+  const rows = [];
+  for (const theme of [null, '', 'classic', 'terminal', 'native', ' NATIVE ', '../bad'])
+    rows.push({kind:'theme', input:theme, output:themes.cssFileFor(theme)});
+  const nonce = '0123456789abcdef0123456789abcdef', cspSource = 'https://construct.media';
+  for (const cards of [[], themes.THEMES.map(c=>({...c, previewUri:cspSource+'/'+themes.previewFileFor(c.id)})), [{id:'"<&',label:"A's & B",blurb:'<description>',previewUri:'https://construct.media/x?a=1&b=2'}]])
+    rows.push({kind:'picker',cards,nonce,output:themes.buildPickerHtml({cspSource,nonce,cards})});
+  for (const surface of ['panel','launcher','hostadmin']) for (const theme of ['classic','native','terminal']) {
+    const template = fs.readFileSync(path.join(__dirname,'../media',surface+'.html'),'utf8');
+    const output = template.replace(/{{cspSource}}/g,cspSource).replace(/{{nonce}}/g,nonce)
+      .replace(/{{styleUri}}/g,cspSource+'/panel.css').replace(/{{themeUri}}/g,cspSource+'/'+themes.cssFileFor(theme))
+      .replace(/{{scriptUri}}/g,cspSource+'/'+surface+'.js').replace(/{{adminStyleUri}}/g,cspSource+'/hostadmin.css');
+    rows.push({kind:'document',surface,template,theme,nonce,output});
+  }
+  return rows;
+}
+async function exportAll() { return { "desktop-webviews": desktopWebviews(), "hostadmin-ipc": hostAdminIpc(), "config-sync": configSync(), "notify-runtime": notifyRuntime(), "audio-runtime": audioRuntime(), "repatch-runtime": repatchRuntime(), "forward-runtime": forwardRuntime(), "guest-scripts": guestScripts(), "ssh-args": sshArgs(), "host-label": hostLabel(), "shell-quoting": shellQuoting(), "settings-mapping": settingsMapping(), "instance-identity": instanceIdentity(), "registry-state": registryState(), "lifecycle-invocations": lifecycleInvocations(), "lifecycle-launches": lifecycleLaunches(), "vm-power": vmPower(), "probe-parsing": probeParsing(), "usage-parsing": usageParsing(), "updates-planning": updatesPlanning(), "remote-identity": remoteIdentity(), "t3-pure": t3Pure(), "remote-routes": remoteRoutes(), "t3-discovery": await t3Discovery(), "state-json-bytes": stateJsonBytes(), "agent-updates": await agentUpdates(), "agent-update-scripts": agentUpdateScripts(), "usage-exports": usageExports(), "instance-fingerprints": instanceFingerprints() }; }
 if (require.main === module) (async () => {
   fs.mkdirSync(directory, { recursive: true });
   for (const [area, value] of Object.entries(await exportAll())) fs.writeFileSync(path.join(directory, area + ".json"), serialize(value));
