@@ -34,7 +34,7 @@ They cannot touch your host PC.
   input, automatic resume after a session limit and Construct integration.
 - 🤷 **It just works.** The agents are trained to install whatever tool a task needs.
 
-<sub>Also: MCP servers deploy to all three agents · the Claude Code extension is patched for faster UI updates · no AI attribution in commits by default.</sub>
+<sub>And many... *many* more practical features and tweaks handcrafted through daily use.</sub>
 
 ## ⚡ Load the Construct
 
