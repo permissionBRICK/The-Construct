@@ -16,16 +16,34 @@ public static partial class SshArgs
         return Finish(args, cfg, keyPath).Append(command).ToArray();
     }
 
+    // Long-lived `ssh -T` running a script from stdin-free base64; keepalives detect a dead VM.
+    public static string[] BuildWatch(SshConfiguration cfg, string script, string? keyPath = null)
+    {
+        var args = new List<string> { "-T" };
+        args.AddRange(Common(cfg));
+        args.AddRange(["-o", "ServerAliveInterval=20", "-o", "ServerAliveCountMax=3"]);
+        AddPort(args, cfg.SshPort);
+        return Finish(args, cfg, keyPath).Append(WrapScriptCommand(script)).ToArray();
+    }
+
     public static string[] BuildLocalForward(SshConfiguration cfg, int localPort, int vmPort,
         string? keyPath = null, string? bindHost = null, string? connectAddress = null, int? connectPort = null)
     {
         if (!ValidPort(localPort) || !ValidPort(vmPort) || !ValidPort(connectPort ?? vmPort))
             throw new ArgumentException("Invalid forward port.");
         var far = NormalizeConnectAddress(connectAddress) ?? throw new ArgumentException("Invalid forward destination.");
+        return Forward(cfg, keyPath, "-L", $"{NormalizeBindHost(bindHost)}:{localPort}:{far}:{connectPort ?? vmPort}");
+    }
+
+    // Microphone passthrough: the VM's recorder port reaches the loopback capture server on this PC.
+    public static string[] BuildReverseForward(SshConfiguration cfg, int vmPort, int hostPort, string? keyPath = null) =>
+        Forward(cfg, keyPath, "-R", $"{Audio.AudioProtocol.NormalizePort(vmPort, 8767)}:127.0.0.1:{Audio.AudioProtocol.NormalizePort(hostPort, 0)}");
+
+    private static string[] Forward(SshConfiguration cfg, string? keyPath, string flag, string spec)
+    {
         var args = new List<string> { "-N" };
         args.AddRange(Common(cfg));
-        args.AddRange(["-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "-o", "ExitOnForwardFailure=yes",
-            "-L", $"{NormalizeBindHost(bindHost)}:{localPort}:{far}:{connectPort ?? vmPort}"]);
+        args.AddRange(["-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "-o", "ExitOnForwardFailure=yes", flag, spec]);
         AddPort(args, cfg.SshPort);
         return Finish(args, cfg, keyPath);
     }
@@ -36,10 +54,10 @@ public static partial class SshArgs
         return $"f=$(mktemp) && printf %s '{b64}' | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc";
     }
     public static int NormalizeSshPort(int port) => ValidPort(port) ? port : 22;
-    public static string NormalizeBindHost(string? host) => ForwardHost.TrimWhitespace(host ?? "") is "0.0.0.0" or "*" or "::" ? "0.0.0.0" : "127.0.0.1";
+    public static string NormalizeBindHost(string? host) => State.StateJson.Trim(host ?? "") is "0.0.0.0" or "*" or "::" ? "0.0.0.0" : "127.0.0.1";
     public static string? NormalizeConnectAddress(string? value)
     {
-        var text = ForwardHost.TrimWhitespace(value ?? "");
+        var text = State.StateJson.Trim(value ?? "");
         if (text.Length == 0) return "127.0.0.1";
         var bare = text.StartsWith('[') && text.EndsWith(']') ? text[1..^1] : text;
         // ssh.js accepts scoped IPv6 destinations; host labels deliberately do not.

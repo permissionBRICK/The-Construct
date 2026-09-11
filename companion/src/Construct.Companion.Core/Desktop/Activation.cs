@@ -1,3 +1,4 @@
+using Construct.Companion.Core.Forwards;
 using Construct.Companion.Core.Ipc;
 
 namespace Construct.Companion.Core.Desktop;
@@ -39,7 +40,7 @@ public static class Activation
                 case "settings": views.Add(new("settings", instance)); break;
                 case "hostadmin": views.Add(new("hostadmin", Host: host)); break;
                 case "forward":
-                    if (instance is null || !query.TryGetValue("id", out var id) || !Construct.Companion.Core.Forwards.ForwardProtocol.IsSafeId(id))
+                    if (instance is null || !query.TryGetValue("id", out var id) || !ForwardProtocol.IsSafeId(id))
                         throw new ArgumentException("Invalid forward activation.");
                     forwardInstance = instance; forwardId = id; break;
                 default: views.Add(new("popup")); break;

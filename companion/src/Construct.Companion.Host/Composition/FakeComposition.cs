@@ -10,11 +10,11 @@ public static class FakeComposition
 {
     public static IServiceCollection AddCompanionFakes(this IServiceCollection services, bool integrationRegistry = false, bool remoteOnly = false)
     {
-        var files = new FakeStateFileSystem(); files.Files.Roots[FileSystemRoot.LocalAppData] = "/fake/local"; files.Files.Roots[FileSystemRoot.Temp] = "/fake/temp";
+        var files = new FakeFileSystem(); files.Roots[FileSystemRoot.LocalAppData] = "/fake/local"; files.Roots[FileSystemRoot.Temp] = "/fake/temp";
         files.CreateDirectory("/fake/scripts"); files.WriteFileAtomic("/fake/scripts/Auto-Install.ps1", "param($InstanceName,$ConfigBranch)"u8);
         files.WriteFileAtomic("/fake/scripts/Provision-AgentVM.ps1", "param($InstanceName,$ConfigBranch)"u8);
         files.WriteFileAtomic("/fake/local/The-Construct/instances.json", "{\"version\":1,\"defaultInstance\":\"agent-vm\",\"instances\":{\"agent-vm\":{\"scriptsDir\":\"/fake/scripts\"}}}"u8);
-        files.Files.Roots[FileSystemRoot.InstallDirectory] = "/fake/app";
+        files.Roots[FileSystemRoot.InstallDirectory] = "/fake/app";
         if (integrationRegistry)
         {
             var entries = new JsonObject();

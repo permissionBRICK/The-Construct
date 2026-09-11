@@ -59,10 +59,10 @@ public sealed class DesktopHostTests
         bus.Publish("dev",new {type="state",value=2}); Assert.True(await pending); Assert.Equal(2,subscriber.Current.GetProperty("value").GetInt32());
         var next=subscriber.MoveNextAsync(); stop.Cancel(); await Assert.ThrowsAnyAsync<OperationCanceledException>(async()=>await next);
     }
-    private static FakeStateFileSystem Files()
+    private static FakeFileSystem Files()
     {
-        var files=new FakeStateFileSystem(); files.Files.Roots[FileSystemRoot.LocalAppData]="/local";
-        files.Files.Roots[FileSystemRoot.InstallDirectory]="/app"; files.Files.Roots[FileSystemRoot.UserProfile]="/user"; return files;
+        var files = new FakeFileSystem(); files.Roots[FileSystemRoot.LocalAppData] = "/local";
+        files.Roots[FileSystemRoot.InstallDirectory] = "/app"; files.Roots[FileSystemRoot.UserProfile] = "/user"; return files;
     }
     [Fact]
     public async Task HeadlessNoInstancesIsSuccessAndDoesNotWriteState()

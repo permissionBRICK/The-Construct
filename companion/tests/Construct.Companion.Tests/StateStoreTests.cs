@@ -8,9 +8,9 @@ namespace Construct.Companion.Tests;
 
 public sealed class StateStoreTests
 {
-    private static FakeStateFileSystem Files()
+    private static FakeFileSystem Files()
     {
-        var fs = new FakeStateFileSystem(); fs.Files.Roots[FileSystemRoot.LocalAppData] = "/local"; fs.CreateDirectory("/scripts"); return fs;
+        var fs = new FakeFileSystem(); fs.Roots[FileSystemRoot.LocalAppData] = "/local"; fs.CreateDirectory("/scripts"); return fs;
     }
     [Fact]
     public void DefaultOnlyInstallDoesNotCreateInstanceFile()
@@ -68,7 +68,7 @@ public sealed class StateStoreTests
         var host = new HostState(fs); Assert.Equal("/local/The-Construct/two", host.ResolveScriptsDirectory());
         Assert.Equal("/scripts", host.ResolveScriptsDirectory("/scripts", "/local/The-Construct/two"));
         Assert.Equal("/local/The-Construct/two", host.ResolveScriptsDirectory("/stale"));
-        fs.Files.Roots.Remove(FileSystemRoot.LocalAppData); fs.Files.Roots[FileSystemRoot.Temp] = "/temp"; Assert.Equal("/temp", host.LocalAppData);
+        fs.Roots.Remove(FileSystemRoot.LocalAppData); fs.Roots[FileSystemRoot.Temp] = "/temp"; Assert.Equal("/temp", host.LocalAppData);
     }
     [Fact]
     public void ProfilesAreTraversalSafeAndCreateDoesNotOverwriteCaseVariants()
