@@ -36,6 +36,7 @@ public static class HostAdminComposition
         services.AddChildVmPlatform(options);
         services.AddSingleton<Constructd.Api.Jobs.PrimaryVmJobs>();
         services.AddSingleton<Constructd.Api.Jobs.LifecycleStart>();
+        services.AddSingleton<Constructd.Api.Jobs.PrimaryCpuSettings>();
         services.AddSingleton<Constructd.Api.Jobs.ChildLifecycleJobs>();
         services.AddSingleton<Constructd.Api.Jobs.LifecycleJobAdmission>();
         services.AddSingleton<Constructd.Api.Jobs.CascadeJobs>();

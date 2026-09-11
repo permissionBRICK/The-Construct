@@ -7,7 +7,7 @@ namespace Constructd.Api.Jobs;
 
 /// <summary>Caller holds the VM gate. An accepted start keeps its original clock across retries.</summary>
 public sealed class LifecycleStart(IVmRepository vms, IHypervisorDriver driver, IChildVmStorage storage,
-    ICapacityLedger capacity, IAdmissionStore admission, IOperationKeyStore keys, IClock clock, ChildStartIntent childStarts, IJobStore jobs, IOperationRegistry operations)
+    ICapacityLedger capacity, IAdmissionStore admission, IOperationKeyStore keys, IClock clock, ChildStartIntent childStarts, IJobStore jobs, IOperationRegistry operations, PrimaryCpuSettings cpuSettings)
 {
     public sealed record Intent(string? Lifetime, long? Seconds, long LeaseVersion, DateTimeOffset ActivationBase,
         IReadOnlyList<ReservationLine> Lines, string OperationId, bool Restart = false);
@@ -21,6 +21,8 @@ public sealed class LifecycleStart(IVmRepository vms, IHypervisorDriver driver, 
         if (key?.State == OperationKeyState.Completed)
             return JsonSerializer.Deserialize<Reply>(key.ResponseJson!, ApiJson.Options)!;
         var state = await driver.GetStateAsync(vm.Name, ct);
+        // Only before a new start intent: a recovered intent must keep the hardware it reserved.
+        if (key is null) vm = await cpuSettings.ApplyAsync(vm, state, ct);
         if (key is null)
         {
             foreach (var pending in (await keys.ListInFlightAsync(vm.Name, ct)).Where(k => k.PowerGeneration == vm.PowerGeneration && k.Kind is "lifecycle-start" or "restart-start" or "child-start"))
@@ -73,6 +75,10 @@ public sealed class LifecycleStart(IVmRepository vms, IHypervisorDriver driver, 
                 if (current is null || current.Deleting || current.PowerGeneration != vm.PowerGeneration) return false;
                 if (state == VmState.Off && !restart)
                     await scope.ReleaseReservationsAsync(rows.Where(r => (r.Resource != ReservationResource.Storage || ReservationRules.SavedState(r))).Select(r => r.Id).ToArray(), state, "observed-off");
+                var replaceCpu = state == VmState.Off && restart && rows.Where(r => r.Resource == ReservationResource.Cpu).Sum(r => r.Amount) != vm.Cpu;
+                if (replaceCpu)
+                    await scope.ReleaseReservationsAsync(rows.Where(r => r.Resource == ReservationResource.Cpu).Select(r => r.Id).ToArray(), state, "cpu-change");
+                if (replaceCpu) rows = rows.Where(r => r.Resource != ReservationResource.Cpu).ToArray();
                 var requested = restart ? lines.Where(line => rows.Where(r => Matches(r, line)).Sum(r => r.Amount) < line.Amount).ToArray() : lines.ToArray();
                 decision = await scope.ReserveAsync(new(vm.Owner, vm.Name, intent.OperationId, requested, TimeSpan.FromMinutes(10)));
                 return decision.Allowed;

@@ -162,6 +162,7 @@ public static class ServiceComposition
     {
         services.AddSingleton<FakeHypervisorDriver>();
         services.AddSingleton<IHypervisorDriver>(sp => sp.GetRequiredService<FakeHypervisorDriver>());
+        services.AddSingleton<IVmCpuDriver>(sp => sp.GetRequiredService<FakeHypervisorDriver>());
 
         services.AddSingleton<FakeIsoBuilder>();
         services.AddSingleton<IIsoBuilder>(sp => sp.GetRequiredService<FakeIsoBuilder>());
@@ -227,6 +228,7 @@ public static class ServiceComposition
         services.AddSingleton<IIsoDownloader, HttpIsoDownloader>();
 
         services.AddSingleton<IHypervisorDriver, HyperVDriver>();
+        services.AddSingleton<IVmCpuDriver>(sp => (HyperVDriver)sp.GetRequiredService<IHypervisorDriver>());
         services.AddSingleton<IPortForwardManager, NetshPortForwardManager>();
 
         // Held while VMs run so the host does not sleep under them; the container disposes it at
