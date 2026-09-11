@@ -5,14 +5,14 @@ using Windows.Data.Xml.Dom;
 using Windows.UI.Notifications;
 namespace Construct.Companion.Windows;
 
+// The WinRT projection types carry a minimum Windows 10 version, so plain "windows" would not satisfy CA1416.
 [SupportedOSPlatform("windows10.0.17763.0")]
-public sealed class WinRtToastRaiser(IRegistry registry) : IToastRaiser
+public sealed class WinRtToastRaiser(DesktopRegistration registration) : IToastRaiser
 {
     public Task<ToastAvailability> GetAvailabilityAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (registry.ReadString(DesktopRegistration.ToastKey, "DisplayName") is null || registry.ReadString(DesktopRegistration.ToastKey, "IconUri") is null)
-            return Task.FromResult(ToastAvailability.Unregistered);
+        if (!registration.ToastRegistered) return Task.FromResult(ToastAvailability.Unregistered);
         var notifier = ToastNotificationManager.CreateToastNotifier(DesktopRegistration.Aumid);
         return Task.FromResult(notifier.Setting == NotificationSetting.Enabled ? ToastAvailability.Available : ToastAvailability.Muted);
     }

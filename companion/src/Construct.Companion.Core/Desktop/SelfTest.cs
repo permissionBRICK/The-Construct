@@ -27,11 +27,8 @@ public sealed class SelfTest(IStateFileSystem files, ISelfTestPlatform platform,
         var local = host.LocalAppData;
         checks.Add(new("paths", local is null || string.IsNullOrEmpty(files.GetRoot(FileSystemRoot.InstallDirectory)) ? "failed" : "passed"));
         InstanceRegistry? registry = null;
-        await Check("registry", true, () => { registry = InstanceRegistry.Load(files); return Task.FromResult(registry.Problems.Count == 0 ? "passed" : "failed"); });
+        await Check("registry", true, () => { registry = InstanceRegistry.LoadUsable(files); return Task.FromResult(registry.Problems.Count == 0 ? "passed" : "failed"); });
         var definitions = registry?.List() ?? [];
-        // The JS registry synthesizes the legacy default; on an uninstalled host it
-        // isn't an actual VM. An explicit registry or scripts install makes it real.
-        if (registry is { Synthesized: true } && host.ResolveScriptsDirectory() is null) definitions = [];
         if (selectedInstance is not null)
         {
             checks.Add(new("selectedInstance", definitions.Any(i => StateJson.Text(i["name"]) == selectedInstance) ? "passed" : "failed"));

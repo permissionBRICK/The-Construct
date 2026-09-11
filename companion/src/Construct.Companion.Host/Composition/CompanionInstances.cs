@@ -24,16 +24,7 @@ public sealed class CompanionInstances(IStateFileSystem files, IpcSettings setti
 {
     private readonly ConcurrentDictionary<string, CompanionInstance> entries = new(StringComparer.Ordinal);
     public HostState Host { get; } = new(files);
-    // The synthesized legacy default is not a VM on a PC without scripts; see SelfTest for the same rule.
-    public InstanceRegistry Registry
-    {
-        get
-        {
-            var value = InstanceRegistry.Load(files);
-            if (value.Synthesized && Host.ResolveScriptsDirectory(overrideDirectory: settings.Read().ScriptsDir) is null) value.ByName.Clear();
-            return value;
-        }
-    }
+    public InstanceRegistry Registry => InstanceRegistry.LoadUsable(files, settings.Read().ScriptsDir);
     public string[] Names => Registry.List().Select(i => StateJson.String(i["name"])).ToArray();
     public CompanionInstance Get(string name)
     {

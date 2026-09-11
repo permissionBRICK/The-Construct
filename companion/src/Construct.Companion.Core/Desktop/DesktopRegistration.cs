@@ -1,7 +1,9 @@
 using Construct.Companion.Core.Abstractions;
 namespace Construct.Companion.Core.Desktop;
 
-public sealed class DesktopRegistration(IRegistry registry, string exe, string icon)
+// The installer (lib/Construct.Companion.ps1) writes the protocol and toast keys; the app only
+// reads them and toggles its own Run value.
+public sealed class DesktopRegistration(IRegistry registry, string exe)
 {
     public const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
     public const string ProtocolKey = @"Software\Classes\construct";
@@ -13,11 +15,5 @@ public sealed class DesktopRegistration(IRegistry registry, string exe, string i
     {
         if (enabled) registry.WriteString(RunKey, "ConstructCompanion", $"\"{exe}\" --background");
         else registry.DeleteValue(RunKey, "ConstructCompanion");
-    }
-    public void Register()
-    {
-        registry.WriteString(ProtocolKey, null, "URL:Construct Protocol"); registry.WriteString(ProtocolKey, "URL Protocol", "");
-        registry.WriteString(ProtocolKey + @"\shell\open\command", null, $"\"{exe}\" --uri \"%1\"");
-        registry.WriteString(ToastKey, "DisplayName", "The Construct"); registry.WriteString(ToastKey, "IconUri", icon);
     }
 }

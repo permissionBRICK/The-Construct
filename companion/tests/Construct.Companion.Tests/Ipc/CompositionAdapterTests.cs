@@ -62,19 +62,14 @@ public sealed class CompositionAdapterTests
         Assert.True(result!["notFound"]!.GetValue<bool>());
     }
     [Fact]
-    public async Task SharedDesktopSettingsPreserveBoundsAndClampIpcValues()
+    public async Task DesktopAndIpcShareOneSettingsStore()
     {
-        SettingsStore? store = null;
-        await using var h = await Harness.Start(s =>
-        {
-            var files = (IFileSystem)s.Last(d => d.ServiceType == typeof(IFileSystem)).ImplementationInstance!;
-            store = new(files, "/fake/local/The-Construct/companion/settings.json"); s.AddSingleton(store);
-        });
+        await using var h = await Harness.Start(); var store = h.App.Services.GetRequiredService<IpcSettings>();
         using var stream = await h.Client.GetAsync("/v1/events",HttpCompletionOption.ResponseHeadersRead);
         using var reader = new StreamReader(await stream.Content.ReadAsStreamAsync()); await reader.ReadLineAsync(); await reader.ReadLineAsync();
-        store!.SaveBounds("panel", new(1,2,300,400));
-        var published = await Until(reader, d => d["type"]?.GetValue<string>() == "settings");
-        Assert.NotNull(published["settings"]?["windows"]?["panel"]);
+        store.SaveBounds("panel", new(1,2,300,400));
+        var published = await Until(reader, d => d["type"]?.GetValue<string>() == "settings" && d["settings"]?["windows"]?["panel"] is not null);
+        Assert.Equal(300, published["settings"]!["windows"]!["panel"]!["width"]!.GetValue<int>());
         var changes = 0; store.Changed += _ => changes++;
         using var response = await h.Client.PutAsJsonAsync("/v1/settings", new { repatchDelaySeconds = 1000, uiTheme = "native" });
         response.EnsureSuccessStatusCode(); Assert.Equal(600, store.Read().RepatchDelaySeconds);

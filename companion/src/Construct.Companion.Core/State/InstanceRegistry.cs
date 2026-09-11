@@ -121,6 +121,13 @@ public sealed class InstanceRegistry
         if (failed) registry.Problems.Insert(0, "instances.json could not be read — using the default instance");
         return registry;
     }
+    // The synthesized legacy default is not a VM on a PC without an installed scripts directory.
+    public static InstanceRegistry LoadUsable(IStateFileSystem files, string? scriptsDirectoryOverride = null)
+    {
+        var registry = Load(files);
+        if (registry.Synthesized && new HostState(files).ResolveScriptsDirectory(overrideDirectory: scriptsDirectoryOverride) is null) registry.ByName.Clear();
+        return registry;
+    }
     public void Save(IFileSystem files, string? path = null)
     {
         path ??= FilePath; if (string.IsNullOrEmpty(path)) throw new InvalidOperationException("No instances.json path resolved");
