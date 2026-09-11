@@ -355,7 +355,7 @@ install but only applies after the next sign-in.
 
 | Choice | What it does |
 |---|---|
-| **Reprovision** | re-runs `Provision-AgentVM.ps1` against the instance's endpoint. Keeps all data. Never touches the service. |
+| **Reprovision** | re-runs `Provision-AgentVM.ps1` against the instance's endpoint. Keeps all data. Requests released source from the service cache when supported, then provisions over SSH. |
 | **Reinstall** | `DELETE /vms/{name}` → `POST /vms` → provision. Same typed-`yes` confirmation as the local path, and the same pre-wipe unsaved-work scan + config save. |
 | **Export config** | pulls the VM's agent config back to this host. No changes to the VM. |
 | **Remove instance** | `DELETE /vms/{name}` **and** removes everything this PC knows about the VM (see below). Needs the instance name typed back. `-KeepVm` (or the prompt when the host is unreachable) forgets it here and leaves the VM on the host. |
@@ -561,7 +561,7 @@ new unit. Details in [`construct expose` § Activity heartbeat](expose.md#activi
 | `Certificate fingerprint mismatch` | the host's certificate changed. Confirm with the admin, then delete `%LOCALAPPDATA%\The-Construct\remote\<hostslug>.pin` and re-enrol. |
 | `409` from `GET /vms/{name}/endpoint` | the VM exists but has no SSH forward yet — it is still being created. |
 | `403` on a VM that exists | it belongs to somebody else. Ownership is per user; an unknown VM answers `404`. |
-| The VM was created but provisioning failed | the instance is already in the registry (§3, step 8). Run `Auto-Install.ps1 -InstanceName <name>` and pick **Reprovision** — nothing on the host is touched, and nothing is created twice. |
+| The VM was created but provisioning failed | the instance is already in the registry (§3, step 8). Run `Auto-Install.ps1 -InstanceName <name>` and pick **Reprovision** — no VM is created twice; the service may populate its source cache. |
 | The job fails and the VM disappears | creation rolls back deliberately (`service/README.md`): a partially created VM would keep consuming disk while holding its name. The original failure is reported, never masked. |
 | Reinstall/Redownload refused in the panel | the installed host scripts predate the remote parameters, so the action would have hit a *local* VM. Update The Construct on this PC. |
 | "this PC's instance registry would refuse …" | an identity clash with an instance you already have — the message names it and the field (a shared `configBranch`, `keyName`, `hostAlias`, `vmName`, or the same `sshHost` **and** `sshPort`). Before the VM is created nothing has happened; after it, the create is rolled back. See the section below. |
@@ -943,3 +943,44 @@ If delivery fails after an explicit credential rotation, the previously installe
 has already been invalidated. Restore SSH reachability, then rerun
 `Provision-AgentVM.ps1 -InstanceName <primary> -RotateVmToken` to issue and deliver a new
 credential. Ordinary reprovisioning does not recover the invalidated credential.
+
+### Reprovision without uploading the checkout
+
+With `source-cache` in the service's `apiFeatures`, the PC ensures its exact Construct commit
+on the host, then the guest pulls the verified ZIP directly. The host downloads each released
+commit once and preserves it across reprovisions and VMs. The PC still sends per-VM settings,
+project profiles via config sync, git identity, keys, credentials and saved configuration through
+the existing channels. The fetch uses the VM's own token in a private header file; first provision
+stages that token over SSH stdin before fetching. Secret transport rules in §5 are unchanged.
+
+`Provision-AgentVM.ps1 -InstanceName <name> -SourceMode auto` is the default. It uses the cache
+only for `constructRef=main` with a known commit and a provably equivalent checkout. Any tracked
+edit or non-ignored untracked file forces upload, even if git is configured to hide untracked
+files. Archive installs use the per-file manifest at
+`%LOCALAPPDATA%\The-Construct\source-manifests\<commit40>.sha256`; missing, changed or extra files
+force upload. Old installs without a manifest upload until `Update-Construct.ps1` runs once.
+
+`-SourceMode upload` explicitly uses the old pack/scp/unpack path. `-IncludeGit` also uses it.
+`-SourceMode cache` explicitly selects the commit even if local files differ, and stops on
+cache failure instead of falling back. These switches are available on `Provision-AgentVM.ps1`;
+Auto-Install and panel reprovision commands use the default. Local Hyper-V provisioning retains
+its original upload path.
+
+On success the client prints `Construct source: host cache (commit …, … KB); nothing uploaded
+from this PC.` This refers to the checkout archive. In auto mode it warns with the reason and
+uploads if the service is old/disabled/unreachable, the commit is unreleased, the cache is full,
+the job fails or times out, or the guest cannot verify/install the ZIP. The feature probe is
+bounded to 10 seconds, ensure to 30 seconds, and job polls stop after three consecutive failures
+(at most 94 seconds including sleeps). `-SourceEnsureTimeoutSec` defaults to 900 seconds for a
+host that continues answering while downloading. A timeout leaves the host download running.
+Guest transfer attempts have their own 600-second bound and one retry.
+
+Admins inspect `GET /api/v1/host/source-cache`: `committedBytes` includes ready, downloading and
+pending-deletion items. `source-cache-full` requires deleting unused entries with
+`DELETE /api/v1/host/source-cache/<commit>`; pinned entries require `?force=true`.
+`POST /api/v1/host/source-cache/cleanup` retries failed cleanup but never evicts ready source.
+Source limits and directory are bootstrap `Constructd:HostAdmin:Source:*` settings.
+
+The ZIP contains tracked source. Ignored host files (`runtime/`, `.env`, `*.local`, ISOs,
+`.construct-tools/`, settings, backup, Python caches and `.claude/worktrees/`) and `.git` are
+absent. Guest scripts use tracked files and the separately delivered live configuration.

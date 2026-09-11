@@ -12,7 +12,9 @@ reachable autoinstall VM.
 What it does:
 
 1. Packs this repo folder into a `tar.gz` (excludes `.git`, `*.iso`, the host-only
-   `.construct-settings.json`, and the secret-bearing `.construct-backup/`).
+   `.construct-settings.json`, and the secret-bearing `.construct-backup/`). For service-managed VMs,
+   first plan the source transport: an equivalent released checkout can come from the host cache
+   without packing; an upload is packed after SSH reachability is established.
 2. Waits for the VM on its SSH port (`-SshPort`, default 22), re-prompting for the hostname
    if it can't connect.
 3. Picks how to connect:
@@ -26,7 +28,9 @@ What it does:
      (hand-installed or freshly recreated VM), it's installed via the seed password, falling back
      to PuTTY instructions. The seed password is used for `sudo` on this path.
 4. Uploads the archive to `/opt/construct/repo` and runs `bin/provision.sh` (directly as `root`
-   on the fast path, otherwise via `sudo`).
+   on the fast path, otherwise via `sudo`). With the remote source cache, the guest instead
+   fetches and verifies the ZIP into `/opt/construct/repo` before the same configuration and
+   `provision.sh` steps. Auto mode falls back to the original upload if caching fails.
 5. Obtains the root SSH private key — reuses the saved copy on the fast path, otherwise retrieves
    the one the VM generated.
 6. Removes the bootstrap public key from the `agent` user's `authorized_keys` (the fast path never
@@ -70,7 +74,7 @@ install, so a plain `.\Provision-AgentVM.ps1` is byte-for-byte the run it always
 | `-LocalKeyName` | `agent_vm_ed25519` | The file name under `~\.ssh\` the VM's root key is saved as. Named instances use `construct_<name>_ed25519`. |
 | `-ConfigBranch` | *(empty → derived)* | The [config-sync](config-sync.md) branch this VM's host-side store lives on. Empty derives it from `-HostAlias`: `agent-vm` → `vm`, anything else → `vm-<alias>`. Pass it explicitly only when a registry entry names a branch that differs from that derivation. |
 
-Three more are set **only** when the VM lives on a [remote host](remote-host.md); while
+These settings apply **only** when the VM lives on a [remote host](remote-host.md); while
 empty they add nothing to the environment `bin/provision.sh` sees, so a local VM's
 provisioning command, log and `config.env` are unchanged by their existence:
 
@@ -79,6 +83,8 @@ provisioning command, log and `config.env` are unchanged by their existence:
 | `-ServiceUrl` | `CONSTRUCT_SERVICE_URL` | The `constructd` base URL. Non-empty is what switches the guest into remote mode (service-backed `construct expose`, idle heartbeat timer). |
 | `-InstanceName` | `CONSTRUCT_INSTANCE_NAME` | This VM's name on that service — the `{name}` in `/api/v1/vms/{name}/…`. |
 | `-VmTokenB64` | `CONSTRUCT_VM_TOKEN_B64` | The VM-scoped token (base64), written by `provision.sh` to `/etc/construct/vm-token` (mode `0600`). |
+| `-SourceMode` | client only (default `auto`) | `auto` caches only an equivalent released checkout; `cache` explicitly uses the commit and fails on cache errors; `upload` uses the original tar. Ignored for local transport; `-IncludeGit` selects upload. |
+| `-SourceEnsureTimeoutSec` | client only (default `900`) | Deadline for waiting on a source job. Unreachable service polls fall back after three consecutive failures. |
 
 The token is a one-time secret and is treated as one: it is passed as a parameter *value*,
 never printed, echoed or logged, and never placed on an argument list on either machine —
@@ -157,6 +163,9 @@ Recognized variables:
 | `ALLOW_LOW_DISK` | `false` | Provision even when the free-disk preflight says the VM disk is full (see below) |
 | `CONSTRUCT_EXTERNAL_HOST` | *(empty → `$(hostname).mshome.net`)* | The address **clients** use to reach this VM. Everything the guest prints — the console banner, the serve-web/OpenCode URLs, the SMB UNC — is built from it instead of concatenating a Hyper-V name. Empty reproduces the historical output byte for byte |
 | `CONSTRUCT_EXTERNAL_SSH_PORT` | `22` | The port clients use for SSH, for the same printed URLs |
+| `CONSTRUCT_SERVICE_CA_B64` | *(empty)* | Base64 PEM for the host service; provision installs it as the guest's service CA. |
+| `CONSTRUCT_SERVICE_CA_FILE` | `/etc/construct/service-ca.pem` | CA file used by guest service requests. |
+| `CONSTRUCT_VERSION` | *(empty)* | Installed commit recorded in provisioning metadata and guest reports; distinct from checkout source identity. |
 | `CONSTRUCT_SERVICE_URL` | *(empty)* | Base URL of the `constructd` [host service](remote-host.md). **Empty means local mode**: no service, `construct expose` uses the guest spool, and no idle-heartbeat timer is installed |
 | `CONSTRUCT_INSTANCE_NAME` | lowercased `hostname` | This VM's instance name on that service |
 | `CONSTRUCT_VM_TOKEN_B64` | *(empty)* | The VM-scoped token, base64. Written to `/etc/construct/vm-token` (`0600`); never echoed, logged or stored in `config.env` |
@@ -363,3 +372,28 @@ solely by you:
   Code" PR footer. (`attribution` is the current key; the older `includeCoAuthoredBy` is deprecated.)
 - Codex (`~/.codex/config.toml`): `commit_attribution = ""` — suppresses the
   `Co-authored-by: Codex <noreply@openai.com>` commit trailer.
+
+### Source fetch environment (remote only)
+
+`bin/fetch-construct-source.sh` is streamed independently of the checkout it replaces. It never
+runs `provision.sh` itself or alters the configuration channels. Size/hash/ZIP failures leave
+the previous tree intact; a failed swap restores it. Exit 7 means restoration also failed:
+auto mode repairs it through upload, and cache mode directs you to rerun with `-SourceMode upload`.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `CONSTRUCT_SERVICE_URL` | required | HTTP(S) scheme and host/port, no path prefix. A path prefix is refused and auto mode uploads. |
+| `CONSTRUCT_INSTANCE_NAME` | required | Service VM name in the fetch route. |
+| `CONSTRUCT_SOURCE_COMMIT` | required | Full lowercase 40-hex commit. |
+| `CONSTRUCT_SOURCE_SHA256` | required | Expected 64-hex SHA-256 from the ensure result, not download headers. |
+| `CONSTRUCT_SOURCE_SIZE` | required | Expected ZIP byte length. |
+| `CONSTRUCT_SEED_USER` | required | Existing account that owns the replacement tree and its parent. |
+| `CONSTRUCT_VM_TOKEN_FILE` | `/etc/construct/vm-token` | Private token file; first provision uses a temporary stdin-delivered file. |
+| `CONSTRUCT_SERVICE_CA_B64` | empty | Optional PEM in base64, written to a private temporary CA file. |
+| `CONSTRUCT_SERVICE_CA_FILE` | `/etc/construct/service-ca.pem` when present | CA path, used when no base64 CA is supplied. |
+| `CONSTRUCT_SOURCE_MAX_BYTES` | `268435456` | Maximum ZIP size. |
+| `CONSTRUCT_SOURCE_TIMEOUT_SEC` | `600` | Curl timeout per attempt; one retry after 3 seconds on transport failure or HTTP 409. |
+| `REPO_DIR` | `/opt/construct/repo` | Destination; staged beside it for same-filesystem renames. |
+
+See [remote reprovisioning](remote-host.md#reprovision-without-uploading-the-checkout) for source
+equivalence, configuration delivery and administrator cleanup.

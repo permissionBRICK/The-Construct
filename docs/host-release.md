@@ -169,3 +169,14 @@ not enforced against an installed commit date. Preserved-name collisions are rej
 by the updater at apply, rather than during stage. A drain-state race can surface as a
 failed operation instead of a dedicated conflict response. These remain follow-up items;
 Linux package fixtures do not establish production provenance or Windows update health.
+
+### Source reuse for remote reprovisioning
+
+Hosts cache `construct-source-<commit40>.zip` from the immutable `host-<commit40>` release,
+verified against `sourceSha256` and `sourceSizeBytes`. Keep the source asset and its manifest
+available: newly provisioned hosts and an admin-deleted entry need to download them again.
+Ready entries are preserved indefinitely until explicitly deleted or found corrupt.
+`install.ps1` and `Update-Construct.ps1` also write a per-file source hash manifest outside the
+checkout at `%LOCALAPPDATA%\The-Construct\source-manifests\<commit40>.sha256`. This proves an
+archive install still matches that release before the client selects the remote cache;
+a best-effort manifest-write failure leaves installation successful and uses upload fallback.

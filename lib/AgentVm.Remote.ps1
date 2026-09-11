@@ -70,6 +70,7 @@ $script:ConstructRemoteDefaultPort = 7462
 # pattern-matching a message.
 $script:ConstructApiLastStatus = 0
 $script:ConstructApiLastError  = ""
+$script:ConstructApiLastProblem = @{ Status = 0; Code = ""; Class = "none"; Detail = "" }
 # One warning per session for the http + Windows-credential case (see Invoke-ConstructApi).
 $script:ConstructApiWarnedUnencrypted = $false
 
@@ -356,6 +357,7 @@ function Get-ConstructRemoteFingerprint {
     $uri = [System.Uri]$normal
     if ($uri.Scheme -ne 'https') { return "" }
 
+    $watch = [Diagnostics.Stopwatch]::StartNew()
     $client = New-Object System.Net.Sockets.TcpClient
     $ssl = $null
     try {
@@ -364,18 +366,21 @@ function Get-ConstructRemoteFingerprint {
         $dialHost = $uri.DnsSafeHost
         $iar = $client.BeginConnect($dialHost, $uri.Port, $null, $null)
         if (-not $iar.AsyncWaitHandle.WaitOne($TimeoutMs)) {
-            throw "Timed out connecting to $($dialHost):$($uri.Port)."
+            throw [TimeoutException]::new("Timed out connecting to $($dialHost):$($uri.Port).")
         }
         $client.EndConnect($iar)
         # Accept ANY certificate here: this call exists to LOOK at the certificate.
         # Nothing is trusted as a result -- the caller compares the fingerprint.
         $validate = [System.Net.Security.RemoteCertificateValidationCallback]{ param($s, $c, $ch, $e) return $true }
         $ssl = New-Object System.Net.Security.SslStream($client.GetStream(), $false, $validate)
+        $remainingMs = [int][Math]::Max(1, $TimeoutMs - $watch.ElapsedMilliseconds)
+        $ssl.ReadTimeout = $remainingMs; $ssl.WriteTimeout = $remainingMs
         $ssl.AuthenticateAsClient($dialHost)
         $remote = $ssl.RemoteCertificate
         if (-not $remote) { throw "The service at $normal presented no certificate." }
         return (Get-ConstructCertificateFingerprint -Certificate $remote)
     } catch {
+        $script:ConstructCertificateFailureClass = Get-ConstructApiFailureClass $_.Exception
         throw "Could not read the certificate of $normal`: $($_.Exception.Message)"
     } finally {
         if ($ssl) { try { $ssl.Dispose() } catch { } }
@@ -404,15 +409,18 @@ function Get-ConstructRemoteCertificatePem {
     $expected = $Pin
     if (-not $expected) { $expected = Get-ConstructRemotePin -BaseUrl $normal -StoreDir $StoreDir }
     if (-not $expected) { throw "No certificate fingerprint is pinned for $normal on this PC; add the host first." }
+    $watch = [Diagnostics.Stopwatch]::StartNew()
     $client = New-Object System.Net.Sockets.TcpClient
     $ssl = $null
     try {
         $dialHost = $uri.DnsSafeHost
         $iar = $client.BeginConnect($dialHost, $uri.Port, $null, $null)
-        if (-not $iar.AsyncWaitHandle.WaitOne($TimeoutMs)) { throw "Timed out connecting to $($dialHost):$($uri.Port)." }
+        if (-not $iar.AsyncWaitHandle.WaitOne($TimeoutMs)) { throw [TimeoutException]::new("Timed out connecting to $($dialHost):$($uri.Port).") }
         $client.EndConnect($iar)
         $validate = [System.Net.Security.RemoteCertificateValidationCallback]{ param($s, $c, $ch, $e) return $true }
         $ssl = New-Object System.Net.Security.SslStream($client.GetStream(), $false, $validate)
+        $remainingMs = [int][Math]::Max(1, $TimeoutMs - $watch.ElapsedMilliseconds)
+        $ssl.ReadTimeout = $remainingMs; $ssl.WriteTimeout = $remainingMs
         $ssl.AuthenticateAsClient($dialHost)
         $remote = $ssl.RemoteCertificate
         if (-not $remote) { throw "The service at $normal presented no certificate." }
@@ -427,6 +435,7 @@ function Get-ConstructRemoteCertificatePem {
         $lines.Add("-----END CERTIFICATE-----")
         return (($lines -join "`n") + "`n")
     } catch {
+        $script:ConstructCertificateFailureClass = Get-ConstructApiFailureClass $_.Exception
         throw "Could not read the certificate of $normal`: $($_.Exception.Message)"
     } finally {
         if ($ssl) { try { $ssl.Dispose() } catch { } }
@@ -576,10 +585,12 @@ function Get-ConstructApiErrorInfo {
         } catch { }
     }
 
+    $code = ""
     $detail = ""
     if ($body) {
         try {
             $doc = $body | ConvertFrom-Json
+            if ($doc.PSObject.Properties['code'] -and [string]$doc.code -cmatch '^[a-z0-9-]{1,100}$') { $code = [string]$doc.code }
             $parts = New-Object System.Collections.Generic.List[string]
             foreach ($f in @('title', 'detail')) {
                 $p = $null
@@ -601,7 +612,7 @@ function Get-ConstructApiErrorInfo {
 
     $text = $detail
     if (-not $text) { $text = $msg }
-    return @{ Status = $status; Message = $text; Body = $body }
+    return @{ Status = $status; Message = $text; Body = $body; Code = $code }
 }
 
 function Get-ConstructApiLastStatus {
@@ -664,12 +675,15 @@ namespace Construct {
     public static class PinValidator {
         // The pinned SHA-256 fingerprint, "AA:BB:...", set before every call.
         public static string Expected;
+        public static bool Rejected;
         public static bool Validate(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors errors) {
             if (certificate == null || string.IsNullOrEmpty(Expected)) { return false; }
             byte[] hash;
             using (var sha = SHA256.Create()) { hash = sha.ComputeHash(certificate.GetRawCertData()); }
             var actual = BitConverter.ToString(hash).Replace("-", ":");
-            return string.Equals(actual, Expected, StringComparison.OrdinalIgnoreCase);
+            var matched = string.Equals(actual, Expected, StringComparison.OrdinalIgnoreCase);
+            if (!matched) Rejected = true;
+            return matched;
         }
     }
 }
@@ -681,6 +695,7 @@ namespace Construct {
     $type = 'Construct.PinValidator' -as [type]
     if ($type) {
         $type::Expected = $fp
+        if ($type.GetField('Rejected')) { $type::Rejected = $false }
         return [System.Delegate]::CreateDelegate([System.Net.Security.RemoteCertificateValidationCallback], $type.GetMethod('Validate'))
     }
     $pinned = $fp
@@ -705,6 +720,7 @@ function Invoke-ConstructApi {
         -Auth      a provider from New-ConstructApiAuth (default: negotiate)
         -Pin       an explicit expected fingerprint (default: the stored pin)
         -RawResponse return the unchanged response JSON (preserves empty/singleton arrays).
+        -Bounded   include the certificate preflight in TimeoutSec (source operations).
         -NoThrow   return $null instead of throwing; the status and message stay
                    readable via Get-ConstructApiLastStatus / Get-ConstructApiLastError.
                    This is how the enrolment flow tries Negotiate and falls back on 401.
@@ -723,78 +739,90 @@ function Invoke-ConstructApi {
         [string]$StoreDir,
         [int]$TimeoutSec = 100,
         [switch]$NoThrow,
-        [switch]$RawResponse
+        [switch]$RawResponse,
+        [switch]$Bounded
     )
 
     $script:ConstructApiLastStatus = 0
     $script:ConstructApiLastError  = ""
+    $script:ConstructApiLastProblem = @{ Status = 0; Code = ""; Class = "none"; Detail = "" }
 
-    $base = ConvertTo-ConstructServiceUrl -Value $BaseUrl
-    # BEFORE a credential is even selected, let alone attached: an unencrypted, unpinned
-    # transport to anywhere but this machine is refused outright.
-    Assert-ConstructTransportSafe -BaseUrl $base
-    $p = ([string]$Path).Trim()
-    if (-not $p.StartsWith('/')) { $p = "/$p" }
-    if (-not $p.StartsWith('/api/')) { $p = "/api/v1$p" }
-    $uri = "$base$p"
-
-    if (-not $Auth) { $Auth = New-ConstructApiAuth -Mode negotiate }
-
-    $headers = @{ 'Accept' = 'application/json' }
-    if ($Auth.ContainsKey('Headers') -and $Auth['Headers']) {
-        foreach ($k in $Auth['Headers'].Keys) { $headers[$k] = $Auth['Headers'][$k] }
-    }
-
-    $req = @{
-        Uri             = $uri
-        Method          = $Method
-        Headers         = $headers
-        TimeoutSec      = $TimeoutSec
-        UseBasicParsing = $true
-        ErrorAction     = 'Stop'
-    }
-    $windowsCredential = $false
-    switch ([string]$Auth['Mode']) {
-        'token'      { $headers['Authorization'] = "Bearer $($Auth['Token'])" }
-        'credential' { $req['Credential'] = $Auth['Credential']; $windowsCredential = $true }
-        default      { $req['UseDefaultCredentials'] = $true; $windowsCredential = $true }
-    }
-    # PowerShell 7 REFUSES to send a Windows credential (-UseDefaultCredentials or
-    # -Credential) over plain http -- "the cmdlet cannot protect plain text secrets sent
-    # over unencrypted connections" -- while Windows PowerShell 5.1 sends it without
-    # comment. Left alone, the same code would work on 5.1 and fail on 7 against a
-    # development/fake service, which is exactly the kind of edition split this client
-    # exists to hide. So opt in explicitly for http, and SAY SO once: a Windows
-    # credential on an unencrypted connection is a development-only arrangement.
-    if ($windowsCredential -and ([System.Uri]$base).Scheme -eq 'http') {
-        $iwr = Get-Command Invoke-WebRequest -ErrorAction SilentlyContinue
-        if ($iwr -and $iwr.Parameters.ContainsKey('AllowUnencryptedAuthentication')) {
-            $req['AllowUnencryptedAuthentication'] = $true
-        }
-        if (-not $script:ConstructApiWarnedUnencrypted) {
-            $script:ConstructApiWarnedUnencrypted = $true
-            Write-Warning "Sending a Windows credential to $base over plain http -- it is not encrypted in transit. Only a service on this machine is allowed to be reached this way; anything else needs https."
-        }
-    }
-    if ($null -ne $Body) {
-        if ($Body -is [string]) { $req['Body'] = $Body }
-        else { $req['Body'] = ($Body | ConvertTo-Json -Depth 8 -Compress) }
-        $req['ContentType'] = 'application/json'
-    }
-
-    $expected = Resolve-ConstructApiPin -BaseUrl $base -Pin $Pin -StoreDir $StoreDir
-    $isHttps  = ([System.Uri]$base).Scheme -eq 'https'
-
-    $prevCallback = $null
-    $prevProtocol = $null
-    $restoreSpm   = $false
+    $requestWatch = [Diagnostics.Stopwatch]::StartNew()
+    $preflight = $true
+    $problemClass = 'none'; $base = $BaseUrl; $p = $Path
+    $prevCallback = $null; $prevProtocol = $null; $restoreSpm = $false
     try {
+        $base = ConvertTo-ConstructServiceUrl -Value $BaseUrl
+        # BEFORE a credential is even selected, let alone attached: an unencrypted, unpinned
+        # transport to anywhere but this machine is refused outright.
+        Assert-ConstructTransportSafe -BaseUrl $base
+        $p = ([string]$Path).Trim()
+        if (-not $p.StartsWith('/')) { $p = "/$p" }
+        if (-not $p.StartsWith('/api/')) { $p = "/api/v1$p" }
+        $uri = "$base$p"
+
+        if (-not $Auth) { $Auth = New-ConstructApiAuth -Mode negotiate }
+
+        $headers = @{ 'Accept' = 'application/json' }
+        if ($Auth.ContainsKey('Headers') -and $Auth['Headers']) {
+            foreach ($k in $Auth['Headers'].Keys) { $headers[$k] = $Auth['Headers'][$k] }
+        }
+
+        $req = @{
+            Uri             = $uri
+            Method          = $Method
+            Headers         = $headers
+            TimeoutSec      = $TimeoutSec
+            UseBasicParsing = $true
+            ErrorAction     = 'Stop'
+        }
+        $windowsCredential = $false
+        switch ([string]$Auth['Mode']) {
+            'token'      { $headers['Authorization'] = "Bearer $($Auth['Token'])" }
+            'credential' { $req['Credential'] = $Auth['Credential']; $windowsCredential = $true }
+            default      { $req['UseDefaultCredentials'] = $true; $windowsCredential = $true }
+        }
+        # PowerShell 7 REFUSES to send a Windows credential (-UseDefaultCredentials or
+        # -Credential) over plain http -- "the cmdlet cannot protect plain text secrets sent
+        # over unencrypted connections" -- while Windows PowerShell 5.1 sends it without
+        # comment. Left alone, the same code would work on 5.1 and fail on 7 against a
+        # development/fake service, which is exactly the kind of edition split this client
+        # exists to hide. So opt in explicitly for http, and SAY SO once: a Windows
+        # credential on an unencrypted connection is a development-only arrangement.
+        if ($windowsCredential -and ([System.Uri]$base).Scheme -eq 'http') {
+            $iwr = Get-Command Invoke-WebRequest -ErrorAction SilentlyContinue
+            if ($iwr -and $iwr.Parameters.ContainsKey('AllowUnencryptedAuthentication')) {
+                $req['AllowUnencryptedAuthentication'] = $true
+            }
+            if (-not $script:ConstructApiWarnedUnencrypted) {
+                $script:ConstructApiWarnedUnencrypted = $true
+                Write-Warning "Sending a Windows credential to $base over plain http -- it is not encrypted in transit. Only a service on this machine is allowed to be reached this way; anything else needs https."
+            }
+        }
+        if ($null -ne $Body) {
+            if ($Body -is [string]) { $req['Body'] = $Body }
+            else { $req['Body'] = ($Body | ConvertTo-Json -Depth 8 -Compress) }
+            $req['ContentType'] = 'application/json'
+        }
+
+        $problemClass = 'pin'
+        $expected = Resolve-ConstructApiPin -BaseUrl $base -Pin $Pin -StoreDir $StoreDir
+        $problemClass = 'none'
+        $isHttps  = ([System.Uri]$base).Scheme -eq 'https'
+
+
+        $preflight = $false
         if ($isHttps -and (Test-ConstructPwshCore)) {
             # PS 7: SocketsHttpHandler ignores ServicePointManager, so verify the
             # presented certificate ourselves first and then skip the (useless) chain
             # check. docs\remote-host.md section 5 documents the ordering.
-            $actual = Get-ConstructRemoteFingerprint -BaseUrl $base
+            $problemClass = 'certificate'
+            $script:ConstructCertificateFailureClass = 'other'
+            if ($Bounded) { $actual = Get-ConstructRemoteFingerprint -BaseUrl $base -TimeoutMs ([int][Math]::Max(1, [Math]::Min(10000, $TimeoutSec * 1000 - $requestWatch.ElapsedMilliseconds))) }
+            else { $actual = Get-ConstructRemoteFingerprint -BaseUrl $base }
+            $problemClass = 'none'
             if (-not (Test-ConstructFingerprintMatch -Expected $expected -Actual $actual)) {
+                $problemClass = 'pin'
                 throw "Certificate fingerprint mismatch for $base.`n    pinned:    $expected`n    presented: $actual`nRefusing to connect. If the host's certificate was legitimately replaced, remove the pin file ($(Get-ConstructRemotePinPath -BaseUrl $base -StoreDir $StoreDir)) and add the host again."
             }
             $req['SkipCertificateCheck'] = $true
@@ -823,9 +851,15 @@ function Invoke-ConstructApi {
         $previousProgress = $ProgressPreference
         try {
             $ProgressPreference = 'SilentlyContinue'
+            if ($Bounded) {
+                $remaining = $TimeoutSec - $requestWatch.Elapsed.TotalSeconds
+                if ($remaining -le 0) { throw [TimeoutException]::new('Source request deadline elapsed.') }
+                $req.TimeoutSec = [int][Math]::Max(1, [Math]::Floor($remaining))
+            }
             $resp = Invoke-WebRequest @req
         } finally { $ProgressPreference = $previousProgress }
         $script:ConstructApiLastStatus = [int]$resp.StatusCode
+        $script:ConstructApiLastProblem = @{ Status = [int]$resp.StatusCode; Code = ''; Class = 'none'; Detail = '' }
         $content = ""
         try { $content = [string]$resp.Content } catch { $content = "" }
         if ([string]::IsNullOrWhiteSpace($content)) { return $null }
@@ -833,9 +867,16 @@ function Invoke-ConstructApi {
         try { return ($content | ConvertFrom-Json) }
         catch { return $content }
     } catch {
+        if ($preflight -and -not $Bounded) { throw }
         $info = Get-ConstructApiErrorInfo -ErrorRecord $_
         $script:ConstructApiLastStatus = [int]$info.Status
         $script:ConstructApiLastError  = [string]$info.Message
+        $class = Get-ConstructApiFailureClass $_.Exception
+        if ($info.Status) { $class = 'http' }
+        elseif ($problemClass -eq 'pin') { $class = 'pin' }
+        elseif ($problemClass -eq 'certificate') { $class = $script:ConstructCertificateFailureClass }
+        elseif ($restoreSpm -and ('Construct.PinValidator' -as [type]) -and [Construct.PinValidator].GetField('Rejected') -and [Construct.PinValidator]::Rejected) { $class = 'pin' }
+        $script:ConstructApiLastProblem = @{ Status = [int]$info.Status; Code = [string]$info.Code; Class = $class; Detail = [string]$info.Message }
         if ($NoThrow) { return $null }
         $where = "$Method $p"
         if ($info.Status) {
@@ -1010,4 +1051,245 @@ function Request-ConstructVmTokenRotation {
         if (-not $result -or -not $result.vmToken) { throw 'Missing credential.' }
         return $result
     } catch { throw 'The host service could not rotate this VM credential.' }
+}
+
+function Get-ConstructApiLastProblem {
+    return $script:ConstructApiLastProblem
+}
+
+function Get-ConstructApiFailureClass {
+    param($Exception)
+    for ($depth = 0; $Exception -and $depth -lt 12; $depth++) {
+        if ($Exception -is [System.TimeoutException] -or $Exception -is [System.OperationCanceledException]) { return 'timeout' }
+        if ($Exception -is [System.Security.Authentication.AuthenticationException]) { return 'tls' }
+        if ($Exception -is [System.Net.WebException]) {
+            switch ([string]$Exception.Status) {
+                'Timeout' { return 'timeout' }
+                'TrustFailure' { return 'tls' }
+                'SecureChannelFailure' { return 'tls' }
+                'NameResolutionFailure' { return 'dns' }
+                'ProxyNameResolutionFailure' { return 'dns' }
+                'ConnectFailure' { return 'connection' }
+            }
+        }
+        if ($Exception -is [System.Net.Sockets.SocketException]) {
+            if ([string]$Exception.SocketErrorCode -in @('HostNotFound','NoData','TryAgain')) { return 'dns' }
+            if ([string]$Exception.SocketErrorCode -eq 'TimedOut') { return 'timeout' }
+            return 'connection'
+        }
+        if ($Exception.PSObject.Properties['HttpRequestError']) {
+            switch ([string]$Exception.HttpRequestError) {
+                'NameResolutionError' { return 'dns' }
+                'SecureConnectionError' { return 'tls' }
+                'ConnectionError' { return 'connection' }
+            }
+        }
+        $Exception = $Exception.InnerException
+    }
+    return 'other'
+}
+
+function Get-ConstructSourceMessage {
+    param([string]$Reason, [string]$Commit, [string]$Ref = 'main', [int]$Divergence, [int]$TimeoutSeconds = 900, [string]$Mode = 'auto')
+    $short = $Commit; if ($short.Length -gt 7) { $short = $short.Substring(0,7) }
+    $message = ''
+    switch -Regex ($Reason) {
+        '^service-without-source-cache$' { $message = 'This host service does not offer the source cache (apiFeatures lack "source-cache"); uploading the Construct checkout as before. Update the host service to skip the upload.'; break }
+        '^ref-not-main$' { $message = "Construct source ref '$Ref' is not main, so no host release exists for it; uploading the checkout as before."; break }
+        '^commit-unknown$' { $message = "Could not determine this checkout's commit (no git or no .construct-revision); uploading the checkout as before."; break }
+        '^archive-unverified$' { $message = 'This Construct install has no source manifest (it was installed before the host cache existed); uploading the checkout as before. Run Update-Construct.ps1 once to enable the host cache.'; break }
+        '^local-changes$' { $message = "This checkout differs from commit $short in $Divergence file(s) (modified, missing or extra); uploading it as before so the VM gets them. Commit or ignore them to use the host cache, or pass -SourceMode cache to send commit $short without them."; break }
+        '^ensure-denied:(.*)$' { $message = "The host service refused the source request (HTTP $($Matches[1])); uploading the checkout as before."; break }
+        '^ensure-maintenance$' { $message = 'The host service is in maintenance; uploading the checkout as before.'; break }
+        '^ensure-(refused|failed):(.*)$' {
+            $detail = $Matches[2]; if ($detail -eq 'source-cache-full') { $detail += ': ask the host admin to delete unused entries' }
+            $message = "The host service could not cache commit $short ($detail); uploading the checkout as before."; break
+        }
+        '^ensure-cancelled$' { $message = "The host service's source download was cancelled; uploading the checkout as before."; break }
+        '^ensure-timeout$' { $message = "The host service did not finish caching commit $short within $TimeoutSeconds s; uploading the checkout as before (the host keeps downloading for the next run)."; break }
+        '^guest-token-staging-failed$' { $message = 'Could not hand the VM its service token for the source fetch; uploading the checkout as before.'; break }
+        '^guest-fetch-failed:repo-lost$' {
+            if ($Mode -eq 'cache') { return "The VM's Construct repo was lost while swapping in commit $short. Rerun with -SourceMode upload to restore it." }
+            return "The VM's Construct repo was lost while swapping in commit $short; uploading the checkout to restore it."
+        }
+        '^guest-fetch-failed:(.*)$' { $message = "The VM could not fetch commit $short from the host service ($($Matches[1])); uploading the checkout as before."; break }
+    }
+    if ($Mode -eq 'cache' -and $message) { return ($message -replace '; uploading.*$', '.') }
+    return $message
+}
+
+function Get-ConstructSourceTransportPlan {
+    [CmdletBinding()]
+    param([bool]$ServiceManaged, [ValidateSet('auto','cache','upload')][string]$Mode = 'auto', [bool]$IncludeGit,
+        [bool]$FeatureAvailable, [string]$Ref = 'main', [string]$Commit = '',
+        [ValidateSet('equivalent','divergent','unverified','unknown')][string]$TreeState = 'unknown', [int]$Divergence = 0)
+    if (-not $Ref) { $Ref = 'main' }
+    $transport = 'upload'; $reason = ''
+    if (-not $ServiceManaged) { $reason = 'local-install' }
+    elseif ($Mode -eq 'upload') { $reason = 'mode-upload' }
+    elseif ($IncludeGit) { $reason = 'include-git' }
+    elseif (-not $FeatureAvailable) { $reason = 'service-without-source-cache' }
+    elseif ($Mode -eq 'auto' -and $Ref -ne 'main') { $reason = 'ref-not-main' }
+    elseif ($Commit -notmatch '^[0-9a-f]{40}$' -or ($Mode -eq 'auto' -and $TreeState -eq 'unknown')) { $reason = 'commit-unknown' }
+    elseif ($Mode -eq 'cache') { $transport = 'cache'; $reason = 'cache-forced' }
+    elseif ($TreeState -eq 'unverified') { $reason = 'archive-unverified' }
+    elseif ($TreeState -eq 'divergent') { $reason = 'local-changes' }
+    else { $transport = 'cache'; $reason = 'cache' }
+    $message = Get-ConstructSourceMessage -Reason $reason -Commit $Commit -Ref $Ref -Divergence $Divergence -Mode $Mode
+    if ($ServiceManaged -and $Mode -eq 'cache' -and $reason -in @('service-without-source-cache','commit-unknown')) { throw $message }
+    return @{ Transport = $transport; Reason = $reason; Message = $message; Commit = $Commit.ToLowerInvariant(); Mode = $Mode; Ref = $Ref; Divergence = $Divergence }
+}
+
+function Get-ConstructSourceFailureCode {
+    param($Result)
+    if ($Result.Code -and [string]$Result.Code -cmatch '^[a-z0-9-]{1,100}$') { return [string]$Result.Code }
+    if ($Result.Class -and $Result.Class -ne 'none') { return [string]$Result.Class }
+    if ($Result.Outcome) { return [string]$Result.Outcome }
+    if ($Result.State) { return [string]$Result.State }
+    return 'other'
+}
+
+function Test-ConstructApiFeature {
+    [CmdletBinding()]
+    param([string]$BaseUrl, [string]$Feature = 'source-cache', $Auth, [string]$Pin, [string]$StoreDir, [int]$TimeoutSec = 10)
+    try {
+        $result = Invoke-ConstructApi -BaseUrl $BaseUrl -Path '/health' -Auth $Auth -Pin $Pin -StoreDir $StoreDir -TimeoutSec $TimeoutSec -NoThrow -Bounded
+        return [bool]($result -and $result.apiFeatures -contains $Feature)
+    } catch { return $false }
+}
+
+function Request-ConstructSourceEnsure {
+    [CmdletBinding()]
+    param([string]$BaseUrl, [string]$VmName, [string]$Commit, [string]$OperationKey, $Auth, [string]$Pin, [string]$StoreDir, [int]$TimeoutSec = 30)
+    $result = @{ Outcome = 'error'; Status = 0; Code = ''; Class = 'other'; JobId = ''; SizeBytes = 0; Sha256 = ''; ReleaseTag = ''; Replayed = $false }
+    try {
+        if (-not $Auth) { $Auth = New-ConstructApiAuth -Mode negotiate }
+        $requestAuth = @{}; foreach ($key in $Auth.Keys) { $requestAuth[$key] = $Auth[$key] }
+        $headers = @{}; if ($Auth.Headers) { foreach ($key in $Auth.Headers.Keys) { $headers[$key] = $Auth.Headers[$key] } }
+        $headers['X-Construct-Operation-Key'] = $OperationKey; $requestAuth.Headers = $headers
+        $body = Invoke-ConstructApi -BaseUrl $BaseUrl -Method POST -Path ('/vms/' + [Uri]::EscapeDataString($VmName) + '/source') -Body @{ commit = $Commit } -Auth $requestAuth -Pin $Pin -StoreDir $StoreDir -TimeoutSec $TimeoutSec -NoThrow -Bounded
+        $problem = Get-ConstructApiLastProblem
+        $result.Status = $problem.Status; $result.Code = $problem.Code; $result.Class = $problem.Class
+        if ($problem.Status -ge 200 -and $problem.Status -lt 300) {
+            $result.Outcome = 'malformed'; $result.Replayed = [bool]$body.replayed
+            if ($body.state -eq 'ready' -and (Test-ConstructSourceResult $body)) {
+                $result.Outcome = 'ready'; $result.SizeBytes = [long]$body.sizeBytes; $result.Sha256 = [string]$body.sha256; $result.ReleaseTag = [string]$body.releaseTag
+            } elseif ($body.state -eq 'downloading' -and $body.jobId) { $result.Outcome = 'downloading'; $result.JobId = [string]$body.jobId }
+        } elseif ($problem.Status -eq 404 -or ($problem.Status -eq 409 -and $problem.Code -eq 'unsupported-capability')) { $result.Outcome = 'unsupported' }
+        elseif ($problem.Status -in @(401,403)) { $result.Outcome = 'denied' }
+        elseif ($problem.Status -eq 503) { $result.Outcome = 'maintenance' }
+        elseif ($problem.Status -ge 400 -and $problem.Status -lt 500) { $result.Outcome = 'refused' }
+    } catch { $result.Class = Get-ConstructApiFailureClass $_.Exception }
+    return $result
+}
+
+function Test-ConstructSourceResult {
+    param($Value)
+    try { return [bool]($Value -and [long]$Value.sizeBytes -gt 0 -and [string]$Value.sha256 -match '^[0-9a-f]{64}$') } catch { return $false }
+}
+
+function Wait-ConstructSourceJob {
+    [CmdletBinding()]
+    param([string]$BaseUrl, [string]$JobId, $Auth, [string]$Pin, [string]$StoreDir,
+        [datetime]$Deadline, [double]$PollSeconds = 2, [scriptblock]$OnProgress = {})
+    $failures = 0; $seen = 0
+    while ([datetime]::UtcNow -lt $Deadline) {
+        $remaining = ($Deadline - [datetime]::UtcNow).TotalSeconds
+        $timeout = [int][Math]::Max(1, [Math]::Min(30, [Math]::Floor($remaining)))
+        $job = $null; $problem = @{ Status = 0; Code = ''; Class = 'other' }
+        try {
+            $job = Invoke-ConstructApi -BaseUrl $BaseUrl -Path ('/jobs/' + [Uri]::EscapeDataString($JobId)) -Auth $Auth -Pin $Pin -StoreDir $StoreDir -TimeoutSec $timeout -NoThrow -Bounded
+            $problem = Get-ConstructApiLastProblem
+        } catch { $problem.Class = Get-ConstructApiFailureClass $_.Exception }
+        if ($problem.Status -in @(401,403)) { return @{ State = 'denied'; Code = [string]$problem.Code; Class = 'http' } }
+        if ($problem.Status -lt 200 -or $problem.Status -ge 500) {
+            $failures++
+            if ($failures -ge 3) { return @{ State = 'error'; Code = [string]$problem.Code; Class = $problem.Class } }
+        } elseif ($problem.Status -ge 300 -or -not $job) { return @{ State = 'malformed'; Code = [string]$problem.Code; Class = $problem.Class } }
+        else {
+            $failures = 0
+            $lines = @($job.progress); while ($seen -lt $lines.Count) { & $OnProgress $lines[$seen]; $seen++ }
+            switch ([string]$job.state) {
+                'succeeded' {
+                    if (-not (Test-ConstructSourceResult $job.result)) { return @{ State = 'malformed'; Code = 'malformed'; Class = 'none' } }
+                    return @{ State = 'succeeded'; Code = ''; Class = 'none'; SizeBytes = [long]$job.result.sizeBytes; Sha256 = [string]$job.result.sha256; ReleaseTag = [string]$job.result.releaseTag }
+                }
+                'failed' { return @{ State = 'failed'; Code = [string]$job.error; Class = 'none' } }
+                'cancelled' { return @{ State = 'cancelled'; Code = 'cancelled'; Class = 'none' } }
+                { $_ -notin @('queued','running') } { return @{ State = 'malformed'; Code = 'malformed'; Class = 'none' } }
+            }
+        }
+        $sleep = [Math]::Min($PollSeconds, [Math]::Max(0, ($Deadline - [datetime]::UtcNow).TotalSeconds))
+        if ($sleep -gt 0) { Start-Sleep -Milliseconds ([int]($sleep * 1000)) }
+    }
+    return @{ State = 'timeout'; Code = 'timeout'; Class = 'timeout' }
+}
+
+function Invoke-ConstructSourceTransport {
+    [CmdletBinding()]
+    param([ValidateSet('begin','complete')][string]$Phase, $Plan, $State, [scriptblock]$Ensure,
+        [scriptblock]$WaitJob, [scriptblock]$StageToken = { $true }, [scriptblock]$RunGuestFetch,
+        [scriptblock]$Pack = {}, [scriptblock]$Upload, [scriptblock]$Warn = { param($text) Write-Warning $text },
+        [scriptblock]$Info = { param($text) Write-Host $text }, [datetime]$Deadline = ([datetime]::UtcNow.AddSeconds(900)), [int]$TimeoutSeconds = 900)
+    $reason = ''
+    if ($Phase -eq 'begin') {
+        $State = @{}; foreach ($key in $Plan.Keys) { $State[$key] = $Plan[$key] }
+        $State.ArchivePath = $null; $State.OperationKey = 'source-' + [guid]::NewGuid().ToString('N')
+        if ($State.Transport -eq 'cache') {
+            & $Info ('==> Ensuring Construct source ' + $State.Commit.Substring(0,7) + ' on the host service')
+            try { $result = & $Ensure $State.Commit $State.OperationKey } catch { $result = @{ Outcome = 'error'; Class = 'other' } }
+            $State.Ensure = $result
+            if ($result.Outcome -eq 'ready') {
+                $State.SizeBytes = $result.SizeBytes; $State.Sha256 = $result.Sha256
+                & $Info ('    Source cached on the host (' + [Math]::Round($State.SizeBytes / 1KB) + ' KB)')
+            } elseif ($result.Outcome -eq 'downloading') {
+                & $Info ('    Host is fetching commit ' + $State.Commit.Substring(0,7) + ' from the release (job ' + $result.JobId + ')')
+            } else {
+                switch ($result.Outcome) {
+                    'unsupported' { $reason = 'service-without-source-cache' }
+                    'denied' { $reason = 'ensure-denied:' + $result.Status }
+                    'maintenance' { $reason = 'ensure-maintenance' }
+                    'refused' { $reason = 'ensure-refused:' + (Get-ConstructSourceFailureCode $result) }
+                    default { $reason = 'ensure-failed:' + (Get-ConstructSourceFailureCode $result) }
+                }
+            }
+        } else { $reason = $State.Reason }
+    } else {
+        if ($State.Transport -eq 'cache') {
+            if ($State.Ensure.Outcome -eq 'downloading') {
+                try { $result = & $WaitJob $State.Ensure.JobId $Deadline } catch { $result = @{ State = 'error'; Class = 'other' } }
+                switch ($result.State) {
+                    'succeeded' { $State.SizeBytes = $result.SizeBytes; $State.Sha256 = $result.Sha256 }
+                    'cancelled' { $reason = 'ensure-cancelled' }
+                    'timeout' { $reason = 'ensure-timeout' }
+                    default { $reason = 'ensure-failed:' + (Get-ConstructSourceFailureCode $result) }
+                }
+            }
+            if (-not $reason) {
+                try { $staged = & $StageToken } catch { $staged = $false }
+                if (-not $staged) { $reason = 'guest-token-staging-failed' }
+            }
+            if (-not $reason) {
+                try { $fetch = & $RunGuestFetch $State } catch { $fetch = @{ ExitCode = 255; Lines = @() } }
+                if ($fetch.ExitCode -eq 7) { $reason = 'guest-fetch-failed:repo-lost' }
+                elseif ($fetch.ExitCode -ne 0) {
+                    $detail = [string]$fetch.ExitCode; if ($fetch.ExitCode -notin @(2,3,4,5,6)) { $detail = 'ssh' }
+                    $reason = 'guest-fetch-failed:' + $detail
+                } elseif (@($fetch.Lines) -cnotcontains ('CONSTRUCT_SOURCE_INSTALLED=' + $State.Commit)) { $reason = 'guest-fetch-failed:unverified' }
+            }
+        }
+    }
+    if ($reason) {
+        $message = Get-ConstructSourceMessage -Reason $reason -Commit $State.Commit -Ref $State.Ref -Divergence $State.Divergence -Mode $State.Mode -TimeoutSeconds $TimeoutSeconds
+        if ($State.Mode -eq 'cache' -and $message) { throw $message }
+        if ($message) { & $Warn $message }
+        $State.Transport = 'upload'; $State.Reason = $reason
+    }
+    if ($State.Transport -eq 'upload') {
+        if (-not $State.ArchivePath) { $State.ArchivePath = & $Pack }
+        if ($Phase -eq 'complete') { & $Upload $State.ArchivePath | Out-Null }
+    } elseif ($Phase -eq 'complete') {
+        & $Info ('    Construct source: host cache (commit ' + $State.Commit.Substring(0,7) + ', ' + [Math]::Round($State.SizeBytes / 1KB) + ' KB); nothing uploaded from this PC.')
+    }
+    return $State
 }
