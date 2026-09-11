@@ -6,20 +6,24 @@ passthrough, and instance monitoring available when VS Code is closed. It hosts 
 same control panel assets as the extension, for all registered instances. It needs
 neither administrator rights nor a separately installed .NET runtime.
 
-**Delivery status:** stage 3 merges the IPC host, Windows app/adapters, installer,
-and release pipeline. The Windows entry point still runs its UI bootstrap and
-refuses runtime commands; production app/IPC composition remains unfinished, so
-the extension keeps running its fallback jobs. The headless selftest now performs
-local checks and can pass without instances; it does not prove runtime composition
-or prevent release of this incomplete app. The behavior described below is the
-completed Companion contract. See the [stage 3 integration notes](plans/construct-companion.md#integration-notes-stage-3)
-for outstanding defects. No Windows installation or runtime field test was run.
+**Delivery status:** S3 connects the desktop app to the full authenticated IPC host,
+real dispatcher and per-instance runtimes. Linux fake-mode end-to-end tests exercise
+mixed local/remote and remote-only registries, forwards, notifications, audio and
+settings. See [implementation coverage](../companion/README.md#message-matrix) for
+explicit unsupported workflows. Windows tray, microphone and toast field validation
+remains pending; a successful Linux build is not a Windows runtime test.
 
 ## Install and update
 
 Run `Auto-Install.ps1` from a normal, non-elevated PowerShell window. Its per-user
 pre-step installs the Companion alongside the VS Code extension before the VM
-installation asks for elevation. `Update-Construct.ps1` also installs or updates it.
+installation asks for elevation. `Update-Construct.ps1` and plain `Provision-AgentVM.ps1` reprovision also install or update it.
+
+Remote installs install the Companion on **your client PC**, too. Forwards, toasts
+and microphone capture terminate there, regardless of which host runs the VM. A PC
+that only added a remote VM through VS Code receives a once-per-session install
+offer in fallback mode; **Construct: Install Construct Companion** opens the same
+installer in a visible, non-elevated console.
 An optional Companion failure prints its safe diagnostic and allows the VM/extension
 work to continue. Local build failures include the native exit status and MSBuild
 error codes; inspect full build output locally by running
@@ -31,8 +35,7 @@ skip the Auto-Install pre-step.
 For a manual install, from your downloaded Construct scripts directory:
 
 ```powershell
-. .\lib\Construct.Companion.ps1
-Install-ConstructCompanion -ScriptsDir $PWD.Path
+.\Install-ConstructCompanion.ps1
 ```
 
 The installer uses a local build when the Companion solution and a .NET 10 SDK
@@ -55,7 +58,7 @@ through `.previous`, restores the prior files/registration values on replacement
 failure, then starts `ConstructCompanion.exe --background` detached. Successful
 process creation is the commit point; it is not a runtime health check.
 
-Pass `-SkipCompanion` to Auto-Install, Update Construct, or the library function to
+Pass `-SkipCompanion` to Auto-Install, Update Construct, Provision-AgentVM, or the library function to
 skip this run. For persistent opt-out, merge `"companion": false` into the scripts
 folder's `.construct-settings.json`. This skips installation/updates; it does not
 stop or uninstall an existing app. `-Force` does not override the opt-out.
@@ -107,13 +110,14 @@ The headless selftest reports paths/state parsing, a loopback health round trip,
 instance probes, microphone device enumeration, WebView2 presence and toast
 registration. It never starts tunnels or writes acknowledgements. Exit 0 means the
 checks that can run without a VM passed; exit 1 means failure. A new user with no
-instances is a supported successful check once app composition is complete.
+instances is a supported successful check. Remote-only registries do not require local
+Hyper-V. The diagnostic binds the real IPC host with runtime jobs and endpoint
+publication disabled, so it cannot replace a running Companion's discovery document.
 
 ## Uninstall and troubleshooting
 
 ```powershell
-. .\lib\Construct.Companion.ps1
-Uninstall-ConstructCompanion
+.\Install-ConstructCompanion.ps1 -Uninstall
 ```
 
 Uninstall asks the app to quit, removes the app and its Run/protocol/AUMID

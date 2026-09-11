@@ -14,7 +14,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 namespace Construct.Companion.Host.Ipc;
 
-public sealed record IpcServerOptions(string Version = "development");
+public sealed record IpcServerOptions(string Version = "development", bool PublishEndpoint = true);
 public static class IpcServer
 {
     // The application owns this host and awaits StopAsync/DisposeAsync on exit.
@@ -39,12 +39,13 @@ public static class IpcServer
         var endpointPath = Path.Combine(settings.Directory, "endpoint.json");
         app.Lifetime.ApplicationStarted.Register(() =>
         {
+            if (!options.PublishEndpoint) return;
             var port = new Uri(app.Urls.Single()).Port;
             files.CreateDirectory(settings.Directory);
             files.WriteFileAtomic(endpointPath, JsonSerializer.SerializeToUtf8Bytes(new Core.Ipc.Endpoint(1, port, secret, pid, startedAt, version), IpcJson.Options));
             logs.Write("IPC listener started.");
         });
-        app.Lifetime.ApplicationStopped.Register(() => { files.DeleteFile(endpointPath); logs.Write("IPC listener stopped."); });
+        app.Lifetime.ApplicationStopped.Register(() => { if (options.PublishEndpoint) { files.DeleteFile(endpointPath); logs.Write("IPC listener stopped."); } });
         app.Use(async (ctx, next) =>
         {
             try
