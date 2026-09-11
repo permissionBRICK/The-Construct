@@ -47,12 +47,12 @@
 
 .ha-form { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px 14px; margin: 8px 0; }
 .ha-form label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--dim); }
-.ha-form input, .ha-form select, .ha-form textarea, .ha-inline-actions input { font-family: var(--mono); font-size: 12px; color: var(--text); background: rgba(0,0,0,0.35); border: 1px solid var(--line); border-radius: 4px; padding: 5px 7px; }
+.ha-form input, .ha-form select, .ha-form textarea, .ha-inline-actions input { font-family: var(--mono); font-size: 12px; color: var(--vscode-input-foreground, var(--text)); background: var(--vscode-input-background, var(--void)); border: 1px solid var(--vscode-input-border, var(--line-strong)); border-radius: 4px; padding: 5px 7px; }
 .ha-form .problem { color: var(--crit); font-size: 10.5px; }
 
 .ha-section { margin: 10px 0; }
 .ha-section-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
-.ha-section textarea { width: 100%; box-sizing: border-box; min-height: 90px; font-family: var(--mono); font-size: 11.5px; color: var(--text); background: rgba(0,0,0,0.35); border: 1px solid var(--line); border-radius: 4px; padding: 6px; }
+.ha-section textarea { width: 100%; box-sizing: border-box; min-height: 90px; font-family: var(--mono); font-size: 11.5px; color: var(--vscode-input-foreground, var(--text)); background: var(--vscode-input-background, var(--void)); border: 1px solid var(--vscode-input-border, var(--line-strong)); border-radius: 4px; padding: 6px; }
 .ha-section.dirty textarea { border-color: var(--warn); }
 .ha-section .problem { color: var(--crit); font-size: 11px; margin: 3px 0 0; white-space: pre-wrap; }
 .ha-pre { font-family: var(--mono); font-size: 11px; color: var(--dim); background: rgba(0,0,0,0.35); border: 1px solid var(--line); border-radius: 4px; padding: 8px; white-space: pre-wrap; max-height: 240px; overflow: auto; }
@@ -87,3 +87,5 @@
 #haVmSettings label { display: grid; gap: .35rem; }
 #haVmSettings input, #haVmSettings select { box-sizing: border-box; width: 100%; padding: .5rem; }
 #haVmSettings .ha-form-actions { display: flex; justify-content: flex-end; gap: .5rem; }
+
+.ha-form select, #haVmSettings select, select[class], select[class]:hover, option { color: var(--vscode-dropdown-foreground, var(--text)); background-color: var(--vscode-dropdown-background, var(--void)); border-color: var(--vscode-dropdown-border, var(--line-strong)); }

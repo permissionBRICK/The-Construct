@@ -1,3 +1,5 @@
 /* Classic Matrix — the original design. The shared panel.css IS this look, so
- * the theme layer is intentionally empty. Other designs (terminal.css,
- * native.css, …) override tokens + component skins from here; see src/themes.js. */
+ * this layer pins the native control scheme. Other designs (terminal.css,
+ * native.css, …) override tokens + component skins; see src/themes.js. */
+
+:root { color-scheme: dark; --construct-native-palette: 0; }

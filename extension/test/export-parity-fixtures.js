@@ -428,7 +428,7 @@ function desktopWebviews() {
     const template = fs.readFileSync(path.join(__dirname,'../media',surface+'.html'),'utf8');
     const output = template.replace(/{{cspSource}}/g,cspSource).replace(/{{nonce}}/g,nonce)
       .replace(/{{styleUri}}/g,cspSource+'/panel.css').replace(/{{themeUri}}/g,cspSource+'/'+themes.cssFileFor(theme))
-      .replace(/{{scriptUri}}/g,cspSource+'/'+surface+'.js').replace(/{{adminStyleUri}}/g,cspSource+'/hostadmin.css');
+      .replace(/{{paletteUri}}/g,cspSource+'/palette.js').replace(/{{scriptUri}}/g,cspSource+'/'+surface+'.js').replace(/{{adminStyleUri}}/g,cspSource+'/hostadmin.css');
     rows.push({kind:'document',surface,template,theme,nonce,output});
   }
   return rows;

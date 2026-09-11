@@ -108,6 +108,7 @@ function createHostAdminFeature(deps = {}) {
       .replace(/{{styleUri}}/g, mediaUri("panel.css"))
       .replace(/{{themeUri}}/g, mediaUri(theme))
       .replace(/{{adminStyleUri}}/g, mediaUri("hostadmin.css"))
+      .replace(/{{paletteUri}}/g, mediaUri("palette.js"))
       .replace(/{{scriptUri}}/g, mediaUri("hostadmin.js"))
       .replace(/{{nonce}}/g, typeof deps.nonce === "function" ? deps.nonce() : "nonce");
   }
