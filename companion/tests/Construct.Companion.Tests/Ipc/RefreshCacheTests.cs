@@ -126,6 +126,7 @@ public sealed class UpdateBannerStateTests
             Assert.True(rebuilt["update"]!["available"]!.GetValue<bool>());
             Assert.Equal("", rebuilt["update"]!["behind"]!.GetValue<string>());
             Assert.Equal("main@aaaaaaa", rebuilt["constructRev"]!.GetValue<string>());
+            Assert.True(rebuilt.ContainsKey("registerOffer")); Assert.Null(rebuilt["registerOffer"]);
         }
         finally { await host.StopAsync(); }
     }

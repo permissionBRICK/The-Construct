@@ -76,13 +76,16 @@ function createSseParser(onEvent) {
     }
   };
 }
-function overlayMessage(message, connectedInstance) {
+// The Companion drives every instance without an attached window, so two fields are the
+// window's own: which instance it is attached to, and the "register this VM" offer for an
+// attached host the registry does not know. Both are overlaid on every state message.
+function overlayMessage(message, connectedInstance, registerOffer = null) {
   if (message && message.type === "state") {
-    return { ...message, state: { ...message.state, connectedInstance } };
+    return { ...message, state: { ...message.state, connectedInstance, registerOffer: registerOffer || null } };
   }
   return message;
 }
-function snapshotMessages(snapshot, connectedInstance) {
+function snapshotMessages(snapshot, connectedInstance, registerOffer = null) {
   const out = [];
   if (!snapshot || typeof snapshot !== "object") return out;
   for (const key of ["state", "settings", "audio", "forwards"]) {
@@ -97,7 +100,7 @@ function snapshotMessages(snapshot, connectedInstance) {
             ? value[field === "hostAdminOffer" ? "offer" : field] : value;
         }
       }
-      out.push(overlayMessage({ ...m, state }, connectedInstance));
+      out.push(overlayMessage({ ...m, state }, connectedInstance, registerOffer));
     } else out.push(m);
   }
   return out;

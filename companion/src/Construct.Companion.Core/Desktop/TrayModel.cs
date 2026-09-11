@@ -44,6 +44,7 @@ public static class TrayModel
         {
             new("instances", "Instance", Children: instances.Select(n => new MenuEntry(InstancePrefix + n, n, Checked: n == state.Instance)).ToArray()),
             new("status", StatusLine(state), false),
+            new("registerVm", "Register a VM…", usable),
             new(power, state.Online ? "Shutdown" : state.VmState is "saved" or "paused" ? "Resume" : "Start", usable && !state.Busy && (state.Online || state.VmState is not ("absent" or "running"))),
             new("connect", "Open VS Code", usable), new("openT3", "Open T3 Code", usable),
             new("forwards", "Forwards", Children: forwards.Count == 0 ? [new("none", "none", false)] : forwards.Select(f => new MenuEntry("forward:" + f.Id, f.Label, Children: [new("openForward:" + f.Id, "Open link"), new("closeForward:" + f.Id, "Close")])).ToArray()),
