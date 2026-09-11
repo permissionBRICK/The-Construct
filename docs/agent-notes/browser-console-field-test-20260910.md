@@ -132,3 +132,28 @@ overrides discovery; the script prints the file changed and leaves activation to
 the next service restart/update. Local PowerShell smoke checks used a registry
 double with real JSON writes for UI, legacy and custom layouts, enable/disable,
 explicit override and missing-service errors. Windows deployment is pending.
+
+## Follow-up: company viewer freezes after connecting (2026-09-11)
+
+Christoph confirmed that the company viewer now connects, but freezes within
+seconds and needs Reconnect. Chromium warned about a `VideoFrame` being garbage
+collected without `close()`. The bundled Guacamole 1.6.0 `Display.drawStream`
+uses `ImageDecoder` for PNG/JPEG streams and never closes the resulting frame or
+decoder. A rejected decode also leaves its scheduled draw permanently blocked.
+These defects were reproduced locally against the original bundled asset:
+300 actual Chromium image decodes leaked frames, and a malformed PNG stalled
+the display queue. This matches the report; the company PC has not yet been
+retested with the fix.
+
+The bundle now contains a marked, readable patch to that single method. It closes
+decoded frames after drawing or cancellation, releases decoders, detaches stream
+handlers before closing early, and unblocks/reports failed decoding. The viewer
+shows the error and disconnects, and cancels queued display work on disconnect.
+Eight local Chromium tests cover actual decoding, resource counts, cancellation,
+failures, trailing protocol data, fallback and repeated viewer reconnects.
+The ordinary gateway/CLI Python checks also pass. See `console-viewer/README.md`
+for the patched asset hash and local test command. No new CI download job was added.
+
+Activation requires the updated `console-viewer/static` files on the company
+primary VM and a fresh console link/page. A Windows host service update does not
+activate these Linux-served browser assets. Deployment to the company VM is pending.

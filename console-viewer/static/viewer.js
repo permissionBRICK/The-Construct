@@ -52,13 +52,18 @@ function connect() {
         screen.style.height = `${display.getHeight() * display.getScale()}px`;
     }
     display.onresize = fit;
+    display.onerror = error => {
+        if (active !== client) return;
+        fail(error.message);
+        active.disconnect();
+    };
     window.onresize = fit;
     active.onerror = error => fail(error.message || `Connection failed: ${phase}. Reconnect or create a new console link.`);
     active.onstatechange = state => {
         if (active !== client) return;
         connectionState = state;
         if (state === 3) { stopProgress(); message('Connected · click the display to control the guest'); cad.disabled = false; }
-        else if (state === 5) { stopProgress(); message(connectionError || 'Disconnected. Reconnect while this link is valid, or create a new link.', !!connectionError); cad.disabled = true; }
+        else if (state === 5) { display.cancel(); stopProgress(); message(connectionError || 'Disconnected. Reconnect while this link is valid, or create a new link.', !!connectionError); cad.disabled = true; }
         else if (state < 3 && !connectionError) message(phase + '…');
     };
     // Guacamole sends X11 keysyms through RDP, avoiding the WMI TypeText path.
