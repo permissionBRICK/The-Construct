@@ -18,7 +18,6 @@ public sealed class FakeRunningProcess : IRunningProcess
     public Task<int> Completion => completion.Task;
     public bool Stopped { get; private set; }
     public void Emit(string text) => stdout.Writer.TryWrite(text);
-    public void EmitError(string text) => stderr.Writer.TryWrite(text);
     public void Exit(int code = 0)
     {
         stdout.Writer.TryComplete(); stderr.Writer.TryComplete(); completion.TrySetResult(code); cancellation.Dispose();

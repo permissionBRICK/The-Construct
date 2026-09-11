@@ -39,7 +39,7 @@ public sealed class RuntimeParityTests
         {
             var cfg = obj["cfg"]!.Deserialize<SshConfiguration>(IpcJson.Options)!; var key = obj["keyPath"]?.GetValue<string>();
             var runner = new FakeProcessRunner();
-            var args = kind == "tunnel" ? RuntimeSshArgs.Reverse(cfg, 8767, 30000, key) : RuntimeSshArgs.Watch(cfg, "echo test", key);
+            var args = kind == "tunnel" ? SshArgs.BuildReverseForward(cfg, 8767, 30000, key) : SshArgs.BuildWatch(cfg, "echo test", key);
             await using var process = runner.Start(new ProcessInvocation("ssh", args));
             actual = JsonSerializer.SerializeToNode(runner.Invocations.Single().Arguments);
         }

@@ -10,6 +10,8 @@ public sealed record MenuEntry(string Id, string Text, bool Enabled = true, bool
 public sealed record TrayForward(string Id, string Label, string Url);
 public static class TrayModel
 {
+    public const string InstancePrefix = "instance:";
+    public static (int Width, int Height) PopupSize(int dpi) => ((int)(420 * dpi / 96d), (int)(650 * dpi / 96d));
     public static TrayAppearance Appearance(TrayState state)
     {
         var missing = state.Instance is null || !state.ScriptsFound;
@@ -28,7 +30,7 @@ public static class TrayModel
         var power = state.Online ? "shutdown" : "startVm";
         var entries = new List<MenuEntry>
         {
-            new("instances", "Instance", Children: instances.Select(n => new MenuEntry("instance:" + n, n, Checked: n == state.Instance)).ToArray()),
+            new("instances", "Instance", Children: instances.Select(n => new MenuEntry(InstancePrefix + n, n, Checked: n == state.Instance)).ToArray()),
             new("status", Appearance(state).Tooltip, false),
             new(power, state.Online ? "Shutdown" : state.VmState is "saved" or "paused" ? "Resume" : "Start", usable && !state.Busy && (state.Online || state.VmState is not ("absent" or "running"))),
             new("connect", "Open VS Code", usable), new("openT3", "Open T3 Code", usable),
@@ -39,21 +41,5 @@ public static class TrayModel
         if (state.HostAdmin) entries.Add(new("hostadmin", "Host Administration"));
         entries.AddRange([new("autostart", "Start with Windows", Checked: autostart), new("logs", "Logs"), new("about", "About"), new("quit", "Quit")]);
         return entries;
-    }
-}
-public sealed record WindowBounds(int X, int Y, int Width, int Height);
-public static class WindowPlacement
-{
-    public static WindowBounds Clamp(WindowBounds desired, WindowBounds work)
-    {
-        var width = Math.Min(Math.Max(1, desired.Width), work.Width); var height = Math.Min(Math.Max(1, desired.Height), work.Height);
-        return new(Math.Clamp(desired.X, work.X, work.X + work.Width - width), Math.Clamp(desired.Y, work.Y, work.Y + work.Height - height), width, height);
-    }
-    public static WindowBounds Popup(WindowBounds tray, WindowBounds work, int width, int height)
-    {
-        var x = tray.X + tray.Width - width; var y = tray.Y - height;
-        if (tray.Y <= work.Y) y = tray.Y + tray.Height;
-        if (tray.X <= work.X) x = tray.X + tray.Width;
-        return Clamp(new(x, y, width, height), work);
     }
 }

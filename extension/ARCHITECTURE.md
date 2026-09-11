@@ -2944,7 +2944,7 @@ Extension shutdown terminates a pending token-migration child; a failed native t
 cannot raise a late VS Code fallback notification after handoff. Host-admin activation
 includes the current remote host slug when the selected instance supplies one.
 
-The S3 desktop entry point now supplies native platform seams to `AddCompanionHost`,
+The desktop entry point supplies native platform seams to `AddCompanionHost`,
 and the tray/WebView2 windows use the same dispatcher and aggregated events as HTTP
 clients. [The message matrix](../companion/README.md#message-matrix) is checked against
 `handleMessage` and the dispatcher's known sets. `companion-host.test.js` starts the

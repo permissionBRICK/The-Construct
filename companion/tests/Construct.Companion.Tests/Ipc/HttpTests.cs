@@ -20,6 +20,8 @@ public sealed class HttpTests
     public async Task CorruptSettingsUseDefaultsAndLogARefusalSafeDiagnostic()
     {
         await using var h = await Harness.Start(); var settings = h.App.Services.GetRequiredService<IpcSettings>();
+        // The enrichment service writes activeInstance at startup; corrupt the file only after that write.
+        using (var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(8))) while (!h.Files.FileExists(settings.PathName)) await Task.Delay(10, deadline.Token);
         h.Files.WriteFileAtomic(settings.PathName, "{invalid"u8);
         using var response = await h.Client.GetAsync("/v1/settings"); Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Contains(h.App.Services.GetRequiredService<IpcLogs>().Read(20), line => line == "Invalid Companion settings; using defaults.");

@@ -3,6 +3,7 @@ using Construct.Companion.Core.Desktop;
 using Construct.Companion.Windows;
 namespace Construct.Companion;
 
+// §9.1: a filled disc with a thin ring in the state colour, "?" when unconfigured, a blue dot for an update.
 internal static class TrayIconDrawing
 {
     public static Icon Draw(TrayAppearance appearance,int dpi)

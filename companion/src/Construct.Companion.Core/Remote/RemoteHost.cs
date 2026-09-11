@@ -68,6 +68,10 @@ public static class RemoteHost
     {
         try { return string.Equals(NormalizeServiceUrl(a), NormalizeServiceUrl(b), StringComparison.OrdinalIgnoreCase); } catch (ArgumentException) { return false; }
     }
+    // hosts.json (Companion enrolment) plus the hosts registered remote instances point at, as slugs.
+    public static JsonArray EnrolledHosts(IFileSystem files, string stateDirectory) => StateJson.ReadObject(files, Path.Combine(stateDirectory, "hosts.json"))?["hosts"] as JsonArray ?? [];
+    public static string[] KnownHostSlugs(InstanceRegistry registry, JsonArray enrolled) => registry.List().Select(i => StateJson.Text(i["service"]?["url"]))
+        .Concat(enrolled.Select(h => StateJson.Text(h?["url"]))).Where(u => !string.IsNullOrEmpty(u)).Select(u => HostSlug(u!)).Distinct(StringComparer.Ordinal).ToArray();
     public static string ReadPin(IFileSystem files, string url)
     {
         try { var path = PinPath(files, url); var bytes = path is null ? null : files.ReadFile(path); return bytes is null ? "" : FormatFingerprint(Encoding.UTF8.GetString(bytes)); }

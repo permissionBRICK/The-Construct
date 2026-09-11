@@ -135,6 +135,34 @@ public sealed class HostAdminHttpTests
         var count = api.Requests.Count;
         using var second = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.action", action = "shareVm", args = new { name = "build", scope = "host" } }); Assert.Equal(HttpStatusCode.Accepted, second.StatusCode); Assert.Equal(count, api.Requests.Count);
     }
+    [Fact]
+    public async Task MalformedConfigSectionsAreRejectedBeforeQueueing()
+    {
+        var api = new RoutingRemoteApi(); await using var h = await Enroll(api);
+        using var ready = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.ready" }); Assert.Equal(HttpStatusCode.Accepted, ready.StatusCode);
+        var valid = new { key = "capacity", text = "{}" };
+        foreach (var sections in new object?[] { null, Array.Empty<object>(), new object?[] { null, valid }, new object?[] { "capacity", valid }, new object?[] { new object[0], valid }, new object?[] { new { key = "capacity", text = "[]" } } })
+        {
+            using var response = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.action", action = "saveConfig", args = new { sections } });
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+            Assert.Equal("invalidConfig", (await response.Content.ReadFromJsonAsync<JsonObject>())!["code"]!.GetValue<string>());
+        }
+        Assert.DoesNotContain(api.Requests, r => r.Method == "PUT" && r.Url.AbsolutePath == "/api/v1/host/config");
+        using var accepted = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.action", action = "saveConfig", args = new { sections = new[] { valid } } });
+        Assert.Equal(HttpStatusCode.Accepted, accepted.StatusCode); Assert.Contains(api.Requests, r => r.Method == "PUT" && r.Url.AbsolutePath == "/api/v1/host/config");
+    }
+    [Fact]
+    public async Task ValidatedActionBodiesCarryTheClientFieldsUnchanged()
+    {
+        var api = new RoutingRemoteApi(); await using var h = await Enroll(api);
+        using var ready = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.ready" }); Assert.Equal(HttpStatusCode.Accepted, ready.StatusCode);
+        h.Get<FakePrompts, IPrompts>().Confirmations.Enqueue(true); h.Get<FakePrompts, IPrompts>().Confirmations.Enqueue(true);
+        using var share = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.action", action = "shareVm", args = new { name = "build", scope = " host " } }); Assert.Equal(HttpStatusCode.Accepted, share.StatusCode);
+        var sharing = Assert.Single(api.Requests, r => r.Url.AbsolutePath == "/api/v1/vms/build/sharing"); Assert.Equal(" host ", sharing.Body!.Value.GetProperty("scope").GetString());
+        using var resolve = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.action", action = "updatesResolve", args = new { updateId = "u1", action = " abort " } }); Assert.Equal(HttpStatusCode.Accepted, resolve.StatusCode);
+        var resolved = Assert.Single(api.Requests, r => r.Url.AbsolutePath == "/api/v1/host/updates/resolve"); Assert.Equal(" abort ", resolved.Body!.Value.GetProperty("action").GetString()); Assert.Equal("u1", resolved.Body!.Value.GetProperty("updateId").GetString());
+        using var badScope = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.action", action = "shareVm", args = new { name = "build", scope = "public" } }); Assert.Equal(HttpStatusCode.BadRequest, badScope.StatusCode);
+    }
     private static async Task<Harness> Enroll(RoutingRemoteApi api)
     { var h = await Harness.Start(s => s.AddSingleton<IRemoteApi>(api)); using var response = await h.Post("/v1/hosts", new { url = "host.example", fingerprint = new string('a', 64) }); Assert.Equal(HttpStatusCode.Created, response.StatusCode); return h; }
 }

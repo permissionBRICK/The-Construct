@@ -1,3 +1,4 @@
+using Construct.Companion.Core.Forwards;
 using Construct.Companion.Core.Ipc;
 
 namespace Construct.Companion.Core.Desktop;
@@ -5,6 +6,17 @@ namespace Construct.Companion.Core.Desktop;
 public sealed record ActivationPlan(IReadOnlyList<UiActivation> Views, string? ForwardInstance = null, string? ForwardId = null);
 public static class Activation
 {
+    // In-process activations (tray, panel messages) reuse the command-line rules; "theme" exists only here.
+    public static ActivationPlan ResolveView(UiActivation activation, IReadOnlyCollection<string> instances, IReadOnlyCollection<string> hosts)
+    {
+        if (activation.View == "theme")
+        {
+            if (activation.Instance is not null && !instances.Contains(activation.Instance, StringComparer.Ordinal)) throw new ArgumentException("Instance is not registered.");
+            return new([activation]);
+        }
+        return Resolve(new CommandLine(Panel: activation.View == "panel", Settings: activation.View == "settings", HostAdmin: activation.View == "hostadmin",
+            Popup: activation.View == "popup", Instance: activation.Instance, Host: activation.Host), instances, hosts);
+    }
     public static ActivationPlan Resolve(CommandLine command, IReadOnlyCollection<string> instances,
         IReadOnlyCollection<string> hosts)
     {
@@ -39,7 +51,7 @@ public static class Activation
                 case "settings": views.Add(new("settings", instance)); break;
                 case "hostadmin": views.Add(new("hostadmin", Host: host)); break;
                 case "forward":
-                    if (instance is null || !query.TryGetValue("id", out var id) || !Construct.Companion.Core.Forwards.ForwardProtocol.IsSafeId(id))
+                    if (instance is null || !query.TryGetValue("id", out var id) || !ForwardProtocol.IsSafeId(id))
                         throw new ArgumentException("Invalid forward activation.");
                     forwardInstance = instance; forwardId = id; break;
                 default: views.Add(new("popup")); break;

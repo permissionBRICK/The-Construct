@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using Construct.Companion.Core.Abstractions;
 using Construct.Companion.Core.State;
+using Construct.Companion.Host.Runtime;
 
 namespace Construct.Companion.Tests;
 
@@ -35,30 +36,24 @@ public sealed class TemporaryStoreTests
         using var files = new TemporaryFiles(); File.WriteAllText(Path.Combine(files.Root, ".construct-settings.json"), content);
         Assert.Empty(new HostState(files).ReadRawSettings(files.Root));
     }
+    // The real OS file system with a throwaway %LOCALAPPDATA%/%TEMP% root.
     private sealed class TemporaryFiles : IStateFileSystem, IDisposable
     {
+        private readonly HostFileSystem inner = new();
         public string Root { get; } = Path.Combine(Path.GetTempPath(), "companion-state-" + Guid.NewGuid().ToString("N"));
         public TemporaryFiles() => Directory.CreateDirectory(Root);
         public string? GetRoot(FileSystemRoot root) => root is FileSystemRoot.LocalAppData or FileSystemRoot.Temp ? Root : null;
-        public bool FileExists(string path) => File.Exists(path);
-        public bool DirectoryExists(string path) => Directory.Exists(path);
-        public DateTimeOffset? LastWriteTime(string path) => File.Exists(path) ? File.GetLastWriteTimeUtc(path) : null;
-        public byte[]? ReadFile(string path) => File.Exists(path) ? File.ReadAllBytes(path) : null;
-        public void WriteFileAtomic(string path, ReadOnlySpan<byte> contents) => Write(path, contents, true);
-        private static void Write(string path, ReadOnlySpan<byte> contents, bool overwrite)
-        {
-            var temp = path + ".tmp." + Guid.NewGuid().ToString("N");
-            try { File.WriteAllBytes(temp, contents); File.Move(temp, path, overwrite); }
-            finally { if (File.Exists(temp)) File.Delete(temp); }
-        }
-        public bool WriteFileIfAbsent(string path, ReadOnlySpan<byte> contents)
-        {
-            try { Write(path, contents, false); return true; } catch (IOException) when (File.Exists(path)) { return false; }
-        }
-        public void DeleteFile(string path) => File.Delete(path);
-        public void CreateDirectory(string path) => Directory.CreateDirectory(path);
-        public IReadOnlyList<string> EnumerateFiles(string directory) => Directory.Exists(directory) ? Directory.GetFiles(directory).Order(StringComparer.Ordinal).ToArray() : [];
-        public IReadOnlyList<string> EnumerateDirectories(string directory) => Directory.Exists(directory) ? Directory.GetDirectories(directory).Order(StringComparer.Ordinal).ToArray() : [];
+        public bool FileExists(string path) => inner.FileExists(path);
+        public bool DirectoryExists(string path) => inner.DirectoryExists(path);
+        public DateTimeOffset? LastWriteTime(string path) => inner.LastWriteTime(path);
+        public byte[]? ReadFile(string path) => inner.ReadFile(path);
+        public void WriteFileAtomic(string path, ReadOnlySpan<byte> contents) => inner.WriteFileAtomic(path, contents);
+        public bool WriteFileIfAbsent(string path, ReadOnlySpan<byte> contents) => inner.WriteFileIfAbsent(path, contents);
+        public void DeleteFile(string path) => inner.DeleteFile(path);
+        public void DeleteDirectory(string path) => inner.DeleteDirectory(path);
+        public void CreateDirectory(string path) => inner.CreateDirectory(path);
+        public IReadOnlyList<string> EnumerateFiles(string directory) => inner.EnumerateFiles(directory);
+        public IReadOnlyList<string> EnumerateDirectories(string directory) => inner.EnumerateDirectories(directory);
         public IDisposable Watch(string directory, Action changed) => throw new NotSupportedException();
         public void Dispose() => Directory.Delete(Root, true);
     }

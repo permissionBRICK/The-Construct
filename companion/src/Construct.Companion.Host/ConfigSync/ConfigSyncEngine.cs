@@ -3,6 +3,7 @@ using Construct.Companion.Core.ConfigSync;
 
 namespace Construct.Companion.Host.ConfigSync;
 
+// storeRoot is overridden only by tests that stand in for the VM with a local directory.
 public sealed class ConfigSyncEngine(ConfigRepository repo, SyncLock syncLock, ISshTransport ssh, string vmBranch = "vm", string storeRoot = StoreScripts.DefaultRoot)
 {
     public async Task<SyncResult> SyncTickAsync(CancellationToken ct = default)
@@ -21,7 +22,7 @@ public sealed class ConfigSyncEngine(ConfigRepository repo, SyncLock syncLock, I
     {
         try { var r = await ssh.RunRemoteScriptAsync(script, TimeSpan.FromSeconds(30), ct); return r.Code < 0 ? null : r.Stdout; }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (Exception) { return null; }
+        catch (Exception) { return null; } // any transport fault reads as "VM store unreadable"; the caller warns once
     }
     private async Task TickLocked(SyncResult result, CancellationToken ct)
     {
@@ -105,21 +106,4 @@ public sealed class ConfigSyncEngine(ConfigRepository repo, SyncLock syncLock, I
         if (wb.Skipped.Count == 0) return true;
         if (mode == "normal") result.Warnings.Add((seed ? "seed " : "") + "write-back skipped concurrently changed profile(s): " + string.Join(", ", wb.Skipped) + "; sync base not advanced"); return false;
     }
-}
-public sealed class SyncResult
-{
-    public bool Ok { get; set; }
-    public bool Ran { get; set; }
-    public bool Conflict { get; set; }
-    public bool Blocked { get; set; }
-    public string? BlockedReason { get; set; }
-    public List<ProfileReason> SkippedInvalid { get; } = [];
-    public bool Merged { get; set; }
-    public bool Seeded { get; set; }
-    public WriteBackResult WriteBack { get; set; } = new();
-    public List<string> Warnings { get; } = [];
-    public bool? VmReadOk { get; set; }
-    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] public bool LockBusy { get; init; }
-    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] public string? Reason { get; init; }
-    public static SyncResult Busy(string reason) => new() { Ok = true, LockBusy = true, Reason = reason };
 }

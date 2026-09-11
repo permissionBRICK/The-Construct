@@ -175,11 +175,10 @@ test("settings migration copies only non-default host settings using extension's
   assert.deepEqual(c.planSettingsMigration({ repatchDelaySeconds: NaN, notifications: "false" }), {});
 });
 test("token migration argv is pinned; only stdin carries the token", () => {
-  const p = c.planTokenMigration({ url: "https://host:7443", libPath: "C:\\user's\\lib.ps1", env: { LOCALAPPDATA: "/user" }, tokenExists: false });
+  const p = c.planTokenMigration({ url: "https://host:7443", libPath: "C:\\user's\\lib.ps1", env: { LOCALAPPDATA: "/user" } });
   assert.equal(p.file, "powershell.exe");
   assert.deepEqual(p.args, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", "$ErrorActionPreference = 'Stop'; try { . 'C:\\user''s\\lib.ps1'; $token = [Console]::In.ReadToEnd(); Save-ConstructRemoteToken -BaseUrl 'https://host:7443' -Token $token -StoreDir '/user/The-Construct/remote' | Out-Null; $token = $null; exit 0 } catch { exit 1 }"]);
   assert.equal(p.secretKey, "construct.remote.token:host_7443");
-  assert.equal(c.planTokenMigration({ tokenExists: true }), null);
 });
 function migrationHarness() {
   const markers = new Map(), files = new Set(), calls = [];

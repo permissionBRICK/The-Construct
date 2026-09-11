@@ -2,20 +2,19 @@ using System.Text.Json.Nodes;
 using Construct.Companion.Core;
 using Construct.Companion.Core.Abstractions;
 using Construct.Companion.Core.Remote;
-using Construct.Companion.Core.Runtime;
 using Construct.Companion.Core.State;
 using Construct.Companion.Host.Runtime;
 namespace Construct.Companion.Host.Composition;
 
-public sealed record CompanionProcessEnvironment(string[] SearchPath, string? SystemRoot, bool Windows);
+// Real ssh/argv transports per instance; the fake registers FakeInstanceConnections instead.
 public sealed class InstanceConnections(IProcessRunner runner, IPortProbe ports, IFileSystem files,
-    IRemoteApi api, ITokenStore tokens, RuntimeClaimId claim, CompanionProcessEnvironment environment) : IInstanceConnections
+    IRemoteApi api, ITokenStore tokens, RuntimeClaimId claim) : IInstanceConnections
 {
     public ISshTransport Ssh(JsonObject instance)
     {
         var cfg = new SshConfiguration(StateJson.String(instance["vmHost"]), StateJson.String(instance["hostAlias"]), KeyName: StateJson.String(instance["keyName"]), SshPort: Instances.CoercePort(instance["sshPort"]) ?? 22, ConnectTimeout: 8);
         var keyPath = files.GetRoot(FileSystemRoot.UserProfile) is { Length: > 0 } root ? Path.Combine(root, ".ssh", cfg.KeyName) : null;
-        return new ProcessSshTransport(runner, ports, cfg, SshExecutable.Resolve(files, environment.SearchPath, environment.SystemRoot, environment.Windows), keyPath);
+        return new ProcessSshTransport(runner, ports, cfg, HostProcesses.SshExecutable(files), keyPath);
     }
     public async Task<IForwardTransport> ForwardsAsync(JsonObject instance, ISshTransport ssh, CancellationToken ct)
     {
