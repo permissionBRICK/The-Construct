@@ -126,7 +126,10 @@ public class UpdateTests
         Assert.Equal(HttpStatusCode.Accepted,response.StatusCode);var body=await response.Content.ReadFromJsonAsync<JsonElement>();
         var id=body.GetProperty("updateId").GetString()!;
         var engine=app.Service<IJobEngine>();await foreach(var _ in engine.SubscribeAsync(body.GetProperty("jobId").GetString()!,default)){}
-        Assert.Equal(HostUpdateState.StageFailed,(await app.Service<IHostUpdateStore>().GetAsync(id,default))!.State);
+        var failed=(await app.Service<IHostUpdateStore>().GetAsync(id,default))!;
+        Assert.Equal(HostUpdateState.StageFailed,failed.State);
+        Assert.Equal("check",failed.Phase);
+        Assert.Equal("check",failed.Phases.Last().Name);
         var replay=await admin.PostAsJsonAsync("/api/v1/host/updates/stage",new{operationKey="stage-test-1"});
         Assert.Equal(HttpStatusCode.OK,replay.StatusCode);Assert.Contains(id,await replay.Content.ReadAsStringAsync());
         Assert.Contains("stageFailed",await (await admin.GetAsync("/api/v1/host/updates/status")).Content.ReadAsStringAsync());
