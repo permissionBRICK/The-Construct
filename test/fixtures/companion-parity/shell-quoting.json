@@ -1,0 +1,38 @@
+[
+  {
+    "input": null,
+    "output": "''"
+  },
+  {
+    "input": "",
+    "output": "''"
+  },
+  {
+    "input": "plain",
+    "output": "'plain'"
+  },
+  {
+    "input": "a'b",
+    "output": "'a'\\''b'"
+  },
+  {
+    "input": "'",
+    "output": "''\\'''"
+  },
+  {
+    "input": "a\nline\r\n",
+    "output": "'a\nline\r\n'"
+  },
+  {
+    "input": "$(id); `id` \\ \"",
+    "output": "'$(id); `id` \\ \"'"
+  },
+  {
+    "input": "ü🧱",
+    "output": "'ü🧱'"
+  },
+  {
+    "input": "{{dir}}",
+    "output": "'{{dir}}'"
+  }
+]
