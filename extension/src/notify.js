@@ -198,13 +198,13 @@ function xmlEscape(s) {
  * don't fade before you look up; everything else uses the default and drops into
  * the notification centre either way. No <actions>: this channel is one-way.
  */
-function toastXml(entry) {
+function toastXml(entry, launchUri = LAUNCH_URI) {
   const level = normalizeLevel(entry && entry.level);
   const title = sanitizeText(entry && entry.title, MAX_TITLE) || APP_NAME;
   const body = sanitizeText(entry && entry.body, MAX_BODY);
   const attribution = sanitizeText(entry && entry.source, 60);
   const duration = level === "info" ? "" : ' duration="long"';
-  return `<toast activationType="protocol" launch="${xmlEscape(LAUNCH_URI)}"${duration}>`
+  return `<toast activationType="protocol" launch="${xmlEscape(launchUri)}"${duration}>`
     + '<visual><binding template="ToastGeneric">'
     + `<text>${xmlEscape(title)}</text>`
     + `<text>${xmlEscape(body)}</text>`

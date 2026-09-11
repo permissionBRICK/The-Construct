@@ -173,6 +173,103 @@ async function t3Discovery() {
   rows.push({channel,scenario,agent,replies,requests,output});
  }return rows;
 }
+function forwardRuntime() {
+  const rows = [];
+  const add = (kind, input, output) => {
+    rows.push({kind, input, output});
+    if (kind === "snapshot") rows.push({kind:"panel", input:output, output:require("../src/forwarder-ui").toPanelForwards(output)});
+  };
+  const ids = ["a", "child-2", "../bad", "", "x".repeat(129)];
+  const documents = [null, {}, {v:2,id:"a",vmPort:80}, {v:1,id:"b",vmPort:80}];
+  for (const v of [undefined, 1, "1", 2]) for (const port of [0, 1, "80", "1e2", 65535, 65536, true])
+    documents.push({v,id:"a",vmPort:port,label:" Hello\n ü ",status:"OPEN",localPort:port,hostLabel:"[::1]",message:" hello\n world "});
+  for (const target of [undefined,null,"","client","CLIENT","host"]) documents.push({v:1,id:"a",vmPort:80,target});
+  for (const id of ids) for (const doc of documents)
+    add("wire", {id,doc}, {request:forwards.parseRequest(id,doc),ack:forwards.parseAck(id,doc),close:forwards.parseClose(id,doc)});
+  for (const name of [null,"","agent-vm","dev","build","ü🧱"," work "])
+    add("slice", name, forwards.instancePortSlice(name));
+  for (const attempt of [-1,0,0.5,1,2,3,5,6,10,99]) add("delay",attempt,forwards.reconnectDelayMs(attempt));
+  for (const opts of [{},{prefer:18801,taken:[80,18802]},{base:65530,count:16},{base:19000,count:2},{prefer:80,taken:[80]}])
+    add("ports",{vmPort:80,opts},forwards.portCandidates(80,opts));
+  const request = {id:"a",vmPort:80,label:"web",target:"client"};
+  const dest = {vmName:"child",via:"primary",connectAddress:"10.0.0.2",connectPort:8080,verified:false};
+  for (const owner of [false,true]) for (const reopenAcked of [false,true])
+    for (const ack of [null,{id:"a",status:"open",localPort:80,hostLabel:"",message:""},{id:"a",status:"open",localPort:81,hostLabel:"pc",message:""},{id:"a",status:"error",localPort:null,message:"failed"}])
+      for (const tunnel of [null,...["starting","up","failed"].flatMap(state => [false,true].map(acked => ({id:"a",vmPort:80,localPort:80,state,acked,message:"failed"})))])
+        for (const closes of [[],["a"]]) for (const hostLabel of ["","pc","[::1]"]) {
+          const input = {owner,reopenAcked,requests:[request],acks:ack?[ack]:[],tunnels:tunnel?[tunnel]:[],closes,hostLabel,mode:reopenAcked?"local":"remote"};
+          add("plan",input,forwards.planActions(input)); add("snapshot",input,forwards.toSnapshot(input));
+        }
+  for (const input of [{requests:[{...request,destination:dest}],acks:[],tunnels:[]}, {requests:[],acks:[{id:"a"}],tunnels:[{id:"a"}]}, {requests:[{id:"../bad"}],closes:["../bad"]}]) add("plan",input,forwards.planActions(input));
+  for (const destination of [undefined,null,{},dest,{...dest,connectAddress:""},{...dest,vmName:"../bad"},{...dest,connectAddress:"[::1]"}])
+    for (const status of ["queued","open","error","closed"]) {
+      const list = [{...request,destination,status,localPort:18800,message:"guest address changed"},{id:"host",vmPort:443,target:"host",url:"https://host/"}];
+      const read = forwards.readForwardList(list); add("remote",list,read); add("snapshot",{...read,mode:"remote"},forwards.toSnapshot({...read,mode:"remote"}));
+    }
+  for (const enabled of [false,true]) for (const online of [false,true]) for (const armed of [null,"dev","other"]) for (const vmState of ["off","saved","running","unknown"])
+    { const input={enabled,online,armed,vmState,name:"dev"}; add("lifecycle",input,forwards.planLifecycle(input)); }
+  for (const outcome of ["supported","unsupported","unanswered","stood-down","running",""]) for (const current of [false,true])
+    add("outcome",{outcome,current},forwards.planStartOutcome({outcome,current}));
+  for (const ack of [{},{status:"error",message:"bad\nline"},{status:"open",localPort:80,hostLabel:"[::1]"}]) add("ack",{id:"a",ack},forwards.ackDocument("a",ack));
+  return rows;
+}
+function notifyRuntime() {
+  const rows = [];
+  const add=(kind,input,output)=>rows.push({kind,input,output});
+  for(const dir of ["/run/construct/notify","/tmp/a'b"]) {
+    add("claim",dir,notify.buildClaimScript(dir)); add("watch",dir,notify.buildWatchScript({dir}));
+  }
+  const entries = [ {}, {body:"hello",title:"title",source:"build"}, {body:"<>&\"'",level:"critical",title:" <error> ",source:"a&b"},
+    {body:"x".repeat(450),title:"y".repeat(120),source:"z".repeat(80)}, {body:" a\n b\u0085c\uFEFFd ",level:"warn",ts:4} ];
+  for(const entry of entries) {
+    add("parse",JSON.stringify(entry),notify.parseEntries(JSON.stringify(entry)));
+    for(const launchUri of [notify.LAUNCH_URI,"construct://open?instance=dev%202"])
+      add("toast",{entry,launchUri},notify.toastXml(entry,launchUri));
+  }
+  for(const max of [1,5]) {
+    const entries=Array.from({length:10},(_,i)=>({ts:i===0?0:1000000*i,body:"message "+i}));
+    const opts={now:9000000,ttlMs:3600000,max}; add("select",{entries,opts},notify.selectDeliverable(entries,opts));
+  }
+  return rows;
+}
+function audioRuntime() {
+  const rows=[];const add=(kind,input,output)=>rows.push({kind,input,output});
+  for(const text of ["","#!/bin/bash\necho 'ü'\n"])
+    for(const port of [0,8767,65535,-1]) for(const count of [0,8,17]) {
+      add("enable",{text,port,count},audio.buildEnableScript(text,text,port,count));
+      add("disable",{text,port,count,self:8770},audio.buildDisableScript(text,8770,port,count));
+    }
+  for(const stdout of ["","CONSTRUCT_PORTS_BUSY=8767,8769,8774","CONSTRUCT_PORTS_BUSY=0,99999,42,42,bad","CONSTRUCT_GATE_PATCHED=10","CONSTRUCT_GATE_PATCHED=1"])
+    add("parse",stdout,{busy:audio.parseBusyPorts(stdout),patched:require("../src/repatch").confirmPatched("CONSTRUCT_GATE_PATCHED",stdout)});
+  for(const busy of [[],[8767,8768],[8767,8768,8769,8770,8771,8772,8773,8774]]) add("ports",busy,audio.portCandidates(8767,8,busy));
+  const keyPath="/fixture/home/.ssh/test key";
+  for(const hasKey of [false,true]) for(const port of [22,2222]) {
+    const cfg={...ssh.DEFAULTS,keyName:"test key",vmHost:"vm.example",hostAlias:"vm-alias",sshPort:port};
+    const stable=args=>args.map(arg=>arg===ssh.keyPath(cfg)?keyPath:arg);
+    add("tunnel",{cfg,keyPath:hasKey?keyPath:null},stable(audio.buildTunnelArgs(ssh,cfg,8767,30000,hasKey)));
+    add("watchArgs",{cfg,keyPath:hasKey?keyPath:null},stable(notify.buildWatchArgs(ssh,cfg,hasKey,"echo test")));
+  }
+  const extensionSource=fs.readFileSync(path.join(__dirname,"../extension.js"),"utf8");
+  const messageSource=extensionSource.match(/function audioMessage\(status, instanceName\) \{([\s\S]*?)\n\}/)[1];
+  const audioMessage=new Function("status","instanceName",messageSource);
+  for(const status of [{},{enabled:true,capturing:false},{enabled:true,capturing:true,tunnel:"vm:8767 → host mic (:30000)",gatePatched:true},{enabled:false,capturing:false,gatePatched:false}])
+    add("message",{status,instance:"dev"},audioMessage(status,"dev"));
+  return rows;
+}
+function repatchRuntime() {
+  const r=require("../src/repatch"); const rows=[];const add=(kind,input,output)=>rows.push({kind,input,output});
+  for(const partial of [null,"stock","patched","unknown","absent"]) for(const gate of [null,"stock","patched","unknown","absent"]) {
+    const status={partial,gate};
+    const stdout=(partial?"CONSTRUCT_PARTIAL_STATUS="+partial+"\n":"")+(gate?"CONSTRUCT_GATE_STATUS="+gate+"\n":"");
+    add("parse",stdout,r.parsePatchStatus(stdout));
+    for(const streamingOn of [false,true]) for(const micOn of [false,true]) add("repairs",{status,streamingOn,micOn},r.decideRepairs({status,streamingOn,micOn}));
+  }
+  for(const streamingOn of [false,true]) for(const micOn of [false,true]) for(const micLive of [false,true]) for(const hasHostAudio of [false,true]) {
+    const input={streamingOn,micOn,micLive,hasHostAudio};add("startup",input,r.planStartupActions(input));
+  }
+  add("parse","CONSTRUCT_GATE_STATUS=stock\nCONSTRUCT_GATE_STATUS=patched\n",r.parsePatchStatus("CONSTRUCT_GATE_STATUS=stock\nCONSTRUCT_GATE_STATUS=patched\n"));
+  return rows;
+}
 function sortKeys(value) {
   if (Array.isArray(value)) return value.map(sortKeys);
   if (value && typeof value === "object") return Object.fromEntries(Object.keys(value).sort().map(key => [key, sortKeys(value[key])]));
@@ -204,7 +301,7 @@ function instanceFingerprints() {
 function stateJsonBytes() {
  return [{z:"🧱ü\u2028",a:"\u0001\n\t\\\""},{values:[1e-7,1e-6,1e20,1e21,-0,1.0,123.45]}, {"10":"ten","2":"two",version:1,instance:"dev"}].map(value=>{const input=sortKeys(value);return{input,output:JSON.stringify(input,null,2)+"\n"};});
 }
-async function exportAll() { return { "guest-scripts": guestScripts(), "ssh-args": sshArgs(), "host-label": hostLabel(), "shell-quoting": shellQuoting(), "settings-mapping": settingsMapping(), "instance-identity": instanceIdentity(), "registry-state": registryState(), "lifecycle-invocations": lifecycleInvocations(), "lifecycle-launches": lifecycleLaunches(), "vm-power": vmPower(), "probe-parsing": probeParsing(), "usage-parsing": usageParsing(), "updates-planning": updatesPlanning(), "remote-identity": remoteIdentity(), "t3-pure": t3Pure(), "remote-routes": remoteRoutes(), "t3-discovery": await t3Discovery(), "state-json-bytes": stateJsonBytes(), "agent-updates": await agentUpdates(), "agent-update-scripts": agentUpdateScripts(), "usage-exports": usageExports(), "instance-fingerprints": instanceFingerprints() }; }
+async function exportAll() { return { "notify-runtime": notifyRuntime(), "audio-runtime": audioRuntime(), "repatch-runtime": repatchRuntime(), "forward-runtime": forwardRuntime(), "guest-scripts": guestScripts(), "ssh-args": sshArgs(), "host-label": hostLabel(), "shell-quoting": shellQuoting(), "settings-mapping": settingsMapping(), "instance-identity": instanceIdentity(), "registry-state": registryState(), "lifecycle-invocations": lifecycleInvocations(), "lifecycle-launches": lifecycleLaunches(), "vm-power": vmPower(), "probe-parsing": probeParsing(), "usage-parsing": usageParsing(), "updates-planning": updatesPlanning(), "remote-identity": remoteIdentity(), "t3-pure": t3Pure(), "remote-routes": remoteRoutes(), "t3-discovery": await t3Discovery(), "state-json-bytes": stateJsonBytes(), "agent-updates": await agentUpdates(), "agent-update-scripts": agentUpdateScripts(), "usage-exports": usageExports(), "instance-fingerprints": instanceFingerprints() }; }
 if (require.main === module) (async () => {
   fs.mkdirSync(directory, { recursive: true });
   for (const [area, value] of Object.entries(await exportAll())) fs.writeFileSync(path.join(directory, area + ".json"), serialize(value));
