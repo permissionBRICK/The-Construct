@@ -72,7 +72,10 @@ function shellQuoting() {
 }
 function forwardRuntime() {
   const rows = [];
-  const add = (kind, input, output) => rows.push({kind, input, output});
+  const add = (kind, input, output) => {
+    rows.push({kind, input, output});
+    if (kind === "snapshot") rows.push({kind:"panel", input:output, output:require("../src/forwarder-ui").toPanelForwards(output)});
+  };
   const ids = ["a", "child-2", "../bad", "", "x".repeat(129)];
   const documents = [null, {}, {v:2,id:"a",vmPort:80}, {v:1,id:"b",vmPort:80}];
   for (const v of [undefined, 1, "1", 2]) for (const port of [0, 1, "80", "1e2", 65535, 65536, true])
@@ -107,13 +110,70 @@ function forwardRuntime() {
   for (const ack of [{},{status:"error",message:"bad\nline"},{status:"open",localPort:80,hostLabel:"[::1]"}]) add("ack",{id:"a",ack},forwards.ackDocument("a",ack));
   return rows;
 }
+function notifyRuntime() {
+  const rows = [];
+  const add=(kind,input,output)=>rows.push({kind,input,output});
+  for(const dir of ["/run/construct/notify","/tmp/a'b"]) {
+    add("claim",dir,notify.buildClaimScript(dir)); add("watch",dir,notify.buildWatchScript({dir}));
+  }
+  const entries = [ {}, {body:"hello",title:"title",source:"build"}, {body:"<>&\"'",level:"critical",title:" <error> ",source:"a&b"},
+    {body:"x".repeat(450),title:"y".repeat(120),source:"z".repeat(80)}, {body:" a\n b\u0085c\uFEFFd ",level:"warn",ts:4} ];
+  for(const entry of entries) {
+    add("parse",JSON.stringify(entry),notify.parseEntries(JSON.stringify(entry)));
+    for(const launchUri of [notify.LAUNCH_URI,"construct://open?instance=dev%202"])
+      add("toast",{entry,launchUri},notify.toastXml(entry,launchUri));
+  }
+  for(const max of [1,5]) {
+    const entries=Array.from({length:10},(_,i)=>({ts:i===0?0:1000000*i,body:"message "+i}));
+    const opts={now:9000000,ttlMs:3600000,max}; add("select",{entries,opts},notify.selectDeliverable(entries,opts));
+  }
+  return rows;
+}
+function audioRuntime() {
+  const rows=[];const add=(kind,input,output)=>rows.push({kind,input,output});
+  for(const text of ["","#!/bin/bash\necho 'ü'\n"])
+    for(const port of [0,8767,65535,-1]) for(const count of [0,8,17]) {
+      add("enable",{text,port,count},audio.buildEnableScript(text,text,port,count));
+      add("disable",{text,port,count,self:8770},audio.buildDisableScript(text,8770,port,count));
+    }
+  for(const stdout of ["","CONSTRUCT_PORTS_BUSY=8767,8769,8774","CONSTRUCT_PORTS_BUSY=0,99999,42,42,bad","CONSTRUCT_GATE_PATCHED=10","CONSTRUCT_GATE_PATCHED=1"])
+    add("parse",stdout,{busy:audio.parseBusyPorts(stdout),patched:require("../src/repatch").confirmPatched("CONSTRUCT_GATE_PATCHED",stdout)});
+  for(const busy of [[],[8767,8768],[8767,8768,8769,8770,8771,8772,8773,8774]]) add("ports",busy,audio.portCandidates(8767,8,busy));
+  const keyPath="/fixture/home/.ssh/test key";
+  for(const hasKey of [false,true]) for(const port of [22,2222]) {
+    const cfg={...ssh.DEFAULTS,keyName:"test key",vmHost:"vm.example",hostAlias:"vm-alias",sshPort:port};
+    const stable=args=>args.map(arg=>arg===ssh.keyPath(cfg)?keyPath:arg);
+    add("tunnel",{cfg,keyPath:hasKey?keyPath:null},stable(audio.buildTunnelArgs(ssh,cfg,8767,30000,hasKey)));
+    add("watchArgs",{cfg,keyPath:hasKey?keyPath:null},stable(notify.buildWatchArgs(ssh,cfg,hasKey,"echo test")));
+  }
+  const extensionSource=fs.readFileSync(path.join(__dirname,"../extension.js"),"utf8");
+  const messageSource=extensionSource.match(/function audioMessage\(status, instanceName\) \{([\s\S]*?)\n\}/)[1];
+  const audioMessage=new Function("status","instanceName",messageSource);
+  for(const status of [{},{enabled:true,capturing:false},{enabled:true,capturing:true,tunnel:"vm:8767 → host mic (:30000)",gatePatched:true},{enabled:false,capturing:false,gatePatched:false}])
+    add("message",{status,instance:"dev"},audioMessage(status,"dev"));
+  return rows;
+}
+function repatchRuntime() {
+  const r=require("../src/repatch"); const rows=[];const add=(kind,input,output)=>rows.push({kind,input,output});
+  for(const partial of [null,"stock","patched","unknown","absent"]) for(const gate of [null,"stock","patched","unknown","absent"]) {
+    const status={partial,gate};
+    const stdout=(partial?"CONSTRUCT_PARTIAL_STATUS="+partial+"\n":"")+(gate?"CONSTRUCT_GATE_STATUS="+gate+"\n":"");
+    add("parse",stdout,r.parsePatchStatus(stdout));
+    for(const streamingOn of [false,true]) for(const micOn of [false,true]) add("repairs",{status,streamingOn,micOn},r.decideRepairs({status,streamingOn,micOn}));
+  }
+  for(const streamingOn of [false,true]) for(const micOn of [false,true]) for(const micLive of [false,true]) for(const hasHostAudio of [false,true]) {
+    const input={streamingOn,micOn,micLive,hasHostAudio};add("startup",input,r.planStartupActions(input));
+  }
+  add("parse","CONSTRUCT_GATE_STATUS=stock\nCONSTRUCT_GATE_STATUS=patched\n",r.parsePatchStatus("CONSTRUCT_GATE_STATUS=stock\nCONSTRUCT_GATE_STATUS=patched\n"));
+  return rows;
+}
 function sortKeys(value) {
   if (Array.isArray(value)) return value.map(sortKeys);
   if (value && typeof value === "object") return Object.fromEntries(Object.keys(value).sort().map(key => [key, sortKeys(value[key])]));
   return value;
 }
 function serialize(value) { return JSON.stringify(sortKeys(value), null, 2) + "\n"; }
-function exportAll() { return { "forward-runtime": forwardRuntime(), "guest-scripts": guestScripts(), "ssh-args": sshArgs(), "host-label": hostLabel(), "shell-quoting": shellQuoting() }; }
+function exportAll() { return { "notify-runtime": notifyRuntime(), "audio-runtime": audioRuntime(), "repatch-runtime": repatchRuntime(), "forward-runtime": forwardRuntime(), "guest-scripts": guestScripts(), "ssh-args": sshArgs(), "host-label": hostLabel(), "shell-quoting": shellQuoting() }; }
 if (require.main === module) {
   fs.mkdirSync(directory, { recursive: true });
   for (const [area, value] of Object.entries(exportAll())) fs.writeFileSync(path.join(directory, area + ".json"), serialize(value));
