@@ -818,7 +818,13 @@ function Invoke-ConstructApi {
                 Get-ConstructPinValidatorCallback -Expected $expected
         }
 
-        $resp = Invoke-WebRequest @req
+        # These are small JSON replies, not the host's ISO transfer. PowerShell 5.1's
+        # download popup otherwise flashes on every job poll and looks like ISO progress.
+        $previousProgress = $ProgressPreference
+        try {
+            $ProgressPreference = 'SilentlyContinue'
+            $resp = Invoke-WebRequest @req
+        } finally { $ProgressPreference = $previousProgress }
         $script:ConstructApiLastStatus = [int]$resp.StatusCode
         $content = ""
         try { $content = [string]$resp.Content } catch { $content = "" }

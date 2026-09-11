@@ -1,4 +1,7 @@
 // Compatible with Windows PowerShell 5.1 / .NET Framework and PowerShell 7.
+#if NET
+#nullable disable
+#endif
 using System;
 using System.IO;
 using System.Net;
@@ -214,7 +217,9 @@ namespace Construct.Download
                 {
                     client.Timeout = Timeout.InfiniteTimeSpan;
                     // .NET Framework defaults to two connections per origin.
+#if !NET
                     ServicePointManager.FindServicePoint(new Uri(url)).ConnectionLimit = Math.Max(8, streams);
+#endif
                     await ProbeAsync(client).ConfigureAwait(false);
                     int count = ranged ? (int)Math.Min(streams, Total) : 1;
                     phase = ranged ? "Downloading" : "Downloading (single stream: server lacks safe ranges)";

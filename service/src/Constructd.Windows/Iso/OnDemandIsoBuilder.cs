@@ -19,7 +19,11 @@ public sealed class OnDemandIsoBuilder(
         string bootstrapPubKeyPath, IProgress<string>? progress, CancellationToken cancellationToken,
         bool redownload = false)
     {
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        if (!await _gate.WaitAsync(0, cancellationToken).ConfigureAwait(false))
+        {
+            progress?.Report("waiting for another ISO build on the host to finish");
+            await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
         try
         {
             var current = catalog.GetCurrent();

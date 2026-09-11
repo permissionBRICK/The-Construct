@@ -224,9 +224,7 @@ public static class ServiceComposition
         services.AddSingleton<IHostAddressResolver, DnsHostAddressResolver>();
         services.AddSingleton<ITcpTableReader, IpHlpApiTcpTableReader>();
 
-        services.AddHttpClient<IIsoDownloader, HttpIsoDownloader>(client =>
-            // The source ISO is gigabytes over whatever link the host has.
-            client.Timeout = TimeSpan.FromHours(2));
+        services.AddSingleton<IIsoDownloader, HttpIsoDownloader>();
 
         services.AddSingleton<IHypervisorDriver, HyperVDriver>();
         services.AddSingleton<IPortForwardManager, NetshPortForwardManager>();
