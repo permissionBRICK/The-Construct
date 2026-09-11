@@ -62,7 +62,7 @@ function connectedInstance() {
   return instances.connectedInstanceName(registryNow(), safeRemoteAuthority()) || null;
 }
 function postCompanionMessage(message, webview) {
-  const value = companion.overlayMessage(message, connectedInstance());
+  const value = companion.overlayMessage(message, connectedInstance(), registerThisVmOffer());
   if (webview) safePost(webview, value, true);
   else for (const w of liveWebviews) safePost(w, value, true);
 }
@@ -73,7 +73,7 @@ async function refreshCompanion(webview) {
   try {
     const snapshot = await companionClient.snapshot(inst.name);
     if (!companionClient.deferred || !instanceGate.valid(token)) return;
-    for (const message of companion.snapshotMessages(snapshot, connectedInstance())) postCompanionMessage(message, webview);
+    for (const message of companion.snapshotMessages(snapshot, connectedInstance(), registerThisVmOffer())) postCompanionMessage(message, webview);
   } catch (_) { /* detection rechecks; keep the last reading during grace */ }
 }
 async function proxyCompanion(message, webview) {

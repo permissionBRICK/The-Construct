@@ -29,7 +29,9 @@ public sealed class StateAggregation(CompanionInstances instances, RuntimeMessag
         if (entry.Definition["service"]?["url"] is JsonValue url && Uri.TryCreate(StateJson.Text(url), UriKind.Absolute, out var uri)) data["serviceHost"] = uri.Host;
         data["usagePeriod"] = entry.UsagePeriod;
         if (entry.Usage is not null) data["usage"] = entry.Usage.DeepClone();
-        data["registerOffer"] = new JsonObject { ["host"] = "" };
+        // The register banner belongs to a VS Code window attached to an unregistered VM; the Companion has no attached
+        // window, so it never offers it (the extension overlays its own offer in companion mode; the tray menu has "Register a VM").
+        data["registerOffer"] = null;
         var removal = InstanceWorkflowPlans.Remove(instances.Registry, name);
         data["removeOffer"] = StateJson.Boolean(removal["ok"]) == true || StateJson.Boolean(removal["requiresTypedConfirmation"]) == true ? removal : null;
         if (entry.ConfigState is not null) data["configSync"] = entry.ConfigState.DeepClone();
