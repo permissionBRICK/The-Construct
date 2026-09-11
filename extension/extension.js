@@ -51,6 +51,8 @@ let companionDisposed = false;
 let fallbackStarted = false;
 const fallbackStartupTimers = new Set();
 function companionDeferred() { return companionStarting || !!(companionClient && companionClient.deferred); }
+// Host jobs (probe, forwards, notify, audio, repatch, config sync) run only in the fallback mode of a live window.
+function hostJobsSuspended() { return companionDeferred() || companionDisposed; }
 
 function companionError() {
   vscode.window.showWarningMessage("Construct Companion is unavailable. Retry after it reconnects or fallback resumes.");
@@ -92,7 +94,7 @@ function activateCompanionView(view) {
 function runCompanionMigration(file, args, input) {
   return new Promise((resolve) => {
     let child, timer, done = false;
-    const finish = (code) => { if (done) return; done = true; clearTimeout(timer); companionMigrationChildren.delete(child); resolve({ code }); };
+    const finish = (code) => { if (done) return; done = true; clearTimeout(timer); if (child) companionMigrationChildren.delete(child); resolve({ code }); };
     try {
       if (companionDisposed) { finish(-1); return; }
       child = require("child_process").spawn(file, args, { windowsHide: true, stdio: ["pipe", "ignore", "ignore"] });
@@ -146,7 +148,7 @@ function startFallback(context) {
   audioTargetInstance = activeInstance().name;
   void requestAudioEnable(context, undefined, { auto: true });
   const later = (work) => {
-    const timer = setTimeout(() => { fallbackStartupTimers.delete(timer); if (!companionDeferred() && !companionDisposed) work(); }, 3000);
+    const timer = setTimeout(() => { fallbackStartupTimers.delete(timer); if (!hostJobsSuspended()) work(); }, 3000);
     fallbackStartupTimers.add(timer);
   };
   later(startNotifyWatch);
@@ -1010,7 +1012,7 @@ function refreshTick() {
  *  applies (5s while a reprovision is in flight, else 30s). Started when the first webview
  *  goes live, stopped when the last closes, recreated when the cadence changes. */
 function syncAutoRefresh() {
-  if (companionDeferred() || companionDisposed) { stopAutoRefresh(); return; }
+  if (hostJobsSuspended()) { stopAutoRefresh(); return; }
   if (liveWebviews.size === 0) { stopAutoRefresh(); return; }
   const wantMs = fastRefreshActive() ? FAST_REFRESH_MS : AUTO_REFRESH_MS;
   if (!autoRefreshTimer || autoRefreshMs !== wantMs) {
@@ -1090,7 +1092,7 @@ function notificationsEnabled() {
 
 /** Open the watcher connection, or schedule a retry if it can't be opened. */
 function startNotifyWatch() {
-  if (companionDeferred() || companionDisposed) return;
+  if (hostJobsSuspended()) return;
   if (notifyChild || notifyRestartTimer) return;
   notifyStopped = false;
   if (!notificationsEnabled()) return;
@@ -1137,7 +1139,7 @@ function startNotifyWatch() {
 
 /** Reconnect after a backoff (2s doubling to 60s), unless we've been told to stop. */
 function scheduleNotifyRestart() {
-  if (companionDeferred() || companionDisposed) return;
+  if (hostJobsSuspended()) return;
   if (notifyStopped || notifyRestartTimer || !notificationsEnabled()) return;
   notifyAttempt += 1;
   const delay = notify.reconnectDelayMs(notifyAttempt);
@@ -1255,7 +1257,7 @@ function forwarderSlotState() {
  * has moved on from is dropped rather than painted over the current VM's card.
  */
 async function startForwarder(target) {
-  if (companionDeferred() || companionDisposed) return;
+  if (hostJobsSuspended()) return;
   const t = target || actionTarget();
   const inst = targetInstance(t);
   const plan = instances.planEnable(forwarderSlotState(), t.name);
@@ -1397,7 +1399,7 @@ function requestForwarderStop() {
  * chain. See extension/ARCHITECTURE.md §Forwards.
  */
 function noteForwarderPresence(target, state) {
-  if (companionDeferred() || companionDisposed) return;
+  if (hostJobsSuspended()) return;
   if (!target) return;
   const plan = forwarder.planLifecycle({
     enabled: forwardsEnabled(),
@@ -1430,7 +1432,7 @@ function noteForwarderPresence(target, state) {
  * status flow.
  */
 function noteForwarderConnected() {
-  if (companionDeferred() || companionDisposed) return;
+  if (hostJobsSuspended()) return;
   try {
     if (!remote.isConnectedToVm(safeRemoteAuthority(), activeCfg())) return;
     noteForwarderPresence(actionTarget(), { online: true, vmState: "running" });
@@ -1651,11 +1653,11 @@ async function onNotifyLines(lines) {
  *  notification when that isn't possible (non-Windows host, blocked execution
  *  policy, notifications switched off in Windows). Never rejects. */
 async function deliverNotification(entry) {
-  if (companionDeferred() || companionDisposed) return;
+  if (hostJobsSuspended()) return;
   logLine(notify.logLineFor(entry));
   if (process.platform === "win32") {
     const reason = await raiseWindowsToast(entry);
-    if (!reason || companionDeferred() || companionDisposed) return;
+    if (!reason || hostJobsSuspended()) return;
     logLine("notify: falling back to a VS Code notification (" + reason + ")");
   }
   const text = entry.title ? `${entry.title}: ${entry.body}` : entry.body;
@@ -1676,7 +1678,7 @@ async function deliverNotification(entry) {
  *  note, because "the toast worked but here is why it may look wrong" is exactly the
  *  information that was missing when this path failed in the field. */
 function raiseWindowsToast(entry) {
-  if (companionDeferred() || companionDisposed) return;
+  if (hostJobsSuspended()) return;
   const cmd = notify.buildToastCommand(entry, {
     file: notify.powershellPath(process.env, (p) => { try { return fs.existsSync(p); } catch (_) { return false; } }),
   });
@@ -1830,7 +1832,7 @@ async function buildConfigSyncState(target) {
  * follow-up starts, and after the tick's own awaits before either follow-on step.
  */
 async function runConfigSync(target) {
-  if (companionDeferred() || companionDisposed) return;
+  if (hostJobsSuspended()) return;
   // BEFORE the first await: instance, cfg, scripts dir and generation. Everything below
   // belongs to this one capture and nothing re-reads "the active instance".
   var syncTarget = captureTargetFull(target);
@@ -2165,13 +2167,13 @@ function coalescedImport(force, target) {
  *  sync tick. Coalesces concurrent attempts (per instance) so offline/hanging SSH
  *  doesn't cause unbounded overlapping scans. */
 function maybeAutoImport(target) {
-  if (companionDeferred() || companionDisposed) return;
+  if (hostJobsSuspended()) return;
   return coalescedImport(false, target);
 }
 
 /** Set up fs.watch on cfgDir/projects (debounced 2s). Tolerates watcher errors. */
 function startConfigWatcher() {
-  if (companionDeferred() || companionDisposed) return;
+  if (hostJobsSuspended()) return;
   if (configWatcher) return;
   var dir = resolveCfgDir();
   if (!dir) return;
@@ -2941,7 +2943,7 @@ function makeMicProvider() {
  *  reflects the result; a down VM or a second window that already holds the tunnel
  *  shouldn't nag on every launch). A manual toggle keeps the progress spinner + toasts. */
 function enableAudio(context, webview, opts = {}) {
-  if (companionDeferred() || companionDisposed) return;
+  if (hostJobsSuspended()) return;
   // `opts.target` is a target the CALLER captured before its own awaits (the auto-arm
   // reads a preference and probes the VM first). Its generation is re-checked below,
   // immediately before the tunnel is created: A's "yes, reachable, mic wanted" must not
@@ -3085,7 +3087,7 @@ function reportAudioState(webview) {
  * VM first); a manual enable enables unconditionally and keeps its toasts.
  */
 function requestAudioEnable(context, webview, opts = {}) {
-  if (companionDeferred() || companionDisposed) return;
+  if (hostJobsSuspended()) return;
   // The target is captured HERE — at the user's click / at activation — not when the
   // queued step finally runs, so an enable can never be applied to a VM the window moved
   // to in between (the chain re-checks it and aborts instead).
@@ -3106,7 +3108,7 @@ function requestAudioDisable() {
  *  Best-effort and QUIET: gated on the VM being reachable so a down VM never toasts;
  *  the user can still toggle manually. */
 async function maybeAutoEnableAudio(context, target) {
-  if (companionDeferred() || companionDisposed) return;
+  if (hostJobsSuspended()) return;
   try {
     if (hostAudio && hostAudio.enabled) return;
     // Instance, cfg, scripts dir and generation are captured BEFORE the preference is
@@ -3152,7 +3154,7 @@ function repatchDelayMs() {
 /** Arm the one-shot startup patch-verification pass. Best-effort and unref'd so it
  *  never keeps the host alive on its own; cancelled by deactivate(). */
 function scheduleStartupRepatch(context) {
-  if (companionDeferred() || companionDisposed) return;
+  if (hostJobsSuspended()) return;
   const delay = repatchDelayMs();
   if (delay === 0) { logLine("repatch: startup verification disabled (construct.repatchDelaySeconds<=0)."); return; }
   logLine(`repatch: scheduling startup patch verification in ${Math.round(delay / 1000)}s.`);
@@ -3173,7 +3175,7 @@ function scheduleStartupRepatch(context) {
  *  Quiet by design — like the mic auto-arm, a startup housekeeping pass shouldn't
  *  toast on every launch; everything is recorded to the Construct output channel. */
 async function verifyPatchesOnStartup(context) {
-  if (companionDeferred() || companionDisposed) return;
+  if (hostJobsSuspended()) return;
   // One target for the whole pass: the settings that say WHICH patches are wanted, the
   // SSH repair that applies them and the auto-arm retry all belong to one VM. Captured
   // before the first await; a switch during the pass discards the rest of it.
