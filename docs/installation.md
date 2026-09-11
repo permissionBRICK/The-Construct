@@ -505,3 +505,12 @@ What the generated ISO does on first boot:
 
 > The built `*.iso` is git-ignored (large) and not committed; only the build script is.
 > Re-run the script to regenerate it.
+
+### Source manifest for remote reprovisioning
+
+A verified release install/update records
+`%LOCALAPPDATA%\The-Construct\source-manifests\<commit40>.sha256`, outside the checkout.
+The provisioner uses its per-file hashes to decide whether a remote host can supply the exact
+same source. Missing or mismatched manifests use the existing upload transport; running
+`Update-Construct.ps1` writes a fresh manifest. Local Hyper-V installs keep their existing
+pack/scp/unpack path. See [remote reprovisioning](remote-host.md#reprovision-without-uploading-the-checkout).

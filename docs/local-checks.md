@@ -60,3 +60,22 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/run-local-windows-c
 GitHub runners provide convenience and clean environments, not unique test
 capabilities. A local Windows VM covers the platform-specific checks that this
 Linux development VM cannot execute directly.
+
+For remote source-cache changes, run the `service` group (including the guest script's
+`bash -n` check), plus these focused suites. They use Linux fakes/local HTTP fixtures and do
+not touch a running host service:
+
+```sh
+pwsh -NoProfile -File test/source-transport.test.ps1
+pwsh -NoProfile -File test/source-release.test.ps1
+pwsh -NoProfile -File test/remote-client.test.ps1
+pwsh -NoProfile -File test/provision-seed-user.test.ps1
+pwsh -NoProfile -File test/instance-identity.test.ps1
+pwsh -NoProfile -File service/tests/host-installer.test.ps1
+bash test/fetch-construct-source.test.sh
+bash test/provision-marker.test.sh
+bash test/remote-e2e.test.sh
+```
+
+The ZIP fixtures require `git`, `curl`, `sha256sum` and Python 3; end-to-end testing starts and
+stops its own fake constructd and drives the real PowerShell helpers and guest script.

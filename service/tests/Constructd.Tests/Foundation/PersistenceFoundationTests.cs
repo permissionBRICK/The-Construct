@@ -105,8 +105,8 @@ public sealed class PersistenceFoundationTests : IDisposable
     public void MigrationRegistryIsOrderedUniqueAndInItsReservedRange()
     {
         var ids = SqliteMigrations.All.Select(m => m.Id).ToArray();
-        Assert.Equal(ids.Order(), ids); Assert.Equal(ids.Length, ids.Distinct().Count()); Assert.All(ids, id => Assert.InRange(id, 100, 799));
-        Assert.Equal(700, SqliteMigrations.SchemaVersion); Assert.Equal(0, SqliteMigrations.MinReadableBy);
+        Assert.Equal(ids.Order(), ids); Assert.Equal(ids.Length, ids.Distinct().Count()); Assert.All(ids, id => Assert.InRange(id, 100, 899));
+        Assert.Equal(800, SqliteMigrations.SchemaVersion); Assert.Equal(0, SqliteMigrations.MinReadableBy);
     }
 
     [Theory]

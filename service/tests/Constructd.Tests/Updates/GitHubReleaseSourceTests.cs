@@ -198,6 +198,39 @@ public sealed class GitHubReleaseSourceTests
         Assert.Equal("release-source-invalid-metadata", error.Code);
     }
 
+    [Theory]
+    [InlineData("valid", "")]
+    [InlineData("missing", "source-unavailable")]
+    [InlineData("404", "source-unavailable")]
+    [InlineData("hash", "release-source-invalid-metadata")]
+    [InlineData("large", "source-too-large")]
+    [InlineData("redirect", "release-source-unreachable")]
+    public async Task SourceAssetsUseImmutableManifestAndValidateSourceFields(string scenario, string code)
+    {
+        var row = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(Manifest()))!.AsObject();
+        if (scenario == "missing") row.Remove("sourceAsset");
+        if (scenario == "hash") row["sourceSha256"] = "bad";
+        if (scenario == "large") row["sourceSizeBytes"] = 268435457;
+        using var client = new HttpClient(new Handler(request =>
+        {
+            Assert.Contains("/download/host-", request.RequestUri!.AbsolutePath);
+            if (scenario == "404") return new(HttpStatusCode.NotFound);
+            if (scenario == "redirect") { var redirect = new HttpResponseMessage(HttpStatusCode.Redirect); redirect.Headers.Location = new Uri("https://evil.example/file"); return redirect; }
+            return new(HttpStatusCode.OK) { Content = new StringContent(row.ToJsonString()) };
+        }));
+        var source = new GitHubReleaseSource(client);
+        if (code.Length == 0)
+        {
+            var asset = await source.GetSourceAssetAsync("owner/repo", new string('a',40), default);
+            Assert.Equal(234, asset.SizeBytes); Assert.EndsWith("construct-source-" + new string('a',40) + ".zip", asset.Url.ToString());
+        }
+        else
+        {
+            var error = await Record.ExceptionAsync(() => source.GetSourceAssetAsync("owner/repo", new string('a',40), default));
+            Assert.Equal(code, error is SourceException se ? se.Code : Assert.IsType<UpdateException>(error).Code);
+        }
+    }
+
     private sealed class Handler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)

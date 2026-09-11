@@ -48,6 +48,7 @@ public sealed class VmInventoryProjection(IVmRepository vms, IVmDelegationReposi
             PendingCpu = cpuSetting is not null && cpuSetting.Cpus != vm.Cpu ? cpuSetting.Cpus : null,
             ResourceUsage = await usage.ReadAsync(vm.Name, ct),
             Media = mediaProjection,
+            SourceCommit = vm.SourceCommit,
             Guest = vm.Guest ?? GuestReport.Unknown,
             Observed = observed,
             Reservations = new(reservation.Where(r => r.Resource == ReservationResource.Ram).Sum(r => r.Amount), checked((int)reservation.Where(r => r.Resource == ReservationResource.Cpu).Sum(r => r.Amount)), reservation.Where(r => r.Resource == ReservationResource.Storage).Sum(r => r.Amount)),
