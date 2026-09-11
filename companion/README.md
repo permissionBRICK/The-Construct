@@ -239,3 +239,24 @@ S2a Linux validation: Companion build 0 warnings/errors; Companion tests 412/412
 service tests 1,261/1,261; Node suites 30/30; PowerShell config-sync 568/568; parity
 333 rows across five areas. Node/PowerShell use the process-local default-branch override
 described above. No extension implementation, installer, guest script, or service code changed.
+
+
+S2b desktop/platform increment: `Core/Desktop` owns activation validation, tray/menu
+models, placement, settings, registration and token/launcher policies. New seams are
+`IMessageSink` (PostAsync + cancellable Subscribe, `host:<slug>` for host-admin),
+`IDataProtection`, `ICimVmQuery`, `IDesktopProcess`, `IUiActivation`, and
+`ISelfTestPlatform`. Each native operation is isolated in Windows adapters, with
+recording fakes for the policies. `ProcessInvocation.CreateNoWindow` is false for
+lifecycle consoles and true for detached T3 Desktop starts. `VmPower.QueryLocalAsync`
+remains the sole owner of the denied-CIM Get-VM fallback.
+
+The theme picker template now lives in `extension/media/theme-picker.html`; both
+JavaScript and Companion render it, with all three surface documents and picker
+escaping covered by `desktop-webviews.json` golden fixtures.
+
+Windows field checks still required: the app TFM and the Windows project reference
+SDK projection 10.0.17763.57; verify that published `Microsoft.Windows.SDK.NET.dll`
+and `WinRT.Runtime.dll` load together and that the toast selftest runs. WASAPI's
+MediaFoundation resampler currently drains on each capture chunk (`ReadFully=false`);
+recording continuity and chunk-boundary glitches require a real device test. VS Code's
+`code.cmd` ShellExecute launch may briefly display a console. No Windows run is claimed.
