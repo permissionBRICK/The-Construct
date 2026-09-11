@@ -52,7 +52,7 @@ a few questions at the start and then runs on its own.
 
 <div align="center">
   
-<img src="https://i.imgur.com/yv9FGAT.png" alt="Construct integration into T3 Code" width="100%">
+<img src="https://i.imgur.com/VHLWENf.png" alt="Construct integration into T3 Code" width="100%">
 
 <sub>*Construct integrated directly into T3-Code, zero-click setup.*</sub>
 
