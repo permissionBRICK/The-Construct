@@ -534,6 +534,9 @@ extension methods in their own files), `extension/extension.js` (S2a extension o
 ## Deviations
 
 (Recorded by implementers; one line each: what, why, where.)
+- S2a state: adds `IStateFileSystem` (extends `IFileSystem`) for marker timestamps, directory existence and atomic create-if-absent profile writes; these host.js requirements cannot be expressed by the S1 seam.
+- S2a state: adds `IUpdateSource` for public release JSON under normal CA validation; `IRemoteApi` remains the credentialed certificate-pinned host-service transport.
+- S2a state: registry parse/read failures report stable diagnostics rather than copying Node-version-specific parser or OS-specific exception text; fallback and rejection behavior are unchanged.
 - S1: repatch already reads `construct-patch-status.sh`/`construct-partial-streaming-enable.sh`; embed and fixture those originals instead of creating redundant `repatch.sh`; pairing keeps separate default/instance templates, and validated numeric/ID fragments retain their byte-identical spelling.
 - S1: the app scaffold uses a named quit event until S2 supplies authenticated HTTP quit/activation; secondary view launches currently exit 0 without opening a view (documented in `companion/README.md`).
 - S1: notify keeps `claim()` in `notify-claim-function.sh`, composed into both claim/watch templates through `{{claim}}`; C# callers render that shared function first, preserving the existing single-source composition and bytes.
