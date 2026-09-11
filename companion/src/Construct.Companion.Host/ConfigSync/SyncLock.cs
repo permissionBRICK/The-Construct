@@ -4,19 +4,20 @@ using Construct.Companion.Core.Abstractions;
 using Construct.Companion.Core.ConfigSync;
 
 namespace Construct.Companion.Host.ConfigSync;
-public sealed class SyncLock(IFileSystem files, IConfigSyncStorage storage, IClock clock, string configDir)
+// The lock file format is shared with the extension and PowerShell engines; a dead owner pid breaks it.
+public sealed class SyncLock(IStateFileSystem files, IProcessLiveness processes, IClock clock, string configDir)
 {
     public const string LockFile = ".sync.lock";
     public const string ProvisionIntent = ".sync.provisioning";
     public static readonly TimeSpan StaleAfter = TimeSpan.FromMinutes(5);
     private bool Dead(string path)
     {
-        try { var node = JsonNode.Parse(files.ReadFile(path) ?? []); var pid = node?["pid"]?.GetValue<int>(); return pid > 0 && storage.ProcessIsDefinitelyDead(pid.Value); }
+        try { var node = JsonNode.Parse(files.ReadFile(path) ?? []); var pid = node?["pid"]?.GetValue<int>(); return pid > 0 && processes.ProcessIsDefinitelyDead(pid.Value); }
         catch (Exception ex) when (ex is System.Text.Json.JsonException or InvalidOperationException or FormatException or IOException) { return false; }
     }
     public bool ProvisionSyncPending()
     {
-        var path = Path.Combine(configDir, ProvisionIntent); var modified = storage.LastWriteTime(path);
+        var path = Path.Combine(configDir, ProvisionIntent); var modified = files.LastWriteTime(path);
         if (modified == null) return false;
         if (!Dead(path) && clock.UtcNow - modified <= StaleAfter) return true;
         files.DeleteFile(path); return false;
@@ -28,8 +29,8 @@ public sealed class SyncLock(IFileSystem files, IConfigSyncStorage storage, IClo
         {
             try
             {
-                if (storage.TryCreateFile(path, ConfigSyncRules.Serialize(new { token, pid = storage.ProcessId, at = clock.UtcNow.ToString("O") }))) return token;
-                var modified = storage.LastWriteTime(path); if (modified == null) continue;
+                if (files.WriteFileIfAbsent(path, Encoding.UTF8.GetBytes(ConfigSyncRules.Serialize(new { token, pid = processes.ProcessId, at = clock.UtcNow.ToString("O") })))) return token;
+                var modified = files.LastWriteTime(path); if (modified == null) continue;
                 if (!Dead(path) && clock.UtcNow - modified <= StaleAfter) return null;
                 files.DeleteFile(path);
             }

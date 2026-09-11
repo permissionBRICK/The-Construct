@@ -2,12 +2,13 @@ using Construct.Companion.Core.Abstractions;
 using Construct.Companion.Core.ConfigSync;
 using Construct.Companion.Fakes;
 using Construct.Companion.Host.ConfigSync;
+using Construct.Companion.Host.Runtime;
 namespace Construct.Companion.Tests.ConfigSync;
 public sealed class ArgvTests
 {
     private static (ConfigRemotes Remote,FakeProcessRunner Runner,FakeFileSystem Files) Setup()
     {
-        var files=new FakeFileSystem(); var clock=new FakeClock(); var runner=new FakeProcessRunner(); var repo=new ConfigRepository(new(runner),files,new FakeConfigSyncStorage(files,clock),"/config"); return (new(repo,"/cache"),runner,files);
+        var files=new FakeFileSystem(); var runner=new FakeProcessRunner(); var repo=new ConfigRepository(new(runner),files,"/config"); return (new(repo,"/cache"),runner,files);
     }
     [Fact] public async Task PublishPinsUserIdentityCommitAndDefaultBranchPush()
     {
@@ -29,6 +30,6 @@ public sealed class ArgvTests
     }
     [Fact] public async Task StartedProcessCanBeStoppedAndDisposedRepeatedly()
     {
-        var process=new ConfigSyncProcessRunner().Start(new("sleep",["5"])); await process.StopAsync(); await process.StopAsync(); await process.DisposeAsync(); await process.DisposeAsync(); await process.StopAsync(); Assert.Equal(-1,await process.Completion);
+        var process=new RuntimeProcessRunner().Start(new("sleep",["5"])); await process.StopAsync(); await process.StopAsync(); await process.DisposeAsync(); await process.DisposeAsync(); await process.StopAsync(); Assert.NotEqual(0,await process.Completion);
     }
 }

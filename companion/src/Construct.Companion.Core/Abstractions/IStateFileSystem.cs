@@ -7,4 +7,5 @@ public interface IStateFileSystem : IFileSystem
     bool DirectoryExists(string path);
     DateTimeOffset? LastWriteTime(string path);
     bool WriteFileIfAbsent(string path, ReadOnlySpan<byte> contents);
+    void DeleteDirectory(string path);
 }

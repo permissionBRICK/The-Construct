@@ -2,13 +2,14 @@ using Construct.Companion.Core.Abstractions;
 using Construct.Companion.Core.ConfigSync;
 using Construct.Companion.Fakes;
 using Construct.Companion.Host.ConfigSync;
+using Construct.Companion.Host.Runtime;
 
 namespace Construct.Companion.Tests.ConfigSync;
 internal sealed class GitTestWorkspace : IDisposable
 {
     public string Root { get; } = Path.Combine(Path.GetTempPath(), "companion-config-test-" + Guid.NewGuid().ToString("N"));
-    public ConfigSyncFileSystem Files { get; } = new();
-    public ConfigSyncProcessRunner Processes { get; } = new();
+    public HostFileSystem Files { get; } = new();
+    public RuntimeProcessRunner Processes { get; } = new();
     public FakeClock Clock { get; } = new();
     public GitRunner Git { get; }
     public ConfigRepository Repo { get; }
@@ -19,8 +20,8 @@ internal sealed class GitTestWorkspace : IDisposable
     public ConfigSyncEngine Engine { get; }
     public GitTestWorkspace()
     {
-        Directory.CreateDirectory(Root); Git = new(Processes); Repo = new(Git, Files, Files, Path.Combine(Root, "config")); Repo.EnsureConfigTree();
-        Lock = new(Files, Files, Clock, Repo.Directory); Ssh = new(Processes, Root); Engine = new(Repo, Lock, Ssh, storeRoot: Store);
+        Directory.CreateDirectory(Root); Git = new(Processes); Repo = new(Git, Files, Path.Combine(Root, "config")); Repo.EnsureConfigTree();
+        Lock = new(Files, new HostProcesses(), Clock, Repo.Directory); Ssh = new(Processes, Root); Engine = new(Repo, Lock, Ssh, storeRoot: Store);
     }
     public static string Profile(string name, string command = "echo base") => ProfileCodec.CanonicalizeProfileText(name, ConfigSyncRules.Serialize(new { name, provisionCommands = new[] {command} })).Content!;
     public void Host(string name, string? text = null) => Repo.WriteText(Repo.FilePath("projects",name), text ?? Profile(name));
@@ -28,7 +29,7 @@ internal sealed class GitTestWorkspace : IDisposable
     public Task<string> G(params string[] args) => Git.RequireAsync(Repo.Directory,args);
     public void Dispose() => Directory.Delete(Root,true);
 }
-internal sealed class LocalStoreTransport(ConfigSyncProcessRunner processes, string cwd) : ISshTransport
+internal sealed class LocalStoreTransport(IProcessRunner processes, string cwd) : ISshTransport
 {
     public Func<string, Task>? BeforeRun { get; set; }
     public int Calls { get; private set; }

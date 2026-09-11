@@ -31,7 +31,6 @@ public sealed class InstanceRuntime(RuntimeInstance instance, IRuntimeProbe prob
     { lock (refresh) { if (started || stop.IsCancellationRequested) return; started = true; loop = LoopAsync(); } }
     public void BeginFastRefresh()
     { Interlocked.Exchange(ref fastUntil, (clock.UtcNow + TimeSpan.FromMinutes(5)).UtcTicks); refresh.Writer.TryWrite(true); }
-    public void Refresh() => refresh.Writer.TryWrite(true);
     private async Task LoopAsync()
     {
         try
@@ -40,6 +39,7 @@ public sealed class InstanceRuntime(RuntimeInstance instance, IRuntimeProbe prob
             {
                 try { await ProbeOnceAsync(stop.Token).ConfigureAwait(false); }
                 catch (OperationCanceledException) when (stop.IsCancellationRequested) { throw; }
+                // The loop must outlive any probe fault; the panel sees an offline state instead.
                 catch { bus.Publish(current.Name, new { type = "state", online = false, vmState = "unknown", probeError = "runtime-failed", connectedInstance = (string?)null }); }
                 using var wait = CancellationTokenSource.CreateLinkedTokenSource(stop.Token);
                 var delay = clock.DelayAsync(TimeSpan.FromSeconds(clock.UtcNow.UtcTicks < Interlocked.Read(ref fastUntil) ? 5 : 30), wait.Token);
@@ -60,7 +60,7 @@ public sealed class InstanceRuntime(RuntimeInstance instance, IRuntimeProbe prob
             JsonObject state;
             try { state = await probe.ProbeAsync(linked.Token).ConfigureAwait(false); }
             catch (OperationCanceledException) when (linked.IsCancellationRequested) { throw; }
-            catch { state = new() { ["online"] = false, ["vmState"] = "unknown", ["probeError"] = "probe-failed" }; }
+            catch { state = new() { ["online"] = false, ["vmState"] = "unknown", ["probeError"] = "probe-failed" }; } // any probe fault is an offline tick
             linked.Token.ThrowIfCancellationRequested(); state["type"] = "state"; state["connectedInstance"] = null; bus.Publish(current.Name, state);
             var reachable = state.True("online");
             if (!reachable)
