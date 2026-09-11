@@ -189,7 +189,7 @@ public sealed class DispatcherHttpTests
     public async Task UnknownCommandsProduceVisibleRefusalsAndNoLaunches()
     {
         await using var h = await Harness.Start(); using var stream = await h.Client.GetAsync("/v1/events", HttpCompletionOption.ResponseHeadersRead); using var reader = new StreamReader(await stream.Content.ReadAsStreamAsync()); await reader.ReadLineAsync(); await reader.ReadLineAsync();
-        foreach (var id in new[] { "unknown", "convertToHost", "createFirstVm", "updateConstruct" })
+        foreach (var id in new[] { "unknown", "updateConstruct" })
         {
             using var response = await h.Post("/v1/instances/agent-vm/messages", new { type = "command", id }); Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
             var message = await Until(reader, d => d["message"]?["id"]?.GetValue<string>() == id); Assert.NotEmpty(message["message"]!["error"]!.GetValue<string>());

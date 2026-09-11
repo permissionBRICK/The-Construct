@@ -95,6 +95,11 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await page.click("#backBtn");
   check("back returns to console", (await page.locator("#mainView").isVisible()) && !(await page.locator("#settingsView").isVisible()));
 
+  await page.evaluate(() => window.postMessage({type:"state",state:{companion:true,registerOffer:{}}},"*"));
+  await page.locator("#createRemoteVm").waitFor({state:"visible"});
+  await page.click("#createRemoteVm");
+  check("Companion panel: create remote VM posts command",await page.evaluate(()=>window.__posted.some(m=>m.type==="command" && m.id==="createFirstVm")));
+  await page.evaluate(() => window.postMessage({type:"state",state:{registerOffer:null}},"*"));
   await page.click("#voiceSwitch");
   let posted = await page.evaluate(() => window.__posted);
   check("voice switch posts setAudio:true", posted.some((m) => m.type === "setAudio" && m.enabled === true));
