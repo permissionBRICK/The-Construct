@@ -16,6 +16,7 @@ $seams.CheckUser={}
 $seams.Native={ param($Exe,[string[]]$Arguments)
     $null=$script:nativeCalls.Add(@{exe=$Exe; argv=$Arguments})
     if ($Exe -eq 'git') { return @{exitCode=0;output=@($sha)} }
+    if ($Arguments[0] -eq '--list-runtimes') { return @{exitCode=$script:runtimeExit;output=$script:runtimes} }
     if ($Arguments[0] -eq '--list-sdks') { return @{exitCode=0;output=$script:sdks} }
     if ($Arguments[0] -eq 'publish') {
         $out=$Arguments[-1]; [IO.Directory]::CreateDirectory((Join-Path $out 'media')) | Out-Null
@@ -51,24 +52,48 @@ try {
     [IO.File]::WriteAllText((Join-Path $repo 'companion/Construct.Companion.sln'),'fixture')
     [IO.File]::WriteAllText((Join-Path $repo '.git'),'fake worktree pointer')
     $script:manifest=[pscustomobject]@{schemaVersion=1;ipcApiVersion=1;commit=$sha;repository='permissionBRICK/The-Construct';releaseTag=('companion-'+$sha);ref='refs/heads/main';exe='app\ConstructCompanion.exe';payloadAsset=('construct-companion-'+$sha.Substring(0,7)+'-win-x64.zip');payloadSha256=('b'*64);sumsSha256=('c'*64);packageVersion='2026.09.11+aaaaaaa';builtAt='2026-09-11T00:00:00Z'}
-    Assert ((Resolve-ConstructCompanionSource $repo auto $seams).source -eq 'local-build') 'SDK 10 + solution chooses local'
+    $script:runtimeExit=0; $script:runtimes=@()
+    Assert ((Resolve-ConstructCompanionSource $repo auto $seams).source -eq 'self-contained') 'SDK never triggers automatic local build'
+    Assert ($script:nativeCalls.Count -eq 0) 'Legacy manifest does not probe dotnet'
+    $script:manifest | Add-Member -NotePropertyName frameworkDependentAsset -NotePropertyValue ('construct-companion-'+$sha.Substring(0,7)+'-win-x64-fdd.zip')
+    $script:manifest | Add-Member -NotePropertyName frameworkDependentSha256 -NotePropertyValue ('d'*64)
+    $script:manifest | Add-Member -NotePropertyName frameworkDependentSumsSha256 -NotePropertyValue ('e'*64)
+    $script:manifest | Add-Member -NotePropertyName frameworkDependentSizeBytes -NotePropertyValue 123
+    $script:manifest | Add-Member -NotePropertyName frameworkDependentUncompressedSizeBytes -NotePropertyValue 456
+    $script:manifest | Add-Member -NotePropertyName runtimes -NotePropertyValue @(@{name='Microsoft.NETCore.App';majorVersion=10},@{name='Microsoft.WindowsDesktop.App';majorVersion=10},@{name='Microsoft.AspNetCore.App';majorVersion=10})
+    Assert ((Resolve-ConstructCompanionSource $repo auto $seams).source -eq 'self-contained') 'Missing runtimes choose self-contained'
+    $script:runtimes=@('Microsoft.NETCore.App 10.0.1 [/shared]','Microsoft.WindowsDesktop.App 10.0.1 [/shared]')
+    Assert ((Resolve-ConstructCompanionSource $repo auto $seams).source -eq 'self-contained') 'Partial runtimes choose self-contained'
+    $script:runtimes+=@('Microsoft.AspNetCore.App 11.0.1 [/shared]')
+    Assert ((Resolve-ConstructCompanionSource $repo auto $seams).source -eq 'self-contained') 'Different major is insufficient'
+    $script:runtimes+=@('Microsoft.AspNetCore.App 10.0.1 [/shared]')
+    Assert ((Resolve-ConstructCompanionSource $repo auto $seams).source -eq 'framework-dependent') 'All shared frameworks select FDD'
+    Assert (($script:nativeCalls[-1].argv -join '|') -eq '--list-runtimes' -and $script:nativeCalls[-1].exe -eq 'dotnet') 'Exact runtime detection argv'
+    $script:runtimeExit=127
+    Assert ((Resolve-ConstructCompanionSource $repo auto $seams).source -eq 'self-contained') 'Absent dotnet chooses self-contained'
+    $script:runtimeExit=0
+    Assert ((Resolve-ConstructCompanionSource $repo local $seams).source -eq 'local-build') 'Explicit local chooses SDK build'
     $script:sdks=@('9.0.1 [/sdk]','11.0.1 [/sdk]')
-    Assert ((Resolve-ConstructCompanionSource $repo auto $seams).source -eq 'release') 'Other SDKs choose release'
     Reject { Resolve-ConstructCompanionSource $repo local $seams } 'Explicit local requires SDK 10'
     $script:sdks=@('10.0.100 [/sdk]')
-    Assert ((Resolve-ConstructCompanionSource $repo release $seams).source -eq 'release') 'Explicit release bypasses SDK'
-    Assert ((Resolve-ConstructCompanionSource $dir auto $seams).source -eq 'release') 'No solution chooses release'
+    Assert ((Resolve-ConstructCompanionSource $repo release $seams).source -eq 'framework-dependent') 'Explicit release also selects by runtimes'
+    Assert ((Resolve-ConstructCompanionSource $dir auto $seams).source -eq 'framework-dependent') 'No solution needed for FDD'
+    foreach ($field in @('frameworkDependentAsset','frameworkDependentSha256','frameworkDependentSumsSha256','frameworkDependentSizeBytes','frameworkDependentUncompressedSizeBytes','runtimes')) {
+        $old=$script:manifest.$field; $script:manifest.$field=$null
+        Reject { Assert-ConstructCompanionManifest $script:manifest 'permissionBRICK/The-Construct' ('companion-'+$sha) } "Reject incomplete FDD $field"
+        $script:manifest.$field=$old
+    }
     foreach ($property in @('schemaVersion','ipcApiVersion','commit','repository','releaseTag','ref','exe','payloadAsset','payloadSha256','sumsSha256','packageVersion','builtAt')) {
         $old=$script:manifest.$property; $script:manifest.$property='invalid'
         Reject { Assert-ConstructCompanionManifest $script:manifest 'permissionBRICK/The-Construct' ('companion-'+$sha) } "Reject bad $property"
         $script:manifest.$property=$old
     }
-    Assert ((Install-ConstructCompanion $repo -SkipCompanion -LocalAppData $local -Seams $seams) -eq 'skipped') 'Skip flag'
+    Assert ((Install-ConstructCompanion $repo -Source local -SkipCompanion -LocalAppData $local -Seams $seams) -eq 'skipped') 'Skip flag'
     $settings=Join-Path $repo '.construct-settings.json'
     [IO.File]::WriteAllText($settings,'{"companion":false}')
-    Assert ((Install-ConstructCompanion $repo -LocalAppData $local -Seams $seams) -eq 'skipped') 'Persistent opt-out'
+    Assert ((Install-ConstructCompanion $repo -Source local -LocalAppData $local -Seams $seams) -eq 'skipped') 'Persistent opt-out'
     [IO.File]::WriteAllText($settings,'{}')
-    Assert ((Install-ConstructCompanion $repo -LocalAppData $local -Seams $seams) -eq 'installed') 'Fresh install'
+    Assert ((Install-ConstructCompanion $repo -Source local -LocalAppData $local -Seams $seams) -eq 'installed') 'Fresh install'
     $paths=Get-ConstructCompanionPaths $local
     $record=Read-ConstructCompanionJson (Join-Path $paths.install 'install.json')
     Assert ($record.commit -eq $sha -and $record.source -eq 'local-build' -and $record.ipcApiVersion -eq 1 -and $null -eq $record.releaseTag) 'Install record'
@@ -81,9 +106,9 @@ try {
     $expected=@('publish',(Join-Path $repo 'companion/src/Construct.Companion/Construct.Companion.csproj'),'-c','Release','-r','win-x64','--self-contained','true',('-p:InformationalVersion=1.0.0+'+$sha),'-p:IncludeSourceRevisionInInformationalVersion=false','-nodeReuse:false','-p:UseSharedCompilation=false','--artifacts-path',(Join-Path (Split-Path -Parent $publish.argv[-1]) 'artifacts'),'-o',$publish.argv[-1])
     Assert (($publish.argv -join '|') -eq ($expected -join '|')) 'Exact publish argv, including spaced path'
     $before=$script:nativeCalls.Count
-    Assert ((Install-ConstructCompanion $repo -LocalAppData $local -Seams $seams) -eq 'unchanged') 'Identical commit is no-op'
+    Assert ((Install-ConstructCompanion $repo -Source local -LocalAppData $local -Seams $seams) -eq 'unchanged') 'Identical commit is no-op'
     Assert ($script:starts.Count -eq 1 -and $script:nativeCalls.Count -eq $before+2) 'No publish/start on no-op'
-    Assert ((Install-ConstructCompanion $repo -Force -LocalAppData $local -Seams $seams) -eq 'installed') 'Force reinstalls'
+    Assert ((Install-ConstructCompanion $repo -Source local -Force -LocalAppData $local -Seams $seams) -eq 'installed') 'Force reinstalls'
     Assert (-not (Test-Path ($paths.install+'.previous'))) 'Previous removed after success'
     $endpoint=Join-Path $paths.state 'endpoint.json'
     [IO.File]::WriteAllText($endpoint,(@{v=1;ipcApiVersion=1;port=12345;pid=23456;token=('d'*64)} | ConvertTo-Json))
@@ -91,7 +116,7 @@ try {
     Stop-ConstructCompanionForInstall $paths.state $seams
     Assert ($script:quits -eq 1 -and -not $script:alive -and $script:lastReason -eq 'update') 'Quit handshake'
     $script:alive=$true; $script:quitWorks=$false
-    Reject { Install-ConstructCompanion $repo -Force -LocalAppData $local -Seams $seams } 'Quit timeout aborts installation'
+    Reject { Install-ConstructCompanion $repo -Source local -Force -LocalAppData $local -Seams $seams } 'Quit timeout aborts installation'
     Assert ($script:sleeps -eq 60 -and -not (Test-Path ($paths.install+'.previous'))) 'Timeout bounded, no swap'
     $script:alive=$false; $script:quitWorks=$true
     $before=$script:quits; Stop-ConstructCompanionForInstall $paths.state $seams
@@ -107,21 +132,21 @@ try {
     [IO.File]::WriteAllText($exe,'original app')
     $registryBefore=$script:registry | ConvertTo-Json -Compress
     $script:failStart=$true
-    Reject { Install-ConstructCompanion $repo -Force -LocalAppData $local -Seams $seams } 'Start failure triggers rollback'
+    Reject { Install-ConstructCompanion $repo -Source local -Force -LocalAppData $local -Seams $seams } 'Start failure triggers rollback'
     Assert ([IO.File]::ReadAllText($exe) -eq 'original app') 'Restores old files'
     Assert (($script:registry | ConvertTo-Json -Compress) -eq $registryBefore) 'Restores registry'
     Assert (-not (Test-Path ($paths.install+'.previous'))) 'Rollback consumes previous'
     $script:failStart=$false; $script:failMove=$true
-    Reject { Install-ConstructCompanion $repo -Force -LocalAppData $local -Seams $seams } 'Move failure triggers rollback'
+    Reject { Install-ConstructCompanion $repo -Source local -Force -LocalAppData $local -Seams $seams } 'Move failure triggers rollback'
     Assert ([IO.File]::ReadAllText($exe) -eq 'original app') 'Move failure restores files'
     $script:failMove=$false; $script:failRegistry=$true
-    Reject { Install-ConstructCompanion $repo -Force -LocalAppData $local -Seams $seams } 'Registry failure triggers rollback'
+    Reject { Install-ConstructCompanion $repo -Source local -Force -LocalAppData $local -Seams $seams } 'Registry failure triggers rollback'
     Assert ([IO.File]::ReadAllText($exe) -eq 'original app') 'Registry failure restores files'
     [IO.File]::WriteAllText((Join-Path $paths.state 'settings.json'),'{"autostart":false}')
-    Install-ConstructCompanion $repo -Force -LocalAppData $local -Seams $seams | Out-Null
+    Install-ConstructCompanion $repo -Source local -Force -LocalAppData $local -Seams $seams | Out-Null
     Assert (-not $script:registry.ContainsKey('HKCU:\Software\Microsoft\Windows\CurrentVersion\Run|ConstructCompanion')) 'Autostart opt-out retained'
     $held=[IO.File]::Open((Join-Path $paths.state 'install.lock'),'OpenOrCreate','ReadWrite','None')
-    try { Reject { Install-ConstructCompanion $repo -Force -LocalAppData $local -Seams $seams } 'Concurrent install refused' } finally { $held.Dispose() }
+    try { Reject { Install-ConstructCompanion $repo -Source local -Force -LocalAppData $local -Seams $seams } 'Concurrent install refused' } finally { $held.Dispose() }
     Uninstall-ConstructCompanion -LocalAppData $local -Seams $seams
     Assert (-not (Test-Path $paths.install) -and $script:registry.Count -eq 0) 'Uninstall removes app and registrations'
     Assert (Test-Path (Join-Path $paths.state 'settings.json')) 'Uninstall keeps state'
@@ -187,7 +212,7 @@ try {
         return @{exitCode=1;output=@('error NU1301: https://user:credential-sentinel@feed.invalid/index.json','error NETSDK1045: credential-sentinel','error NU1301: again')}
     }
     $buildMessage=''
-    try { Install-ConstructCompanion $repo -LocalAppData $local -Seams $seams | Out-Null } catch { $buildMessage=$_.Exception.Message }
+    try { Install-ConstructCompanion $repo -Source local -LocalAppData $local -Seams $seams | Out-Null } catch { $buildMessage=$_.Exception.Message }
     Assert ($buildMessage.Contains('dotnet exit 1') -and $buildMessage.Contains('NETSDK1045, NU1301')) 'Native build error codes and exit status preserved'
     Assert (-not $buildMessage.Contains('credential-sentinel') -and -not (Test-Path (Get-ConstructCompanionPaths $local).install)) 'Build output secrets suppressed and no installation created'
     $seams.Native=$originalNative
