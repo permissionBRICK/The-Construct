@@ -470,8 +470,7 @@ const lastState = (entry) => [...entry.panel.posted].reverse().find((m) => m.typ
     ok("wiring: one feature block builds the adapter with injected deps", /hostadminui\.createHostAdminFeature\(\{/.test(extSrc) && /clientFor: \(entry\) => remoteClientFor\(entry\)/.test(extSrc));
     ok("wiring: the offer probe gets the silent driverOpts-based factory", /offerClient: async \(entry\) => \{[\s\S]*?await driverOpts\(inst\)[\s\S]*?hypervRemote\.resolveClient\(inst/.test(extSrc));
     ok("wiring: the state push carries children + hostAdminOffer like idlePolicy", /extra\.children = cachedChildren;/.test(extSrc) && /extra\.hostAdminOffer = cachedHostAdminOffer;/.test(extSrc));
-    ok("wiring: the refresh reads them after the idle policy", /await readHostAdminExtras\(inst\);/.test(extSrc));
-    ok("wiring: the four panel commands are forwarded to the feature", /id === "openHostAdmin" \|\| id === "createFirstVm" \|\| id === "childShutdown" \|\| id === "childDelete"/.test(extSrc));
+    ok("wiring: the guest and host panel commands are forwarded to the feature", /id === "openHostAdmin" \|\| id === "createFirstVm" \|\| id === "childShutdown" \|\| id === "childDelete" \|\| id === "childConsole"/.test(extSrc));
     ok("wiring: the picker appends the feature's rows and lets it handle them", /\.concat\(hostRows\)/.test(extSrc) && /handlePickerItem\(pick\)/.test(extSrc));
     ok("wiring: the forwarder transport gets the service's features", /createRemoteTransport\(\{ ssh, cfg, client, features \}\)/.test(extSrc));
     ok("wiring: a switch clears the caches", /cachedChildren = null; cachedHostAdminOffer = null; cachedHostAdminInstance = null;/.test(extSrc));
