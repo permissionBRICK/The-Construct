@@ -32,7 +32,7 @@ They cannot touch your host PC.
   from anywhere.
 - 🖥️ **T3 Code, patched.** The VM and the Windows client get a patched T3 Code build with voice
   input, automatic resume after a session limit and Construct integration.
-- 🤷 **It just works.** The agents are told to install whatever tool a task needs.
+- 🤷 **It just works.** The agents are trained to install whatever tool a task needs.
 
 <sub>Also: MCP servers deploy to all three agents · the Claude Code extension is patched for faster UI updates · no AI attribution in commits by default.</sub>
 
