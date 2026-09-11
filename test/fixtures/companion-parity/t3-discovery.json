@@ -1,0 +1,677 @@
+[
+  {
+    "agent": {
+      "buildHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "channel": "stable",
+      "id": "t3code",
+      "installationMode": "prebuilt",
+      "version": "1.2.2"
+    },
+    "channel": "stable",
+    "output": {
+      "buildHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "channel": "stable",
+      "id": "t3code",
+      "installationMode": "prebuilt",
+      "latest": "1.2.3",
+      "updateAvailable": true,
+      "version": "1.2.2"
+    },
+    "replies": [
+      {
+        "buildHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "channel": "stable",
+        "version": "1.2.3"
+      }
+    ],
+    "requests": [
+      "https://github.com/permissionBRICK/construct-t3-builds/releases/latest/download/manifest.json"
+    ],
+    "scenario": "new"
+  },
+  {
+    "agent": {
+      "buildHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "channel": "stable",
+      "id": "t3code",
+      "installationMode": "prebuilt",
+      "version": "1.2.2"
+    },
+    "channel": "stable",
+    "output": {
+      "buildHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "channel": "stable",
+      "id": "t3code",
+      "installationMode": "prebuilt",
+      "version": "1.2.2"
+    },
+    "replies": [
+      {
+        "buildHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "channel": "stable",
+        "version": "1.2.3"
+      }
+    ],
+    "requests": [
+      "https://github.com/permissionBRICK/construct-t3-builds/releases/latest/download/manifest.json"
+    ],
+    "scenario": "same"
+  },
+  {
+    "agent": {
+      "buildHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "channel": "stable",
+      "id": "t3code",
+      "installationMode": "prebuilt",
+      "version": "1.2.2"
+    },
+    "channel": "stable",
+    "output": {
+      "buildHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "channel": "stable",
+      "id": "t3code",
+      "installationMode": "prebuilt",
+      "version": "1.2.2"
+    },
+    "replies": [
+      {
+        "buildHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "channel": "wrong",
+        "version": "1.2.3"
+      }
+    ],
+    "requests": [
+      "https://github.com/permissionBRICK/construct-t3-builds/releases/latest/download/manifest.json"
+    ],
+    "scenario": "invalid"
+  },
+  {
+    "agent": {
+      "buildHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "channel": "stable",
+      "id": "t3code",
+      "installationMode": "prebuilt",
+      "version": "1.2.2"
+    },
+    "channel": "stable",
+    "output": {
+      "buildHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "channel": "stable",
+      "id": "t3code",
+      "installationMode": "prebuilt",
+      "version": "1.2.2"
+    },
+    "replies": [
+      null
+    ],
+    "requests": [
+      "https://github.com/permissionBRICK/construct-t3-builds/releases/latest/download/manifest.json"
+    ],
+    "scenario": "missing"
+  },
+  {
+    "agent": {
+      "buildHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "channel": "stable",
+      "id": "t3code",
+      "installationMode": "prebuilt",
+      "version": "1.2.2"
+    },
+    "channel": "stable",
+    "output": {
+      "buildHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "channel": "stable",
+      "id": "t3code",
+      "installationMode": "prebuilt",
+      "latest": "1.2.3",
+      "updateAvailable": true,
+      "version": "1.2.2"
+    },
+    "replies": [
+      {
+        "buildHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "channel": "stable",
+        "version": "1.2.3"
+      }
+    ],
+    "requests": [
+      "https://github.com/permissionBRICK/construct-t3-builds/releases/latest/download/manifest.json"
+    ],
+    "scenario": "page2"
+  },
+  {
+    "agent": {
+      "buildHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "channel": "nightly",
+      "id": "t3code",
+      "installationMode": "prebuilt",
+      "version": "1.2.2"
+    },
+    "channel": "nightly",
+    "output": {
+      "buildHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "channel": "nightly",
+      "id": "t3code",
+      "installationMode": "prebuilt",
+      "latest": "1.2.3",
+      "updateAvailable": true,
+      "version": "1.2.2"
+    },
+    "replies": [
+      [
+        {
+          "assets": [
+            {
+              "name": "manifest.json"
+            },
+            {
+              "name": "SHA256SUMS"
+            },
+            {
+              "name": "T3Code-Construct-Setup.exe"
+            },
+            {
+              "name": "t3code-server-linux-x64.tar.gz"
+            }
+          ],
+          "draft": false,
+          "prerelease": true,
+          "published_at": "2026-09-11",
+          "tag_name": "t3-1.2.3-nightly.1.2-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      {
+        "buildHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "channel": "nightly",
+        "version": "1.2.3"
+      }
+    ],
+    "requests": [
+      "https://api.github.com/repos/permissionBRICK/construct-t3-builds/releases?per_page=100&page=1",
+      "https://github.com/permissionBRICK/construct-t3-builds/releases/download/t3-1.2.3-nightly.1.2-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/manifest.json"
+    ],
+    "scenario": "new"
+  },
+  {
+    "agent": {
+      "buildHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "channel": "nightly",
+      "id": "t3code",
+      "installationMode": "prebuilt",
+      "version": "1.2.2"
+    },
+    "channel": "nightly",
+    "output": {
+      "buildHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "channel": "nightly",
+      "id": "t3code",
+      "installationMode": "prebuilt",
+      "version": "1.2.2"
+    },
+    "replies": [
+      [
+        {
+          "assets": [
+            {
+              "name": "manifest.json"
+            },
+            {
+              "name": "SHA256SUMS"
+            },
+            {
+              "name": "T3Code-Construct-Setup.exe"
+            },
+            {
+              "name": "t3code-server-linux-x64.tar.gz"
+            }
+          ],
+          "draft": false,
+          "prerelease": true,
+          "published_at": "2026-09-11",
+          "tag_name": "t3-1.2.3-nightly.1.2-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      {
+        "buildHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "channel": "nightly",
+        "version": "1.2.3"
+      }
+    ],
+    "requests": [
+      "https://api.github.com/repos/permissionBRICK/construct-t3-builds/releases?per_page=100&page=1",
+      "https://github.com/permissionBRICK/construct-t3-builds/releases/download/t3-1.2.3-nightly.1.2-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/manifest.json"
+    ],
+    "scenario": "same"
+  },
+  {
+    "agent": {
+      "buildHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "channel": "nightly",
+      "id": "t3code",
+      "installationMode": "prebuilt",
+      "version": "1.2.2"
+    },
+    "channel": "nightly",
+    "output": {
+      "buildHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "channel": "nightly",
+      "id": "t3code",
+      "installationMode": "prebuilt",
+      "version": "1.2.2"
+    },
+    "replies": [
+      [
+        {
+          "assets": [
+            {
+              "name": "manifest.json"
+            },
+            {
+              "name": "SHA256SUMS"
+            },
+            {
+              "name": "T3Code-Construct-Setup.exe"
+            },
+            {
+              "name": "t3code-server-linux-x64.tar.gz"
+            }
+          ],
+          "draft": false,
+          "prerelease": true,
+          "published_at": "2026-09-11",
+          "tag_name": "t3-1.2.3-nightly.1.2-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      {
+        "buildHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "channel": "wrong",
+        "version": "1.2.3"
+      }
+    ],
+    "requests": [
+      "https://api.github.com/repos/permissionBRICK/construct-t3-builds/releases?per_page=100&page=1",
+      "https://github.com/permissionBRICK/construct-t3-builds/releases/download/t3-1.2.3-nightly.1.2-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/manifest.json"
+    ],
+    "scenario": "invalid"
+  },
+  {
+    "agent": {
+      "buildHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "channel": "nightly",
+      "id": "t3code",
+      "installationMode": "prebuilt",
+      "version": "1.2.2"
+    },
+    "channel": "nightly",
+    "output": {
+      "buildHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "channel": "nightly",
+      "id": "t3code",
+      "installationMode": "prebuilt",
+      "version": "1.2.2"
+    },
+    "replies": [
+      []
+    ],
+    "requests": [
+      "https://api.github.com/repos/permissionBRICK/construct-t3-builds/releases?per_page=100&page=1"
+    ],
+    "scenario": "missing"
+  },
+  {
+    "agent": {
+      "buildHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "channel": "nightly",
+      "id": "t3code",
+      "installationMode": "prebuilt",
+      "version": "1.2.2"
+    },
+    "channel": "nightly",
+    "output": {
+      "buildHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "channel": "nightly",
+      "id": "t3code",
+      "installationMode": "prebuilt",
+      "latest": "1.2.3",
+      "updateAvailable": true,
+      "version": "1.2.2"
+    },
+    "replies": [
+      [
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        },
+        {
+          "draft": true
+        }
+      ],
+      [
+        {
+          "assets": [
+            {
+              "name": "manifest.json"
+            },
+            {
+              "name": "SHA256SUMS"
+            },
+            {
+              "name": "T3Code-Construct-Setup.exe"
+            },
+            {
+              "name": "t3code-server-linux-x64.tar.gz"
+            }
+          ],
+          "draft": false,
+          "prerelease": true,
+          "published_at": "2026-09-11",
+          "tag_name": "t3-1.2.3-nightly.1.2-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ],
+      {
+        "buildHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "channel": "nightly",
+        "version": "1.2.3"
+      }
+    ],
+    "requests": [
+      "https://api.github.com/repos/permissionBRICK/construct-t3-builds/releases?per_page=100&page=1",
+      "https://api.github.com/repos/permissionBRICK/construct-t3-builds/releases?per_page=100&page=2",
+      "https://github.com/permissionBRICK/construct-t3-builds/releases/download/t3-1.2.3-nightly.1.2-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/manifest.json"
+    ],
+    "scenario": "page2"
+  }
+]

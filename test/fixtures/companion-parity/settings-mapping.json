@@ -1,0 +1,343 @@
+[
+  {
+    "input": null,
+    "kind": "to",
+    "output": {},
+    "outputJson": "{}"
+  },
+  {
+    "input": {},
+    "kind": "to",
+    "output": {},
+    "outputJson": "{}"
+  },
+  {
+    "input": {
+      "claudePartialStreaming": true,
+      "gitCredentialStore": false,
+      "gitEmail": "a@b",
+      "gitUserName": " ü ",
+      "micPassthrough": false,
+      "opencodeBackgroundWatcher": true,
+      "smbShare": true,
+      "t3code": true,
+      "t3codeChannel": "nightly",
+      "t3codeLimitResume": true,
+      "ubuntuRelease": "24.04",
+      "vmAutoCheckpoints": false,
+      "vmCpuCount": 4,
+      "vmDiskGB": 80,
+      "vmMemoryGB": 8,
+      "vsCodeServeWeb": true,
+      "vsCodeTunnel": false
+    },
+    "kind": "to",
+    "output": {
+      "autoCheckpoints": false,
+      "cpu": "4",
+      "disk": "80",
+      "gitCred": false,
+      "gitEmail": "a@b",
+      "gitName": " ü ",
+      "mic": false,
+      "opencodeBackgroundWatcher": true,
+      "partialStreaming": true,
+      "ram": "8",
+      "serveWeb": true,
+      "smb": true,
+      "t3code": true,
+      "t3codeChannel": "nightly",
+      "t3codeLimitResume": true,
+      "tunnel": false,
+      "ubuntu": "24.04"
+    },
+    "outputJson": "{\"gitName\":\" ü \",\"gitEmail\":\"a@b\",\"gitCred\":false,\"ram\":\"8\",\"disk\":\"80\",\"cpu\":\"4\",\"ubuntu\":\"24.04\",\"serveWeb\":true,\"tunnel\":false,\"smb\":true,\"mic\":false,\"partialStreaming\":true,\"opencodeBackgroundWatcher\":true,\"t3code\":true,\"t3codeChannel\":\"nightly\",\"t3codeLimitResume\":true,\"autoCheckpoints\":false}"
+  },
+  {
+    "input": {
+      "claudePartialStreaming": null,
+      "gitCredentialStore": null,
+      "gitEmail": null,
+      "gitUserName": null,
+      "micPassthrough": null,
+      "opencodeBackgroundWatcher": null,
+      "smbShare": null,
+      "t3code": null,
+      "t3codeChannel": null,
+      "t3codeLimitResume": null,
+      "ubuntuRelease": null,
+      "vmAutoCheckpoints": null,
+      "vmCpuCount": null,
+      "vmDiskGB": null,
+      "vmMemoryGB": null,
+      "vsCodeServeWeb": null,
+      "vsCodeTunnel": null
+    },
+    "kind": "to",
+    "output": {
+      "cpu": "null",
+      "disk": "null",
+      "gitEmail": "null",
+      "gitName": "null",
+      "ram": "null",
+      "ubuntu": "null"
+    },
+    "outputJson": "{\"gitName\":\"null\",\"gitEmail\":\"null\",\"ram\":\"null\",\"disk\":\"null\",\"cpu\":\"null\",\"ubuntu\":\"null\"}"
+  },
+  {
+    "input": {
+      "claudePartialStreaming": "wrong",
+      "gitCredentialStore": "wrong",
+      "gitEmail": "wrong",
+      "gitUserName": "wrong",
+      "micPassthrough": "wrong",
+      "opencodeBackgroundWatcher": "wrong",
+      "smbShare": "wrong",
+      "t3code": "wrong",
+      "t3codeChannel": "wrong",
+      "t3codeLimitResume": "wrong",
+      "ubuntuRelease": "wrong",
+      "vmAutoCheckpoints": "wrong",
+      "vmCpuCount": "wrong",
+      "vmDiskGB": "wrong",
+      "vmMemoryGB": "wrong",
+      "vsCodeServeWeb": "wrong",
+      "vsCodeTunnel": "wrong"
+    },
+    "kind": "to",
+    "output": {
+      "cpu": "wrong",
+      "disk": "wrong",
+      "gitEmail": "wrong",
+      "gitName": "wrong",
+      "ram": "wrong",
+      "ubuntu": "wrong"
+    },
+    "outputJson": "{\"gitName\":\"wrong\",\"gitEmail\":\"wrong\",\"ram\":\"wrong\",\"disk\":\"wrong\",\"cpu\":\"wrong\",\"ubuntu\":\"wrong\"}"
+  },
+  {
+    "input": {
+      "gitUserName": [
+        1,
+        null,
+        "x"
+      ],
+      "t3codeChannel": "future",
+      "vmMemoryGB": {}
+    },
+    "kind": "to",
+    "output": {
+      "gitName": "1,,x",
+      "ram": "[object Object]"
+    },
+    "outputJson": "{\"gitName\":\"1,,x\",\"ram\":\"[object Object]\"}"
+  },
+  {
+    "input": null,
+    "kind": "from",
+    "output": {}
+  },
+  {
+    "input": {},
+    "kind": "from",
+    "output": {}
+  },
+  {
+    "input": {
+      "autoCheckpoints": false,
+      "cpu": "4",
+      "disk": "80",
+      "gitCred": false,
+      "gitEmail": "a@b",
+      "gitName": " ü ",
+      "mic": false,
+      "opencodeBackgroundWatcher": true,
+      "partialStreaming": true,
+      "ram": "8",
+      "serveWeb": true,
+      "smb": true,
+      "t3code": true,
+      "t3codeChannel": "nightly",
+      "t3codeLimitResume": true,
+      "tunnel": false,
+      "ubuntu": "24.04"
+    },
+    "kind": "from",
+    "output": {
+      "claudePartialStreaming": true,
+      "gitCredentialStore": false,
+      "gitEmail": "a@b",
+      "gitUserName": "ü",
+      "micPassthrough": false,
+      "opencodeBackgroundWatcher": true,
+      "smbShare": true,
+      "t3code": true,
+      "t3codeChannel": "nightly",
+      "t3codeLimitResume": true,
+      "ubuntuRelease": "24.04",
+      "vmAutoCheckpoints": false,
+      "vmCpuCount": 4,
+      "vmDiskGB": 80,
+      "vmMemoryGB": 8,
+      "vsCodeServeWeb": true,
+      "vsCodeTunnel": false
+    }
+  },
+  {
+    "input": {
+      "cpu": "-4",
+      "disk": "+8",
+      "gitCred": "false",
+      "gitName": " ",
+      "password": "DO-NOT-PERSIST",
+      "ram": " 1e3 "
+    },
+    "kind": "from",
+    "output": {
+      "vmCpuCount": -4,
+      "vmDiskGB": 8,
+      "vmMemoryGB": 1000
+    }
+  },
+  {
+    "input": {
+      "cpu": "1e999",
+      "disk": "bad",
+      "ram": ".5",
+      "t3codeChannel": "future"
+    },
+    "kind": "from",
+    "output": {
+      "vmCpuCount": null,
+      "vmDiskGB": "bad",
+      "vmMemoryGB": 0.5
+    }
+  },
+  {
+    "input": {
+      "cpu": null,
+      "disk": "",
+      "mic": false,
+      "ram": "0x10"
+    },
+    "kind": "from",
+    "output": {
+      "micPassthrough": false,
+      "vmMemoryGB": "0x10"
+    }
+  },
+  {
+    "kind": "patch",
+    "next": {},
+    "output": [],
+    "previous": {}
+  },
+  {
+    "kind": "patch",
+    "next": {
+      "t3code": true,
+      "t3codeChannel": "nightly",
+      "t3codeLimitResume": true
+    },
+    "output": [
+      "patched T3 Code + Desktop build"
+    ],
+    "previous": {}
+  },
+  {
+    "kind": "patch",
+    "next": {
+      "opencodeBackgroundWatcher": true
+    },
+    "output": [
+      "OpenCode background watcher"
+    ],
+    "previous": {}
+  },
+  {
+    "kind": "patch",
+    "next": {},
+    "output": [
+      "patched T3 Code + Desktop build"
+    ],
+    "previous": {
+      "t3code": true,
+      "t3codeChannel": " ",
+      "t3codeLimitResume": true
+    }
+  },
+  {
+    "kind": "patch",
+    "next": {
+      "t3code": true,
+      "t3codeChannel": "nightly",
+      "t3codeLimitResume": true
+    },
+    "output": [
+      "patched T3 Code + Desktop build"
+    ],
+    "previous": {
+      "t3code": true,
+      "t3codeChannel": " ",
+      "t3codeLimitResume": true
+    }
+  },
+  {
+    "kind": "patch",
+    "next": {
+      "opencodeBackgroundWatcher": true
+    },
+    "output": [
+      "patched T3 Code + Desktop build",
+      "OpenCode background watcher"
+    ],
+    "previous": {
+      "t3code": true,
+      "t3codeChannel": " ",
+      "t3codeLimitResume": true
+    }
+  },
+  {
+    "kind": "patch",
+    "next": {},
+    "output": [
+      "patched T3 Code + Desktop build"
+    ],
+    "previous": {
+      "t3code": true,
+      "t3codeChannel": "stable",
+      "t3codeLimitResume": true
+    }
+  },
+  {
+    "kind": "patch",
+    "next": {
+      "t3code": true,
+      "t3codeChannel": "nightly",
+      "t3codeLimitResume": true
+    },
+    "output": [
+      "patched T3 Code + Desktop build"
+    ],
+    "previous": {
+      "t3code": true,
+      "t3codeChannel": "stable",
+      "t3codeLimitResume": true
+    }
+  },
+  {
+    "kind": "patch",
+    "next": {
+      "opencodeBackgroundWatcher": true
+    },
+    "output": [
+      "patched T3 Code + Desktop build",
+      "OpenCode background watcher"
+    ],
+    "previous": {
+      "t3code": true,
+      "t3codeChannel": "stable",
+      "t3codeLimitResume": true
+    }
+  }
+]

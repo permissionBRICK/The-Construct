@@ -1,0 +1,82 @@
+[
+  {
+    "input": {
+      "backend": "hyperv-local",
+      "configBranch": "vm-dev",
+      "hostAlias": "dev",
+      "keyName": "construct_dev_ed25519",
+      "name": "dev",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": {
+        "auth": false,
+        "url": 42
+      },
+      "sshPort": "1e3",
+      "vmHost": "dev.mshome.net",
+      "vmName": "dev"
+    },
+    "output": "[\"dev\",\"hyperv-local\",\"dev\",\"dev.mshome.net\",1000,\"dev\",\"construct_dev_ed25519\",\"vm-dev\",\"\",\"42\",\"false\",\"\"]"
+  },
+  {
+    "input": {
+      "backend": "hyperv-local",
+      "configBranch": "vm-dev",
+      "hostAlias": "dev",
+      "keyName": "construct_dev_ed25519",
+      "name": "dev",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": {
+        "auth": false,
+        "url": 42
+      },
+      "sshPort": 0,
+      "vmHost": "dev.mshome.net",
+      "vmName": "dev"
+    },
+    "output": "[\"dev\",\"hyperv-local\",\"dev\",\"dev.mshome.net\",0,\"dev\",\"construct_dev_ed25519\",\"vm-dev\",\"\",\"42\",\"false\",\"\"]"
+  },
+  {
+    "input": {
+      "backend": "hyperv-local",
+      "configBranch": "vm-dev",
+      "hostAlias": "dev",
+      "keyName": "construct_dev_ed25519",
+      "name": "dev",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": {
+        "auth": false,
+        "url": 42
+      },
+      "sshPort": "bad",
+      "vmHost": "dev.mshome.net",
+      "vmName": "dev"
+    },
+    "output": "[\"dev\",\"hyperv-local\",\"dev\",\"dev.mshome.net\",0,\"dev\",\"construct_dev_ed25519\",\"vm-dev\",\"\",\"42\",\"false\",\"\"]"
+  },
+  {
+    "input": {
+      "backend": "hyperv-local",
+      "configBranch": "vm-dev",
+      "hostAlias": "dev",
+      "keyName": "construct_dev_ed25519",
+      "name": "dev",
+      "owner": null,
+      "publicHost": null,
+      "scriptsDir": null,
+      "service": {
+        "auth": false,
+        "url": 42
+      },
+      "sshPort": true,
+      "vmHost": "dev.mshome.net",
+      "vmName": "dev"
+    },
+    "output": "[\"dev\",\"hyperv-local\",\"dev\",\"dev.mshome.net\",1,\"dev\",\"construct_dev_ed25519\",\"vm-dev\",\"\",\"42\",\"false\",\"\"]"
+  }
+]
