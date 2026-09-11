@@ -1,0 +1,1773 @@
+[
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 22,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "command": "true",
+    "keyPath": null,
+    "kind": "run",
+    "output": [
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "vm-alias",
+      "true"
+    ]
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 22,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "command": "f=$(mktemp) && printf %s 'ZWNobyAnw7wnCg==' | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc",
+    "keyPath": null,
+    "kind": "run",
+    "output": [
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "vm-alias",
+      "f=$(mktemp) && printf %s 'ZWNobyAnw7wnCg==' | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+    ]
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 22,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": null,
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {},
+    "output": [
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "127.0.0.1:18801:127.0.0.1:5173",
+      "vm-alias"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 22,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": null,
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {
+      "bindHost": "*"
+    },
+    "output": [
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "0.0.0.0:18801:127.0.0.1:5173",
+      "vm-alias"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 22,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": null,
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {
+      "bindHost": "::",
+      "connectAddress": "[2001:db8::1]",
+      "connectPort": 443
+    },
+    "output": [
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "0.0.0.0:18801:[2001:db8::1]:443",
+      "vm-alias"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 22,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": null,
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {
+      "bindHost": "bad",
+      "connectAddress": "child.example"
+    },
+    "output": [
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "127.0.0.1:18801:child.example:5173",
+      "vm-alias"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 2222,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "command": "true",
+    "keyPath": null,
+    "kind": "run",
+    "output": [
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-p",
+      "2222",
+      "vm-alias",
+      "true"
+    ]
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 2222,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "command": "f=$(mktemp) && printf %s 'ZWNobyAnw7wnCg==' | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc",
+    "keyPath": null,
+    "kind": "run",
+    "output": [
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-p",
+      "2222",
+      "vm-alias",
+      "f=$(mktemp) && printf %s 'ZWNobyAnw7wnCg==' | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+    ]
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 2222,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": null,
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {},
+    "output": [
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "127.0.0.1:18801:127.0.0.1:5173",
+      "-p",
+      "2222",
+      "vm-alias"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 2222,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": null,
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {
+      "bindHost": "*"
+    },
+    "output": [
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "0.0.0.0:18801:127.0.0.1:5173",
+      "-p",
+      "2222",
+      "vm-alias"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 2222,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": null,
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {
+      "bindHost": "::",
+      "connectAddress": "[2001:db8::1]",
+      "connectPort": 443
+    },
+    "output": [
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "0.0.0.0:18801:[2001:db8::1]:443",
+      "-p",
+      "2222",
+      "vm-alias"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 2222,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": null,
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {
+      "bindHost": "bad",
+      "connectAddress": "child.example"
+    },
+    "output": [
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "127.0.0.1:18801:child.example:5173",
+      "-p",
+      "2222",
+      "vm-alias"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 0,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "command": "true",
+    "keyPath": null,
+    "kind": "run",
+    "output": [
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "vm-alias",
+      "true"
+    ]
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 0,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "command": "f=$(mktemp) && printf %s 'ZWNobyAnw7wnCg==' | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc",
+    "keyPath": null,
+    "kind": "run",
+    "output": [
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "vm-alias",
+      "f=$(mktemp) && printf %s 'ZWNobyAnw7wnCg==' | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+    ]
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 0,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": null,
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {},
+    "output": [
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "127.0.0.1:18801:127.0.0.1:5173",
+      "vm-alias"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 0,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": null,
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {
+      "bindHost": "*"
+    },
+    "output": [
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "0.0.0.0:18801:127.0.0.1:5173",
+      "vm-alias"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 0,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": null,
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {
+      "bindHost": "::",
+      "connectAddress": "[2001:db8::1]",
+      "connectPort": 443
+    },
+    "output": [
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "0.0.0.0:18801:[2001:db8::1]:443",
+      "vm-alias"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 0,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": null,
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {
+      "bindHost": "bad",
+      "connectAddress": "child.example"
+    },
+    "output": [
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "127.0.0.1:18801:child.example:5173",
+      "vm-alias"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 65536,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "command": "true",
+    "keyPath": null,
+    "kind": "run",
+    "output": [
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "vm-alias",
+      "true"
+    ]
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 65536,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "command": "f=$(mktemp) && printf %s 'ZWNobyAnw7wnCg==' | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc",
+    "keyPath": null,
+    "kind": "run",
+    "output": [
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "vm-alias",
+      "f=$(mktemp) && printf %s 'ZWNobyAnw7wnCg==' | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+    ]
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 65536,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": null,
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {},
+    "output": [
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "127.0.0.1:18801:127.0.0.1:5173",
+      "vm-alias"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 65536,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": null,
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {
+      "bindHost": "*"
+    },
+    "output": [
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "0.0.0.0:18801:127.0.0.1:5173",
+      "vm-alias"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 65536,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": null,
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {
+      "bindHost": "::",
+      "connectAddress": "[2001:db8::1]",
+      "connectPort": 443
+    },
+    "output": [
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "0.0.0.0:18801:[2001:db8::1]:443",
+      "vm-alias"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 65536,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": null,
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {
+      "bindHost": "bad",
+      "connectAddress": "child.example"
+    },
+    "output": [
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "127.0.0.1:18801:child.example:5173",
+      "vm-alias"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 22,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "command": "true",
+    "keyPath": "/fixture/home/.ssh/test key",
+    "kind": "run",
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "root@vm.example",
+      "true"
+    ]
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 22,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "command": "f=$(mktemp) && printf %s 'ZWNobyAnw7wnCg==' | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc",
+    "keyPath": "/fixture/home/.ssh/test key",
+    "kind": "run",
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "root@vm.example",
+      "f=$(mktemp) && printf %s 'ZWNobyAnw7wnCg==' | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+    ]
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 22,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": "/fixture/home/.ssh/test key",
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {},
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "127.0.0.1:18801:127.0.0.1:5173",
+      "root@vm.example"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 22,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": "/fixture/home/.ssh/test key",
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {
+      "bindHost": "*"
+    },
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "0.0.0.0:18801:127.0.0.1:5173",
+      "root@vm.example"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 22,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": "/fixture/home/.ssh/test key",
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {
+      "bindHost": "::",
+      "connectAddress": "[2001:db8::1]",
+      "connectPort": 443
+    },
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "0.0.0.0:18801:[2001:db8::1]:443",
+      "root@vm.example"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 22,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": "/fixture/home/.ssh/test key",
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {
+      "bindHost": "bad",
+      "connectAddress": "child.example"
+    },
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "127.0.0.1:18801:child.example:5173",
+      "root@vm.example"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 2222,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "command": "true",
+    "keyPath": "/fixture/home/.ssh/test key",
+    "kind": "run",
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-p",
+      "2222",
+      "root@vm.example",
+      "true"
+    ]
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 2222,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "command": "f=$(mktemp) && printf %s 'ZWNobyAnw7wnCg==' | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc",
+    "keyPath": "/fixture/home/.ssh/test key",
+    "kind": "run",
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-p",
+      "2222",
+      "root@vm.example",
+      "f=$(mktemp) && printf %s 'ZWNobyAnw7wnCg==' | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+    ]
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 2222,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": "/fixture/home/.ssh/test key",
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {},
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "127.0.0.1:18801:127.0.0.1:5173",
+      "-p",
+      "2222",
+      "root@vm.example"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 2222,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": "/fixture/home/.ssh/test key",
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {
+      "bindHost": "*"
+    },
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "0.0.0.0:18801:127.0.0.1:5173",
+      "-p",
+      "2222",
+      "root@vm.example"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 2222,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": "/fixture/home/.ssh/test key",
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {
+      "bindHost": "::",
+      "connectAddress": "[2001:db8::1]",
+      "connectPort": 443
+    },
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "0.0.0.0:18801:[2001:db8::1]:443",
+      "-p",
+      "2222",
+      "root@vm.example"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 2222,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": "/fixture/home/.ssh/test key",
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {
+      "bindHost": "bad",
+      "connectAddress": "child.example"
+    },
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "127.0.0.1:18801:child.example:5173",
+      "-p",
+      "2222",
+      "root@vm.example"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 0,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "command": "true",
+    "keyPath": "/fixture/home/.ssh/test key",
+    "kind": "run",
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "root@vm.example",
+      "true"
+    ]
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 0,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "command": "f=$(mktemp) && printf %s 'ZWNobyAnw7wnCg==' | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc",
+    "keyPath": "/fixture/home/.ssh/test key",
+    "kind": "run",
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "root@vm.example",
+      "f=$(mktemp) && printf %s 'ZWNobyAnw7wnCg==' | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+    ]
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 0,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": "/fixture/home/.ssh/test key",
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {},
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "127.0.0.1:18801:127.0.0.1:5173",
+      "root@vm.example"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 0,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": "/fixture/home/.ssh/test key",
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {
+      "bindHost": "*"
+    },
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "0.0.0.0:18801:127.0.0.1:5173",
+      "root@vm.example"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 0,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": "/fixture/home/.ssh/test key",
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {
+      "bindHost": "::",
+      "connectAddress": "[2001:db8::1]",
+      "connectPort": 443
+    },
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "0.0.0.0:18801:[2001:db8::1]:443",
+      "root@vm.example"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 0,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": "/fixture/home/.ssh/test key",
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {
+      "bindHost": "bad",
+      "connectAddress": "child.example"
+    },
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "127.0.0.1:18801:child.example:5173",
+      "root@vm.example"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 65536,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "command": "true",
+    "keyPath": "/fixture/home/.ssh/test key",
+    "kind": "run",
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "root@vm.example",
+      "true"
+    ]
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 65536,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "command": "f=$(mktemp) && printf %s 'ZWNobyAnw7wnCg==' | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc",
+    "keyPath": "/fixture/home/.ssh/test key",
+    "kind": "run",
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "root@vm.example",
+      "f=$(mktemp) && printf %s 'ZWNobyAnw7wnCg==' | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+    ]
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 65536,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": "/fixture/home/.ssh/test key",
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {},
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "127.0.0.1:18801:127.0.0.1:5173",
+      "root@vm.example"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 65536,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": "/fixture/home/.ssh/test key",
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {
+      "bindHost": "*"
+    },
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "0.0.0.0:18801:127.0.0.1:5173",
+      "root@vm.example"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 65536,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": "/fixture/home/.ssh/test key",
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {
+      "bindHost": "::",
+      "connectAddress": "[2001:db8::1]",
+      "connectPort": 443
+    },
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "0.0.0.0:18801:[2001:db8::1]:443",
+      "root@vm.example"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 65536,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": "/fixture/home/.ssh/test key",
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {
+      "bindHost": "bad",
+      "connectAddress": "child.example"
+    },
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "127.0.0.1:18801:child.example:5173",
+      "root@vm.example"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "input": null,
+    "kind": "address",
+    "output": "127.0.0.1"
+  },
+  {
+    "input": "",
+    "kind": "address",
+    "output": "127.0.0.1"
+  },
+  {
+    "input": "127.0.0.1",
+    "kind": "address",
+    "output": "127.0.0.1"
+  },
+  {
+    "input": "001.2.3.4",
+    "kind": "address",
+    "output": "001.2.3.4"
+  },
+  {
+    "input": "[::1]",
+    "kind": "address",
+    "output": "[::1]"
+  },
+  {
+    "input": "::ffff:1.2.3.004",
+    "kind": "address",
+    "output": null
+  },
+  {
+    "input": "fe80::1%eth0",
+    "kind": "address",
+    "output": "[fe80::1%eth0]"
+  },
+  {
+    "input": "[fe80::1%3]",
+    "kind": "address",
+    "output": "[fe80::1%3]"
+  },
+  {
+    "input": "fe80::1%a_b",
+    "kind": "address",
+    "output": null
+  },
+  {
+    "input": "fe80::1%a:b",
+    "kind": "address",
+    "output": "[fe80::1%a:b]"
+  },
+  {
+    "input": "--option",
+    "kind": "address",
+    "output": null
+  },
+  {
+    "input": "a/b",
+    "kind": "address",
+    "output": null
+  },
+  {
+    "input": "foo_bar",
+    "kind": "address",
+    "output": null
+  },
+  {
+    "input": "-host",
+    "kind": "address",
+    "output": null
+  },
+  {
+    "input": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "kind": "address",
+    "output": null
+  },
+  {
+    "input": "﻿child.example﻿",
+    "kind": "address",
+    "output": "child.example"
+  },
+  {
+    "input": "child.example",
+    "kind": "address",
+    "output": null
+  },
+  {
+    "input": null,
+    "kind": "bind",
+    "output": "127.0.0.1"
+  },
+  {
+    "input": "",
+    "kind": "bind",
+    "output": "127.0.0.1"
+  },
+  {
+    "input": "0.0.0.0",
+    "kind": "bind",
+    "output": "0.0.0.0"
+  },
+  {
+    "input": "*",
+    "kind": "bind",
+    "output": "0.0.0.0"
+  },
+  {
+    "input": "::",
+    "kind": "bind",
+    "output": "0.0.0.0"
+  },
+  {
+    "input": "bad",
+    "kind": "bind",
+    "output": "127.0.0.1"
+  },
+  {
+    "input": "﻿*﻿",
+    "kind": "bind",
+    "output": "0.0.0.0"
+  },
+  {
+    "input": "*",
+    "kind": "bind",
+    "output": "127.0.0.1"
+  },
+  {
+    "input": 0,
+    "kind": "port",
+    "output": 22
+  },
+  {
+    "input": -1,
+    "kind": "port",
+    "output": 22
+  },
+  {
+    "input": 22,
+    "kind": "port",
+    "output": 22
+  },
+  {
+    "input": 2222,
+    "kind": "port",
+    "output": 2222
+  },
+  {
+    "input": 65535,
+    "kind": "port",
+    "output": 65535
+  },
+  {
+    "input": 65536,
+    "kind": "port",
+    "output": 22
+  }
+]

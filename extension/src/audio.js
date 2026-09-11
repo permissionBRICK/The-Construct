@@ -1,4 +1,5 @@
 "use strict";
+const guestScripts = require("./guest-scripts");
 // Microphone passthrough for the Construct control panel — host side.
 //
 // WHY THIS EXISTS — Claude Code's speech-to-text ("/voice", the chat mic button)
@@ -268,17 +269,7 @@ function buildEnableScript(enableText, shimText, vmPort, portCount) {
   const n = normalizeCount(portCount, DEFAULT_VM_PORT_COUNT);
   // The shim contents ride as base64-as-data; the enable script decodes it to the
   // install path. The port range rides as validated integer literals (no quoting risk).
-  return [
-    "set -eu",
-    "export CONSTRUCT_VM_PORT_BASE=" + p,
-    "export CONSTRUCT_VM_PORT_COUNT=" + n,
-    "CONSTRUCT_SHIM_B64='" + b64(shimText) + "'",
-    "export CONSTRUCT_SHIM_B64",
-    // Hand the enable script itself to bash via the same base64-as-data channel so
-    // its own contents never pass through a quoting layer.
-    "CONSTRUCT_ENABLE_B64='" + b64(enableText) + "'",
-    'f=$(mktemp) && printf %s "$CONSTRUCT_ENABLE_B64" | base64 -d > "$f" && bash "$f"; rc=$?; rm -f "$f"; exit $rc',
-  ].join("\n");
+  return guestScripts.render("audio-enable", { port: p, count: n, shim: "'" + b64(shimText) + "'", enable: "'" + b64(enableText) + "'" });
 }
 
 /**
@@ -294,14 +285,7 @@ function buildDisableScript(disableText, selfPort, vmPort, portCount) {
   const self = normalizePort(selfPort, 0);
   const p = normalizePort(vmPort, DEFAULT_VM_PORT);
   const n = normalizeCount(portCount, DEFAULT_VM_PORT_COUNT);
-  return [
-    "set -eu",
-    "export CONSTRUCT_TUNNEL_SELF_PORT=" + self,
-    "export CONSTRUCT_VM_PORT_BASE=" + p,
-    "export CONSTRUCT_VM_PORT_COUNT=" + n,
-    "CONSTRUCT_DISABLE_B64='" + b64(disableText) + "'",
-    'f=$(mktemp) && printf %s "$CONSTRUCT_DISABLE_B64" | base64 -d > "$f" && bash "$f"; rc=$?; rm -f "$f"; exit $rc',
-  ].join("\n");
+  return guestScripts.render("audio-disable", { self, port: p, count: n, disable: "'" + b64(disableText) + "'" });
 }
 
 /** Resolve the vm/ script directory (sibling of src/). */
