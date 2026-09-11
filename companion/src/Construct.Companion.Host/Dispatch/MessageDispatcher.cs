@@ -187,7 +187,9 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
             data["constructUpdate"] = await UpdatePlanner.CheckConstructAsync(updates, markers, ct);
             UpdatePlanner.Fold(data, markers, data["constructUpdate"] as JsonObject);
             if (data["agents"] is JsonArray agents) data["agents"] = await UpdatePlanner.AugmentAgentsAsync(updates, agents, ct);
+            // Everything the enrichment adds must survive the next probe-driven rebuild of the state (StateAggregation.State copies Enrichment).
             entry.Enrichment = new JsonObject { ["constructUpdate"] = data["constructUpdate"]?.DeepClone(), ["provisionStale"] = data["provisionStale"]?.DeepClone() };
+            foreach (var key in new[] { "update", "constructRev" }) if (data[key] is { } folded) entry.Enrichment[key] = folded.DeepClone();
             state.Publish(entry.Name, full);
             state.PublishSnapshot(entry.Name);
         }
