@@ -270,6 +270,45 @@ function repatchRuntime() {
   add("parse","CONSTRUCT_GATE_STATUS=stock\nCONSTRUCT_GATE_STATUS=patched\n",r.parsePatchStatus("CONSTRUCT_GATE_STATUS=stock\nCONSTRUCT_GATE_STATUS=patched\n"));
   return rows;
 }
+function configSync() {
+  const c = require('../src/configsync');
+  const rows = [];
+  const add = (kind, input, output) => rows.push({kind, input, output});
+  for (const name of ['', 'vm', 'VM', 'main', 'master', 'HEAD', 'WORK', 'vm-other', 'CON.txt', 'con-work', 'a..b', 'a.lock', 'a.', 'topic/x', 'topic/.hidden', '-bad']) {
+    add('vmBranch', name, c.isValidVmBranch(name)); add('publishBranch', name, c.isValidPublishBranch(name)); add('safeName', name, c.isSafeProfileName(name));
+  }
+  for (const url of ['', ' https://alice:fixture-secret@host/x ', 'https://alice@host/x', 'ssh://git@host/x', 'git@host:x', '--upload-pack=x', 'https://ggpat_fixture@host/x', 'https://gitgud-project.long.name@host/x']) {
+    add('credentials', url, c.urlHasCredentials(url)); add('url', url, c.validateConfigRemoteUrl(url, require('../src/remote').isLikelyGitUrl)); add('redact', url, c.redactGitOutput(url)); add('slug', url, c.remoteSlug(url));
+  }
+  for (const input of [ {mainFiles:{a:'new',b:'new'},vmFiles:{a:'old',c:'old'}}, {mainFiles:{a:'same'},vmFiles:{a:'same'}}, {mainFiles:{},vmFiles:{}} ]) add('writeBack', input, c.planWriteBack(input));
+  for (const root of ['/opt/construct/projects', "/tmp/store 'quoted'"]) {
+    add('readScript', root, c.buildReadStoreScript(root));
+    const ops = c.planWriteBack({mainFiles:{a:'new',b:'ü\n'},vmFiles:{a:'old',c:'old'}});
+    add('writeScript', {root,ops}, c.buildWriteStoreScript(ops,root));
+  }
+  for (const raw of ['END\n','STORE_ABSENT\nEND\n','a\te30K\nEND\n','a\te30K!!\nEND\n','a\te30\nEND\n','a\t!\nEND\n','a\te30K\n']) add('readResult', raw, c.parseReadStore(raw));
+  for (const raw of ['a\tdone\nb\tskipped\nEND\n','a\tdone\n']) add('writeResult', raw, c.parseWriteResult(raw));
+  const objects = [{name:'a'}, {name:'a',repos:[{directory:'dir',url:'https://host/x'}],sdks:{node:['22'],empty:[]},mcp:[{name:'m',command:'npx',args:[],env:{},agents:['codex'],enabled:false}],hostPackages:['git'],provisionCommands:['echo ü'],tests:{z:true}}, {name:'b'}, {name:'a',extra:1}, {name:'a',repos:[{url:' '}]}, {name:'a',mcp:[{name:'m',type:'http',url:'https://host',headers:{Z:'z',A:'a'},bearerTokenEnvVar:'TOKEN'}]}, {name:'a',mcp:[{name:'m',type:'bad'}]}, {name:'a',sdks:4,tests:[]}, null];
+  for(const obj of objects) { const input={name:'a',raw:JSON.stringify(obj)}; add('canonical',input,c.canonicalizeProfileText(input.name,input.raw)); }
+  for (const raw of ['{"name":"a","tests":{"a":1.0,"b":1e2,"c":-0,"d":1.5e300,"e":1e-7,"f":1e-6,"g":1e20}}', JSON.stringify({name:'a',tests:{del:'\x7f',other:'\u2028'}})]) add('canonical',{name:'a',raw},c.canonicalizeProfileText('a',raw));
+  for(const raw of ['{"name":"a","tests":{"10":1,"2":2},"sdks":{"10":"v","2":"v"}}',JSON.stringify({name:'a',tests:{controls:'\x0b\x1b'}})]) add('canonical',{name:'a',raw},c.canonicalizeProfileText('a',raw));
+  const selections=[{remoteUrl:'https://host/repo',ref:'HEAD',relPath:'projects/a.json',name:'a',content:'{}'}];
+  for(const input of [{selected:selections,manifest:{},existingNames:[]},{selected:selections,manifest:{},existingNames:['a','a-2']},{selected:selections,manifest:{a:{remoteUrl:'https://host/repo',pathInRemote:'projects/a.json'}},existingNames:['a']},{selected:[...selections,...selections],manifest:{},existingNames:[]}]) add('import',input,c.planUpstreamImport(input));
+  const profiles=[{name:'a',raw:'{"name":"a"}'},{name:'default',raw:'{}'},{name:'../bad',raw:'{}'},{name:'invalid',raw:'{"name":"invalid","repos":0}'},{name:'tracked',raw:'{}'}];
+  for(const remoteFiles of [{},{a:'{"name":"a"}'},{A:'{}'},{a:'{"name":"a","repos":[{"url":"x"}]}'}]) {
+    const input={profiles,manifest:{tracked:{remoteUrl:'https://user:fixture-secret@host/repo'}},remoteFiles}; const plan=c.planPublish(input); add('publish',input,plan); add('picker',plan,c.buildPublishPickerItems(plan));
+  }
+  const subset={profiles,manifest:{},remoteFiles:{},selected:['a']}; add('publish',subset,c.planPublish(subset));
+  const picker=[{label:'yes',blocked:false},{label:'no',blocked:true},{label:'heading',kind:'separator'}]; add('filterPicker',picker,c.filterPublishSelection(picker));
+  for(const wanted of ['https://host/x','https://***@host/x','missing']) { const remotes=[{url:'https://host/x'},{url:'https://user:fixture-secret@host/x'}]; add('resolveRemote',{remotes,wanted},c.resolveRemoteUrl(remotes,wanted)); }
+  for(const name of ['vm','vm-other','main']) { const warnings=[]; const branch=c.resolveVmBranch(name,s=>warnings.push(s)); add('resolveBranch',name,{branch,warnings}); }
+  const projects=require('../src/projects');
+  for(const installRepo of ['permissionBRICK/The-Construct','fork/construct']) for(const installRef of ['main','topic/config']) { const input={configRepoUrl:'https://host/config',names:['a','b'],installRepo,installRef}; add('share',input,projects.buildShareCommand(input)); add('deploy',input,projects.buildDeployPs1(input)); }
+  const quotedShare={configRepoUrl:"https://host/team's/config",names:["a'b",'second'],installRepo:'fork/construct',installRef:"topic/it's-config"}; add('share',quotedShare,projects.buildShareCommand(quotedShare)); add('deploy',quotedShare,projects.buildDeployPs1(quotedShare));
+  const manifestInput={remoteUrl:'https://host/repo',ref:'main',name:'a',baseCommit:'a'.repeat(40),baseBlobSha:'b'.repeat(40)};
+  add('manifest',manifestInput,JSON.stringify(c.publishManifestEntry(manifestInput),null,2)+'\n');
+  return rows;
+}
 function sortKeys(value) {
   if (Array.isArray(value)) return value.map(sortKeys);
   if (value && typeof value === "object") return Object.fromEntries(Object.keys(value).sort().map(key => [key, sortKeys(value[key])]));
@@ -301,7 +340,7 @@ function instanceFingerprints() {
 function stateJsonBytes() {
  return [{z:"🧱ü\u2028",a:"\u0001\n\t\\\""},{values:[1e-7,1e-6,1e20,1e21,-0,1.0,123.45]}, {"10":"ten","2":"two",version:1,instance:"dev"}].map(value=>{const input=sortKeys(value);return{input,output:JSON.stringify(input,null,2)+"\n"};});
 }
-async function exportAll() { return { "notify-runtime": notifyRuntime(), "audio-runtime": audioRuntime(), "repatch-runtime": repatchRuntime(), "forward-runtime": forwardRuntime(), "guest-scripts": guestScripts(), "ssh-args": sshArgs(), "host-label": hostLabel(), "shell-quoting": shellQuoting(), "settings-mapping": settingsMapping(), "instance-identity": instanceIdentity(), "registry-state": registryState(), "lifecycle-invocations": lifecycleInvocations(), "lifecycle-launches": lifecycleLaunches(), "vm-power": vmPower(), "probe-parsing": probeParsing(), "usage-parsing": usageParsing(), "updates-planning": updatesPlanning(), "remote-identity": remoteIdentity(), "t3-pure": t3Pure(), "remote-routes": remoteRoutes(), "t3-discovery": await t3Discovery(), "state-json-bytes": stateJsonBytes(), "agent-updates": await agentUpdates(), "agent-update-scripts": agentUpdateScripts(), "usage-exports": usageExports(), "instance-fingerprints": instanceFingerprints() }; }
+async function exportAll() { return { "config-sync": configSync(), "notify-runtime": notifyRuntime(), "audio-runtime": audioRuntime(), "repatch-runtime": repatchRuntime(), "forward-runtime": forwardRuntime(), "guest-scripts": guestScripts(), "ssh-args": sshArgs(), "host-label": hostLabel(), "shell-quoting": shellQuoting(), "settings-mapping": settingsMapping(), "instance-identity": instanceIdentity(), "registry-state": registryState(), "lifecycle-invocations": lifecycleInvocations(), "lifecycle-launches": lifecycleLaunches(), "vm-power": vmPower(), "probe-parsing": probeParsing(), "usage-parsing": usageParsing(), "updates-planning": updatesPlanning(), "remote-identity": remoteIdentity(), "t3-pure": t3Pure(), "remote-routes": remoteRoutes(), "t3-discovery": await t3Discovery(), "state-json-bytes": stateJsonBytes(), "agent-updates": await agentUpdates(), "agent-update-scripts": agentUpdateScripts(), "usage-exports": usageExports(), "instance-fingerprints": instanceFingerprints() }; }
 if (require.main === module) (async () => {
   fs.mkdirSync(directory, { recursive: true });
   for (const [area, value] of Object.entries(await exportAll())) fs.writeFileSync(path.join(directory, area + ".json"), serialize(value));
