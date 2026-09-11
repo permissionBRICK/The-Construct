@@ -21,10 +21,11 @@ internal sealed class WebViewWindow : Form
     private readonly Func<WebViewWindow, string, JsonElement, Task<bool>> localMessage;
     private readonly string view;
     private readonly string cacheDirectory;
+    private readonly string documentDirectory;
     private readonly List<JsonElement> pending = [];
     private CancellationTokenSource subscription = new();
     private string scope;
-    private string document = "";
+    private string document = ""; // the rendered document, written into the mapped folder on every (re)load
     private bool initialized;
     private bool ready;
     private bool exiting;
@@ -33,6 +34,7 @@ internal sealed class WebViewWindow : Form
     {
         this.view = view; this.scope = scope; this.platform = platform; this.sink = sink; this.settings = settings; this.localMessage = localMessage;
         cacheDirectory = Path.Combine(platform.StateDirectory, "webview2");
+        documentDirectory = Path.Combine(platform.StateDirectory, "windows", view);
         Text = WebViewDocument.Title(view);
         AutoScaleMode = AutoScaleMode.Dpi; Size = new(1080, 800); MinimumSize = new(360, 300); StartPosition = FormStartPosition.Manual;
         if (view == "popup")
@@ -96,7 +98,10 @@ internal sealed class WebViewWindow : Form
             web.CoreWebView2.Settings.AreDevToolsEnabled = false;
             web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
             web.CoreWebView2.Settings.IsStatusBarEnabled = false;
-            web.CoreWebView2.SetVirtualHostNameToFolderMapping(WebViewDocument.VirtualHost, platform.MediaDirectory, CoreWebView2HostResourceAccessKind.DenyCors);
+            // Bundled media (scripts, styles, fonts, previews) and the per-view rendered document are two mapped folders.
+            web.CoreWebView2.SetVirtualHostNameToFolderMapping(WebViewDocument.VirtualHost, platform.MediaDirectory, CoreWebView2HostResourceAccessKind.Allow);
+            platform.Files.CreateDirectory(documentDirectory);
+            web.CoreWebView2.SetVirtualHostNameToFolderMapping(WebViewDocument.AppHost, documentDirectory, CoreWebView2HostResourceAccessKind.DenyCors);
             await web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(WebViewDocument.BridgeScript);
             await web.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(WebViewDocument.PaletteScript(new Dictionary<string, string>
             {
@@ -111,12 +116,6 @@ internal sealed class WebViewWindow : Form
                 ["--vscode-editorWidget-background"] = ColorTranslator.ToHtml(SystemColors.Control),
                 ["--vscode-widget-border"] = ColorTranslator.ToHtml(SystemColors.ControlDark)
             }));
-            web.CoreWebView2.AddWebResourceRequestedFilter(WebViewDocument.Origin + "/__companion/*", CoreWebView2WebResourceContext.Document);
-            web.CoreWebView2.WebResourceRequested += (_, e) =>
-            {
-                if (e.Request.Uri != DocumentUrl) return;
-                e.Response = environment.CreateWebResourceResponse(new MemoryStream(Encoding.UTF8.GetBytes(document)), 200, "OK", "Content-Type: text/html; charset=utf-8\r\nCache-Control: no-store");
-            };
             // The window shows exactly one document; every other navigation is an external link for the browser.
             web.CoreWebView2.NavigationStarting += async (_, e) => { if (e.Uri == DocumentUrl) return; e.Cancel = true; await OpenExternalAsync(e.Uri); };
             web.CoreWebView2.NewWindowRequested += async (_, e) => { e.Handled = true; await OpenExternalAsync(e.Uri); };
@@ -157,11 +156,11 @@ internal sealed class WebViewWindow : Form
     }
     private async Task OpenExternalAsync(string link)
     {
-        if (!Uri.TryCreate(link, UriKind.Absolute, out var uri) || uri.Scheme is not ("https" or "http") || uri.Host == WebViewDocument.VirtualHost) return;
+        if (!Uri.TryCreate(link, UriKind.Absolute, out var uri) || uri.Scheme is not ("https" or "http") || uri.Host is WebViewDocument.VirtualHost or WebViewDocument.AppHost) return;
         try { await platform.Launcher.OpenAsync(uri.AbsoluteUri); }
         catch (Exception e) { platform.Log.Write(DesktopLogEvent.ActivationFailed, e); } // a broken browser association must not close the window
     }
-    private string DocumentUrl => WebViewDocument.Origin + "/__companion/" + view + ".html";
+    private string DocumentUrl => WebViewDocument.DocumentUrl(view);
     public void ReloadTheme()
     {
         if (web.CoreWebView2 is null || web.IsDisposed) return;
@@ -177,6 +176,7 @@ internal sealed class WebViewWindow : Form
             var surface = WebViewDocument.Surface(view);
             document = WebViewDocument.Render(Read(surface + ".html"), surface + ".js", settings.Read().UiTheme, nonce);
         }
+        platform.Files.WriteFileAtomic(Path.Combine(documentDirectory, WebViewDocument.DocumentFile(view)), Encoding.UTF8.GetBytes(document));
         ready = false; pending.Clear(); web.CoreWebView2.Navigate(DocumentUrl);
     }
     // Settings are the panel's own settings view: the settings window opens it once the document is ready.

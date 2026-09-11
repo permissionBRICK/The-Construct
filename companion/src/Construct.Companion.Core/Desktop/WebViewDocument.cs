@@ -5,6 +5,12 @@ public static class WebViewDocument
 {
     public const string VirtualHost = "construct.media";
     public const string Origin = "https://" + VirtualHost;
+    // The rendered document is served from its own mapped folder, not intercepted in flight: WebView2 does not
+    // reliably raise WebResourceRequested for a virtual-host path, and a miss shows a bare "file not found" page.
+    public const string AppHost = "construct.app";
+    public const string AppOrigin = "https://" + AppHost;
+    public static string DocumentFile(string view) => view + ".html";
+    public static string DocumentUrl(string view) => AppOrigin + "/" + DocumentFile(view);
     public const string BridgeScript = """
         (() => {
           let state;
