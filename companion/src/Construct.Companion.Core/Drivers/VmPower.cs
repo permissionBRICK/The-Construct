@@ -19,10 +19,11 @@ public static class VmPower
     public static string RefineSavedState(string state, string? backend, string? rawState) => state == "off" && Instances.IsRemoteBackend(backend) && StateJson.Trim(rawState ?? "").Equals("saved", StringComparison.OrdinalIgnoreCase) ? "saved" : state;
     public static string? LifecycleRefusal(string? backend, string action)
     {
-        if (action is not ("reinstall" or "redownload" or "setCheckpoints")) return null;
+        if (action is not ("reinstall" or "redownload" or "setCheckpoints" or "setResources")) return null;
         var key = StateJson.Trim(string.IsNullOrEmpty(backend) ? "hyperv-local" : backend).ToLowerInvariant();
         if (key is not ("hyperv-local" or "hyperv-remote")) return $"the \"{backend}\" backend can't be rebuilt or reconfigured from here — the host scripts drive the local Hyper-V. Reprovision and Export config still work.";
         if (action == "setCheckpoints" && key == "hyperv-remote") return "the \"hyperv-remote\" backend has no checkpoints — that setting applies to VMs on this PC's Hyper-V only.";
+        if (action == "setResources" && key == "hyperv-remote") return "the \"hyperv-remote\" backend is not resized by the host scripts — a VM on a host service is resized through that service.";
         return null;
     }
     public static string BuildStartCommand(string? name) => "Start-VM -Name " + PowerShellLaunch.SingleQuote(string.IsNullOrEmpty(name) ? "Agent-VM" : name) + "; if ($?) { Write-Host 'Construct VM started.' -ForegroundColor Green } else { Write-Host 'Failed to start the Construct VM.' -ForegroundColor Red; if (-not [Console]::IsInputRedirected) { [void](Read-Host 'Press Enter to close') } }";

@@ -21,7 +21,7 @@ namespace Construct.Companion.Host.Dispatch;
 // come from the desktop prompts, whichever client sent the message.
 public sealed partial class MessageDispatcher(CompanionInstances instances, StateAggregation state, IpcSettings settings,
     IpcEvents events, IpcLogs logs, IStateFileSystem files, IPrompts prompts, ILauncher launcher,
-    ICompanionDesktop desktop, IClock clock, HostAdministration hosts, CachedUpdateSource updates, IAudioCapture capture)
+    ICompanionDesktop desktop, IClock clock, HostAdministration hosts, CachedUpdateSource updates, IAudioCapture capture, HostConversionWorkflow conversion)
 {
     public async Task DispatchAsync(string name, JsonObject message, CancellationToken ct)
     {
@@ -35,7 +35,10 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
         {
             switch (type)
             {
-                case "ready": await RefreshAsync(entry, ct); return;
+                case "ready":
+                    if (StateJson.Boolean(message["snapshotOnly"]) == true) state.PublishSnapshot(name);
+                    else await RefreshAsync(entry, ct, bypassManifest: StateJson.Boolean(message["surfaceOpened"]) == true);
+                    return;
                 case "openPanel": await desktop.ActivateAsync(new("panel", name), ct); return;
                 case "setInstance": await SelectAsync(Text(message, "name"), ct); return;
                 case "setAudio":
@@ -45,8 +48,7 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
                     state.Publish(name, new { type = "settings", instance = name, settings = entry.Store.ReadSettings() }); return;
                 case "saveSettings": await SaveSettings(entry, message["settings"] as JsonObject ?? throw new IpcFailure(400, "invalidSettings", "A settings object is required."), ct); return;
                 case "customRebuild": RequireRebuild(message); await Lifecycle(entry, Text(message, "mode"), message, ct); return;
-                // Saved by saveSettings; the restart-to-resize workflow (elevated Set-AgentVmResources.ps1 with a result file, or the service's CPU route plus restart) is not ported yet.
-                case "applyVmResources": Refuse(name, type, "Applying the VM size is not available from Construct Companion yet. The values are saved; use Apply in the VS Code control panel, or Reinstall."); return;
+                case "applyVmResources": await ApplyVmResources(entry, ct); return;
                 case "setUsagePeriod": entry.UsagePeriod = UsageParser.NormalizeReport(Text(message, "period")); await RefreshAsync(entry, ct); return;
                 case "saveProject":
                     var project = Text(message, "name"); var profile = RequireProject(project, message["profile"]);
@@ -147,19 +149,18 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
             case "syncConfigNow": case "addConfigRemote": case "removeConfigRemote": case "importRemoteConfigs": case "shareConfigs": case "pushConfigUpstream": case "publishConfigProfiles": case "addRemoteAndPublish": case "openConfigRepo":
                 await ConfigCommand(entry, id, m, ct); break;
             case "installGit": await launcher.StartDetachedAsync(PowerShellLaunch.BuildInstallGitLaunch().Invocation(), ct); break;
-            // Documented unsupported workflows (companion/README.md): refused visibly, never ignored.
-            case "registerThisVm": Refuse(name, id, "Registration requires an attached Remote-SSH window. Use Register this VM in VS Code."); break;
-            case "addProject": Refuse(name, id, "Clone-and-register project creation is not yet ported. Save a project profile or use Add Project in VS Code fallback mode."); break;
-            case "removeInstance": Refuse(name, id, "Instance removal needs the installer removal planner. Use Remove Instance in VS Code."); break;
-            case "convertToHost": Refuse(name, id, "Host conversion requires the attached VM identity and explicit finish workflow. Review or finish it in VS Code; Companion never finishes a pending conversion automatically."); break;
-            case "createFirstVm": Refuse(name, id, "The remote VM creation wizard is not yet ported. Use New Remote VM in VS Code."); break;
+            case "registerThisVm": await RegisterThisVm(ct); break;
+            case "addProject": await AddProject(entry, ct); break;
+            case "removeInstance": await RemoveInstance(entry, ct); break;
+            case "convertToHost": try { await conversion.RunAsync(entry, ct); } finally { state.PublishSnapshot(name); events.Message(name, new { type = "lifecyclePrepared", id }); } break;
+            case "createFirstVm": await hosts.CreateFirstVmAsync(null, ct); break;
             case "updateConstruct": await UpdateConstruct(entry, ct); break;
             default: Refuse(name, id, "This command is not supported by Construct Companion."); break;
         }
     }
     // Recomputes and publishes the full state message (probe, host extras, usage, config sync,
     // update enrichment). The enrichment service calls it with probe:false and collectUsage:false.
-    public async Task RefreshAsync(CompanionInstance entry, CancellationToken ct, bool probe = true, bool collectUsage = true)
+    public async Task RefreshAsync(CompanionInstance entry, CancellationToken ct, bool probe = true, bool collectUsage = true, bool bypassManifest = false)
     {
         await entry.EnrichmentSerial.WaitAsync(ct);
         try
@@ -184,7 +185,7 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
             var data = full["state"]!.AsObject();
             var markers = entry.Store.ReadMarkers();
             data["provisionStale"] = UpdatePlanner.IsProvisionStale(markers, Text(data, "provisionedCommit"));
-            data["constructUpdate"] = await UpdatePlanner.CheckConstructAsync(updates, markers, ct);
+            data["constructUpdate"] = await UpdatePlanner.CheckConstructAsync(bypassManifest ? updates.Bypass() : updates, markers, ct);
             UpdatePlanner.Fold(data, markers, data["constructUpdate"] as JsonObject);
             if (data["agents"] is JsonArray agents) data["agents"] = await UpdatePlanner.AugmentAgentsAsync(updates, agents, ct);
             // Everything the enrichment adds must survive the next probe-driven rebuild of the state (StateAggregation.State copies Enrichment).
@@ -202,7 +203,7 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
         var previous = entry.Store.ReadSettings(); entry.Store.SaveSettings(form); var merged = entry.Store.ReadSettings();
         state.Publish(entry.Name, new { type = "settings", instance = entry.Name, settings = merged });
         if (entry.Runtime is { } runtime) await runtime.SetAudioAsync(StateJson.Boolean(merged["mic"]) == true, ct);
-        if (StateJson.Boolean(previous["autoCheckpoints"]) != StateJson.Boolean(merged["autoCheckpoints"])) Refuse(entry.Name, "saveSettings", "Automatic checkpoint preference was saved. Applying it to the existing VM is not yet supported; use VS Code or the installer checkpoint action.");
+        if (StateJson.Boolean(form["autoCheckpoints"]) is not null) await ApplyCheckpoints(entry, StateJson.Boolean(merged["autoCheckpoints"]) == true, ct);
         var changes = SettingsMapping.PatchReprovisionChanges(previous, merged);
         var t3 = T3Code.PlanLiveAction(StateJson.Boolean(merged["t3code"]) == true, StateJson.Boolean(previous["t3code"]) == true, Text(merged, "t3codeChannel"), Text(previous, "t3codeChannel"));
         if (t3 is not null && (Text(t3, "action") == "disable" || StateJson.Boolean(merged["t3codeLimitResume"]) != true))
@@ -214,11 +215,12 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
         try
         {
             var directory = RequireDirectory(entry);
+            if (action is "reprovision" or "reinstall" or "redownload" && !await LifecyclePreflight(entry, action, ct)) return;
             var invocation = LifecycleBuilder.BuildInvocation(action, new()
             {
                 ["instance"] = entry.Definition.DeepClone(), ["settings"] = entry.Store.ReadSettings(),
                 ["instanceParams"] = JsonSerializer.SerializeToNode(LifecycleBuilder.InstanceParameterSupport(files, directory, action, entry.Definition)),
-                ["projects"] = entry.Store.ReadSelectedProjects(), ["backupMode"] = message["backup"]?.DeepClone(),
+                ["projects"] = await EffectiveProjects(entry, ct), ["backupMode"] = message["backup"]?.DeepClone(),
                 ["backupDir"] = Path.Combine(directory, "config")
             });
             if (invocation is null || StateJson.Boolean(invocation["blocked"]) == true) { Refuse(entry.Name, action, invocation is null ? "This lifecycle action is unavailable." : Text(invocation, "reason")); return; }

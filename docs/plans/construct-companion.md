@@ -5,7 +5,7 @@ Windows app to the real IPC dispatcher and per-instance runtimes, including the 
 install offer and local/remote/reprovision hooks. Linux build and fake-mode integration
 are verified below. Native Windows build/selftest and field operation remain pending:
 the relay answered SDK queries, but source transfer failed; no executable ran there.
-Explicit unsupported workflows remain in companion/README.md.
+S5 implements the remaining workflows; intentional legacy input differences are recorded in companion/README.md.
 
 Author: Fable (design). Implementers: see [Work packages](#13-work-packages).
 
@@ -564,6 +564,15 @@ for regression suite results, retries, unsupported workflows and Windows limitat
 - T3 gets a launch button only; no IPC consumption in this delivery.
 
 ## Deviations
+
+- S5 creation: Companion delegates POST /vms, job and SSH waits, registry/spec persistence and provisioning to the same non-elevated Auto-Install.ps1 flow as runNewRemoteVm; a supported -Projects parameter receives the native profile selection, including an explicit empty selection.
+
+- S5 registration: Companion asks for the SSH host before the instance name because it has no attached Remote-SSH window; canonical local identity checks and registry writes match `instances.js`.
+- S5 project cloning: credential-bearing Git URLs are refused and remote Git stderr is omitted to keep credentials out of process arguments and notifications; the clone script and successful open path match the extension.
+- S5 removal: the requested Keep VM choice passes the installer’s existing `-KeepVm` flag; the current VS Code command offers deletion only for remote instances.
+- S5 conversion: the RSA private key uses the existing per-user DPAPI token-store seam instead of VS Code SecretStorage; a conversion started in VS Code must be finished in that original VS Code profile.
+- S5 conversion launch: the detached elevation observer writes a failed result when UAC is cancelled or the installer exits without a result, so the native poller can report the failure.
+- S5 completion supersedes the historical S2/S3 unsupported-workflow notes in this document: registration, removal, cloning, conversion, remote creation, resources, checkpoints, preflight and one-time token display are now implemented; native Windows runtime validation remains outstanding.
 
 - merge of main 2026-09-11: manifest-based updates, composed T3 pairing and forward readiness, guest consoles, shared inventory and CPU administration parity; Companion regressions moved to local checks, release stays separate; console failures deliberately omit raw SSH stderr/exception text to protect ticket credentials, while retaining distinct safe failure reasons.
 

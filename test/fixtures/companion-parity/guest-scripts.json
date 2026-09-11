@@ -146,6 +146,47 @@
     "values": {}
   },
   {
+    "name": "project-clone",
+    "output": "set -u\nroot='/root/repos'\nurl=$(printf %s 'aHR0cHM6Ly9leGFtcGxlLnRlc3QvcmVwby5naXQ=' | base64 -d)\ndest=$(printf %s 'cmVwbw==' | base64 -d)\nmkdir -p \"$root\"\ntarget=\"$root/$dest\"\nif [ -e \"$target\" ]; then printf \"EXISTS\\t%s\\n\" \"$target\" >&2; exit 3; fi\ngit clone -- \"$url\" \"$target\"",
+    "values": {
+      "dest": "cmVwbw==",
+      "root": "/root/repos",
+      "url": "aHR0cHM6Ly9leGFtcGxlLnRlc3QvcmVwby5naXQ="
+    }
+  },
+  {
+    "name": "project-clone",
+    "output": "set -u\nroot='/root/repos'\nurl=$(printf %s 'Z2l0QGhvc3Q6YSdiLmdpdA==' | base64 -d)\ndest=$(printf %s 'YSdi' | base64 -d)\nmkdir -p \"$root\"\ntarget=\"$root/$dest\"\nif [ -e \"$target\" ]; then printf \"EXISTS\\t%s\\n\" \"$target\" >&2; exit 3; fi\ngit clone -- \"$url\" \"$target\"",
+    "values": {
+      "dest": "YSdi",
+      "root": "/root/repos",
+      "url": "Z2l0QGhvc3Q6YSdiLmdpdA=="
+    }
+  },
+  {
+    "name": "project-clone",
+    "output": "set -u\nroot='/root/repos'\nurl=$(printf %s 'aHR0cHM6Ly9ob3N0L3t7ZGVzdH19LmdpdA==' | base64 -d)\ndest=$(printf %s 'e3tkZXN0fX0=' | base64 -d)\nmkdir -p \"$root\"\ntarget=\"$root/$dest\"\nif [ -e \"$target\" ]; then printf \"EXISTS\\t%s\\n\" \"$target\" >&2; exit 3; fi\ngit clone -- \"$url\" \"$target\"",
+    "values": {
+      "dest": "e3tkZXN0fX0=",
+      "root": "/root/repos",
+      "url": "aHR0cHM6Ly9ob3N0L3t7ZGVzdH19LmdpdA=="
+    }
+  },
+  {
+    "name": "project-scan",
+    "output": "set -u\nroot='/root/repos'\nif [ -d \"$root\" ]; then\n  for repo in \"$root\"/*/; do\n    [ -d \"${repo}.git\" ] || continue\n    name=$(basename \"$repo\")\n    url=$(git -C \"$repo\" remote get-url origin 2>/dev/null || true)\n    branch=$(git -C \"$repo\" rev-parse --abbrev-ref HEAD 2>/dev/null || true)\n    printf '%s\\t%s\\t%s\\n' \"$name\" \"$url\" \"$branch\"\n  done\nfi\nprintf 'END\\n'",
+    "values": {
+      "root": "/root/repos"
+    }
+  },
+  {
+    "name": "project-scan",
+    "output": "set -u\nroot='/tmp/a'\\''b'\nif [ -d \"$root\" ]; then\n  for repo in \"$root\"/*/; do\n    [ -d \"${repo}.git\" ] || continue\n    name=$(basename \"$repo\")\n    url=$(git -C \"$repo\" remote get-url origin 2>/dev/null || true)\n    branch=$(git -C \"$repo\" rev-parse --abbrev-ref HEAD 2>/dev/null || true)\n    printf '%s\\t%s\\t%s\\n' \"$name\" \"$url\" \"$branch\"\n  done\nfi\nprintf 'END\\n'",
+    "values": {
+      "root": "/tmp/a'\\''b"
+    }
+  },
+  {
     "name": "audio-enable",
     "output": "set -eu\nexport CONSTRUCT_VM_PORT_BASE=8767\nexport CONSTRUCT_VM_PORT_COUNT=8\nCONSTRUCT_SHIM_B64=''\nexport CONSTRUCT_SHIM_B64\nCONSTRUCT_ENABLE_B64=''\nf=$(mktemp) && printf %s \"$CONSTRUCT_ENABLE_B64\" | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc",
     "values": {
