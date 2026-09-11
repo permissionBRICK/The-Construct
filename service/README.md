@@ -141,7 +141,7 @@ Memory replies contain `currentRamGb`, `desiredRamGb`, `pending`, `maximumRamGb`
 `recommendedRamGb` and `appliesOn: "next-stop-start"`. CPU uses corresponding
 `currentCpus`/`desiredCpus`/`maximumCpus` fields. Inventory includes nullable
 `pendingCpu` and `pendingRamGb`. `/vm-defaults` supplies recommended/maximum CPU
-and RAM for a new VM. Feature discovery advertises `primary-cpu` and `primary-memory`.
+and RAM for a new VM (`recommendedRamGb = min(8, maximumRamGb)`). Feature discovery advertises `primary-cpu` and `primary-memory`.
 
 Saving reserves no RAM and does not alter the running guest. Both settings are durable,
 bound to the VM creation identity, and applied CPU then RAM at confirmed Off before
