@@ -88,8 +88,22 @@
     button.title = offer ? "Administer " + (offer.host || "this host") : "";
   }
 
+  const instanceSelect = $("lInstanceSelect");
+  if (instanceSelect) instanceSelect.addEventListener("change", () => vscode.postMessage({ type: "setInstance", name: instanceSelect.value }));
   function render(s) {
     if (!s) return;
+    if (s.companion === true) {
+      const label = $("lInstanceLabel");
+      if (label) label.hidden = !(Array.isArray(s.instances) && s.instances.length > 1);
+      if (instanceSelect) {
+        instanceSelect.textContent = "";
+        for (const name of s.instances || [s.instance]) {
+          const option = document.createElement("option"); option.value = name; option.textContent = name;
+          option.selected = name === s.instance; instanceSelect.appendChild(option);
+        }
+      }
+      if ($("lRegister")) $("lRegister").hidden = !s.registerOffer;
+    }
     if (s.instance) shownInstance = s.instance;
     if (s.hostAdminOffer !== undefined) renderHostAdminOffer(s.hostAdminOffer);
     const online = s.online !== false;
