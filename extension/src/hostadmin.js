@@ -27,7 +27,7 @@
 //                  tab, perform an action — every step re-classifying on refusal
 
 /** The `apiFeatures` names a current service advertises (§3.4). */
-const FEATURE_NAMES = ["host-admin", "children", "media", "console", "updates", "network"];
+const FEATURE_NAMES = ["host-admin", "children", "media", "console", "updates", "network", "primary-cpu"];
 
 /** The exhaustive `ChildAction` enum of §2.2, for rendering `allowedActions`. */
 const CHILD_ACTIONS = [
@@ -115,6 +115,7 @@ function featureSet(health) {
     console: list.indexOf("console") >= 0,
     updates: list.indexOf("updates") >= 0,
     network: list.indexOf("network") >= 0,
+    primaryCpu: list.indexOf("primary-cpu") >= 0,
   };
 }
 
@@ -359,6 +360,7 @@ function toVmRow(vm, now) {
     tokenKind: str(v.tokenKind) || null,
     deleting: v.deleting === true,
     childCreationClosed: v.childCreationClosed === true,
+    pendingCpu: num(v.pendingCpu),
     resources: resourcesText(v.hardware || { cpus: v.cpu, ramMb: num(v.ramGb) === null ? null : v.ramGb * 1024, diskGb: v.diskGb }),
     usage: resourceUsageView(v.resourceUsage, now),
     lease: leaseText(v.lease, now),
@@ -1236,6 +1238,22 @@ function createHostAdminModel(deps = {}) {
     notice(null, "");
     try {
       switch (a) {
+        case "loadVmCpu": {
+          return { ok: true, cpu: await client.vmCpu(str(args.name)) };
+        }
+        case "setVmCpu": {
+          const cpus = Number(args.cpus);
+          if (!Number.isInteger(cpus) || cpus < 1 || cpus > 64) throw new Error("Choose a whole CPU count from 1 to 64.");
+          const cpu = await client.setVmCpu(str(args.name), { cpus });
+          notice("info", cpu.pending ? `${args.name}: ${cpu.desiredCpus} vCPUs saved for the next full stop/start. The running VM is unchanged.` : `${args.name}: CPU setting matches the current ${cpu.currentCpus} vCPUs.`);
+          return { ok: true, cpu };
+        }
+        case "restartVm":
+        case "startVm": {
+          const res = await client.lifecycle(str(args.name), { action: a === "restartVm" ? "restart" : "start" });
+          notice("info", `${args.name}: ${a === "restartVm" ? "restart" : "start"} requested.`);
+          return { ok: true, jobId: str(res && res.jobId) };
+        }
         case "updatesUpdate": {
           await updater.start();
           return { ok: true };

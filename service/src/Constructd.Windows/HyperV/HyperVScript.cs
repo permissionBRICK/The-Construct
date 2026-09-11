@@ -74,6 +74,9 @@ internal static class HyperVScript
     public static string StartVm(string scriptsDir, string vmName) =>
         Call(scriptsDir, "Start-ConstructVm", vmName);
 
+    public static string SetCpuCount(string scriptsDir, string vmName, int cpus) => Build(scriptsDir,
+        $"Set-ConstructVmCpuCount -Name {PowerShellLiteral.Quote(ArgumentGuard.VmName(vmName))} -ProcessorCount {ArgumentGuard.Positive(cpus, "cpus", 64)}");
+
     /// <summary>
     /// <c>-Force</c> so Hyper-V never asks: the service runs under the SCM with
     /// <c>-NonInteractive</c>, where a confirmation prompt is a hang, not a question.

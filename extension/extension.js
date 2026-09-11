@@ -4057,7 +4057,19 @@ async function runNewRemoteVm(preferred) {
     });
     return v == null ? null : Number(String(v).trim());
   };
-  const cpu = await askNumber("vCPUs", "How many virtual CPUs?", 4, 1, 64);
+  const cpuClient = await remoteClientFor(hostEntry);
+  if (!cpuClient) return;
+  let cpuDefaults;
+  try { cpuDefaults = await cpuClient.vmDefaults(); }
+  catch (e) {
+    vscode.window.showErrorMessage(`Cannot determine the CPU allowance on this host. Update the host service and retry. ${e.message}`);
+    return;
+  }
+  if (!Number.isInteger(cpuDefaults.recommendedCpus) || cpuDefaults.recommendedCpus < 1) {
+    vscode.window.showErrorMessage("No CPU allowance is available for another VM on this host.");
+    return;
+  }
+  const cpu = await askNumber("vCPUs", "Defaults to the available user allowance, capped by the host's CPU count and limits.", cpuDefaults.recommendedCpus, 1, cpuDefaults.maximumCpus);
   if (cpu == null) return;
   const ram = await askNumber("Memory (GB)", "How much RAM, in GB?", 8, 1, 1024);
   if (ram == null) return;
