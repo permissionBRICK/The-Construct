@@ -120,11 +120,22 @@ try {
             $oldScript=Join-Path $f.h.scriptsDir 'lib/old.ps1'
             [IO.Directory]::CreateDirectory((Split-Path $oldScript -Parent)) | Out-Null
             [IO.File]::WriteAllText($oldScript,'old script')
+            $sourceRoot=Join-Path $f.h.scriptsDir 'operator-source-cache'
+            [IO.Directory]::CreateDirectory($sourceRoot) | Out-Null
+            $cachedSource=Join-Path $sourceRoot 'cached.zip'; [IO.File]::WriteAllText($cachedSource,'preserved source')
+            $settingsPath=Join-Path $f.h.publishDir 'appsettings.Production.json'
+            $settings=Read-UpdateJson $settingsPath
+            $settings.Constructd.HostAdmin | Add-Member -NotePropertyName Source -NotePropertyValue @{RootDir=$sourceRoot}
+            Write-UpdateJson $settingsPath $settings
+            $rejected=$false; try { Get-UpdateTarget 'scripts/operator-source-cache/cached.zip' $f.h $settings | Out-Null } catch { $rejected=$true }
+            Assert $rejected 'Custom source cache is not a payload target'
             $script:failNew=$rollback
             Assert ((Invoke-ConstructHostUpdate $f.path $false $false) -eq 0) 'First update has a complete backup and recoverable apply'
             $record=Read-UpdateJson $f.record
             $expected='succeeded'; if ($rollback) { $expected='rolledBack' }
             Assert ($record.outcome -eq $expected) 'First update outcome'
+            Assert ([IO.File]::ReadAllText($cachedSource) -eq 'preserved source') 'Custom source cache survives apply and rollback'
+            Assert (-not (Test-Path (Join-Path $record.backupPath 'scripts/operator-source-cache'))) 'Custom source cache excluded from code scan'
             Assert ([IO.File]::ReadAllText((Join-Path $record.backupPath 'service/Constructd.Api.exe')) -eq 'old') 'Fallback scan backed up old executable'
             Assert ([IO.File]::ReadAllText((Join-Path $record.backupPath 'service/removed.dll')) -eq 'old-owned') 'Fallback scan backed up old DLL'
             Assert ([IO.File]::ReadAllText((Join-Path $record.backupPath 'scripts/lib/old.ps1')) -eq 'old script') 'Fallback scan backed up old scripts'
