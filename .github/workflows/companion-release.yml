@@ -1,0 +1,28 @@
+name: Companion release
+on:
+  push:
+    branches: [main]
+    paths: ['companion/**', 'extension/media/**', 'extension/vm/**', 'extension/src/**', 'extension/test/**', 'test/fixtures/companion-parity/**', 'lib/Construct.Companion.ps1', '.github/workflows/companion-release.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: companion-release-${{ github.sha }}
+  cancel-in-progress: false
+jobs:
+  test-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+      - run: dotnet build companion/Construct.Companion.sln -warnaserror
+      - run: dotnet test companion/Construct.Companion.sln --no-build
+      - run: node extension/test/parity.test.js
+  # Windows publish/package/release job belongs to S2b install.

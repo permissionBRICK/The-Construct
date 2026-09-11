@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <EmbeddedResource Include="../../../extension/vm/*.sh" Link="GuestScripts/%(Filename)%(Extension)" LogicalName="GuestScripts.%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>
