@@ -565,6 +565,8 @@ for regression suite results, retries, unsupported workflows and Windows limitat
 ## Deviations
 
 - S4 cleanup: `ConfigSyncRules.IsSafeProfileName` now shares `HostState.SafeProfileName` (the `configsync.js` formulation, ECMAScript `trim`), so edge U+0085 is accepted and edge U+FEFF rejected exactly as in JS; the `config-sync` fixture gained those cases (Core/ConfigSync/ConfigSyncRules.cs).
+- S4 cleanup (Host): `IConfigSyncStorage` is gone: its file members live on `IStateFileSystem` (plus `DeleteDirectory`) and its process members on the new `IProcessLiveness`; `ConfigSyncFileSystem`/`DesktopFileSystem` are one `HostFileSystem` and `ConfigSyncProcessRunner` is dropped in favour of the production `RuntimeProcessRunner` (its `RunAsync` throws on timeout where the removed runner returned -1; only `GitRunner`, which maps both to -1, and tests used it).
+- S4 cleanup (Host): the S2 `DesktopActivationServer`, `IUiActivation` and the app's private `ui-endpoint.json` are removed; that build never shipped, so activation and quit use `endpoint.json` only (the installer's `ui-endpoint.json` discovery is dropped in the installer increment).
 - owner amendment 2026-09-11: plain reprovision installs or updates the client Companion through the same non-blocking opt-out-aware hook in `Provision-AgentVM.ps1`, covering panel and T3 Desktop reprovision entry paths.
 
 - S2b ipc: automatic checkpoint apply and lifecycle preflight/live-project fallback remain documented unsupported subflows; S2a has the pieces but not the complete dialog/result workflow, so users must sync/select explicitly and apply checkpoints through VS Code/installer.

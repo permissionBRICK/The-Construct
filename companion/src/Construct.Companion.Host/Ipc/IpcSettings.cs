@@ -6,14 +6,10 @@ using Construct.Companion.Core.Ipc;
 using Construct.Companion.Core.State;
 namespace Construct.Companion.Host.Ipc;
 
-public sealed class IpcFailure(int status, string code, string title) : Exception(title)
-{
-    public int Status { get; } = status;
-    public string Code { get; } = code;
-}
 public sealed class IpcSettings(IFileSystem files, IpcEvents events, SettingsStore? store = null)
 {
     private readonly object gate = new();
+    // With a shared desktop store its Changed event publishes; without one Merge publishes itself.
     private readonly bool sharedEvents = Subscribe(store, events);
     private static bool Subscribe(SettingsStore? store, IpcEvents events)
     { if (store is null) return false; store.Changed += value => events.Companion(new { type = "settings", settings = value }); return true; }
@@ -54,29 +50,6 @@ public sealed class IpcSettings(IFileSystem files, IpcEvents events, SettingsSto
             if (store is null) files.WriteFileAtomic(PathName, JsonSerializer.SerializeToUtf8Bytes(settings, IpcJson.Options));
             else { var validated = patch.DeepClone().AsObject(); if (validated.ContainsKey("repatchDelaySeconds")) validated["repatchDelaySeconds"] = settings.RepatchDelaySeconds; settings = store.Update(validated); }
             if (!sharedEvents) events.Companion(new { type = "settings", settings }); return settings;
-        }
-    }
-}
-// Accept only already-sanitized operational messages, never exception bodies or request data.
-public sealed class IpcLogs(IFileSystem files, IpcSettings settings)
-{
-    private readonly object gate = new();
-    public string PathName => Path.Combine(settings.Directory, "logs", "companion.log");
-    public string[] Read(int count)
-    { lock (gate) return System.Text.Encoding.UTF8.GetString(files.ReadFile(PathName) ?? []).Split('\n', StringSplitOptions.RemoveEmptyEntries).TakeLast(Math.Clamp(count, 0, 10000)).ToArray(); }
-    public void Failure(string operation, Exception error) => Write(operation + " failed (" + error.GetType().Name + ").");
-    public void Write(string message)
-    {
-        lock (gate)
-        {
-            var data = System.Text.Encoding.UTF8.GetBytes(System.Text.Encoding.UTF8.GetString(files.ReadFile(PathName) ?? []) + message + "\n");
-            files.CreateDirectory(Path.GetDirectoryName(PathName)!);
-            if (data.Length > 1048576)
-            {
-                for (var i = 4; i >= 1; i--) { var old = files.ReadFile(i == 1 ? PathName : PathName + "." + (i - 1)); if (old is not null) files.WriteFileAtomic(PathName + "." + i, old); }
-                data = System.Text.Encoding.UTF8.GetBytes(message + "\n");
-            }
-            files.WriteFileAtomic(PathName, data);
         }
     }
 }

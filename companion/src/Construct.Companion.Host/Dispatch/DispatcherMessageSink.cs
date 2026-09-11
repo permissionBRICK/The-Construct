@@ -2,11 +2,12 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Construct.Companion.Core.Abstractions;
-using Construct.Companion.Host.Dispatch;
 using Construct.Companion.Host.Ipc;
-namespace Construct.Companion.Host.Desktop;
+namespace Construct.Companion.Host.Dispatch;
 
-public sealed class DispatcherMessageSink(IIpcBackend backend, IpcEvents events, HostAdministration hosts) : IMessageSink
+// The desktop windows' IMessageSink: the same backend and event stream the HTTP routes use,
+// so a window and a VS Code client see identical messages.
+public sealed class DispatcherMessageSink(CompanionBackend backend, IpcEvents events, HostAdministration hosts) : IMessageSink
 {
     public Task PostAsync(string scope, JsonElement message, CancellationToken cancellationToken = default)
     {
@@ -20,6 +21,7 @@ public sealed class DispatcherMessageSink(IIpcBackend backend, IpcEvents events,
         using var subscription = events.Subscribe();
         try
         {
+            // IpcEvents serializes each event into its own JsonElement, so yielding a property is not a borrow.
             await foreach (var item in subscription.Reader.ReadAllAsync(cancellationToken))
             {
                 if (scope == "companion" && item.Event == "companion") yield return item.Data;
@@ -27,6 +29,6 @@ public sealed class DispatcherMessageSink(IIpcBackend backend, IpcEvents events,
                 else if (item.Event == "hostadmin" && scope == "host:" + item.Data.GetProperty("host").GetString()) yield return item.Data.GetProperty("message");
             }
         }
-        finally { if (scope.StartsWith("host:", StringComparison.Ordinal)) hosts.Close(scope[5..]); }
+        finally { if (scope.StartsWith("host:", StringComparison.Ordinal)) hosts.Close(scope[5..]); } // a closed window stops host polling
     }
 }

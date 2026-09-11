@@ -4,12 +4,11 @@ using Construct.Companion.Core.Abstractions;
 using Construct.Companion.Core.ConfigSync;
 
 namespace Construct.Companion.Host.ConfigSync;
-public sealed partial class ConfigRepository(GitRunner git, IFileSystem files, IConfigSyncStorage storage, string directory)
+public sealed class ConfigRepository(GitRunner git, IStateFileSystem files, string directory)
 {
     public string Directory { get; } = Path.GetFullPath(directory);
     public GitRunner Git => git;
-    public IConfigSyncStorage Storage => storage;
-    public IFileSystem Files => files;
+    public IStateFileSystem Files => files;
     public string FilePath(string folder, string name) { if (!ConfigSyncRules.IsSafeProfileName(name)) throw new ConfigSyncException("Invalid profile file name."); return Path.Combine(Directory, folder, name + ".json"); }
     public string? ReadText(string path) { var data = files.ReadFile(path); return data == null ? null : Encoding.UTF8.GetString(data); }
     public void WriteText(string path, string text) => files.WriteFileAtomic(path, Encoding.UTF8.GetBytes(text));
@@ -17,13 +16,15 @@ public sealed partial class ConfigRepository(GitRunner git, IFileSystem files, I
     public async Task HardenAsync(CancellationToken ct = default)
     {
         foreach (var pair in new[] { ("commit.gpgsign", "false"), ("core.hooksPath", ""), ("core.autocrlf", "false") }) await git.RunAsync(Directory, ["config", pair.Item1, pair.Item2], cancellationToken: ct);
+        // Best effort: a read-only config directory must not block the sync itself.
         try
         {
-        var attrs = Path.Combine(Directory, ".gitattributes"); if (!files.FileExists(attrs)) WriteText(attrs, "* text=auto eol=lf\n");
-        var exclude = Path.Combine(Directory, ".git", "info", "exclude"); var cur = ReadText(exclude) ?? ""; var have = cur.Split('\n').Select(s => s.Trim()).ToHashSet();
-        var missing = new[] { ".gitattributes", ".migrated", SyncLock.LockFile, SyncLock.ProvisionIntent, "projects/default.json", "projects/project.schema.json" }.Where(s => !have.Contains(s)).ToArray();
-        if (missing.Length > 0) WriteText(exclude, cur + (cur.Length > 0 && !cur.EndsWith('\n') ? "\n" : "") + string.Join('\n', missing) + "\n");
-        } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            var attrs = Path.Combine(Directory, ".gitattributes"); if (!files.FileExists(attrs)) WriteText(attrs, "* text=auto eol=lf\n");
+            var exclude = Path.Combine(Directory, ".git", "info", "exclude"); var cur = ReadText(exclude) ?? ""; var have = cur.Split('\n').Select(s => s.Trim()).ToHashSet();
+            var missing = new[] { ".gitattributes", ".migrated", SyncLock.LockFile, SyncLock.ProvisionIntent, "projects/default.json", "projects/project.schema.json" }.Where(s => !have.Contains(s)).ToArray();
+            if (missing.Length > 0) WriteText(exclude, cur + (cur.Length > 0 && !cur.EndsWith('\n') ? "\n" : "") + string.Join('\n', missing) + "\n");
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }
     public async Task<RepoInit> EnsureRepoAsync(string branch = "vm", CancellationToken ct = default)
     {
