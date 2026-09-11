@@ -62,7 +62,10 @@ in a profile shared between different hosts.
 - The gateway creates an ordinary host console session and calls the new
   `POST /api/v1/vms/{name}/console/sessions/{sid}/connection` endpoint. All existing
   console authorization, principal binding, parent fences, and session caps apply.
-  Primary-token gateways may connect only to themselves and their own children.
+  Primary-token gateways may connect to themselves, their own children, and
+  host-shared children they are authorized to operate. The connection endpoint
+  uses the same sharing rules as screenshots/input; it requires a session owned
+  by the requesting principal. Private VMs remain inaccessible to other gateways.
 - The host creates a random-password local account, with no group membership,
   and grants VMConnect access only to the selected native VM GUID. Credentials
   are sent over the pinned host API to the trusted primary gateway, then over
