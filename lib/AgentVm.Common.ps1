@@ -6733,7 +6733,7 @@ function Get-ConstructSourceIdentity {
         foreach ($file in Get-ChildItem -LiteralPath $Root -File -Force -Recurse) {
             $relative = $file.FullName.Substring($prefix.Length).Replace('\', '/')
             if ($files.ContainsKey($relative)) { continue }
-            if ($relative -match '(^|/)(\.construct-settings\.json|[^/]*\.iso|\.env|[^/]*\.local)$|(^|/)(\.construct-backup|\.construct-tools|runtime|__pycache__)/|(^|/)\.claude/worktrees/') { continue }
+            if ($relative -match '(^|/)(\.construct-settings\.json|[^/]*\.iso|\.env|[^/]*\.local)$|(^|/)(\.construct-backup|\.construct-tools|runtime|__pycache__|bin|obj|node_modules|TestResults|\.vs)/|(^|/)\.claude/worktrees/') { continue }
             $count++
         }
         $result.Divergence = $count; $result.TreeState = $(if ($count) { 'divergent' } else { 'equivalent' })

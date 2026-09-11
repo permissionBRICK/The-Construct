@@ -331,7 +331,7 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
             case "updatesApply": result = await client.UpdatesApplyAsync(new JsonObject { ["updateId"] = args["updateId"]?.DeepClone() }, ct); break;
             case "updatesCancel": result = await client.UpdatesCancelAsync(new JsonObject { ["updateId"] = args["updateId"]?.DeepClone() }, ct); break;
             case "updatesResolve": RequireResolve(args); result = await client.UpdatesResolveAsync(new JsonObject { ["updateId"] = args["updateId"]?.DeepClone(), ["action"] = args["action"]?.DeepClone() }, ct); break;
-            case "updatesUpdate": await StartUpdate(m, client, ct); break;
+            case "updatesUpdate": await StartUpdate(m, client, ct); await Load(m, client, ct); return;
             case "createFirstVm": await CreateFirstVmAsync(m.Host.Slug, ct); await Load(m, client, ct); return;
             default: Notice(m, "Unknown host-administration action."); return;
         }
@@ -353,9 +353,13 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
     {
         var status = await client.UpdatesStatusAsync(ct) as JsonObject ?? [];
         var check = Text(status["current"]?["state"]) == "staged" ? null : await client.UpdatesCheckAsync(null, ct) as JsonObject;
-        var pending = HostUpdatePlanner.PlanStart(status, check, "cc-" + Guid.NewGuid().ToString("N"));
+        JsonObject? pending;
+        // The planner refuses with a sentence meant for the user (update already active, no release, incompatible).
+        try { pending = HostUpdatePlanner.PlanStart(status, check, "cc-" + Guid.NewGuid().ToString("N")); }
+        catch (InvalidOperationException e) { Notice(model, e.Message); return; }
         if (pending is null) { model.State["notice"] = new JsonObject { ["level"] = "info", ["text"] = "The host is already on the latest release." }; return; }
         SavePending(model, pending); await AdvanceUpdate(model, client, ct);
+        if (model.State["updatePending"] is not null) model.State["notice"] = new JsonObject { ["level"] = "info", ["text"] = "Host update started. Progress shows in the Maintenance tab." };
     }
     private async Task AdvanceUpdate(Model model, RemoteHostClient client, CancellationToken ct)
     {

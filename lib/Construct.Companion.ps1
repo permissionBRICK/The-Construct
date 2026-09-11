@@ -240,7 +240,7 @@ function Install-ConstructCompanion {
         [IO.Directory]::CreateDirectory($work) | Out-Null
         $app=Join-Path $work 'app'
         if ($plan.source -eq 'local-build') {
-            $result=& $Seams.Native 'dotnet' @('publish',(Join-Path $ScriptsDir 'companion/src/Construct.Companion/Construct.Companion.csproj'),'-c','Release','-r','win-x64','--self-contained','true',('-p:InformationalVersion=1.0.0+'+$plan.commit),'-p:IncludeSourceRevisionInInformationalVersion=false','-o',$app)
+            $result=& $Seams.Native 'dotnet' @('publish',(Join-Path $ScriptsDir 'companion/src/Construct.Companion/Construct.Companion.csproj'),'-c','Release','-r','win-x64','--self-contained','true',('-p:InformationalVersion=1.0.0+'+$plan.commit),'-p:IncludeSourceRevisionInInformationalVersion=false','--artifacts-path',(Join-Path $work 'artifacts'),'-o',$app)
             if ($result.exitCode -ne 0) {
                 # Dependency diagnostics can include credentials (for example NuGet
                 # source URLs). Expose their error codes, never arbitrary output.

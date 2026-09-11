@@ -125,6 +125,19 @@ public sealed class HostAdminHttpTests
         var e = await Until(reader, d => d["host"]?.GetValue<string>() == "host.example_7462"); Assert.Equal("hostadmin.state", e["message"]!["type"]!.GetValue<string>());
     }
     [Fact]
+    public async Task UpdateStartRefusalIsAVisibleNotice()
+    {
+        var api = new RoutingRemoteApi(); var previous = api.Handle;
+        api.Handle = r => r.Url.AbsolutePath == "/api/v1/host/updates/status" ? new(200, JsonSerializer.SerializeToElement(new { current = new { state = "interrupted", updateId = "u1" } })) : previous(r);
+        await using var h = await Enroll(api);
+        using var ready = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.ready" }); Assert.Equal(HttpStatusCode.Accepted, ready.StatusCode);
+        using var response = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.action", action = "updatesUpdate", args = new { } }); Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        JsonObject? snapshot = null;
+        for (var i = 0; i < 100 && snapshot?["state"]?["notice"] is null; i++) { await Task.Delay(50); snapshot = await h.Client.GetFromJsonAsync<JsonObject>("/v1/hosts/host.example_7462/snapshot"); }
+        Assert.Contains("already active or needs recovery", snapshot!["state"]!["notice"]!.ToJsonString());
+        Assert.DoesNotContain(api.Requests, r => r.Url.AbsolutePath == "/api/v1/host/updates/stage");
+    }
+    [Fact]
     public async Task RoleRefusalReclassifiesAndBlocksFurtherAdminMutation()
     {
         var api = new RoutingRemoteApi(); await using var h = await Enroll(api);
