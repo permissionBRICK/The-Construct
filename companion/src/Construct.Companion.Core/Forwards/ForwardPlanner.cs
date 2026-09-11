@@ -102,6 +102,24 @@ public static class ForwardPlanner
         return new() { ["mode"] = input.Str("mode") == "remote" ? "remote" : "local", ["owner"] = !input.False("owner"),
             ["items"] = List(items.OrderBy(i => Port(i["vmPort"]) ?? 0).ThenBy(i => i.Str("id"), StringComparer.Ordinal)) };
     }
+    public static JsonObject ToPanelForwards(JsonObject snapshot)
+    {
+        var remote = snapshot.Str("mode") == "remote";
+        var items = snapshot.Array("items");
+        var projected = new JsonArray();
+        foreach (var item in items.OfType<JsonObject>())
+        {
+            var output = new JsonObject { ["id"] = item.Str("id"), ["label"] = item.Str("label"),
+                ["target"] = item.Str("target") is { Length: > 0 } target ? target : "client",
+                ["status"] = item.Str("status") is { Length: > 0 } status ? status : "queued",
+                ["localPort"] = item["localPort"]?.DeepClone(), ["url"] = item.Str("url") is { Length: > 0 } url ? url : null,
+                ["message"] = item.Str("message"), ["closable"] = remote || !snapshot.False("owner") };
+            if (item.ContainsKey("vmPort")) output["vmPort"] = item["vmPort"]?.DeepClone();
+            if (item["child"] is JsonValue child && child.TryGetValue<string>(out var name) && name.Length > 0) output["child"] = name;
+            projected.Add(output);
+        }
+        return new() { ["mode"] = remote ? "remote" : "local", ["owner"] = !snapshot.False("owner"), ["visible"] = items.Count > 0 || remote, ["items"] = projected };
+    }
     private static JsonObject Item(JsonObject r, string target, bool owned) => new() { ["id"] = r.Str("id"), ["vmPort"] = r["vmPort"]?.DeepClone(),
         ["label"] = Sanitize(r.Str("label"), 100), ["target"] = target, ["status"] = "queued", ["localPort"] = null, ["url"] = null, ["message"] = "", ["owned"] = owned };
     private static void Open(JsonObject item, int port, string host)

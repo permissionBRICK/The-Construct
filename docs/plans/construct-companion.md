@@ -538,6 +538,11 @@ extension methods in their own files), `extension/extension.js` (S2a extension o
 - S1: the app scaffold uses a named quit event until S2 supplies authenticated HTTP quit/activation; secondary view launches currently exit 0 without opening a view (documented in `companion/README.md`).
 - S1: notify keeps `claim()` in `notify-claim-function.sh`, composed into both claim/watch templates through `{{claim}}`; C# callers render that shared function first, preserving the existing single-source composition and bytes.
 
+
+- S2a runtime: added runtime registry/probe, supervised-process, forward-transport, port-reservation/probe and audio-server seams in new Abstractions files; state normalization stays with S2a state, while S3 supplies the per-instance factories.
+
+- S2a runtime: replace a remote tunnel when its child destination changes; the service invalidates its ack, so re-acking the old address would preserve an incorrect route (Core/Forwards/Forwarder.cs).
+
 ## Integration notes (stage 1)
 
 - Merged `cc/s1-scaffold` (`91c8902`) into `cc/integ-1` from `feat/companion` (`4dbb0ea`) with `--no-ff`; no conflicts or skipped branches. No integration code changes or new design deviations.
