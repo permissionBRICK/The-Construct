@@ -50,3 +50,33 @@ public sealed class RefreshCacheTests
         await cache.GetJsonAsync(url); Assert.Equal(2,source.Requests.Count);
     }
 }
+public sealed class UpdateBannerStateTests
+{
+    // The panel reads update.available/behind and constructRev; both must survive the probe-driven rebuild of the state.
+    [Fact]
+    public async Task FoldedUpdateFieldsSurviveStateRebuilds()
+    {
+        var commit = new string('a', 40); var latest = new string('b', 40);
+        var source = new FakeUpdateSource();
+        source.Responses.Enqueue(new JsonObject { ["schemaVersion"] = 1, ["repository"] = "owner/repo", ["ref"] = "refs/heads/main", ["commit"] = latest, ["releaseTag"] = "host-" + latest,
+            ["sourceAsset"] = "construct-source-" + latest + ".zip", ["sourceSha256"] = new string('c', 64), ["sourceSizeBytes"] = 1024,
+            ["payloadAsset"] = "construct-host-" + latest[..7] + "-win-x64.zip", ["payloadSha256"] = new string('d', 64), ["payloadSizeBytes"] = 2048 });
+        await using var host = IpcServer.Build(s => { s.AddCompanionFakes(); s.AddSingleton<IUpdateSource>(source); s.AddCompanionHost(runtimeJobs:false); }, new(PublishEndpoint:false));
+        await host.StartAsync();
+        try
+        {
+            host.Services.GetRequiredService<IStateFileSystem>().WriteFileAtomic("/fake/scripts/.construct-settings.json",
+                System.Text.Encoding.UTF8.GetBytes("{\"installedCommit\":\"" + commit + "\",\"constructRef\":\"main\",\"constructRepo\":\"owner/repo\"}"));
+            var entry = host.Services.GetRequiredService<CompanionInstances>().Get("agent-vm");
+            ((FakeSshTransport)entry.Ssh).ScriptHandler = (_,_) => Task.FromResult(new ProcessResult(0,"{}"));
+            await host.Services.GetRequiredService<MessageDispatcher>().RefreshAsync(entry,CancellationToken.None,probe:false);
+            // The next probe publishes a bare state message; the aggregation rebuilds from it plus the stored enrichment.
+            host.Services.GetRequiredService<Host.Runtime.RuntimeMessageBus>().Publish("agent-vm", new { type = "state", instance = "agent-vm", state = new { online = true, vmState = "running" } });
+            var rebuilt = host.Services.GetRequiredService<StateAggregation>().State("agent-vm")["state"]!.AsObject();
+            Assert.True(rebuilt["update"]!["available"]!.GetValue<bool>());
+            Assert.Equal("", rebuilt["update"]!["behind"]!.GetValue<string>());
+            Assert.Equal("main@aaaaaaa", rebuilt["constructRev"]!.GetValue<string>());
+        }
+        finally { await host.StopAsync(); }
+    }
+}
