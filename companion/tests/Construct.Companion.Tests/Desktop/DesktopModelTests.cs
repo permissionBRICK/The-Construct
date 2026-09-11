@@ -83,6 +83,34 @@ public sealed class DesktopModelTests
         Assert.True(TrayModel.Appearance(new(new string('x', 100), true)).Tooltip.Length <= 63);
         Assert.Equal([16, 20, 24, 32], new[] { 96, 120, 144, 192 }.Select(TrayModel.IconSize));
     }
+    [Theory]
+    [InlineData(0, 0, "Construct: no VM configured")] [InlineData(0, 2, "All Construct VMs offline")]
+    [InlineData(1, 2, "1 Construct VM online")] [InlineData(2, 2, "2 Construct VMs online")]
+    public void TooltipCountsOnlineVmsOnly(int online, int total, string expected)
+    {
+        Assert.Equal(expected, TrayModel.Tooltip(online, total));
+        var appearance = TrayModel.Appearance(new("dev", true, Online: true, Mic: true, ForwardCount: 3, OnlineCount: online, InstanceCount: total));
+        Assert.Equal(expected, appearance.Tooltip);
+        Assert.DoesNotContain("mic", appearance.Tooltip); Assert.False(appearance.Mic);
+        var active = TrayModel.Appearance(new("dev", true, Online: true, OnlineCount: online, InstanceCount: total, MicActive: true));
+        Assert.Equal(expected + " · mic active", active.Tooltip); Assert.True(active.Mic);
+        Assert.Equal("dev · online", TrayModel.StatusLine(new("dev", true, Online: true, Mic: true)));
+    }
+    [Fact]
+    public void SnapshotCountsOnlineInstancesFromTheirStateMessages()
+    {
+        var snapshot = new DesktopSnapshot(new FakeClock()); snapshot.SetInstances(["a", "b"]); snapshot.Select("a", true);
+        snapshot.Apply(System.Text.Json.JsonSerializer.SerializeToElement(new { type = "state", state = new { instance = "a", online = true, vmState = "running" } }));
+        snapshot.ApplyOnline("b", true); snapshot.ApplyOnline("zzz", true);
+        Assert.Equal((2, 2), (snapshot.Current.OnlineCount, snapshot.Current.InstanceCount));
+        snapshot.SetInstances(["a"]); Assert.Equal((1, 1), (snapshot.Current.OnlineCount, snapshot.Current.InstanceCount));
+        // The passthrough session being enabled is not "mic active"; only a live capture is.
+        snapshot.Apply(System.Text.Json.JsonSerializer.SerializeToElement(new { type = "audio", instance = "a", enabled = true, capturing = false }));
+        Assert.False(snapshot.Current.MicActive);
+        snapshot.Apply(System.Text.Json.JsonSerializer.SerializeToElement(new { type = "audio", instance = "a", enabled = true, capturing = true }));
+        Assert.True(snapshot.Current.MicActive);
+        snapshot.ApplyMic("a", false); Assert.False(snapshot.Current.MicActive);
+    }
     [Fact]
     public void MenuGatesAndChecks()
     {

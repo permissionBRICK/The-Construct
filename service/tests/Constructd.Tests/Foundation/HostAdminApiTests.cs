@@ -172,7 +172,7 @@ public sealed class HostAdminApiTests
             var adminFiltered = await admin.GetFromJsonAsync<JsonElement>("/api/v1/vms?owner=bob");
             Assert.Equal("other-parent", Assert.Single(adminFiltered.EnumerateArray()).GetProperty("name").GetString());
             var owned = await owner.GetFromJsonAsync<JsonElement>("/api/v1/vms?kind=child");
-            Assert.Single(owned.EnumerateArray().Where(vm => vm.GetProperty("name").GetString() == "shared"));
+            Assert.Single(owned.EnumerateArray(), vm => vm.GetProperty("name").GetString() == "shared");
             Assert.Equal(HttpStatusCode.OK, (await admin.PutAsJsonAsync("/api/v1/host/config", new { network = new { hostForwardsEnabled = false, directAddressReporting = true } })).StatusCode);
             Assert.Equal(HttpStatusCode.Forbidden, (await guest.PostAsJsonAsync("/api/v1/vms/parent/forwards", new { vmPort = 8080, target = "host" })).StatusCode);
             Assert.Equal(HttpStatusCode.Created, (await guest.PostAsJsonAsync("/api/v1/vms/parent/forwards", new { vmPort = 8080, target = "client" })).StatusCode);

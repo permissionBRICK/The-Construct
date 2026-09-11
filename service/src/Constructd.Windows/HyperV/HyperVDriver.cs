@@ -39,8 +39,11 @@ public sealed class HypervisorOperationException(string operation, string vmName
 /// The service therefore shares one implementation with the local install instead of reimplementing
 /// Hyper-V against raw cmdlets — which is the whole point of the driver extraction (plan §4.2, B4).
 /// </summary>
-public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver
+public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver
 {
+    public async Task SetMemoryAsync(string name, int ramGb, CancellationToken ct) =>
+        await RunAsync("set-memory", name, HyperVScript.SetMemory(_options.ScriptsDir, name, ramGb), ShortTimeout, null, ct);
+
     public async Task SetCpuCountAsync(string name, int cpus, CancellationToken ct) =>
         await RunAsync("set-cpu", name, HyperVScript.SetCpuCount(_options.ScriptsDir, name, cpus), ShortTimeout, null, ct);
     /// <summary>Enough for a create with a fresh VHD, well short of leaving a hung process forever.</summary>

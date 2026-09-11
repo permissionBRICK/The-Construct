@@ -1,0 +1,371 @@
+[
+  {
+    "kind": "parse",
+    "output": null,
+    "stdout": ""
+  },
+  {
+    "kind": "parse",
+    "output": [],
+    "stdout": "END\n"
+  },
+  {
+    "kind": "parse",
+    "output": [
+      {
+        "branch": "main",
+        "name": "api",
+        "url": "https://example.test/api.git"
+      }
+    ],
+    "stdout": "api\thttps://example.test/api.git\tmain\nEND\n"
+  },
+  {
+    "kind": "parse",
+    "output": null,
+    "stdout": "api\t\tmain\n"
+  },
+  {
+    "kind": "parse",
+    "output": null,
+    "stdout": "a\tu\tb\nEND\r\n"
+  },
+  {
+    "existing": {},
+    "kind": "plan",
+    "options": {},
+    "output": {
+      "covered": [
+        "API",
+        "ui"
+      ],
+      "skipped": [
+        "local"
+      ],
+      "toWrite": [
+        {
+          "name": "api",
+          "profile": {
+            "hostPackages": [],
+            "mcp": [],
+            "name": "api",
+            "provisionCommands": [],
+            "repos": [
+              {
+                "directory": "api",
+                "url": "https://example.test/api.git"
+              }
+            ],
+            "sdks": {},
+            "tests": {}
+          }
+        }
+      ]
+    },
+    "scan": [
+      {
+        "branch": "main",
+        "name": "api",
+        "url": "https://example.test/api.git"
+      },
+      {
+        "branch": "main",
+        "name": "API",
+        "url": "ssh://example.test/other"
+      },
+      {
+        "branch": "main",
+        "name": "ui",
+        "url": "https://example.test/api.git"
+      },
+      {
+        "branch": "main",
+        "name": "local",
+        "url": ""
+      }
+    ]
+  },
+  {
+    "existing": {},
+    "kind": "plan",
+    "options": {
+      "ignoredNames": [
+        "api"
+      ]
+    },
+    "output": {
+      "covered": [],
+      "skipped": [
+        "api",
+        "API",
+        "local"
+      ],
+      "toWrite": [
+        {
+          "name": "ui",
+          "profile": {
+            "hostPackages": [],
+            "mcp": [],
+            "name": "ui",
+            "provisionCommands": [],
+            "repos": [
+              {
+                "directory": "ui",
+                "url": "https://example.test/api.git"
+              }
+            ],
+            "sdks": {},
+            "tests": {}
+          }
+        }
+      ]
+    },
+    "scan": [
+      {
+        "branch": "main",
+        "name": "api",
+        "url": "https://example.test/api.git"
+      },
+      {
+        "branch": "main",
+        "name": "API",
+        "url": "ssh://example.test/other"
+      },
+      {
+        "branch": "main",
+        "name": "ui",
+        "url": "https://example.test/api.git"
+      },
+      {
+        "branch": "main",
+        "name": "local",
+        "url": ""
+      }
+    ]
+  },
+  {
+    "existing": {},
+    "kind": "plan",
+    "options": {
+      "ignoredUrls": [
+        "https://example.test/api.git"
+      ]
+    },
+    "output": {
+      "covered": [],
+      "skipped": [
+        "api",
+        "ui",
+        "local"
+      ],
+      "toWrite": [
+        {
+          "name": "API",
+          "profile": {
+            "hostPackages": [],
+            "mcp": [],
+            "name": "API",
+            "provisionCommands": [],
+            "repos": [
+              {
+                "directory": "API",
+                "url": "ssh://example.test/other"
+              }
+            ],
+            "sdks": {},
+            "tests": {}
+          }
+        }
+      ]
+    },
+    "scan": [
+      {
+        "branch": "main",
+        "name": "api",
+        "url": "https://example.test/api.git"
+      },
+      {
+        "branch": "main",
+        "name": "API",
+        "url": "ssh://example.test/other"
+      },
+      {
+        "branch": "main",
+        "name": "ui",
+        "url": "https://example.test/api.git"
+      },
+      {
+        "branch": "main",
+        "name": "local",
+        "url": ""
+      }
+    ]
+  },
+  {
+    "existing": {
+      "api": {
+        "hostPackages": [],
+        "mcp": [],
+        "name": "api",
+        "provisionCommands": [],
+        "repos": [
+          {
+            "directory": "api",
+            "url": "https://example.test/api.git"
+          }
+        ],
+        "sdks": {},
+        "tests": {}
+      }
+    },
+    "kind": "plan",
+    "options": {},
+    "output": {
+      "covered": [
+        "api",
+        "API",
+        "ui"
+      ],
+      "skipped": [
+        "local"
+      ],
+      "toWrite": []
+    },
+    "scan": [
+      {
+        "branch": "main",
+        "name": "api",
+        "url": "https://example.test/api.git"
+      },
+      {
+        "branch": "main",
+        "name": "API",
+        "url": "ssh://example.test/other"
+      },
+      {
+        "branch": "main",
+        "name": "ui",
+        "url": "https://example.test/api.git"
+      },
+      {
+        "branch": "main",
+        "name": "local",
+        "url": ""
+      }
+    ]
+  },
+  {
+    "existing": {
+      "api": {
+        "hostPackages": [],
+        "mcp": [],
+        "name": "api",
+        "provisionCommands": [],
+        "repos": [
+          {
+            "directory": "api",
+            "url": "https://example.test/api.git"
+          }
+        ],
+        "sdks": {},
+        "tests": {}
+      }
+    },
+    "kind": "plan",
+    "options": {
+      "ignoredNames": [
+        "api"
+      ]
+    },
+    "output": {
+      "covered": [
+        "ui"
+      ],
+      "skipped": [
+        "api",
+        "API",
+        "local"
+      ],
+      "toWrite": []
+    },
+    "scan": [
+      {
+        "branch": "main",
+        "name": "api",
+        "url": "https://example.test/api.git"
+      },
+      {
+        "branch": "main",
+        "name": "API",
+        "url": "ssh://example.test/other"
+      },
+      {
+        "branch": "main",
+        "name": "ui",
+        "url": "https://example.test/api.git"
+      },
+      {
+        "branch": "main",
+        "name": "local",
+        "url": ""
+      }
+    ]
+  },
+  {
+    "existing": {
+      "api": {
+        "hostPackages": [],
+        "mcp": [],
+        "name": "api",
+        "provisionCommands": [],
+        "repos": [
+          {
+            "directory": "api",
+            "url": "https://example.test/api.git"
+          }
+        ],
+        "sdks": {},
+        "tests": {}
+      }
+    },
+    "kind": "plan",
+    "options": {
+      "ignoredUrls": [
+        "https://example.test/api.git"
+      ]
+    },
+    "output": {
+      "covered": [
+        "API"
+      ],
+      "skipped": [
+        "api",
+        "ui",
+        "local"
+      ],
+      "toWrite": []
+    },
+    "scan": [
+      {
+        "branch": "main",
+        "name": "api",
+        "url": "https://example.test/api.git"
+      },
+      {
+        "branch": "main",
+        "name": "API",
+        "url": "ssh://example.test/other"
+      },
+      {
+        "branch": "main",
+        "name": "ui",
+        "url": "https://example.test/api.git"
+      },
+      {
+        "branch": "main",
+        "name": "local",
+        "url": ""
+      }
+    ]
+  }
+]

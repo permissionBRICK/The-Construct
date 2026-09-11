@@ -37,7 +37,7 @@ public static class WebViewDocument
         {
             ["cspSource"] = Origin, ["nonce"] = nonce, ["styleUri"] = Origin + "/panel.css",
             ["themeUri"] = Origin + "/" + ThemeCss(theme), ["scriptUri"] = Origin + "/" + script,
-            ["adminStyleUri"] = Origin + "/hostadmin.css"
+            ["adminStyleUri"] = Origin + "/hostadmin.css", ["paletteUri"] = Origin + "/palette.js"
         };
         return Regex.Replace(template, @"\{\{(\w+)\}\}", m => substitutions.TryGetValue(m.Groups[1].Value, out var value) ? value : m.Value);
     }

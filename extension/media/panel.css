@@ -1,4 +1,6 @@
 :root {
+  color-scheme: dark;
+  --construct-native-palette: 0;
   --void: #010503;
   --ground: #04120a;
   --ground-2: #020a06;
@@ -246,7 +248,7 @@ h1.title {
 .field .hint { display: block; color: var(--faint); font-size: 10.5px; margin-top: 2px; }
 .field .ctl { display: flex; align-items: center; gap: 10px; }
 input[type=text], input[type=password], input[type=number], select {
-  font-family: var(--mono); font-size: 12.5px; color: var(--title); background: rgba(0,0,0,0.45);
+  font-family: var(--mono); font-size: 12.5px; color: var(--vscode-input-foreground, var(--title)); background: var(--vscode-input-background, var(--void));
   border: 1px solid var(--line); border-radius: 5px; padding: 7px 10px; width: 100%; max-width: 280px;
 }
 input:focus, select:focus { outline: none; border-color: var(--rain); box-shadow: 0 0 0 1px rgba(0,255,102,0.3); }
@@ -288,7 +290,7 @@ input:focus, select:focus { outline: none; border-color: var(--rain); box-shadow
 .pm-del { font-family: var(--mono); font-size: 17px; line-height: 1; color: var(--dim); background: transparent; border: 1px solid var(--line); border-radius: 5px; padding: 4px 9px; cursor: pointer; }
 .pm-del:hover { color: var(--crit); border-color: rgba(255,93,93,0.5); }
 .pm-del:focus-visible { outline: 2px solid var(--rain); outline-offset: 2px; }
-.pm-ta { font-family: var(--sans); font-size: 12.5px; color: var(--title); background: rgba(0,0,0,0.45); border: 1px solid var(--line); border-radius: 5px; padding: 8px 10px; width: 100%; resize: vertical; }
+.pm-ta { font-family: var(--sans); font-size: 12.5px; color: var(--vscode-input-foreground, var(--title)); background: var(--vscode-input-background, var(--void)); border: 1px solid var(--line); border-radius: 5px; padding: 8px 10px; width: 100%; resize: vertical; }
 .pm-ta.mono { font-family: var(--mono); }
 .pm-ta:focus { outline: none; border-color: var(--rain); box-shadow: 0 0 0 1px rgba(0,255,102,0.3); }
 .pm-err { margin-top: 6px; font-size: 11px; color: var(--crit); }
@@ -489,3 +491,15 @@ body.launcher { font-size: 12px; }
 .child-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .child-actions button { white-space: nowrap; padding: 6px 8px; }
 #childrenModule .mhead { flex-wrap: wrap; gap: 6px 12px; }
+
+/* Native controls need opaque foreground/background pairs, including popup options. */
+input[type=text], input[type=password], input[type=number], textarea {
+  color: var(--vscode-input-foreground, var(--text));
+  background-color: var(--vscode-input-background, var(--void));
+  border-color: var(--vscode-input-border, var(--line-strong));
+}
+select, select[class], select[class]:hover, option {
+  color: var(--vscode-dropdown-foreground, var(--text));
+  background-color: var(--vscode-dropdown-background, var(--void));
+  border-color: var(--vscode-dropdown-border, var(--line-strong));
+}
