@@ -602,5 +602,20 @@
       ]
     },
     "script": "C:/it's here/script.ps1"
+  },
+  {
+    "kind": "installGit",
+    "output": {
+      "command": "winget install --id Git.Git -e --source winget",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-EncodedCommand",
+        "dwBpAG4AZwBlAHQAIABpAG4AcwB0AGEAbABsACAALQAtAGkAZAAgAEcAaQB0AC4ARwBpAHQAIAAtAGUAIAAtAC0AcwBvAHUAcgBjAGUAIAB3AGkAbgBnAGUAdAA="
+      ]
+    }
   }
 ]

@@ -13,6 +13,8 @@ public sealed record HostLaunch(string File, string[] SpawnArgs, string Command)
 }
 public static class PowerShellLaunch
 {
+    public static HostLaunch BuildInstallGitLaunch() => new("cmd.exe", ["/c", "start", "", "powershell.exe", "-EncodedCommand", Encode("winget install --id Git.Git -e --source winget")], "winget install --id Git.Git -e --source winget");
+
     public static string SingleQuote(string value) => "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
     public static string WinQuoteArg(string arg)
     {
