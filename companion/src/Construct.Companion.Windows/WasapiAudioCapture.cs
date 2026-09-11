@@ -26,26 +26,58 @@ public sealed class WasapiAudioCapture : IAudioCapture
         using var enumerator = new MMDeviceEnumerator();
         using var device = string.IsNullOrEmpty(deviceId) ? enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Console) : enumerator.GetDevice(deviceId);
         using var capture = new WasapiCapture(device);
-        var input = new BufferedWaveProvider(capture.WaveFormat) { ReadFully = false, BufferDuration = TimeSpan.FromSeconds(2) };
-        using var resampler = new MediaFoundationResampler(input, new WaveFormat(16000, 16, 1)) { ResamplerQuality = 60 };
-        var output = Channel.CreateBounded<ReadOnlyMemory<byte>>(new BoundedChannelOptions(64) { FullMode = BoundedChannelFullMode.Wait, SingleReader = true });
-        var buffer = new byte[3200];
+        // Keep the MFT stream open between callbacks. A temporary empty queue must
+        // block rather than return zero (which means end-of-stream to the resampler).
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var input = Channel.CreateBounded<byte[]>(64);
+        var output = Channel.CreateBounded<ReadOnlyMemory<byte>>(64);
         capture.DataAvailable += (_, args) =>
+        {
+            if (args.BytesRecorded==0) return;
+            if (!input.Writer.TryWrite(args.Buffer.AsSpan(0,args.BytesRecorded).ToArray()))
+                input.Writer.TryComplete(new IOException("Audio capture queue filled."));
+        };
+        capture.RecordingStopped += (_, args) =>
+        { input.Writer.TryComplete(args.Exception is null ? null : new IOException("Audio capture stopped.")); };
+        var conversion = Task.Run(() =>
         {
             try
             {
-                input.AddSamples(args.Buffer, 0, args.BytesRecorded);
-                int read;
-                while ((read = resampler.Read(buffer, 0, buffer.Length)) > 0)
-                    if (!output.Writer.TryWrite(buffer.AsMemory(0, read).ToArray()))
-                    { output.Writer.TryComplete(new IOException("Audio consumer fell behind.")); break; }
+                using var resampler = new MediaFoundationResampler(new CaptureInput(input.Reader,capture.WaveFormat,stop.Token),new WaveFormat(16000,16,1)) { ResamplerQuality=60 };
+                var buffer = new byte[3200]; int read;
+                while ((read=resampler.Read(buffer,0,buffer.Length))>0)
+                    if (!output.Writer.TryWrite(buffer.AsMemory(0,read).ToArray())) throw new IOException("Audio consumer fell behind.");
+                output.Writer.TryComplete();
             }
+            catch (OperationCanceledException) { output.Writer.TryComplete(); }
             catch (Exception) { output.Writer.TryComplete(new IOException("Audio conversion failed.")); }
-        };
-        var stopped = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        capture.RecordingStopped += (_, args) => { output.Writer.TryComplete(args.Exception is null ? null : new IOException("Audio capture stopped.")); stopped.TrySetResult(); };
-        capture.StartRecording();
-        try { await foreach (var frame in output.Reader.ReadAllAsync(cancellationToken)) yield return frame; }
-        finally { capture.StopRecording(); await stopped.Task; }
+        },CancellationToken.None);
+        try
+        {
+            capture.StartRecording();
+            await foreach (var frame in output.Reader.ReadAllAsync(cancellationToken)) yield return frame;
+        }
+        finally
+        {
+            capture.StopRecording(); stop.Cancel(); input.Writer.TryComplete(); await conversion;
+            // NAudio Dispose joins the recording worker and releases COM.
+        }
+    }
+    private sealed class CaptureInput(ChannelReader<byte[]> input,WaveFormat format,CancellationToken cancellationToken) : IWaveProvider
+    {
+        private byte[]? current;
+        private int position;
+        public WaveFormat WaveFormat => format;
+        public int Read(byte[] buffer,int offset,int count)
+        {
+            if (count==0) return 0;
+            if (current is null || position==current.Length)
+            {
+                try { current=input.ReadAsync(cancellationToken).AsTask().GetAwaiter().GetResult(); position=0; }
+                catch (ChannelClosedException) { return 0; }
+            }
+            var copied=Math.Min(count,current.Length-position);
+            current.AsSpan(position,copied).CopyTo(buffer.AsSpan(offset,copied)); position+=copied; return copied;
+        }
     }
 }

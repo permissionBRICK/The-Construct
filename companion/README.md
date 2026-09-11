@@ -1,9 +1,9 @@
 # Construct Companion
 
-Per-user Windows host agent: S1 scaffold plus the S2a state, runtime and config-sync
-packages, with the extension client in `extension/src/companion.js`. The frozen design
-is [construct-companion.md](../docs/plans/construct-companion.md). HTTP IPC, Windows
-platform adapters, and webview dispatch remain with subsequent work packages.
+Per-user Windows host agent with the S2a state/runtime/config-sync packages and S2b
+Windows services and tray/WebView2 application. The frozen design is
+[construct-companion.md](../docs/plans/construct-companion.md). The parallel S2b IPC
+package owns the full HTTP server and dispatcher; S3 connects it to this application.
 
 ## Layout
 
@@ -11,23 +11,51 @@ platform adapters, and webview dispatch remain with subsequent work packages.
 |---|---|
 | `src/Construct.Companion.Core` | Package-free interfaces and runtime logic, IPC records, command-line grammar, shared scripts, planners and argv builders |
 | `src/Construct.Companion.Host` | Process/socket adapters, instance supervision, outbound message bus and config-sync Git transactions; references `Microsoft.AspNetCore.App` |
-| `src/Construct.Companion.Windows` | `net10.0` Windows adapters; currently single-instance/quit signaling and icon handle cleanup |
+| `src/Construct.Companion.Windows` | `net10.0` DPAPI, CIM, WASAPI, WinRT toast, HKCU, detached launch and native UI adapters |
 | `src/Construct.Companion` | `net10.0-windows10.0.17763.0` WinForms WinExe, self-contained `win-x64`, WebView2, linked `extension/media/**` |
 | `src/Construct.Companion.Fakes` | In-memory implementation of every Core seam; recording processes and scripted guest spool |
 | `tests/Construct.Companion.Tests` | Linux xUnit tests and shared golden-fixture consumers |
 
-The executable is `ConstructCompanion.exe`. It currently shows a grey question-mark tray
-icon with no registered instance and a Quit menu. `--version` prints the assembly version;
-`--quit` signals the running scaffold (or exits successfully if absent). `--selftest`
-(and `--selftest --json`) prints nine checks as `not implemented`, with `ok:false` and exit 1.
-All section 6 options are parsed and combinable; view activation and registry validation
-of URI query values belong to S2. The default instance is not inferred by the parser.
+The executable is `ConstructCompanion.exe`. It has DPI-aware state/update icons, the
+tray popup and context menu, reusable panel/settings/host-admin/design windows, and
+native dialogs. `--settings` clicks the existing panel settings control; the settings
+window also offers design and microphone-device pickers. Every WebView2 instance is
+kept alive when hidden, including the popup. Bounds persist in `settings.json`.
 
-The scaffold uses `Local\ConstructCompanion` for its mutex and a temporary named event
-for quit. A second launch exits 0. HTTP activation forwarding and `/v1/quit` are pending
-S2 IPC/app integration. The app entry point does not yet create endpoint files, listeners,
-tunnels, registrations, or runtime timers. The Host project is currently a library; its fake-mode
-console entry belongs with the runtime/IPC composition root.
+All section 6 command-line options are combinable. URI instance/host query values
+are checked against the registry, and forward IDs use the shared forward guard.
+`--version` prints the assembly version. `--selftest [--json] [--instance name]` runs
+without WinForms, settings writes, endpoint publication, tunnels, capture or acks;
+it prints JSON and exits 0 when required local checks pass (1 otherwise, 2 for invalid
+arguments). Offline VM probes are informational. Uninstalled hosts with no instances
+or toast registration can pass; an installed build requires its toast identity.
+
+The standalone S2b entry point deliberately has no runtime composition. Its bridge
+answers readiness and explicitly refuses runtime commands. It publishes only private
+`companion/ui-endpoint.json` for authenticated HTTP activation and quit, leaving the
+extension's runtime fallback active. The mutex is `Local\ConstructCompanion`; there
+is no named quit event. Secondary processes validate the health PID/start time and
+hand off all requested views through `/v1/ui/activate`, or quit through `/v1/quit`.
+The private endpoint is removed when its listener exits. The full S3 IPC host uses
+the frozen `endpoint.json` path; the secondary client can discover either endpoint.
+
+S3 composition hooks:
+
+- Inject `IMessageSink` into `TrayContext`/`WebViewWindow`. `InProcessMessageSink`
+  adapts a dispatcher delegate and `RuntimeMessageBus`; windows subscribe before
+  posting `ready`. Host-admin uses scope `host:<slug>` and `hostadmin.ready`.
+- Supply `TrayContext.Prompts` as `IPrompts` and `TrayContext` as `IUiActivation` to
+  the full host. Replace the bootstrap sink/server in `Program` with that host,
+  including runtime cleanup before process exit.
+- Use the same `SettingsStore` instance for IPC settings and desktop preferences.
+  Bind settings changes into the runtime, enrich host discovery with the full
+  enrolled-host catalog, and supply the remote-state delegate to
+  `DesktopSelfTestPlatform` (local CIM/Get-VM and SSH checks already run).
+
+The current host list is derived from registered instances. The bootstrap cannot
+administer an enrolled remote host with no registry instance. Remote selftest state
+is `unknown` until S3 supplies the existing remote-client adapter. These are
+composition dependencies, not claims that runtime jobs work in the standalone app.
 
 ## Layering rules
 
@@ -127,10 +155,12 @@ renders it; its former assertion searched the JavaScript builder's internal sour
 
 ## Unsupported messages
 
-Placeholder for the S2/S3 dispatcher message matrix. All webview messages and command IDs
-are currently unsupported because S1 has no dispatcher, webview windows, or HTTP listener.
-S2/S3 must implement each protocol entry or list its reason here and return the panel's
-existing refusal message; messages must never be silently ignored by an active dispatcher.
+The standalone S2b app handles `openPanel`, `setInstance`, `pickTheme`, and local
+`command` IDs `chooseTheme`, `chooseMicDevice`, `showLogs`, `openHostAdmin`. It
+answers `ready` / `hostadmin.ready` with an offline/unavailable state. All remaining
+runtime messages/commands are forwarded unchanged through `IMessageSink`; without
+the S3 dispatcher binding they receive `lifecyclePrepared` plus an explicit desktop
+refusal. The full dispatcher message matrix belongs to S2b IPC/S3.
 
 ## S2a state
 
@@ -172,7 +202,7 @@ runtimes, serialized registry reconciliation, and the outbound message bus. Core
 only injected effect seams. Host contains the process/socket adapters; Fakes contains
 scriptable implementations. `AddRuntime()` registers the host adapters, process-wide
 port reservations, claim ID, message bus and shared capture. Register `IAudioCapture`
-before resolving capture (the Windows implementation belongs to S2b app).
+before resolving capture (the Windows implementation is WasapiAudioCapture).
 
 Integration supplies `IRuntimeProbe` (the state package's full probe result), normalized
 `RuntimeInstance` records through `IRuntimeRegistry`, and the per-instance factories.
@@ -226,7 +256,7 @@ provides the history-based suppression set for discovery.
 Supply `IClock`, `IPrompts`, and `IClipboard` from host/app composition. Publish picker
 items carry `Disabled` and `Separator`, and pickers carry `Placeholder`; the dialog adapter
 must honor them. Action results carry display messages and warnings for the UI. Windows
-clipboard/dialog implementations and dispatcher wiring belong to S2b/S3. No Windows runtime
+clipboard implementation and dispatcher wiring belong to S3; WinForms dialogs are supplied by S2b. No Windows runtime
 validation has been performed. Real-Git config-sync tests run on Linux and require `git`,
 `bash`, `printf`, and `sleep` on PATH; each uses and deletes its own temporary repositories.
 
@@ -257,6 +287,15 @@ escaping covered by `desktop-webviews.json` golden fixtures.
 Windows field checks still required: the app TFM and the Windows project reference
 SDK projection 10.0.17763.57; verify that published `Microsoft.Windows.SDK.NET.dll`
 and `WinRT.Runtime.dll` load together and that the toast selftest runs. WASAPI's
-MediaFoundation resampler currently drains on each capture chunk (`ReadFully=false`);
-recording continuity and chunk-boundary glitches require a real device test. VS Code's
+MediaFoundation resampler consumes a continuous, bounded capture queue so pauses
+between callbacks do not signal end-of-stream. Recording continuity and actual
+device formats still require a real device test. VS Code's
 `code.cmd` ShellExecute launch may briefly display a console. No Windows run is claimed.
+
+
+S2b validation on Linux: build gate 0 warnings/0 errors; all Node suites and
+service tests passed (31 suite files and 1,261 tests). The relay command
+`dotnet --list-sdks` did not answer within ten minutes despite `--timeout 300`;
+its client was cancelled and reaped. No Windows compilation or selftest ran.
+The Windows field checklist still includes WebView2 focus/placement, console
+handoff/output, actual microphone sample continuity, and toast projection loading.

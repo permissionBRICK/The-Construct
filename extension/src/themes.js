@@ -13,23 +13,7 @@
  * Pure module: no vscode dependency, so it is unit-testable in plain node.
  */
 
-const THEMES = [
-  {
-    id: "classic",
-    label: "Classic Matrix",
-    blurb: "The original green operator console — rain, glow and all.",
-  },
-  {
-    id: "terminal",
-    label: "Terminal, Refined",
-    blurb: "The Matrix identity with discipline: a real phosphor scale, glow reserved for live things.",
-  },
-  {
-    id: "native",
-    label: "VS Code Native",
-    blurb: "Looks like a built-in VS Code panel and follows your editor theme, light or dark.",
-  },
-];
+const THEMES = require("../media/theme-cards.json");
 
 /** The design used when nothing was chosen yet: VS Code Native, so a fresh
  *  install looks like a built-in panel and follows the user's editor theme. */

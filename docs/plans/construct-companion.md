@@ -534,6 +534,8 @@ extension methods in their own files), `extension/extension.js` (S2a extension o
 ## Deviations
 
 (Recorded by implementers; one line each: what, why, where.)
+- S2b app: standalone UI activation uses private `ui-endpoint.json` until S3 binds the full IPC host; publishing `endpoint.json` earlier would incorrectly disable the extension runtime fallback. The bootstrap explicitly refuses runtime commands; remote-state/catalog/settings runtime binding are S3 composition hooks in companion/README.md.
+- S2b app: headless SSH changes the shared builder's StrictHostKeyChecking=accept-new to yes so selftest cannot write known_hosts; native design colors come from WinForms system colors, and shared theme-card metadata lives in media/theme-cards.json.
 - S2b app: adds IMessageSink (host-admin scope `host:<slug>`), native data-protection/CIM/detached-process and UI/selftest seams in new Abstractions files; Windows stays net10.0 using explicit SDK projection references for in-process WinRT.
 - S2b app: extracts themes.js picker template into shared media/theme-picker.html, retaining byte-identical JS output with golden fixtures; CIM maps EnabledState (EnabledStateDetail is not defined by the documented v2 schema); the existing VmPower.QueryLocalAsync owns the single Get-VM fallback.
 - S2a state: adds `IStateFileSystem` (extends `IFileSystem`) for marker timestamps, directory existence and atomic create-if-absent profile writes; these host.js requirements cannot be expressed by the S1 seam.
