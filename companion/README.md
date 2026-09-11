@@ -133,21 +133,17 @@ the same non-blocking, opt-out-aware hook. Installation always targets the clien
 
 The dispatcher implements all top-level panel message types. Unknown types/commands
 return `{type:"lifecyclePrepared", id, error}`; both shared webviews display `error`.
-These specific workflows remain explicit refusals:
+No known panel or host-administration workflow remains unsupported. These legacy input differences are intentional:
 
 | Command | Reason / alternative |
 |---|---|
-| `convertToHost` | Initiation depends on the attached VM identity; pending VS Code conversions keep their RSA private key in that VS Code profile's SecretStorage. Companion shows pending status and never finishes it automatically. Review/finish in that profile. |
-| `createFirstVm` | The service-backed creation wizard is not exposed. Use New Remote VM in VS Code. |
-| `hostadmin.action: issueToken`, `rotateVmToken` | `IPrompts` has no one-time secret display operation. Refused before requesting any new token; use the host CLI. |
-| `hostadmin.action: createFirstVm` | Same missing creation wizard as the panel command above. |
 | Lifecycle import malformed legacy names | Scanned profiles use the strict profile validation gate; invalid/reserved names are reported as failed writes before the continue-anyway prompt. |
 | `saveProject` malformed legacy values | Uses the strict validation and canonicalization gate rather than the extension modal's legacy schema coercion. Invalid or reserved profiles are refused before writing. |
 
 Other panel command IDs are routed in `Host/Dispatch/MessageDispatcher.cs`; host-admin
 messages/actions are routed in `Host/Dispatch/HostAdministration.cs`. Bad names, form
 values and routes return RFC 7807 problems. Host-admin refusals also publish a visible
-`state.notice`; ordinary unsupported panel operations publish the visible error above.
+`state.notice`; unknown panel operations publish the visible error above.
 
 
 ## Message matrix
@@ -183,8 +179,8 @@ views and runtime messages use IPC). The limitations of the implemented rows are
 | command | `chooseTheme` | implemented |
 | command | `closeForward` | implemented |
 | command | `connect` | implemented |
-| command | `convertToHost` | unsupported: Review and explicitly finish in the originating VS Code profile. |
-| command | `createFirstVm` | unsupported: Use the VS Code remote VM creation wizard. |
+| command | `convertToHost` | implemented |
+| command | `createFirstVm` | implemented |
 | command | `deleteProject` | implemented |
 | command | `editProject` | implemented |
 | command | `exportConfig` | implemented |

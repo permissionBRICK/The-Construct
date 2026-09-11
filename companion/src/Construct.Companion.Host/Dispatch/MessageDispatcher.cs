@@ -21,7 +21,7 @@ namespace Construct.Companion.Host.Dispatch;
 // come from the desktop prompts, whichever client sent the message.
 public sealed partial class MessageDispatcher(CompanionInstances instances, StateAggregation state, IpcSettings settings,
     IpcEvents events, IpcLogs logs, IStateFileSystem files, IPrompts prompts, ILauncher launcher,
-    ICompanionDesktop desktop, IClock clock, HostAdministration hosts, CachedUpdateSource updates, IAudioCapture capture)
+    ICompanionDesktop desktop, IClock clock, HostAdministration hosts, CachedUpdateSource updates, IAudioCapture capture, HostConversionWorkflow conversion)
 {
     public async Task DispatchAsync(string name, JsonObject message, CancellationToken ct)
     {
@@ -149,12 +149,11 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
             case "syncConfigNow": case "addConfigRemote": case "removeConfigRemote": case "importRemoteConfigs": case "shareConfigs": case "pushConfigUpstream": case "publishConfigProfiles": case "addRemoteAndPublish": case "openConfigRepo":
                 await ConfigCommand(entry, id, m, ct); break;
             case "installGit": await launcher.StartDetachedAsync(PowerShellLaunch.BuildInstallGitLaunch().Invocation(), ct); break;
-            // Documented unsupported workflows (companion/README.md): refused visibly, never ignored.
             case "registerThisVm": await RegisterThisVm(ct); break;
             case "addProject": await AddProject(entry, ct); break;
             case "removeInstance": await RemoveInstance(entry, ct); break;
-            case "convertToHost": Refuse(name, id, "Host conversion requires the attached VM identity and explicit finish workflow. Review or finish it in VS Code; Companion never finishes a pending conversion automatically."); break;
-            case "createFirstVm": Refuse(name, id, "The remote VM creation wizard is not yet ported. Use New Remote VM in VS Code."); break;
+            case "convertToHost": try { await conversion.RunAsync(entry, ct); } finally { state.PublishSnapshot(name); events.Message(name, new { type = "lifecyclePrepared", id }); } break;
+            case "createFirstVm": await hosts.CreateFirstVmAsync(null, ct); break;
             case "updateConstruct": await UpdateConstruct(entry, ct); break;
             default: Refuse(name, id, "This command is not supported by Construct Companion."); break;
         }

@@ -5,7 +5,7 @@ Windows app to the real IPC dispatcher and per-instance runtimes, including the 
 install offer and local/remote/reprovision hooks. Linux build and fake-mode integration
 are verified below. Native Windows build/selftest and field operation remain pending:
 the relay answered SDK queries, but source transfer failed; no executable ran there.
-Explicit unsupported workflows remain in companion/README.md.
+S5 implements the remaining workflows; intentional legacy input differences are recorded in companion/README.md.
 
 Author: Fable (design). Implementers: see [Work packages](#13-work-packages).
 
@@ -565,6 +565,15 @@ for regression suite results, retries, unsupported workflows and Windows limitat
 
 ## Deviations
 
+- S5 creation: Companion delegates POST /vms, job and SSH waits, registry/spec persistence and provisioning to the same non-elevated Auto-Install.ps1 flow as runNewRemoteVm; a supported -Projects parameter receives the native profile selection, including an explicit empty selection.
+
+- S5 registration: Companion asks for the SSH host before the instance name because it has no attached Remote-SSH window; canonical local identity checks and registry writes match `instances.js`.
+- S5 project cloning: credential-bearing Git URLs are refused and remote Git stderr is omitted to keep credentials out of process arguments and notifications; the clone script and successful open path match the extension.
+- S5 removal: the requested Keep VM choice passes the installer’s existing `-KeepVm` flag; the current VS Code command offers deletion only for remote instances.
+- S5 conversion: the RSA private key uses the existing per-user DPAPI token-store seam instead of VS Code SecretStorage; a conversion started in VS Code must be finished in that original VS Code profile.
+- S5 conversion launch: the detached elevation observer writes a failed result when UAC is cancelled or the installer exits without a result, so the native poller can report the failure.
+- S5 completion supersedes the historical S2/S3 unsupported-workflow notes in this document: registration, removal, cloning, conversion, remote creation, resources, checkpoints, preflight and one-time token display are now implemented; native Windows runtime validation remains outstanding.
+
 - merge of main 2026-09-11: manifest-based updates, composed T3 pairing and forward readiness, guest consoles, shared inventory and CPU administration parity; Companion regressions moved to local checks, release stays separate; console failures deliberately omit raw SSH stderr/exception text to protect ticket credentials, while retaining distinct safe failure reasons.
 
 - S4 cleanup: `ConfigSyncRules.IsSafeProfileName` now shares `HostState.SafeProfileName` (the `configsync.js` formulation, ECMAScript `trim`), so edge U+0085 is accepted and edge U+FEFF rejected exactly as in JS; the `config-sync` fixture gained those cases (Core/ConfigSync/ConfigSyncRules.cs).
@@ -665,7 +674,3 @@ for regression suite results, retries, unsupported workflows and Windows limitat
 - Existing defects remain: `contracts-compile.test.sh` 4/5 (`HypervisorVmInfo` frozen signature mismatch); `idle-report.test.sh` 100/103 (service-key count, URL and instance assertions). Tests, service, contract document and guest code are unchanged by the merge; failures match stage 4 and earlier baseline evidence. The existing service xUnit2029 analyzer warning also remains. No merge-induced regression was found.
 - Regenerated 4,466 parity rows across 31 areas with zero fixture drift. All .NET build/test invocations were serial, including those inside Bash suites. No existing VM service was stopped or restarted. No Windows build, selftest, installation, registration or native runtime/UI execution was performed.
 - Inherited unsupported workflows remain documented in `companion/README.md`: attached-window registration/conversion, project creation, instance removal, first-VM wizard, install-wide update orchestration, one-time token display, automatic checkpoint apply, lifecycle preflight/live-project fallback and result monitoring. These exceed a few-line merge repair; Linux validation does not claim completion. Native Windows field validation remains pending.
-
-- S5 registration: Companion asks for the SSH host before the instance name because it has no attached Remote-SSH window; canonical local identity checks and registry writes match `instances.js`.
-- S5 project cloning: credential-bearing Git URLs are refused and remote Git stderr is omitted to keep credentials out of process arguments and notifications; the clone script and successful open path match the extension.
-- S5 removal: the requested Keep VM choice passes the installer’s existing `-KeepVm` flag; the current VS Code command offers deletion only for remote instances.

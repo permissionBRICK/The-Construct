@@ -19,9 +19,10 @@ public sealed class StateAggregation(CompanionInstances instances, RuntimeMessag
         var data = (probe["state"] as JsonObject ?? probe).DeepClone().AsObject(); data.Remove("type");
         foreach (var (key, value) in entry.Enrichment) data[key] = value?.DeepClone();
         data["instance"] = name; data["backend"] = entry.Definition["backend"]?.DeepClone(); data["connected"] = false; data["connectedInstance"] = null;
-        data["companion"] = true; data["canConvertHost"] = false;
+        data["companion"] = true; data["canConvertHost"] = StateJson.Text(entry.Definition["backend"]) == "hyperv-local";
         var pending = StateJson.ReadObject(files, HostConversion.PendingPath(instances.Host.LocalAppData));
         var resultPath = StateJson.Text(pending?["resultPath"]);
+        if (StateJson.Text(pending?["name"]) == name) data["canConvertHost"] = true;
         data["hostConversionStatus"] = HostConversion.PendingStatus(name, pending, resultPath is null ? null : StateJson.ReadObject(files, resultPath));
         var names = instances.Names;
         if (names.Length > 1) data["instances"] = JsonSerializer.SerializeToNode(names); else data.Remove("instances");

@@ -54,7 +54,7 @@ public sealed partial class MessageDispatcher
     }
     private async Task AddProject(CompanionInstance entry, CancellationToken ct)
     {
-        var url = (await prompts.InputAsync(new("Add project — clone a git repo onto the Construct VM", "Git URL to clone into /root/repos on the VM"), ct))?.Trim();
+        var url = (await prompts.InputAsync(new("Add project — clone a git repo onto the Construct VM", "Git URL to clone into /root/repos on the VM", Placeholder: "https://github.com/owner/repo.git"), ct))?.Trim();
         if (string.IsNullOrEmpty(url)) return;
         if (!InstanceWorkflowPlans.IsGitUrl(url)) { Notify("Enter an https://, ssh:// or git@host:path git URL.", "warning"); return; }
         // A URL credential would become process argv inside the SSH script. Use the guest's Git credential helper.

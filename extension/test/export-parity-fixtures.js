@@ -487,6 +487,33 @@ function instanceWorkflows() {
   for (const url of ["", "https://host/a.git", "git@host:project.git", "ssh://host/a.GIT/", " https://host/a.git?q=1#x ", "nope", "https://a b", "git@host:.."]) rows.push({kind:"git",url,valid:remote.isLikelyGitUrl(url),name:remote.repoNameFromUrl(url)});
   return rows;
 }
+function hostConversionLaunches() {
+  const m=require("../src/hostconversion"), rows=[];
+  const source=fs.readFileSync(path.join(__dirname,"../src/hostconversion.js"),"utf8");
+  const identity=source.match(/const pc = JSON.parse\(await powershell\(`([^`]+)`\)\);/)[1];
+  rows.push({kind:"identity",output:["-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-EncodedCommand",Buffer.from("$u=New-Object Text.UTF8Encoding($false); [Console]::OutputEncoding=$u; [Console]::InputEncoding=$u; "+identity,"utf16le").toString("base64")]});
+  for (const input of [null,"host.example","HOST","192.168.1.2","a..b","a'b","a".repeat(254)]) rows.push({kind:"host",input,output:m.validHost(input)});
+  for (const directory of ["C:/Construct", "C:/Users/O'Neil/构建"]) {
+    const plan=sortKeys({id:"0123456789abcdef0123456789abcdef",name:"work-vm",scriptsDir:directory,adminUser:"PC\\owner",publicHost:"host.example",resultPath:"C:/temp/conversion.result",publicKeyXml:"<RSAKeyValue/>"});
+    rows.push({kind:"launch",plan,output:m.launchScript(plan)});
+  }
+  return rows;
+}
+function remoteVmLaunches() {
+  const lifecycle=require("../src/lifecycle"), vm=require("vm");
+  const source=fs.readFileSync(path.join(__dirname,"../extension.js"),"utf8");
+  const start=source.indexOf("  const argSpec = [",source.indexOf("async function runNewRemoteVm"));
+  const builder=source.slice(start,source.indexOf("  lifecycle.launchHostScript",start));
+  const rows=[];
+  for(const auth of ["token","negotiate"]) for(const supportsCpu of [true,false]) for(const projects of [null,[],["default","api"]]) {
+    const script="C:/Construct/Auto-Install.ps1",url="https://host.example:7462",name="work-vm",cpu=4,ram=8,disk=50;
+    const argSpec=JSON.parse(JSON.stringify(vm.runInNewContext(builder+";argSpec",{hostEntry:{url,auth},name,cpu,ram,disk,scriptsDir:"C:/Construct",lifecycle:{AUTO_INSTALL:"Auto-Install.ps1",scriptSupportsParam:()=>supportsCpu},logLine:()=>{}})));
+    if(projects!==null) argSpec.push({flag:"-Projects",value:projects.join(",")});
+    const args=lifecycle.flattenArgPairs(argSpec);
+    rows.push({auth,supportsCpu,projects,script,url,name,cpu,ram,disk,argSpec,args,output:lifecycle.buildHostLaunch(script,args,{elevate:false,argSpec})});
+  }
+  return rows;
+}
 async function exportAll() {
   return {
     "refresh-cache": refreshCachePolicy(),
@@ -508,6 +535,8 @@ async function exportAll() {
     "instance-identity": instanceIdentity(),
     "registry-state": registryState(),
     "instance-workflows": instanceWorkflows(),
+    "host-conversion-launches": hostConversionLaunches(),
+    "remote-vm-launches": remoteVmLaunches(),
     "lifecycle-invocations": lifecycleInvocations(),
     "lifecycle-launches": lifecycleLaunches(),
     "vm-power": vmPower(),
