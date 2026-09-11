@@ -34,6 +34,9 @@ internal sealed class TrayContext : ApplicationContext,IUiActivation
     private TrayAppearance? appearance;
     private int iconDpi;
     private bool disposed;
+    private readonly PopupGesture popupGesture=new();
+    private Rectangle? trayHitArea;
+    private bool showOnClick;
     public IPrompts Prompts { get; }
     public TrayContext(IStateFileSystem files,IMessageSink sink,SettingsStore settings,DesktopLauncher launcher,
         DesktopRegistration registration,RollingLog log,IClock clock,IAudioCapture capture,string stateDirectory,string version,ActivationPlan initial)
@@ -43,9 +46,16 @@ internal sealed class TrayContext : ApplicationContext,IUiActivation
         _=dispatcher.Handle; Prompts=new DesktopPrompts(dispatcher);
         registry=LoadRegistry();
         tray.ContextMenuStrip=menu; menu.Renderer=new RadioMenuRenderer();
-        tray.MouseClick+=(_,e)=> { if (e.Button==MouseButtons.Left) { clickTimer.Stop(); clickTimer.Start(); } };
-        tray.MouseDoubleClick+=(_,e)=> { if (e.Button==MouseButtons.Left) { clickTimer.Stop(); HidePopup(); Open("panel",Active); } };
-        clickTimer.Tick+=(_,_)=> { clickTimer.Stop(); TogglePopup(); };
+        tray.MouseDown+=(_,e)=>
+        {
+            var point=Cursor.Position; var dpi=DesktopDisplay.DpiAt(point.X,point.Y); var size=TrayModel.IconSize(dpi);
+            trayHitArea=new(point.X-size,point.Y-size,size*2,size*2);
+            if (dpi!=iconDpi) { iconDpi=dpi; appearance=null; RefreshIcon(); }
+            if (e.Button==MouseButtons.Left) popupGesture.Press(windows.TryGetValue("popup",out var popup) && popup.Visible);
+        };
+        tray.MouseClick+=(_,e)=> { if (e.Button==MouseButtons.Left) { showOnClick=popupGesture.Click(); clickTimer.Stop(); clickTimer.Start(); } };
+        tray.MouseDoubleClick+=(_,e)=> { if (e.Button==MouseButtons.Left) { clickTimer.Stop(); popupGesture.Reset(); HidePopup(); Open("panel",Active); } };
+        clickTimer.Tick+=(_,_)=> { clickTimer.Stop(); if (showOnClick) Open("popup",Active); else HidePopup(); };
         menu.Opening+=(_,_)=>BuildMenu();
         refreshTimer.Tick+=(_,_)=>RefreshIcon(); refreshTimer.Start();
         files.CreateDirectory(Path.Combine(new HostState(files).LocalAppData!,"The-Construct"));
@@ -92,7 +102,7 @@ internal sealed class TrayContext : ApplicationContext,IUiActivation
     }
     private void RefreshIcon()
     {
-        var current=TrayModel.Appearance(snapshot.Current); var point=Cursor.Position; var dpi=DesktopDisplay.DpiAt(point.X,point.Y);
+        var current=TrayModel.Appearance(snapshot.Current); var dpi=iconDpi>0 ? iconDpi : dispatcher.DeviceDpi;
         if (appearance==current && dpi==iconDpi) return;
         var next=TrayIconDrawing.Draw(current,dpi); tray.Icon=next; icon?.Dispose(); icon=next; tray.Text=current.Tooltip;
         appearance=current; iconDpi=dpi;
@@ -122,18 +132,22 @@ internal sealed class TrayContext : ApplicationContext,IUiActivation
         {
             window=new WebViewWindow(view,sinkScope,files,sink,settings,log,launcher,HandleLocalMessageAsync,
                 Path.Combine(files.GetRoot(FileSystemRoot.InstallDirectory)!,"media"),Path.Combine(stateDirectory,"webview2"));
+            if (view=="popup") window.PopupDeactivated+=()=>popupGesture.FocusLost(
+                (Control.MouseButtons & MouseButtons.Left)!=0 && trayHitArea is {} area && area.Contains(Cursor.Position));
             windows.Add(key,window);
         }
         if (view=="popup")
         {
-            var point=Cursor.Position; var work=Screen.FromPoint(point).WorkingArea; var size=TrayModel.IconSize(DesktopDisplay.DpiAt(point.X,point.Y));
-            var scale=DesktopDisplay.DpiAt(point.X,point.Y)/96d;
+            var screen=trayHitArea is {} hit ? Screen.FromRectangle(hit) : Screen.PrimaryScreen!;
+            var work=screen.WorkingArea;
+            var point=trayHitArea is {} anchor ? new Point(anchor.X+anchor.Width/2,anchor.Y+anchor.Height/2) : new Point(work.Right-16,work.Bottom+16);
+            var size=TrayModel.IconSize(iconDpi>0 ? iconDpi : dispatcher.DeviceDpi);
+            var scale=(iconDpi>0 ? iconDpi : dispatcher.DeviceDpi)/96d;
             var bounds=WindowPlacement.Popup(new(point.X-size/2,point.Y-size/2,size,size),new(work.X,work.Y,work.Width,work.Height),(int)(420*scale),(int)(650*scale));
             window.Bounds=new(bounds.X,bounds.Y,bounds.Width,bounds.Height);
         }
         _=window.ChangeScopeAsync(sinkScope); window.Present();
     }
-    private void TogglePopup() { if (windows.TryGetValue("popup",out var popup) && popup.Visible) popup.Hide(); else Open("popup",Active); }
     private void HidePopup() { if (windows.TryGetValue("popup",out var popup)) popup.Hide(); }
     private async Task CommandAsync(string id)
     {

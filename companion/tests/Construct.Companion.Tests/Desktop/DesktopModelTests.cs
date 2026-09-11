@@ -48,6 +48,22 @@ public sealed class DesktopModelTests
         var appearance = TrayModel.Appearance(new("dev", true, online, vm, busy, error, TimeSpan.FromSeconds(seconds), UpdateAvailable: true));
         Assert.Equal(expected, appearance.Color); Assert.True(appearance.Update); Assert.False(appearance.Question);
     }
+    [Theory]
+    [InlineData(true)] [InlineData(false)]
+    public void ClickingVisiblePopupClosesRegardlessOfDeactivationOrder(bool deactivateFirst)
+    {
+        var gesture=new PopupGesture();
+        if (deactivateFirst) { gesture.FocusLost(true); gesture.Press(false); }
+        else { gesture.Press(true); gesture.FocusLost(true); }
+        Assert.False(gesture.Click());
+        gesture.Press(false); Assert.True(gesture.Click());
+    }
+    [Fact]
+    public void ClickingTrayAfterOrdinaryFocusLossOpensAndDoubleClickResets()
+    {
+        var gesture=new PopupGesture(); gesture.FocusLost(false); gesture.Press(false); Assert.True(gesture.Click());
+        gesture.Press(true); gesture.Reset(); gesture.Press(false); Assert.True(gesture.Click());
+    }
     [Fact]
     public void MissingAndLongInstanceTooltipAreSafe()
     {

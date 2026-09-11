@@ -299,3 +299,14 @@ service tests passed (31 suite files and 1,261 tests). The relay command
 its client was cancelled and reaped. No Windows compilation or selftest ran.
 The Windows field checklist still includes WebView2 focus/placement, console
 handoff/output, actual microphone sample continuity, and toast projection loading.
+
+
+Final desktop checks: the single-click popup gesture remembers whether that press
+dismissed the popup, handling either Windows deactivation/MouseDown event order;
+three pure tests cover close/reopen, unrelated focus loss, and double-click reset.
+The app explicitly selects PerMonitorV2 DPI awareness. A Linux Release win-x64
+self-contained publish succeeded: WebView2Loader and both WinRT assemblies are
+present (the latter match the pinned SDK package), and all 17 media files match
+source bytes. The reviewer observed an intermittent failure in unchanged S2a
+`ProbeFastWindowUsesFiveSecondsAndRevertsToThirty`; it passed three isolated reruns.
+That runtime timing test remains a follow-up for S3/S4.

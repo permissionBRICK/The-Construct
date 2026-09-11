@@ -28,6 +28,7 @@ internal sealed class WebViewWindow : Form
     private bool ready;
     private bool exiting;
     private readonly List<JsonElement> pending=[];
+    public event Action? PopupDeactivated;
     public WebViewWindow(string view,string scope,IFileSystem files,IMessageSink sink,SettingsStore settings,RollingLog log,
         ILauncher launcher,Func<WebViewWindow,string,JsonElement,Task<bool>> localMessage,string mediaDirectory,string cacheDirectory)
     {
@@ -52,7 +53,7 @@ internal sealed class WebViewWindow : Form
             Controls.Add(menu); MainMenuStrip=menu;
         }
         Shown += async (_,_) => { if (!initialized) { initialized=true; await InitializeAsync(); } else await OpenRequestedViewAsync(); };
-        Deactivate += (_,_) => { if (view == "popup") Hide(); };
+        Deactivate += (_,_) => { if (view == "popup") { PopupDeactivated?.Invoke(); Hide(); } };
         FormClosing += (_,e) => { if (!exiting && e.CloseReason == CloseReason.UserClosing) { e.Cancel=true; SaveBounds(); Hide(); } };
         ResizeEnd += (_,_)=>SaveBounds();
     }
