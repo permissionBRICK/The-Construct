@@ -710,6 +710,7 @@ async function refreshState(webview) {
   const target = instances.captureTarget(instanceGate, inst);
   const gate = target.token;
   void refreshHostAdminOffer(inst);
+  void readHostAdminExtras(inst);
   const probed = await probeOnce(inst);
   if (!instanceGate.valid(gate)) return;
   backfillVmFacts(inst, probed);
@@ -746,6 +747,7 @@ async function refreshAll() {
   const refreshTarget = instances.captureTarget(instanceGate, inst);
   const gate = refreshTarget.token;
   void refreshHostAdminOffer(inst);
+  void readHostAdminExtras(inst);
   const probed = await probeOnce(inst);
   if (!instanceGate.valid(gate)) return;
   backfillVmFacts(inst, probed);
@@ -766,12 +768,6 @@ async function refreshAll() {
   // check. A local instance resolves to null, which is what hides the card.
   try {
     await readIdlePolicy(inst);
-    if (!instanceGate.valid(gate)) return;
-    for (const w of liveWebviews) postState(w, withUsage !== aug ? withUsage : aug);
-  } catch (_) { /* never break a refresh over an optional card */ }
-  // Child VMs and the host-administration offer (remote instances only; §10.2/§10.3).
-  try {
-    await readHostAdminExtras(inst);
     if (!instanceGate.valid(gate)) return;
     for (const w of liveWebviews) postState(w, withUsage !== aug ? withUsage : aug);
   } catch (_) { /* never break a refresh over an optional card */ }
@@ -1389,7 +1385,7 @@ async function refreshHostAdminOffer(inst) {
   } catch (e) { logLine(`hostadmin: offer for "${target.name}" — ${(e && e.message) || e}`); }
 }
 
-/** Child inventory stays on the normal status refresh; it cannot delay host discovery. */
+/** Child inventory stays independent of SSH, update and usage probes. */
 async function readHostAdminExtras(inst) {
   const target = inst || activeInstance();
   if (String(target.backend || "").trim().toLowerCase() !== "hyperv-remote") {
@@ -1401,6 +1397,7 @@ async function readHostAdminExtras(inst) {
     const children = await hostAdminFeature().childrenStateFor(target);
     if (!instanceGate.valid(token)) return;
     cachedChildren = children;
+    for (const webview of liveWebviews) safePost(webview, { type: "children", instance: target.name, children });
   } catch (e) { logLine(`hostadmin: children of "${target.name}" — ${(e && e.message) || e}`); }
 }
 
@@ -4361,7 +4358,7 @@ function handleMessage(message, webview, context) {
       // Host administration (§10.2): the Child VMs card's two actions, the Host button
       // and the first-VM offer. The child name is validated against what THIS window
       // listed — the webview is untrusted input.
-      if (id === "openHostAdmin" || id === "createFirstVm" || id === "childShutdown" || id === "childDelete") {
+      if (id === "openHostAdmin" || id === "createFirstVm" || id === "childShutdown" || id === "childDelete" || id === "childConsole") {
         void hostAdminFeature().handlePanelCommand(id, message, targetInstance(actionTarget()));
         return;
       }
