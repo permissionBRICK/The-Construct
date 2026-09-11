@@ -1,5 +1,61 @@
 [
   {
+    "args": [
+      "name /?ü"
+    ],
+    "method": "vmMemory",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC/memory"
+    }
+  },
+  {
+    "args": [
+      "name /?ü",
+      {
+        "ramGb": 12
+      }
+    ],
+    "method": "setVmMemory",
+    "output": {
+      "body": {
+        "ramGb": 12
+      },
+      "method": "PUT",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC/memory"
+    }
+  },
+  {
+    "args": [
+      "name /?ü"
+    ],
+    "method": "vmIdlePolicy",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC/idle-policy"
+    }
+  },
+  {
+    "args": [
+      "name /?ü",
+      {
+        "action": "shutdown",
+        "timeoutMinutes": 60
+      }
+    ],
+    "method": "setVmIdlePolicy",
+    "output": {
+      "body": {
+        "action": "shutdown",
+        "timeoutMinutes": 60
+      },
+      "method": "PUT",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC/idle-policy"
+    }
+  },
+  {
     "args": [],
     "method": "vmDefaults",
     "output": {

@@ -27,6 +27,19 @@ public sealed class HyperVDriverTests
         await Assert.ThrowsAnyAsync<ArgumentException>(() => driver.SetCpuCountAsync("work-vm", 0, default));
         Assert.Single(runner.Calls);
     }
+    [Fact]
+    public async Task Memory_change_pins_argv_and_guarded_shared_driver_call()
+    {
+        var (driver, runner) = Driver(new RecordingProcessRunner().Respond(Ok("null")));
+        await driver.SetMemoryAsync("work-vm", 12, default);
+        Assert.Equal("powershell.exe", runner[0].FileName);
+        Assert.Equal(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand"], runner[0].Arguments.Take(5));
+        Assert.Equal(6, runner[0].Arguments.Count);
+        Assert.Contains("Set-ConstructVmMemory -Name 'work-vm' -MemoryGB 12", Script(runner[0]));
+        await Assert.ThrowsAnyAsync<ArgumentException>(() => driver.SetMemoryAsync("work-vm", 0, default));
+        await Assert.ThrowsAnyAsync<ArgumentException>(() => driver.SetMemoryAsync("work-vm", 1025, default));
+        Assert.Single(runner.Calls);
+    }
     private static readonly VmDescriptor Descriptor =
         new("work-vm", Cpu: 4, RamGb: 8, DiskGb: 100, IsoPath: @"C:\isos\work-vm-autoinstall.iso",
             Nested: true, AutomaticCheckpoints: false);

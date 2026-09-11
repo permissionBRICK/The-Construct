@@ -206,10 +206,14 @@ function ok(name, cond, detail) {
   let calls2 = 0;
   const succFetch = async () => { calls2++; return published("c/d"); };
   const s1 = await updates.checkConstructCached(cm2, { fetchJson: succFetch, now: () => 5000 });
-  const s2 = await updates.checkConstructCached(cm2, { fetchJson: succFetch, now: () => 5000 + 5 * 60 * 1000 });
-  ok("cache: success served for the full TTL (no refetch at +5min)", s1.available && s2.available && calls2 === 1);
-  const s3 = await updates.checkConstructCached(cm2, { fetchJson: succFetch, now: () => 5000 + 11 * 60 * 1000 });
-  ok("cache: success refetched after TTL (+11min)", s3.available && calls2 === 2);
+  const s2 = await updates.checkConstructCached(cm2, { fetchJson: succFetch, now: () => 5000 + 5 * 60 * 1000 - 1 });
+  ok("cache: success served for the full TTL (no refetch before +5min)", s1.available && s2.available && calls2 === 1);
+  const s3 = await updates.checkConstructCached(cm2, { fetchJson: succFetch, now: () => 5000 + 5 * 60 * 1000 });
+  ok("cache: success refetched at TTL (+5min)", s3.available && calls2 === 2);
+
+  const s4 = await updates.checkConstructCached(cm2, { fetchJson: async () => { calls2++; return null; }, now: () => 305001, noCache: true });
+  const s5 = await updates.checkConstructCached(cm2, { fetchJson: succFetch, now: () => 305002 });
+  ok("cache: manual bypass refreshes the same cache", s4 === null && s5 === null && calls2 === 3);
 
   // ── fetchJson redirect following + per-host Accept (mocked https.get) ────────
   // routes: { url: { statusCode, headers?, body? } }; seenAccept records the Accept

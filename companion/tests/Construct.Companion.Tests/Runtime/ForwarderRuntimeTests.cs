@@ -53,11 +53,12 @@ public sealed class ForwarderRuntimeTests
     [Fact]
     public async Task CancellationDuringCapabilityCannotSpawnAnything()
     {
+        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var finish = new TaskCompletionSource<ProcessResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var ssh = new FakeSshTransport { ScriptHandler = (_, _) => { entered.TrySetResult(); return finish.Task; } };
+        var ssh = new FakeSshTransport { ScriptHandler = async (_, ct) => { using var registration = ct.Register(() => cancelled.TrySetResult()); entered.TrySetResult(); return await finish.Task; } };
         var clock = new FakeClock(); var forwarder = new Forwarder("dev", new LocalForwardTransport(ssh, "cc-12345678"), new SshProcessSupervisor(clock), new PortReservations(), clock);
-        var start = forwarder.StartAsync(); await entered.Task; var dispose = forwarder.DisposeAsync().AsTask(); finish.SetResult(new(0, "SPOOL=1"));
+        var start = forwarder.StartAsync(); await entered.Task; var dispose = forwarder.DisposeAsync().AsTask(); await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(3)); finish.SetResult(new(0, "SPOOL=1"));
         Assert.Equal("stood-down", await start); await dispose; Assert.Empty(ssh.Watches); Assert.Empty(ssh.Tunnels);
     }
     [Fact]

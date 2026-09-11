@@ -96,7 +96,9 @@ public static class IpcServer
             if (activation?.View is not ("panel" or "settings" or "hostadmin" or "popup")) throw new IpcFailure(400, "invalidView", "Unknown Companion view.");
             if (activation.Instance is not null) await backend.SnapshotAsync(activation.Instance, c.RequestAborted);
             if (activation.Host is not null) await backend.HostSnapshotAsync(activation.Host, c.RequestAborted);
-            await desktop.ActivateAsync(activation, c.RequestAborted); return Accepted();
+            await desktop.ActivateAsync(activation with { RefreshScheduled = activation.View != "hostadmin" }, c.RequestAborted);
+            if (activation.View != "hostadmin") await backend.RefreshOpenedSurfaceAsync(activation.Instance, c.RequestAborted);
+            return Accepted();
         });
         app.MapPost("/v1/quit", async (HttpContext c) =>
         {

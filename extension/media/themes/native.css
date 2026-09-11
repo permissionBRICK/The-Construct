@@ -18,6 +18,7 @@
 
 /* ── 1. Tokens ─────────────────────────────────────────────────────────── */
 :root {
+  --construct-native-palette: 1;
   /* theme-own tokens */
   --nv-fg: var(--vscode-foreground, #cccccc);
   --nv-desc: var(--vscode-descriptionForeground, #9d9d9d);

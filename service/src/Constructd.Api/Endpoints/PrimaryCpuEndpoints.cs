@@ -11,9 +11,14 @@ public static class PrimaryCpuEndpoints
     public sealed record Request(int Cpus);
     public static RouteGroupBuilder MapPrimaryCpuEndpoints(this RouteGroupBuilder api)
     {
-        api.MapGet("/vm-defaults", async (HttpContext http, PrimaryCpuSettings settings, CancellationToken ct) =>
+        api.MapGet("/vm-defaults", async (HttpContext http, PrimaryCpuSettings settings, PrimaryMemorySettings memory, CancellationToken ct) =>
         {
-            try { return Results.Ok(await settings.LimitsAsync(http.User.NameOrEmpty(), null, ct)); }
+            try
+            {
+                var cpu = await settings.LimitsAsync(http.User.NameOrEmpty(), null, ct);
+                var ram = await memory.LimitsAsync(http.User.NameOrEmpty(), null, ct);
+                return Results.Ok(new { cpu.HostLogicalCpus, cpu.MaximumCpus, cpu.RecommendedCpus, ram.MaximumRamGb, ram.RecommendedRamGb });
+            }
             catch (LifecycleException ex) { return LifecycleEndpoints.Problem(ex.Code); }
         }).RequireAuthorization(Policies.User);
         api.MapGet("/vms/{name}/cpu", (string name, HttpContext http, CancellationToken ct) => ReadOrSave(name, null, http, ct))

@@ -125,6 +125,11 @@ public sealed partial class RemoteHostClient
         var errorBody = result is null ? null : JsonNode.Parse(Redact(result.ToJsonString(), secrets, json: true));
         throw new RemoteApiException(response.StatusCode, RemoteHost.MapError(response.StatusCode, errorBody, method + " " + path), StateJson.Text((errorBody as JsonObject)?["code"]) ?? "") { Body = errorBody };
     }
+    public async Task<string> RedactDiagnosticAsync(string text, CancellationToken cancellationToken = default)
+    {
+        var token = authentication == RemoteAuthentication.Token ? await tokens.ReadAsync(RemoteHost.HostSlug(BaseUrl), cancellationToken) : null;
+        return Redact(text, RequestSecrets(token, null));
+    }
     private static string[] RequestSecrets(Secret? token, JsonNode? body)
     {
         var secrets = new List<string>(); if (token is not null) secrets.Add(token.Reveal());

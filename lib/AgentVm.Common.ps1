@@ -583,6 +583,11 @@ function Select-ProjectProfiles {
                                 $null = Initialize-ConstructConfigStore -ScriptsDir (Split-Path -Parent $ProjectsDir)
                                 try {
                                     $cloneDir = Update-ConstructStagingClone -SourceRepo $repoUrl
+                                    if (-not $cloneDir) {
+                                        Register-ConstructConfigRemote -ConfigDir $configDir -RemoteUrl $repoUrl
+                                        Write-Note 'Config repo import deferred; no profiles could be read from it on this PC.'
+                                        continue
+                                    }
                                     $importCands = @(Get-ConstructImportCandidates -SourceDir $cloneDir)
                                     if ($importCands.Count -eq 0) {
                                         Write-Host "    No importable profiles found in the repo." -ForegroundColor Yellow
@@ -1079,58 +1084,273 @@ function Get-ProjectRepoUrls {
     return @($list | Select-Object -Unique)
 }
 
-function Resolve-GitCloneCredential {
-    <#
-        If any of the selected project profiles declare http(s) repo URLs, prompt
-        ONCE for a git username + token to use for cloning them during
-        provisioning (Enter on the username skips entirely). Builds one
-        `<proto>://<user>:<token>@<host>` credential line per distinct http(s)
-        host found, URL-encoding the user/token, and returns them base64-encoded
-        (newline-joined) for handoff to the VM (env GIT_CLONE_CREDENTIALS_B64).
-
-        Returns "" when skipped, when there are no repos, or when the only repo
-        URLs are ssh:// / git@ forms (a username/token can't authenticate those,
-        so they don't trigger the prompt).
-    #>
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][string]$ProjectsDir,
-        [Parameter(Mandatory)][AllowNull()]$Names,
-        [switch]$NoPrompt
-    )
-    if ($NoPrompt) { return "" }
-    $urls = Get-ProjectRepoUrls -ProjectsDir $ProjectsDir -Names $Names
-    if (-not $urls -or @($urls).Count -eq 0) { return "" }
-
-    # Distinct http(s) hosts (with port, minus any embedded userinfo) and the
-    # scheme each was first seen with.
-    $hostProto = [ordered]@{}
-    foreach ($u in $urls) {
-        if ($u -match '^(https?)://(?:[^/@]+@)?([^/]+)') {
-            $h = $matches[2]
-            if (-not $hostProto.Contains($h)) { $hostProto[$h] = $matches[1] }
+function Protect-ConstructGitMessage {
+    param([string]$Message, $Credential)
+    if ($Credential) {
+        foreach ($secret in @($Credential.Token, [uri]::EscapeDataString($Credential.Token), [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Credential.User + ':' + $Credential.Token)))) {
+            if ($secret) { $Message = $Message.Replace($secret, '[redacted]') }
         }
     }
-    if ($hostProto.Count -eq 0) { return "" }   # only ssh/git@ URLs -- nothing to prompt for
-    $hostList = @($hostProto.Keys)
+    return ($Message -replace '(?i)((?:https?|socks[45]h?)://)[^\s/@]+@', '$1[redacted]@')
+}
 
-    Show-TuiScreen -Title "Git credentials for cloning project repos" -Body @(
-        "The selected projects clone repos from: $($hostList -join ', ')",
-        "Enter credentials to use for the clone, or press Enter to skip",
-        "(skip if the repos are public or you'll authenticate another way)."
-    )
-    $user = Read-Host "    Git username (press Enter to skip)"
-    if ([string]::IsNullOrWhiteSpace($user)) { Write-Note "No clone credentials entered -- skipping."; return "" }
-    $secure = Read-Host "    Git token / password" -AsSecureString
-    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
-    try   { $token = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
-    finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
-    if ([string]::IsNullOrWhiteSpace($token)) { Write-Note "No token entered -- skipping."; return "" }
+function Invoke-ConstructCredentialGit {
+    # Child-only environment: no secret in argv, helper files, transcripts or the
+    # parent's environment. Git for Windows runs this askpass with its own sh.
+    [CmdletBinding()]
+    param([string[]]$Arguments, $Credential, [int]$TimeoutSeconds = 20, [scriptblock]$GitRunner, [switch]$ReadTransportConfig)
+    $safeArgs = @('-c', 'credential.helper=', '-c', 'http.extraHeader=', '-c', 'core.hooksPath=')
+    if ($Credential) { $safeArgs += @('-c', ('credential.username=' + $Credential.User)) }
+    $safeArgs += $Arguments
+    if ($GitRunner) {
+        $r = & $GitRunner $safeArgs $Credential $TimeoutSeconds
+        return [pscustomobject]@{ ExitCode = $r.ExitCode; Stdout = (Protect-ConstructGitMessage $r.Stdout $Credential); Stderr = (Protect-ConstructGitMessage $r.Stderr $Credential) }
+    }
+    # Keep TLS/proxy transport choices while excluding origin authentication,
+    # cookies, URL rewrites and helper configuration. Reading config runs no
+    # network operation or helper. A generic extraHeader reset alone does NOT
+    # clear URL-scoped Authorization headers, hence the isolated network config.
+    $transportValues = [ordered]@{}
+    if (-not $ReadTransportConfig) {
+        $remoteUrl = @($Arguments | Where-Object { $_ -match '^https?://' } | Select-Object -First 1)
+        if ($remoteUrl.Count -gt 0) {
+            $transport = Invoke-ConstructCredentialGit -Arguments @('config', '--get-urlmatch', 'http', $remoteUrl[0]) -ReadTransportConfig
+            if ($transport.ExitCode -eq 0) {
+                foreach ($line in ($transport.Stdout -split "`n")) {
+                    if ($line -match '^http\.(sslbackend|sslcainfo|sslcapath|sslverify|sslcert|sslkey|sslversion|sslcipherlist|schannelcheckrevoke|schannelusesslcainfo|proxy|noproxy|proxyauthmethod|version)\s+(.+)$') {
+                        $transportValues[$matches[1]] = $matches[2].TrimEnd("`r")
+                    }
+                }
+            } elseif ($transport.ExitCode -ne 1) {
+                throw "Could not read git TLS configuration: $($transport.Stderr)"
+            }
+        }
+    }
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ('construct-git-' + [guid]::NewGuid().ToString('N'))
+    $process = $null
+    try {
+        $null = New-Item -ItemType Directory -Path $tmp
+        $askpass = Join-Path $tmp 'askpass.sh'
+        [IO.File]::WriteAllText($askpass, "#!/bin/sh`ncase `"`$1`" in`n*Username*) printf '%s\n' `"`$CONSTRUCT_GIT_USERNAME`" ;;`n*Password*) printf '%s\n' `"`$CONSTRUCT_GIT_TOKEN`" ;;`n*) exit 1 ;;`nesac`n", (New-Object Text.UTF8Encoding $false))
+        $emptyConfig = Join-Path $tmp 'gitconfig'
+        [IO.File]::WriteAllText($emptyConfig, '')
+        if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+            $acl = New-Object Security.AccessControl.FileSecurity
+            $acl.SetAccessRuleProtection($true, $false)
+            $identity = [Security.Principal.WindowsIdentity]::GetCurrent().User
+            $rule = New-Object Security.AccessControl.FileSystemAccessRule($identity, 'FullControl', 'Allow')
+            $acl.AddAccessRule($rule)
+            Set-Acl -LiteralPath $emptyConfig -AclObject $acl -ErrorAction Stop
+        } else {
+            & chmod 700 $tmp $askpass
+            if ($LASTEXITCODE -ne 0) { throw 'Could not protect temporary git directory.' }
+            & chmod 600 $emptyConfig
+            if ($LASTEXITCODE -ne 0) { throw 'Could not protect temporary git config.' }
+        }
+        $configLines = @('[http]')
+        $transportCredential = $null
+        foreach ($key in $transportValues.Keys) {
+            $value = $transportValues[$key]
+            if ($key -eq 'proxy') {
+                try {
+                    $proxy = [uri]$value
+                    $parts = $proxy.UserInfo -split ':', 2
+                    if ($parts.Count -eq 2) { $transportCredential = @{ User = [uri]::UnescapeDataString($parts[0]); Token = [uri]::UnescapeDataString($parts[1]) } }
+                } catch { }
+            }
+            $escaped = $value.Replace('\', '\\').Replace('"', '\"').Replace("`n", '\n').Replace("`t", '\t')
+            $configLines += ($key + ' = "' + $escaped + '"')
+        }
+        [IO.File]::WriteAllText($emptyConfig, ($configLines -join "`n"), (New-Object Text.UTF8Encoding $false))
+        $psi = New-Object Diagnostics.ProcessStartInfo
+        $psi.FileName = (Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+        # ProcessStartInfo.ArgumentList is unavailable on Windows PowerShell 5.1.
+        $psi.Arguments = (@($safeArgs | ForEach-Object { '"' + (($_ -replace '(\\*)"', '$1$1\"') -replace '(\\+)$', '$1$1') + '"' }) -join ' ')
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        # Do not inherit trace destinations or config injection (including helpers,
+        # Authorization headers and URL rewrites) from the launching shell.
+        $inherited = @{}
+        foreach ($key in @('GIT_CONFIG_SYSTEM', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM',
+                           'GIT_SSL_CAINFO', 'GIT_SSL_CAPATH', 'GIT_SSL_NO_VERIFY', 'GIT_SSL_CERT', 'GIT_SSL_KEY', 'GIT_SSL_VERSION', 'GIT_SSL_CIPHER_LIST')) {
+            if ($psi.EnvironmentVariables.ContainsKey($key)) { $inherited[$key] = $psi.EnvironmentVariables[$key] }
+        }
+        foreach ($key in @($psi.EnvironmentVariables.Keys)) {
+            if ($key -like 'GIT_*' -or $key -like 'GCM_*' -or $key -like 'CONSTRUCT_GIT_*') { $psi.EnvironmentVariables.Remove($key) }
+        }
+        $psi.EnvironmentVariables['GIT_TERMINAL_PROMPT'] = '0'
+        $psi.EnvironmentVariables['GCM_INTERACTIVE'] = 'Never'
+        foreach ($key in $inherited.Keys) {
+            if ($ReadTransportConfig -or $key -like 'GIT_SSL_*') { $psi.EnvironmentVariables[$key] = $inherited[$key] }
+        }
+        if (-not $ReadTransportConfig) {
+            $psi.EnvironmentVariables['GIT_CONFIG_NOSYSTEM'] = '1'
+            $psi.EnvironmentVariables['GIT_CONFIG_GLOBAL'] = $emptyConfig
+        }
+        $psi.EnvironmentVariables['GIT_ASKPASS'] = $askpass.Replace('\', '/')
+        $psi.EnvironmentVariables['SSH_ASKPASS'] = $askpass.Replace('\', '/')
+        $psi.EnvironmentVariables['GIT_SSH_COMMAND'] = 'ssh -oBatchMode=yes -oConnectTimeout=10'
+        if ($Credential) {
+            $psi.EnvironmentVariables['CONSTRUCT_GIT_USERNAME'] = $Credential.User
+            $psi.EnvironmentVariables['CONSTRUCT_GIT_TOKEN'] = $Credential.Token
+        }
+        # Avoid repository-local config on probes, even when launched in a checkout.
+        $psi.WorkingDirectory = $tmp
+        $process = New-Object Diagnostics.Process
+        $process.StartInfo = $psi
+        $null = $process.Start()
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+            if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+                & taskkill /PID $process.Id /T /F | Out-Null
+            } else { $process.Kill($true) }
+            $process.WaitForExit()
+            return [pscustomobject]@{ ExitCode = 124; Stdout = ''; Stderr = 'git timed out.' }
+        }
+        $safeStdout = Protect-ConstructGitMessage (Protect-ConstructGitMessage $stdout.Result $Credential) $transportCredential
+        if ($ReadTransportConfig) { $safeStdout = $stdout.Result } # internal config query; never printed
+        return [pscustomobject]@{ ExitCode = $process.ExitCode; Stdout = $safeStdout; Stderr = (Protect-ConstructGitMessage (Protect-ConstructGitMessage $stderr.Result $Credential) $transportCredential) }
+    } finally {
+        if ($process) { $process.Dispose() }
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
+    }
+}
 
-    $encUser = [uri]::EscapeDataString($user.Trim())
-    $encTok  = [uri]::EscapeDataString($token)
-    $lines = foreach ($h in $hostList) { "{0}://{1}:{2}@{3}" -f $hostProto[$h], $encUser, $encTok, $h }
-    Write-Ok ("Clone credentials set for: {0}" -f ($hostList -join ', '))
+function Test-ConstructGitCredentialPromptAllowed {
+    param([bool]$ExistingInstall, [string]$Action, [bool]$InputRedirected, [bool]$BackupHasCredentials)
+    return -not ($ExistingInstall -or $Action -in @('reprovision', 'reinstall', 'redownload') -or $InputRedirected -or $BackupHasCredentials)
+}
+
+function New-ConstructGitCredentialSession {
+    param([switch]$NoPrompt, [string]$CredentialsB64, [scriptblock]$GitRunner, [scriptblock]$ReadCredential, [switch]$ExistingInstall)
+    $session = @{ ExistingInstall = [bool]$ExistingInstall; NoPrompt = [bool]$NoPrompt; Unattended = [bool]$CredentialsB64; Supplied = @{}; Verified = [ordered]@{}; Skipped = @{}; Checked = @{}; Required = @{}; ScreenShown = $false; GitRunner = $GitRunner; ReadCredential = $ReadCredential }
+    if ($CredentialsB64) {
+        try {
+            $lines = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($CredentialsB64)) -split '\r?\n'
+            foreach ($line in $lines) {
+                if (-not $line.Trim()) { continue }
+                $u = [uri]$line
+                if ($u.Scheme -notin @('http', 'https') -or $u.UserInfo -notmatch '^([^:]+):(.+)$' -or $u.AbsolutePath -ne '/' -or $u.Query -or $u.Fragment) { throw 'invalid' }
+                $session.Supplied[$u.GetLeftPart([UriPartial]::Authority) -replace '://[^/]+@', '://'] = @{ User = [uri]::UnescapeDataString($matches[1]); Token = [uri]::UnescapeDataString($matches[2]) }
+            }
+            if ($session.Supplied.Count -eq 0) { throw 'empty' }
+        } catch { throw 'Invalid -GitCloneCredentialsB64: expected base64 newline-separated http(s) credential-store entries.' }
+    }
+    return $session
+}
+
+function Test-ConstructGitHostCredential {
+    param([string]$Key, $Credential, $Session, [switch]$Reuse)
+    foreach ($repo in $Session.Required[$Key]) {
+        $result = Invoke-ConstructCredentialGit -Arguments @('ls-remote', '--', $repo) -Credential $Credential -GitRunner $Session.GitRunner
+        if ($result.ExitCode -ne 0) {
+            # One credential-store entry must cover all selected private repos
+            # on this origin. A host-level skip also skips its earlier clones;
+            # retaining a partially verified entry would contradict that choice.
+            $Session.Verified.Remove($Key)
+            $hint = 'Possibly a wrong password. GitLab and GitHub with two-factor or SSO require a personal access token instead of the password.'
+            if ($Session.Unattended) { throw "Git credential rejected for ${Key}: $($result.Stderr)`n$hint" }
+            if ($Reuse) {
+                Write-Host "    Previous credential not accepted for ${Key}: $($result.Stderr)" -ForegroundColor Yellow
+            } else {
+                Write-Host "    FAIL ${Key}: $($result.Stderr)" -ForegroundColor Red
+                Write-Note $hint
+            }
+            return $false
+        }
+    }
+    $Session.Verified[$Key] = $Credential
+    foreach ($repo in $Session.Required[$Key]) { $Session.Checked[$repo] = $true }
+    Write-Ok "Git credential verified: $Key"
+    return $true
+}
+
+function Resolve-ConstructGitUrls {
+    param([string[]]$Urls, [Parameter(Mandatory)]$Session)
+    $pending = [ordered]@{}
+    foreach ($url in @($Urls | Select-Object -Unique)) {
+        if ($url -notmatch '^https?://') { continue }
+        $u = [uri]$url
+        if ($u.UserInfo -match ':') { throw 'Repository URLs must not contain passwords or tokens. Use the credential prompt or -GitCloneCredentialsB64.' }
+        $builder = New-Object UriBuilder $u
+        $builder.UserName = ''; $builder.Password = ''
+        $cleanUrl = $builder.Uri.AbsoluteUri
+        $key = $builder.Uri.GetLeftPart([UriPartial]::Authority)
+        if ($Session.Checked.ContainsKey($cleanUrl) -or $Session.Skipped.ContainsKey($key)) { continue }
+        $anonymous = Invoke-ConstructCredentialGit -Arguments @('ls-remote', '--', $cleanUrl) -GitRunner $Session.GitRunner
+        if ($anonymous.ExitCode -eq 0) { $Session.Checked[$cleanUrl] = $true; continue }
+        if ($anonymous.ExitCode -ne 0 -and $Session.NoPrompt -and -not $Session.Unattended) {
+            Write-Note "Anonymous git access refused for ${key}: $($anonymous.Stderr)"
+            if ($Session.ExistingInstall) {
+                Write-Note "The VM's stored git credentials will be used; the panel reports the clone if they are missing."
+            } else {
+                Write-Note "No credential was supplied for $key during this unattended initial install. Configure git credentials in the VM and reprovision; the panel reports failed clones."
+            }
+            $Session.Skipped[$key] = 'deferred'
+            continue
+        }
+        if (-not $Session.Required.ContainsKey($key)) { $Session.Required[$key] = @() }
+        $Session.Required[$key] += $cleanUrl
+        $pending[$key] = $true
+    }
+    # First reuse earlier verified credentials (including the config-repo entry)
+    # and per-host unattended entries. Never retry a host that already passed.
+    foreach ($key in @($pending.Keys)) {
+        $credential = $null
+        if ($Session.Verified.Contains($key)) { $credential = $Session.Verified[$key] }
+        elseif ($Session.Supplied.ContainsKey($key)) { $credential = $Session.Supplied[$key] }
+        elseif (-not $Session.Unattended) { $credential = $Session.LastCredential }
+        if ($credential -and (Test-ConstructGitHostCredential -Key $key -Credential $credential -Session $Session -Reuse:(-not $Session.Unattended))) { $pending.Remove($key) }
+    }
+    while ($pending.Count -gt 0) {
+        $key = @($pending.Keys)[0]
+        if ($Session.Unattended) { throw "No supplied git credential for $key (-GitCloneCredentialsB64)." }
+        if (-not $Session.ScreenShown) {
+            Show-TuiScreen -Title 'Git credentials for cloning project repos' -Body @('Private config and project repos are verified before provisioning.', 'Use a personal access token for two-factor or SSO accounts. Enter an empty username to skip this host.')
+            $Session.ScreenShown = $true
+        }
+        Write-Note "Hosts still needing a credential: $(@($pending.Keys) -join ', ')"
+        $credential = $null
+        if ($Session.ReadCredential) { $credential = & $Session.ReadCredential $key @($pending.Keys) }
+        else {
+            $user = Read-Host "    Git username for remaining hosts (Enter to skip this host: $key)"
+            if ($user.Trim()) {
+                $secure = Read-Host '    Git token / password' -AsSecureString
+                $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+                try { $credential = @{ User = $user.Trim(); Token = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) } }
+                finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+            }
+        }
+        if (-not $credential -or -not $credential.Token) {
+            $Session.Skipped[$key] = 'skip'
+            $Session.Verified.Remove($key)
+            $pending.Remove($key)
+            Write-Note "Skipping $key and its clones for this provision."
+            continue
+        }
+        $Session.LastCredential = $credential
+        foreach ($remaining in @($pending.Keys)) {
+            if (Test-ConstructGitHostCredential -Key $remaining -Credential $credential -Session $Session) { $pending.Remove($remaining) }
+        }
+    }
+}
+
+function Resolve-GitCloneCredential {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$ProjectsDir, [Parameter(Mandatory)][AllowNull()]$Names,
+          [switch]$NoPrompt, [string]$CredentialsB64, $Session)
+    if (-not $Session) { $Session = New-ConstructGitCredentialSession -NoPrompt:$NoPrompt -CredentialsB64 $CredentialsB64 }
+    Resolve-ConstructGitUrls -Urls @(Get-ProjectRepoUrls -ProjectsDir $ProjectsDir -Names $Names) -Session $Session
+    # Supplied entries with no selected repository cannot be verified; never forward them.
+    $lines = foreach ($key in $Session.Verified.Keys) {
+        $c = $Session.Verified[$key]
+        '{0}://{1}:{2}@{3}' -f ([uri]$key).Scheme, [uri]::EscapeDataString($c.User), [uri]::EscapeDataString($c.Token), ([uri]$key).Authority
+    }
+    $skipHosts = @($Session.Skipped.Keys | Where-Object { $Session.Skipped[$_] -eq 'skip' }) -join "`n"
+    $env:CONSTRUCT_GIT_SKIP_HOSTS_B64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($skipHosts))
     return [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($lines -join "`n")))
 }
 
@@ -5102,39 +5322,48 @@ function Update-ConstructStagingClone {
     $slug = ($SourceRepo -replace '[^A-Za-z0-9._-]', '-')
     $cloneDir = Join-Path $stagingRoot $slug
 
-    # Fail CLOSED: a fetch/reset that fails must NOT silently fall back to stale
-    # cached content (which could import an out-of-date profile). Every git step
-    # is checked via $LASTEXITCODE and any failure throws — the caller then aborts
-    # the import rather than proceeding with the old clone. -NoFetch is the only
-    # sanctioned way to reuse an existing clone without a network round-trip.
-    $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-    $err = $null
-    try {
-        if (Test-Path -LiteralPath (Join-Path $cloneDir ".git")) {
-            if (-not $NoFetch) {
-                & git -C $cloneDir fetch origin 2>$null | Out-Null
-                if ($LASTEXITCODE -ne 0) { throw "git fetch failed for config repo '$SourceRepo'." }
-                $defaultBranch = & git -C $cloneDir symbolic-ref refs/remotes/origin/HEAD 2>$null
-                if ($LASTEXITCODE -ne 0 -or -not $defaultBranch) { $defaultBranch = "refs/remotes/origin/main" }
-                $defaultBranch = "$defaultBranch".Trim()
-                & git -C $cloneDir reset --hard $defaultBranch 2>$null | Out-Null
-                if ($LASTEXITCODE -ne 0) { throw "git reset --hard '$defaultBranch' failed for config repo '$SourceRepo'." }
-            }
-        } else {
-            if (-not (Test-Path -LiteralPath $stagingRoot)) {
-                New-Item -ItemType Directory -Path $stagingRoot -Force | Out-Null
-            }
-            & git clone $SourceRepo $cloneDir 2>$null | Out-Null
-            if ($LASTEXITCODE -ne 0) { throw "git clone failed for config repo '$SourceRepo'." }
+    $displayUrl = Format-ConstructRemoteUrlForDisplay -Url $SourceRepo
+    if (Test-ConstructUrlHasCredentials -Url $SourceRepo) { throw 'Config repository URL carries credentials; use the credential prompt.' }
+    $credential = $null
+    $runner = $null
+    if ($script:ConstructGitCredentialSession) {
+        $session = $script:ConstructGitCredentialSession
+        Resolve-ConstructGitUrls -Urls @($SourceRepo) -Session $session
+        $runner = $session.GitRunner
+        if ($SourceRepo -match '^https?://') {
+            $builder = New-Object UriBuilder $SourceRepo
+            $builder.UserName = ''; $builder.Password = ''
+            $key = $builder.Uri.GetLeftPart([UriPartial]::Authority)
+            if ($session.Skipped.ContainsKey($key)) { return $null }
+            if ($session.Verified.Contains($key)) { $credential = $session.Verified[$key] }
+            # A username embedded in the URL must not override the verified user.
+            $SourceRepo = $builder.Uri.AbsoluteUri
         }
-    } catch {
-        $err = $_.Exception.Message
     }
-    $ErrorActionPreference = $prev
-
-    if ($err) { throw $err }
-    if (-not (Test-Path -LiteralPath (Join-Path $cloneDir ".git"))) {
-        throw "Failed to clone/fetch config repo '$SourceRepo'."
+    $invoke = {
+        param([string[]]$GitArguments)
+        $r = Invoke-ConstructCredentialGit -Arguments $GitArguments -Credential $credential -TimeoutSeconds 120 -GitRunner $runner
+        if ($r.ExitCode -ne 0) { throw "git failed for config repo '${displayUrl}': $($r.Stderr)" }
+        return $r.Stdout
+    }
+    # Fail closed: never import stale cached content after a failed fetch/reset.
+    if (Test-Path -LiteralPath (Join-Path $cloneDir '.git')) {
+        if (-not $NoFetch) {
+            # Fetch the requested URL, not a possibly stale origin with userinfo.
+            $null = & $invoke @('-C', $cloneDir, 'fetch', $SourceRepo, '+refs/heads/*:refs/remotes/origin/*')
+            $branch = Invoke-ConstructCredentialGit -Arguments @('-C', $cloneDir, 'symbolic-ref', 'refs/remotes/origin/HEAD') -GitRunner $runner
+            if ($branch.ExitCode -ne 0) {
+                Write-Note "Config repo default branch lookup: $($branch.Stderr)"
+                $defaultBranch = 'refs/remotes/origin/main'
+            } else { $defaultBranch = $branch.Stdout.Trim() }
+            $null = & $invoke @('-C', $cloneDir, 'reset', '--hard', $defaultBranch)
+        }
+    } else {
+        $null = New-Item -ItemType Directory -Path $stagingRoot -Force
+        $null = & $invoke @('clone', '--', $SourceRepo, $cloneDir)
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $cloneDir '.git'))) {
+        throw "Failed to clone/fetch config repo '$displayUrl'."
     }
     return $cloneDir
 }
@@ -5166,6 +5395,8 @@ function Register-ConstructConfigRemote {
         [Parameter(Mandatory)][string]$ConfigDir,
         [Parameter(Mandatory)][string]$RemoteUrl
     )
+
+    if (Test-ConstructUrlHasCredentials -Url $RemoteUrl) { throw 'Config repository URL carries credentials; use the credential prompt.' }
 
     $manifDir = Join-Path $ConfigDir "manifest"
     if (-not (Test-Path -LiteralPath $manifDir)) {
@@ -5233,6 +5464,21 @@ function Test-ConstructRenameTarget {
         return [pscustomobject]@{ Ok = $false; Reason = "A profile named '$nm' already exists -- choose another." }
     }
     return [pscustomobject]@{ Ok = $true; Reason = "" }
+}
+
+function Invoke-ConstructImportGit {
+    param([string[]]$Arguments)
+    $r = Invoke-ConstructCredentialGit -Arguments $Arguments
+    if ($r.ExitCode -ne 0) { throw "Config import git failed: $($r.Stderr)" }
+    return $r.Stdout
+}
+
+function Complete-ConstructImportCommit {
+    param([string]$ConfigDir, [string]$Message)
+    $diff = Invoke-ConstructCredentialGit -Arguments @('-C', $ConfigDir, 'diff', '--cached', '--quiet')
+    if ($diff.ExitCode -eq 0) { return }
+    if ($diff.ExitCode -ne 1) { throw "Config import git diff failed: $($diff.Stderr)" }
+    $null = Invoke-ConstructImportGit -Arguments @('-C', $ConfigDir, '-c', 'user.name=The Construct', '-c', 'user.email=construct@construct.local', '-c', 'commit.gpgsign=false', 'commit', '-m', $Message)
 }
 
 function Import-ConstructConfigAs {
@@ -5304,12 +5550,12 @@ function Import-ConstructConfigAs {
         $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
         try {
             if ($CloneDir -and (Test-Path -LiteralPath (Join-Path $CloneDir ".git"))) {
-                $manifBaseCommit = "$(& git -C $CloneDir rev-parse HEAD 2>$null)".Trim()
-                $rawRef = "$(& git -C $CloneDir symbolic-ref --short HEAD 2>$null)".Trim()
+                $manifBaseCommit = (Invoke-ConstructImportGit -Arguments @('-C', $CloneDir, 'rev-parse', 'HEAD')).Trim()
+                $rawRef = (Invoke-ConstructImportGit -Arguments @('-C', $CloneDir, 'symbolic-ref', '--short', 'HEAD')).Trim()
                 if ($rawRef) { $manifRef = $rawRef }
-                $manifBaseBlobSha = "$(& git -C $CloneDir hash-object -- $SourceFile 2>$null)".Trim()
+                $manifBaseBlobSha = (Invoke-ConstructImportGit -Arguments @('-C', $CloneDir, 'hash-object', '--', $SourceFile)).Trim()
             }
-        } catch { }
+        } catch { throw }
         $ErrorActionPreference = $prev
 
         $manifEntry = [ordered]@{
@@ -5327,12 +5573,11 @@ function Import-ConstructConfigAs {
 
     if (Test-ConstructGitAvailable) {
         $srcBase = [System.IO.Path]::GetFileNameWithoutExtension($SourceFile)
-        $gitArgs = @("-c", "user.name=The Construct", "-c", "user.email=construct@construct.local", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=")
         $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
         try {
-            & git -C $ConfigDir add -A 2>$null | Out-Null
-            & git -C $ConfigDir @gitArgs commit -m "import: $nm (renamed from $srcBase)" 2>$null | Out-Null
-        } catch { }
+            $null = Invoke-ConstructImportGit -Arguments @('-C', $ConfigDir, 'add', '-A')
+            Complete-ConstructImportCommit -ConfigDir $ConfigDir -Message "import: $nm (renamed from $srcBase)"
+        } catch { throw }
         $ErrorActionPreference = $prev
     }
 
@@ -5371,6 +5616,11 @@ function Import-ConstructConfigs {
         $remoteUrl = $SourceRepo
         # Clone/fetch to the D2 staging cache.
         $srcDir = Update-ConstructStagingClone -SourceRepo $SourceRepo -NoFetch:$NoFetch
+        if (-not $srcDir) {
+            Register-ConstructConfigRemote -ConfigDir $ConfigDir -RemoteUrl $SourceRepo
+            Write-Note 'Config repo import deferred; no profiles could be read from it on this PC.'
+            return [pscustomobject]@{ Imported = @(); Errors = @(); Deferred = $true }
+        }
     } elseif ($SourceDir) {
         if (-not (Test-Path -LiteralPath $SourceDir)) {
             throw "Source directory '$SourceDir' does not exist."
@@ -5467,7 +5717,7 @@ function Import-ConstructConfigs {
                                         $mergeGateOk = $true
                                     }
                                 }
-                            } catch { }
+                            } catch { throw }
                             if (-not $mergeGateOk) {
                                 $errors += "3-way merge for '$name' produced invalid JSON; treat as conflict."
                                 continue
@@ -5507,12 +5757,12 @@ function Import-ConstructConfigs {
             $prev2 = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
             try {
                 if ($null -ne $srcDir -and (Test-Path -LiteralPath (Join-Path $srcDir ".git"))) {
-                    $manifBaseCommit = "$(& git -C $srcDir rev-parse HEAD 2>$null)".Trim()
-                    $rawRef = "$(& git -C $srcDir symbolic-ref --short HEAD 2>$null)".Trim()
+                    $manifBaseCommit = (Invoke-ConstructImportGit -Arguments @('-C', $srcDir, 'rev-parse', 'HEAD')).Trim()
+                    $rawRef = (Invoke-ConstructImportGit -Arguments @('-C', $srcDir, 'symbolic-ref', '--short', 'HEAD')).Trim()
                     if ($rawRef) { $manifRef = $rawRef }
-                    $manifBaseBlobSha = "$(& git -C $srcDir hash-object -- $f.FullName 2>$null)".Trim()
+                    $manifBaseBlobSha = (Invoke-ConstructImportGit -Arguments @('-C', $srcDir, 'hash-object', '--', $f.FullName)).Trim()
                 }
-            } catch { }
+            } catch { throw }
             $ErrorActionPreference = $prev2
 
             $manifEntry = [ordered]@{
@@ -5534,12 +5784,11 @@ function Import-ConstructConfigs {
 
     # Commit the import.
     if ($imported.Count -gt 0 -and (Test-ConstructGitAvailable)) {
-        $gitArgs = @("-c", "user.name=The Construct", "-c", "user.email=construct@construct.local", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=")
         $prev = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
         try {
-            & git -C $ConfigDir add -A 2>$null | Out-Null
-            & git -C $ConfigDir @gitArgs commit -m "import: $($imported -join ', ')" 2>$null | Out-Null
-        } catch { }
+            $null = Invoke-ConstructImportGit -Arguments @('-C', $ConfigDir, 'add', '-A')
+            Complete-ConstructImportCommit -ConfigDir $ConfigDir -Message "import: $($imported -join ', ')"
+        } catch { throw }
         $ErrorActionPreference = $prev
     }
 

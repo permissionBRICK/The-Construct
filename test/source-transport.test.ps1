@@ -245,7 +245,7 @@ $oldBlock = $baseline.Substring($baseline.IndexOf($marker),$baseline.IndexOf($en
 Check 'original upload block appears verbatim twice' ([regex]::Matches($provision,[regex]::Escape($oldBlock)).Count -eq 2)
 $sha=[Security.Cryptography.SHA256]::Create()
 try {$downstreamHash=[BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($provision.Substring($provision.IndexOf($end)).TrimEnd()))).Replace('-','').ToLowerInvariant()} finally {$sha.Dispose()}
-Check 'downstream commands and environment byte-identical to 8ef673b' ($downstreamHash -ceq 'd7c5f4c8f3c9d1f8c2e08173f01dd83119b1e41fa35cd17e03fb79f78fa5dd37')
+Check 'downstream commands and environment byte-identical to main 4c9409a' ($downstreamHash -ceq 'f8729213b64103ca4226c4848c2062e771e98fe8b7e4c911b14785b6a6f98a59')
 $local = $provision.IndexOf('if (-not $ServiceUrl) { $archivePath = New-RepoArchive }')
 $reachable = $provision.IndexOf('Ensure-VmReachable', $local)
 $begin = $provision.IndexOf('Invoke-ConstructSourceTransport -Phase begin', $reachable)

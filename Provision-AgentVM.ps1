@@ -2284,7 +2284,27 @@ $setupRootKeyArg = if ($script:UseRootKey) { "false" } else { "true" }
 # Feature 2: clone the selected projects' repos during provisioning. Credentials
 # for private repos come from -GitCloneCredentialsB64 (the up-front prompt), or on
 # a restore from the saved backup's git-credentials so the checkout can authenticate.
+$cloneSkipHostsB64 = $env:CONSTRUCT_GIT_SKIP_HOSTS_B64
+if ($cloneSkipHostsB64 -and $cloneSkipHostsB64 -notmatch '^[A-Za-z0-9+/]*={0,2}$') { throw 'Invalid skipped git host handoff.' }
 $cloneCredB64 = $GitCloneCredentialsB64
+if ($GitCloneCredentialsB64) {
+    # Auto-Install's in-process session already verified the selected hosts. A
+    # direct/unattended provision must verify its explicit handoff as well.
+    $credentialSession = Get-Variable -Name ConstructGitCredentialSession -ValueOnly -ErrorAction SilentlyContinue
+    if (-not $credentialSession) {
+        $credentialSession = New-ConstructGitCredentialSession -NoPrompt -CredentialsB64 $GitCloneCredentialsB64
+        if ($cloneSkipHostsB64) {
+            foreach ($origin in ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($cloneSkipHostsB64)) -split "`n")) {
+                if ($origin) { $credentialSession.Skipped[$origin] = 'skip' }
+            }
+        }
+    }
+    # VM sync can reveal new profiles after the installer's questions finished.
+    # That must never reopen its interactive credential prompt during provisioning.
+    $credentialSession.NoPrompt = $true
+    $credentialProjectsDir = Get-ConstructConfigProjectsDir -ScriptsDir $PSScriptRoot
+    $cloneCredB64 = Resolve-GitCloneCredential -ProjectsDir $credentialProjectsDir -Names $Projects -Session $credentialSession
+}
 if (-not $cloneCredB64 -and $RestoreDir) {
     $restoredCreds = Join-Path $RestoreDir "extracted\home\.git-credentials"
     if (Test-Path -LiteralPath $restoredCreds) {
@@ -2455,7 +2475,7 @@ if ($VmTokenB64) {
     $tokenExport  = "export CONSTRUCT_VM_TOKEN_B64=`"`$(cat '$vmTokenRemotePath')`"; "
     $tokenCleanup = "; __rc=`$?; rm -f '$vmTokenRemotePath'; exit `$__rc"
 }
-$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit' CONSTRUCT_VERSION='$constructVersion' SMB_SHARE='$SmbShare' CLAUDE_PARTIAL_STREAMING='$ClaudePartialStreaming' MIC_PASSTHROUGH='$MicPassthrough' OPENCODE_BACKGROUND_WATCHER='$OpenCodeBackgroundWatcher' T3CODE='$T3Code' T3CODE_CHANNEL='$T3CodeChannel' T3CODE_BUILD_SOURCE='$T3CodeBuildSource' T3CODE_LIMIT_RESUME='$T3CodeLimitResume' T3CODE_HTTPS='$T3CodeHttps'" + $externalEnv + $serviceEnv + " T3CODE_BUILD_MODE='server'"
+$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' GIT_CLONE_SKIP_HOSTS_B64='$cloneSkipHostsB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit' CONSTRUCT_VERSION='$constructVersion' SMB_SHARE='$SmbShare' CLAUDE_PARTIAL_STREAMING='$ClaudePartialStreaming' MIC_PASSTHROUGH='$MicPassthrough' OPENCODE_BACKGROUND_WATCHER='$OpenCodeBackgroundWatcher' T3CODE='$T3Code' T3CODE_CHANNEL='$T3CodeChannel' T3CODE_BUILD_SOURCE='$T3CodeBuildSource' T3CODE_LIMIT_RESUME='$T3CodeLimitResume' T3CODE_HTTPS='$T3CodeHttps'" + $externalEnv + $serviceEnv + " T3CODE_BUILD_MODE='server'"
 Write-Host "  --- live provisioning output ---" -ForegroundColor DarkGray
 $provisionStream = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "$tokenExport$envPrefix bash /opt/construct/repo/bin/provision.sh$tokenCleanup"
 Write-Host "  --- end provisioning output ---" -ForegroundColor DarkGray

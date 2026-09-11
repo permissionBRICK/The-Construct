@@ -893,6 +893,10 @@ function Show-Banner([string[]]$Lines) {
 $commonLib = Join-Path $PSScriptRoot "lib\AgentVm.Common.ps1"
 if (-not (Test-Path -LiteralPath $commonLib)) { throw "Required helper not found: $commonLib" }
 . $commonLib
+$script:ConstructGitCredentialSession = $null
+$script:ConstructGitExistingInstall = $false
+$script:ConstructGitConfigImported = $false
+$env:CONSTRUCT_GIT_SKIP_HOSTS_B64 = ""
 
 # Per-instance state (the VM-scoped half of what the control panel saves). OPTIONAL: an
 # older/partial checkout without it falls back to the legacy top-level keys, which is
@@ -1348,6 +1352,28 @@ $bootstrapPubKey = Join-Path $PSScriptRoot "keys\bootstrap_ed25519.pub"
 # comma prompt below is only a fallback for when that lib isn't loaded.
 # Mirrors Select-Projects in Provision-AgentVM.ps1 so the choice can be made up
 # front here and passed straight through.
+function Start-ConstructGitPreflight {
+    # One in-process session spans config import, project selection and handoff.
+    if (-not $script:ConstructGitCredentialSession) {
+        $hasBackupCredentials = $restoreDir -and (Test-BackupHasGitCredentials -BackupDir $restoreDir)
+        $noPrompt = -not (Test-ConstructGitCredentialPromptAllowed -ExistingInstall:$script:ConstructGitExistingInstall `
+            -Action $Action -InputRedirected:([Console]::IsInputRedirected) -BackupHasCredentials:$hasBackupCredentials)
+        $script:ConstructGitCredentialSession = New-ConstructGitCredentialSession -NoPrompt:$noPrompt -CredentialsB64 $GitCloneCredentialsB64 `
+            -ExistingInstall:($script:ConstructGitExistingInstall -or $hasBackupCredentials)
+    }
+    # Explicit config sources must be imported BEFORE choosing project profiles.
+    # Local add-config owns its import below (including collision handling).
+    if ($ConfigRepo -and ($Action -ne 'add-config' -or $RemoteInstall) -and -not $script:ConstructGitConfigImported) {
+        $configStore = Initialize-ConstructConfigStore -ScriptsDir $PSScriptRoot
+        $null = Initialize-ConstructConfigRepo -ConfigDir $configStore
+        $importParams = @{ ConfigDir = $configStore; SourceRepo = $ConfigRepo }
+        if ($ImportConfigs) { $importParams['Names'] = @($ImportConfigs -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
+        $result = Import-ConstructConfigs @importParams
+        foreach ($e in @($result.Errors)) { Write-Note $e }
+        $script:ConstructGitConfigImported = $true
+    }
+}
+
 function Select-Projects {
     # Config-sync v2: prefer the shared config projects dir; fall back to the
     # shipped projects/ in the repo checkout (pre-migration / degraded mode).
@@ -2079,6 +2105,7 @@ if ($RemoteInstall) {
     # ── Which instance is this about? ─────────────────────────────────────────
     $existingEntry = $null
     if ($InstanceName -and $registry.Entries.ContainsKey($InstanceName)) {
+        $script:ConstructGitExistingInstall = $true
         $existingEntry = $registry.Entries[$InstanceName]
         if ([string]$existingEntry.Backend -cne 'hyperv-remote') {
             throw "The instance '$InstanceName' is a '$($existingEntry.Backend)' instance, not a remote one. Drop -Backend hyperv-remote to manage it."
@@ -2208,6 +2235,7 @@ if ($RemoteInstall) {
         if ($choice -eq 0) {
             # Reprovision: straight to the provisioner over the endpoint. Nothing on the
             # host service is touched at all.
+            Start-ConstructGitPreflight
             $reprovProjects = $Projects
             if (-not $PSBoundParameters.ContainsKey('Projects')) { $reprovProjects = Select-Projects }
             Write-Ok "Projects: $reprovProjects"
@@ -2224,7 +2252,7 @@ if ($RemoteInstall) {
                 $reprovProjDir = if (Get-Command Get-ConstructConfigProjectsDir -ErrorAction SilentlyContinue) {
                     Get-ConstructConfigProjectsDir -ScriptsDir $PSScriptRoot
                 } else { Join-Path $PSScriptRoot 'projects' }
-                $reprovCloneCredB64 = if ($GitCloneCredentialsB64) { $GitCloneCredentialsB64 } else { Resolve-GitCloneCredential -ProjectsDir $reprovProjDir -Names $reprovProjects }
+                $reprovCloneCredB64 = Resolve-GitCloneCredential -ProjectsDir $reprovProjDir -Names $reprovProjects -Session $script:ConstructGitCredentialSession
             }
 
             Show-AllSet @(
@@ -2421,6 +2449,7 @@ if ($RemoteInstall) {
         if ($chosenDiskGB -lt 10) { Write-Warning "Minimum disk size is 10 GB. Using 10 GB."; $chosenDiskGB = 10 }
     }
 
+    Start-ConstructGitPreflight
     $chosenProjects = $Projects
     if (-not $PSBoundParameters.ContainsKey('Projects')) { $chosenProjects = Select-Projects }
     if (@($restoredProjectNames).Count -gt 0) {
@@ -2435,18 +2464,13 @@ if ($RemoteInstall) {
         $freshProjDir = if (Get-Command Get-ConstructConfigProjectsDir -ErrorAction SilentlyContinue) {
             Get-ConstructConfigProjectsDir -ScriptsDir $PSScriptRoot
         } else { Join-Path $PSScriptRoot 'projects' }
-        $ccParams = @{ ProjectsDir = $freshProjDir; Names = $chosenProjects }
+        $ccParams = @{ ProjectsDir = $freshProjDir; Names = $chosenProjects; Session = $script:ConstructGitCredentialSession }
         if ($restoreDir -and (Get-Command Test-BackupHasGitCredentials -ErrorAction SilentlyContinue) `
                         -and (Test-BackupHasGitCredentials -BackupDir $restoreDir)) {
             $ccParams['NoPrompt'] = $true
             Write-Note "Reusing the saved git credentials from the restore for cloning -- skipping the credential prompt."
         }
-        if ($GitCloneCredentialsB64) {
-            $chosenCloneCredB64 = $GitCloneCredentialsB64
-            Write-Note "Using the clone credentials passed with -GitCloneCredentialsB64 -- skipping the credential prompt."
-        } else {
-            $chosenCloneCredB64 = Resolve-GitCloneCredential @ccParams
-        }
+        $chosenCloneCredB64 = Resolve-GitCloneCredential @ccParams
     }
 
     $chosenAgentPassword = $AgentPassword
@@ -2641,6 +2665,7 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
     ((Test-ConstructVmPresent -Name $HyperVmName) -eq $true)) {
 
     $existingVmHandled = $true
+    $script:ConstructGitExistingInstall = $true
     # The VM exists on THIS PC: record it before any action runs, so a VM created before
     # B11 (or by a script that predates the registry) is listed by the control panel from
     # its next reprovision/export onward. Writes nothing for a default-only install.
@@ -2674,6 +2699,7 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
     if ($choice -eq 0) {
         # Reprovision only: we just need the project selection, then run the
         # provisioner against the existing VM -- no download / build / create.
+        Start-ConstructGitPreflight
         $reprovProjects = $Projects
         if (-not $PSBoundParameters.ContainsKey('Projects')) { $reprovProjects = Select-Projects }
         Write-Ok "Projects: $reprovProjects"
@@ -2686,13 +2712,13 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
         if ($giParams.ContainsKey('Name') -and $giParams.ContainsKey('Email')) { $giParams['NoPrompt'] = $true }
         $reprovGit = Resolve-GitIdentity @giParams
 
-        # Feature 2: if the selected projects clone repos, ask once for credentials.
+        # Check anonymous access; reprovision uses the VM credentials without prompting.
         $reprovCloneCredB64 = ""
         if (Get-Command Resolve-GitCloneCredential -ErrorAction SilentlyContinue) {
             $reprovProjDir = if (Get-Command Get-ConstructConfigProjectsDir -ErrorAction SilentlyContinue) {
                 Get-ConstructConfigProjectsDir -ScriptsDir $PSScriptRoot
             } else { Join-Path $PSScriptRoot 'projects' }
-            $reprovCloneCredB64 = if ($GitCloneCredentialsB64) { $GitCloneCredentialsB64 } else { Resolve-GitCloneCredential -ProjectsDir $reprovProjDir -Names $reprovProjects }
+            $reprovCloneCredB64 = Resolve-GitCloneCredential -ProjectsDir $reprovProjDir -Names $reprovProjects -Session $script:ConstructGitCredentialSession
         }
 
         # No download/build/create on this path -- just re-run the provisioner
@@ -2986,6 +3012,7 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
             }
 
             # (2) Import profiles.
+            Start-ConstructGitPreflight
             $importArgs = @{ ConfigDir = $addConfigDir }
             if ($PSBoundParameters.ContainsKey('ConfigRepo')) {
                 $importArgs['SourceRepo'] = $ConfigRepo
@@ -3061,7 +3088,7 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
                 $acProjDir = if (Get-Command Get-ConstructConfigProjectsDir -ErrorAction SilentlyContinue) {
                     Get-ConstructConfigProjectsDir -ScriptsDir $PSScriptRoot
                 } else { Join-Path $PSScriptRoot 'projects' }
-                $acCloneCredB64 = Resolve-GitCloneCredential -ProjectsDir $acProjDir -Names $addProjectsStr
+                $acCloneCredB64 = Resolve-GitCloneCredential -ProjectsDir $acProjDir -Names $addProjectsStr -Session $script:ConstructGitCredentialSession
             }
 
             Write-Step "Reprovisioning the VM with the new config"
@@ -3144,6 +3171,7 @@ if ($PSBoundParameters.ContainsKey('Action') -and $Action -eq 'add-config' -and 
             Initialize-ConstructConfigRepo -ConfigDir $addConfigDir | Out-Null
         }
 
+        Start-ConstructGitPreflight
         $importArgs = @{ ConfigDir = $addConfigDir }
         if ($PSBoundParameters.ContainsKey('ConfigRepo')) {
             $importArgs['SourceRepo'] = $ConfigRepo
@@ -3294,6 +3322,7 @@ if (-not $SkipCreateVm) {
     }
 
     # Project profiles to provision.
+    Start-ConstructGitPreflight
     if (-not $PSBoundParameters.ContainsKey('Projects')) {
         $chosenProjects = Select-Projects
     }
@@ -3307,20 +3336,12 @@ if (-not $SkipCreateVm) {
         Write-Ok "Including restored project profile(s): $($restoredProjectNames -join ', ')"
     }
 
-    # Feature 2: if any selected project clones repos, ask once for credentials
-    # (Enter skips; a restore falls back to the saved git-credentials).
-    #
-    # But when a restore is in play AND its backup already carries stored git
-    # credentials, those get reused for the clone (Provision-AgentVM.ps1 falls back
-    # to them), so the prompt is redundant -- skip it. It's the stray prompt that
-    # otherwise interrupts the unattended control-panel reinstall. With no stored
-    # credentials available (e.g. a clean-wipe reinstall), still prompt so private
-    # repos can be cloned during provisioning.
+    # Initial installs verify credentials; reinstalls reuse the VM backup without prompting.
     if (Get-Command Resolve-GitCloneCredential -ErrorAction SilentlyContinue) {
         $freshProjDir = if (Get-Command Get-ConstructConfigProjectsDir -ErrorAction SilentlyContinue) {
             Get-ConstructConfigProjectsDir -ScriptsDir $PSScriptRoot
         } else { Join-Path $PSScriptRoot 'projects' }
-        $ccParams = @{ ProjectsDir = $freshProjDir; Names = $chosenProjects }
+        $ccParams = @{ ProjectsDir = $freshProjDir; Names = $chosenProjects; Session = $script:ConstructGitCredentialSession }
         if ($restoreDir -and (Get-Command Test-BackupHasGitCredentials -ErrorAction SilentlyContinue) `
                         -and (Test-BackupHasGitCredentials -BackupDir $restoreDir)) {
             $ccParams['NoPrompt'] = $true

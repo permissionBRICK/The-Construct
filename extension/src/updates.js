@@ -15,9 +15,9 @@ const { extractVersion } = require("./probe");
 
 const DEFAULT_REPO = "permissionBRICK/The-Construct";
 const DEFAULT_REF = "main";
-const TTL_MS = 10 * 60 * 1000; // cache a successful result for 10 min
+const TTL_MS = 5 * 60 * 1000; // cache a successful result for 5 min
 const NEG_TTL_MS = 60 * 1000;  // cache a FAILURE (null) only briefly, so a transient
-                               // offline/rate-limit blip doesn't hide the banner for 10 min
+                               // offline/rate-limit blip doesn't hide the banner for 5 min
 
 /** Read the Construct update markers, applying defaults.
  *
@@ -161,10 +161,9 @@ async function checkConstruct(markers, opts = {}) {
 // and opts.noCache are for tests.
 const _cache = new Map(); // key -> { at, value }
 async function cached(key, produce, opts = {}) {
-  if (opts.noCache) return produce();
   const now = opts.now ? opts.now() : Date.now();
   const hit = _cache.get(key);
-  if (hit && now - hit.at < (hit.value == null ? NEG_TTL_MS : TTL_MS)) return hit.value;
+  if (!opts.noCache && hit && now - hit.at < (hit.value == null ? NEG_TTL_MS : TTL_MS)) return hit.value;
   const value = await produce();
   _cache.set(key, { at: now, value });
   return value;
@@ -426,7 +425,7 @@ async function augment(state, raw, opts = {}) {
     // The GUEST's own marker wins when the probe brought one back (state.provisionedCommit
     // from probe.toState); the host-side per-instance cache stands in when it did not.
     if (isProvisionStale(markers, state.provisionedCommit)) next = { ...next, provisionStale: true };
-    const c = await checkConstructCached(markers, opts);
+    const c = await checkConstructCached(markers, { ...opts, noCache: opts.noCache || opts.constructNoCache });
     if (c) next = { ...next, update: { available: c.available, behind: behindText(c.count) } };
     // Agent update detection (only when the VM is online with probed agents).
     if (next.online !== false && Array.isArray(next.agents) && next.agents.length) {

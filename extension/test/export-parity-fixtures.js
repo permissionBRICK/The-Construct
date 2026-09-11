@@ -44,6 +44,11 @@ function guestScripts() {
     add("notify-watch", { dir: q(dir), claim, heartbeat: "60", fallback: "3" }, notify.buildWatchScript({ dir }));
   }
   add("probe", {}, probe.REMOTE_PROBE);
+  for (const url of ["https://example.test/repo.git", "git@host:a'b.git", " https://host/{{dest}}.git "]) {
+    const remote = require("../src/remote"), dest = remote.repoNameFromUrl(url);
+    add("project-clone", {root:"/root/repos",url:Buffer.from(url.trim()).toString("base64"),dest:Buffer.from(dest).toString("base64")},remote.buildCloneScript(url,dest));
+  }
+  for (const root of ["/root/repos", "/tmp/a'b"]) add("project-scan", {root:root.replace(/'/g, "'\\''")}, require("../src/projects").buildScanScript(root));
   for (const text of ["", "#!/bin/bash\necho 'hello'\n# Unicode: ü\n"]) {
     add("audio-enable", { port: "8767", count: "8", shim: q(Buffer.from(text).toString("base64")), enable: q(Buffer.from(text).toString("base64")) }, audio.buildEnableScript(text, text));
     add("audio-disable", { self: "0", port: "8767", count: "8", disable: q(Buffer.from(text).toString("base64")) }, audio.buildDisableScript(text));
@@ -111,8 +116,9 @@ function lifecycleInvocations() {
   const m=require("../src/lifecycle"), i=instances; const rows=[];
   const settings={gitName:"-someone 'ü'",gitEmail:"a@b",ram:"12",disk:"100",cpu:"6",ubuntu:"24.04",serveWeb:true,tunnel:false,smb:false,partialStreaming:true,mic:false,opencodeBackgroundWatcher:true,t3code:true,t3codeChannel:"nightly",t3codeLimitResume:false,autoCheckpoints:false};
   const targets=[null,i.deriveDefaults("agent-vm",{}),i.deriveDefaults("dev",{}),i.deriveDefaults("dev",{configBranch:"custom"}),i.deriveDefaults("dev",{backend:"hyperv-remote",sshHost:"host",service:{url:"https://host:7462",auth:"token"}}),i.deriveDefaults("dev",{backend:"hyperv-remote",sshHost:"host"}),i.deriveDefaults("dev",{backend:"unknown"})];
-  for(const action of ["reprovision","exportConfig","reinstall","redownload","setCheckpoints","removeInstance","unknown"]) for(const instance of targets) for(const declared of [null,[],["VmName"],["VmHost","HostAlias","SshPort","LocalKeyName"],["VmHost","HostAlias","SshPort","LocalKeyName","VmName","ConfigBranch"],["InstanceName"],["InstanceName","ConfigBranch"],["Backend","ServiceUrl","InstanceName"],["Backend","ServiceUrl","InstanceName","ConfigBranch"]]) for(const legacy of [false,true]) {
+  for(const action of ["reprovision","exportConfig","reinstall","redownload","setCheckpoints","setResources","removeInstance","unknown"]) for(const instance of targets) for(const declared of [null,[],["VmName"],["VmHost","HostAlias","SshPort","LocalKeyName"],["VmHost","HostAlias","SshPort","LocalKeyName","VmName","ConfigBranch"],["InstanceName"],["InstanceName","ConfigBranch"],["Backend","ServiceUrl","InstanceName"],["Backend","ServiceUrl","InstanceName","ConfigBranch"]]) for(const legacy of [false,true]) {
     const opts={instance,instanceParams:declared,settings,projects:["api","ui"],backupDir:"C:/Backup dir",backupMode:legacy?"wipe":"save",enabled:!legacy,confirmation:"dev",supportsCheckpoints:!legacy,supportsVmCpuCount:!legacy,supportsT3CodeChannel:!legacy,supportsT3CodeLimitResume:!legacy,supportsOpenCodeBackgroundWatcher:!legacy};
+    if (action === "setResources") Object.assign(opts, {ram:legacy?null:"16.5",cpu:legacy?"bad":4});
     rows.push({action,opts,output:m.buildInvocation(action,opts),args:m.instanceArgs(action,instance,declared),params:m.paramsForAction(action,instance,declared)||[]});
   }
   return rows;
@@ -124,10 +130,21 @@ function lifecycleLaunches() {
     const opts={elevate,keepOpen,argSpec}; rows.push({script,args,opts,output:m.buildHostLaunch(script,args,opts),child:m.buildChildCommandLine(script,args,opts)});
   }rows.push({kind:"installGit",output:{file:"cmd.exe",spawnArgs:["/c","start","","powershell.exe","-EncodedCommand",Buffer.from("winget install --id Git.Git -e --source winget","utf16le").toString("base64")],command:"winget install --id Git.Git -e --source winget"}});return rows;
 }
+function projectImport() {
+  const m = require("../src/projects"), rows = [];
+  for (const stdout of ["", "END\n", "api\thttps://example.test/api.git\tmain\nEND\n", "api\t\tmain\n", "a\tu\tb\nEND\r\n"])
+    rows.push({kind:"parse",stdout,output:m.parseScan(stdout)});
+  const scan = [{name:"api",url:"https://example.test/api.git",branch:"main"},{name:"API",url:"ssh://example.test/other",branch:"main"},{name:"ui",url:"https://example.test/api.git",branch:"main"},{name:"local",url:"",branch:"main"}];
+  for (const existing of [{}, {api:m.buildDiscoveredProfile(scan[0])}]) for (const options of [{},{ignoredNames:["api"]},{ignoredUrls:["https://example.test/api.git"]}])
+    rows.push({kind:"plan",scan,existing,options,output:m.planImport(scan,existing,options)});
+  return rows;
+}
 function vmPower() {
   const m=require("../src/vmpower");const rows=[];
   for(const name of [null,"Agent-VM","dev","a'b", "name with space"])for(const kind of ["state","checkpoints","start"]){const output=kind==="state"?m.buildStateProbeLaunch(name):kind==="checkpoints"?m.buildAutoCheckpointProbeLaunch(name):m.buildElevatedCommandLaunch(m.buildStartCommand(name));rows.push({kind,name,output});}
   for(const input of ["","noise\nVMSTATE=Running\n","VMSTATE=Off","VMSTATE=Saved","VMSTATE=Paused","VMSTATE=Starting","VMSTATE=absent","VMSTATE=unknown","VMAUTOCHK=True","VMAUTOCHK=False","VMAUTOCHK=unsupported","VMAUTOCHK=absent"]) rows.push({kind:"parse",input,state:m.parseVmState(input),checkpoints:m.parseAutoCheckpoints(input)});
+  for (const saved of [{}, {ram:"16",cpu:"8"}, {ram:"16.5",cpu:1}, {ram:0,cpu:"max"}, {ram:true,cpu:1.5}, {ram:"0x10",cpu:"4"}])
+    for (const live of [null, {}, {ramGb:16,cpus:8}, {ramGb:8,cpus:4}, {ramGb:16.5,cpus:1}]) rows.push({kind:"resources",saved,live,output:m.planResourceApply(saved,live)});
   rows.push({kind:"shutdown",output:m.SHUTDOWN_CMD}); return rows;
 }
 function probeParsing() {
@@ -170,7 +187,7 @@ function t3Pure() {
 function remoteRoutes() {
  const m=remotehost, rows=[]; const value="name /?ü";
  const calls=[
- ["vmDefaults"],["vmCpu",value],["setVmCpu",value,{cpus:8}],["whoami"],["listVms"],["getVm",value],["getState",value],["getEndpoint",value],["power",value,"start"],["createVm",{name:"dev"}],["deleteVm",value,{force:true}],["getJob",value],["health"],["hostCapabilities"],["vmIdentity",value],["vmCapabilities",value],["hostStatus"],["hostCapacity",true],["hostConfig"],["putHostConfig",{mode:"x"}],["isoCatalog"],
+ ["vmMemory",value],["setVmMemory",value,{ramGb:12}],["vmIdlePolicy",value],["setVmIdlePolicy",value,{timeoutMinutes:60,action:"shutdown"}],["vmDefaults"],["vmCpu",value],["setVmCpu",value,{cpus:8}],["whoami"],["listVms"],["getVm",value],["getState",value],["getEndpoint",value],["power",value,"start"],["createVm",{name:"dev"}],["deleteVm",value,{force:true}],["getJob",value],["health"],["hostCapabilities"],["vmIdentity",value],["vmCapabilities",value],["hostStatus"],["hostCapacity",true],["hostConfig"],["putHostConfig",{mode:"x"}],["isoCatalog"],
  ["users"],["getUser",value],["createUser",{name:"x"}],["updateUser",value,{role:"admin"}],["deleteUser",value],["userAllowance",value],["putUserAllowance",value,{maxVms:2}],["userTokens",value],["issueUserToken",value,null],["revokeUserToken",value,"id /"],
  ["vms",{all:true,empty:"",owner:value}],["sharedVms"],["children",value],["overrides",value],["putOverrides",value,{ram:8}],["deleteOverrides",value],["lifecycle",value,{action:"reprovision"}],["setVmSharing",value,{shared:true}],["renewVmLease",value,{minutes:30}],["rotateVmToken",value,null],["revokeVmToken",value],
  ["media",{type:"iso"}],["mediaItem",value],["mediaReferences",value],["deleteMedia",value],["mediaCleanup"],["jobs",{state:"running"}],["cancelJob",value],["audit",{limit:20}],["forwardsVia",value],["updatesStatus"],["updatesCheck",null],["updatesStage",{releaseTag:"x"}],["updatesApply",{updateId:"x"}],["updatesCancel",{updateId:"x"}],["updatesResolve",{updateId:"x"}]];
@@ -366,7 +383,7 @@ function hostAdminIpc() {
  for(const input of [{},{mode:"admin",activeTab:"vms"},{mode:"admin",features:{updates:true}},{mode:"user"},{maintenance:{phase:"draining"}},{updatePending:{id:"one"}}])add("poll",input,m.pollIntervalMs(input));
  for(const input of [null,"", "5m", "4m", "24h", "2d", "never", "NEVER", " 12h ", "0m", "-5h", "99999999999999999999d", "five"])
   add("lifetime",input,m.parseLifetime(input));
- for(const features of [[],["host-admin"],["host-admin","children","updates"],["host-admin","children","media","updates","network","console","primary-cpu"]]) {
+ for(const features of [[],["host-admin"],["host-admin","children","updates"],["host-admin","children","media","updates","network","console","primary-cpu","primary-memory"]]) {
   const input={apiFeatures:features}; add("features",input,m.featureSet(input)); add("tabs",input,m.tabsFor({features:m.featureSet(input)}));
  }
  for(const form of [{},{name:"alice",role:"admin",enabled:"false",maxVms:"3",allowHostForwards:"true"},{name:"",role:"root",enabled:"invalid",maxVms:"-1"},{allowChildCreation:"true",maxRetainedChildren:"4",cpuBudget:"8",ramBudgetGiB:"1.5",storageBudgetGiB:"100",maxChildLifetime:"24h",allowNeverLifetime:"false",allowSharing:"inherit"},{maxChildLifetime:"never",ramBudgetGiB:"bad",maxRetainedChildren:"1.5"}])
@@ -374,7 +391,7 @@ function hostAdminIpc() {
  for(const timeoutMinutes of [0,1,5.8,99,-5,"bad","45"])for(const action of ["shutdown","save","SAVE","unknown"]) {
   const input={policy:{timeoutMinutes,action},max:30}; add("idleClamp",input,f.clampIdlePolicy(input.policy,input.max)); add("idle",{timeoutMinutes,action,maxTimeoutMinutes:30},f.toPanelIdlePolicy({timeoutMinutes,action,maxTimeoutMinutes:30}));
  }
- const vm={pendingCpu:8,name:"build",kind:"child",parent:"agent-vm",owner:"alice",sharing:"host",state:"running",hardware:{cpus:4,ramMb:2048,diskGb:80},lease:{state:"active",requested:"12h",expiresAt:"2026-09-11T13:00:00Z"},allowedActions:["shutdown","delete","invented"],resourceUsage:{cpuUsagePercent:25.5,memoryDemandBytes:1073741824,memoryAssignedBytes:2147483648,diskFileBytes:123456789,observedAt:"2026-09-11T11:59:55Z"}};
+ const vm={pendingRamGb:12,pendingCpu:8,name:"build",kind:"child",parent:"agent-vm",owner:"alice",sharing:"host",state:"running",hardware:{cpus:4,ramMb:2048,diskGb:80},lease:{state:"active",requested:"12h",expiresAt:"2026-09-11T13:00:00Z"},allowedActions:["shutdown","delete","invented"],resourceUsage:{cpuUsagePercent:25.5,memoryDemandBytes:1073741824,memoryAssignedBytes:2147483648,diskFileBytes:123456789,observedAt:"2026-09-11T11:59:55Z"}};
  for(const input of [{},vm,{...vm,state:"paused",deleting:true,lease:{state:"overdue",lastOutcome:"no integration"}},{name:"agent-vm",kind:"primary",children:["build"],guest:{constructCommit:"abcdef0123456789",provisionedAt:"2026-09-11T11:30:00Z"}}]) {
   add("vm",input,m.toVmRow(input,now)); add("childDelete",input,m.childDeleteConfirmation(input)); add("children",[input],m.childRows([input],now));
  }
@@ -428,7 +445,7 @@ function desktopWebviews() {
     const template = fs.readFileSync(path.join(__dirname,'../media',surface+'.html'),'utf8');
     const output = template.replace(/{{cspSource}}/g,cspSource).replace(/{{nonce}}/g,nonce)
       .replace(/{{styleUri}}/g,cspSource+'/panel.css').replace(/{{themeUri}}/g,cspSource+'/'+themes.cssFileFor(theme))
-      .replace(/{{scriptUri}}/g,cspSource+'/'+surface+'.js').replace(/{{adminStyleUri}}/g,cspSource+'/hostadmin.css');
+      .replace(/{{paletteUri}}/g,cspSource+'/palette.js').replace(/{{scriptUri}}/g,cspSource+'/'+surface+'.js').replace(/{{adminStyleUri}}/g,cspSource+'/hostadmin.css');
     rows.push({kind:'document',surface,template,theme,nonce,output});
   }
   return rows;
@@ -457,6 +474,46 @@ function integrationSettings() {
     return rows;
   } finally { fs.rmSync(root, {recursive:true}); }
 }
+function instanceWorkflows() {
+  const rows = [], remote = require("../src/remote");
+  for (const document of [{}, {instances:{"work-vm":{},"remote-vm":{backend:"hyperv-remote",sshHost:"guest.example",service:{url:"http://localhost:7462",auth:"negotiate"}}}}]) {
+    const text = JSON.stringify(document), registry = instances.parseRegistry(text).registry;
+    for (const name of ["", "bad name", "agent-vm", "work-vm", "other-vm"])
+      for (const host of ["work-vm.mshome.net", "WORK-VM.MSHOME.NET.", "other-vm", "elsewhere"])
+        rows.push({kind:"register",text,name,host,output:instances.planLocalRegistration(registry,name,host)});
+    for (const name of ["", "missing", "agent-vm", "remote-vm", "work-vm"])
+      for (const confirmation of ["", name]) rows.push({kind:"remove",text,name,confirmation,output:instances.planRemoveInstance({registry,name,confirmation})});
+  }
+  for (const url of ["", "https://host/a.git", "git@host:project.git", "ssh://host/a.GIT/", " https://host/a.git?q=1#x ", "nope", "https://a b", "git@host:.."]) rows.push({kind:"git",url,valid:remote.isLikelyGitUrl(url),name:remote.repoNameFromUrl(url)});
+  return rows;
+}
+function hostConversionLaunches() {
+  const m=require("../src/hostconversion"), rows=[];
+  const source=fs.readFileSync(path.join(__dirname,"../src/hostconversion.js"),"utf8");
+  const identity=source.match(/const pc = JSON.parse\(await powershell\(`([^`]+)`\)\);/)[1];
+  rows.push({kind:"identity",output:["-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-EncodedCommand",Buffer.from("$u=New-Object Text.UTF8Encoding($false); [Console]::OutputEncoding=$u; [Console]::InputEncoding=$u; "+identity,"utf16le").toString("base64")]});
+  for (const input of [null,"host.example","HOST","192.168.1.2","a..b","a'b","a".repeat(254)]) rows.push({kind:"host",input,output:m.validHost(input)});
+  for (const directory of ["C:/Construct", "C:/Users/O'Neil/构建"]) {
+    const plan=sortKeys({id:"0123456789abcdef0123456789abcdef",name:"work-vm",scriptsDir:directory,adminUser:"PC\\owner",publicHost:"host.example",resultPath:"C:/temp/conversion.result",publicKeyXml:"<RSAKeyValue/>"});
+    rows.push({kind:"launch",plan,output:m.launchScript(plan)});
+  }
+  return rows;
+}
+function remoteVmLaunches() {
+  const lifecycle=require("../src/lifecycle"), vm=require("vm");
+  const source=fs.readFileSync(path.join(__dirname,"../extension.js"),"utf8");
+  const start=source.indexOf("  const argSpec = [",source.indexOf("async function runNewRemoteVm"));
+  const builder=source.slice(start,source.indexOf("  lifecycle.launchHostScript",start));
+  const rows=[];
+  for(const auth of ["token","negotiate"]) for(const supportsCpu of [true,false]) for(const projects of [null,[],["default","api"]]) {
+    const script="C:/Construct/Auto-Install.ps1",url="https://host.example:7462",name="work-vm",cpu=4,ram=8,disk=50;
+    const argSpec=JSON.parse(JSON.stringify(vm.runInNewContext(builder+";argSpec",{hostEntry:{url,auth},name,cpu,ram,disk,scriptsDir:"C:/Construct",lifecycle:{AUTO_INSTALL:"Auto-Install.ps1",scriptSupportsParam:()=>supportsCpu},logLine:()=>{}})));
+    if(projects!==null) argSpec.push({flag:"-Projects",value:projects.join(",")});
+    const args=lifecycle.flattenArgPairs(argSpec);
+    rows.push({auth,supportsCpu,projects,script,url,name,cpu,ram,disk,argSpec,args,output:lifecycle.buildHostLaunch(script,args,{elevate:false,argSpec})});
+  }
+  return rows;
+}
 async function exportAll() {
   return {
     "refresh-cache": refreshCachePolicy(),
@@ -477,9 +534,13 @@ async function exportAll() {
     "settings-mapping": settingsMapping(),
     "instance-identity": instanceIdentity(),
     "registry-state": registryState(),
+    "instance-workflows": instanceWorkflows(),
+    "host-conversion-launches": hostConversionLaunches(),
+    "remote-vm-launches": remoteVmLaunches(),
     "lifecycle-invocations": lifecycleInvocations(),
     "lifecycle-launches": lifecycleLaunches(),
     "vm-power": vmPower(),
+    "project-import": projectImport(),
     "probe-parsing": probeParsing(),
     "usage-parsing": usageParsing(),
     "updates-planning": await updatesPlanning(),
