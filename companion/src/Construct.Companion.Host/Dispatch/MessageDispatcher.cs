@@ -45,6 +45,8 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
                     state.Publish(name, new { type = "settings", instance = name, settings = entry.Store.ReadSettings() }); return;
                 case "saveSettings": await SaveSettings(entry, message["settings"] as JsonObject ?? throw new IpcFailure(400, "invalidSettings", "A settings object is required."), ct); return;
                 case "customRebuild": RequireRebuild(message); await Lifecycle(entry, Text(message, "mode"), message, ct); return;
+                // Saved by saveSettings; the restart-to-resize workflow (elevated Set-AgentVmResources.ps1 with a result file, or the service's CPU route plus restart) is not ported yet.
+                case "applyVmResources": Refuse(name, type, "Applying the VM size is not available from Construct Companion yet. The values are saved; use Apply in the VS Code control panel, or Reinstall."); return;
                 case "setUsagePeriod": entry.UsagePeriod = UsageParser.NormalizeReport(Text(message, "period")); await RefreshAsync(entry, ct); return;
                 case "saveProject":
                     var project = Text(message, "name"); var profile = RequireProject(project, message["profile"]);
@@ -183,6 +185,7 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
             var markers = entry.Store.ReadMarkers();
             data["provisionStale"] = UpdatePlanner.IsProvisionStale(markers, Text(data, "provisionedCommit"));
             data["constructUpdate"] = await UpdatePlanner.CheckConstructAsync(updates, markers, ct);
+            UpdatePlanner.Fold(data, markers, data["constructUpdate"] as JsonObject);
             if (data["agents"] is JsonArray agents) data["agents"] = await UpdatePlanner.AugmentAgentsAsync(updates, agents, ct);
             entry.Enrichment = new JsonObject { ["constructUpdate"] = data["constructUpdate"]?.DeepClone(), ["provisionStale"] = data["provisionStale"]?.DeepClone() };
             state.Publish(entry.Name, full);
