@@ -12,7 +12,7 @@ VM provisioning installs the Linux gateway and its pinned guacd container;
 no separate project profile or enable command is needed.
 
 ```bash
-construct vm console NAME --web --minutes 30
+construct vm console NAME --web
 ```
 
 Existing hosts without a `Constructd:BrowserConsoleEnabled` setting gain the
@@ -27,8 +27,9 @@ For an existing primary, reprovision to install the gateway, or run
 certificate fingerprint through the authenticated host API.
 
 The command uses `construct expose` to print a working client-forwarded link.
-The viewer listens on port 6080. Link lifetimes range from 5 to 120 minutes;
-default 30. This does not extend the guest's VM lease. Opening a new link after a
+The viewer listens on port 6080. Links default to 24 hours (1440 minutes).
+Use `--minutes` for a shorter lifetime, from 5 to 1440 minutes. This does not
+extend the guest's VM lease. Opening a new link after a
 page refresh is intentional: the fragment is removed from browser history once
 redeemed. Reconnect works from the current page while its link remains valid.
 

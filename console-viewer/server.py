@@ -109,9 +109,9 @@ class Gateway:
 
     async def mint(self, request):
         body = await request.json()
-        name, minutes = body.get('name', ''), body.get('minutes', 30)
-        if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9-]{0,62}', name) or type(minutes) is not int or not 5 <= minutes <= 120:
-            raise web.HTTPBadRequest(text='VM name and lifetime (5–120 minutes) required')
+        name, minutes = body.get('name', ''), body.get('minutes', 1440)
+        if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9-]{0,62}', name) or type(minutes) is not int or not 5 <= minutes <= 1440:
+            raise web.HTTPBadRequest(text='VM name and lifetime (5–1440 minutes) required')
         self.tickets = {k: v for k, v in self.tickets.items() if v['expires'] > time.monotonic() or v['active']}
         if len(self.tickets) >= 32:
             raise web.HTTPTooManyRequests(text='Too many viewer links')
