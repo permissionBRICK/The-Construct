@@ -99,6 +99,23 @@ try {
     [IO.File]::WriteAllText($endpoint,'{"v":1,"port":0,"token":"do-not-print"}')
     Reject { Stop-ConstructCompanionForInstall $paths.state $seams } 'Malformed endpoint rejected'
     Remove-Item -LiteralPath $endpoint
+    $uiEndpoint=Join-Path $paths.state 'ui-endpoint.json'
+    [IO.File]::WriteAllText($uiEndpoint,(@{v=1;ipcApiVersion=1;port=12345;pid=34567;token=('d'*64)} | ConvertTo-Json))
+    $before=$script:quits; $script:alive=$true
+    Stop-ConstructCompanionForInstall $paths.state $seams -Reason user
+    Assert ($script:quits -eq $before+1 -and -not $script:alive -and $script:lastReason -eq 'user') 'Bootstrap quit handshake for uninstall'
+    [IO.File]::WriteAllText($endpoint,(@{v=1;ipcApiVersion=1;port=12346;pid=23456;token=('d'*64)} | ConvertTo-Json))
+    $seams.Alive={ param($ProcessId) $ProcessId -eq 34567 -and $script:alive }
+    $before=$script:quits; $script:alive=$true
+    Stop-ConstructCompanionForInstall $paths.state $seams
+    Assert ($script:quits -eq $before+1 -and -not $script:alive) 'Dead full endpoint does not hide live bootstrap'
+    Remove-Item -LiteralPath $endpoint
+    $script:alive=$true; $script:quitWorks=$false; $before=$script:sleeps
+    Reject { Install-ConstructCompanion $repo -Force -LocalAppData $local -Seams $seams } 'Bootstrap quit timeout aborts installation'
+    Assert ($script:sleeps -eq $before+60 -and -not (Test-Path ($paths.install+'.previous'))) 'Bootstrap timeout bounded, no swap'
+    $script:alive=$false; $script:quitWorks=$true
+    $seams.Alive={ param($ProcessId) $script:alive }
+    Remove-Item -LiteralPath $uiEndpoint
     $exe=Join-Path $paths.install 'ConstructCompanion.exe'
     [IO.File]::WriteAllText($exe,'original app')
     $registryBefore=$script:registry | ConvertTo-Json -Compress

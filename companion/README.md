@@ -1,9 +1,11 @@
 # Construct Companion
 
-Per-user Windows host agent with the S2a state/runtime/config-sync packages and S2b
-Windows services and tray/WebView2 application. The frozen design is
-[construct-companion.md](../docs/plans/construct-companion.md). The parallel S2b IPC
-package owns the full HTTP server and dispatcher; S3 connects it to this application.
+Per-user Windows host agent with the S2a state/runtime/config-sync packages and
+merged S2b IPC, Windows services, tray/WebView2 app, and installer/release packages.
+The frozen design is [construct-companion.md](../docs/plans/construct-companion.md).
+Production app/IPC composition remains unfinished; the Windows entry point still
+uses its UI bootstrap. See the [stage 3 integration results](../docs/plans/construct-companion-stage-3-integration.md)
+for validation and recorded defects.
 
 ## Layout
 
@@ -37,7 +39,9 @@ extension's runtime fallback active. The mutex is `Local\ConstructCompanion`; th
 is no named quit event. Secondary processes validate the health PID/start time and
 hand off all requested views through `/v1/ui/activate`, or quit through `/v1/quit`.
 The private endpoint is removed when its listener exits. The full S3 IPC host uses
-the frozen `endpoint.json` path; the secondary client can discover either endpoint.
+the frozen `endpoint.json` path; the secondary client and installer can discover
+either endpoint. The installer also checks the private endpoint when the full-host
+endpoint has a dead PID, and refuses replacement if the live app does not quit.
 
 S3 composition hooks:
 
