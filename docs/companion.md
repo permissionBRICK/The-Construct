@@ -6,11 +6,14 @@ passthrough, and instance monitoring available when VS Code is closed. It hosts 
 same control panel assets as the extension, for all registered instances. It needs
 neither administrator rights nor a separately installed .NET runtime.
 
-**Delivery status:** the installer and release pipeline are tested with fakes on
-Linux. The integrated application still needs the S2b app/IPC and S3 composition
-work; the current scaffold's `--selftest` fails deliberately, preventing a release.
-The behavior described below is the completed Companion contract. No Windows
-installation or runtime field test has been performed in this delivery.
+**Delivery status:** stage 3 merges the IPC host, Windows app/adapters, installer,
+and release pipeline. The Windows entry point still runs its UI bootstrap and
+refuses runtime commands; production app/IPC composition remains unfinished, so
+the extension keeps running its fallback jobs. The headless selftest now performs
+local checks and can pass without instances; it does not prove runtime composition
+or prevent release of this incomplete app. The behavior described below is the
+completed Companion contract. See the [stage 3 integration notes](plans/construct-companion.md#integration-notes-stage-3)
+for outstanding defects. No Windows installation or runtime field test was run.
 
 ## Install and update
 
@@ -45,7 +48,9 @@ marker written by the Construct install/update step for a local build.
 An identical installed commit is a no-op. `-Force` rebuilds/reinstalls it. Downloads
 stream to disk; the detached manifest, ZIP SHA-256, checksum-list hash and every
 payload file are checked before asking the app to quit. The installer waits at
-most 15 seconds for graceful exit and never kills a process. It swaps the install
+most 15 seconds for graceful exit and never kills a process. Quit discovery supports
+both the full host's `endpoint.json` and the bootstrap's private `ui-endpoint.json`.
+It swaps the install
 through `.previous`, restores the prior files/registration values on replacement
 failure, then starts `ConstructCompanion.exe --background` detached. Successful
 process creation is the commit point; it is not a runtime health check.
