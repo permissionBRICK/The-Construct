@@ -56,7 +56,7 @@ public sealed class HostUpdateJob(IHostUpdateStore store, IReleaseSource source,
                 return new JobOutcome(row);
             }
             catch (Exception ex)
-            { row=await PhaseAsync(row, ex is OperationCanceledException ? HostUpdateState.Cancelled : HostUpdateState.StageFailed,row.Phase,SafeCode(ex)); if(ex is OperationCanceledException or UpdateException) throw; throw new UpdateException(SafeCode(ex)); }
+            { row=await PhaseAsync(row, ex is OperationCanceledException ? HostUpdateState.Cancelled : HostUpdateState.StageFailed,row.Phase ?? "verify",SafeCode(ex)); if(ex is OperationCanceledException or UpdateException) throw; throw new UpdateException(SafeCode(ex)); }
         },ct,operation);
     }
     private sealed class PhaseProgress(Func<string,Task> update) : IProgress<string>

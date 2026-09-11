@@ -33,7 +33,9 @@ public sealed record HostCapacitySnapshot(
     IReadOnlyList<VolumeCapacity> Volumes,
     IReadOnlyList<Reservation> Reservations,
     IReadOnlyList<HypervisorVmInfo> Unmanaged,
-    IReadOnlyList<string>? Problems = null);
+    IReadOnlyList<string>? Problems = null,
+    IReadOnlyDictionary<string, long>? RamAvailableByVm = null,
+    IReadOnlyList<Reservation>? Accounting = null);
 
 public interface ICapacityLedger
 {

@@ -107,9 +107,19 @@ public static class CapacityMath
         }).ToArray();
         if (artifacts.Values.Any(a => !volumes.Any(v => Key(v.Root) == Key(a.Volume))))
         { complete = false; problems.Add("volume-unavailable"); }
+        // Hypothetical cold-start capacity for each managed VM, from this same epoch.
+        // Credit both its unreflected promise and RAM currently assigned by the hypervisor.
+        var byVm = managed.ToDictionary(vm => vm.Name, vm =>
+        {
+            var own = runtime.Where(r => Ownership.SameName(r.VmName, vm.Name)).Sum(r => r.Amount);
+            var actual = inventory.Vms.FirstOrDefault(a => Matches(vm, a));
+            var assigned = actual is { Complete: true } && !ReservationRules.Terminal(actual.State) ? Math.Max(0, actual.MemoryAssignedBytes) : 0;
+            return Math.Max(0, Math.Min(inventory.Host.TotalRamBytes - headroom - ram - externalRam + own,
+                inventory.Host.FreeRamBytes - headroom - unreflected + Math.Max(0, own - assigned) + assigned));
+        }, StringComparer.OrdinalIgnoreCase);
         return new(inventory.Epoch, inventory.ObservedAt, complete, inventory.Host.TotalRamBytes, headroom, ram, externalRam,
             inventory.Host.FreeRamBytes, available, inventory.Host.LogicalCpus, config.CpuBudget, (int)Math.Min(int.MaxValue, cpus),
-            config.CpuBudget is int budget ? (int)Math.Max(0, budget - cpus) : null, volumes, persisted.ToArray(), unmanaged, problems.Distinct().ToArray());
+            config.CpuBudget is int budget ? (int)Math.Max(0, budget - cpus) : null, volumes, persisted.ToArray(), unmanaged, problems.Distinct().ToArray(), byVm, reservations);
     }
 
     public static CapacityDecision Decide(ReservationRequest request, HostCapacitySnapshot snapshot, CapacityConfig config,
