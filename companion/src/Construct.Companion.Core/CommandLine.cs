@@ -38,10 +38,10 @@ public sealed record CommandLine(bool Background = false, bool Panel = false, bo
     }
 }
 
-public sealed record SelfTestCheck(string Name, string Status);
+public sealed record SelfTestCheck(string Name, string Status, bool Required = true);
 public sealed record SelfTestReport(bool Ok, IReadOnlyList<SelfTestCheck> Checks)
 {
-    public static SelfTestReport Stub() => new(false,
-        new[] { "paths", "registry", "stateFiles", "ipcHealth", "ssh", "hypervisor", "audioDevices", "webView2", "toastRegistration" }
-            .Select(name => new SelfTestCheck(name, "not implemented")).ToArray());
+    public int ExitCode => Ok ? 0 : 1;
+    public static SelfTestReport Create(IReadOnlyList<SelfTestCheck> checks) => new(
+        checks.All(c => !c.Required || c.Status is "passed" or "none" or "muted"), checks);
 }

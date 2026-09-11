@@ -39,7 +39,7 @@ public static class Activation
                 case "settings": views.Add(new("settings", instance)); break;
                 case "hostadmin": views.Add(new("hostadmin", Host: host)); break;
                 case "forward":
-                    if (instance is null || !query.TryGetValue("id", out var id) || id.Length is 0 or > 128 || id.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('-' or '_' or '.')))
+                    if (instance is null || !query.TryGetValue("id", out var id) || !Construct.Companion.Core.Forwards.ForwardProtocol.IsSafeId(id))
                         throw new ArgumentException("Invalid forward activation.");
                     forwardInstance = instance; forwardId = id; break;
                 default: views.Add(new("popup")); break;
