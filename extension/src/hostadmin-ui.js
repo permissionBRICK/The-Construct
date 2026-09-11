@@ -260,6 +260,34 @@ function createHostAdminFeature(deps = {}) {
           await model.perform("renewVmLease", { name, lifetime });
           break;
         }
+        case "changeVmCpu": {
+          if (!name) return;
+          const loaded = await model.perform("loadVmCpu", { name });
+          if (!loaded.ok) break;
+          const cpu = loaded.cpu;
+          const value = await vscode.window.showInputBox({
+            title: `CPU count for ${name}`,
+            prompt: `Current: ${cpu.currentCpus}. Allowed maximum: ${cpu.maximumCpus}. Enter a count or max. Applies on the next full stop/start; an Ubuntu reboot is insufficient.`,
+            value: cpu.pending ? String(cpu.desiredCpus) : "max",
+            ignoreFocusOut: true,
+            validateInput: (v) => {
+              const n = v.trim().toLowerCase() === "max" ? cpu.recommendedCpus : Number(v);
+              return Number.isInteger(n) && n >= 1 && n <= cpu.maximumCpus ? null : `Enter max or a whole number from 1 to ${cpu.maximumCpus}.`;
+            },
+          });
+          if (value === undefined) return;
+          await model.perform("setVmCpu", { name, cpus: value.trim().toLowerCase() === "max" ? cpu.recommendedCpus : Number(value) });
+          break;
+        }
+        case "restartVm":
+        case "startVm": {
+          const restart = action === "restartVm";
+          if (!name || !(await modal(`${restart ? "Restart" : "Start"} "${name}"?`, restart
+            ? "Construct will ask Ubuntu to shut down, apply any pending CPU count, then start the VM. Running work will be interrupted."
+            : "Construct will apply any pending CPU count before starting this powered-off VM.", restart ? "Restart" : "Start"))) return;
+          await model.perform(action, { name });
+          break;
+        }
         case "deleteVm":
           await deleteVmFlow(entry, name, str(args.kind), str(args.cascadeToken));
           break;

@@ -270,6 +270,18 @@ function Remove-ConstructVm {
     Remove-AgentVm -VmName $Name
 }
 
+function Set-ConstructVmCpuCount {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name,
+          [Parameter(Mandatory)][ValidateRange(1,64)][int]$ProcessorCount)
+    $vm = Get-VM -Name $Name -ErrorAction Stop
+    if ([string]$vm.State -ne 'Off') { throw 'CPU changes require a powered-off VM.' }
+    Set-VMProcessor -VM $vm -Count $ProcessorCount -ErrorAction Stop
+    if ([int](Get-VMProcessor -VM $vm -ErrorAction Stop).Count -ne $ProcessorCount) {
+        throw 'Hyper-V did not apply the requested CPU count.'
+    }
+}
+
 function Start-ConstructVm {
     <#
         Power the VM on. Hyper-V's Start-VM also RESUMES a saved or paused VM,

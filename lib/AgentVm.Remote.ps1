@@ -893,6 +893,19 @@ function ConvertFrom-ConstructVmEndpoint {
     return @{ SshHost = $sshHost; SshPort = $sshPort; PublicHost = $publicHost }
 }
 
+function Get-ConstructRemoteCpuDefault {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$BaseUrl, $Auth)
+    try { $defaults = Invoke-ConstructApi -BaseUrl $BaseUrl -Path '/vm-defaults' -Auth $Auth }
+    catch { throw "Could not determine the host's CPU allowance. Update the host service or pass -VmCpuCount explicitly. $($_.Exception.Message)" }
+    $count = 0
+    if (-not $defaults -or -not $defaults.PSObject.Properties['recommendedCpus'] -or
+        -not [int]::TryParse([string]$defaults.recommendedCpus, [ref]$count) -or $count -lt 1 -or $count -gt 64) {
+        throw 'The host reports no available CPU allowance for a new VM. Check the user allowance and host capacity.'
+    }
+    return $count
+}
+
 function Wait-ConstructJob {
     <#
         Follow a long operation to its end: poll GET /jobs/{id}, print every NEW

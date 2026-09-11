@@ -10,7 +10,7 @@ using Constructd.Core.Logic;
 namespace Constructd.Api.Endpoints;
 
 public sealed class VmInventoryProjection(IVmRepository vms, IVmDelegationRepository delegation, IUserStore users,
-    IDelegationPolicy policy, ICapacityLedger capacity, IMediaStore media, IJobStore jobs, IPortForwardManager forwards, ConstructdOptions options, IOperationKeyStore keys, Constructd.Api.Hosting.VmResourceUsageReader usage)
+    IDelegationPolicy policy, ICapacityLedger capacity, IMediaStore media, IJobStore jobs, IPortForwardManager forwards, ConstructdOptions options, IOperationKeyStore keys, Constructd.Api.Hosting.VmResourceUsageReader usage, PrimaryCpuSettings cpuSettings)
 {
     public async Task<VmResponse> ProjectAsync(Vm vm, ClaimsPrincipal caller, CancellationToken ct)
     {
@@ -28,6 +28,7 @@ public sealed class VmInventoryProjection(IVmRepository vms, IVmDelegationReposi
         if (job?.State is not (JobState.Queued or JobState.Running)) job = null;
         var l = vm.Lease;
         var observed = vm.Observed ?? new(null, null, [], null);
+        var cpuSetting = owned && vm.Kind == VmKind.Primary ? await cpuSettings.GetAsync(vm, ct) : null;
         // The durable intent is the flag: capacity observation cannot erase an unresolved attachment.
         if (vm.Kind == VmKind.Child && (await keys.ListInFlightAsync(vm.Name, ct)).Any(k => k.Kind == "child-media" && ConfigurationIntent.Applies(k, vm)))
             observed = observed with { StorageProblem = "media-unverified" };
@@ -42,6 +43,7 @@ public sealed class VmInventoryProjection(IVmRepository vms, IVmDelegationReposi
             ChildCreationClosed = vm.ChildCreationClosed,
             Lease = l is null ? null : new(l.RequestedText, l.ActivatedAt, l.ExpiresAt, l.State, l.State == LeaseState.Overdue, l.Version, l.LastExpiryAttemptAt, l.LastExpiryOutcome),
             Hardware = vm.Hardware,
+            PendingCpu = cpuSetting is not null && cpuSetting.Cpus != vm.Cpu ? cpuSetting.Cpus : null,
             ResourceUsage = await usage.ReadAsync(vm.Name, ct),
             Media = mediaProjection,
             Guest = vm.Guest ?? GuestReport.Unknown,

@@ -170,6 +170,12 @@ public sealed class SqliteAdmissionStore(SqliteCapacityLedger ledger, IClock clo
                 .With("@ram", hardware.RamMb).With("@disk", hardware.DiskGb).With("@expected", expectedGeneration);
             return Task.FromResult(Cas(cmd.ExecuteNonQuery() == 1));
         }
+        public Task<bool> UpdatePrimaryCpuAsync(string vmName, int cpus, long expectedGeneration)
+        {
+            Check(); using var cmd = Command(tx, "UPDATE vms SET cpu=@cpu WHERE name=@name AND kind='primary' AND deleting=0 AND power_generation=@expected");
+            cmd.With("@name", vmName).With("@cpu", cpus).With("@expected", expectedGeneration);
+            return Task.FromResult(Cas(cmd.ExecuteNonQuery() == 1));
+        }
         public Task<bool> UpdatePowerStateAsync(string vmName, VmState state, long expectedGeneration)
         {
             Check(); using var cmd = Command(tx, "UPDATE vms SET state=@state,power_generation=power_generation+1 WHERE name=@name AND power_generation=@expected");
