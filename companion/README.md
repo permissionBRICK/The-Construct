@@ -145,6 +145,7 @@ These specific workflows remain explicit refusals:
 | `updateConstruct` | The install-wide result-file/update/reload workflow is not yet wired. Run the installed `Update-Construct.ps1`. |
 | `hostadmin.action: issueToken`, `rotateVmToken` | `IPrompts` has no one-time secret display operation. Refused before requesting any new token; use the host CLI. |
 | `hostadmin.action: createFirstVm` | Same missing creation wizard as the panel command above. |
+| `applyVmResources` | The restart-to-resize workflow (elevated `Set-AgentVmResources.ps1` with its result file, or the service CPU route plus restart) is not ported. The RAM/vCPU values are saved; apply them from the VS Code control panel or by Reinstall. |
 | `saveSettings` automatic checkpoint apply | The preference is saved, but the elevated apply/result workflow is not wired. A visible refusal directs the user to VS Code or the installer checkpoint action. |
 | Lifecycle preflight / live project fallback | The dispatcher uses the persisted project selection. The extension's import-scan/config-sync/continue-anyway preflight and probe fallback are not wired; sync and select projects explicitly before launching lifecycle actions. |
 | `saveProject` malformed legacy values | Uses the strict validation and canonicalization gate rather than the extension modal's legacy schema coercion. Invalid or reserved profiles are refused before writing. |
@@ -165,6 +166,7 @@ views and runtime messages use IPC). The limitations of the implemented rows are
 
 | Kind | Message or command | Status |
 |---|---|---|
+| message | `applyVmResources` | unsupported: apply the saved VM size from VS Code or by Reinstall. |
 | message | `command` | implemented |
 | message | `customRebuild` | implemented |
 | message | `openPanel` | implemented |
