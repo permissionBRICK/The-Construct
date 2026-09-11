@@ -91,13 +91,14 @@ test("Host narrow snapshot envelopes are unwrapped for panel state", () => {
     idlePolicy: { type: "idlePolicy", idlePolicy: { timeoutMinutes: 10 } },
     hostAdminOffer: { type: "hostAdminOffer", offer: { host: "remote" } } };
   assert.deepEqual(c.snapshotMessages(snapshot, null)[0].state, {
-    connectedInstance: null, children: { items: [] }, idlePolicy: { timeoutMinutes: 10 }, hostAdminOffer: { host: "remote" }
+    connectedInstance: null, registerOffer: null, children: { items: [] }, idlePolicy: { timeoutMinutes: 10 }, hostAdminOffer: { host: "remote" }
   });
 });
 test("snapshot emits existing message shapes and overlays window connection without mutation", () => {
   const snapshot = { state: { type: "state", state: { instance: "a", connectedInstance: null } }, audio: { type: "audio", enabled: true }, children: [], idlePolicy: null, hostAdminOffer: null };
-  const messages = c.snapshotMessages(snapshot, "b");
-  assert.deepEqual(messages[0].state, { instance: "a", connectedInstance: "b", children: [], idlePolicy: null, hostAdminOffer: null });
+  const messages = c.snapshotMessages(snapshot, "b", { host: "b.mshome.net", suggestedName: "b" });
+  assert.deepEqual(messages[0].state, { instance: "a", connectedInstance: "b", registerOffer: { host: "b.mshome.net", suggestedName: "b" }, children: [], idlePolicy: null, hostAdminOffer: null });
+  assert.deepEqual(c.overlayMessage({ type: "state", state: { registerOffer: { host: "stale" } } }, null).state, { connectedInstance: null, registerOffer: null });
   assert.equal(snapshot.state.state.connectedInstance, null);
   assert.equal(messages[1], snapshot.audio);
 });
