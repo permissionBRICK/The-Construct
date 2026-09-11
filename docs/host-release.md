@@ -21,6 +21,27 @@ The manifest identifies the repository, main ref and immutable commit tag. SHA-2
 checks cover the ZIP and every payload file; these checks detect corruption, while
 authenticity relies on HTTPS and control of the configured GitHub repository.
 
+Release-source failures report safe diagnostic codes: `release-source-rate-limited`,
+`release-source-http-<status>`, DNS/TLS/proxy/connection failures, timeout, invalid
+metadata, or asset size mismatch. Check responses include the upstream HTTP status
+and GitHub's rate-limit reset time when supplied. Raw response bodies, exception
+messages and signed asset URLs are never exposed. Staging failures retain their
+actual phase (`check`, `download`, or `verify`). Older builds labelled every staging
+failure `verify`; a blank commit in their failed update row means release selection
+did not complete, not that ZIP verification failed.
+
+To diagnose an older host's generic `release-source-unreachable`, run on that host:
+
+```powershell
+curl.exe -sS -D - -o NUL -A "Construct-Host-Updater/1" "https://api.github.com/repos/permissionBRICK/The-Construct/releases?per_page=100"
+```
+
+Inspect HTTP status and `X-RateLimit-Remaining` / `X-RateLimit-Reset`. This checks the
+interactive account's network path; the Windows service can have different proxy
+or certificate settings. Successful access from a development machine does not
+establish access from the affected host. A failure during staging does not replace
+the service or interrupt VMs.
+
 Production apply requires `Constructd:CertThumbprint` for the updater's loopback health
 pin. A host configured only with `CertPath` is refused with
 `update-health-pin-required` before drain or replacement; configure a supported

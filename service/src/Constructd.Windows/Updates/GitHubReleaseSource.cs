@@ -17,7 +17,7 @@ public sealed class GitHubReleaseSource(HttpClient client) : IReleaseSource
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, $"https://api.github.com/repos/{repository}/releases?per_page=100");
             request.Headers.UserAgent.ParseAdd("Construct-Host-Updater/1");
-            using var response = await client.SendAsync(request, ct); response.EnsureSuccessStatusCode();
+            using var response = await client.SendAsync(request, ct); RequireSuccess(response, "release list");
             var rows = await response.Content.ReadFromJsonAsync<JsonElement>(ct);
             foreach (var row in rows.EnumerateArray())
             {
@@ -37,8 +37,11 @@ public sealed class GitHubReleaseSource(HttpClient client) : IReleaseSource
             }
             return result.OrderByDescending(r => r.PublishedAt).ToArray();
         }
-        catch (Exception ex) when (ex is HttpRequestException or JsonException or InvalidOperationException)
-        { throw new UpdateException("release-source-unreachable"); }
+        catch (HttpRequestException ex) { throw NetworkFailure(ex, "release list"); }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        { throw new UpdateException("release-source-timeout", "Timed out retrieving the GitHub release list."); }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException or FormatException)
+        { throw new UpdateException("release-source-invalid-metadata", "GitHub returned an invalid release list."); }
     }
     public async Task DownloadAsync(ReleaseAsset asset, string destinationPath, IProgress<string>? progress, CancellationToken ct)
     {
@@ -57,17 +60,53 @@ public sealed class GitHubReleaseSource(HttpClient client) : IReleaseSource
                         uri.Host is not ("github.com" or "release-assets.githubusercontent.com" or "objects.githubusercontent.com")) throw new UpdateException("release-source-unreachable");
                     continue;
                 }
-                response.EnsureSuccessStatusCode();
+                RequireSuccess(response, "release asset");
                 await using var input = await response.Content.ReadAsStreamAsync(ct);
                 await using var output = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None);
                 var buffer = new byte[81920]; long total = 0; int read;
                 while ((read = await input.ReadAsync(buffer, ct)) > 0)
-                { total += read; if (total > expected) throw new UpdateException("release-source-unreachable"); await output.WriteAsync(buffer.AsMemory(0, read), ct); }
-                if (total != expected) throw new UpdateException("release-source-unreachable");
+                { total += read; if (total > expected) throw new UpdateException("release-source-asset-size-mismatch"); await output.WriteAsync(buffer.AsMemory(0, read), ct); }
+                if (total != expected) throw new UpdateException("release-source-asset-size-mismatch");
                 return;
             }
             throw new UpdateException("release-source-unreachable");
         }
-        catch (HttpRequestException) { throw new UpdateException("release-source-unreachable"); }
+        catch (HttpRequestException ex) { throw NetworkFailure(ex, "release asset"); }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        { throw new UpdateException("release-source-timeout", "Timed out downloading a GitHub release asset."); }
+    }
+
+    // Only emit allowlisted classifications and numeric status/header values. Raw
+    // exceptions, response bodies and signed redirect URLs can contain secrets.
+    private static void RequireSuccess(HttpResponseMessage response, string operation)
+    {
+        if (response.IsSuccessStatusCode) return;
+        var status = (int)response.StatusCode;
+        var limited = status == 429 || status == 403 &&
+            (response.Headers.TryGetValues("X-RateLimit-Remaining", out var remaining) && remaining.Contains("0") ||
+             response.Headers.RetryAfter is not null);
+        var code = limited ? "release-source-rate-limited" : $"release-source-http-{status}";
+        var detail = $"GitHub {operation} returned HTTP {status}.";
+        if (limited)
+        {
+            detail += " GitHub rate limit reached; wait before retrying.";
+            if (response.Headers.TryGetValues("X-RateLimit-Reset", out var resets) &&
+                long.TryParse(resets.FirstOrDefault(), out var reset) && reset is >= 0 and <= 253402300799)
+                detail += $" Limit resets at {DateTimeOffset.FromUnixTimeSeconds(reset):yyyy-MM-dd HH:mm:ss} UTC.";
+        }
+        throw new UpdateException(code, detail);
+    }
+
+    private static UpdateException NetworkFailure(HttpRequestException ex, string operation)
+    {
+        var reason = ex.HttpRequestError switch
+        {
+            HttpRequestError.NameResolutionError => "dns-failed",
+            HttpRequestError.SecureConnectionError => "tls-failed",
+            HttpRequestError.ProxyTunnelError => "proxy-failed",
+            HttpRequestError.ConnectionError => "connection-failed",
+            _ => "unreachable"
+        };
+        return new UpdateException("release-source-" + reason, $"GitHub {operation} failed: {reason}. Check the host service's outbound network access.");
     }
 }
