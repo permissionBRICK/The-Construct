@@ -1,0 +1,890 @@
+[
+  {
+    "argSpec": [
+      {
+        "flag": "-Backend",
+        "value": "hyperv-remote"
+      },
+      {
+        "flag": "-ServiceUrl",
+        "value": "https://host.example:7462"
+      },
+      {
+        "flag": "-ServiceAuth",
+        "value": "token"
+      },
+      {
+        "flag": "-InstanceName",
+        "value": "work-vm"
+      },
+      {
+        "flag": "-VmMemoryGB",
+        "value": "8"
+      },
+      {
+        "flag": "-VmDiskGB",
+        "value": "50"
+      },
+      {
+        "flag": "-VmCpuCount",
+        "value": "4"
+      }
+    ],
+    "args": [
+      "-Backend",
+      "hyperv-remote",
+      "-ServiceUrl",
+      "https://host.example:7462",
+      "-ServiceAuth",
+      "token",
+      "-InstanceName",
+      "work-vm",
+      "-VmMemoryGB",
+      "8",
+      "-VmDiskGB",
+      "50",
+      "-VmCpuCount",
+      "4"
+    ],
+    "auth": "token",
+    "cpu": 4,
+    "disk": 50,
+    "name": "work-vm",
+    "output": {
+      "command": "& 'C:/Construct/Auto-Install.ps1' -Backend 'hyperv-remote' -ServiceUrl 'https://host.example:7462' -ServiceAuth 'token' -InstanceName 'work-vm' -VmMemoryGB '8' -VmDiskGB '50' -VmCpuCount '4'",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "JgAgACcAQwA6AC8AQwBvAG4AcwB0AHIAdQBjAHQALwBBAHUAdABvAC0ASQBuAHMAdABhAGwAbAAuAHAAcwAxACcAIAAtAEIAYQBjAGsAZQBuAGQAIAAnAGgAeQBwAGUAcgB2AC0AcgBlAG0AbwB0AGUAJwAgAC0AUwBlAHIAdgBpAGMAZQBVAHIAbAAgACcAaAB0AHQAcABzADoALwAvAGgAbwBzAHQALgBlAHgAYQBtAHAAbABlADoANwA0ADYAMgAnACAALQBTAGUAcgB2AGkAYwBlAEEAdQB0AGgAIAAnAHQAbwBrAGUAbgAnACAALQBJAG4AcwB0AGEAbgBjAGUATgBhAG0AZQAgACcAdwBvAHIAawAtAHYAbQAnACAALQBWAG0ATQBlAG0AbwByAHkARwBCACAAJwA4ACcAIAAtAFYAbQBEAGkAcwBrAEcAQgAgACcANQAwACcAIAAtAFYAbQBDAHAAdQBDAG8AdQBuAHQAIAAnADQAJwA="
+      ]
+    },
+    "projects": null,
+    "ram": 8,
+    "script": "C:/Construct/Auto-Install.ps1",
+    "supportsCpu": true,
+    "url": "https://host.example:7462"
+  },
+  {
+    "argSpec": [
+      {
+        "flag": "-Backend",
+        "value": "hyperv-remote"
+      },
+      {
+        "flag": "-ServiceUrl",
+        "value": "https://host.example:7462"
+      },
+      {
+        "flag": "-ServiceAuth",
+        "value": "token"
+      },
+      {
+        "flag": "-InstanceName",
+        "value": "work-vm"
+      },
+      {
+        "flag": "-VmMemoryGB",
+        "value": "8"
+      },
+      {
+        "flag": "-VmDiskGB",
+        "value": "50"
+      },
+      {
+        "flag": "-VmCpuCount",
+        "value": "4"
+      },
+      {
+        "flag": "-Projects",
+        "value": ""
+      }
+    ],
+    "args": [
+      "-Backend",
+      "hyperv-remote",
+      "-ServiceUrl",
+      "https://host.example:7462",
+      "-ServiceAuth",
+      "token",
+      "-InstanceName",
+      "work-vm",
+      "-VmMemoryGB",
+      "8",
+      "-VmDiskGB",
+      "50",
+      "-VmCpuCount",
+      "4",
+      "-Projects",
+      ""
+    ],
+    "auth": "token",
+    "cpu": 4,
+    "disk": 50,
+    "name": "work-vm",
+    "output": {
+      "command": "& 'C:/Construct/Auto-Install.ps1' -Backend 'hyperv-remote' -ServiceUrl 'https://host.example:7462' -ServiceAuth 'token' -InstanceName 'work-vm' -VmMemoryGB '8' -VmDiskGB '50' -VmCpuCount '4' -Projects ''",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "JgAgACcAQwA6AC8AQwBvAG4AcwB0AHIAdQBjAHQALwBBAHUAdABvAC0ASQBuAHMAdABhAGwAbAAuAHAAcwAxACcAIAAtAEIAYQBjAGsAZQBuAGQAIAAnAGgAeQBwAGUAcgB2AC0AcgBlAG0AbwB0AGUAJwAgAC0AUwBlAHIAdgBpAGMAZQBVAHIAbAAgACcAaAB0AHQAcABzADoALwAvAGgAbwBzAHQALgBlAHgAYQBtAHAAbABlADoANwA0ADYAMgAnACAALQBTAGUAcgB2AGkAYwBlAEEAdQB0AGgAIAAnAHQAbwBrAGUAbgAnACAALQBJAG4AcwB0AGEAbgBjAGUATgBhAG0AZQAgACcAdwBvAHIAawAtAHYAbQAnACAALQBWAG0ATQBlAG0AbwByAHkARwBCACAAJwA4ACcAIAAtAFYAbQBEAGkAcwBrAEcAQgAgACcANQAwACcAIAAtAFYAbQBDAHAAdQBDAG8AdQBuAHQAIAAnADQAJwAgAC0AUAByAG8AagBlAGMAdABzACAAJwAnAA=="
+      ]
+    },
+    "projects": [],
+    "ram": 8,
+    "script": "C:/Construct/Auto-Install.ps1",
+    "supportsCpu": true,
+    "url": "https://host.example:7462"
+  },
+  {
+    "argSpec": [
+      {
+        "flag": "-Backend",
+        "value": "hyperv-remote"
+      },
+      {
+        "flag": "-ServiceUrl",
+        "value": "https://host.example:7462"
+      },
+      {
+        "flag": "-ServiceAuth",
+        "value": "token"
+      },
+      {
+        "flag": "-InstanceName",
+        "value": "work-vm"
+      },
+      {
+        "flag": "-VmMemoryGB",
+        "value": "8"
+      },
+      {
+        "flag": "-VmDiskGB",
+        "value": "50"
+      },
+      {
+        "flag": "-VmCpuCount",
+        "value": "4"
+      },
+      {
+        "flag": "-Projects",
+        "value": "default,api"
+      }
+    ],
+    "args": [
+      "-Backend",
+      "hyperv-remote",
+      "-ServiceUrl",
+      "https://host.example:7462",
+      "-ServiceAuth",
+      "token",
+      "-InstanceName",
+      "work-vm",
+      "-VmMemoryGB",
+      "8",
+      "-VmDiskGB",
+      "50",
+      "-VmCpuCount",
+      "4",
+      "-Projects",
+      "default,api"
+    ],
+    "auth": "token",
+    "cpu": 4,
+    "disk": 50,
+    "name": "work-vm",
+    "output": {
+      "command": "& 'C:/Construct/Auto-Install.ps1' -Backend 'hyperv-remote' -ServiceUrl 'https://host.example:7462' -ServiceAuth 'token' -InstanceName 'work-vm' -VmMemoryGB '8' -VmDiskGB '50' -VmCpuCount '4' -Projects 'default,api'",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "JgAgACcAQwA6AC8AQwBvAG4AcwB0AHIAdQBjAHQALwBBAHUAdABvAC0ASQBuAHMAdABhAGwAbAAuAHAAcwAxACcAIAAtAEIAYQBjAGsAZQBuAGQAIAAnAGgAeQBwAGUAcgB2AC0AcgBlAG0AbwB0AGUAJwAgAC0AUwBlAHIAdgBpAGMAZQBVAHIAbAAgACcAaAB0AHQAcABzADoALwAvAGgAbwBzAHQALgBlAHgAYQBtAHAAbABlADoANwA0ADYAMgAnACAALQBTAGUAcgB2AGkAYwBlAEEAdQB0AGgAIAAnAHQAbwBrAGUAbgAnACAALQBJAG4AcwB0AGEAbgBjAGUATgBhAG0AZQAgACcAdwBvAHIAawAtAHYAbQAnACAALQBWAG0ATQBlAG0AbwByAHkARwBCACAAJwA4ACcAIAAtAFYAbQBEAGkAcwBrAEcAQgAgACcANQAwACcAIAAtAFYAbQBDAHAAdQBDAG8AdQBuAHQAIAAnADQAJwAgAC0AUAByAG8AagBlAGMAdABzACAAJwBkAGUAZgBhAHUAbAB0ACwAYQBwAGkAJwA="
+      ]
+    },
+    "projects": [
+      "default",
+      "api"
+    ],
+    "ram": 8,
+    "script": "C:/Construct/Auto-Install.ps1",
+    "supportsCpu": true,
+    "url": "https://host.example:7462"
+  },
+  {
+    "argSpec": [
+      {
+        "flag": "-Backend",
+        "value": "hyperv-remote"
+      },
+      {
+        "flag": "-ServiceUrl",
+        "value": "https://host.example:7462"
+      },
+      {
+        "flag": "-ServiceAuth",
+        "value": "token"
+      },
+      {
+        "flag": "-InstanceName",
+        "value": "work-vm"
+      },
+      {
+        "flag": "-VmMemoryGB",
+        "value": "8"
+      },
+      {
+        "flag": "-VmDiskGB",
+        "value": "50"
+      }
+    ],
+    "args": [
+      "-Backend",
+      "hyperv-remote",
+      "-ServiceUrl",
+      "https://host.example:7462",
+      "-ServiceAuth",
+      "token",
+      "-InstanceName",
+      "work-vm",
+      "-VmMemoryGB",
+      "8",
+      "-VmDiskGB",
+      "50"
+    ],
+    "auth": "token",
+    "cpu": 4,
+    "disk": 50,
+    "name": "work-vm",
+    "output": {
+      "command": "& 'C:/Construct/Auto-Install.ps1' -Backend 'hyperv-remote' -ServiceUrl 'https://host.example:7462' -ServiceAuth 'token' -InstanceName 'work-vm' -VmMemoryGB '8' -VmDiskGB '50'",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "JgAgACcAQwA6AC8AQwBvAG4AcwB0AHIAdQBjAHQALwBBAHUAdABvAC0ASQBuAHMAdABhAGwAbAAuAHAAcwAxACcAIAAtAEIAYQBjAGsAZQBuAGQAIAAnAGgAeQBwAGUAcgB2AC0AcgBlAG0AbwB0AGUAJwAgAC0AUwBlAHIAdgBpAGMAZQBVAHIAbAAgACcAaAB0AHQAcABzADoALwAvAGgAbwBzAHQALgBlAHgAYQBtAHAAbABlADoANwA0ADYAMgAnACAALQBTAGUAcgB2AGkAYwBlAEEAdQB0AGgAIAAnAHQAbwBrAGUAbgAnACAALQBJAG4AcwB0AGEAbgBjAGUATgBhAG0AZQAgACcAdwBvAHIAawAtAHYAbQAnACAALQBWAG0ATQBlAG0AbwByAHkARwBCACAAJwA4ACcAIAAtAFYAbQBEAGkAcwBrAEcAQgAgACcANQAwACcA"
+      ]
+    },
+    "projects": null,
+    "ram": 8,
+    "script": "C:/Construct/Auto-Install.ps1",
+    "supportsCpu": false,
+    "url": "https://host.example:7462"
+  },
+  {
+    "argSpec": [
+      {
+        "flag": "-Backend",
+        "value": "hyperv-remote"
+      },
+      {
+        "flag": "-ServiceUrl",
+        "value": "https://host.example:7462"
+      },
+      {
+        "flag": "-ServiceAuth",
+        "value": "token"
+      },
+      {
+        "flag": "-InstanceName",
+        "value": "work-vm"
+      },
+      {
+        "flag": "-VmMemoryGB",
+        "value": "8"
+      },
+      {
+        "flag": "-VmDiskGB",
+        "value": "50"
+      },
+      {
+        "flag": "-Projects",
+        "value": ""
+      }
+    ],
+    "args": [
+      "-Backend",
+      "hyperv-remote",
+      "-ServiceUrl",
+      "https://host.example:7462",
+      "-ServiceAuth",
+      "token",
+      "-InstanceName",
+      "work-vm",
+      "-VmMemoryGB",
+      "8",
+      "-VmDiskGB",
+      "50",
+      "-Projects",
+      ""
+    ],
+    "auth": "token",
+    "cpu": 4,
+    "disk": 50,
+    "name": "work-vm",
+    "output": {
+      "command": "& 'C:/Construct/Auto-Install.ps1' -Backend 'hyperv-remote' -ServiceUrl 'https://host.example:7462' -ServiceAuth 'token' -InstanceName 'work-vm' -VmMemoryGB '8' -VmDiskGB '50' -Projects ''",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "JgAgACcAQwA6AC8AQwBvAG4AcwB0AHIAdQBjAHQALwBBAHUAdABvAC0ASQBuAHMAdABhAGwAbAAuAHAAcwAxACcAIAAtAEIAYQBjAGsAZQBuAGQAIAAnAGgAeQBwAGUAcgB2AC0AcgBlAG0AbwB0AGUAJwAgAC0AUwBlAHIAdgBpAGMAZQBVAHIAbAAgACcAaAB0AHQAcABzADoALwAvAGgAbwBzAHQALgBlAHgAYQBtAHAAbABlADoANwA0ADYAMgAnACAALQBTAGUAcgB2AGkAYwBlAEEAdQB0AGgAIAAnAHQAbwBrAGUAbgAnACAALQBJAG4AcwB0AGEAbgBjAGUATgBhAG0AZQAgACcAdwBvAHIAawAtAHYAbQAnACAALQBWAG0ATQBlAG0AbwByAHkARwBCACAAJwA4ACcAIAAtAFYAbQBEAGkAcwBrAEcAQgAgACcANQAwACcAIAAtAFAAcgBvAGoAZQBjAHQAcwAgACcAJwA="
+      ]
+    },
+    "projects": [],
+    "ram": 8,
+    "script": "C:/Construct/Auto-Install.ps1",
+    "supportsCpu": false,
+    "url": "https://host.example:7462"
+  },
+  {
+    "argSpec": [
+      {
+        "flag": "-Backend",
+        "value": "hyperv-remote"
+      },
+      {
+        "flag": "-ServiceUrl",
+        "value": "https://host.example:7462"
+      },
+      {
+        "flag": "-ServiceAuth",
+        "value": "token"
+      },
+      {
+        "flag": "-InstanceName",
+        "value": "work-vm"
+      },
+      {
+        "flag": "-VmMemoryGB",
+        "value": "8"
+      },
+      {
+        "flag": "-VmDiskGB",
+        "value": "50"
+      },
+      {
+        "flag": "-Projects",
+        "value": "default,api"
+      }
+    ],
+    "args": [
+      "-Backend",
+      "hyperv-remote",
+      "-ServiceUrl",
+      "https://host.example:7462",
+      "-ServiceAuth",
+      "token",
+      "-InstanceName",
+      "work-vm",
+      "-VmMemoryGB",
+      "8",
+      "-VmDiskGB",
+      "50",
+      "-Projects",
+      "default,api"
+    ],
+    "auth": "token",
+    "cpu": 4,
+    "disk": 50,
+    "name": "work-vm",
+    "output": {
+      "command": "& 'C:/Construct/Auto-Install.ps1' -Backend 'hyperv-remote' -ServiceUrl 'https://host.example:7462' -ServiceAuth 'token' -InstanceName 'work-vm' -VmMemoryGB '8' -VmDiskGB '50' -Projects 'default,api'",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "JgAgACcAQwA6AC8AQwBvAG4AcwB0AHIAdQBjAHQALwBBAHUAdABvAC0ASQBuAHMAdABhAGwAbAAuAHAAcwAxACcAIAAtAEIAYQBjAGsAZQBuAGQAIAAnAGgAeQBwAGUAcgB2AC0AcgBlAG0AbwB0AGUAJwAgAC0AUwBlAHIAdgBpAGMAZQBVAHIAbAAgACcAaAB0AHQAcABzADoALwAvAGgAbwBzAHQALgBlAHgAYQBtAHAAbABlADoANwA0ADYAMgAnACAALQBTAGUAcgB2AGkAYwBlAEEAdQB0AGgAIAAnAHQAbwBrAGUAbgAnACAALQBJAG4AcwB0AGEAbgBjAGUATgBhAG0AZQAgACcAdwBvAHIAawAtAHYAbQAnACAALQBWAG0ATQBlAG0AbwByAHkARwBCACAAJwA4ACcAIAAtAFYAbQBEAGkAcwBrAEcAQgAgACcANQAwACcAIAAtAFAAcgBvAGoAZQBjAHQAcwAgACcAZABlAGYAYQB1AGwAdAAsAGEAcABpACcA"
+      ]
+    },
+    "projects": [
+      "default",
+      "api"
+    ],
+    "ram": 8,
+    "script": "C:/Construct/Auto-Install.ps1",
+    "supportsCpu": false,
+    "url": "https://host.example:7462"
+  },
+  {
+    "argSpec": [
+      {
+        "flag": "-Backend",
+        "value": "hyperv-remote"
+      },
+      {
+        "flag": "-ServiceUrl",
+        "value": "https://host.example:7462"
+      },
+      {
+        "flag": "-ServiceAuth",
+        "value": "negotiate"
+      },
+      {
+        "flag": "-InstanceName",
+        "value": "work-vm"
+      },
+      {
+        "flag": "-VmMemoryGB",
+        "value": "8"
+      },
+      {
+        "flag": "-VmDiskGB",
+        "value": "50"
+      },
+      {
+        "flag": "-VmCpuCount",
+        "value": "4"
+      }
+    ],
+    "args": [
+      "-Backend",
+      "hyperv-remote",
+      "-ServiceUrl",
+      "https://host.example:7462",
+      "-ServiceAuth",
+      "negotiate",
+      "-InstanceName",
+      "work-vm",
+      "-VmMemoryGB",
+      "8",
+      "-VmDiskGB",
+      "50",
+      "-VmCpuCount",
+      "4"
+    ],
+    "auth": "negotiate",
+    "cpu": 4,
+    "disk": 50,
+    "name": "work-vm",
+    "output": {
+      "command": "& 'C:/Construct/Auto-Install.ps1' -Backend 'hyperv-remote' -ServiceUrl 'https://host.example:7462' -ServiceAuth 'negotiate' -InstanceName 'work-vm' -VmMemoryGB '8' -VmDiskGB '50' -VmCpuCount '4'",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "JgAgACcAQwA6AC8AQwBvAG4AcwB0AHIAdQBjAHQALwBBAHUAdABvAC0ASQBuAHMAdABhAGwAbAAuAHAAcwAxACcAIAAtAEIAYQBjAGsAZQBuAGQAIAAnAGgAeQBwAGUAcgB2AC0AcgBlAG0AbwB0AGUAJwAgAC0AUwBlAHIAdgBpAGMAZQBVAHIAbAAgACcAaAB0AHQAcABzADoALwAvAGgAbwBzAHQALgBlAHgAYQBtAHAAbABlADoANwA0ADYAMgAnACAALQBTAGUAcgB2AGkAYwBlAEEAdQB0AGgAIAAnAG4AZQBnAG8AdABpAGEAdABlACcAIAAtAEkAbgBzAHQAYQBuAGMAZQBOAGEAbQBlACAAJwB3AG8AcgBrAC0AdgBtACcAIAAtAFYAbQBNAGUAbQBvAHIAeQBHAEIAIAAnADgAJwAgAC0AVgBtAEQAaQBzAGsARwBCACAAJwA1ADAAJwAgAC0AVgBtAEMAcAB1AEMAbwB1AG4AdAAgACcANAAnAA=="
+      ]
+    },
+    "projects": null,
+    "ram": 8,
+    "script": "C:/Construct/Auto-Install.ps1",
+    "supportsCpu": true,
+    "url": "https://host.example:7462"
+  },
+  {
+    "argSpec": [
+      {
+        "flag": "-Backend",
+        "value": "hyperv-remote"
+      },
+      {
+        "flag": "-ServiceUrl",
+        "value": "https://host.example:7462"
+      },
+      {
+        "flag": "-ServiceAuth",
+        "value": "negotiate"
+      },
+      {
+        "flag": "-InstanceName",
+        "value": "work-vm"
+      },
+      {
+        "flag": "-VmMemoryGB",
+        "value": "8"
+      },
+      {
+        "flag": "-VmDiskGB",
+        "value": "50"
+      },
+      {
+        "flag": "-VmCpuCount",
+        "value": "4"
+      },
+      {
+        "flag": "-Projects",
+        "value": ""
+      }
+    ],
+    "args": [
+      "-Backend",
+      "hyperv-remote",
+      "-ServiceUrl",
+      "https://host.example:7462",
+      "-ServiceAuth",
+      "negotiate",
+      "-InstanceName",
+      "work-vm",
+      "-VmMemoryGB",
+      "8",
+      "-VmDiskGB",
+      "50",
+      "-VmCpuCount",
+      "4",
+      "-Projects",
+      ""
+    ],
+    "auth": "negotiate",
+    "cpu": 4,
+    "disk": 50,
+    "name": "work-vm",
+    "output": {
+      "command": "& 'C:/Construct/Auto-Install.ps1' -Backend 'hyperv-remote' -ServiceUrl 'https://host.example:7462' -ServiceAuth 'negotiate' -InstanceName 'work-vm' -VmMemoryGB '8' -VmDiskGB '50' -VmCpuCount '4' -Projects ''",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "JgAgACcAQwA6AC8AQwBvAG4AcwB0AHIAdQBjAHQALwBBAHUAdABvAC0ASQBuAHMAdABhAGwAbAAuAHAAcwAxACcAIAAtAEIAYQBjAGsAZQBuAGQAIAAnAGgAeQBwAGUAcgB2AC0AcgBlAG0AbwB0AGUAJwAgAC0AUwBlAHIAdgBpAGMAZQBVAHIAbAAgACcAaAB0AHQAcABzADoALwAvAGgAbwBzAHQALgBlAHgAYQBtAHAAbABlADoANwA0ADYAMgAnACAALQBTAGUAcgB2AGkAYwBlAEEAdQB0AGgAIAAnAG4AZQBnAG8AdABpAGEAdABlACcAIAAtAEkAbgBzAHQAYQBuAGMAZQBOAGEAbQBlACAAJwB3AG8AcgBrAC0AdgBtACcAIAAtAFYAbQBNAGUAbQBvAHIAeQBHAEIAIAAnADgAJwAgAC0AVgBtAEQAaQBzAGsARwBCACAAJwA1ADAAJwAgAC0AVgBtAEMAcAB1AEMAbwB1AG4AdAAgACcANAAnACAALQBQAHIAbwBqAGUAYwB0AHMAIAAnACcA"
+      ]
+    },
+    "projects": [],
+    "ram": 8,
+    "script": "C:/Construct/Auto-Install.ps1",
+    "supportsCpu": true,
+    "url": "https://host.example:7462"
+  },
+  {
+    "argSpec": [
+      {
+        "flag": "-Backend",
+        "value": "hyperv-remote"
+      },
+      {
+        "flag": "-ServiceUrl",
+        "value": "https://host.example:7462"
+      },
+      {
+        "flag": "-ServiceAuth",
+        "value": "negotiate"
+      },
+      {
+        "flag": "-InstanceName",
+        "value": "work-vm"
+      },
+      {
+        "flag": "-VmMemoryGB",
+        "value": "8"
+      },
+      {
+        "flag": "-VmDiskGB",
+        "value": "50"
+      },
+      {
+        "flag": "-VmCpuCount",
+        "value": "4"
+      },
+      {
+        "flag": "-Projects",
+        "value": "default,api"
+      }
+    ],
+    "args": [
+      "-Backend",
+      "hyperv-remote",
+      "-ServiceUrl",
+      "https://host.example:7462",
+      "-ServiceAuth",
+      "negotiate",
+      "-InstanceName",
+      "work-vm",
+      "-VmMemoryGB",
+      "8",
+      "-VmDiskGB",
+      "50",
+      "-VmCpuCount",
+      "4",
+      "-Projects",
+      "default,api"
+    ],
+    "auth": "negotiate",
+    "cpu": 4,
+    "disk": 50,
+    "name": "work-vm",
+    "output": {
+      "command": "& 'C:/Construct/Auto-Install.ps1' -Backend 'hyperv-remote' -ServiceUrl 'https://host.example:7462' -ServiceAuth 'negotiate' -InstanceName 'work-vm' -VmMemoryGB '8' -VmDiskGB '50' -VmCpuCount '4' -Projects 'default,api'",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "JgAgACcAQwA6AC8AQwBvAG4AcwB0AHIAdQBjAHQALwBBAHUAdABvAC0ASQBuAHMAdABhAGwAbAAuAHAAcwAxACcAIAAtAEIAYQBjAGsAZQBuAGQAIAAnAGgAeQBwAGUAcgB2AC0AcgBlAG0AbwB0AGUAJwAgAC0AUwBlAHIAdgBpAGMAZQBVAHIAbAAgACcAaAB0AHQAcABzADoALwAvAGgAbwBzAHQALgBlAHgAYQBtAHAAbABlADoANwA0ADYAMgAnACAALQBTAGUAcgB2AGkAYwBlAEEAdQB0AGgAIAAnAG4AZQBnAG8AdABpAGEAdABlACcAIAAtAEkAbgBzAHQAYQBuAGMAZQBOAGEAbQBlACAAJwB3AG8AcgBrAC0AdgBtACcAIAAtAFYAbQBNAGUAbQBvAHIAeQBHAEIAIAAnADgAJwAgAC0AVgBtAEQAaQBzAGsARwBCACAAJwA1ADAAJwAgAC0AVgBtAEMAcAB1AEMAbwB1AG4AdAAgACcANAAnACAALQBQAHIAbwBqAGUAYwB0AHMAIAAnAGQAZQBmAGEAdQBsAHQALABhAHAAaQAnAA=="
+      ]
+    },
+    "projects": [
+      "default",
+      "api"
+    ],
+    "ram": 8,
+    "script": "C:/Construct/Auto-Install.ps1",
+    "supportsCpu": true,
+    "url": "https://host.example:7462"
+  },
+  {
+    "argSpec": [
+      {
+        "flag": "-Backend",
+        "value": "hyperv-remote"
+      },
+      {
+        "flag": "-ServiceUrl",
+        "value": "https://host.example:7462"
+      },
+      {
+        "flag": "-ServiceAuth",
+        "value": "negotiate"
+      },
+      {
+        "flag": "-InstanceName",
+        "value": "work-vm"
+      },
+      {
+        "flag": "-VmMemoryGB",
+        "value": "8"
+      },
+      {
+        "flag": "-VmDiskGB",
+        "value": "50"
+      }
+    ],
+    "args": [
+      "-Backend",
+      "hyperv-remote",
+      "-ServiceUrl",
+      "https://host.example:7462",
+      "-ServiceAuth",
+      "negotiate",
+      "-InstanceName",
+      "work-vm",
+      "-VmMemoryGB",
+      "8",
+      "-VmDiskGB",
+      "50"
+    ],
+    "auth": "negotiate",
+    "cpu": 4,
+    "disk": 50,
+    "name": "work-vm",
+    "output": {
+      "command": "& 'C:/Construct/Auto-Install.ps1' -Backend 'hyperv-remote' -ServiceUrl 'https://host.example:7462' -ServiceAuth 'negotiate' -InstanceName 'work-vm' -VmMemoryGB '8' -VmDiskGB '50'",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "JgAgACcAQwA6AC8AQwBvAG4AcwB0AHIAdQBjAHQALwBBAHUAdABvAC0ASQBuAHMAdABhAGwAbAAuAHAAcwAxACcAIAAtAEIAYQBjAGsAZQBuAGQAIAAnAGgAeQBwAGUAcgB2AC0AcgBlAG0AbwB0AGUAJwAgAC0AUwBlAHIAdgBpAGMAZQBVAHIAbAAgACcAaAB0AHQAcABzADoALwAvAGgAbwBzAHQALgBlAHgAYQBtAHAAbABlADoANwA0ADYAMgAnACAALQBTAGUAcgB2AGkAYwBlAEEAdQB0AGgAIAAnAG4AZQBnAG8AdABpAGEAdABlACcAIAAtAEkAbgBzAHQAYQBuAGMAZQBOAGEAbQBlACAAJwB3AG8AcgBrAC0AdgBtACcAIAAtAFYAbQBNAGUAbQBvAHIAeQBHAEIAIAAnADgAJwAgAC0AVgBtAEQAaQBzAGsARwBCACAAJwA1ADAAJwA="
+      ]
+    },
+    "projects": null,
+    "ram": 8,
+    "script": "C:/Construct/Auto-Install.ps1",
+    "supportsCpu": false,
+    "url": "https://host.example:7462"
+  },
+  {
+    "argSpec": [
+      {
+        "flag": "-Backend",
+        "value": "hyperv-remote"
+      },
+      {
+        "flag": "-ServiceUrl",
+        "value": "https://host.example:7462"
+      },
+      {
+        "flag": "-ServiceAuth",
+        "value": "negotiate"
+      },
+      {
+        "flag": "-InstanceName",
+        "value": "work-vm"
+      },
+      {
+        "flag": "-VmMemoryGB",
+        "value": "8"
+      },
+      {
+        "flag": "-VmDiskGB",
+        "value": "50"
+      },
+      {
+        "flag": "-Projects",
+        "value": ""
+      }
+    ],
+    "args": [
+      "-Backend",
+      "hyperv-remote",
+      "-ServiceUrl",
+      "https://host.example:7462",
+      "-ServiceAuth",
+      "negotiate",
+      "-InstanceName",
+      "work-vm",
+      "-VmMemoryGB",
+      "8",
+      "-VmDiskGB",
+      "50",
+      "-Projects",
+      ""
+    ],
+    "auth": "negotiate",
+    "cpu": 4,
+    "disk": 50,
+    "name": "work-vm",
+    "output": {
+      "command": "& 'C:/Construct/Auto-Install.ps1' -Backend 'hyperv-remote' -ServiceUrl 'https://host.example:7462' -ServiceAuth 'negotiate' -InstanceName 'work-vm' -VmMemoryGB '8' -VmDiskGB '50' -Projects ''",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "JgAgACcAQwA6AC8AQwBvAG4AcwB0AHIAdQBjAHQALwBBAHUAdABvAC0ASQBuAHMAdABhAGwAbAAuAHAAcwAxACcAIAAtAEIAYQBjAGsAZQBuAGQAIAAnAGgAeQBwAGUAcgB2AC0AcgBlAG0AbwB0AGUAJwAgAC0AUwBlAHIAdgBpAGMAZQBVAHIAbAAgACcAaAB0AHQAcABzADoALwAvAGgAbwBzAHQALgBlAHgAYQBtAHAAbABlADoANwA0ADYAMgAnACAALQBTAGUAcgB2AGkAYwBlAEEAdQB0AGgAIAAnAG4AZQBnAG8AdABpAGEAdABlACcAIAAtAEkAbgBzAHQAYQBuAGMAZQBOAGEAbQBlACAAJwB3AG8AcgBrAC0AdgBtACcAIAAtAFYAbQBNAGUAbQBvAHIAeQBHAEIAIAAnADgAJwAgAC0AVgBtAEQAaQBzAGsARwBCACAAJwA1ADAAJwAgAC0AUAByAG8AagBlAGMAdABzACAAJwAnAA=="
+      ]
+    },
+    "projects": [],
+    "ram": 8,
+    "script": "C:/Construct/Auto-Install.ps1",
+    "supportsCpu": false,
+    "url": "https://host.example:7462"
+  },
+  {
+    "argSpec": [
+      {
+        "flag": "-Backend",
+        "value": "hyperv-remote"
+      },
+      {
+        "flag": "-ServiceUrl",
+        "value": "https://host.example:7462"
+      },
+      {
+        "flag": "-ServiceAuth",
+        "value": "negotiate"
+      },
+      {
+        "flag": "-InstanceName",
+        "value": "work-vm"
+      },
+      {
+        "flag": "-VmMemoryGB",
+        "value": "8"
+      },
+      {
+        "flag": "-VmDiskGB",
+        "value": "50"
+      },
+      {
+        "flag": "-Projects",
+        "value": "default,api"
+      }
+    ],
+    "args": [
+      "-Backend",
+      "hyperv-remote",
+      "-ServiceUrl",
+      "https://host.example:7462",
+      "-ServiceAuth",
+      "negotiate",
+      "-InstanceName",
+      "work-vm",
+      "-VmMemoryGB",
+      "8",
+      "-VmDiskGB",
+      "50",
+      "-Projects",
+      "default,api"
+    ],
+    "auth": "negotiate",
+    "cpu": 4,
+    "disk": 50,
+    "name": "work-vm",
+    "output": {
+      "command": "& 'C:/Construct/Auto-Install.ps1' -Backend 'hyperv-remote' -ServiceUrl 'https://host.example:7462' -ServiceAuth 'negotiate' -InstanceName 'work-vm' -VmMemoryGB '8' -VmDiskGB '50' -Projects 'default,api'",
+      "file": "cmd.exe",
+      "spawnArgs": [
+        "/c",
+        "start",
+        "",
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        "JgAgACcAQwA6AC8AQwBvAG4AcwB0AHIAdQBjAHQALwBBAHUAdABvAC0ASQBuAHMAdABhAGwAbAAuAHAAcwAxACcAIAAtAEIAYQBjAGsAZQBuAGQAIAAnAGgAeQBwAGUAcgB2AC0AcgBlAG0AbwB0AGUAJwAgAC0AUwBlAHIAdgBpAGMAZQBVAHIAbAAgACcAaAB0AHQAcABzADoALwAvAGgAbwBzAHQALgBlAHgAYQBtAHAAbABlADoANwA0ADYAMgAnACAALQBTAGUAcgB2AGkAYwBlAEEAdQB0AGgAIAAnAG4AZQBnAG8AdABpAGEAdABlACcAIAAtAEkAbgBzAHQAYQBuAGMAZQBOAGEAbQBlACAAJwB3AG8AcgBrAC0AdgBtACcAIAAtAFYAbQBNAGUAbQBvAHIAeQBHAEIAIAAnADgAJwAgAC0AVgBtAEQAaQBzAGsARwBCACAAJwA1ADAAJwAgAC0AUAByAG8AagBlAGMAdABzACAAJwBkAGUAZgBhAHUAbAB0ACwAYQBwAGkAJwA="
+      ]
+    },
+    "projects": [
+      "default",
+      "api"
+    ],
+    "ram": 8,
+    "script": "C:/Construct/Auto-Install.ps1",
+    "supportsCpu": false,
+    "url": "https://host.example:7462"
+  }
+]

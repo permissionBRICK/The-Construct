@@ -137,9 +137,9 @@ public sealed class HttpTests
         public string EndpointPath => Path.Combine(app.Services.GetRequiredService<IpcSettings>().Directory, "endpoint.json");
         public T Get<T, TInterface>() where T : class where TInterface : notnull => (app.Services.GetRequiredService<TInterface>() as T)!;
         public void Authenticate() => client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", endpoint.Token);
-        public static async Task<Harness> Start(Action<IServiceCollection>? configure = null)
+        public static async Task<Harness> Start(Action<IServiceCollection>? configure = null, bool runtimeJobs = true)
         {
-            var app = IpcServer.Build(s => { s.AddCompanionFakes(); configure?.Invoke(s); s.AddCompanionHost(); });
+            var app = IpcServer.Build(s => { s.AddCompanionFakes(); configure?.Invoke(s); s.AddCompanionHost(runtimeJobs: runtimeJobs); });
             try
             {
                 await app.StartAsync();

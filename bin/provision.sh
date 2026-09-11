@@ -1155,9 +1155,11 @@ fi
 if [[ "${CHECKOUT_PROJECTS}" == "true" ]]; then
   if [[ -n "${_clone_creds_file}" && -s "${_clone_creds_file}" ]]; then
     run_step optional "Checking out project repos" \
-      env GIT_CONFIG_COUNT=1 \
+      env GIT_CONFIG_COUNT=2 \
       GIT_CONFIG_KEY_0=credential.helper \
-      GIT_CONFIG_VALUE_0="store --file=${_clone_creds_file}" \
+      GIT_CONFIG_VALUE_0= \
+      GIT_CONFIG_KEY_1=credential.helper \
+      GIT_CONFIG_VALUE_1="store --file=${_clone_creds_file}" \
       bash "${REPO_DIR}/bin/checkout-projects.sh"
   else
     run_step optional "Checking out project repos" bash "${REPO_DIR}/bin/checkout-projects.sh"

@@ -174,6 +174,21 @@ wait_for_one() {
 echo "Checking out repositories in parallel (CHECKOUT_JOBS=${checkout_jobs}; 0 = all)"
 while IFS=$'\t' read -r url directory; do
   [[ -n "${url}" ]] || continue
+  # Host skips are a separate, non-secret handoff; credentials retain their format.
+  if [[ "${url}" =~ ^(https?)://([^/]+) ]]; then
+    repo_scheme="${BASH_REMATCH[1],,}"
+    repo_authority="${BASH_REMATCH[2]##*@}"
+    if [[ "$repo_scheme" == https ]]; then repo_authority="${repo_authority%:443}"; else repo_authority="${repo_authority%:80}"; fi
+    repo_origin="${repo_scheme}://${repo_authority}"
+    skipped=false
+    while IFS= read -r skip_origin; do
+      if [[ "${repo_origin,,}" == "${skip_origin,,}" ]]; then skipped=true; break; fi
+    done <<<"$(printf '%s' "${GIT_CLONE_SKIP_HOSTS_B64:-}" | base64 -d)"
+    if [[ "${skipped}" == true ]]; then
+      echo "Skipping ${repo_origin}: host skipped during credential verification"
+      continue
+    fi
+  fi
   if [[ -z "${directory}" ]]; then directory="$(basename "${url}" .git)"; fi
   target="$(realpath -m -- "${WORKSPACE_ROOT}/${directory}")"
   storage="${target}/.git"
