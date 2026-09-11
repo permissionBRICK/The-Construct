@@ -44,6 +44,11 @@ function guestScripts() {
     add("notify-watch", { dir: q(dir), claim, heartbeat: "60", fallback: "3" }, notify.buildWatchScript({ dir }));
   }
   add("probe", {}, probe.REMOTE_PROBE);
+  for (const url of ["https://example.test/repo.git", "git@host:a'b.git", " https://host/{{dest}}.git "]) {
+    const remote = require("../src/remote"), dest = remote.repoNameFromUrl(url);
+    add("project-clone", {root:"/root/repos",url:Buffer.from(url.trim()).toString("base64"),dest:Buffer.from(dest).toString("base64")},remote.buildCloneScript(url,dest));
+  }
+  for (const root of ["/root/repos", "/tmp/a'b"]) add("project-scan", {root:root.replace(/'/g, "'\\''")}, require("../src/projects").buildScanScript(root));
   for (const text of ["", "#!/bin/bash\necho 'hello'\n# Unicode: ü\n"]) {
     add("audio-enable", { port: "8767", count: "8", shim: q(Buffer.from(text).toString("base64")), enable: q(Buffer.from(text).toString("base64")) }, audio.buildEnableScript(text, text));
     add("audio-disable", { self: "0", port: "8767", count: "8", disable: q(Buffer.from(text).toString("base64")) }, audio.buildDisableScript(text));
@@ -111,8 +116,9 @@ function lifecycleInvocations() {
   const m=require("../src/lifecycle"), i=instances; const rows=[];
   const settings={gitName:"-someone 'ü'",gitEmail:"a@b",ram:"12",disk:"100",cpu:"6",ubuntu:"24.04",serveWeb:true,tunnel:false,smb:false,partialStreaming:true,mic:false,opencodeBackgroundWatcher:true,t3code:true,t3codeChannel:"nightly",t3codeLimitResume:false,autoCheckpoints:false};
   const targets=[null,i.deriveDefaults("agent-vm",{}),i.deriveDefaults("dev",{}),i.deriveDefaults("dev",{configBranch:"custom"}),i.deriveDefaults("dev",{backend:"hyperv-remote",sshHost:"host",service:{url:"https://host:7462",auth:"token"}}),i.deriveDefaults("dev",{backend:"hyperv-remote",sshHost:"host"}),i.deriveDefaults("dev",{backend:"unknown"})];
-  for(const action of ["reprovision","exportConfig","reinstall","redownload","setCheckpoints","removeInstance","unknown"]) for(const instance of targets) for(const declared of [null,[],["VmName"],["VmHost","HostAlias","SshPort","LocalKeyName"],["VmHost","HostAlias","SshPort","LocalKeyName","VmName","ConfigBranch"],["InstanceName"],["InstanceName","ConfigBranch"],["Backend","ServiceUrl","InstanceName"],["Backend","ServiceUrl","InstanceName","ConfigBranch"]]) for(const legacy of [false,true]) {
+  for(const action of ["reprovision","exportConfig","reinstall","redownload","setCheckpoints","setResources","removeInstance","unknown"]) for(const instance of targets) for(const declared of [null,[],["VmName"],["VmHost","HostAlias","SshPort","LocalKeyName"],["VmHost","HostAlias","SshPort","LocalKeyName","VmName","ConfigBranch"],["InstanceName"],["InstanceName","ConfigBranch"],["Backend","ServiceUrl","InstanceName"],["Backend","ServiceUrl","InstanceName","ConfigBranch"]]) for(const legacy of [false,true]) {
     const opts={instance,instanceParams:declared,settings,projects:["api","ui"],backupDir:"C:/Backup dir",backupMode:legacy?"wipe":"save",enabled:!legacy,confirmation:"dev",supportsCheckpoints:!legacy,supportsVmCpuCount:!legacy,supportsT3CodeChannel:!legacy,supportsT3CodeLimitResume:!legacy,supportsOpenCodeBackgroundWatcher:!legacy};
+    if (action === "setResources") Object.assign(opts, {ram:legacy?null:"16.5",cpu:legacy?"bad":4});
     rows.push({action,opts,output:m.buildInvocation(action,opts),args:m.instanceArgs(action,instance,declared),params:m.paramsForAction(action,instance,declared)||[]});
   }
   return rows;
@@ -124,10 +130,21 @@ function lifecycleLaunches() {
     const opts={elevate,keepOpen,argSpec}; rows.push({script,args,opts,output:m.buildHostLaunch(script,args,opts),child:m.buildChildCommandLine(script,args,opts)});
   }rows.push({kind:"installGit",output:{file:"cmd.exe",spawnArgs:["/c","start","","powershell.exe","-EncodedCommand",Buffer.from("winget install --id Git.Git -e --source winget","utf16le").toString("base64")],command:"winget install --id Git.Git -e --source winget"}});return rows;
 }
+function projectImport() {
+  const m = require("../src/projects"), rows = [];
+  for (const stdout of ["", "END\n", "api\thttps://example.test/api.git\tmain\nEND\n", "api\t\tmain\n", "a\tu\tb\nEND\r\n"])
+    rows.push({kind:"parse",stdout,output:m.parseScan(stdout)});
+  const scan = [{name:"api",url:"https://example.test/api.git",branch:"main"},{name:"API",url:"ssh://example.test/other",branch:"main"},{name:"ui",url:"https://example.test/api.git",branch:"main"},{name:"local",url:"",branch:"main"}];
+  for (const existing of [{}, {api:m.buildDiscoveredProfile(scan[0])}]) for (const options of [{},{ignoredNames:["api"]},{ignoredUrls:["https://example.test/api.git"]}])
+    rows.push({kind:"plan",scan,existing,options,output:m.planImport(scan,existing,options)});
+  return rows;
+}
 function vmPower() {
   const m=require("../src/vmpower");const rows=[];
   for(const name of [null,"Agent-VM","dev","a'b", "name with space"])for(const kind of ["state","checkpoints","start"]){const output=kind==="state"?m.buildStateProbeLaunch(name):kind==="checkpoints"?m.buildAutoCheckpointProbeLaunch(name):m.buildElevatedCommandLaunch(m.buildStartCommand(name));rows.push({kind,name,output});}
   for(const input of ["","noise\nVMSTATE=Running\n","VMSTATE=Off","VMSTATE=Saved","VMSTATE=Paused","VMSTATE=Starting","VMSTATE=absent","VMSTATE=unknown","VMAUTOCHK=True","VMAUTOCHK=False","VMAUTOCHK=unsupported","VMAUTOCHK=absent"]) rows.push({kind:"parse",input,state:m.parseVmState(input),checkpoints:m.parseAutoCheckpoints(input)});
+  for (const saved of [{}, {ram:"16",cpu:"8"}, {ram:"16.5",cpu:1}, {ram:0,cpu:"max"}, {ram:true,cpu:1.5}, {ram:"0x10",cpu:"4"}])
+    for (const live of [null, {}, {ramGb:16,cpus:8}, {ramGb:8,cpus:4}, {ramGb:16.5,cpus:1}]) rows.push({kind:"resources",saved,live,output:m.planResourceApply(saved,live)});
   rows.push({kind:"shutdown",output:m.SHUTDOWN_CMD}); return rows;
 }
 function probeParsing() {
@@ -457,6 +474,46 @@ function integrationSettings() {
     return rows;
   } finally { fs.rmSync(root, {recursive:true}); }
 }
+function instanceWorkflows() {
+  const rows = [], remote = require("../src/remote");
+  for (const document of [{}, {instances:{"work-vm":{},"remote-vm":{backend:"hyperv-remote",sshHost:"guest.example",service:{url:"http://localhost:7462",auth:"negotiate"}}}}]) {
+    const text = JSON.stringify(document), registry = instances.parseRegistry(text).registry;
+    for (const name of ["", "bad name", "agent-vm", "work-vm", "other-vm"])
+      for (const host of ["work-vm.mshome.net", "WORK-VM.MSHOME.NET.", "other-vm", "elsewhere"])
+        rows.push({kind:"register",text,name,host,output:instances.planLocalRegistration(registry,name,host)});
+    for (const name of ["", "missing", "agent-vm", "remote-vm", "work-vm"])
+      for (const confirmation of ["", name]) rows.push({kind:"remove",text,name,confirmation,output:instances.planRemoveInstance({registry,name,confirmation})});
+  }
+  for (const url of ["", "https://host/a.git", "git@host:project.git", "ssh://host/a.GIT/", " https://host/a.git?q=1#x ", "nope", "https://a b", "git@host:.."]) rows.push({kind:"git",url,valid:remote.isLikelyGitUrl(url),name:remote.repoNameFromUrl(url)});
+  return rows;
+}
+function hostConversionLaunches() {
+  const m=require("../src/hostconversion"), rows=[];
+  const source=fs.readFileSync(path.join(__dirname,"../src/hostconversion.js"),"utf8");
+  const identity=source.match(/const pc = JSON.parse\(await powershell\(`([^`]+)`\)\);/)[1];
+  rows.push({kind:"identity",output:["-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass","-EncodedCommand",Buffer.from("$u=New-Object Text.UTF8Encoding($false); [Console]::OutputEncoding=$u; [Console]::InputEncoding=$u; "+identity,"utf16le").toString("base64")]});
+  for (const input of [null,"host.example","HOST","192.168.1.2","a..b","a'b","a".repeat(254)]) rows.push({kind:"host",input,output:m.validHost(input)});
+  for (const directory of ["C:/Construct", "C:/Users/O'Neil/构建"]) {
+    const plan=sortKeys({id:"0123456789abcdef0123456789abcdef",name:"work-vm",scriptsDir:directory,adminUser:"PC\\owner",publicHost:"host.example",resultPath:"C:/temp/conversion.result",publicKeyXml:"<RSAKeyValue/>"});
+    rows.push({kind:"launch",plan,output:m.launchScript(plan)});
+  }
+  return rows;
+}
+function remoteVmLaunches() {
+  const lifecycle=require("../src/lifecycle"), vm=require("vm");
+  const source=fs.readFileSync(path.join(__dirname,"../extension.js"),"utf8");
+  const start=source.indexOf("  const argSpec = [",source.indexOf("async function runNewRemoteVm"));
+  const builder=source.slice(start,source.indexOf("  lifecycle.launchHostScript",start));
+  const rows=[];
+  for(const auth of ["token","negotiate"]) for(const supportsCpu of [true,false]) for(const projects of [null,[],["default","api"]]) {
+    const script="C:/Construct/Auto-Install.ps1",url="https://host.example:7462",name="work-vm",cpu=4,ram=8,disk=50;
+    const argSpec=JSON.parse(JSON.stringify(vm.runInNewContext(builder+";argSpec",{hostEntry:{url,auth},name,cpu,ram,disk,scriptsDir:"C:/Construct",lifecycle:{AUTO_INSTALL:"Auto-Install.ps1",scriptSupportsParam:()=>supportsCpu},logLine:()=>{}})));
+    if(projects!==null) argSpec.push({flag:"-Projects",value:projects.join(",")});
+    const args=lifecycle.flattenArgPairs(argSpec);
+    rows.push({auth,supportsCpu,projects,script,url,name,cpu,ram,disk,argSpec,args,output:lifecycle.buildHostLaunch(script,args,{elevate:false,argSpec})});
+  }
+  return rows;
+}
 async function exportAll() {
   return {
     "refresh-cache": refreshCachePolicy(),
@@ -477,9 +534,13 @@ async function exportAll() {
     "settings-mapping": settingsMapping(),
     "instance-identity": instanceIdentity(),
     "registry-state": registryState(),
+    "instance-workflows": instanceWorkflows(),
+    "host-conversion-launches": hostConversionLaunches(),
+    "remote-vm-launches": remoteVmLaunches(),
     "lifecycle-invocations": lifecycleInvocations(),
     "lifecycle-launches": lifecycleLaunches(),
     "vm-power": vmPower(),
+    "project-import": projectImport(),
     "probe-parsing": probeParsing(),
     "usage-parsing": usageParsing(),
     "updates-planning": await updatesPlanning(),
