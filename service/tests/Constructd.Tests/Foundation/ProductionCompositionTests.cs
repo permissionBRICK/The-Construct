@@ -31,6 +31,7 @@ public sealed class ProductionCompositionTests
                 Assert.True(guard.Message.Contains("need Windows", StringComparison.Ordinal),
                     "Only the pre-existing Windows platform adapters are skipped on Linux; the production host-admin registrations must execute.");
                 services.AddSingleton<IHypervisorDriver, FakeHypervisorDriver>();
+                services.AddSingleton<IVmCpuDriver>(sp => (FakeHypervisorDriver)sp.GetRequiredService<IHypervisorDriver>());
                 services.AddSingleton<IProcessRunner, Constructd.Fakes.RecordingProcessRunner>();
                 services.AddSingleton<IJobEngine>(sp => new InProcessJobEngine(sp.GetRequiredService<IClock>(), sp.GetRequiredService<IJobStore>()));
                 services.AddSingleton<IPortForwardManager>(sp => new InMemoryPortForwardManager(sp.GetRequiredService<IClock>(),
@@ -40,7 +41,7 @@ public sealed class ProductionCompositionTests
             Type[] required = [typeof(VmInventoryProjection), typeof(IVmDelegationRepository), typeof(IVmMetadataStore), typeof(IUserAllowanceStore), typeof(IVmTokenIssuer),
                 typeof(IUserTokenRevoker), typeof(IJobQueryStore), typeof(IHostConfigStore), typeof(IHostConfigMetadata), typeof(IDelegationPolicy),
                 typeof(ICapabilityAggregator), typeof(IChildVmDriver), typeof(IConsoleTransport), typeof(IConsoleSessionStore), typeof(IVmOperationGate),
-                typeof(IMaintenanceGate), typeof(ICapacityLedger), typeof(IMediaStore), typeof(IReleaseInfo), typeof(IAdmissionStore),
+                typeof(IMaintenanceGate), typeof(ICapacityLedger), typeof(IMediaStore), typeof(IReleaseInfo), typeof(IAdmissionStore), typeof(IVmCpuDriver),
                 typeof(IPersistedJobRunner), typeof(IHypervisorInventory), typeof(IOperationKeyStore), typeof(IAccessExposure), typeof(IGuestAddressProvider),
                 typeof(INetworkPolicyReconciler), typeof(IHostNetworkPolicy), typeof(IUrlAdmissionPolicy), typeof(IHostLock), typeof(IReleaseSource),
                 typeof(IUpdateStager), typeof(IUpdaterLauncher), typeof(IHostUpdateStore)];
