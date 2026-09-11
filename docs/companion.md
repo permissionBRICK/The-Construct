@@ -16,6 +16,9 @@ The popup can switch instances, register a VM, run lifecycle actions, and open t
 
 ## Install and update
 
+A local build (`-Source local`) needs the Companion sources, which the release archive
+does not carry; use a git clone of the repository for that.
+
 Run `Auto-Install.ps1` from a normal, non-elevated PowerShell window. Its per-user
 pre-step installs the Companion alongside the VS Code extension before the VM
 installation asks for elevation. `Update-Construct.ps1` and a plain

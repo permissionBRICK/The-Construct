@@ -134,6 +134,16 @@ try {
         [IO.File]::WriteAllText((Join-Path $tree $built),'built')
     }
     Check 'build outputs and node_modules are not local changes' ((Get-ConstructSourceIdentity -Root $tree -ManifestDir $manifests).TreeState -eq 'equivalent')
+    foreach ($devOnly in 'test/old.test.ps1','extension/test/old.test.js','service/src/Old.cs','companion/src/App/Old.cs','docs/plans/old.md','.github/workflows/old.yml') {
+        [IO.Directory]::CreateDirectory((Split-Path -Parent (Join-Path $tree $devOnly))) | Out-Null
+        [IO.File]::WriteAllText((Join-Path $tree $devOnly),'dev-only')
+    }
+    Check 'repository-only folders left over from an older archive are not local changes' ((Get-ConstructSourceIdentity -Root $tree -ManifestDir $manifests).TreeState -eq 'equivalent')
+    [IO.File]::WriteAllText((Join-Path $tree 'stale.txt'),'from an older release')
+    [IO.File]::WriteAllText((Join-Path $tree 'keep.local'),'mine')
+    $pruned = Remove-ConstructStaleSourceFiles -Root $tree -Zip $zip
+    Check 'pruning removes files the archive no longer ships' ($pruned -eq 1 -and -not (Test-Path (Join-Path $tree 'stale.txt')))
+    Check 'pruning keeps archive files and local artifacts' ((Test-Path (Join-Path $tree 'file')) -and (Test-Path (Join-Path $tree 'keep.local')) -and (Test-Path (Join-Path $tree 'companion/src/App/obj/x.dll')))
     [IO.File]::WriteAllText((Join-Path $tree 'extra'),'extra')
     Check 'archive extra divergent' ((Get-ConstructSourceIdentity -Root $tree -ManifestDir $manifests).TreeState -eq 'divergent')
     Remove-Item -LiteralPath (Join-Path $tree 'extra');[IO.File]::WriteAllText((Join-Path $tree 'file'),'changed')
