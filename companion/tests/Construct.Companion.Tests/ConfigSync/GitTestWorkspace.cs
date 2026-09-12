@@ -34,12 +34,13 @@ internal sealed class LocalStoreTransport(IProcessRunner processes, string cwd) 
     public Func<string, Task>? BeforeRun { get; set; }
     public int Calls { get; private set; }
     public bool Offline { get; set; }
-    public async Task<ProcessResult> RunRemoteScriptAsync(string script, TimeSpan? timeout = null, CancellationToken cancellationToken = default)
+    public async Task<ProcessResult> RunRemoteScriptAsync(string script, TimeSpan? timeout = null, CancellationToken cancellationToken = default, Secret? standardInput = null)
     {
         Calls++; if (Offline) return new(-1);
         if (BeforeRun != null) await BeforeRun(script);
         return await processes.RunAsync(new("bash", [], cwd, new Secret(script), timeout), cancellationToken);
     }
+    public Task<bool> ProbeListeningPortAsync(int port, CancellationToken cancellationToken = default) => Task.FromResult(false);
     public IRunningProcess SpawnWatch(string script, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     public IRunningProcess SpawnTunnel(TunnelSpec tunnel, CancellationToken cancellationToken = default) => throw new NotSupportedException();
     public Task<bool> ProbePortAsync(int port, string bindHost = "127.0.0.1", CancellationToken cancellationToken = default) => throw new NotSupportedException();

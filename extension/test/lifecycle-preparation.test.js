@@ -21,6 +21,7 @@ const helper = source.slice(source.indexOf("async function preparePanelLifecycle
     assert.equal(messages.length, 1);
     assert.equal(messages[0].type, "lifecyclePrepared");
     assert.equal(messages[0].id, "reinstall");
+    assert.equal(messages[0].error, outcome === "failed" ? "SSH failed" : undefined);
     assert.equal(errors.length, outcome === "failed" ? 1 : 0);
   }
   console.log("Lifecycle preparation: completion, early return, and exception recovery passed.");

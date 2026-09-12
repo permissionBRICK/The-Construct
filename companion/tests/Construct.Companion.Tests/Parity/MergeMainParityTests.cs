@@ -16,10 +16,19 @@ public sealed class MergeMainParityTests
     [Theory, MemberData(nameof(ConsoleRows))]
     public void ConsoleScriptsAndBrowserAcceptanceMatchJavaScript(JsonElement row)
     {
-        string? result = null;
-        try { result = row.GetProperty("kind").GetString() == "script" ? GuestConsole.BuildConsoleScript(row.GetProperty("input").GetString()!) : GuestConsole.ParseBrowserLink(row.GetProperty("input").GetString()); }
+        object? result = null;
+        try {
+            var input = row.GetProperty("input");
+            result = row.GetProperty("kind").GetString() switch {
+                "script" => GuestConsole.BuildConsoleScript(input.GetString()!),
+                "self" => GuestConsole.BuildSelfConsoleScript(input.GetBoolean()),
+                "ensure" => GuestConsole.ParseEnsureOutput(input.GetString()!),
+                "handoff" => GuestConsole.ParseHandoff(input.GetString()!),
+                "failure" => GuestConsole.MapFailure(input.GetProperty("step").GetString()!, new ProcessResult(input.GetProperty("result").GetProperty("code").GetInt32(), input.GetProperty("result").TryGetProperty("stdout", out var stdout) ? stdout.GetString()! : "", input.GetProperty("result").TryGetProperty("stderr", out var stderr) ? stderr.GetString()! : "")),
+                _ => GuestConsole.ParseBrowserLink(input.GetString()) };
+        }
         catch (Exception e) when (e is ArgumentException or InvalidOperationException) { }
-        Assert.Equal(row.GetProperty("output").GetString(), result);
+        StateParityTests.Equal(JsonNode.Parse(row.GetProperty("output").GetRawText()), JsonSerializer.SerializeToNode(result));
     }
     public static IEnumerable<object[]> PairingRows => ParityTests.Scripts.Where(r => ((JsonElement)r[0]).GetProperty("name").GetString() is "t3-pairing" or "t3-pairing-instance");
     [Theory, MemberData(nameof(PairingRows))]

@@ -32,15 +32,18 @@ public sealed class FakeSshTransport : ISshTransport
     public Func<string, CancellationToken, Task<ProcessResult>>? ScriptHandler { get; set; }
     public Action<FakeRunningProcess>? TunnelStarted { get; set; }
     public ScriptedGuestSpool Spool { get; } = new();
+    public List<Secret?> StandardInputs { get; } = [];
     public List<string> Scripts { get; } = [];
     public List<TimeSpan?> ScriptTimeouts { get; } = [];
     public List<(string Script, FakeRunningProcess Process)> Watches { get; } = [];
     public List<(TunnelSpec Spec, FakeRunningProcess Process)> Tunnels { get; } = [];
     public HashSet<(int Port, string BindHost)> BusyPorts { get; } = [];
-    public Task<ProcessResult> RunRemoteScriptAsync(string script, TimeSpan? timeout = null, CancellationToken cancellationToken = default)
+    public Task<ProcessResult> RunRemoteScriptAsync(string script, TimeSpan? timeout = null, CancellationToken cancellationToken = default, Secret? standardInput = null)
     {
-        cancellationToken.ThrowIfCancellationRequested(); Scripts.Add(script); ScriptTimeouts.Add(timeout); return ScriptHandler is null ? Task.FromResult(Spool.Run(script)) : ScriptHandler(script, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested(); StandardInputs.Add(standardInput); Scripts.Add(script); ScriptTimeouts.Add(timeout); return ScriptHandler is null ? Task.FromResult(Spool.Run(script)) : ScriptHandler(script, cancellationToken);
     }
+    public Queue<bool> ListeningResults { get; } = new();
+    public Task<bool> ProbeListeningPortAsync(int port, CancellationToken cancellationToken = default) => Task.FromResult(ListeningResults.TryDequeue(out var value) ? value : true);
     public IRunningProcess SpawnWatch(string script, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();

@@ -2998,3 +2998,14 @@ and no install-wide `companion:false`. Registry changes re-evaluate eligibility;
 choosing either button suppresses further offers for the session. Local and remote
 VMs use the same client install rule. Auto-Install, Update-Construct and
 Provision-AgentVM use the shared non-blocking installation hook.
+
+## Primary browser console
+
+`command/openConsole` captures the selected instance and runs `src/console.js`.
+Registry-derived `state.console` carries support and an optional reason even when
+SSH is offline. The status-strip button uses the existing preparation spinner;
+`lifecyclePrepared` carries any error to `#consoleNote`. Shared guest templates
+ensure the gateway and resolve stale forward IDs. Local connection JSON travels
+on SSH stdin, separate from the temporary script file. The Windows PowerShell
+broker shares a DPAPI store and rotation mutex between VS Code and Companion.
+Companion dispatches the same command through `InstanceConsole`.

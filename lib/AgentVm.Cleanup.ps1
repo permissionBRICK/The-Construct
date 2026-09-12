@@ -322,6 +322,7 @@ function Get-ConstructInstanceRemovalPlan {
     if ($isRemote -and $serviceUrl) {
         & $add 'remote-vm-delete' "Delete the VM '$Name' on $serviceUrl" $serviceUrl
     }
+    if (-not $isRemote) { & $add 'console-account' "Remove console access for $Name" $Name }
     if ($HomeDir) {
         $sshDir = Join-Path $HomeDir ".ssh"
         & $add 'ssh-config' "Remove the Host '$alias' block from ~/.ssh/config" (Join-Path $sshDir "config")
@@ -788,6 +789,14 @@ function Invoke-ConstructInstanceRemoval {
                         return $results.ToArray()
                     }
                 }
+            }
+            'console-account' {
+                try {
+                    . "$PSScriptRoot/AgentVm.Remote.ps1"
+                    . "$PSScriptRoot/AgentVm.Console.ps1"
+                    Remove-ConstructConsoleAccount -InstanceName $Plan.Name
+                    $results.Add((New-ConstructCleanupResult $step.Kind 'removed' 'Removed local console access.'))
+                } catch { $results.Add((New-ConstructCleanupResult $step.Kind 'skipped' 'Run Set-AgentVmConsoleAccess.ps1 -Remove as administrator to remove the console account.')) }
             }
             'ssh-config' { $results.Add((Remove-ConstructSshConfigEntry -Path $step.Target -Alias $Plan.HostAlias)) }
             'known-hosts' { $results.Add((Remove-ConstructKnownHostsEntries -Alias $Plan.HostAlias -VmHost $vmHost -SshPort $sshPort)) }

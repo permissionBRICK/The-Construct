@@ -59,7 +59,7 @@ Media:
   media delete ID --yes [--json]
 
 Console:
-  console NAME --web [--minutes 1440]  Browser viewer (default link lifetime: 24 hours)
+  console NAME|self --web [--minutes 1440] [--connection-stdin]  Browser viewer (default link lifetime: 24 hours)
   Other actions use one short-lived session per invocation:
   console NAME --screenshot FILE.png [--width W --height H]
   console NAME (--type-stdin | --type-file FILE | --key CODE [--press|--release]
@@ -821,14 +821,19 @@ require_mouse_applied() {
   fi
 }
 
+cmd_console_web() {
+  local name="${1:-}"; shift || true
+  [[ -n "${name}" ]] || die 'console requires NAME or self'
+  if [[ "${name}" == self ]]; then name="${INSTANCE_NAME}"; fi
+  local viewer="${CONSTRUCT_CONSOLE_OPENER:-/opt/construct/console-viewer/open.py}" arg
+  local -a args=()
+  for arg in "$@"; do [[ "${arg}" == --web ]] || args+=("${arg}"); done
+  [[ -f "${viewer}" ]] || die 'browser gateway is not installed; run console-viewer/install.sh from the Construct checkout'
+  exec /usr/bin/python3 "${viewer}" "${name}" "${args[@]}"
+}
+
 cmd_console() {
   local name="${1:-}"; shift || true
-  if [[ "${1:-}" == --web ]]; then
-    shift
-    local viewer=/opt/construct/console-viewer/open.py
-    [[ -f "${viewer}" ]] || die 'browser gateway is not installed; run console-viewer/install.sh from the Construct checkout'
-    exec /usr/bin/python3 "${viewer}" "${name}" "$@"
-  fi
   local mode="" value="" width="" height="" press_state=null operation_id="" key session base body response query="" file
   [[ -n "${name}" ]] || die 'console requires a VM name'
   while [[ $# -gt 0 ]]; do
@@ -900,6 +905,11 @@ cmd_cancel() {
 if [[ $# -eq 0 ]]; then usage >&2; exit "${EXIT_USAGE}"; fi
 case "$1" in -h|--help|help) usage; exit 0;; esac
 if [[ "${!#}" == --help || "${!#}" == -h ]]; then usage; exit 0; fi
+if [[ "$1" == console ]]; then
+  for arg in "$@"; do
+    if [[ "${arg}" == --web ]]; then shift; cmd_console_web "$@"; fi
+  done
+fi
 require_environment
 discover_identity
 command="$1"; shift

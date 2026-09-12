@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Incremental installation on the trusted service-managed Linux primary VM.
+# Incremental installation on the trusted Linux primary VM.
 set -euo pipefail
 src="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 [[ $EUID -eq 0 ]] || { echo 'Run as root.' >&2; exit 1; }
-[[ -f /etc/construct/config.env ]] || { echo 'Construct service configuration is required.' >&2; exit 1; }
+[[ -f /etc/construct/config.env ]] || { echo 'Construct configuration is required.' >&2; exit 1; }
 if ! dpkg-query -W -f='${Status}' python3-aiohttp 2>/dev/null | grep -qx 'install ok installed'; then
   apt-get update -qq
   apt-get install -y -qq python3-aiohttp

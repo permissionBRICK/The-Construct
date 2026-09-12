@@ -35,7 +35,7 @@ redeemed. Reconnect works from the current page while its link remains valid.
 
 The gateway is installed under `/opt/construct/console-viewer` and managed by
 `construct-console-viewer.service`. guacd is a separate, digest-pinned container,
-bound **only to 127.0.0.1:4822**, without guest-supplied connection settings.
+bound **only to 127.0.0.1:4822**, with connection settings supplied by the trusted gateway.
 The optional `construct-browser-console` profile remains available for older
 provisioners; current service-managed primaries install the gateway automatically.
 
@@ -116,3 +116,27 @@ SHA-256: `b41ceb1e2df010b54db563e0b00edb8d5fe9f073c6168462e4c978df0fc6e716`
 Original JS SHA-256: `cc89f710ecc544477dbe6bfea453fab752dafa1b1ab9770f523676e7b744b44a`
 Patched JS SHA-256: `89657877ac1c06f958f6f8f83b0b1811f464389c5c054c0f55d634639aa64fd5`
 guacd image: `guacamole/guacd@sha256:8974eaa9ba32f713daf311e7cc8cd7e4cdfba1edea39eed75524e78ef4b08f4f`
+
+## Primary and local consoles
+
+`construct vm console self --web` opens the primary itself. The Console button in
+VS Code and Companion runs this command over SSH, installs or starts the gateway
+when needed, verifies the client forward and opens a fresh ticket every time.
+Provisioning also installs the gateway on local primaries when Docker is present.
+
+Without `CONSTRUCT_SERVICE_URL`, the gateway runs in local mode. A Windows broker
+supplies a validated connection object through SSH stdin with
+`construct vm console self --web --connection-stdin`. The CLI fills an empty host
+address from the guest's default IPv4 route and sends the object over the root-only
+control socket. It never writes the object to the guest filesystem. Service-managed
+gateways reject these objects and continue to authorize through the host API.
+
+Local tickets hold a restricted account password, the VM GUID, host address and
+VMConnect certificate fingerprint in memory. guacd receives them over loopback;
+the browser receives only a ticket fragment. Local streams end at ticket expiry
+and do not call host session APIs. Reconnect uses the ticket's retained connection.
+A subsequent click rotates the account password, so an older page may need a new
+link. The persistent account has no group membership and a grant to one VM;
+`Set-AgentVmConsoleAccess.ps1 -Remove` revokes it. Rotation falls back to the current
+password only for Windows password-policy restrictions. See the
+[setup and Windows checklist](../docs/control-panel.md#browser-console).

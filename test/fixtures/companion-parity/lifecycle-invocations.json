@@ -81180,5 +81180,196 @@
     },
     "output": null,
     "params": []
+  },
+  {
+    "action": "consoleAccess",
+    "args": [],
+    "opts": {
+      "instance": null,
+      "reset": false
+    },
+    "output": null,
+    "params": []
+  },
+  {
+    "action": "consoleAccess",
+    "args": [],
+    "opts": {
+      "instance": null,
+      "reset": true
+    },
+    "output": null,
+    "params": []
+  },
+  {
+    "action": "consoleAccess",
+    "args": [],
+    "opts": {
+      "instance": {
+        "backend": "hyperv-local",
+        "configBranch": "vm",
+        "hostAlias": "agent-vm",
+        "keyName": "agent_vm_ed25519",
+        "name": "agent-vm",
+        "owner": null,
+        "publicHost": null,
+        "scriptsDir": null,
+        "service": null,
+        "sshPort": 22,
+        "vmHost": "agent-vm.mshome.net",
+        "vmName": "Agent-VM"
+      },
+      "reset": false
+    },
+    "output": {
+      "args": [
+        "-FromPanel",
+        "-InstanceName",
+        "agent-vm",
+        "-VmName",
+        "Agent-VM"
+      ],
+      "destructive": false,
+      "elevate": true,
+      "label": "Set up console access",
+      "script": "Set-AgentVmConsoleAccess.ps1"
+    },
+    "params": []
+  },
+  {
+    "action": "consoleAccess",
+    "args": [],
+    "opts": {
+      "instance": {
+        "backend": "hyperv-local",
+        "configBranch": "vm",
+        "hostAlias": "agent-vm",
+        "keyName": "agent_vm_ed25519",
+        "name": "agent-vm",
+        "owner": null,
+        "publicHost": null,
+        "scriptsDir": null,
+        "service": null,
+        "sshPort": 22,
+        "vmHost": "agent-vm.mshome.net",
+        "vmName": "Agent-VM"
+      },
+      "reset": true
+    },
+    "output": {
+      "args": [
+        "-FromPanel",
+        "-InstanceName",
+        "agent-vm",
+        "-VmName",
+        "Agent-VM",
+        "-Reset"
+      ],
+      "destructive": false,
+      "elevate": true,
+      "label": "Set up console access",
+      "script": "Set-AgentVmConsoleAccess.ps1"
+    },
+    "params": []
+  },
+  {
+    "action": "consoleAccess",
+    "args": [],
+    "opts": {
+      "instance": {
+        "backend": "hyperv-local",
+        "configBranch": "vm-dev",
+        "hostAlias": "dev",
+        "keyName": "construct_dev_ed25519",
+        "name": "dev",
+        "owner": null,
+        "publicHost": null,
+        "scriptsDir": null,
+        "service": null,
+        "sshPort": 22,
+        "vmHost": "dev.mshome.net",
+        "vmName": "dev"
+      },
+      "reset": false
+    },
+    "output": {
+      "argSpec": [
+        {
+          "flag": "-FromPanel"
+        },
+        {
+          "flag": "-InstanceName",
+          "value": "dev"
+        },
+        {
+          "flag": "-VmName",
+          "value": "dev"
+        }
+      ],
+      "args": [
+        "-FromPanel",
+        "-InstanceName",
+        "dev",
+        "-VmName",
+        "dev"
+      ],
+      "destructive": false,
+      "elevate": true,
+      "label": "Set up console access",
+      "script": "Set-AgentVmConsoleAccess.ps1"
+    },
+    "params": []
+  },
+  {
+    "action": "consoleAccess",
+    "args": [],
+    "opts": {
+      "instance": {
+        "backend": "hyperv-local",
+        "configBranch": "vm-dev",
+        "hostAlias": "dev",
+        "keyName": "construct_dev_ed25519",
+        "name": "dev",
+        "owner": null,
+        "publicHost": null,
+        "scriptsDir": null,
+        "service": null,
+        "sshPort": 22,
+        "vmHost": "dev.mshome.net",
+        "vmName": "dev"
+      },
+      "reset": true
+    },
+    "output": {
+      "argSpec": [
+        {
+          "flag": "-FromPanel"
+        },
+        {
+          "flag": "-InstanceName",
+          "value": "dev"
+        },
+        {
+          "flag": "-VmName",
+          "value": "dev"
+        },
+        {
+          "flag": "-Reset"
+        }
+      ],
+      "args": [
+        "-FromPanel",
+        "-InstanceName",
+        "dev",
+        "-VmName",
+        "dev",
+        "-Reset"
+      ],
+      "destructive": false,
+      "elevate": true,
+      "label": "Set up console access",
+      "script": "Set-AgentVmConsoleAccess.ps1"
+    },
+    "params": []
   }
 ]

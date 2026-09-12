@@ -109,6 +109,29 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("title mentions Construct", /Construct/.test(await page.title()));
   check("hero title renders", /CONSTRUCT/.test(await page.locator("h1.title").innerText()));
   check("rain canvas present", (await page.locator("#rain").count()) === 1);
+  async function consoleState(state) {
+    await page.evaluate(s => window.postMessage({ type: "state", state: s }, "*"), state);
+    await page.waitForTimeout(30);
+  }
+  await consoleState({ online: true });
+  check("console: hidden for old snapshots", !(await page.locator("#consoleBtn").isVisible()));
+  await consoleState({ online: true, console: { supported: false, reason: "unsupported backend" } });
+  check("console: unsupported disables with reason", await page.locator("#consoleBtn").isDisabled() && await page.locator("#consoleBtn").getAttribute("title") === "unsupported backend");
+  await consoleState({ online: false, console: { supported: true } });
+  check("console: offline disables", await page.locator("#consoleBtn").isDisabled());
+  await consoleState({ online: true, console: { supported: true } });
+  check("console: in status strip and enabled", await page.locator("#statusStrip #consoleBtn").isVisible() && !(await page.locator("#consoleBtn").isDisabled()));
+  await page.click("#consoleBtn");
+  check("console: command posted and spinner visible", await page.evaluate(() => window.__posted.some(m => m.type === "command" && m.id === "openConsole")) && await page.locator("#consoleBtn .prepare-spinner").isVisible());
+  await page.evaluate(() => window.postMessage({ type: "lifecyclePrepared", id: "openConsole", error: "Reconnect the VM" }, "*"));
+  await page.waitForTimeout(30);
+  check("console: inline error and spinner clears", await page.locator("#consoleNote").innerText() === "Reconnect the VM" && await page.locator("#consoleBtn .prepare-spinner").count() === 0);
+  await consoleState({ online: false, console: { supported: true } });
+  await page.evaluate(() => window.postMessage({ type: "lifecyclePrepared", id: "reinstall" }, "*"));
+  await page.waitForTimeout(30);
+  check("console: another command completion preserves offline state", await page.locator("#consoleBtn").isDisabled());
+  await page.reload();
+  await page.waitForTimeout(100);
   check("panel: power button present on first paint", await page.locator("#powerBtn").isVisible());
   check("panel: power button disabled while loading", await page.locator("#powerBtn").isDisabled());
   // Usage-period tabs default to daily ("today") before any state is pushed.

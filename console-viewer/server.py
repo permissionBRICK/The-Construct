@@ -3,6 +3,7 @@
 import asyncio
 import codecs
 import hmac
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -86,14 +87,37 @@ def validate_input(text):
     return True
 
 
+def validate_connection(value):
+    if not isinstance(value, dict):
+        raise web.HTTPBadRequest(text='Local console connection required')
+    patterns = {
+        'vmId': r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}',
+        'username': r'[A-Za-z0-9_-]{1,20}',
+        'domain': r'[A-Za-z0-9_.-]{1,255}',
+        'password': r'[^\x00-\x1f\x7f]{1,256}',
+        'certificateFingerprint': r'sha256:(?:[0-9a-f]{2}:){31}[0-9a-f]{2}',
+    }
+    for key, pattern in patterns.items():
+        if not isinstance(value.get(key), str) or not re.fullmatch(pattern, value[key]):
+            raise web.HTTPBadRequest(text='Invalid local console connection')
+    try:
+        ipaddress.IPv4Address(value.get('hostAddress', ''))
+    except (ValueError, TypeError):
+        raise web.HTTPBadRequest(text='Invalid console host address')
+    return {key: value[key] for key in (*patterns, 'hostAddress')}
+
+
 class Gateway:
     def __init__(self, config, token_path, guacd_host='127.0.0.1', guacd_port=4822):
         self.config = config
         self.token_path = Path(token_path)
-        self.api_url = config['CONSTRUCT_SERVICE_URL'].rstrip('/')
-        if urlsplit(self.api_url).scheme != 'https':
-            raise ValueError('Host API requires HTTPS')
-        self.api_ssl = ssl.create_default_context(cafile=config['CONSTRUCT_SERVICE_CA_FILE'])
+        self.local = not config.get('CONSTRUCT_SERVICE_URL')
+        self.api_url = self.api_ssl = None
+        if not self.local:
+            self.api_url = config['CONSTRUCT_SERVICE_URL'].rstrip('/')
+            if urlsplit(self.api_url).scheme != 'https':
+                raise ValueError('Host API requires HTTPS')
+            self.api_ssl = ssl.create_default_context(cafile=config['CONSTRUCT_SERVICE_CA_FILE'])
         self.guacd_host, self.guacd_port = guacd_host, guacd_port
         self.tickets = {}
         self.http = None
@@ -115,12 +139,17 @@ class Gateway:
         self.tickets = {k: v for k, v in self.tickets.items() if v['expires'] > time.monotonic() or v['active']}
         if len(self.tickets) >= 32:
             raise web.HTTPTooManyRequests(text='Too many viewer links')
-        # Authorize the name before issuing any link. Connection reauthorizes when opened.
-        capabilities = await self.api('GET', f'/api/v1/vms/{quote(name)}/console/capabilities')
-        if capabilities.get('interactive') == 'unsupported':
-            raise web.HTTPConflict(text=capabilities.get('interactiveReason', 'Browser console is unavailable on this host.'))
+        connection = None
+        if self.local:
+            connection = validate_connection(body.get('connection'))
+        else:
+            if 'connection' in body:
+                raise web.HTTPBadRequest(text='Host-managed consoles do not accept local connections')
+            capabilities = await self.api('GET', f'/api/v1/vms/{quote(name)}/console/capabilities')
+            if capabilities.get('interactive') == 'unsupported':
+                raise web.HTTPConflict(text=capabilities.get('interactiveReason', 'Browser console is unavailable on this host.'))
         ident, token = secrets.token_hex(16), secrets.token_urlsafe(32)
-        self.tickets[ident] = dict(token=token, name=name, expires=time.monotonic() + minutes * 60, active=False)
+        self.tickets[ident] = dict(token=token, name=name, expires=time.monotonic() + minutes * 60, active=False, connection=connection)
         return web.json_response({'fragment': ident + '.' + token, 'minutes': minutes})
 
     async def redeem(self, request):
@@ -151,16 +180,19 @@ class Gateway:
         session_path, writer, tasks = None, None, []
         try:
             await ws.prepare(request)
-            root = f'/api/v1/vms/{quote(ticket["name"])}/console/sessions'
-            ticket['phase'] = 'Creating a console session on the Windows host'
-            session = await self.api('POST', root)
-            session_path = root + '/' + session['sessionId']
-            ticket['phase'] = 'Requesting console access from the host'
-            connection = await self.api('POST', session_path + '/connection')
+            if ticket.get('connection'):
+                connection = dict(ticket['connection'])
+            else:
+                root = f'/api/v1/vms/{quote(ticket["name"])}/console/sessions'
+                ticket['phase'] = 'Creating a console session on the Windows host'
+                session = await self.api('POST', root)
+                session_path = root + '/' + session['sessionId']
+                ticket['phase'] = 'Requesting console access from the host'
+                connection = await self.api('POST', session_path + '/connection')
             ticket['phase'] = 'Connecting to the local console gateway'
             reader, writer = await asyncio.wait_for(asyncio.open_connection(self.guacd_host, self.guacd_port), 10)
             params = {
-                'VERSION_1_5_0': 'VERSION_1_5_0', 'hostname': urlsplit(self.api_url).hostname, 'port': '2179', 'security': 'vmconnect',
+                'VERSION_1_5_0': 'VERSION_1_5_0', 'hostname': connection['hostAddress'] if self.local else urlsplit(self.api_url).hostname, 'port': '2179', 'security': 'vmconnect',
                 'username': connection['username'], 'password': connection['password'], 'domain': connection['domain'],
                 'preconnection-blob': connection['vmId'], 'ignore-cert': 'false',
                 'cert-fingerprints': connection['certificateFingerprint'],
@@ -181,7 +213,7 @@ class Gateway:
             await writer.drain()
             connection.clear()
             params.clear()
-            ticket['phase'] = 'Connecting to Hyper-V VMConnect on the Windows host (port 2179)'
+            ticket['phase'] = 'Connecting to Hyper-V VMConnect on this PC (port 2179)' if self.local else 'Connecting to Hyper-V VMConnect on the Windows host (port 2179)'
             ready = await asyncio.wait_for(read_instruction(reader), 30)
             if ready[0] != 'ready':
                 raise RuntimeError('Hyper-V console connection failed')
@@ -216,7 +248,8 @@ class Gateway:
                     await asyncio.sleep(min(20, remaining))
                     if ticket['expires'] <= time.monotonic():
                         return
-                    await self.api('POST', session_path + '/renew')
+                    if session_path:
+                        await self.api('POST', session_path + '/renew')
 
             tasks = [asyncio.create_task(fn()) for fn in (receive_browser, receive_display, renew)]
             await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)

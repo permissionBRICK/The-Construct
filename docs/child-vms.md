@@ -326,3 +326,6 @@ the child. There is no abandon/supersede configuration API.
 An opt-in browser viewer is available with `construct vm console NAME --web`.
 It connects through Guacamole to Hyper-V VMConnect and supports boot/installer
 consoles. See [gateway installation and session boundaries](../console-viewer/README.md).
+
+The main panel's **Console** button opens the selected primary itself; child
+**Connect VNC** buttons continue to open their named child through that primary.

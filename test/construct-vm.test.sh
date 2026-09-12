@@ -598,6 +598,22 @@ for scenario in dd-failed dd-short; do
   ok "${scenario} sends no truncated chunk" sh -c "! grep -q /chunks/ '${stub}/state/requests'"
 done
 
+# Browser console is also available to unmanaged primary VMs; only this path bypasses the API.
+cat >"${tmp}/console-opener.py" <<'PYTHON'
+import json, sys
+print(json.dumps(sys.argv[1:]))
+if '--connection-stdin' in sys.argv: print(sys.stdin.read())
+PYTHON
+printf 'CONSTRUCT_INSTANCE_NAME=local-primary\n' >"${tmp}/console-local.env"
+CONFIG_FILE="${tmp}/console-local.env" CONSTRUCT_CONSOLE_OPENER="${tmp}/console-opener.py" bash "${CLI}" vm console self --web --connection-stdin <<< '{"secret":"stdin-only"}' >"${tmp}/console.out"
+ok 'unmanaged browser console execs opener' test "$?" = 0
+ok 'self resolves instance from config and forwards stdin flag' grep -q '\["local-primary", "--connection-stdin"\]' "${tmp}/console.out"
+ok 'connection data reaches stdin' grep -q 'stdin-only' "${tmp}/console.out"
+CONFIG_FILE="${tmp}/empty.env" CONSTRUCT_CONSOLE_OPENER="${tmp}/console-opener.py" bash "${CLI}" vm console self --web >"${tmp}/console.out"
+ok 'unmanaged self falls back to hostname' grep -q "$(hostname | tr '[:upper:]' '[:lower:]')" "${tmp}/console.out"
+CONFIG_FILE="${tmp}/console-local.env" bash "${CLI}" vm list >/dev/null 2>&1
+ok 'unmanaged non-browser commands still exit 9' test "$?" = 9
+
 # Dispatcher/help and static hygiene.
 ok 'construct vm --help is available without service configuration' sh -c "CONFIG_FILE='${tmp}/empty.env' bash '${CLI}' vm --help | grep -q 'media upload'"
 ok 'per-command help works without service configuration' sh -c "CONFIG_FILE='${tmp}/empty.env' bash '${CLI}' vm create --help | grep -q 'construct vm <command>'"
