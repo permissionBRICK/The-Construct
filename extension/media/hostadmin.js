@@ -580,9 +580,14 @@
     renderOperations(s);
     if (refreshForms || JSON.stringify(previous.config) !== JSON.stringify(s.config)) renderConfig(s);
     renderMaintenance(s);
-    // Every mutation is disabled while the host is updating (§10.3).
+    // Every mutation is disabled while the host is updating (§10.3), and re-enabled afterwards:
+    // the Companion keeps this document alive across an update, so a button disabled here must
+    // not stay disabled forever (static buttons have no renderer of their own).
     document.querySelectorAll("#haAdmin .btn, #haAdmin .save-btn").forEach((b) => {
-      if (s.maintenance && !b.closest(".ha-tabs") && b.id !== "updResume" && !b.hasAttribute("data-resolve")) b.disabled = true;
+      if (s.maintenance && !b.closest(".ha-tabs") && b.id !== "updResume" && !b.hasAttribute("data-resolve")) {
+        if (!b.disabled) b.dataset.maintenanceDisabled = "1";
+        b.disabled = true;
+      } else if (b.dataset.maintenanceDisabled) { delete b.dataset.maintenanceDisabled; b.disabled = false; }
     });
   }
 
