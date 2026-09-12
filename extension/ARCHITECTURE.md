@@ -2276,6 +2276,12 @@ says what will actually happen.
   wrongly clear the update banner. When the two differ (`updates.isProvisionStale`), the
   panel + launcher mark the **Reprovision** button yellow (`.stale`) + "update pending"
   subtext/tooltip — "the VM is behind the installed Construct; reprovision to apply it."
+  `updates.vmConstruct` also folds both seven-character commits and a
+  `current|behind|unknown` verdict into every enriched panel state. The full panel shows
+  that verdict beside the installed revision; its behind tag focuses Reprovision. The
+  extension reports each instance/commit pair once per session with an actionable VS Code
+  message when a live probe first observes the drift. Companion mirrors the state and panel
+  display, but not that message because its generic tray balloon has no action button.
   Conservative: only when BOTH markers are known and differ (an unknown `provisionedCommit`
   — a VM provisioned before this tracking — isn't flagged until its next reprovision records
   one). The comparison is **plain string inequality, never a history or compare lookup**, so

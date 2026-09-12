@@ -74,7 +74,63 @@ function isProvisionStale(markers, guestCommit) {
   // PLAIN STRING INEQUALITY, never a history/compare lookup: the answer must survive a
   // repo whose history was rewritten (the compare API then 404s and cannot resolve the
   // base at all), and it must not need the network to be taken.
-  return !!provisioned && markers.installedCommit !== provisioned;
+  return !!provisioned && String(markers.installedCommit).toLowerCase() !== String(provisioned).toLowerCase();
+}
+
+/** The installed/provisioned Construct pair shown in the main panel. The guest marker
+ *  wins while the VM is reachable; the per-instance host marker remains the offline
+ *  cache. Older VMs with neither marker stay unknown until they are reprovisioned. */
+function vmConstruct(markers, guestCommit) {
+  markers = markers || {};
+  const installed = String(markers.installedCommit || "").trim().toLowerCase();
+  const provisioned = String(effectiveProvisionedCommit(markers, guestCommit) || "").trim().toLowerCase();
+  return {
+    installed: installed.slice(0, 7),
+    provisioned: provisioned.slice(0, 7),
+    ref: String(markers.ref || DEFAULT_REF),
+    state: !installed || !provisioned ? "unknown" : isProvisionStale(markers, guestCommit) ? "behind" : "current",
+  };
+}
+
+/** Fold the local markers into a state before any network-backed update lookup. Reuse the
+ *  input object when it already carries the same values so later enrichment can retain its
+ *  existing skip-push fast path. */
+function foldVmConstruct(state, raw, instanceRaw) {
+  if (!state || typeof state !== "object") return state;
+  const markers = readMarkers(raw, instanceRaw === undefined ? raw : instanceRaw);
+  const value = vmConstruct(markers, state.provisionedCommit);
+  const prior = state.vmConstruct;
+  const revision = markers.installedCommit ? `${markers.ref}@${markers.installedCommit.slice(0, 7)}` : "";
+  const same = prior && prior.installed === value.installed && prior.provisioned === value.provisioned &&
+    prior.ref === value.ref && prior.state === value.state && (!revision || state.constructRev === revision);
+  if (same) return state;
+  const next = { ...state, vmConstruct: value };
+  if (revision) next.constructRev = revision;
+  return next;
+}
+
+/** Plan the one-time VS Code drift notice without mutating session memory. Only a live
+ *  observation can transition to behind; the first live observation counts as a transition.
+ *  A pair already reported in this session stays quiet after later state changes. */
+function planVmConstructNotice(memory, instance, value, online) {
+  const currentMemory = memory && typeof memory === "object" ? memory : {};
+  const name = String(instance || "").trim();
+  if (!name || online !== true) return { memory: currentMemory, notify: false };
+  const prior = currentMemory[name] && typeof currentMemory[name] === "object"
+    ? currentMemory[name] : { state: "unknown", seen: [] };
+  const state = value && value.state === "behind" ? "behind"
+    : value && value.state === "current" ? "current" : "unknown";
+  const pair = state === "behind" && value.installed && value.provisioned
+    ? `${value.provisioned}:${value.installed}` : "";
+  const seen = Array.isArray(prior.seen) ? prior.seen : [];
+  const notify = state === "behind" && prior.state !== "behind" && !!pair && !seen.includes(pair);
+  return {
+    notify,
+    memory: {
+      ...currentMemory,
+      [name]: { state, seen: notify ? [...seen, pair] : [...seen] },
+    },
+  };
 }
 
 /** GET a URL and parse JSON, FOLLOWING redirects (up to opts.maxRedirects, default 3)
@@ -406,22 +462,20 @@ function buildAgentUpdateScript(ids) {
 }
 
 /**
- * Return a copy of `state` with Construct update info folded in (and a constructRev
- * label from the installed marker). Best-effort: on any failure or missing marker
- * the state is returned unchanged (no `update` key -> the panel keeps the banner
- * hidden). `opts.fetchJson` / `opts.noCache` are for tests.
+ * Return a copy of `state` with the VM Construct verdict, Construct update info and
+ * the installed revision label folded in. Network work is best-effort: a failed lookup
+ * adds no `update` key, so the panel keeps the host-update banner hidden.
+ * `opts.fetchJson` / `opts.noCache` are for tests.
  */
 async function augment(state, raw, opts = {}) {
   if (!state || typeof state !== "object") return state;
   let next = state;
   try {
     const markers = readMarkers(raw, opts.instanceRaw || raw);
-    if (markers.installedCommit) {
-      next = { ...next, constructRev: `${markers.ref}@${markers.installedCommit.slice(0, 7)}` };
-    }
+    next = foldVmConstruct(next, raw, opts.instanceRaw || raw);
     // The VM is behind the installed Construct → the panel flags the Provision button.
-    // Only set it when TRUE (keep the "no marker → unchanged" fast path; the webview
-    // treats an absent flag as not-stale and re-toggles the class on every render).
+    // Only set it when TRUE; the webview treats an absent flag as not-stale and
+    // re-toggles the class on every render.
     // The GUEST's own marker wins when the probe brought one back (state.provisionedCommit
     // from probe.toState); the host-side per-instance cache stands in when it did not.
     // Only for a RUNNING VM (owner, 2026-09-12): a VM that is not started gets no reprovision
@@ -459,7 +513,7 @@ module.exports = {
   DEFAULT_REPO, DEFAULT_REF, TTL_MS, NEG_TTL_MS, AGENT_LATEST,
   readMarkers, acceptFor, fetchJson, NOT_FOUND, constructUpdateFromManifest, checkConstruct, checkConstructCached,
   behindText, semverParts, isNewer, isNewerNightly, prereleasePart, comparePrerelease,
-  isProvisionStale, effectiveProvisionedCommit, normalizeCommit, t3codeUrl,
+  isProvisionStale, effectiveProvisionedCommit, normalizeCommit, vmConstruct, foldVmConstruct, planVmConstructNotice, t3codeUrl,
   fetchAgentLatest, augmentAgents, buildAgentUpdateScript,
   augment, constructRefreshArgs, constructRefreshArgPairs,
 };
