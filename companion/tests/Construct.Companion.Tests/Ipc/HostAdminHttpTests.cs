@@ -272,6 +272,56 @@ public sealed class HostAdminHttpTests
         if (confirm) Assert.Equal(restart ? "restart" : "start", Assert.Single(requests).Body!.Value.GetProperty("action").GetString());
         else Assert.Empty(requests);
     }
-    private static async Task<Harness> Enroll(RoutingRemoteApi api)
-    { var h = await Harness.Start(s => s.AddSingleton<IRemoteApi>(api)); using var response = await h.Post("/v1/hosts", new { url = "host.example", fingerprint = new string('a', 64) }); Assert.Equal(HttpStatusCode.Created, response.StatusCode); return h; }
+    [Theory]
+    [InlineData("updatesCheck", "/api/v1/host/updates/check")]
+    [InlineData("updatesStage", "/api/v1/host/updates/stage")]
+    public async Task MaintenanceActionsOmitAnEmptyReleaseTag(string action, string route)
+    {
+        var api = new RoutingRemoteApi(); await using var h = await Enroll(api);
+        using var ready = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.ready" }); Assert.Equal(HttpStatusCode.Accepted, ready.StatusCode);
+        foreach (var tag in new[] { "", "  ", "host-" + new string('b', 40) })
+        {
+            api.Requests.Clear();
+            using var response = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.action", action, args = new { releaseTag = tag } }); Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+            RemoteRequest? sent = null;
+            for (var i = 0; i < 100 && sent is null; i++) { await Task.Delay(50); lock (api.Requests) sent = api.Requests.FirstOrDefault(r => r.Method == "POST" && r.Url.AbsolutePath == route); }
+            Assert.NotNull(sent);
+            var hasTag = sent.Body is { } body && body.TryGetProperty("releaseTag", out var value) && value.ValueKind == JsonValueKind.String;
+            Assert.Equal(tag.Trim().Length > 0, hasTag);
+        }
+    }
+    [Fact]
+    public async Task OpeningTheHostChecksForTheLatestReleaseAtMostEveryFifteenMinutes()
+    {
+        var api = new RoutingRemoteApi(); var previous = api.Handle; var installed = new string('1', 40); var latest = new string('2', 40);
+        api.Handle = r => r.Url.AbsolutePath switch
+        {
+            "/api/v1/host/updates/status" => new(200, JsonSerializer.SerializeToElement(new { installed = new { commit = installed, packageVersion = "1" }, current = (object?)null, history = Array.Empty<object>(), latestKnown = new { commit = installed, packageVersion = "1" } })),
+            "/api/v1/host/updates/check" => new(200, JsonSerializer.SerializeToElement(new { installed = new { commit = installed, packageVersion = "1" }, latest = new { commit = latest, packageVersion = "2", releaseTag = "host-" + latest, compatible = true, reasons = Array.Empty<string>() }, checkedAt = "2026-09-12T00:00:00+00:00" })),
+            _ => previous(r)
+        };
+        var clock = new FakeClock(); await using var h = await Enroll(api, s => s.AddSingleton<IClock>(clock));
+        async Task<JsonObject> Ready()
+        {
+            using var ready = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.ready" }); Assert.Equal(HttpStatusCode.Accepted, ready.StatusCode);
+            JsonObject? snapshot = null;
+            for (var i = 0; i < 100 && snapshot?["state"]?["maintenanceTab"]?["updateAvailable"]?.GetValue<bool>() != true; i++) { await Task.Delay(50); snapshot = await h.Client.GetFromJsonAsync<JsonObject>("/v1/hosts/host.example_7462/snapshot"); }
+            return snapshot!["state"]!.AsObject();
+        }
+        var state = await Ready();
+        Assert.True(state["maintenanceTab"]!["updateAvailable"]!.GetValue<bool>());
+        Assert.Equal(latest[..12], state["maintenanceTab"]!["latestKnown"]!["commit"]!.GetValue<string>());
+        Assert.Equal("", state["updateError"]!.GetValue<string>()); Assert.False(state["updateChecking"]!.GetValue<bool>());
+        int Checks() { lock (api.Requests) return api.Requests.Count(r => r.Method == "POST" && r.Url.AbsolutePath == "/api/v1/host/updates/check"); }
+        Assert.Equal(1, Checks());
+        await Ready(); await Task.Delay(200); Assert.Equal(1, Checks());
+        clock.Advance(TimeSpan.FromMinutes(16));
+        await Ready();
+        for (var i = 0; i < 100 && Checks() < 2; i++) await Task.Delay(50);
+        Assert.Equal(2, Checks());
+        var body = api.Requests.Last(r => r.Url.AbsolutePath == "/api/v1/host/updates/check").Body;
+        Assert.False(body is { } b && b.TryGetProperty("releaseTag", out _));
+    }
+    private static async Task<Harness> Enroll(RoutingRemoteApi api, Action<IServiceCollection>? configure = null)
+    { var h = await Harness.Start(s => { s.AddSingleton<IRemoteApi>(api); configure?.Invoke(s); }); using var response = await h.Post("/v1/hosts", new { url = "host.example", fingerprint = new string('a', 64) }); Assert.Equal(HttpStatusCode.Created, response.StatusCode); return h; }
 }
