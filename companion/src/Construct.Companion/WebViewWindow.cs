@@ -33,6 +33,7 @@ internal sealed class WebViewWindow : Form
     private bool openingRefresh = true;
     private bool openingSnapshotOnly;
     private bool exiting;
+    private bool reloadOnPresent; // a host-admin window closed by the user reopens with a fresh document
     public event Action? PopupDeactivated;
     public WebViewWindow(string view, string scope, Platform platform, IMessageSink sink, IpcSettings settings, Func<WebViewWindow, string, JsonElement, Task<bool>> localMessage)
     {
@@ -62,7 +63,7 @@ internal sealed class WebViewWindow : Form
         }
         Shown += async (_, _) => { if (!initialized) { initialized = true; await InitializeAsync(); } else await OpenRequestedViewAsync(); };
         Deactivate += (_, _) => { if (view == "popup") { PopupDeactivated?.Invoke(); Hide(); } };
-        FormClosing += (_, e) => { if (!exiting && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; SaveBounds(); Hide(); } };
+        FormClosing += (_, e) => { if (!exiting && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; SaveBounds(); Hide(); reloadOnPresent = view == "hostadmin"; } };
         // A hidden host-admin window stops its subscription so the Host stops polling that host;
         // panel and popup keep listening because their snapshot must be current when they reappear.
         VisibleChanged += (_, _) =>
@@ -72,7 +73,8 @@ internal sealed class WebViewWindow : Form
             else if (subscription.IsCancellationRequested)
             {
                 subscription.Dispose(); subscription = new(); _ = ListenAsync(subscription.Token);
-                _ = sink.PostAsync(scope, JsonSerializer.SerializeToElement(new { type = "hostadmin.ready" }, IpcJson.Options), subscription.Token);
+                // A reloaded document posts its own hostadmin.ready once it has loaded.
+                if (!reloadOnPresent) _ = sink.PostAsync(scope, JsonSerializer.SerializeToElement(new { type = "hostadmin.ready" }, IpcJson.Options), subscription.Token);
             }
         };
         ResizeEnd += (_, _) => SaveBounds();
@@ -86,7 +88,12 @@ internal sealed class WebViewWindow : Form
     {
         if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
         openingRefresh = !refreshScheduled; openingSnapshotOnly = refreshScheduled;
+        // Closing a host-admin window discards its document: nothing from the previous session
+        // (tab, dialogs, disabled controls) survives, the page loads again as on first open.
+        var reload = reloadOnPresent && initialized && web.CoreWebView2 is not null;
+        if (reload) { ready = false; pending.Clear(); web.CoreWebView2!.Navigate(DocumentUrl); }
         Show(); Activate();
+        reloadOnPresent = false;
         if (ready)
         {
             _ = OpenRequestedViewAsync();
