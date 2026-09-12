@@ -127,7 +127,7 @@ function Resolve-ConstructCompanionSource {
     # Construct commit names its Companion directly: one manifest download, no release
     # listing and no GitHub API rate limit. The listing is only the fallback (a commit whose
     # Companion release is still building, or an install without a commit marker).
-    $manifest=$null; $tag=''
+    $found=$null; $tag=''
     $installedCommit=[string]$settings.installedCommit
     if ($installedCommit -cnotmatch '^[0-9a-f]{40}$') {
         $marker=Join-Path $ScriptsDir '.construct-revision'
@@ -146,13 +146,13 @@ function Resolve-ConstructCompanionSource {
         if ($candidates -notcontains "companion-$installedCommit") { $candidates+="companion-$installedCommit" }
         foreach ($candidate in $candidates) {
             try {
-                $manifest=& $Seams.Json "https://github.com/$repo/releases/download/$candidate/manifest.json"
-                Assert-ConstructCompanionManifest $manifest $repo $candidate
+                $found=& $Seams.Json "https://github.com/$repo/releases/download/$candidate/manifest.json"
+                Assert-ConstructCompanionManifest $found $repo $candidate
                 $tag=$candidate; break
-            } catch { $manifest=$null; $tag='' }
+            } catch { $found=$null; $tag='' }
         }
     }
-    if (-not $manifest) {
+    if (-not $found) {
         # Paginate: host and Companion releases share this repository.
         $releases=@(); $page=1
         do {
@@ -166,12 +166,12 @@ function Resolve-ConstructCompanionSource {
         $release=$releases | Sort-Object { [DateTimeOffset]$_.published_at } -Descending | Select-Object -First 1
         if (-not $release) { Throw-ConstructCompanionError 'No published Companion release is available.' }
         $tag=[string]$release.tag_name
-        $manifest=& $Seams.Json "https://github.com/$repo/releases/download/$tag/manifest.json"
-        Assert-ConstructCompanionManifest $manifest $repo $tag
+        $found=& $Seams.Json "https://github.com/$repo/releases/download/$tag/manifest.json"
+        Assert-ConstructCompanionManifest $found $repo $tag
     }
     $base="https://github.com/$repo/releases/download/$tag"
-    $payload=Select-ConstructReleasePayload $manifest $Seams.Native
-    return @{source=$payload.source; commit=$manifest.commit; packageVersion=$manifest.packageVersion; releaseTag=$tag; manifest=$manifest; payload=$payload; payloadUri="$base/$($payload.asset)"}
+    $payload=Select-ConstructReleasePayload $found $Seams.Native
+    return @{source=$payload.source; commit=$found.commit; packageVersion=$found.packageVersion; releaseTag=$tag; manifest=$found; payload=$payload; payloadUri="$base/$($payload.asset)"}
 }
 
 function Assert-ConstructCompanionManifest {
@@ -240,6 +240,26 @@ function Expand-ConstructCompanionPayload {
         $name='app/'+$file.FullName.Substring((Join-Path $Destination 'app').Length+1).Replace('\','/')
         if (-not $checked.ContainsKey($name)) { Throw-ConstructCompanionError 'Unlisted Companion payload file.' }
     }
+}
+
+# Directory moves fail transiently while an antivirus or indexer still holds a freshly extracted
+# file, or while the just-quit app's last handles close. Retry briefly before giving up.
+function Move-ConstructCompanionTree {
+    param([string]$From,[string]$To,[hashtable]$Seams)
+    for ($attempt=1; ; $attempt++) {
+        try { & $Seams.Move $From $To; return }
+        catch { if ($attempt -ge 8) { throw }; & $Seams.Sleep 500 }
+    }
+}
+# One line, no secrets: move/registry/start errors carry paths and Windows error text only.
+function Get-ConstructCompanionSafeMessage {
+    param($Exception)
+    $text=[string]$Exception.Message
+    if ($Exception.InnerException -and $Exception.InnerException.Message) { $text=[string]$Exception.InnerException.Message }
+    $text=($text -replace '\s+',' ').Trim()
+    if ($text.Length -gt 200) { $text=$text.Substring(0,200)+'...' }
+    if (-not $text) { $text=$Exception.GetType().Name }
+    return $text
 }
 
 function Stop-ConstructCompanionForInstall {
@@ -324,17 +344,20 @@ function Install-ConstructCompanion {
         $registrations=Get-ConstructCompanionRegistrations $paths.install $autostart
         $saved=@(); foreach ($entry in $registrations) { $saved+=@{entry=$entry; prior=(& $Seams.Registry 'read' $entry.path $entry.name $null)} }
         Stop-ConstructCompanionForInstall $paths.state $Seams
-        $backedUp=$false; $moved=$false; $registered=$false
+        $backedUp=$false; $moved=$false; $registered=$false; $step='backing up the installed files'
         try {
-            if (Test-Path -LiteralPath $paths.install) { & $Seams.Move $paths.install $previous; $backedUp=$true }
-            & $Seams.Move $app $paths.install; $moved=$true
-            $registered=$true
+            if (Test-Path -LiteralPath $paths.install) { Move-ConstructCompanionTree $paths.install $previous $Seams; $backedUp=$true }
+            $step='moving the new files into place'
+            Move-ConstructCompanionTree $app $paths.install $Seams; $moved=$true
+            $step='registering the app'; $registered=$true
             foreach ($entry in $registrations) {
                 if ($entry.enabled) { & $Seams.Registry 'write' $entry.path $entry.name $entry.value }
                 else { & $Seams.Registry 'remove' $entry.path $entry.name $null }
             }
+            $step='starting the app'
             & $Seams.Start (Join-Path $paths.install 'ConstructCompanion.exe') @('--background')
         } catch {
+            $detail=Get-ConstructCompanionSafeMessage $_.Exception
             try {
                 if ($registered) {
                     foreach ($item in $saved) {
@@ -343,9 +366,13 @@ function Install-ConstructCompanion {
                     }
                 }
                 if ($moved) { Remove-Item -LiteralPath $paths.install -Recurse -Force }
-                if ($backedUp) { & $Seams.Move $previous $paths.install }
-            } catch { Throw-ConstructCompanionError 'Companion update failed and rollback is incomplete; preserve .previous and see docs/companion.md.' }
-            Throw-ConstructCompanionError 'Companion update failed; the previous files and registrations were restored. Start the Companion again manually.'
+                if ($backedUp) { Move-ConstructCompanionTree $previous $paths.install $Seams }
+            } catch { Throw-ConstructCompanionError ('Companion update failed while '+$step+' ('+$detail+') and rollback is incomplete; preserve .previous and see docs/companion.md.') }
+            # Leave the user with a running Companion whenever the previous files came back.
+            $restarted=$false
+            if ($backedUp) { try { & $Seams.Start (Join-Path $paths.install 'ConstructCompanion.exe') @('--background'); $restarted=$true } catch { } }
+            $outcome=if ($restarted) { 'the previous files and registrations were restored and the previous Companion was started again.' } else { 'the previous files and registrations were restored. Start the Companion again manually.' }
+            Throw-ConstructCompanionError ('Companion update failed while '+$step+' ('+$detail+'); '+$outcome)
         }
         # A successful process start commits the swap; cleanup cannot roll back a running app.
         if ($backedUp) {

@@ -46,7 +46,14 @@ $seams.Start={ param($Exe,[string[]]$Arguments) if ($script:failStart) { throw '
 $seams.Alive={ param($ProcessId) $script:alive }
 $seams.Quit={ param($Endpoint,$Reason) $script:quits++; $script:lastReason=$Reason; if ($script:quitWorks) { $script:alive=$false } }
 $seams.Sleep={ param($Milliseconds) $script:sleeps++ }
-$seams.Move={ param($From,$To) if ($script:failMove -and $From -match 'companion-stage-') { throw 'fake move failure' }; [IO.Directory]::Move($From,$To) }
+$script:failMoveTimes=0
+$seams.Move={ param($From,$To)
+    if ($From -match 'companion-stage-') {
+        if ($script:failMove) { throw 'fake move failure: being used by another process' }
+        if ($script:failMoveTimes -gt 0) { $script:failMoveTimes--; throw 'fake transient move failure' }
+    }
+    [IO.Directory]::Move($From,$To)
+}
 try {
     [IO.Directory]::CreateDirectory((Join-Path $repo 'companion')) | Out-Null
     [IO.File]::WriteAllText((Join-Path $repo 'companion/Construct.Companion.sln'),'fixture')
@@ -132,14 +139,20 @@ try {
     [IO.File]::WriteAllText($exe,'original app')
     $registryBefore=$script:registry | ConvertTo-Json -Compress
     $script:failStart=$true
-    Reject { Install-ConstructCompanion $repo -Source local -Force -LocalAppData $local -Seams $seams } 'Start failure triggers rollback'
+    $startMessage=''; try { Install-ConstructCompanion $repo -Source local -Force -LocalAppData $local -Seams $seams | Out-Null } catch { $startMessage=$_.Exception.Message }
+    Assert ($startMessage.Contains('while starting the app (fake start failure)') -and $startMessage.Contains('Start the Companion again manually')) 'Start failure triggers rollback and names the step'
     Assert ([IO.File]::ReadAllText($exe) -eq 'original app') 'Restores old files'
     Assert (($script:registry | ConvertTo-Json -Compress) -eq $registryBefore) 'Restores registry'
     Assert (-not (Test-Path ($paths.install+'.previous'))) 'Rollback consumes previous'
-    $script:failStart=$false; $script:failMove=$true
-    Reject { Install-ConstructCompanion $repo -Source local -Force -LocalAppData $local -Seams $seams } 'Move failure triggers rollback'
+    $script:failStart=$false; $script:failMove=$true; $startsBefore=$script:starts.Count; $sleepsBefore=$script:sleeps
+    $moveMessage=''; try { Install-ConstructCompanion $repo -Source local -Force -LocalAppData $local -Seams $seams | Out-Null } catch { $moveMessage=$_.Exception.Message }
+    Assert ($moveMessage.Contains('while moving the new files into place (fake move failure: being used by another process)') -and $moveMessage.Contains('the previous Companion was started again')) 'Move failure triggers rollback, names the step and restarts the previous app'
+    Assert ($script:starts.Count -eq $startsBefore+1 -and $script:sleeps -eq $sleepsBefore+7) 'Move retried before rollback, previous app restarted'
     Assert ([IO.File]::ReadAllText($exe) -eq 'original app') 'Move failure restores files'
-    $script:failMove=$false; $script:failRegistry=$true
+    $script:failMove=$false; $script:failMoveTimes=2
+    Assert ((Install-ConstructCompanion $repo -Source local -Force -LocalAppData $local -Seams $seams) -eq 'installed') 'Transient move failures are retried'
+    [IO.File]::WriteAllText($exe,'original app')
+    $script:failRegistry=$true
     Reject { Install-ConstructCompanion $repo -Source local -Force -LocalAppData $local -Seams $seams } 'Registry failure triggers rollback'
     Assert ([IO.File]::ReadAllText($exe) -eq 'original app') 'Registry failure restores files'
     [IO.File]::WriteAllText((Join-Path $paths.state 'settings.json'),'{"autostart":false}')

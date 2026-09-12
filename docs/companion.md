@@ -71,9 +71,14 @@ An identical installed commit is a no-op. `-Force` rebuilds/reinstalls it. Downl
 stream to disk; the detached manifest, ZIP size and SHA-256, checksum-list hash and every
 payload file are checked before asking the app to quit. The installer waits at
 most 15 seconds for graceful exit and never kills a process. It swaps the install
-through `.previous`, restores the prior files/registration values on replacement
-failure, then starts `ConstructCompanion.exe --background` detached. Successful
-process creation is the commit point; it is not a runtime health check.
+through `.previous`, retrying each directory move for a few seconds while an
+antivirus scan or a closing handle still holds a file, restores the prior
+files/registration values on replacement failure and starts the restored app again,
+then starts `ConstructCompanion.exe --background` detached. Successful process
+creation is the commit point; it is not a runtime health check. A replacement
+failure names the step (backing up, moving the new files, registering, starting) and
+the Windows error text, so a blocked executable or a held file is visible in the
+update console.
 
 Pass `-SkipCompanion` to Auto-Install, Update Construct, Provision-AgentVM, or the library function to
 skip this run. For persistent opt-out, merge `"companion": false` into the scripts
@@ -150,7 +155,8 @@ both folders, and retain a copy before recovery. If replacement failed, restore
 `.previous` to `ConstructCompanion` after moving the failed directory aside. If the
 new install succeeded and only cleanup failed, remove `.previous` after confirming
 the installed version. A failed rollback explicitly reports incomplete recovery.
-Start the restored executable manually after rollback.
+After a completed rollback the previous Companion is started again; start it from the
+Start menu only if the diagnostic says so.
 
 No release found usually means this repository has not published a Companion yet.
 For manifest/checksum failure, keep the existing install and retry from the intended
