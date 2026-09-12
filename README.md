@@ -63,7 +63,7 @@ unattended, provisions the agents and links up your PC for remote access through
 
 ## 🔌 Jack in
 
-The installer automatically links every app you want, just enable it in the settings panel:
+The installer automatically links any tool you want, just enable it in the settings panel:
 
 | Client | How |
 |--------|-----|
