@@ -4,16 +4,29 @@ namespace Construct.Companion;
 internal sealed class DesktopPrompts(Control dispatcher) : IPrompts
 {
     private Task<T> OnUi<T>(Func<T> action,CancellationToken cancellationToken) => dispatcher.InvokeAsync(action,cancellationToken);
-    private static Form Dialog(string title)
+    // Dialogs size themselves to their content (owner, 2026-09-12): a fixed 620x320 form left a
+    // block of empty space between a two-line message and its buttons, and grew again with DPI.
+    // Design units are 96-dpi pixels; AutoScaleMode.Dpi scales them for the monitor.
+    private const int ContentWidth=560;
+    private static (Form Form,TableLayoutPanel Body) Dialog(string title)
     {
-        return new Form { Text=title, StartPosition=FormStartPosition.CenterScreen, AutoScaleMode=AutoScaleMode.Dpi,
-            Size=new(620,320),MinimizeBox=false,MaximizeBox=false,ShowInTaskbar=false };
+        var form=new Form { Text=title, StartPosition=FormStartPosition.CenterScreen, AutoScaleMode=AutoScaleMode.Dpi, AutoScaleDimensions=new SizeF(96,96),
+            AutoSize=true, AutoSizeMode=AutoSizeMode.GrowAndShrink, FormBorderStyle=FormBorderStyle.FixedDialog,
+            MinimizeBox=false, MaximizeBox=false, ShowInTaskbar=false, Padding=new Padding(12) };
+        var body=new TableLayoutPanel { AutoSize=true, AutoSizeMode=AutoSizeMode.GrowAndShrink, ColumnCount=1, Location=new Point(12,12), Margin=new Padding(0) };
+        body.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        form.Controls.Add(body);
+        return (form,body);
     }
-    private static void Buttons(Form form,Button ok)
+    private static Label Text(string text) => new() { AutoSize=true, MaximumSize=new Size(ContentWidth,0), MinimumSize=new Size(ContentWidth,0), Text=text, Margin=new Padding(0,0,0,10) };
+    private static void Buttons(TableLayoutPanel body,Button ok,Button? cancel=null,params Button[] extra)
     {
-        var cancel=new Button { Text="Cancel",DialogResult=DialogResult.Cancel,AutoSize=true };
-        var bar=new FlowLayoutPanel { Dock=DockStyle.Bottom,Height=45,FlowDirection=FlowDirection.RightToLeft,Padding=new Padding(6) };
-        bar.Controls.Add(cancel); bar.Controls.Add(ok); form.Controls.Add(bar); form.AcceptButton=ok; form.CancelButton=cancel;
+        cancel??=new Button { Text="Cancel",DialogResult=DialogResult.Cancel,AutoSize=true };
+        var bar=new FlowLayoutPanel { AutoSize=true, AutoSizeMode=AutoSizeMode.GrowAndShrink, FlowDirection=FlowDirection.RightToLeft, Margin=new Padding(0,6,0,0), MinimumSize=new Size(ContentWidth,0), WrapContents=false };
+        if (!ReferenceEquals(cancel,ok)) bar.Controls.Add(cancel);
+        bar.Controls.Add(ok); foreach (var button in extra) bar.Controls.Add(button);
+        body.Controls.Add(bar);
+        var form=(Form)body.Parent!; form.AcceptButton=ok; form.CancelButton=cancel;
     }
     private static DialogResult Show(Form form,CancellationToken cancellationToken)
     {
@@ -23,17 +36,18 @@ internal sealed class DesktopPrompts(Control dispatcher) : IPrompts
     }
     public Task<string?> InputAsync(InputPrompt prompt,CancellationToken cancellationToken=default) => OnUi(() =>
     {
-        using var form=Dialog(prompt.Title);
-        var field=new TextBox { Dock=DockStyle.Top,Text=prompt.Value ?? "",UseSystemPasswordChar=prompt.Password,PlaceholderText=prompt.Placeholder ?? "",Margin=new Padding(12) };
-        form.Controls.Add(field); form.Controls.Add(new Label { Dock=DockStyle.Top,Text=prompt.Prompt,Height=80,Padding=new Padding(10) });
-        Buttons(form,new Button { Text="OK",DialogResult=DialogResult.OK,AutoSize=true });
+        var (form,body)=Dialog(prompt.Title); using var _=form;
+        var field=new TextBox { Width=ContentWidth,Text=prompt.Value ?? "",UseSystemPasswordChar=prompt.Password,PlaceholderText=prompt.Placeholder ?? "",Margin=new Padding(0,0,0,4) };
+        body.Controls.Add(Text(prompt.Prompt)); body.Controls.Add(field);
+        Buttons(body,new Button { Text="OK",DialogResult=DialogResult.OK,AutoSize=true });
         form.Shown+=(_,_)=>field.Focus();
         return Show(form,cancellationToken)==DialogResult.OK ? field.Text : null;
     },cancellationToken);
     public Task<IReadOnlyList<string>?> PickAsync(PickPrompt prompt,CancellationToken cancellationToken=default) => OnUi<IReadOnlyList<string>?>(()=>
     {
-        using var form=Dialog(prompt.Title); form.Height=480;
-        var list=new ListView { Dock=DockStyle.Fill,View=View.Details,FullRowSelect=true,MultiSelect=prompt.Multiple,CheckBoxes=prompt.Multiple,HideSelection=false,HeaderStyle=ColumnHeaderStyle.None };
+        var (form,body)=Dialog(prompt.Title); using var _=form;
+        var rows=Math.Clamp(prompt.Items.Count,3,12);
+        var list=new ListView { Width=ContentWidth,Height=24*rows+8,View=View.Details,FullRowSelect=true,MultiSelect=prompt.Multiple,CheckBoxes=prompt.Multiple,HideSelection=false,HeaderStyle=ColumnHeaderStyle.None,Margin=new Padding(0,0,0,4) };
         list.Columns.Add("Item",220); list.Columns.Add("Description",340);
         foreach (var item in prompt.Items)
         {
@@ -45,9 +59,9 @@ internal sealed class DesktopPrompts(Control dispatcher) : IPrompts
         list.ItemCheck+=(_,e)=> { if (list.Items[e.Index].Tag is PickItem { Disabled:true } or PickItem { Separator:true }) e.NewValue=CheckState.Unchecked; };
         list.SelectedIndexChanged+=(_,_)=>ok.Enabled=prompt.Multiple || list.SelectedItems.Cast<ListViewItem>().Any(r=>r.Tag is PickItem { Disabled:false,Separator:false });
         list.DoubleClick+=(_,_)=> { if (!prompt.Multiple && ok.Enabled) { form.DialogResult=DialogResult.OK; form.Close(); } };
-        form.Controls.Add(list);
-        if (prompt.Placeholder is not null) form.Controls.Add(new Label { Dock=DockStyle.Top,Text=prompt.Placeholder,Height=50,Padding=new Padding(10) });
-        Buttons(form,ok);
+        if (prompt.Placeholder is not null) body.Controls.Add(Text(prompt.Placeholder));
+        body.Controls.Add(list);
+        Buttons(body,ok);
         if (Show(form,cancellationToken)!=DialogResult.OK) return null;
         var chosen=prompt.Multiple ? list.CheckedItems.Cast<ListViewItem>() : list.SelectedItems.Cast<ListViewItem>();
         return chosen.Select(r=>(PickItem)r.Tag!).Where(i=>!i.Disabled && !i.Separator).Select(i=>i.Id).ToArray();
@@ -55,22 +69,19 @@ internal sealed class DesktopPrompts(Control dispatcher) : IPrompts
     public Task<bool> ConfirmAsync(string title,string message,CancellationToken cancellationToken=default) => ConfirmAsync(new ConfirmationPrompt(title, message, "Confirm"), cancellationToken);
     public Task<bool> ConfirmAsync(ConfirmationPrompt prompt,CancellationToken cancellationToken=default) => OnUi(()=>
     {
-        using var form=Dialog(prompt.Title); form.Controls.Add(new Label { Dock=DockStyle.Fill,Text=prompt.Message,Padding=new Padding(14) });
-        Buttons(form,new Button { Text=prompt.Action,DialogResult=DialogResult.OK,AutoSize=true }); return Show(form,cancellationToken)==DialogResult.OK;
+        var (form,body)=Dialog(prompt.Title); using var _=form; body.Controls.Add(Text(prompt.Message));
+        Buttons(body,new Button { Text=prompt.Action,DialogResult=DialogResult.OK,AutoSize=true }); return Show(form,cancellationToken)==DialogResult.OK;
     },cancellationToken);
     public Task ShowSecretOnceAsync(string title, Secret value, string note, CancellationToken cancellationToken=default) => OnUi(()=>
     {
-        using var form=Dialog(title); form.Height=390;
-        var field=new TextBox { Dock=DockStyle.Fill,Text=value.Reveal(),ReadOnly=true,Multiline=true,ScrollBars=ScrollBars.Vertical };
+        var (form,body)=Dialog(title); using var _=form;
+        var field=new TextBox { Width=ContentWidth,Height=96,Text=value.Reveal(),ReadOnly=true,Multiline=true,ScrollBars=ScrollBars.Vertical,Margin=new Padding(0,0,0,6) };
         var close=new Button { Text="Close",DialogResult=DialogResult.OK,AutoSize=true };
         var copy=new Button { Text="Copy to clipboard",AutoSize=true };
-        var bar=new FlowLayoutPanel { Dock=DockStyle.Bottom,Height=45,FlowDirection=FlowDirection.RightToLeft,Padding=new Padding(6) };
-        bar.Controls.Add(close); bar.Controls.Add(copy);
         copy.Click+=(_,_)=> { try { Clipboard.SetText(field.Text); } catch (System.Runtime.InteropServices.ExternalException) { MessageBox.Show(form,"Could not copy: the clipboard is unavailable.",title); } };
-        form.Controls.Add(field);
-        form.Controls.Add(new Label { Dock=DockStyle.Top,Text=note,Height=90,Padding=new Padding(10) });
-        form.Controls.Add(new Label { Dock=DockStyle.Bottom,Text="This is shown once and is not stored anywhere by The Construct.",Height=48,Padding=new Padding(10) });
-        form.Controls.Add(bar); form.AcceptButton=close; form.CancelButton=close;
+        body.Controls.Add(Text(note)); body.Controls.Add(field);
+        body.Controls.Add(Text("This is shown once and is not stored anywhere by The Construct."));
+        Buttons(body,close,close,copy);
         try { Show(form,cancellationToken); } finally { field.Clear(); }
         return true;
     },cancellationToken);
