@@ -9,7 +9,7 @@ import subprocess
 import zipfile
 
 
-def package(root, output, commit, repository):
+def package(root, output, commit, repository, companion_release_tag=None):
     if not re.fullmatch(r'[0-9a-f]{40}', commit) or not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository):
         raise ValueError('Invalid release identity')
     if subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip() != commit:
@@ -40,6 +40,11 @@ def package(root, output, commit, repository):
     manifest.update(sourceAsset=source.name, sourceSha256=source_hash,
                     sourceSizeBytes=source.stat().st_size,
                     payloadSizeBytes=(output / manifest['payloadAsset']).stat().st_size)
+    if companion_release_tag is not None:
+        # The Companion this commit installs: its own build, or the newest one when nothing changed.
+        if not re.fullmatch(r'companion-[0-9a-f]{40}', companion_release_tag):
+            raise ValueError('Invalid Companion release tag')
+        manifest['companionReleaseTag'] = companion_release_tag
     with (output / 'SHA256SUMS').open('a') as sums:
         sums.write(f'{source_hash}  {source.name}\n')
     manifest_path.write_text(json.dumps(manifest, indent=2) + '\n')
@@ -51,5 +56,6 @@ if __name__ == '__main__':
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--commit', required=True)
     parser.add_argument('--repository', required=True)
+    parser.add_argument('--companion-release-tag')
     args = parser.parse_args()
-    package(args.root, args.output, args.commit, args.repository)
+    package(args.root, args.output, args.commit, args.repository, args.companion_release_tag)

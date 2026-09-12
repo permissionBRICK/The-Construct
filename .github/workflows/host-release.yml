@@ -24,8 +24,13 @@ jobs:
       - name: Package pinned commit
         shell: pwsh
         run: ./service/host/New-ConstructHostPackage.ps1 -PublishDir /tmp/host-publish -FrameworkDependentPublishDir /tmp/host-publish-fdd -OutputDir /tmp/host-release -Commit "${{ github.sha }}" -Repository "$env:GITHUB_REPOSITORY"
+      - name: Decide which Companion release this commit installs
+        id: companion
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "tag=$(python3 scripts/companion-release-plan.py --commit "$GITHUB_SHA" | python3 -c 'import json,sys; print(json.load(sys.stdin)["tag"])')" >> "$GITHUB_OUTPUT"
       - name: Package source and generate shared manifest
-        run: python3 scripts/package-construct-release.py --output /tmp/host-release --commit "$GITHUB_SHA" --repository "$GITHUB_REPOSITORY"
+        run: python3 scripts/package-construct-release.py --output /tmp/host-release --commit "$GITHUB_SHA" --repository "$GITHUB_REPOSITORY" --companion-release-tag "${{ steps.companion.outputs.tag }}"
       - name: Publish complete release and advance latest
         env:
           GH_TOKEN: ${{ github.token }}

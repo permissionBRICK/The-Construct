@@ -2,7 +2,6 @@ name: Companion release
 on:
   push:
     branches: [main]
-    paths: ['companion/**', 'extension/media/**', 'extension/vm/**', 'extension/src/**', 'extension/test/**', 'test/fixtures/companion-parity/**', 'lib/Construct.Companion.ps1', 'lib/Construct.Runtime.ps1', 'Install-ConstructCompanion.ps1', 'test/companion-*.test.ps1', 'Auto-Install.ps1', 'Update-Construct.ps1', 'Provision-AgentVM.ps1', '.github/workflows/companion-release.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -19,23 +18,40 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
+          fetch-depth: 0
+      # Build only when Companion sources changed since the newest published Companion release;
+      # the host manifest of this commit points at that release either way (scripts/companion-release-plan.py).
+      - name: Decide whether this commit needs a Companion build
+        id: plan
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          plan="$(python3 scripts/companion-release-plan.py --commit "$GITHUB_SHA")"
+          echo "$plan"
+          echo "build=$(printf '%s' "$plan" | python3 -c 'import json,sys; print(str(json.load(sys.stdin)["build"]).lower())')" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        if: steps.plan.outputs.build == 'true'
         with:
           dotnet-version: '10.0.x'
       - name: Publish self-contained Windows app
+        if: steps.plan.outputs.build == 'true'
         shell: pwsh
         run: |
           dotnet publish companion/src/Construct.Companion/Construct.Companion.csproj -c Release -r win-x64 --self-contained true "-p:InformationalVersion=1.0.0+$env:GITHUB_SHA" -p:IncludeSourceRevisionInInformationalVersion=false -o "$env:RUNNER_TEMP/companion-publish"
           if ($LASTEXITCODE -ne 0) { throw 'Publish failed.' }
       - name: Publish framework-dependent Windows app
+        if: steps.plan.outputs.build == 'true'
         shell: pwsh
         run: |
           dotnet publish companion/src/Construct.Companion/Construct.Companion.csproj -c Release -r win-x64 --self-contained false "-p:InformationalVersion=1.0.0+$env:GITHUB_SHA" -p:IncludeSourceRevisionInInformationalVersion=false -o "$env:RUNNER_TEMP/companion-publish-fdd"
           if ($LASTEXITCODE -ne 0) { throw 'Publish failed.' }
       - name: Package pinned commit
+        if: steps.plan.outputs.build == 'true'
         shell: pwsh
         run: ./companion/host/New-ConstructCompanionPackage.ps1 -PublishDir "$env:RUNNER_TEMP/companion-publish" -FrameworkDependentPublishDir "$env:RUNNER_TEMP/companion-publish-fdd" -OutputDir "$env:RUNNER_TEMP/companion-release" -Commit $env:GITHUB_SHA -Repository $env:GITHUB_REPOSITORY
       - name: Publish immutable release
+        if: steps.plan.outputs.build == 'true'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}

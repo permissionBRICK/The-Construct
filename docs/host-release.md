@@ -21,7 +21,7 @@ are:
 | `construct-host-<commit7>-win-x64.zip` | Self-contained host, scripts and updater |
 | `construct-host-<commit7>-win-x64-fdd.zip` | Framework-dependent host, same scripts and updater |
 | `construct-source-<commit40>.zip` | Pinned Construct source archive |
-| `manifest.json` | Identity, compatibility, runtime requirements, hashes and sizes |
+| `manifest.json` | Identity, compatibility, runtime requirements, hashes, sizes and `companionReleaseTag` (the Companion release this commit installs) |
 | `SHA256SUMS` | Host payload file hashes and the three archive hashes |
 
 Both the panel and Windows host discover the current release at:

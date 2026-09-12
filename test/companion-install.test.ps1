@@ -209,7 +209,31 @@ try {
         $script:directUris+=$Uri; return $script:manifest
     }
     $direct=Resolve-ConstructCompanionSource $repo release $seams
-    Assert ($direct.commit -eq $sha -and $direct.releaseTag -eq ('companion-'+$sha) -and $script:releaseCalls -eq 0 -and $script:directUris[0] -eq ('https://github.com/permissionBRICK/The-Construct/releases/download/companion-'+$sha+'/manifest.json')) 'Installed commit resolves its Companion without listing releases'
+    Assert ($direct.commit -eq $sha -and $direct.releaseTag -eq ('companion-'+$sha) -and $script:releaseCalls -eq 0 -and $script:directUris[0] -eq ('https://github.com/permissionBRICK/The-Construct/releases/download/host-'+$sha+'/manifest.json') -and $script:directUris[1] -eq ('https://github.com/permissionBRICK/The-Construct/releases/download/companion-'+$sha+'/manifest.json')) 'Installed commit resolves its Companion without listing releases'
+    # A host release whose manifest points at an older Companion (no Companion change since) installs that one.
+    $script:releaseCalls=0; $script:directUris=@()
+    $seams.Json={ param($Uri)
+        if ($Uri -match '/releases\?') { $script:releaseCalls++; return @() }
+        $script:directUris+=$Uri
+        if ($Uri -match ('/host-'+('9'*40)+'/manifest.json$')) { return [pscustomobject]@{commit=('9'*40);companionReleaseTag=('companion-'+$sha)} }
+        if ($Uri -match ('/companion-'+$sha+'/manifest.json$')) { return $script:manifest }
+        throw 'The remote server returned an error: (404) Not Found.'
+    }
+    [IO.File]::WriteAllText($settings,(@{installedCommit=('9'*40)} | ConvertTo-Json))
+    $pointed=Resolve-ConstructCompanionSource $repo release $seams
+    Assert ($pointed.commit -eq $sha -and $pointed.releaseTag -eq ('companion-'+$sha) -and $script:releaseCalls -eq 0 -and $script:directUris.Count -eq 2) 'Host manifest pointer selects the Companion release without listing'
+    $seams.Json={ param($Uri)
+        if ($Uri -match '/releases\?') { $script:releaseCalls++; return @() }
+        if ($Uri -match ('/host-'+('9'*40)+'/manifest.json$')) { return [pscustomobject]@{commit=('9'*40);companionReleaseTag='companion-latest'} }
+        if ($Uri -match ('/companion-'+('9'*40)+'/manifest.json$')) { throw 'The remote server returned an error: (404) Not Found.' }
+        return $script:manifest
+    }
+    Reject { Resolve-ConstructCompanionSource $repo release $seams } 'Malformed pointer is ignored and a missing own build with an empty listing fails clearly'
+    [IO.File]::WriteAllText($settings,(@{installedCommit=$sha} | ConvertTo-Json))
+    $seams.Json={ param($Uri)
+        if ($Uri -match '/releases\?') { $script:releaseCalls++; return @() }
+        $script:directUris+=$Uri; return $script:manifest
+    }
     Assert ($direct.payloadUri -eq ('https://github.com/permissionBRICK/The-Construct/releases/download/companion-'+$sha+'/'+$direct.payload.asset)) 'Direct payload URI uses the commit tag'
     [IO.File]::WriteAllText($settings,'{}')
     [IO.File]::WriteAllText((Join-Path $repo '.construct-revision'),$sha+"`n")

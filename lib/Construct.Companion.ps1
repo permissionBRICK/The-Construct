@@ -134,11 +134,23 @@ function Resolve-ConstructCompanionSource {
         if (Test-Path -LiteralPath $marker) { $installedCommit=([IO.File]::ReadAllText($marker)).Trim().ToLowerInvariant() }
     }
     if ($installedCommit -cmatch '^[0-9a-f]{40}$') {
+        # The host release of that commit names the Companion it installs (companionReleaseTag:
+        # its own build, or the newest one when no Companion file changed). Older host releases
+        # have no pointer; then the Companion built from the same commit is tried.
+        $candidates=@()
         try {
-            $tag="companion-$installedCommit"
-            $manifest=& $Seams.Json "https://github.com/$repo/releases/download/$tag/manifest.json"
-            Assert-ConstructCompanionManifest $manifest $repo $tag
-        } catch { $manifest=$null; $tag='' }
+            $hostManifest=& $Seams.Json "https://github.com/$repo/releases/download/host-$installedCommit/manifest.json"
+            $pointer=[string]$hostManifest.companionReleaseTag
+            if ($pointer -cmatch '^companion-[0-9a-f]{40}$') { $candidates+=$pointer }
+        } catch { }
+        if ($candidates -notcontains "companion-$installedCommit") { $candidates+="companion-$installedCommit" }
+        foreach ($candidate in $candidates) {
+            try {
+                $manifest=& $Seams.Json "https://github.com/$repo/releases/download/$candidate/manifest.json"
+                Assert-ConstructCompanionManifest $manifest $repo $candidate
+                $tag=$candidate; break
+            } catch { $manifest=$null; $tag='' }
+        }
     }
     if (-not $manifest) {
         # Paginate: host and Companion releases share this repository.
@@ -379,7 +391,16 @@ function Invoke-ConstructCompanionInstallHook {
         $outcome = Install-ConstructCompanion -ScriptsDir $ScriptsDir -SkipCompanion:$SkipCompanion
         switch ([string]$outcome) {
             'installed' { Write-Host '==> Construct Companion installed and started.' -ForegroundColor Green }
-            'unchanged' { Write-Host '==> Construct Companion already current.' -ForegroundColor DarkGray }
+            'unchanged' {
+                $build=''
+                try {
+                    if (Get-Command Get-ConstructCompanionPaths -ErrorAction SilentlyContinue) {
+                        $current=[string](Read-ConstructCompanionJson (Join-Path (Get-ConstructCompanionPaths).install 'install.json')).commit
+                        if ($current -cmatch '^[0-9a-f]{40}$') { $build=' (build '+$current.Substring(0,7)+': no Companion change since)' }
+                    }
+                } catch { $build='' }
+                Write-Host ('==> Construct Companion already current'+$build+'.') -ForegroundColor DarkGray
+            }
             'skipped'   { Write-Host '==> Construct Companion skipped.' -ForegroundColor DarkGray }
             default     { if ($outcome) { Write-Host ('==> Construct Companion: ' + $outcome) -ForegroundColor DarkGray } }
         }

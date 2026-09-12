@@ -46,14 +46,19 @@ For a manual install, from your downloaded Construct scripts directory:
 .\Install-ConstructCompanion.ps1
 ```
 
-The installer downloads the `companion-<commit40>` GitHub release of the installed
-Construct commit (`installedCommit` in `.construct-settings.json`, or `.construct-revision`)
-from `constructRepo` (default `permissionBRICK/The-Construct`): one manifest download,
-no release listing and no GitHub API rate limit. When that release does not exist yet
-(its workflow is still running) or no commit is recorded, it falls back to the newest
-published Companion release from the release listing, filtered independently of host
-releases and prereleases. The listing is bounded to 20 pages (2,000 releases); if the
-last page is full, it refuses an incomplete result with a clear diagnostic.
+A Companion release (`companion-<commit40>`) is published only for commits that change
+a Companion file (its sources, the panel media, the installer scripts; the list is in
+`scripts/companion-release-plan.py`). Every host release manifest carries
+`companionReleaseTag`: the commit's own Companion build, or the newest published one
+when nothing Companion-related changed since. The installer reads the host manifest of
+the installed Construct commit (`installedCommit` in `.construct-settings.json`, or
+`.construct-revision`) from `constructRepo` (default `permissionBRICK/The-Construct`)
+and downloads that Companion release directly: two small manifest downloads, no release
+listing and no GitHub API rate limit. "Already current" therefore means the newest
+Companion build is installed, even when the Construct version moved. Host releases
+without the pointer fall back to `companion-<installedCommit>`, then to the newest
+published Companion release from the release listing (bounded to 20 pages; a full
+last page is refused with a clear diagnostic).
 Both the default and `-Source release` prefer the framework-dependent ZIP when
 `dotnet --list-runtimes` lists every shared framework at the manifest's major version.
 The current app requires .NET 10's `Microsoft.NETCore.App`,
