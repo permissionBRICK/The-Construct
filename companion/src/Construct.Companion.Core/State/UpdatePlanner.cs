@@ -17,7 +17,19 @@ public static class UpdatePlanner
     }
     public static string NormalizeCommit(string? value) { var s = StateJson.Trim(value ?? "").ToLowerInvariant(); return Regex.IsMatch(s, "^[0-9a-f]{7,64}$") ? s : ""; }
     public static string EffectiveProvisionedCommit(JsonObject markers, string? guestCommit = null) => NormalizeCommit(guestCommit) is { Length: > 0 } guest ? guest : StateJson.Text(markers["provisionedCommit"]) ?? "";
-    public static bool IsProvisionStale(JsonObject markers, string? guestCommit = null) => StateJson.Text(markers["installedCommit"]) is { Length: > 0 } installed && EffectiveProvisionedCommit(markers, guestCommit) is { Length: > 0 } provisioned && installed != provisioned;
+    public static bool IsProvisionStale(JsonObject markers, string? guestCommit = null) => StateJson.Text(markers["installedCommit"]) is { Length: > 0 } installed && EffectiveProvisionedCommit(markers, guestCommit) is { Length: > 0 } provisioned && !string.Equals(installed, provisioned, StringComparison.OrdinalIgnoreCase);
+    public static JsonObject VmConstruct(JsonObject markers, string? guestCommit = null)
+    {
+        var installed = StateJson.Trim(StateJson.String(markers["installedCommit"])).ToLowerInvariant();
+        var provisioned = StateJson.Trim(EffectiveProvisionedCommit(markers, guestCommit)).ToLowerInvariant();
+        return new()
+        {
+            ["installed"] = installed[..Math.Min(7, installed.Length)],
+            ["provisioned"] = provisioned[..Math.Min(7, provisioned.Length)],
+            ["ref"] = StateJson.Nonempty(markers["ref"]) ?? DefaultRef,
+            ["state"] = installed.Length == 0 || provisioned.Length == 0 ? "unknown" : IsProvisionStale(markers, guestCommit) ? "behind" : "current"
+        };
+    }
     public static JsonObject? ConstructUpdateFromManifest(JsonObject? json, JsonObject markers)
     {
         var commit = StateJson.Text(json?["commit"]) ?? "";
@@ -41,6 +53,7 @@ public static class UpdatePlanner
     public static JsonObject Fold(JsonObject state, JsonObject markers, JsonObject? constructUpdate)
     {
         var installed = StateJson.String(markers["installedCommit"]);
+        state["vmConstruct"] = VmConstruct(markers, StateJson.Text(state["provisionedCommit"]));
         if (installed.Length > 0) state["constructRev"] = $"{StateJson.String(markers["ref"])}@{installed[..Math.Min(7, installed.Length)]}";
         if (constructUpdate is not null) state["update"] = new JsonObject { ["available"] = StateJson.Truthy(constructUpdate["available"]), ["behind"] = BehindText(StateJson.Number(constructUpdate["count"])) };
         return state;

@@ -89,7 +89,8 @@ function ok(name, cond, detail) {
   ok("augment: up-to-date -> available false, blank behind", a2.update.available === false && a2.update.behind === "");
 
   const a3 = await updates.augment(base, {}, { fetchJson: fakeFetch(published()), noCache: true });
-  ok("augment: no marker -> unchanged (same ref, no update/constructRev)", a3 === base);
+  ok("augment: no marker -> unknown VM state, no update/constructRev",
+    a3 !== base && a3.vmConstruct.state === "unknown" && a3.update === undefined && a3.constructRev === undefined);
 
   // ── provisionStale (installedCommit vs provisionedCommit) ────────────────────
   ok("stale: installed != provisioned -> stale", updates.isProvisionStale({ installedCommit: "aaa", provisionedCommit: "bbb" }) === true);
@@ -152,6 +153,55 @@ function ok(name, cond, detail) {
     updates.normalizeCommit("zzzzzzz") === "" &&
     updates.normalizeCommit(null) === ""))());
 
+  // The panel shows the host's installed revision beside the VM's provisioned revision.
+  const vmCurrent = updates.vmConstruct(
+    { installedCommit: "ABCDEF1234567890", provisionedCommit: "abcdef1234567890", ref: "main" });
+  ok("vmConstruct: equal commits are current and shortened",
+    JSON.stringify(vmCurrent) === JSON.stringify({ installed: "abcdef1", provisioned: "abcdef1", ref: "main", state: "current" }));
+  const vmBehind = updates.vmConstruct(
+    { installedCommit: "def56789", provisionedCommit: "abc12345", ref: "topic" });
+  ok("vmConstruct: different known commits are behind",
+    JSON.stringify(vmBehind) === JSON.stringify({ installed: "def5678", provisioned: "abc1234", ref: "topic", state: "behind" }));
+  ok("vmConstruct: guest marker wins over the host cache",
+    updates.vmConstruct({ installedCommit: "def56789", provisionedCommit: "def56789", ref: "main" }, "abc12345").state === "behind");
+  ok("vmConstruct: an older VM with no provisioned marker is unknown",
+    updates.vmConstruct({ installedCommit: "def56789", provisionedCommit: "", ref: "main" }, "").state === "unknown");
+  ok("vmConstruct: an offline caller can use the host cache",
+    updates.vmConstruct({ installedCommit: "def56789", provisionedCommit: "def56789", ref: "main" }).state === "current");
+
+  const firstPush = updates.foldVmConstruct(
+    { online: false, instance: "build-vm" },
+    { installedCommit: "def56789", constructRef: "main" },
+    { provisionedCommit: "abc12345" });
+  ok("vmConstruct fold: the first state push carries the selected instance's cached commit",
+    firstPush.constructRev === "main@def5678" && firstPush.vmConstruct.provisioned === "abc1234" && firstPush.vmConstruct.state === "behind");
+  ok("vmConstruct fold: an identical state retains object identity",
+    updates.foldVmConstruct(firstPush, { installedCommit: "def56789", constructRef: "main" }, { provisionedCommit: "abc12345" }) === firstPush);
+  const switchedPush = updates.foldVmConstruct(
+    { online: false, instance: "other-vm" },
+    { installedCommit: "def56789", constructRef: "main" },
+    { provisionedCommit: "def56789" });
+  ok("vmConstruct fold: an instance switch cannot retain the previous VM's verdict",
+    switchedPush.vmConstruct.provisioned === "def5678" && switchedPush.vmConstruct.state === "current");
+
+  let noticeMemory = {};
+  const offlineNotice = updates.planVmConstructNotice(noticeMemory, "agent-vm", vmBehind, false);
+  ok("vm notice: an offline cached drift does not report", offlineNotice.notify === false && offlineNotice.memory === noticeMemory);
+  const firstNotice = updates.planVmConstructNotice(noticeMemory, "agent-vm", vmBehind, true);
+  ok("vm notice: first transition to a behind pair reports", firstNotice.notify === true);
+  ok("vm notice: helper does not mutate its input", Object.keys(noticeMemory).length === 0);
+  noticeMemory = firstNotice.memory;
+  const repeatedNotice = updates.planVmConstructNotice(noticeMemory, "agent-vm", vmBehind, true);
+  ok("vm notice: a repeated behind refresh stays quiet", repeatedNotice.notify === false);
+  noticeMemory = updates.planVmConstructNotice(repeatedNotice.memory, "agent-vm", { ...vmBehind, state: "current" }, true).memory;
+  const oldPairAgain = updates.planVmConstructNotice(noticeMemory, "agent-vm", vmBehind, true);
+  ok("vm notice: a previously reported pair stays quiet after another transition", oldPairAgain.notify === false);
+  const otherInstance = updates.planVmConstructNotice(oldPairAgain.memory, "build-vm", vmBehind, true);
+  ok("vm notice: de-duplication is per instance", otherInstance.notify === true);
+  const newerPair = { ...vmBehind, installed: "fedcba9", provisioned: "def5678" };
+  const currentMemory = updates.planVmConstructNotice(otherInstance.memory, "agent-vm", { ...vmBehind, state: "current" }, true).memory;
+  ok("vm notice: a later different pair can report", updates.planVmConstructNotice(currentMemory, "agent-vm", newerPair, true).notify === true);
+
   const aGuest = await updates.augment(
     { ...base, provisionedCommit: "bbbbbbb" },
     { installedCommit: "aaaaaaa", provisionedCommit: "aaaaaaa", constructRef: "main" },
@@ -182,7 +232,8 @@ function ok(name, cond, detail) {
     aResetGuest.update.available === true && aResetGuest.provisionStale === true);
 
   const a4 = await updates.augment(base, { installedCommit: "abc1234567" }, { fetchJson: async () => null, noCache: true });
-  ok("augment: network fail still sets constructRev, no update", a4.constructRev === "main@abc1234" && a4.update === undefined);
+  ok("augment: network fail still sets constructRev + unknown VM state, no update",
+    a4.constructRev === "main@abc1234" && a4.vmConstruct.state === "unknown" && a4.update === undefined);
 
   // constructRev must reflect the MARKER's ref, not the default — a non-default ref
   // catches a regression that hardcodes "main".
@@ -463,11 +514,10 @@ function ok(name, cond, detail) {
   const stOffline = await updates.augment({ online: false, agents: [{ id: "codex", version: "0.142.4" }] }, {}, { noCache: true, fetchJson: gh("9.9.9") });
   ok("augment: offline state leaves agents unchanged", stOffline.agents[0].updateAvailable === undefined && stOffline.agents[0].latest === undefined);
 
-  // When everything is up to date and there's no Construct marker, augment must
-  // return the SAME object reference so the extension can skip the redundant re-push.
+  // vmConstruct is present even without markers so the panel can show an explicit unknown state.
   const upToDate = { online: true, agents: [{ id: "codex", name: "Codex", version: "0.143.0", updateAvailable: false }] };
   const same = await updates.augment(upToDate, {}, { noCache: true, fetchJson: fakeByUrl({ [updates.AGENT_LATEST.codex.url]: { tag_name: "0.143.0" } }) });
-  ok("augment: no changes -> same state ref (skip re-push)", same === upToDate);
+  ok("augment: no markers -> explicit unknown VM state", same !== upToDate && same.vmConstruct.state === "unknown");
 
   // ── buildAgentUpdateScript ──────────────────────────────────────────────────
   const all = updates.buildAgentUpdateScript();
