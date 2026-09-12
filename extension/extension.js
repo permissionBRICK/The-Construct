@@ -19,6 +19,7 @@ const crypto = require("crypto");
 const probe = require("./src/probe");
 const ssh = require("./src/ssh");
 const host = require("./src/host");
+const consoleFeature = require("./src/console");
 const instancestate = require("./src/instancestate");
 const instances = require("./src/instances");
 const lifecycle = require("./src/lifecycle");
@@ -670,7 +671,7 @@ function instanceState(inst) {
     const reg = registryNow();
     const target = inst || activeInstance();
     const names = instances.list(reg).map((i) => i.name);
-    const out = { instance: target.name, backend: target.backend };
+    const out = { instance: target.name, backend: target.backend, console: consoleFeature.stateFor(target) };
     // The service HOST, not the whole URL: the panel renders it in a one-line row, and
     // the scheme + port are noise there. Only for an instance that has one — the panel
     // hides both rows for hyperv-local, so a single-VM install is pixel-identical.
@@ -4620,9 +4621,10 @@ const webviewOptions = (extensionUri) => ({
  * land in the right place.
  */
 async function preparePanelLifecycle(webview, id, work) {
+  let error;
   try { await work(); }
-  catch (e) { vscode.window.showErrorMessage("Could not prepare " + id + ": " + (e && e.message ? e.message : e)); }
-  finally { safePost(webview, { type: "lifecyclePrepared", id }); }
+  catch (e) { error = e && e.message ? e.message : String(e); if (id === "openConsole") vscode.window.showWarningMessage(error); else vscode.window.showErrorMessage("Could not prepare " + id + ": " + error); }
+  finally { safePost(webview, { type: "lifecyclePrepared", id, ...(error ? { error } : {}) }); }
 }
 
 function handleMessage(message, webview, context) {
@@ -4788,6 +4790,16 @@ function handleMessage(message, webview, context) {
 
     case "command": {
       const id = message.id;
+      if (id === "openConsole") return preparePanelLifecycle(webview, id, async () => {
+        const target = actionTarget();
+        const scriptsDir = resolveScriptsDirFor(target.instance);
+        await consoleFeature.open(target, { scriptsDir, targetSuperseded,
+          launchSetup: reason => {
+            if (!scriptsDir) throw new Error("Update Construct on this PC to install the console setup script.");
+            const invocation = lifecycle.buildInvocation("consoleAccess", { instance: target.instance, reset: reason === "credential-out-of-sync" });
+            return lifecycle.launchHostScript({ scriptsDir, ...invocation });
+          } });
+      });
       if (id === "convertToHost") return preparePanelLifecycle(webview, id, runConvertToHost);
       logLine(`command: ${id}${message.project ? " (" + message.project + ")" : ""}`);
       if (id === "showLogs") { showLogs(); return; }

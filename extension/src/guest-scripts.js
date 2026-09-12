@@ -4,7 +4,7 @@
 const fs = require("fs");
 const path = require("path");
 const names = [
-  "forwards-capability", "forwards-watch", "forwards-reconcile", "forwards-ack",
+  "console-close", "console-ensure", "forwards-capability", "forwards-watch", "forwards-reconcile", "forwards-ack",
   "forwards-remove", "forwards-release", "notify-claim-function", "notify-claim", "notify-watch",
   "project-clone", "project-scan", "probe", "audio-enable", "audio-disable", "t3-pairing", "t3-pairing-instance", "construct-t3-pairing-base", "usage",
   "construct-rec-shim", "construct-audio-enable", "construct-audio-disable",

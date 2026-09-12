@@ -84,12 +84,14 @@
   const backupId = () => { const e = $("backupPick"); return e ? e.value : ""; };
 
   // Give immediate feedback while the extension preserves configuration before its modal.
-  const preparingCommands = new Set(["reprovision", "reinstall", "redownload", "customReinstall", "customRedownload", "convertToHost", "updateConstruct"]);
+  let consoleAllowed = false, lifecycleBusy = false;
+  const preparingCommands = new Set(["openConsole", "reprovision", "reinstall", "redownload", "customReinstall", "customRedownload", "convertToHost", "updateConstruct"]);
   function setPreparing(id, busy) {
+    lifecycleBusy = busy;
     document.querySelectorAll("[data-cmd]").forEach((button) => {
       if (!preparingCommands.has(button.dataset.cmd)) return;
-      button.disabled = busy;
-      button.setAttribute("aria-disabled", String(busy));
+      button.disabled = busy || (button.dataset.cmd === "openConsole" && !consoleAllowed);
+      button.setAttribute("aria-disabled", String(button.disabled));
       const active = busy && button.dataset.cmd === id;
       button.classList.toggle("preparing", active);
       button.setAttribute("aria-busy", String(active));
@@ -109,6 +111,7 @@
     el.addEventListener("click", () => {
       const id = el.getAttribute("data-cmd");
       if (!id || el.disabled) return;
+      if (id === "openConsole") { $("consoleNote").hidden = true; $("consoleNote").textContent = ""; }
       if (preparingCommands.has(id)) setPreparing(id, true);
       if (id === "customReinstall" || id === "customRedownload") {
         post({
@@ -478,6 +481,15 @@
       : '<span class="dot"></span> VM OFFLINE';
   }
 
+  function setConsoleAction(s) {
+    const btn = $("consoleBtn");
+    btn.hidden = !s.console;
+    consoleAllowed = !!s.console && s.console.supported && s.online === true;
+    btn.disabled = !consoleAllowed || lifecycleBusy;
+    btn.setAttribute("aria-disabled", String(btn.disabled));
+    btn.title = !s.console ? "Checking VM state" : !s.console.supported ? s.console.reason : s.online !== true ? "The VM must be running and reachable over SSH to open its browser console" : "Open this VM's screen in your browser (fresh link every time)";
+    $("consoleNote").hidden = true; $("consoleNote").textContent = "";
+  }
   function setPowerAction(s) {
     const btn = $("powerBtn");
     if (!btn) return;
@@ -850,6 +862,7 @@
     // Stable power slot: it is present from first paint, then changes label/command
     // as state arrives so the rest of the strip never jumps under the pointer.
     setPowerAction(s);
+    setConsoleAction(s);
 
     // Usage-period tab reflects the extension's shared selection (a local preference,
     // so sync it even on the offline path before the early-return below). If the active
@@ -1173,7 +1186,7 @@
   }
 
   window.addEventListener("message", (ev) => {
-    if (ev.data && ev.data.type === "lifecyclePrepared") { setPreparing(ev.data.id, false); if (ev.data.error) window.alert(String(ev.data.error)); return; }
+    if (ev.data && ev.data.type === "lifecyclePrepared") { setPreparing(ev.data.id, false); if (ev.data.id === "openConsole") { $("consoleNote").textContent = String(ev.data.error || ""); $("consoleNote").hidden = !ev.data.error; } else if (ev.data.error) window.alert(String(ev.data.error)); return; }
     const m = ev.data;
     if (!m) return;
     if (m.type === "state") { render(m.state); return; }

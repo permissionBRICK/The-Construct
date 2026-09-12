@@ -1040,6 +1040,8 @@ run_step optional "Installing construct CLI" install_construct_cli
 if [[ -n "${CONSTRUCT_SERVICE_URL}" ]]; then
   run_step critical "Installing browser console gateway" \
     bash "${REPO_DIR}/console-viewer/install.sh"
+elif command -v docker >/dev/null 2>&1; then
+  run_step optional "Installing browser console gateway" bash "${REPO_DIR}/console-viewer/install.sh"
 fi
 
 # 4c. Notification spool for `construct notify`. On tmpfs (/run) deliberately: a
