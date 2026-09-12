@@ -248,6 +248,10 @@ $script:wireCalls=0;$script:progressSeen=[Collections.Generic.List[string]]::new
 $script:wireHandler={if($script:wireCalls -eq 1){$script:wire=@{state='queued';progress=@('check')}}else{$script:wire=@{state='succeeded';progress=@('check','ready');result=@{sizeBytes=123;sha256=$hash}}}}
 $result=Wait-ConstructSourceJob -BaseUrl $base -JobId job -Auth $auth -Deadline ([datetime]::UtcNow.AddSeconds(5)) -PollSeconds 0 -OnProgress {param($line)$script:progressSeen.Add($line)}
 Check 'queued progress consumed once' (($script:progressSeen -join ',') -eq 'check,ready' -and $result.State -eq 'succeeded')
+$script:wireCalls=0;$script:progressSeen=[Collections.Generic.List[string]]::new()
+$script:wireHandler={$script:wire=@{state='succeeded';progress=@(@{at='2026-09-12T11:03:35Z';text='check'},@{at='2026-09-12T11:03:36Z';text='download'});result=@{sizeBytes=123;sha256=$hash}}}
+Wait-ConstructSourceJob -BaseUrl $base -JobId job -Auth $auth -Deadline ([datetime]::UtcNow.AddSeconds(5)) -PollSeconds 0 -OnProgress {param($line)$script:progressSeen.Add($line)} | Out-Null
+Check 'structured progress rows print their text' (($script:progressSeen -join ',') -ceq 'check,download')
 $script:wireHandler=$null
 Write-Host "$passed passed"
 # Keep the local transport and everything after repo delivery identical to the reviewed base.
@@ -371,12 +375,13 @@ $overlayMessages = @{
     'local-changes-too-large' = 'This checkout differs from commit aaaaaaa in 3 file(s), too many or too large for an overlay; uploading it as before…'
     'overlay-pack-failed:overlay-not-file' = 'Could not pack the 3 differing file(s) (overlay-not-file); uploading the checkout as before.'
     'overlay-pack-failed:IOException' = 'Could not pack the 3 differing file(s) (IOException); uploading the checkout as before.'
+    'overlay-pack-failed:overlay-file-unreadable/IOException at lib/x.ps1' = 'Could not pack the 3 differing file(s) (overlay-file-unreadable/IOException at lib/x.ps1); uploading the checkout as before.'
     'overlay-upload-failed' = 'Could not upload the source overlay to the VM; uploading the checkout as before.'
 }
 foreach ($reason in $overlayMessages.Keys) {
     Check ('literal overlay message '+$reason) ((Get-ConstructSourceMessage -Reason $reason -Commit $commit -Divergence 3) -ceq $overlayMessages[$reason])
 }
-foreach ($failure in @('','size','pack','pack-io','upload','empty-upload','stage','fetch')) {
+foreach ($failure in @('','size','pack','pack-io','pack-path','pack-empty','upload','empty-upload','stage','fetch')) {
     $events = [Collections.Generic.List[string]]::new(); $infos = [Collections.Generic.List[string]]::new(); $warnings = [Collections.Generic.List[string]]::new()
     $state = Invoke-ConstructSourceTransport -Phase begin -Plan $overlayPlan -Ensure { @{Outcome='ready';SizeBytes=1024;Sha256=$hash} } -Info {param($s) $infos.Add($s)} -Warn {param($s) $warnings.Add($s)}
     $state = Invoke-ConstructSourceTransport -Phase complete -State $state -PackOverlay {
@@ -384,6 +389,8 @@ foreach ($failure in @('','size','pack','pack-io','upload','empty-upload','stage
         if ($failure -eq 'size') { $e=[InvalidOperationException]::new('limit');$e.Data['ConstructSourceOverlayTooLarge']=$true;throw $e }
         if ($failure -eq 'pack') { throw 'overlay-not-file' }
         if ($failure -eq 'pack-io') { throw [IO.IOException]::new('do not log secret fixture contents') }
+        if ($failure -eq 'pack-path') { $e=[Exception]::new('overlay-file-unreadable'); $e.Data['ConstructSourceOverlayError']='IOException'; $e.Data['ConstructSourceOverlayPath']='lib/x.ps1'; throw $e }
+        if ($failure -eq 'pack-empty') { return $null }
         @{Path='patch.zip';Files=2;Deleted=1;SizeBytes=20;CompressedSizeBytes=2048;Sha256=$hash}
     } -UploadOverlay {
         param($o) $events.Add('upload-overlay');Check 'upload receives archive' ($o.Path -eq 'patch.zip')
@@ -401,10 +408,10 @@ foreach ($failure in @('','size','pack','pack-io','upload','empty-upload','stage
         Check 'overlay final info' ($infos[$infos.Count-1] -ceq '    Construct source: host cache (commit aaaaaaa, 1 KB) + 3 differing file(s) (2 KB) uploaded from this PC.')
         Check 'overlay success no warning' ($warnings.Count -eq 0)
     } else {
-        $expected = @{size='local-changes-too-large';pack='overlay-pack-failed:overlay-not-file';'pack-io'='overlay-pack-failed:IOException';upload='overlay-upload-failed';'empty-upload'='overlay-upload-failed';stage='guest-token-staging-failed';fetch='guest-fetch-failed:5'}
+        $expected = @{size='local-changes-too-large';pack='overlay-pack-failed:overlay-not-file';'pack-io'='overlay-pack-failed:IOException';'pack-path'='overlay-pack-failed:overlay-file-unreadable/IOException at lib/x.ps1';'pack-empty'='overlay-pack-failed:empty-overlay-result';upload='overlay-upload-failed';'empty-upload'='overlay-upload-failed';stage='guest-token-staging-failed';fetch='guest-fetch-failed:5'}
         Check ('overlay fallback '+$failure) ($state.Transport -eq 'upload' -and $state.Reason -ceq $expected[$failure] -and ($events -join ',').EndsWith('pack,upload'))
         Check ('overlay fallback warning '+$failure) ($warnings.Count -eq 1 -and $warnings[0] -ceq (Get-ConstructSourceMessage -Reason $expected[$failure] -Commit $commit -Divergence 3))
-        if ($failure -in @('pack','pack-io','size','upload','empty-upload')) { Check ('failed overlay stops before token '+$failure) (-not $events.Contains('stage-token')) }
+        if ($failure -in @('pack','pack-io','pack-path','pack-empty','size','upload','empty-upload')) { Check ('failed overlay stops before token '+$failure) (-not $events.Contains('stage-token')) }
     }
 }
 $tmp=Join-Path ([IO.Path]::GetTempPath()) ('source-overlay-'+[guid]::NewGuid().ToString('N'))
@@ -467,6 +474,11 @@ try {
     foreach ($c in @($largeChanges,@{Modified=@('missing');Added=@();Deleted=@()},@{Modified=@('sub');Added=@();Deleted=@()},@{Modified=@('edited');Added=@();Deleted=@('edited')},@{Modified=@();Added=@('edited');Deleted=@('edited')})) {
         $thrown=$false;try{New-ConstructSourceOverlay -Root $tree -Changes $c -Path $zip|Out-Null}catch{$thrown=$true}
         Check 'overlay refuses count missing file or directory' ($thrown -and -not (Test-Path $zip))
+    }
+    # The failure names the file (never its contents) so the console says which one could not be packed.
+    foreach ($pair in @(@(@{Modified=@('missing');Added=@();Deleted=@()},'overlay-file-missing','missing'),@(@{Modified=@('sub');Added=@();Deleted=@()},'overlay-not-file','sub'))) {
+        $code='';$at='';try{New-ConstructSourceOverlay -Root $tree -Changes $pair[0] -Path $zip|Out-Null}catch{$code=$_.Exception.Message;$at=[string]$_.Exception.Data['ConstructSourceOverlayPath']}
+        Check ('overlay failure names the file '+$pair[1]) ($code -ceq $pair[1] -and $at -ceq $pair[2])
     }
     $big=Join-Path $tree 'big';$stream=[IO.File]::Create($big);try{$stream.SetLength(64MB+1)}finally{$stream.Dispose()}
     $thrown=$false;try{New-ConstructSourceOverlay -Root $tree -Changes @{Modified=@('big');Added=@();Deleted=@()} -Path $zip|Out-Null}catch{$thrown=[bool]$_.Exception.Data['ConstructSourceOverlayTooLarge']}
