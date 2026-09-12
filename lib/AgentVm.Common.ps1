@@ -6688,10 +6688,10 @@ function Write-ConstructSourceManifest {
 }
 
 # Files a checkout may carry that the release archive does not: local settings and tools,
-# build outputs, the user's own project profiles in the legacy projects/ folder, and the
+# build outputs, log files a tool dropped there, the user's own project profiles in the legacy projects/ folder, and the
 # repository-only folders the archive leaves out (.gitattributes export-ignore). Both the
 # identity check and the update's pruning use this one pattern.
-$script:ConstructSourceLocalArtifactPattern = '(^|/)(\.construct-settings\.json|[^/]*\.iso|\.env|[^/]*\.local)$|^projects/[^/]+\.json$|(^|/)(\.construct-backup|\.construct-tools|runtime|__pycache__|bin|obj|node_modules|TestResults|\.vs)/|(^|/)\.claude/worktrees/|^(test|extension/test|service/(src|tests)|companion/(src|tests)|docs/(plans|agent-notes)|\.github|scripts|assets)/|^(service/Constructd\.sln|companion/Construct\.Companion\.sln|console-viewer/test_server\.py)$'
+$script:ConstructSourceLocalArtifactPattern = '(^|/)(\.construct-settings\.json|[^/]*\.iso|\.env|[^/]*\.local|[^/]*\.log)$|^projects/[^/]+\.json$|(^|/)(\.construct-backup|\.construct-tools|runtime|__pycache__|bin|obj|node_modules|TestResults|\.vs)/|(^|/)\.claude/worktrees/|^(test|extension/test|service/(src|tests)|companion/(src|tests)|docs/(plans|agent-notes)|\.github|scripts|assets)/|^(service/Constructd\.sln|companion/Construct\.Companion\.sln|console-viewer/test_server\.py)$'
 function Test-ConstructSourceLocalArtifact { param([Parameter(Mandatory)][string]$Relative) return [bool]($Relative -match $script:ConstructSourceLocalArtifactPattern) }
 
 function Remove-ConstructStaleSourceFiles {

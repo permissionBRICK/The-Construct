@@ -142,6 +142,8 @@ try {
     [IO.Directory]::CreateDirectory((Join-Path $tree 'projects')) | Out-Null
     [IO.File]::WriteAllText((Join-Path $tree 'projects/my-app.json'),'{"name":"my-app"}')
     Check 'user project profiles in the legacy projects folder are not local changes' ((Get-ConstructSourceIdentity -Root $tree -ManifestDir $manifests).TreeState -eq 'equivalent')
+    [IO.File]::WriteAllText((Join-Path $tree 'debug.log'),'dropped by a tool')
+    Check 'log files are not local changes' ((Get-ConstructSourceIdentity -Root $tree -ManifestDir $manifests).TreeState -eq 'equivalent')
     [IO.File]::WriteAllText((Join-Path $tree 'stale.txt'),'from an older release')
     [IO.File]::WriteAllText((Join-Path $tree 'keep.local'),'mine')
     $pruned = Remove-ConstructStaleSourceFiles -Root $tree -Zip $zip
