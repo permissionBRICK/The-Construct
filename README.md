@@ -64,82 +64,29 @@ a few questions at the start and then runs on its own.
 
 ## 🔌 Jack in
 
-The VM answers as `agent-vm.mshome.net` (alias `agent-vm`). The installer sets up every
-target below:
+The installer automatically links every app you want, just enable it in the settings panel:
 
 | Client | How |
 |--------|-----|
 | VS Code Remote-SSH | Remote Explorer, `agent-vm`. Claude Code starts in bypass mode. |
-| VS Code in the browser | `http://localhost:8000/?tkn=<token>`. On by default and token-gated. The token only works from a localhost origin, so reach the port through a tunnel (`ssh -L 8000:127.0.0.1:8000 agent-vm`, or `construct expose 8000` on the VM). |
-| vscode.dev tunnel | `https://vscode.dev/tunnel/<name>`. Opt in with `VSCODE_TUNNEL=true`. |
+| T3 Code | Opt in from the Construct settings, then use its paired web UI or the Windows Desktop app. |
 | Codex App | Add `agent-vm` as an SSH host. |
 | Opencode | `agent-vm.mshome.net:4096`. `opencode serve` starts at boot. |
-| T3 Code | Opt in from the Construct settings, then use its paired web UI or the Windows Desktop app. |
+| VS Code in the browser | `http://localhost:8000/?tkn=<token>`. On by default and token-gated. The token only works from a localhost origin, so reach the port through a tunnel (`ssh -L 8000:127.0.0.1:8000 agent-vm`, or `construct expose 8000` on the VM). |
+| vscode.dev tunnel | `https://vscode.dev/tunnel/<name>`. Opt in with `VSCODE_TUNNEL=true`. |
 | Windows file share | `\\agent-vm.mshome.net\repo`. Map it to a drive with `-MountRepoShare true`. |
 | Terminal | `ssh agent-vm`. Root access. |
 
-Ports go the other way too. When an agent starts a dev server it runs `construct expose 5173`,
-which opens that port on your PC and prints the link. See [`construct expose`](docs/expose.md).
-
-More in [Remote access & services](docs/remote-access.md). The addresses above belong to the
-default VM. A second local VM follows the same pattern under its own name. For a VM on a
-[remote host](docs/remote-host.md), the host service publishes the SSH port, so `ssh <name>`,
-Remote-SSH and the Codex App work under that instance's alias. You reach its web ports with
-`construct expose`. The SMB share exists for local VMs only.
-
-## ⚙️ Configure
-
-Each project is declared once in `projects/*.json` and applied on every provision:
-
-```jsonc
-{
-  "name": "customer-portal",
-  "repos": [{ "url": "git@github.com:acme/customer-portal.git", "directory": "customer-portal" }],
-  "sdks": { "node": "22" },
-  "mcp": [{ "name": "context7", "type": "stdio", "command": "npx", "args": ["-y", "@upstash/context7-mcp"] }],
-  "provisionCommands": ["npm install", "if [ ! -e .env ]; then cp .env.example .env; fi"]
-}
-```
-
-VM-level settings live in `/etc/construct/config.env` (agent name, projects, tools,
-workspace root). Reference: [Project profiles & configuration](docs/projects.md) and
-[Provisioning](docs/provisioning.md). You switch optional features on in the
-[control panel](docs/control-panel.md#patched-t3-code-server--desktop-build), for example
-microphone passthrough and the patched T3 Code build.
 
 ## 🖧 Run it on a remote host
 
-The VM can live on a shared Hyper-V machine instead of your PC. An admin installs the
-`constructd` service there once. After that, everyone creates and manages their own VMs on
-it from the same installer and the same control panel:
+The VM can live on a shared Hyper-V machine instead of your PC. Install the service there once. After that, everyone creates and manages their own VMs remotely.
 
 ```powershell
 .\Auto-Install.ps1 -Backend hyperv-remote -ServiceUrl https://buildbox.example.local:7462 -InstanceName work-vm
 ```
 
-On a fresh machine the installer asks: local Hyper-V, or remote host. With a remote host:
-
-- The host builds the ISO, creates the VM and assigns an SSH port.
-- Your PC still runs the provisioning, so git credentials, agent auth and backups never
-  pass through the service.
-- No administrator rights are needed on your PC.
-- The VM keeps running with your laptop closed.
-
-The Host Administration view, in VS Code and in the Companion, covers users and their
-allowances (VM count, CPU, RAM, storage, lifetime, sharing), every VM with its settings,
-media, jobs, configuration and host updates. The Maintenance tab installs host updates from
-the published `main` releases. Guest provisioning stays per instance. From a VM on such a
-host, `construct vm` creates [child VMs](docs/child-vms.md) for tests.
-
-Several VMs, local or remote, are instances in a small registry on your PC
-(`%LOCALAPPDATA%\The-Construct\instances.json`). The control panel and the Companion switch
-between them. With a single local VM the registry is not needed.
-
-[Remote host](docs/remote-host.md) covers the admin setup, authentication (Kerberos or
-admin-issued tokens), certificate pinning and the idle policy.
-[Field test](docs/field-test-remote-host.md) walks through the first run on a domain. Host
-administration and child VMs have Linux tests and still need the
-[Hyper-V field test](docs/field-test-host-admin.md) before rollout.
+Or just click the convert to Host button in the settings panel.
 
 ## 📚 Documentation
 
