@@ -26,15 +26,18 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
-        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763)) { Console.Error.WriteLine("Construct Companion needs Windows 10 version 1809 or later."); return 1; }
-        ParentConsole.Attach();
+        if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 17763)) { ParentConsole.Attach(); Console.Error.WriteLine("Construct Companion needs Windows 10 version 1809 or later."); return 1; }
         CommandLine command;
         try { command = CommandLine.Parse(args); }
-        catch (ArgumentException error) { Console.Error.WriteLine(error.Message); return 2; }
+        catch (ArgumentException error) { ParentConsole.Attach(); Console.Error.WriteLine(error.Message); return 2; }
+        // Only the printing commands join the launching console. The tray app must not: an
+        // installer or update console that started it would otherwise stay open for as long as
+        // the Companion runs (owner, 2026-09-12, the update window that never closed).
+        if (command.Version || command.SelfTest) ParentConsole.Attach();
         var version = typeof(Program).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "0.0.0";
         if (command.Version) { Console.WriteLine(version); return 0; }
         var files = new HostFileSystem();
-        if (new HostState(files).LocalAppData is not { } local) { Console.Error.WriteLine("No local application data path."); return 1; }
+        if (new HostState(files).LocalAppData is not { } local) { ParentConsole.Attach(); Console.Error.WriteLine("No local application data path."); return 1; }
         var platform = new Platform(files, local, version);
         return command.SelfTest ? RunSelfTest(platform, command) : RunTray(platform, command);
     }
@@ -101,11 +104,11 @@ internal static class Program
             finally { Task.Run(async () => { await server.StopAsync(); await server.DisposeAsync(); }).GetAwaiter().GetResult(); platform.Log.Write(DesktopLogEvent.Stopped); }
             return 0;
         }
-        catch (ArgumentException) { Console.Error.WriteLine("Invalid Construct activation."); return 2; }
+        catch (ArgumentException) { ParentConsole.Attach(); Console.Error.WriteLine("Invalid Construct activation."); return 2; }
         catch (Exception error)
         {
             platform.Log.Write(DesktopLogEvent.UnhandledException, error);
-            Console.Error.WriteLine("Construct Companion could not start.");
+            ParentConsole.Attach(); Console.Error.WriteLine("Construct Companion could not start.");
             return 1;
         }
     }
