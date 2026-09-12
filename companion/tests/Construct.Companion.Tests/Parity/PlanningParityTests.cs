@@ -75,6 +75,7 @@ public sealed class PlanningParityTests
                 else { var n = row["input"]!.GetValue<double>(); Value("tokens", UsageParser.FormatTokens(n)); Value("cost", UsageParser.FormatCost(n)); } break;
             case "updates-planning":
                 if (S("kind") == "markers") { var markers = UpdatePlanner.ReadMarkers(O("raw"), O("state")); Equal("markers", markers); Value("stale", UpdatePlanner.IsProvisionStale(markers, StateJson.Text(row["guest"]))); Value("effective", UpdatePlanner.EffectiveProvisionedCommit(markers, StateJson.Text(row["guest"]))); Value("args", UpdatePlanner.ConstructRefreshArgs(markers)); }
+                else if (S("kind") == "vmConstruct") Equal("output", UpdatePlanner.VmConstruct(O("markers")!, StateJson.Text(row["guest"])));
                 else if (S("kind") == "manifest") Equal("output", UpdatePlanner.ConstructUpdateFromManifest(O("input"), O("markers")!));
                 else if (S("kind") == "behind") Value("output", UpdatePlanner.BehindText(StateJson.Number(row["count"])));
                 else if (S("kind") == "fold") { var markers = UpdatePlanner.ReadMarkers(O("raw"), O("raw")); var folded = UpdatePlanner.Fold(O("state")!, markers, null); if (StateJson.Truthy(folded["online"]) && UpdatePlanner.IsProvisionStale(markers, StateJson.Text(folded["provisionedCommit"]))) folded["provisionStale"] = true; Equal("output", folded); }
