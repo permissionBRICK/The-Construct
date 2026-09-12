@@ -103,7 +103,6 @@
     "output": {
       "constructRev": "main@abcdef1",
       "online": false,
-      "provisionStale": true,
       "provisionedCommit": "1234567"
     },
     "raw": {
@@ -153,7 +152,6 @@
     "output": {
       "constructRev": "dev@abc",
       "online": false,
-      "provisionStale": true,
       "provisionedCommit": "1234567"
     },
     "raw": {

@@ -424,7 +424,9 @@ async function augment(state, raw, opts = {}) {
     // treats an absent flag as not-stale and re-toggles the class on every render).
     // The GUEST's own marker wins when the probe brought one back (state.provisionedCommit
     // from probe.toState); the host-side per-instance cache stands in when it did not.
-    if (isProvisionStale(markers, state.provisionedCommit)) next = { ...next, provisionStale: true };
+    // Only for a RUNNING VM (owner, 2026-09-12): a VM that is not started gets no reprovision
+    // nudge at all; it will be judged when it comes online.
+    if (state.online === true && isProvisionStale(markers, state.provisionedCommit)) next = { ...next, provisionStale: true };
     const c = await checkConstructCached(markers, { ...opts, noCache: opts.noCache || opts.constructNoCache });
     if (c) next = { ...next, update: { available: c.available, behind: behindText(c.count) } };
     // Agent update detection (only when the VM is online with probed agents).

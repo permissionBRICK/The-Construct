@@ -184,7 +184,8 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
             var full = state.State(entry.Name);
             var data = full["state"]!.AsObject();
             var markers = entry.Store.ReadMarkers();
-            data["provisionStale"] = UpdatePlanner.IsProvisionStale(markers, Text(data, "provisionedCommit"));
+            // Only a running VM is nudged to reprovision; a stopped one is judged when it comes online.
+            data["provisionStale"] = StateJson.Truthy(data["online"]) && UpdatePlanner.IsProvisionStale(markers, Text(data, "provisionedCommit"));
             data["constructUpdate"] = await UpdatePlanner.CheckConstructAsync(bypassManifest ? updates.Bypass() : updates, markers, ct);
             UpdatePlanner.Fold(data, markers, data["constructUpdate"] as JsonObject);
             if (data["agents"] is JsonArray agents) data["agents"] = await UpdatePlanner.AugmentAgentsAsync(updates, agents, ct);

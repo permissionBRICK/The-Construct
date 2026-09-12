@@ -102,6 +102,8 @@ function ok(name, cond, detail) {
   ok("augment: stale VM -> provisionStale true", aStale.provisionStale === true);
   const aFresh = await updates.augment(base, { installedCommit: "aaaaaaa", provisionedCommit: "aaaaaaa", constructRef: "main" }, { fetchJson: fakeFetch(published(updates.DEFAULT_REPO, 'abc1234567' + '0'.repeat(30))), noCache: true });
   ok("augment: in-sync VM -> no provisionStale key", aFresh.provisionStale === undefined);
+  const aOffline = await updates.augment({ ...base, online: false }, { installedCommit: "aaaaaaa", provisionedCommit: "bbbbbbb", constructRef: "main" }, { fetchJson: fakeFetch(published(updates.DEFAULT_REPO, 'abc1234567' + '0'.repeat(30))), noCache: true });
+  ok("augment: a stale VM that is not running gets no provisionStale nudge", aOffline.provisionStale === undefined);
 
   // ── B12: two markers from two files, and the guest's own marker on top ───────
   // readMarkers' second argument is the ACTIVE INSTANCE's VM-scoped state; omitted, it IS
