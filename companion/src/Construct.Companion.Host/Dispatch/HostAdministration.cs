@@ -153,9 +153,23 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
             {
                 var slug = HostIdentity.HostSlug(client.BaseUrl); var model = Get(slug);
                 await model.Serial.WaitAsync(ct);
-                try { if (clock.UtcNow - model.LastDetection >= TimeSpan.FromSeconds(60)) { await Detect(model, client, ct); model.View = model.State.DeepClone().AsObject(); model.LastDetection = clock.UtcNow; } }
+                try
+                {
+                    if (clock.UtcNow - model.LastDetection >= TimeSpan.FromSeconds(60))
+                    {
+                        await Detect(model, client, ct);
+                        // The panel's Host button lights up when the host has a newer release (owner, 2026-09-12);
+                        // the check itself runs at most every 15 minutes per host.
+                        if (Text(model.State["mode"]) == "admin") { try { await RefreshUpdates(model, client, ct); } catch (RemoteApiException) { } }
+                        model.View = model.State.DeepClone().AsObject(); model.LastDetection = clock.UtcNow;
+                    }
+                }
                 finally { model.Serial.Release(); }
-                if (Text(model.View["mode"]) == "admin") offer = new JsonObject { ["url"] = client.BaseUrl, ["host"] = client.Host };
+                if (Text(model.View["mode"]) == "admin")
+                {
+                    offer = new JsonObject { ["url"] = client.BaseUrl, ["host"] = client.Host };
+                    if (StateJson.Boolean(model.View["maintenanceTab"]?["updateAvailable"]) == true) offer["updateAvailable"] = true;
+                }
                 if (StateJson.Boolean(model.View["features"]?["children"]) == true)
                 {
                     var input = new JsonObject { ["backend"] = "hyperv-remote", ["supported"] = true, ["primary"] = entry.Name };

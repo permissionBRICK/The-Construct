@@ -85,7 +85,9 @@
     const button = $("lHostAdmin");
     if (!button) return;
     button.hidden = !offer;
-    button.title = offer ? "Administer " + (offer.host || "this host") : "";
+    const hostUpdate = !!(offer && offer.updateAvailable);
+    button.classList.toggle("stale", hostUpdate);
+    button.title = offer ? (hostUpdate ? "Host update available — administer " : "Administer ") + (offer.host || "this host") : "";
   }
 
   const instanceSelect = $("lInstanceSelect");

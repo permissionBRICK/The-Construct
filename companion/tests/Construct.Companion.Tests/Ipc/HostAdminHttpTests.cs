@@ -336,6 +336,29 @@ public sealed class HostAdminHttpTests
         snapshot = await h.Client.GetFromJsonAsync<JsonObject>("/v1/hosts/host.example_7462/snapshot");
         Assert.Equal("overview", snapshot!["state"]!["activeTab"]!.GetValue<string>()); Assert.Null(snapshot["state"]!["notice"]);
     }
+    [Fact]
+    public async Task HostAdminOfferCarriesUpdateAvailableWhenTheHostHasANewerRelease()
+    {
+        var api = new RoutingRemoteApi(); var previous = api.Handle; var installed = new string('1', 40); var latest = new string('2', 40);
+        api.Handle = r => r.Url.AbsolutePath switch
+        {
+            "/api/v1/host/updates/status" => new(200, JsonSerializer.SerializeToElement(new { installed = new { commit = installed }, current = (object?)null, history = Array.Empty<object>() })),
+            "/api/v1/host/updates/check" => new(200, JsonSerializer.SerializeToElement(new { installed = new { commit = installed }, latest = new { commit = latest, releaseTag = "host-" + latest, compatible = true, reasons = Array.Empty<string>() }, checkedAt = "2026-09-12T00:00:00+00:00" })),
+            _ => previous(r)
+        };
+        await using var h = await Harness.Start(s =>
+        {
+            s.AddSingleton<IRemoteApi>(api);
+            var files = (IStateFileSystem)s.Last(d => d.ServiceType == typeof(IStateFileSystem)).ImplementationInstance!;
+            files.WriteFileAtomic("/fake/local/The-Construct/instances.json", System.Text.Encoding.UTF8.GetBytes("{\"version\":1,\"defaultInstance\":\"agent-vm\",\"instances\":{\"agent-vm\":{\"backend\":\"hyperv-remote\",\"vmName\":\"agent-vm\",\"sshHost\":\"guest.host.example\",\"scriptsDir\":\"/fake/scripts\",\"service\":{\"url\":\"https://host.example:7462\",\"auth\":\"negotiate\"}}}}"));
+            RemoteHost.WritePin(files, "https://host.example:7462", new string('a', 64));
+        });
+        var hosts = h.App.Services.GetRequiredService<HostAdministration>(); var entry = h.App.Services.GetRequiredService<CompanionInstances>().Get("agent-vm");
+        await hosts.RefreshExtrasAsync(entry, default); await hosts.RefreshExtrasAsync(entry, default);
+        Assert.Single(api.Requests, r => r.Method == "POST" && r.Url.AbsolutePath == "/api/v1/host/updates/check");
+        var snapshot = await h.Client.GetFromJsonAsync<JsonObject>("/v1/instances/agent-vm/snapshot");
+        Assert.True(snapshot!["hostAdminOffer"]!["offer"]!["updateAvailable"]!.GetValue<bool>());
+    }
     private static async Task<Harness> Enroll(RoutingRemoteApi api, Action<IServiceCollection>? configure = null)
     { var h = await Harness.Start(s => { s.AddSingleton<IRemoteApi>(api); configure?.Invoke(s); }); using var response = await h.Post("/v1/hosts", new { url = "host.example", fingerprint = new string('a', 64) }); Assert.Equal(HttpStatusCode.Created, response.StatusCode); return h; }
 }
