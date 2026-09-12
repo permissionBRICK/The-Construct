@@ -26,6 +26,9 @@ const remotehost = require("./remotehost");
 
 /** How long a host's admin/user classification is trusted for the panel offers. */
 const OFFER_TTL_MS = 60000;
+// How often the silent offer probe asks an admin host for its latest release (the host
+// fetches its release manifest for that), so the Host button can light up for a host update.
+const OFFER_UPDATE_TTL_MS = 15 * 60 * 1000;
 /** How long a `vm-shutdown` job is followed before the panel stops waiting (2 s × 150). */
 const SHUTDOWN_WAIT = { attempts: 150, delayMs: 2000 };
 
@@ -544,14 +547,26 @@ function createHostAdminFeature(deps = {}) {
         const factory = deps.offerClient || deps.clientFor;
         const client = await factory(hostEntry);
         const resolved = await hostadmin.resolveHostState(client, { backend: "hyperv-remote", host: hostOf(hostEntry.url) });
-        offers.set(k, { mode: resolved.mode, at: now() });
+        const previous = offers.get(k) || {};
+        let updateAvailable = previous.updateAvailable === true, updateAt = previous.updateAt || -Infinity;
+        if (resolved.mode === "admin" && resolved.features && resolved.features.updates && now() - updateAt > OFFER_UPDATE_TTL_MS) {
+          // Silent as well: a host that cannot answer simply shows no highlight.
+          try {
+            const result = await client.updatesCheck({});
+            const latest = result && result.latest, installed = result && result.installed;
+            updateAvailable = !!(latest && installed && latest.commit && installed.commit && latest.commit !== installed.commit);
+          } catch (e) { log(`hostadmin: update probe for ${hostOf(hostEntry.url)} failed — ${errText(e)}`); }
+          updateAt = now();
+        }
+        offers.set(k, { mode: resolved.mode, at: now(), updateAvailable, updateAt });
       } catch (e) {
         log(`hostadmin: offer probe for ${hostOf(hostEntry.url)} failed — ${errText(e)}`);
         offers.set(k, { mode: "unavailable", at: now() });
       }
     }
     const state = offers.get(k);
-    return state && state.mode === "admin" ? { host: hostOf(hostEntry.url), url: hostEntry.url } : null;
+    if (!state || state.mode !== "admin") return null;
+    return state.updateAvailable ? { host: hostOf(hostEntry.url), url: hostEntry.url, updateAvailable: true } : { host: hostOf(hostEntry.url), url: hostEntry.url };
   }
 
   /**
