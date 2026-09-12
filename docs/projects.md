@@ -203,6 +203,9 @@ Behaviour:
 
 Keep dependent commands in the same profile. Declare shared system packages in
 `hostPackages` where applicable, so they are installed before parallel commands.
+Profiles that still run `apt-get` themselves no longer fail on the shared dpkg lock:
+the runner configures apt to wait for it (`DPkg::Lock::Timeout`, 15 minutes) before
+starting the groups. Plain `dpkg -i` is not covered.
 Arbitrary scripts can access resources outside their checkout: use explicit locks
 for those resources or `PROVISION_JOBS=1` when profiles depend on each other or
 perform conflicting global setup. Each profile prints a start message and its

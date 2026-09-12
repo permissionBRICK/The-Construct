@@ -225,6 +225,16 @@ wait_for_one() {
   unset 'active['"${finished}"']' 'active_targets['"${finished}"']' 'active_storage['"${finished}"']'
 }
 
+# Parallel groups share one dpkg/apt lock. Make apt wait for it (up to 15 minutes) instead
+# of failing with "Could not get lock"; the setting stays for later installs by agents too.
+# Plain dpkg -i is not covered: prefer hostPackages for shared system dependencies.
+apt_conf_dir="${CONSTRUCT_APT_CONF_DIR:-/etc/apt/apt.conf.d}"
+if mkdir -p "${apt_conf_dir}" 2>/dev/null && printf 'DPkg::Lock::Timeout "900";\n' >"${apt_conf_dir}/90construct-lock-timeout" 2>/dev/null; then
+  :
+else
+  warn "Could not write ${apt_conf_dir}/90construct-lock-timeout; parallel apt installs may collide on the dpkg lock."
+fi
+
 step "Running ${count} commands across ${group_count} project group(s) in parallel (PROVISION_JOBS=${provision_jobs}; 0 = all)"
 for (( group=0; group<group_count; group++ )); do
   group_file="${commands_tmp}/${group}.json"
