@@ -117,6 +117,21 @@ internal sealed class WebViewWindow : Form
             web.CoreWebView2.Settings.AreDevToolsEnabled = false;
             web.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
             web.CoreWebView2.Settings.IsStatusBarEnabled = false;
+            // A page's alert() becomes a native message box: WebView2's own dialog is sized for a
+            // browser tab and gets clipped inside the popup. The popup hides on deactivation, so
+            // the box is not owned by it.
+            web.CoreWebView2.Settings.AreDefaultScriptDialogsEnabled = false;
+            web.CoreWebView2.ScriptDialogOpening += (_, e) =>
+            {
+                using var deferral = e.GetDeferral();
+                try
+                {
+                    if (e.Kind == CoreWebView2ScriptDialogKind.Alert) MessageBox.Show(view == "popup" ? null : this, e.Message, WebViewDocument.Title(view), MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    else if (e.Kind == CoreWebView2ScriptDialogKind.Confirm && MessageBox.Show(view == "popup" ? null : this, e.Message, WebViewDocument.Title(view), MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
+                    e.Accept();
+                }
+                catch (Exception ex) { platform.Log.Write(DesktopLogEvent.BridgeFailed, ex); }
+            };
             // Bundled media (scripts, styles, fonts, previews) and the per-view rendered document are two mapped folders.
             web.CoreWebView2.SetVirtualHostNameToFolderMapping(WebViewDocument.VirtualHost, platform.MediaDirectory, CoreWebView2HostResourceAccessKind.Allow);
             platform.Files.CreateDirectory(documentDirectory);
