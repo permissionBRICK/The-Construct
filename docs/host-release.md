@@ -232,6 +232,17 @@ verified against `sourceSha256` and `sourceSizeBytes`. Keep the source asset and
 available: newly provisioned hosts and an admin-deleted entry need to download them again.
 Ready entries are preserved indefinitely until explicitly deleted or found corrupt.
 `install.ps1` and `Update-Construct.ps1` also write a per-file source hash manifest outside the
-checkout at `%LOCALAPPDATA%\The-Construct\source-manifests\<commit40>.sha256`. This proves an
-archive install still matches that release before the client selects the remote cache;
+checkout at `%LOCALAPPDATA%\The-Construct\source-manifests\<commit40>.sha256`. This identifies the
+modified, missing and extra source files relative to that release;
 a best-effort manifest-write failure leaves installation successful and uses upload fallback.
+
+For remote reprovisioning, `-SourceMode auto` fetches the released commit from the host cache
+and uploads only local changes as an overlay ZIP. The overlay carries modified/added files
+and a deletion list; the guest validates and applies it before replacing its current repo.
+The PC reports the changed-file count and compressed upload size. The limits are 5,000 changed
+files and 64 MiB uncompressed; an unavailable change list or failed/oversized overlay falls
+back to the whole checkout upload. Archive-mode local-artifact exclusions remain unchanged;
+Git mode follows `.gitignore`. Project profiles still travel through config sync.
+`-SourceMode cache` sends the commit without local changes and stops on cache errors;
+`-SourceMode upload` retains the full pack/scp/unpack path. No host-service update is required
+beyond the existing `source-cache` capability. Local Hyper-V transport is unchanged.

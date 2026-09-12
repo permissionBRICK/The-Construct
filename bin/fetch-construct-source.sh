@@ -14,6 +14,23 @@ name="${CONSTRUCT_INSTANCE_NAME:-}"
 token_file="${CONSTRUCT_VM_TOKEN_FILE:-/etc/construct/vm-token}"
 repo="${REPO_DIR:-/opt/construct/repo}"
 curl_bin="${CONSTRUCT_CURL:-curl}"
+overlay="${CONSTRUCT_SOURCE_OVERLAY:-}"
+work=''; old=''; displaced=false
+cleanup() {
+  local code=$?
+  trap - EXIT
+  if $displaced && [[ ! -e "$repo" && -d "$old" ]]; then
+    if ! mv -- "$old" "$repo"; then code=7; printf 'source-fetch: repo-lost\n' >&2; fi
+  fi
+  if [[ -n "$work" && -d "$work" ]]; then rm -r -- "$work" 2>/dev/null || true; fi
+  if [[ -n "$overlay" && "$overlay" == /tmp/* ]]; then
+    case "$(realpath -m -- "$overlay")" in
+      /tmp/*) if [[ -f "$overlay" || -L "$overlay" ]]; then rm -r -- "$overlay" 2>/dev/null || true; fi ;;
+    esac
+  fi
+  exit "$code"
+}
+trap cleanup EXIT
 [[ "$commit" =~ ^[0-9a-f]{40}$ && "$hash" =~ ^[0-9a-f]{64}$ ]] || fail 2 invalid-identity
 [[ "$size" =~ ^[1-9][0-9]{0,9}$ && "$max" =~ ^[1-9][0-9]{0,9}$ && "$limit" =~ ^[1-9][0-9]{0,5}$ ]] || fail 2 invalid-size
 ((size <= max)) || fail 2 source-too-large
@@ -31,17 +48,6 @@ if not os.path.isabs(sys.argv[2]) or os.path.normpath(sys.argv[2])=='/':
 PY
 repo="$(realpath -m -- "$repo")"
 parent="$(dirname -- "$repo")"
-work=''; old=''; displaced=false
-cleanup() {
-  local code=$?
-  trap - EXIT
-  if $displaced && [[ ! -e "$repo" && -d "$old" ]]; then
-    if ! mv -- "$old" "$repo"; then code=7; printf 'source-fetch: repo-lost\n' >&2; fi
-  fi
-  if [[ -n "$work" && -d "$work" ]]; then rm -r -- "$work" 2>/dev/null || true; fi
-  exit "$code"
-}
-trap cleanup EXIT
 mkdir -p -- "$parent" || fail 6 parent-create-failed
 # Remove leftovers only when a current tree exists; never discard a recovery copy.
 if [[ -d "$repo" ]]; then
@@ -88,30 +94,48 @@ PY
 fi
 [[ "$(stat -c %s "$work/source.zip")" == "$size" ]] || fail 4 size-mismatch
 [[ "$(sha256sum "$work/source.zip" | cut -d ' ' -f 1)" == "$hash" ]] || fail 4 hash-mismatch
-python3 - "$work/source.zip" "$work/repo" "$commit" <<'PY' || exit 5
+if [[ -n "$overlay" ]]; then
+  overlay_size="${CONSTRUCT_SOURCE_OVERLAY_SIZE:-}"
+  overlay_hash="${CONSTRUCT_SOURCE_OVERLAY_SHA256:-}"
+  [[ "$overlay_size" =~ ^[1-9][0-9]{0,9}$ && -f "$overlay" && ! -L "$overlay" ]] || fail 4 size-mismatch
+  [[ "$(stat -c %s -- "$overlay")" == "$overlay_size" ]] || fail 4 size-mismatch
+  [[ "$overlay_hash" =~ ^[0-9a-f]{64}$ && "$(sha256sum -- "$overlay" | cut -d ' ' -f 1)" == "$overlay_hash" ]] || fail 4 hash-mismatch
+fi
+python3 - "$work/source.zip" "$work/repo" "$commit" "$overlay" "$work/overlay-counts" <<'PY' || exit 5
 import os,sys,zipfile,re,stat
-archive,dest,commit=sys.argv[1:]
+archive,dest,commit,overlay,counts=sys.argv[1:]
+refusal="extraction-refused"
+def validate_name(name):
+    parts=name.split('/')
+    if not name or len(name)>240 or '\\' in name or any(ord(c)<32 or c in ':*?"<>|' for c in name): raise ValueError()
+    if any(not p or p in ('.','..') or p.endswith(('.',' ')) or re.match(r'^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.|$)',p,re.I) for p in parts): raise ValueError()
+    return parts
+def validate(z,archive,is_overlay=False):
+    entries=z.infolist(); names={}; root=None; total=0
+    if not 0<len(entries)<=20000: raise ValueError()
+    for e in entries:
+        directory=e.filename.endswith('/'); name=e.filename[:-1] if directory else e.filename
+        parts=validate_name(name); kind=(e.external_attr>>16)&0xf000
+        if kind not in (0,stat.S_IFDIR if directory else stat.S_IFREG) or e.external_attr&0x400: raise ValueError()
+        if name.lower() in names: raise ValueError()
+        names[name.lower()]=directory
+        root=root or parts[0]
+        if is_overlay:
+            if name == 'construct-overlay.deleted':
+                if directory: raise ValueError()
+            elif parts[0] != 'construct-overlay' or len(parts)==1 and not directory: raise ValueError()
+        elif parts[0]!=root or not re.fullmatch(r'[A-Za-z0-9_.-]+-main',root) or len(parts)==1 and not directory: raise ValueError()
+        total+=e.file_size
+        if total>min(os.path.getsize(archive)*16,1<<30): raise ValueError()
+    for name in names:
+        p=name
+        while '/' in p:
+            p=p.rsplit('/',1)[0]
+            if p in names and not names[p]: raise ValueError()
+    return entries,root
 try:
     with zipfile.ZipFile(archive) as z:
-        entries=z.infolist(); names={}; root=None; total=0
-        if not 0<len(entries)<=20000: raise ValueError()
-        for e in entries:
-            directory=e.filename.endswith('/'); name=e.filename[:-1] if directory else e.filename
-            parts=name.split('/'); kind=(e.external_attr>>16)&0xf000
-            if not name or len(name)>240 or '\\' in name or any(ord(c)<32 or c in ':*?"<>|' for c in name): raise ValueError()
-            if any(not p or p in ('.','..') or p.endswith(('.',' ')) or re.match(r'^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.|$)',p,re.I) for p in parts): raise ValueError()
-            if kind not in (0,stat.S_IFDIR if directory else stat.S_IFREG) or e.external_attr&0x400: raise ValueError()
-            if name.lower() in names: raise ValueError()
-            names[name.lower()]=directory
-            root=root or parts[0]
-            if parts[0]!=root or not re.fullmatch(r'[A-Za-z0-9_.-]+-main',root) or len(parts)==1 and not directory: raise ValueError()
-            total+=e.file_size
-            if total>min(os.path.getsize(archive)*16,1<<30): raise ValueError()
-        for name in names:
-            p=name
-            while '/' in p:
-                p=p.rsplit('/',1)[0]
-                if p in names and not names[p]: raise ValueError()
+        entries,root=validate(z,archive)
         os.mkdir(dest,0o755)
         for e in entries:
             relative=e.filename[len(root)+1:]
@@ -127,10 +151,46 @@ try:
             os.chmod(target,bits or 0o644)
         # All parents created under umask 077 must also have the source directory mode.
         for parent,dirs,files in os.walk(dest): os.chmod(parent,0o755)
+        if overlay:
+            refusal="overlay-refused"
+            with zipfile.ZipFile(overlay) as patch:
+                overlay_entries,_=validate(patch,overlay,True)
+                deletions=[]; written=0; removed=0
+                if 'construct-overlay.deleted' in patch.namelist():
+                    text=patch.read('construct-overlay.deleted').decode('utf-8')
+                    if '\r' in text or text and not text.endswith('\n'): raise ValueError()
+                    deletions=text.split('\n')[:-1]
+                    for relative in deletions:
+                        validate_name('construct-overlay/'+relative)
+                for e in overlay_entries:
+                    if e.filename == 'construct-overlay.deleted' or e.is_dir(): continue
+                    relative=e.filename[len('construct-overlay/'):]
+                    target=os.path.normpath(os.path.join(dest,relative))
+                    if os.path.commonpath([dest,target])!=dest: raise ValueError()
+                    mode=stat.S_IMODE(os.stat(target).st_mode) if os.path.isfile(target) else (0o755 if relative.endswith('.sh') or relative.startswith('bin/') else 0o644)
+                    os.makedirs(os.path.dirname(target),mode=0o755,exist_ok=True)
+                    with patch.open(e) as inp,open(target,'wb') as out:
+                        import shutil
+                        shutil.copyfileobj(inp,out)
+                    os.chmod(target,mode); written+=1
+                for relative in deletions:
+                    target=os.path.normpath(os.path.join(dest,relative))
+                    if os.path.commonpath([dest,target])!=dest or target==dest: raise ValueError()
+                    if not os.path.lexists(target): continue
+                    if not stat.S_ISREG(os.lstat(target).st_mode): raise ValueError()
+                    os.unlink(target); removed+=1
+                    parent=os.path.dirname(target)
+                    while parent!=dest:
+                        if os.listdir(parent): break
+                        os.rmdir(parent); parent=os.path.dirname(parent)
+                for parent,dirs,files in os.walk(dest): os.chmod(parent,0o755)
+                with open(counts,'w') as out:
+                    out.write(f'CONSTRUCT_SOURCE_OVERLAY_FILES={written}\nCONSTRUCT_SOURCE_OVERLAY_DELETED={removed}\n')
+            refusal="extraction-refused"
         with open(os.path.join(dest,'.construct-revision'),'w') as marker: marker.write(commit+'\n')
         os.chmod(os.path.join(dest,'.construct-revision'),0o644)
 except (OSError,ValueError,zipfile.BadZipFile,RuntimeError):
-    print('source-fetch: extraction-refused',file=sys.stderr);sys.exit(1)
+    print('source-fetch: '+refusal,file=sys.stderr);sys.exit(1)
 PY
 chown -R "$seed:$seed" "$work/repo" || fail 6 tree-chown-failed
 chown "$seed:$seed" "$parent" || fail 6 parent-chown-failed
@@ -149,3 +209,4 @@ fi
 displaced=false
 if [[ -d "$old" ]]; then rm -r -- "$old" 2>/dev/null || printf 'warning: previous repo left at %s\n' "$old" >&2; fi
 printf 'CONSTRUCT_SOURCE_INSTALLED=%s\nCONSTRUCT_SOURCE_BYTES=%s\n' "$commit" "$size"
+if [[ -n "$overlay" ]]; then cat -- "$work/overlay-counts"; fi

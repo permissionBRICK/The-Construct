@@ -1756,7 +1756,7 @@ if (-not $ServiceUrl) { $archivePath = New-RepoArchive } else {
         $sourceFeature = Test-ConstructApiFeature -BaseUrl $ServiceUrl -Auth $ServiceApiAuth -TimeoutSec 10
     }
     $sourcePlan = Get-ConstructSourceTransportPlan -ServiceManaged $true -Mode $SourceMode -IncludeGit ([bool]$IncludeGit) `
-        -FeatureAvailable $sourceFeature -Ref $sourceRef -Commit $sourceIdentity.Commit -TreeState $sourceIdentity.TreeState -Divergence $sourceIdentity.Divergence
+        -FeatureAvailable $sourceFeature -Ref $sourceRef -Commit $sourceIdentity.Commit -TreeState $sourceIdentity.TreeState -Divergence $sourceIdentity.Divergence -Changes $sourceIdentity.Changes
 }
 Ensure-VmReachable
 if ($ServiceUrl) {
@@ -1830,10 +1830,25 @@ if (Enter-RootKeyFastPath) {
 
 if ($ServiceUrl) {
     $script:SourceFetchTokenPath = ''
+    $script:SourceOverlayPath = ''
+    try {
     $sourceResult = Invoke-ConstructSourceTransport -Phase complete -State $sourceState -Deadline $sourceDeadline -TimeoutSeconds $SourceEnsureTimeoutSec `
         -Pack { New-RepoArchive } -WaitJob {
             param($jobId, $deadline)
             Wait-ConstructSourceJob -BaseUrl $ServiceUrl -JobId $jobId -Auth $ServiceApiAuth -Deadline $deadline -OnProgress { param($line) Write-Host "    $line" }
+        } -PackOverlay {
+            param($changes)
+            $overlayZip = Join-Path ([IO.Path]::GetTempPath()) ('construct-source-overlay.' + [guid]::NewGuid().ToString('N') + '.zip')
+            New-ConstructSourceOverlay -Root $PSScriptRoot -Changes $changes -Path $overlayZip
+        } -UploadOverlay {
+            param($overlay)
+            $script:SourceOverlayPath = '/tmp/construct-source-overlay.' + [guid]::NewGuid().ToString('N') + '.zip'
+            try {
+                Invoke-Ssh -Sudo -Command ('umask 077; if [ -e {0} ]; then rm -r -- {0}; fi; : > {0}; chown {1} {0}' -f $script:SourceOverlayPath, $script:ConnectUser) | Out-Null
+                Invoke-Scp -LocalPath $overlay.Path -RemotePath $script:SourceOverlayPath | Out-Null
+                Invoke-Ssh -Sudo -Command ('chmod 0600 -- ' + $script:SourceOverlayPath) | Out-Null
+                return $script:SourceOverlayPath
+            } finally { Remove-Item -LiteralPath $overlay.Path -Force -ErrorAction SilentlyContinue }
         } -StageToken {
             if (-not $VmTokenB64) { return $true }
             $script:SourceFetchTokenPath = '/tmp/.construct-vm-token-fetch.' + [guid]::NewGuid().ToString('N')
@@ -1858,18 +1873,25 @@ if ($ServiceUrl) {
                     CONSTRUCT_SOURCE_COMMIT = $state.Commit; CONSTRUCT_SOURCE_SHA256 = $state.Sha256
                     CONSTRUCT_SOURCE_SIZE = $state.SizeBytes; CONSTRUCT_SEED_USER = $SeedUser
                 }
+                if ($state.OverlayPath) {
+                    $fetchEnv.CONSTRUCT_SOURCE_OVERLAY = $state.OverlayPath
+                    $fetchEnv.CONSTRUCT_SOURCE_OVERLAY_SHA256 = $state.OverlayArchive.Sha256
+                    $fetchEnv.CONSTRUCT_SOURCE_OVERLAY_SIZE = $state.OverlayArchive.CompressedSizeBytes
+                }
                 if ($script:SourceFetchTokenPath) { $fetchEnv.CONSTRUCT_VM_TOKEN_FILE = $script:SourceFetchTokenPath }
                 $fetchPem = Get-ConstructRemoteCertificatePem -BaseUrl $ServiceUrl -TimeoutMs 10000
                 if ($fetchPem) { $fetchEnv.CONSTRUCT_SERVICE_CA_B64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($fetchPem)) }
                 $fetchAssignments = @($fetchEnv.Keys | ForEach-Object { $_ + "='" + ([string]$fetchEnv[$_]).Replace("'", "'\''") + "'" }) -join ' '
                 $fetchCleanup = "rm -r -- $fetchPath $fetchPath.sh"
                 if ($script:SourceFetchTokenPath) { $fetchCleanup += ' ' + $script:SourceFetchTokenPath }
+                if ($script:SourceOverlayPath) { $fetchCleanup += '; if [ -f ' + $script:SourceOverlayPath + ' ]; then rm -r -- ' + $script:SourceOverlayPath + '; fi' }
                 $fetchCommand = "umask 077; trap '$fetchCleanup' EXIT; base64 -di < '$fetchPath' > '$fetchPath.sh' && env $fetchAssignments bash '$fetchPath.sh'; rc=`$?; exit `$rc"
                 return (Invoke-SshStream -Sudo -PassThru -NoThrow -Command $fetchCommand)
             } finally {
                 # Covers failures before the remote EXIT trap was installed as well.
                 $leftovers = "$fetchPath $fetchPath.sh"
                 if ($script:SourceFetchTokenPath) { $leftovers += ' ' + $script:SourceFetchTokenPath }
+                if ($script:SourceOverlayPath) { $leftovers += ' ' + $script:SourceOverlayPath }
                 try { Invoke-Ssh -Sudo -Command ('for f in {0}; do if [ -f "$f" ]; then rm -r -- "$f"; fi; done' -f $leftovers) | Out-Null } catch { }
             }
         } -Upload {
@@ -1886,6 +1908,11 @@ Invoke-Ssh -Sudo -Command "mkdir -p /opt/construct && rm -rf /opt/construct/repo
 Write-Ok "Repo in place at /opt/construct/repo"
 
         }
+    } finally {
+        if ($script:SourceOverlayPath) {
+            try { Invoke-Ssh -Sudo -Command ('if [ -f {0} ]; then rm -r -- {0}; fi' -f $script:SourceOverlayPath) | Out-Null } catch { }
+        }
+    }
 } else {
 # Upload the archive via SCP (remove any stale copy owned by root from a previous run).
 Write-Step "Uploading repo archive to $RemoteArchive"
