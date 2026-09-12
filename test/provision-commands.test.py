@@ -32,8 +32,10 @@ class ProvisionCommandsTests(unittest.TestCase):
         config = self.root / 'config.env'
         config.write_text(f'AGENT_HOME={shlex.quote(str(self.agent))}\n'
                           f'WORKSPACE_ROOT={shlex.quote(str(self.workspace))}\n')
+        self.apt_conf = self.root / 'apt.conf.d'
         self.env = dict(os.environ, CONFIG_FILE=str(config), TEST_EVENTS=str(self.events),
-                        REPO_DIR=str(ROOT), ALLOW_HOST_PACKAGES='false', PROVISION_JOBS='0')
+                        REPO_DIR=str(ROOT), ALLOW_HOST_PACKAGES='false', PROVISION_JOBS='0',
+                        CONSTRUCT_APT_CONF_DIR=str(self.apt_conf))
         self.helper = self.root / 'record.py'
         self.helper.write_text('''import json, os, sys, time
 from pathlib import Path
@@ -84,6 +86,11 @@ record('end')
             peak = max(peak, len(active))
         self.assertFalse(active, 'runner returned before commands finished')
         return peak
+
+    def test_apt_waits_for_the_shared_dpkg_lock_during_parallel_groups(self):
+        self.plan([('one', 'a', [self.command('a1')])])
+        self.run_commands()
+        self.assertEqual((self.apt_conf / '90construct-lock-timeout').read_text(), 'DPkg::Lock::Timeout "900";\n')
 
     def test_parallel_profiles_keep_internal_order_and_environment(self):
         self.plan([(p, p, [self.command(p+'1', .4), self.command(p+'2')]) for p in ['a', 'b']])
