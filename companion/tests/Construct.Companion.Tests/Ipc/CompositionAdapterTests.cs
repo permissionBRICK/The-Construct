@@ -1,3 +1,4 @@
+using System.Net.Sockets;
 using System.Net;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
@@ -49,8 +50,32 @@ public sealed class CompositionAdapterTests
             Assert.Equal(302, redirect.StatusCode);
             await api.SendAsync(new("POST", url, actual => actual == pin, Authentication:RemoteAuthentication.Negotiate));
             Assert.True(handlers.Last().UseDefaultCredentials);
+            // Unpinned requests never share a client; pinned requests share one per host, mode and pin.
+            Assert.Equal(4, handlers.Count);
+            await api.SendAsync(new("POST", url, actual => actual == pin, body, RemoteAuthentication.Token, new("fixture"), Pin: pin));
+            await api.SendAsync(new("POST", url, actual => actual == pin, body, RemoteAuthentication.Token, new("fixture"), Pin: pin));
+            Assert.Equal(5, handlers.Count);
+            await Assert.ThrowsAsync<HttpRequestException>(() => api.SendAsync(new("POST", url, _ => false, body, RemoteAuthentication.Token, new("fixture"), Pin: "other")));
+            Assert.Equal(6, handlers.Count);
+            // The production client races every resolved address, so a dead first address never blocks a request.
+            using var production = new HttpRemoteApi();
+            var raced = await production.SendAsync(new("POST", url, actual => actual == pin, body, RemoteAuthentication.Token, new("fixture")));
+            Assert.Equal(200, raced.StatusCode);
         }
         finally { await app.StopAsync(); }
+    }
+    [Fact]
+    public async Task AddressRaceKeepsTheFirstAddressThatAnswers()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0); listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var dead = new[] { IPAddress.Parse("fe80::1"), IPAddress.Parse("10.255.255.1") };
+        var started = DateTime.UtcNow;
+        await using var stream = await AddressRace.ConnectAsync([.. dead, IPAddress.Loopback], port, TimeSpan.FromSeconds(20), CancellationToken.None);
+        Assert.True(DateTime.UtcNow - started < TimeSpan.FromSeconds(5));
+        using var accepted = await listener.AcceptTcpClientAsync();
+        await Assert.ThrowsAnyAsync<SocketException>(async () => await AddressRace.ConnectAsync(dead, port, TimeSpan.FromMilliseconds(500), CancellationToken.None));
+        await Assert.ThrowsAnyAsync<SocketException>(async () => await AddressRace.ConnectAsync([], port, TimeSpan.FromSeconds(1), CancellationToken.None));
     }
     private sealed class NotFoundHandler : HttpMessageHandler
     { protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)); }

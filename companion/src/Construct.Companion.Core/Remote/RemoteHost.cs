@@ -115,7 +115,7 @@ public sealed partial class RemoteHostClient
         try
         {
             response = await api.SendAsync(new RemoteRequest(method, new Uri(BaseUrl + path), fingerprint => !secure || RemoteHost.FingerprintsMatch(pin, fingerprint),
-                body is null ? null : JsonSerializer.SerializeToElement(body), authentication, token), cancellationToken);
+                body is null ? null : JsonSerializer.SerializeToElement(body), authentication, token, secure ? pin : ""), cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception error) { throw new RemoteApiException(0, RemoteHost.MapError(0, null, method + " " + path), inner: SafeException(error, secrets)); }
