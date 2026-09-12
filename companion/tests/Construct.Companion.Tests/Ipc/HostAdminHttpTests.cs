@@ -322,6 +322,20 @@ public sealed class HostAdminHttpTests
         var body = api.Requests.Last(r => r.Url.AbsolutePath == "/api/v1/host/updates/check").Body;
         Assert.False(body is { } b && b.TryGetProperty("releaseTag", out _));
     }
+    [Fact]
+    public async Task ClosingTheWindowForgetsTabAndNotice()
+    {
+        var api = new RoutingRemoteApi(); await using var h = await Enroll(api);
+        using var ready = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.ready" }); Assert.Equal(HttpStatusCode.Accepted, ready.StatusCode);
+        using var tab = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.tab", tab = "users" }); Assert.Equal(HttpStatusCode.Accepted, tab.StatusCode);
+        using var bad = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.action", action = "nonsense", args = new { } }); Assert.Equal(HttpStatusCode.Accepted, bad.StatusCode);
+        JsonObject? snapshot = null;
+        for (var i = 0; i < 100 && (snapshot?["state"]?["activeTab"]?.GetValue<string>() != "users" || snapshot?["state"]?["notice"] is null); i++) { await Task.Delay(50); snapshot = await h.Client.GetFromJsonAsync<JsonObject>("/v1/hosts/host.example_7462/snapshot"); }
+        Assert.Equal("users", snapshot!["state"]!["activeTab"]!.GetValue<string>()); Assert.NotNull(snapshot["state"]!["notice"]);
+        h.App.Services.GetRequiredService<HostAdministration>().Close("host.example_7462");
+        snapshot = await h.Client.GetFromJsonAsync<JsonObject>("/v1/hosts/host.example_7462/snapshot");
+        Assert.Equal("overview", snapshot!["state"]!["activeTab"]!.GetValue<string>()); Assert.Null(snapshot["state"]!["notice"]);
+    }
     private static async Task<Harness> Enroll(RoutingRemoteApi api, Action<IServiceCollection>? configure = null)
     { var h = await Harness.Start(s => { s.AddSingleton<IRemoteApi>(api); configure?.Invoke(s); }); using var response = await h.Post("/v1/hosts", new { url = "host.example", fingerprint = new string('a', 64) }); Assert.Equal(HttpStatusCode.Created, response.StatusCode); return h; }
 }

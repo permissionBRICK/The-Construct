@@ -205,7 +205,13 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
         }
         await RefreshExtrasAsync(entry, ct);
     }
-    public void Close(string slug) { if (models.TryGetValue(slug, out var model)) { Interlocked.Increment(ref model.Visibility); model.Opened = false; } }
+    // A closed window forgets its session: the next open starts on the overview without a stale notice.
+    public void Close(string slug)
+    {
+        if (!models.TryGetValue(slug, out var model)) return;
+        Interlocked.Increment(ref model.Visibility); model.Opened = false;
+        model.State["activeTab"] = "overview"; model.State["notice"] = null; model.View = model.State.DeepClone().AsObject();
+    }
     public async Task PollAsync(CancellationToken ct)
     {
         try
