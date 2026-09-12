@@ -150,8 +150,15 @@ try {
     $script:failStart=$false; $script:failMove=$true; $startsBefore=$script:starts.Count; $sleepsBefore=$script:sleeps
     $script:holders=@(@{name='MsMpEng.exe';id=42},@{name='ConstructCompanion.exe';id=777})
     $moveMessage=''; try { Install-ConstructCompanion $repo -Source local -Force -LocalAppData $local -Seams $seams | Out-Null } catch { $moveMessage=$_.Exception.Message }
-    Assert ($moveMessage.Contains('while moving the new files into place (fake move failure: being used by another process; held by MsMpEng.exe (pid 42), ConstructCompanion.exe (pid 777))') -and $moveMessage.Contains('the previous Companion was started again')) 'Move failure triggers rollback, names the step, the holders, and restarts the previous app'
+    Assert ($moveMessage.Contains('while moving the new files into place (media: fake move failure: being used by another process; held by MsMpEng.exe (pid 42), ConstructCompanion.exe (pid 777))') -and $moveMessage.Contains('the previous Companion was started again')) 'Move failure triggers rollback, names the step, the item, the holders, and restarts the previous app'
     Assert ($script:starts.Count -eq $startsBefore+1 -and $script:sleeps -eq $sleepsBefore+19) 'Move retried for ten seconds before rollback, previous app restarted'
+    # A held installation folder (a console's current directory) cannot be renamed, but its files move.
+    $script:holders=@(); $script:failMove=$false
+    $heldFolderSeam=$seams.Move
+    $seams.Move={ param($From,$To) if ($From -eq $paths.install -or $To -eq $paths.install) { throw 'folder rename refused' }; [IO.Directory]::Move($From,$To) }
+    Assert ((Install-ConstructCompanion $repo -Source local -Force -LocalAppData $local -Seams $seams) -eq 'installed') 'Held installation folder is swapped file by file'
+    Assert ((Test-Path (Join-Path $paths.install 'ConstructCompanion.exe')) -and -not (Test-ConstructCompanionFolderHasContent ($paths.install+'.previous'))) 'Files landed in the held folder and .previous is consumed'
+    $seams.Move=$heldFolderSeam; [IO.File]::WriteAllText($exe,'original app')
     $script:holders=@(); $script:failMove=$false
     # A Companion running from the install folder without a reachable endpoint is waited for, then refused.
     $script:runningPolls=3

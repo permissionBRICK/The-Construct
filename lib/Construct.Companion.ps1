@@ -249,21 +249,32 @@ function Expand-ConstructCompanionPayload {
     }
 }
 
-# Directory moves fail transiently while an antivirus or indexer still holds a freshly extracted
-# file, or while the just-quit app's last handles close. Retry for ten seconds; then name the
-# holders so the diagnostic says who (a scanner, a Companion the endpoint could not reach).
+# Moves a folder's contents item by item rather than renaming the folder: a folder held open
+# (a console whose current directory it is, an Explorer window, a scanner) blocks the rename
+# but not the files inside. Each item retries for ten seconds (antivirus scans and closing
+# handles hold freshly extracted files); a failure then names the holders. The emptied source
+# folder is removed when possible; a held empty folder is harmless and reused next time.
 function Move-ConstructCompanionTree {
     param([string]$From,[string]$To,[hashtable]$Seams)
-    for ($attempt=1; ; $attempt++) {
-        try { & $Seams.Move $From $To; return }
-        catch {
-            if ($attempt -lt 20) { & $Seams.Sleep 500; continue }
-            $message=Get-ConstructCompanionSafeMessage $_.Exception
-            $holders=@(); try { $holders=@(& $Seams.Holders $From) } catch { $holders=@() }
-            if ($holders.Count -gt 0) { $message+='; held by '+(@($holders | ForEach-Object { [string]$_.name+' (pid '+[string]$_.id+')' }) -join ', ') }
-            throw (New-Object Exception $message)
+    [IO.Directory]::CreateDirectory($To) | Out-Null
+    foreach ($item in @(Get-ChildItem -LiteralPath $From -Force)) {
+        $target=Join-Path $To $item.Name
+        for ($attempt=1; ; $attempt++) {
+            try { & $Seams.Move $item.FullName $target; break }
+            catch {
+                if ($attempt -lt 20) { & $Seams.Sleep 500; continue }
+                $message=$item.Name+': '+(Get-ConstructCompanionSafeMessage $_.Exception)
+                $holders=@(); try { $holders=@(& $Seams.Holders $item.FullName) } catch { $holders=@() }
+                if ($holders.Count -gt 0) { $message+='; held by '+(@($holders | ForEach-Object { [string]$_.name+' (pid '+[string]$_.id+')' }) -join ', ') }
+                throw (New-Object Exception $message)
+            }
         }
     }
+    try { [IO.Directory]::Delete($From) } catch { }
+}
+function Test-ConstructCompanionFolderHasContent {
+    param([string]$Path)
+    return (Test-Path -LiteralPath $Path) -and @(Get-ChildItem -LiteralPath $Path -Force | Select-Object -First 1).Count -gt 0
 }
 function Get-ConstructCompanionFileHolders {
     param([string]$Directory)
@@ -387,7 +398,7 @@ function Install-ConstructCompanion {
         $installed=Read-ConstructCompanionJson (Join-Path $paths.install 'install.json')
         if (-not $Force -and $installed.commit -eq $plan.commit -and (Test-Path -LiteralPath (Join-Path $paths.install 'ConstructCompanion.exe'))) { return 'unchanged' }
         $previous=$paths.install+'.previous'
-        if (Test-Path -LiteralPath $previous) { Throw-ConstructCompanionError 'A previous Companion installation needs recovery; see docs/companion.md.' }
+        if (Test-ConstructCompanionFolderHasContent $previous) { Throw-ConstructCompanionError 'A previous Companion installation needs recovery; see docs/companion.md.' }
         $parent=Split-Path $paths.install -Parent
         [IO.Directory]::CreateDirectory($parent) | Out-Null
         $work=Join-Path $parent ('companion-stage-'+[guid]::NewGuid().ToString('N'))
@@ -422,7 +433,7 @@ function Install-ConstructCompanion {
         Wait-ConstructCompanionProcessesExit $paths.install $Seams
         $backedUp=$false; $moved=$false; $registered=$false; $step='backing up the installed files'
         try {
-            if (Test-Path -LiteralPath $paths.install) { Move-ConstructCompanionTree $paths.install $previous $Seams; $backedUp=$true }
+            if (Test-ConstructCompanionFolderHasContent $paths.install) { Move-ConstructCompanionTree $paths.install $previous $Seams; $backedUp=$true }
             $step='moving the new files into place'
             Move-ConstructCompanionTree $app $paths.install $Seams; $moved=$true
             $step='registering the app'; $registered=$true
@@ -441,7 +452,7 @@ function Install-ConstructCompanion {
                         else { & $Seams.Registry 'remove' $item.entry.path $item.entry.name $null }
                     }
                 }
-                if ($moved) { Remove-Item -LiteralPath $paths.install -Recurse -Force }
+                if ($moved) { Get-ChildItem -LiteralPath $paths.install -Force | Remove-Item -Recurse -Force }
                 if ($backedUp) { Move-ConstructCompanionTree $previous $paths.install $Seams }
             } catch { Throw-ConstructCompanionError ('Companion update failed while '+$step+' ('+$detail+') and rollback is incomplete; preserve .previous and see docs/companion.md.') }
             # Leave the user with a running Companion whenever the previous files came back.
