@@ -28,6 +28,8 @@ $here     = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent $here
 
 $script:pass = 0; $script:fail = 0
+. (Join-Path $repoRoot "lib/AgentVm.FeatureSet.ps1")
+$script:ConstructFeatureParameters = @{}
 function ok($name, $cond) {
     if ($cond) { $script:pass++; Write-Host "  PASS  $name" }
     else       { $script:fail++; Write-Host "  FAIL  $name" -ForegroundColor Red }
