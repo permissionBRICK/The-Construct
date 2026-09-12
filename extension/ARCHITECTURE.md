@@ -814,7 +814,7 @@ was reset and the compare API 404s (that path still shows "update available, unk
 of commits" *and* the yellow Reprovision button). A VM provisioned from a different PC is
 therefore judged correctly, and the host file is only the cache used while the VM is off.
 
-The status-bar item counts the stale instances (`instancestate.countStale`) from those host
+The status-bar item no longer counts stale instances (a stopped VM must not be nudged and the host caches cannot tell which VMs run; `instancestate.countStale` remains available). It formerly counted them from those host
 caches alone — no SSH fan-out, right for a VM that is switched off, hidden at zero and
 hidden entirely when there is a single default instance without a registry.
 
