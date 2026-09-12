@@ -176,6 +176,7 @@ views and runtime messages use IPC). The limitations of the implemented rows are
 | command | `addProject` | implemented |
 | command | `addRemoteAndPublish` | implemented |
 | command | `childConsole` | implemented |
+| command | `openConsole` | implemented |
 | command | `childDelete` | implemented |
 | command | `childShutdown` | implemented |
 | command | `chooseMicDevice` | implemented |

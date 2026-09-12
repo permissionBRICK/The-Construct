@@ -913,3 +913,70 @@ Panel Here** keeps an editor tab available, connected to the same Companion.
 Set `construct.companion` to `off` to use the extension's built-in runtime. See
 [Companion mode](../extension/ARCHITECTURE.md#companion-mode) for detection, fallback,
 and migration details.
+
+## Browser console
+
+The **Console** button next to the power button opens the selected VM's screen in
+your browser. It works for local Hyper-V VMs on Windows and service-managed VMs,
+including local VMs adopted by a Construct host. The VM must be reachable over SSH.
+Each click creates a fresh link; the panel checks the client forward before opening
+it and recreates a dead forward once. Errors appear below the status strip.
+
+The panel installs or starts the VM's gateway automatically. The first installation
+may take a minute to pull guacd. Docker and the Construct checkout at
+`/opt/construct/repo` must be present. If setup fails, reprovision the VM or run
+`bash /opt/construct/repo/console-viewer/install.sh` on it to inspect the error.
+
+Fresh local installs and reinstalls prepare console access during their existing
+administrator setup. Older installs offer **Set up console**, with one Windows UAC
+prompt. Subsequent clicks run without elevation. To repair access manually, run this
+from the Construct scripts directory in an administrator PowerShell window:
+
+```powershell
+.\Set-AgentVmConsoleAccess.ps1 -InstanceName work-vm -VmName Work-VM -Reset
+# Remove that instance's console grant, account, credential and firewall rule:
+.\Set-AgentVmConsoleAccess.ps1 -InstanceName work-vm -Remove
+```
+
+Each local instance has one `cvl…` account without group memberships, granted access
+to that VM GUID only. Its password is DPAPI-encrypted for your Windows user in
+`%LOCALAPPDATA%\The-Construct\remote\console-<instance>.token`, shared by VS Code and
+Companion. The broker rotates it on each click. A minimum-password-age policy may
+prevent rotation; that case retains the existing password. The persistent grant is
+revocable with the removal command. Unelevated instance cleanup removes the local
+credential and reports when an administrator must remove the account separately.
+
+The gateway holds console credentials in memory; they never enter the browser or
+SSH command arguments. A link defaults to 24 hours. After another click rotates the
+password, reconnecting an older page may fail; open Console again. Remote hosts
+retain their existing temporary-account and session-renewal policy. If Windows asks
+for a different administrator's credentials, DPAPI setup belongs to that profile;
+run setup as your own administrator account. A new Hyper-V Administrators membership
+may need a Windows sign-out and sign-in before the broker can query the VM.
+
+### Windows field-test checklist
+
+These checks require Windows and Hyper-V; Linux unit tests do not validate them.
+
+1. On a fresh local install, click Console. Confirm no extra UAC prompt, browser
+   display, keyboard, mouse, and Reconnect. Repeat after an Auto-Install reinstall.
+2. Inspect `Get-LocalUser cvl*`, local group memberships and
+   `Get-VMConnectAccess -VMName Work-VM`. Confirm one group-less account and a grant
+   only to the selected VM GUID. No service `cvc…` account should be created locally.
+3. Click twice and confirm different fragments without recording them. Check that
+   `PasswordLastSet` changes. Verify the group-less account can change its own
+   password without elevation; under a minimum-age policy confirm the fallback.
+4. On an older install, accept the one-time setup prompt and repeat the click without
+   UAC. Exercise cancellation, a missing grant after reinstall, and `-Reset` repair.
+5. Close VS Code, reopen it, then click Console. Confirm a dead advertised forward is
+   replaced. Repeat with a non-default gateway port in `console-viewer.env`.
+6. Open the same local VM from Companion, then from VS Code. Confirm both use the
+   shared credential and concurrent clicks cannot corrupt its password file.
+7. Run the removal command. Verify no matching account, VMConnect grant, DPAPI token
+   or `Construct-Console-cvl…` firewall rule remains. Confirm another VM still works.
+8. Inspect the instance's inbound TCP 2179 rule. It must apply to the VM switch's
+   `vEthernet` interface. Block 2179 and check the viewer's connection-stage error.
+9. On a converted/service-managed host, click Console for the primary itself.
+   Verify `construct vm console self --web` works; HTTP 403 means the host refused
+   authorization. Confirm missing gateway setup, stopped guacd and stopped systemd
+   service recover on a click, and an offline VM leaves the button disabled.

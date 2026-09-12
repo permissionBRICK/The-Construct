@@ -22,6 +22,22 @@ public sealed class TransportArgvTests
         Assert.True(await ssh.ProbePortAsync(19000, "0.0.0.0")); Assert.Equal((19000, "0.0.0.0"), probe.Probes.Single());
     }
     [Fact]
+    public async Task ConsoleCredentialUsesStdinAndTcpProbeChecksAListener()
+    {
+        var runner = new FakeProcessRunner();
+        var ssh = new ProcessSshTransport(runner, new FakePortProbe(), new SshConfiguration());
+        var secret = new Secret("PRIVATE-console-password");
+        await ssh.RunRemoteScriptAsync("construct vm console self --web --connection-stdin", standardInput: secret);
+        Assert.Same(secret, Assert.Single(runner.Invocations).StandardInput);
+        Assert.DoesNotContain("PRIVATE", string.Join(" ", runner.Invocations[0].Arguments));
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+        try { Assert.True(await ssh.ProbeListeningPortAsync(port)); }
+        finally { listener.Stop(); }
+        Assert.False(await ssh.ProbeListeningPortAsync(port));
+    }
+    [Fact]
     public void ExecutableResolutionPrefersPathThenWindowsOpenSsh()
     {
         var files = new FakeFileSystem(); files.WriteFileAtomic("C:\\Windows\\System32\\OpenSSH\\ssh.exe", []);

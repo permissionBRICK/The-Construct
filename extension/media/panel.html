@@ -64,11 +64,14 @@
 
     <div class="strip" id="statusStrip">
       <button class="btn loading" id="powerBtn" data-cmd="" disabled aria-disabled="true">&#x231B; Loading</button>
+      <button class="btn" id="consoleBtn" data-cmd="openConsole" disabled aria-disabled="true" title="Checking VM state"><span class="action-icon" aria-hidden="true"><span class="action-symbol">&#x25A3;</span></span> Console</button>
       <span class="pill" id="pillStatus"><span class="dot live"></span> VM ONLINE</span>
       <span class="pill" id="pillHost">agent-vm.mshome.net</span>
       <span class="pill" id="pillInstalled">installed —</span>
       <span class="pill" id="pillReprovisioned">reprovisioned —</span>
     </div>
+
+    <p class="cost-note strip-note" id="consoleNote" role="alert" hidden></p>
 
     <div class="cols">
       <div class="col">

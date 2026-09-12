@@ -1,5 +1,146 @@
 [
   {
+    "input": false,
+    "kind": "self",
+    "output": "construct vm console self --web\n"
+  },
+  {
+    "input": true,
+    "kind": "self",
+    "output": "construct vm console self --web --connection-stdin\n"
+  },
+  {
+    "input": "CONSOLE_GATEWAY=ready\n",
+    "kind": "ensure",
+    "output": "ready"
+  },
+  {
+    "input": "CONSOLE_GATEWAY=installed\n",
+    "kind": "ensure",
+    "output": "installed"
+  },
+  {
+    "input": "CONSOLE_GATEWAY=no-docker",
+    "kind": "ensure",
+    "output": "no-docker"
+  },
+  {
+    "input": "CONSOLE_GATEWAY=missing-source",
+    "kind": "ensure",
+    "output": "missing-source"
+  },
+  {
+    "input": "garbage",
+    "kind": "ensure",
+    "output": "install-failed"
+  },
+  {
+    "input": "{\"vmId\":\"11111111-2222-3333-4444-555555555555\",\"username\":\"cvltest\",\"domain\":\"HOST\",\"password\":\"test-password\",\"certificateFingerprint\":\"sha256:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab\",\"hostAddress\":\"192.168.1.1\",\"rotated\":true}",
+    "kind": "handoff",
+    "output": {
+      "certificateFingerprint": "sha256:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab",
+      "domain": "HOST",
+      "hostAddress": "192.168.1.1",
+      "password": "test-password",
+      "rotated": true,
+      "username": "cvltest",
+      "vmId": "11111111-2222-3333-4444-555555555555"
+    }
+  },
+  {
+    "input": "{\"vmId\":\"bad\",\"username\":\"cvltest\",\"domain\":\"HOST\",\"password\":\"test-password\",\"certificateFingerprint\":\"sha256:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab\",\"hostAddress\":\"192.168.1.1\",\"rotated\":true}",
+    "kind": "handoff",
+    "output": null
+  },
+  {
+    "input": "{\"vmId\":\"11111111-2222-3333-4444-555555555555\",\"username\":\"cvltest\",\"domain\":\"HOST\",\"password\":\"\",\"certificateFingerprint\":\"sha256:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab:ab\",\"hostAddress\":\"192.168.1.1\",\"rotated\":true}",
+    "kind": "handoff",
+    "output": null
+  },
+  {
+    "input": "{\"setupRequired\":true,\"reason\":\"no-credential\"}",
+    "kind": "handoff",
+    "output": {
+      "reason": "no-credential",
+      "setupRequired": true
+    }
+  },
+  {
+    "input": "{\"error\":\"vm-not-running\"}",
+    "kind": "handoff",
+    "output": {
+      "error": "vm-not-running"
+    }
+  },
+  {
+    "input": "null",
+    "kind": "handoff",
+    "output": null
+  },
+  {
+    "input": {
+      "result": {
+        "code": 4,
+        "stdout": "CONSOLE_GATEWAY=no-docker"
+      },
+      "step": "ensure"
+    },
+    "kind": "failure",
+    "output": "Docker is not installed on the VM, so the console gateway cannot run. Reprovision the VM, or make this PC a Construct host."
+  },
+  {
+    "input": {
+      "result": {
+        "code": 6
+      },
+      "step": "mint"
+    },
+    "kind": "failure",
+    "output": "No Construct client is attached to the VM, so the viewer port cannot be forwarded. Connect this window to the VM and retry."
+  },
+  {
+    "input": {
+      "result": {
+        "code": 9
+      },
+      "step": "mint"
+    },
+    "kind": "failure",
+    "output": "This VM's construct CLI is older than the panel. Reprovision the VM."
+  },
+  {
+    "input": {
+      "result": {
+        "code": 1,
+        "stderr": "Host refused console operation (HTTP 403)"
+      },
+      "step": "mint"
+    },
+    "kind": "failure",
+    "output": "Host refused console operation (HTTP 403)"
+  },
+  {
+    "input": {
+      "result": {
+        "code": -2
+      },
+      "step": "mint"
+    },
+    "kind": "failure",
+    "output": "The VM did not answer over SSH. Start or connect the VM, then click Console again."
+  },
+  {
+    "input": {
+      "result": {
+        "code": 1,
+        "stderr": "SECRET"
+      },
+      "step": "mint"
+    },
+    "kind": "failure",
+    "output": "Could not create a console link. Check that the primary VM and Construct client are connected."
+  },
+  {
     "input": "guest",
     "kind": "script",
     "output": "construct vm console 'guest' --web\n"

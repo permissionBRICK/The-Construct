@@ -579,6 +579,13 @@ function buildInvocation(action, opts = {}) {
     // rebuild (the disk stays a reinstall/redownload job). Elevated like setCheckpoints
     // (Hyper-V cmdlets); not `destructive` in the confirm-modal sense because the
     // extension has already confirmed the restart with the user.
+    case "consoleAccess": {
+      if (!opts.instance) return null;
+      addPair("-InstanceName", opts.instance.name);
+      addPair("-VmName", opts.instance.vmName);
+      if (opts.reset) addSwitch("-Reset");
+      return done("Set-AgentVmConsoleAccess.ps1", { destructive: false, elevate: true, label: "Set up console access" });
+    }
     case "setResources": {
       // STRICT numbers, and at least one of them: this action powers a VM off, so a
       // malformed request (strings, NaN, nothing set) must be refused, never defaulted.
