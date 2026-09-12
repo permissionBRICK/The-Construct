@@ -43,6 +43,8 @@ function guestScripts() {
     add("notify-claim", { dir: q(dir), claim }, notify.buildClaimScript(dir));
     add("notify-watch", { dir: q(dir), claim, heartbeat: "60", fallback: "3" }, notify.buildWatchScript({ dir }));
   }
+  add("console-ensure", {});
+  add("console-close", {clientPort:"18816"});
   add("probe", {}, probe.REMOTE_PROBE);
   for (const url of ["https://example.test/repo.git", "git@host:a'b.git", " https://host/{{dest}}.git "]) {
     const remote = require("../src/remote"), dest = remote.repoNameFromUrl(url);
@@ -120,6 +122,10 @@ function lifecycleInvocations() {
     const opts={instance,instanceParams:declared,settings,projects:["api","ui"],backupDir:"C:/Backup dir",backupMode:legacy?"wipe":"save",enabled:!legacy,confirmation:"dev",supportsCheckpoints:!legacy,supportsVmCpuCount:!legacy,supportsT3CodeChannel:!legacy,supportsT3CodeLimitResume:!legacy,supportsOpenCodeBackgroundWatcher:!legacy};
     if (action === "setResources") Object.assign(opts, {ram:legacy?null:"16.5",cpu:legacy?"bad":4});
     rows.push({action,opts,output:m.buildInvocation(action,opts),args:m.instanceArgs(action,instance,declared),params:m.paramsForAction(action,instance,declared)||[]});
+  }
+  for (const instance of targets.slice(0,3)) for (const reset of [false,true]) {
+    const action="consoleAccess",opts={instance,reset};
+    rows.push({action,opts,output:m.buildInvocation(action,opts),args:m.instanceArgs(action,instance),params:m.paramsForAction(action,instance)||[]});
   }
   return rows;
 }
@@ -414,13 +420,20 @@ function hostAdminIpc() {
  return rows;
 }
 async function guestConsole() {
- const m=require("../src/guest-console"), rows=[];
+ const m=require("../src/guest-console"), c=require("../src/console"), rows=[];
+ for (const local of [false,true]) rows.push({kind:"self",input:local,output:c.buildMintScript({local})});
+ for (const input of ["CONSOLE_GATEWAY=ready\n","CONSOLE_GATEWAY=installed\n","CONSOLE_GATEWAY=no-docker","CONSOLE_GATEWAY=missing-source","garbage"]) rows.push({kind:"ensure",input,output:c.parseEnsureOutput(input)});
+ const handoff={vmId:"11111111-2222-3333-4444-555555555555",username:"cvltest",domain:"HOST",password:"test-password",certificateFingerprint:"sha256:"+Array(32).fill("ab").join(":"),hostAddress:"192.168.1.1",rotated:true};
+ for(const value of [handoff,{...handoff,vmId:"bad"},{...handoff,password:""},{setupRequired:true,reason:"no-credential"},{error:"vm-not-running"},null]) {
+   const input=JSON.stringify(value);let output=null;try{output=c.parseHandoff(input);}catch(_){}rows.push({kind:"handoff",input,output});
+ }
+ for(const [step,result] of [["ensure",{code:4,stdout:"CONSOLE_GATEWAY=no-docker"}],["mint",{code:6}],["mint",{code:9}],["mint",{code:1,stderr:"Host refused console operation (HTTP 403)"}],["mint",{code:-2}],["mint",{code:1,stderr:"SECRET"}]]) rows.push({kind:"failure",input:{step,result},output:c.mapFailure(step,result)});
  for(const name of ["guest","A.b_c-1","a".repeat(64),"a".repeat(65),"","-bad","bad'", "a\nb", "a/b"]) {
    let output=null; try { output=m.buildConsoleScript(name); } catch (_) {} rows.push({kind:"script",input:name,output});
  }
  for(const input of ["https://host/console#ticket","http://127.0.0.1:8080/#ticket","https://host#ticket"," HTTPS://HOST:443/a#ticket\r\n", "https://[::1]/#ticket","https://host/", "https://host/#", "https://user@host/#ticket", "https://user:pass@host/#ticket", "ftp://host/#ticket", "javascript:alert(1)#ticket", "not a url", "", "https://host/#one\nhttps://host/#two", "noise\nhttps://host/#ticket"]) {
    let output=null; const vscode={ProgressLocation:{Notification:1},window:{withProgress:(_,fn)=>fn()},env:{openExternal:async uri=>{output=uri;return true;}},Uri:{parse:x=>x}};
-   try { await m.openGuestConsole({name:"agent-vm"},"guest",{_vscode:vscode,_ssh:{runRemoteScript:async()=>({code:0,stdout:input})}}); } catch (_) {}
+   try { await m.openGuestConsole({name:"agent-vm"},"guest",{probeLink:async()=>true,_vscode:vscode,_ssh:{runRemoteScript:async()=>({code:0,stdout:input})}}); } catch (_) {}
    rows.push({kind:"url",input,output});
  }
  return rows;

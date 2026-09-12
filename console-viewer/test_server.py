@@ -30,6 +30,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.gateway = viewer.Gateway.__new__(viewer.Gateway)
         self.gateway.tickets = {'id': dict(token='secret-link', name='test-vm', expires=time.monotonic() + 60, active=False)}
+        self.gateway.local = False
         self.gateway.api_url = 'https://trusted-host:7462'
         self.gateway.config = {'CONSTRUCT_VMCONNECT_CERT_FINGERPRINT': 'sha256:trusted-fingerprint'}
         self.calls, self.params = [], {}
@@ -183,6 +184,65 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         await ws.receive(timeout=2)
         await ws.send_str('6.select,3.ssh;')
         self.assertEqual((await ws.receive(timeout=2)).type, WSMsgType.CLOSE)
+
+
+class LocalGatewayTests(unittest.IsolatedAsyncioTestCase):
+    # Reuse the real fake guacd server and aiohttp client, without inheriting remote assertions.
+    asyncSetUp = GatewayTests.asyncSetUp
+    asyncTearDown = GatewayTests.asyncTearDown
+    redeem = GatewayTests.redeem
+
+    def connection(self):
+        return dict(vmId='11111111-2222-3333-4444-555555555555', username='cvltest', domain='HOST',
+                    password='PRIVATE-LOCAL-PASSWORD', certificateFingerprint='sha256:' + ':'.join(['ab'] * 32), hostAddress='192.168.1.1')
+
+    async def test_local_mint_validation_and_service_rejection(self):
+        import json
+        class Request:
+            def __init__(self, body): self.body = body
+            async def json(self): return self.body
+        body = {'name': 'test-vm', 'minutes': 5, 'connection': self.connection()}
+        with self.assertRaises(web.HTTPBadRequest):
+            await self.gateway.mint(Request(body))
+        self.gateway.local = True
+        for connection in (None, {}, *[{**self.connection(), key: 'invalid'} for key in ('vmId', 'certificateFingerprint', 'hostAddress')],
+                           *[{**self.connection(), key: ''} for key in ('username', 'password', 'domain')]):
+            with self.assertRaises(web.HTTPBadRequest):
+                await self.gateway.mint(Request({**body, 'connection': connection}))
+        first = json.loads((await self.gateway.mint(Request(body))).text)
+        second = json.loads((await self.gateway.mint(Request(body))).text)
+        self.assertNotEqual(first['fragment'], second['fragment'])
+        self.assertEqual(self.calls, [])
+        self.assertNotIn('PASSWORD', str(first))
+        gateway = viewer.Gateway({}, '/does/not/exist')
+        self.assertTrue(gateway.local)
+        self.assertIsNone(gateway.api_ssl)
+
+    async def test_local_stream_reconnect_expiry_and_secret_exclusion(self):
+        self.gateway.local = True
+        ticket = self.gateway.tickets['id']
+        ticket['connection'] = self.connection()
+        await self.redeem()
+        for attempt in range(2):
+            self.ended.clear()
+            if attempt: ticket['expires'] = time.monotonic() + .1
+            ws = await self.client.ws_connect('/ws/id', protocols=['guacamole'], headers={'Origin': self.origin})
+            first = await ws.receive(timeout=2)
+            display = await ws.receive(timeout=2)
+            self.assertNotIn('PRIVATE', str(first.data) + str(display.data))
+            self.assertEqual(self.params['password'], 'PRIVATE-LOCAL-PASSWORD')
+            self.assertEqual(self.params['hostname'], '192.168.1.1')
+            self.assertEqual(self.params['preconnection-blob'], self.connection()['vmId'])
+            status = await (await self.client.get('/ws/id/status')).text()
+            self.assertNotIn('PRIVATE', status)
+            if attempt: self.assertEqual((await ws.receive(timeout=2)).type, WSMsgType.CLOSE)
+            await ws.close()
+            await asyncio.wait_for(self.ended.wait(), 2)
+            await asyncio.sleep(.02)
+            self.assertFalse(ticket['active'])
+        self.assertEqual(self.calls, [])
+        self.assertEqual(ticket['connection'], self.connection())
+
 
 
 if __name__ == '__main__':

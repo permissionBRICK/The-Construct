@@ -55,8 +55,9 @@ public sealed class RuntimeTests
     }
     private sealed class DelayedTransport(ISshTransport inner,TaskCompletionSource entered,TaskCompletionSource release) : ISshTransport
     {
-        public async Task<ProcessResult> RunRemoteScriptAsync(string script,TimeSpan? timeout=null,CancellationToken cancellationToken=default) { entered.TrySetResult(); await release.Task.WaitAsync(cancellationToken); return await inner.RunRemoteScriptAsync(script,timeout,cancellationToken); }
-        public IRunningProcess SpawnWatch(string script,CancellationToken cancellationToken=default)=>inner.SpawnWatch(script,cancellationToken);
+        public async Task<ProcessResult> RunRemoteScriptAsync(string script,TimeSpan? timeout=null,CancellationToken cancellationToken=default,Secret? standardInput=null) { entered.TrySetResult(); await release.Task.WaitAsync(cancellationToken); return await inner.RunRemoteScriptAsync(script,timeout,cancellationToken,standardInput); }
+        public Task<bool> ProbeListeningPortAsync(int port, CancellationToken cancellationToken = default) => Task.FromResult(false);
+    public IRunningProcess SpawnWatch(string script,CancellationToken cancellationToken=default)=>inner.SpawnWatch(script,cancellationToken);
         public IRunningProcess SpawnTunnel(TunnelSpec tunnel,CancellationToken cancellationToken=default)=>inner.SpawnTunnel(tunnel,cancellationToken);
         public Task<bool> ProbePortAsync(int port,string bindHost="127.0.0.1",CancellationToken cancellationToken=default)=>inner.ProbePortAsync(port,bindHost,cancellationToken);
     }

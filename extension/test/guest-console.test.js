@@ -8,6 +8,7 @@ const instances = require("../src/instances");
   const calls = [], opened = [];
   let result = { code: 0, stdout: "https://localhost:6080/#ticket=fresh\n" };
   const opts = {
+    probeLink: async () => true,
     _ssh: { runRemoteScript: async (script, options) => { calls.push({ script, options }); return result; } },
     _vscode: {
       ProgressLocation: { Notification: 15 }, window: { withProgress: async (_, action) => action() },
@@ -26,7 +27,7 @@ const instances = require("../src/instances");
     await assert.rejects(openGuestConsole(inst, "shared-win11", opts));
   }
   result = { code: 1, stderr: "console-forbidden" };
-  await assert.rejects(openGuestConsole(inst, "shared-win11", opts), /console-forbidden/);
+  await assert.rejects(openGuestConsole(inst, "shared-win11", opts), /Could not create a console link/);
   assert.equal(opened.length, 2, "failures never open a guessed browser URL");
   console.log("Guest console fresh links, SSH targeting, input validation and failures passed");
 })().catch(e => { console.error(e); process.exitCode = 1; });
