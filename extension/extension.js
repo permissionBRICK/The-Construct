@@ -588,9 +588,9 @@ function backfillVmFacts(inst, probed) {
   } catch (_) { /* best-effort */ }
 }
 
-/** Fold host-side update info (GitHub) into a probed state. Best-effort: returns
- *  the same object reference when nothing was added, so callers can skip a re-push. */
+/** Fold the marker-derived VM verdict and best-effort host update info into a probed state. */
 const instantConstructChecks = new Set();
+let vmConstructNoticeMemory = {};
 function refreshOpenedSurface(webview) {
   instantConstructChecks.add(activeInstance().name);
   void refreshState(webview);
@@ -607,6 +607,38 @@ async function augmentUpdates(state, inst) {
     const constructNoCache = instantConstructChecks.delete(target.name);
     return await updates.augment(state, raw, { instanceRaw, constructNoCache });
   } catch (_) { return state; }
+}
+
+/** Fold file-backed version markers into the first state push. This has no network work,
+ *  so an instance switch never displays the previous VM while update enrichment runs. */
+function withConstructMarkers(state, inst) {
+  try {
+    const target = inst || activeInstance();
+    const scriptsDir = resolveScriptsDirFor(target);
+    const raw = scriptsDir ? host.readRawSettings(scriptsDir) : {};
+    const instanceRaw = instancestate.readState(stateStore(target, scriptsDir));
+    return updates.foldVmConstruct(state, raw, instanceRaw);
+  } catch (_) {
+    return updates.foldVmConstruct(state, {}, {});
+  }
+}
+
+/** Show the actionable drift notice once for each instance/commit pair in this
+ *  extension-host session. The captured target keeps an answer to the notification from
+ *  reprovisioning a different VM after an instance switch. */
+function noteVmConstructDrift(inst, state) {
+  const value = state && state.vmConstruct;
+  const plan = updates.planVmConstructNotice(vmConstructNoticeMemory, inst && inst.name, value, state && state.online);
+  vmConstructNoticeMemory = plan.memory;
+  if (!plan.notify) return;
+  const target = captureTargetFull({ instance: inst, name: inst.name, cfg: instances.toSshCfg(inst) });
+  const scriptsDir = resolveScriptsDirFor(inst);
+  vscode.window.showInformationMessage(
+    `The VM \`${inst.name}\` runs an older Construct (${value.provisioned}) than the installed one (${value.installed}). Reprovision to apply.`,
+    "Reprovision",
+  ).then((pick) => {
+    if (pick === "Reprovision") void startConstructReprovision(scriptsDir, target);
+  });
 }
 
 /** Fold the VM's token usage + estimated cost into a probed state. Best-effort and
@@ -879,7 +911,7 @@ async function refreshState(webview) {
   const probed = await probeOnce(inst);
   if (!instanceGate.valid(gate)) return;
   backfillVmFacts(inst, probed);
-  const state = withProjects(await withVmState(withLocalState(probed, inst), inst), inst);
+  const state = withConstructMarkers(withProjects(await withVmState(withLocalState(probed, inst), inst), inst), inst);
   if (!instanceGate.valid(gate)) return;
   postState(webview, state);
   // The reading this window just took IS the forwarder's trigger — it never probes on its
@@ -887,7 +919,10 @@ async function refreshState(webview) {
   noteForwarderPresence(target, state);
   const aug = await augmentUpdates(state, inst);
   if (!instanceGate.valid(gate)) return;
-  if (aug !== state) postState(webview, aug);
+  if (aug !== state) {
+    postState(webview, aug);
+    noteVmConstructDrift(inst, aug);
+  }
   // Usage is a slower SSH+ccusage round-trip: BIND it to the report we start with and
   // DISCARD the result if the user switched the period meanwhile (a stale daily run must
   // never land as monthly's numbers). postState always stamps the CURRENT usagePeriod.
@@ -917,7 +952,7 @@ async function refreshAll() {
   const probed = await probeOnce(inst);
   if (!instanceGate.valid(gate)) return;
   backfillVmFacts(inst, probed);
-  const state = withProjects(await withVmState(withLocalState(probed, inst), inst), inst);
+  const state = withConstructMarkers(withProjects(await withVmState(withLocalState(probed, inst), inst), inst), inst);
   if (!instanceGate.valid(gate)) return;
   for (const w of liveWebviews) postState(w, state);
   // Same reading, same trigger (see refreshState): the forwarder is started — or let go —
@@ -925,7 +960,10 @@ async function refreshAll() {
   noteForwarderPresence(refreshTarget, state);
   const aug = await augmentUpdates(state, inst);
   if (!instanceGate.valid(gate)) return;
-  if (aug !== state) for (const w of liveWebviews) postState(w, aug);
+  if (aug !== state) {
+    for (const w of liveWebviews) postState(w, aug);
+    noteVmConstructDrift(inst, aug);
+  }
   const report = usageReport;
   const withUsage = await augmentUsage(aug, report, inst);
   if (!instanceGate.valid(gate)) return;

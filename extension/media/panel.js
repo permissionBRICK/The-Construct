@@ -536,6 +536,31 @@
     renderAgents([]); renderProjects([]);
   }
 
+  // Installed Construct is rendered immediately beside the VM's provisioned revision.
+  // The behind tag is the only interactive state: it moves keyboard focus to the
+  // existing Reprovision action, so no second command path is introduced.
+  function renderVmConstruct(value) {
+    if (!value) return;
+    const ref = value.ref || "main";
+    text("vmConstructLabel", "VM " + ref + "@" + (value.provisioned || "—"));
+    const tag = $("vmConstructState");
+    if (!tag) return;
+    const state = value.state === "behind" ? "behind" : value.state === "current" ? "current" : "unknown";
+    tag.textContent = state === "behind" ? "behind host · reprovision" : state === "current" ? "up to date" : "unknown";
+    tag.classList.toggle("upd", state === "behind");
+    tag.disabled = state !== "behind";
+    tag.title = state === "behind" ? "Focus the Reprovision action" : "";
+  }
+
+  const vmConstructState = $("vmConstructState");
+  if (vmConstructState) vmConstructState.addEventListener("click", () => {
+    if (vmConstructState.disabled) return;
+    const action = document.querySelector('.action-grid [data-cmd="reprovision"]');
+    if (!action) return;
+    action.scrollIntoView({ behavior: "smooth", block: "center" });
+    action.focus({ preventScroll: true });
+  });
+
   // Which backend the active instance runs on, and (for a remote one) the host service
   // that owns it. Both rows stay HIDDEN for the local Hyper-V backend — and for a state
   // push that carries no backend at all, which is what an older extension host sends —
@@ -811,6 +836,8 @@
     // Backend + host service: registry-derived, so render them before the offline
     // early-return too — which backend a VM is on doesn't depend on it answering.
     renderBackend(s);
+    if (s.constructRev) text("constructRev", s.constructRev);
+    if (s.vmConstruct) renderVmConstruct(s.vmConstruct);
     const conversion = $("hostConversionSettings");
     if (conversion) conversion.hidden = s.canConvertHost !== true;
     text("hostConversionLabel", s.hostConversionStatus?.ready ? "Finish host conversion" : s.hostConversionStatus ? "Review / retry host setup…" : "Make this PC a Construct host…");
@@ -878,7 +905,6 @@
     }
     if (s.diskPct != null) setDiskWarn(s.diskPct);
     if (s.ubuntu != null) text("sysUbuntu", s.ubuntu || "—");
-    if (s.constructRev) text("constructRev", s.constructRev);
     // Authoritative on the online path: a value shows the date, an absent marker
     // (older VM, or unreadable /etc/construct/provisioned.env) falls back to "—".
     text("pillInstalled", "installed " + (s.installed || "—"));

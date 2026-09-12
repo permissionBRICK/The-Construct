@@ -111,6 +111,8 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("rain canvas present", (await page.locator("#rain").count()) === 1);
   check("panel: power button present on first paint", await page.locator("#powerBtn").isVisible());
   check("panel: power button disabled while loading", await page.locator("#powerBtn").isDisabled());
+  check("VM Construct revision: element is present with an unknown tag before state",
+    (await page.locator("#vmConstructRev").count()) === 1 && /unknown/i.test(await page.locator("#vmConstructRev").innerText()));
   // Usage-period tabs default to daily ("today") before any state is pushed.
   check("usage: three period tabs (daily/monthly/total)", (await page.locator(".usage-tabs .utab").count()) === 3);
   check("usage: daily tab active by default", (await page.locator('.utab[data-period="daily"]').getAttribute("aria-selected")) === "true"
@@ -305,6 +307,9 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     (await page.locator('#agentList .tag.upd[data-agent="claude-code"][role="button"]').count()) === 1);
   check("agent update tag: up-to-date tag stays inert",
     (await page.locator("#agentList .tag.ok[data-agent]").count()) === 0);
+  check("agent update tag: native theme keeps the surrounding UI font",
+    THEME !== "native" || await page.locator('#agentList .tag.upd[data-agent="claude-code"]').evaluate((el) =>
+      getComputedStyle(el).fontFamily === getComputedStyle(document.body).fontFamily));
   await page.click('#agentList .tag.upd[data-agent="claude-code"]');
   const agentPost = await page.evaluate(() =>
     window.__posted.filter((m) => m && m.type === "command" && m.id === "updateAgent").pop());
@@ -312,13 +317,36 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
 
   // provision-stale: Reprovision goes yellow (class "stale") + subtext when the VM was
   // provisioned with an older Construct than the installed one; cleared when in sync.
-  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h", provisionStale: true } }, "*"));
+  await page.evaluate(() => window.postMessage({ type: "state", state: {
+    online: true, host: "h", provisionStale: true,
+    vmConstruct: { installed: "def5678", provisioned: "abc1234", ref: "main", state: "behind" },
+  } }, "*"));
   await page.waitForTimeout(60);
   check("panel: reprovision marked stale when VM behind", await page.locator('.action-grid [data-cmd="reprovision"]').evaluate((el) => el.classList.contains("stale")));
   check("panel: reprovision stale subtext", (await page.locator('.action-grid [data-cmd="reprovision"] small').innerText()).toLowerCase().includes("update pending"));
-  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h" } }, "*"));
+  check("VM Construct revision: behind state shows the provisioned commit and warning tag",
+    (await page.locator("#vmConstructRev").innerText()).includes("VM main@abc1234") &&
+    /behind host.*reprovision/i.test(await page.locator("#vmConstructState").innerText()) &&
+    await page.locator("#vmConstructState").isEnabled() &&
+    await page.locator("#vmConstructState").evaluate((el) => el.classList.contains("upd")));
+  await page.click("#vmConstructState");
+  check("VM Construct revision: behind tag focuses the existing Reprovision action",
+    await page.locator('.action-grid [data-cmd="reprovision"]').evaluate((el) => document.activeElement === el));
+  await page.evaluate(() => window.postMessage({ type: "state", state: {
+    online: true, host: "h",
+    vmConstruct: { installed: "def5678", provisioned: "def5678", ref: "main", state: "current" },
+  } }, "*"));
   await page.waitForTimeout(60);
   check("panel: reprovision not stale when in sync", !(await page.locator('.action-grid [data-cmd="reprovision"]').evaluate((el) => el.classList.contains("stale"))));
+  check("VM Construct revision: current state is muted and not interactive",
+    /up to date/i.test(await page.locator("#vmConstructState").innerText()) &&
+    await page.locator("#vmConstructState").isDisabled() &&
+    !(await page.locator("#vmConstructState").evaluate((el) => el.classList.contains("upd"))));
+  check("VM Construct revision: native current state keeps the agent-tag chip background",
+    THEME !== "native" || await page.locator("#vmConstructState").evaluate((el) => {
+      const background = getComputedStyle(el).backgroundColor;
+      return background !== "transparent" && background !== "rgba(0, 0, 0, 0)";
+    }));
 
   // per-chip open: each chip carries an inline ▷ button that opens that project on
   // the VM; the chip body still opens the edit modal, and ▷ must NOT bubble to it.

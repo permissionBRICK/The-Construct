@@ -35,9 +35,150 @@
     "output": "1.5 behind"
   },
   {
+    "guest": null,
+    "kind": "vmConstruct",
+    "markers": {
+      "installedCommit": "abcdef1234567890",
+      "provisionedCommit": "abcdef1234567890",
+      "ref": "main"
+    },
+    "output": {
+      "installed": "abcdef1",
+      "provisioned": "abcdef1",
+      "ref": "main",
+      "state": "current"
+    }
+  },
+  {
+    "guest": "7654321",
+    "kind": "vmConstruct",
+    "markers": {
+      "installedCommit": "abcdef1234567890",
+      "provisionedCommit": "abcdef1234567890",
+      "ref": "main"
+    },
+    "output": {
+      "installed": "abcdef1",
+      "provisioned": "7654321",
+      "ref": "main",
+      "state": "behind"
+    }
+  },
+  {
+    "guest": "",
+    "kind": "vmConstruct",
+    "markers": {
+      "installedCommit": "abcdef1234567890",
+      "provisionedCommit": "abcdef1234567890",
+      "ref": "main"
+    },
+    "output": {
+      "installed": "abcdef1",
+      "provisioned": "abcdef1",
+      "ref": "main",
+      "state": "current"
+    }
+  },
+  {
+    "guest": null,
+    "kind": "vmConstruct",
+    "markers": {
+      "installedCommit": "def56789",
+      "provisionedCommit": "abc12345",
+      "ref": "main"
+    },
+    "output": {
+      "installed": "def5678",
+      "provisioned": "abc1234",
+      "ref": "main",
+      "state": "behind"
+    }
+  },
+  {
+    "guest": "7654321",
+    "kind": "vmConstruct",
+    "markers": {
+      "installedCommit": "def56789",
+      "provisionedCommit": "abc12345",
+      "ref": "main"
+    },
+    "output": {
+      "installed": "def5678",
+      "provisioned": "7654321",
+      "ref": "main",
+      "state": "behind"
+    }
+  },
+  {
+    "guest": "",
+    "kind": "vmConstruct",
+    "markers": {
+      "installedCommit": "def56789",
+      "provisionedCommit": "abc12345",
+      "ref": "main"
+    },
+    "output": {
+      "installed": "def5678",
+      "provisioned": "abc1234",
+      "ref": "main",
+      "state": "behind"
+    }
+  },
+  {
+    "guest": null,
+    "kind": "vmConstruct",
+    "markers": {
+      "installedCommit": "def56789",
+      "provisionedCommit": "",
+      "ref": "topic"
+    },
+    "output": {
+      "installed": "def5678",
+      "provisioned": "",
+      "ref": "topic",
+      "state": "unknown"
+    }
+  },
+  {
+    "guest": "7654321",
+    "kind": "vmConstruct",
+    "markers": {
+      "installedCommit": "def56789",
+      "provisionedCommit": "",
+      "ref": "topic"
+    },
+    "output": {
+      "installed": "def5678",
+      "provisioned": "7654321",
+      "ref": "topic",
+      "state": "behind"
+    }
+  },
+  {
+    "guest": "",
+    "kind": "vmConstruct",
+    "markers": {
+      "installedCommit": "def56789",
+      "provisionedCommit": "",
+      "ref": "topic"
+    },
+    "output": {
+      "installed": "def5678",
+      "provisioned": "",
+      "ref": "topic",
+      "state": "unknown"
+    }
+  },
+  {
     "kind": "fold",
     "output": {
-      "online": true
+      "online": true,
+      "vmConstruct": {
+        "installed": "",
+        "provisioned": "",
+        "ref": "main",
+        "state": "unknown"
+      }
     },
     "raw": {},
     "state": {
@@ -48,7 +189,13 @@
     "kind": "fold",
     "output": {
       "online": true,
-      "provisionedCommit": "abcdef1234567890"
+      "provisionedCommit": "abcdef1234567890",
+      "vmConstruct": {
+        "installed": "",
+        "provisioned": "abcdef1",
+        "ref": "main",
+        "state": "unknown"
+      }
     },
     "raw": {},
     "state": {
@@ -60,7 +207,13 @@
     "kind": "fold",
     "output": {
       "online": false,
-      "provisionedCommit": "1234567"
+      "provisionedCommit": "1234567",
+      "vmConstruct": {
+        "installed": "",
+        "provisioned": "1234567",
+        "ref": "main",
+        "state": "unknown"
+      }
     },
     "raw": {},
     "state": {
@@ -72,7 +225,13 @@
     "kind": "fold",
     "output": {
       "constructRev": "main@abcdef1",
-      "online": true
+      "online": true,
+      "vmConstruct": {
+        "installed": "abcdef1",
+        "provisioned": "",
+        "ref": "main",
+        "state": "unknown"
+      }
     },
     "raw": {
       "constructRef": "main",
@@ -87,7 +246,13 @@
     "output": {
       "constructRev": "main@abcdef1",
       "online": true,
-      "provisionedCommit": "abcdef1234567890"
+      "provisionedCommit": "abcdef1234567890",
+      "vmConstruct": {
+        "installed": "abcdef1",
+        "provisioned": "abcdef1",
+        "ref": "main",
+        "state": "current"
+      }
     },
     "raw": {
       "constructRef": "main",
@@ -103,7 +268,13 @@
     "output": {
       "constructRev": "main@abcdef1",
       "online": false,
-      "provisionedCommit": "1234567"
+      "provisionedCommit": "1234567",
+      "vmConstruct": {
+        "installed": "abcdef1",
+        "provisioned": "1234567",
+        "ref": "main",
+        "state": "behind"
+      }
     },
     "raw": {
       "constructRef": "main",
@@ -118,7 +289,13 @@
     "kind": "fold",
     "output": {
       "constructRev": "dev@abc",
-      "online": true
+      "online": true,
+      "vmConstruct": {
+        "installed": "abc",
+        "provisioned": "",
+        "ref": "dev",
+        "state": "unknown"
+      }
     },
     "raw": {
       "constructRef": "dev",
@@ -135,7 +312,13 @@
       "constructRev": "dev@abc",
       "online": true,
       "provisionStale": true,
-      "provisionedCommit": "abcdef1234567890"
+      "provisionedCommit": "abcdef1234567890",
+      "vmConstruct": {
+        "installed": "abc",
+        "provisioned": "abcdef1",
+        "ref": "dev",
+        "state": "behind"
+      }
     },
     "raw": {
       "constructRef": "dev",
@@ -152,7 +335,13 @@
     "output": {
       "constructRev": "dev@abc",
       "online": false,
-      "provisionedCommit": "1234567"
+      "provisionedCommit": "1234567",
+      "vmConstruct": {
+        "installed": "abc",
+        "provisioned": "1234567",
+        "ref": "dev",
+        "state": "behind"
+      }
     },
     "raw": {
       "constructRef": "dev",

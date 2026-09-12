@@ -18,6 +18,9 @@ public sealed class StateAggregation(CompanionInstances instances, RuntimeMessag
         probe ??= cached.TryGetValue("state", out var state) ? JsonNode.Parse(state.GetRawText())!.AsObject() : new() { ["online"] = false, ["vmState"] = "unknown" };
         var data = (probe["state"] as JsonObject ?? probe).DeepClone().AsObject(); data.Remove("type");
         foreach (var (key, value) in entry.Enrichment) data[key] = value?.DeepClone();
+        // Recompute this on every probe publication. Enrichment also stores it for host-marker
+        // changes, but only the fresh probe can supply the guest marker that outranks that cache.
+        data["vmConstruct"] = UpdatePlanner.VmConstruct(entry.Store.ReadMarkers(), StateJson.Text(data["provisionedCommit"]));
         data["instance"] = name; data["backend"] = entry.Definition["backend"]?.DeepClone(); data["connected"] = false; data["connectedInstance"] = null;
         data["companion"] = true; data["canConvertHost"] = StateJson.Text(entry.Definition["backend"]) == "hyperv-local";
         var pending = StateJson.ReadObject(files, HostConversion.PendingPath(instances.Host.LocalAppData));
