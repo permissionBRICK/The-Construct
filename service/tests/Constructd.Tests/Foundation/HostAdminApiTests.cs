@@ -6,6 +6,7 @@ using Constructd.Core.Abstractions;
 using Constructd.Core.Configuration;
 using Constructd.Core.Domain;
 using Constructd.Tests.Support;
+using Microsoft.Data.Sqlite;
 namespace Constructd.Tests.Foundation;
 
 public sealed class HostAdminApiTests
@@ -108,6 +109,45 @@ public sealed class HostAdminApiTests
         Assert.Equal(HttpStatusCode.Conflict, (await owner.GetAsync("/api/v1/vms/child/endpoint")).StatusCode);
         var caps = await owner.GetFromJsonAsync<JsonElement>("/api/v1/vms/child/capabilities"); Assert.Equal("conditional", caps.GetProperty("console").GetProperty("screenshot").GetString());
     }
+    [Fact]
+    public async Task SqliteGuestReportUsesInitialInstallAsLastReinstallUntilReinstall()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "construct-guest-report-" + Guid.NewGuid().ToString("n"));
+        try
+        {
+            using var app = TestApp.WithSqlite(Path.Combine(directory, "constructd.db"));
+            using var owner = await app.CreateUserClientAsync("alice");
+            var job = await owner.CreateVmAsync("parent");
+            using var guest = app.CreateVmTokenClient(job.VmToken());
+            var installed = app.Clock.UtcNow;
+
+            Assert.Equal(HttpStatusCode.OK, (await guest.PostAsJsonAsync("/api/v1/vms/parent/guest-report",
+                new { @event = "provisioned", constructCommit = "abcdef0", at = installed, reporter = "Provision-AgentVM.ps1" })).StatusCode);
+            var first = await guest.GetFromJsonAsync<JsonElement>("/api/v1/vms/parent");
+            Assert.Equal(installed, first.GetProperty("guest").GetProperty("provisionedAt").GetDateTimeOffset());
+            Assert.Equal(installed, first.GetProperty("guest").GetProperty("reinstalledAt").GetDateTimeOffset());
+
+            var reprovisioned = installed.AddDays(1);
+            Assert.Equal(HttpStatusCode.OK, (await guest.PostAsJsonAsync("/api/v1/vms/parent/guest-report",
+                new { @event = "provisioned", constructCommit = "1111111", at = reprovisioned, reporter = "Provision-AgentVM.ps1" })).StatusCode);
+            var afterReprovision = await guest.GetFromJsonAsync<JsonElement>("/api/v1/vms/parent");
+            Assert.Equal(reprovisioned, afterReprovision.GetProperty("guest").GetProperty("provisionedAt").GetDateTimeOffset());
+            Assert.Equal(installed, afterReprovision.GetProperty("guest").GetProperty("reinstalledAt").GetDateTimeOffset());
+
+            var reinstalled = installed.AddDays(2);
+            Assert.Equal(HttpStatusCode.OK, (await guest.PostAsJsonAsync("/api/v1/vms/parent/guest-report",
+                new { @event = "reinstalled", at = reinstalled, reporter = "provision.sh" })).StatusCode);
+            var second = await guest.GetFromJsonAsync<JsonElement>("/api/v1/vms/parent");
+            Assert.Equal(reprovisioned, second.GetProperty("guest").GetProperty("provisionedAt").GetDateTimeOffset());
+            Assert.Equal(reinstalled, second.GetProperty("guest").GetProperty("reinstalledAt").GetDateTimeOffset());
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Fact]
     public async Task OverridesOnlyRestrictAndAreImmediatelyVisible()
     {
