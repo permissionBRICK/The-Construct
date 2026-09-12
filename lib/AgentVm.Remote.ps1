@@ -1216,7 +1216,8 @@ function Wait-ConstructSourceJob {
         } elseif ($problem.Status -ge 300 -or -not $job) { return @{ State = 'malformed'; Code = [string]$problem.Code; Class = $problem.Class } }
         else {
             $failures = 0
-            $lines = @($job.progress); while ($seen -lt $lines.Count) { & $OnProgress $lines[$seen]; $seen++ }
+            # The service records progress as {at, text} rows; older services returned plain strings.
+            $lines = @($job.progress); while ($seen -lt $lines.Count) { $row = $lines[$seen]; & $OnProgress $(if ($row -is [string]) { $row } elseif ($null -ne $row -and $row.PSObject.Properties['text']) { [string]$row.text } else { [string]$row }); $seen++ }
             switch ([string]$job.state) {
                 'succeeded' {
                     if (-not (Test-ConstructSourceResult $job.result)) { return @{ State = 'malformed'; Code = 'malformed'; Class = 'none' } }
@@ -1281,10 +1282,11 @@ function Invoke-ConstructSourceTransport {
                 } catch {
                     if ($_.Exception.Data['ConstructSourceOverlayTooLarge']) { $reason = 'local-changes-too-large' }
                     else {
+                        # Only the packer's own codes, the exception type and the file's path are reported: never a message that could carry file contents.
                         $detail = $_.Exception.GetType().Name
-                        if ($_.Exception -is [Management.Automation.RuntimeException] -and $_.Exception.Message -cmatch '^(invalid-overlay-path|overlay-reparse-point|overlay-not-file|duplicate-overlay-path|conflicting-overlay-path)$') {
-                            $detail = $_.Exception.Message
-                        }
+                        if ($_.Exception.Message -cmatch '^(invalid-overlay-path|overlay-reparse-point|overlay-not-file|overlay-file-missing|overlay-file-unreadable|duplicate-overlay-path|conflicting-overlay-path|empty-overlay-result)$') { $detail = $_.Exception.Message }
+                        if ($_.Exception.Data -and $_.Exception.Data.Contains('ConstructSourceOverlayError') -and [string]$_.Exception.Data['ConstructSourceOverlayError'] -cmatch '^[A-Za-z0-9.]{1,80}$') { $detail += '/' + $_.Exception.Data['ConstructSourceOverlayError'] }
+                        if ($_.Exception.Data -and $_.Exception.Data.Contains('ConstructSourceOverlayPath') -and (Test-ConstructSourceRelativePath ([string]$_.Exception.Data['ConstructSourceOverlayPath']))) { $detail += ' at ' + $_.Exception.Data['ConstructSourceOverlayPath'] }
                         $reason = 'overlay-pack-failed:' + $detail
                     }
                 }

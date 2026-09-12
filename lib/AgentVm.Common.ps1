@@ -6832,9 +6832,10 @@ function New-ConstructSourceOverlay {
     $written = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($relative in $files) { [void]$written.Add($relative) }
     foreach ($relative in $deleted) { if ($written.Contains($relative)) { throw 'conflicting-overlay-path' } }
-    $size = [long]0; $archive = $null; $created = $false
+    $size = [long]0; $archive = $null; $created = $false; $current = ''
     try {
         foreach ($relative in ($files + $deleted)) {
+            $current = [string]$relative
             if (-not (Test-ConstructSourceRelativePath $relative)) { throw 'invalid-overlay-path' }
             # Check every parent inside the checkout and the leaf. The root may be a user-selected junction.
             $itemPath = $rootPath
@@ -6845,8 +6846,10 @@ function New-ConstructSourceOverlay {
             }
         }
         foreach ($relative in $files) {
+            $current = [string]$relative
             if (-not $seen.Add($relative)) { throw 'duplicate-overlay-path' }
-            $item = Get-Item -LiteralPath (Join-Path $rootPath $relative) -Force -ErrorAction Stop
+            $item = Get-Item -LiteralPath (Join-Path $rootPath $relative) -Force -ErrorAction SilentlyContinue
+            if (-not $item) { throw 'overlay-file-missing' }
             if ($item.PSIsContainer) { throw 'overlay-not-file' }
             $size += $item.Length
             if ($size -gt 64MB) { throw $tooLarge }
@@ -6855,11 +6858,16 @@ function New-ConstructSourceOverlay {
         if ($deleted.Count) { $deletionBytes = [Text.UTF8Encoding]::new($false).GetBytes(($deleted -join "`n") + "`n") }
         $size += $deletionBytes.Length
         if ($size -gt 64MB) { throw $tooLarge }
+        $current = ''
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         $archive = [IO.Compression.ZipFile]::Open($Path, [IO.Compression.ZipArchiveMode]::Create); $created = $true
         foreach ($relative in $files) {
-            [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, (Join-Path $rootPath $relative), ('construct-overlay/' + $relative), [IO.Compression.CompressionLevel]::Optimal) | Out-Null
+            $current = [string]$relative
+            # A file another program holds open (an editor, a scanner) cannot be read into the archive.
+            try { [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, (Join-Path $rootPath $relative), ('construct-overlay/' + $relative), [IO.Compression.CompressionLevel]::Optimal) | Out-Null }
+            catch { $inner = $_.Exception; while ($inner.InnerException) { $inner = $inner.InnerException }; $e = [Exception]::new('overlay-file-unreadable'); $e.Data['ConstructSourceOverlayError'] = $inner.GetType().Name; throw $e }
         }
+        $current = ''
         if ($deleted.Count) {
             $entry = $archive.CreateEntry('construct-overlay.deleted', [IO.Compression.CompressionLevel]::Optimal)
             $stream = $entry.Open()
@@ -6876,6 +6884,8 @@ function New-ConstructSourceOverlay {
     } catch {
         if ($archive) { $archive.Dispose(); $archive = $null }
         if ($created) { Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue }
+        # The path names which differing file failed; the diagnostic never carries file contents.
+        if ($current -and $_.Exception.Data -and -not $_.Exception.Data.Contains('ConstructSourceOverlayPath')) { $_.Exception.Data['ConstructSourceOverlayPath'] = $current }
         throw
     } finally { if ($archive) { $archive.Dispose() } }
 }
