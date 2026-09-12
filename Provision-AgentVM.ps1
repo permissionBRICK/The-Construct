@@ -59,6 +59,8 @@ param(
     # settings file and this host's own git identity. Empty leaves it unchanged.
     [string]$GitUserName,
     [string]$GitEmail,
+    # Explicit credential-store preference, forwarded by the first-install feature set.
+    [ValidateSet('', 'true', 'false')][string]$GitCredentialStore = '',
     # Source repo/ref this install came from (threaded from install.ps1 via
     # Auto-Install / Create-AgentVM). Used to record the installed-commit update
     # marker for the control panel at the end of a successful provision. Default to
@@ -1723,6 +1725,7 @@ if ($Action -eq 'provision') {
         if ($PSBoundParameters.ContainsKey('GitUserName')) { $giParams['Name']  = $GitUserName }
         if ($PSBoundParameters.ContainsKey('GitEmail'))    { $giParams['Email'] = $GitEmail }
         if ($Auto -or $NonInteractive -or ($giParams.ContainsKey('Name') -and $giParams.ContainsKey('Email'))) { $giParams['NoPrompt'] = $true }
+        if ($GitCredentialStore) { $giParams['CredentialStore'] = if ($GitCredentialStore -eq 'true') { 'yes' } else { 'no' } }
         $gitIdentity = Resolve-GitIdentity @giParams
     } else {
         $gitIdentity = @{ Name = $GitUserName; Email = $GitEmail }

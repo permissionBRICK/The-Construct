@@ -39,11 +39,11 @@ merges and release preparation, not for ordinary changes.
 | `extension/src/**`, `extension/media/**` | `panel`, plus `companion` when it ports the changed module |
 | T3, pairing, updates | `t3` |
 | `service/**`, `drivers/**`, `lib/**`, `bin/**` | `service` |
-| Installers | Companion PowerShell suites plus the touched script's own tests |
+| Installers | Companion PowerShell suites plus `pwsh -NoProfile -File test/feature-set.test.ps1` and the touched script's own tests |
 
 The `companion` group builds with warnings as errors, runs Companion .NET tests,
-Node parity and Companion suites, and the three Companion PowerShell suites. It
-is included in `all`; the Companion workflow only publishes its Windows deliverable.
+Node parity and Companion suites, the three Companion PowerShell suites, and the
+first-install feature-set suite. It is included in `all`; the Companion workflow only publishes its Windows deliverable.
 
 The panel defaults to the native theme; set `UI_SMOKE_THEME=classic` or `terminal`
 to check another theme. These runners group the former workflow checks; other

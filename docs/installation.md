@@ -15,7 +15,7 @@ irm https://raw.githubusercontent.com/permissionBRICK/The-Construct/main/install
 
 This downloads the latest repo and launches the guided installer (`Auto-Install.ps1`): it
 elevates to Administrator (required for Hyper-V), builds the Ubuntu autoinstall ISO, then
-creates and provisions the VM. You answer a few questions up front (RAM, disk size,
+creates and provisions the VM. On a fresh PC, choose a feature set first, then answer the up-front questions (RAM, disk size,
 projects) through full-screen terminal menus — one screen per choice — and once the
 "all set" banner appears, everything after that runs unattended with normal log output.
 
@@ -24,6 +24,21 @@ projects) through full-screen terminal menus — one screen per choice — and o
 > and everything from there is the install described on this page. The remote path is a
 > separate story: [Several VMs, and VMs on another host](#several-vms-and-vms-on-another-host).
 > An existing install never sees the question.
+
+After choosing local or remote hosting, a fresh interactive install asks for a **Feature set**:
+
+- **Minimal** enables Companion, Claude Code live streaming and the VM git credential store.
+  The browser IDE and SMB workspace share are off. T3 Code HTTPS keeps the VM default, on.
+- **Full** also enables the browser IDE, SMB share, microphone passthrough, OpenCode background
+  watcher, stable T3 Code and patched T3 Code + Desktop. Automatic checkpoints and the VS Code
+  tunnel stay off.
+- **Custom** asks about each component in the table below, in that order, with Minimal defaults.
+  It also offers drive-letter mapping, which both presets leave off.
+
+A summary shows the resolved choices without another confirmation. Explicit component
+parameters override the preset or Custom answer. Existing instances keep their saved choices
+on reinstall, reprovision and redownload; they never see the feature-set question. Remote
+installs use the same choices, and Companion installs on the client PC.
 
 If the VM already exists, you get a menu:
 
@@ -59,6 +74,37 @@ autoinstall ISO, then creates and provisions the VM:
 Override the release or supply your own source ISO with `-UbuntuRelease 24.04`,
 `-IsoPath …`, or `-IsoUrl …`; add `-SkipCreateVm` to only build the ISO. Same native ISO builder
 and reprovision/reset menu as the one-liner above.
+
+Feature parameters for `Auto-Install.ps1`:
+
+| Parameter | Meaning |
+|-----------|---------|
+| `-FeatureSet minimal\|full\|custom` | Preset for a fresh PC. Omit to ask interactively; unattended runs use Minimal. |
+| `-SkipCompanion` | Skip the client tray app. `-SkipCompanion:$false` explicitly enables it. |
+| `-ClaudePartialStreaming true\|false` | Claude Code live streaming patch. |
+| `-GitCredentialStore true\|false` | Store VM git credentials in plaintext in `~/.git-credentials`. |
+| `-VsCodeServeWeb true\|false` | Browser IDE on port 8000. |
+| `-VsCodeTunnel true\|false` | VS Code tunnel via vscode.dev. |
+| `-SmbShare true\|false` | SMB workspace share. |
+| `-MountRepoShare true\|false` | Map the SMB share to a drive letter; requires SMB. |
+| `-MicPassthrough true\|false` | Microphone passthrough. |
+| `-AutomaticCheckpoints true\|false` | Hyper-V automatic checkpoints, local or remote. |
+| `-OpenCodeBackgroundWatcher true\|false` | OpenCode background watcher patch. |
+| `-T3Code true\|false` | T3 Code web GUI. `-T3CodeChannel stable\|nightly` overrides the preset's stable channel. |
+| `-T3CodeLimitResume true\|false` | Patched T3 Code + Desktop, using the legacy parameter name. |
+| `-T3CodeHttps true\|false` | T3 Code HTTPS. |
+| `-Auto`, `-NonInteractive`, `-FromPanel` | Suppress feature questions. Unattended Custom uses Minimal defaults plus explicit overrides. |
+| `-SkipCreateVm` | Build only the ISO; skip feature selection. |
+
+For example, select Full but disable microphone passthrough:
+
+```powershell
+.\Auto-Install.ps1 -FeatureSet full -MicPassthrough false
+```
+
+Choices are saved in the existing control-panel settings store. Named instances keep their
+VM settings in their own instance file; git credential storage keeps its existing shared
+setting. Provisioning writes the guest settings to `/etc/construct/config.env`.
 
 ## Option B — full bundle (repo + ISO together)
 

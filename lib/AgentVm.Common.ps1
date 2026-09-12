@@ -906,8 +906,9 @@ function Resolve-GitIdentity {
         with a security warning. Its default comes from -CredentialStore ("yes" /
         "no"), then the saved setting, then yes.
 
-        Unless -NoPrompt, the user is prompted for each value with the resolved
-        default offered on Enter. The final values are saved back to -Dir.
+        Unless -NoPrompt, identity values are prompted with defaults offered on Enter.
+        An explicit -CredentialStore skips that component's question, but keeps the
+        plaintext-storage warning visible. The final values are saved back to -Dir.
         Returns @{ Name = <string>; Email = <string>; CredentialStore = <bool> }
         (Name / Email may be "").
     #>
@@ -956,14 +957,16 @@ function Resolve-GitIdentity {
         Write-Host "      WARNING: credentials are saved in PLAINTEXT (~/.git-credentials) and are" -ForegroundColor Yellow
         Write-Host "      readable by anything on the VM -- including the AI agents, so a prompt-" -ForegroundColor Yellow
         Write-Host "      injection attack could exfiltrate them." -ForegroundColor Yellow
-        if ([Console]::IsInputRedirected) {
-            # Can't drive a menu: keep the resolved default.
-        } else {
-            # Same screen -- the warning above is context the user still needs.
-            $resCred = Invoke-TuiConfirm -NoScreen -DefaultNo:(-not $defCred) `
-                -Question "Store git credentials on the VM?" `
-                -YesLabel "Yes  store them (convenient, plaintext)" `
-                -NoLabel  "No   re-authenticate per push/pull"
+        if (-not $PSBoundParameters.ContainsKey('CredentialStore')) {
+            if ([Console]::IsInputRedirected) {
+                # Can't drive a menu: keep the resolved default.
+            } else {
+                # Same screen -- the warning above is context the user still needs.
+                $resCred = Invoke-TuiConfirm -NoScreen -DefaultNo:(-not $defCred) `
+                    -Question "Store git credentials on the VM?" `
+                    -YesLabel "Yes  store them (convenient, plaintext)" `
+                    -NoLabel  "No   re-authenticate per push/pull"
+            }
         }
     }
 
