@@ -35,7 +35,11 @@ public sealed class TransportArgvTests
         var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
         try { Assert.True(await ssh.ProbeListeningPortAsync(port)); }
         finally { listener.Stop(); }
-        Assert.False(await ssh.ProbeListeningPortAsync(port));
+        // A bound but never-listening socket keeps its port reserved (no parallel test can grab
+        // it) while refusing connections, so the negative probe cannot race an ephemeral reuse.
+        using var closed = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.InterNetwork, System.Net.Sockets.SocketType.Stream, System.Net.Sockets.ProtocolType.Tcp);
+        closed.Bind(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, 0));
+        Assert.False(await ssh.ProbeListeningPortAsync(((System.Net.IPEndPoint)closed.LocalEndPoint!).Port));
     }
     [Fact]
     public void ExecutableResolutionPrefersPathThenWindowsOpenSsh()
