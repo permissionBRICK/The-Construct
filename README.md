@@ -46,6 +46,7 @@ irm https://raw.githubusercontent.com/permissionBRICK/The-Construct/main/install
 
 The script builds an Ubuntu autoinstall ISO, creates the Hyper-V VM, installs Ubuntu
 unattended, provisions the agents and links up your PC for remote access through whatever application you like.
+On a fresh interactive install, choose Minimal, Full or Custom before the VM setup questions.
 
 > **Requirements:** Windows 10 or 11 with local admin rights, some free disk space and RAM (4 GB RAM min recommended), and about 15 minutes.
 
