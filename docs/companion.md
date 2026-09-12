@@ -46,11 +46,14 @@ For a manual install, from your downloaded Construct scripts directory:
 .\Install-ConstructCompanion.ps1
 ```
 
-The installer downloads the newest published `companion-<commit40>`
-GitHub release from `constructRepo` in `.construct-settings.json` (default
-`permissionBRICK/The-Construct`). Releases are filtered independently of host
-releases and prereleases. Discovery is bounded to 20 pages (2,000 releases); if
-the last page is full, it refuses an incomplete result with a clear diagnostic.
+The installer downloads the `companion-<commit40>` GitHub release of the installed
+Construct commit (`installedCommit` in `.construct-settings.json`, or `.construct-revision`)
+from `constructRepo` (default `permissionBRICK/The-Construct`): one manifest download,
+no release listing and no GitHub API rate limit. When that release does not exist yet
+(its workflow is still running) or no commit is recorded, it falls back to the newest
+published Companion release from the release listing, filtered independently of host
+releases and prereleases. The listing is bounded to 20 pages (2,000 releases); if the
+last page is full, it refuses an incomplete result with a clear diagnostic.
 Both the default and `-Source release` prefer the framework-dependent ZIP when
 `dotnet --list-runtimes` lists every shared framework at the manifest's major version.
 The current app requires .NET 10's `Microsoft.NETCore.App`,

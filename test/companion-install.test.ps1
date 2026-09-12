@@ -195,6 +195,36 @@ try {
     $capMessage=''
     try { Resolve-ConstructCompanionSource $repo release $seams | Out-Null } catch { $capMessage=$_.Exception.Message }
     Assert ($script:releaseCalls -eq 20 -and $capMessage.Contains('20-page limit')) 'Release pagination fails clearly at the cap'
+    # Windows PowerShell 5.1 hands back a JSON array as a single object; discovery still works.
+    $seams.Json={ param($Uri)
+        if ($Uri -match '/releases\?') { return ,@(@{tag_name=('host-'+$sha);published_at='2026-09-12T00:00:00Z'},@{tag_name=('companion-'+$sha);published_at='2026-09-11T00:00:00Z'}) }
+        return $script:manifest
+    }
+    Assert ((Resolve-ConstructCompanionSource $repo release $seams).commit -eq $sha) 'Nested array from Invoke-RestMethod is unwrapped'
+    # The installed commit names its Companion release directly: no listing, no API rate limit.
+    [IO.File]::WriteAllText($settings,(@{installedCommit=$sha} | ConvertTo-Json))
+    $script:releaseCalls=0; $script:directUris=@()
+    $seams.Json={ param($Uri)
+        if ($Uri -match '/releases\?') { $script:releaseCalls++; return @() }
+        $script:directUris+=$Uri; return $script:manifest
+    }
+    $direct=Resolve-ConstructCompanionSource $repo release $seams
+    Assert ($direct.commit -eq $sha -and $direct.releaseTag -eq ('companion-'+$sha) -and $script:releaseCalls -eq 0 -and $script:directUris[0] -eq ('https://github.com/permissionBRICK/The-Construct/releases/download/companion-'+$sha+'/manifest.json')) 'Installed commit resolves its Companion without listing releases'
+    Assert ($direct.payloadUri -eq ('https://github.com/permissionBRICK/The-Construct/releases/download/companion-'+$sha+'/'+$direct.payload.asset)) 'Direct payload URI uses the commit tag'
+    [IO.File]::WriteAllText($settings,'{}')
+    [IO.File]::WriteAllText((Join-Path $repo '.construct-revision'),$sha+"`n")
+    $script:releaseCalls=0
+    Assert ((Resolve-ConstructCompanionSource $repo release $seams).commit -eq $sha -and $script:releaseCalls -eq 0) 'Archive revision marker also resolves directly'
+    Remove-Item -LiteralPath (Join-Path $repo '.construct-revision') -Force
+    # A commit whose Companion release is missing (still building) falls back to the newest listed one.
+    [IO.File]::WriteAllText($settings,(@{installedCommit=('f'*40)} | ConvertTo-Json))
+    $script:releaseCalls=0
+    $seams.Json={ param($Uri)
+        if ($Uri -match '/releases\?') { $script:releaseCalls++; return @(@{tag_name=('companion-'+$sha);published_at='2026-09-11T00:00:00Z'}) }
+        if ($Uri -match ('companion-'+('f'*40))) { throw 'The remote server returned an error: (404) Not Found.' }
+        return $script:manifest
+    }
+    Assert ((Resolve-ConstructCompanionSource $repo release $seams).commit -eq $sha -and $script:releaseCalls -eq 1) 'Missing direct release falls back to the listing'
     $seams.Json=$originalJson
     [IO.File]::WriteAllText($settings,'{"constructRepo":"https://invalid/repo"}')
     Reject { Resolve-ConstructCompanionSource $repo release $seams } 'Invalid repository refused'

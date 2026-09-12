@@ -123,20 +123,41 @@ function Resolve-ConstructCompanionSource {
         if ($commit -notmatch '^[0-9a-f]{40}$') { Throw-ConstructCompanionError 'Cannot determine the local Companion commit; record the Construct update marker first.' }
         return @{source='local-build'; commit=$commit; packageVersion=([DateTimeOffset]::UtcNow.ToString('yyyy.MM.dd')+'+'+$commit.Substring(0,7)); releaseTag=$null}
     }
-    # Paginate: host and Companion releases share this repository.
-    $releases=@(); $page=1
-    do {
-        $batch=@(& $Seams.Json "https://api.github.com/repos/$repo/releases?per_page=100&page=$page")
-        $releases+=@($batch | Where-Object { -not $_.draft -and -not $_.prerelease -and $_.tag_name -cmatch '^companion-[0-9a-f]{40}$' })
-        if ($batch.Count -eq 100 -and $page -ge 20) { Throw-ConstructCompanionError 'Companion release discovery reached its 20-page limit; reduce unrelated repository releases or use -Source local.' }
-        $page++
-    } while ($batch.Count -eq 100)
-    $release=$releases | Sort-Object { [DateTimeOffset]$_.published_at } -Descending | Select-Object -First 1
-    if (-not $release) { Throw-ConstructCompanionError 'No published Companion release is available.' }
-    $tag=[string]$release.tag_name
+    # Every main commit publishes its Companion next to its host release, so the installed
+    # Construct commit names its Companion directly: one manifest download, no release
+    # listing and no GitHub API rate limit. The listing is only the fallback (a commit whose
+    # Companion release is still building, or an install without a commit marker).
+    $manifest=$null; $tag=''
+    $installedCommit=[string]$settings.installedCommit
+    if ($installedCommit -cnotmatch '^[0-9a-f]{40}$') {
+        $marker=Join-Path $ScriptsDir '.construct-revision'
+        if (Test-Path -LiteralPath $marker) { $installedCommit=([IO.File]::ReadAllText($marker)).Trim().ToLowerInvariant() }
+    }
+    if ($installedCommit -cmatch '^[0-9a-f]{40}$') {
+        try {
+            $tag="companion-$installedCommit"
+            $manifest=& $Seams.Json "https://github.com/$repo/releases/download/$tag/manifest.json"
+            Assert-ConstructCompanionManifest $manifest $repo $tag
+        } catch { $manifest=$null; $tag='' }
+    }
+    if (-not $manifest) {
+        # Paginate: host and Companion releases share this repository.
+        $releases=@(); $page=1
+        do {
+            $batch=@(& $Seams.Json "https://api.github.com/repos/$repo/releases?per_page=100&page=$page")
+            # Windows PowerShell 5.1 returns a JSON array as one object; unwrap it.
+            if ($batch.Count -eq 1 -and $batch[0] -is [Array]) { $batch=@($batch[0]) }
+            $releases+=@($batch | Where-Object { -not $_.draft -and -not $_.prerelease -and $_.tag_name -cmatch '^companion-[0-9a-f]{40}$' })
+            if ($batch.Count -eq 100 -and $page -ge 20) { Throw-ConstructCompanionError 'Companion release discovery reached its 20-page limit; reduce unrelated repository releases or use -Source local.' }
+            $page++
+        } while ($batch.Count -eq 100)
+        $release=$releases | Sort-Object { [DateTimeOffset]$_.published_at } -Descending | Select-Object -First 1
+        if (-not $release) { Throw-ConstructCompanionError 'No published Companion release is available.' }
+        $tag=[string]$release.tag_name
+        $manifest=& $Seams.Json "https://github.com/$repo/releases/download/$tag/manifest.json"
+        Assert-ConstructCompanionManifest $manifest $repo $tag
+    }
     $base="https://github.com/$repo/releases/download/$tag"
-    $manifest=& $Seams.Json "$base/manifest.json"
-    Assert-ConstructCompanionManifest $manifest $repo $tag
     $payload=Select-ConstructReleasePayload $manifest $Seams.Native
     return @{source=$payload.source; commit=$manifest.commit; packageVersion=$manifest.packageVersion; releaseTag=$tag; manifest=$manifest; payload=$payload; payloadUri="$base/$($payload.asset)"}
 }
