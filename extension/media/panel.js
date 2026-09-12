@@ -84,7 +84,7 @@
   const backupId = () => { const e = $("backupPick"); return e ? e.value : ""; };
 
   // Give immediate feedback while the extension preserves configuration before its modal.
-  const preparingCommands = new Set(["reprovision", "reinstall", "redownload", "customReinstall", "customRedownload", "convertToHost"]);
+  const preparingCommands = new Set(["reprovision", "reinstall", "redownload", "customReinstall", "customRedownload", "convertToHost", "updateConstruct"]);
   function setPreparing(id, busy) {
     document.querySelectorAll("[data-cmd]").forEach((button) => {
       if (!preparingCommands.has(button.dataset.cmd)) return;
@@ -93,7 +93,7 @@
       const active = busy && button.dataset.cmd === id;
       button.classList.toggle("preparing", active);
       button.setAttribute("aria-busy", String(active));
-      if (active && !button.querySelector(".prepare-spinner")) {
+      if (active && !button.querySelector(".prepare-spinner") && button.querySelector(".action-icon")) {
         const spinner = document.createElement("span");
         spinner.className = "prepare-spinner";
         spinner.setAttribute("aria-hidden", "true");

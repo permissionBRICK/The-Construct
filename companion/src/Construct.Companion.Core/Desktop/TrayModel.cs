@@ -4,8 +4,10 @@ public enum TrayColor { Green, Yellow, Grey, Red }
 public sealed record TrayState(string? Instance = null, bool ScriptsFound = false, bool Online = false,
     string VmState = "unknown", bool Busy = false, bool ProbeError = false, TimeSpan UnknownFor = default,
     int ForwardCount = 0, bool Mic = false, bool UpdateAvailable = false, bool HostAdmin = false,
-    int OnlineCount = 0, int InstanceCount = 0, bool MicActive = false);
-public sealed record TrayAppearance(TrayColor Color, bool Question, bool Update, string Tooltip, bool Mic = false);
+    int OnlineCount = 0, int InstanceCount = 0, bool MicActive = false, bool ProvisionStale = false);
+/// <param name="Update">Blue dot: a Construct update is available on this PC.</param>
+/// <param name="Stale">Yellow dot: the update is installed but the VM has not been reprovisioned with it (never with Update).</param>
+public sealed record TrayAppearance(TrayColor Color, bool Question, bool Update, string Tooltip, bool Mic = false, bool Stale = false);
 public sealed record MenuEntry(string Id, string Text, bool Enabled = true, bool Checked = false,
     IReadOnlyList<MenuEntry>? Children = null);
 public sealed record TrayForward(string Id, string Label, string Url);
@@ -21,7 +23,7 @@ public static class TrayModel
             state.VmState is "off" or "saved" or "paused" ? TrayColor.Grey : TrayColor.Yellow;
         var status = missing ? "not configured" : state.Busy ? "working" : state.Online ? "online" : state.VmState;
         var tooltip = Tooltip(state.OnlineCount, state.InstanceCount) + (state.MicActive ? " · mic active" : "");
-        return new(color, missing, state.UpdateAvailable, tooltip, state.MicActive);
+        return new(color, missing, state.UpdateAvailable, tooltip, state.MicActive, state.ProvisionStale && !state.UpdateAvailable);
     }
     // The tooltip counts VMs (owner, 2026-09-11); "mic active" and the mic glyph appear only while a program on a VM
     // holds the microphone open through the shim, never for the idle passthrough session.

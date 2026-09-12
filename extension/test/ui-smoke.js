@@ -289,6 +289,13 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await page.waitForTimeout(80);
   check("state render: vm name", (await page.locator("#sysVm").innerText()) === "agent-vm-01");
   check("state render: update banner shown", await page.locator("#updateBanner").isVisible());
+  // Clicking Update Construct blocks the button (like Reprovision) until the update reports back.
+  await page.click('#updateBanner [data-cmd="updateConstruct"]');
+  check("update: the button is disabled while the update runs", await page.locator('#updateBanner [data-cmd="updateConstruct"]').isDisabled()
+    && await page.locator('.action-grid [data-cmd="reprovision"]').isDisabled());
+  await page.evaluate(() => window.postMessage({ type: "lifecyclePrepared", id: "updateConstruct" }, "*"));
+  await page.waitForTimeout(40);
+  check("update: the button is enabled again once the update reported", !(await page.locator('#updateBanner [data-cmd="updateConstruct"]').isDisabled()));
   check("state render: agent version", (await page.locator("#agentList .agent").first().innerText()).includes("2.1.196"));
   check("state render: project chips", (await page.locator("#projChips .chip").count()) === 2);
 
@@ -691,6 +698,10 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await page.click("#lUpdate");
   lposted = await page.evaluate(() => window.__posted);
   check("launcher: update banner posts updateConstruct", lposted.some((m) => m.type === "command" && m.id === "updateConstruct"));
+  check("launcher: update button blocked until the update reports", await page.locator("#lUpdate").isDisabled());
+  await page.evaluate(() => window.postMessage({ type: "lifecyclePrepared", id: "updateConstruct" }, "*"));
+  await page.waitForTimeout(40);
+  check("launcher: update button unblocked afterwards", !(await page.locator("#lUpdate").isDisabled()));
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h.example.net", update: { available: false } } }, "*"));
   await page.waitForTimeout(60);
   check("launcher: update banner hidden when no update", !(await page.locator("#lUpdate").isVisible()));
