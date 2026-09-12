@@ -1121,10 +1121,11 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await page.evaluate(() => window.postMessage({ type: "hostAdminOffer", offer: { host: "buildbox.example.local", url: "https://buildbox.example.local:7462", updateAvailable: true } }, "*"));
   await page.waitForTimeout(40);
   check("host admin: the Host button is highlighted when the host has an update",
-    (await page.locator("#hostAdminBtn").getAttribute("class") || "").includes("stale") && (await page.locator("#hostAdminBtn").getAttribute("title") || "").includes("Host update available"));
+    (await page.locator("#hostAdminBtn").getAttribute("class") || "").includes("stale") && (await page.locator("#hostAdminBtn").getAttribute("title") || "").includes("Host update available")
+    && (await page.locator("#hostAdminBtn").innerText()).includes("update available"));
   await page.evaluate(() => window.postMessage({ type: "hostAdminOffer", offer: { host: "buildbox.example.local", url: "https://buildbox.example.local:7462" } }, "*"));
   await page.waitForTimeout(40);
-  check("host admin: ...and plain again without one", !(await page.locator("#hostAdminBtn").getAttribute("class") || "").includes("stale"));
+  check("host admin: ...and plain again without one", !(await page.locator("#hostAdminBtn").getAttribute("class") || "").includes("stale") && !(await page.locator("#hostAdminBtn").innerText()).includes("update available"));
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h", children: null, hostAdminOffer: null } }, "*"));
   await page.waitForTimeout(60);
   check("children: an explicit null hides the card (local instance / old service)", !(await page.locator("#childrenModule").isVisible()));
