@@ -78,7 +78,9 @@ then starts `ConstructCompanion.exe --background` detached. Successful process
 creation is the commit point; it is not a runtime health check. A replacement
 failure names the step (backing up, moving the new files, registering, starting) and
 the Windows error text, so a blocked executable or a held file is visible in the
-update console.
+update console; a held file also names the processes holding it (Windows Restart
+Manager). A Companion running from the installation folder whose endpoint cannot be
+reached is waited for up to 15 seconds and then refused by name; nothing is killed.
 
 Pass `-SkipCompanion` to Auto-Install, Update Construct, Provision-AgentVM, or the library function to
 skip this run. For persistent opt-out, merge `"companion": false` into the scripts

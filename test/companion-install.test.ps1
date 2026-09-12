@@ -46,6 +46,9 @@ $seams.Start={ param($Exe,[string[]]$Arguments) if ($script:failStart) { throw '
 $seams.Alive={ param($ProcessId) $script:alive }
 $seams.Quit={ param($Endpoint,$Reason) $script:quits++; $script:lastReason=$Reason; if ($script:quitWorks) { $script:alive=$false } }
 $seams.Sleep={ param($Milliseconds) $script:sleeps++ }
+$script:runningPolls=0; $script:holders=@()
+$seams.Running={ param($Directory) if ($script:runningPolls -gt 0) { $script:runningPolls--; return @(@{name='ConstructCompanion.exe';id=777}) }; @() }
+$seams.Holders={ param($Directory) $script:holders }
 $script:failMoveTimes=0
 $seams.Move={ param($From,$To)
     if ($From -match 'companion-stage-') {
@@ -145,11 +148,21 @@ try {
     Assert (($script:registry | ConvertTo-Json -Compress) -eq $registryBefore) 'Restores registry'
     Assert (-not (Test-Path ($paths.install+'.previous'))) 'Rollback consumes previous'
     $script:failStart=$false; $script:failMove=$true; $startsBefore=$script:starts.Count; $sleepsBefore=$script:sleeps
+    $script:holders=@(@{name='MsMpEng.exe';id=42},@{name='ConstructCompanion.exe';id=777})
     $moveMessage=''; try { Install-ConstructCompanion $repo -Source local -Force -LocalAppData $local -Seams $seams | Out-Null } catch { $moveMessage=$_.Exception.Message }
-    Assert ($moveMessage.Contains('while moving the new files into place (fake move failure: being used by another process)') -and $moveMessage.Contains('the previous Companion was started again')) 'Move failure triggers rollback, names the step and restarts the previous app'
-    Assert ($script:starts.Count -eq $startsBefore+1 -and $script:sleeps -eq $sleepsBefore+7) 'Move retried before rollback, previous app restarted'
+    Assert ($moveMessage.Contains('while moving the new files into place (fake move failure: being used by another process; held by MsMpEng.exe (pid 42), ConstructCompanion.exe (pid 777))') -and $moveMessage.Contains('the previous Companion was started again')) 'Move failure triggers rollback, names the step, the holders, and restarts the previous app'
+    Assert ($script:starts.Count -eq $startsBefore+1 -and $script:sleeps -eq $sleepsBefore+19) 'Move retried for ten seconds before rollback, previous app restarted'
+    $script:holders=@(); $script:failMove=$false
+    # A Companion running from the install folder without a reachable endpoint is waited for, then refused.
+    $script:runningPolls=3
+    Assert ((Install-ConstructCompanion $repo -Source local -Force -LocalAppData $local -Seams $seams) -eq 'installed') 'Exiting Companion process is waited for'
+    [IO.File]::WriteAllText($exe,'original app')
+    $script:runningPolls=1000; $sleepsBefore=$script:sleeps
+    $runningMessage=''; try { Install-ConstructCompanion $repo -Source local -Force -LocalAppData $local -Seams $seams | Out-Null } catch { $runningMessage=$_.Exception.Message }
+    Assert ($runningMessage.Contains('still running (ConstructCompanion.exe (pid 777))') -and $script:sleeps -eq $sleepsBefore+60 -and [IO.File]::ReadAllText($exe) -eq 'original app' -and -not (Test-Path ($paths.install+'.previous'))) 'Unreachable running Companion refused before any swap'
+    $script:runningPolls=0
     Assert ([IO.File]::ReadAllText($exe) -eq 'original app') 'Move failure restores files'
-    $script:failMove=$false; $script:failMoveTimes=2
+    $script:failMoveTimes=2
     Assert ((Install-ConstructCompanion $repo -Source local -Force -LocalAppData $local -Seams $seams) -eq 'installed') 'Transient move failures are retried'
     [IO.File]::WriteAllText($exe,'original app')
     $script:failRegistry=$true
