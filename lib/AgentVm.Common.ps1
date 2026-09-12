@@ -6859,6 +6859,9 @@ function New-ConstructSourceOverlay {
         $size += $deletionBytes.Length
         if ($size -gt 64MB) { throw $tooLarge }
         $current = ''
+        # Windows PowerShell 5.1 resolves [IO.Compression.ZipArchiveMode] and CompressionLevel from
+        # System.IO.Compression, not from the FileSystem assembly that carries ZipFile; load both.
+        Add-Type -AssemblyName System.IO.Compression
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         $archive = [IO.Compression.ZipFile]::Open($Path, [IO.Compression.ZipArchiveMode]::Create); $created = $true
         foreach ($relative in $files) {
