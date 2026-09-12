@@ -107,9 +107,13 @@ public sealed partial class SqliteVmRepository
     public async Task<bool> UpdateGuestReportAsync(string name, GuestReport report, CancellationToken ct)
     {
         await using var c = await database.OpenAsync(ct); await using var cmd = c.CreateCommand();
+        // Only persist the initial provisioning as a reinstall. Legacy rows with a provisioned
+        // date keep NULL here and receive the fallback through GuestReportRules.ForPresentation.
         cmd.CommandText = """
             UPDATE vms SET guest_construct_commit=COALESCE(@commit,guest_construct_commit),
-              guest_provisioned_at=COALESCE(@provisioned,guest_provisioned_at), guest_reinstalled_at=COALESCE(@reinstalled,guest_reinstalled_at),
+              guest_provisioned_at=COALESCE(@provisioned,guest_provisioned_at),
+              guest_reinstalled_at=COALESCE(@reinstalled,
+                CASE WHEN guest_reinstalled_at IS NULL AND guest_provisioned_at IS NULL THEN @provisioned ELSE guest_reinstalled_at END),
               guest_reported_at=COALESCE(@reported,guest_reported_at),
               guest_provenance=CASE WHEN @provenance='unknown' THEN guest_provenance ELSE @provenance END,
               guest_last_attempt_at=COALESCE(@attempt,guest_last_attempt_at), guest_last_attempt_outcome=COALESCE(@outcome,guest_last_attempt_outcome)

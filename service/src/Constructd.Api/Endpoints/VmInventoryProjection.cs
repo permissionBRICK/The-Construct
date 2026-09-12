@@ -49,7 +49,7 @@ public sealed class VmInventoryProjection(IVmRepository vms, IVmDelegationReposi
             ResourceUsage = await usage.ReadAsync(vm.Name, ct),
             Media = mediaProjection,
             SourceCommit = vm.SourceCommit,
-            Guest = vm.Guest ?? GuestReport.Unknown,
+            Guest = GuestReportRules.ForPresentation(vm.Guest),
             Observed = observed,
             Reservations = new(reservation.Where(r => r.Resource == ReservationResource.Ram).Sum(r => r.Amount), checked((int)reservation.Where(r => r.Resource == ReservationResource.Cpu).Sum(r => r.Amount)), reservation.Where(r => r.Resource == ReservationResource.Storage).Sum(r => r.Amount)),
             CurrentOperation = job is null ? null : new(job.Id, job.Kind, job.Phase, job.Initiator),
