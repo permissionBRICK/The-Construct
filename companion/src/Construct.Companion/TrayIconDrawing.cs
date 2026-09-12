@@ -3,7 +3,8 @@ using Construct.Companion.Core.Desktop;
 using Construct.Companion.Windows;
 namespace Construct.Companion;
 
-// §9.1: a filled disc with a thin ring in the state colour, "?" when unconfigured, a blue dot for an update.
+// §9.1: a filled disc with a thin ring in the state colour, "?" when unconfigured, a blue dot for an
+// available update and a yellow dot while the installed update still waits for a reprovision.
 internal static class TrayIconDrawing
 {
     public static Icon Draw(TrayAppearance appearance,int dpi)
@@ -26,7 +27,11 @@ internal static class TrayIconDrawing
             graphics.DrawArc(pen,x-size*0.12f,y+h*0.25f,w+size*0.24f,h*0.75f,0,180);
             graphics.DrawLine(pen,size/2f,y+h+size*0.12f,size/2f,size*0.86f);
         }
-        if (appearance.Update) { graphics.FillEllipse(Brushes.White,size*0.6f,size*0.6f,size*0.38f,size*0.38f); graphics.FillEllipse(Brushes.DodgerBlue,size*0.65f,size*0.65f,size*0.28f,size*0.28f); }
+        if (appearance.Update || appearance.Stale)
+        {
+            using var dot=new SolidBrush(appearance.Update ? Color.DodgerBlue : Color.FromArgb(242,195,55));
+            graphics.FillEllipse(Brushes.White,size*0.6f,size*0.6f,size*0.38f,size*0.38f); graphics.FillEllipse(dot,size*0.65f,size*0.65f,size*0.28f,size*0.28f);
+        }
         var handle=bitmap.GetHicon(); try { using var borrowed=Icon.FromHandle(handle); return (Icon)borrowed.Clone(); } finally { IconHandle.DestroyIcon(handle); }
     }
 }

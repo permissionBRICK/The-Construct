@@ -238,8 +238,11 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
     // Update-Construct.ps1 is install-wide: it refreshes the scripts, the VS Code extension and this Companion
     // (its hook asks this process to quit and restarts it), so the console runs detached and the outcome is read
     // from the result file exactly as the extension does. A completed update usually ends this process first.
+    // The update button stays blocked until Update-Construct.ps1 reports its result; the panel is
+    // refreshed right after a success so the update banner disappears with the console.
     private async Task UpdateConstruct(CompanionInstance entry, CancellationToken ct)
     {
+        var watching = false;
         try
         {
             var directory = RequireDirectory(entry);
@@ -253,20 +256,23 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
                 with { EnvironmentOverrides = new Dictionary<string, string?> { [plan.EnvironmentKey] = plan.File } };
             await launcher.StartDetachedAsync(launch, ct);
             events.Companion(new { type = "lifecycle", instance = entry.Name, action = "updateConstruct", status = "launched" });
-            _ = WatchUpdateResultAsync(entry.Name, plan);
+            watching = true; _ = WatchUpdateResultAsync(entry, plan);
         }
-        finally { events.Message(entry.Name, new { type = "lifecyclePrepared", id = "updateConstruct" }); }
+        finally { if (!watching) events.Message(entry.Name, new { type = "lifecyclePrepared", id = "updateConstruct" }); }
     }
-    private async Task WatchUpdateResultAsync(string name, ResultPollingPlan plan)
+    private async Task WatchUpdateResultAsync(CompanionInstance entry, ResultPollingPlan plan)
     {
+        var name = entry.Name;
         try
         {
             var outcome = await PollResultAsync(files, clock, plan, CancellationToken.None);
             events.Companion(new { type = "lifecycle", instance = name, action = "updateConstruct", status = outcome });
-            if (outcome == "fail") Refuse(name, "updateConstruct", "Construct update didn't complete. See the update console, then retry.");
+            if (outcome == "ok") { try { await RefreshAsync(entry, CancellationToken.None, bypassManifest: true); } catch (Exception e) { logs.Failure("Construct update refresh", e); } }
+            else if (outcome == "fail") Refuse(name, "updateConstruct", "Construct update didn't complete. See the update console, then retry.");
             else if (outcome == "timeout") logs.Failure("Construct update", new TimeoutException("No result was written within the update timeout; the console shows the outcome."));
         }
         catch (Exception e) { logs.Failure("Construct update", e); }
+        finally { events.Message(name, new { type = "lifecyclePrepared", id = "updateConstruct" }); }
     }
     public static async Task<string> PollResultAsync(IStateFileSystem files, IClock clock, ResultPollingPlan plan, CancellationToken ct)
     {

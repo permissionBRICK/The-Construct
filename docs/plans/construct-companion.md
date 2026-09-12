@@ -345,7 +345,9 @@ In companion mode the extension runs none of these timers.
 ### 9.1 Tray icon
 
 Icons are drawn programmatically (GDI+, 16/20/24/32 px by DPI): a filled disc with a thin
-ring in the state colour, and a small overlay dot when a Construct update is available.
+ring in the state colour, and a small overlay dot: blue when a Construct update is available
+on this PC, yellow when the installed update still waits for a reprovision of the VM (the
+panel's Reprovision button is yellow at the same time; an available update takes precedence).
 
 | Colour | Meaning (active instance) |
 |---|---|

@@ -6,6 +6,7 @@ using Construct.Companion.Core.Lifecycle;
 using Construct.Companion.Fakes;
 using Construct.Companion.Host.Dispatch;
 using Construct.Companion.Host.Runtime;
+using Microsoft.Extensions.DependencyInjection;
 using static Construct.Companion.Tests.Ipc.HttpTests;
 namespace Construct.Companion.Tests.Ipc;
 public sealed class UpdateConstructTests
@@ -37,6 +38,28 @@ public sealed class UpdateConstructTests
         clock.Advance(plan.Interval);
         Assert.Equal(outcome, await poll.WaitAsync(TimeSpan.FromSeconds(5)));
         Assert.False(files.FileExists(plan.File));
+    }
+    [Fact]
+    public async Task UpdateButtonUnblocksOnlyAfterTheResultAndASuccessRefreshesThePanel()
+    {
+        await using var h = await Harness.Start();
+        h.Files.WriteFileAtomic("/fake/scripts/Update-Construct.ps1", "param($Repo,$Ref)"u8);
+        h.Files.WriteFileAtomic("/fake/scripts/.construct-settings.json", "{\"installedCommit\":\"abc\",\"constructRef\":\"main\",\"constructRepo\":\"owner/repo\"}"u8);
+        using var stream = await h.Client.GetAsync("/v1/events?instance=agent-vm", HttpCompletionOption.ResponseHeadersRead); using var reader = new StreamReader(await stream.Content.ReadAsStreamAsync()); await reader.ReadLineAsync(); await reader.ReadLineAsync();
+        using var response = await h.Post("/v1/instances/agent-vm/messages", new { type = "command", id = "updateConstruct" }); Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        var launcher = h.Get<FakeLauncher, ILauncher>();
+        await Until(() => launcher.Detached.Count == 1);
+        var resultFile = launcher.Detached[0].EnvironmentOverrides!["CONSTRUCT_UPDATE_RESULT"]!;
+        h.App.Services.GetRequiredService<Host.Ipc.IpcEvents>().Companion(new { type = "testBarrier" });
+        var before = new List<string>();
+        while (true) { var item = await ReadEvent(reader); if (item.Data["type"]?.GetValue<string>() == "testBarrier") break; if (item.Event == "message") before.Add(item.Data["message"]!["type"]!.GetValue<string>()); }
+        Assert.DoesNotContain("lifecyclePrepared", before);
+        h.Files.WriteFileAtomic(resultFile, "ok\n"u8);
+        // After the result: the button unblocks and the panel receives a fresh state (the refresh publishes
+        // its parts independently, so only their presence is asserted, not their order).
+        var order = new List<string>();
+        for (var i = 0; i < 100 && !(order.Contains("lifecyclePrepared") && order.Contains("state")); i++) { var item = await ReadEvent(reader); if (item.Event == "message") order.Add(item.Data["message"]!["type"]!.GetValue<string>()); }
+        Assert.Contains("lifecyclePrepared", order); Assert.Contains("state", order);
     }
     [Fact]
     public async Task ResultPollingGivesUpAfterTheTimeout()
