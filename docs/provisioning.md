@@ -13,8 +13,8 @@ What it does:
 
 1. Packs this repo folder into a `tar.gz` (excludes `.git`, `*.iso`, the host-only
    `.construct-settings.json`, and the secret-bearing `.construct-backup/`). For service-managed VMs,
-   first plan the source transport: an equivalent released checkout can come from the host cache
-   without packing; an upload is packed after SSH reachability is established.
+   first plan the source transport: a released commit can come from the host cache, with a ZIP overlay
+   for modified, added and deleted files; an upload is packed after SSH reachability is established.
 2. Waits for the VM on its SSH port (`-SshPort`, default 22), re-prompting for the hostname
    if it can't connect.
 3. Picks how to connect:
@@ -29,7 +29,8 @@ What it does:
      to PuTTY instructions. The seed password is used for `sudo` on this path.
 4. Uploads the archive to `/opt/construct/repo` and runs `bin/provision.sh` (directly as `root`
    on the fast path, otherwise via `sudo`). With the remote source cache, the guest instead
-   fetches and verifies the ZIP into `/opt/construct/repo` before the same configuration and
+   fetches and verifies the ZIP, applies any local overlay in its staging tree, and swaps it
+   into `/opt/construct/repo` before the same configuration and
    `provision.sh` steps. Auto mode falls back to the original upload if caching fails.
 5. Obtains the root SSH private key — reuses the saved copy on the fast path, otherwise retrieves
    the one the VM generated.
@@ -83,7 +84,7 @@ provisioning command, log and `config.env` are unchanged by their existence:
 | `-ServiceUrl` | `CONSTRUCT_SERVICE_URL` | The `constructd` base URL. Non-empty is what switches the guest into remote mode (service-backed `construct expose`, idle heartbeat timer). |
 | `-InstanceName` | `CONSTRUCT_INSTANCE_NAME` | This VM's name on that service — the `{name}` in `/api/v1/vms/{name}/…`. |
 | `-VmTokenB64` | `CONSTRUCT_VM_TOKEN_B64` | The VM-scoped token (base64), written by `provision.sh` to `/etc/construct/vm-token` (mode `0600`). |
-| `-SourceMode` | client only (default `auto`) | `auto` caches only an equivalent released checkout; `cache` explicitly uses the commit and fails on cache errors; `upload` uses the original tar. Ignored for local transport; `-IncludeGit` selects upload. |
+| `-SourceMode` | client only (default `auto`) | `auto` fetches the released commit and uploads local changes as an overlay, up to 5,000 files / 64 MiB uncompressed, falling back to the full tar if unavailable or refused; `cache` sends the commit without local changes and fails on cache errors; `upload` uses the original tar. Ignored for local transport; `-IncludeGit` selects upload. |
 | `-SourceEnsureTimeoutSec` | client only (default `900`) | Deadline for waiting on a source job. Unreachable service polls fall back after three consecutive failures. |
 
 The token is a one-time secret and is treated as one: it is passed as a parameter *value*,
@@ -377,7 +378,7 @@ solely by you:
 
 `bin/fetch-construct-source.sh` is streamed independently of the checkout it replaces. It never
 runs `provision.sh` itself or alters the configuration channels. Size/hash/ZIP failures leave
-the previous tree intact; a failed swap restores it. Exit 7 means restoration also failed:
+the previous tree intact, including overlay refusals. Overlays preserve existing file modes; new `.sh` files and paths under `bin/` get 0755, other new files 0644. Deleted files are removed and their empty parent directories pruned. A failed swap restores the previous tree. Exit 7 means restoration also failed:
 auto mode repairs it through upload, and cache mode directs you to rerun with `-SourceMode upload`.
 
 | Variable | Default | Purpose |

@@ -954,20 +954,26 @@ the existing channels. The fetch uses the VM's own token in a private header fil
 stages that token over SSH stdin before fetching. Secret transport rules in §5 are unchanged.
 
 `Provision-AgentVM.ps1 -InstanceName <name> -SourceMode auto` is the default. It uses the cache
-only for `constructRef=main` with a known commit and a provably equivalent checkout. Any tracked
-edit or non-ignored untracked file forces upload, even if git is configured to hide untracked
-files. Archive installs use the per-file manifest at
-`%LOCALAPPDATA%\The-Construct\source-manifests\<commit40>.sha256`; missing, changed or extra files
-force upload. Old installs without a manifest upload until `Update-Construct.ps1` runs once.
+for `constructRef=main` with a known released commit. When files differ, the guest fetches
+that commit from the host and the PC uploads only the modified and added files, plus a deletion
+list, in an overlay ZIP. Git checkouts include non-ignored untracked files even if git is
+configured to hide them. Archive installs compare files with the per-file manifest at
+`%LOCALAPPDATA%\The-Construct\source-manifests\<commit40>.sha256`; the existing local-artifact
+exclusions still apply to added files, including legacy `projects/*.json` profiles.
+
+An overlay may contain at most 5,000 changed files and 64 MiB of uncompressed data. Changes
+that cannot be listed, larger overlays, or overlay packing/upload/application failures fall back
+to the full upload with a reason. Old installs without a manifest upload until
+`Update-Construct.ps1` runs once.
 
 `-SourceMode upload` explicitly uses the old pack/scp/unpack path. `-IncludeGit` also uses it.
-`-SourceMode cache` explicitly selects the commit even if local files differ, and stops on
+`-SourceMode cache` explicitly selects the commit without any local changes or overlay, and stops on
 cache failure instead of falling back. These switches are available on `Provision-AgentVM.ps1`;
 Auto-Install and panel reprovision commands use the default. Local Hyper-V provisioning retains
 its original upload path.
 
 On success the client prints `Construct source: host cache (commit …, … KB); nothing uploaded
-from this PC.` This refers to the checkout archive. In auto mode it warns with the reason and
+from this PC.` With an overlay it instead reports `Construct source: host cache (commit …, … KB) + … differing file(s) (… KB) uploaded from this PC.` These sizes are compressed bytes. This refers to source transport. In auto mode it warns with the reason and
 uploads if the service is old/disabled/unreachable, the commit is unreleased, the cache is full,
 the job fails or times out, or the guest cannot verify/install the ZIP. The feature probe is
 bounded to 10 seconds, ensure to 30 seconds, and job polls stop after three consecutive failures

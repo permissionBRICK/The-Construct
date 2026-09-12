@@ -1,6 +1,7 @@
 # Remote reprovision source cache (design contract)
 
-Status: **contract for implementation** (branch `feat/remote-reprovision-cache` builds against it).
+Status: **shipped host-cache contract, extended by the source-overlay implementation**.
+Overlay owner decision: 2026-09-12, branch `feat/source-overlay`. The overlay provisions below supersede the original equivalence-only defaults T2/T3 and C14/C15.
 Date: 2026-09-11 (revision 3 after review rounds 1 and 2). Branch: `rr/contract`.
 Inputs: the owner's goal of 2026-09-11 (below), `Provision-AgentVM.ps1`, `bin/provision.sh`,
 `lib/AgentVm.Common.ps1`, `lib/AgentVm.Remote.ps1`, `install.ps1`, `Update-Construct.ps1`,
@@ -23,9 +24,9 @@ technical choice open, the choice is made here and marked **decided here** with 
 rationale; §0 lists every such choice in one place. §0.1 lists the proposed technical defaults
 that touch product behaviour; **the owner was not reachable in this run** (the contract is
 written autonomously against the goal text), so none of them claims owner approval, and each
-is chosen so that the strictest reading of the goal holds: source is never evicted
-automatically, and the cache is used only when the client can prove its checkout equals the
-release. Nothing in this document exists in code yet unless it says "existing". Line numbers
+was chosen for the original goal: source is never evicted automatically, and the original client
+used the cache only for equivalent checkouts. The owner's 2026-09-12 decision adds overlays for
+divergent checkouts as specified in §4.6.1. The rest of the host cache contract is unchanged. Line numbers
 refer to the tree at `253f3ce` (`origin/main`). Facts marked *measured* were checked on that
 tree on 2026-09-11 (Linux; python3 `sqlite3` and `zipfile`).
 
@@ -301,6 +302,8 @@ Environment contract (all values arrive through `env` in the remote command, non
 | `CONSTRUCT_SOURCE_COMMIT` | yes | 40 hex. |
 | `CONSTRUCT_SOURCE_SHA256` | yes | 64 hex, from the ensure result. |
 | `CONSTRUCT_SOURCE_SIZE` | yes | Byte count, from the ensure result. |
+| `CONSTRUCT_SOURCE_OVERLAY` | no | Temporary ZIP path; unset means no overlay. |
+| `CONSTRUCT_SOURCE_OVERLAY_SHA256` / `CONSTRUCT_SOURCE_OVERLAY_SIZE` | with overlay | SHA-256 and compressed byte count of the uploaded ZIP. |
 | `CONSTRUCT_SEED_USER` | yes | `chown` target (the same `$SeedUser` the tar path uses). |
 | `CONSTRUCT_VM_TOKEN_FILE` | no | Default `/etc/construct/vm-token` (reprovision). The first provision points it at the temp file of §4.6. |
 | `CONSTRUCT_SERVICE_CA_FILE` | no | Default `/etc/construct/service-ca.pem` when it exists. |
@@ -317,10 +320,10 @@ Steps and exit codes (`set -euo pipefail`; a `trap` removes the work directory o
 | 1. Validate every input (`^[0-9a-f]{40}$`, `^[0-9a-f]{64}$`, integer size ≤ max, seed user exists, token file readable, `python3`, `curl`, `sha256sum` present). | `2` |
 | 2. `parent=$(dirname "$REPO_DIR")`; `mkdir -p "$parent"`; `work=$(mktemp -d "$parent/.repo-fetch.XXXXXX")` (same filesystem as the destination, so step 6 is a rename, never a copy); write `Authorization: VmToken <token>` into `$work/headers` under `umask 077`; `curl --silent --show-error --fail-with-body --max-time … --max-filesize $CONSTRUCT_SOURCE_SIZE -H @$work/headers -H 'Accept: application/zip' [--cacert …] -o $work/source.zip -w '%{http_code}' <url>`; one retry after 3 s on a transport failure or `409`. The token is never on a command line and never printed. | `3` (prints the HTTP status and the problem `code` when the body is JSON; never the body verbatim) |
 | 3. `stat -c %s` equals `CONSTRUCT_SOURCE_SIZE` and `sha256sum` equals `CONSTRUCT_SOURCE_SHA256`. | `4` |
-| 4. Extract with `python3` (§3.5) into `$work/repo`. | `5` |
+| 4. Extract with `python3` (§3.5) into `$work/repo`, then validate and apply any overlay (§4.6.1) before writing `.construct-revision`. | `4` for overlay size/hash mismatch, `5` for extraction/application refusal |
 | 5. `chown -R "$CONSTRUCT_SEED_USER:$CONSTRUCT_SEED_USER" "$work/repo"`, and `chown "$CONSTRUCT_SEED_USER:$CONSTRUCT_SEED_USER" "$parent"` (the tar path's `chown -R /opt/construct` reaches the parent too). Both **before** the swap, so every fallible operation the result needs has succeeded before the old tree is touched. | `6` (old repo untouched) |
 | 6. Swap, all renames on one filesystem: `old="$parent/.repo-old.$$"`; (a) if `$REPO_DIR` exists, `mv "$REPO_DIR" "$old"` — failure → exit `6`, old tree untouched; (b) `mv "$work/repo" "$REPO_DIR"` — failure → `mv "$old" "$REPO_DIR"` (restore) → exit `6`; if the restore itself fails → exit `7` (`repo-lost`); (c) `rm -rf "$old"` — **non-fatal**: a failure prints `warning: previous repo left at <old>` and the run still succeeds (the next run removes leftover `.repo-old.*` directories before step 2). On a fresh install there is no (a) and no (c). Nothing fallible that the result needs runs after (b). | `6` / `7` |
-| 7. Print `CONSTRUCT_SOURCE_INSTALLED=<commit>` and `CONSTRUCT_SOURCE_BYTES=<n>`; remove `$work`. | `0` |
+| 7. Print `CONSTRUCT_SOURCE_INSTALLED=<commit>` and `CONSTRUCT_SOURCE_BYTES=<n>`, plus overlay written/deleted counts when applicable; remove `$work` and any overlay under `/tmp`. | `0` |
 
 Guarantee: **exit codes 2–6 leave the previous `/opt/construct/repo` in place** (steps 1–5 never touch it; step 6 restores it). Exit `7` means the restore failed and the repo is missing; the client's response is in §4.8. The script never touches `/etc/construct/config.env`, never writes the token anywhere, and never runs anything from the fetched tree. The local tar path (`Provision-AgentVM.ps1:1816`) is not changed by any of this.
 
@@ -360,7 +363,7 @@ The tar packs the whole checkout minus `.git`, `*.iso`, `.construct-settings.jso
 | In the tar today | Is it configuration? | How it reaches the guest with the cache transport |
 |---|---|---|
 | Tracked source (`bin/`, `lib/`, `config/`, `systemd/`, `projects/default.json` + samples, `console-viewer/`, `extension/`, `docs/`, `service/`, `companion/`, `test/`, `drivers/`, `keys/`, `*.ps1`, `bootstrap.sh`, …) | no | the cache item (the release zip contains exactly the tracked tree). |
-| `projects/*.json` user profiles, when someone still keeps them in the checkout | **no longer read from there**: `bin/generate-runtime-config.sh:87-133` resolves `default` from the shipped copy and every other profile **from `/opt/construct/projects` only** | the config-sync tick already writes the live profiles from `%LOCALAPPDATA%\The-Construct\config\projects` into `/opt/construct/projects/<name>.json` before `provision.sh` runs (`Invoke-ConstructConfigSync` → `Write-ConstructVmStore`, `Provision-AgentVM.ps1:1905-2185`). Unchanged. A profile kept only in the checkout's `projects/` shows up as an untracked/extra file and forces the upload (C14/C15). |
+| `projects/*.json` user profiles, when someone still keeps them in the checkout | **no longer read from there**: `bin/generate-runtime-config.sh:87-133` resolves `default` from the shipped copy and every other profile **from `/opt/construct/projects` only** | the config-sync tick already writes the live profiles from `%LOCALAPPDATA%\The-Construct\config\projects` into `/opt/construct/projects/<name>.json` before `provision.sh` runs (`Invoke-ConstructConfigSync` → `Write-ConstructVmStore`, `Provision-AgentVM.ps1:1905-2185`). Unchanged. A profile kept only in the checkout's `projects/` shows up as an untracked/extra file and joins the overlay in Git mode. Archive mode retains its local-artifact exclusion for these profiles. |
 | `.construct-tools/` (ISO builder), `runtime/`, `__pycache__/`, `.env`, `*.local` | host-only or generated | not sent; unused by the guest (§3.5). |
 | `keys/bootstrap_ed25519{,.pub}` | tracked; used by the host, stripped from the guest's `authorized_keys` at the end | in the zip (tracked), unchanged. |
 | `.construct-settings.json`, `.construct-backup/`, `*.iso`, `.git` | excluded today | excluded. |
@@ -375,7 +378,7 @@ Everything else the guest needs is already outside the tar and is **not changed 
 | Saved agent config (reinstall) | scp of `construct-config-restore.tar.gz` + `restore-config.sh` | `:2412-2445` |
 | Git identity, agent password, bootstrap-key removal | env prefix / final ssh session | `:2948-3021` |
 
-So the "config bundle" is a name for what the provisioner already sends; the cache transport removes the tar and adds nothing. No new secret travels, no new file is written on the guest beyond `/opt/construct/repo` itself.
+So the "config bundle" is a name for what the provisioner already sends; the cache transport replaces the full tar with a released commit and, when needed, a temporary overlay ZIP. Configuration and token channels remain unchanged.
 
 ### 4.2 Decision logic (C12): `Get-ConstructSourceTransportPlan` (decided here)
 
@@ -390,7 +393,8 @@ Get-ConstructSourceTransportPlan
   -Ref <string>                 # settings.constructRef ('' = 'main')
   -Commit <string>              # Get-ConstructSourceIdentity.Commit
   -TreeState 'equivalent'|'divergent'|'unverified'|'unknown'
-  -Divergence <int>             # count of differing entries (message only)
+  -Divergence <int>             # count of differing files
+  -Changes <hashtable or null>  # Modified, Added, Deleted arrays; plan carries Overlay
   -> @{ Transport = 'cache'|'upload'; Reason = <code>; Message = <text>; Commit = <40hex or ''> }
 ```
 
@@ -405,7 +409,9 @@ Decision matrix (first matching row wins; `Reason` is the code the tests assert)
 | true | `auto` | false | true | ≠ `main` | any | upload | `ref-not-main` |
 | true | `auto` | false | true | `main` | commit not 40 hex or tree `unknown` | upload | `commit-unknown` |
 | true | `auto` | false | true | `main` | tree `unverified` (archive without manifest) | upload | `archive-unverified` |
-| true | `auto` | false | true | `main` | tree `divergent` | upload | `local-changes` |
+| true | `auto` | false | true | `main` | tree `divergent`, Changes unavailable | upload | `local-changes` |
+| true | `auto` | false | true | `main` | tree `divergent`, > 5,000 changed files | upload | `local-changes-too-large` |
+| true | `auto` | false | true | `main` | tree `divergent`, Changes available, ≤ 5,000 files | **cache + overlay** | `cache-overlay` |
 | true | `auto` | false | true | `main` | 40 hex and tree `equivalent` | **cache** | `cache` |
 | true | `cache` | false | false | any | any | **throw** | `service-without-source-cache` |
 | true | `cache` | false | true | any | commit not 40 hex | **throw** | `commit-unknown` |
@@ -418,7 +424,7 @@ New in `lib/AgentVm.Common.ps1` (pure apart from reading the checkout; `git` is 
 | Checkout | Commit | TreeState | Divergence |
 |---|---|---|---|
 | `.git` present, `git` available, `git -C $Root rev-parse HEAD` is 40 hex, `git -C $Root status --porcelain --untracked-files=all --ignore-submodules=none` prints nothing (the explicit options override a user's `status.showUntrackedFiles`/`diff.ignoreSubmodules` settings; the repository has no submodules today, and a future one's dirtiness counts) | HEAD | `equivalent` | 0 |
-| same, status prints n lines | HEAD | `divergent` | n |
+| same, status prints n lines | HEAD | `divergent` | total changed files, or n when Changes unavailable |
 | `.git` present, `git` missing or failing | `''` | `unknown` | – |
 | no `.git`, `.construct-revision` is 40 hex, manifest `<ManifestDir>\<commit>.sha256` present, every listed file present with the listed hash, and no extra file in the tree (§4.4) | that value | `equivalent` | 0 |
 | same, but any listed file missing/different or any extra file | that value | `divergent` | n |
@@ -440,12 +446,13 @@ There is no `-InstallSource` parameter in the repository today (the source-selec
 | Situation | What happens |
 |---|---|
 | Developer checkout on `main`, committed and clean | cache (`git rev-parse HEAD` is released once `main` published it; until then `source-unavailable` → upload with the message). |
-| Developer checkout with local edits or untracked files | upload, reason `local-changes` (T2). |
+| Developer checkout with local edits or untracked files | cache + overlay when the change set is available and within limits. Otherwise upload. |
 | Checkout on a feature branch (`constructRef` ≠ `main`, or the commit is unreleased) | upload, reason `ref-not-main` / `ensure-failed:source-unavailable`. |
 | Archive install with a manifest that matches | cache. |
-| Archive install with hand edits, extra files, or no manifest (installed before this change) | upload, reason `local-changes` / `archive-unverified` (T3); the next `Update-Construct.ps1` writes the manifest. |
+| Archive install with hand edits or extra files | cache + overlay under the same limits, retaining the local-artifact exclusions. |
+| Archive install without a manifest | upload, reason `archive-unverified`; the next `Update-Construct.ps1` writes the manifest. |
 | `-IncludeGit` | upload (the guest is meant to receive `.git`). |
-| `-SourceMode cache` | cache for HEAD regardless of tree state, or a hard error naming the reason (for scripted use). |
+| `-SourceMode cache` | cache for HEAD without local changes or an overlay, regardless of tree state, or a hard error naming the reason (for scripted use). |
 
 ### 4.6 New flow in `Provision-AgentVM.ps1`
 
@@ -474,13 +481,52 @@ The only textual change on this path is the guard around line 1744: `if (-not $S
 2. `Ensure-VmReachable` (line 1745, unchanged). A remote VM that is unreachable fails here **before** any packing: on the remote path the archive is no longer built for a VM that cannot be reached (today it is built first and then discarded), which is the one observable difference and is deliberate.
 3. **Begin** (new block right after line 1745): `$sourceState = Invoke-ConstructSourceTransport -Phase begin -Plan $sourcePlan …`. For a `cache` plan it generates the run's operation key (`'source-' + [guid]::NewGuid().ToString('n')`), issues the ensure **once**, prints `==> Ensuring Construct source <commit7> on the host service` and `    Source cached on the host (<n> KB)` or `    Host is fetching commit <commit7> from the release (job <id>)`, and stores the outcome. An outcome other than `ready`/`downloading` already turns `$sourceState.Transport` into `upload` here (§4.8, "ensure failure before SSH"). Then: `if ($sourceState.Transport -eq 'upload') { $archivePath = New-RepoArchive }` — the remote upload path packs here, after reachability and after the ensure decision, and prints the usual `Packing repo …`.
 4. Host-key acceptance, root-key fast path / bootstrap key / sudo checks (lines 1747-1807, unchanged). The host's download overlaps with them.
-5. **Complete** replaces the two steps `Uploading repo archive …` / `Unpacking repo on the VM` (lines 1809-1817) inside `if ($ServiceUrl) { … } else { <today's two steps verbatim> }`: `$sourceResult = Invoke-ConstructSourceTransport -Phase complete -State $sourceState …`. For `cache` it waits for the job (progress lines print as they do for creation), stages the token if needed (step 6), streams `bin/fetch-construct-source.sh` (read from `$PSScriptRoot\bin`) over stdin with the §3.3 environment, parses `CONSTRUCT_SOURCE_INSTALLED=`, prints `    Construct source: host cache (commit <commit7>, <n> KB); nothing uploaded from this PC.` For `upload` (planned, decided at begin, or fallen back inside `complete`) it runs the `-Upload` closure: `New-RepoArchive` when `$archivePath` is still empty, then today's `Uploading …`/`Unpacking …` steps verbatim.
+5. **Complete** replaces the two steps `Uploading repo archive …` / `Unpacking repo on the VM` (lines 1809-1817) inside `if ($ServiceUrl) { … } else { <today's two steps verbatim> }`: `$sourceResult = Invoke-ConstructSourceTransport -Phase complete -State $sourceState …`. For `cache` it waits for the job (progress lines print as they do for creation), packs and uploads an overlay when the plan carries Changes (see §4.6.1), stages the token if needed (step 6), streams `bin/fetch-construct-source.sh` (read from `$PSScriptRoot\bin`) over stdin with the §3.3 environment, parses `CONSTRUCT_SOURCE_INSTALLED=`, prints `    Construct source: host cache (commit <commit7>, <n> KB); nothing uploaded from this PC.` For `upload` (planned, decided at begin, or fallen back inside `complete`) it runs the `-Upload` closure: `New-RepoArchive` when `$archivePath` is still empty, then today's `Uploading …`/`Unpacking …` steps verbatim.
 
 6. **First provision** (C16): when `-VmTokenB64` is set, before the fetch the decoded token is written with `Send-GuestSecret` to `/tmp/.construct-vm-token-fetch.<guid>` (0600) and passed as `CONSTRUCT_VM_TOKEN_FILE`; the remote fetch command removes it on exit whatever the exit code, the way `$tokenCleanup` does. The later `provision.sh` token delivery (`:2355-2372`) is unchanged and still writes `/etc/construct/vm-token`. The CA rides as `CONSTRUCT_SERVICE_CA_B64` (already computed at `:2326-2340`; computed earlier when the cache path is taken).
 7. **`-Action export`** keeps working: it needs the repo on the VM for `export-config.sh` and gets it through whichever transport was used.
 8. **Everything after the repo is in place** (config-sync tick, restore, `provision.sh`, guest report, markers, host-side `~/.ssh`, VS Code) is untouched. `CONSTRUCT_VERSION` stays `installedCommit`; `Set-ConstructProvisionedMarker` and `Send-ConstructGuestReport` are called exactly as today.
 
 `Auto-Install.ps1` and the panel/Companion reprovision commands need no change (default `auto`). `-SourceMode` is not threaded through `Auto-Install.ps1` in this delivery; a user who wants the upload runs `Provision-AgentVM.ps1 -InstanceName <name> -SourceMode upload`.
+
+### 4.6.1 Source overlays (owner decision, 2026-09-12)
+
+`Get-ConstructSourceIdentity` returns `Changes = @{ Modified = @(); Added = @(); Deleted = @() }`
+with ordinal-sorted, case-preserved, forward-slash relative paths. Archive mode compares the
+manifest hashes and lists missing/extra files using the existing local-artifact exclusions.
+Git mode parses the existing porcelain invocation: `??` and `A` add, either-column `D` deletes,
+other statuses modify; a rename deletes the old path and adds the new one. Paths present in both deletion and write lists keep their on-disk copy. Quoted or unparsable
+paths, including embedded repositories reported as directories, make Changes null while Divergence still counts status lines. Git mode applies no extra
+artifact exclusions.
+
+After ensure/job success in `complete`, `-PackOverlay { param($changes) }` calls
+`New-ConstructSourceOverlay -Root <checkout> -Changes <hashtable> -Path <zip>`. Modified and added
+files use `construct-overlay/<relative path>` entries, Optimal compression. Optional root entry
+`construct-overlay.deleted` contains UTF-8 without BOM, LF-terminated deletion paths. The packer
+rejects invalid paths, reparse points in entries and parent directories inside the checkout, more than 5,000 changed files,
+and more than 64 MiB uncompressed including the deletion list. It returns Path, Files, Deleted,
+SizeBytes (uncompressed), CompressedSizeBytes, and Sha256 of the ZIP.
+
+`-UploadOverlay { param($overlay) }` uploads to `/tmp/construct-source-overlay.<guid>.zip`, mode
+0600, then deletes the local ZIP. Token staging and guest fetch follow in that order. The guest
+receives `CONSTRUCT_SOURCE_OVERLAY`, `CONSTRUCT_SOURCE_OVERLAY_SHA256`, and
+`CONSTRUCT_SOURCE_OVERLAY_SIZE` (compressed ZIP bytes). Client cleanup covers upload, staging,
+and fetch failures; guest cleanup removes the overlay under `/tmp` on success and failure.
+No content or credentials appear in diagnostics or command arguments.
+
+After base extraction and before revision/chown/swap, the guest applies the overlay in staging.
+Size/hash mismatches exit 4; ZIP or application violations print `source-fetch: overlay-refused`
+and exit 5, preserving the previous repo. It uses the base ZIP's validation rules, with exactly
+`construct-overlay` as the root and optional `construct-overlay.deleted`; at most 20,000 entries
+and uncompressed data at most min(16 × compressed size, 1 GiB). Existing files retain base modes;
+new `.sh` files or paths under `bin/` get 0755, other new files 0644. Deletions remove regular
+files only, ignore missing files, and prune emptied parent directories. Successful output adds
+`CONSTRUCT_SOURCE_OVERLAY_FILES=<written>` and `CONSTRUCT_SOURCE_OVERLAY_DELETED=<removed>`.
+
+`cache-overlay` is an Info message, not a warning. Success reports
+`    Construct source: host cache (commit <short>, N KB) + M differing file(s) (K KB) uploaded from this PC.`
+Both displayed sizes are compressed. Forced `cache` sends only the commit, never an overlay;
+`upload` and the local single-VM path retain their existing behavior. The service is unchanged.
 
 ### 4.7 Client library functions (C23, C24)
 
@@ -501,6 +547,11 @@ Every event below is handled by `Invoke-ConstructSourceTransport`. "Upload" mean
 
 | Event (phase) | Reason code | `auto` | Notes |
 |---|---|---|---|
+| Changes unavailable (plan) | `local-changes` | upload | differing files could not be listed |
+| More than 5,000 changes (plan/pack), or more than 64 MiB uncompressed (pack) | `local-changes-too-large` | upload | no guest fetch |
+| Overlay packing failure (complete) | `overlay-pack-failed:<detail>` | upload | safe packer code or exception type, no file content |
+| Overlay upload failure (complete) | `overlay-upload-failed` | upload | clean temporary ZIPs |
+| Overlay size/hash or extraction/application failure | `guest-fetch-failed:4` / `guest-fetch-failed:5` | upload | previous repo intact |
 | Feature probe false/timeout (plan) | `service-without-source-cache` | upload | no ensure attempted |
 | Ensure `unsupported` (begin) | `service-without-source-cache` | upload | |
 | Ensure `denied` 401/403 (begin) | `ensure-denied:<status>` | upload | proposed technical default T4 (§0.1), not an owner decision |
@@ -532,7 +583,11 @@ Fallbacks, all `Write-Warning`, then the ordinary `==> Packing repo …` output:
 | `ref-not-main` | `Construct source ref '<ref>' is not main, so no host release exists for it; uploading the checkout as before.` |
 | `commit-unknown` | `Could not determine this checkout's commit (no git or no .construct-revision); uploading the checkout as before.` |
 | `archive-unverified` | `This Construct install has no source manifest (it was installed before the host cache existed); uploading the checkout as before. Run Update-Construct.ps1 once to enable the host cache.` |
-| `local-changes` | `This checkout differs from commit <commit7> in <n> file(s) (modified, missing or extra); uploading it as before so the VM gets them. Commit or ignore them to use the host cache, or pass -SourceMode cache to send commit <commit7> without them.` |
+| `cache-overlay` (Info) | `This checkout differs from commit <short> in N file(s); the VM fetches commit <short> from the host cache and only those file(s) are uploaded from this PC.` |
+| `local-changes-too-large` | `This checkout differs from commit <short> in N file(s), too many or too large for an overlay; uploading it as before…` |
+| `overlay-pack-failed:<detail>` | `Could not pack the N differing file(s) (<detail>); uploading the checkout as before.` |
+| `overlay-upload-failed` | `Could not upload the source overlay to the VM; uploading the checkout as before.` |
+| `local-changes` | `This checkout differs from commit <commit7> in <n> file(s) (the differing files could not be listed); uploading it as before so the VM gets them. Commit or ignore them to use the host cache, or pass -SourceMode cache to send commit <commit7> without them.` |
 | `include-git` | (none; `-IncludeGit` is explicit) |
 | `ensure-denied:<status>` | `The host service refused the source request (HTTP <status>); uploading the checkout as before.` |
 | `ensure-maintenance` | `The host service is in maintenance; uploading the checkout as before.` |
@@ -675,7 +730,7 @@ Fake mode reads `HostAdmin:Source:FakeReleaseDir`: `FakeReleaseSource.GetSourceA
 
 - T1–T4 (§0.1) are proposed technical defaults; the owner was not reachable in this run and no approval is claimed. Relaxing them later changes the plan function, the retention rule or one fallback row, not the API.
 - A full cache (`source-cache-full`) is not self-healing: every affected reprovision uploads as before until an admin deletes entries. The admin list shows `committedBytes` so this is visible; the default cap holds hundreds of commits at today's ~4 MB.
-- Archive installs made before this change upload until their next `Update-Construct.ps1` writes the manifest; a hand-edited archive install uploads permanently in `auto` (by design), with `-SourceMode cache` as the explicit override.
+- Archive installs made before this change upload until their next `Update-Construct.ps1` writes the manifest; a hand-edited archive install with a manifest uses an overlay in `auto` when its changes fit the limits. `-SourceMode cache` explicitly omits those changes.
 - A commit that `main` has not published yet (a push whose release workflow is still running, or coalesced away by GitHub) falls back to the upload; the next reprovision after publication uses the cache.
 - The client learns the feature from one `GET /health` per run; a host disabled between probe and ensure answers `409 unsupported-capability`, which is handled as a fallback, not an error.
 - The cache is host-charged and invisible to `GET /host/capacity`; an operator whose `RootDir` volume also holds VM disks sets `MaxTotalBytes` accordingly.
@@ -692,3 +747,14 @@ Fake mode reads `HostAdmin:Source:FakeReleaseDir`: `FakeReleaseSource.GetSourceA
 - The orchestration helper also exposes `-Pack`, so begin-time packing and fallback packing can be asserted independently from upload.
 - Source API calls opt into a bounded preflight/request budget; legacy callers retain preflight exception behavior and existing status/error accessors.
 - Byte-identity checks compare the unchanged local archive algorithm, upload commands, transcript on identical inputs and downstream environment; naturally the new tracked feature files join future source archives, while no generated manifest enters the checkout.
+
+- The 2026-09-12 overlay owner decision supersedes the original equivalence-only client defaults.
+  The host cache protocol and service remain unchanged.
+- Overlay packing reports both uncompressed `SizeBytes` and `CompressedSizeBytes`; guest integrity
+  checks and progress use the compressed size. Packing errors expose the packer's fixed diagnostic code or an exception type, so
+  paths or file contents from an underlying exception cannot leak into diagnostics.
+- The 64 MiB client limit includes the deletion-list bytes. Highly compressible overlays can
+  still exceed the specified guest 16× expansion bound and fall back to full upload.
+- A user-selected symlink or junction at the checkout root is allowed; linked entries and
+  parent directories within the checkout are refused. Git delete/write overlaps retain the
+  on-disk file, and the packer independently refuses conflicting write/delete paths.
