@@ -191,7 +191,9 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
             if (data["agents"] is JsonArray agents) data["agents"] = await UpdatePlanner.AugmentAgentsAsync(updates, agents, ct);
             // Everything the enrichment adds must survive the next probe-driven rebuild of the state (StateAggregation.State copies Enrichment).
             entry.Enrichment = new JsonObject { ["constructUpdate"] = data["constructUpdate"]?.DeepClone(), ["provisionStale"] = data["provisionStale"]?.DeepClone() };
-            foreach (var key in new[] { "update", "constructRev" }) if (data[key] is { } folded) entry.Enrichment[key] = folded.DeepClone();
+            // Companion has no update toast with an action button. Its generic tray balloon
+            // cannot trigger Reprovision, so only the shared panel carries this VM verdict.
+            foreach (var key in new[] { "update", "constructRev", "vmConstruct" }) if (data[key] is { } folded) entry.Enrichment[key] = folded.DeepClone();
             state.Publish(entry.Name, full);
             state.PublishSnapshot(entry.Name);
         }

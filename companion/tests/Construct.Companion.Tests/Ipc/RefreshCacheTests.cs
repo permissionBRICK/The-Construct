@@ -94,7 +94,7 @@ public sealed class RefreshCacheTests
 }
 public sealed class UpdateBannerStateTests
 {
-    // The panel reads update.available/behind and constructRev; both must survive the probe-driven rebuild of the state.
+    // The panel reads update.available/behind, constructRev and vmConstruct; all must survive a probe-driven rebuild.
     [Fact]
     public async Task FoldedUpdateFieldsSurviveStateRebuilds()
     {
@@ -126,7 +126,15 @@ public sealed class UpdateBannerStateTests
             Assert.True(rebuilt["update"]!["available"]!.GetValue<bool>());
             Assert.Equal("", rebuilt["update"]!["behind"]!.GetValue<string>());
             Assert.Equal("main@aaaaaaa", rebuilt["constructRev"]!.GetValue<string>());
+            Assert.Equal("unknown", rebuilt["vmConstruct"]!["state"]!.GetValue<string>());
+            Assert.Equal("aaaaaaa", rebuilt["vmConstruct"]!["installed"]!.GetValue<string>());
             Assert.True(rebuilt.ContainsKey("registerOffer")); Assert.Null(rebuilt["registerOffer"]);
+            // A later probe marker must update the comparison immediately, before the slower
+            // enrichment timer runs again.
+            host.Services.GetRequiredService<Host.Runtime.RuntimeMessageBus>().Publish("agent-vm", new { type = "state", instance = "agent-vm", state = new { online = true, vmState = "running", provisionedCommit = "bbbbbbb" } });
+            var reprobed = host.Services.GetRequiredService<StateAggregation>().State("agent-vm")["state"]!.AsObject();
+            Assert.Equal("behind", reprobed["vmConstruct"]!["state"]!.GetValue<string>());
+            Assert.Equal("bbbbbbb", reprobed["vmConstruct"]!["provisioned"]!.GetValue<string>());
         }
         finally { await host.StopAsync(); }
     }
