@@ -149,6 +149,19 @@ param(
     # can also apply it to an existing VM via Set-AgentVmCheckpoints.ps1. "true"/"false".
     [ValidateSet("true", "false")]
     [string]$AutomaticCheckpoints = "false",
+    # First-install defaults. Explicit component parameters always win.
+    [ValidateSet('', 'minimal', 'full', 'custom')]
+    [string]$FeatureSet = '',
+    [switch]$Auto,
+    [switch]$NonInteractive,
+    # Internal elevation handoff: choices and the client Companion attempt are complete.
+    [Parameter(DontShow)][switch]$FeatureSetResolved,
+    [ValidateSet('', 'true', 'false')][string]$GitCredentialStore = '',
+    [ValidateSet('', 'true', 'false')][string]$VsCodeServeWeb = '',
+    [ValidateSet('', 'true', 'false')][string]$VsCodeTunnel = '',
+    [ValidateSet('', 'true', 'false')][string]$SmbShare = '',
+    [ValidateSet('', 'true', 'false')][string]$MountRepoShare = '',
+    [ValidateSet('', 'true', 'false')][string]$T3CodeHttps = '',
     [switch]$SkipCompanion,
     [switch]$SkipChecksum,
     [switch]$SkipCreateVm,
@@ -249,6 +262,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "lib/AgentVm.FeatureSet.ps1")
 
 if ($T3CodeChannel) { $T3CodeChannel = $T3CodeChannel.ToLower() }
 
@@ -607,6 +621,136 @@ function Test-ConstructPriorLocalInstall {
     }
 }
 
+function Test-ConstructFreshFeatureInstall {
+    param($Snapshot)
+    # add-config can perform a first install, so freshness probes decide that action.
+    if ($SkipCreateVm -or $Action -in @('reprovision', 'reinstall', 'redownload', 'export', 'remove-instance', 'publish-config')) { return $false }
+    if ($Snapshot -and ($Snapshot.Exists -or @($Snapshot.Entries.Keys).Count -gt 1)) { return $false }
+    foreach ($name in @('Agent-VM', $VmName, $InstanceName) | Select-Object -Unique) {
+        if (-not $name) { continue }
+        if (Test-ConstructPriorLocalInstall -VmName $name) { return $false }
+        try {
+            if ((Get-Command Test-ConstructVmPresent -ErrorAction SilentlyContinue) -and
+                ((Test-ConstructVmPresent -Name $name) -eq $true)) { return $false }
+        } catch { }
+    }
+    return $true
+}
+
+function Initialize-ConstructInstallFeatures {
+    param([System.Collections.IDictionary]$Bound, $Snapshot)
+    if ($script:ConstructFeaturesInitialized -or $SkipCreateVm) { return }
+    $script:ConstructFeaturesInitialized = $true
+    $script:ConstructFeatureParameters = @{}
+    foreach ($p in @((Get-ConstructFeatureTable | ForEach-Object { $_.Parameter })) + @('T3CodeChannel')) {
+        if ($Bound.ContainsKey($p)) { $script:ConstructFeatureParameters[$p] = $Bound[$p] }
+    }
+    if ($FeatureSetResolved) { return }
+    $fresh = Test-ConstructFreshFeatureInstall -Snapshot $Snapshot
+    $interactive = -not ($Auto -or $NonInteractive -or $FromPanel -or [Console]::IsInputRedirected)
+    if ($fresh) {
+        $tier = $FeatureSet
+        if (-not $tier -and $interactive) {
+            Show-TuiScreen -Title 'Feature set'
+            $pick = Show-Menu -Title 'Feature set' -Options @(
+                'Minimal  Companion, Claude streaming and git credential store; HTTPS default on',
+                'Full     Minimal + browser IDE, SMB, microphone, OpenCode watcher, patched T3 + Desktop',
+                'Custom   Choose each component; defaults match Minimal'
+            ) -Default 0
+            $tier = @('minimal', 'full', 'custom')[$pick]
+        }
+        if (-not $tier) { $tier = 'minimal' }
+        $answers = @{}
+        if ($tier -eq 'custom' -and $interactive) {
+            foreach ($row in Get-ConstructFeatureTable) {
+                $answers[$row.Parameter] = Invoke-TuiConfirm -ScreenTitle 'Feature set' `
+                    -Question $row.Prompt -DefaultNo:(-not $row.Minimal)
+            }
+        }
+        $resolved = Resolve-ConstructFeatureSet -FeatureSet $tier -Bound $script:ConstructFeatureParameters -CustomAnswers $answers
+        $script:ConstructFeatureParameters = @{}
+        foreach ($p in $resolved.ForwardParameters) {
+            $script:ConstructFeatureParameters[$p] = $resolved.Parameters[$p]
+            $Bound[$p] = $resolved.Parameters[$p]
+            Set-Variable -Scope Script -Name $p -Value $resolved.Parameters[$p]
+        }
+        # The Companion runs as the desktop user before elevation. Persist its actual
+        # preference before SkipCompanion becomes the downstream duplicate-attempt guard.
+        $clientSettings = @{ companion = $resolved.Settings.companion }
+        if ($resolved.Settings.Contains('gitCredentialStore')) {
+            $clientSettings['gitCredentialStore'] = $resolved.Settings.gitCredentialStore
+        }
+        Save-ConstructSettings -Dir $PSScriptRoot -Values $clientSettings
+        $lines = @($resolved.Values.GetEnumerator() | ForEach-Object {
+            $label = if ("$($_.Value)" -eq '') { 'VM default / saved' } elseif ($_.Value) { 'on' } else { 'off' }
+            '{0}: {1}' -f $_.Key, $label
+        })
+        Show-TuiScreen -Title 'Feature set' -Body $lines
+    } else {
+        $saved = Read-ConstructSettings -Dir $PSScriptRoot
+        if ($Bound.ContainsKey('SkipCompanion')) {
+            Save-ConstructSettings -Dir $PSScriptRoot -Values @{ companion = -not [bool]$Bound['SkipCompanion'] }
+        }
+        # Already-elevated runs bypass the client hook, so carry its saved opt-out
+        # into downstream provisioning too.
+        if (-not $Bound.ContainsKey('SkipCompanion') -and $saved -and $saved.companion -eq $false) {
+            $script:SkipCompanion = [switch]$true
+        }
+    }
+    $Bound['FeatureSetResolved'] = [switch]$true
+}
+
+function Restore-ConstructInstallFeatures {
+    param([string]$Name)
+    # Replay saved settings before any existing-VM action can invoke provisioning.
+    $wide = Read-ConstructSettings -Dir $PSScriptRoot
+    $defaultStore = (-not $Name -or $Name -ceq 'agent-vm')
+    $saved = if (Get-Command Read-ConstructInstanceState -ErrorAction SilentlyContinue) {
+        Read-ConstructInstanceState -Name $Name -Dir $PSScriptRoot
+    } elseif ($defaultStore) { $wide } else { $null }
+    # Without the optional state library, a named VM must not borrow the default VM's settings.
+    $settings = @{}
+    foreach ($row in Get-ConstructFeatureTable) {
+        if ($row.Parameter -eq 'SkipCompanion') { continue }
+        $p = $row.Parameter
+        $source = $saved
+        if ($p -eq 'GitCredentialStore') { $source = $wide }
+        if (-not $script:ConstructFeatureParameters.ContainsKey($p) -and $source -and
+            $source.PSObject.Properties.Name -contains $row.Key) {
+            $savedText = "$($source.($row.Key))".Trim().ToLowerInvariant()
+            if ($savedText -in @('true', 'false')) {
+                $script:ConstructFeatureParameters[$p] = $savedText
+            } elseif ($p -eq 'AutomaticCheckpoints' -and $savedText -in @('1', '0')) {
+                # Preserve the legacy checkpoint reader's numeric boolean support.
+                $script:ConstructFeatureParameters[$p] = if ($savedText -eq '1') { 'true' } else { 'false' }
+            }
+            # Null or malformed saved values are absent preferences, not caller errors.
+        }
+        if ($script:ConstructFeatureParameters.ContainsKey($p)) {
+            $v = "$($script:ConstructFeatureParameters[$p])".ToLowerInvariant()
+            $script:ConstructFeatureParameters[$p] = $v
+            Set-Variable -Scope Script -Name $p -Value $v
+            if ("$v" -ne '') { $settings[$row.Key] = ConvertTo-ConstructFeatureBoolean $v }
+        }
+    }
+    if (-not $script:ConstructFeatureParameters.ContainsKey('T3CodeChannel') -and $saved -and
+        $saved.t3codeChannel -in @('stable', 'nightly')) {
+        $script:ConstructFeatureParameters['T3CodeChannel'] = [string]$saved.t3codeChannel
+    }
+    if ($script:ConstructFeatureParameters.ContainsKey('T3CodeChannel')) {
+        $script:T3CodeChannel = ([string]$script:ConstructFeatureParameters['T3CodeChannel']).ToLowerInvariant()
+        $script:ConstructFeatureParameters['T3CodeChannel'] = $T3CodeChannel
+        if ($T3CodeChannel) { $settings['t3codeChannel'] = $T3CodeChannel }
+    }
+    if ($settings.Count) {
+        if (Get-Command Save-ConstructInstanceState -ErrorAction SilentlyContinue) {
+            Save-ConstructInstanceState -Name $Name -Dir $PSScriptRoot -Values $settings
+        } elseif ($defaultStore) {
+            Save-ConstructSettings -Dir $PSScriptRoot -Values $settings
+        }
+    }
+}
+
 function Resolve-ConstructInstallMode {
     <#
         "hyperv-local" or "hyperv-remote" for THIS run, decided once and cached.
@@ -653,7 +797,7 @@ function Resolve-ConstructInstallMode {
     }
 
     $script:ConstructInstallMode = 'hyperv-local'
-    if ($SkipCreateVm -or $FromPanel) { return $script:ConstructInstallMode }
+    if ($SkipCreateVm -or $FromPanel -or $Auto -or $NonInteractive) { return $script:ConstructInstallMode }
     foreach ($p in @('Action', 'VmName', 'VmHost', 'InstanceName')) {
         if ($Bound.ContainsKey($p)) { return $script:ConstructInstallMode }
     }
@@ -772,11 +916,6 @@ if (-not $SkipCreateVm -and $Action -ne 'remove-instance') {
         } catch {
             Write-Warning "Could not set up the control panel on the host (continuing): $($_.Exception.Message)"
         }
-        try { . (Join-Path $PSScriptRoot 'lib/Construct.Companion.ps1'); Invoke-ConstructCompanionInstallHook -ScriptsDir $PSScriptRoot -SkipCompanion:$SkipCompanion }
-        catch { Write-Warning 'Could not load Companion installer helpers; continuing VM installation.' }
-        # The client pre-step owns this attempt; descendants must not install twice.
-        $SkipCompanion = $true
-        $PSBoundParameters['SkipCompanion'] = $true
         # ── Local or remote? Decided BEFORE the relaunch ──────────────────────
         # A REMOTE install creates no local VM, so it needs no administrator rights --
         # and elevating would be actively harmful where UAC switches to a different
@@ -803,6 +942,15 @@ if (-not $SkipCreateVm -and $Action -ne 'remove-instance') {
             }
         } catch { }
         $modeSnapshot = Read-ConstructInstanceRegistrySnapshot
+        Enable-ConstructTui
+        [void](Resolve-ConstructInstallMode -Bound $PSBoundParameters -Snapshot $modeSnapshot)
+        Initialize-ConstructInstallFeatures -Bound $PSBoundParameters -Snapshot $modeSnapshot
+        try { . (Join-Path $PSScriptRoot 'lib/Construct.Companion.ps1'); Invoke-ConstructCompanionInstallHook -ScriptsDir $PSScriptRoot -SkipCompanion:$SkipCompanion }
+        catch { Write-Warning 'Could not load Companion installer helpers; continuing VM installation.' }
+        # The client pre-step owns this attempt; descendants must not install twice.
+        $SkipCompanion = $true
+        $PSBoundParameters['SkipCompanion'] = [switch]$true
+        $script:ConstructFeatureParameters['SkipCompanion'] = [switch]$true
         if ((Resolve-ConstructInstallMode -Bound $PSBoundParameters -Snapshot $modeSnapshot) -eq 'hyperv-remote') {
             # Write-Host, not Write-Note: this runs BEFORE this script's own output
             # helpers are defined.
@@ -1150,6 +1298,7 @@ if (-not $script:ConstructInstallMode) {
     $modeSnapshot = Read-ConstructInstanceRegistrySnapshot
     [void](Resolve-ConstructInstallMode -Bound $PSBoundParameters -Snapshot $modeSnapshot)
 }
+Initialize-ConstructInstallFeatures -Bound $PSBoundParameters -Snapshot $modeSnapshot
 $RemoteInstall = ($script:ConstructInstallMode -eq 'hyperv-remote')
 if ($RemoteInstall -and $SkipCreateVm) {
     # -SkipCreateVm means "build the autoinstall ISO here and stop". A remote install
@@ -2062,6 +2211,9 @@ function New-ConstructRemoteProvisionArgs {
     foreach ($opt in @('T3CodeChannel', 'T3CodeLimitResume', 'OpenCodeBackgroundWatcher')) {
         if ($script:RemoteProvCmd -and -not $script:RemoteProvCmd.Parameters.ContainsKey($opt)) { $a.Remove($opt) }
     }
+    if ($script:ConstructFeatureParameters) {
+        Add-ConstructFeatureArguments -Arguments $a -Values $script:ConstructFeatureParameters -Command $script:RemoteProvCmd
+    }
     return $a
 }
 
@@ -2155,6 +2307,7 @@ if ($RemoteInstall) {
     # ═══ An instance that already exists: reprovision / reinstall / export ════
     if ($existingEntry) {
         $instName = [string]$existingEntry.Name
+        Restore-ConstructInstallFeatures -Name $instName
         $instKey  = "construct_${instName}_ed25519"
         $instBranch = [string]$existingEntry.ConfigBranch
         if (-not $instBranch) { $instBranch = "vm-$instName" }
@@ -2245,6 +2398,7 @@ if ($RemoteInstall) {
             if ($PSBoundParameters.ContainsKey('GitEmail'))    { $giParams['Email'] = $GitEmail }
             if ($giParams.ContainsKey('Name') -and $giParams.ContainsKey('Email')) { $giParams['NoPrompt'] = $true }
             if ($FromPanel) { $giParams['NoPrompt'] = $true }
+            if ($GitCredentialStore) { $giParams['CredentialStore'] = if ($GitCredentialStore -eq 'true') { 'yes' } else { 'no' } }
             $reprovGit = Resolve-GitIdentity @giParams
 
             $reprovCloneCredB64 = ""
@@ -2423,6 +2577,8 @@ if ($RemoteInstall) {
                "Nothing was created on $svcUrl. Fix the registry ($($registry.Path)) or pick another name.")
     }
 
+    Restore-ConstructInstallFeatures -Name $instName
+
     # ── The usual questions, asked up front ───────────────────────────────────
     # Not the local path's prompts: the recommendation there is "a third of THIS PC's
     # RAM", and the machine that matters here is the host's -- which we cannot see, and
@@ -2489,6 +2645,7 @@ if ($RemoteInstall) {
     if ($PSBoundParameters.ContainsKey('GitEmail'))    { $giParams['Email'] = $GitEmail }
     if ($giParams.ContainsKey('Name') -and $giParams.ContainsKey('Email')) { $giParams['NoPrompt'] = $true }
     if ($FromPanel) { $giParams['NoPrompt'] = $true }
+    if ($GitCredentialStore) { $giParams['CredentialStore'] = if ($GitCredentialStore -eq 'true') { 'yes' } else { 'no' } }
     $gitId = Resolve-GitIdentity @giParams
 
     $pwLabel  = if ($chosenAgentPassword -and $chosenAgentPassword -ne "agent") { "custom" } else { "default" }
@@ -2519,7 +2676,7 @@ if ($RemoteInstall) {
                         MemoryGB             = $chosenMemGB
                         DiskGB               = $chosenDiskGB
                         Nested               = $true
-                        AutomaticCheckpoints = $false
+                        AutomaticCheckpoints = ($AutomaticCheckpoints -eq 'true')
                         Redownload           = $remoteRedownload
                     }
     # The size this VM was created with, recorded as the control panel's settings for
@@ -2623,6 +2780,7 @@ $VmKeyName   = $script:VmIdentity.KeyName
 # never reaches here -- it returns inside the `if ($RemoteInstall)` block above, where the
 # instance name is -InstanceName.
 $VmInstanceName = $script:VmIdentity.Name
+if (-not $SkipCreateVm) { Restore-ConstructInstallFeatures -Name $VmInstanceName }
 # The config-sync branch THIS run owns: an explicit -ConfigBranch wins, otherwise the
 # SAME derivation Provision-AgentVM.ps1 applies ("agent-vm" -> "vm", anything else ->
 # "vm-<alias>"). Every sync this script performs -- the PRE-WIPE tick below included --
@@ -2710,6 +2868,7 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
         if ($PSBoundParameters.ContainsKey('GitUserName')) { $giParams['Name']  = $GitUserName }
         if ($PSBoundParameters.ContainsKey('GitEmail'))    { $giParams['Email'] = $GitEmail }
         if ($giParams.ContainsKey('Name') -and $giParams.ContainsKey('Email')) { $giParams['NoPrompt'] = $true }
+        if ($GitCredentialStore) { $giParams['CredentialStore'] = if ($GitCredentialStore -eq 'true') { 'yes' } else { 'no' } }
         $reprovGit = Resolve-GitIdentity @giParams
 
         # Check anonymous access; reprovision uses the VM credentials without prompting.
@@ -2753,6 +2912,7 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
         if ($PSBoundParameters.ContainsKey('AgentPassword')) { $reprovArgs['AgentPassword'] = $AgentPassword }
         if ($reprovCloneCredB64) { $reprovArgs['GitCloneCredentialsB64'] = $reprovCloneCredB64 }
         if ($PSBoundParameters.ContainsKey('AutoResolve')) { $reprovArgs['AutoResolve'] = $AutoResolve }
+        $reprovCmd = $null
         try {
             $reprovCmd = Get-Command -Name $provisionScript -CommandType ExternalScript -ErrorAction Stop
             if ($SkipCompanion -and $reprovCmd.Parameters.ContainsKey('SkipCompanion')) { $reprovArgs['SkipCompanion'] = $true }
@@ -2766,11 +2926,13 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
                 $reprovArgs.Remove('OpenCodeBackgroundWatcher')
             }
         } catch {
+            $reprovCmd = $null
             $reprovArgs.Remove('T3CodeChannel')
             $reprovArgs.Remove('T3CodeLimitResume')
             $reprovArgs.Remove('OpenCodeBackgroundWatcher')
         }
         try {
+            Add-ConstructFeatureArguments -Arguments $reprovArgs -Values $script:ConstructFeatureParameters -Command $reprovCmd
             Invoke-DeElevatedProvision -ScriptPath $provisionScript -ProvisionParams $reprovArgs
         } catch {
             # Show the failure ABOVE the pause so it's readable even when the
@@ -3080,6 +3242,7 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
             $acGiParams = @{ Dir = $PSScriptRoot; NoPrompt = $true }
             if ($PSBoundParameters.ContainsKey('GitUserName')) { $acGiParams['Name']  = $GitUserName }
             if ($PSBoundParameters.ContainsKey('GitEmail'))    { $acGiParams['Email'] = $GitEmail }
+            if ($GitCredentialStore) { $acGiParams['CredentialStore'] = if ($GitCredentialStore -eq 'true') { 'yes' } else { 'no' } }
             $acGitId = Resolve-GitIdentity @acGiParams
 
             # Clone credentials for any new repos.
@@ -3109,6 +3272,7 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
             if ($ConfigBranch) { $acReprovArgs['ConfigBranch'] = $ConfigBranch }
             if ($acCloneCredB64) { $acReprovArgs['GitCloneCredentialsB64'] = $acCloneCredB64 }
             if ($PSBoundParameters.ContainsKey('AutoResolve')) { $acReprovArgs['AutoResolve'] = $AutoResolve }
+            $acProvCmd = $null
             try {
                 $acProvCmd = Get-Command -Name $provisionScript -CommandType ExternalScript -ErrorAction Stop
                 if ($SkipCompanion -and $acProvCmd.Parameters.ContainsKey('SkipCompanion')) { $acReprovArgs['SkipCompanion'] = $true }
@@ -3122,10 +3286,12 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
                     $acReprovArgs.Remove('OpenCodeBackgroundWatcher')
                 }
             } catch {
+                $acProvCmd = $null
                 $acReprovArgs.Remove('T3CodeChannel')
                 $acReprovArgs.Remove('T3CodeLimitResume')
                 $acReprovArgs.Remove('OpenCodeBackgroundWatcher')
             }
+            Add-ConstructFeatureArguments -Arguments $acReprovArgs -Values $script:ConstructFeatureParameters -Command $acProvCmd
             Invoke-DeElevatedProvision -ScriptPath $provisionScript -ProvisionParams $acReprovArgs
         } catch {
             Write-Host ""
@@ -3261,7 +3427,10 @@ if (-not $SkipCreateVm -and -not $existingVmHandled -and
 # covers an OLDER control-panel extension driving a NEWER Auto-Install: it passes no
 # argument at all, and without this the saved "on" would be lost.
 $effectiveAutoCheckpoints = $AutomaticCheckpoints
-if (-not $PSBoundParameters.ContainsKey('AutomaticCheckpoints')) {
+# Resolved feature values already include explicit and saved preferences. The legacy
+# fallback below only handles older settings that the feature reader did not resolve.
+if (-not $PSBoundParameters.ContainsKey('AutomaticCheckpoints') -and
+    (-not $script:ConstructFeatureParameters -or -not $script:ConstructFeatureParameters.ContainsKey('AutomaticCheckpoints'))) {
     try {
         # THIS VM's saved preference ($VmInstanceName is the one place that answers "which
         # instance"), so the default VM reads the legacy top-level key and any other VM
@@ -3379,6 +3548,7 @@ if (-not $SkipCreateVm) {
     # page owns it. Resolve silently from the passed values, else the saved settings,
     # else this host's git identity (even if only one of name/email was passed).
     if ($FromPanel) { $giParams['NoPrompt'] = $true }
+    if ($GitCredentialStore) { $giParams['CredentialStore'] = if ($GitCredentialStore -eq 'true') { 'yes' } else { 'no' } }
     $gitId = Resolve-GitIdentity @giParams
     $chosenGitName  = $gitId.Name
     $chosenGitEmail = $gitId.Email
@@ -3592,6 +3762,7 @@ Save-ConstructVmSpec -Dir $PSScriptRoot -InstanceName $VmInstanceName -MemoryGB 
 # there is a parameter-binding failure -- and by this point the old VM is already
 # DELETED, so the rebuild would simply break. Drop the argument instead (the old
 # script's own default stands) and say so loudly, rather than fail the rebuild.
+$createCmd = $null
 try {
     $createCmd = Get-Command -Name $createScript -CommandType ExternalScript -ErrorAction Stop
     if ($SkipCompanion -and $createCmd.Parameters.ContainsKey('SkipCompanion')) { $createArgs['SkipCompanion'] = $true }
@@ -3648,6 +3819,7 @@ if ($PSBoundParameters.ContainsKey('Repo') -or $PSBoundParameters.ContainsKey('R
     $createArgs['Repo'] = $Repo; $createArgs['Ref'] = $Ref
 }
 try {
+    Add-ConstructFeatureArguments -Arguments $createArgs -Values $script:ConstructFeatureParameters -Command $createCmd
     & $createScript @createArgs
 
     # ── Elevated host-side finalization (needs admin) ────────────────────────
@@ -3689,6 +3861,7 @@ try {
     if ($PSBoundParameters.ContainsKey('AutoResolve')) { $provArgs['AutoResolve'] = $AutoResolve }
     # Same version-skew guard as above: an older Provision-AgentVM.ps1 may lack
     # -T3CodeChannel; splatting it would fail parameter binding.
+    $provCmd = $null
     try {
         $provCmd = Get-Command -Name $provisionScript -CommandType ExternalScript -ErrorAction Stop
         if ($SkipCompanion -and $provCmd.Parameters.ContainsKey('SkipCompanion')) { $provArgs['SkipCompanion'] = $true }
@@ -3699,9 +3872,11 @@ try {
             $provArgs.Remove('OpenCodeBackgroundWatcher')
         }
     } catch {
+        $provCmd = $null
         $provArgs.Remove('T3CodeChannel')
         $provArgs.Remove('OpenCodeBackgroundWatcher')
     }
+    Add-ConstructFeatureArguments -Arguments $provArgs -Values $script:ConstructFeatureParameters -Command $provCmd
     Invoke-DeElevatedProvision -ScriptPath $provisionScript -ProvisionParams $provArgs
 
     # ── Post-provision host setup ────────────────────────────────────────────

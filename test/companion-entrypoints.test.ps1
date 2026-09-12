@@ -25,12 +25,19 @@ function Uninstall-ConstructCompanion { $null = $script:calls.Add(@{uninstall=$t
     Set-Content (Join-Path $dir 'lib/AgentVm.Common.ps1') 'function Install-ControlPanelExtension { param($SourceRoot) return $true }'
     $auto = Get-Content -Raw (Join-Path $repo 'Auto-Install.ps1')
     $begin = $auto.IndexOf("if (-not `$SkipCreateVm -and `$Action -ne 'remove-instance') {")
-    $end = $auto.IndexOf('        # ── Local or remote?', $begin)
-    Assert ($begin -gt 0 -and $end -gt $begin) 'Locate actual installer pre-step before backend selection'
+    $end = $auto.IndexOf("        if ((Resolve-ConstructInstallMode -Bound", $begin)
+    Assert ($begin -gt 0 -and $end -gt $begin) 'Locate actual installer pre-step before elevation'
     $pre = $auto.Substring($begin, $end-$begin) + "`n    }`n}"
     # The only Windows-native query in this boundary is replaced by a normal-user result.
     $pre = [regex]::Replace($pre, '(?s)\$isAdmin = \(\[Security.Principal.WindowsPrincipal\].*?\)\.IsInRole\(\[Security.Principal.WindowsBuiltInRole\]::Administrator\)', '$isAdmin = $false')
-    $header = 'param($Backend, [switch]$SkipCompanion) $SkipCreateVm=$false; $Action=""; $PSBoundParameters=@{}' + "`n"
+    $header = @'
+param($Backend, [switch]$SkipCompanion)
+$SkipCreateVm=$false; $Action=""; $PSBoundParameters=@{}
+function Read-ConstructInstanceRegistrySnapshot { return $null }
+function Resolve-ConstructInstallMode { param($Bound,$Snapshot) return $Backend }
+function Enable-ConstructTui { }
+function Initialize-ConstructInstallFeatures { param($Bound,$Snapshot) $script:ConstructFeatureParameters=@{} }
+'@ + "`n"
     Set-Content (Join-Path $dir 'Auto-Install.ps1') ($header + $pre)
     foreach ($scenario in @('fresh-local', 'fresh-remote', 'additional-remote')) {
         $script:calls.Clear()
@@ -41,7 +48,7 @@ function Uninstall-ConstructCompanion { $null = $script:calls.Add(@{uninstall=$t
         }
         $backend = if ($scenario -eq 'fresh-local') { 'hyperv-local' } else { 'hyperv-remote' }
         . (Join-Path $dir 'Auto-Install.ps1') -Backend $backend
-        Assert ($script:calls.Count -eq 1) "$scenario reaches installer once before backend decision"
+        Assert ($script:calls.Count -eq 1) "$scenario reaches installer once before elevation"
         Assert ($script:calls[0].dir -eq $dir) "$scenario installs on the client PC"
     }
     $provision = Get-Content -Raw (Join-Path $repo 'Provision-AgentVM.ps1')

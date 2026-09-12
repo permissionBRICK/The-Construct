@@ -130,7 +130,14 @@ param(
     # final "Press Enter" pause. When run on its own this stays off and the
     # script pauses at the end -- important because a direct run self-elevates
     # into a fresh window that would otherwise vanish before it can be read.
-    [switch]$Auto
+    [switch]$Auto,
+    # Feature overrides forwarded to Provision; appended to preserve positional callers.
+    [ValidateSet('', 'true', 'false')][string]$GitCredentialStore = '',
+    [ValidateSet('', 'true', 'false')][string]$VsCodeServeWeb = '',
+    [ValidateSet('', 'true', 'false')][string]$VsCodeTunnel = '',
+    [ValidateSet('', 'true', 'false')][string]$SmbShare = '',
+    [ValidateSet('', 'true', 'false')][string]$MountRepoShare = '',
+    [ValidateSet('', 'true', 'false')][string]$T3CodeHttps = ''
 )
 
 if ($T3CodeChannel) { $T3CodeChannel = $T3CodeChannel.ToLower() }
@@ -233,6 +240,7 @@ function Register-ThisVmInstance {
 }
 
 # Shared helpers: interactive menu, reinstall confirmation, VM teardown.
+. (Join-Path $PSScriptRoot "lib/AgentVm.FeatureSet.ps1")
 $commonLib = Join-Path $PSScriptRoot "lib\AgentVm.Common.ps1"
 if (-not (Test-Path -LiteralPath $commonLib)) { throw "Required helper not found: $commonLib" }
 . $commonLib
@@ -396,6 +404,7 @@ if ((Test-ConstructVmPresent -Name $VmName) -eq $true) {
             $provArgs['Repo'] = $Repo; $provArgs['Ref'] = $Ref
         }
         if ($SkipCompanion -and (Get-Command -Name $provisionScript -CommandType ExternalScript -ErrorAction Stop).Parameters.ContainsKey('SkipCompanion')) { $provArgs['SkipCompanion'] = $true }
+        Add-ConstructFeatureArguments -Arguments $provArgs -Values $PSBoundParameters -Command (Get-Command -Name $provisionScript -CommandType ExternalScript)
         Invoke-DeElevatedProvision -ScriptPath $provisionScript -ProvisionParams $provArgs
         return
     }
@@ -652,6 +661,7 @@ if ($isAutoinstall) {
                 $provArgs['Repo'] = $Repo; $provArgs['Ref'] = $Ref
             }
             if ($SkipCompanion -and (Get-Command -Name $provisionScript -CommandType ExternalScript -ErrorAction Stop).Parameters.ContainsKey('SkipCompanion')) { $provArgs['SkipCompanion'] = $true }
+            Add-ConstructFeatureArguments -Arguments $provArgs -Values $PSBoundParameters -Command (Get-Command -Name $provisionScript -CommandType ExternalScript)
             Invoke-DeElevatedProvision -ScriptPath $provisionScript -ProvisionParams $provArgs
         }
     }
