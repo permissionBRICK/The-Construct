@@ -39,7 +39,8 @@ public sealed class DesktopSnapshot(IClock clock)
                 if (vm != "unknown" || State.VmState != "unknown") unknownSince = clock.UtcNow;
                 if (StateJson.Text(data["instance"]) is { } owner) ApplyOnline(owner, StateJson.Truthy(data["online"]));
                 State = State with { Online = StateJson.Truthy(data["online"]), VmState = vm,
-                    ProbeError = StateJson.Truthy(data["probeError"]), UpdateAvailable = StateJson.Truthy(data["constructUpdate"]?["available"]) || StateJson.Truthy(data["update"]?["available"]) };
+                    ProbeError = StateJson.Truthy(data["probeError"]), UpdateAvailable = StateJson.Truthy(data["constructUpdate"]?["available"]) || StateJson.Truthy(data["update"]?["available"]),
+                    ProvisionStale = StateJson.Truthy(data["provisionStale"]) };
                 if (data.ContainsKey("hostAdminOffer")) ApplyOffer(data["hostAdminOffer"] as JsonObject);
                 if (data["forwards"] is JsonObject forwards) Apply(JsonSerializer.SerializeToElement(new { type = "forwards", forwards }));
                 break;

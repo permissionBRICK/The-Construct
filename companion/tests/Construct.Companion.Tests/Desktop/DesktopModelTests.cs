@@ -110,6 +110,13 @@ public sealed class DesktopModelTests
         snapshot.Apply(System.Text.Json.JsonSerializer.SerializeToElement(new { type = "audio", instance = "a", enabled = true, capturing = true }));
         Assert.True(snapshot.Current.MicActive);
         snapshot.ApplyMic("a", false); Assert.False(snapshot.Current.MicActive);
+        // A pending reprovision shows a yellow dot; an available update (blue) takes precedence.
+        snapshot.Apply(System.Text.Json.JsonSerializer.SerializeToElement(new { type = "state", state = new { instance = "a", online = true, vmState = "running", provisionStale = true } }));
+        Assert.True(snapshot.Current.ProvisionStale); Assert.True(TrayModel.Appearance(snapshot.Current).Stale); Assert.False(TrayModel.Appearance(snapshot.Current).Update);
+        snapshot.Apply(System.Text.Json.JsonSerializer.SerializeToElement(new { type = "state", state = new { instance = "a", online = true, vmState = "running", provisionStale = true, constructUpdate = new { available = true } } }));
+        Assert.True(TrayModel.Appearance(snapshot.Current).Update); Assert.False(TrayModel.Appearance(snapshot.Current).Stale);
+        snapshot.Apply(System.Text.Json.JsonSerializer.SerializeToElement(new { type = "state", state = new { instance = "a", online = true, vmState = "running" } }));
+        Assert.False(TrayModel.Appearance(snapshot.Current).Stale); Assert.False(TrayModel.Appearance(snapshot.Current).Update);
     }
     [Fact]
     public void MenuGatesAndChecks()
