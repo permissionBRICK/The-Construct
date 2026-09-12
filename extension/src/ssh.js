@@ -206,6 +206,8 @@ function runRemote(remoteCommand, opts = {}) {
     } catch (e) {
       return finish(-1);
     }
+    child.stdin.on("error", () => {});
+    child.stdin.end(opts.stdin);
     child.stdout.on("data", (d) => { if (stdout.length < MAX_OUT) stdout += d.toString(); });
     child.stderr.on("data", (d) => { if (stderr.length < MAX_OUT) stderr += d.toString(); });
     child.on("error", (e) => { stderr += String(e); finish(-1); });

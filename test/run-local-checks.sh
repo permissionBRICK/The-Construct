@@ -8,12 +8,14 @@ group="${1:-all}"
 case "$group" in panel|t3|service|companion|all) ;; *) echo 'Usage: bash test/run-local-checks.sh [panel|t3|service|companion|all]' >&2; exit 2 ;; esac
 if [[ "$group" == panel || "$group" == all ]]; then
   node extension/test/guest-console.test.js
+  node extension/test/console.test.js
   node extension/test/hostadmin.test.js
   node extension/test/hostadmin-ui.test.js
   node extension/test/hostadmin-discovery.test.js
   node extension/test/vmpower.test.js
   node extension/test/lifecycle.test.js
   pwsh -NoProfile -File test/vm-resources.test.ps1
+  pwsh -NoProfile -File test/console-local.test.ps1
   UI_SMOKE_THEME="${UI_SMOKE_THEME:-native}" node extension/test/ui-smoke.js
 fi
 if [[ "$group" == t3 || "$group" == all ]]; then

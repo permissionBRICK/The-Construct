@@ -19,6 +19,7 @@ public sealed class StateAggregation(CompanionInstances instances, RuntimeMessag
         var data = (probe["state"] as JsonObject ?? probe).DeepClone().AsObject(); data.Remove("type");
         foreach (var (key, value) in entry.Enrichment) data[key] = value?.DeepClone();
         data["instance"] = name; data["backend"] = entry.Definition["backend"]?.DeepClone(); data["connected"] = false; data["connectedInstance"] = null;
+        data["console"] = Construct.Companion.Core.HostAdmin.GuestConsole.StateFor(entry.Definition, OperatingSystem.IsWindows());
         data["companion"] = true; data["canConvertHost"] = StateJson.Text(entry.Definition["backend"]) == "hyperv-local";
         var pending = StateJson.ReadObject(files, HostConversion.PendingPath(instances.Host.LocalAppData));
         var resultPath = StateJson.Text(pending?["resultPath"]);

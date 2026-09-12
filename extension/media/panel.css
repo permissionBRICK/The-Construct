@@ -506,3 +506,6 @@ select, select[class], select[class]:hover, option {
   background-color: var(--vscode-dropdown-background, var(--void));
   border-color: var(--vscode-dropdown-border, var(--line-strong));
 }
+
+#consoleBtn .action-icon { width: 1em; height: 1em; }
+.strip-note { margin: -10px 0 14px; }
