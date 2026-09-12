@@ -1098,7 +1098,11 @@ function Get-ConstructSourceMessage {
         '^ref-not-main$' { $message = "Construct source ref '$Ref' is not main, so no host release exists for it; uploading the checkout as before."; break }
         '^commit-unknown$' { $message = "Could not determine this checkout's commit (no git or no .construct-revision); uploading the checkout as before."; break }
         '^archive-unverified$' { $message = 'This Construct install has no source manifest (it was installed before the host cache existed); uploading the checkout as before. Run Update-Construct.ps1 once to enable the host cache.'; break }
-        '^local-changes$' { $message = "This checkout differs from commit $short in $Divergence file(s) (modified, missing or extra); uploading it as before so the VM gets them. Commit or ignore them to use the host cache, or pass -SourceMode cache to send commit $short without them."; break }
+        '^local-changes$' { $message = "This checkout differs from commit $short in $Divergence file(s) (the differing files could not be listed); uploading it as before so the VM gets them. Commit or ignore them to use the host cache, or pass -SourceMode cache to send commit $short without them."; break }
+        '^cache-overlay$' { $message = "This checkout differs from commit $short in $Divergence file(s); the VM fetches commit $short from the host cache and only those file(s) are uploaded from this PC."; break }
+        '^local-changes-too-large$' { $message = "This checkout differs from commit $short in $Divergence file(s), too many or too large for an overlay; uploading it as before$([char]0x2026)"; break }
+        '^overlay-pack-failed:(.*)$' { $message = "Could not pack the $Divergence differing file(s) ($($Matches[1])); uploading the checkout as before."; break }
+        '^overlay-upload-failed$' { $message = 'Could not upload the source overlay to the VM; uploading the checkout as before.'; break }
         '^ensure-denied:(.*)$' { $message = "The host service refused the source request (HTTP $($Matches[1])); uploading the checkout as before."; break }
         '^ensure-maintenance$' { $message = 'The host service is in maintenance; uploading the checkout as before.'; break }
         '^ensure-(refused|failed):(.*)$' {
@@ -1122,9 +1126,9 @@ function Get-ConstructSourceTransportPlan {
     [CmdletBinding()]
     param([bool]$ServiceManaged, [ValidateSet('auto','cache','upload')][string]$Mode = 'auto', [bool]$IncludeGit,
         [bool]$FeatureAvailable, [string]$Ref = 'main', [string]$Commit = '',
-        [ValidateSet('equivalent','divergent','unverified','unknown')][string]$TreeState = 'unknown', [int]$Divergence = 0)
+        [ValidateSet('equivalent','divergent','unverified','unknown')][string]$TreeState = 'unknown', [int]$Divergence = 0, [hashtable]$Changes = $null)
     if (-not $Ref) { $Ref = 'main' }
-    $transport = 'upload'; $reason = ''
+    $transport = 'upload'; $reason = ''; $overlay = $null
     if (-not $ServiceManaged) { $reason = 'local-install' }
     elseif ($Mode -eq 'upload') { $reason = 'mode-upload' }
     elseif ($IncludeGit) { $reason = 'include-git' }
@@ -1133,11 +1137,15 @@ function Get-ConstructSourceTransportPlan {
     elseif ($Commit -notmatch '^[0-9a-f]{40}$' -or ($Mode -eq 'auto' -and $TreeState -eq 'unknown')) { $reason = 'commit-unknown' }
     elseif ($Mode -eq 'cache') { $transport = 'cache'; $reason = 'cache-forced' }
     elseif ($TreeState -eq 'unverified') { $reason = 'archive-unverified' }
-    elseif ($TreeState -eq 'divergent') { $reason = 'local-changes' }
+    elseif ($TreeState -eq 'divergent') {
+        if ($null -eq $Changes) { $reason = 'local-changes' }
+        elseif (@($Changes.Modified).Count + @($Changes.Added).Count + @($Changes.Deleted).Count -gt 5000) { $reason = 'local-changes-too-large' }
+        else { $transport = 'cache'; $reason = 'cache-overlay'; $overlay = $Changes }
+    }
     else { $transport = 'cache'; $reason = 'cache' }
     $message = Get-ConstructSourceMessage -Reason $reason -Commit $Commit -Ref $Ref -Divergence $Divergence -Mode $Mode
     if ($ServiceManaged -and $Mode -eq 'cache' -and $reason -in @('service-without-source-cache','commit-unknown')) { throw $message }
-    return @{ Transport = $transport; Reason = $reason; Message = $message; Commit = $Commit.ToLowerInvariant(); Mode = $Mode; Ref = $Ref; Divergence = $Divergence }
+    return @{ Transport = $transport; Reason = $reason; Message = $message; Commit = $Commit.ToLowerInvariant(); Mode = $Mode; Ref = $Ref; Divergence = $Divergence; Overlay = $overlay }
 }
 
 function Get-ConstructSourceFailureCode {
@@ -1229,13 +1237,14 @@ function Invoke-ConstructSourceTransport {
     [CmdletBinding()]
     param([ValidateSet('begin','complete')][string]$Phase, $Plan, $State, [scriptblock]$Ensure,
         [scriptblock]$WaitJob, [scriptblock]$StageToken = { $true }, [scriptblock]$RunGuestFetch,
-        [scriptblock]$Pack = {}, [scriptblock]$Upload, [scriptblock]$Warn = { param($text) Write-Warning $text },
+        [scriptblock]$Pack = {}, [scriptblock]$Upload, [scriptblock]$PackOverlay, [scriptblock]$UploadOverlay, [scriptblock]$Warn = { param($text) Write-Warning $text },
         [scriptblock]$Info = { param($text) Write-Host $text }, [datetime]$Deadline = ([datetime]::UtcNow.AddSeconds(900)), [int]$TimeoutSeconds = 900)
     $reason = ''
     if ($Phase -eq 'begin') {
         $State = @{}; foreach ($key in $Plan.Keys) { $State[$key] = $Plan[$key] }
         $State.ArchivePath = $null; $State.OperationKey = 'source-' + [guid]::NewGuid().ToString('N')
         if ($State.Transport -eq 'cache') {
+            if ($State.Reason -eq 'cache-overlay') { & $Info $State.Message }
             & $Info ('==> Ensuring Construct source ' + $State.Commit.Substring(0,7) + ' on the host service')
             try { $result = & $Ensure $State.Commit $State.OperationKey } catch { $result = @{ Outcome = 'error'; Class = 'other' } }
             $State.Ensure = $result
@@ -1265,6 +1274,27 @@ function Invoke-ConstructSourceTransport {
                     default { $reason = 'ensure-failed:' + (Get-ConstructSourceFailureCode $result) }
                 }
             }
+            if (-not $reason -and $null -ne $State.Overlay) {
+                try {
+                    $State.OverlayArchive = & $PackOverlay $State.Overlay
+                    if (-not $State.OverlayArchive) { throw 'empty-overlay-result' }
+                } catch {
+                    if ($_.Exception.Data['ConstructSourceOverlayTooLarge']) { $reason = 'local-changes-too-large' }
+                    else {
+                        $detail = $_.Exception.GetType().Name
+                        if ($_.Exception -is [Management.Automation.RuntimeException] -and $_.Exception.Message -cmatch '^(invalid-overlay-path|overlay-reparse-point|overlay-not-file|duplicate-overlay-path|conflicting-overlay-path)$') {
+                            $detail = $_.Exception.Message
+                        }
+                        $reason = 'overlay-pack-failed:' + $detail
+                    }
+                }
+                if (-not $reason) {
+                    try {
+                        $State.OverlayPath = & $UploadOverlay $State.OverlayArchive
+                        if (-not $State.OverlayPath) { throw 'empty-overlay-path' }
+                    } catch { $reason = 'overlay-upload-failed' }
+                }
+            }
             if (-not $reason) {
                 try { $staged = & $StageToken } catch { $staged = $false }
                 if (-not $staged) { $reason = 'guest-token-staging-failed' }
@@ -1289,7 +1319,11 @@ function Invoke-ConstructSourceTransport {
         if (-not $State.ArchivePath) { $State.ArchivePath = & $Pack }
         if ($Phase -eq 'complete') { & $Upload $State.ArchivePath | Out-Null }
     } elseif ($Phase -eq 'complete') {
-        & $Info ('    Construct source: host cache (commit ' + $State.Commit.Substring(0,7) + ', ' + [Math]::Round($State.SizeBytes / 1KB) + ' KB); nothing uploaded from this PC.')
+        if ($null -ne $State.Overlay) {
+            & $Info ('    Construct source: host cache (commit ' + $State.Commit.Substring(0,7) + ', ' + [Math]::Round($State.SizeBytes / 1KB) + ' KB) + ' + $State.Divergence + ' differing file(s) (' + [Math]::Round($State.OverlayArchive.CompressedSizeBytes / 1KB) + ' KB) uploaded from this PC.')
+        } else {
+            & $Info ('    Construct source: host cache (commit ' + $State.Commit.Substring(0,7) + ', ' + [Math]::Round($State.SizeBytes / 1KB) + ' KB); nothing uploaded from this PC.')
+        }
     }
     return $State
 }

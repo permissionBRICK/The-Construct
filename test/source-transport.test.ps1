@@ -28,7 +28,7 @@ foreach ($feature in @($false,$true)) {
     Check ('forced cache throws '+$feature) $thrown
 }
 Check 'literal unavailable message' ((Get-ConstructSourceMessage -Reason service-without-source-cache) -ceq 'This host service does not offer the source cache (apiFeatures lack "source-cache"); uploading the Construct checkout as before. Update the host service to skip the upload.')
-Check 'literal changes message' ((Get-ConstructSourceMessage -Reason local-changes -Commit $commit -Divergence 2) -ceq 'This checkout differs from commit aaaaaaa in 2 file(s) (modified, missing or extra); uploading it as before so the VM gets them. Commit or ignore them to use the host cache, or pass -SourceMode cache to send commit aaaaaaa without them.')
+Check 'literal changes message' ((Get-ConstructSourceMessage -Reason local-changes -Commit $commit -Divergence 2) -ceq 'This checkout differs from commit aaaaaaa in 2 file(s) (the differing files could not be listed); uploading it as before so the VM gets them. Commit or ignore them to use the host cache, or pass -SourceMode cache to send commit aaaaaaa without them.')
 Check 'capacity guidance' ((Get-ConstructSourceMessage -Reason ensure-failed:source-cache-full -Commit $commit) -match 'ask the host admin to delete unused entries')
 $plan = Get-ConstructSourceTransportPlan -ServiceManaged $true -FeatureAvailable $true -Commit $commit -TreeState equivalent
 $cases = @(
@@ -353,4 +353,181 @@ try {
     try { Get-ConstructRemoteFingerprint -BaseUrl ('https://127.0.0.1:'+$listener.LocalEndpoint.Port) -TimeoutMs 200 | Out-Null } catch {$threw=$true}
     Check 'silent TLS peer preflight is bounded' ($threw -and $watch.Elapsed.TotalSeconds -lt 3)
 } finally {$listener.Stop()}
+Write-Host "$passed passed"
+
+# Overlay identity, planning, packing and transport keep the existing local-path pins above.
+$changes = @{ Modified = @('edited'); Added = @('new'); Deleted = @('gone') }
+$overlayPlan = Get-ConstructSourceTransportPlan -ServiceManaged $true -FeatureAvailable $true -Commit $commit -TreeState divergent -Divergence 3 -Changes $changes
+Check 'overlay plan' ($overlayPlan.Transport -eq 'cache' -and $overlayPlan.Reason -eq 'cache-overlay' -and $overlayPlan.Overlay -eq $changes)
+foreach ($mode in @('cache','upload')) {
+    $p = Get-ConstructSourceTransportPlan -ServiceManaged $true -FeatureAvailable $true -Commit $commit -TreeState divergent -Divergence 3 -Changes $changes -Mode $mode
+    Check ('explicit mode ignores overlay '+$mode) ($null -eq $p.Overlay -and $p.Transport -eq $mode)
+}
+$largeChanges = @{ Modified = @(1..5001 | ForEach-Object { 'f'+$_ }); Added = @(); Deleted = @() }
+$p = Get-ConstructSourceTransportPlan -ServiceManaged $true -FeatureAvailable $true -Commit $commit -TreeState divergent -Divergence 5001 -Changes $largeChanges
+Check 'overlay count fallback plan' ($p.Transport -eq 'upload' -and $p.Reason -eq 'local-changes-too-large')
+$overlayMessages = @{
+    'cache-overlay' = 'This checkout differs from commit aaaaaaa in 3 file(s); the VM fetches commit aaaaaaa from the host cache and only those file(s) are uploaded from this PC.'
+    'local-changes-too-large' = 'This checkout differs from commit aaaaaaa in 3 file(s), too many or too large for an overlay; uploading it as before…'
+    'overlay-pack-failed:overlay-not-file' = 'Could not pack the 3 differing file(s) (overlay-not-file); uploading the checkout as before.'
+    'overlay-pack-failed:IOException' = 'Could not pack the 3 differing file(s) (IOException); uploading the checkout as before.'
+    'overlay-upload-failed' = 'Could not upload the source overlay to the VM; uploading the checkout as before.'
+}
+foreach ($reason in $overlayMessages.Keys) {
+    Check ('literal overlay message '+$reason) ((Get-ConstructSourceMessage -Reason $reason -Commit $commit -Divergence 3) -ceq $overlayMessages[$reason])
+}
+foreach ($failure in @('','size','pack','pack-io','upload','empty-upload','stage','fetch')) {
+    $events = [Collections.Generic.List[string]]::new(); $infos = [Collections.Generic.List[string]]::new(); $warnings = [Collections.Generic.List[string]]::new()
+    $state = Invoke-ConstructSourceTransport -Phase begin -Plan $overlayPlan -Ensure { @{Outcome='ready';SizeBytes=1024;Sha256=$hash} } -Info {param($s) $infos.Add($s)} -Warn {param($s) $warnings.Add($s)}
+    $state = Invoke-ConstructSourceTransport -Phase complete -State $state -PackOverlay {
+        param($c) $events.Add('pack-overlay'); Check 'pack receives change set' ($c -eq $changes)
+        if ($failure -eq 'size') { $e=[InvalidOperationException]::new('limit');$e.Data['ConstructSourceOverlayTooLarge']=$true;throw $e }
+        if ($failure -eq 'pack') { throw 'overlay-not-file' }
+        if ($failure -eq 'pack-io') { throw [IO.IOException]::new('do not log secret fixture contents') }
+        @{Path='patch.zip';Files=2;Deleted=1;SizeBytes=20;CompressedSizeBytes=2048;Sha256=$hash}
+    } -UploadOverlay {
+        param($o) $events.Add('upload-overlay');Check 'upload receives archive' ($o.Path -eq 'patch.zip')
+        if ($failure -eq 'upload') {throw 'upload failed'}
+        if ($failure -eq 'empty-upload') {return $null}
+        '/tmp/patch.zip'
+    } -StageToken { $events.Add('stage-token');$failure -ne 'stage' } -RunGuestFetch {
+        param($s) $events.Add('guest-fetch');Check 'fetch receives overlay metadata' ($s.OverlayPath -eq '/tmp/patch.zip' -and $s.OverlayArchive.Sha256 -eq $hash)
+        if ($failure -eq 'fetch') {return @{ExitCode=5;Lines=@()}}
+        @{ExitCode=0;Lines=@('CONSTRUCT_SOURCE_INSTALLED='+$commit)}
+    } -Pack {$events.Add('pack');'full'} -Upload {$events.Add('upload')} -Info {param($s)$infos.Add($s)} -Warn {param($s)$warnings.Add($s)}
+    Check ('overlay announced as info '+$failure) ($infos[0] -ceq $overlayMessages['cache-overlay'])
+    if (-not $failure) {
+        Check 'overlay transport order' (($events -join ',') -ceq 'pack-overlay,upload-overlay,stage-token,guest-fetch')
+        Check 'overlay final info' ($infos[$infos.Count-1] -ceq '    Construct source: host cache (commit aaaaaaa, 1 KB) + 3 differing file(s) (2 KB) uploaded from this PC.')
+        Check 'overlay success no warning' ($warnings.Count -eq 0)
+    } else {
+        $expected = @{size='local-changes-too-large';pack='overlay-pack-failed:overlay-not-file';'pack-io'='overlay-pack-failed:IOException';upload='overlay-upload-failed';'empty-upload'='overlay-upload-failed';stage='guest-token-staging-failed';fetch='guest-fetch-failed:5'}
+        Check ('overlay fallback '+$failure) ($state.Transport -eq 'upload' -and $state.Reason -ceq $expected[$failure] -and ($events -join ',').EndsWith('pack,upload'))
+        Check ('overlay fallback warning '+$failure) ($warnings.Count -eq 1 -and $warnings[0] -ceq (Get-ConstructSourceMessage -Reason $expected[$failure] -Commit $commit -Divergence 3))
+        if ($failure -in @('pack','pack-io','size','upload','empty-upload')) { Check ('failed overlay stops before token '+$failure) (-not $events.Contains('stage-token')) }
+    }
+}
+$tmp=Join-Path ([IO.Path]::GetTempPath()) ('source-overlay-'+[guid]::NewGuid().ToString('N'))
+try {
+    $tree=Join-Path $tmp 'tree';[IO.Directory]::CreateDirectory((Join-Path $tree '.git'))|Out-Null
+    $identity=Get-ConstructSourceIdentity -Root $tree -GitRunner {
+        param($r,$argv)
+        if ($argv[0] -eq 'rev-parse') {return @{ExitCode=0;Lines=@($commit)}}
+        @{ExitCode=0;Lines=@(' M z','M  A','?? projects/app.json','A  added',' D deleted','D  removed','R  old name -> New name')}
+    }
+    Check 'git changes sorted with preserved case and rename' (($identity.Changes.Modified -join ',') -ceq 'A,z' -and ($identity.Changes.Added -join ',') -ceq 'New name,added,projects/app.json' -and ($identity.Changes.Deleted -join ',') -ceq 'deleted,old name,removed' -and $identity.Divergence -eq 8)
+    foreach ($line in @('?? "quoted"','R  old -> "quoted"','bad','R  no arrow','?? nested/','?? ../outside','C  old -> new')) {
+        $id=Get-ConstructSourceIdentity -Root $tree -GitRunner {param($r,$argv) if($argv[0] -eq 'rev-parse'){return @{ExitCode=0;Lines=@($commit)}};@{ExitCode=0;Lines=@(' M valid',$line)}}
+        Check ('unavailable git changes '+$line) ($null -eq $id.Changes -and $id.Divergence -eq 2 -and $id.TreeState -eq 'divergent')
+    }
+    $id=Get-ConstructSourceIdentity -Root $tree -GitRunner {param($r,$argv)
+        if($argv[0] -eq 'rev-parse'){return @{ExitCode=0;Lines=@($commit)}}
+        @{ExitCode=0;Lines=@('D  x','?? x','D  y',' M y')}
+    }
+    Check 'git on-disk copies win over deletions' ($id.Divergence -eq 2 -and $id.Changes.Deleted.Count -eq 0 -and ($id.Changes.Added -join ',') -ceq 'x' -and ($id.Changes.Modified -join ',') -ceq 'y')
+    & git -C $tree init -q
+    [IO.File]::WriteAllText((Join-Path $tree 'untrack'),'keep on disk')
+    & git -C $tree add untrack
+    & git -C $tree -c user.name=test -c user.email=test@example.invalid commit -qm fixture
+    & git -C $tree rm --cached --quiet untrack
+    $id=Get-ConstructSourceIdentity -Root $tree
+    Check 'real git rm cached preserves on-disk file in overlay' ($id.Divergence -eq 1 -and $id.Changes.Deleted.Count -eq 0 -and ($id.Changes.Added -join ',') -ceq 'untrack')
+    Remove-Item -LiteralPath (Join-Path $tree 'untrack')
+    Remove-Item -LiteralPath (Join-Path $tree '.git') -Recurse -Force
+    [IO.File]::WriteAllText((Join-Path $tree '.construct-revision'),$commit)
+    [IO.File]::WriteAllText((Join-Path $tree 'edited'),'old')
+    [IO.File]::WriteAllText((Join-Path $tree 'gone'),'old')
+    $baseZip=Join-Path $tmp 'base.zip';$z=[IO.Compression.ZipFile]::Open($baseZip,[IO.Compression.ZipArchiveMode]::Create)
+    try {foreach($f in Get-ChildItem -LiteralPath $tree -File -Force){[IO.Compression.ZipFileExtensions]::CreateEntryFromFile($z,$f.FullName,('repo-main/'+$f.Name))|Out-Null}}finally{$z.Dispose()}
+    $manifests=Join-Path $tmp 'manifests';Write-ConstructSourceManifest -Zip $baseZip -Commit $commit -ManifestDir $manifests | Out-Null
+    [IO.File]::WriteAllText((Join-Path $tree 'edited'),'replacement')
+    [IO.Directory]::CreateDirectory((Join-Path $tree 'sub'))|Out-Null
+    [IO.File]::WriteAllText((Join-Path $tree 'sub/new'),'added')
+    [IO.File]::WriteAllText((Join-Path $tree 'ignored.local'),'excluded')
+    Remove-Item -LiteralPath (Join-Path $tree 'gone')
+    $id=Get-ConstructSourceIdentity -Root $tree -ManifestDir $manifests
+    Check 'archive changes lists' ($id.Divergence -eq 3 -and ($id.Changes.Modified -join ',') -ceq 'edited' -and ($id.Changes.Added -join ',') -ceq 'sub/new' -and ($id.Changes.Deleted -join ',') -ceq 'gone')
+    $zip=Join-Path $tmp 'overlay.zip';$o=New-ConstructSourceOverlay -Root $tree -Changes $id.Changes -Path $zip
+    Check 'overlay metadata' ($o.Files -eq 2 -and $o.Deleted -eq 1 -and $o.SizeBytes -eq 21 -and $o.CompressedSizeBytes -eq (Get-Item $zip).Length -and $o.Sha256 -ceq (Get-FileHash $zip).Hash.ToLowerInvariant())
+    $z=[IO.Compression.ZipFile]::OpenRead($zip)
+    try {
+        Check 'overlay entry names' ((@($z.Entries.FullName) -join ',') -ceq 'construct-overlay/edited,construct-overlay/sub/new,construct-overlay.deleted')
+        foreach ($pair in @(@('construct-overlay/edited','replacement'),@('construct-overlay/sub/new','added'),@('construct-overlay.deleted',"gone`n"))) {
+            $reader=[IO.StreamReader]::new($z.GetEntry($pair[0]).Open());try{$text=$reader.ReadToEnd()}finally{$reader.Dispose()}
+            Check ('overlay content '+$pair[0]) ($text -ceq $pair[1])
+        }
+    } finally {$z.Dispose()}
+    Remove-Item $zip
+    $o=New-ConstructSourceOverlay -Root $tree -Changes @{Modified=@('edited');Added=@();Deleted=@()} -Path $zip
+    $z=[IO.Compression.ZipFile]::OpenRead($zip);try{Check 'no deletion entry when empty' ($null -eq $z.GetEntry('construct-overlay.deleted'))}finally{$z.Dispose()};Remove-Item $zip
+    foreach ($bad in @('../escape','/absolute','dir\file','sub//file','sub/../file',"line`nbreak")) {
+        $thrown=$false;try{New-ConstructSourceOverlay -Root $tree -Changes @{Modified=@();Added=@();Deleted=@($bad)} -Path $zip|Out-Null}catch{$thrown=$true}
+        Check ('overlay refuses path '+$bad) ($thrown -and -not (Test-Path $zip))
+    }
+    foreach ($c in @($largeChanges,@{Modified=@('missing');Added=@();Deleted=@()},@{Modified=@('sub');Added=@();Deleted=@()},@{Modified=@('edited');Added=@();Deleted=@('edited')},@{Modified=@();Added=@('edited');Deleted=@('edited')})) {
+        $thrown=$false;try{New-ConstructSourceOverlay -Root $tree -Changes $c -Path $zip|Out-Null}catch{$thrown=$true}
+        Check 'overlay refuses count missing file or directory' ($thrown -and -not (Test-Path $zip))
+    }
+    $big=Join-Path $tree 'big';$stream=[IO.File]::Create($big);try{$stream.SetLength(64MB+1)}finally{$stream.Dispose()}
+    $thrown=$false;try{New-ConstructSourceOverlay -Root $tree -Changes @{Modified=@('big');Added=@();Deleted=@()} -Path $zip|Out-Null}catch{$thrown=[bool]$_.Exception.Data['ConstructSourceOverlayTooLarge']}
+    Check 'overlay size uses typed limit failure' ($thrown -and -not (Test-Path $zip))
+    if ($env:OS -ne 'Windows_NT') {
+        $linkedRoot=Join-Path $tmp 'linked-root'
+        New-Item -ItemType SymbolicLink -Path $linkedRoot -Target $tree | Out-Null
+        $o=New-ConstructSourceOverlay -Root $linkedRoot -Changes @{Modified=@('edited');Added=@();Deleted=@()} -Path $zip
+        Check 'overlay accepts symlinked checkout root' ($o.Files -eq 1 -and (Test-Path $zip))
+        Remove-Item -LiteralPath $zip
+        New-Item -ItemType SymbolicLink -Path (Join-Path $tree 'link') -Target (Join-Path $tree 'edited')|Out-Null
+        New-Item -ItemType SymbolicLink -Path (Join-Path $tree 'linked-dir') -Target (Join-Path $tree 'sub')|Out-Null
+        foreach ($path in @('link','linked-dir/new')) {
+            $thrown=$false;try{New-ConstructSourceOverlay -Root $tree -Changes @{Modified=@($path);Added=@();Deleted=@()} -Path $zip|Out-Null}catch{$thrown=$true}
+            Check ('overlay refuses reparse '+$path) ($thrown -and -not (Test-Path $zip))
+        }
+    }
+} finally {Remove-Item -LiteralPath $tmp -Recurse -Force}
+Write-Host "$passed passed"
+
+# Execute the provisioner's real overlay closures behind SSH/SCP fakes.
+$parseErrors=$null;$ast=[Management.Automation.Language.Parser]::ParseInput($provision,[ref]$null,[ref]$parseErrors)
+Check 'provision parses with overlay closures' ($parseErrors.Count -eq 0)
+$completeAst=$ast.Find({param($n) $n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Invoke-ConstructSourceTransport' -and $n.Extent.Text.StartsWith('Invoke-ConstructSourceTransport -Phase complete')},$true)
+$closures=@{}
+for($i=0;$i -lt $completeAst.CommandElements.Count;$i++) {
+    $element=$completeAst.CommandElements[$i]
+    if($element -is [Management.Automation.Language.CommandParameterAst] -and $element.ParameterName -in @('PackOverlay','UploadOverlay','RunGuestFetch')) {
+        $body=$completeAst.CommandElements[$i+1].ScriptBlock.Extent.Text
+        $closures[$element.ParameterName]=[scriptblock]::Create($body.Substring(1,$body.Length-2).Replace('$PSScriptRoot','$root'))
+    }
+}
+Check 'provision wires all overlay callbacks' ($closures.Count -eq 3 -and $provision.Contains('-Changes $sourceIdentity.Changes'))
+$script:commands=[Collections.Generic.List[string]]::new();$script:ConnectUser='root'
+function Invoke-Ssh {param([switch]$Sudo,$Command) $script:commands.Add($Command)}
+function Invoke-Scp {param($LocalPath,$RemotePath) $script:commands.Add('scp '+$RemotePath);if($script:failOverlayScp){throw 'scp fixture failure'}}
+$tmp=Join-Path ([IO.Path]::GetTempPath()) ('overlay-wire-'+[guid]::NewGuid().ToString('N'))
+try {
+    foreach($failure in @($false,$true)) {
+        [IO.File]::WriteAllText($tmp,'fixture');$script:failOverlayScp=$failure;$script:commands.Clear();$thrown=$false
+        try {$remote=& $closures.UploadOverlay @{Path=$tmp}} catch {$thrown=$true}
+        Check ('real upload closure removes local zip '+$failure) (-not (Test-Path $tmp) -and $thrown -eq $failure)
+        Check ('real upload closure precreates private file '+$failure) ($script:commands[0].StartsWith('umask 077;') -and $script:commands[0].Contains('chown root') -and $script:commands[1].StartsWith('scp /tmp/construct-source-overlay.'))
+        if(-not $failure){Check 'real upload closure returns private guest path' ($remote -match '^/tmp/construct-source-overlay\.[a-f0-9]{32}\.zip$' -and $script:commands[2] -ceq ('chmod 0600 -- '+$remote))}
+    }
+    function Send-GuestSecret {param($Content,$RemotePath) return $true}
+    function Get-ConstructRemoteCertificatePem {param($BaseUrl,$TimeoutMs) return ''}
+    function Invoke-SshStream {param([switch]$Sudo,[switch]$PassThru,[switch]$NoThrow,$Command) $script:fetchCommand=$Command;return @{ExitCode=0;Lines=@()}}
+    $script:SourceOverlayPath='/tmp/construct-source-overlay.fixture.zip';$script:SourceFetchTokenPath='';$ServiceUrl='https://host.invalid';$InstanceName='vm';$SeedUser='root'
+    $wireState=@{Commit=$commit;Sha256=$hash;SizeBytes=100;OverlayPath=$script:SourceOverlayPath;OverlayArchive=@{Sha256=('c'*64);CompressedSizeBytes=321}}
+    & $closures.RunGuestFetch $wireState | Out-Null
+    Check 'real fetch closure passes overlay metadata' ($script:fetchCommand.Contains("CONSTRUCT_SOURCE_OVERLAY='/tmp/construct-source-overlay.fixture.zip'") -and $script:fetchCommand.Contains("CONSTRUCT_SOURCE_OVERLAY_SIZE='321'") -and $script:fetchCommand.Contains("CONSTRUCT_SOURCE_OVERLAY_SHA256='"+('c'*64)+"'"))
+    Check 'real fetch closure cleans overlay' ($script:commands[$script:commands.Count-1].Contains($script:SourceOverlayPath) -and $script:fetchCommand.Contains("rm -r -- $($script:SourceOverlayPath); fi' EXIT"))
+    $trapScript=Join-Path ([IO.Path]::GetTempPath()) ('overlay-trap-'+[guid]::NewGuid().ToString('N')+'.sh')
+    try {
+        $trapBody=[regex]::Match($script:fetchCommand, "trap '([^']+)' EXIT").Groups[1].Value
+        $trapBody=$trapBody.Substring($trapBody.IndexOf('; if [ -f ')+2)
+        [IO.File]::WriteAllText($trapScript,"trap '$trapBody' EXIT`nexit 0`n")
+        $output=@(& bash $trapScript 2>&1)
+        Check 'outer trap tolerates already-removed overlay' ($LASTEXITCODE -eq 0 -and $output.Count -eq 0)
+    } finally {Remove-Item -LiteralPath $trapScript}
+
+} finally {if(Test-Path $tmp){Remove-Item -LiteralPath $tmp -Force}}
 Write-Host "$passed passed"

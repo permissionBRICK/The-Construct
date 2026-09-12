@@ -6735,7 +6735,7 @@ function Remove-ConstructStaleSourceFiles {
 function Get-ConstructSourceIdentity {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Root, [scriptblock]$GitRunner, [string]$ManifestDir)
-    $result = @{ Commit = ''; TreeState = 'unknown'; Divergence = 0 }
+    $result = @{ Commit = ''; TreeState = 'unknown'; Divergence = 0; Changes = $null }
     if (Test-Path -LiteralPath (Join-Path $Root '.git')) {
         try {
             if (-not $GitRunner) {
@@ -6750,7 +6750,35 @@ function Get-ConstructSourceIdentity {
             $status = & $GitRunner $Root @('status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none')
             if ($status.ExitCode -ne 0) { return $result }
             $count = @($status.Lines | Where-Object { [string]$_ -ne '' }).Count
-            return @{ Commit = $commit; TreeState = $(if ($count) { 'divergent' } else { 'equivalent' }); Divergence = $count }
+            $changes = @{ Modified = @(); Added = @(); Deleted = @() }
+            foreach ($line in $status.Lines) {
+                if ([string]$line -eq '') { continue }
+                if ($line -cnotmatch '^[ MADRCUT?!]{2} .+$') { $changes = $null; break }
+                $flags = $line.Substring(0,2); $relative = $line.Substring(3)
+                if ($relative.StartsWith('"')) { $changes = $null; break }
+                if ($flags.Contains('R')) {
+                    $paths = @($relative -split ' -> ')
+                    if ($paths.Count -ne 2 -or -not (Test-ConstructSourceRelativePath $paths[0]) -or -not (Test-ConstructSourceRelativePath $paths[1])) { $changes = $null; break }
+                    $changes.Deleted += $paths[0]; $changes.Added += $paths[1]
+                } elseif (-not (Test-ConstructSourceRelativePath $relative) -or $flags.Contains('C')) { $changes = $null; break }
+                elseif ($flags.Contains('D')) { $changes.Deleted += $relative }
+                elseif ($flags -eq '??' -or $flags.Contains('A')) { $changes.Added += $relative }
+                elseif ($flags -eq '  ' -or $flags.Contains('?') -or $flags.Contains('!')) { $changes = $null; break }
+                else { $changes.Modified += $relative }
+            }
+            if ($null -ne $changes) {
+                # git rm --cached reports both D and ?? for the same on-disk file.
+                # Keep the on-disk copy, so the overlay never writes then deletes it.
+                $written = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+                foreach ($path in (@($changes.Added) + @($changes.Modified))) { [void]$written.Add($path) }
+                $changes.Deleted = @($changes.Deleted | Where-Object { -not $written.Contains($_) })
+                $count = 0
+                foreach ($key in @('Modified','Added','Deleted')) {
+                    $paths = [string[]]$changes[$key]; [Array]::Sort($paths, [StringComparer]::Ordinal)
+                    $changes[$key] = $paths; $count += $paths.Count
+                }
+            }
+            return @{ Commit = $commit; TreeState = $(if ($count) { 'divergent' } else { 'equivalent' }); Divergence = $count; Changes = $changes }
         } catch { return $result }
     }
     try {
@@ -6768,20 +6796,86 @@ function Get-ConstructSourceIdentity {
             $files.Add($relative, $line.Substring(0,64))
         }
         if ($files.Count -eq 0) { return $result }
-        $count = 0
+        $count = 0; $changes = @{ Modified = @(); Added = @(); Deleted = @() }
         foreach ($relative in $files.Keys) {
             $path = Join-Path $Root $relative
-            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { $count++; continue }
-            if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $files[$relative]) { $count++ }
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { $count++; $changes.Deleted += $relative; continue }
+            if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -cne $files[$relative]) { $count++; $changes.Modified += $relative }
         }
         $prefix = [IO.Path]::GetFullPath($Root).TrimEnd([char[]]@('/', '\')) + [IO.Path]::DirectorySeparatorChar
         foreach ($file in Get-ChildItem -LiteralPath $Root -File -Force -Recurse) {
             $relative = $file.FullName.Substring($prefix.Length).Replace('\', '/')
             if ($files.ContainsKey($relative)) { continue }
             if (Test-ConstructSourceLocalArtifact -Relative $relative) { continue }
-            $count++
+            $count++; $changes.Added += $relative
         }
+        foreach ($key in @('Modified','Added','Deleted')) {
+            $paths = [string[]]$changes[$key]; [Array]::Sort($paths, [StringComparer]::Ordinal); $changes[$key] = $paths
+        }
+        $result.Changes = $changes
         $result.Divergence = $count; $result.TreeState = $(if ($count) { 'divergent' } else { 'equivalent' })
     } catch { if ($result.Commit) { $result.TreeState = 'unverified' } }
     return $result
+}
+
+
+function New-ConstructSourceOverlay {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Root, [Parameter(Mandatory)][hashtable]$Changes, [Parameter(Mandatory)][string]$Path)
+    # Exception data distinguishes limits from I/O or path failures without logging file contents.
+    $tooLarge = [InvalidOperationException]::new('overlay-too-large')
+    $tooLarge.Data['ConstructSourceOverlayTooLarge'] = $true
+    $files = @($Changes.Modified) + @($Changes.Added); $deleted = @($Changes.Deleted)
+    if ($files.Count + $deleted.Count -gt 5000) { throw $tooLarge }
+    $rootPath = [IO.Path]::GetFullPath($Root)
+    $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $written = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($relative in $files) { [void]$written.Add($relative) }
+    foreach ($relative in $deleted) { if ($written.Contains($relative)) { throw 'conflicting-overlay-path' } }
+    $size = [long]0; $archive = $null; $created = $false
+    try {
+        foreach ($relative in ($files + $deleted)) {
+            if (-not (Test-ConstructSourceRelativePath $relative)) { throw 'invalid-overlay-path' }
+            # Check every parent inside the checkout and the leaf. The root may be a user-selected junction.
+            $itemPath = $rootPath
+            foreach ($part in ($relative -split '/')) {
+                $itemPath = Join-Path $itemPath $part
+                $item = Get-Item -LiteralPath $itemPath -Force -ErrorAction SilentlyContinue
+                if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'overlay-reparse-point' }
+            }
+        }
+        foreach ($relative in $files) {
+            if (-not $seen.Add($relative)) { throw 'duplicate-overlay-path' }
+            $item = Get-Item -LiteralPath (Join-Path $rootPath $relative) -Force -ErrorAction Stop
+            if ($item.PSIsContainer) { throw 'overlay-not-file' }
+            $size += $item.Length
+            if ($size -gt 64MB) { throw $tooLarge }
+        }
+        $deletionBytes = [byte[]]@()
+        if ($deleted.Count) { $deletionBytes = [Text.UTF8Encoding]::new($false).GetBytes(($deleted -join "`n") + "`n") }
+        $size += $deletionBytes.Length
+        if ($size -gt 64MB) { throw $tooLarge }
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $archive = [IO.Compression.ZipFile]::Open($Path, [IO.Compression.ZipArchiveMode]::Create); $created = $true
+        foreach ($relative in $files) {
+            [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, (Join-Path $rootPath $relative), ('construct-overlay/' + $relative), [IO.Compression.CompressionLevel]::Optimal) | Out-Null
+        }
+        if ($deleted.Count) {
+            $entry = $archive.CreateEntry('construct-overlay.deleted', [IO.Compression.CompressionLevel]::Optimal)
+            $stream = $entry.Open()
+            try { $stream.Write($deletionBytes, 0, $deletionBytes.Length) } finally { $stream.Dispose() }
+        }
+        $archive.Dispose(); $archive = [IO.Compression.ZipFile]::OpenRead($Path)
+        # Recheck actual packed lengths in case a file grew after the initial stat.
+        $size = [long]0
+        foreach ($entry in $archive.Entries) { $size += $entry.Length }
+        if ($size -gt 64MB) { throw $tooLarge }
+        $archive.Dispose(); $archive = $null
+        return @{ Path = $Path; Files = $files.Count; Deleted = $deleted.Count; SizeBytes = $size
+            CompressedSizeBytes = (Get-Item -LiteralPath $Path).Length; Sha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant() }
+    } catch {
+        if ($archive) { $archive.Dispose(); $archive = $null }
+        if ($created) { Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue }
+        throw
+    } finally { if ($archive) { $archive.Dispose() } }
 }

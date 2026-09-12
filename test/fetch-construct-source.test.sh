@@ -101,6 +101,69 @@ exec /usr/bin/curl "$@"
 ''');run(extras={'CONSTRUCT_SERVICE_CA_FILE':str(ca)})
         assert token not in argvfile.read_text();assert headersfile.read_text().strip()=='Authorization: VmToken '+token
         assert '--cacert\n'+str(ca) in argvfile.read_text();ok('token uses header file and CA is passed')
+        # Each overlay uses a disposable /tmp path; both success and failure must remove it.
+        def overlayzip(entries,compression=zipfile.ZIP_STORED):
+            out=io.BytesIO()
+            with zipfile.ZipFile(out,'w',compression=compression) as z:
+                for name,data in entries: z.writestr(name,data)
+            return out.getvalue()
+        def overlayrun(data,expected=0,extras=None):
+            patch=t/'overlay.zip';patch.write_bytes(data)
+            env={'CONSTRUCT_SOURCE_OVERLAY':str(patch),'CONSTRUCT_SOURCE_OVERLAY_SIZE':str(len(data)),
+                'CONSTRUCT_SOURCE_OVERLAY_SHA256':hashlib.sha256(data).hexdigest()}
+            if extras:env.update(extras)
+            r=run(expected,env);assert not patch.exists(),'overlay not cleaned'
+            if expected==5:assert 'source-fetch: overlay-refused' in r.stderr
+            return r
+        reset()
+        state['bytes']=overlayzip([('repo-main/keep.txt',b'keep'),('repo-main/nested/empty/gone',b'gone'),
+            ('repo-main/nonempty/gone',b'gone'),('repo-main/nonempty/keep',b'keep')])
+        patch=overlayzip([('construct-overlay/keep.txt',b'new'),('construct-overlay/new.sh',b'shell'),
+            ('construct-overlay/bin/tool',b'tool'),('construct-overlay/new/data',b'data'),
+            ('construct-overlay.deleted',b'nested/empty/gone\nnonempty/gone\nabsent\n')])
+        r=overlayrun(patch)
+        assert (repo/'keep.txt').read_bytes()==b'new' and (repo/'new/data').read_bytes()==b'data'
+        assert not (repo/'nested').exists() and not (repo/'nonempty/gone').exists() and (repo/'nonempty/keep').exists()
+        assert (repo/'new.sh').stat().st_mode&0o777==0o755 and (repo/'bin/tool').stat().st_mode&0o777==0o755
+        assert (repo/'new/data').stat().st_mode&0o777==0o644 and (repo/'keep.txt').stat().st_mode&0o777==0o600
+        assert all(p.stat().st_mode&0o777==0o755 for p in repo.rglob('*') if p.is_dir())
+        assert r.stdout==f'CONSTRUCT_SOURCE_INSTALLED={commit}\nCONSTRUCT_SOURCE_BYTES={len(state["bytes"])}\nCONSTRUCT_SOURCE_OVERLAY_FILES=4\nCONSTRUCT_SOURCE_OVERLAY_DELETED=2\n'
+        ok('overlay adds overwrites deletes prunes preserves modes and reports counts')
+        reset();overlayrun(overlayzip([('construct-overlay/bin/provision.sh',b'changed'),('construct-overlay/README.md',b'changed')]))
+        assert (repo/'bin/provision.sh').stat().st_mode&0o777==0o755 and (repo/'README.md').stat().st_mode&0o777==0o644
+        ok('overlay preserves base executable and nonexecutable modes')
+        reset();overlayrun(overlayzip([('construct-overlay.deleted',b'README.md\n')]))
+        assert not (repo/'README.md').exists();ok('deletion-only overlay')
+        for label,extra in [('size',{'CONSTRUCT_SOURCE_OVERLAY_SIZE':'1'}),('hash',{'CONSTRUCT_SOURCE_OVERLAY_SHA256':'0'*64})]:
+            reset();overlayrun(patch,4,extra);ok('overlay '+label+' mismatch preserves tree')
+        for label,data in [
+            ('traversal',badzip('construct-overlay/../escape')),('absolute',badzip('/construct-overlay/file')),
+            ('symlink',badzip('construct-overlay/link',0xa1ff)),('device',badzip('construct-overlay/device',0x21b6)),
+            ('foreign root',badzip('foreign/file')),('second root',badzip('construct-overlay/a',second='foreign/b')),
+            ('duplicate case',badzip('construct-overlay/a',second='construct-overlay/A')),
+            ('parent file',badzip('construct-overlay/a',second='construct-overlay/a/b')),
+            ('directory mismatch',badzip('construct-overlay/a',0x41ed)),
+            ('deletion traversal',overlayzip([('construct-overlay.deleted',b'../escape\n')])),
+            ('deletion absolute',overlayzip([('construct-overlay.deleted',b'/outside\n')])),
+            ('deletion directory',overlayzip([('construct-overlay.deleted',b'bin\n')])),
+            ('deletion empty',overlayzip([('construct-overlay.deleted',b'\n')])),
+            ('deletion trailing slash',overlayzip([('construct-overlay.deleted',b'missing/\n')])),
+            ('deletion invalid utf8',overlayzip([('construct-overlay.deleted',b'\xff\n')])),
+            ('deletion CRLF',overlayzip([('construct-overlay.deleted',b'README.md\r\n')])),
+            ('compression ratio',overlayzip([('construct-overlay/bomb',b'0'*100000)],zipfile.ZIP_DEFLATED)),
+            ('too many entries',overlayzip([(f'construct-overlay/{i}',b'') for i in range(20001)]))]:
+            reset();overlayrun(data,5);ok('overlay '+label+' refused and tree preserved')
+        reset();overlayrun(patch,2,{'CONSTRUCT_SOURCE_COMMIT':''});ok('overlay cleaned on early input failure')
+        reset();state['statuses']=[404];overlayrun(patch,3);ok('overlay cleaned on base fetch failure')
+        reset();r=run();assert 'CONSTRUCT_SOURCE_OVERLAY_' not in r.stdout;ok('no-overlay output unchanged')
+        reset()
+        client=t/'client';client.mkdir();(client/'README.md').write_text('client change');(client/'added.txt').write_text('client addition')
+        packed=t/'packed.zip';packer=t/'pack.ps1'
+        packer.write_text("param($Library,$Tree,$Zip)\n$ErrorActionPreference='Stop'\n. $Library\nNew-ConstructSourceOverlay -Root $Tree -Path $Zip -Changes @{Modified=@('README.md');Added=@('added.txt');Deleted=@('bootstrap.sh')} | Out-Null\n")
+        subprocess.run(['pwsh','-NoProfile','-File',str(packer),str(root/'lib/AgentVm.Common.ps1'),str(client),str(packed)],check=True,capture_output=True)
+        overlayrun(packed.read_bytes())
+        assert (repo/'README.md').read_text()=='client change' and (repo/'added.txt').read_text()=='client addition' and not (repo/'bootstrap.sh').exists()
+        ok('real PowerShell overlay installs through guest HTTP fetch')
         print(f'{passed} passed')
     finally:
         server.shutdown();thread.join();server.server_close()
