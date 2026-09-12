@@ -549,7 +549,7 @@ Every event below is handled by `Invoke-ConstructSourceTransport`. "Upload" mean
 |---|---|---|---|
 | Changes unavailable (plan) | `local-changes` | upload | differing files could not be listed |
 | More than 5,000 changes (plan/pack), or more than 64 MiB uncompressed (pack) | `local-changes-too-large` | upload | no guest fetch |
-| Overlay packing failure (complete) | `overlay-pack-failed:<detail>` | upload | safe packer code or exception type, no file content |
+| Overlay packing failure (complete) | `overlay-pack-failed:<detail>` | upload | safe packer code (`invalid-overlay-path`, `overlay-reparse-point`, `overlay-not-file`, `overlay-file-missing`, `overlay-file-unreadable/<exception type>`, `duplicate-overlay-path`, `conflicting-overlay-path`, `empty-overlay-result`) or exception type, plus ` at <relative path>` of the file that failed; never file content |
 | Overlay upload failure (complete) | `overlay-upload-failed` | upload | clean temporary ZIPs |
 | Overlay size/hash or extraction/application failure | `guest-fetch-failed:4` / `guest-fetch-failed:5` | upload | previous repo intact |
 | Feature probe false/timeout (plan) | `service-without-source-cache` | upload | no ensure attempted |
