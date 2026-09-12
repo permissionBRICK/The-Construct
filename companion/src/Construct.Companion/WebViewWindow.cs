@@ -49,7 +49,11 @@ internal sealed class WebViewWindow : Form
         }
         else
         {
-            var saved = settings.Bounds(view) ?? new WindowBounds(100, 100, 1080, 800);
+            // The panel opens 20% narrower than before (owner, 2026-09-12); a window still at the
+            // old default width follows, a window the user sized keeps its size.
+            var fallback = new WindowBounds(100, 100, view == "panel" ? 864 : 1080, 800);
+            var saved = settings.Bounds(view) ?? fallback;
+            if (view == "panel" && saved.Width == 1080) saved = saved with { Width = 864 };
             var work = Screen.FromRectangle(new(saved.X, saved.Y, saved.Width, saved.Height)).WorkingArea;
             var bounds = WindowPlacement.Clamp(saved, new(work.X, work.Y, work.Width, work.Height)); Bounds = new(bounds.X, bounds.Y, bounds.Width, bounds.Height);
         }
