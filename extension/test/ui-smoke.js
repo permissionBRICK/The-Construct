@@ -1345,6 +1345,19 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     await admin.locator("#haMaint").isVisible() && (await admin.locator("#haMaintPhase").textContent()).includes("draining"));
   check("admin: ...and disables every mutation", await admin.locator('button[data-act="capacityRefresh"]').isDisabled());
   check("admin: ...while the tabs stay usable", !(await admin.locator('#haTabs button[data-tab="vms"]').isDisabled()));
+  check("admin: ...including the static register-user and override buttons", await admin.locator("#usrAddToggle").isDisabled() && await admin.locator("#ovrClose").isDisabled());
+  // The Companion keeps this document alive across an update: buttons must come back afterwards.
+  await pushAdmin({ ...ADMIN_STATE, activeTab: "users", maintenance: null });
+  await admin.waitForTimeout(60);
+  check("admin: after maintenance the register-user button is enabled again", !(await admin.locator("#usrAddToggle").isDisabled()));
+  await admin.locator("#usrAddToggle").click();
+  check("admin: ...and opens the registration form", await admin.locator("#usrNew").isVisible());
+  await pushAdmin({ ...ADMIN_STATE, activeTab: "vms", maintenance: null });
+  await admin.waitForTimeout(60);
+  await admin.evaluate(() => { document.getElementById("vmOverridesCard").hidden = false; });
+  check("admin: the override close button is enabled again", !(await admin.locator("#ovrClose").isDisabled()));
+  await admin.locator("#ovrClose").click();
+  check("admin: ...and closes the card", !(await admin.locator("#vmOverridesCard").isVisible()));
   check("admin: no console/page errors after every state", adminErrors.length === 0, adminErrors.join(" | "));
   await admin.close();
 
