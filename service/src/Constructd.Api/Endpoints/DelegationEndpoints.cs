@@ -66,7 +66,7 @@ public static class DelegationEndpoints
         };
         if (!await reports.UpdateGuestReportAsync(name, report, ct)) return CodedProblems.Create(409, "vm-deleting", "VM changed during the report.");
         CodedProblems.Audit(http, "vm.guest-report", vm.Owner, vm.Parent, vm.Name, "event=" + request.Event);
-        return Results.Ok((await vms.GetAsync(name, ct))!.Guest);
+        return Results.Ok(GuestReportRules.ForPresentation((await vms.GetAsync(name, ct))!.Guest));
     }
     private static async Task<IResult> RotateAsync(string name, VmTokenRequest request, HttpContext http, IVmRepository vms, IAuthorizationService authorization,
         IVmTokenIssuer tokens, IConsoleSessionStore sessions, IVmOperationGate gate, IClock clock, CancellationToken ct)
