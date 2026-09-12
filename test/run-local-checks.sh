@@ -43,6 +43,8 @@ if [[ "$group" == companion || "$group" == all ]]; then
   node extension/test/parity.test.js
   for suite in extension/test/companion*.test.js; do node "$suite"; done
   pwsh -NoProfile -File test/companion-install.test.ps1
+  # First-install feature selection and installer forwarding (Linux PowerShell).
+  pwsh -NoProfile -File test/feature-set.test.ps1
   pwsh -NoProfile -File test/companion-entrypoints.test.ps1
   pwsh -NoProfile -File test/companion-package.test.ps1
 fi
