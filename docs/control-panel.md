@@ -187,8 +187,11 @@ badge marks an available update (**update all** force-updates them over SSH, the
 
 Construct tracks two versions separately: the **installed** Construct (extension + scripts,
 bumped by install / Update Construct) and the version the **VM was last provisioned with**.
-When the VM is behind the installed Construct, the **Reprovision** button turns **yellow**
-("update pending") — reprovision to apply the update to the VM. It clears once you reprovision.
+The Lifecycle heading shows both commits and labels the VM **up to date**, **behind host ·
+reprovision**, or **unknown**. When the VM is behind, the warning tag focuses the
+**Reprovision** button, that button turns **yellow** ("update pending"), and VS Code offers
+the same action once for that commit pair when it sees the VM running. Reprovisioning applies
+the installed version to the VM and clears the warning.
 
 ## Lifecycle
 
