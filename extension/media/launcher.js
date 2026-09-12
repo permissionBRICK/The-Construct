@@ -87,6 +87,7 @@
     button.hidden = !offer;
     const hostUpdate = !!(offer && offer.updateAvailable);
     button.classList.toggle("stale", hostUpdate);
+    button.textContent = hostUpdate ? "Host Administration\u2026 update available" : "Host Administration";
     button.title = offer ? (hostUpdate ? "Host update available — administer " : "Administer ") + (offer.host || "this host") : "";
   }
 
