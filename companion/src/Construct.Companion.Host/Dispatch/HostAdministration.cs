@@ -132,7 +132,7 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
             var client = Client(model.Host);
             switch (type)
             {
-                case "hostadmin.ready": case "hostadmin.refresh": case "hostadmin.signIn": await Detect(model, client, ct); await Load(model, client, ct); await AdvanceUpdate(model, client, ct); break;
+                case "hostadmin.ready": case "hostadmin.refresh": case "hostadmin.signIn": await Detect(model, client, ct); await Load(model, client, ct); if (Text(model.State["activeTab"]) != "maintenance") await RefreshUpdates(model, client, ct); break;
                 case "hostadmin.tab": model.State["activeTab"] = RequireTab(Text(message["tab"])); await Load(model, client, ct); break;
                 case "hostadmin.action": await Action(model, client, Text(message["action"]), message["args"] as JsonObject ?? [], ct); break;
                 default: Notice(model, "This host-administration message is unsupported."); break;
@@ -255,7 +255,7 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
                 case "config":
                     var config = await client.HostConfigAsync(ct);
                     m.State["config"] = new JsonObject { ["sections"] = HostAdminViews.Config(config), ["capabilities"] = HostAdminViews.Capabilities(await client.HostCapabilitiesAsync(ct)), ["problems"] = new JsonArray() }; break;
-                case "maintenance": m.State["maintenanceTab"] = HostAdminViews.Updates(await client.UpdatesStatusAsync(ct)); break;
+                case "maintenance": await RefreshUpdates(m, client, ct); break;
             }
             m.State["lastKnownAt"] = clock.UtcNow.ToString("O");
         }
@@ -326,8 +326,8 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
             case "revokeToken": result = await client.RevokeUserTokenAsync(name, id, ct); break;
             case "revokeVmToken": result = await client.RevokeVmTokenAsync(name, ct); break;
             case "saveConfig": result = await client.PutHostConfigAsync(RequireSections(args), ct); events.HostAdmin(m.Host.Slug, new { type = "hostadmin.configSaved" }); break;
-            case "updatesCheck": result = await client.UpdatesCheckAsync(new JsonObject { ["releaseTag"] = args["releaseTag"]?.DeepClone() }, ct); break;
-            case "updatesStage": result = await client.UpdatesStageAsync(new JsonObject { ["releaseTag"] = args["releaseTag"]?.DeepClone() }, ct); break;
+            case "updatesCheck": result = await client.UpdatesCheckAsync(ReleaseTagBody(args), ct); m.LastLatestCheck = default; break;
+            case "updatesStage": result = await client.UpdatesStageAsync(ReleaseTagBody(args), ct); break;
             case "updatesApply": result = await client.UpdatesApplyAsync(new JsonObject { ["updateId"] = args["updateId"]?.DeepClone() }, ct); break;
             case "updatesCancel": result = await client.UpdatesCancelAsync(new JsonObject { ["updateId"] = args["updateId"]?.DeepClone() }, ct); break;
             case "updatesResolve": RequireResolve(args); result = await client.UpdatesResolveAsync(new JsonObject { ["updateId"] = args["updateId"]?.DeepClone(), ["action"] = args["action"]?.DeepClone() }, ct); break;
@@ -360,6 +360,32 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
         if (pending is null) { model.State["notice"] = new JsonObject { ["level"] = "info", ["text"] = "The host is already on the latest release." }; return; }
         SavePending(model, pending); await AdvanceUpdate(model, client, ct);
         if (model.State["updatePending"] is not null) model.State["notice"] = new JsonObject { ["level"] = "info", ["text"] = "Host update started. Progress shows in the Maintenance tab." };
+    }
+    // The maintenance tab's tag box is empty for "latest"; the host rejects an empty tag as invalid metadata.
+    private static JsonObject ReleaseTagBody(JsonObject args)
+    { var tag = Text(args["releaseTag"]).Trim(); return tag.Length == 0 ? [] : new JsonObject { ["releaseTag"] = tag }; }
+    // Mirrors the extension's updater.refresh: current status, pending advancement, then a latest-release
+    // check at most every 15 minutes so "Update host" enables without a manual check.
+    private async Task RefreshUpdates(Model model, RemoteHostClient client, CancellationToken ct)
+    {
+        if (Text(model.State["mode"]) != "admin" || StateJson.Boolean(model.State["features"]?["updates"]) != true) return;
+        var status = await client.UpdatesStatusAsync(ct) as JsonObject ?? [];
+        model.State["maintenanceTab"] = HostAdminViews.Updates(status);
+        await AdvanceUpdate(model, client, ct);
+        var current = (model.State["maintenanceTab"] as JsonObject)?["current"] as JsonObject;
+        if (model.State["maintenance"] is not null || model.State["updatePending"] is not null || HostUpdatePlanner.Active.Contains(Text(current?["state"]), StringComparer.Ordinal)) return;
+        if (clock.UtcNow - model.LastLatestCheck < TimeSpan.FromMinutes(15)) return;
+        model.State["updateChecking"] = true;
+        try
+        {
+            var check = await client.UpdatesCheckAsync(null, ct) as JsonObject;
+            model.LastLatestCheck = clock.UtcNow; model.State["updateError"] = "";
+            if (check?["latest"] is JsonObject latest) { var known = latest.DeepClone().AsObject(); known["checkedAt"] = check["checkedAt"]?.DeepClone(); status["latestKnown"] = known; }
+            if (check?["installed"] is JsonObject installed) status["installed"] = installed.DeepClone();
+            model.State["maintenanceTab"] = HostAdminViews.Updates(status);
+        }
+        catch (RemoteApiException e) { model.State["updateError"] = e.Status == 0 ? "the host is unreachable" : $"the host answered HTTP {e.Status}" + (e.Code.Length > 0 ? $" ({e.Code})" : ""); }
+        finally { model.State["updateChecking"] = false; }
     }
     private async Task AdvanceUpdate(Model model, RemoteHostClient client, CancellationToken ct)
     {
@@ -464,7 +490,8 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
         public JsonObject View = new() { ["mode"] = "unavailable" };
         public DateTimeOffset LastPoll;
         public DateTimeOffset LastDetection;
+        public DateTimeOffset LastLatestCheck;
         public SemaphoreSlim Serial { get; } = new(1, 1);
-        public JsonObject State { get; } = new() { ["host"] = new Uri(host.Url).Host, ["url"] = host.Url, ["mode"] = "unavailable", ["message"] = "", ["retryable"] = false, ["maintenance"] = null, ["features"] = Features(null), ["identity"] = null, ["tabs"] = TabsFor(Features(null)), ["activeTab"] = "overview", ["busy"] = false, ["notice"] = null, ["overview"] = null, ["vms"] = null, ["users"] = null, ["media"] = null, ["operations"] = null, ["config"] = null, ["maintenanceTab"] = null, ["lastKnownAt"] = null, ["problem"] = "", ["updatePending"] = null };
+        public JsonObject State { get; } = new() { ["host"] = new Uri(host.Url).Host, ["url"] = host.Url, ["mode"] = "unavailable", ["message"] = "", ["retryable"] = false, ["maintenance"] = null, ["features"] = Features(null), ["identity"] = null, ["tabs"] = TabsFor(Features(null)), ["activeTab"] = "overview", ["busy"] = false, ["notice"] = null, ["overview"] = null, ["vms"] = null, ["users"] = null, ["media"] = null, ["operations"] = null, ["config"] = null, ["maintenanceTab"] = null, ["lastKnownAt"] = null, ["problem"] = "", ["updatePending"] = null, ["updateChecking"] = false, ["updateError"] = "" };
     }
 }
