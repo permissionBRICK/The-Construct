@@ -83,6 +83,11 @@ public static class LifecycleBuilder
             case "setCheckpoints":
                 if (StateJson.Boolean(options["enabled"]) is not bool enabled) return null;
                 Pair("-Enabled", JsonValue.Create(enabled ? "true" : "false")); return Done("Set-AgentVmCheckpoints.ps1", false, true, enabled ? "Enable automatic checkpoints" : "Disable automatic checkpoints");
+            case "consoleAccess":
+                if (instance is null) return null;
+                Pair("-InstanceName", instance["name"]); Pair("-VmName", instance["vmName"]);
+                if (StateJson.Boolean(options["reset"]) == true) pairs.Add(new JsonObject { ["flag"] = "-Reset" });
+                return Done("Set-AgentVmConsoleAccess.ps1", false, true, "Set up console access");
             case "setResources":
                 var ram = VmResourcePlan.Number(options["ram"], false); var cpu = VmResourcePlan.Number(options["cpu"], true);
                 if (ram is null && cpu is null) return null;

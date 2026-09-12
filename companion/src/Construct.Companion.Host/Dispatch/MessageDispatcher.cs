@@ -21,7 +21,7 @@ namespace Construct.Companion.Host.Dispatch;
 // come from the desktop prompts, whichever client sent the message.
 public sealed partial class MessageDispatcher(CompanionInstances instances, StateAggregation state, IpcSettings settings,
     IpcEvents events, IpcLogs logs, IStateFileSystem files, IPrompts prompts, ILauncher launcher,
-    ICompanionDesktop desktop, IClock clock, HostAdministration hosts, CachedUpdateSource updates, IAudioCapture capture, HostConversionWorkflow conversion)
+    ICompanionDesktop desktop, IClock clock, HostAdministration hosts, CachedUpdateSource updates, IAudioCapture capture, HostConversionWorkflow conversion, InstanceConsole consoles)
 {
     public async Task DispatchAsync(string name, JsonObject message, CancellationToken ct)
     {
@@ -68,6 +68,7 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
         var name = entry.Name; var id = Text(m, "id");
         switch (id)
         {
+            case "openConsole": await consoles.OpenAsync(entry, ct); break;
             case "refresh": await RefreshAsync(entry, ct); break;
             case "chooseTheme": await desktop.ActivateAsync(new("theme", name), ct); break;
             case "chooseMicDevice":

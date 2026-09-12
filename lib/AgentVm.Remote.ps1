@@ -192,9 +192,11 @@ function Get-ConstructRemoteStoreDir {
 
 function Get-ConstructRemoteTokenPath {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$BaseUrl, [string]$StoreDir)
+    param([Parameter(Mandatory, ParameterSetName="Url")][string]$BaseUrl,
+        [Parameter(Mandatory, ParameterSetName="Slug")][ValidatePattern('^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$')][string]$Slug, [string]$StoreDir)
     if (-not $StoreDir) { $StoreDir = Get-ConstructRemoteStoreDir }
-    return (Join-Path $StoreDir ((Get-ConstructRemoteHostSlug -BaseUrl $BaseUrl) + ".token"))
+    $tokenSlug = if ($Slug) { $Slug } else { Get-ConstructRemoteHostSlug -BaseUrl $BaseUrl }
+    return (Join-Path $StoreDir ($tokenSlug + ".token"))
 }
 
 function Get-ConstructRemotePinPath {
@@ -230,6 +232,16 @@ function Test-ConstructDpapiAvailable {
     }
 }
 
+# Small protection seams keep the file-format round trip testable off Windows.
+function Protect-ConstructTokenBytes {
+    param([byte[]]$Bytes)
+    return ,([System.Security.Cryptography.ProtectedData]::Protect($Bytes, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser))
+}
+function Unprotect-ConstructTokenBytes {
+    param([byte[]]$Bytes)
+    return ,([System.Security.Cryptography.ProtectedData]::Unprotect($Bytes, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser))
+}
+
 function Save-ConstructRemoteToken {
     <#
         Store an API token for one service host, DPAPI-encrypted for the CURRENT USER
@@ -242,7 +254,8 @@ function Save-ConstructRemoteToken {
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][string]$BaseUrl,
+        [Parameter(Mandatory, ParameterSetName="Url")][string]$BaseUrl,
+        [Parameter(Mandatory, ParameterSetName="Slug")][ValidatePattern('^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$')][string]$Slug,
         [Parameter(Mandatory)][string]$Token,
         [string]$StoreDir
     )
@@ -250,11 +263,13 @@ function Save-ConstructRemoteToken {
     if (-not (Test-ConstructDpapiAvailable)) {
         throw "Cannot store the API token: Windows DPAPI (per-user encryption) is not available on this system. Pass the token explicitly instead -- The Construct never writes it in plaintext."
     }
-    $path = Get-ConstructRemoteTokenPath -BaseUrl $BaseUrl -StoreDir $StoreDir
+    $key = @{}
+    if ($Slug) { $key.Slug = $Slug } else { $key.BaseUrl = $BaseUrl }
+    $path = Get-ConstructRemoteTokenPath @key -StoreDir $StoreDir
     $dir  = Split-Path -Parent $path
     if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($Token)
-    $enc   = [System.Security.Cryptography.ProtectedData]::Protect($bytes, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
+    $enc   = Protect-ConstructTokenBytes $bytes
     # Base64 text, not raw bytes: the file stays copy-pasteable/diffable and Set-Content
     # cannot corrupt it with an encoding conversion.
     [System.IO.File]::WriteAllText($path, [Convert]::ToBase64String($enc))
@@ -269,14 +284,17 @@ function Get-ConstructRemoteToken {
         decrypted -- a file copied from another account/machine). Never throws.
     #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$BaseUrl, [string]$StoreDir)
-    $path = Get-ConstructRemoteTokenPath -BaseUrl $BaseUrl -StoreDir $StoreDir
+    param([Parameter(Mandatory, ParameterSetName="Url")][string]$BaseUrl,
+        [Parameter(Mandatory, ParameterSetName="Slug")][ValidatePattern('^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$')][string]$Slug, [string]$StoreDir)
+    $key = @{}
+    if ($Slug) { $key.Slug = $Slug } else { $key.BaseUrl = $BaseUrl }
+    $path = Get-ConstructRemoteTokenPath @key -StoreDir $StoreDir
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return "" }
     try {
         $b64 = [System.IO.File]::ReadAllText($path).Trim()
         if (-not $b64) { return "" }
         $enc = [Convert]::FromBase64String($b64)
-        $raw = [System.Security.Cryptography.ProtectedData]::Unprotect($enc, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
+        $raw = Unprotect-ConstructTokenBytes $enc
         return [System.Text.Encoding]::UTF8.GetString($raw)
     } catch {
         return ""
@@ -285,8 +303,11 @@ function Get-ConstructRemoteToken {
 
 function Remove-ConstructRemoteToken {
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$BaseUrl, [string]$StoreDir)
-    $path = Get-ConstructRemoteTokenPath -BaseUrl $BaseUrl -StoreDir $StoreDir
+    param([Parameter(Mandatory, ParameterSetName="Url")][string]$BaseUrl,
+        [Parameter(Mandatory, ParameterSetName="Slug")][ValidatePattern('^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$')][string]$Slug, [string]$StoreDir)
+    $key = @{}
+    if ($Slug) { $key.Slug = $Slug } else { $key.BaseUrl = $BaseUrl }
+    $path = Get-ConstructRemoteTokenPath @key -StoreDir $StoreDir
     if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
     return $path
 }

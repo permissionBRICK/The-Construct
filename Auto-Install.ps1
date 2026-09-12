@@ -3655,6 +3655,11 @@ try {
     # extension can read VM power state without a UAC prompt. (Driver contract:
     # the host-access half of Ensure-ConstructDriverPrereqs.)
     Ensure-ConstructDriverPrereqs -Scope HostAccess
+    try {
+        . "$PSScriptRoot/lib/AgentVm.Remote.ps1"
+        . "$PSScriptRoot/lib/AgentVm.Console.ps1"
+        Set-ConstructConsoleAccess -InstanceName $VmInstanceName -VmName $HyperVmName
+    } catch { Write-Warning "Browser console setup did not finish: $($_.Exception.Message). Run Set-AgentVmConsoleAccess.ps1 once to repair it." }
 
     # ── Provisioning ─────────────────────────────────────────────────────────
     # Goes through Invoke-DeElevatedProvision, whose de-elevation is currently

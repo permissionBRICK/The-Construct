@@ -360,7 +360,7 @@ try {
     # A step that genuinely FAILS (not "there was nothing there"): an ssh_config path that
     # is a DIRECTORY -- Test-Path says it exists, reading it throws.
     $failingPlan = Get-Plan -Identity (New-TestIdentity)
-    $failingPlan.Steps[0].Target = $work
+    @($failingPlan.Steps | Where-Object { $_.Kind -eq 'ssh-config' })[0].Target = $work
     $script:failWriterCalled = $false
     $failedWalk = Invoke-ConstructInstanceRemoval -Plan $failingPlan -RemoveRegistryEntry { param($n) $script:failWriterCalled = $true }
     $registryResult = @($failedWalk | Where-Object { $_.Kind -eq 'registry-entry' })[0]
