@@ -71,8 +71,10 @@ An identical installed commit is a no-op. `-Force` rebuilds/reinstalls it. Downl
 stream to disk; the detached manifest, ZIP size and SHA-256, checksum-list hash and every
 payload file are checked before asking the app to quit. The installer waits at
 most 15 seconds for graceful exit and never kills a process. It swaps the install
-through `.previous`, retrying each directory move for a few seconds while an
-antivirus scan or a closing handle still holds a file, restores the prior
+through `.previous` file by file rather than renaming the folder (a folder held open by
+a console, an Explorer window or a scanner blocks the rename but not the files),
+retrying each move for ten seconds while an antivirus scan or a closing handle still
+holds a file, restores the prior
 files/registration values on replacement failure and starts the restored app again,
 then starts `ConstructCompanion.exe --background` detached. Successful process
 creation is the commit point; it is not a runtime health check. A replacement
