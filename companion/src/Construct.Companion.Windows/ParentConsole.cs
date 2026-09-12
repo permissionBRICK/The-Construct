@@ -7,7 +7,8 @@ public static class ParentConsole
 {
     [DllImport("kernel32.dll")] private static extern IntPtr GetStdHandle(int handle);
     [DllImport("kernel32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool AttachConsole(uint process);
-    // A WinExe has no console; --version and --selftest print into the console that launched them.
+    // A WinExe has no console; --version, --selftest and start-up errors print into the console that
+    // launched them. The tray app never attaches: it would keep an installer's console window open.
     public static void Attach()
     {
         var stdout = GetStdHandle(-11);
