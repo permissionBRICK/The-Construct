@@ -43,6 +43,13 @@ function New-ConstructCompanionSeams {
             } catch { Throw-ConstructCompanionError 'Companion quit request failed.' }
         }
         Alive = { param($ProcessId) $null -ne (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) }
+        # Processes running from the installation folder (a Companion the endpoint cannot reach).
+        Running = { param($Directory)
+            $prefix=([IO.Path]::GetFullPath($Directory)).TrimEnd('\')+'\'
+            @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $p=$null; try { $p=$_.Path } catch { }; $p -and $p.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { @{name=$_.ProcessName+'.exe'; id=$_.Id} })
+        }
+        # Processes holding any file of the folder open (Windows Restart Manager, no elevation).
+        Holders = { param($Directory) Get-ConstructCompanionFileHolders $Directory }
         Sleep = { param($Milliseconds) Start-Sleep -Milliseconds $Milliseconds }
         Start = { param($Exe, [string[]]$Arguments)
             $info = New-Object Diagnostics.ProcessStartInfo
@@ -243,13 +250,81 @@ function Expand-ConstructCompanionPayload {
 }
 
 # Directory moves fail transiently while an antivirus or indexer still holds a freshly extracted
-# file, or while the just-quit app's last handles close. Retry briefly before giving up.
+# file, or while the just-quit app's last handles close. Retry for ten seconds; then name the
+# holders so the diagnostic says who (a scanner, a Companion the endpoint could not reach).
 function Move-ConstructCompanionTree {
     param([string]$From,[string]$To,[hashtable]$Seams)
     for ($attempt=1; ; $attempt++) {
         try { & $Seams.Move $From $To; return }
-        catch { if ($attempt -ge 8) { throw }; & $Seams.Sleep 500 }
+        catch {
+            if ($attempt -lt 20) { & $Seams.Sleep 500; continue }
+            $message=Get-ConstructCompanionSafeMessage $_.Exception
+            $holders=@(); try { $holders=@(& $Seams.Holders $From) } catch { $holders=@() }
+            if ($holders.Count -gt 0) { $message+='; held by '+(@($holders | ForEach-Object { [string]$_.name+' (pid '+[string]$_.id+')' }) -join ', ') }
+            throw (New-Object Exception $message)
+        }
     }
+}
+function Get-ConstructCompanionFileHolders {
+    param([string]$Directory)
+    if ($env:OS -ne 'Windows_NT' -or -not (Test-Path -LiteralPath $Directory)) { return @() }
+    try {
+        if (-not ('ConstructCompanionRestartManager' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+public static class ConstructCompanionRestartManager {
+    [StructLayout(LayoutKind.Sequential)] public struct RM_UNIQUE_PROCESS { public int dwProcessId; public System.Runtime.InteropServices.ComTypes.FILETIME ProcessStartTime; }
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] public struct RM_PROCESS_INFO {
+        public RM_UNIQUE_PROCESS Process;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string strAppName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)] public string strServiceShortName;
+        public int ApplicationType; public uint AppStatus; public uint TSSessionId; [MarshalAs(UnmanagedType.Bool)] public bool bRestartable;
+    }
+    [DllImport("rstrtmgr.dll", CharSet = CharSet.Unicode)] static extern int RmStartSession(out uint pSessionHandle, int dwSessionFlags, string strSessionKey);
+    [DllImport("rstrtmgr.dll")] static extern int RmEndSession(uint pSessionHandle);
+    [DllImport("rstrtmgr.dll", CharSet = CharSet.Unicode)] static extern int RmRegisterResources(uint pSessionHandle, uint nFiles, string[] rgsFilenames, uint nApplications, IntPtr rgApplications, uint nServices, string[] rgsServiceNames);
+    [DllImport("rstrtmgr.dll")] static extern int RmGetList(uint dwSessionHandle, out uint pnProcInfoNeeded, ref uint pnProcInfo, [In, Out] RM_PROCESS_INFO[] rgAffectedApps, ref uint lpdwRebootReasons);
+    public static List<KeyValuePair<string, int>> Holders(string[] files) {
+        var result = new List<KeyValuePair<string, int>>();
+        uint session; if (RmStartSession(out session, 0, Guid.NewGuid().ToString("N")) != 0) return result;
+        try {
+            if (RmRegisterResources(session, (uint)files.Length, files, 0, IntPtr.Zero, 0, null) != 0) return result;
+            uint needed, count = 0, reasons = 0;
+            var status = RmGetList(session, out needed, ref count, null, ref reasons);
+            if (needed == 0) return result;
+            var infos = new RM_PROCESS_INFO[needed]; count = needed;
+            if (RmGetList(session, out needed, ref count, infos, ref reasons) != 0) return result;
+            for (var i = 0; i < count; i++) result.Add(new KeyValuePair<string, int>(infos[i].strAppName, infos[i].Process.dwProcessId));
+            return result;
+        } finally { RmEndSession(session); }
+    }
+}
+'@
+        }
+        $files=@(Get-ChildItem -LiteralPath $Directory -File -Recurse -Force | ForEach-Object { $_.FullName })
+        if ($files.Count -eq 0) { return @() }
+        $seen=@{}; $holders=@()
+        foreach ($pair in [ConstructCompanionRestartManager]::Holders([string[]]$files)) {
+            $name=[string]$pair.Key; $id=[int]$pair.Value
+            try { $process=Get-Process -Id $id -ErrorAction Stop; $name=$process.ProcessName+'.exe' } catch { }
+            if (-not $seen.ContainsKey($id)) { $seen[$id]=$true; $holders+=@{name=$name; id=$id} }
+        }
+        return $holders
+    } catch { return @() }
+}
+# A Companion started outside the endpoint handshake (or still shutting down) keeps its files
+# open; wait for it briefly and refuse clearly instead of failing the move. Never kills.
+function Wait-ConstructCompanionProcessesExit {
+    param([string]$InstallDir,[hashtable]$Seams)
+    for ($i=0; $i -lt 60; $i++) {
+        $running=@(); try { $running=@(& $Seams.Running $InstallDir) } catch { $running=@() }
+        if ($running.Count -eq 0) { return }
+        & $Seams.Sleep 250
+    }
+    $list=@($running | ForEach-Object { [string]$_.name+' (pid '+[string]$_.id+')' }) -join ', '
+    Throw-ConstructCompanionError ('The Companion is still running ('+$list+') and its endpoint is not reachable; close it from the tray and retry. No process was killed.')
 }
 # One line, no secrets: move/registry/start errors carry paths and Windows error text only.
 function Get-ConstructCompanionSafeMessage {
@@ -344,6 +419,7 @@ function Install-ConstructCompanion {
         $registrations=Get-ConstructCompanionRegistrations $paths.install $autostart
         $saved=@(); foreach ($entry in $registrations) { $saved+=@{entry=$entry; prior=(& $Seams.Registry 'read' $entry.path $entry.name $null)} }
         Stop-ConstructCompanionForInstall $paths.state $Seams
+        Wait-ConstructCompanionProcessesExit $paths.install $Seams
         $backedUp=$false; $moved=$false; $registered=$false; $step='backing up the installed files'
         try {
             if (Test-Path -LiteralPath $paths.install) { Move-ConstructCompanionTree $paths.install $previous $Seams; $backedUp=$true }
