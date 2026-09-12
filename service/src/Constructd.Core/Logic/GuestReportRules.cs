@@ -12,7 +12,11 @@ public static class GuestReportRules
     {
         var old = previous ?? GuestReport.Unknown;
         return new(report.ConstructCommit ?? old.ConstructCommit,
-            report.ProvisionedAt ?? old.ProvisionedAt, report.ReinstalledAt ?? old.ReinstalledAt ?? report.ProvisionedAt,
+            report.ProvisionedAt ?? old.ProvisionedAt,
+            // Only a FIRST provisioning seeds the reinstall time; a legacy row that already had a
+            // provisioned date keeps NULL here (the SQL path does the same) and is backfilled by
+            // ForPresentation, so a plain reprovision never moves the value.
+            report.ReinstalledAt ?? old.ReinstalledAt ?? (old.ProvisionedAt is null ? report.ProvisionedAt : null),
             report.ReportedAt ?? old.ReportedAt,
             report.Provenance == GuestReportProvenance.Unknown ? old.Provenance : report.Provenance,
             report.LastAttemptAt ?? old.LastAttemptAt, report.LastAttemptOutcome ?? old.LastAttemptOutcome);
