@@ -749,7 +749,7 @@
     const hostUpdate = !!(offer && offer.updateAvailable);
     b.classList.toggle("stale", hostUpdate);
     // The label says it (owner, 2026-09-12): a recoloured label reads as disabled in dark mode.
-    b.innerHTML = hostUpdate ? "&#x2699; Host&hellip; update available" : "&#x2699; Host";
+    b.innerHTML = hostUpdate ? "&#x2699; Host &middot; Update Available" : "&#x2699; Host";
     if (offer) b.title = (hostUpdate ? "Host update available — administer " : "Administer ") + (offer.host || "this host");
   }
 
