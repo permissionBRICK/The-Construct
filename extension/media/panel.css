@@ -52,6 +52,8 @@ h1.title {
   border-radius: 5px; padding: 5px 11px; transition: border-color .15s, color .15s;
 }
 .gear:hover { border-color: var(--line-strong); color: var(--title); }
+/* The host has a newer release: the same warm highlight as a pending reprovision. */
+.gear.stale, .lopen.stale { border-color: var(--warn); color: var(--warn); box-shadow: 0 0 10px rgba(255,194,77,0.18); }
 .gear:focus-visible { outline: 2px solid var(--rain); outline-offset: 2px; }
 /* Instance picker (multi-instance installs only; hidden with exactly one). Styled as
    a .gear so it sits in the header tools without a design of its own — every theme

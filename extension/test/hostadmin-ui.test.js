@@ -460,6 +460,18 @@ const lastState = (entry) => [...entry.panel.posted].reverse().find((m) => m.typ
     t.setNow(1000 + ui.OFFER_TTL_MS + 1);
     await t.feature.hostAdminOfferFor(INST);
     eq("offer: re-probed after the TTL", client.calls.filter((c) => c.method === "whoami").length, probes + 1);
+    eq("offer: no host update -> no updateAvailable key", offer && offer.updateAvailable, undefined);
+    // A host with a newer release lights the Host button; the check is silent and throttled.
+    const upd = fakeClient({ health: HEALTH, whoami: ME_ADMIN, updatesCheck: { installed: { commit: "a".repeat(40) }, latest: { commit: "b".repeat(40), releaseTag: "host-" + "b".repeat(40) } } });
+    const tu = makeFeature({ client: upd });
+    const offerUpd = await tu.feature.hostAdminOfferFor(INST);
+    ok("offer: a newer host release sets updateAvailable", offerUpd && offerUpd.updateAvailable === true);
+    tu.setNow(1000 + ui.OFFER_TTL_MS + 1);
+    await tu.feature.hostAdminOfferFor(INST);
+    eq("offer: the update check is asked once inside its own TTL", upd.calls.filter((c) => c.method === "updatesCheck").length, 1);
+    const failing = fakeClient({ health: HEALTH, whoami: ME_ADMIN, updatesCheck: Object.assign(new Error("rate limited"), { status: 502 }) });
+    const offerFail = await makeFeature({ client: failing }).feature.hostAdminOfferFor(INST);
+    ok("offer: a failed update check still offers administration without a highlight", offerFail && offerFail.host === "buildbox.example.local" && offerFail.updateAvailable === undefined);
     eq("offer: a local instance has none", await t.feature.hostAdminOfferFor({ name: "agent-vm", backend: "hyperv-local" }), null);
     eq("offer: an instance on an un-enrolled host has none", await t.feature.hostAdminOfferFor({ ...INST, service: { url: "https://other:7462" } }), null);
   }

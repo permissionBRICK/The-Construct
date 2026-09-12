@@ -746,7 +746,9 @@
     const b = $("hostAdminBtn");
     if (!b) return;
     b.hidden = !offer;
-    if (offer) b.title = "Administer " + (offer.host || "this host");
+    const hostUpdate = !!(offer && offer.updateAvailable);
+    b.classList.toggle("stale", hostUpdate);
+    if (offer) b.title = (hostUpdate ? "Host update available — administer " : "Administer ") + (offer.host || "this host");
   }
 
   // ── Idle policy (B8, plan §4.7) ─────────────────────────────────────────────
