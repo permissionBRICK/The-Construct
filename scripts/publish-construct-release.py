@@ -45,6 +45,8 @@ def publish(output):
                 'source': f'construct-source-{commit}.zip'}
     if manifest.get('releaseTag') != 'host-' + commit or any(manifest.get(key + 'Asset') != name for key, name in expected.items()):
         raise ValueError('Invalid release asset identity')
+    if 'companionReleaseTag' in manifest and not re.fullmatch(r'companion-[0-9a-f]{40}', str(manifest['companionReleaseTag'])):
+        raise ValueError('Invalid Companion release tag')
     assets = [output / name for name in ('manifest.json', *expected.values(), 'SHA256SUMS')]
     if not all(p.is_file() for p in assets):
         raise ValueError('Incomplete release')
