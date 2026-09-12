@@ -3681,11 +3681,10 @@ function syncInstanceStatusItem() {
     const all = instances.list(reg);
     if (all.length < 2) { instanceStatusItem.hide(); return; }
     const inst = activeInstance();
-    let stale = 0;
-    try { stale = instancestate.countStale(all.map((i) => stateStore(i))); } catch (_) { stale = 0; }
-    instanceStatusItem.text = "$(vm) " + inst.name + (stale > 0 ? ` (${stale} to reprovision)` : "");
-    instanceStatusItem.tooltip = `The Construct instance: ${inst.name} (${inst.vmHost}:${inst.sshPort}) — click to switch` +
-      (stale > 0 ? `\n${stale} instance(s) were provisioned with an older Construct — switch to one and reprovision.` : "");
+    // No "(n to reprovision)" count here (owner, 2026-09-12): the host caches cannot tell which of
+    // those VMs are running, and a stopped VM must not be nudged. The panel nudges the running one.
+    instanceStatusItem.text = "$(vm) " + inst.name;
+    instanceStatusItem.tooltip = `The Construct instance: ${inst.name} (${inst.vmHost}:${inst.sshPort}) — click to switch`;
     instanceStatusItem.show();
   } catch (_) { /* a status-bar item is never worth an exception */ }
 }
