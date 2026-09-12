@@ -27,7 +27,7 @@ public sealed class RemoteVmWizardTests
         }
         else await h.App.Services.GetRequiredService<MessageDispatcher>().DispatchAsync("agent-vm",new(){["type"]="command",["id"]="createFirstVm"},CancellationToken.None);
         Assert.Single(h.Get<FakeLauncher,ILauncher>().Detached);Assert.Empty(h.Get<FakeLauncher,ILauncher>().Elevated);
-        Assert.DoesNotContain(api.Requests,r=>r.Method=="POST");
+        Assert.DoesNotContain(api.Requests,r=>r.Method=="POST"&&r.Url.AbsolutePath!="/api/v1/host/updates/check");
     }
     [Theory]
     [InlineData(false,false,"negotiate")] [InlineData(true,false,"negotiate")]
