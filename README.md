@@ -25,7 +25,7 @@ They cannot touch your host PC.
 - 🤖 **Agents with full access.** Claude Code, Codex and Opencode run as root in bypass mode,
   with no permission prompts.
 - 🔒 **Sandboxed.** A throwaway Hyper-V VM sits between the agents and your PC.
-- ♻️ **Disposable.** Reinstall the VM and the agent configuration, auth and memory come back.
+- ♻️ **Disposable.** Reinstall the VM in one click, and everything automatically comes back.
 - 📦 **Project profiles.** Repos, SDKs, MCP servers and setup commands in one JSON file,
   applied on every provision.
 - 🛜 **Local or hosted.** Run the VM on your own PC, or on a shared Hyper-V host and use it
