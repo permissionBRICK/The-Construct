@@ -49,7 +49,9 @@ public static class LifecycleEndpoints
     {
         var vm = await vms.GetAsync(name, ct); if (vm is null) return Problems.NotFound("Unknown VM.");
         if (await AuthorizeAsync(vm, http, false, ct) is { } denied) return denied;
-        await using var held = await gate.TryAcquireAsync(vm.Name, http.TraceIdentifier, ct);
+        await using var held = vm.Kind == VmKind.Primary
+            ? await PrimaryOperationGate.AcquireAsync(gate, vm.Name, http.TraceIdentifier, ct)
+            : await gate.TryAcquireAsync(vm.Name, http.TraceIdentifier, ct);
         if (held is null) { gate.IsHeld(vm.Name, out var operation); return Busy(operation); }
         vm = (await vms.GetAsync(vm.Name, ct))!;
         if (await AuthorizeAsync(vm, http, false, ct) is { } refused) return refused;

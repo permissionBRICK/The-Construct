@@ -611,8 +611,9 @@ locally on the host.
 
 **VM settings.** Each primary VM row offers **VM settings…**: CPU count, fixed RAM
 (whole GB), idle timeout and idle action in one dialog, with current/pending hardware,
-owner/host maxima and the idle cap. Apply saves changes; CPU/RAM require the row's
-confirmed **Restart**, or a full stop followed by **Start**. Resuming saved state or
+owner/host maxima and the idle cap. **Apply** changes CPU/RAM immediately when the VM
+is powered off. Otherwise, CPU/RAM changes wait for the row's confirmed **Restart**,
+or a full stop followed by **Start**. Start runs without a confirmation. Resuming saved state or
 rebooting Ubuntu does not apply them. The guest sees its new RAM/CPU after the cold boot.
 Idle changes take effect immediately; **Off** disables idle handling, and is unavailable
 when the host forces it. Admins obey the owner's resource allowance and the host idle cap.
@@ -621,7 +622,7 @@ operation is in progress. Inventory problems appear as warnings. CPU and RAM lim
 use runtime resource data; an unrelated disk or media problem does not block them.
 Apply sends only edited fields, so an idle-only change makes no CPU or RAM requests.
 Each control loads independently, and a failed read disables only that control.
-The service checks the relevant limits when saving hardware changes and again at start.
+The service checks the relevant limits when saving hardware changes and checks pending changes again at start.
 If one save fails, already-saved fields remain saved;
 the dialog reloads actual values and stays open for review/retry. Older hosts keep idle
 editing and disable hardware fields they do not support. The Companion shares this dialog.
