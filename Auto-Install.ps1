@@ -435,10 +435,8 @@ if ($Action -eq 'publish-config') {
 }
 
 # ── Install mode: local Hyper-V, or a remote host service ────────────────────
-# ONE entry point, one extra question, and only on a genuinely fresh machine
-# (docs/plans/modular-remote-architecture.md §4.5). Every existing install -- and every
-# scripted or panel-launched run -- resolves the mode from its parameters and sees NO
-# new prompt at all.
+# Ask where to create a VM on a fresh machine or after the local VM was removed.
+# Scripted and panel-launched runs resolve the mode from their parameters.
 #
 # WHY IT IS DECIDED HERE, before the self-elevation below: a remote install creates no
 # local VM and therefore needs no administrator rights, and elevating would be actively
@@ -762,20 +760,17 @@ function Resolve-ConstructInstallMode {
           -InstanceName <new>           local (B11: a name this PC does not know yet is
                                         the LOCAL VM this run is about to build)
 
-        Otherwise the prompt is shown only on a FRESH machine, i.e. when ALL of:
+        Otherwise the prompt is shown when ALL of:
           * this run creates a VM at all (not -SkipCreateVm) and is interactive
             (not -FromPanel, no pre-selected -Action);
           * no VM identity was named (-VmName / -VmHost);
-          * the instance registry names no VM (missing file, or only the synthesized
-            default);
-          * this host has no local Construct VM already -- asked twice, because the
-            Hyper-V probe needs rights this (non-elevated) run may not have:
-            Test-ConstructVmPresent AND the user-profile key
-            Test-ConstructPriorLocalInstall looks for;
+          * the instance registry contains only the default local instance;
+          * Hyper-V reports the local VM is absent, or its state is unknown and
+            a backup is available or no client files suggest a prior install;
           * the TUI helper is actually available (a degraded install falls back to the
             local path rather than to a broken prompt).
-        Anything else answers "hyperv-local" silently -- which is what makes an existing
-        install's experience byte-identical.
+        A confirmed absence takes precedence over leftover client files. A backup
+        also allows the location choice when Hyper-V is unreadable before elevation.
     #>
     param([hashtable]$Bound, $Snapshot)
 
@@ -802,29 +797,34 @@ function Resolve-ConstructInstallMode {
         if ($Bound.ContainsKey($p)) { return $script:ConstructInstallMode }
     }
     if (-not (Get-Command Show-Menu -ErrorAction SilentlyContinue)) { return $script:ConstructInstallMode }
-    # A registry that names any VM means this machine is already set up -- no prompt.
-    if ($Snapshot -and ($Snapshot.Exists -or @($Snapshot.Entries.Keys).Count -gt 1)) {
+    # Named instances still use the existing management flow.
+    if ($Snapshot -and @($Snapshot.Entries.Keys | Where-Object { $_ -ne 'agent-vm' }).Count -gt 0) {
         return $script:ConstructInstallMode
     }
     # An existing LOCAL VM likewise. Probed through the driver contract (three-valued,
     # so an unreadable Hyper-V is "can't tell" and does NOT suppress the prompt).
+    $localVmPresent = $null
     if ((Get-Command Test-ConstructDriverPrereqs -ErrorAction SilentlyContinue) -and
         (Get-Command Test-ConstructVmPresent -ErrorAction SilentlyContinue)) {
         try {
-            if ((Test-ConstructDriverPrereqs) -and ((Test-ConstructVmPresent -Name $VmName) -eq $true)) {
-                return $script:ConstructInstallMode
+            if (Test-ConstructDriverPrereqs) {
+                $localVmPresent = Test-ConstructVmPresent -Name $VmName
             }
         } catch { }
     }
-    # ...and the same question asked WITHOUT Hyper-V, because at this point we are the
-    # non-elevated desktop user: Get-VM needs administrator rights or membership of
-    # "Hyper-V Administrators" (which the installer grants, but which only takes effect
-    # after the next sign-in), so on a machine that already HAS a Construct VM the probe
-    # above can perfectly well answer "can't tell" -- and an existing install would then
-    # be asked a brand-new question. Provisioning leaves this VM's private key in the
-    # user's own profile, so its presence is a permission-free "this PC has installed a
-    # Construct VM before".
-    if (Test-ConstructPriorLocalInstall -VmName $VmName) { return $script:ConstructInstallMode }
+    if ($localVmPresent -eq $true) { return $script:ConstructInstallMode }
+    # A restore must be able to choose a remote host before elevation, even when
+    # Hyper-V cannot be queried as this user. The choice itself changes no VM.
+    $hasBackup = $false
+    if (Get-Command Get-ConstructBackupDir -ErrorAction SilentlyContinue) {
+        $backupDir = Get-ConstructBackupDir -Dir $PSScriptRoot
+        $hasBackup = Test-Path -LiteralPath (Join-Path $backupDir "extracted\backup-info.json")
+    }
+    # Keep the prior-install fallback for unreadable Hyper-V without a backup.
+    if ($localVmPresent -ne $false -and -not $hasBackup -and
+        (($Snapshot -and $Snapshot.Exists) -or (Test-ConstructPriorLocalInstall -VmName $VmName))) {
+        return $script:ConstructInstallMode
+    }
 
     $script:ConstructModePrompted = $true
     if (Get-Command Show-TuiScreen -ErrorAction SilentlyContinue) {
@@ -1617,6 +1617,21 @@ function Get-BackupProjectNames {
         if ($info.addedProjects) { return @($info.addedProjects) }
     } catch { }
     return @()
+}
+
+# Both local and remote creation can reuse the backup cached on this PC.
+function Confirm-ConstructSavedConfigRestore {
+    param([Parameter(Mandatory)][string]$BackupDir, [string]$BackupMode)
+    if (-not (Test-Path -LiteralPath (Join-Path $BackupDir "extracted\backup-info.json"))) { return $false }
+    if ($BackupMode) { return ($BackupMode -ne 'wipe') }
+    return (Invoke-TuiConfirm -ScreenTitle "Restore a previously saved config?" -Body @(
+        "A config backup from an earlier run exists on this PC. It can restore",
+        "the agent config (auth, memory, chat history, skills, instruction files,",
+        "project setup, and the credentials used to clone private repos)",
+        "automatically onto the new VM."
+    ) -Question "Auto-restore the saved config?" `
+      -YesLabel "Yes  restore it onto the new VM (recommended)" `
+      -NoLabel  "No   install completely blank")
 }
 
 # Quick, non-interactive TCP probe of the VM's SSH port. Used to gate the
@@ -2577,6 +2592,16 @@ if ($RemoteInstall) {
                "Nothing was created on $svcUrl. Fix the registry ($($registry.Path)) or pick another name.")
     }
 
+    # Existing-instance reinstalls already chose their backup before deletion.
+    if (-not $existingEntry) {
+        $bk = Get-ConstructBackupDir -Dir $PSScriptRoot
+        if (Confirm-ConstructSavedConfigRestore -BackupDir $bk -BackupMode $BackupMode) {
+            $restoreDir = $bk
+            $restoredProjectNames = Get-BackupProjectNames -BackupDir $bk
+            Write-Ok "Saved config loaded; it will be restored automatically after the install."
+        }
+    }
+
     Restore-ConstructInstallFeatures -Name $instName
 
     # ── The usual questions, asked up front ───────────────────────────────────
@@ -3395,21 +3420,8 @@ if ($PSBoundParameters.ContainsKey('Action') -and $Action -eq 'add-config' -and 
 # the reinstall path's "declined the save" branch. This brings back the saved
 # auth/memory/skills AND the git-credentials used to clone private repos, so the
 # checkout can authenticate instead of silently failing into an empty repos dir.
-if (-not $SkipCreateVm -and -not $existingVmHandled -and
-    (Test-Path -LiteralPath (Join-Path $bk "extracted\backup-info.json"))) {
-    $useBackup = if ($BackupMode) {
-        ($BackupMode -ne 'wipe')
-    } else {
-        Invoke-TuiConfirm -ScreenTitle "Restore a previously saved config?" -Body @(
-            "No agent VM is installed, but a config backup from an earlier run exists",
-            "on this host. It can restore the agent config (auth, memory, chat history,",
-            "skills, instruction files, project setup, and the credentials used to clone",
-            "private repos) automatically onto the freshly installed VM."
-        ) -Question "Auto-restore the saved config?" `
-          -YesLabel "Yes  restore it onto the new VM (recommended)" `
-          -NoLabel  "No   install completely blank"
-    }
-    if ($useBackup) {
+if (-not $SkipCreateVm -and -not $existingVmHandled) {
+    if (Confirm-ConstructSavedConfigRestore -BackupDir $bk -BackupMode $BackupMode) {
         $restoreDir = $bk
         $restoredProjectNames = Get-BackupProjectNames -BackupDir $bk
         Write-Ok "Saved config loaded; it will be restored automatically after the install."

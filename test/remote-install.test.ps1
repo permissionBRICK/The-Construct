@@ -6,11 +6,10 @@
 
     Two things are pinned here, and they are the two that can go wrong quietly:
 
-      1. THE ZERO-CHANGE BAR. Auto-Install.ps1 gained exactly one new question, and an
-         existing install must never see it. Resolve-ConstructInstallMode is the whole
-         gate, so every way of being "not a fresh machine" is asserted individually --
-         including the one that has no Hyper-V rights, since the mode is resolved BEFORE
-         the elevation prompt.
+      1. THE MODE GATE. Existing VMs keep their management flow. A confirmed missing
+         local VM offers local/remote creation even with leftover client files.
+         Unreadable Hyper-V still uses those files as a prior-install fallback,
+         since mode resolution runs BEFORE the elevation prompt.
       2. THE REMOTE SPLAT + THE REGISTRY WRITE. New-ConstructRemoteProvisionArgs is what
          aims Provision-AgentVM.ps1 at somebody else's machine; get an argument wrong and
          it provisions the LOCAL VM instead. Add-ConstructInstance is what records the
@@ -140,6 +139,8 @@ $script:vmPresent = $null      # $null = "can't tell" (no Hyper-V rights), $true
 $script:prereqs = $true
 function Test-ConstructDriverPrereqs { return $script:prereqs }
 function Test-ConstructVmPresent { param([string]$Name) return $script:vmPresent }
+$modeBackupDir = Join-Path $tmpRoot 'mode-backup'
+function Get-ConstructBackupDir { param($Dir) return $modeBackupDir }
 
 # The installer's own parameters, as the resolver reads them.
 $Backend = "hyperv-local"; $ServiceUrl = ""; $InstanceName = ""
@@ -219,7 +220,7 @@ try {
     $SkipCreateVm = $false
 
     [void](Invoke-Mode @{} (New-Snapshot @{} $true))
-    ok "mode: an EXISTING instances.json suppresses the prompt" ($script:menuCalls -eq 0)
+    ok "mode: a default-only registry with a missing VM offers a new location" ($script:menuCalls -eq 1)
     [void](Invoke-Mode @{} $registered)
     ok "mode: a registry naming other VMs suppresses the prompt" ($script:menuCalls -eq 0)
 
@@ -232,6 +233,8 @@ try {
     # permission-free second opinion; without it, an existing install would be asked a
     # brand-new question.
     $script:vmPresent = $null
+    [void](Invoke-Mode @{} (New-Snapshot @{} $true))
+    ok "mode: a saved registry still suppresses the prompt when Hyper-V is unreadable" ($script:menuCalls -eq 0)
     [void](Invoke-Mode @{} $freshSnapshot)
     ok "mode: an unreadable Hyper-V alone does NOT suppress the prompt" ($script:menuCalls -eq 1)
     $env:USERPROFILE = $profileDir     # ...has agent_vm_ed25519 from section (b)
@@ -241,6 +244,28 @@ try {
     [void](Invoke-Mode @{} $freshSnapshot)
     ok "mode: ...and the same holds with no Hyper-V cmdlets at all" ($script:menuCalls -eq 0)
     $script:prereqs = $true
+    $script:vmPresent = $false
+    $script:menuAnswer = 1
+    ok "mode: a deleted VM with a leftover key can select remote" (
+        (Invoke-Mode @{} $freshSnapshot) -eq 'hyperv-remote' -and $script:menuCalls -eq 1)
+    ok "mode: a deleted VM with a leftover key AND registry can select remote" (
+        (Invoke-Mode @{} (New-Snapshot @{} $true)) -eq 'hyperv-remote' -and $script:menuCalls -eq 1)
+    $script:vmPresent = $true
+    [void](Invoke-Mode @{} (New-Snapshot @{} $true))
+    ok "mode: an existing VM with a key and registry still suppresses the prompt" ($script:menuCalls -eq 0)
+
+    New-Item -ItemType Directory -Path (Join-Path $modeBackupDir 'extracted') -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $modeBackupDir 'extracted/backup-info.json') -Value '{}'
+    [void](Invoke-Mode @{} (New-Snapshot @{} $true))
+    ok "mode: a backup does not override a confirmed existing local VM" ($script:menuCalls -eq 0)
+    $script:vmPresent = $null
+    ok "mode: a backup with unreadable Hyper-V offers remote despite leftover client files" (
+        (Invoke-Mode @{} (New-Snapshot @{} $true)) -eq 'hyperv-remote' -and $script:menuCalls -eq 1)
+    $script:prereqs = $false
+    ok "mode: a backup without Hyper-V cmdlets also offers remote" (
+        (Invoke-Mode @{} (New-Snapshot @{} $true)) -eq 'hyperv-remote' -and $script:menuCalls -eq 1)
+    $script:prereqs = $true
+    $script:menuAnswer = 0
     $env:USERPROFILE = Join-Path $tmpRoot "no-such-profile"
     $script:vmPresent = $false
 
@@ -251,6 +276,78 @@ try {
     function Show-Menu { param($Title, $Options, $Default) $script:menuCalls++; return $script:menuAnswer }
 } finally {
     $env:USERPROFILE = $savedUserProfile
+}
+
+# A new remote VM must offer the same cached backup as a new local VM, before
+# projects and clone credentials are resolved. Exercise the actual remote branch.
+Write-Host ""
+Write-Host "=== Restore onto a new remote VM ===" -ForegroundColor Cyan
+& {
+    foreach ($name in @('Confirm-ConstructSavedConfigRestore', 'Get-BackupProjectNames')) {
+        Invoke-Expression (Get-InstallerFunctionText $name)
+    }
+    $script:restorePrompts = 0
+    $script:restoreAnswer = $true
+    function Invoke-TuiConfirm {
+        param($ScreenTitle, $Body, $Question, $YesLabel, $NoLabel)
+        $script:restorePrompts++
+        return $script:restoreAnswer
+    }
+    function Write-Ok { param($Message) }
+    $backupDir = Join-Path $tmpRoot 'backup'
+    function Get-ConstructBackupDir { param($Dir) return $backupDir }
+    $remoteRestore = $autoAst.FindAll({
+        param($n)
+        $n -is [System.Management.Automation.Language.IfStatementAst] -and
+        $n.Clauses[0].Item1.Extent.Text -eq '-not $existingEntry' -and
+        $n.Extent.Text.Contains('Confirm-ConstructSavedConfigRestore')
+    }, $true) | Select-Object -First 1
+    ok "restore: remote creation has a saved-backup branch" ($null -ne $remoteRestore)
+    if (-not $remoteRestore) { throw 'Missing remote restore branch' }
+
+    $existingEntry = $null
+    $BackupMode = ''
+    $restoreDir = ''
+    $restoredProjectNames = @()
+    Invoke-Expression $remoteRestore.Extent.Text
+    ok "restore: no backup means no prompt or restore" ($script:restorePrompts -eq 0 -and -not $restoreDir)
+
+    New-Item -ItemType Directory -Path (Join-Path $backupDir 'extracted') -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $backupDir 'extracted/backup-info.json') -Value '{"addedProjects":["private-project","second-project"]}'
+    Invoke-Expression $remoteRestore.Extent.Text
+    ok "restore: a new remote VM offers the cached backup" ($script:restorePrompts -eq 1)
+    ok "restore: acceptance sets the directory handed to provisioning" ($restoreDir -eq $backupDir)
+    ok "restore: acceptance includes the saved project profiles" (($restoredProjectNames -join ',') -eq 'private-project,second-project')
+
+    $script:restoreAnswer = $false
+    $restoreDir = ''
+    $restoredProjectNames = @()
+    Invoke-Expression $remoteRestore.Extent.Text
+    ok "restore: declining leaves a blank install" (-not $restoreDir -and $restoredProjectNames.Count -eq 0)
+
+    foreach ($mode in @('existing', 'save', 'wipe')) {
+        $BackupMode = $mode
+        $restoreDir = ''
+        $script:restorePrompts = 0
+        Invoke-Expression $remoteRestore.Extent.Text
+        ok "restore: BackupMode $mode never prompts" ($script:restorePrompts -eq 0)
+        ok "restore: BackupMode $mode selects the expected restore" (($restoreDir -eq $backupDir) -eq ($mode -ne 'wipe'))
+    }
+    $BackupMode = ''
+    $existingEntry = @{ Name = 'existing-vm' }
+    $restoreDir = 'already-selected'
+    $script:restorePrompts = 0
+    Invoke-Expression $remoteRestore.Extent.Text
+    ok "restore: reinstall does not ask again or replace its selection" ($script:restorePrompts -eq 0 -and $restoreDir -eq 'already-selected')
+
+    $remainingRemote = $autoAst.Extent.Text.Substring($remoteRestore.Extent.EndOffset)
+    $iPreflight = $remainingRemote.IndexOf('Start-ConstructGitPreflight')
+    $iMerge = $remainingRemote.IndexOf('if (@($restoredProjectNames).Count -gt 0)')
+    $iCredentials = $remainingRemote.IndexOf('Test-BackupHasGitCredentials -BackupDir $restoreDir')
+    $iForward = $remainingRemote.IndexOf("if (`$restoreDir) { `$provArgs['RestoreDir'] = `$restoreDir }")
+    $iProvision = $remainingRemote.IndexOf('& $provisionScript @provArgs')
+    ok "restore: remote preflight, projects and credentials run after backup selection" ($iPreflight -ge 0 -and $iMerge -gt $iPreflight -and $iCredentials -gt $iMerge)
+    ok "restore: the remote provisioner receives RestoreDir before invocation" ($iForward -gt $iCredentials -and $iProvision -gt $iForward)
 }
 
 # ── (d) The instance-name rule ──────────────────────────────────────────────
