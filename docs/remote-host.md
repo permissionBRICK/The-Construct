@@ -615,6 +615,8 @@ owner/host maxima and the idle cap. **Apply** changes CPU/RAM immediately when t
 is powered off. Otherwise, CPU/RAM changes wait for the row's confirmed **Restart**,
 or a full stop followed by **Start**. Start runs without a confirmation. Resuming saved state or
 rebooting Ubuntu does not apply them. The guest sees its new RAM/CPU after the cold boot.
+Every cold start reapplies saved CPU/RAM settings to the hypervisor, even when the
+service's recorded values already match. The driver reads the values back before starting.
 Idle changes take effect immediately; **Off** disables idle handling, and is unavailable
 when the host forces it. Admins obey the owner's resource allowance and the host idle cap.
 Current and pending settings remain readable when capacity is unavailable or a VM

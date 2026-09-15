@@ -38,10 +38,16 @@ public sealed class PrimaryMemorySettings(IHostConfigStore config, ICapacityLedg
     {
         if (vm.Kind != VmKind.Primary || state != VmState.Off) return vm;
         var setting = await GetAsync(vm, ct);
-        if (setting is null || setting.RamGb == vm.RamGb && vm.RamBytes == ((long)setting.RamGb << 30)) return vm;
-        limits ??= await LimitsAsync(vm.Owner, vm, ct);
-        if (setting.RamGb > limits.MaximumRamGb) throw new LifecycleException("memoryAllowanceExceeded");
+        if (setting is null) return vm;
+        var changed = setting.RamGb != vm.RamGb || vm.RamBytes != ((long)setting.RamGb << 30);
+        if (changed)
+        {
+            limits ??= await LimitsAsync(vm.Owner, vm, ct);
+            if (setting.RamGb > limits.MaximumRamGb) throw new LifecycleException("memoryAllowanceExceeded");
+        }
+        // The database is not a hardware readback. Apply even when its recorded size matches.
         await driver.SetMemoryAsync(vm.Name, setting.RamGb, ct);
+        if (!changed) return vm;
         var result = await admission.MutateAsync(null, scope => scope.UpdatePrimaryRamAsync(vm.Name, setting.RamGb, vm.PowerGeneration), ct);
         if (result.Outcome != AdmissionOutcome.Accepted) throw new LifecycleException("power-state-changed");
         return await vms.GetAsync(vm.Name, ct) ?? throw new LifecycleException("vm-deleting");
