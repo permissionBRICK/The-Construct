@@ -218,6 +218,10 @@ const lastState = (entry) => [...entry.panel.posted].reverse().find((m) => m.typ
     await send("restartVm");
     eq("settings: confirmed restart uses lifecycle", client.calls.find(c => c.method === "lifecycle").args[1].action, "restart");
     ok("settings: confirmation mentions RAM and interruption", /RAM/.test(t.vscode.rec.warnings.at(-1).detail) && /interrupted/.test(t.vscode.rec.warnings.at(-1).detail));
+    const confirmations = t.vscode.rec.warnings.length;
+    await send("startVm");
+    eq("settings: start uses lifecycle without confirmation", client.calls.filter(c => c.method === "lifecycle").at(-1).args[1].action, "start");
+    eq("settings: start opens no popup", t.vscode.rec.warnings.length, confirmations);
     cpu.maximumCpus = 0; memory.maximumRamGb = 0;
     const beforeIdle = client.calls.filter(c => c.method === "setVmIdlePolicy").length;
     const beforeHardware = client.calls.filter(c => c.method === "setVmCpu" || c.method === "setVmMemory").length;

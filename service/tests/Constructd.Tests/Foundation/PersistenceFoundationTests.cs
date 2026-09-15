@@ -223,7 +223,7 @@ public sealed class PersistenceFoundationTests : IDisposable
     public async Task IdleEngineSkipsChildren()
     {
         var vms = new InMemoryVmRepository(); await vms.AddAsync(Child(), 5, Ct);
-        var engine = new IdlePolicyEngine(vms, null!, new FakeHypervisorDriver(), new InMemoryAuditLog(), new Constructd.Core.Configuration.IdleOptions());
+        var engine = new IdlePolicyEngine(vms, null!, new FakeHypervisorDriver(), new InMemoryAuditLog(), new Constructd.Core.Configuration.IdleOptions(), new Constructd.Core.Services.InMemoryVmOperationGate());
         Assert.Empty(await engine.EvaluateAsync(DateTimeOffset.UtcNow, Ct));
     }
     public void Dispose() { SqliteConnection.ClearAllPools(); if (Directory.Exists(_directory)) Directory.Delete(_directory, true); }

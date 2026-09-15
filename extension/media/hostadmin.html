@@ -227,7 +227,7 @@
     <form id="haVmSettingsForm">
       <h2 id="haVmSettingsTitle">VM settings</h2>
       <p id="haVmSettingsCurrent"></p>
-      <p>CPU and RAM apply on the next full stop/start. Resuming saved state or rebooting Ubuntu keeps them pending. Idle policy applies immediately.</p>
+      <p>CPU and RAM apply immediately when the VM is off; otherwise, after a full stop/start. Resuming saved state or rebooting Ubuntu keeps them pending. Idle policy applies immediately.</p>
       <fieldset id="haVmSettingsFields" disabled>
         <label>CPU count <input id="haVmCpus" type="number" min="1" max="64" step="1" required></label>
         <label>RAM (GB) <input id="haVmRam" type="number" min="1" max="1024" step="1" required></label>

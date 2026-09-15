@@ -73,7 +73,7 @@ public sealed partial class HostAdministration
                 if (idle is not null && (timeout != StateJson.CoerceNumber(idle["timeoutMinutes"]) || idleAction != Text(idle["action"])))
                     await client.SetVmIdlePolicyAsync(name, new JsonObject { ["timeoutMinutes"] = timeout, ["action"] = idleAction }, ct);
                 saved = true;
-                m.State["notice"] = new JsonObject { ["level"] = "info", ["text"] = $"{name}: settings saved. CPU and RAM apply on the next full stop/start; idle policy applies immediately." };
+                m.State["notice"] = new JsonObject { ["level"] = "info", ["text"] = $"{name}: settings saved." };
             }
             else settings = await ReadVmSettings(m, client, name, ct);
         }

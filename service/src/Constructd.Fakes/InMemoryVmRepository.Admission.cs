@@ -3,6 +3,15 @@ namespace Constructd.Fakes;
 
 public sealed partial class InMemoryVmRepository
 {
+    internal Task<bool> UpdatePrimaryRamAsync(string name, int ramGb, long expected)
+    {
+        lock (InMemoryTransaction.Gate)
+        {
+            if (!_vms.TryGetValue(name, out var vm) || vm.Kind != VmKind.Primary || vm.Deleting || vm.PowerGeneration != expected) return Task.FromResult(false);
+            _vms[name] = vm with { RamGb = ramGb, RamMb = null };
+            return Task.FromResult(true);
+        }
+    }
     internal Task<bool> UpdateHardwareAsync(string name, ChildHardware hardware, long expected)
     {
         lock (InMemoryTransaction.Gate)

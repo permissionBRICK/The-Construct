@@ -1289,7 +1289,7 @@ function createHostAdminModel(deps = {}) {
           if (memory && args.ramGb !== memory.desiredRamGb) await client.setVmMemory(name, { ramGb: args.ramGb });
           if (idle && (args.timeoutMinutes !== idle.timeoutMinutes || args.action !== idle.action))
             await client.setVmIdlePolicy(name, { timeoutMinutes: args.timeoutMinutes, action: args.action });
-          notice("info", `${name}: settings saved. CPU and RAM apply on the next full stop/start; idle policy applies immediately.`);
+          notice("info", `${name}: settings saved.`);
           return { ok: true };
         }
         case "loadVmCpu": {

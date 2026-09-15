@@ -54,7 +54,7 @@ public static class PrimaryCpuEndpoints
                 hostLogicalCpus = limits?.HostLogicalCpus, maximumCpus = limits?.MaximumCpus,
                 recommendedCpus = limits?.RecommendedCpus, warnings, appliesOn = "next-stop-start" });
         }
-        await using var gate = await services.GetRequiredService<IVmOperationGate>().TryAcquireAsync(name, http.TraceIdentifier, ct);
+        await using var gate = await PrimaryOperationGate.AcquireAsync(services.GetRequiredService<IVmOperationGate>(), name, http.TraceIdentifier, ct);
         if (gate is null) return LifecycleEndpoints.Busy(vm.CurrentJobId);
         vm = await vms.GetAsync(name, ct);
         if (vm is null) return Problems.NotFound("Unknown VM.");
@@ -72,6 +72,8 @@ public static class PrimaryCpuEndpoints
                 if (request.Cpus < 1 || request.Cpus > limits.MaximumCpus)
                     return CodedProblems.Validation("cpus", $"CPU count must be between 1 and {limits.MaximumCpus} for this VM's owner and host.");
                 await settings.SaveAsync(vm, request.Cpus, http.User.Actor(), ct);
+                vm = await settings.ApplyAsync(vm,
+                    await services.GetRequiredService<IHypervisorDriver>().GetStateAsync(vm.Name, ct), ct, limits);
                 CodedProblems.Audit(http, "vm.cpu", vm.Owner, target: name, extra: "cpus=" + request.Cpus);
             }
             var desired = (await settings.GetAsync(vm, ct))?.Cpus ?? vm.Cpu;

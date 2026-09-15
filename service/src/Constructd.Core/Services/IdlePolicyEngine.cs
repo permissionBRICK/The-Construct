@@ -19,7 +19,8 @@ public sealed class IdlePolicyEngine(
     IPortForwardManager forwards,
     IHypervisorDriver driver,
     IAuditLog audit,
-    IdleOptions options) : IIdlePolicyEngine
+    IdleOptions options,
+    IVmOperationGate vmGate) : IIdlePolicyEngine
 {
     /// <summary>
     /// Per-VM "last seen active" watermark, so the timeout measures a continuous idle window.
@@ -45,7 +46,12 @@ public sealed class IdlePolicyEngine(
             foreach (var vm in all.Where(v => v.Kind == VmKind.Primary).OrderBy(v => v.Name, StringComparer.Ordinal))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                outcomes.Add(await EvaluateVmAsync(vm, now, cancellationToken).ConfigureAwait(false));
+                await using var held = await vmGate.TryAcquireAsync(vm.Name, "idle-evaluate", cancellationToken).ConfigureAwait(false);
+                if (held is null) continue;
+                // The list can predate a settings change or start. Never write its old resources back.
+                var current = await vms.GetAsync(vm.Name, cancellationToken).ConfigureAwait(false);
+                if (current is null || current.Kind != VmKind.Primary || current.Deleting) continue;
+                outcomes.Add(await EvaluateVmAsync(current, now, cancellationToken).ConfigureAwait(false));
             }
 
             return outcomes;

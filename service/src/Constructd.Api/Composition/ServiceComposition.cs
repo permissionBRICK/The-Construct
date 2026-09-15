@@ -76,7 +76,8 @@ public static class ServiceComposition
             sp.GetRequiredService<IPortForwardManager>(),
             sp.GetRequiredService<IHypervisorDriver>(),
             sp.GetRequiredService<IAuditLog>(),
-            options.Idle));
+            options.Idle,
+            sp.GetRequiredService<IVmOperationGate>()));
 
         // Keeping the host awake is platform-agnostic policy over the VM registry (plan §4.13); only
         // the guard under it is a platform call, and off Windows that guard does nothing.
