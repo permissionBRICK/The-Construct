@@ -34,12 +34,12 @@ public sealed class PrimaryMemorySettings(IHostConfigStore config, ICapacityLedg
     }
     public Task SaveAsync(Vm vm, int ramGb, string actor, CancellationToken ct) =>
         config.SetAsync(Section(vm), new Setting(vm.Created, ramGb), actor, ct);
-    public async Task<Vm> ApplyAsync(Vm vm, VmState state, CancellationToken ct)
+    public async Task<Vm> ApplyAsync(Vm vm, VmState state, CancellationToken ct, Limits? limits = null)
     {
         if (vm.Kind != VmKind.Primary || state != VmState.Off) return vm;
         var setting = await GetAsync(vm, ct);
-        if (setting is null || setting.RamGb == vm.RamGb) return vm;
-        var limits = await LimitsAsync(vm.Owner, vm, ct);
+        if (setting is null || setting.RamGb == vm.RamGb && vm.RamBytes == ((long)setting.RamGb << 30)) return vm;
+        limits ??= await LimitsAsync(vm.Owner, vm, ct);
         if (setting.RamGb > limits.MaximumRamGb) throw new LifecycleException("memoryAllowanceExceeded");
         await driver.SetMemoryAsync(vm.Name, setting.RamGb, ct);
         var result = await admission.MutateAsync(null, scope => scope.UpdatePrimaryRamAsync(vm.Name, setting.RamGb, vm.PowerGeneration), ct);

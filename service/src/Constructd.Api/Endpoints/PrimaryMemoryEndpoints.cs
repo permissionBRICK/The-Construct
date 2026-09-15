@@ -44,7 +44,7 @@ public static class PrimaryMemoryEndpoints
                 maximumRamGb = limits?.MaximumRamGb, recommendedRamGb = limits?.RecommendedRamGb,
                 warnings, appliesOn = "next-stop-start" });
         }
-        await using var gate = await services.GetRequiredService<IVmOperationGate>().TryAcquireAsync(name, http.TraceIdentifier, ct);
+        await using var gate = await PrimaryOperationGate.AcquireAsync(services.GetRequiredService<IVmOperationGate>(), name, http.TraceIdentifier, ct);
         if (gate is null) return LifecycleEndpoints.Busy(vm.CurrentJobId);
         vm = await vms.GetAsync(name, ct);
         if (vm is null) return Problems.NotFound("Unknown VM.");
@@ -62,6 +62,8 @@ public static class PrimaryMemoryEndpoints
                 if (request.RamGb < 1 || request.RamGb > limits.MaximumRamGb)
                     return CodedProblems.Validation("ramGb", $"RAM (GB) must be between 1 and {limits.MaximumRamGb} for this VM's owner and host.");
                 await settings.SaveAsync(vm, request.RamGb, http.User.Actor(), ct);
+                vm = await settings.ApplyAsync(vm,
+                    await services.GetRequiredService<IHypervisorDriver>().GetStateAsync(vm.Name, ct), ct, limits);
                 CodedProblems.Audit(http, "vm.memory", vm.Owner, target: name, extra: "ramGb=" + request.RamGb);
             }
             var desired = (await settings.GetAsync(vm, ct))?.RamGb ?? vm.RamGb;

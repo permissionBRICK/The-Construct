@@ -24,6 +24,7 @@ public class IdlePolicyEngineTests
         public FakeHypervisorDriver Driver { get; } = new();
 
         public InMemoryAuditLog Audit { get; } = new();
+        public InMemoryVmOperationGate Gate { get; } = new();
 
         public InMemoryPortForwardManager Forwards { get; }
 
@@ -44,7 +45,7 @@ public class IdlePolicyEngineTests
                 new PortRangeOptions(2201, 2299),
                 new PortRangeOptions(2300, 2999));
 
-            Engine = new IdlePolicyEngine(Vms, Forwards, Driver, Audit, Options);
+            Engine = new IdlePolicyEngine(Vms, Forwards, Driver, Audit, Options, Gate);
         }
 
         public async Task<Vm> AddRunningVmAsync(string name, IdlePolicy policy)
@@ -54,6 +55,56 @@ public class IdlePolicyEngineTests
             Driver.SetState(name, VmState.Running);
             return vm;
         }
+    }
+
+    [Fact]
+    public async Task IdleTickDoesNotRestoreResourcesFromAnOldInventoryList()
+    {
+        var h = new Harness();
+        var vm = await h.AddRunningVmAsync("work-vm", IdlePolicy.Disabled);
+        await h.Vms.UpdateAsync(vm with { State = VmState.Off }, default);
+        var gate = new BeforeAcquireGate(h.Gate, async () =>
+        {
+            // A start finishes after the idle tick listed VMs, before it acquires this VM.
+            await h.Vms.UpdateAsync(vm with { Cpu = 6, RamGb = 12, State = VmState.Off }, default);
+        });
+        var engine = new IdlePolicyEngine(h.Vms, h.Forwards, h.Driver, h.Audit, h.Options, gate);
+        await engine.EvaluateAsync(Start, default);
+        var current = (await h.Vms.GetAsync(vm.Name, default))!;
+        Assert.Equal(6, current.Cpu);
+        Assert.Equal(12, current.RamGb);
+        Assert.Equal(VmState.Running, current.State);
+    }
+
+    private sealed class BeforeAcquireGate(IVmOperationGate inner, Func<Task> before) : IVmOperationGate
+    {
+        public async Task<IAsyncDisposable?> TryAcquireAsync(string name, string operation, CancellationToken ct)
+        {
+            await before();
+            return await inner.TryAcquireAsync(name, operation, ct);
+        }
+        public Task<IAsyncDisposable> AcquireAsync(string name, string operation, CancellationToken ct) => inner.AcquireAsync(name, operation, ct);
+        public bool IsHeld(string name, out string? operation) => inner.IsHeld(name, out operation);
+    }
+
+    [Fact]
+    public async Task IdleTickSkipsVmWhileSettingsAndStartAreInProgress()
+    {
+        var h = new Harness();
+        var vm = await h.AddRunningVmAsync("work-vm", new IdlePolicy(1, IdleAction.Save));
+        await h.Engine.EvaluateAsync(Start, default);
+        await using (await h.Gate.AcquireAsync(vm.Name, "start", default))
+        {
+            await h.Vms.UpdateAsync(vm with { Cpu = 6, RamGb = 12, State = VmState.Off }, default);
+            Assert.Empty(await h.Engine.EvaluateAsync(Start.AddHours(2), default));
+            Assert.Equal(VmState.Running, h.Driver.StateOf(vm.Name));
+            Assert.Equal(VmState.Off, (await h.Vms.GetAsync(vm.Name, default))!.State);
+        }
+        await h.Engine.EvaluateAsync(Start.AddHours(2), default);
+        var updated = (await h.Vms.GetAsync(vm.Name, default))!;
+        Assert.Equal(6, updated.Cpu);
+        Assert.Equal(12, updated.RamGb);
+        Assert.Equal(VmState.Saved, updated.State);
     }
 
     [Fact]

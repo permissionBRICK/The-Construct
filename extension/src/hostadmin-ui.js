@@ -278,9 +278,9 @@ function createHostAdminFeature(deps = {}) {
         case "restartVm":
         case "startVm": {
           const restart = action === "restartVm";
-          if (!name || !(await modal(`${restart ? "Restart" : "Start"} "${name}"?`, restart
-            ? "Construct will ask Ubuntu to shut down, apply any pending CPU and RAM settings, then start the VM. Running work will be interrupted."
-            : "Construct will apply any pending CPU and RAM settings before starting this powered-off VM.", restart ? "Restart" : "Start"))) return;
+          if (!name) return;
+          if (restart && !(await modal(`Restart "${name}"?`,
+            "Construct will ask Ubuntu to shut down, apply any pending CPU and RAM settings, then start the VM. Running work will be interrupted.", "Restart"))) return;
           await model.perform(action, { name });
           break;
         }

@@ -302,18 +302,18 @@ public sealed class HostAdminHttpTests
     }
     [Theory]
     [InlineData("restartVm", true)][InlineData("restartVm", false)][InlineData("startVm", true)][InlineData("startVm", false)]
-    public async Task CpuLifecycleRequiresConfirmation(string action, bool confirm)
+    public async Task OnlyRestartRequiresConfirmation(string action, bool confirm)
     {
         var api = new RoutingRemoteApi(); await using var h = await Enroll(api);
         using var ready = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.ready" });
         var prompts = h.Get<FakePrompts, IPrompts>(); prompts.Confirmations.Enqueue(confirm);
         using var response = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.action", action, args = new { name = "build" } });
         var restart = action == "restartVm";
-        Assert.Contains(((restart ? "Restart" : "Start") + " \"build\"?", restart
-            ? "Construct will ask Ubuntu to shut down, apply any pending CPU and RAM settings, then start the VM. Running work will be interrupted."
-            : "Construct will apply any pending CPU and RAM settings before starting this powered-off VM."), prompts.Shown);
+        if (restart) Assert.Contains(("Restart \"build\"?",
+            "Construct will ask Ubuntu to shut down, apply any pending CPU and RAM settings, then start the VM. Running work will be interrupted."), prompts.Shown);
+        else Assert.Empty(prompts.Shown);
         var requests = api.Requests.Where(r => r.Url.AbsolutePath == "/api/v1/vms/build/lifecycle").ToArray();
-        if (confirm) Assert.Equal(restart ? "restart" : "start", Assert.Single(requests).Body!.Value.GetProperty("action").GetString());
+        if (!restart || confirm) Assert.Equal(restart ? "restart" : "start", Assert.Single(requests).Body!.Value.GetProperty("action").GetString());
         else Assert.Empty(requests);
     }
     [Theory]

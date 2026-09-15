@@ -130,12 +130,8 @@ public sealed class InMemoryAdmissionStore(InMemoryVmRepository vms, InMemoryUse
         public Task SetOverrideAsync(VmOverride value) { Check(); return vms.SetOverrideAsync(value, ct); }
         public Task<bool> SetAllowanceAsync(string userName, UserAllowance allowance) => Cas(() => users.SetAllowanceAsync(userName, allowance, ct));
         public Task<bool> UpdateHardwareAsync(string vmName, ChildHardware hardware, long expectedGeneration) => Cas(() => vms.UpdateHardwareAsync(vmName, hardware, expectedGeneration));
-        public Task<bool> UpdatePrimaryRamAsync(string vmName, int ramGb, long expectedGeneration) => Cas(async () =>
-        {
-            var vm = await vms.GetAsync(vmName, ct);
-            return vm is { Kind: VmKind.Primary, Deleting: false } && vm.PowerGeneration == expectedGeneration &&
-                await vms.UpdateAsync(vm with { RamGb = ramGb }, ct);
-        });
+        public Task<bool> UpdatePrimaryRamAsync(string vmName, int ramGb, long expectedGeneration) =>
+            Cas(() => vms.UpdatePrimaryRamAsync(vmName, ramGb, expectedGeneration));
         public Task<bool> UpdateIdlePolicyAsync(string vmName, IdlePolicy policy, long expectedGeneration) => Cas(async () =>
         {
             var vm = await vms.GetAsync(vmName, ct);

@@ -43,12 +43,12 @@ public sealed class PrimaryCpuSettings(IHostConfigStore config, ICapacityLedger 
     public Task SaveAsync(Vm vm, int cpus, string actor, CancellationToken ct) =>
         config.SetAsync(Section(vm), new Setting(vm.Created, cpus), actor, ct);
 
-    public async Task<Vm> ApplyAsync(Vm vm, VmState state, CancellationToken ct)
+    public async Task<Vm> ApplyAsync(Vm vm, VmState state, CancellationToken ct, Limits? limits = null)
     {
         if (vm.Kind != VmKind.Primary || state != VmState.Off) return vm;
         var setting = await GetAsync(vm, ct);
         if (setting is null || setting.Cpus == vm.Cpu) return vm;
-        var limits = await LimitsAsync(vm.Owner, vm, ct);
+        limits ??= await LimitsAsync(vm.Owner, vm, ct);
         if (setting.Cpus > limits.MaximumCpus) throw new LifecycleException("cpu-allowance-exceeded");
         await driver.SetCpuCountAsync(vm.Name, setting.Cpus, ct);
         var result = await admission.MutateAsync(null, scope => scope.UpdatePrimaryCpuAsync(vm.Name, setting.Cpus, vm.PowerGeneration), ct);

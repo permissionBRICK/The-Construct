@@ -178,7 +178,7 @@ public sealed class SqliteAdmissionStore(SqliteCapacityLedger ledger, IClock clo
         }
         public Task<bool> UpdatePrimaryRamAsync(string vmName, int ramGb, long expectedGeneration)
         {
-            Check(); using var cmd = Command(tx, "UPDATE vms SET ram_gb=@ram WHERE name=@name AND kind='primary' AND deleting=0 AND power_generation=@expected");
+            Check(); using var cmd = Command(tx, "UPDATE vms SET ram_gb=@ram,ram_mb=NULL WHERE name=@name AND kind='primary' AND deleting=0 AND power_generation=@expected");
             cmd.With("@name", vmName).With("@ram", ramGb).With("@expected", expectedGeneration);
             return Task.FromResult(Cas(cmd.ExecuteNonQuery() == 1));
         }
