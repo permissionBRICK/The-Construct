@@ -478,8 +478,20 @@ legacy VM token cannot create children: reprovision it (or rotate its token from
 tab) once to receive the primary-scoped credential used by `construct vm`.
 
 Passing any of `-Backend` / `-ServiceUrl` / `-InstanceName` skips the mode prompt, as do
-`-VmName`, `-Action`, `-FromPanel` and an existing default instance. The whole flow — admin
-setup, authentication, certificate pinning, the idle policy — is in
+`-VmName`, `-Action`, `-FromPanel` and an existing local VM. When Hyper-V confirms the
+local VM is gone, the installer offers local or remote creation even if its SSH key
+and default registry entry remain. A cached backup also enables this choice when
+Hyper-V cannot be queried before elevation. Without a backup, those saved files
+still select the local management flow in that case. Named instances keep their
+existing management flow.
+
+Creating a new remote VM also offers to restore the config backup cached on this PC.
+Accepting includes the saved project profiles and clone credentials, just like a local
+restore. `-BackupMode existing` selects the backup without asking; `-BackupMode wipe`
+starts blank.
+
+The whole flow, including admin setup, authentication, certificate pinning, and
+the idle policy, is in
 [Remote host](remote-host.md); [Field test](field-test-remote-host.md) walks the first run
 end to end. The later [host-administration field test](field-test-host-admin.md) covers
 allowances, children, sharing, console input and signed service updates; those paths are
