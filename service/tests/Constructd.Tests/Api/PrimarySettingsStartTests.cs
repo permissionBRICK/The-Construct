@@ -11,6 +11,54 @@ namespace Constructd.Tests.Api;
 public sealed class PrimarySettingsStartTests
 {
     [Theory]
+    [InlineData("lifecycle")]
+    [InlineData("power")]
+    public async Task ColdStartReappliesDesiredHardwareWhenStoredValuesAlreadyMatch(string route)
+    {
+        using var app = new TestApp();
+        using var owner = await app.CreateUserClientAsync("alice");
+        var vm = new Vm("parent", "alice", 4, 8, 50, app.Clock.UtcNow, VmState.Off, 2222, null, IdlePolicy.Disabled, []);
+        await app.Vms.AddAsync(vm, 5, default);
+        await app.Service<PrimaryCpuSettings>().SaveAsync(vm, 4, "alice", default);
+        await app.Service<PrimaryMemorySettings>().SaveAsync(vm, 8, "alice", default);
+        // Matching database values must not hide different hardware, including on later starts.
+        // Capacity is unavailable here; unchanged configured resources require no new resize check.
+        for (var start = 0; start < 2; start++)
+        {
+            app.Driver.SetState(vm.Name, VmState.Off);
+            app.Driver.CpuCounts[vm.Name] = 2;
+            app.Driver.MemorySizes[vm.Name] = 4;
+            app.Driver.Calls.Clear();
+            (await owner.PostAsJsonAsync($"/api/v1/vms/parent/{route}", new { action = "start" })).EnsureSuccessStatusCode();
+            Assert.Equal(4, app.Driver.CpuCounts[vm.Name]);
+            Assert.Equal(8, app.Driver.MemorySizes[vm.Name]);
+            var calls = app.Driver.Calls.ToArray();
+            Assert.True(Array.IndexOf(calls, "cpu:parent:4") < Array.IndexOf(calls, "start:parent"));
+            Assert.True(Array.IndexOf(calls, "memory:parent:8") < Array.IndexOf(calls, "start:parent"));
+        }
+    }
+
+    [Theory]
+    [InlineData("cpu")]
+    [InlineData("memory")]
+    public async Task MatchingStoredSettingsDoNotHideHardwareFailureAtStart(string resource)
+    {
+        using var app = new TestApp();
+        using var owner = await app.CreateUserClientAsync("alice");
+        var vm = new Vm("parent", "alice", 4, 8, 50, app.Clock.UtcNow, VmState.Off, 2222, null, IdlePolicy.Disabled, []);
+        await app.Vms.AddAsync(vm, 5, default);
+        app.Driver.SetState(vm.Name, VmState.Off);
+        await app.Service<PrimaryCpuSettings>().SaveAsync(vm, 4, "alice", default);
+        await app.Service<PrimaryMemorySettings>().SaveAsync(vm, 8, "alice", default);
+        if (resource == "cpu") app.Driver.PowerFailure = new IOException("driver failure");
+        else app.Driver.MemoryFailure = new IOException("driver failure");
+        var response = await owner.PostAsJsonAsync("/api/v1/vms/parent/lifecycle", new { action = "start" });
+        Assert.False(response.IsSuccessStatusCode);
+        Assert.DoesNotContain("start:parent", app.Driver.Calls);
+        Assert.Equal(VmState.Off, app.Driver.StateOf(vm.Name));
+    }
+
+    [Theory]
     [InlineData(false, false, true)]
     [InlineData(true, false, true)]
     [InlineData(false, false, false)]
