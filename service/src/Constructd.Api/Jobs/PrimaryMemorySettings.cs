@@ -9,13 +9,13 @@ public sealed class PrimaryMemorySettings(IHostConfigStore config, ICapacityLedg
     IDelegationPolicy policy, IVmRepository vms, IVmMemoryDriver driver, IAdmissionStore admission)
 {
     public sealed record Setting(DateTimeOffset Created, int RamGb);
-    public sealed record Limits(int MaximumRamGb, int RecommendedRamGb);
+    public sealed record Limits(int MaximumRamGb, int RecommendedRamGb, IReadOnlyList<string> Warnings);
     private static string Section(Vm vm) => "primary-memory:" + vm.Name.ToLowerInvariant();
-    public async Task<Limits> LimitsAsync(string owner, Vm? vm, CancellationToken ct)
+    public async Task<Limits> LimitsAsync(string owner, Vm? vm, CancellationToken ct, bool refresh = true)
     {
         const long gib = 1L << 30;
-        var snapshot = await capacity.SnapshotAsync(true, ct);
-        if (!snapshot.Complete) throw new LifecycleException("capacity-unavailable");
+        var snapshot = await capacity.SnapshotAsync(refresh, ct);
+        if (!CapacityMath.RuntimeInventoryComplete(snapshot)) throw new LifecycleException("capacity-unavailable");
         var allowance = await policy.ResolveAsync(owner, null, ct);
         var rows = (snapshot.Accounting ?? snapshot.Reservations).Where(r => r.Resource == ReservationResource.Ram).ToArray();
         var own = rows.Where(r => vm is not null && Ownership.SameName(r.VmName, vm.Name)).Sum(r => r.Amount);
@@ -25,7 +25,7 @@ public sealed class PrimaryMemorySettings(IHostConfigStore config, ICapacityLedg
         if (allowance.RamBudgetBytes is long budget)
             available = Math.Min(available, Math.Max(0, budget - rows.Where(r => Ownership.SameName(r.ScopeOwner, owner)).Sum(r => r.Amount) + own));
         var maximum = (int)Math.Clamp(available / gib, 0, 1024);
-        return new(maximum, Math.Min(8, maximum));
+        return new(maximum, Math.Min(8, maximum), snapshot.Problems ?? []);
     }
     public async Task<Setting?> GetAsync(Vm vm, CancellationToken ct)
     {

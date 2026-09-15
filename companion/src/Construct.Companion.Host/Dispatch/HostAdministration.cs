@@ -267,7 +267,18 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
         {
             switch (tab)
             {
-                case "overview": m.State["overview"] = HostAdminViews.Overview(await client.HostStatusAsync(ct)); break;
+                case "overview":
+                    async Task<JsonNode?> ReadCapacity()
+                    {
+                        try { return await client.HostCapacityAsync(false, ct); }
+                        catch (RemoteApiException ex) when (ex.Status is not (401 or 403))
+                        { return new JsonObject { ["problems"] = new JsonArray("Capacity details unavailable: " + ex.Message) }; }
+                    }
+                    var statusTask = client.HostStatusAsync(ct);
+                    var capacityTask = ReadCapacity();
+                    await Task.WhenAll(statusTask, capacityTask);
+                    m.State["overview"] = HostAdminViews.Overview(await statusTask, await capacityTask);
+                    break;
                 case "vms": m.State["vms"] = new JsonObject { ["rows"] = HostAdminViews.Vms(await client.VmsAsync(new() { ["kind"] = "all" }, ct), clock.UtcNow), ["childrenFeature"] = m.State["features"]?["children"]?.DeepClone() }; break;
                 case "users": m.State["users"] = new JsonObject { ["rows"] = HostAdminViews.Map(await client.UsersAsync(ct), HostAdminViews.User) }; break;
                 case "media": m.State["media"] = new JsonObject { ["catalog"] = HostAdminViews.IsoCatalog(await client.IsoCatalogAsync(ct)), ["catalogProblem"] = "", ["items"] = StateJson.Boolean(m.State["features"]?["media"]) == true ? HostAdminViews.Map(await client.MediaAsync(null, ct), HostAdminViews.Media) : new JsonArray(), ["mediaProblem"] = "" }; break;

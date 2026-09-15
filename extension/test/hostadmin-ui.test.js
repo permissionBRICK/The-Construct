@@ -138,6 +138,50 @@ const lastState = (entry) => [...entry.panel.posted].reverse().find((m) => m.typ
 (async () => {
   console.log("\n=== the panel ===");
   {
+    const client = fakeClient({ health: { ...HEALTH, apiFeatures: [...HEALTH.apiFeatures, "primary-cpu", "primary-memory"] }, whoami: ME_ADMIN,
+      vmCpu: apiErr(409, { code: "capacity-unavailable" }),
+      vmMemory: { currentRamGb: 8, desiredRamGb: 8, maximumRamGb: null, warnings: ["capacity-unavailable"] },
+      vmIdlePolicy: { timeoutMinutes: 60, action: "save", forceEnabled: false, maxTimeoutMinutes: 120 } });
+    const t = makeFeature({ client }); const entry = await openReady(t);
+    await entry.panel.send({ type: "hostadmin.action", action: "loadVmSettings", args: { name: "work-vm", requestId: "partial" } });
+    const reply = entry.panel.posted.filter(m => m.type === "hostadmin.vmSettings").at(-1);
+    eq("settings: CPU failure does not hide RAM", reply.settings.memory.currentRamGb, 8);
+    eq("settings: CPU failure does not hide idle policy", reply.settings.idle.timeoutMinutes, 60);
+    ok("settings: CPU failure appears as a warning", reply.settings.warnings.some(w => /cpu settings unavailable/.test(w)));
+    client.calls.length = 0;
+    await entry.panel.send({ type: "hostadmin.action", action: "setVmSettings", args: { name: "work-vm", timeoutMinutes: 90, action: "save" } });
+    ok("settings: idle-only save succeeds with broken CPU inventory", entry.panel.posted.filter(m => m.type === "hostadmin.vmSettings").at(-1).saved);
+    ok("settings: idle-only save never reads or writes CPU/RAM", !client.calls.some(c => ["vmCpu", "vmMemory", "setVmCpu", "setVmMemory"].includes(c.method)));
+    t.feature.dispose();
+  }
+  {
+    let epoch = 4;
+    let problems = ["disk-unreadable"];
+    const client = fakeClient({ health: HEALTH, whoami: ME_ADMIN,
+      hostStatus: () => ({ capacity: { epoch: 1, complete: false }, health: { inventory: "incomplete" } }),
+      hostCapacity: (refresh) => {
+        if (refresh) epoch++;
+        return { summary: { epoch, complete: problems.length === 0, observedAt: "2026-09-15T12:00:00Z" }, problems };
+      } });
+    const t = makeFeature({ client });
+    const entry = await openReady(t);
+    eq("inventory: initial overview includes the detailed failure", lastState(entry).overview.capacityProblems.join(","), "disk-unreadable");
+    await entry.panel.send({ type: "hostadmin.action", action: "capacityRefresh" });
+    eq("inventory: re-inventory errors survive the automatic overview reload", lastState(entry).overview.capacityProblems.join(","), "disk-unreadable");
+    eq("inventory: re-inventory displays the refreshed epoch", lastState(entry).overview.capacityEpoch.epoch, "5");
+    await entry.panel.send({ type: "hostadmin.refresh" });
+    eq("inventory: later refreshes retain the detailed failure", lastState(entry).overview.capacityProblems.join(","), "disk-unreadable");
+    problems = [];
+    await entry.panel.send({ type: "hostadmin.action", action: "capacityRefresh" });
+    eq("inventory: recovery clears the old failure", lastState(entry).overview.capacityProblems.length, 0);
+    eq("inventory: recovery updates completeness", lastState(entry).overview.capacityEpoch.complete, true);
+    client.hostCapacity = async () => { throw apiErr(503, {}, "Inventory timed out"); };
+    await entry.panel.send({ type: "hostadmin.refresh" });
+    eq("inventory: a failed details endpoint keeps the overview available", lastState(entry).overview.capacityEpoch.epoch, "1");
+    ok("inventory: a failed details endpoint shows a warning", lastState(entry).overview.capacityProblems.some(p => p.includes("Inventory timed out")));
+    t.feature.dispose();
+  }
+  {
     const vm = { name: "work-vm", kind: "primary", state: "running", cpu: 4, allowedActions: ["restart"] };
     const cpu = { currentCpus: 4, desiredCpus: 4, maximumCpus: 12, pending: false };
     const memory = { currentRamGb: 8, desiredRamGb: 8, maximumRamGb: 16, pending: false };
