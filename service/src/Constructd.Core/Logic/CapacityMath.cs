@@ -13,6 +13,12 @@ public static class CapacityMath
     public static long Memory(HypervisorVmInfo vm) => Math.Max(Math.Max(vm.MemoryStartupBytes, vm.MemoryAssignedBytes),
         vm.DynamicMemory ? vm.MemoryMaximumBytes ?? 0 : 0);
 
+    // CPU/RAM settings do not depend on disk, media, or saved-state readability.
+    public static bool RuntimeInventoryComplete(HostCapacitySnapshot snapshot) => snapshot.Complete ||
+        snapshot.Problems is { Count: > 0 } && snapshot.Problems.All(p => p is
+            "disk-unreadable" or "passthrough-disk-unavailable" or "volume-unavailable" or
+            "volume-enumeration-unavailable" or "artifact-unreadable" or "artifact-unreadable-or-missing");
+
     public static IReadOnlyList<Reservation> AccountedReservations(InventorySnapshot inventory,
         IReadOnlyList<Reservation> reservations, IReadOnlyList<Vm> managed)
     {
@@ -55,7 +61,7 @@ public static class CapacityMath
         {
             var vm = managed.FirstOrDefault(v => Ownership.SameName(v.Name, group.Key));
             var actual = vm is null ? null : inventory.Vms.FirstOrDefault(a => Matches(vm, a));
-            var assigned = actual is { Complete: true } && !ReservationRules.Terminal(actual.State) ? Math.Max(0, actual.MemoryAssignedBytes) : 0;
+            var assigned = actual is { MemoryStartupBytes: > 0 } && !ReservationRules.Terminal(actual.State) ? Math.Max(0, actual.MemoryAssignedBytes) : 0;
             return Math.Max(0, group.Sum(r => r.Amount) - assigned);
         });
         var externalRam = unmanaged.Where(v => !ReservationRules.Terminal(v.State)).Sum(Memory);
@@ -113,7 +119,7 @@ public static class CapacityMath
         {
             var own = runtime.Where(r => Ownership.SameName(r.VmName, vm.Name)).Sum(r => r.Amount);
             var actual = inventory.Vms.FirstOrDefault(a => Matches(vm, a));
-            var assigned = actual is { Complete: true } && !ReservationRules.Terminal(actual.State) ? Math.Max(0, actual.MemoryAssignedBytes) : 0;
+            var assigned = actual is { MemoryStartupBytes: > 0 } && !ReservationRules.Terminal(actual.State) ? Math.Max(0, actual.MemoryAssignedBytes) : 0;
             return Math.Max(0, Math.Min(inventory.Host.TotalRamBytes - headroom - ram - externalRam + own,
                 inventory.Host.FreeRamBytes - headroom - unreflected + Math.Max(0, own - assigned) + assigned));
         }, StringComparer.OrdinalIgnoreCase);

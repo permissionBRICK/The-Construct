@@ -13,6 +13,50 @@ namespace Construct.Companion.Tests.Ipc;
 public sealed class HostAdminHttpTests
 {
     [Fact]
+    public async Task InventoryProblemsSurviveReinventoryAndOverviewReloads()
+    {
+        var api = new RoutingRemoteApi(); var previous = api.Handle;
+        var epoch = 4; var complete = false;
+        api.Handle = r =>
+        {
+            if (r.Url.AbsolutePath != "/api/v1/host/capacity") return previous(r);
+            if (r.Url.Query.Contains("refresh=true", StringComparison.Ordinal)) epoch++;
+            return new(200, JsonSerializer.SerializeToElement(new
+            {
+                summary = new { epoch, complete, observedAt = "2026-09-15T12:00:00Z" },
+                problems = complete ? System.Array.Empty<string>() : new[] { "disk-unreadable" }
+            }));
+        };
+        await using var h = await Enroll(api);
+        foreach (var action in new[] { "ready", "capacityRefresh", "refresh", "capacityRefresh" })
+        {
+            if (action == "refresh") complete = true;
+            using var response = await h.Post("/v1/hosts/host.example_7462/messages", action == "capacityRefresh"
+                ? new { type = "hostadmin.action", action } : new { type = "hostadmin." + action, action = "" });
+            Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+            var snapshot = await h.Client.GetFromJsonAsync<JsonObject>("/v1/hosts/host.example_7462/snapshot");
+            var overview = snapshot!["state"]!["overview"]!;
+            Assert.Equal(epoch.ToString(), overview["capacityEpoch"]!["epoch"]!.GetValue<string>());
+            Assert.Equal(complete, overview["capacityEpoch"]!["complete"]!.GetValue<bool>());
+            Assert.Equal(complete ? 0 : 1, overview["capacityProblems"]!.AsArray().Count);
+            if (!complete) Assert.Equal("disk-unreadable", overview["capacityProblems"]![0]!.GetValue<string>());
+        }
+    }
+
+    [Fact]
+    public async Task CapacityDetailsFailureKeepsOverviewAvailable()
+    {
+        var api = new RoutingRemoteApi(); var previous = api.Handle;
+        api.Handle = r => r.Url.AbsolutePath == "/api/v1/host/capacity"
+            ? new(500, JsonSerializer.SerializeToElement(new { code = "inventory-unavailable" })) : previous(r);
+        await using var h = await Enroll(api);
+        using var response = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.ready" });
+        var snapshot = await h.Client.GetFromJsonAsync<JsonObject>("/v1/hosts/host.example_7462/snapshot");
+        Assert.NotNull(snapshot!["state"]!["overview"]!["version"]);
+        Assert.Contains("Capacity details unavailable", snapshot["state"]!["overview"]!["capacityProblems"]!.ToJsonString());
+    }
+
+    [Fact]
     public async Task QueuedSignInFailureKeepsFullAdminState()
     {
         var api = new RoutingRemoteApi(); await using var h = await Enroll(api);

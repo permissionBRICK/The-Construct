@@ -94,11 +94,11 @@ public sealed class HostAdminVmSettingsTests
     }
     [Theory]
     [InlineData(16.5, 60, "save")]
-    [InlineData(17, 60, "save")]
+    [InlineData(1025, 60, "save")]
     [InlineData(12, 0, "off")]
     [InlineData(12, 121, "save")]
     [InlineData(12, 60, "invalid")]
-    public async Task EveryFieldIsValidatedBeforeTheFirstMutation(double ramGb, int timeoutMinutes, string action)
+    public async Task MalformedSettingsAreRejectedBeforeTheFirstMutation(double ramGb, int timeoutMinutes, string action)
     {
         var remote = new RemoteSettings(); await using var h = await Enroll(remote.Api);
         var result = await Send(h, "setVmSettings", new { name = "build", cpus = 6, ramGb, timeoutMinutes, action });
@@ -115,6 +115,24 @@ public sealed class HostAdminVmSettingsTests
         Assert.True(result.GetProperty("saved").GetBoolean());
         Assert.Single(remote.Api.Requests, r => r.Method == "PUT");
         Assert.DoesNotContain(remote.Api.Requests, r => r.Url.AbsolutePath.EndsWith("/cpu", StringComparison.Ordinal) || r.Url.AbsolutePath.EndsWith("/memory", StringComparison.Ordinal));
+    }
+    [Fact]
+    public async Task CpuReadFailureWarnsAndIdleOnlySaveNeverTouchesHardware()
+    {
+        var remote = new RemoteSettings(); await using var h = await Enroll(remote.Api);
+        var original = remote.Api.Handle;
+        remote.Api.Handle = request => request.Url.AbsolutePath.EndsWith("/cpu", StringComparison.Ordinal)
+            ? new(409, JsonSerializer.SerializeToElement(new { code = "capacity-unavailable" })) : original(request);
+        var result = await Send(h, "loadVmSettings", new { name = "build" });
+        var settings = result.GetProperty("settings");
+        Assert.Equal(JsonValueKind.Null, settings.GetProperty("cpu").ValueKind);
+        Assert.Equal(8, settings.GetProperty("memory").GetProperty("currentRamGb").GetInt32());
+        Assert.Equal(60, settings.GetProperty("idle").GetProperty("timeoutMinutes").GetInt32());
+        Assert.Contains("cpu settings unavailable", settings.GetProperty("warnings").ToString());
+        var before = remote.Api.Requests.Count;
+        result = await Send(h, "setVmSettings", new { name = "build", timeoutMinutes = 90, action = "shutdown" });
+        Assert.True(result.GetProperty("saved").GetBoolean());
+        Assert.DoesNotContain(remote.Api.Requests.Skip(before), r => r.Url.AbsolutePath.EndsWith("/cpu", StringComparison.Ordinal) || r.Url.AbsolutePath.EndsWith("/memory", StringComparison.Ordinal));
     }
     [Fact]
     public async Task UnchangedHardwareAboveLoweredCapsDoesNotPreventIdleEdits()

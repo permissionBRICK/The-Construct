@@ -36,6 +36,24 @@ public static class PrimaryCpuEndpoints
         if (vm is null) return Problems.NotFound("Unknown VM.");
         if (await LifecycleEndpoints.AuthorizeAsync(vm, http, true, ct) is { } denied) return denied;
         if (vm.Kind != VmKind.Primary) return LifecycleEndpoints.Problem("not-a-primary");
+        if (request is null)
+        {
+            var settings = services.GetRequiredService<PrimaryCpuSettings>();
+            var desired = (await settings.GetAsync(vm, ct))?.Cpus ?? vm.Cpu;
+            PrimaryCpuSettings.Limits? limits = null;
+            IReadOnlyList<string> warnings;
+            try { limits = await settings.LimitsAsync(vm.Owner, vm, ct, refresh: false); warnings = limits.Warnings; }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                services.GetRequiredService<ILoggerFactory>().CreateLogger(nameof(PrimaryCpuEndpoints))
+                    .LogWarning(ex, "CPU limits unavailable while reading settings for {VmName}", vm.Name);
+                warnings = ["capacity-unavailable"];
+            }
+            return Results.Ok(new { currentCpus = vm.Cpu, desiredCpus = desired, pending = desired != vm.Cpu,
+                hostLogicalCpus = limits?.HostLogicalCpus, maximumCpus = limits?.MaximumCpus,
+                recommendedCpus = limits?.RecommendedCpus, warnings, appliesOn = "next-stop-start" });
+        }
         await using var gate = await services.GetRequiredService<IVmOperationGate>().TryAcquireAsync(name, http.TraceIdentifier, ct);
         if (gate is null) return LifecycleEndpoints.Busy(vm.CurrentJobId);
         vm = await vms.GetAsync(name, ct);
@@ -58,7 +76,7 @@ public static class PrimaryCpuEndpoints
             }
             var desired = (await settings.GetAsync(vm, ct))?.Cpus ?? vm.Cpu;
             return Results.Ok(new { currentCpus = vm.Cpu, desiredCpus = desired, pending = desired != vm.Cpu,
-                limits.HostLogicalCpus, limits.MaximumCpus, limits.RecommendedCpus, appliesOn = "next-stop-start" });
+                limits.HostLogicalCpus, limits.MaximumCpus, limits.RecommendedCpus, limits.Warnings, appliesOn = "next-stop-start" });
         }
         catch (LifecycleException ex) { return LifecycleEndpoints.Problem(ex.Code); }
     }

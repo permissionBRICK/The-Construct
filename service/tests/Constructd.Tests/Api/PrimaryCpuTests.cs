@@ -188,6 +188,46 @@ public sealed class PrimaryCpuTests
     }
 
     [Fact]
+    public async Task SettingsRemainReadableWithUnknownCapacityAndWhileVmIsBusy()
+    {
+        using var app = CreateApp(); using var owner = await app.CreateUserClientAsync("alice");
+        await owner.CreateVmAsync("parent");
+        (await owner.PutAsJsonAsync("/api/v1/vms/parent/cpu", new { cpus = 6 })).EnsureSuccessStatusCode();
+        var ledger = app.Service<InMemoryCapacityLedger>();
+        ledger.Inventory = ledger.Inventory with { Complete = false, Problems = ["inventory-unavailable"] };
+        await using (var gate = await app.Service<IVmOperationGate>().TryAcquireAsync("parent", "test", default))
+        {
+            Assert.NotNull(gate);
+            var reply = await owner.GetFromJsonAsync<JsonElement>("/api/v1/vms/parent/cpu");
+            Assert.Equal(4, reply.GetProperty("currentCpus").GetInt32());
+            Assert.Equal(6, reply.GetProperty("desiredCpus").GetInt32());
+            Assert.Contains("capacity-unavailable", reply.GetProperty("warnings").ToString());
+        }
+        Assert.Equal(HttpStatusCode.Conflict, (await owner.PutAsJsonAsync("/api/v1/vms/parent/cpu", new { cpus = 8 })).StatusCode);
+        (await owner.PutAsJsonAsync("/api/v1/vms/parent/idle-policy", new { timeoutMinutes = 60, action = "save" })).EnsureSuccessStatusCode();
+    }
+
+    [Theory]
+    [InlineData("artifact-unreadable-or-missing")]
+    [InlineData("disk-unreadable")]
+    [InlineData("volume-enumeration-unavailable")]
+    public async Task StorageProblemsWarnWithoutBlockingCpuEdits(string problem)
+    {
+        using var app = CreateApp(); using var owner = await app.CreateUserClientAsync("alice");
+        await owner.CreateVmAsync("parent");
+        var ledger = app.Service<InMemoryCapacityLedger>();
+        ledger.Inventory = ledger.Inventory with { Complete = false, Problems = [problem] };
+        var reply = await owner.GetFromJsonAsync<JsonElement>("/api/v1/vms/parent/cpu");
+        Assert.Equal(8, reply.GetProperty("maximumCpus").GetInt32());
+        Assert.Contains(problem, reply.GetProperty("warnings").ToString());
+        (await owner.PutAsJsonAsync("/api/v1/vms/parent/cpu", new { cpus = 6 })).EnsureSuccessStatusCode();
+        Assert.Equal(HttpStatusCode.BadRequest, (await owner.PutAsJsonAsync("/api/v1/vms/parent/cpu", new { cpus = 9 })).StatusCode);
+        app.Driver.SetState("parent", VmState.Off);
+        await app.Service<PrimaryCpuSettings>().ApplyAsync((await app.Vms.GetAsync("parent", default))!, VmState.Off, default);
+        Assert.Equal(6, app.Driver.CpuCounts["parent"]);
+    }
+
+    [Fact]
     public async Task HypervisorFailureRetainsSettingAndNeverStarts()
     {
         using var app = CreateApp();

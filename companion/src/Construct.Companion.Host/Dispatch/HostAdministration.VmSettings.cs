@@ -9,12 +9,30 @@ public sealed partial class HostAdministration
 {
     private sealed class VmSettingsValidationException(string message) : Exception(message);
 
-    private static async Task<JsonObject> ReadVmSettings(Model m, RemoteHostClient client, string name, CancellationToken ct) => new()
+    private static async Task<JsonObject> ReadVmSettings(Model m, RemoteHostClient client, string name, CancellationToken ct, JsonObject? changes = null)
     {
-        ["cpu"] = StateJson.Boolean(m.State["features"]?["primaryCpu"]) == true ? await client.VmCpuAsync(name, ct) : null,
-        ["memory"] = StateJson.Boolean(m.State["features"]?["primaryMemory"]) == true ? await client.VmMemoryAsync(name, ct) : null,
-        ["idle"] = await client.VmIdlePolicyAsync(name, ct)
-    };
+        async Task<(string Key, JsonNode? Value, string? Error)> Read(string key, bool enabled, Func<Task<JsonNode?>> fetch)
+        {
+            if (!enabled) return (key, null, null);
+            try { return (key, await fetch(), null); }
+            catch (RemoteApiException ex) when (changes is null && ex.Status is not (401 or 403))
+            { return (key, null, $"{key} settings unavailable: {ex.Message}"); }
+        }
+        var results = await Task.WhenAll(
+            Read("cpu", StateJson.Boolean(m.State["features"]?["primaryCpu"]) == true && (changes is null || changes.ContainsKey("cpus")), () => client.VmCpuAsync(name, ct)),
+            Read("memory", StateJson.Boolean(m.State["features"]?["primaryMemory"]) == true && (changes is null || changes.ContainsKey("ramGb")), () => client.VmMemoryAsync(name, ct)),
+            Read("idle", changes is null || changes.ContainsKey("timeoutMinutes") || changes.ContainsKey("action"), () => client.VmIdlePolicyAsync(name, ct)));
+        var settings = new JsonObject(); var warnings = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (key, value, error) in results)
+        {
+            settings[key] = value;
+            if (error is not null) warnings.Add(error);
+            if (value?["warnings"] is JsonArray items)
+                foreach (var item in items) warnings.Add("Inventory warning: " + Text(item));
+        }
+        settings["warnings"] = new JsonArray(warnings.Select(w => (JsonNode?)JsonValue.Create(w)).ToArray());
+        return settings;
+    }
 
     private async Task VmSettingsAction(Model m, RemoteHostClient client, string action, JsonObject args, CancellationToken ct)
     {
@@ -25,11 +43,9 @@ public sealed partial class HostAdministration
         try
         {
             if (Text(m.State["mode"]) != "admin") throw new VmSettingsValidationException("Not an administrator of this host.");
-            if (m.State["maintenance"] is not null) throw new VmSettingsValidationException("The host is updating; mutations are disabled until it is back.");
-            settings = await ReadVmSettings(m, client, name, ct);
+            if (action == "setVmSettings" && m.State["maintenance"] is not null) throw new VmSettingsValidationException("The host is updating; mutations are disabled until it is back.");
             if (action == "setVmSettings")
             {
-                var cpu = settings["cpu"]; var memory = settings["memory"]; var idle = settings["idle"];
                 static double Whole(JsonNode? value, double min, double max, string message)
                 {
                     // Match the JS number-only gate, including rejecting null, strings and booleans.
@@ -38,27 +54,28 @@ public sealed partial class HostAdministration
                         throw new VmSettingsValidationException(message);
                     return parsed;
                 }
-                static double Hardware(JsonNode? value, JsonNode? desired, JsonNode? maximum, string message)
-                {
-                    var parsed = Whole(value, 1, int.MaxValue, message);
-                    if (parsed != StateJson.CoerceNumber(desired) && parsed > StateJson.CoerceNumber(maximum)) throw new VmSettingsValidationException(message);
-                    return parsed;
-                }
-                var cpus = cpu is null ? 0 : Hardware(args["cpus"], cpu["desiredCpus"], cpu["maximumCpus"], $"CPU count must be between 1 and {Text(cpu["maximumCpus"])}.");
-                var ram = memory is null ? 0 : Hardware(args["ramGb"], memory["desiredRamGb"], memory["maximumRamGb"], $"RAM (GB) must be between 1 and {Text(memory["maximumRamGb"])}.");
+                var changeCpu = StateJson.Boolean(m.State["features"]?["primaryCpu"]) == true && args.ContainsKey("cpus");
+                var changeRam = StateJson.Boolean(m.State["features"]?["primaryMemory"]) == true && args.ContainsKey("ramGb");
+                var changeIdle = args.ContainsKey("timeoutMinutes") || args.ContainsKey("action");
+                var cpus = changeCpu ? Whole(args["cpus"], 1, 64, "Choose a whole CPU count from 1 to 64.") : 0;
+                var ram = changeRam ? Whole(args["ramGb"], 1, 1024, "Choose whole RAM (GB) from 1 to 1024.") : 0;
+                const string idleError = "Choose an idle timeout and action within the host cap.";
+                var timeout = changeIdle ? Whole(args["timeoutMinutes"], 0, int.MaxValue, idleError) : 0;
+                var idleAction = Text(args["action"]);
+                if (changeIdle && idleAction is not ("save" or "shutdown" or "off")) throw new VmSettingsValidationException(idleError);
+                settings = await ReadVmSettings(m, client, name, ct, args);
+                var cpu = settings["cpu"]; var memory = settings["memory"]; var idle = settings["idle"];
                 var forced = StateJson.Boolean(idle?["forceEnabled"]) == true;
                 var cap = StateJson.CoerceNumber(idle?["maxTimeoutMinutes"]);
-                const string idleError = "Choose an idle timeout and action within the host cap.";
-                var timeout = Whole(args["timeoutMinutes"], forced ? 1 : 0, cap > 0 ? cap : int.MaxValue, idleError);
-                var idleAction = Text(args["action"]);
-                if (idleAction is not ("save" or "shutdown" or "off") || forced && idleAction == "off") throw new VmSettingsValidationException(idleError);
+                if (idle is not null && (timeout < (forced ? 1 : 0) || cap > 0 && timeout > cap || forced && idleAction == "off")) throw new VmSettingsValidationException(idleError);
                 if (cpu is not null && cpus != StateJson.CoerceNumber(cpu["desiredCpus"])) await client.SetVmCpuAsync(name, new JsonObject { ["cpus"] = cpus }, ct);
                 if (memory is not null && ram != StateJson.CoerceNumber(memory["desiredRamGb"])) await client.SetVmMemoryAsync(name, new JsonObject { ["ramGb"] = ram }, ct);
-                if (timeout != StateJson.CoerceNumber(idle?["timeoutMinutes"]) || idleAction != Text(idle?["action"]))
+                if (idle is not null && (timeout != StateJson.CoerceNumber(idle["timeoutMinutes"]) || idleAction != Text(idle["action"])))
                     await client.SetVmIdlePolicyAsync(name, new JsonObject { ["timeoutMinutes"] = timeout, ["action"] = idleAction }, ct);
                 saved = true;
                 m.State["notice"] = new JsonObject { ["level"] = "info", ["text"] = $"{name}: settings saved. CPU and RAM apply on the next full stop/start; idle policy applies immediately." };
             }
+            else settings = await ReadVmSettings(m, client, name, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (RemoteApiException ex) { Refusal(m, ex); error = ex.Message; }

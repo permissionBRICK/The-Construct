@@ -1358,7 +1358,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await admin.locator("#haVmIdleAction").selectOption("shutdown");
   await admin.locator("#haVmSettingsApply").click();
   let appliedSettings = await admin.evaluate(() => window.__posted.filter(m => m.action === "setVmSettings").at(-1));
-  check("admin: one Apply carries all settings", appliedSettings.args.cpus === 6 && appliedSettings.args.ramGb === 14 && appliedSettings.args.timeoutMinutes === 60 && appliedSettings.args.action === "shutdown");
+  check("admin: Apply carries only edited settings", !("cpus" in appliedSettings.args) && appliedSettings.args.ramGb === 14 && appliedSettings.args.timeoutMinutes === 60 && appliedSettings.args.action === "shutdown");
   check("admin: Apply disabled while saving", await admin.locator("#haVmSettingsApply").isDisabled());
   await settingsReply({ error: "RAM allowance changed", settings });
   check("admin: partial failure keeps dialog open with actual values", await admin.locator("#haVmSettings").isVisible() && await admin.locator("#haVmRam").inputValue() === "12");
@@ -1370,6 +1370,21 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await settingsReply({ settings: { cpu: null, memory: null, idle: { timeoutMinutes: 60, action: "save", maxTimeoutMinutes: 60, forceEnabled: true } } });
   check("admin: older hosts disable unsupported hardware fields", await admin.locator("#haVmRam").isDisabled() && await admin.locator("#haVmCpus").isDisabled());
   check("admin: forced idle disables Off", await admin.locator('#haVmIdleAction option[value="off"]').evaluate(e => e.disabled), await admin.locator("#haVmSettingsForm").innerHTML());
+  await admin.locator("#haVmSettingsCancel").click();
+
+  await admin.getByRole("button", { name: "VM settings…", exact: true }).click();
+  settingsRequest = await admin.evaluate(() => window.__posted.filter(m => m.action === "loadVmSettings").at(-1));
+  await settingsReply({ settings: { ...settings, cpu: { ...settings.cpu, maximumCpus: null }, memory: { ...settings.memory, maximumRamGb: null }, warnings: ["Inventory warning: artifact-unreadable-or-missing"] } });
+  check("admin: unknown capacity keeps saved hardware visible", await admin.locator("#haVmCpus").inputValue() === "6" && await admin.locator("#haVmRam").inputValue() === "12");
+  check("admin: inventory warning is visible", /artifact-unreadable-or-missing/.test(await admin.locator("#haVmSettingsError").innerText()));
+  await admin.locator("#haVmTimeout").fill("90");
+  await admin.locator("#haVmSettingsApply").click();
+  appliedSettings = await admin.evaluate(() => window.__posted.filter(m => m.action === "setVmSettings").at(-1));
+  check("admin: idle-only Apply omits hardware with unknown capacity", !("cpus" in appliedSettings.args) && !("ramGb" in appliedSettings.args) && appliedSettings.args.timeoutMinutes === 90);
+  await settingsReply({ settings: { cpu: settings.cpu, memory: null, idle: null, warnings: ["RAM and idle settings unavailable"] } });
+  check("admin: partial response disables only unavailable fields", !await admin.locator("#haVmCpus").isDisabled() && await admin.locator("#haVmRam").isDisabled() && await admin.locator("#haVmTimeout").isDisabled());
+  await admin.locator("#haVmCpus").fill("7");
+  check("admin: available CPU remains editable", !await admin.locator("#haVmSettingsApply").isDisabled());
   await admin.locator("#haVmSettingsCancel").click();
 
   check("admin: Delete posts deleteVm with name and kind", aposted.some((m) => m.action === "deleteVm" && m.args.name === "work-vm" && m.args.kind === "primary"));

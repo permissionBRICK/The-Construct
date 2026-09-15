@@ -435,11 +435,12 @@ function toCapacityBars(summary) {
 }
 
 /** The Overview tab from `HostStatusResponse` (§8.2). Pure. */
-function toOverview(status) {
+function toOverview(status, capacityReport) {
   const s = status && typeof status === "object" ? status : {};
   const version = s.version && typeof s.version === "object" ? s.version : {};
   const health = s.health && typeof s.health === "object" ? s.health : {};
-  const cap = s.capacity && typeof s.capacity === "object" ? s.capacity : {};
+  const summary = capacityReport && capacityReport.summary || s.capacity;
+  const cap = summary && typeof summary === "object" ? summary : {};
   const maint = s.maintenance && typeof s.maintenance === "object" ? s.maintenance : {};
   const problems = [];
   if (str(health.hypervisor) && str(health.hypervisor) !== "ok") problems.push(`hypervisor ${str(health.hypervisor)}`);
@@ -458,6 +459,7 @@ function toOverview(status) {
     capacityMode: str(s.capacityMode).toLowerCase() === "enforce" ? "enforce" : "observe",
     capacity: toCapacityBars(cap),
     capacityEpoch: { epoch: str(cap.epoch), observedAt: formatWhen(cap.observedAt), complete: cap.complete !== false },
+    capacityProblems: Array.isArray(capacityReport && capacityReport.problems) ? capacityReport.problems.map(str) : [],
     maintenance: str(maint.phase) && str(maint.phase) !== "open"
       ? { phase: str(maint.phase), since: formatWhen(maint.since), updateId: str(maint.updateId) || null }
       : null,
@@ -1179,7 +1181,11 @@ function createHostAdminModel(deps = {}) {
     // reload that follows it. `perform` clears it when the next action starts.
     try {
       if (id === "overview") {
-        state.overview = toOverview(await client.hostStatus());
+        const [status, capacity] = await Promise.allSettled([client.hostStatus(), client.hostCapacity(false)]);
+        if (status.status === "rejected") throw status.reason;
+        if (capacity.status === "rejected" && refused(capacity.reason)) throw capacity.reason;
+        state.overview = toOverview(status.value, capacity.status === "fulfilled" ? capacity.value :
+          { problems: [`Capacity details unavailable: ${errText(capacity.reason)}`] });
       } else if (id === "vms") {
         const list = await client.vms({ kind: "all" });
         state.vms = { rows: toVmRows(list, now()), childrenFeature: state.features.children };
@@ -1232,7 +1238,7 @@ function createHostAdminModel(deps = {}) {
       notice("error", `not an administrator of ${host}`);
       return { ok: false, error: `not an administrator of ${host}` };
     }
-    if (state.maintenance && !["refresh", "updatesApply", "updatesResolve"].includes(a)) {
+    if (state.maintenance && !["refresh", "loadVmSettings", "updatesApply", "updatesResolve"].includes(a)) {
       const text = `${host} is updating (${state.maintenance.phase}); mutations are disabled until it is back.`;
       notice("error", text);
       return { ok: false, error: text };
@@ -1243,26 +1249,45 @@ function createHostAdminModel(deps = {}) {
       switch (a) {
         case "loadVmSettings": {
           const name = str(args.name);
-          const cpu = state.features.primaryCpu ? await client.vmCpu(name) : null;
-          const memory = state.features.primaryMemory ? await client.vmMemory(name) : null;
-          const idle = await client.vmIdlePolicy(name);
-          return { ok: true, settings: { cpu, memory, idle } };
+          const fields = ["cpu", "memory", "idle"];
+          const results = await Promise.allSettled([
+            state.features.primaryCpu ? client.vmCpu(name) : Promise.resolve(null),
+            state.features.primaryMemory ? client.vmMemory(name) : Promise.resolve(null),
+            client.vmIdlePolicy(name),
+          ]);
+          const settings = { warnings: [] };
+          results.forEach((result, i) => {
+            if (result.status === "rejected") {
+              if (refused(result.reason)) throw result.reason;
+              settings[fields[i]] = null;
+              settings.warnings.push(`${fields[i]} settings unavailable: ${errText(result.reason)}`);
+            } else {
+              settings[fields[i]] = result.value;
+              for (const warning of result.value?.warnings || []) settings.warnings.push(`Inventory warning: ${warning}`);
+            }
+          });
+          settings.warnings = [...new Set(settings.warnings)];
+          return { ok: true, settings };
         }
         case "setVmSettings": {
           const name = str(args.name);
-          // Read policy again before any write; the webview is not an authority.
-          const cpu = state.features.primaryCpu ? await client.vmCpu(name) : null;
-          const memory = state.features.primaryMemory ? await client.vmMemory(name) : null;
-          const idle = await client.vmIdlePolicy(name);
+          const changeCpu = state.features.primaryCpu && Object.prototype.hasOwnProperty.call(args, "cpus");
+          const changeMemory = state.features.primaryMemory && Object.prototype.hasOwnProperty.call(args, "ramGb");
+          const changeIdle = Object.prototype.hasOwnProperty.call(args, "timeoutMinutes") || Object.prototype.hasOwnProperty.call(args, "action");
           const whole = (value, min, max) => typeof value === "number" && Number.isInteger(value) && value >= min && value <= max;
-          if (cpu && args.cpus !== cpu.desiredCpus && !whole(args.cpus, 1, cpu.maximumCpus)) throw new Error(`CPU count must be between 1 and ${cpu.maximumCpus}.`);
-          if (memory && args.ramGb !== memory.desiredRamGb && !whole(args.ramGb, 1, memory.maximumRamGb)) throw new Error(`RAM (GB) must be between 1 and ${memory.maximumRamGb}.`);
-          if (!whole(args.timeoutMinutes, idle.forceEnabled ? 1 : 0, idle.maxTimeoutMinutes > 0 ? idle.maxTimeoutMinutes : 2147483647) ||
-              !["save", "shutdown", "off"].includes(args.action) || (idle.forceEnabled && args.action === "off"))
+          if (changeCpu && !whole(args.cpus, 1, 64)) throw new Error("Choose a whole CPU count from 1 to 64.");
+          if (changeMemory && !whole(args.ramGb, 1, 1024)) throw new Error("Choose whole RAM (GB) from 1 to 1024.");
+          if (changeIdle && (!whole(args.timeoutMinutes, 0, 2147483647) || !["save", "shutdown", "off"].includes(args.action)))
             throw new Error("Choose an idle timeout and action within the host cap.");
+          // Read only the resources being edited. Their PUT endpoints enforce current limits.
+          const cpu = changeCpu ? await client.vmCpu(name) : null;
+          const memory = changeMemory ? await client.vmMemory(name) : null;
+          const idle = changeIdle ? await client.vmIdlePolicy(name) : null;
+          if (idle && (!whole(args.timeoutMinutes, idle.forceEnabled ? 1 : 0, idle.maxTimeoutMinutes > 0 ? idle.maxTimeoutMinutes : 2147483647) ||
+              (idle.forceEnabled && args.action === "off"))) throw new Error("Choose an idle timeout and action within the host cap.");
           if (cpu && args.cpus !== cpu.desiredCpus) await client.setVmCpu(name, { cpus: args.cpus });
           if (memory && args.ramGb !== memory.desiredRamGb) await client.setVmMemory(name, { ramGb: args.ramGb });
-          if (args.timeoutMinutes !== idle.timeoutMinutes || args.action !== idle.action)
+          if (idle && (args.timeoutMinutes !== idle.timeoutMinutes || args.action !== idle.action))
             await client.setVmIdlePolicy(name, { timeoutMinutes: args.timeoutMinutes, action: args.action });
           notice("info", `${name}: settings saved. CPU and RAM apply on the next full stop/start; idle policy applies immediately.`);
           return { ok: true };
@@ -1294,7 +1319,9 @@ function createHostAdminModel(deps = {}) {
         }
         case "capacityRefresh": {
           const cap = await client.hostCapacity(true);
-          if (state.overview) state.overview = { ...state.overview, capacity: toCapacityBars(cap && cap.summary), capacityProblems: Array.isArray(cap && cap.problems) ? cap.problems.map(str) : [] };
+          const refreshed = toOverview({}, cap);
+          if (state.overview) state.overview = { ...state.overview, capacity: refreshed.capacity,
+            capacityEpoch: refreshed.capacityEpoch, capacityProblems: refreshed.capacityProblems };
           return { ok: true };
         }
         case "shutdownVm": {

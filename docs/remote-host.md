@@ -616,7 +616,13 @@ confirmed **Restart**, or a full stop followed by **Start**. Resuming saved stat
 rebooting Ubuntu does not apply them. The guest sees its new RAM/CPU after the cold boot.
 Idle changes take effect immediately; **Off** disables idle handling, and is unavailable
 when the host forces it. Admins obey the owner's resource allowance and the host idle cap.
-Capacity is checked again at start. If one save fails, already-saved fields remain saved;
+Current and pending settings remain readable when capacity is unavailable or a VM
+operation is in progress. Inventory problems appear as warnings. CPU and RAM limits
+use runtime resource data; an unrelated disk or media problem does not block them.
+Apply sends only edited fields, so an idle-only change makes no CPU or RAM requests.
+Each control loads independently, and a failed read disables only that control.
+The service checks the relevant limits when saving hardware changes and again at start.
+If one save fails, already-saved fields remain saved;
 the dialog reloads actual values and stays open for review/retry. Older hosts keep idle
 editing and disable hardware fields they do not support. The Companion shares this dialog.
 
