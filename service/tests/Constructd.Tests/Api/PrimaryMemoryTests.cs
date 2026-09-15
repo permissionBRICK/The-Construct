@@ -24,6 +24,44 @@ public sealed class PrimaryMemoryTests
     private static Task Allow(TestApp app, long budget) => app.Service<IUserAllowanceStore>()
         .SetAllowanceAsync("alice", UserAllowance.Unset with { RamBudgetBytes = budget }, default);
 
+    [Fact]
+    public async Task SettingsRemainReadableWithUnknownCapacityAndWhileVmIsBusy()
+    {
+        using var app = App(); using var owner = await app.CreateUserClientAsync("alice");
+        await owner.CreateVmAsync("parent");
+        (await owner.PutAsJsonAsync("/api/v1/vms/parent/memory", new { ramGb = 12 })).EnsureSuccessStatusCode();
+        var ledger = app.Service<InMemoryCapacityLedger>();
+        ledger.Inventory = ledger.Inventory with { Complete = false, Problems = ["vm-enumeration-unavailable"] };
+        await using (var gate = await app.Service<IVmOperationGate>().TryAcquireAsync("parent", "test", default))
+        {
+            Assert.NotNull(gate);
+            var reply = await owner.GetFromJsonAsync<JsonElement>("/api/v1/vms/parent/memory");
+            Assert.Equal(8, reply.GetProperty("currentRamGb").GetInt32());
+            Assert.Equal(12, reply.GetProperty("desiredRamGb").GetInt32());
+            Assert.Contains("capacity-unavailable", reply.GetProperty("warnings").ToString());
+        }
+        Assert.Equal(HttpStatusCode.Conflict, (await owner.PutAsJsonAsync("/api/v1/vms/parent/memory", new { ramGb = 16 })).StatusCode);
+    }
+
+    [Theory]
+    [InlineData("artifact-unreadable-or-missing")]
+    [InlineData("disk-unreadable")]
+    [InlineData("volume-unavailable")]
+    public async Task StorageProblemsWarnWithoutBlockingMemoryEdits(string problem)
+    {
+        using var app = App(); using var owner = await app.CreateUserClientAsync("alice");
+        await owner.CreateVmAsync("parent"); await Allow(app, 16 * Gib);
+        var ledger = app.Service<InMemoryCapacityLedger>();
+        ledger.Inventory = ledger.Inventory with { Complete = false, Problems = [problem] };
+        var reply = await owner.GetFromJsonAsync<JsonElement>("/api/v1/vms/parent/memory");
+        Assert.Contains(problem, reply.GetProperty("warnings").ToString());
+        (await owner.PutAsJsonAsync("/api/v1/vms/parent/memory", new { ramGb = 12 })).EnsureSuccessStatusCode();
+        Assert.Equal(HttpStatusCode.BadRequest, (await owner.PutAsJsonAsync("/api/v1/vms/parent/memory", new { ramGb = 17 })).StatusCode);
+        app.Driver.SetState("parent", VmState.Off);
+        await app.Service<PrimaryMemorySettings>().ApplyAsync((await app.Vms.GetAsync("parent", default))!, VmState.Off, default);
+        Assert.Equal(12, app.Driver.MemorySizes["parent"]);
+    }
+
     [Theory]
     [InlineData(12)]
     [InlineData(4)]

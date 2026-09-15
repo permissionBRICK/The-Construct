@@ -8,6 +8,7 @@ function Get-ConstructHostInventory {
     $volumes = New-Object 'System.Collections.Generic.List[object]'
     $observedArtifacts = New-Object 'System.Collections.Generic.List[object]'
     $saved = @{}
+    $savedByName = @{}
     function Get-CapacityVolumeRoot([string]$Path) {
         $v = Get-Volume -FilePath $Path -ErrorAction Stop
         if ($v.DriveLetter) { return ([string]$v.DriveLetter + ':\') }
@@ -46,6 +47,8 @@ function Get-ConstructHostInventory {
                 $savedBytes = 0
                 $saved[$vm.Id.ToString()] = @{ path = $savedPath; bytes = 0; presence = 'absent'; volume = $configVolume }
             }
+            # Primary creation reserves saved-state space before Hyper-V assigns an ID.
+            $savedByName[[string]$vm.Name] = $saved[$vm.Id.ToString()]
             $attached = @(Get-VMHardDiskDrive -VM $vm -ErrorAction Stop)
             foreach ($checkpoint in @(Get-VMSnapshot -VM $vm -ErrorAction Stop)) {
                 $attached += @(Get-VMHardDiskDrive -VMSnapshot $checkpoint -ErrorAction Stop)
@@ -91,8 +94,9 @@ function Get-ConstructHostInventory {
         try {
             if ([string]$artifact.artifact -like 'saved-state:*') {
                 $id = ([string]$artifact.artifact).Substring(12)
-                if ($saved.ContainsKey($id)) {
-                    $e = $saved[$id]; $path = $e.path; $bytes = $e.bytes; $presence = $e.presence; $volume = $e.volume
+                $e = if ($saved.ContainsKey($id)) { $saved[$id] } else { $savedByName[$id] }
+                if ($e) {
+                    $path = $e.path; $bytes = $e.bytes; $presence = $e.presence; $volume = $e.volume
                 }
             } elseif ($path) {
                 # A missing file is absence only on a readable volume, not a missing drive/mount.

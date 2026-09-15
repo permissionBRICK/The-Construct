@@ -39,6 +39,19 @@ Check ($r.vms[0].disks.Count -eq 2) 'Deduplicates checkpoint and parent chains'
 Check ($r.vms[0].dynamicMemory -eq $true) 'Dynamic memory flag'
 Check ($r.vms[0].memoryMaximumBytes -eq 8GB) 'Dynamic maximum'
 Check ($r.artifacts[0].presence -eq 'present') 'Retained artifact evidence'
+$r = Get-ConstructHostInventory -Artifacts @(
+    @{ artifact = 'saved-state:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'; volume = 'C:\' },
+    @{ artifact = 'saved-state:unmanaged'; volume = 'C:\' },
+    @{ artifact = 'saved-state:missing-vm'; volume = 'C:\' }
+)
+Check ($r.artifacts[0].presence -eq 'present') 'Saved-state GUID resolves'
+Check ($r.artifacts[1].presence -eq 'present') 'Pre-creation saved-state name resolves'
+Check ($r.artifacts[0].path -eq $r.artifacts[1].path) 'Both identities resolve the same VMRS'
+Check ($r.artifacts[2].presence -eq 'unknown') 'Unknown VM stays unknown'
+function Test-Path { param($LiteralPath) $LiteralPath -notlike '*.vmrs' }
+$r = Get-ConstructHostInventory -Artifacts @(@{ artifact = 'saved-state:unmanaged'; volume = 'C:\' })
+Check ($r.artifacts[0].presence -eq 'absent') 'Running VM with no saved file has confirmed absence'
+function Test-Path { param($LiteralPath) $true }
 function Get-VHD { param($Path) throw 'sentinel-secret' }
 $r = Get-ConstructHostInventory
 Check (-not $r.complete) 'Unreadable disk fails closed'

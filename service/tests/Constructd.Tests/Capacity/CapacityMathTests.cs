@@ -71,6 +71,19 @@ public class CapacityMathTests
         Assert.Equal(7 * Gb + CapacityMath.SavedStateOverhead, snapshot.Volumes[0].GrowthReservedBytes);
     }
     [Fact]
+    public void DiskFailureDoesNotSubtractAlreadyAssignedRamAgain()
+    {
+        var healthy = Inventory(20 * Gb, Actual(state: VmState.Running, assigned: 8 * Gb));
+        var broken = healthy with { Complete = false, Problems = ["disk-unreadable"],
+            Vms = [healthy.Vms[0] with { Complete = false }] };
+        var expected = CapacityMath.Calculate(healthy, Config, [Row(phase: ReservationPhase.Held)], [Vm()]);
+        var actual = CapacityMath.Calculate(broken, Config, [Row(phase: ReservationPhase.Held)], [Vm()]);
+        Assert.False(actual.Complete);
+        Assert.True(CapacityMath.RuntimeInventoryComplete(actual));
+        Assert.Equal(expected.RamAvailableBytes, actual.RamAvailableBytes);
+        Assert.Equal(expected.RamAvailableByVm!["a"], actual.RamAvailableByVm!["a"]);
+    }
+    [Fact]
     public void ExternalDiskGrowthDeltasRemainReservedWithoutReadableDisk()
     {
         var original = Row(ReservationResource.Storage, 10 * Gb, ReservationPhase.Held, artifact: "disk:C:\\grown.vhdx");

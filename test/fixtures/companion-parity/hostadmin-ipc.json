@@ -4005,6 +4005,7 @@
         "observedAt": "—"
       },
       "capacityMode": "observe",
+      "capacityProblems": [],
       "health": {
         "database": "unknown",
         "hypervisor": "unknown",

@@ -20,14 +20,15 @@ public static partial class HostAdminViews
         }
         return result;
     }
-    public static JsonObject Overview(JsonNode? input)
+    public static JsonObject Overview(JsonNode? input, JsonNode? capacityReport = null)
     {
-        var s = input as JsonObject ?? []; var version = s["version"] as JsonObject ?? []; var health = s["health"] as JsonObject ?? []; var cap = s["capacity"] as JsonObject ?? []; var maint = s["maintenance"] as JsonObject ?? [];
+        var s = input as JsonObject ?? []; var version = s["version"] as JsonObject ?? []; var health = s["health"] as JsonObject ?? []; var cap = capacityReport?["summary"] as JsonObject ?? s["capacity"] as JsonObject ?? []; var maint = s["maintenance"] as JsonObject ?? [];
         var problems = new JsonArray(); var healthView = new JsonObject();
         foreach (var key in new[] { "hypervisor", "database", "media", "inventory" })
         { healthView[key] = Default(health[key], "unknown"); if (Text(health[key]).Length > 0 && Text(health[key]) != (key == "inventory" ? "complete" : "ok")) problems.Add(key + " " + Text(health[key])); }
         var vv = new JsonObject(); foreach (var key in new[] { "commit", "packageVersion", "source" }) vv[key] = Default(version[key], "unknown"); vv["installedAt"] = FormatWhen(version["installedAt"]);
         return new() { ["version"] = vv, ["health"] = healthView, ["problems"] = problems, ["capacityMode"] = Text(s["capacityMode"]).ToLowerInvariant() == "enforce" ? "enforce" : "observe", ["capacity"] = Capacity(cap), ["capacityEpoch"] = new JsonObject { ["epoch"] = Text(cap["epoch"]), ["observedAt"] = FormatWhen(cap["observedAt"]), ["complete"] = StateJson.Boolean(cap["complete"]) != false },
+            ["capacityProblems"] = new JsonArray(Array(capacityReport?["problems"]).Select(p => (JsonNode?)JsonValue.Create(Text(p))).ToArray()),
             ["maintenance"] = Text(maint["phase"]) is not ("" or "open") ? new JsonObject { ["phase"] = Text(maint["phase"]), ["since"] = FormatWhen(maint["since"]), ["updateId"] = Text(maint["updateId"]).Length > 0 ? Text(maint["updateId"]) : null } : null,
             ["activeJobs"] = Map(s["activeJobs"], j => { var r = Strings(j as JsonObject ?? [], "id", "kind", "vmName", "owner", "initiator", "phase"); r["created"] = FormatWhen(j?["created"]); return r; }), ["leaseOverdueCount"] = Number(s["leaseOverdueCount"]) ?? 0, ["unmanagedVmCount"] = Number(s["unmanagedVmCount"]) ?? 0 };
     }

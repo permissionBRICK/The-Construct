@@ -653,14 +653,15 @@
       ["haVmCpus", vmSettingsData?.cpu, "desiredCpus", "maximumCpus", "CPU count"],
       ["haVmRam", vmSettingsData?.memory, "desiredRamGb", "maximumRamGb", "RAM (GB)"]]) {
       const input = $(id); input.setCustomValidity("");
-      if (data && input.valueAsNumber !== data[desired] && (!Number.isInteger(input.valueAsNumber) || input.valueAsNumber < 1 || input.valueAsNumber > data[maximum]))
-        input.setCustomValidity(`${label} must be between 1 and ${data[maximum]}. Leave the saved value unchanged to edit idle policy only.`);
+      const max = Number.isFinite(data?.[maximum]) ? data[maximum] : id === "haVmCpus" ? 64 : 1024;
+      if (data && input.valueAsNumber !== data[desired] && (!Number.isInteger(input.valueAsNumber) || input.valueAsNumber < 1 || input.valueAsNumber > max))
+        input.setCustomValidity(`${label} must be between 1 and ${max}.`);
     }
-    const forcedOff = vmSettingsData?.idle.forceEnabled && $("haVmIdleAction").value === "off";
+    const forcedOff = vmSettingsData?.idle?.forceEnabled && $("haVmIdleAction").value === "off";
     $("haVmIdleAction").setCustomValidity(forcedOff ? "The host requires idle handling." : "");
     const invalid = [...$("haVmSettingsForm").elements].find(input => input.willValidate && !input.validity.valid);
-    $("haVmSettingsApply").disabled = !vmSettingsData || vmSettingsSaving || !allowed || !!invalid;
-    if (vmSettingsData && !vmSettingsSaving) text("haVmSettingsError", invalid ? invalid.validationMessage : !allowed ? "Editing is unavailable while host administration is disabled or updating." : vmSettingsServerError);
+    $("haVmSettingsApply").disabled = !vmSettingsData || ![vmSettingsData.cpu, vmSettingsData.memory, vmSettingsData.idle].some(Boolean) || vmSettingsSaving || !allowed || !!invalid;
+    if (vmSettingsData && !vmSettingsSaving) text("haVmSettingsError", invalid ? invalid.validationMessage : !allowed ? "Editing is unavailable while host administration is disabled or updating." : [vmSettingsServerError, ...(vmSettingsData.warnings || [])].filter(Boolean).join(" "));
   }
   function receiveVmSettings(m) {
     if (!vmSettingsRequest || m.name !== vmSettingsRequest.name || m.requestId !== vmSettingsRequest.requestId) return;
@@ -675,17 +676,18 @@
       const { cpu, memory, idle } = m.settings;
       $("haVmCpus").disabled = !cpu; $("haVmRam").disabled = !memory;
       $("haVmCpus").value = cpu ? cpu.desiredCpus : "";
-      $("haVmCpus").max = cpu ? Math.max(cpu.maximumCpus, cpu.desiredCpus) : 64;
+      $("haVmCpus").max = cpu ? Math.max(cpu.maximumCpus ?? 64, cpu.desiredCpus) : 64;
       $("haVmRam").value = memory ? memory.desiredRamGb : "";
-      $("haVmRam").max = memory ? Math.max(memory.maximumRamGb, memory.desiredRamGb) : 1024;
-      $("haVmTimeout").value = idle.timeoutMinutes;
-      $("haVmTimeout").min = idle.forceEnabled ? 1 : 0;
-      $("haVmTimeout").max = idle.maxTimeoutMinutes > 0 ? idle.maxTimeoutMinutes : 2147483647;
-      $("haVmIdleAction").value = idle.action;
-      $("haVmIdleAction").querySelector('[value="off"]').disabled = !!idle.forceEnabled;
-      text("haVmSettingsCurrent", [cpu ? `Current CPU: ${cpu.currentCpus}${cpu.pending ? `; pending: ${cpu.desiredCpus}` : ""}` : "CPU editing unavailable on this host version",
-        memory ? `Current RAM: ${memory.currentRamGb} GB${memory.pending ? `; pending: ${memory.desiredRamGb} GB` : ""}` : "RAM editing unavailable on this host version"].join(". "));
-      text("haVmSettingsLimits", `Owner/host maxima: CPU ${cpu ? cpu.maximumCpus : "unavailable"}, RAM ${memory ? memory.maximumRamGb + " GB" : "unavailable"}. Idle cap: ${idle.maxTimeoutMinutes > 0 ? idle.maxTimeoutMinutes + " minutes" : "none"}${idle.forceEnabled ? "; idle handling required" : ""}. Capacity is checked again at start.`);
+      $("haVmRam").max = memory ? Math.max(memory.maximumRamGb ?? 1024, memory.desiredRamGb) : 1024;
+      $("haVmTimeout").disabled = !idle; $("haVmIdleAction").disabled = !idle;
+      $("haVmTimeout").value = idle?.timeoutMinutes ?? "";
+      $("haVmTimeout").min = idle?.forceEnabled ? 1 : 0;
+      $("haVmTimeout").max = idle?.maxTimeoutMinutes > 0 ? idle.maxTimeoutMinutes : 2147483647;
+      $("haVmIdleAction").value = idle?.action ?? "save";
+      $("haVmIdleAction").querySelector('[value="off"]').disabled = !!idle?.forceEnabled;
+      text("haVmSettingsCurrent", [cpu ? `Current CPU: ${cpu.currentCpus}${cpu.pending ? `; pending: ${cpu.desiredCpus}` : ""}` : "CPU settings unavailable",
+        memory ? `Current RAM: ${memory.currentRamGb} GB${memory.pending ? `; pending: ${memory.desiredRamGb} GB` : ""}` : "RAM settings unavailable"].join(". "));
+      text("haVmSettingsLimits", `Owner/host maxima: CPU ${cpu?.maximumCpus ?? "unavailable"}, RAM ${memory?.maximumRamGb != null ? memory.maximumRamGb + " GB" : "unavailable"}. Idle cap: ${!idle ? "unavailable" : idle.maxTimeoutMinutes > 0 ? idle.maxTimeoutMinutes + " minutes" : "none"}${idle?.forceEnabled ? "; idle handling required" : ""}. Changes are checked when saved and applied.`);
     }
     validateVmSettings();
   }
@@ -698,7 +700,13 @@
     e.preventDefault(); validateVmSettings();
     if ($("haVmSettingsApply").disabled) return;
     vmSettingsSaving = true;
-    const args = { ...vmSettingsRequest, cpus: Number($("haVmCpus").value), ramGb: Number($("haVmRam").value), timeoutMinutes: Number($("haVmTimeout").value), action: $("haVmIdleAction").value };
+    const args = { ...vmSettingsRequest };
+    const { cpu, memory, idle } = vmSettingsData;
+    if (cpu && Number($("haVmCpus").value) !== cpu.desiredCpus) args.cpus = Number($("haVmCpus").value);
+    if (memory && Number($("haVmRam").value) !== memory.desiredRamGb) args.ramGb = Number($("haVmRam").value);
+    if (idle && (Number($("haVmTimeout").value) !== idle.timeoutMinutes || $("haVmIdleAction").value !== idle.action)) {
+      args.timeoutMinutes = Number($("haVmTimeout").value); args.action = $("haVmIdleAction").value;
+    }
     $("haVmSettingsFields").disabled = true; $("haVmSettingsApply").disabled = true;
     $("haVmSettingsCancel").disabled = true; $("haVmSettingsReload").disabled = true;
     text("haVmSettingsError", "Saving settings…");
