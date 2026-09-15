@@ -47,10 +47,16 @@ public sealed class PrimaryCpuSettings(IHostConfigStore config, ICapacityLedger 
     {
         if (vm.Kind != VmKind.Primary || state != VmState.Off) return vm;
         var setting = await GetAsync(vm, ct);
-        if (setting is null || setting.Cpus == vm.Cpu) return vm;
-        limits ??= await LimitsAsync(vm.Owner, vm, ct);
-        if (setting.Cpus > limits.MaximumCpus) throw new LifecycleException("cpu-allowance-exceeded");
+        if (setting is null) return vm;
+        var changed = setting.Cpus != vm.Cpu;
+        if (changed)
+        {
+            limits ??= await LimitsAsync(vm.Owner, vm, ct);
+            if (setting.Cpus > limits.MaximumCpus) throw new LifecycleException("cpu-allowance-exceeded");
+        }
+        // The database is not a hardware readback. Apply even when its recorded count matches.
         await driver.SetCpuCountAsync(vm.Name, setting.Cpus, ct);
+        if (!changed) return vm;
         var result = await admission.MutateAsync(null, scope => scope.UpdatePrimaryCpuAsync(vm.Name, setting.Cpus, vm.PowerGeneration), ct);
         if (result.Outcome != AdmissionOutcome.Accepted) throw new LifecycleException("power-state-changed");
         return await vms.GetAsync(vm.Name, ct) ?? throw new LifecycleException("vm-deleting");
