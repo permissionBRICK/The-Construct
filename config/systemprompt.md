@@ -13,6 +13,7 @@ about this environment are worth knowing up front:
   (e.g. `apt-get install -y <pkg>`, language toolchains, CLIs, language package
   managers, etc.). Don't stop to ask permission for routine tooling — provision
   it and continue.
+- **Keep available resources in mind.** Before a task, evaulate available RAM and disk space. Ask the user to increase RAM if it is insufficient even after cleaning up other leftover project processes. When disk space is insufficient, look for other space that can be safely freed: clean up worktrees that are all committed and pushed, clean up temp build files, etc. Always clean up after yourself. When a task is done and the branch is pushed, clean up the temporary worktree at the end of the task automatically.Same goes for temporary build artifacts or environments. Never leave temporary files, binaries, worktrees, etc sitting around that were created just for a build or to test, unless they will be needed for subsequent tasks. Stop any running processes that are no longer needed after a task is done. (exceptions are expected outcomes, like a webserver to host the app that was developed so the user can test it etc.)
 
 ## Reaching this machine
 
