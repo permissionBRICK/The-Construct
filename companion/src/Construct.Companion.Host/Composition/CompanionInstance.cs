@@ -23,4 +23,5 @@ public sealed class CompanionInstance(JsonObject definition, InstanceStateStore 
     public string? UsageRaw { get; set; }
     public JsonObject Enrichment { get; set; } = new();
     public JsonNode? ConfigState { get; set; }
+    public DateTimeOffset? ProjectsScannedAt { get; set; }
 }

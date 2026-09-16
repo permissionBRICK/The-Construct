@@ -166,11 +166,18 @@ public sealed class ConfigSyncActions(ConfigRepository repo, ConfigRemotes remot
         if (!await prompts.ConfirmAsync("Push","This commits your local versions of the files imported from "+ConfigSyncRules.DisplayRemoteUrl(url)+" to a new branch and pushes.",ct)) return ActionResult.Cancelled;
         return await Queued(async()=>
         {
+            var files=new List<UpstreamFile>(); var warnings=new List<string>();
+            foreach (var (name,entry) in remotes.ReadImportManifest().Where(p=>p.Value.RemoteUrl==url))
+            {
+                var source=repo.FilePath("projects",name);
+                if (!repo.Files.FileExists(source)) { warnings.Add("Skipped locally removed profile \""+name+"\"; its remote file is unchanged."); continue; }
+                files.Add(new(source,entry.PathInRemote));
+            }
+            if (files.Count==0) return new(true,"No local imported profiles to push.",warnings);
             var clone=await remotes.EnsureStagingCloneAsync(url,ct); if (!clone.Ok) return new(false,"Push failed: "+clone.Output);
             var branch="construct-config-update-"+clock.UtcNow.ToString("yyyyMMdd-HHmm",System.Globalization.CultureInfo.InvariantCulture);
-            var files=remotes.ReadImportManifest().Where(p=>p.Value.RemoteUrl==url).Select(p=>new UpstreamFile(repo.FilePath("projects",p.Key),p.Value.PathInRemote));
             var pushed=await remotes.PushUpstreamAsync(clone.Dir,files,branch,"config update from The Construct ("+branch+")",ct);
-            return new(pushed.Ok,pushed.Ok ? "Pushed to branch \""+branch+"\" -- create a PR from that branch." : "Push failed: "+pushed.Output);
+            return new(pushed.Ok,pushed.Ok ? pushed.Output=="nothing to push" ? "No local changes to push." : "Pushed to branch \""+branch+"\" -- create a PR from that branch." : "Push failed: "+pushed.Output,warnings);
         },ct);
     }
     public async Task<ActionResult> ShareAsync(string installRepo = ConfigSharing.DefaultRepo, string installRef = ConfigSharing.DefaultRef, CancellationToken ct = default)
