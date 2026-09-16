@@ -153,7 +153,7 @@ public sealed class ConfigRemotes(ConfigRepository repo, string stagingRoot)
         {
             foreach (var file in files)
             {
-                var dest = ContainedPath(dir,file.PathInRemote); var text = repo.ReadText(file.AbsSource) ?? throw new ConfigSyncException("Source profile could not be read."); repo.WriteText(dest,text);
+                var dest = ContainedPath(dir,file.PathInRemote); var text = repo.ReadText(file.AbsSource) ?? throw new ConfigSyncException("Source profile \""+Path.GetFileName(file.AbsSource)+"\" could not be read."); repo.WriteText(dest,text);
             }
             await Git.RequireAsync(dir,["checkout","-B",branch],true,cancellationToken:ct); await Git.RequireAsync(dir,["add","-A"],true,cancellationToken:ct);
             if ((await Git.RequireAsync(dir,["diff","--cached","--name-only"],cancellationToken:ct)).Length == 0) return new(true,branch,"nothing to push");
