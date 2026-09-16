@@ -40,7 +40,10 @@ public sealed class StateAggregation(CompanionInstances instances, RuntimeMessag
         data["removeOffer"] = StateJson.Boolean(removal["ok"]) == true || StateJson.Boolean(removal["requiresTypedConfirmation"]) == true ? removal : null;
         if (entry.ConfigState is not null) data["configSync"] = entry.ConfigState.DeepClone();
         var selected = entry.Store.ReadSelectedProjects().Select(StateJson.String).ToHashSet(StringComparer.Ordinal);
-        if (entry.Store.HasPersistedSelection()) data["projects"] = new JsonArray(instances.Host.ListProjectProfiles(instances.Host.ConfigDirectory ?? entry.Store.ScriptsDirectory).Select(p => (JsonNode)new JsonObject { ["name"] = p, ["selected"] = selected.Contains(p) }).ToArray());
+        if (!entry.Store.HasPersistedSelection()) selected = (data["projects"] as JsonArray ?? []).OfType<JsonObject>().Where(p => StateJson.Boolean(p["selected"]) != false).Select(p => StateJson.String(p["name"])).ToHashSet(StringComparer.Ordinal);
+        var profiles = instances.Host.ListProjectProfiles(instances.Host.ConfigDirectory ?? entry.Store.ScriptsDirectory);
+        if (!entry.Store.HasPersistedSelection()) profiles = profiles.Concat((data["projects"] as JsonArray ?? []).OfType<JsonObject>().Select(p => StateJson.String(p["name"]))).Where(p => p.Length > 0).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        if (profiles.Length > 0 || entry.Store.HasPersistedSelection()) data["projects"] = new JsonArray(profiles.Select(p => (JsonNode)new JsonObject { ["name"] = p, ["selected"] = selected.Contains(p) }).ToArray());
         foreach (var kind in new[] { "forwards", "children", "idlePolicy", "hostAdminOffer" })
             data[kind] = cached.TryGetValue(kind, out var message) && message.TryGetProperty(kind == "hostAdminOffer" ? "offer" : kind, out var value) ? JsonNode.Parse(value.GetRawText()) : null;
         return new() { ["type"] = "state", ["state"] = data };

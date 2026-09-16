@@ -38,7 +38,7 @@ public sealed class CompanionInstances(IStateFileSystem files, IpcSettings setti
         var store = new InstanceStateStore(files, StateJson.String(definition["name"]), Host.ResolveScriptsDirectory(StateJson.Text(definition["scriptsDir"]), settings.Read().ScriptsDir));
         var ssh = connections.Ssh(definition);
         if (entry is null) entry = new CompanionInstance(definition, store, ssh);
-        else { entry.Definition = definition; entry.Store = store; entry.Ssh = ssh; }
+        else { entry.Definition = definition; entry.Store = store; entry.Ssh = ssh; entry.ProjectsScannedAt = null; }
         if (entry.ConfigSync is null && Host.ConfigDirectory is { } cfg)
             entry.ConfigSync = config.Create(cfg, Path.Combine(Host.LocalAppData!, "The-Construct", "cache", "config-remotes"), entry.Ssh, StateJson.String(definition["configBranch"]));
         return entry;

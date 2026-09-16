@@ -52,7 +52,9 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
                 case "setUsagePeriod": entry.UsagePeriod = UsageParser.NormalizeReport(Text(message, "period")); await RefreshAsync(entry, ct); return;
                 case "saveProject":
                     var project = Text(message, "name"); var profile = RequireProject(project, message["profile"]);
-                    instances.Host.WriteProjectProfile(ProjectRoot(entry), project, JsonNode.Parse(ProfileCodec.CanonicalizeProfileText(project, profile.ToJsonString()).Content!)!.AsObject()); await RefreshAsync(entry, ct); return;
+                    var profilesBefore = instances.Host.ListProjectProfiles(ProjectRoot(entry));
+                    instances.Host.WriteProjectProfile(ProjectRoot(entry), project, JsonNode.Parse(ProfileCodec.CanonicalizeProfileText(project, profile.ToJsonString()).Content!)!.AsObject());
+                    await EnableNewProjects(entry, profilesBefore, ct); await RefreshAsync(entry, ct); return;
                 case "saveIdlePolicy": await SaveIdle(entry, message["policy"] as JsonObject ?? [], ct); return;
                 case "command": await Command(entry, message, ct); return;
                 default: Refuse(name, type, "This message is not supported by Construct Companion."); return;
@@ -305,9 +307,10 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
     {
         var area = entry.ConfigSync ?? throw new IpcFailure(409, "configUnavailable", "Config sync is not configured for this instance.");
         if (id == "openConfigRepo") { await launcher.OpenAsync(area.Repository.Directory, ct); return; }
-        if (id == "syncConfigNow") { await area.Runtime.SyncNowAsync(ct); await area.Actions.ImportAsync(ct); }
+        if (id == "syncConfigNow") await SyncProjectsAsync(entry, ct);
         else
         {
+            var profilesBefore = instances.Host.ListProjectProfiles(ProjectRoot(entry));
             var result = id switch
             {
                 "addConfigRemote" => await area.Actions.AddRemoteAsync(false, ct),
@@ -319,7 +322,12 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
                 _ => await area.Actions.PublishAsync(Text(message, "url"), ct)
             };
             if (!result.Ok) Refuse(entry.Name, id, result.Message);
-            else if (id == "importRemoteConfigs") await area.Runtime.SyncNowAsync(ct);
+            else
+            {
+                if (result.Message.Length > 0) events.Companion(new { type = "notification", level = "info", text = result.Message });
+                if (id == "importRemoteConfigs") { await EnableNewProjects(entry, profilesBefore, ct); await SyncProjectsAsync(entry, ct); }
+            }
+            foreach (var warning in result.Warnings ?? []) events.Companion(new { type = "notification", level = "warning", text = warning });
         }
         entry.ConfigState = JsonSerializer.SerializeToNode(await area.Runtime.BuildStateAsync(ct), IpcJson.Options); var full = state.State(entry.Name); full["state"]!["configSync"] = entry.ConfigState?.DeepClone(); events.Message(entry.Name, full);
     }
