@@ -31,7 +31,7 @@ internal sealed class CompanionEnrichmentService(CompanionInstances instances, M
                     try
                     {
                         if (entry.Runtime is null) continue;
-                        if (entry.ConfigSync is {} area) await area.Runtime.TickAutoAsync(stoppingToken);
+                        await dispatcher.SyncProjectsAsync(entry, stoppingToken, automatic:true);
                         await dispatcher.RefreshAsync(entry, stoppingToken, probe:false, collectUsage:false);
                     }
                     catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { throw; }

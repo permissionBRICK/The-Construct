@@ -14,6 +14,15 @@ successful Linux build is not a Windows runtime test.
 
 The popup can switch instances, register a VM, run lifecycle actions, and open the full panel. The panel also clones and opens projects, removes instances with an option to keep remote VMs, applies CPU/RAM and automatic checkpoint settings, preserves configuration before reprovisioning, creates remote VMs, and starts or explicitly finishes host conversion. Host administration issues and rotates tokens in a native one-time dialog with a copy button. Opening a control surface manually refreshes the Construct update check immediately; successful checks are cached for five minutes and failures for one minute. A host conversion started in VS Code must be finished in its original VS Code profile.
 
+While Companion is running, it scans `/root/repos` on each VM every five minutes.
+Repos with a Git remote that are not covered by an existing profile get a minimal
+profile and are selected for that VM's next reprovision or reinstall. New profiles
+synced from the VM and profiles created in the editor are also selected automatically;
+existing deselected profiles stay deselected. **Sync now** runs discovery immediately.
+Discovery works even without Git installed on the PC, but it does not infer SDKs or
+setup commands. Record those requirements in the profile. Repos without a remote
+need a separate backup of their files.
+
 ## Install and update
 
 A local build (`-Source local`) needs the Companion sources, which the release archive
