@@ -10,6 +10,7 @@ try {
         'test/t3-desktop-handoff.test.ps1',
         'test/native-iso-host.test.ps1',
         'test/iso-download-compile.test.ps1',
+        'test/hyperv-prereqs.test.ps1',
         'service/tests/host-installer.test.ps1',
         'service/tests/Constructd.Tests/Network/network-script.test.ps1',
         'test/remote-driver.test.ps1',
