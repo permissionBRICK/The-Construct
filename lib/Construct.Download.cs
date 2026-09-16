@@ -1,7 +1,6 @@
 // Compatible with Windows PowerShell 5.1 / .NET Framework and PowerShell 7.
-#if NET
-#nullable disable
-#endif
+// Keep directives compatible with the legacy compiler too: it rejects
+// #nullable even inside an inactive #if block.
 using System;
 using System.IO;
 using System.Net;
