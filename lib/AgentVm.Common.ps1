@@ -203,7 +203,8 @@ function Ensure-HyperV {
              firmware. The script can't turn that on -- only the user can, in
              BIOS/UEFI -- so abort with guidance if it's positively off.
           2. Enable any of the required Windows features that aren't already on:
-             Hyper-V. Native ISO construction does not require WSL components.
+             Hyper-V and its PowerShell tools. Native ISO construction does not
+             require WSL components.
           3. If a feature can't be enabled, point Windows 10/11 Home users at a
              community workaround (Hyper-V isn't officially supported there);
              other editions get generic guidance. Either way it throws.
@@ -247,11 +248,17 @@ function Ensure-HyperV {
     # 2. Required Windows features. -All also pulls in each feature's parents.
     $requiredFeatures = @(
         @{ Name = "Microsoft-Hyper-V"; Label = "Hyper-V" }
+        @{ Name = "Microsoft-Hyper-V-Management-PowerShell"; Label = "Hyper-V PowerShell tools" }
     )
     $rebootNeeded  = $false
     $installFailed = $false
     foreach ($feat in $requiredFeatures) {
         $state = Get-WindowsOptionalFeature -Online -FeatureName $feat.Name -ErrorAction SilentlyContinue
+        if ($state -and $state.State -eq "EnablePending") {
+            Write-Note "$($feat.Label) is waiting for a Windows restart"
+            $rebootNeeded = $true
+            continue
+        }
         if ($state -and $state.State -eq "Enabled") {
             Write-Ok "$($feat.Label) already enabled"
             continue
@@ -313,6 +320,14 @@ function Ensure-HyperV {
             Restart-Computer -Force
         }
         exit
+    }
+
+    # Feature state alone does not prove this PowerShell process can create VMs.
+    try {
+        Import-Module Hyper-V -Global -ErrorAction Stop
+        Get-Command New-VM -Module Hyper-V -ErrorAction Stop | Out-Null
+    } catch {
+        throw "Hyper-V PowerShell tools are not available: $($_.Exception.Message). Restart Windows if installation requested it, then re-run from 64-bit PowerShell."
     }
 }
 
