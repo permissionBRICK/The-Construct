@@ -54,6 +54,23 @@ def atomic_json(path, value):
     temporary.replace(path)
 
 
+def ensure_runtime_dependencies():
+    # The bundled Node executable still links to Ubuntu's C++ and atomic
+    # runtimes. Fresh VMs need these even when no compiler or SDK is installed.
+    missing = []
+    for package in ('libatomic1', 'libstdc++6'):
+        result = subprocess.run(['dpkg-query', '-W', '-f=${db:Status-Status}', package],
+                                capture_output=True, text=True)
+        if result.returncode != 0 or result.stdout.strip() != 'installed':
+            missing.append(package)
+    if missing:
+        print('Installing T3 runtime dependencies: ' + ', '.join(missing), flush=True)
+        env = {**os.environ, 'DEBIAN_FRONTEND': 'noninteractive'}
+        subprocess.run(['apt-get', 'update'], check=True, env=env)
+        subprocess.run(['apt-get', 'install', '-y', '--no-install-recommends', *missing],
+                       check=True, env=env)
+
+
 def manifest_url(channel, fetch, temporary):
     if channel == 'stable':
         return f'{BASE}/latest/download/manifest.json'
@@ -92,6 +109,7 @@ def install(fetch=download):
         temporary = Path(scratch)
         fetch(manifest_url(channel, fetch, temporary), temporary / 'manifest.json')
         manifest = read_manifest(json.loads((temporary / 'manifest.json').read_text()), channel)
+        ensure_runtime_dependencies()
         destination = cache / manifest['buildHash']
         receipt = destination / '.construct-prebuilt-manifest.json'
         current = False
