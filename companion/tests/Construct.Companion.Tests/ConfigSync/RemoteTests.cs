@@ -56,6 +56,36 @@ public sealed class RemoteTests
         var pushed=await remote.PushUpstreamAsync(clone.Dir,[new(w.Repo.FilePath("projects","a"),"projects/a.json")],"construct-config-update-test"); Assert.True(pushed.Ok,pushed.Output);
         Assert.Contains("pushback",await w.Git.RequireAsync(w.Root,["--git-dir",url,"show","construct-config-update-test:projects/a.json"])); Assert.DoesNotContain("pushback",await w.Git.RequireAsync(w.Root,["--git-dir",url,"show","main:projects/a.json"]));
     }
+    [Fact] public async Task PushBackSkipsDeletedLocalImportsAndPreservesTheirRemoteFiles()
+    {
+        using var w=new GitTestWorkspace(); var url=await Bare(w); var remote=new ConfigRemotes(w.Repo,w.Cache); remote.WriteRemotes([new(url)]);
+        var clone=await remote.EnsurePublishCloneAsync(url); await Identity(w,clone.Dir); await remote.CheckoutPublishBranchAsync(clone.Dir,"main");
+        var deleted=GitTestWorkspace.Profile("deleted");
+        Assert.True((await remote.PublishToRemoteAsync(clone.Dir,"main",[FileA(),new("deleted","projects/deleted.json",deleted,false)])).Ok);
+        await w.Git.RequireAsync(clone.Dir,["fetch","origin"]); await w.Git.RequireAsync(clone.Dir,["remote","set-head","origin","main"]);
+        remote.Adopt("a",GitTestWorkspace.Profile("a","pushback"),new(url,"main","projects/a.json","a"),FileA().Content);
+        remote.Adopt("deleted",deleted,new(url,"main","projects/deleted.json","deleted"),deleted);
+        w.Files.DeleteFile(w.Repo.FilePath("projects","deleted"));
+        var prompts=new FakePrompts(); prompts.Confirmations.Enqueue(true);
+        var actions=new ConfigSyncActions(w.Repo,remote,w.Lock,prompts,new FakeClipboard(),w.Clock,new(1,1));
+        var result=await actions.PushUpstreamAsync(url); Assert.True(result.Ok,result.Message);
+        Assert.Contains(result.Warnings!,warning=>warning.Contains("deleted"));
+        var branch="construct-config-update-"+w.Clock.UtcNow.ToString("yyyyMMdd-HHmm");
+        Assert.Contains("pushback",await w.Git.RequireAsync(w.Root,["--git-dir",url,"show",branch+":projects/a.json"]));
+        Assert.Equal(deleted.Trim(),await w.Git.RequireAsync(w.Root,["--git-dir",url,"show",branch+":projects/deleted.json"]));
+        Assert.DoesNotContain("pushback",await w.Git.RequireAsync(w.Root,["--git-dir",url,"show","main:projects/a.json"]));
+    }
+    [Fact] public async Task PushBackWithOnlyDeletedImportsDoesNotContactRemoteOrClaimAPush()
+    {
+        using var w=new GitTestWorkspace(); var url=Path.Combine(w.Root,"unreachable.git"); var remote=new ConfigRemotes(w.Repo,w.Cache); remote.WriteRemotes([new(url)]);
+        remote.Adopt("deleted",GitTestWorkspace.Profile("deleted"),new(url,"main","projects/deleted.json","deleted"),GitTestWorkspace.Profile("deleted"));
+        w.Files.DeleteFile(w.Repo.FilePath("projects","deleted"));
+        var prompts=new FakePrompts(); prompts.Confirmations.Enqueue(true);
+        var actions=new ConfigSyncActions(w.Repo,remote,w.Lock,prompts,new FakeClipboard(),w.Clock,new(1,1));
+        var result=await actions.PushUpstreamAsync(url); Assert.True(result.Ok,result.Message);
+        Assert.Equal("No local imported profiles to push.",result.Message);
+        Assert.Contains(result.Warnings!,warning=>warning.Contains("deleted")); Assert.False(Directory.Exists(w.Cache));
+    }
     [Theory] [InlineData("../../outside")] [InlineData("projects/../../outside")] [InlineData(".git/config")] public void PushPathsCannotEscapeClone(string path) => Assert.Throws<ConfigSyncException>(()=>ConfigRemotes.ContainedPath("/staging",path));
     [Fact] public async Task ShareProducesClipboardCommandOrZipThroughSeams()
     {
