@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -28,6 +29,9 @@ class Prebuilt(unittest.TestCase):
         })
         self.environ.start()
         self.addCleanup(self.environ.stop)
+        dependencies = patch.object(p, 'ensure_runtime_dependencies')
+        self.dependencies = dependencies.start()
+        self.addCleanup(dependencies.stop)
         self.archive = self.root / 'source.tar.gz'
         with tarfile.open(self.archive, 'w:gz') as tar:
             for name in ('bin/t3', 'bin/node'):
@@ -65,7 +69,22 @@ class Prebuilt(unittest.TestCase):
         p.install(self.fetch)
         self.assertEqual([f'{p.BASE}/latest/download/manifest.json'], self.calls)
         self.assertEqual(first, (self.root / 't3').resolve())
+        self.assertEqual(2, self.dependencies.call_count)
         self.assertEqual('prebuilt', json.loads((self.root / 'artifacts/server-manifest.json').read_text())['installationMode'])
+
+    def test_dependency_failure_preserves_previous_install_without_downloading(self):
+        p.install(self.fetch)
+        previous = (self.root / 't3').resolve()
+        status = (self.root / 'status').read_bytes()
+        manifest = (self.root / 'artifacts/server-manifest.json').read_bytes()
+        self.calls.clear()
+        self.dependencies.side_effect = subprocess.CalledProcessError(100, ['apt-get', 'install'])
+        with self.assertRaises(subprocess.CalledProcessError):
+            p.install(self.fetch)
+        self.assertEqual([f'{p.BASE}/latest/download/manifest.json'], self.calls)
+        self.assertEqual(previous, (self.root / 't3').resolve())
+        self.assertEqual(status, (self.root / 'status').read_bytes())
+        self.assertEqual(manifest, (self.root / 'artifacts/server-manifest.json').read_bytes())
 
     def test_version_change_installs_and_preserves_previous_runtime(self):
         p.install(self.fetch)
@@ -131,6 +150,48 @@ class Prebuilt(unittest.TestCase):
             p.install(self.fetch)
         self.assertFalse((self.root / 't3').exists())
         self.assertFalse((self.root / 'cache/escaped').exists())
+
+
+class RuntimeDependencies(unittest.TestCase):
+    def test_installed_libraries_skip_apt(self):
+        with patch.object(p.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'installed')) as run:
+            p.ensure_runtime_dependencies()
+        self.assertEqual(['libatomic1', 'libstdc++6'], [c.args[0][-1] for c in run.call_args_list])
+        self.assertTrue(all(c.args[0][0] == 'dpkg-query' for c in run.call_args_list))
+
+    def test_fresh_vm_installs_only_missing_runtime(self):
+        with patch.object(p.subprocess, 'run', side_effect=[
+            subprocess.CompletedProcess([], 1, ''),
+            subprocess.CompletedProcess([], 0, 'installed'),
+            subprocess.CompletedProcess([], 0),
+            subprocess.CompletedProcess([], 0),
+        ]) as run:
+            p.ensure_runtime_dependencies()
+        self.assertEqual(['apt-get', 'update'], run.call_args_list[2].args[0])
+        install = run.call_args_list[3]
+        self.assertEqual(['apt-get', 'install', '-y', '--no-install-recommends', 'libatomic1'], install.args[0])
+        self.assertTrue(install.kwargs['check'])
+        self.assertEqual('noninteractive', install.kwargs['env']['DEBIAN_FRONTEND'])
+
+    def test_unconfigured_packages_are_repaired(self):
+        with patch.object(p.subprocess, 'run', side_effect=[
+            subprocess.CompletedProcess([], 0, 'unpacked'),
+            subprocess.CompletedProcess([], 0, 'config-files'),
+            subprocess.CompletedProcess([], 0),
+            subprocess.CompletedProcess([], 0),
+        ]) as run:
+            p.ensure_runtime_dependencies()
+        self.assertEqual(['libatomic1', 'libstdc++6'], run.call_args_list[-1].args[0][-2:])
+
+    def test_apt_failure_stops_installation(self):
+        with patch.object(p.subprocess, 'run', side_effect=[
+            subprocess.CompletedProcess([], 1, ''),
+            subprocess.CompletedProcess([], 0, 'installed'),
+            subprocess.CalledProcessError(100, ['apt-get', 'update']),
+        ]) as run:
+            with self.assertRaises(subprocess.CalledProcessError):
+                p.ensure_runtime_dependencies()
+        self.assertEqual(3, run.call_count)
 
 if __name__ == '__main__':
     unittest.main()
