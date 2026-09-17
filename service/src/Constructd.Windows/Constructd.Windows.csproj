@@ -21,6 +21,11 @@
   -->
 
   <ItemGroup>
+    <!-- The Proxmox platform reuses the argument guards and the process runner. -->
+    <InternalsVisibleTo Include="Constructd.Proxmox" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Constructd.Core\Constructd.Core.csproj" />
     <Compile Include="../../../lib/Construct.Download.cs" Link="Iso/Construct.Download.cs" />
   </ItemGroup>

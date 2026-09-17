@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <!--
+    The Proxmox VE platform: the service runs ON the node and drives VMs through `qm` and `pvesh`
+    (via IProcessRunner, argv only), seeds them with cloud-init, and relays port forwards in-process.
+    Plain net10.0 like every other project: it builds and its tests run on any OS; only the real
+    `qm`/`pvesh` binaries are Linux-and-Proxmox-only.
+  -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\Constructd.Core\Constructd.Core.csproj" />
+    <!-- The portable pieces of the Windows project: ProcessRunner, ArgumentGuard, the DNS resolver. -->
+    <ProjectReference Include="..\Constructd.Windows\Constructd.Windows.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
+  </ItemGroup>
+
+</Project>

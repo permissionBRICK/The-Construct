@@ -15,6 +15,7 @@ public static class NetworkComposition
             services.AddSingleton<FakeGuestAddressProvider>();
             services.AddSingleton<IGuestAddressProvider>(sp => sp.GetRequiredService<FakeGuestAddressProvider>());
         }
+        else if (options.IsProxmox) services.AddSingleton<IGuestAddressProvider>(sp => sp.GetRequiredService<UnsupportedFeaturePlatform>());
         else services.AddSingleton<IGuestAddressProvider, HyperVGuestAddressProvider>();
         if (options.EffectivePersistence == PersistenceMode.Sqlite) services.AddSingleton<INetworkRuleStore, SqliteNetworkRuleStore>();
         else services.AddSingleton<INetworkRuleStore, InMemoryNetworkRuleStore>();
