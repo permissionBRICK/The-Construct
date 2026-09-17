@@ -5,8 +5,8 @@
 > The same `constructd` service that runs on a Windows Hyper-V host runs on the Proxmox node
 > itself with the Proxmox platform selected (`Constructd:Backend = proxmox`). Every client is
 > unchanged: `Auto-Install.ps1 -Backend hyperv-remote`, the VS Code extension and the Companion
-> talk to the same API and see the same instance registry entries; the only difference they can
-> observe is a shorter feature list (no child VMs or screenshot console).
+> talk to the same API and see the same instance registry entries. Child VMs, media, screenshots,
+> input and guest addresses are implemented with local tests; child VM field testing is still pending.
 > Host self-update is implemented; its systemd handoff and rollback still need human field testing.
 > The design background is [docs/remote-host.md](remote-host.md); this page is the Proxmox specifics.
 
@@ -103,7 +103,12 @@ Re-running the script is the install/repair path: `--host-release latest` (or a 
 re-established from the database when the service comes back. Without such a flag a re-run keeps
 the installed service and only refreshes scripts and settings.
 
-Options: `--admin`, `--storage`, `--image-storage`, `--bridge`, `--release`, `--listen-port`,
+Child media uses directory storage `construct-media` at `/var/lib/constructd/media`, with files
+under `template/iso`. `--media-storage` changes the storage ID. The installer verifies `swtpm`
+and `pve-edk2-firmware` and enables ISO content without removing existing content types.
+See [child mappings, limitations and upgrade setup](child-vms.md#on-a-proxmox-host).
+
+Options: `--admin`, `--storage`, `--image-storage`, `--media-storage`, `--bridge`, `--release`, `--listen-port`,
 `--ssh-ports a-b`, `--app-ports a-b`, `--skip-image`, `--rotate-token`, `--repo`, `--ref`,
 `--host-release`, `--build`, `--package`, `--source`, and the Kerberos trio `--keytab`,
 `--netbios-domain`, `--realm` (section 5b).
@@ -412,8 +417,10 @@ update the A record; the SPN and keytab are name-based and stay valid.
 
 ## 6. What is not there (yet)
 
-- **Child VMs** (`construct vm …`) and the **screenshot console** report
-  `unsupported-capability`; the health endpoint does not list them, so the extension does not offer them.
+- **VMConnect browser gateway** is unsupported. Console sessions include a native noVNC URL
+  that requires a separate Proxmox login; screenshot and input routes work through Construct.
+- **Distinct Secure Boot key sets and Unicode typing** are unavailable. OVMF combines the
+  Microsoft keys; console text uses US-layout ASCII. See [all child differences](child-vms.md#on-a-proxmox-host).
 - **Capacity enforcement** — the ledger observes (`HostAdmin:Capacity:Mode = Observe`) with a real
   inventory (`pvesh get /nodes/<node>/status|storage|qemu`), but nothing is refused for capacity.
 - **NTLM fallback** — the Linux Negotiate handler speaks Kerberos; a PC that cannot get a ticket for
@@ -428,11 +435,13 @@ update the A record; the SPN and keytab are name-based and stay valid.
 | `Backend` | `hyperv` | `proxmox` selects this platform |
 | `Proxmox:Node` | this machine's host name | the node addressed |
 | `Proxmox:Storage` | `local-lvm` | VM disks and cloud-init drives (`images` content) |
+| `Proxmox:MediaStorage` | `construct-media` | Directory storage with ISO content; `HostAdmin:Media:RootDir` defaults to `/var/lib/constructd/media/template/iso` |
 | `Proxmox:ImageVolume` | `local:import/construct-ubuntu-noble-cloudimg-amd64.qcow2` | the cached cloud image |
 | `Proxmox:SnippetStorage` / `SnippetDir` | `local` / `/var/lib/vz/snippets` | where per-VM seeds go |
 | `Proxmox:Bridge` | `vmbr0` | guest network |
 | `Proxmox:CpuType` | `host` | QEMU CPU type |
 | `Proxmox:QmPath` / `PveshPath` | `qm` / `pvesh` | the commands |
+| `Proxmox:PvesmPath` / `PythonPath` | `pvesm` / `python3` | owned-volume cleanup and the local QMP client |
 
 Everything else (`PublicHost`, port ranges, idle policy, `Iso:SeedUser`, `Iso:BootstrapPublicKeyPath`,
 persistence) is the common configuration documented in [service/README.md](../service/README.md).

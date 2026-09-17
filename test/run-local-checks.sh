@@ -42,6 +42,7 @@ if [[ "$group" == service || "$group" == all ]]; then
   dotnet test service/Constructd.sln -c Release
   pwsh -NoProfile -File service/tests/host-updater.test.ps1
   bash service/tests/host-updater.test.sh
+  bash service/tests/proxmox-media-storage.test.sh
 fi
 
 if [[ "$group" == companion || "$group" == all ]]; then
