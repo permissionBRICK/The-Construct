@@ -15,6 +15,13 @@ desk, a lab server, a build machine — instead of your own PC. An admin install
 manages **their own** VMs on it from the same `Auto-Install.ps1` and the same VS Code
 control panel.
 
+The host's **Usage** tab in VS Code and Companion shows guest-reported tokens and
+estimated cost for today, this month and retained history. Admins can compare users
+and VMs; ordinary users see their own usage. Reprovision guests to install the
+15-minute reporter. Deleted VM usage remains attributed to its former owner.
+See [Host usage](control-panel.md#host-usage) for settings and backfill limits.
+Reporting on a real Hyper-V host still needs a field test.
+
 Remote installs also install [Construct Companion](companion.md) on the **user's PC**.
 The VM runs on the remote host; client forwards, notifications and microphone
 capture run on the user's desktop. Auto-Install performs this per-user step before

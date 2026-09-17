@@ -129,6 +129,9 @@ Everything lives under `/api/v1`, speaks JSON with camelCase properties and came
 | `POST /vms/{name}/forwards/{id}/ack` | owner/admin — **not** the VM's own token | `{status: open\|error, localPort?, hostLabel?, message?}` → the updated forward. The extension reporting that it opened the port on the user's PC. |
 | `GET`/`PUT /vms/{name}/idle-policy` | owner/admin | `{timeoutMinutes, action}`; the response also carries the admin cap and whether the request was clamped. |
 | `POST /vms/{name}/activity` | owner/admin **or that VM's own token** | Guest heartbeat `{busy, reasons[]}`. |
+| `POST /vms/{name}/usage` | owner/admin **or that VM's own token** | Guest token usage `{generatedAt, days[]}`; 204 on success. |
+| `GET /host/usage?window=today\|month\|all` | enrolled user | Host totals for admins; the caller's usage otherwise, including deleted VMs. |
+| `GET /vms/{name}/usage?window=today\|month\|all` | owner/admin | One registered VM's token usage. |
 | `POST /vms/{name}/source` | owner/admin user | `{commit}` (40 lowercase hex) → `200` ready metadata or `202 {jobId,commit,state:"downloading"}`. Atomic VM pin and operation-key replay; primary service-managed VMs only. |
 | `GET /vms/{name}/source/{commit}` | owner/admin or that VM's token | Verified original ZIP with length, ETag, `X-Construct-Source-Commit` and `X-Construct-Source-Sha256`. Another VM's token is refused. |
 | `GET /host/source-cache` | admin | Items, `pinnedBy`, active readers, `committedBytes`, `maxItemBytes`, `maxTotalBytes`. |
@@ -205,7 +208,7 @@ See [the settings contract](../docs/plans/host-vm-settings.md) for dialog/partia
 lease/resources, guest reports and separate host observations, reservations, operation metadata and
 `allowedActions`. These describe current policy; authorization reads current user state on every
 request. Disabling a user immediately rejects their Bearer tokens and their VMs' credentials. Legacy
-VM tokens retain only the existing forwards/activity scope plus identity and guest-report intake.
+VM tokens retain the forwards/activity scope plus identity, guest-report intake and token-usage intake.
 New primary creation issues a `primary` token; it never grants user identity or admin access.
 
 Discovery advertises `host-admin`, `children`, `media`, `console`, `updates`, `network` and (when enabled) `source-cache`
@@ -236,6 +239,7 @@ gate: the resource policy is evaluated again inside every handler.
 | Primary lifecycle | `POST /vms`; `POST /vms/{name}/power`; `DELETE /vms/{name}` | Enrolled user for create/power; owner/Admin for delete. Primary delete uses the cascade preview/token flow when children exist. |
 | Primary identity | `GET /vms/{name}/identity`; `POST /vms/{name}/guest-report`; `POST`, `DELETE /vms/{name}/token`; `GET`, `PUT`, `DELETE /vms/{name}/overrides` | Self/owner/Admin for identity/report; owner/Admin user credential for token rotation; Admin for overrides. |
 | Idle policy/activity | `GET`, `PUT /vms/{name}/idle-policy`; `POST /vms/{name}/activity` | Owner/Admin user credential for policy; the matching VM token or owner/Admin for activity. |
+| Token usage | `POST /vms/{name}/usage`; `GET /host/usage`; `GET /vms/{name}/usage` | Matching VM token or owner/Admin for intake; enrolled users read their own usage, admins read all. |
 | Child lifecycle | `POST /vms/{parent}/children`; `POST /vms/{name}/lifecycle`; `POST /vms/{name}/lease`; `PUT /vms/{name}/sharing`; `PUT /vms/{name}/hardware`; `PUT /vms/{name}/media`; `DELETE /vms/{name}` | Parent delegate creates; operator lifecycle; owner/Admin-only lease, sharing, configuration and deletion. Shared callers cannot delete or configure. |
 | Addresses/forwards | `GET /vms/{name}/addresses`; `GET`, `POST /vms/{name}/forwards`; `DELETE /vms/{name}/forwards/{id}`; `POST /vms/{name}/forwards/{id}/ack` | Existing self/owner rules for a primary; child relationship rules for a child. Ack always requires a user credential and, for a child, the owner of the `via` primary or Admin. |
 | Jobs | `GET /jobs`; `GET /jobs/{id}`; `GET /jobs/{id}/events`; `POST /jobs/{id}/cancel` | Owner/initiator or Admin. Event streams replay progress and phase history, then one terminal state. |
@@ -307,6 +311,34 @@ never masks the original failure.
 Jobs are authorized by their submitter (or an admin), not by the VM they mention: a delete job
 outlives the VM record, and a create job hands out a secret.
 
+### Token usage
+
+Both host platforms advertise the `usage` API feature. Guests post daily totals
+for `claude`, `codex` and `opencode`; see the [report payload](../docs/expose.md#token-usage-reports).
+Intake validates up to 200 distinct tool/date rows, 64 models per row and model
+names of at most 128 characters. Token counts are non-negative signed 64-bit
+integers. Costs must fit a non-negative signed 64-bit micro-dollar value; fractions
+smaller than one micro-dollar are truncated. Invalid batches write nothing.
+Successful telemetry does not enter the audit log; refused and failed requests do.
+
+Usage reads return `{window, generatedAt, totals:{tokens,costUsd}, byUser, byVm}`.
+User rows include `user`, `tokens`, `costUsd`, `vms`, `lastReportedAt` and `tools`.
+VM rows include `vm`, `user`, `deleted`, `tokens`, `costUsd`, `lastReportedAt` and
+`tools`. Each tool entry has `tool`, `tokens` and `costUsd`. Missing `window` means
+`today`; unknown windows return 400. Windows use UTC calendar dates. Last report
+time is the host's receipt time, independent of the guest's `generatedAt` clock.
+
+M830 stores `token_usage` independently of the VM registry. Its key includes VM
+name, incarnation, tool and date, so a recreated VM cannot overwrite a former
+owner's usage. Legacy VMs without an incarnation use their creation timestamp.
+Deletion marks retained rows through a database trigger. Daily rows take precedence
+over a monthly backfill for the same incarnation/tool/month. A partially reported
+month can therefore undercount history, as described in [Host usage](../docs/control-panel.md#host-usage).
+The daily cleanup worker reads `host_config.usage.retentionDays`, default 400,
+and skips maintenance. Daily rows expire by their usage date; monthly rows expire
+when the month's final day is outside the retention window. `all` means all retained
+usage, including deleted VMs, rather than an unbounded lifetime total.
+
 ### Authentication and authorization
 
 | Scheme | Credential | Notes |
@@ -330,10 +362,9 @@ Policies (`Auth/AuthorizationSetup.cs`):
 - `vm-owner-or-admin` / `vm-self-or-owner-or-admin` — resource-based checks against the `Vm`,
   implemented on top of the pure `Ownership` helpers.
 
-A VM-scoped token is valid for exactly four calls: its own VM's forwards (list, add, remove) and its
-own heartbeat. Every other route — including `/whoami` and including the **ack** on its own
-forwards — answers `403` for it, and so does any other VM's copy of those four routes, even one
-owned by the same user.
+A VM-scoped token can report its own activity and token usage in addition to the
+forward and delegation routes described above. Usage reads require an enrolled user
+credential. Usage writes to another VM are refused, even when both VMs have the same owner.
 
 A VM that exists but belongs to somebody else answers `403`, not `404`; an unknown VM answers `404`.
 
@@ -347,7 +378,7 @@ finish the job. From that moment the two callers see different things, and the d
   the fence.
 - **An authenticated owner or admin gets `409` from the fenced routes**: `POST /vms/{name}/power`,
   `POST` and `DELETE` on `/vms/{name}/forwards`, `PUT /vms/{name}/idle-policy` and
-  `POST /vms/{name}/activity`. Reads still work and report `deleting: true`.
+  `POST /vms/{name}/activity` and `POST /vms/{name}/usage`. Reads still work and report `deleting: true`.
 
 `DELETE /vms/{name}` itself carries **no** fence check, so a second delete while the first removal job
 is still running is accepted rather than refused: it re-writes the same fence and queues a **second**
@@ -622,6 +653,7 @@ exists; a timestamp requires an exact match. A conflict returns `409 config-conf
 |---|---|---|
 | `capacity` | `mode`, `ramHeadroomBytes`, `storageHeadroomBytes`, `cpuBudget`, `maxVcpusPerVm`, `reconcileSeconds`, `orphanReservationTimeoutSeconds` | `observe`, null RAM headroom, 20 GiB storage headroom, null CPU/per-VM caps, 60 s reconcile, 600 s orphan timeout |
 | `memoryPressure` | `enabled`, `highWaterPercent`, `lowWaterPercent`, `swapHighWaterPercent`, `minSecondsBetweenSaves`, `cooldownMinutesAfterSave` | `true`, 90%, 80%, 50%, 60 seconds, 10 minutes |
+| `usage` | `retentionDays`, from 1 to 36500 | `400`; pruned every 24 hours |
 | `userDefaults` | `maxPrimaries`, `allowChildCreation`, `maxRetainedChildren`, `cpuBudget`, `ramBudgetBytes`, `storageBudgetBytes`, `maxChildLifetimeSeconds`, `allowNeverLifetime`, `allowSharing` | `1, true, 1, null, null, null, null, true, true` in field order |
 | `userCaps` | Caps on retained children, CPU/RAM/storage, lifetime, never-lifetime and sharing; null leaves the value uncapped. | every cap null |
 | `lifecycle` | `gracefulShutdownTimeoutSeconds`, `leaseTickSeconds`, `leaseRetrySeconds` | `300, 30, 600` seconds |
