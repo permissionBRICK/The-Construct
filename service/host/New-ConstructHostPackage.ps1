@@ -9,8 +9,7 @@ param(
     [string]$Repository = 'permissionBRICK/The-Construct',
     [DateTimeOffset]$BuiltAt = [DateTimeOffset]::UtcNow,
     [string]$FrameworkDependentPublishDir,
-    # A linux-x64 self-contained publish of Constructd.Api: packaged as-is (no scripts payload, the
-    # node installer brings the checkout itself) so install-construct-host.sh can fetch it.
+    # A linux-x64 self-contained publish, with the same scripts layout and its own updater.
     [string]$LinuxPublishDir
 )
 $ErrorActionPreference = 'Stop'
@@ -24,8 +23,10 @@ if (Test-Path -LiteralPath $OutputDir) { throw 'Output directory must be new.' }
 $payload = Join-Path $OutputDir 'payload'
 [IO.Directory]::CreateDirectory($payload) | Out-Null
 function Copy-PayloadFile([string]$Source, [string]$Relative) {
-    if ($Relative -match '(^|/)(\.\.?|keys|\.git|\.construct-tools|projects|settings\.json|appsettings\.Production\.json)(/|$)' -or $Relative -match '\.db($|[-.])') { throw 'Preserved file in package.' }
-    if ((Get-Item -LiteralPath $Source).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Package cannot contain links.' }
+    if ($Relative -match '(^|/)(\.\.?|keys|\.git|\.construct-tools|projects|data|media|iso|install\.json|settings\.json|appsettings\.Production\.json)(/|$)' -or $Relative -match '\.db') { throw 'Preserved file in package.' }
+    for ($current = [IO.Path]::GetFullPath($Source); $current; $current = Split-Path $current -Parent) {
+        if ((Get-Item -LiteralPath $current -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Package cannot contain links.' }
+    }
     $target = Join-Path $payload $Relative
     [IO.Directory]::CreateDirectory((Split-Path $target -Parent)) | Out-Null
     [IO.File]::Copy($Source, $target)
@@ -47,22 +48,25 @@ function Get-ConstructHostMigrationMetadata([string]$Root) {
     if ($breaking.Count -gt 0) { $minimum=[int]($breaking|Measure-Object -Maximum).Maximum }
     return @{schemaVersion=[int]($ids|Measure-Object -Maximum).Maximum;minReadableBy=$minimum;breakingMigrations=@($breaking|Sort-Object)}
 }
-try {
+function New-HostPayload([string]$PublishDir, [string]$UpdaterName, [string]$Rid) {
+    $payload = Join-Path $OutputDir ('payload-' + $Rid)
+    [IO.Directory]::CreateDirectory($payload) | Out-Null
     $publishRoot = (Resolve-Path -LiteralPath $PublishDir).Path.TrimEnd([IO.Path]::DirectorySeparatorChar)
-    foreach ($file in Get-ChildItem -LiteralPath $publishRoot -Recurse -File) {
+    foreach ($file in Get-ChildItem -LiteralPath $publishRoot -Recurse -File -Force) {
         $relative = $file.FullName.Substring($publishRoot.Length + 1).Replace('\','/')
         Copy-PayloadFile $file.FullName ('service/' + $relative)
     }
-    if (-not (Test-Path (Join-Path $payload 'service/Constructd.Api.exe'))) { throw 'Windows x64 publish output is required.' }
+    $executable = 'Constructd.Api'; if ($Rid -eq 'win-x64') { $executable += '.exe' }
+    if (-not (Test-Path (Join-Path $payload ('service/' + $executable)))) { throw "$Rid publish output is required." }
     # Only tracked files from this checkout; never working-tree data, build output or credentials.
     $tracked = @(& git -C $RepositoryRoot ls-files -- drivers lib bin config docs Create-AgentVM.ps1 Provision-AgentVM.ps1 service/host)
     if ($LASTEXITCODE -ne 0) { throw 'Cannot enumerate scripts.' }
     foreach ($rel in ($tracked | Sort-Object -Unique)) {
         if ($rel.StartsWith('docs/') -and $rel -notmatch '\.(md|txt|json|yml|yaml)$') { continue }
-        if ($rel.StartsWith('service/host/') -and $rel -notmatch '\.ps1$') { continue }
+        if ($rel.StartsWith('service/host/') -and $rel -notmatch '\.(ps1|sh)$') { continue }
         Copy-PayloadFile (Join-Path $RepositoryRoot $rel) ('scripts/' + $rel)
     }
-    Copy-PayloadFile (Join-Path $RepositoryRoot 'service/host/Update-ConstructHost.ps1') 'updater/Update-ConstructHost.ps1'
+    Copy-PayloadFile (Join-Path $RepositoryRoot ('service/host/' + $UpdaterName)) ('updater/' + $UpdaterName)
     [IO.File]::WriteAllText((Join-Path $payload 'scripts/.construct-revision'), ($Commit + "`n"), $utf8)
     $lines = @()
     foreach ($file in (Get-ChildItem -LiteralPath $payload -Recurse -File -Force | Sort-Object FullName)) {
@@ -70,8 +74,13 @@ try {
         $lines += (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + $rel
     }
     [IO.File]::WriteAllText((Join-Path $payload 'SHA256SUMS'), (($lines -join "`n") + "`n"), $utf8)
-    $asset = 'construct-host-' + $Commit.Substring(0,7) + '-win-x64.zip'
+    $asset = 'construct-host-' + $Commit.Substring(0,7) + '-' + $Rid + '.zip'
     [IO.Compression.ZipFile]::CreateFromDirectory($payload, (Join-Path $OutputDir $asset), [IO.Compression.CompressionLevel]::Optimal, $false)
+    return @{Path=$payload;Asset=$asset}
+}
+try {
+    $windows = New-HostPayload $PublishDir 'Update-ConstructHost.ps1' 'win-x64'
+    $payload = $windows.Path; $asset = $windows.Asset
     $databaseMetadata = Get-ConstructHostMigrationMetadata $RepositoryRoot
     $manifest = [ordered]@{
         schemaVersion=1; commit=$Commit; ref='refs/heads/main'; packageVersion=($BuiltAt.ToString('yyyy.MM.dd') + '+' + $Commit.Substring(0,7)); builtAt=$BuiltAt.ToString('o')
@@ -103,17 +112,16 @@ try {
         } finally { if (Test-Path -LiteralPath $fddOutput) { Remove-Item -LiteralPath $fddOutput -Recurse -Force } }
     }
     if ($LinuxPublishDir) {
-        $linuxRoot = (Resolve-Path -LiteralPath $LinuxPublishDir).Path.TrimEnd([IO.Path]::DirectorySeparatorChar)
-        if (-not (Test-Path -LiteralPath (Join-Path $linuxRoot 'Constructd.Api'))) { throw 'Linux x64 publish output is required (Constructd.Api).' }
-        foreach ($file in Get-ChildItem -LiteralPath $linuxRoot -Recurse -File) {
-            $rel = $file.FullName.Substring($linuxRoot.Length + 1).Replace('\','/')
-            if ($rel -match '(^|/)appsettings\.Production\.json$' -or $rel -match '\.db($|[-.])') { throw 'Preserved file in Linux package.' }
-            if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Linux package cannot contain links.' }
-        }
-        $manifest.linuxAsset='construct-host-'+$Commit.Substring(0,7)+'-linux-x64.zip'
-        [IO.Compression.ZipFile]::CreateFromDirectory($linuxRoot, (Join-Path $OutputDir $manifest.linuxAsset), [IO.Compression.CompressionLevel]::Optimal, $false)
+        $linux = New-HostPayload $LinuxPublishDir 'update-construct-host.sh' 'linux-x64'
+        $manifest.linuxAsset=$linux.Asset
         $manifest.linuxSha256=(Get-FileHash (Join-Path $OutputDir $manifest.linuxAsset) -Algorithm SHA256).Hash.ToLowerInvariant()
         $manifest.linuxSizeBytes=(Get-Item -LiteralPath (Join-Path $OutputDir $manifest.linuxAsset)).Length
+        $manifest.linuxSumsSha256=(Get-FileHash (Join-Path $linux.Path 'SHA256SUMS') -Algorithm SHA256).Hash.ToLowerInvariant()
+        $manifest.linuxUncompressedSizeBytes=[long](Get-ChildItem -LiteralPath $linux.Path -Recurse -File -Force | Measure-Object Length -Sum).Sum
+        $manifest.linuxUpdaterPath='updater/update-construct-host.sh'
+        $manifest.linuxUpdaterSha256=(Get-FileHash (Join-Path $linux.Path $manifest.linuxUpdaterPath) -Algorithm SHA256).Hash.ToLowerInvariant()
+        $archive=[IO.Compression.ZipFile]::OpenRead((Join-Path $OutputDir $manifest.linuxAsset))
+        try { Assert-ConstructArchiveLengths $archive $manifest.linuxUncompressedSizeBytes } finally { $archive.Dispose() }
     }
     $manifestPath = Join-Path $OutputDir 'manifest.json'
     [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 10), $utf8)
@@ -122,4 +130,9 @@ try {
     if ($FrameworkDependentPublishDir) { $archiveSums+=$manifest.frameworkDependentSha256+'  '+$manifest.frameworkDependentAsset+"`n" }
     if ($LinuxPublishDir) { $archiveSums+=$manifest.linuxSha256+'  '+$manifest.linuxAsset+"`n" }
     [IO.File]::AppendAllText((Join-Path $OutputDir 'SHA256SUMS'),$archiveSums,$utf8)
-} finally { if (Test-Path -LiteralPath $payload) { Remove-Item -LiteralPath $payload -Recurse -Force } }
+} finally {
+    foreach ($dir in @('payload','payload-win-x64','payload-linux-x64')) {
+        $path=Join-Path $OutputDir $dir
+        if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Recurse -Force }
+    }
+}

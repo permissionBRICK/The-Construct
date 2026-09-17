@@ -20,7 +20,7 @@ are:
 |---|---|
 | `construct-host-<commit7>-win-x64.zip` | Self-contained host, scripts and updater |
 | `construct-host-<commit7>-win-x64-fdd.zip` | Framework-dependent host, same scripts and updater |
-| `construct-host-<commit7>-linux-x64.zip` | Self-contained service for a Proxmox host (no scripts; `install-construct-host.sh` fetches them with the source asset). Manifest keys `linuxAsset`/`linuxSha256`/`linuxSizeBytes`; optional, absent in older releases. |
+| `construct-host-<commit7>-linux-x64.zip` | Self-contained Proxmox host in `service/`, matching `scripts/`, `updater/update-construct-host.sh`, and an in-archive `SHA256SUMS`. |
 | `construct-source-<commit40>.zip` | Pinned Construct source archive |
 | `manifest.json` | Identity, compatibility, runtime requirements, hashes, sizes and `companionReleaseTag` (the Companion release this commit installs) |
 | `SHA256SUMS` | Host payload file hashes and the three archive hashes |
@@ -51,8 +51,12 @@ main tip may replace an unrelated latest commit. Published assets are never over
 on retry. GitHub may coalesce pending runs during rapid pushes; clients get the newest
 successfully published commit rather than every intermediate push.
 
-The host ZIP contains `service/`, `scripts/`, `updater/Update-ConstructHost.ps1`, and
-`SHA256SUMS`; the detached manifest avoids a circular ZIP hash. Both host ZIPs use Optimal
+The Windows host ZIP contains `service/`, `scripts/`, `updater/Update-ConstructHost.ps1`, and
+`SHA256SUMS`; Linux uses `updater/update-construct-host.sh` with the same layout.
+The additive Linux keys are `linuxAsset`, `linuxSha256`, `linuxSizeBytes`,
+`linuxSumsSha256`, `linuxUncompressedSizeBytes`, `linuxUpdaterPath` and
+`linuxUpdaterSha256`. Older releases can omit them. The Linux payload is self-contained.
+The detached manifest avoids a circular ZIP hash. All host ZIPs use Optimal
 compression. `payloadUncompressedSizeBytes` and
 `frameworkDependentUncompressedSizeBytes` declare the respective total inflated
 bytes, including `SHA256SUMS`. Extractors replace the former 4× ratio rule with
