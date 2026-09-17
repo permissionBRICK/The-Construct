@@ -25,7 +25,7 @@ public static class GuestConsole
         try { value = JsonNode.Parse(stdout) as JsonObject; }
         catch { throw new InvalidOperationException("Console access could not be prepared on this PC. Update Construct and retry."); }
         if (value is not null && StateJson.Boolean(value["setupRequired"]) == true && StateJson.String(value["reason"]) is "no-credential" or "grant-missing" or "credential-out-of-sync") return new() { ["setupRequired"] = true, ["reason"] = value["reason"]!.DeepClone() };
-        if (value is not null && StateJson.String(value["error"]) is "vm-not-running" or "vmconnect-unreachable") return new() { ["error"] = value["error"]!.DeepClone() };
+        if (value is not null && StateJson.String(value["error"]) is "vm-not-running" or "vmconnect-unreachable" or "vnc-unreachable") return new() { ["error"] = value["error"]!.DeepClone() };
         var patterns = new Dictionary<string, string> {
             ["vmId"] = @"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", ["username"] = @"[A-Za-z0-9_-]{1,20}",
             ["domain"] = @"[A-Za-z0-9_.-]{1,255}", ["password"] = @"[^\x00-\x1f\x7f]{1,256}", ["certificateFingerprint"] = @"sha256:(?:[0-9a-f]{2}:){31}[0-9a-f]{2}"
@@ -44,7 +44,8 @@ public static class GuestConsole
             "missing-source" => "The Construct checkout is missing on the VM (/opt/construct/repo). Reprovision the VM.",
             "install-failed" => "Installing the console gateway failed. Run bash /opt/construct/repo/console-viewer/install.sh on the VM to see the full error.",
             "vm-not-running" => "The VM is not running on this PC's Hyper-V.",
-            "vmconnect-unreachable" => "Hyper-V's console service (port 2179) did not answer on this PC. Check that the Hyper-V Virtual Machine Management service is running.", _ => null };
+            "vmconnect-unreachable" => "Hyper-V's console service (port 2179) did not answer on this PC. Check that the Hyper-V Virtual Machine Management service is running.",
+            "vnc-unreachable" => "The VM display on the Proxmox host did not answer. Check that the VM is running and the primary can reach the host's console port range.", _ => null };
         if (message is not null) return message;
         if (StateJson.Boolean(handoff?["setupRequired"]) == true) return "Console setup did not finish. Check the administrator PowerShell window, then click Console again.";
         if (step == "mint" && result.Code == 6) return "No Construct client is attached to the VM, so the viewer port cannot be forwarded. Connect this window to the VM and retry.";

@@ -1,6 +1,6 @@
 # Child VM lifetime and sharing in the admin panel
 
-Added 2026-09-11. The project owner clarified that “idle timeout” means the existing
+Added 2026-09-11. Christoph clarified that “idle timeout” means the existing
 child VM lifetime, not activity-based idle detection.
 
 In Host administration → VMs, child rows offer:

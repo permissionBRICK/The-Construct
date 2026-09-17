@@ -1,6 +1,6 @@
 # Company-pc client forwarding recovery, 2026-09-08
 
-The project owner reported that the company workstation connects directly to its local
+Christoph reported that the company workstation connects directly to its local
 Hyper-V VM. Agent-provided localhost links initially sometimes work, then stop;
 the matching agent-vm.mshome.net links keep working. Closing/reopening VS Code
 may not restore the forward, while deleting and recreating the request does.

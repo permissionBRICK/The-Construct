@@ -11,6 +11,7 @@ public static partial class HostAdminViews
         var used = (Number(ram["reservedBytes"]) ?? 0) + (Number(ram["unmanagedBytes"]) ?? 0) + (Number(ram["headroomBytes"]) ?? 0);
         var result = new JsonArray(new JsonObject { ["id"] = "ram", ["label"] = "RAM", ["pct"] = Pct(JsonValue.Create(used), ram["totalBytes"]), ["text"] = $"{Bytes(ram["availableBytes"])} available of {Bytes(ram["totalBytes"])} (reserved {Bytes(ram["reservedBytes"])}, unmanaged {Bytes(ram["unmanagedBytes"])}, headroom {Bytes(ram["headroomBytes"])})" },
             new JsonObject { ["id"] = "cpu", ["label"] = "CPU allocation", ["pct"] = Number(cpu["budget"]).HasValue ? Pct(cpu["active"], cpu["budget"]) : null, ["text"] = (Number(cpu["active"]).HasValue ? Text(cpu["active"]) : "—") + " allocated vCPU" + (Number(cpu["budget"]).HasValue ? " of a " + Text(cpu["budget"]) + " budget" : " on " + (Number(cpu["logical"]).HasValue ? Text(cpu["logical"]) : "—") + " logical CPUs (no budget)") });
+        MeasuredRam(ram, result);
         foreach (var v in Array(s["volumes"]).OfType<JsonObject>())
         {
             var unmounted = Regex.IsMatch(Text(v["root"]), @"^\\\\\?\\Volume\{[^}]+\}\\?$", RegexOptions.IgnoreCase);
@@ -21,6 +22,35 @@ public static partial class HostAdminViews
         if (memoryPressure is JsonObject pressure) result[0]!["memoryPressure"] = MemoryPressureText(pressure, now ?? DateTimeOffset.UtcNow);
         return result;
     }
+    /// <summary>Mirror of the extension's measured RAM card (usedBytes/vmResidentBytes/hostOwnBytes present).</summary>
+    private static void MeasuredRam(JsonObject ram, JsonArray result)
+    {
+        var total = Number(ram["totalBytes"]); var used = Number(ram["usedBytes"]);
+        var resident = Number(ram["vmResidentBytes"]); var host = Number(ram["hostOwnBytes"]);
+        if (!(total > 0) || used is null || resident is null || host is null) return;
+        var t = total.Value;
+        var usedForBar = Math.Max(0, Math.Min(t, used.Value));
+        var vmForBar = Math.Max(0, Math.Min(usedForBar, resident.Value));
+        var hostForBar = Math.Max(0, Math.Min(usedForBar - vmForBar, host.Value));
+        var admission = ram["admission"] as JsonObject; var committed = Number(ram["committedBytes"]); var swap = ram["swap"] as JsonObject;
+        var enforced = admission is null ? null : StateJson.Boolean(admission["enforced"]);
+        var line = admission is null ? null : Number(admission["lineBytes"]);
+        var bar = new JsonObject
+        {
+            ["id"] = "ram", ["label"] = "RAM", ["pct"] = Pct(ram["usedBytes"], ram["totalBytes"]),
+            ["text"] = $"{Bytes(ram["usedBytes"])} in use of {Bytes(ram["totalBytes"])}",
+            ["segments"] = new JsonArray(new JsonObject { ["id"] = "vms", ["pct"] = Round2(vmForBar / t * 100) }, new JsonObject { ["id"] = "host", ["pct"] = Round2(hostForBar / t * 100) }),
+            ["details"] = $"VMs {Bytes(ram["vmResidentBytes"])} · host {Bytes(ram["hostOwnBytes"])} · free {Bytes(ram["physicalFreeBytes"])}" + (enforced == false ? " · admission not enforced (observe mode)" : ""),
+            ["admission"] = enforced == true && line is not null
+                ? new JsonObject { ["pct"] = Round2(Math.Max(0, Math.Min(100, line.Value / t * 100))), ["title"] = $"admission line: {Bytes(ram["headroomBytes"])} headroom" } : null,
+            ["committed"] = committed is null ? null
+                : new JsonObject { ["text"] = $"{Bytes(ram["committedBytes"])} committed to VMs ({N(Round(committed.Value / t * 100))} %)", ["hot"] = committed.Value > t },
+            ["swap"] = swap is not null && Number(swap["totalBytes"]) > 0 && Number(swap["usedBytes"]) is not null
+                ? new JsonObject { ["pct"] = Pct(swap["usedBytes"], swap["totalBytes"]), ["text"] = $"{Bytes(swap["usedBytes"])} of {Bytes(swap["totalBytes"])} swap" } : null,
+        };
+        result[0] = bar;
+    }
+    private static double Round2(double n) => Math.Floor(n * 100 + .5) / 100;
     private static string MemoryPressureText(JsonObject pressure, DateTimeOffset now)
     {
         if (StateJson.Boolean(pressure["enabled"]) == false) return "memory pressure: off";

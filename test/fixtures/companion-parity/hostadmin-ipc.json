@@ -2277,6 +2277,194 @@
     "input": {
       "apiFeatures": [
         "host-admin",
+        "primary-nested",
+        "usage"
+      ]
+    },
+    "kind": "features",
+    "now": 1789128000000,
+    "output": {
+      "children": false,
+      "console": false,
+      "hostAdmin": true,
+      "media": false,
+      "network": false,
+      "networkMode": false,
+      "primaryCpu": false,
+      "primaryMemory": false,
+      "primaryNested": true,
+      "updates": false,
+      "usage": true
+    }
+  },
+  {
+    "input": {
+      "apiFeatures": [
+        "host-admin",
+        "primary-nested",
+        "usage"
+      ]
+    },
+    "kind": "tabs",
+    "now": 1789128000000,
+    "output": [
+      {
+        "available": true,
+        "id": "overview",
+        "label": "Overview",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "vms",
+        "label": "VMs",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "users",
+        "label": "Users",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "usage",
+        "label": "Usage",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "media",
+        "label": "Media",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "operations",
+        "label": "Operations",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "config",
+        "label": "Configuration",
+        "reason": ""
+      },
+      {
+        "available": false,
+        "id": "maintenance",
+        "label": "Maintenance",
+        "reason": "not available on this host version"
+      }
+    ]
+  },
+  {
+    "input": {
+      "apiFeatures": [
+        "host-admin",
+        "children",
+        "media",
+        "console",
+        "network",
+        "network-mode",
+        "primary-nested",
+        "usage",
+        "updates",
+        "primary-cpu",
+        "primary-memory",
+        "source-cache"
+      ]
+    },
+    "kind": "features",
+    "now": 1789128000000,
+    "output": {
+      "children": true,
+      "console": true,
+      "hostAdmin": true,
+      "media": true,
+      "network": true,
+      "networkMode": true,
+      "primaryCpu": true,
+      "primaryMemory": true,
+      "primaryNested": true,
+      "updates": true,
+      "usage": true
+    }
+  },
+  {
+    "input": {
+      "apiFeatures": [
+        "host-admin",
+        "children",
+        "media",
+        "console",
+        "network",
+        "network-mode",
+        "primary-nested",
+        "usage",
+        "updates",
+        "primary-cpu",
+        "primary-memory",
+        "source-cache"
+      ]
+    },
+    "kind": "tabs",
+    "now": 1789128000000,
+    "output": [
+      {
+        "available": true,
+        "id": "overview",
+        "label": "Overview",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "vms",
+        "label": "VMs",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "users",
+        "label": "Users",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "usage",
+        "label": "Usage",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "media",
+        "label": "Media",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "operations",
+        "label": "Operations",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "config",
+        "label": "Configuration",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "maintenance",
+        "label": "Maintenance",
+        "reason": ""
+      }
+    ]
+  },
+  {
+    "input": {
+      "apiFeatures": [
+        "host-admin",
         "children",
         "updates"
       ]
@@ -4275,6 +4463,244 @@
     ]
   },
   {
+    "input": {
+      "kind": "primary",
+      "name": "agent-vm",
+      "nested": {
+        "available": true,
+        "desired": true,
+        "selectable": true
+      },
+      "network": {
+        "address": null,
+        "appliesOn": "next-stop-start",
+        "desiredAddress": null,
+        "dns": null,
+        "effectiveMode": "relayed",
+        "gateway": null,
+        "maySetAddress": true,
+        "maySwitchMode": true,
+        "mode": null,
+        "pending": false,
+        "pendingAddress": null,
+        "pendingMode": null
+      },
+      "owner": "alice",
+      "state": "running"
+    },
+    "kind": "vm",
+    "now": 1789128000000,
+    "output": {
+      "allowedActions": [],
+      "childCreationClosed": false,
+      "children": [],
+      "deleting": false,
+      "guest": "Construct unknown · provisioned unknown · reinstalled unknown",
+      "kind": "primary",
+      "lease": "",
+      "lifetime": "",
+      "media": 0,
+      "name": "agent-vm",
+      "network": {
+        "address": null,
+        "appliesOn": "next-stop-start",
+        "desiredAddress": null,
+        "dns": null,
+        "effectiveMode": "relayed",
+        "gateway": null,
+        "maySetAddress": true,
+        "maySwitchMode": true,
+        "mode": null,
+        "pending": false,
+        "pendingAddress": null,
+        "pendingMode": null
+      },
+      "operation": "",
+      "operationJobId": "",
+      "overdue": false,
+      "owner": "alice",
+      "parent": "",
+      "pendingCpu": null,
+      "pendingRamGb": null,
+      "reservations": "—",
+      "resources": "—",
+      "savedBy": null,
+      "shared": false,
+      "sharing": "private",
+      "state": "running",
+      "tokenKind": null,
+      "usage": {
+        "cpu": "CPU usage unavailable",
+        "cpuPercent": null,
+        "disk": "Disk usage unavailable",
+        "ram": "RAM usage unavailable",
+        "ramPercent": null,
+        "sample": "Usage unavailable on this host",
+        "stale": false
+      }
+    }
+  },
+  {
+    "input": {
+      "kind": "primary",
+      "name": "agent-vm",
+      "nested": {
+        "available": true,
+        "desired": true,
+        "selectable": true
+      },
+      "network": {
+        "address": "192.0.2.50",
+        "appliesOn": "next-stop-start",
+        "desiredAddress": "192.0.2.50/24",
+        "dns": [
+          "192.0.2.2"
+        ],
+        "effectiveMode": "direct",
+        "gateway": "192.0.2.1",
+        "maySetAddress": false,
+        "maySwitchMode": false,
+        "mode": "direct",
+        "pending": false,
+        "pendingAddress": null,
+        "pendingMode": null
+      },
+      "owner": "alice",
+      "state": "running"
+    },
+    "kind": "vm",
+    "now": 1789128000000,
+    "output": {
+      "allowedActions": [],
+      "childCreationClosed": false,
+      "children": [],
+      "deleting": false,
+      "guest": "Construct unknown · provisioned unknown · reinstalled unknown",
+      "kind": "primary",
+      "lease": "",
+      "lifetime": "",
+      "media": 0,
+      "name": "agent-vm",
+      "network": {
+        "address": "192.0.2.50",
+        "appliesOn": "next-stop-start",
+        "desiredAddress": "192.0.2.50/24",
+        "dns": [
+          "192.0.2.2"
+        ],
+        "effectiveMode": "direct",
+        "gateway": "192.0.2.1",
+        "maySetAddress": false,
+        "maySwitchMode": false,
+        "mode": "direct",
+        "pending": false,
+        "pendingAddress": null,
+        "pendingMode": null
+      },
+      "operation": "",
+      "operationJobId": "",
+      "overdue": false,
+      "owner": "alice",
+      "parent": "",
+      "pendingCpu": null,
+      "pendingRamGb": null,
+      "reservations": "—",
+      "resources": "—",
+      "savedBy": null,
+      "shared": false,
+      "sharing": "private",
+      "state": "running",
+      "tokenKind": null,
+      "usage": {
+        "cpu": "CPU usage unavailable",
+        "cpuPercent": null,
+        "disk": "Disk usage unavailable",
+        "ram": "RAM usage unavailable",
+        "ramPercent": null,
+        "sample": "Usage unavailable on this host",
+        "stale": false
+      }
+    }
+  },
+  {
+    "input": {
+      "kind": "primary",
+      "name": "agent-vm",
+      "nested": {
+        "available": true,
+        "desired": true,
+        "selectable": true
+      },
+      "network": {
+        "address": null,
+        "appliesOn": "next-stop-start",
+        "desiredAddress": "192.0.2.51/24",
+        "dns": null,
+        "effectiveMode": "relayed",
+        "gateway": "192.0.2.1",
+        "maySetAddress": true,
+        "maySwitchMode": true,
+        "mode": "direct",
+        "pending": true,
+        "pendingAddress": "192.0.2.51",
+        "pendingMode": "direct"
+      },
+      "owner": "alice",
+      "state": "running"
+    },
+    "kind": "vm",
+    "now": 1789128000000,
+    "output": {
+      "allowedActions": [],
+      "childCreationClosed": false,
+      "children": [],
+      "deleting": false,
+      "guest": "Construct unknown · provisioned unknown · reinstalled unknown",
+      "kind": "primary",
+      "lease": "",
+      "lifetime": "",
+      "media": 0,
+      "name": "agent-vm",
+      "network": {
+        "address": null,
+        "appliesOn": "next-stop-start",
+        "desiredAddress": "192.0.2.51/24",
+        "dns": null,
+        "effectiveMode": "relayed",
+        "gateway": "192.0.2.1",
+        "maySetAddress": true,
+        "maySwitchMode": true,
+        "mode": "direct",
+        "pending": true,
+        "pendingAddress": "192.0.2.51",
+        "pendingMode": "direct"
+      },
+      "operation": "",
+      "operationJobId": "",
+      "overdue": false,
+      "owner": "alice",
+      "parent": "",
+      "pendingCpu": null,
+      "pendingRamGb": null,
+      "reservations": "—",
+      "resources": "—",
+      "savedBy": null,
+      "shared": false,
+      "sharing": "private",
+      "state": "running",
+      "tokenKind": null,
+      "usage": {
+        "cpu": "CPU usage unavailable",
+        "cpuPercent": null,
+        "disk": "Disk usage unavailable",
+        "ram": "RAM usage unavailable",
+        "ramPercent": null,
+        "sample": "Usage unavailable on this host",
+        "stale": false
+      }
+    }
+  },
+  {
     "input": [
       {
         "allowedActions": [
@@ -5409,6 +5835,276 @@
     "kind": "allowanceText",
     "now": 1789128000000,
     "output": "— primaries · — children · CPU no budget · RAM no budget · storage no budget · lifetime ≤ unlimited · sharing · host forwards"
+  },
+  {
+    "input": {
+      "cpu": {
+        "active": 6,
+        "budget": 16,
+        "logical": 16
+      },
+      "ram": {
+        "admission": {
+          "availableBytes": 0,
+          "enforced": false,
+          "lineBytes": 7171764224
+        },
+        "availableBytes": 0,
+        "committedBytes": 7516192768,
+        "headroomBytes": 1073741824,
+        "hostOwnBytes": 1341992960,
+        "physicalFreeBytes": 356577280,
+        "reservedBytes": 7516192768,
+        "swap": {
+          "totalBytes": 4294963200,
+          "usedBytes": 1648934912
+        },
+        "totalBytes": 8245506048,
+        "unmanagedBytes": 0,
+        "usedBytes": 7888928768,
+        "vmResidentBytes": 6546935808
+      }
+    },
+    "kind": "capacity",
+    "now": 1789128000000,
+    "output": [
+      {
+        "admission": null,
+        "committed": {
+          "hot": false,
+          "text": "7.0 GiB committed to VMs (91 %)"
+        },
+        "details": "VMs 6.1 GiB · host 1.2 GiB · free 340 MiB · admission not enforced (observe mode)",
+        "id": "ram",
+        "label": "RAM",
+        "pct": 96,
+        "segments": [
+          {
+            "id": "vms",
+            "pct": 79.4
+          },
+          {
+            "id": "host",
+            "pct": 16.28
+          }
+        ],
+        "swap": {
+          "pct": 38,
+          "text": "1.5 GiB of 4.0 GiB swap"
+        },
+        "text": "7.3 GiB in use of 7.7 GiB"
+      },
+      {
+        "id": "cpu",
+        "label": "CPU allocation",
+        "pct": 38,
+        "text": "6 allocated vCPU of a 16 budget"
+      }
+    ]
+  },
+  {
+    "input": {
+      "cpu": {
+        "active": 6,
+        "budget": 16,
+        "logical": 16
+      },
+      "ram": {
+        "admission": {
+          "availableBytes": 0,
+          "enforced": true,
+          "lineBytes": 7171764224
+        },
+        "availableBytes": 0,
+        "committedBytes": 7516192768,
+        "headroomBytes": 1073741824,
+        "hostOwnBytes": 1341992960,
+        "physicalFreeBytes": 356577280,
+        "reservedBytes": 7516192768,
+        "swap": null,
+        "totalBytes": 8245506048,
+        "unmanagedBytes": 0,
+        "usedBytes": 7888928768,
+        "vmResidentBytes": 6546935808
+      }
+    },
+    "kind": "capacity",
+    "now": 1789128000000,
+    "output": [
+      {
+        "admission": {
+          "pct": 86.98,
+          "title": "admission line: 1.0 GiB headroom"
+        },
+        "committed": {
+          "hot": false,
+          "text": "7.0 GiB committed to VMs (91 %)"
+        },
+        "details": "VMs 6.1 GiB · host 1.2 GiB · free 340 MiB",
+        "id": "ram",
+        "label": "RAM",
+        "pct": 96,
+        "segments": [
+          {
+            "id": "vms",
+            "pct": 79.4
+          },
+          {
+            "id": "host",
+            "pct": 16.28
+          }
+        ],
+        "swap": null,
+        "text": "7.3 GiB in use of 7.7 GiB"
+      },
+      {
+        "id": "cpu",
+        "label": "CPU allocation",
+        "pct": 38,
+        "text": "6 allocated vCPU of a 16 budget"
+      }
+    ]
+  },
+  {
+    "input": {
+      "cpu": {
+        "active": 6,
+        "budget": 16,
+        "logical": 16
+      },
+      "ram": {
+        "admission": {
+          "availableBytes": 0,
+          "enforced": false,
+          "lineBytes": 7171764224
+        },
+        "availableBytes": 0,
+        "committedBytes": 12884901888,
+        "headroomBytes": 1073741824,
+        "hostOwnBytes": 1341992960,
+        "physicalFreeBytes": 356577280,
+        "reservedBytes": 7516192768,
+        "swap": {
+          "totalBytes": 0,
+          "usedBytes": 0
+        },
+        "totalBytes": 8245506048,
+        "unmanagedBytes": 0,
+        "usedBytes": 9000000000,
+        "vmResidentBytes": 6546935808
+      }
+    },
+    "kind": "capacity",
+    "now": 1789128000000,
+    "output": [
+      {
+        "admission": null,
+        "committed": {
+          "hot": true,
+          "text": "12 GiB committed to VMs (156 %)"
+        },
+        "details": "VMs 6.1 GiB · host 1.2 GiB · free 340 MiB · admission not enforced (observe mode)",
+        "id": "ram",
+        "label": "RAM",
+        "pct": 100,
+        "segments": [
+          {
+            "id": "vms",
+            "pct": 79.4
+          },
+          {
+            "id": "host",
+            "pct": 16.28
+          }
+        ],
+        "swap": null,
+        "text": "8.4 GiB in use of 7.7 GiB"
+      },
+      {
+        "id": "cpu",
+        "label": "CPU allocation",
+        "pct": 38,
+        "text": "6 allocated vCPU of a 16 budget"
+      }
+    ]
+  },
+  {
+    "input": {
+      "cpu": {
+        "active": 6,
+        "budget": 16,
+        "logical": 16
+      },
+      "ram": {
+        "admission": {
+          "availableBytes": 0,
+          "enforced": false,
+          "lineBytes": 7171764224
+        },
+        "availableBytes": 0,
+        "committedBytes": 7516192768,
+        "headroomBytes": 1073741824,
+        "hostOwnBytes": 1341992960,
+        "physicalFreeBytes": 356577280,
+        "reservedBytes": 7516192768,
+        "swap": {
+          "totalBytes": 4294963200,
+          "usedBytes": 1648934912
+        },
+        "totalBytes": 8245506048,
+        "unmanagedBytes": 0,
+        "usedBytes": null,
+        "vmResidentBytes": 6546935808
+      }
+    },
+    "kind": "capacity",
+    "now": 1789128000000,
+    "output": [
+      {
+        "id": "ram",
+        "label": "RAM",
+        "pct": 100,
+        "text": "0 B available of 7.7 GiB (reserved 7.0 GiB, unmanaged 0 B, headroom 1.0 GiB)"
+      },
+      {
+        "id": "cpu",
+        "label": "CPU allocation",
+        "pct": 38,
+        "text": "6 allocated vCPU of a 16 budget"
+      }
+    ]
+  },
+  {
+    "input": {
+      "cpu": {
+        "active": 6,
+        "budget": 16,
+        "logical": 16
+      },
+      "ram": {
+        "availableBytes": 17179869184,
+        "headroomBytes": 4294967296,
+        "reservedBytes": 8589934592,
+        "totalBytes": 34359738368,
+        "unmanagedBytes": 2147483648
+      }
+    },
+    "kind": "capacity",
+    "now": 1789128000000,
+    "output": [
+      {
+        "id": "ram",
+        "label": "RAM",
+        "pct": 44,
+        "text": "16 GiB available of 32 GiB (reserved 8.0 GiB, unmanaged 2.0 GiB, headroom 4.0 GiB)"
+      },
+      {
+        "id": "cpu",
+        "label": "CPU allocation",
+        "pct": 38,
+        "text": "6 allocated vCPU of a 16 budget"
+      }
+    ]
   },
   {
     "input": {

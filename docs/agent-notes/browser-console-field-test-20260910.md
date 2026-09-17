@@ -134,7 +134,7 @@ explicit override and missing-service errors. Windows deployment is pending.
 
 ## Follow-up: company viewer freezes after connecting (2026-09-11)
 
-The project owner confirmed that the company viewer now connects, but freezes within
+Christoph confirmed that the company viewer now connects, but freezes within
 seconds and needs Reconnect. Chromium warned about a `VideoFrame` being garbage
 collected without `close()`. The bundled Guacamole 1.6.0 `Display.drawStream`
 uses `ImageDecoder` for PNG/JPEG streams and never closes the resulting frame or

@@ -24,7 +24,7 @@ public sealed class MergeMainParityTests
                 "self" => GuestConsole.BuildSelfConsoleScript(input.GetBoolean()),
                 "ensure" => GuestConsole.ParseEnsureOutput(input.GetString()!),
                 "handoff" => GuestConsole.ParseHandoff(input.GetString()!),
-                "failure" => GuestConsole.MapFailure(input.GetProperty("step").GetString()!, new ProcessResult(input.GetProperty("result").GetProperty("code").GetInt32(), input.GetProperty("result").TryGetProperty("stdout", out var stdout) ? stdout.GetString()! : "", input.GetProperty("result").TryGetProperty("stderr", out var stderr) ? stderr.GetString()! : "")),
+                "failure" => GuestConsole.MapFailure(input.GetProperty("step").GetString()!, new ProcessResult(input.GetProperty("result").GetProperty("code").GetInt32(), input.GetProperty("result").TryGetProperty("stdout", out var stdout) ? stdout.GetString()! : "", input.GetProperty("result").TryGetProperty("stderr", out var stderr) ? stderr.GetString()! : ""), input.GetProperty("result").TryGetProperty("error", out var error) ? new System.Text.Json.Nodes.JsonObject { ["error"] = error.GetString() } : null),
                 _ => GuestConsole.ParseBrowserLink(input.GetString()) };
         }
         catch (Exception e) when (e is ArgumentException or InvalidOperationException) { }

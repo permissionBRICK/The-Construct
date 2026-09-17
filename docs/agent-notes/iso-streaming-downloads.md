@@ -30,7 +30,7 @@ Validation: `python test/iso-download.test.py` exercises eight concurrent stream
 resume after stalls/truncation, redirects, single-stream and unknown-length
 responses, changed resources, malformed ranges, checksum failures, exhausted
 retries, and cancellation against a local HTTP fixture with generated data.
-Keep these tests local and manual: the project owner requested removal of the GitHub
+Keep these tests local and manual: Christoph requested removal of the GitHub
 downloader workflow on 2026-09-10 because recurring CI is unnecessary for this
 component. Run with Python 3 and PowerShell installed; set `POWERSHELL_EXE=pwsh`
 for PowerShell 7 or `POWERSHELL_EXE=powershell` for Windows PowerShell 5.1.

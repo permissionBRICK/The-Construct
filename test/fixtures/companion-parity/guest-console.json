@@ -73,6 +73,20 @@
     }
   },
   {
+    "input": "{\"error\":\"vmconnect-unreachable\"}",
+    "kind": "handoff",
+    "output": {
+      "error": "vmconnect-unreachable"
+    }
+  },
+  {
+    "input": "{\"error\":\"vnc-unreachable\"}",
+    "kind": "handoff",
+    "output": {
+      "error": "vnc-unreachable"
+    }
+  },
+  {
     "input": "null",
     "kind": "handoff",
     "output": null
@@ -107,6 +121,39 @@
     },
     "kind": "failure",
     "output": "This VM's construct CLI is older than the panel. Reprovision the VM."
+  },
+  {
+    "input": {
+      "result": {
+        "code": 1,
+        "error": "vnc-unreachable"
+      },
+      "step": "mint"
+    },
+    "kind": "failure",
+    "output": "The VM display on the Proxmox host did not answer. Check that the VM is running and the primary can reach the host's console port range."
+  },
+  {
+    "input": {
+      "result": {
+        "code": 1,
+        "error": "vmconnect-unreachable"
+      },
+      "step": "mint"
+    },
+    "kind": "failure",
+    "output": "Hyper-V's console service (port 2179) did not answer on this PC. Check that the Hyper-V Virtual Machine Management service is running."
+  },
+  {
+    "input": {
+      "result": {
+        "code": 1,
+        "error": "vm-not-running"
+      },
+      "step": "mint"
+    },
+    "kind": "failure",
+    "output": "The VM is not running on this PC's Hyper-V."
   },
   {
     "input": {

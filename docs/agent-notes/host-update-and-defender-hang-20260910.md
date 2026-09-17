@@ -36,7 +36,7 @@ Operational event **5008 at 20:10:09 UTC** explicitly reported a hang, platform
 `MpCmdRun.exe -SignatureUpdate -MMPC` command also timed out after 120 seconds.
 No exclusions, protection changes, process-killing bypasses, or reboot were applied.
 
-RDP authenticated at 22:46:30 UTC (RemoteConnectionManager 1149), but the project owner
+RDP authenticated at 22:46:30 UTC (RemoteConnectionManager 1149), but Christoph
 reported login hanging. A shared Defender problem is plausible, not proven by an
 RDP wait chain. Windows reported approximately 6.6 GiB physical RAM free, 2.35 GiB
 commit free, and 3 GiB free on C:. Do not equate this event with the earlier
@@ -51,10 +51,10 @@ reports live blocking operations.
 
 ## Pending activation and checks
 
-Host deployment is blocked by Windows' Defender hang. The project owner explicitly authorized
+Host deployment is blocked by Windows' Defender hang. Christoph explicitly authorized
 a normal reboot, with a physical power cycle as his fallback. The relay executed
 `shutdown.exe /r /t 0`, but Windows refused with error 1271: the computer is locked
-and requires force. No reboot occurred and no forced command was issued; The project owner
+and requires force. No reboot occurred and no forced command was issued; Christoph
 was informed that he can proceed with his physical power cycle. After recovery,
 verify PowerShell and RDP first, inspect the fenced update, then retry/apply or
 cancel that pre-replacement attempt and install the new release normally. Do not
