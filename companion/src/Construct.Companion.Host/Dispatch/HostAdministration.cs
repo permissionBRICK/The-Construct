@@ -296,8 +296,6 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
                     var capacityTask = ReadCapacity();
                     await Task.WhenAll(statusTask, capacityTask);
                     m.State["overview"] = HostAdminViews.Overview(await statusTask, await capacityTask);
-                    if (StateJson.Boolean(m.State["features"]?["networkMode"]) == true)
-                        m.State["networkSection"] = HostAdminViews.Config(await client.HostConfigAsync(ct)).OfType<JsonObject>().First(s => Text(s["key"]) == "network").DeepClone();
                     try { m.State["overview"]!["nested"] = (await client.HostCapabilitiesAsync(ct))?["nested"]?.DeepClone(); }
                     catch (RemoteApiException ex) when (ex.Status is not (401 or 403)) { }
                     break;

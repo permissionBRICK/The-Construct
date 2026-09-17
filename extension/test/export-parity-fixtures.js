@@ -551,6 +551,7 @@ function remoteVmLaunches() {
   return rows;
 }
 async function exportAll() {
+  const configSchema = require('../src/hostadmin-config-schema');
   return {
     "refresh-cache": refreshCachePolicy(),
     "integration-settings": integrationSettings(),
@@ -559,6 +560,7 @@ async function exportAll() {
     "guest-console": await guestConsole(),
     "driver-children": await driverChildren(),
     "config-sync": configSync(),
+    "hostadmin-config-schema": configSchema,
     "notify-runtime": notifyRuntime(),
     "audio-runtime": audioRuntime(),
     "repatch-runtime": repatchRuntime(),

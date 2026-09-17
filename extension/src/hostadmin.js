@@ -1252,7 +1252,6 @@ function createHostAdminModel(deps = {}) {
         if (capacity.status === "rejected" && refused(capacity.reason)) throw capacity.reason;
         state.overview = toOverview(status.value, capacity.status === "fulfilled" ? capacity.value :
           { problems: [`Capacity details unavailable: ${errText(capacity.reason)}`] });
-        if (state.features.networkMode) state.networkSection = toConfigView(await client.hostConfig()).find(s => s.key === "network");
         state.overview.nested = capabilities.status === "fulfilled" ? capabilities.value.nested : null;
       } else if (id === "vms") {
         const list = await client.vms({ kind: "all" });

@@ -1,5 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <EmbeddedResource Include="../../../test/fixtures/companion-parity/hostadmin-config-schema.json" LogicalName="HostAdmin.ConfigSchema.json" />
     <EmbeddedResource Include="../../../extension/vm/*.sh" Link="GuestScripts/%(Filename)%(Extension)" LogicalName="GuestScripts.%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>
