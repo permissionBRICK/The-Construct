@@ -1314,12 +1314,12 @@ try {
     Remove-Item -LiteralPath $epDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 $forwardRecord = Get-ConstructT3EndpointRecord -InstanceName 'haus-vm' -ServiceManaged `
-    -BaseUrl 'https://standpc.dc.htl-sky.net:5178' -ForwardUrl 'https://standpc.dc.htl-sky.net:2301'
+    -BaseUrl 'https://pc1.corp.example.com:5178' -ForwardUrl 'https://pc1.corp.example.com:2301'
 ok "endpoint: service-managed VM records the reachable forward rather than its internal port" (
-    $forwardRecord.port -eq 2301 -and $forwardRecord.baseUrl -eq 'https://standpc.dc.htl-sky.net:2301')
+    $forwardRecord.port -eq 2301 -and $forwardRecord.baseUrl -eq 'https://pc1.corp.example.com:2301')
 foreach ($missingForward in @('', 'error', 'denied')) {
     $missingRecord = Get-ConstructT3EndpointRecord -InstanceName 'haus-vm' -ServiceManaged `
-        -BaseUrl 'https://standpc.dc.htl-sky.net:5178' -ForwardUrl $missingForward
+        -BaseUrl 'https://pc1.corp.example.com:5178' -ForwardUrl $missingForward
     ok "endpoint: service-managed VM with forward '$missingForward' cannot publish an internal port" ($null -eq $missingRecord)
 }
 $directRecord = Get-ConstructT3EndpointRecord -InstanceName 'direct-vm' `
