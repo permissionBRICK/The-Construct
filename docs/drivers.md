@@ -342,10 +342,19 @@ It supports PNG screenshots and authenticated keyboard/mouse injection for child
 there is no streamed video, and mouse injection can report `applied: false` when the
 host cannot map absolute coordinates safely.
 
-## 7. Proxmox mapping notes (design-only)
+## 7. Proxmox
 
-Recorded from plan §4.2/§4.9 so the next implementer has a checklist. Nothing Proxmox
-is implemented; every contract op maps 1:1 onto the Proxmox REST API:
+> **Implemented on the SERVICE side** (2026-09-17): `service/src/Constructd.Proxmox` is an
+> `IHypervisorDriver` over `qm`/`pvesh` for a `constructd` that runs on the Proxmox node
+> itself, selected with `Constructd:Backend = proxmox`. Clients reach such a host through the
+> existing `hyperv-remote` backend — the PowerShell and extension contracts below are untouched,
+> and no client-side `proxmox` driver exists or is needed. User guide: [docs/proxmox-host.md](proxmox-host.md).
+> What differs from the design notes that follow: VMs are cloned from a cached Ubuntu cloud
+> image and seeded with a per-VM cloud-init snippet (no ISO upload, no autoinstall), and the
+> service runs on the node, so it uses `qm` directly instead of the REST API and a token.
+
+The original design-only notes, kept for a possible client-side driver that would talk to a
+node's REST API directly (plan §4.2/§4.9); every contract op maps 1:1 onto it:
 
 | Contract op | Proxmox VE REST |
 |---|---|

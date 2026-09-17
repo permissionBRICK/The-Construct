@@ -211,13 +211,20 @@ public static class ServiceComposition
     {
         ArgumentNullException.ThrowIfNull(options);
 
+        // The Proxmox platform runs on the node itself (Linux) — see ProxmoxComposition.
+        if (options.IsProxmox)
+        {
+            return services.AddProxmoxPlatform(options);
+        }
+
         if (!OperatingSystem.IsWindows())
         {
             throw new InvalidOperationException(
                 "constructd has no hypervisor platform here: the Hyper-V driver, the ISO catalog and " +
                 "the portproxy forward manager need Windows, and this process is running on " +
                 $"{Environment.OSVersion.Platform}. Start the service with --fake (or " +
-                "Constructd:Fake=true); persistence works in both modes.");
+                "Constructd:Fake=true); persistence works in both modes. On a Proxmox VE node, set " +
+                "Constructd:Backend=proxmox (service/host/install-construct-host.sh does).");
         }
 
         ValidatePlatformOptions(options);

@@ -63,6 +63,10 @@ you dial* change.
 
 ## 2. Admin: set the host up once
 
+> A **Proxmox VE node** can be the host instead of a Windows machine: the same service, installed
+> by `service/host/install-construct-host.sh` — see [docs/proxmox-host.md](proxmox-host.md). The
+> rest of this guide applies to both; the Windows steps below are the Hyper-V host's.
+
 If you already have a local Construct VM, connect to it in VS Code and open
 **Construct Settings → Make this PC a Construct host…**. Review the prefilled
 address and optional AC wake setting, then approve Windows elevation. Setup installs

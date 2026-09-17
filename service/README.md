@@ -524,6 +524,8 @@ Bound from the `Constructd` section of `appsettings.json`, from environment vari
 | Key | Default | Meaning |
 |---|---|---|
 | `Fake` | `false` | Use the in-memory hypervisor/ISO/forward fakes (`--fake`). Development only. |
+| `Backend` | `hyperv` | The platform: `hyperv` (this Windows host) or `proxmox` (the service runs on a Proxmox VE node — see *The Proxmox platform* and `docs/proxmox-host.md`). |
+| `Proxmox:Node` / `Storage` / `ImageVolume` / `SnippetStorage` / `SnippetDir` / `Bridge` / `CpuType` / `QmPath` / `PveshPath` | this host / `local-lvm` / `local:import/construct-ubuntu-noble-cloudimg-amd64.qcow2` / `local` / `/var/lib/vz/snippets` / `vmbr0` / `host` / `qm` / `pvesh` | The Proxmox platform's node, VM-disk storage, cached cloud image, snippet storage and directory, guest bridge, QEMU CPU type and the two commands. Only read with `Backend = proxmox`. |
 | `Persistence` | `Sqlite` (`Memory` in fake mode) | Where users, tokens, VMs, jobs and the audit trail live. |
 | `DatabasePath` | `constructd.db` | SQLite file; on a real host under `C:\ProgramData\Construct\service\`. |
 | `ListenUrl` | `https://0.0.0.0:7462` | What the service listens on. |
@@ -728,7 +730,7 @@ exactly one place — `Composition/ServiceComposition.cs`, which has two indepen
 
 | Interface | Implementation |
 |---|---|
-| `IHypervisorDriver` | `HyperVDriver`: `powershell.exe` running the repo's own `drivers/Load-ConstructDriver.ps1` contract (`docs/drivers.md`). A future Proxmox driver maps the same operations onto its REST API. |
+| `IHypervisorDriver` | `HyperVDriver`: `powershell.exe` running the repo's own `drivers/Load-ConstructDriver.ps1` contract (`docs/drivers.md`). With `Backend = proxmox`: `ProxmoxDriver` (`Constructd.Proxmox`), `qm`/`pvesh` on the node — see *The Proxmox platform*. |
 | `IIsoBuilder` (consume) | By `Iso:Mode`: `OnDemandIsoBuilder` (default — reuses media or builds it on demand) or `WslIsoBuilder` (builds one ISO per VM through `wsl.exe`). See *ISO build strategies*. |
 | `IIsoMediaBuilder` (produce) | `NativeIsoBuilder` for `Native` and `Prebuilt`; `WslIsoBuilder` only for explicit `PerVm`. Driven by on-demand VM jobs and `admin iso build`. |
 | `IIsoCatalog` | `FileIsoCatalog`: versioned ISOs, sidecars and the `current.pointer` in `Iso:CacheDir`. Any build strategy publishes into it. |
@@ -1072,6 +1074,28 @@ carrying on would add a rule on top of one still aimed at the VM's old address.
 its SSH forward plus every host forward. Only established rows count: the portproxy listener is always
 `Listen`, and a closed session lingers in `TimeWait` for minutes, so counting either would mean a VM is
 never idle. A client tunnel rides the VM's SSH connection, so it is seen on the SSH forward (§4.6).
+
+## The Proxmox platform
+
+`Constructd:Backend = proxmox` composes the service for a Proxmox VE node it runs ON (as root, so
+`qm` and `pvesh` work). The API, the stores, the jobs, the idle policy and the clients are the
+ones above; only the platform seams change (`Composition/ProxmoxComposition.cs`):
+
+| Interface | Implementation |
+|---|---|
+| `IHypervisorDriver`, `IVmCpuDriver`, `IVmMemoryDriver` | `ProxmoxDriver`: `qm create` cloning the cached Ubuntu cloud image (`--scsi0 <storage>:0,import-from=<image>`) with a cloud-init drive and `--cicustom user=<seed>`, then `qm disk resize` and `qm start`; `qm shutdown --forceStop 1`, `qm suspend --todisk 1`, `qm destroy --purge 1 --destroy-unreferenced-disks 1`; state from `pvesh get …/status/current` (`lock: suspended` → saved), the endpoint from the guest agent's `network-get-interfaces`. VMs are found by NAME in `pvesh get /cluster/resources --type vm` on every call; `absent` only from a successfully read list. |
+| `IIsoBuilder` | `CloudInitSeedBuilder`: one root-only cloud-config per VM in the snippets directory (hostname, seed user with a locked password and passwordless sudo, the bootstrap key, `qemu-guest-agent`); returns its volume id in the `IsoPath` slot; removed with the VM. |
+| `IPortForwardManager` | `TcpRelayPortForwardManager`: the same ranges, store-first ordering, per-VM gate and reconciliation as the netsh manager, materialized as in-process TCP listeners that resolve the guest's current address (cached 60 s) when a connection arrives. `CountActiveConnectionsAsync` is the listeners' own live count, so no TCP-table reader is needed. |
+| `IHypervisorInventory` | `ProxmoxInventory`: node CPUs/RAM, one volume per active storage, every QEMU VM's configured CPUs/RAM/disk, and presence evidence for `disk:` reservations by VM name (placement is decided before Proxmox assigns the numeric id). |
+| `IChildVmDriver`, `IChildVmStorage`, `IChildVmCreationOwnership` | `ProxmoxChildVmPlatform`: the Core's unsupported child driver plus a placement on the configured storage. |
+| `IConsoleTransport`, `IInteractiveConsole`, `IGuestAddressProvider`, `IIsoCatalog`, `IUpdaterLauncher`, `IHostPowerGuard` | The unsupported/no-op implementations (`UnsupportedConsoleTransport`, `UnsupportedInteractiveConsole`, `UnsupportedFeaturePlatform`, `UnsupportedIsoCatalog`, `NoUpdaterLauncher`, `NullHostPowerGuard`). `ReleaseInfo.ApiFeatures` drops `children`, `media`, `console`, `updates` and `network` accordingly, so clients hide what the host cannot do. |
+
+Startup validation: `ScriptsDir` must hold `bin/provision.sh`, `Iso:BootstrapPublicKeyPath` must
+exist, and `Proxmox:ImageVolume` must be an `import` volume id. Negotiate is not registered off
+Windows, so clients enrol with `-ServiceAuth token`. Installer: `service/host/install-construct-host.sh`;
+user guide: `docs/proxmox-host.md`. Tests: `tests/Constructd.Tests/Proxmox/` (argv-level driver
+tests over `RecordingProcessRunner`, the seed's exact text, the relay over real loopback sockets,
+and the SQLite-backed composition through `WebApplicationFactory`).
 
 ## Admin CLI
 

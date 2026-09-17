@@ -22,6 +22,7 @@
     <ProjectReference Include="..\..\src\Constructd.Core\Constructd.Core.csproj" />
     <ProjectReference Include="..\..\src\Constructd.Fakes\Constructd.Fakes.csproj" />
     <ProjectReference Include="..\..\src\Constructd.Windows\Constructd.Windows.csproj" />
+    <ProjectReference Include="..\..\src\Constructd.Proxmox\Constructd.Proxmox.csproj" />
   </ItemGroup>
 
   <ItemGroup>
