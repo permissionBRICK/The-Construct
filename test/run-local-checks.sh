@@ -28,6 +28,7 @@ if [[ "$group" == t3 || "$group" == all ]]; then
   python3 test/t3-pairing-forward.test.py
 fi
 if [[ "$group" == service || "$group" == all ]]; then
+  bash test/usage-report.test.sh
   bash test/endpoint-refresh.test.sh
   bash test/construct-expose.test.sh
   bash test/proxmox-nested-installer.test.sh

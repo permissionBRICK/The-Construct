@@ -1,0 +1,11 @@
+[Unit]
+Description=Construct guest token usage timer
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+AccuracySec=30s
+Unit=construct-usage-report.service
+
+[Install]
+WantedBy=timers.target

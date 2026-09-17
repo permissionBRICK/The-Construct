@@ -58,6 +58,7 @@ function guestScripts() {
   add("t3-pairing", { pairingBase: scripts.render("construct-t3-pairing-base") }, t3.buildPairingScript());
   for (const name of ["dev", "build-2"]) add("t3-pairing-instance", { instance: name, pairingBase: scripts.render("construct-t3-pairing-base") }, t3.buildPairingScript({ name }));
   for (const report of ["daily", "monthly", "total"]) add("usage", { report }, usage.buildUsageScript(report));
+  add("usage-collect", {}, require("../src/guest-scripts").render("usage-collect"));
   for (const name of scripts.names.filter(name => name.startsWith("construct-"))) add(name, {});
   return rows;
 }
