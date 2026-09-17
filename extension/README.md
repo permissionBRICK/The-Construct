@@ -1,5 +1,10 @@
 # The Construct — control panel
 
+> **Legacy / fallback.** The [Construct Companion](../companion/README.md) desktop app is the primary
+> UI. This extension is kept as a fallback only: implement features in the Companion first and mirror
+> them here only when the fallback needs them. `extension/media` is shared with the Companion and
+> is not legacy; `extension/src` and `extension.js` are.
+
 A VS Code extension that turns the agent VM into a one-screen operator console:
 lifecycle (reprovision / reinstall / redownload / export), update checks for
 Construct itself and the coding agents, project profiles, token usage & cost,
