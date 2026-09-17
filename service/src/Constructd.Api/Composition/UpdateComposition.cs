@@ -25,9 +25,7 @@ public static class UpdateComposition
             services.AddSingleton<IHostLock>(new FileHostLock(data));
             services.AddSingleton<IReleaseSource>(_=>new GitHubReleaseSource(new HttpClient(new HttpClientHandler{AllowAutoRedirect=false}){Timeout=TimeSpan.FromMinutes(30)}, options.HostAdmin.Source.MaxItemBytes));
             services.AddSingleton<IUpdateStager>(sp=>sp.GetRequiredService<PackageStager>());
-            // Host self-update relaunches through a Windows scheduled task; on a Proxmox node the
-            // installer script is the update path, so the launcher is the unsupported one there.
-            if(options.IsProxmox) services.AddSingleton<IUpdaterLauncher,Constructd.Proxmox.NoUpdaterLauncher>();
+            if(options.IsProxmox) services.AddSingleton<IUpdaterLauncher>(sp=>new Constructd.Proxmox.Updates.SystemdUpdaterLauncher(sp.GetRequiredService<IProcessRunner>(),sp.GetRequiredService<IHostLock>(),data));
             else services.AddSingleton<IUpdaterLauncher>(sp=>new ScheduledTaskUpdaterLauncher(sp.GetRequiredService<IProcessRunner>(),sp.GetRequiredService<IHostLock>(),data));
         }
         if(options.EffectivePersistence==PersistenceMode.Memory)
