@@ -1,0 +1,15 @@
+[Unit]
+Description=Refresh the Construct guest endpoint and agent prompt
+Wants=network-online.target
+After=network-online.target cloud-final.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/construct-endpoint-refresh.sh
+Restart=on-failure
+RestartSec=15
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target
