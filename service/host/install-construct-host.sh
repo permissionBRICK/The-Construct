@@ -474,6 +474,26 @@ systemctl daemon-reload
 systemctl enable constructd >/dev/null 2>&1
 note "${UNIT} (root: qm and pvesh need it)"
 
+# ── 7b. Never sleep ──────────────────────────────────────────────────────────
+# The Windows host installer disables sleep with powercfg; a Linux node (a laptop, say)
+# must not suspend under its guests either: mask the sleep targets and make logind
+# ignore the lid, the suspend/hibernate keys and idleness.
+say "Host power"
+systemctl mask --quiet sleep.target suspend.target hibernate.target hybrid-sleep.target 2>/dev/null || true
+install -d -m 0755 /etc/systemd/logind.conf.d
+cat >/etc/systemd/logind.conf.d/constructd.conf <<'LOGIND'
+# The Construct host: this node hosts VMs and must never sleep (install-construct-host.sh).
+[Login]
+HandleLidSwitch=ignore
+HandleLidSwitchExternalPower=ignore
+HandleLidSwitchDocked=ignore
+HandleSuspendKey=ignore
+HandleHibernateKey=ignore
+IdleAction=ignore
+LOGIND
+systemctl try-restart systemd-logind >/dev/null 2>&1 || systemctl kill -s HUP systemd-logind >/dev/null 2>&1 || true
+note "sleep/suspend/hibernate masked; lid, suspend key and idle ignored"
+
 # ── 8. First admin and their token ───────────────────────────────────────────
 say "Admin user '${ADMIN}'"
 admin_cli() { (cd "${HOST_DIR}" && ASPNETCORE_ENVIRONMENT=Production DOTNET_ENVIRONMENT=Production "${HOST_DIR}/Constructd.Api" admin "$@"); }
