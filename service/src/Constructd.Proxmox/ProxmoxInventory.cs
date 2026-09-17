@@ -12,7 +12,7 @@ namespace Constructd.Proxmox;
 /// unavailable" snapshot the Hyper-V reader does, which the ledger treats as incomplete evidence
 /// rather than as an error.
 /// </summary>
-public sealed class ProxmoxInventory(IProcessRunner runner, ConstructdOptions options, IClock clock) : IHypervisorInventory
+public sealed partial class ProxmoxInventory(IProcessRunner runner, ConstructdOptions options, IClock clock) : IHypervisorInventory
 {
     private static readonly TimeSpan QueryTimeout = TimeSpan.FromSeconds(60);
     private long _epoch;
@@ -44,7 +44,7 @@ public sealed class ProxmoxInventory(IProcessRunner runner, ConstructdOptions op
             }
 
             var snapshot = Parse(epoch, clock.UtcNow, status.Value, storages.Value, guests.Value, options.Proxmox.Storage, reservations);
-            return snapshot ?? Unavailable(epoch);
+            return snapshot is null ? Unavailable(epoch) : await WithChildrenAsync(snapshot, guests.Value, reservations, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

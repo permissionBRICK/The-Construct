@@ -15,9 +15,8 @@ namespace Constructd.Api.Composition;
 /// <item><c>IIsoBuilder</c> → a per-VM cloud-init seed snippet instead of an ISO,</item>
 /// <item><c>IPortForwardManager</c> → in-process TCP relays with their own connection count.</item>
 /// </list>
-/// What Proxmox does not offer yet — child VMs, the screenshot console, host self-update, the
-/// guest-network policy — is registered as the Core's unsupported implementations by the feature
-/// compositions, and <see cref="ReleaseInfo"/> stops advertising those features.
+/// Feature compositions register child VMs, media, QMP console, guest addresses and systemd updates.
+/// Network isolation and the VMConnect browser gateway remain unsupported.
 /// </summary>
 public static class ProxmoxComposition
 {
@@ -80,6 +79,7 @@ public static class ProxmoxComposition
         foreach (var (value, name) in new[]
                  {
                      (options.Proxmox.Storage, "Constructd:Proxmox:Storage"),
+                     (options.Proxmox.MediaStorage, "Constructd:Proxmox:MediaStorage"),
                      (options.Proxmox.ImageVolume, "Constructd:Proxmox:ImageVolume"),
                      (options.Proxmox.SnippetStorage, "Constructd:Proxmox:SnippetStorage"),
                      (options.Proxmox.SnippetDir, "Constructd:Proxmox:SnippetDir"),

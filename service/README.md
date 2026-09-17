@@ -1089,9 +1089,16 @@ ones above; only the platform seams change (`Composition/ProxmoxComposition.cs`)
 | `IIsoBuilder` | `CloudInitSeedBuilder`: one root-only cloud-config per VM in the snippets directory (hostname, seed user with a locked password and passwordless sudo, the bootstrap key, `qemu-guest-agent`); returns its volume id in the `IsoPath` slot; removed with the VM. |
 | `IPortForwardManager` | `TcpRelayPortForwardManager`: the same ranges, store-first ordering, per-VM gate and reconciliation as the netsh manager, materialized as in-process TCP listeners that resolve the guest's current address (cached 60 s) when a connection arrives. `CountActiveConnectionsAsync` is the listeners' own live count, so no TCP-table reader is needed. |
 | `IHypervisorInventory` | `ProxmoxInventory`: node CPUs/RAM, one volume per active storage, every QEMU VM's configured CPUs/RAM/disk, and presence evidence for `disk:` reservations by VM name (placement is decided before Proxmox assigns the numeric id). |
-| `IChildVmDriver`, `IChildVmStorage`, `IChildVmCreationOwnership` | `ProxmoxChildVmPlatform`: the Core's unsupported child driver plus a placement on the configured storage. |
+| `IChildVmDriver`, `IChildVmStorage`, `IChildVmCreationOwnership` | `ProxmoxChildVmPlatform`: Q35/OVMF children, fixed RAM, Secure Boot, TPM, two optical slots, Off-only hardware/media changes and graceful shutdown. Name/tag/UUID ownership and a durable volume journal protect rollback and deletion. Inventory resolves child UUIDs and guest/EFI/TPM disks. |
 | `IUpdaterLauncher` | `SystemdUpdaterLauncher`: starts the verified Bash/Python updater through `systemd-run --unit construct-host-update-<id> --collect`. Its separate cgroup survives `constructd` stopping. The Maintenance tab offers self-update; logs are `/var/lib/constructd/updates/updater.log` and `journalctl -u construct-host-update-<id>`. |
-| `IConsoleTransport`, `IInteractiveConsole`, `IGuestAddressProvider`, `IIsoCatalog`, `IHostPowerGuard` | The unsupported/no-op implementations (`UnsupportedConsoleTransport`, `UnsupportedInteractiveConsole`, `UnsupportedFeaturePlatform`, `UnsupportedIsoCatalog`, `NullHostPowerGuard`). `ReleaseInfo.ApiFeatures` drops `children`, `media`, `console` and `network` accordingly, so clients hide what the host cannot do. |
+| `IConsoleTransport`, `IInteractiveConsole` | `ProxmoxConsoleTransport`: bounded native PNG screenshots and keyboard/mouse events through local QMP, with input on stdin. `ProxmoxInteractiveConsole`: native noVNC session URL requiring a Proxmox login; the VMConnect gateway remains unsupported. |
+| `IGuestAddressProvider` | `ProxmoxGuestAddressProvider`: one snapshot of QEMU guest-agent reports, host-configured adapters, bridge subnets and neighbours. Reports remain unverified. |
+| `IIsoCatalog`, `IHostPowerGuard` | `UnsupportedIsoCatalog`, `NullHostPowerGuard`. Primary provisioning uses the cloud image; the node does not sleep. Child media has its separate working catalog. |
+
+`ReleaseInfo.ApiFeatures` advertises `children`, `media`, `console` and `network`.
+The installer registers `Proxmox:MediaStorage` and configures the ISO root. Child feature
+differences, conservative thin-storage accounting, console constraints and human field checks
+are documented in [child VMs on Proxmox](../docs/child-vms.md#on-a-proxmox-host).
 
 Startup validation: `ScriptsDir` must hold `bin/provision.sh`, `Iso:BootstrapPublicKeyPath` must
 exist, and `Proxmox:ImageVolume` must be an `import` volume id. Negotiate is not registered off
