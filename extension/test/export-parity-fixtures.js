@@ -396,7 +396,7 @@ function hostAdminIpc() {
  for(const input of [{},{mode:"admin",activeTab:"vms"},{mode:"admin",features:{updates:true}},{mode:"user"},{maintenance:{phase:"draining"}},{updatePending:{id:"one"}}])add("poll",input,m.pollIntervalMs(input));
  for(const input of [null,"", "5m", "4m", "24h", "2d", "never", "NEVER", " 12h ", "0m", "-5h", "99999999999999999999d", "five"])
   add("lifetime",input,m.parseLifetime(input));
- for(const features of [[],["host-admin"],["host-admin","network-mode"],["host-admin","children","updates"],["host-admin","children","media","updates","network","console","primary-cpu","primary-memory"]]) {
+ for(const features of [[],["host-admin"],["host-admin","network-mode"],["host-admin","primary-nested","usage"],["host-admin","children","media","console","network","network-mode","primary-nested","usage","updates","primary-cpu","primary-memory","source-cache"],["host-admin","children","updates"],["host-admin","children","media","updates","network","console","primary-cpu","primary-memory"]]) {
   const input={apiFeatures:features}; add("features",input,m.featureSet(input)); add("tabs",input,m.tabsFor({features:m.featureSet(input)}));
  }
  for(const form of [{},{name:"alice",role:"admin",enabled:"false",maxVms:"3",allowHostForwards:"true"},{name:"",role:"root",enabled:"invalid",maxVms:"-1"},{allowChildCreation:"true",maxRetainedChildren:"4",cpuBudget:"8",ramBudgetGiB:"1.5",storageBudgetGiB:"100",maxChildLifetime:"24h",allowNeverLifetime:"false",allowSharing:"inherit"},{maxChildLifetime:"never",ramBudgetGiB:"bad",maxRetainedChildren:"1.5"}])
@@ -408,6 +408,11 @@ function hostAdminIpc() {
  for(const input of [{},vm,{...vm,state:"paused",deleting:true,lease:{state:"overdue",lastOutcome:"no integration"}},{name:"agent-vm",kind:"primary",children:["build"],guest:{constructCommit:"abcdef0123456789",provisionedAt:"2026-09-11T11:30:00Z"}}]) {
   add("vm",input,m.toVmRow(input,now)); add("childDelete",input,m.childDeleteConfirmation(input)); add("children",[input],m.childRows([input],now));
  }
+ for (const network of [
+  { mode: null, effectiveMode: "relayed", address: null, pendingMode: null, pendingAddress: null, desiredAddress: null, gateway: null, dns: null, pending: false, maySwitchMode: true, maySetAddress: true, appliesOn: "next-stop-start" },
+  { mode: "direct", effectiveMode: "direct", address: "192.0.2.50", pendingMode: null, pendingAddress: null, desiredAddress: "192.0.2.50/24", gateway: "192.0.2.1", dns: ["192.0.2.2"], pending: false, maySwitchMode: false, maySetAddress: false, appliesOn: "next-stop-start" },
+  { mode: "direct", effectiveMode: "relayed", address: null, pendingMode: "direct", pendingAddress: "192.0.2.51", desiredAddress: "192.0.2.51/24", gateway: "192.0.2.1", dns: null, pending: true, maySwitchMode: true, maySetAddress: true, appliesOn: "next-stop-start" },
+ ]) { const input = { name: "agent-vm", kind: "primary", state: "running", owner: "alice", network, nested: { desired: true, available: true, selectable: true } }; add("vm", input, m.toVmRow(input, now)); }
  add("vms",[vm,{name:"agent-vm"},{name:"orphan",kind:"child",parent:"gone"}],m.toVmRows([vm,{name:"agent-vm"},{name:"orphan",kind:"child",parent:"gone"}],now));
  for (const state of ["saved", "running"]) {
   const input = { name: "pressure-vm", state, savedBy: "memory-pressure" };
@@ -428,6 +433,16 @@ function hostAdminIpc() {
  for(const [kind,fn] of [["overview","toOverview"],["capacity","toCapacityBars"],["media","toMediaRow"],["iso","toIsoCatalogView"],["job","toJobRow"],["audit","toAuditRow"],["config","toConfigView"],["capabilities","toCapabilityRows"],["updates","toUpdateView"],["updateActions","updateActionsFor"],["user","toUserRow"],["allowanceForm","allowanceForm"],["allowanceText","allowanceText"]]) {
   add(kind,{},m[fn]({}));
  }
+ const ramFull = { totalBytes: 8245506048, headroomBytes: 1073741824, reservedBytes: 7516192768, unmanagedBytes: 0, physicalFreeBytes: 356577280, availableBytes: 0,
+  usedBytes: 7888928768, vmResidentBytes: 6546935808, hostOwnBytes: 1341992960, committedBytes: 7516192768,
+  admission: { enforced: false, lineBytes: 7171764224, availableBytes: 0 }, swap: { totalBytes: 4294963200, usedBytes: 1648934912 } };
+ for (const ram of [
+  ramFull,
+  { ...ramFull, admission: { enforced: true, lineBytes: 7171764224, availableBytes: 0 }, swap: null },
+  { ...ramFull, committedBytes: 12884901888, usedBytes: 9000000000, swap: { totalBytes: 0, usedBytes: 0 } },
+  { ...ramFull, usedBytes: null },
+  { totalBytes: 34359738368, headroomBytes: 4294967296, reservedBytes: 8589934592, unmanagedBytes: 2147483648, availableBytes: 17179869184 },
+ ]) { const input = { ram, cpu: { active: 6, budget: 16, logical: 16 } }; add("capacity", input, m.toCapacityBars(input)); }
  for (const sizeBytes of [0,1,"0",null]) for (const sidecarReadable of [true,false,null]) { const input={entries:[{fileName:"test.iso",sizeBytes,sidecarReadable}]}; add("iso",input,m.toIsoCatalogView(input)); }
  for (const state of ["running","paused","off"]) for(const deleting of [true,false]) for(const allowedActions of [undefined,[],["console"]]) for(const currentOperation of [null,{kind:"provision"}]) {
    const input=[{name:"guest",state,deleting,allowedActions,currentOperation}]; add("children",input,m.childRows(input,now));
@@ -446,10 +461,10 @@ async function guestConsole() {
  for (const local of [false,true]) rows.push({kind:"self",input:local,output:c.buildMintScript({local})});
  for (const input of ["CONSOLE_GATEWAY=ready\n","CONSOLE_GATEWAY=installed\n","CONSOLE_GATEWAY=no-docker","CONSOLE_GATEWAY=missing-source","garbage"]) rows.push({kind:"ensure",input,output:c.parseEnsureOutput(input)});
  const handoff={vmId:"11111111-2222-3333-4444-555555555555",username:"cvltest",domain:"HOST",password:"test-password",certificateFingerprint:"sha256:"+Array(32).fill("ab").join(":"),hostAddress:"192.168.1.1",rotated:true};
- for(const value of [handoff,{...handoff,vmId:"bad"},{...handoff,password:""},{setupRequired:true,reason:"no-credential"},{error:"vm-not-running"},null]) {
+ for(const value of [handoff,{...handoff,vmId:"bad"},{...handoff,password:""},{setupRequired:true,reason:"no-credential"},{error:"vm-not-running"},{error:"vmconnect-unreachable"},{error:"vnc-unreachable"},null]) {
    const input=JSON.stringify(value);let output=null;try{output=c.parseHandoff(input);}catch(_){}rows.push({kind:"handoff",input,output});
  }
- for(const [step,result] of [["ensure",{code:4,stdout:"CONSOLE_GATEWAY=no-docker"}],["mint",{code:6}],["mint",{code:9}],["mint",{code:1,stderr:"Host refused console operation (HTTP 403)"}],["mint",{code:-2}],["mint",{code:1,stderr:"SECRET"}]]) rows.push({kind:"failure",input:{step,result},output:c.mapFailure(step,result)});
+ for(const [step,result] of [["ensure",{code:4,stdout:"CONSOLE_GATEWAY=no-docker"}],["mint",{code:6}],["mint",{code:9}],["mint",{code:1,error:"vnc-unreachable"}],["mint",{code:1,error:"vmconnect-unreachable"}],["mint",{code:1,error:"vm-not-running"}],["mint",{code:1,stderr:"Host refused console operation (HTTP 403)"}],["mint",{code:-2}],["mint",{code:1,stderr:"SECRET"}]]) rows.push({kind:"failure",input:{step,result},output:c.mapFailure(step,result)});
  for(const name of ["guest","A.b_c-1","a".repeat(64),"a".repeat(65),"","-bad","bad'", "a\nb", "a/b"]) {
    let output=null; try { output=m.buildConsoleScript(name); } catch (_) {} rows.push({kind:"script",input:name,output});
  }

@@ -96,6 +96,7 @@ function formatDuration(seconds) {
 }
 
 /** Percentage of `part` in `whole`, clamped to [0, 100]; 0 when the whole is unknown. Pure. */
+function round2(n) { return Math.round(n * 100) / 100; }
 function pct(part, whole) {
   const p = num(part), w = num(whole);
   if (p === null || w === null || w <= 0) return 0;
@@ -446,11 +447,11 @@ function toCapacityBars(summary, memoryPressure, now = Date.now()) {
     bars[0] = {
       id: "ram", label: "RAM", pct: pct(used, total),
       text: `${formatBytes(used)} in use of ${formatBytes(total)}`,
-      segments: [{ id: "vms", pct: vmForBar / total * 100 }, { id: "host", pct: hostForBar / total * 100 }],
+      segments: [{ id: "vms", pct: round2(vmForBar / total * 100) }, { id: "host", pct: round2(hostForBar / total * 100) }],
       details: `VMs ${formatBytes(resident)} · host ${formatBytes(host)} · free ${formatBytes(ram.physicalFreeBytes)}`
         + (admission && admission.enforced === false ? " · admission not enforced (observe mode)" : ""),
       admission: admission && admission.enforced === true && num(admission.lineBytes) !== null
-        ? { pct: Math.max(0, Math.min(100, num(admission.lineBytes) / total * 100)), title: `admission line: ${formatBytes(ram.headroomBytes)} headroom` } : null,
+        ? { pct: round2(Math.max(0, Math.min(100, num(admission.lineBytes) / total * 100))), title: `admission line: ${formatBytes(ram.headroomBytes)} headroom` } : null,
       committed: committed === null ? null : {
         text: `${formatBytes(committed)} committed to VMs (${Math.round(committed / total * 100)} %)`,
         hot: committed > total,
