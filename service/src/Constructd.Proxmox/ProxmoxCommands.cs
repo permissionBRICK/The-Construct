@@ -42,13 +42,18 @@ internal sealed class ProxmoxCommands(IProcessRunner runner, ConstructdOptions o
     internal Task<JsonElement> ConfigAsync(int id, CancellationToken ct) => QueryAsync(["get", VmPath(id) + "/config"], ct);
     internal async Task<VmState> StateAsync(int id, CancellationToken ct) =>
         ProxmoxDriver.MapState(await QueryAsync(["get", VmPath(id) + "/status/current"], ct));
-    internal Task<JsonElement> ResourcesAsync(CancellationToken ct) => QueryAsync(["get", "/cluster/resources", "--type", "vm"], ct);
+    // The node's own guest list, not /cluster/resources: the cluster view is pvestatd's cache and
+    // lags a freshly created VM by up to ten seconds, which made the incarnation read-back right
+    // after `qm create` fail. The node list reads the config files directly.
+    internal Task<JsonElement> ResourcesAsync(CancellationToken ct) =>
+        QueryAsync(["get", "/nodes/" + ProxmoxDriver.ResolveNode(options) + "/qemu"], ct);
     internal int? Find(JsonElement resources, string name)
     {
         ArgumentGuard.VmName(name);
         if (resources.ValueKind != JsonValueKind.Array) throw Failure();
-        var matches = resources.EnumerateArray().Where(e => String(e, "type") == "qemu" &&
-            string.Equals(String(e, "node"), ProxmoxDriver.ResolveNode(options), StringComparison.OrdinalIgnoreCase) &&
+        // Entries from the node list carry no type/node fields; cluster-shaped entries must match them.
+        var matches = resources.EnumerateArray().Where(e => (String(e, "type") ?? "qemu") == "qemu" &&
+            (String(e, "node") is not { } node || string.Equals(node, ProxmoxDriver.ResolveNode(options), StringComparison.OrdinalIgnoreCase)) &&
             string.Equals(String(e, "name"), name, StringComparison.OrdinalIgnoreCase)).ToArray();
         if (matches.Length > 1) throw new ChildValidationException("vm-identity-ambiguous", "vm");
         if (matches.Length == 0) return null;
