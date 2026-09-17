@@ -58,6 +58,21 @@ sudo /opt/construct/repo/bin/generate-runtime-config.sh
 The generated files are written to `/opt/construct/runtime/generated.json` and
 `/opt/construct/runtime/generated.env`.
 
+Repository entries are deduplicated by URL across selected profiles. Profiles
+using the same URL must agree on `repos[].directory`: a different profile name
+or directory does not create another checkout of that URL. Inspect existing
+profiles with `construct project list` and `construct project get <name>` before
+adding one. For example, desktop and Android profiles for SlideSaver should
+both point to `slidesaver`. Provision any separate checkouts explicitly and
+use their paths in each command that needs them.
+
+Profile validation checks each file independently; it does not detect these
+cross-profile directory conflicts. After changing repository entries, regenerate
+the runtime files and verify that `repos` and `provisionCommands[].dir` in
+`generated.json` refer to the intended checkouts. Command directories come from
+each profile's first repository entry, even when checkout deduplication kept
+another profile's entry for that URL.
+
 ### Degraded mode (no git on the host)
 
 Config sync needs `git` on the host. Without it, the config directory is still used as a
@@ -179,7 +194,8 @@ Behaviour:
 - **Working directory** — each command runs from the profile's **first repo checkout**
   (`/root/repos/<directory>`), so `npm install` / `dotnet restore` just work. Profiles with no
   repo (or whose repo isn't on disk — e.g. `CHECKOUT_PROJECTS=false` or a failed clone)
-  run from the workspace root instead.
+  run from the workspace root instead. Each command starts in a fresh shell;
+  a `cd` in one command does not carry over to the next command.
 - **Incremental setup** — they run every time. Install everything needed on a
   fresh VM, then reuse installed dependencies, caches, environments, and build
   outputs on reprovision. Skip satisfied work and install or repair only what
