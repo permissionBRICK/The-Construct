@@ -127,8 +127,16 @@ if ($password) {
     # /pass +rndPass: ktpass generates the password and sets it on the account itself (SAM, not the AD
     # web service), so the keytab and the account always agree and no password ever passes through
     # PowerShell. /mapop set: the SPN is already on the account; no second mapping is added.
-    & $ktpass.Source /princ $principal /mapuser "$netbios\$AccountName" /crypto AES256-SHA1 /ptype KRB5_NT_PRINCIPAL /pass +rndPass /out $KeytabPath /mapop set /setupn 2>&1 | ForEach-Object { "    ktpass: $_" } | Write-Host
-    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $KeytabPath)) { throw "ktpass failed; no keytab written." }
+    # ktpass reports progress on stderr; under $ErrorActionPreference = 'Stop' that would abort the
+    # script mid-run, so the native call runs with errors merely displayed and its exit code decides.
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $ktpass.Source /princ $principal /mapuser "$netbios\$AccountName" /crypto AES256-SHA1 /ptype KRB5_NT_PRINCIPAL /pass +rndPass /out $KeytabPath /mapop set /setupn 2>&1 |
+            ForEach-Object { "    ktpass: $($_.ToString().Trim())" } | Write-Host
+        $ktpassExit = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $previousPreference }
+    if ($ktpassExit -ne 0 -or -not (Test-Path -LiteralPath $KeytabPath)) { throw "ktpass failed (exit $ktpassExit); no keytab written." }
     Write-Host "    keytab written to $KeytabPath (copy it to the host, then delete it here)"
 } else {
     Write-Host "    keytab not regenerated (account existed; pass -RotateKeytab to reset the password and write a new one)"
