@@ -112,12 +112,12 @@ Everything lives under `/api/v1`, speaks JSON with camelCase properties and came
 | Route | Who | What it does |
 |---|---|---|
 | `GET /whoami` | any authenticated user identity | Resolved identity, role, quota. Answers for identities that are *not* enrolled too (`known: false`), which is how enrollment tells "wrong credential" from "ask your admin to add you". VM tokens are refused. |
-| `POST /users` | admin | Creates a user `{name, role, maxVms, allowHostForwards?, allowance?}`. With `allowance` supplied, omitted `maxVms` uses the host default; the legacy request still requires `maxVms`. There is no self-registration. |
+| `POST /users` | admin | Creates a user `{name, role, maxVms, allowHostForwards?, allowNested?, allowance?}`. With `allowance` supplied, omitted `maxVms` uses the host default; the legacy request still requires `maxVms`. There is no self-registration. |
 | `DELETE /users/{name}` | admin | Removes a user and revokes their tokens. Refused while they still own VMs, and for the caller's own account. |
 | `POST /users/{name}/tokens` | admin | Issues an API token `{label}`; the plaintext is in the response **once** and is never stored or logged. |
 | `GET /audit` | admin | Audit trail, newest first, `?limit=`. |
 | `GET /vms` | user or primary token | Owned VMs (token: its primary and children); all for admin. Optional `kind=primary|child|all`, `parent`, and admin-only `owner` filters. |
-| `POST /vms` | user | `{name, cpu, ramGb, diskGb, opts:{nested?, automaticCheckpoints?, idlePolicy?}}` → `202 {jobId}`. Name uniqueness and the quota are enforced by the insert itself. |
+| `POST /vms` | user | `{name, cpu, ramGb, diskGb, opts:{nested?, automaticCheckpoints?, idlePolicy?}}` → `202 {jobId, nested, nestedFromHostDefault, ignoredOptions}`. `nested` is the effective value; unsupported explicitly enabled options appear in `ignoredOptions`. Name uniqueness and the quota are enforced by the insert itself. |
 | `GET /vms/{name}` | owner/admin | The VM including its `publicHost`, forwards and host-administration metadata. Never exposes the VM token hash. |
 | `DELETE /vms/{name}` | owner/admin | → `202 {jobId}`; accepting it fences the VM (see below) and the job removes the VM, its forwards and its SSH port. |
 | `POST /vms/{name}/power` | owner/admin | `{action: start\|stop\|save}`, synchronous, returns the new state. `save` needs the driver's suspend capability. |
@@ -154,6 +154,14 @@ start admission. Start from Saved/Paused and an Ubuntu reboot do not apply them.
 A full Construct Restart applies both; the guest sees the new CPU count and fixed
 RAM after boot. RAM uses `Set-ConstructVmMemory -MemoryGB` through the shared
 PowerShell driver (Off-only, dynamic memory disabled, read-back verified).
+
+`GET`/`PUT /vms/{name}/nested` is also owner/admin-only and advertises `primary-nested`.
+PUT accepts `{enabled: true|false}`; GET and PUT return `current`, `desired`, `pending`,
+`available`, `selectable` and `appliesOn: "next-stop-start"`. The desired setting is durable
+and bound to the VM creation identity. It applies immediately when Off, or after CPU/RAM
+on the next Off-to-Start transition. Saved/Paused resumes and guest reboots leave it pending.
+Enabling requires the caller's nested allowance (admins bypass this policy) and an available
+host capability. A driver failure leaves the desired setting pending for retry.
 
 Admins obey the VM owner's allowance. RAM maxima credit that VM's existing reservation
 and assigned RAM using both model and physical-free bounds from one inventory epoch.
@@ -528,6 +536,7 @@ Bound from the `Constructd` section of `appsettings.json`, from environment vari
 | `Negotiate:Enabled` | – (Windows: on, elsewhere: off) | Register the Kerberos/NTLM scheme. On Linux this needs a keytab for `HTTP/<PublicHost>` (`KRB5_KTNAME`), which `install-construct-host.sh --keytab` installs. |
 | `Negotiate:DomainName` / `Negotiate:Realm` | – | Map a Kerberos principal `user@REALM` onto `DOMAIN\user` (the form a Windows host and the user store use). Empty `Realm` maps every realm. |
 | `Proxmox:Node` / `Storage` / `ImageVolume` / `SnippetStorage` / `SnippetDir` / `Bridge` / `CpuType` / `QmPath` / `PveshPath` | this host / `local-lvm` / `local:import/construct-ubuntu-noble-cloudimg-amd64.qcow2` / `local` / `/var/lib/vz/snippets` / `vmbr0` / `host` / `qm` / `pvesh` | The Proxmox platform's node, VM-disk storage, cached cloud image, snippet storage and directory, guest bridge, QEMU CPU type and the two commands. Only read with `Backend = proxmox`. |
+| `Proxmox:CpuTypeWithoutNesting` | `x86-64-v2-AES` | CPU model used for guests with nesting disabled; must not expose VMX/SVM. `Proxmox:CpuType` is used when nesting is enabled. |
 | `Persistence` | `Sqlite` (`Memory` in fake mode) | Where users, tokens, VMs, jobs and the audit trail live. |
 | `DatabasePath` | `constructd.db` | SQLite file; on a real host under `C:\ProgramData\Construct\service\`. |
 | `ListenUrl` | `https://0.0.0.0:7462` | What the service listens on. |
@@ -594,6 +603,7 @@ exists; a timestamp requires an exact match. A conflict returns `409 config-conf
 | `lifecycle` | `gracefulShutdownTimeoutSeconds`, `leaseTickSeconds`, `leaseRetrySeconds` | `300, 30, 600` seconds |
 | `media` | `maxBytes`, `maxItemsPerUser`, `uploadChunkBytes`, `uploadTtlHours`, `acquireTimeoutMinutes`, `allowHttp`, `unreferencedTtlHours` | 16 GiB, 20 items, 8 MiB chunks, 24 h, 180 min, HTTP allowed, no automatic unreferenced cleanup |
 | `network` | `hostForwardsEnabled`, `directAddressReporting` | both true |
+| `virtualization` | `nestedDefault`, `nestedSelectable` | `false`, `true` |
 | `updates` | `repository`, `channel`, `drainTimeoutMinutes`, `healthTimeoutSeconds` | `permissionBRICK/The-Construct`, `main`, 60 min, 120 s |
 
 When `capacity.ramHeadroomBytes` is null, RAM headroom is `max(1 GiB, total RAM / 8)`
@@ -603,6 +613,25 @@ including zero, overrides either default.
 Disabling `network.hostForwardsEnabled` refuses new primary host forwards immediately; the default
 preserves existing behavior. Stored user allowances override defaults, host caps narrow them, and
 per-primary overrides can only restrict the result. Lowered limits do not delete existing VMs.
+
+`GET /host/capabilities` includes `nested: {available, default, selectable}`. On Proxmox,
+availability reads the live `/sys/module/kvm_intel/parameters/nested` or `kvm_amd` parameter
+(`Y` or `1`); Hyper-V assumes a host capable of nesting. A host configuration update enabling
+`nestedDefault` while unavailable returns `409 unsupported-on-host`.
+
+An omitted `opts.nested` uses `virtualization.nestedDefault`. Explicit true requires the
+user's nullable `allowNested` override, or `nestedSelectable` when null; admins always may
+select it. A denied request returns `403 policy-denied`. Explicit false remains allowed.
+Updating a user with `allowNested: null` restores inheritance; omitting the field preserves
+the existing override. Host defaults apply independently of permission to select an override.
+
+After policy checks, create disables unsupported options and reports explicitly enabled ones
+in `ignoredOptions` (`automaticCheckpoints` on Proxmox, `nested` on a host unable to nest).
+Creation still succeeds. Its response includes the effective `nested` value and
+`nestedFromHostDefault`; operation-key replays preserve these fields. The remote install
+client prints this result and one line per ignored option. `Auto-Install.ps1 -Nested true|false`
+selects an override; omission uses the remote host default and retains the existing enabled
+default for local Hyper-V installs.
 
 ## Capacity accounting
 
@@ -754,11 +783,12 @@ configuration, allowances, overrides and cascades added by M100. Name columns ar
 
 Every platform-specific concern is one interface in `Constructd.Core/Abstractions`, registered in
 exactly one place — `Composition/ServiceComposition.cs`, which has two independent axes: persistence
-(SQLite or memory) and platform (fakes or Windows).
+(SQLite or memory) and platform (fakes, Windows or Proxmox).
 
 | Interface | Implementation |
 |---|---|
 | `IHypervisorDriver` | `HyperVDriver`: `powershell.exe` running the repo's own `drivers/Load-ConstructDriver.ps1` contract (`docs/drivers.md`). With `Backend = proxmox`: `ProxmoxDriver` (`Constructd.Proxmox`), `qm`/`pvesh` on the node — see *The Proxmox platform*. |
+| `IVmNestedDriver` | Hyper-V reads/sets `ExposeVirtualizationExtensions` through the shared PowerShell driver; Proxmox reads the configured CPU model and uses `qm set --cpu` with `CpuType` or `CpuTypeWithoutNesting`. |
 | `IIsoBuilder` (consume) | By `Iso:Mode`: `OnDemandIsoBuilder` (default — reuses media or builds it on demand) or `WslIsoBuilder` (builds one ISO per VM through `wsl.exe`). See *ISO build strategies*. |
 | `IIsoMediaBuilder` (produce) | `NativeIsoBuilder` for `Native` and `Prebuilt`; `WslIsoBuilder` only for explicit `PerVm`. Driven by on-demand VM jobs and `admin iso build`. |
 | `IIsoCatalog` | `FileIsoCatalog`: versioned ISOs, sidecars and the `current.pointer` in `Iso:CacheDir`. Any build strategy publishes into it. |
@@ -1111,7 +1141,7 @@ ones above; only the platform seams change (`Composition/ProxmoxComposition.cs`)
 
 | Interface | Implementation |
 |---|---|
-| `IHypervisorDriver`, `IVmCpuDriver`, `IVmMemoryDriver` | `ProxmoxDriver`: `qm create` cloning the cached Ubuntu cloud image (`--scsi0 <storage>:0,import-from=<image>`) with a cloud-init drive and `--cicustom user=<seed>`, then `qm disk resize` and `qm start`; `qm shutdown --forceStop 1`, `qm suspend --todisk 1`, `qm destroy --purge 1 --destroy-unreferenced-disks 1`; state from `pvesh get …/status/current` (`lock: suspended` → saved), the endpoint from the guest agent's `network-get-interfaces`. VMs are found by NAME in `pvesh get /cluster/resources --type vm` on every call; `absent` only from a successfully read list. |
+| `IHypervisorDriver`, `IVmCpuDriver`, `IVmMemoryDriver`, `IVmNestedDriver` | `ProxmoxDriver`: `qm create` cloning the cached Ubuntu cloud image (`--scsi0 <storage>:0,import-from=<image>`) with a cloud-init drive and `--cicustom user=<seed>`, then `qm disk resize` and `qm start`; `qm shutdown --forceStop 1`, `qm suspend --todisk 1`, `qm destroy --purge 1 --destroy-unreferenced-disks 1`; state from `pvesh get …/status/current` (`lock: suspended` → saved), the endpoint from the guest agent's `network-get-interfaces`. Nested settings select `CpuType` or `CpuTypeWithoutNesting` on create and `qm set --cpu`. VMs are found by NAME in `pvesh get /cluster/resources --type vm` on every call; `absent` only from a successfully read list. |
 | `IIsoBuilder` | `CloudInitSeedBuilder`: one root-only cloud-config per VM in the snippets directory (hostname, seed user with a locked password and passwordless sudo, the bootstrap key, `qemu-guest-agent`); returns its volume id in the `IsoPath` slot; removed with the VM. |
 | `IPortForwardManager` | `TcpRelayPortForwardManager`: the same ranges, store-first ordering, per-VM gate and reconciliation as the netsh manager, materialized as in-process TCP listeners that resolve the guest's current address (cached 60 s) when a connection arrives. `CountActiveConnectionsAsync` is the listeners' own live count, so no TCP-table reader is needed. |
 | `IHypervisorInventory` | `ProxmoxInventory`: node CPUs/RAM, one volume per active storage, every QEMU VM's configured CPUs/RAM/disk, and presence evidence for `disk:` reservations by VM name (placement is decided before Proxmox assigns the numeric id). |
