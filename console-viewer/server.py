@@ -184,7 +184,7 @@ class Gateway:
                 connection = dict(ticket['connection'])
             else:
                 root = f'/api/v1/vms/{quote(ticket["name"])}/console/sessions'
-                ticket['phase'] = 'Creating a console session on the Windows host'
+                ticket['phase'] = 'Creating a console session on the host'
                 session = await self.api('POST', root)
                 session_path = root + '/' + session['sessionId']
                 ticket['phase'] = 'Requesting console access from the host'
@@ -192,31 +192,47 @@ class Gateway:
             ticket['phase'] = 'Connecting to the local console gateway'
             reader, writer = await asyncio.wait_for(asyncio.open_connection(self.guacd_host, self.guacd_port), 10)
             params = {
-                'VERSION_1_5_0': 'VERSION_1_5_0', 'hostname': connection['hostAddress'] if self.local else urlsplit(self.api_url).hostname, 'port': '2179', 'security': 'vmconnect',
-                'username': connection['username'], 'password': connection['password'], 'domain': connection['domain'],
-                'preconnection-blob': connection['vmId'], 'ignore-cert': 'false',
-                'cert-fingerprints': connection['certificateFingerprint'],
+                'VERSION_1_5_0': 'VERSION_1_5_0', 'password': connection['password'],
                 'width': '1024', 'height': '768', 'dpi': '96', 'disable-audio': 'true',
                 'enable-drive': 'false', 'disable-copy': 'true', 'disable-paste': 'true', 'read-only': 'false',
                 'server-layout': self.config.get('CONSTRUCT_CONSOLE_KEYBOARD_LAYOUT', 'en-us-qwerty'),
             }
-            if not params['cert-fingerprints']:
-                raise RuntimeError('VMConnect certificate fingerprint is not configured')
-            writer.write(instruction('select', 'rdp'))
+            protocol = connection.get('protocol', 'vmconnect')
+            if protocol == 'vnc' and not self.local:
+                if (not isinstance(connection.get('host'), str) or not connection['host'] or
+                        type(connection.get('port')) is not int or not 1 <= connection['port'] <= 65535):
+                    raise RuntimeError('Invalid VNC endpoint')
+                params.update(hostname=connection['host'], port=str(connection['port']))
+                guacd_protocol = 'vnc'
+                host_phase = 'Connecting to the VM display on the host (VNC)'
+            elif protocol == 'vmconnect':
+                params.update({
+                    'hostname': connection['hostAddress'] if self.local else urlsplit(self.api_url).hostname,
+                    'port': '2179', 'security': 'vmconnect', 'username': connection['username'],
+                    'domain': connection['domain'], 'preconnection-blob': connection['vmId'],
+                    'ignore-cert': 'false', 'cert-fingerprints': connection['certificateFingerprint'],
+                })
+                if not params['cert-fingerprints']:
+                    raise RuntimeError('VMConnect certificate fingerprint is not configured')
+                guacd_protocol = 'rdp'
+                host_phase = 'Connecting to Hyper-V VMConnect on this PC (port 2179)' if self.local else 'Connecting to Hyper-V VMConnect on the Windows host (port 2179)'
+            else:
+                raise RuntimeError('Unsupported console protocol')
+            writer.write(instruction('select', guacd_protocol))
             await writer.drain()
             args = await asyncio.wait_for(read_instruction(reader), 15)
             if not args or args[0] != 'args':
-                raise RuntimeError('Gateway did not accept RDP')
+                raise RuntimeError('Gateway did not accept console protocol')
             for values in [('size', '1024', '768', '96'), ('audio',), ('video',), ('image', 'image/png', 'image/jpeg')]:
                 writer.write(instruction(*values))
             writer.write(instruction('connect', *(params.get(arg, '') for arg in args[1:])))
             await writer.drain()
             connection.clear()
             params.clear()
-            ticket['phase'] = 'Connecting to Hyper-V VMConnect on this PC (port 2179)' if self.local else 'Connecting to Hyper-V VMConnect on the Windows host (port 2179)'
+            ticket['phase'] = host_phase
             ready = await asyncio.wait_for(read_instruction(reader), 30)
             if ready[0] != 'ready':
-                raise RuntimeError('Hyper-V console connection failed')
+                raise RuntimeError('Host console connection failed')
             # Guacamole WebSocketTunnel expects its UUID as the first internal instruction.
             await ws.send_str(instruction('', ready[1]).decode())
             ticket['phase'] = 'Waiting for the guest display'
@@ -274,11 +290,11 @@ class Gateway:
                     try:
                         await self.api('DELETE', session_path)
                     except Exception:
-                        pass  # Host expires and reaps the account independently.
+                        pass  # Host expires and reaps console access independently.
                 ticket['active'] = False
                 await ws.close()
             # aiohttp may cancel this handler as soon as the browser closes its socket.
-            # Account revocation must survive that cancellation.
+            # Console revocation must survive that cancellation.
             await asyncio.shield(cleanup())
         return ws
 

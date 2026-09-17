@@ -50,7 +50,7 @@ public sealed class SourceStoreTests : IDisposable
         using (var tx = c.BeginTransaction()) { new M800_SourceCache().Apply(c, tx); tx.Commit(); }
         cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('source_cache')"; Assert.Equal(10L, cmd.ExecuteScalar());
         cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('vms') WHERE name='source_commit'"; Assert.Equal(1L, cmd.ExecuteScalar());
-        Assert.Equal(820, SqliteMigrations.SchemaVersion); Assert.Equal(0, SqliteMigrations.MinReadableBy);
+        Assert.Equal(830, SqliteMigrations.SchemaVersion); Assert.Equal(0, SqliteMigrations.MinReadableBy);
     }
     public void Dispose() { SqliteConnection.ClearAllPools(); if (Directory.Exists(root)) Directory.Delete(root, true); }
 }

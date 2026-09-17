@@ -277,7 +277,7 @@ const lastState = (entry) => [...entry.panel.posted].reverse().find((m) => m.typ
     eq("panel: ready -> detect -> admin state posted", s.mode, "admin");
     eq("panel: the overview tab was loaded", s.activeTab, "overview");
     ok("panel: the overview data is there", !!s.overview);
-    ok("panel: every tab available on a full-feature host", s.tabs.every((x) => x.available));
+    ok("panel: usage is gated on older hosts", s.tabs.every((x) => x.available === (x.id !== "usage")));
     eq("panel: no first-VM offer while the host has one of ours", s.offers.createFirstVm, false);
     const again = await t.feature.openHostAdmin(HOST);
     ok("panel: opening again reveals the same panel", again === entry && entry.panel.revealed === 1 && t.vscode.rec.panels.length === 1);

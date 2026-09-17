@@ -10,6 +10,12 @@
 > Host self-update is implemented; its systemd handoff and rollback still need human field testing.
 > The design background is [docs/remote-host.md](remote-host.md); this page is the Proxmox specifics.
 
+The host's **Usage** tab shows guest-reported tokens and estimated cost by VM and,
+for admins, by user. Provisioned guests normally report within 15 minutes through
+their scoped VM token; no guest SSH credential is held by the host. The reporter,
+storage and views are shared with Hyper-V hosts. See [Host usage](control-panel.md#host-usage)
+for settings and backfill limits. This feature still needs a field test on each platform.
+
 ## Quick start (four steps)
 
 1. **Install Proxmox VE** on the machine (the stock installer, any storage layout; one bridge with
@@ -422,10 +428,38 @@ Kerberos names the user `alice@CORP.EXAMPLE.COM`; the service maps that onto `CO
 serves a Windows host and this one. Tokens keep working alongside. If the node's address changes,
 update the A record; the SPN and keytab are name-based and stay valid.
 
-## 6. What is not there (yet)
+## 6. Browser console and remaining limitations
 
-- **VMConnect browser gateway** is unsupported. Console sessions include a native noVNC URL
-  that requires a separate Proxmox login; screenshot and input routes work through Construct.
+`construct vm console NAME --web` and the panel's console buttons use the Construct
+Guacamole gateway on the primary. The node runs `qm vncproxy` for the selected VM;
+Construct session authorization is sufficient, with no Proxmox account or login.
+The viewer works during boot and ISO installation without a guest agent.
+
+Allow the trusted primary to reach TCP `5900-5999` on the node, or configure
+`Constructd:Proxmox:ConsolePorts:Start` and `:End`. This inclusive range must not overlap
+`SshForwardPorts` or `AppForwardPorts`. Listeners bind to `Constructd:ListenAddress` and
+the gateway connects to `Constructd:PublicHost`, falling back to the node name if empty.
+Keep that name reachable from the primary. Gateway provisioning already runs when the
+host advertises `console`; reprovision an older primary to install it.
+
+Each session gets a random eight-character password passed to `qm` through
+`LC_PVE_TICKET`, never argv. The listener accepts one connection, then closes. The
+gateway renews the 60-second session every 20 seconds; expiry, disconnect or removal
+kills the proxy. Reconcile removes revoked sessions and completed proxies. Proxmox's
+ticket authentication window is 30 seconds, so open the stream promptly; reconnect
+requests fresh credentials. VNC between primary and node is unencrypted, including
+display and input. Keep this hop on the trusted LAN bridge and restrict the console
+range to trusted primaries.
+
+Human field test on the node: open a fresh child's installer and the primary from
+the CLI and panel without a Proxmox browser login. Check display, keyboard, mouse,
+Ctrl-Alt-Delete and reconnect. Confirm the installed `qm vncproxy` honours
+`LC_PVE_TICKET`, rejects an incorrect password, refuses a second TCP connection,
+and exits when the Construct session expires or is removed. Verify port reuse after
+cleanup and the configured range through the node firewall.
+
+Remaining limitations:
+
 - **Distinct Secure Boot key sets and Unicode typing** are unavailable. OVMF combines the
   Microsoft keys; console text uses US-layout ASCII. See [all child differences](child-vms.md#on-a-proxmox-host).
 - **Capacity enforcement** — the ledger observes (`HostAdmin:Capacity:Mode = Observe`) with a real

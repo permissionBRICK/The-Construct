@@ -181,14 +181,6 @@ public sealed class ProxmoxConsoleTests
             Assert.Equal(kind != MouseInputKind.Release, events[0].GetProperty("data").GetProperty("down").GetBoolean()); }
     }
     [Fact]
-    public async Task Native_noVNC_link_uses_node_and_vmid_and_does_not_issue_root_credentials()
-    {
-        var runner = new RecordingProcessRunner().RespondStdout(Resources); var interactive = new ProxmoxInteractiveConsole(runner, Options());
-        Assert.Equal("https://pve.example.test:8006/?console=kvm&novnc=1&vmid=101&node=pve1&resize=off", await interactive.GetLaunchUrlAsync("child", default));
-        await Assert.ThrowsAsync<NotSupportedException>(() => interactive.ConnectAsync(new("id", "child", "owner", DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddMinutes(1), 2, 1), default));
-        Assert.Single(runner.Calls);
-    }
-    [Fact]
     public async Task Unsupported_console_transport_returns_coded_409()
     {
         using var app = new TestApp(configureServices: services => services.AddSingleton<IConsoleTransport, UnsupportedConsoleTransport>());
@@ -196,23 +188,6 @@ public sealed class ProxmoxConsoleTests
         using var response = await owner.GetAsync("/api/v1/vms/probe-vm/console/capabilities");
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         Assert.Equal("unsupported-capability", (await response.ReadAsync<JsonElement>()).GetProperty("code").GetString());
-    }
-    [Fact]
-    public async Task Native_link_is_in_session_but_VMConnect_connection_returns_409()
-    {
-        var runner = new RecordingProcessRunner().RespondStdout(Resources.Replace("child", "probe-vm"));
-        using var app = new TestApp(new Dictionary<string, string?> { ["Constructd:BrowserConsoleEnabled"] = "true" },
-            services => services.AddSingleton<IInteractiveConsole>(new ProxmoxInteractiveConsole(runner, Options())));
-        using var owner = await app.CreateUserClientAsync("owner"); await owner.CreateVmAsync("probe-vm");
-        using var response = await owner.PostJsonAsync("/api/v1/vms/probe-vm/console/sessions", new { });
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        var session = await response.ReadAsync<JsonElement>();
-        Assert.Contains("vmid=101", session.GetProperty("interactiveUrl").GetString());
-        Assert.Contains("Proxmox login", session.GetProperty("capabilities").GetProperty("interactiveReason").GetString());
-        var id = session.GetProperty("sessionId").GetString();
-        using var connection = await owner.PostJsonAsync($"/api/v1/vms/probe-vm/console/sessions/{id}/connection", new { });
-        Assert.Equal(HttpStatusCode.Conflict, connection.StatusCode);
-        Assert.Equal("unsupported-capability", (await connection.ReadAsync<JsonElement>()).GetProperty("code").GetString());
     }
     [Theory]
     [InlineData(false, true)]

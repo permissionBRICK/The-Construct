@@ -106,7 +106,7 @@ public sealed class PersistenceFoundationTests : IDisposable
     {
         var ids = SqliteMigrations.All.Select(m => m.Id).ToArray();
         Assert.Equal(ids.Order(), ids); Assert.Equal(ids.Length, ids.Distinct().Count()); Assert.All(ids, id => Assert.InRange(id, 100, 899));
-        Assert.Equal(820, SqliteMigrations.SchemaVersion); Assert.Equal(0, SqliteMigrations.MinReadableBy);
+        Assert.Equal(830, SqliteMigrations.SchemaVersion); Assert.Equal(0, SqliteMigrations.MinReadableBy);
     }
 
     [Theory]

@@ -13,6 +13,37 @@ namespace Construct.Companion.Tests.Ipc;
 public sealed class HostAdminHttpTests
 {
     [Fact]
+    public async Task UsageWindowLoadsForOrdinaryUsersAndSurvivesRefresh()
+    {
+        var api = new RoutingRemoteApi(); var previous = api.Handle;
+        api.Handle = r => r.Url.AbsolutePath switch
+        {
+            "/api/v1/health" => new(200, JsonSerializer.SerializeToElement(new { apiFeatures = new[] { "host-admin", "usage" } })),
+            "/api/v1/whoami" => new(200, JsonSerializer.SerializeToElement(new { name = "alice", role = "user", known = true, enabled = true })),
+            "/api/v1/host/usage" => new(200, JsonSerializer.SerializeToElement(new { window = r.Url.Query.Contains("month") ? "month" : "all",
+                totals = new { tokens = 1200, costUsd = 1.23 }, byUser = new object[0],
+                byVm = new[] { new { vm = "gone", user = "alice", deleted = true, tokens = 1200, costUsd = 1.23 } } })),
+            _ => previous(r)
+        };
+        await using var h = await Enroll(api);
+        using var ready = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.ready" });
+        foreach (var window in new[] { "month", "all" })
+        {
+            using var response = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.tab", tab = "usage", window });
+            Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+            var snapshot = await h.Client.GetFromJsonAsync<JsonObject>("/v1/hosts/host.example_7462/snapshot");
+            Assert.Equal(window, snapshot!["state"]!["usage"]!["window"]!.GetValue<string>());
+            Assert.Equal("1.2K", snapshot["state"]!["usage"]!["totals"]!["tokens"]!.GetValue<string>());
+            Assert.True(snapshot["state"]!["usage"]!["byVm"]![0]!["deleted"]!.GetValue<bool>());
+        }
+        using var refresh = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.refresh" });
+        var final = await h.Client.GetFromJsonAsync<JsonObject>("/v1/hosts/host.example_7462/snapshot");
+        Assert.Equal("usage", final!["state"]!["activeTab"]!.GetValue<string>());
+        Assert.Equal(2, final["state"]!["tabs"]!.AsArray().Count);
+        Assert.Contains(api.Requests, r => r.Url.PathAndQuery == "/api/v1/host/usage?window=all");
+    }
+
+    [Fact]
     public async Task InventoryProblemsSurviveReinventoryAndOverviewReloads()
     {
         var api = new RoutingRemoteApi(); var previous = api.Handle;

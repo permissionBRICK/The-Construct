@@ -26,6 +26,7 @@ public sealed partial class RemoteHostClient
     public Task<JsonNode?> VmIdentityAsync(string name, CancellationToken cancellationToken = default) => RequestAsync("GET", $"/vms/{RemoteHost.Encode(name)}/identity", null, cancellationToken);
     public Task<JsonNode?> VmCapabilitiesAsync(string name, CancellationToken cancellationToken = default) => RequestAsync("GET", $"/vms/{RemoteHost.Encode(name)}/capabilities", null, cancellationToken);
     public Task<JsonNode?> HostStatusAsync(CancellationToken cancellationToken = default) => RequestAsync("GET", "/host/status", null, cancellationToken);
+    public Task<JsonNode?> HostUsageAsync(string window, CancellationToken cancellationToken = default) => RequestAsync("GET", "/host/usage?window=" + Uri.EscapeDataString(window), null, cancellationToken);
     public Task<JsonNode?> HostCapacityAsync(bool refresh, CancellationToken cancellationToken = default) => RequestAsync("GET", "/host/capacity" + RemoteHost.BuildQuery(new JsonObject { ["refresh"] = refresh ? "true" : null }), null, cancellationToken);
     public Task<JsonNode?> HostConfigAsync(CancellationToken cancellationToken = default) => RequestAsync("GET", "/host/config", null, cancellationToken);
     public Task<JsonNode?> PutHostConfigAsync(JsonNode? body, CancellationToken cancellationToken = default) => RequestAsync("PUT", "/host/config", body, cancellationToken);

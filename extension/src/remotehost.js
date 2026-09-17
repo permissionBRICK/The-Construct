@@ -669,6 +669,7 @@ function createClient(opts = {}) {
     vmCapabilities: (name) => request("GET", `/vms/${encodeURIComponent(name)}/capabilities`),
     // Host status and configuration (§8.2, §8.18; admin).
     hostStatus: () => request("GET", "/host/status"),
+    hostUsage: (window = "today") => request("GET", "/host/usage" + buildQuery({ window })),
     hostCapacity: (refresh) => request("GET", "/host/capacity" + buildQuery({ refresh: refresh ? "true" : null })),
     hostConfig: () => request("GET", "/host/config"),
     putHostConfig: (body) => request("PUT", "/host/config", body),
