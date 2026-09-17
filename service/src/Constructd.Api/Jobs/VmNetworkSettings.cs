@@ -8,7 +8,7 @@ namespace Constructd.Api.Jobs;
 
 /// <summary>Desired and applied settings are tied to the VM's creation identity. Callers hold its gate for writes.</summary>
 public sealed class VmNetworkSettings(IHostConfigStore config, IHostNetworkPolicy policy,
-    ConstructdOptions options, IHypervisorDriver driver)
+    ConstructdOptions options, IHypervisorDriver driver, IGuestNetworkConfigurator configurator)
 {
     public sealed record Setting(DateTimeOffset Created, string? Mode, string? Address, string? Gateway, string[]? Dns);
     public sealed record View(string? Mode, string EffectiveMode, string? Address, string? PendingMode,
@@ -26,6 +26,18 @@ public sealed class VmNetworkSettings(IHostConfigStore config, IHostNetworkPolic
 
     public Task SaveAsync(Vm vm, Setting setting, string actor, CancellationToken ct) =>
         config.SetAsync(Section(vm), setting with { Created = vm.Created }, actor, ct);
+
+    public async Task<Vm> ApplyAsync(Vm vm, VmState state, CancellationToken ct)
+    {
+        if (!Supported || vm.Kind != VmKind.Primary || state != VmState.Off) return vm;
+        var desired = await DesiredAsync(vm, ct);
+        if (Validate(desired) is not null) throw new LifecycleException("invalid-network-settings");
+        try { await configurator.ConfigureNetworkAsync(vm.Name, desired.Address, desired.Gateway, desired.Dns, ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch { throw new LifecycleException("network-apply-failed"); }
+        await config.SetAsync(Section(vm, applied: true), desired, "system", ct);
+        return vm;
+    }
 
     public async Task<Setting> DesiredAsync(Vm vm, CancellationToken ct)
     {

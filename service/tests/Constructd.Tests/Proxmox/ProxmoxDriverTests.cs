@@ -23,6 +23,31 @@ public sealed class ProxmoxDriverTests
         new("work-vm", Cpu: 4, RamGb: 8, DiskGb: 60, IsoPath: "local:snippets/construct-work-vm-user.yaml",
             Nested: true, AutomaticCheckpoints: false);
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Network_configuration_updates_cloud_init_only_while_off(bool fixedAddress)
+    {
+        var (driver, runner, _) = Driver(new RecordingProcessRunner().RespondStdout(Resources)
+            .RespondStdout("""{"status":"stopped"}""").RespondStdout("").RespondStdout(""));
+        await driver.ConfigureNetworkAsync("work-vm", fixedAddress ? "10.0.3.50/22" : null,
+            fixedAddress ? "10.0.0.1" : null, fixedAddress ? ["10.0.0.2", "10.0.0.3"] : null, default);
+        Assert.Equal(fixedAddress
+            ? new[] { "set", "104", "--ipconfig0", "ip=10.0.3.50/22,gw=10.0.0.1", "--nameserver", "10.0.0.2 10.0.0.3" }
+            : new[] { "set", "104", "--ipconfig0", "ip=dhcp", "--delete", "nameserver" }, runner[2].Arguments);
+        Assert.Equal(["cloudinit", "update", "104"], runner[3].Arguments);
+    }
+
+    [Theory]
+    [InlineData("""{"status":"running"}""")]
+    [InlineData("""{"status":"stopped","lock":"suspended"}""")]
+    public async Task Network_configuration_refuses_running_and_saved_guests(string state)
+    {
+        var (driver, runner, _) = Driver(new RecordingProcessRunner().RespondStdout(Resources).RespondStdout(state));
+        await Assert.ThrowsAsync<ProxmoxOperationException>(() => driver.ConfigureNetworkAsync("work-vm", null, null, null, default));
+        Assert.All(runner.Calls, call => Assert.Equal("pvesh", call.FileName));
+    }
+
     [Fact]
     public async Task Create_clones_the_image_seeds_cloud_init_resizes_and_starts()
     {

@@ -12,6 +12,47 @@ public sealed class VmNetworkSettingsTests
 {
     private static TestApp Proxmox() => new(new Dictionary<string, string?> { ["Constructd:Backend"] = "proxmox" });
 
+    [Theory]
+    [InlineData(VmState.Running)]
+    [InlineData(VmState.Saved)]
+    [InlineData(VmState.Paused)]
+    [InlineData(VmState.Off)]
+    public async Task NetworkAppliesOnlyWhileOff(VmState state)
+    {
+        using var app = Proxmox();
+        using var owner = await app.CreateUserClientAsync("alice");
+        await owner.CreateVmAsync("vm");
+        var vm = (await app.Vms.GetAsync("vm", default))!;
+        var settings = app.Service<VmNetworkSettings>();
+        await settings.SaveAsync(vm, new(vm.Created, "direct", "10.0.3.50/22", "10.0.0.1", null), "admin", default);
+        app.Driver.SetState("vm", state);
+        await settings.ApplyAsync(vm, state, default);
+        Assert.Equal(state == VmState.Off ? "direct" : "relayed", (await settings.CurrentAsync(vm, default)).Mode);
+        Assert.Equal(state == VmState.Off, app.Driver.Calls.Any(c => c.StartsWith("network:vm:")));
+    }
+
+    [Fact]
+    public async Task DriverFailurePreventsStartAndKeepsDesiredSettingsForRetry()
+    {
+        using var app = Proxmox();
+        using var owner = await app.CreateUserClientAsync("alice");
+        await owner.CreateVmAsync("vm");
+        var vm = (await app.Vms.GetAsync("vm", default))!;
+        var settings = app.Service<VmNetworkSettings>();
+        await settings.SaveAsync(vm, new(vm.Created, "direct", null, null, null), "admin", default);
+        app.Driver.SetState("vm", VmState.Off);
+        app.Driver.NetworkFailure = new Exception("fixture");
+        var result = await owner.PostAsJsonAsync("/api/v1/vms/vm/power", new { action = "start" });
+        Assert.Equal(HttpStatusCode.Conflict, result.StatusCode);
+        Assert.Equal("network-apply-failed", (await result.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("code").GetString());
+        Assert.DoesNotContain("start:vm", app.Driver.Calls);
+        Assert.Equal("direct", (await settings.GetAsync(vm, default))!.Mode);
+        app.Driver.NetworkFailure = null;
+        Assert.Equal(HttpStatusCode.OK, (await owner.PostAsJsonAsync("/api/v1/vms/vm/power", new { action = "start" })).StatusCode);
+        Assert.Equal("direct", (await settings.CurrentAsync(vm, default)).Mode);
+        Assert.True(app.Driver.Calls.ToList().IndexOf("start:vm") > app.Driver.Calls.ToList().FindIndex(c => c.StartsWith("network:vm:")));
+    }
+
     [Fact]
     public async Task OwnerModeRequiresPolicyAndAddressFieldsAlwaysRequireAdmin()
     {
