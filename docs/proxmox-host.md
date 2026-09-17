@@ -8,6 +8,47 @@
 > observe is a shorter feature list (no child VMs, no screenshot console, no host self-update).
 > The design background is [docs/remote-host.md](remote-host.md); this page is the Proxmox specifics.
 
+## Quick start (four steps)
+
+1. **Install Proxmox VE** on the machine (the stock installer, any storage layout; one bridge with
+   DHCP on your LAN is all the network it needs). Make sure the node has a DNS name in your domain
+   or add one in step 3.
+2. **On the node**, as root, one line: it fetches the latest release, caches the Ubuntu cloud image,
+   issues a certificate, installs and starts the service, and prints an admin token.
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/permissionBRICK/The-Construct/main/service/host/install-construct-host.sh | bash
+   ```
+
+   Done already if tokens are enough for you: enrol from a PC with the printed command
+   (`-ServiceAuth token`) and skip step 3.
+3. **On the domain controller** (optional, for sign-in with Windows accounts), as a domain admin
+   in an elevated PowerShell: it creates the service account, its SPN and the DNS record, writes the
+   keytab, copies it to the node and finishes the host over SSH (asks for the node's root password).
+
+   ```powershell
+   Invoke-WebRequest https://raw.githubusercontent.com/permissionBRICK/The-Construct/main/service/host/New-ConstructKerberosPrincipal.ps1 -OutFile .\New-ConstructKerberosPrincipal.ps1
+   .\New-ConstructKerberosPrincipal.ps1 -HostFqdn test-proxmox.corp.example.com -Address 10.0.3.184 -InstallOnHost root@test-proxmox.corp.example.com
+   ```
+
+   Then add the people who may use it, by domain name:
+
+   ```sh
+   ssh root@test-proxmox.corp.example.com /opt/construct/host/Constructd.Api admin users add 'HOME\alice' --max-vms 3
+   ```
+4. **On a PC** with The Construct installed, the normal remote command, with your Windows account:
+
+   ```powershell
+   .\Auto-Install.ps1 -Backend hyperv-remote -ServiceUrl https://test-proxmox.corp.example.com:7462 -InstanceName work-vm
+   ```
+
+   Confirm the certificate fingerprint the node printed in step 2. Without step 3 add
+   `-ServiceAuth token` and paste the admin token when asked.
+
+To update the host later, repeat step 2 with `--host-release latest`; certificate, keytab, users
+and VMs stay. To test an unreleased branch, add `--ref <branch>` (the service is then built on the
+node, which fetches a .NET SDK once).
+
 ## 1. What the node ends up running
 
 | Piece | Where | What it does |
@@ -25,21 +66,14 @@ lifecycle. **Do not rename or renumber them behind the service's back** — it a
 
 ## 2. Install (or update) the host
 
-On the node, as root, from a Construct checkout:
+The one-liner of the quick start is `service/host/install-construct-host.sh`, the Linux counterpart
+of `Install-ConstructHost.ps1`. From a checkout it installs that checkout's scripts; run bare it
+fetches the release's pinned source itself. The service binary comes from the release's
+`construct-host-<commit>-linux-x64.zip` (checksum-verified against the manifest), from `--package`
+(a `dotnet publish -r linux-x64 --self-contained true` output, directory or zip), or is built on the
+node with `--build` / for a non-main `--ref`. In order it does:
 
-```sh
-bash service/host/install-construct-host.sh --package ./constructd-linux-x64 --public-host 10.0.3.184
-```
-
-`--package` is a linux-x64 publish of the service (a directory or a zip):
-
-```sh
-dotnet publish service/src/Constructd.Api -c Release -r linux-x64 --self-contained true -o ./constructd-linux-x64
-```
-
-The script is the Linux counterpart of `Install-ConstructHost.ps1` and does, in order:
-
-0. **Inputs** — root, `pvesh`/`qm`, a Construct checkout (`--source` defaults to the one the script is in), sane port ranges.
+0. **Inputs** — root, `pvesh`/`qm`, the small tools it needs (installed if missing), sane port ranges, the public host (the node's FQDN when it resolves, else its address).
 1. **Directories** — the layout above.
 2. **Storage and network** — the disk storage must offer `images` (default `local-lvm`); the image storage must be a *directory* storage (default `local`) and gets `import` and `snippets` content enabled; the bridge (default `vmbr0`) must exist.
 3. **Cloud image** — downloads `https://cloud-images.ubuntu.com/<release>/current/…` into the image storage through Proxmox's own `download-url`, checksum-verified against Ubuntu's `SHA256SUMS`. Skipped when already cached.
@@ -50,12 +84,15 @@ The script is the Linux counterpart of `Install-ConstructHost.ps1` and does, in 
 8. **First admin** — `admin users add <name> --role Admin --max-vms 10` and one API token, printed once. Re-runs keep the token; `--rotate-token` issues a new one.
 9. **Start and verify** — restarts the unit and waits for `/api/v1/health`.
 
-Re-running the script is the update path: pass a new `--package` and the service is replaced in
-place (the existing VMs keep running; their SSH forwards are re-established from the database
-when the service comes back).
+Re-running the script is the update path: `--host-release latest` (or a new `--package`, or
+`--build`) replaces the service in place; the existing VMs keep running and their SSH forwards are
+re-established from the database when the service comes back. Without such a flag a re-run keeps
+the installed service and only refreshes scripts and settings.
 
 Options: `--admin`, `--storage`, `--image-storage`, `--bridge`, `--release`, `--listen-port`,
-`--ssh-ports a-b`, `--app-ports a-b`, `--skip-image`, `--rotate-token`.
+`--ssh-ports a-b`, `--app-ports a-b`, `--skip-image`, `--rotate-token`, `--repo`, `--ref`,
+`--host-release`, `--build`, `--package`, `--source`, and the Kerberos trio `--keytab`,
+`--netbios-domain`, `--realm` (section 5b).
 
 ## 3. Enrol from a PC
 
@@ -124,15 +161,18 @@ Three steps, all scripted:
 1. **On a domain controller**, as a domain admin (needs RSAT's ActiveDirectory and DnsServer modules and `ktpass`):
 
    ```powershell
-   .\service\host\New-ConstructKerberosPrincipal.ps1 -HostFqdn test-proxmox.corp.example.com -Address 10.0.3.184 -KeytabPath C:\constructd.keytab
+   .\service\host\New-ConstructKerberosPrincipal.ps1 -HostFqdn test-proxmox.corp.example.com -Address 10.0.3.184 -InstallOnHost root@test-proxmox.corp.example.com
    ```
 
-   It creates `svc-constructd` (random never-expiring password, AES-256), adds the SPN, adds the
-   A record in the AD DNS zone when the name does not resolve yet, and writes the keytab. Re-runs
-   change nothing unless `-RotateKeytab` (which resets the password: install the new keytab).
+   It creates `svc-constructd` (random never-expiring password set by `ktpass`, AES-256, UPN equal
+   to the principal so the key salt matches), adds the SPN, adds the A record in the AD DNS zone
+   when the name does not resolve yet, writes the keytab, and with `-InstallOnHost` copies it to
+   the node and runs step 2 there over SSH. Re-runs change nothing unless `-RotateKeytab` (which
+   resets the password: install the new keytab). Without `-InstallOnHost` the keytab is left at
+   `-KeytabPath` for you to carry over.
 
-2. **On the node**, copy the keytab over and re-run the installer with the host's DNS name as the
-   public host (the SPN, the certificate SAN and the URL clients type must all be that name):
+2. **On the node** (what `-InstallOnHost` does for you), with the host's DNS name as the public
+   host — the SPN, the certificate SAN and the URL clients type must all be that name:
 
    ```sh
    bash service/host/install-construct-host.sh --public-host test-proxmox.corp.example.com \
@@ -168,8 +208,6 @@ update the A record; the SPN and keytab are name-based and stay valid.
   the host's SPN (wrong URL name, no domain reachability) falls back to a token prompt.
 - **Cluster** — one node; `Constructd:Proxmox:Node` names it, and VMs of the same name on other
   nodes are not this host's.
-- **A Linux release asset** — the release workflow publishes Windows host packages; the Linux
-  service is published from the checkout for now (section 2).
 
 ## 7. Settings reference (`Constructd:Proxmox`)
 

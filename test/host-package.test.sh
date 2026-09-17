@@ -9,8 +9,11 @@ printf '{}\n' > "$task_dir/publish/appsettings.json"
 mkdir "$task_dir/fdd"
 head -c 4096 /dev/urandom > "$task_dir/fdd/Constructd.Api.exe"
 printf '%s' '{"runtimeOptions":{"frameworks":[{"name":"Microsoft.NETCore.App","version":"10.0.0"},{"name":"Microsoft.AspNetCore.App","version":"10.0.0"}]}}' > "$task_dir/fdd/Constructd.Api.runtimeconfig.json"
+mkdir "$task_dir/linux"
+head -c 65536 /dev/urandom > "$task_dir/linux/Constructd.Api"
+printf '{}\n' > "$task_dir/linux/appsettings.json"
 commit=$(git rev-parse HEAD)
-pwsh -NoProfile -File service/host/New-ConstructHostPackage.ps1 -PublishDir "$task_dir/publish" -FrameworkDependentPublishDir "$task_dir/fdd" -OutputDir "$task_dir/output" -Commit "$commit"
+pwsh -NoProfile -File service/host/New-ConstructHostPackage.ps1 -PublishDir "$task_dir/publish" -FrameworkDependentPublishDir "$task_dir/fdd" -LinuxPublishDir "$task_dir/linux" -OutputDir "$task_dir/output" -Commit "$commit"
 python3 scripts/package-construct-release.py --output "$task_dir/output" --commit "$commit" --repository permissionBRICK/The-Construct
 python3 - "$task_dir/output" "$commit" <<'PY'
 import hashlib,json,pathlib,sys,zipfile
@@ -41,5 +44,12 @@ for prefix in ('payload','frameworkDependent'):
         assert files[m['updaterPath']]==m['updaterSha256'];checks+=1
         assert z.read('scripts/config/iso-builder.json')==pathlib.Path('config/iso-builder.json').read_bytes();checks+=1
         assert not any('appsettings.Production.json' in p or '/keys/' in p for p in files);checks+=1
+linux=root/m['linuxAsset']
+assert m['linuxAsset']=='construct-host-'+sys.argv[2][:7]+'-linux-x64.zip';checks+=1
+assert linux.stat().st_size==m['linuxSizeBytes'];checks+=1
+assert hashlib.sha256(linux.read_bytes()).hexdigest()==m['linuxSha256'];checks+=1
+with zipfile.ZipFile(linux) as z:
+    assert set(z.namelist())=={'Constructd.Api','appsettings.json'};checks+=1
+assert (m['linuxSha256']+'  '+m['linuxAsset']) in (root/'SHA256SUMS').read_text();checks+=1
 print(f'host-package: {checks} assertions passed ({len(files)} payload files); fixture executable, no Windows publish performed')
 PY
