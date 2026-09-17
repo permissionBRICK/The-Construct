@@ -62,3 +62,23 @@ with zipfile.ZipFile(linux) as z:
 assert (m['linuxSha256']+'  '+m['linuxAsset']) in (root/'SHA256SUMS').read_text();checks+=1
 print(f'host-package: {checks} assertions passed ({len(files)} payload files); fixture executable, no Windows publish performed')
 PY
+
+# A directory link must be refused too, even when no file is reached through it.
+ln -s "$task_dir/linux" "$task_dir/linux/link"
+if pwsh -NoProfile -File service/host/New-ConstructHostPackage.ps1 -PublishDir "$task_dir/publish" -LinuxPublishDir "$task_dir/linux" -OutputDir "$task_dir/linked-output" -Commit "$commit" >"$task_dir/refusal.log" 2>&1; then
+  echo 'Packager accepted a Linux publish directory link' >&2; exit 1
+fi
+python3 - "$task_dir/refusal.log" <<'PY'
+import pathlib,sys
+assert 'Package cannot contain links' in pathlib.Path(sys.argv[1]).read_text()
+PY
+unlink "$task_dir/linux/link"
+printf '{}\n' >"$task_dir/linux/install.json"
+if pwsh -NoProfile -File service/host/New-ConstructHostPackage.ps1 -PublishDir "$task_dir/publish" -LinuxPublishDir "$task_dir/linux" -OutputDir "$task_dir/preserved-output" -Commit "$commit" >"$task_dir/refusal.log" 2>&1; then
+  echo 'Packager accepted a preserved Linux ledger' >&2; exit 1
+fi
+python3 - "$task_dir/refusal.log" <<'PY'
+import pathlib,sys
+assert 'Preserved file in package' in pathlib.Path(sys.argv[1]).read_text()
+print('host-package: directory links and preserved Linux files refused')
+PY
