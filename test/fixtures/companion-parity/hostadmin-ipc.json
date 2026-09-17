@@ -295,6 +295,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": false
@@ -325,6 +326,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": false
@@ -354,6 +356,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": false
@@ -383,6 +386,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": false
@@ -417,6 +421,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": false
@@ -451,6 +456,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": false
@@ -484,6 +490,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": false
@@ -517,6 +524,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": false
@@ -557,6 +565,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": false
@@ -597,6 +606,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": false
@@ -636,6 +646,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": false
@@ -675,6 +686,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": false
@@ -705,6 +717,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": false
@@ -735,6 +748,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": false
@@ -764,6 +778,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": false
@@ -793,6 +808,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": false
@@ -827,6 +843,7 @@
         "hostAdmin": true,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": false
@@ -868,6 +885,7 @@
         "hostAdmin": true,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": false
@@ -908,6 +926,7 @@
         "hostAdmin": true,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": false
@@ -948,6 +967,7 @@
         "hostAdmin": true,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": false
@@ -995,6 +1015,7 @@
         "hostAdmin": true,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": true
@@ -1046,6 +1067,7 @@
         "hostAdmin": true,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": true
@@ -1096,6 +1118,7 @@
         "hostAdmin": true,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": true
@@ -1146,6 +1169,7 @@
         "hostAdmin": true,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": true
@@ -1191,6 +1215,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": false
@@ -1225,6 +1250,7 @@
         "hostAdmin": true,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": false
@@ -1259,6 +1285,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": false
@@ -1293,6 +1320,7 @@
         "hostAdmin": true,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": false
@@ -1327,6 +1355,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": false
@@ -1361,6 +1390,7 @@
         "hostAdmin": true,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": false
@@ -1395,6 +1425,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": false
@@ -1429,6 +1460,7 @@
         "hostAdmin": true,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": false
@@ -1463,6 +1495,7 @@
         "hostAdmin": false,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": false
@@ -1508,6 +1541,7 @@
         "hostAdmin": true,
         "media": false,
         "network": false,
+        "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
         "updates": false
@@ -1719,6 +1753,7 @@
       "hostAdmin": false,
       "media": false,
       "network": false,
+      "networkMode": false,
       "primaryCpu": false,
       "primaryMemory": false,
       "updates": false
@@ -1789,6 +1824,7 @@
       "hostAdmin": true,
       "media": false,
       "network": false,
+      "networkMode": false,
       "primaryCpu": false,
       "primaryMemory": false,
       "updates": false
@@ -1798,6 +1834,81 @@
     "input": {
       "apiFeatures": [
         "host-admin"
+      ]
+    },
+    "kind": "tabs",
+    "now": 1789128000000,
+    "output": [
+      {
+        "available": true,
+        "id": "overview",
+        "label": "Overview",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "vms",
+        "label": "VMs",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "users",
+        "label": "Users",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "media",
+        "label": "Media",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "operations",
+        "label": "Operations",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "config",
+        "label": "Configuration",
+        "reason": ""
+      },
+      {
+        "available": false,
+        "id": "maintenance",
+        "label": "Maintenance",
+        "reason": "not available on this host version"
+      }
+    ]
+  },
+  {
+    "input": {
+      "apiFeatures": [
+        "host-admin",
+        "network-mode"
+      ]
+    },
+    "kind": "features",
+    "now": 1789128000000,
+    "output": {
+      "children": false,
+      "console": false,
+      "hostAdmin": true,
+      "media": false,
+      "network": false,
+      "networkMode": true,
+      "primaryCpu": false,
+      "primaryMemory": false,
+      "updates": false
+    }
+  },
+  {
+    "input": {
+      "apiFeatures": [
+        "host-admin",
+        "network-mode"
       ]
     },
     "kind": "tabs",
@@ -1863,6 +1974,7 @@
       "hostAdmin": true,
       "media": false,
       "network": false,
+      "networkMode": false,
       "primaryCpu": false,
       "primaryMemory": false,
       "updates": true
@@ -1944,6 +2056,7 @@
       "hostAdmin": true,
       "media": true,
       "network": true,
+      "networkMode": false,
       "primaryCpu": true,
       "primaryMemory": true,
       "updates": true

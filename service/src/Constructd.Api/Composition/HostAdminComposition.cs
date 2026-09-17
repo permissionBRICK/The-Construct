@@ -32,7 +32,7 @@ public static class HostAdminComposition
         services.AddSingleton<IOperationRegistry, InMemoryOperationRegistry>();
         services.AddSingleton<IDelegationPolicy, DelegationPolicy>();
         services.AddSingleton<ICapabilityAggregator, CapabilityAggregator>();
-        if (options.Fake) services.AddSingleton<IReleaseInfo>(_ => new FakeReleaseInfo { ApiFeatures = new FakeReleaseInfo().ApiFeatures.Where(f => f != "source-cache" || options.HostAdmin.Source.Enabled).ToArray() });
+        if (options.Fake) services.AddSingleton<IReleaseInfo>(_ => new FakeReleaseInfo { ApiFeatures = new ReleaseInfo(options).ApiFeatures });
         else services.AddSingleton<IReleaseInfo, ReleaseInfo>();
         services.AddMediaPlatform(options);
         services.AddSourcePlatform(options);
