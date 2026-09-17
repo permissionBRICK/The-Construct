@@ -35,11 +35,15 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.gateway.config = {'CONSTRUCT_VMCONNECT_CERT_FINGERPRINT': 'sha256:trusted-fingerprint'}
         self.calls, self.params = [], {}
         self.ended = asyncio.Event()
+        self.protocol = 'rdp'
+        self.host_connection = dict(username='vm-only-user', password='PRIVATE-HOST-PASSWORD', domain='HOST', vmId='native-id', certificateFingerprint='sha256:trusted-fingerprint')
+        self.guacd_error = False
+        self.browser_input = None
 
         async def host_api(method, path):
             self.calls.append((method, path))
             if path.endswith('/connection'):
-                return dict(username='vm-only-user', password='PRIVATE-HOST-PASSWORD', domain='HOST', vmId='native-id', certificateFingerprint='sha256:trusted-fingerprint')
+                return dict(self.host_connection)
             if path.endswith('/sessions'):
                 return dict(sessionId='host-session')
             return {}
@@ -47,17 +51,20 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
 
         async def guacd(reader, writer):
             try:
-                self.assertEqual(await viewer.read_instruction(reader), ['select', 'rdp'])
-                names = ['VERSION_1_5_0', 'hostname', 'password', 'preconnection-blob', 'cert-fingerprints']
+                selected = await viewer.read_instruction(reader)
+                self.assertEqual(selected, ['select', self.protocol])
+                names = ['VERSION_1_5_0', 'hostname', 'port', 'password', 'preconnection-blob', 'cert-fingerprints', 'security', 'username', 'domain']
                 writer.write(viewer.instruction('args', *names)); await writer.drain()
                 for unused in range(4):
                     await viewer.read_instruction(reader)
                 values = await viewer.read_instruction(reader)
                 self.params.update(zip(names, values[1:]))
-                writer.write(viewer.instruction('ready', 'connection-id'))
+                writer.write(viewer.instruction('error', 'PRIVATE-HOST-PASSWORD') if self.guacd_error else viewer.instruction('ready', 'connection-id'))
                 writer.write(viewer.instruction('sync', '123'))
                 await writer.drain()
-                await reader.read()
+                self.browser_input = await reader.read()
+            except asyncio.IncompleteReadError:
+                pass  # Invalid host connection data is rejected before select.
             finally:
                 writer.close()
                 await writer.wait_closed()
@@ -114,8 +121,14 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('sync', display.data)
         self.assertNotIn('PASSWORD', first.data + display.data)
         self.assertEqual(self.params['password'], 'PRIVATE-HOST-PASSWORD')
-        self.assertEqual(self.params['hostname'], 'trusted-host')
-        self.assertEqual(self.params['preconnection-blob'], 'native-id')
+        self.assertEqual(self.params['hostname'], self.host_connection.get('host', 'trusted-host'))
+        self.assertEqual(self.params['port'], str(self.host_connection.get('port', 2179)))
+        if self.protocol == 'rdp':
+            self.assertEqual(self.params['preconnection-blob'], 'native-id')
+        else:
+            for key in ('preconnection-blob', 'cert-fingerprints', 'security', 'username', 'domain'):
+                self.assertEqual(self.params[key], '')
+        await ws.send_str('3.key,2.65,1.1;')
         await ws.send_str('0.,4.ping,3.123;')
         self.assertEqual((await ws.receive(timeout=2)).data, '0.,4.ping,3.123;')
         await ws.close()
@@ -123,6 +136,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(.02)
         self.assertIn(('DELETE', '/api/v1/vms/test-vm/console/sessions/host-session'), self.calls)
         self.assertFalse(self.gateway.tickets['id']['active'])
+        self.assertIn(b'3.key,2.65,1.1;', self.browser_input)
 
     async def test_connection_status_requires_the_ticket_cookie_and_redacts_failures(self):
         response = await self.client.get('/ws/id/status')
@@ -184,6 +198,40 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         await ws.receive(timeout=2)
         await ws.send_str('6.select,3.ssh;')
         self.assertEqual((await ws.receive(timeout=2)).type, WSMsgType.CLOSE)
+
+
+class VncGatewayTests(GatewayTests):
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.protocol = 'vnc'
+        self.host_connection = dict(protocol='vnc', host='pve-node', port=5907, password='PRIVATE-HOST-PASSWORD',
+                               username='', domain='', vmId='101', certificateFingerprint='')
+
+    async def test_vnc_failure_uses_vnc_phase_and_redacts_daemon_output(self):
+        self.guacd_error = True
+        await self.redeem()
+        ws = await self.client.ws_connect('/ws/id', protocols=['guacamole'], headers={'Origin': self.origin})
+        failure = await ws.receive(timeout=2)
+        self.assertIn('Connecting to the VM display on the host (VNC)', failure.data)
+        self.assertNotIn('PRIVATE', failure.data)
+        status = await (await self.client.get('/ws/id/status')).json()
+        self.assertNotIn('PRIVATE', str(status))
+        await ws.close()
+
+    async def test_invalid_endpoint_or_unknown_protocol_is_rejected_and_session_removed(self):
+        original = dict(self.host_connection)
+        for change in ({'port': 0}, {'port': True}, {'port': 65536}, {'host': ''}, {'protocol': 'ssh'}):
+            self.host_connection = {**original, **change}
+            self.ended.clear()
+            await self.redeem()
+            ws = await self.client.ws_connect('/ws/id', protocols=['guacamole'], headers={'Origin': self.origin})
+            self.assertIn('Connection failed', (await ws.receive(timeout=2)).data)
+            await ws.close()
+            await asyncio.wait_for(self.ended.wait(), 2)
+            await asyncio.sleep(.02)
+            self.assertFalse(self.gateway.tickets['id']['active'])
+        self.assertEqual(5, self.calls.count(('DELETE', '/api/v1/vms/test-vm/console/sessions/host-session')))
+        self.assertEqual(self.params, {})
 
 
 class LocalGatewayTests(unittest.IsolatedAsyncioTestCase):
