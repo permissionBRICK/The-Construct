@@ -17,9 +17,15 @@ public static class PrimaryVmAdmission
         var supplied = http.Request.Headers["X-Construct-Operation-Key"].FirstOrDefault();
         if (supplied is not null && !OperationFingerprint.ValidKey(supplied)) return CodedProblems.Validation("operationKey", "Invalid operation key.");
         var id = Guid.NewGuid().ToString("n");
+        var driver = services.GetRequiredService<IHypervisorDriver>();
+        var ignoredOptions = new List<string>();
+        if (request.Opts?.AutomaticCheckpoints == true && !driver.Capabilities.Checkpoints) ignoredOptions.Add("automaticCheckpoints");
+        if (request.Opts?.Nested == true && !driver.NestedAvailable) ignoredOptions.Add("nested");
+        var response = new { jobId = id, nested = descriptor.Nested, nestedFromHostDefault = request.Opts?.Nested is null, ignoredOptions };
+        descriptor = descriptor with { AutomaticCheckpoints = descriptor.AutomaticCheckpoints && driver.Capabilities.Checkpoints };
         var key = supplied is null ? null : new OperationKeyRecord(vm.Owner, "create-vm", supplied,
             OperationFingerprint.Compute(http.Request.Path, JsonSerializer.SerializeToElement(request, ApiJson.Options)), vm.Name, id,
-            OperationKeyState.Completed, null, null, JsonSerializer.Serialize(new { jobId = id }, ApiJson.Options), clock.UtcNow);
+            OperationKeyState.Completed, null, null, JsonSerializer.Serialize(response, ApiJson.Options), clock.UtcNow);
         var prior = key is null ? null : await services.GetRequiredService<IOperationKeyStore>().GetAsync(vm.Owner, key.Kind, key.Key, ct);
         if (prior is not null) return prior.Fingerprint == key!.Fingerprint && Ownership.SameName(prior.Target, vm.Name)
             ? LifecycleEndpoints.Replay(prior) : LifecycleEndpoints.Problem("operation-key-conflict");
@@ -73,7 +79,7 @@ public static class PrimaryVmAdmission
             }
             catch { await admission.MarkStartFailedAsync(id, "Primary job could not start.", CancellationToken.None); return LifecycleEndpoints.Problem("job-start-failed", 500); }
             http.SetAuditDetail($"job={id}, cpu={vm.Cpu}, ramGb={vm.RamGb}, diskGb={vm.DiskGb}");
-            return Results.Accepted("/api/v1/jobs/" + id, new JobAcceptedResponse(id));
+            return Results.Accepted("/api/v1/jobs/" + id, response);
         }
         finally { handle?.Dispose(); }
     }
