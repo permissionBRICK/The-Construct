@@ -27,7 +27,8 @@
 //                  tab, perform an action — every step re-classifying on refusal
 
 /** The `apiFeatures` names a current service advertises (§3.4). */
-const FEATURE_NAMES = ["host-admin", "children", "media", "console", "updates", "network", "primary-cpu", "primary-memory", "network-mode"];
+const FEATURE_NAMES = ["host-admin", "children", "media", "console", "updates", "network", "primary-cpu", "primary-memory", "network-mode", "usage"];
+const { formatTokens, formatCost } = require("./usage");
 
 /** The exhaustive `ChildAction` enum of §2.2, for rendering `allowedActions`. */
 const CHILD_ACTIONS = [
@@ -36,13 +37,14 @@ const CHILD_ACTIONS = [
 ];
 
 /** The host-config sections of §1.5, in display order. */
-const CONFIG_SECTIONS = ["capacity", "memoryPressure", "userDefaults", "userCaps", "lifecycle", "media", "network", "virtualization", "updates"];
+const CONFIG_SECTIONS = ["capacity", "memoryPressure", "userDefaults", "userCaps", "lifecycle", "media", "network", "virtualization", "updates", "usage"];
 
 /** The tabs of §10.2 and the feature each one needs. `host-admin` gates the module. */
 const TABS = [
   { id: "overview", label: "Overview", feature: "host-admin" },
   { id: "vms", label: "VMs", feature: "host-admin" },
   { id: "users", label: "Users", feature: "host-admin" },
+  { id: "usage", label: "Usage", feature: "usage" },
   { id: "media", label: "Media", feature: "host-admin" },
   { id: "operations", label: "Operations", feature: "host-admin" },
   { id: "config", label: "Configuration", feature: "host-admin" },
@@ -110,6 +112,7 @@ function featureSet(health) {
   const list = health && Array.isArray(health.apiFeatures) ? health.apiFeatures.map((f) => str(f)) : [];
   return {
     hostAdmin: list.indexOf("host-admin") >= 0,
+    usage: list.includes("usage"),
     children: list.indexOf("children") >= 0,
     media: list.indexOf("media") >= 0,
     console: list.indexOf("console") >= 0,
@@ -254,7 +257,10 @@ function applyRefusal(state, error, host) {
 /** The webview's tab list for a state: each tab says whether the host version has it. Pure. */
 function tabsFor(state) {
   const f = (state && state.features) || featureSet(null);
-  if (state?.mode === "user" && f.networkMode) return [{ id: "vms", label: "My VMs", available: true, reason: "" }];
+  if (state?.mode === "user" && (f.networkMode || f.usage)) return [
+    { id: "vms", label: "My VMs", available: true, reason: "" },
+    ...(f.usage ? [{ id: "usage", label: "Usage", available: true, reason: "" }] : []),
+  ];
   return TABS.map((t) => {
     const key = t.feature === "host-admin" ? "hostAdmin" : t.feature;
     const available = !!f[key];
@@ -266,6 +272,7 @@ function tabsFor(state) {
 function pollIntervalMs(state) {
   if (state && state.maintenance) return MAINTENANCE_POLL_MS;
   if (state && (state.updatePending || ["checking", "draining", "handedOff", "applying"].includes(state.maintenanceTab?.current?.state))) return MAINTENANCE_POLL_MS;
+  if (state?.activeTab === "usage" && state.features?.usage && ["admin", "user"].includes(state.mode)) return 60000;
   if (state?.mode !== "admin") return null;
   return state.activeTab === "vms" ? 10000 : state.features?.updates ? 60000 : null;
 }
@@ -370,6 +377,9 @@ function toVmRow(vm, now) {
     ...(v.network ? { network: v.network } : {}),
     resources: resourcesText(v.hardware || { cpus: v.cpu, ramMb: num(v.ramGb) === null ? null : v.ramGb * 1024, diskGb: v.diskGb }),
     usage: resourceUsageView(v.resourceUsage, now),
+    ...(v.tokenUsage ? { tokenUsage: v.tokenUsage.lastReportedAt
+      ? `${formatTokens(v.tokenUsage.today?.tokens)} today / ${formatTokens(v.tokenUsage.month?.tokens)} month`
+      : "No token report yet" } : {}),
     lease: leaseText(v.lease, now),
     lifetime: str(v.lease && v.lease.requested),
     overdue: !!(v.lease && (v.lease.overdue === true || str(v.lease.state).toLowerCase() === "overdue")),
@@ -550,6 +560,7 @@ function toUserRow(user) {
     primaries: num(vms.primaries) || 0,
     children: num(vms.children) || 0,
     tokens: num(u.tokens) || 0,
+    ...(u.usageTokensMonth != null ? { usageTokensMonth: formatTokens(u.usageTokensMonth) } : {}),
     allowance: allowanceForm(u.allowance),
     effective: allowanceText(u.effective),
   };
@@ -626,7 +637,7 @@ function toAuditRow(entry) {
 /** The Configuration tab: one editable JSON text per §1.5 section. Pure. */
 function toConfigView(config) {
   const c = config && typeof config === "object" ? config : {};
-  return CONFIG_SECTIONS.filter((key) => key !== "memoryPressure" || c[key]).map((key) => {
+  return CONFIG_SECTIONS.filter((key) => !["memoryPressure", "usage"].includes(key) || c[key]).map((key) => {
     const section = c[key] && typeof c[key] === "object" ? c[key] : null;
     const value = section && section.value && typeof section.value === "object" ? section.value : section;
     const meta = section && typeof section === "object" ? section : {};
@@ -1197,6 +1208,9 @@ function createHostAdminModel(deps = {}) {
     const next = applyRefusal({ mode: state.mode, message: state.message, maintenance: state.maintenance, host }, e, host);
     setState({ mode: next.mode, message: next.message, maintenance: next.maintenance, retryable: !!next.retryable });
     if (next.mode !== before) {
+      state.usage = null;
+      state.vms = null;
+      state.users = null;
       log(`hostadmin[${host}]: ${before} -> ${next.mode} (${errStatus(e)} ${errCode(e) || ""})`);
       return true;
     }
@@ -1207,21 +1221,25 @@ function createHostAdminModel(deps = {}) {
     state.busy = true;
     try {
       const resolved = await resolveHostState(client, { backend: deps.backend, host, problem: deps.problem });
+      if (resolved.mode !== state.mode || resolved.identity?.name !== state.identity?.name) {
+        state.usage = null; state.vms = null; state.users = null;
+      }
       setState({
         mode: resolved.mode, message: resolved.message, retryable: !!resolved.retryable,
         maintenance: resolved.maintenance, features: resolved.features, identity: resolved.identity,
       });
       if (resolved.mode === "admin" || resolved.mode === "user") state.lastKnownAt = new Date(now()).toISOString();
-      if (resolved.mode === "user" && state.features.networkMode) state.activeTab = "vms";
+      if (resolved.mode === "user" && (state.features.networkMode || state.features.usage) && !state.tabs.some(t => t.id === state.activeTab)) state.activeTab = "vms";
       return state;
     } finally { state.busy = false; }
   };
 
   /** Load one tab's data. Only in `admin` mode; a refusal re-classifies. */
-  model.load = async function load(tab) {
+  model.load = async function load(tab, window) {
     const id = str(tab) || state.activeTab;
     state.activeTab = id;
-    if (!client || state.mode !== "admin" && !(state.mode === "user" && state.features.networkMode && id === "vms")) return state;
+    if (!client || state.mode !== "admin" && !(state.mode === "user" &&
+      ((state.features.networkMode || state.features.usage) && id === "vms" || state.features.usage && id === "usage"))) return state;
     const available = state.tabs.find((t) => t.id === id);
     if (!available || !available.available) return state;
     state.busy = true;
@@ -1239,6 +1257,9 @@ function createHostAdminModel(deps = {}) {
       } else if (id === "vms") {
         const list = await client.vms({ kind: "all" });
         state.vms = { rows: toVmRows(list, now()), childrenFeature: state.features.children };
+      } else if (id === "usage") {
+        const period = ["today", "month", "all"].includes(window) ? window : state.usage?.window || "today";
+        state.usage = toTokenUsageView(await client.hostUsage(period));
       } else if (id === "users") {
         state.users = { rows: (await client.users()).map(toUserRow).sort((a, b) => a.name.localeCompare(b.name)) };
       } else if (id === "media") {
@@ -1574,4 +1595,15 @@ module.exports = {
   cascadeKindOf, cascadeConfirmation, childDeleteConfirmation,
   firstVmOffers, discoverHosts, hostEntryFor,
   resourceUsageView, createHostAdminModel,
+  toTokenUsageView,
 };
+
+function toTokenUsageView(report) {
+  const r = report || {};
+  const amounts = row => ({ tokens: formatTokens(row?.tokens), cost: formatCost(row?.costUsd) });
+  const details = row => ({ ...amounts(row), lastReported: formatWhen(row.lastReportedAt),
+    tools: (row.tools || []).map(t => `${t.tool}: ${formatTokens(t.tokens)} tokens, ${formatCost(t.costUsd)}`).join("; ") });
+  return { window: ["today", "month", "all"].includes(r.window) ? r.window : "today", generatedAt: formatWhen(r.generatedAt),
+    totals: amounts(r.totals), byUser: (r.byUser || []).map(u => ({ user: str(u.user), vms: num(u.vms) || 0, ...details(u) })),
+    byVm: (r.byVm || []).map(v => ({ vm: str(v.vm), user: str(v.user), deleted: !!v.deleted, ...details(v) })) };
+}

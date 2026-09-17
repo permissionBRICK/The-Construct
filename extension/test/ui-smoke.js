@@ -1303,6 +1303,25 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     maintenanceTab: null,
   };
   for (const row of ADMIN_STATE.vms.rows) row.usage = require("../src/hostadmin").toVmRow({}).usage;
+  const usageModel = require("../src/hostadmin");
+  const usageState = { ...ADMIN_STATE, features: { ...ADMIN_STATE.features, usage: true }, activeTab: "usage",
+    tabs: [...TABS, { id: "usage", label: "Usage", available: true, reason: "" }],
+    usage: usageModel.toTokenUsageView({ window: "month", generatedAt: "2026-09-17T12:00:00Z", totals: { tokens: 1200, costUsd: 1.23 },
+      byUser: [{ user: "alice", tokens: 1200, costUsd: 1.23, vms: 1 }],
+      byVm: [{ vm: "gone", user: "alice", deleted: true, tokens: 1200, costUsd: 1.23, lastReportedAt: "2026-09-17T11:00:00Z", tools: [{ tool: "codex", tokens: 1200, costUsd: 1.23 }] }] }) };
+  await pushAdmin(usageState);
+  check("usage: totals and estimated cost render", (await admin.locator("#hostUsageTotals").innerText()).includes("1.2K tokens · $1.23"));
+  check("usage: deleted VM is greyed and labelled", (await admin.locator("#usageVmTable .disabled").innerText()).includes("gone (deleted)"));
+  check("usage: per-tool split is available on hover", (await admin.locator("#usageVmTable .disabled").getAttribute("title")).includes("codex: 1.2K tokens"));
+  await admin.selectOption("#usageWindow", "all");
+  check("usage: window selector requests all time", (await admin.evaluate(() => window.__posted)).some(m => m.type === "hostadmin.tab" && m.tab === "usage" && m.window === "all"));
+  await pushAdmin({ ...usageState, mode: "user", tabs: usageModel.tabsFor({ mode: "user", features: { usage: true } }) });
+  check("usage: users can view usage without network-mode", await admin.locator("#tab-usage").isVisible());
+  check("usage: by-user table is admin-only", !(await admin.locator("#usageUsers").isVisible()));
+  await pushAdmin({ ...ADMIN_STATE, activeTab: "vms", vms: { ...ADMIN_STATE.vms, rows: ADMIN_STATE.vms.rows.map(r => ({ ...r, tokenUsage: "1.2K today / 1.2M month" })) } });
+  check("usage: VM rows show today and month", (await admin.locator("#vmsTable").innerText()).includes("1.2K today / 1.2M month"));
+  await pushAdmin({ ...ADMIN_STATE, activeTab: "users", users: { rows: ADMIN_STATE.users.rows.map(r => ({ ...r, usageTokensMonth: "1.2M" })) } });
+  check("usage: user row keeps API token count and adds usage", (await admin.locator("#usrTable").innerText()).includes("1.2M tokens this month"));
   await pushAdmin(ADMIN_STATE);
   await admin.waitForTimeout(80);
   check("admin: the module renders for an admin", await admin.locator("#haAdmin").isVisible() && !(await admin.locator("#haState").isVisible()));

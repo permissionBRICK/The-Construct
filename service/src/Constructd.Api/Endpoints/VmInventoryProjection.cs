@@ -10,7 +10,7 @@ using Constructd.Core.Logic;
 namespace Constructd.Api.Endpoints;
 
 public sealed class VmInventoryProjection(IVmRepository vms, IVmDelegationRepository delegation, IUserStore users,
-    IDelegationPolicy policy, ICapacityLedger capacity, IMediaStore media, IJobStore jobs, IPortForwardManager forwards, ConstructdOptions options, IOperationKeyStore keys, Constructd.Api.Hosting.VmResourceUsageReader usage, PrimaryCpuSettings cpuSettings, PrimaryMemorySettings memorySettings, VmNetworkSettings networkSettings)
+    IDelegationPolicy policy, ICapacityLedger capacity, IMediaStore media, IJobStore jobs, IPortForwardManager forwards, ConstructdOptions options, IOperationKeyStore keys, Constructd.Api.Hosting.VmResourceUsageReader usage, PrimaryCpuSettings cpuSettings, PrimaryMemorySettings memorySettings, VmNetworkSettings networkSettings, Constructd.Api.Hosting.TokenUsageReader tokenUsage)
 {
     public async Task<VmResponse> ProjectAsync(Vm vm, ClaimsPrincipal caller, CancellationToken ct)
     {
@@ -50,6 +50,8 @@ public sealed class VmInventoryProjection(IVmRepository vms, IVmDelegationReposi
             PendingRamGb = memorySetting is not null && memorySetting.RamGb != vm.RamGb ? memorySetting.RamGb : null,
             PendingCpu = cpuSetting is not null && cpuSetting.Cpus != vm.Cpu ? cpuSetting.Cpus : null,
             ResourceUsage = await usage.ReadAsync(vm.Name, ct),
+            TokenUsage = caller.IsAdmin() || Ownership.SameName(caller.NameOrEmpty(), vm.Owner)
+                ? await tokenUsage.VmAsync(vm.Name, caller.IsAdmin() ? null : vm.Owner, ct) : null,
             Media = mediaProjection,
             SourceCommit = vm.SourceCommit,
             Guest = GuestReportRules.ForPresentation(vm.Guest),

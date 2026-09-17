@@ -15,7 +15,27 @@ public static class TokenUsageEndpoints
         api.MapPost("/vms/{name}/usage", PostAsync)
             .RequireAuthorization(Policies.VmScoped)
             .Audited("vm.usage", auditSuccess: false).WithName("PostTokenUsage");
+        api.MapGet("/host/usage", HostAsync).RequireAuthorization(Policies.User).WithName("GetHostTokenUsage");
+        api.MapGet("/vms/{name}/usage", VmAsync).RequireAuthorization(Policies.User).WithName("GetVmTokenUsage");
         return api;
+    }
+
+    private static async Task<IResult> HostAsync(string? window, HttpContext http, ITokenUsageStore store, IClock clock, CancellationToken ct)
+    {
+        window ??= "today";
+        if (!TokenUsageMath.ValidWindow(window)) return Problems.BadRequest("window must be today, month or all.");
+        var rows = await store.ListAsync(http.User.IsAdmin() ? null : http.User.NameOrEmpty(), null, ct);
+        return TypedResults.Ok(TokenUsageMath.Aggregate(rows, window, clock.UtcNow));
+    }
+
+    private static async Task<IResult> VmAsync(string name, string? window, HttpContext http, IVmRepository repository,
+        IAuthorizationService authorization, ITokenUsageStore store, IClock clock, CancellationToken ct)
+    {
+        var lookup = await ApiHelpers.ResolveVmAsync(http, repository, authorization, name, Policies.VmOwnerOrAdmin, ct);
+        if (!lookup.Ok) return lookup.Failure!;
+        window ??= "today";
+        if (!TokenUsageMath.ValidWindow(window)) return Problems.BadRequest("window must be today, month or all.");
+        return TypedResults.Ok(TokenUsageMath.Aggregate(await store.ListAsync(http.User.IsAdmin() ? null : http.User.NameOrEmpty(), lookup.Vm!.Name, ct), window, clock.UtcNow));
     }
 
     private static bool ValidCost(decimal? cost) => cost is >= 0 and <= 9223372036854.775807m;

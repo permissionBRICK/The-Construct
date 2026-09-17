@@ -26,6 +26,8 @@
 .ha-row.child { padding-left: 22px; }
 .ha-row.overdue .ha-lease, .ha-row.failed .ha-state-cell, .ha-row.error .ha-state-cell { color: var(--crit); }
 .ha-row.disabled { opacity: 0.55; }
+.ha-usage-table .ha-row { grid-template-columns: minmax(120px, 1.5fr) minmax(80px, 1fr) minmax(70px, 1fr) minmax(100px, 1fr) minmax(160px, 1.5fr); }
+.ha-token-usage { font-size: 0.85em; margin-top: 4px; }
 .ha-cell { min-width: 70px; }
 .ha-cell.name { font-family: var(--mono); color: var(--title); font-weight: 600; min-width: 140px; }
 .ha-cell.wide { flex: 1 1 220px; color: var(--dim); word-break: break-word; }

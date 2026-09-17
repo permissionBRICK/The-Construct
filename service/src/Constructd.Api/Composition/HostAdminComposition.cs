@@ -27,6 +27,9 @@ public static class HostAdminComposition
         services.AddSingleton<IUserTokenRevoker>(sp => sp.GetRequiredService<ITokenService>() as IUserTokenRevoker ?? throw new InvalidOperationException("Token store must implement IUserTokenRevoker."));
         services.AddSingleton<Constructd.Api.Endpoints.VmInventoryProjection>();
         services.AddSingleton<Constructd.Api.Hosting.VmResourceUsageReader>();
+        services.AddSingleton<Constructd.Api.Hosting.TokenUsageReader>();
+        services.AddSingleton<Constructd.Api.Hosting.TokenUsageCleanupService>();
+        services.AddHostedService(sp => sp.GetRequiredService<Constructd.Api.Hosting.TokenUsageCleanupService>());
         services.AddSingleton<IVmOperationGate, InMemoryVmOperationGate>();
         services.AddSingleton<IMediaGate, InMemoryMediaGate>();
         services.AddSingleton<IOperationRegistry, InMemoryOperationRegistry>();

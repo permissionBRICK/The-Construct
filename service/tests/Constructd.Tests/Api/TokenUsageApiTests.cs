@@ -8,6 +8,52 @@ namespace Constructd.Tests.Api;
 
 public sealed class TokenUsageApiTests
 {
+    [Fact]
+    public async Task Reads_filter_owners_retain_deleted_vms_and_project_row_figures()
+    {
+        using var app = new TestApp(); app.Clock.UtcNow = DateTimeOffset.Parse("2026-09-17T12:00:00Z");
+        using var alice = await app.CreateUserClientAsync("alice"); using var bob = await app.CreateUserClientAsync("bob");
+        using var admin = await app.CreateUserClientAsync("admin", Role.Admin);
+        var job = await alice.CreateVmAsync("vm"); await alice.CreateVmAsync("gone"); await bob.CreateVmAsync("other");
+        foreach (var name in new[] { "vm", "gone", "other" })
+            Assert.Equal(HttpStatusCode.NoContent, (await admin.PostJsonAsync($"/api/v1/vms/{name}/usage", Body(Row()))).StatusCode);
+        await app.Vms.RemoveAsync("gone", default);
+        foreach (var window in new[] { "today", "month", "all" })
+        {
+            var mine = await (await alice.GetAsync("/api/v1/host/usage?window=" + window)).ReadAsync<TokenUsageSummary>();
+            Assert.Equal(200m, mine.Totals.Tokens); Assert.Single(mine.ByUser);
+            Assert.All(mine.ByVm, v => Assert.Equal("alice", v.User)); Assert.True(mine.ByVm.Single(v => v.Vm == "gone").Deleted);
+            var all = await (await admin.GetAsync("/api/v1/host/usage?window=" + window)).ReadAsync<TokenUsageSummary>();
+            Assert.Equal(300m, all.Totals.Tokens); Assert.Equal(2, all.ByUser.Count);
+        }
+        var one = await (await alice.GetAsync("/api/v1/vms/vm/usage?window=month")).ReadAsync<TokenUsageSummary>();
+        Assert.Equal(100m, one.Totals.Tokens);
+        Assert.Equal(HttpStatusCode.Forbidden, (await bob.GetAsync("/api/v1/vms/vm/usage")).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await alice.GetAsync("/api/v1/host/usage?window=year")).StatusCode);
+        using var guest = app.CreateVmTokenClient(job.VmToken());
+        Assert.Equal(HttpStatusCode.Forbidden, (await guest.GetAsync("/api/v1/host/usage")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await guest.GetAsync("/api/v1/vms/vm/usage")).StatusCode);
+        var vm = await (await alice.GetAsync("/api/v1/vms/vm")).ReadAsync<VmResponse>();
+        Assert.Equal(100m, vm.TokenUsage!.Today.Tokens); Assert.Equal(100m, vm.TokenUsage.Month.Tokens);
+        var user = await (await admin.GetAsync("/api/v1/users/alice")).ReadAsync<UserDetailResponse>();
+        Assert.Equal(200m, user.UsageTokensMonth);
+    }
+
+    [Fact]
+    public async Task Retention_config_is_validated_and_cleanup_uses_it()
+    {
+        using var app = new TestApp(); app.Clock.UtcNow = DateTimeOffset.Parse("2026-09-17T12:00:00Z");
+        using var admin = await app.CreateUserClientAsync("admin", Role.Admin); await admin.CreateVmAsync("vm");
+        Assert.Equal(HttpStatusCode.BadRequest, (await admin.PutJsonAsync("/api/v1/host/config", new { usage = new { retentionDays = 0 } })).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await admin.PutJsonAsync("/api/v1/host/config", new { usage = new { retentionDays = 1 } })).StatusCode);
+        var old = Row(); old["day"] = "2026-09-15";
+        await admin.PostJsonAsync("/api/v1/vms/vm/usage", Body(old, Row()));
+        await app.Service<Constructd.Api.Hosting.TokenUsageCleanupService>().PruneAsync(default);
+        Assert.Single(await app.Service<ITokenUsageStore>().ListAsync(null, null, default));
+        var health = JsonNode.Parse(await admin.GetStringAsync("/api/v1/health"))!;
+        Assert.Contains("usage", health["apiFeatures"]!.AsArray().Select(n => n!.GetValue<string>()));
+    }
+
     private static JsonObject Row() => new() { ["day"] = "2026-09-17", ["tool"] = "claude", ["inputTokens"] = 60,
         ["outputTokens"] = 40, ["cacheCreateTokens"] = 0, ["cacheReadTokens"] = 0, ["totalTokens"] = 100, ["costUsd"] = 1.234567m,
         ["models"] = new JsonObject { ["model"] = new JsonObject { ["totalTokens"] = 100, ["costUsd"] = 1.234567m } } };
