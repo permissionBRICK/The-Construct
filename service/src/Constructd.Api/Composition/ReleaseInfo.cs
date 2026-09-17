@@ -10,12 +10,11 @@ public sealed class ReleaseInfo : IReleaseInfo
     public int SchemaVersion => SqliteMigrations.SchemaVersion;
     public int SchemaMinReadableBy => SqliteMigrations.MinReadableBy;
     /// <summary>
-    /// What this host's platform really offers. A Proxmox node has no child VMs, media catalog,
-    /// screenshot console or child-network policy yet, and must not advertise them: the
-    /// extension shows what is listed here and hides the rest (host-administration contract §8.1).
+    /// Implemented API groups. Individual capabilities describe platform limitations within them;
+    /// `network-mode` (relayed or direct guest networking) exists on Proxmox only.
     /// </summary>
     public IReadOnlyList<string> ApiFeatures => options?.IsProxmox == true
-        ? ["host-admin", "updates", "primary-cpu", "primary-memory", "network-mode", .. SourceCache]
+        ? ["host-admin", "updates", "primary-cpu", "primary-memory", "network-mode", "children", "media", "console", "network", .. SourceCache]
         : ["host-admin", "children", "media", "console", "updates", "network", "primary-cpu", "primary-memory", .. SourceCache];
     private string[] SourceCache => options?.HostAdmin.Source.Enabled != false ? ["source-cache"] : [];
     private readonly Constructd.Core.Configuration.ConstructdOptions? options;

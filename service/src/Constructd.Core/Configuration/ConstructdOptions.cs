@@ -172,6 +172,9 @@ public sealed class ProxmoxOptions
     /// <summary>Storage that receives each VM's disk and cloud-init drive (<c>images</c> content).</summary>
     public string Storage { get; set; } = "local-lvm";
 
+    /// <summary>Directory storage exposing the child media root as ISO content.</summary>
+    public string MediaStorage { get; set; } = "construct-media";
+
     /// <summary>
     /// The cached Ubuntu cloud image every VM is cloned from, as a Proxmox volume id on a storage with
     /// <c>import</c> content (<c>qm create --scsi0 &lt;storage&gt;:0,import-from=&lt;this&gt;</c>).
@@ -192,6 +195,12 @@ public sealed class ProxmoxOptions
 
     /// <summary>The <c>qm</c> command (VM lifecycle).</summary>
     public string QmPath { get; set; } = "qm";
+
+    /// <summary>The storage command, used to finish deletion of journalled child disks.</summary>
+    public string PvesmPath { get; set; } = "pvesm";
+
+    /// <summary>Python 3 for the local QMP client. Console input is supplied only on stdin.</summary>
+    public string PythonPath { get; set; } = "python3";
 
     /// <summary>The <c>pvesh</c> command (read-only API queries).</summary>
     public string PveshPath { get; set; } = "pvesh";

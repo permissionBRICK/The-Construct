@@ -1,7 +1,7 @@
 # Proxmox host self-update
 
-Status: plan, 2026-09-17. Branch `feat/proxmox-backend` (PR #19). Implementation is
-handed to a T3 Code thread; this document is the brief.
+Status: implemented, 2026-09-17. Branch `feat/proxmox-backend` (PR #19).
+This design brief is retained; systemd handoff and rollback still need human field testing.
 
 ## 1. Goal
 
@@ -10,8 +10,8 @@ systemd) updates itself from the GitHub host release exactly like the Windows ho
 does: the admin opens the extension's **Maintenance** tab, clicks *Update*, the service
 stages and verifies the package, drains, hands off to a privileged one-shot updater,
 which swaps the files, restarts `constructd.service`, health-checks the new binary
-and commits, or rolls back on failure. Today the tab is hidden on Proxmox (no `updates`
-feature) and the only update path is re-running `service/host/install-construct-host.sh`.
+and commits, or rolls back on failure. Proxmox now advertises `updates` and uses
+`SystemdUpdaterLauncher`; the installer remains the initial install and repair path.
 
 Non-goals: changing the Windows updater's behaviour (its tests pin it), changing
 `install-construct-host.sh`'s role (it stays the install/repair path), signing.
@@ -31,7 +31,7 @@ The whole flow is platform-neutral except three pieces. Read in this order:
 | **Launcher** (Task Scheduler) | `service/src/Constructd.Windows/Updates/ScheduledTaskUpdaterLauncher.cs` | **yes** |
 | **Updater** (runs as SYSTEM after the service stops) | `service/host/Update-ConstructHost.ps1` | **yes** |
 | **Packager** | `service/host/New-ConstructHostPackage.ps1`, `.github/workflows/host-release.yml`, `scripts/publish-construct-release.py` | the Linux branch is a stub (§4.1) |
-| Proxmox stub | `service/src/Constructd.Proxmox/NoUpdaterLauncher.cs`, `service/src/Constructd.Api/Composition/UpdateComposition.cs:30-31`, `service/src/Constructd.Api/Composition/ReleaseInfo.cs:17-20` | replace |
+| Proxmox launcher | `service/src/Constructd.Proxmox/Updates/SystemdUpdaterLauncher.cs`, `service/src/Constructd.Api/Composition/UpdateComposition.cs`, `service/src/Constructd.Api/Composition/ReleaseInfo.cs` | implemented; replaces the former `NoUpdaterLauncher` |
 | Extension | `extension/src/hostadmin.js` (`FEATURE_NAMES`, tab gated on `updates`), `hostupdate.js` | no change |
 | Existing tests | `service/tests/Constructd.Tests/Updates/*.cs`, `service/tests/host-updater.test.ps1`, `test/host-package.test.sh` | extend, do not weaken |
 | Docs | `docs/host-release.md`, `docs/proxmox-host.md` §"Updating", `service/README.md` | update |
@@ -86,7 +86,7 @@ Each step leaves the tree building and the suites green (`dotnet test service/te
 ### 4.3 Launcher (`Constructd.Proxmox/Updates/SystemdUpdaterLauncher.cs`)
 
 - Implement per §3.4. Reuse `UpdateFiles` and `FileHostLock` verbatim. Reject control characters and quotes in paths (`invalid-update-path`) like the Windows class. Never log or persist the health token anywhere except `handoff.json` (0600, root).
-- `UpdateComposition`: `IsProxmox` → `SystemdUpdaterLauncher(IProcessRunner, IHostLock, dataDir)`. Delete `NoUpdaterLauncher.cs`.
+- `UpdateComposition` now registers `SystemdUpdaterLauncher(IProcessRunner, IHostLock, dataDir)` for Proxmox; `NoUpdaterLauncher.cs` has been removed.
 - Tests: exact `systemd-run` argv (unit name derived from the update id, `--resume` only on resume, no token in argv), launch failure removes nothing and throws `updater-launch-failed`, `PrepareAsync` refuses when a closed fence plus `replaceStarted` exist, fence/handoff/record readers use the same file names as Windows. Add an interop test: `FileHostLock` holds `updater.lock`, `flock -n <path> true` must fail; and the reverse (`flock` held by a child process → `IsHeldByAnotherProcess == true`). Skip that test on Windows.
 
 ### 4.4 Updater script (`service/host/update-construct-host.sh`)

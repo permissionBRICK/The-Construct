@@ -110,5 +110,80 @@ public sealed class ProxmoxInventoryTests
         Assert.NotNull(snapshot);
         Assert.Equal(total, snapshot.Host.SwapTotalBytes);
         Assert.Equal(used, snapshot.Host.SwapUsedBytes);
+    private const string Child = """[{"vmid":101,"name":"child","tags":"construct-child","status":"running","cpus":2,"maxmem":2147483648,"maxdisk":4294967296}]""";
+    private const string ChildConfig = """
+        {"name":"child","tags":"construct-child","smbios1":"uuid=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "description":"construct-child parent=primary uuid=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa operation=op",
+        "scsi0":"local-lvm:vm-101-disk-2,size=4G","efidisk0":"local-lvm:vm-101-disk-0,size=4M,pre-enrolled-keys=1",
+        "tpmstate0":"local-lvm:vm-101-disk-1,size=4M"}
+        """;
+    private static Reservation ChildDisk() => new("r", ReservationResource.Storage, "alice", "child", "disk:local-lvm:vm-child-disk-0",
+        "local-lvm", 4L << 30, ReservationPhase.Held, ReservationOrigin.Api, null, DateTimeOffset.UtcNow, null, null);
+
+    [Fact]
+    public async Task Tagged_child_uses_UUID_and_actual_guest_disk_placement_without_inventing_thin_allocation()
+    {
+        var runner = new RecordingProcessRunner().RespondStdout(Status).RespondStdout(Storages).RespondStdout(Child)
+            .RespondStdout(ChildConfig).RespondStdout("{\"status\":\"running\"}");
+        var snapshot = await new ProxmoxInventory(runner, Options(), new SystemClock()).ReadAsync([ChildDisk()], default);
+        Assert.True(snapshot.Complete); var vm = Assert.Single(snapshot.Vms);
+        Assert.Equal("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", vm.Id);
+        Assert.Equal(3, vm.Disks.Count); Assert.Equal("local-lvm:vm-child-disk-0", vm.Disks[0].Path);
+        Assert.Equal(4L << 30, vm.Disks[0].MaxBytes); Assert.Equal(0, vm.Disks[0].FileBytes);
+        var evidence = Assert.Single(snapshot.Artifacts!); Assert.Equal(vm.Disks[0].Path, evidence.Path);
+        Assert.Equal(ArtifactPresence.Present, evidence.Presence);
+        var managed = new Vm("child", "alice", 2, 2, 4, DateTimeOffset.UtcNow, VmState.Running, null, null, IdlePolicy.Disabled, [],
+            Kind: VmKind.Child, Incarnation: vm.Id);
+        Assert.True(Constructd.Core.Logic.CapacityMath.Matches(managed, vm));
+        Assert.False(Constructd.Core.Logic.CapacityMath.Matches(managed with { Incarnation = Guid.NewGuid().ToString() }, vm));
+        var accounted = Constructd.Core.Logic.CapacityMath.AccountedReservations(snapshot, [ChildDisk()], [managed]);
+        Assert.Equal(4L << 30, accounted.Where(r => r.Artifact == ChildDisk().Artifact).Sum(r => r.Amount));
+        Assert.Equal((4L << 30) + (8L << 20), accounted.Where(r => r.Artifact?.StartsWith("disk:") == true).Sum(r => r.Amount));
+        Assert.Equal(new[] { "get", "/nodes/pve1/qemu/101/config", "--output-format", "json" }, runner.Calls[3].Arguments);
+    }
+    [Fact]
+    public async Task Saved_child_retains_UUID_and_reports_saved_state_evidence()
+    {
+        var config = ChildConfig.TrimEnd().TrimEnd('}') + ",\"vmstate\":\"local-lvm:vm-101-state-suspend\"}";
+        var runner = new RecordingProcessRunner().RespondStdout(Status).RespondStdout(Storages).RespondStdout(Child)
+            .RespondStdout(config).RespondStdout("{\"status\":\"stopped\",\"lock\":\"suspended\"}")
+            .RespondStdout("[{\"volid\":\"local-lvm:vm-101-state-suspend\",\"size\":1234}]");
+        var snapshot = await new ProxmoxInventory(runner, Options(), new SystemClock()).ReadAsync(default);
+        Assert.True(snapshot.Complete); var vm = Assert.Single(snapshot.Vms);
+        Assert.Equal(VmState.Saved, vm.State); Assert.Equal(1234, vm.SavedStateBytes); Assert.Equal(0, vm.MemoryAssignedBytes);
+        Assert.Equal("local-lvm:vm-101-disk-2", vm.Disks[0].Path); // Native volume when there is no placement hold.
+    }
+    [Fact]
+    public async Task Child_config_identity_mismatch_is_incomplete_evidence()
+    {
+        var runner = new RecordingProcessRunner().RespondStdout(Status).RespondStdout(Storages).RespondStdout(Child)
+            .RespondStdout(ChildConfig.Replace("parent=primary uuid=aaaaaaaa", "parent=primary uuid=bbbbbbbb"));
+        var snapshot = await new ProxmoxInventory(runner, Options(), new SystemClock()).ReadAsync(default);
+        Assert.False(snapshot.Complete); Assert.Equal("inventory-unavailable", Assert.Single(snapshot.Problems));
+    }
+    [Fact]
+    public async Task Construct_primary_identity_agrees_with_the_enabled_child_identity_provider()
+    {
+        var runner = new RecordingProcessRunner().RespondStdout(Status).RespondStdout(Storages)
+            .RespondStdout(Child.Replace("construct-child", "construct")).RespondStdout(ChildConfig.Replace("construct-child", "construct"));
+        var snapshot = await new ProxmoxInventory(runner, Options(), new SystemClock()).ReadAsync(default);
+        Assert.True(snapshot.Complete);
+        Assert.Equal("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", Assert.Single(snapshot.Vms).Id);
+        Assert.Equal(4, runner.Calls.Count);
+    }
+    [Fact]
+    public async Task A_missing_VM_with_a_cleanup_journal_does_not_prove_its_disks_absent()
+    {
+        var dir = Directory.CreateTempSubdirectory("child-inventory-");
+        try
+        {
+            var options = Options(); options.DatabasePath = Path.Combine(dir.FullName, "constructd.db");
+            Directory.CreateDirectory(Path.Combine(dir.FullName, "children"));
+            File.WriteAllText(Path.Combine(dir.FullName, "children", "child.json"), "{}");
+            var runner = new RecordingProcessRunner().RespondStdout(Status).RespondStdout(Storages).RespondStdout("[]");
+            var snapshot = await new ProxmoxInventory(runner, options, new SystemClock()).ReadAsync([ChildDisk()], default);
+            Assert.Equal(ArtifactPresence.Unknown, Assert.Single(snapshot.Artifacts!).Presence);
+        }
+        finally { dir.Delete(true); }
     }
 }
