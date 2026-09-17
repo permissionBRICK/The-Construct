@@ -309,6 +309,7 @@ Write-Host "=== Restore onto a new remote VM ===" -ForegroundColor Cyan
     $BackupMode = ''
     $restoreDir = ''
     $restoredProjectNames = @()
+    $savedProfiles = @()
     Invoke-Expression $remoteRestore.Extent.Text
     ok "restore: no backup means no prompt or restore" ($script:restorePrompts -eq 0 -and -not $restoreDir)
 
@@ -317,7 +318,9 @@ Write-Host "=== Restore onto a new remote VM ===" -ForegroundColor Cyan
     Invoke-Expression $remoteRestore.Extent.Text
     ok "restore: a new remote VM offers the cached backup" ($script:restorePrompts -eq 1)
     ok "restore: acceptance sets the directory handed to provisioning" ($restoreDir -eq $backupDir)
-    ok "restore: acceptance includes the saved project profiles" (($restoredProjectNames -join ',') -eq 'private-project,second-project')
+    # A NEW instance restores the config but not the saved VM's workspace: the profiles the
+    # save generated are reported, never folded into this VM's project selection.
+    ok "restore: acceptance leaves the project selection to the user" ($restoredProjectNames.Count -eq 0 -and $savedProfiles.Count -eq 2)
 
     $script:restoreAnswer = $false
     $restoreDir = ''
