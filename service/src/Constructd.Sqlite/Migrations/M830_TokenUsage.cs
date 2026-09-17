@@ -13,17 +13,18 @@ public sealed class M830_TokenUsage : ISqliteMigration
         command.CommandText = """
             CREATE TABLE token_usage (
                 vm_name TEXT NOT NULL COLLATE NOCASE, owner TEXT NOT NULL COLLATE NOCASE,
+                vm_incarnation TEXT NOT NULL,
                 tool TEXT NOT NULL, day TEXT NOT NULL,
                 input_tokens INTEGER NOT NULL, output_tokens INTEGER NOT NULL,
                 cache_create_tokens INTEGER NOT NULL, cache_read_tokens INTEGER NOT NULL,
                 total_tokens INTEGER NOT NULL, cost_usd_micros INTEGER NOT NULL,
                 models_json TEXT NOT NULL, reported_at TEXT NOT NULL, vm_deleted_at TEXT NULL,
-                PRIMARY KEY(vm_name, tool, day)
+                PRIMARY KEY(vm_name, vm_incarnation, tool, day)
             );
             CREATE INDEX ix_token_usage_owner ON token_usage(owner);
             CREATE TRIGGER token_usage_vm_deleted AFTER DELETE ON vms BEGIN
                 UPDATE token_usage SET vm_deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-                WHERE vm_name = OLD.name AND vm_deleted_at IS NULL;
+                WHERE vm_name = OLD.name AND vm_incarnation = COALESCE(OLD.incarnation, OLD.created) AND vm_deleted_at IS NULL;
             END;
             """;
         command.ExecuteNonQuery();

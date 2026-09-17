@@ -32,6 +32,25 @@ public sealed class TokenUsageTests : IDisposable
     }
 
     [Fact]
+    public async Task Reusing_a_deleted_vm_name_does_not_overwrite_its_former_owners_history()
+    {
+        var db = Open(); var vms = new SqliteVmRepository(db); var store = new SqliteTokenUsageStore(db);
+        var oldVm = Vm() with { Incarnation = "old" };
+        await vms.AddAsync(oldVm, 10, default);
+        await store.UpsertAsync(oldVm, [Day("2026-09"), Day("2026-08-17")], Now, default);
+        await vms.RemoveAsync(oldVm.Name, default);
+        var newVm = Vm(owner: "bob") with { Incarnation = "new" };
+        await vms.AddAsync(newVm, 10, default);
+        await store.UpsertAsync(newVm, [Day("2026-09-17", 200), Day("2026-08-17", 200)], Now.AddHours(1), default);
+        var all = TokenUsageMath.Aggregate(await store.ListAsync(null, null, default), "all", Now);
+        Assert.Equal(600m, all.Totals.Tokens);
+        Assert.Equal(200m, all.ByUser.Single(u => u.User == "alice").Tokens);
+        Assert.True(all.ByVm.Single(v => v.User == "alice").Deleted);
+        Assert.False(all.ByVm.Single(v => v.User == "bob").Deleted);
+        Assert.Equal(2, (await store.ListAsync("alice", null, default)).Count);
+    }
+
+    [Fact]
     public async Task Deleting_and_replaced_vms_cannot_report()
     {
         var db = Open(); var vms = new SqliteVmRepository(db); var store = new SqliteTokenUsageStore(db); var vm = Vm();

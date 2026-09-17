@@ -258,21 +258,23 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
             if (Text(resolved["mode"]) != Text(m.State["mode"]) || Text(resolved["identity"]?["name"]) != Text(m.State["identity"]?["name"]))
             { m.State["usage"] = null; m.State["vms"] = null; m.State["users"] = null; }
             foreach (var (key, value) in resolved) m.State[key] = value?.DeepClone();
-            m.State["tabs"] = OwnerReadView(m)
-                ? new JsonArray(new JsonObject { ["id"] = "vms", ["label"] = "My VMs", ["available"] = true, ["reason"] = "" })
-                : TabsFor(m.State["features"]!.AsObject());
-            if (OwnerReadView(m))
-            {
-                if (StateJson.Boolean(m.State["features"]?["usage"]) == true)
-                    m.State["tabs"]!.AsArray().Add(new JsonObject { ["id"] = "usage", ["label"] = "Usage", ["available"] = true, ["reason"] = "" });
-                if (Text(m.State["activeTab"]) is not ("vms" or "usage")) m.State["activeTab"] = "vms";
-            }
+            SetTabs(m);
             if (Text(m.State["mode"]) is "admin" or "user") m.State["lastKnownAt"] = clock.UtcNow.ToString("O");
         }
         finally { m.State["busy"] = false; }
     }
     private static bool OwnerNetworkView(Model m) => Text(m.State["mode"]) == "user" && StateJson.Boolean(m.State["features"]?["networkMode"]) == true;
     private static bool OwnerReadView(Model m) => OwnerNetworkView(m) || Text(m.State["mode"]) == "user" && StateJson.Boolean(m.State["features"]?["usage"]) == true;
+    private static void SetTabs(Model m)
+    {
+        m.State["tabs"] = OwnerReadView(m)
+            ? new JsonArray(new JsonObject { ["id"] = "vms", ["label"] = "My VMs", ["available"] = true, ["reason"] = "" })
+            : TabsFor(m.State["features"]!.AsObject());
+        if (!OwnerReadView(m)) return;
+        if (StateJson.Boolean(m.State["features"]?["usage"]) == true)
+            m.State["tabs"]!.AsArray().Add(new JsonObject { ["id"] = "usage", ["label"] = "Usage", ["available"] = true, ["reason"] = "" });
+        if (!m.State["tabs"]!.AsArray().Any(t => Text(t?["id"]) == Text(m.State["activeTab"]))) m.State["activeTab"] = "vms";
+    }
     private async Task Load(Model m, RemoteHostClient client, CancellationToken ct)
     {
         if (Text(m.State["mode"]) != "admin" && !(OwnerReadView(m) && Text(m.State["activeTab"]) is "vms" or "usage")) return;
@@ -526,10 +528,13 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
     private static void Notice(Model m, string text) => m.State["notice"] = new JsonObject { ["level"] = "error", ["text"] = text };
     private static void Refusal(Model m, RemoteApiException e)
     {
+        if (e.Status is 401 or 403 or 0)
+        { m.State["usage"] = null; m.State["vms"] = null; m.State["users"] = null; }
         if (e.Status == 401) m.State["mode"] = "sign-in";
         else if (e.Status == 403 && e.Code is not ("lifetime-not-allowed" or "sharing-not-allowed")) m.State["mode"] = "user";
         else if (e.Status == 0) { m.State["mode"] = "unavailable"; m.State["retryable"] = true; }
         else if (e.Status == 503 && e.Code is "" or "maintenance") m.State["maintenance"] = new JsonObject { ["phase"] = "maintenance" };
+        SetTabs(m);
         Notice(m, "The host refused this operation or is unavailable.");
     }
     private void Publish(Model m) { m.View = m.State.DeepClone().AsObject(); events.HostAdmin(m.Host.Slug, new { type = "hostadmin.state", state = m.View }); }

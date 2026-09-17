@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 CC=()
 ensure_ccusage() {
   if command -v ccusage >/dev/null 2>&1; then CC=(ccusage); return; fi
@@ -43,4 +44,3 @@ capture() {
   fi
   rm -- "$errfile"
 }
-

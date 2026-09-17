@@ -19,16 +19,17 @@ public sealed class SqliteTokenUsageStore(SqliteDatabase database) : ITokenUsage
             using var command = connection.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = """
-                INSERT INTO token_usage(vm_name,owner,tool,day,input_tokens,output_tokens,cache_create_tokens,
+                INSERT INTO token_usage(vm_name,vm_incarnation,owner,tool,day,input_tokens,output_tokens,cache_create_tokens,
                     cache_read_tokens,total_tokens,cost_usd_micros,models_json,reported_at)
-                VALUES(@vm,@owner,@tool,@day,@input,@output,@create,@read,@total,@cost,@models,@at)
-                ON CONFLICT(vm_name,tool,day) DO UPDATE SET owner=excluded.owner,
+                VALUES(@vm,@identity,@owner,@tool,@day,@input,@output,@create,@read,@total,@cost,@models,@at)
+                ON CONFLICT(vm_name,vm_incarnation,tool,day) DO UPDATE SET owner=excluded.owner,
                     input_tokens=excluded.input_tokens, output_tokens=excluded.output_tokens,
                     cache_create_tokens=excluded.cache_create_tokens, cache_read_tokens=excluded.cache_read_tokens,
                     total_tokens=excluded.total_tokens, cost_usd_micros=excluded.cost_usd_micros,
                     models_json=excluded.models_json, reported_at=excluded.reported_at, vm_deleted_at=NULL
                 """;
             command.With("@vm", vm.Name).With("@owner", vm.Owner).With("@tool", day.Tool).With("@day", day.Day)
+                .With("@identity", vm.Incarnation ?? SqliteDatabase.Text(vm.Created))
                 .With("@input", day.InputTokens).With("@output", day.OutputTokens).With("@create", day.CacheCreateTokens)
                 .With("@read", day.CacheReadTokens).With("@total", day.TotalTokens).With("@cost", day.CostUsdMicros)
                 .With("@models", day.ModelsJson).With("@at", SqliteDatabase.Text(reportedAt));
@@ -52,7 +53,7 @@ public sealed class SqliteTokenUsageStore(SqliteDatabase database) : ITokenUsage
                     reader.GetInt64(reader.GetOrdinal("output_tokens")), reader.GetInt64(reader.GetOrdinal("cache_create_tokens")),
                     reader.GetInt64(reader.GetOrdinal("cache_read_tokens")), reader.GetInt64(reader.GetOrdinal("total_tokens")),
                     reader.GetInt64(reader.GetOrdinal("cost_usd_micros")), reader.GetString("models_json")),
-                SqliteDatabase.ReadTime(reader.GetString("reported_at")), SqliteDatabase.ReadTimeOrNull(reader.GetStringOrNull("vm_deleted_at"))));
+                SqliteDatabase.ReadTime(reader.GetString("reported_at")), SqliteDatabase.ReadTimeOrNull(reader.GetStringOrNull("vm_deleted_at")), reader.GetString("vm_incarnation")));
         return rows;
     }
 

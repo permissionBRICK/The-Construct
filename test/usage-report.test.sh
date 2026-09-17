@@ -52,7 +52,9 @@ jq -e --arg today "$(date +%F)" '.days[] | select(.day == $today and .tool == "c
 jq -e --arg today "$(date +%F)" '.days[] | select(.day == $today and .tool == "codex") | .costUsd == 2.34 and .cacheReadTokens == 4 and .models["model-b"].totalTokens == 30' "${tmp}/body.json" >/dev/null
 [[ -f "${tmp}/state/backfilled" && ! -d "$(cat "${tmp}/work")" ]]
 rg -q 'Authorization: VmToken test-usage-secret' "${tmp}/headers"
-! rg -q 'test-usage-secret' "${tmp}/curl-argv" "${tmp}/stdout" "${tmp}/stderr" "${tmp}/cc-argv"
+if rg -q 'test-usage-secret' "${tmp}/curl-argv" "${tmp}/stdout" "${tmp}/stderr" "${tmp}/cc-argv"; then
+  echo 'A credential leaked into output or argv.' >&2; exit 1
+fi
 rg -q -- '--cacert' "${tmp}/curl-argv"
 rg -q 'https://fake.invalid/api/v1/vms/test-vm/usage' "${tmp}/curl-argv"
 rg -q -- "daily --since $(date -d '2 days ago' +%Y%m%d) --until $(date +%Y%m%d) --json" "${tmp}/cc-argv"
@@ -77,6 +79,9 @@ printf '' >"${CONFIG_FILE}"
 before="$(wc -l <"${tmp}/cc-argv")"
 run
 [[ "$(wc -l <"${tmp}/cc-argv")" == "${before}" ]]
+if printf '{"daily":[{"totalTokens":999}]}' | jq --arg report daily --arg tool claude --argjson periods '["2026-09-17"]' -f "${ROOT}/bin/lib/usage-normalize.jq" >/dev/null 2>&1; then
+  echo 'Malformed collector periods must not replace usage with zero.' >&2; exit 1
+fi
 
 # Run only the install function, against fake directories and systemctl.
 eval "$(sed -n '/^setup_usage_report_timer() {/,/^}/p' "${ROOT}/bin/provision.sh")"
