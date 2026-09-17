@@ -3,8 +3,10 @@ using Constructd.Core.Domain;
 namespace Constructd.Core.Services;
 
 /// <summary>Explicit failures until a feature registers its implementation. Never acknowledges a mutation.</summary>
-public sealed class UnsupportedFeaturePlatform : IMediaStore, IMediaTransfer, IHypervisorInventory, IReleaseSource, IUpdateStager, IUpdaterLauncher, IHostUpdateStore, IHostLock, IGuestAddressProvider, IAccessExposure, IOperationKeyStore, IAdmissionStore, IPersistedJobRunner
+public sealed class UnsupportedFeaturePlatform : IMediaStore, IMediaTransfer, IHypervisorInventory, IReleaseSource, IUpdateStager, IUpdaterLauncher, IHostUpdateStore, IHostLock, IGuestAddressProvider, IAccessExposure, IOperationKeyStore, IAdmissionStore, IPersistedJobRunner, IGuestNetworkConfigurator
 {
+    Task IGuestNetworkConfigurator.ConfigureNetworkAsync(string name, string? address, string? gateway, IReadOnlyList<string>? dns, CancellationToken ct) =>
+        throw new NotSupportedException("Guest network configuration requires Proxmox.");
     Task<MediaItem?> IMediaStore.GetAsync(string id, CancellationToken ct) => Task.FromResult<MediaItem?>(null);
     Task<IReadOnlyList<MediaItem>> IMediaStore.ListAsync(string? owner, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");
     Task<int> IMediaStore.CountByOwnerAsync(string owner, CancellationToken ct) => throw new NotSupportedException("This host-administration backend is not installed.");

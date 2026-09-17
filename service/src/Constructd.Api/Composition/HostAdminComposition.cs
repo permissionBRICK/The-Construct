@@ -10,6 +10,9 @@ public static class HostAdminComposition
     public static IServiceCollection AddHostAdminCore(this IServiceCollection services, ConstructdOptions options)
     {
         services.AddSingleton<UnsupportedFeaturePlatform>();
+        services.AddSingleton<IGuestNetworkConfigurator>(sp => options.Fake
+            ? sp.GetRequiredService<FakeHypervisorDriver>() : options.IsProxmox
+                ? sp.GetRequiredService<Constructd.Proxmox.ProxmoxDriver>() : sp.GetRequiredService<UnsupportedFeaturePlatform>());
         services.AddSingleton<IVmMetadataStore>(sp => (IVmMetadataStore)sp.GetRequiredService<IVmRepository>());
         services.AddSingleton<IVmDelegationRepository>(sp => sp.GetRequiredService<IVmRepository>() as IVmDelegationRepository ?? throw new InvalidOperationException("IVmRepository must also implement IVmDelegationRepository."));
         services.AddSingleton<IUserAllowanceStore>(sp => sp.GetRequiredService<IUserStore>() as IUserAllowanceStore ?? throw new InvalidOperationException("IUserStore must also implement IUserAllowanceStore."));
