@@ -82,6 +82,7 @@ public sealed class ProxmoxInteractiveConsoleTests
     [Fact]
     public async Task Argv_environment_binary_bridge_single_use_and_removal()
     {
+        if (OperatingSystem.IsWindows()) return; // The node fixture uses Linux's python3.
         await using var world = new World();
         var session = world.Session();
         var connection = await world.Console.ConnectAsync(session, default);
@@ -118,6 +119,7 @@ public sealed class ProxmoxInteractiveConsoleTests
     [InlineData("disconnected")]
     public async Task Reconcile_reaps_unavailable_sessions_and_releases_ports(string reason)
     {
+        if (OperatingSystem.IsWindows()) return;
         await using var world = new World();
         var session = world.Session();
         var connection = await world.Console.ConnectAsync(session, default);
@@ -143,6 +145,7 @@ public sealed class ProxmoxInteractiveConsoleTests
     [Fact]
     public async Task Renew_extends_deadline_and_expiry_kills_active_stream_without_reconcile()
     {
+        if (OperatingSystem.IsWindows()) return;
         await using var world = new World();
         var session = world.Session();
         var connection = await world.Console.ConnectAsync(session, default);
@@ -161,6 +164,7 @@ public sealed class ProxmoxInteractiveConsoleTests
     [InlineData(true)]
     public async Task Idle_listener_closes_on_deadline_or_process_exit(bool crash)
     {
+        if (OperatingSystem.IsWindows()) return;
         await using var world = new World();
         if (crash) world.Runner.Script = "pass";
         var session = world.Session();
@@ -175,6 +179,7 @@ public sealed class ProxmoxInteractiveConsoleTests
     [Fact]
     public async Task Start_failure_is_redacted_and_port_is_reusable()
     {
+        if (OperatingSystem.IsWindows()) return;
         await using var world = new World(); world.Runner.Fail = true;
         var session = world.Session();
         var error = await Assert.ThrowsAsync<ConsoleTransportException>(() => world.Console.ConnectAsync(session, default));
@@ -189,6 +194,7 @@ public sealed class ProxmoxInteractiveConsoleTests
     [Fact]
     public async Task Disabled_expired_cancelled_and_exhausted_requests_start_no_proxy()
     {
+        if (OperatingSystem.IsWindows()) return;
         await using var world = new World();
         var session = world.Session();
         world.Options.BrowserConsoleEnabled = false;
