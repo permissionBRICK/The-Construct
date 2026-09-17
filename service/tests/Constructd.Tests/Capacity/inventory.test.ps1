@@ -12,6 +12,13 @@ function Get-CimInstance {
     switch ($ClassName) {
         'Win32_OperatingSystem' { @{ TotalVisibleMemorySize = 32 * 1024 * 1024; FreePhysicalMemory = 24 * 1024 * 1024 } }
         'Win32_ComputerSystem' { @{ NumberOfLogicalProcessors = 8 } }
+        'Win32_PageFileUsage' {
+            if ($script:pageFileFailure) { throw 'page-file-query-failed' }
+            if (-not $script:noPageFiles) {
+                @{ AllocatedBaseSize = 2048; CurrentUsage = 512 }
+                @{ AllocatedBaseSize = 1024; CurrentUsage = 256 }
+            }
+        }
         'Win32_Volume' { @{ Name = 'C:\'; DriveLetter = 'C:'; Capacity = 100GB; FreeSpace = 80GB } }
     }
 }
@@ -30,6 +37,16 @@ $r = Get-ConstructHostInventory -Artifacts @(@{ artifact = 'disk:C:\orphan.vhdx'
 Check $r.complete 'Complete inventory'
 Check ($r.host.totalRamBytes -eq 32GB) 'RAM KiB conversion'
 Check ($r.host.freeRamBytes -eq 24GB) 'Physical free RAM'
+Check ($r.host.usedRamBytes -eq 8GB) 'Measured used RAM'
+Check ($r.host.swapTotalBytes -eq 3GB) 'Page-file totals summed with MiB conversion'
+Check ($r.host.swapUsedBytes -eq 768MB) 'Page-file usage summed with MiB conversion'
+$script:pageFileFailure = $true
+$optional = Get-ConstructHostInventory
+Check ($optional.complete -and $null -eq $optional.host.swapTotalBytes -and $null -eq $optional.host.swapUsedBytes) 'Page-file query failure leaves complete inventory with unknown swap'
+$script:pageFileFailure = $false; $script:noPageFiles = $true
+$optional = Get-ConstructHostInventory
+Check ($optional.complete -and $optional.host.swapTotalBytes -eq 0 -and $optional.host.swapUsedBytes -eq 0) 'No page files reports zero swap'
+$script:noPageFiles = $false
 Check ($r.host.volumes[0].freeBytes -eq 80GB) 'Physical volume free'
 Check ($r.vms.Count -eq 1) 'Enumerates unmanaged VM'
 Check ($r.vms[0].cpuUsagePercent -eq 17) 'Observed CPU percentage'
