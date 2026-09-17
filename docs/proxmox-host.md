@@ -22,16 +22,25 @@
 
    Done already if tokens are enough for you: enrol from a PC with the printed command
    (`-ServiceAuth token`) and skip step 3.
-3. **On the domain controller** (optional, for sign-in with Windows accounts), as a domain admin
-   in an elevated PowerShell: it creates the service account, its SPN and the DNS record, writes the
-   keytab, copies it to the node and finishes the host over SSH (asks for the node's root password).
+3. **Windows sign-in** (optional; skip it if tokens are enough). Two ways to the same result, the
+   choice is yours:
+
+   - **Scripted** (below): one PowerShell script run on the domain controller does everything.
+   - **Manual** ([§5b, "The manual way"](#the-manual-way)): you create the service account, the SPN,
+     the DNS record and the keytab yourself, one documented command at a time, and never run a
+     foreign script against your directory. Then continue with the `users add` line at the end of
+     this step.
+
+   **Scripted:** on the domain controller, as a domain admin in an elevated PowerShell: it creates
+   the service account, its SPN and the DNS record, writes the keytab, copies it to the node and
+   finishes the host over SSH (asks for the node's root password).
 
    ```powershell
    Invoke-WebRequest https://raw.githubusercontent.com/permissionBRICK/The-Construct/main/service/host/New-ConstructKerberosPrincipal.ps1 -OutFile .\New-ConstructKerberosPrincipal.ps1
    .\New-ConstructKerberosPrincipal.ps1 -HostFqdn test-proxmox.corp.example.com -Address 10.0.3.184 -InstallOnHost root@test-proxmox.corp.example.com
    ```
 
-   Then add the people who may use it, by domain name:
+   **Either way**, then add the people who may use it, by domain name:
 
    ```sh
    ssh root@test-proxmox.corp.example.com /opt/construct/host/Constructd.Api admin users add 'HOME\alice' --max-vms 3
