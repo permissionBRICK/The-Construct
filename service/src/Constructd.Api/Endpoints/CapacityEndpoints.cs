@@ -1,5 +1,6 @@
 using Constructd.Api.Auth;
 using Constructd.Core.Abstractions;
+using Constructd.Core.Configuration;
 using Constructd.Core.Domain;
 using Constructd.Core.Logic;
 
@@ -18,7 +19,8 @@ public static class CapacityEndpoints
     }
     public static RouteGroupBuilder MapCapacityEndpoints(this RouteGroupBuilder api)
     {
-        api.MapGet("/host/capacity", async (bool? refresh, ICapacityLedger ledger, IVmRepository vms, IUserStore users, CancellationToken ct) =>
+        api.MapGet("/host/capacity", async (bool? refresh, ICapacityLedger ledger, IVmRepository vms, IUserStore users,
+            IHostConfigStore config, ConstructdOptions options, CancellationToken ct) =>
         {
             var snapshot = await ledger.SnapshotAsync(refresh == true, ct);
             var managed = await vms.ListAsync(null, ct);
@@ -26,7 +28,7 @@ public static class CapacityEndpoints
                 .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase);
             return Results.Ok(new
             {
-                summary = HostAdminEndpoints.CapacitySummary(snapshot),
+                summary = HostAdminEndpoints.CapacitySummary(snapshot, (await HostAdminEndpoints.CapacityConfigAsync(config, options, ct)).Mode),
                 problems = snapshot.Problems ?? (snapshot.Complete ? [] : new[] { "inventory-incomplete" }),
                 reservations = snapshot.Reservations.Select(r => new { r.Id, r.Resource, r.ScopeOwner, r.VmName, r.Artifact, r.Volume, r.Amount, r.Phase, r.Origin, r.OperationId, r.PendingUntil, r.Created }),
                 unmanaged = snapshot.Unmanaged.Select(v => new { v.Name, v.Id, v.State, v.Cpus, v.MemoryStartupBytes, v.MemoryAssignedBytes, v.DynamicMemory, v.MemoryMaximumBytes,
