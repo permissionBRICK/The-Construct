@@ -444,6 +444,37 @@ doesn't support a weekly report for Codex, which would drop Codex from the table
 **export json** saves the full raw usage document — scoped to the current tab — to a file you
 pick. The first run can be slow if ccusage installs itself on the VM.
 
+### Host usage
+
+Open **Host → Usage** to see tokens and estimated cost for today, this month or all
+retained history. Administrators see totals by user and by VM. Ordinary users see
+their own VMs and totals. Each row shows its last report time; hover it for the
+per-tool split. Deleted VMs remain greyed out and their usage stays with the owner
+recorded when it was reported. VMs that have never reported show no last-report time.
+The VMs tab also shows tokens today and this month, and the Users tab shows tokens
+this month beside the separate count of API credentials.
+
+Service-managed guests install `construct-usage-report.timer` during provisioning.
+It collects Claude Code, Codex and OpenCode usage every 15 minutes and sends it
+with the guest's scoped VM token. Nothing needs to open the guest control panel.
+The shared collector helper uses the same ccusage bootstrap and invocation as that
+panel. The host's Refresh button rereads stored reports; it does not run a collector
+inside the guest. The first collection can take several minutes.
+
+In the guest's `/etc/construct/config.env`, set `CONSTRUCT_USAGE_REPORT_ENABLED=false`
+to stop reporting. Set `CONSTRUCT_USAGE_REPORT_INTERVAL_MIN` and reprovision to change
+the interval, at least 5 minutes. The first successful collection after provisioning,
+or a run with `CONSTRUCT_USAGE_BACKFILL=1`, also sends the current and previous month.
+Failed collections and posts retry on the next timer tick. Inspect them with
+`journalctl -u construct-usage-report.service`.
+
+Daily reports cover today and the preceding two days. A monthly backfill counts only
+when that VM incarnation and tool have no daily rows for the month. This prevents
+double counting but means a partial daily history can leave that month's total
+incomplete. Host windows use UTC calendar dates; guests use their own clock for
+collector date windows. All-time means retained history, with a default of 400 days.
+Cost is an estimate from the collector's price table.
+
 ## Microphone passthrough (voice input)
 
 Claude Code's speech-to-text is disabled over Remote-SSH by default. The **Voice input**

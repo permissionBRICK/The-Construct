@@ -123,7 +123,7 @@ function createHostAdminFeature(deps = {}) {
       offers: { createFirstVm: hostadmin.firstVmOffers({ hosts: [entry.hostEntry], instances: registryList(), sameUrl: same }).length > 0 },
     };
     try { entry.panel.webview.postMessage({ type: "hostadmin.state", state }); } catch (_) { /* disposed */ }
-    offers.set(key(entry.hostEntry.url), { mode: s.mode, networkMode: s.features.networkMode, at: now() });
+    offers.set(key(entry.hostEntry.url), { mode: s.mode, networkMode: s.features.networkMode, usage: s.features.usage, at: now() });
     schedulePoll(entry);
   }
 
@@ -142,7 +142,7 @@ function createHostAdminFeature(deps = {}) {
   async function refreshEntry(entry, background = false) {
     if (entry.disposed) return;
     await entry.model.detect();
-    if ((entry.model.state.mode === "admin" || entry.model.state.mode === "user" && entry.model.state.features.networkMode) && (!background || ["overview", "vms", "maintenance"].includes(entry.model.state.activeTab))) await entry.model.load(entry.model.state.activeTab);
+    if ((entry.model.state.mode === "admin" || entry.model.state.mode === "user" && (entry.model.state.features.networkMode || entry.model.state.features.usage)) && (!background || ["overview", "vms", "usage", "maintenance"].includes(entry.model.state.activeTab))) await entry.model.load(entry.model.state.activeTab);
     if (entry.model.state.activeTab !== "maintenance") await entry.model.refreshUpdates();
     postState(entry);
   }
@@ -213,7 +213,7 @@ function createHostAdminFeature(deps = {}) {
       case "hostadmin.tab": {
         const tab = str(m.tab);
         if (!hostadmin.TABS.some((t) => t.id === tab)) return;
-        return serialize(entry, async () => { await entry.model.load(tab); postState(entry); });
+        return serialize(entry, async () => { await entry.model.load(tab, m.window); postState(entry); });
       }
       case "hostadmin.signIn":
         return serialize(entry, async () => {
@@ -389,7 +389,7 @@ function createHostAdminFeature(deps = {}) {
       model.state.notice = { level: "error", text: errText(e) };
     }
     if (entry.disposed) return;
-    if (reloadTab && (model.state.mode === "admin" || model.state.mode === "user" && model.state.features.networkMode)) await model.load(model.state.activeTab);
+    if (reloadTab && (model.state.mode === "admin" || model.state.mode === "user" && (model.state.features.networkMode || model.state.features.usage))) await model.load(model.state.activeTab);
     postState(entry);
   }
 
@@ -558,14 +558,14 @@ function createHostAdminFeature(deps = {}) {
           } catch (e) { log(`hostadmin: update probe for ${hostOf(hostEntry.url)} failed — ${errText(e)}`); }
           updateAt = now();
         }
-        offers.set(k, { mode: resolved.mode, networkMode: resolved.features?.networkMode, at: now(), updateAvailable, updateAt });
+        offers.set(k, { mode: resolved.mode, networkMode: resolved.features?.networkMode, usage: resolved.features?.usage, at: now(), updateAvailable, updateAt });
       } catch (e) {
         log(`hostadmin: offer probe for ${hostOf(hostEntry.url)} failed — ${errText(e)}`);
         offers.set(k, { mode: "unavailable", at: now() });
       }
     }
     const state = offers.get(k);
-    if (!state || state.mode !== "admin" && !(state.mode === "user" && state.networkMode)) return null;
+    if (!state || state.mode !== "admin" && !(state.mode === "user" && (state.networkMode || state.usage))) return null;
     return state.updateAvailable ? { host: hostOf(hostEntry.url), url: hostEntry.url, updateAvailable: true } : { host: hostOf(hostEntry.url), url: hostEntry.url };
   }
 

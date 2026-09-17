@@ -10,6 +10,12 @@
 > Host self-update is implemented; its systemd handoff and rollback still need human field testing.
 > The design background is [docs/remote-host.md](remote-host.md); this page is the Proxmox specifics.
 
+The host's **Usage** tab shows guest-reported tokens and estimated cost by VM and,
+for admins, by user. Provisioned guests normally report within 15 minutes through
+their scoped VM token; no guest SSH credential is held by the host. The reporter,
+storage and views are shared with Hyper-V hosts. See [Host usage](control-panel.md#host-usage)
+for settings and backfill limits. This feature still needs a field test on each platform.
+
 ## Quick start (four steps)
 
 1. **Install Proxmox VE** on the machine (the stock installer, any storage layout; one bridge with

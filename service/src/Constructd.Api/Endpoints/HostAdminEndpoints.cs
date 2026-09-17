@@ -28,21 +28,21 @@ public static class HostAdminEndpoints
     }
     internal static async Task<EffectiveAllowanceResponse> EffectiveAsync(string owner, string? parent, IDelegationPolicy policy, CancellationToken ct) =>
         EffectiveAllowanceResponse.From(await policy.ResolveAsync(owner, parent, ct), await policy.UsageAsync(owner, ct));
-    internal static async Task<UserDetailResponse> DetailAsync(User user, IDelegationPolicy policy, ITokenService tokens, CancellationToken ct)
+    internal static async Task<UserDetailResponse> DetailAsync(User user, IDelegationPolicy policy, ITokenService tokens, Constructd.Api.Hosting.TokenUsageReader usage, CancellationToken ct)
     {
         var effective = await EffectiveAsync(user.Name, null, policy, ct);
         return new(user.Name, user.Role, user.Enabled, user.MaxVms, user.AllowHostForwards, user.Created, user.Allowance ?? UserAllowance.Unset,
-            effective, new(effective.Usage.Primaries, effective.Usage.Children), (await tokens.ListAsync(user.Name, ct)).Count, user.AllowNested);
+            effective, new(effective.Usage.Primaries, effective.Usage.Children), (await tokens.ListAsync(user.Name, ct)).Count, user.AllowNested, await usage.UserMonthAsync(user.Name, ct));
     }
-    private static async Task<IResult> UsersAsync(IUserStore users, IDelegationPolicy policy, ITokenService tokens, CancellationToken ct)
+    private static async Task<IResult> UsersAsync(IUserStore users, IDelegationPolicy policy, ITokenService tokens, Constructd.Api.Hosting.TokenUsageReader usage, CancellationToken ct)
     {
-        var result = new List<UserDetailResponse>(); foreach (var user in await users.ListAsync(ct)) result.Add(await DetailAsync(user, policy, tokens, ct));
+        var result = new List<UserDetailResponse>(); foreach (var user in await users.ListAsync(ct)) result.Add(await DetailAsync(user, policy, tokens, usage, ct));
         return Results.Ok(result);
     }
-    private static async Task<IResult> UserAsync(string name, IUserStore users, IDelegationPolicy policy, ITokenService tokens, CancellationToken ct) =>
-        await users.GetAsync(name, ct) is { } user ? Results.Ok(await DetailAsync(user, policy, tokens, ct)) : Problems.NotFound("Unknown user.");
+    private static async Task<IResult> UserAsync(string name, IUserStore users, IDelegationPolicy policy, ITokenService tokens, Constructd.Api.Hosting.TokenUsageReader usage, CancellationToken ct) =>
+        await users.GetAsync(name, ct) is { } user ? Results.Ok(await DetailAsync(user, policy, tokens, usage, ct)) : Problems.NotFound("Unknown user.");
     private static async Task<IResult> UpdateUserAsync(string name, UserUpdateRequest request, HttpContext http, IUserStore users,
-        IDelegationPolicy policy, ITokenService tokens, IConsoleSessionStore sessions, IVmRepository vms, IVmOperationGate gate, CancellationToken ct)
+        IDelegationPolicy policy, ITokenService tokens, IConsoleSessionStore sessions, IVmRepository vms, IVmOperationGate gate, Constructd.Api.Hosting.TokenUsageReader usage, CancellationToken ct)
     {
         await using var handle = await gate.AcquireAsync("$users", http.TraceIdentifier, ct);
         var user = await users.GetAsync(name, ct); if (user is null) return Problems.NotFound("Unknown user.");
@@ -66,7 +66,7 @@ public static class HostAdminEndpoints
         if (!await users.UpdateAsync(user, ct)) return Problems.NotFound("Unknown user.");
         if (!enabled) { sessions.RemoveForPrincipal(user.Name); foreach (var vm in await vms.ListAsync(user.Name, ct)) sessions.RemoveForPrincipal("vm:" + vm.Name); }
         CodedProblems.Audit(http, "user.update", user.Name, target: user.Name);
-        return Results.Ok(await DetailAsync(user, policy, tokens, ct));
+        return Results.Ok(await DetailAsync(user, policy, tokens, usage, ct));
     }
     private static async Task<IResult> AllowanceAsync(string name, IUserStore users, IDelegationPolicy policy, CancellationToken ct) =>
         await users.GetAsync(name, ct) is { } user ? Results.Ok(new { stored = user.Allowance ?? UserAllowance.Unset, effective = await EffectiveAsync(name, null, policy, ct) }) : Problems.NotFound("Unknown user.");

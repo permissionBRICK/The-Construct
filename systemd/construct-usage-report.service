@@ -1,0 +1,11 @@
+[Unit]
+Description=Construct guest token usage report
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+# ccusage bootstrap and initial scans can take several minutes.
+TimeoutStartSec=12min
+ExecStart=/usr/local/bin/construct-usage-report.sh

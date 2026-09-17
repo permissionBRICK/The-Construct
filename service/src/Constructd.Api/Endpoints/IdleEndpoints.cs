@@ -26,7 +26,7 @@ public static class IdleEndpoints
             .Audited("vm.idle-policy")
             .WithName("PutIdlePolicy");
 
-        // The one write a VM-scoped token is allowed besides its forwards.
+        // Guest telemetry accepts the VM's scoped token, as does usage intake.
         api.MapPost("/vms/{name}/activity", PostActivityAsync)
             .RequireAuthorization(Policies.VmScoped)
             .Audited("vm.activity", auditSuccess: false)

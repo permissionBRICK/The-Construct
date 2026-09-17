@@ -92,6 +92,19 @@
       </div>
     </section>
 
+    <section class="ha-tab" id="tab-usage" hidden>
+      <section class="module">
+        <div class="mhead"><h2 class="seclabel">Token usage &amp; cost</h2>
+          <label>Period <select id="usageWindow"><option value="today">Today</option><option value="month">This month</option><option value="all">All time</option></select></label>
+        </div>
+        <p id="hostUsageTotals">Waiting for usage reports.</p>
+        <div id="usageUsers"><h3>By user</h3><div class="ha-table ha-usage-table" id="usageUserTable"></div></div>
+        <h3>By VM</h3><div class="ha-table ha-usage-table" id="usageVmTable"></div>
+        <p class="cost-note">Cost is an estimate from the collector's price table. Hover a row for its per-tool split. Guests normally report every 15 minutes.</p>
+        <p class="cost-note" id="usageGeneratedAt"></p>
+      </section>
+    </section>
+
     <!-- VMs -->
     <section class="ha-tab" id="tab-vms" hidden>
       <section class="module">

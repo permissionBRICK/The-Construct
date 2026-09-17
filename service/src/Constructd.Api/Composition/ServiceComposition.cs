@@ -134,6 +134,7 @@ public static class ServiceComposition
 
         services.AddSingleton<IUserStore, SqliteUserStore>();
         services.AddSingleton<IVmRepository, SqliteVmRepository>();
+        services.AddSingleton<ITokenUsageStore, SqliteTokenUsageStore>();
         services.AddSingleton<IAuditLog, SqliteAuditLog>();
         services.AddSingleton<IJobStore, SqliteJobStore>();
         services.AddSingleton<IForwardStore, SqliteForwardStore>();
@@ -152,6 +153,7 @@ public static class ServiceComposition
 
         services.AddSingleton<InMemoryVmRepository>();
         services.AddSingleton<IVmRepository>(sp => sp.GetRequiredService<InMemoryVmRepository>());
+        services.AddSingleton<ITokenUsageStore>(sp => sp.GetRequiredService<InMemoryVmRepository>());
 
         services.AddSingleton<InMemoryAuditLog>();
         services.AddSingleton<IAuditLog>(sp => sp.GetRequiredService<InMemoryAuditLog>());
