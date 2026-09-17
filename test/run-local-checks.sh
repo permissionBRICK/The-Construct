@@ -10,6 +10,7 @@ if [[ "$group" == panel || "$group" == all ]]; then
   node extension/test/guest-console.test.js
   node extension/test/console.test.js
   node extension/test/hostadmin.test.js
+  node extension/test/network-mode.test.js
   node extension/test/hostadmin-ui.test.js
   node extension/test/hostadmin-discovery.test.js
   node extension/test/vmpower.test.js
@@ -27,6 +28,8 @@ if [[ "$group" == t3 || "$group" == all ]]; then
   python3 test/t3-pairing-forward.test.py
 fi
 if [[ "$group" == service || "$group" == all ]]; then
+  bash test/endpoint-refresh.test.sh
+  bash test/construct-expose.test.sh
   /usr/bin/python3 -m unittest discover -s console-viewer -p 'test_*.py' -v
   node --check console-viewer/static/viewer.js
   bash -n console-viewer/install.sh bin/construct-vm.sh bin/provision.sh bin/fetch-construct-source.sh

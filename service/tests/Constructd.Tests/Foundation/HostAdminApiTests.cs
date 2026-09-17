@@ -11,6 +11,29 @@ namespace Constructd.Tests.Foundation;
 
 public sealed class HostAdminApiTests
 {
+    [Theory]
+    [InlineData("hyperv", "direct", HttpStatusCode.BadRequest, "unsupported-on-platform")]
+    [InlineData("proxmox", "invalid", HttpStatusCode.BadRequest, "validation")]
+    [InlineData("proxmox", "direct", HttpStatusCode.OK, null)]
+    public async Task NetworkModeConfiguration(string backend, string mode, HttpStatusCode status, string? code)
+    {
+        using var app = new TestApp();
+        using var admin = await app.CreateUserClientAsync("admin", Role.Admin);
+        app.Service<ConstructdOptions>().Backend = backend;
+        var response = await admin.PutAsJsonAsync("/api/v1/host/config", new
+        {
+            network = new { hostForwardsEnabled = true, directAddressReporting = true, defaultMode = mode, ownerMaySwitchMode = true }
+        });
+        Assert.Equal(status, response.StatusCode);
+        if (code is not null) Assert.Equal(code, (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("code").GetString());
+        else
+        {
+            var caps = await admin.GetFromJsonAsync<JsonElement>("/api/v1/host/capabilities");
+            Assert.Equal("direct", caps.GetProperty("policy").GetProperty("defaultMode").GetString());
+            Assert.True(caps.GetProperty("policy").GetProperty("ownerMaySwitchMode").GetBoolean());
+        }
+    }
+
     public static IEnumerable<object[]> AdminRoutes => new[] {
         ("GET","/host/status"),("GET","/host/config"),("PUT","/host/config"),("GET","/users"),("GET","/users/alice"),
         ("PUT","/users/alice"),("GET","/users/alice/allowance"),("PUT","/users/alice/allowance"),

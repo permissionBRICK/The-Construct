@@ -3,9 +3,6 @@ using Constructd.Core.Configuration;
 using Constructd.Core.Domain;
 using Constructd.Core.Logic;
 
-// Disambiguate from Microsoft.AspNetCore.Http.Endpoint.
-using DomainEndpoint = Constructd.Core.Domain.Endpoint;
-
 namespace Constructd.Api.Jobs;
 
 /// <summary>
@@ -35,6 +32,7 @@ public static class VmJobs
         var vms = services.GetRequiredService<IVmRepository>();
         var audit = services.GetRequiredService<IAuditLog>();
         var clock = services.GetRequiredService<IClock>();
+        var network = services.GetRequiredService<VmNetworkSettings>();
 
         var name = descriptor.Name;
 
@@ -44,6 +42,8 @@ public static class VmJobs
 
         try
         {
+            var initial = await vms.GetAsync(name, cancellationToken) ?? throw new LifecycleException("vm-deleting");
+            await network.InitializeAsync(initial, cancellationToken);
             // Seed credentials exist only for the unattended install; the client's provisioning run
             // replaces them. Generated per VM, never persisted, never logged.
             var seedPassword = TokenHasher.GenerateSecret();
@@ -72,8 +72,12 @@ public static class VmJobs
             await driver.DetachInstallMediaAsync(name, cancellationToken).ConfigureAwait(false);
             progress.Report("install media detached");
 
-            var port = await forwards.AllocateSshForwardAsync(name, cancellationToken).ConfigureAwait(false);
-            progress.Report($"ssh forward allocated on {options.PublicHost}:{port}");
+            int? port = null;
+            if ((await network.CurrentAsync(initial, cancellationToken)).Mode != "direct")
+            {
+                port = await forwards.AllocateSshForwardAsync(name, cancellationToken).ConfigureAwait(false);
+                progress.Report($"ssh forward allocated on {options.PublicHost}:{port}");
+            }
 
             // Issued after the forward so a failure earlier never leaves a live token behind. This
             // also writes the hash onto the VM record, hence the re-read below.
@@ -89,18 +93,20 @@ public static class VmJobs
                     .ConfigureAwait(false);
             }
 
+            var endpoint = await network.EndpointAsync(vm! with { SshForwardPort = port }, cancellationToken)
+                ?? throw new LifecycleException("no-address");
             await AuditAsync(audit, clock, actor, "vm.create.completed", name, AuditOutcome.Success,
-                $"endpoint={options.PublicHost}:{port}", cancellationToken).ConfigureAwait(false);
+                $"endpoint={endpoint.SshHost}:{endpoint.SshPort}", cancellationToken).ConfigureAwait(false);
 
             progress.Report($"vm {name} ready — provision it with Provision-AgentVM.ps1 " +
-                            $"-VmHost {options.PublicHost} -SshPort {port}");
+                            $"-VmHost {endpoint.SshHost} -SshPort {endpoint.SshPort}");
 
             // The token travels in the one-time channel, never in the (durable) job result. The
             // endpoint carries the VM's PUBLIC host too (plan §4.12) — the name its web forwards are
             // advertised under — so the client records it with the instance instead of having to ask
             // again; without a PublicHostPattern it is the same string as the SSH host.
             return new JobOutcome(
-                new VmCreateResult(name, new DomainEndpoint(options.PublicHost, port, options.PublicHostFor(name))),
+                new VmCreateResult(name, endpoint),
                 vmToken);
         }
         catch (Exception ex)

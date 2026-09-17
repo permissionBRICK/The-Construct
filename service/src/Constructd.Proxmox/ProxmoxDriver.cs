@@ -46,7 +46,7 @@ public sealed class ProxmoxOperationException(string operation, string vmName, s
 /// looked up in the cluster resource list on every call rather than cached, so a VM recreated behind
 /// the service's back is never driven under a stale id.
 /// </summary>
-public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver
+public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver, IGuestNetworkConfigurator
 {
     /// <summary>Cloning the image and starting the VM; well short of leaving a hung <c>qm</c> forever.</summary>
     private static readonly TimeSpan CreateTimeout = TimeSpan.FromMinutes(30);
@@ -437,6 +437,29 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
         var (vmName, id) = await RequireVmAsync("set-memory", name, cancellationToken).ConfigureAwait(false);
         await RunQmAsync("set-memory", vmName, ["set", id, "--memory", ArgumentGuard.Invariant(gb * 1024)],
             ShortTimeout, null, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task ConfigureNetworkAsync(string name, string? address, string? gateway, IReadOnlyList<string>? dns, CancellationToken ct)
+    {
+        var ipconfig = "ip=dhcp";
+        if (address is not null)
+        {
+            var parts = address.Split('/');
+            if (parts.Length != 2 || !int.TryParse(parts[1], out var prefix) || prefix is < 1 or > 32)
+                throw new ArgumentException("Expected an IPv4 CIDR.", nameof(address));
+            ipconfig = $"ip={ArgumentGuard.IPv4(parts[0], "address")}/{prefix},gw={ArgumentGuard.IPv4(gateway!, "gateway")}";
+        }
+        else if (gateway is not null) throw new ArgumentException("A gateway requires a fixed address.", nameof(gateway));
+        var resolvers = dns?.Select(d => ArgumentGuard.IPv4(d, "dns")).ToArray() ?? [];
+        var (vmName, id, vmId) = await RequireVmWithIdAsync("set-network", name, ct);
+        if (await ReadStateAsync(vmName, vmId, ct) != VmState.Off)
+            throw Fail("set-network", vmName, "the VM must be fully stopped");
+        await RunQmAsync("set-network", vmName,
+            ["set", id, "--ipconfig0", ipconfig, .. resolvers.Length > 0
+                ? new[] { "--nameserver", string.Join(" ", resolvers) } : new[] { "--delete", "nameserver" }],
+            ShortTimeout, null, ct);
+        // Generate the changed cloud-init drive before the next cold boot.
+        await RunQmAsync("set-network", vmName, ["cloudinit", "update", id], ShortTimeout, null, ct);
     }
 
     // ── Lookups ─────────────────────────────────────────────────────────────────

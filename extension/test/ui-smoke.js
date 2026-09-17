@@ -1421,6 +1421,32 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await admin.locator("#haVmSettingsCancel").click();
 
   check("admin: Delete posts deleteVm with name and kind", aposted.some((m) => m.action === "deleteVm" && m.args.name === "work-vm" && m.args.kind === "primary"));
+  const networkState = { ...ADMIN_STATE, activeTab: "overview", features: { ...ADMIN_STATE.features, networkMode: true },
+    networkSection: { key: "network", expectedUpdatedAt: null, text: JSON.stringify({ hostForwardsEnabled: false, directAddressReporting: true, defaultMode: "relayed", ownerMaySwitchMode: false }) } };
+  await pushAdmin(networkState);
+  check("network: host card visible on supported host", await admin.locator("#hostNetworkCard").isVisible());
+  await admin.locator("#hostNetworkMode").selectOption("direct");
+  await admin.locator("#hostNetworkOwner").check();
+  await admin.locator("#hostNetworkSave").click();
+  const networkSave = await admin.evaluate(() => window.__posted.filter(m => m.action === "saveConfig").at(-1));
+  const networkBody = JSON.parse(networkSave.args.sections[0].text);
+  check("network: card preserves existing forward policy", networkBody.defaultMode === "direct" && networkBody.ownerMaySwitchMode && networkBody.hostForwardsEnabled === false);
+  await pushAdmin({ ...networkState, activeTab: "vms" });
+  await admin.getByRole("button", { name: "VM settings…", exact: true }).click();
+  settingsRequest = await admin.evaluate(() => window.__posted.filter(m => m.action === "loadVmSettings").at(-1));
+  const networkSettings = { mode: null, effectiveMode: "relayed", desiredAddress: null, gateway: null, dns: null, maySwitchMode: true, maySetAddress: true };
+  await settingsReply({ settings: { ...settings, network: networkSettings } });
+  await admin.locator("#haVmNetworkMode").selectOption("direct");
+  await admin.locator("#haVmAddress").fill("10.0.3.50/22");
+  await admin.locator("#haVmGateway").fill("10.0.0.1");
+  await admin.locator("#haVmSettingsApply").click();
+  appliedSettings = await admin.evaluate(() => window.__posted.filter(m => m.action === "setVmSettings").at(-1));
+  check("network: modal saves mode and fixed address", appliedSettings.args.network.mode === "direct" && appliedSettings.args.network.address === "10.0.3.50/22");
+  await settingsReply({ settings: { ...settings, network: { ...networkSettings, maySetAddress: false, maySwitchMode: false } } });
+  check("network: owner cannot edit fixed address or forbidden mode", !await admin.locator("#haVmNetworkAddressFields").isVisible() && !await admin.locator("#haVmNetworkModeRow").isVisible());
+  await settingsReply({ settings: { ...settings, network: { ...networkSettings, maySetAddress: false, maySwitchMode: true } } });
+  check("network: allowed owner can select a mode", await admin.locator("#haVmNetworkModeRow").isVisible() && !await admin.locator("#haVmNetworkAddressFields").isVisible());
+  await admin.locator("#haVmSettingsCancel").click();
   await pushAdmin({ ...ADMIN_STATE, activeTab: "users" });
   await admin.waitForTimeout(60);
   await admin.locator("#usrTable button", { hasText: "Edit" }).click();

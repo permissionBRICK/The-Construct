@@ -120,7 +120,7 @@
     denied: "Access denied", user: "Not an administrator", local: "Local instance",
   };
   function renderStateCard(s) {
-    const admin = s.mode === "admin";
+    const admin = s.mode === "admin" || s.mode === "user" && s.features?.networkMode;
     show($("haState"), !admin);
     show($("haAdmin"), admin);
     if (admin) return;
@@ -299,13 +299,14 @@
         b.disabled = busy && !r.deleting;
         actions.appendChild(b);
       }
-      if (r.kind !== "child") {
+      if (r.kind !== "child" && s.mode === "admin") {
         actions.appendChild(btn("Overrides", "ghost", () => act("loadOverrides", { name: r.name }), "Per-VM delegation overrides (restrict-only)"));
         actions.appendChild(btn("Rotate token", "ghost", () => act("rotateVmToken", { name: r.name }), "Issue a new VM token (primary kind); the old one stops working"));
       }
       row.appendChild(actions);
       const details = el("div", "ha-vm-details");
       const facts = [];
+      if (r.network) facts.push(`Network: ${r.network.effectiveMode}${r.network.address ? " · " + r.network.address : ""}${r.network.pending ? "; change pending for next start" : ""}`);
       if (r.pendingRamGb != null) facts.push(`Pending: ${r.pendingRamGb} GB RAM on next full stop/start`);
       if (r.pendingCpu != null) facts.push(`Pending: ${r.pendingCpu} vCPUs on next full stop/start`);
       if (r.lease) facts.push("Lease: " + r.lease);
@@ -596,7 +597,14 @@
     state = s;
     renderHeader(s);
     renderStateCard(s);
-    if (s.mode !== "admin") return;
+    if (s.mode !== "admin" && !(s.mode === "user" && s.features?.networkMode)) return;
+    text("vmsTitle", s.mode === "admin" ? "Virtual machines · all users" : "My virtual machines");
+    show($("hostNetworkCard"), s.mode === "admin" && !!s.features?.networkMode && !!s.networkSection);
+    if (s.networkSection && JSON.stringify(previous?.networkSection) !== JSON.stringify(s.networkSection)) {
+      const network = JSON.parse(s.networkSection.text);
+      $("hostNetworkMode").value = network.defaultMode || "relayed";
+      $("hostNetworkOwner").checked = !!network.ownerMaySwitchMode;
+    }
     renderTabs(s);
     renderOverview(s);
     renderVms(s);
@@ -644,6 +652,14 @@
     });
     act("saveConfig", { sections });
   });
+  $("hostNetworkSave").addEventListener("click", () => {
+    const section = state?.networkSection;
+    if (!section) return;
+    const network = JSON.parse(section.text);
+    network.defaultMode = $("hostNetworkMode").value;
+    network.ownerMaySwitchMode = $("hostNetworkOwner").checked;
+    act("saveConfig", { sections: [{ key: "network", text: JSON.stringify(network), expectedUpdatedAt: section.expectedUpdatedAt }] });
+  });
   $("updCheck") && $("updCheck").addEventListener("click", () => act("updatesCheck", { releaseTag: $("updTag").value }));
   $("updStage") && $("updStage").addEventListener("click", () => act("updatesStage", { releaseTag: $("updTag").value }));
   $("updApply") && $("updApply").addEventListener("click", () => act("updatesApply", { updateId: state && state.maintenanceTab && state.maintenanceTab.current ? state.maintenanceTab.current.updateId : "" }));
@@ -674,7 +690,7 @@
   }
   function closeVmSettings() { if (!vmSettingsSaving) vmDialog.close(); }
   function validateVmSettings() {
-    const allowed = state?.mode === "admin" && !state.maintenance;
+    const allowed = (state?.mode === "admin" || state?.mode === "user" && state.features?.networkMode) && !state.maintenance;
     for (const [id, data, desired, maximum, label] of [
       ["haVmCpus", vmSettingsData?.cpu, "desiredCpus", "maximumCpus", "CPU count"],
       ["haVmRam", vmSettingsData?.memory, "desiredRamGb", "maximumRamGb", "RAM (GB)"]]) {
@@ -686,7 +702,7 @@
     const forcedOff = vmSettingsData?.idle?.forceEnabled && $("haVmIdleAction").value === "off";
     $("haVmIdleAction").setCustomValidity(forcedOff ? "The host requires idle handling." : "");
     const invalid = [...$("haVmSettingsForm").elements].find(input => input.willValidate && !input.validity.valid);
-    $("haVmSettingsApply").disabled = !vmSettingsData || ![vmSettingsData.cpu, vmSettingsData.memory, vmSettingsData.idle].some(Boolean) || vmSettingsSaving || !allowed || !!invalid;
+    $("haVmSettingsApply").disabled = !vmSettingsData || ![vmSettingsData.cpu, vmSettingsData.memory, vmSettingsData.idle, vmSettingsData.network].some(Boolean) || vmSettingsSaving || !allowed || !!invalid;
     if (vmSettingsData && !vmSettingsSaving) text("haVmSettingsError", invalid ? invalid.validationMessage : !allowed ? "Editing is unavailable while host administration is disabled or updating." : [vmSettingsServerError, ...(vmSettingsData.warnings || [])].filter(Boolean).join(" "));
   }
   function receiveVmSettings(m) {
@@ -699,7 +715,16 @@
     vmSettingsServerError = m.error ? `${m.error} ${m.settings ? "Some changes may already be saved. Review the reloaded values before retrying." : "Reload to retry reading settings."}` : "";
     text("haVmSettingsError", vmSettingsServerError);
     if (m.settings) {
-      const { cpu, memory, idle } = m.settings;
+      const { cpu, memory, idle, network } = m.settings;
+      show($("haVmNetwork"), !!network);
+      show($("haVmNetworkModeRow"), !!network?.maySwitchMode);
+      show($("haVmNetworkAddressFields"), !!network?.maySetAddress);
+      $("haVmNetworkMode").disabled = !network?.maySwitchMode;
+      $("haVmNetworkMode").value = network?.mode || "";
+      for (const [id, value] of [["haVmAddress", network?.desiredAddress], ["haVmGateway", network?.gateway], ["haVmDns", network?.dns?.join(" ")]]) {
+        $(id).value = value || ""; $(id).disabled = !network?.maySetAddress;
+      }
+      text("haVmNetworkCurrent", network ? `Current: ${network.effectiveMode}${network.address ? " at " + network.address : ""}${network.pending ? "; change pending" : ""}` : "");
       $("haVmCpus").disabled = !cpu; $("haVmRam").disabled = !memory;
       $("haVmCpus").value = cpu ? cpu.desiredCpus : "";
       $("haVmCpus").max = cpu ? Math.max(cpu.maximumCpus ?? 64, cpu.desiredCpus) : 64;
@@ -727,7 +752,17 @@
     if ($("haVmSettingsApply").disabled) return;
     vmSettingsSaving = true;
     const args = { ...vmSettingsRequest };
-    const { cpu, memory, idle } = vmSettingsData;
+    const { cpu, memory, idle, network } = vmSettingsData;
+    const changes = {};
+    if (network?.maySwitchMode && ($("haVmNetworkMode").value || null) !== network.mode) changes.mode = $("haVmNetworkMode").value || null;
+    if (network?.maySetAddress) {
+      const values = { address: $("haVmAddress").value.trim() || null, gateway: $("haVmGateway").value.trim() || null,
+        dns: $("haVmDns").value.trim() ? $("haVmDns").value.trim().split(/\s+/) : null };
+      if (values.address !== network.desiredAddress) changes.address = values.address;
+      if (values.gateway !== network.gateway) changes.gateway = values.gateway;
+      if (JSON.stringify(values.dns) !== JSON.stringify(network.dns)) changes.dns = values.dns;
+    }
+    if (Object.keys(changes).length) args.network = changes;
     if (cpu && Number($("haVmCpus").value) !== cpu.desiredCpus) args.cpus = Number($("haVmCpus").value);
     if (memory && Number($("haVmRam").value) !== memory.desiredRamGb) args.ramGb = Number($("haVmRam").value);
     if (idle && (Number($("haVmTimeout").value) !== idle.timeoutMinutes || $("haVmIdleAction").value !== idle.action)) {
