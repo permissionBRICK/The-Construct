@@ -93,7 +93,8 @@ public sealed partial class ProxmoxChildVmPlatform(IProcessRunner processes, IHy
         if (h.Tpm) args.AddRange(["--tpmstate0", Storage + ":1,version=v2.0"]);
         if (install is not null) args.AddRange(["--ide2", install + ",media=cdrom"]);
         if (auxiliary is not null) args.AddRange(["--ide0", auxiliary + ",media=cdrom"]);
-        if (h.NetworkAttached) args.AddRange(["--net0", "virtio,bridge=" + bridge]);
+        // Windows also lacks an in-box virtio-net driver; the Windows preset gets an e1000e card.
+        if (h.NetworkAttached) args.AddRange(["--net0", NicModel(h) + ",bridge=" + bridge]);
         var boot = Boot(h.BootOrder, install is not null, auxiliary is not null, h.NetworkAttached, DiskSlot(h));
         if (boot.Length > 0) args.AddRange(["--boot", "order=" + boot]);
         await commands.QmAsync(args, ct, TimeSpan.FromMinutes(30));
@@ -105,6 +106,8 @@ public sealed partial class ProxmoxChildVmPlatform(IProcessRunner processes, IHy
     private string Efi(bool secure) => Storage + ":1,efitype=4m,pre-enrolled-keys=" + (secure ? "1" : "0");
     private static string Description(ChildOwnership owner, string template) =>
         $"construct-child parent={owner.Parent} template={template} created={owner.Created:O} operation={owner.OperationId} uuid={owner.Incarnation}";
+    /// <summary>The network card model: e1000e for the Windows preset (in-box driver), virtio otherwise.</summary>
+    public static string NicModel(ChildHardware h) => h.SecureBootTemplate == SecureBootTemplate.MicrosoftWindows ? "e1000e" : "virtio";
     /// <summary>The system disk slot: SATA for the Windows preset (in-box driver), virtio-scsi otherwise.</summary>
     public static string DiskSlot(ChildHardware h) => h.SecureBootTemplate == SecureBootTemplate.MicrosoftWindows ? "sata0" : "scsi0";
     /// <summary>The slot a created VM actually uses, from its config (either slot may be present).</summary>
