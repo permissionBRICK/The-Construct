@@ -37,18 +37,18 @@
 
    ```powershell
    Invoke-WebRequest https://raw.githubusercontent.com/permissionBRICK/The-Construct/main/service/host/New-ConstructKerberosPrincipal.ps1 -OutFile .\New-ConstructKerberosPrincipal.ps1
-   .\New-ConstructKerberosPrincipal.ps1 -HostFqdn test-proxmox.corp.example.com -Address 10.0.3.184 -InstallOnHost root@test-proxmox.corp.example.com
+   .\New-ConstructKerberosPrincipal.ps1 -HostFqdn pve1.corp.example.com -Address 192.0.2.10 -InstallOnHost root@pve1.corp.example.com
    ```
 
    **Either way**, then add the people who may use it, by domain name:
 
    ```sh
-   ssh root@test-proxmox.corp.example.com /opt/construct/host/Constructd.Api admin users add 'HOME\alice' --max-vms 3
+   ssh root@pve1.corp.example.com /opt/construct/host/Constructd.Api admin users add 'CORP\alice' --max-vms 3
    ```
 4. **On a PC** with The Construct installed, the normal remote command, with your Windows account:
 
    ```powershell
-   .\Auto-Install.ps1 -Backend hyperv-remote -ServiceUrl https://test-proxmox.corp.example.com:7462 -InstanceName work-vm
+   .\Auto-Install.ps1 -Backend hyperv-remote -ServiceUrl https://pve1.corp.example.com:7462 -InstanceName work-vm
    ```
 
    Confirm the certificate fingerprint the node printed in step 2. Without step 3 add
@@ -109,7 +109,7 @@ Exactly like a Windows host. Without a Kerberos keytab on the node (section 5b) 
 Windows sign-in, so the token is mandatory:
 
 ```powershell
-.\Auto-Install.ps1 -Backend hyperv-remote -ServiceUrl https://10.0.3.184:7462 -ServiceAuth token -InstanceName work-vm
+.\Auto-Install.ps1 -Backend hyperv-remote -ServiceUrl https://192.0.2.10:7462 -ServiceAuth token -InstanceName work-vm
 ```
 
 The installer shows the certificate fingerprint (compare it with what the install script
@@ -147,7 +147,7 @@ module has `nested=1` (the default on Proxmox 9).
 ## 5. Networking
 
 Guests take a DHCP lease on the node's bridge, so they are ordinary LAN machines. Clients still
-dial the **service host** on an allocated port (`10.0.3.184:2201` → guest `:22`), because that is
+dial the **service host** on an allocated port (`192.0.2.10:2201` → guest `:22`), because that is
 what the API contract promises and what keeps a PC's SSH config valid across a guest's lease
 changes: the relay looks the guest's current address up through the guest agent when a connection
 arrives (cached for a minute), so a rebooted guest with a new address is reached without anyone
@@ -172,7 +172,7 @@ one command at a time with what it does, for a domain admin who will not run som
 PowerShell against the directory. Both end in the same state; pick one.
 
 Whichever way: the SPN, the certificate name and the URL clients type must all be the **same DNS
-name** (`test-proxmox.corp.example.com` below). Kerberos tickets are issued for a name, never for an
+name** (`pve1.corp.example.com` below). Kerberos tickets are issued for a name, never for an
 address.
 
 ### The scripted way
@@ -180,7 +180,7 @@ address.
 1. **On a domain controller**, as a domain admin (needs RSAT's ActiveDirectory and DnsServer modules and `ktpass`):
 
    ```powershell
-   .\service\host\New-ConstructKerberosPrincipal.ps1 -HostFqdn test-proxmox.corp.example.com -Address 10.0.3.184 -InstallOnHost root@test-proxmox.corp.example.com
+   .\service\host\New-ConstructKerberosPrincipal.ps1 -HostFqdn pve1.corp.example.com -Address 192.0.2.10 -InstallOnHost root@pve1.corp.example.com
    ```
 
    It creates `svc-constructd` (random never-expiring password set by `ktpass`, AES-256, UPN equal
@@ -194,8 +194,8 @@ address.
    host:
 
    ```sh
-   bash service/host/install-construct-host.sh --public-host test-proxmox.corp.example.com \
-        --keytab /root/constructd.keytab --netbios-domain HOME --realm CORP.EXAMPLE.COM
+   bash service/host/install-construct-host.sh --public-host pve1.corp.example.com \
+        --keytab /root/constructd.keytab --netbios-domain CORP --realm CORP.EXAMPLE.COM
    ```
 
    The keytab goes to `/etc/constructd/krb5.keytab` (root-only), the unit gets `KRB5_KTNAME`, a
@@ -205,11 +205,11 @@ address.
 3. **On the node**, add people by their domain name, then they enrol without a token:
 
    ```sh
-   /opt/construct/host/Constructd.Api admin users add 'HOME\alice' --max-vms 3
+   /opt/construct/host/Constructd.Api admin users add 'CORP\alice' --max-vms 3
    ```
 
    ```powershell
-   .\Auto-Install.ps1 -Backend hyperv-remote -ServiceUrl https://test-proxmox.corp.example.com:7462 -InstanceName work-vm
+   .\Auto-Install.ps1 -Backend hyperv-remote -ServiceUrl https://pve1.corp.example.com:7462 -InstanceName work-vm
    ```
 
 ### The manual way
@@ -220,19 +220,19 @@ example values, replace them with yours. Nothing here touches the node until ste
 
 | Value | Example | Where it is used |
 |---|---|---|
-| Host FQDN | `test-proxmox.corp.example.com` | DNS record, SPN, certificate, client URL |
+| Host FQDN | `pve1.corp.example.com` | DNS record, SPN, certificate, client URL |
 | Realm (the AD domain, upper case) | `CORP.EXAMPLE.COM` | principal name, `krb5.conf` |
-| NetBIOS domain | `HOME` | how the service names users (`HOME\alice`) |
+| NetBIOS domain | `CORP` | how the service names users (`CORP\alice`) |
 | Service account | `svc-constructd` | owns the SPN and the keytab |
-| Principal | `HTTP/test-proxmox.corp.example.com@CORP.EXAMPLE.COM` | the identity in the keytab |
+| Principal | `HTTP/pve1.corp.example.com@CORP.EXAMPLE.COM` | the identity in the keytab |
 
 1. **DNS: make the name resolve to the node.** Skip this when your DNS lives elsewhere (a
    DHCP-registered name, an external DNS appliance); only the result matters. In the AD-integrated
    zone:
 
    ```powershell
-   Add-DnsServerResourceRecordA -ZoneName corp.example.com -Name test-proxmox -IPv4Address 10.0.3.184 -TimeToLive (New-TimeSpan -Hours 1)
-   Resolve-DnsName test-proxmox.corp.example.com
+   Add-DnsServerResourceRecordA -ZoneName corp.example.com -Name pve1 -IPv4Address 192.0.2.10 -TimeToLive (New-TimeSpan -Hours 1)
+   Resolve-DnsName pve1.corp.example.com
    ```
 
    Do **not** use a CNAME: the Windows Kerberos client requests a ticket for the canonical name it
@@ -254,11 +254,11 @@ example values, replace them with yours. Nothing here touches the node until ste
    plan for a keytab rotation (steps 5 and 6) before every expiry instead.
 
 3. **Register the SPN.** The service principal name is what a client asks the KDC for when it
-   opens `https://test-proxmox.corp.example.com`. It must exist exactly once in the forest.
+   opens `https://pve1.corp.example.com`. It must exist exactly once in the forest.
 
    ```powershell
-   setspn -Q HTTP/test-proxmox.corp.example.com          # must find nothing
-   setspn -S HTTP/test-proxmox.corp.example.com svc-constructd
+   setspn -Q HTTP/pve1.corp.example.com          # must find nothing
+   setspn -S HTTP/pve1.corp.example.com svc-constructd
    ```
 
    `-S` refuses a duplicate; if `-Q` finds the SPN on another object (a decommissioned server, a
@@ -270,7 +270,7 @@ example values, replace them with yours. Nothing here touches the node until ste
    holds must use the same salt, so the UPN is set to the principal before the password is set:
 
    ```powershell
-   Set-ADUser -Identity svc-constructd -UserPrincipalName 'HTTP/test-proxmox.corp.example.com@CORP.EXAMPLE.COM'
+   Set-ADUser -Identity svc-constructd -UserPrincipalName 'HTTP/pve1.corp.example.com@CORP.EXAMPLE.COM'
    ```
 
    (`ktpass +setupn` below does the same thing; setting it explicitly first makes the state visible
@@ -283,7 +283,7 @@ example values, replace them with yours. Nothing here touches the node until ste
    `+DumpSalt` prints the salt so you can check it matches step 4.
 
    ```powershell
-   ktpass /princ HTTP/test-proxmox.corp.example.com@CORP.EXAMPLE.COM /mapuser HOME\svc-constructd /crypto AES256-SHA1 /ptype KRB5_NT_PRINCIPAL /pass +rndPass /mapop set +setupn +DumpSalt /out C:\temp\constructd.keytab
+   ktpass /princ HTTP/pve1.corp.example.com@CORP.EXAMPLE.COM /mapuser CORP\svc-constructd /crypto AES256-SHA1 /ptype KRB5_NT_PRINCIPAL /pass +rndPass /mapop set +setupn +DumpSalt /out C:\temp\constructd.keytab
    Get-ADUser svc-constructd -Properties msDS-KeyVersionNumber, ServicePrincipalNames, UserPrincipalName, Enabled, KerberosEncryptionType
    ```
 
@@ -302,16 +302,16 @@ example values, replace them with yours. Nothing here touches the node until ste
    (`service/README.md`, rows `Negotiate:*`).
 
    ```sh
-   scp C:\temp\constructd.keytab root@test-proxmox.corp.example.com:/root/constructd.keytab
-   bash service/host/install-construct-host.sh --public-host test-proxmox.corp.example.com \
-        --keytab /root/constructd.keytab --netbios-domain HOME --realm CORP.EXAMPLE.COM
+   scp C:\temp\constructd.keytab root@pve1.corp.example.com:/root/constructd.keytab
+   bash service/host/install-construct-host.sh --public-host pve1.corp.example.com \
+        --keytab /root/constructd.keytab --netbios-domain CORP --realm CORP.EXAMPLE.COM
    shred -u /root/constructd.keytab
    ```
 
    The node needs `/etc/krb5.conf` naming the realm; the installer writes a minimal one (KDCs
    found through DNS SRV records) only when none exists. Without the installer, the same state is:
    the keytab at a root-only path, `Environment=KRB5_KTNAME=<path>` in `constructd.service`, and
-   `Constructd:Negotiate:{Enabled:true, DomainName:"HOME", Realm:"CORP.EXAMPLE.COM"}` in
+   `Constructd:Negotiate:{Enabled:true, DomainName:"CORP", Realm:"CORP.EXAMPLE.COM"}` in
    `appsettings.Production.json`.
 
 7. **The TLS certificate.** The installer issues a self-signed certificate for the public host
@@ -331,11 +331,11 @@ example values, replace them with yours. Nothing here touches the node until ste
    those fall back to NTLM, which the Linux side rejects on purpose):
 
    ```powershell
-   klist get HTTP/test-proxmox.corp.example.com      # a ticket for the SPN; 0xc000018b = SPN not found or account disabled
-   curl.exe --negotiate -u : https://test-proxmox.corp.example.com:7462/api/v1/whoami
+   klist get HTTP/pve1.corp.example.com      # a ticket for the SPN; 0xc000018b = SPN not found or account disabled
+   curl.exe --negotiate -u : https://pve1.corp.example.com:7462/api/v1/whoami
    ```
 
-   `whoami` answers for any authenticated identity, enrolled or not: `name` is `HOME\<user>`,
+   `whoami` answers for any authenticated identity, enrolled or not: `name` is `CORP\<user>`,
    `scheme` is `Negotiate`, and `known` turns `true` once the user is added on the host (step 9).
    A `name` of the right shape with `known: false` already proves the keytab. On the node,
    `journalctl -u constructd` shows the negotiated principal, and `klist -k /etc/constructd/krb5.keytab`
@@ -343,7 +343,7 @@ example values, replace them with yours. Nothing here touches the node until ste
 
 9. **Add users** by domain name and let them enrol, exactly as in step 3 of the scripted way.
 
-Kerberos names the user `alice@CORP.EXAMPLE.COM`; the service maps that onto `HOME\alice`
+Kerberos names the user `alice@CORP.EXAMPLE.COM`; the service maps that onto `CORP\alice`
 (`Negotiate:DomainName`, optionally restricted to `Negotiate:Realm`) so the same user record
 serves a Windows host and this one. Tokens keep working alongside. If the node's address changes,
 update the A record; the SPN and keytab are name-based and stay valid.
