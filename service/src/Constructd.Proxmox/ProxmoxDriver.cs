@@ -90,8 +90,8 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
 
     /// <summary>
     /// No checkpoint policy (Proxmox has snapshots but no "checkpoint at every start"), suspend to disk
-    /// yes (<c>qm suspend --todisk</c>; a start resumes it), and no desktop console: the node's own
-    /// noVNC needs a Proxmox login, which the service does not hand out.
+    /// yes (<c>qm suspend --todisk</c>; a start resumes it), and no native desktop console.
+    /// Browser display access is provided separately by <see cref="ProxmoxInteractiveConsole"/>.
     /// </summary>
     public DriverCapabilities Capabilities { get; } =
         new(Checkpoints: false, Suspend: true, Console: DriverConsole.None);

@@ -10,6 +10,7 @@ if [[ "$group" == panel || "$group" == all ]]; then
   node extension/test/guest-console.test.js
   node extension/test/console.test.js
   node extension/test/hostadmin.test.js
+  node extension/test/host-usage.test.js
   node extension/test/network-mode.test.js
   node extension/test/hostadmin-ui.test.js
   node extension/test/hostadmin-discovery.test.js
@@ -28,6 +29,7 @@ if [[ "$group" == t3 || "$group" == all ]]; then
   python3 test/t3-pairing-forward.test.py
 fi
 if [[ "$group" == service || "$group" == all ]]; then
+  bash test/usage-report.test.sh
   bash test/endpoint-refresh.test.sh
   bash test/construct-expose.test.sh
   bash test/proxmox-nested-installer.test.sh
@@ -35,6 +37,7 @@ if [[ "$group" == service || "$group" == all ]]; then
   node --check console-viewer/static/viewer.js
   bash -n console-viewer/install.sh bin/construct-vm.sh bin/provision.sh bin/fetch-construct-source.sh
   pwsh -NoProfile -File test/browser-console-install.test.ps1
+  bash test/browser-console-provision.test.sh
   node extension/test/drivers.test.js
   node extension/test/hostadmin.test.js
   bash test/construct-vm.test.sh

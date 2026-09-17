@@ -11,7 +11,8 @@ public sealed record ProcessResult(int ExitCode, string StandardOutput, string S
 }
 
 /// <summary>
-/// The one way the service starts a child process. Every Windows-side operation — <c>powershell.exe</c>
+/// The service's buffered child-process runner. Binary duplex consoles use <see cref="IStreamingProcessRunner"/>.
+/// Every Windows-side operation — <c>powershell.exe</c>
 /// for the Hyper-V driver, <c>wsl.exe</c> for the ISO build, <c>netsh.exe</c> for the port forwards —
 /// goes through here, which buys two things:
 ///

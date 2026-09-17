@@ -1,6 +1,229 @@
 [
   {
     "input": null,
+    "kind": "tokenUsage",
+    "now": 1789128000000,
+    "output": {
+      "byUser": [],
+      "byVm": [],
+      "generatedAt": "—",
+      "totals": {
+        "cost": "$0.00",
+        "tokens": "0"
+      },
+      "window": "today"
+    }
+  },
+  {
+    "input": {},
+    "kind": "tokenUsage",
+    "now": 1789128000000,
+    "output": {
+      "byUser": [],
+      "byVm": [],
+      "generatedAt": "—",
+      "totals": {
+        "cost": "$0.00",
+        "tokens": "0"
+      },
+      "window": "today"
+    }
+  },
+  {
+    "input": {
+      "byUser": [
+        {
+          "costUsd": 12.34,
+          "tokens": 1234567,
+          "user": "alice",
+          "vms": 2
+        }
+      ],
+      "byVm": [
+        {
+          "costUsd": 12.34,
+          "deleted": true,
+          "lastReportedAt": "2026-09-11T10:00:00Z",
+          "tokens": 1234567,
+          "tools": [
+            {
+              "costUsd": 12.34,
+              "tokens": 1234567,
+              "tool": "claude"
+            }
+          ],
+          "user": "alice",
+          "vm": "gone"
+        }
+      ],
+      "generatedAt": "2026-09-11T12:00:00Z",
+      "totals": {
+        "costUsd": 12.34,
+        "tokens": 1234567
+      },
+      "window": "month"
+    },
+    "kind": "tokenUsage",
+    "now": 1789128000000,
+    "output": {
+      "byUser": [
+        {
+          "cost": "$12.34",
+          "lastReported": "—",
+          "tokens": "1.2M",
+          "tools": "",
+          "user": "alice",
+          "vms": 2
+        }
+      ],
+      "byVm": [
+        {
+          "cost": "$12.34",
+          "deleted": true,
+          "lastReported": "2026-09-11 10:00 UTC",
+          "tokens": "1.2M",
+          "tools": "claude: 1.2M tokens, $12.34",
+          "user": "alice",
+          "vm": "gone"
+        }
+      ],
+      "generatedAt": "2026-09-11 12:00 UTC",
+      "totals": {
+        "cost": "$12.34",
+        "tokens": "1.2M"
+      },
+      "window": "month"
+    }
+  },
+  {
+    "input": {
+      "tokenUsage": {
+        "lastReportedAt": "2026-09-11T10:00:00Z",
+        "month": {
+          "tokens": 1234567
+        },
+        "today": {
+          "tokens": 1234
+        }
+      }
+    },
+    "kind": "vm",
+    "now": 1789128000000,
+    "output": {
+      "allowedActions": [],
+      "childCreationClosed": false,
+      "children": [],
+      "deleting": false,
+      "guest": "Construct unknown · provisioned unknown · reinstalled unknown",
+      "kind": "primary",
+      "lease": "",
+      "lifetime": "",
+      "media": 0,
+      "name": "",
+      "operation": "",
+      "operationJobId": "",
+      "overdue": false,
+      "owner": "",
+      "parent": "",
+      "pendingCpu": null,
+      "pendingRamGb": null,
+      "reservations": "—",
+      "resources": "—",
+      "savedBy": null,
+      "shared": false,
+      "sharing": "private",
+      "state": "unknown",
+      "tokenKind": null,
+      "tokenUsage": "1.2K today / 1.2M month",
+      "usage": {
+        "cpu": "CPU usage unavailable",
+        "cpuPercent": null,
+        "disk": "Disk usage unavailable",
+        "ram": "RAM usage unavailable",
+        "ramPercent": null,
+        "sample": "Usage unavailable on this host",
+        "stale": false
+      }
+    }
+  },
+  {
+    "input": {
+      "tokenUsage": {
+        "lastReportedAt": null
+      }
+    },
+    "kind": "vm",
+    "now": 1789128000000,
+    "output": {
+      "allowedActions": [],
+      "childCreationClosed": false,
+      "children": [],
+      "deleting": false,
+      "guest": "Construct unknown · provisioned unknown · reinstalled unknown",
+      "kind": "primary",
+      "lease": "",
+      "lifetime": "",
+      "media": 0,
+      "name": "",
+      "operation": "",
+      "operationJobId": "",
+      "overdue": false,
+      "owner": "",
+      "parent": "",
+      "pendingCpu": null,
+      "pendingRamGb": null,
+      "reservations": "—",
+      "resources": "—",
+      "savedBy": null,
+      "shared": false,
+      "sharing": "private",
+      "state": "unknown",
+      "tokenKind": null,
+      "tokenUsage": "No token report yet",
+      "usage": {
+        "cpu": "CPU usage unavailable",
+        "cpuPercent": null,
+        "disk": "Disk usage unavailable",
+        "ram": "RAM usage unavailable",
+        "ramPercent": null,
+        "sample": "Usage unavailable on this host",
+        "stale": false
+      }
+    }
+  },
+  {
+    "input": {
+      "usageTokensMonth": 1234567
+    },
+    "kind": "user",
+    "now": 1789128000000,
+    "output": {
+      "allowHostForwards": true,
+      "allowNested": null,
+      "allowance": {
+        "allowChildCreation": "",
+        "allowNeverLifetime": "",
+        "allowSharing": "",
+        "cpuBudget": "",
+        "maxChildLifetime": "",
+        "maxRetainedChildren": "",
+        "ramBudgetGiB": "",
+        "storageBudgetGiB": ""
+      },
+      "children": 0,
+      "created": "—",
+      "effective": "—",
+      "enabled": true,
+      "maxVms": null,
+      "name": "",
+      "primaries": 0,
+      "role": "user",
+      "tokens": 0,
+      "usageTokensMonth": "1.2M"
+    }
+  },
+  {
+    "input": null,
     "kind": "projectOpenPath",
     "now": 1789128000000,
     "output": "/root/repos"
@@ -299,7 +522,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": false
+        "updates": false,
+        "usage": false
       },
       "identity": null,
       "maintenance": null,
@@ -331,7 +555,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": false
+        "updates": false,
+        "usage": false
       },
       "identity": null,
       "maintenance": null,
@@ -362,7 +587,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": false
+        "updates": false,
+        "usage": false
       },
       "identity": null,
       "maintenance": null,
@@ -393,7 +619,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": false
+        "updates": false,
+        "usage": false
       },
       "identity": null,
       "maintenance": null,
@@ -429,7 +656,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": false
+        "updates": false,
+        "usage": false
       },
       "identity": null,
       "maintenance": null,
@@ -465,7 +693,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": false
+        "updates": false,
+        "usage": false
       },
       "identity": null,
       "maintenance": null,
@@ -500,7 +729,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": false
+        "updates": false,
+        "usage": false
       },
       "identity": null,
       "maintenance": null,
@@ -535,7 +765,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": false
+        "updates": false,
+        "usage": false
       },
       "identity": null,
       "maintenance": null,
@@ -577,7 +808,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": false
+        "updates": false,
+        "usage": false
       },
       "identity": null,
       "maintenance": null,
@@ -619,7 +851,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": false
+        "updates": false,
+        "usage": false
       },
       "identity": null,
       "maintenance": null,
@@ -660,7 +893,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": false
+        "updates": false,
+        "usage": false
       },
       "identity": null,
       "maintenance": null,
@@ -701,7 +935,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": false
+        "updates": false,
+        "usage": false
       },
       "identity": null,
       "maintenance": null,
@@ -733,7 +968,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": false
+        "updates": false,
+        "usage": false
       },
       "identity": null,
       "maintenance": null,
@@ -765,7 +1001,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": false
+        "updates": false,
+        "usage": false
       },
       "identity": null,
       "maintenance": null,
@@ -796,7 +1033,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": false
+        "updates": false,
+        "usage": false
       },
       "identity": null,
       "maintenance": null,
@@ -827,7 +1065,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": false
+        "updates": false,
+        "usage": false
       },
       "identity": null,
       "maintenance": null,
@@ -863,7 +1102,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": false
+        "updates": false,
+        "usage": false
       },
       "identity": {
         "effective": null,
@@ -906,7 +1146,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": false
+        "updates": false,
+        "usage": false
       },
       "identity": {
         "effective": null,
@@ -948,7 +1189,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": false
+        "updates": false,
+        "usage": false
       },
       "identity": {
         "effective": null,
@@ -990,7 +1232,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": false
+        "updates": false,
+        "usage": false
       },
       "identity": {
         "effective": null,
@@ -1039,7 +1282,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": true
+        "updates": true,
+        "usage": false
       },
       "identity": {
         "effective": null,
@@ -1092,7 +1336,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": true
+        "updates": true,
+        "usage": false
       },
       "identity": {
         "effective": null,
@@ -1144,7 +1389,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": true
+        "updates": true,
+        "usage": false
       },
       "identity": {
         "effective": null,
@@ -1196,7 +1442,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": true
+        "updates": true,
+        "usage": false
       },
       "identity": {
         "effective": null,
@@ -1243,7 +1490,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": false
+        "updates": false,
+        "usage": false
       },
       "identity": null,
       "maintenance": null,
@@ -1279,7 +1527,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": false
+        "updates": false,
+        "usage": false
       },
       "identity": null,
       "maintenance": null,
@@ -1315,7 +1564,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": false
+        "updates": false,
+        "usage": false
       },
       "identity": null,
       "maintenance": null,
@@ -1351,7 +1601,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": false
+        "updates": false,
+        "usage": false
       },
       "identity": null,
       "maintenance": null,
@@ -1387,7 +1638,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": false
+        "updates": false,
+        "usage": false
       },
       "identity": null,
       "maintenance": null,
@@ -1423,7 +1675,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": false
+        "updates": false,
+        "usage": false
       },
       "identity": null,
       "maintenance": null,
@@ -1459,7 +1712,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": false
+        "updates": false,
+        "usage": false
       },
       "identity": null,
       "maintenance": null,
@@ -1495,7 +1749,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": false
+        "updates": false,
+        "usage": false
       },
       "identity": null,
       "maintenance": null,
@@ -1531,7 +1786,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": false
+        "updates": false,
+        "usage": false
       },
       "identity": {
         "effective": null,
@@ -1578,7 +1834,8 @@
         "primaryCpu": false,
         "primaryMemory": false,
         "primaryNested": false,
-        "updates": false
+        "updates": false,
+        "usage": false
       },
       "identity": {
         "effective": null,
@@ -1791,7 +2048,8 @@
       "primaryCpu": false,
       "primaryMemory": false,
       "primaryNested": false,
-      "updates": false
+      "updates": false,
+      "usage": false
     }
   },
   {
@@ -1817,6 +2075,12 @@
         "available": false,
         "id": "users",
         "label": "Users",
+        "reason": "not available on this host version"
+      },
+      {
+        "available": false,
+        "id": "usage",
+        "label": "Usage",
         "reason": "not available on this host version"
       },
       {
@@ -1863,7 +2127,8 @@
       "primaryCpu": false,
       "primaryMemory": false,
       "primaryNested": false,
-      "updates": false
+      "updates": false,
+      "usage": false
     }
   },
   {
@@ -1892,6 +2157,12 @@
         "id": "users",
         "label": "Users",
         "reason": ""
+      },
+      {
+        "available": false,
+        "id": "usage",
+        "label": "Usage",
+        "reason": "not available on this host version"
       },
       {
         "available": true,
@@ -1938,7 +2209,8 @@
       "primaryCpu": false,
       "primaryMemory": false,
       "primaryNested": false,
-      "updates": false
+      "updates": false,
+      "usage": false
     }
   },
   {
@@ -1968,6 +2240,12 @@
         "id": "users",
         "label": "Users",
         "reason": ""
+      },
+      {
+        "available": false,
+        "id": "usage",
+        "label": "Usage",
+        "reason": "not available on this host version"
       },
       {
         "available": true,
@@ -2015,7 +2293,8 @@
       "primaryCpu": false,
       "primaryMemory": false,
       "primaryNested": false,
-      "updates": true
+      "updates": true,
+      "usage": false
     }
   },
   {
@@ -2046,6 +2325,12 @@
         "id": "users",
         "label": "Users",
         "reason": ""
+      },
+      {
+        "available": false,
+        "id": "usage",
+        "label": "Usage",
+        "reason": "not available on this host version"
       },
       {
         "available": true,
@@ -2098,7 +2383,8 @@
       "primaryCpu": true,
       "primaryMemory": true,
       "primaryNested": false,
-      "updates": true
+      "updates": true,
+      "usage": false
     }
   },
   {
@@ -2134,6 +2420,12 @@
         "id": "users",
         "label": "Users",
         "reason": ""
+      },
+      {
+        "available": false,
+        "id": "usage",
+        "label": "Usage",
+        "reason": "not available on this host version"
       },
       {
         "available": true,

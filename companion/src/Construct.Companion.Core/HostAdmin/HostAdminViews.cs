@@ -53,6 +53,9 @@ public static partial class HostAdminViews
         r["kind"] = Default(v["kind"], "primary").ToLowerInvariant(); r["sharing"] = Default(v["sharing"], "private").ToLowerInvariant(); r["state"] = Default(v["state"], "unknown").ToLowerInvariant();
         foreach (var k in new[] { "shared", "deleting", "childCreationClosed" }) r[k] = StateJson.Boolean(v[k]) == true;
         r["pendingCpu"] = Number(v["pendingCpu"]);
+        if (v["tokenUsage"] is JsonObject tokenUsage) r["tokenUsage"] = tokenUsage["lastReportedAt"] is not null
+            ? $"{UsageParser.FormatTokens(Number(tokenUsage["today"]?["tokens"]) ?? 0)} today / {UsageParser.FormatTokens(Number(tokenUsage["month"]?["tokens"]) ?? 0)} month"
+            : "No token report yet";
         r["savedBy"] = Text(r["state"]) == "saved" && Text(v["savedBy"]) == "memory-pressure" ? "memory-pressure" : null;
         r["pendingRamGb"] = Number(v["pendingRamGb"]);
         if (v["network"] is JsonObject network) r["network"] = network.DeepClone();
@@ -91,7 +94,7 @@ public static partial class HostAdminViews
         return new() { ["primary"] = Text(input["primary"]), ["visible"] = true, ["items"] = Children(items, now),
             ["problem"] = Text(input["problem"]) is { Length: > 0 } problem ? problem : items is null ? "could not read the child VMs" : "" };
     }
-    public static JsonArray Config(JsonNode? config) => new(ConfigSections.Where(key => key != "memoryPressure" || config?[key] is not null).Select(key =>
+    public static JsonArray Config(JsonNode? config) => new(ConfigSections.Where(key => key is not ("memoryPressure" or "usage") || config?[key] is not null).Select(key =>
     {
         var section = config?[key] as JsonObject; var value = section?["value"] as JsonObject ?? section; var clean = value?.DeepClone().AsObject() ?? []; clean.Remove("source"); clean.Remove("updatedAt");
         return (JsonNode)new JsonObject { ["key"] = key, ["source"] = Default(section?["source"], section is null ? "default" : "stored"), ["updatedAt"] = section?["updatedAt"] is null ? "" : FormatWhen(section["updatedAt"]), ["expectedUpdatedAt"] = Text(section?["updatedAt"]).Length > 0 ? Text(section?["updatedAt"]) : null, ["text"] = StateJson.Stringify(clean, true), ["present"] = section is not null };
@@ -136,7 +139,9 @@ public static partial class HostAdminViews
     }
     public static JsonObject User(JsonNode? input)
     {
-        var u = input as JsonObject ?? []; return new() { ["name"] = Text(u["name"]), ["role"] = Default(u["role"], "user").ToLowerInvariant(), ["enabled"] = StateJson.Boolean(u["enabled"]) != false, ["maxVms"] = Number(u["maxVms"]), ["allowHostForwards"] = StateJson.Boolean(u["allowHostForwards"]) != false, ["allowNested"] = StateJson.Boolean(u["allowNested"]), ["created"] = FormatWhen(u["created"]), ["primaries"] = Number(u["vms"]?["primaries"]) ?? 0, ["children"] = Number(u["vms"]?["children"]) ?? 0, ["tokens"] = Number(u["tokens"]) ?? 0, ["allowance"] = AllowanceForm(u["allowance"]), ["effective"] = AllowanceText(u["effective"]) };
+        var u = input as JsonObject ?? []; var result = new JsonObject { ["name"] = Text(u["name"]), ["role"] = Default(u["role"], "user").ToLowerInvariant(), ["enabled"] = StateJson.Boolean(u["enabled"]) != false, ["maxVms"] = Number(u["maxVms"]), ["allowHostForwards"] = StateJson.Boolean(u["allowHostForwards"]) != false, ["allowNested"] = StateJson.Boolean(u["allowNested"]), ["created"] = FormatWhen(u["created"]), ["primaries"] = Number(u["vms"]?["primaries"]) ?? 0, ["children"] = Number(u["vms"]?["children"]) ?? 0, ["tokens"] = Number(u["tokens"]) ?? 0, ["allowance"] = AllowanceForm(u["allowance"]), ["effective"] = AllowanceText(u["effective"]) };
+        if (u["usageTokensMonth"] is not null) result["usageTokensMonth"] = UsageParser.FormatTokens(Number(u["usageTokensMonth"]) ?? 0);
+        return result;
     }
     private static JsonObject Strings(JsonObject obj, params string[] keys)
     { var result = new JsonObject(); foreach (var key in keys) result[key] = Text(obj[key]); return result; }

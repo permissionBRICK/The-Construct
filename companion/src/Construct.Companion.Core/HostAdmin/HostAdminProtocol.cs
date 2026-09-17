@@ -6,16 +6,16 @@ namespace Construct.Companion.Core.HostAdmin;
 
 public static partial class HostAdminProtocol
 {
-    public static readonly string[] Tabs = ["overview", "vms", "users", "media", "operations", "config", "maintenance"];
-    public static readonly string[] ConfigSections = ["capacity", "memoryPressure", "userDefaults", "userCaps", "lifecycle", "media", "network", "virtualization", "updates"];
+    public static readonly string[] Tabs = ["overview", "vms", "users", "usage", "media", "operations", "config", "maintenance"];
+    public static readonly string[] ConfigSections = ["capacity", "memoryPressure", "userDefaults", "userCaps", "lifecycle", "media", "network", "virtualization", "updates", "usage"];
     public static string Text(JsonNode? node) => StateJson.Trim(node is null ? "" : StateJson.String(node));
     public static JsonObject Features(JsonNode? health)
     {
         var flags = (health?["apiFeatures"] as JsonArray ?? []).Select(Text).ToHashSet();
-        return new() { ["hostAdmin"] = flags.Contains("host-admin"), ["children"] = flags.Contains("children"), ["media"] = flags.Contains("media"), ["console"] = flags.Contains("console"), ["updates"] = flags.Contains("updates"), ["network"] = flags.Contains("network"), ["networkMode"] = flags.Contains("network-mode"), ["primaryCpu"] = flags.Contains("primary-cpu"), ["primaryMemory"] = flags.Contains("primary-memory"), ["primaryNested"] = flags.Contains("primary-nested") };
+        return new() { ["hostAdmin"] = flags.Contains("host-admin"), ["usage"] = flags.Contains("usage"), ["children"] = flags.Contains("children"), ["media"] = flags.Contains("media"), ["console"] = flags.Contains("console"), ["updates"] = flags.Contains("updates"), ["network"] = flags.Contains("network"), ["networkMode"] = flags.Contains("network-mode"), ["primaryCpu"] = flags.Contains("primary-cpu"), ["primaryMemory"] = flags.Contains("primary-memory"), ["primaryNested"] = flags.Contains("primary-nested") };
     }
     public static JsonArray TabsFor(JsonObject features) => new(Tabs.Select((id, i) => (JsonNode)new JsonObject
-    { ["id"] = id, ["label"] = new[] { "Overview", "VMs", "Users", "Media", "Operations", "Configuration", "Maintenance" }[i], ["available"] = StateJson.Boolean(features[id == "maintenance" ? "updates" : "hostAdmin"]) == true, ["reason"] = StateJson.Boolean(features[id == "maintenance" ? "updates" : "hostAdmin"]) == true ? "" : "not available on this host version" }).ToArray());
+    { ["id"] = id, ["label"] = new[] { "Overview", "VMs", "Users", "Usage", "Media", "Operations", "Configuration", "Maintenance" }[i], ["available"] = StateJson.Boolean(features[id == "maintenance" ? "updates" : id == "usage" ? "usage" : "hostAdmin"]) == true, ["reason"] = StateJson.Boolean(features[id == "maintenance" ? "updates" : id == "usage" ? "usage" : "hostAdmin"]) == true ? "" : "not available on this host version" }).ToArray());
     public static JsonObject ClampIdlePolicy(JsonObject policy, double max)
     {
         var requested = StateJson.CoerceNumber(policy["timeoutMinutes"]); var timeout = double.IsFinite(requested) && requested > 0 ? Math.Floor(requested) : 0;

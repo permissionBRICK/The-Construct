@@ -10,6 +10,8 @@ const handoff = { vmId: "11111111-2222-3333-4444-555555555555", username: "cvlte
   assert.equal(c.stateFor({}, "linux").supported, false);
   assert.equal(c.stateFor({ backend: "other" }, "win32").supported, false);
   assert.deepEqual(c.parseHandoff(JSON.stringify(handoff)), handoff);
+  assert.deepEqual(c.parseHandoff('{"error":"vnc-unreachable"}'), { error: "vnc-unreachable" });
+  assert.match(c.mapFailure("mint", { error: "vnc-unreachable" }), /Proxmox host/);
   for (const [field, invalid] of [["vmId", "bad"], ["username", "user/name"], ["domain", ""], ["password", ""], ["certificateFingerprint", "sha256:aa"], ["hostAddress", "localhost"], ["hostAddress", "256.0.0.1"]]) assert.throws(() => c.parseHandoff(JSON.stringify({ ...handoff, [field]: invalid })));
   for (const reason of ["no-credential", "grant-missing", "credential-out-of-sync"]) assert.equal(c.parseHandoff(JSON.stringify({ setupRequired: true, reason })).setupRequired, true);
   const instance = instances.deriveDefaults("work-vm", { backend: "hyperv-remote" });

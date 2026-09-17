@@ -36,7 +36,7 @@ function parseHandoff(stdout) {
   let value;
   try { value = JSON.parse(stdout); } catch (_) { throw new Error("Console access could not be prepared on this PC. Update Construct and retry."); }
   if (value && value.setupRequired === true && ["no-credential", "grant-missing", "credential-out-of-sync"].includes(value.reason)) return { setupRequired: true, reason: value.reason };
-  if (value && ["vm-not-running", "vmconnect-unreachable"].includes(value.error)) return { error: value.error };
+  if (value && ["vm-not-running", "vmconnect-unreachable", "vnc-unreachable"].includes(value.error)) return { error: value.error };
   const patterns = { vmId: /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i, username: /^[A-Za-z0-9_-]{1,20}$/, domain: /^[A-Za-z0-9_.-]{1,255}$/, password: /^[^\x00-\x1f\x7f]{1,256}$/, certificateFingerprint: /^sha256:(?:[0-9a-f]{2}:){31}[0-9a-f]{2}$/ };
   if (!value || Object.entries(patterns).some(([key, pattern]) => typeof value[key] !== "string" || !pattern.test(value[key])) || typeof value.hostAddress !== "string" || (value.hostAddress !== "" && net.isIP(value.hostAddress) !== 4))
     throw new Error("Console access could not be prepared on this PC. The credential broker returned invalid connection data.");
@@ -52,6 +52,7 @@ function mapFailure(step, result = {}) {
     "install-failed": "Installing the console gateway failed. Run bash /opt/construct/repo/console-viewer/install.sh on the VM to see the full error.",
     "vm-not-running": "The VM is not running on this PC's Hyper-V.",
     "vmconnect-unreachable": "Hyper-V's console service (port 2179) did not answer on this PC. Check that the Hyper-V Virtual Machine Management service is running.",
+    "vnc-unreachable": "The VM display on the Proxmox host did not answer. Check that the VM is running and the primary can reach the host's console port range.",
   };
   if (messages[status]) return messages[status];
   if (result.setupRequired) return "Console setup did not finish. Check the administrator PowerShell window, then click Console again.";

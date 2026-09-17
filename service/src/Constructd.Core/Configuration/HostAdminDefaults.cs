@@ -3,6 +3,7 @@ namespace Constructd.Core.Configuration;
 
 public static class HostAdminDefaults
 {
+    public static UsageConfig Usage { get; } = new();
     public static MemoryPressureConfig MemoryPressure { get; } = new();
     public static CapacityConfig Capacity { get; } = new(CapacityMode.Observe, null, 20L << 30, null, null, 60, 600);
     public static UserDefaultsConfig UserDefaults { get; } = new(1, true, 1, null, null, null, null, true, true);

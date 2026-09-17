@@ -9,7 +9,7 @@ public sealed record EffectiveAllowanceResponse(int MaxPrimaries, bool AllowChil
         a.MaxRetainedChildren, a.CpuBudget, a.RamBudgetBytes, a.StorageBudgetBytes, a.MaxChildLifetimeSeconds, a.AllowNeverLifetime, a.AllowSharing, a.AllowHostForwards, usage);
 }
 public sealed record UserDetailResponse(string Name, Role Role, bool Enabled, int MaxVms, bool AllowHostForwards, DateTimeOffset Created,
-    UserAllowance Allowance, EffectiveAllowanceResponse Effective, UserVmCounts Vms, int Tokens, bool? AllowNested = null);
+    UserAllowance Allowance, EffectiveAllowanceResponse Effective, UserVmCounts Vms, int Tokens, bool? AllowNested = null, decimal? UsageTokensMonth = null);
 public sealed record UserVmCounts(int Primaries, int Children);
 public sealed record UserUpdateRequest(string? Role = null, bool? Enabled = null, int? MaxVms = null, bool? AllowHostForwards = null,
     System.Text.Json.JsonElement AllowNested = default);

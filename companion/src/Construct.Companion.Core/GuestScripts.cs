@@ -18,12 +18,14 @@ public static partial class GuestScripts
     private static Dictionary<string, string> Load()
     {
         var assembly = typeof(GuestScripts).Assembly;
-        return assembly.GetManifestResourceNames().Where(name => name.StartsWith("GuestScripts.", StringComparison.Ordinal))
+        var templates = assembly.GetManifestResourceNames().Where(name => name.StartsWith("GuestScripts.", StringComparison.Ordinal))
             .ToDictionary(name => name[13..^3], name =>
             {
                 using var reader = new StreamReader(assembly.GetManifestResourceStream(name)!);
                 return reader.ReadToEnd();
             }, StringComparer.Ordinal);
+        templates["usage"] = templates["usage"].Replace("# construct:usage-collect", templates["usage-collect"], StringComparison.Ordinal);
+        return templates;
     }
 
     [GeneratedRegex(@"\{\{([A-Za-z][A-Za-z0-9]*)\}\}")]
