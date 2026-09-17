@@ -178,6 +178,15 @@ public sealed partial class ProxmoxChildDriverTests : IDisposable
         Assert.Equal("vm-identity-ambiguous", (await Assert.ThrowsAsync<ChildValidationException>(() => driver.GetVmIdAsync("child", default))).Code);
     }
     [Fact]
+    public async Task Lookup_uses_the_node_guest_list_so_a_fresh_vm_is_found_at_once()
+    {
+        // /cluster/resources is pvestatd's cache and lags a new VM by seconds; the node list does not.
+        runner.RespondStdout("""[{"vmid":101,"name":"child","status":"stopped","tags":"construct-child"}]""")
+            .RespondStdout("""{"smbios1":"uuid=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}""");
+        Assert.Equal("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", await driver.GetVmIdAsync("child", default));
+        Assert.Equal(["get", "/nodes/pve1/qemu", "--output-format", "json"], runner.Calls[0].Arguments);
+    }
+    [Fact]
     public async Task Capabilities_match_the_supported_hardware_and_legacy_suspend()
     {
         var caps = await driver.GetCapabilitiesAsync(default);
