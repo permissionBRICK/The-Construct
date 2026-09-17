@@ -18,6 +18,7 @@ public sealed class VmNetworkSettingsTests
         using var app = Proxmox();
         using var owner = await app.CreateUserClientAsync("alice", allowHostForwards: false);
         await app.Service<IHostConfigStore>().SetAsync("network", new NetworkConfig(false, false, "direct"), "admin", default);
+        app.Forwards.Failure = new InvalidOperationException("Direct creation must not allocate a relay.");
         var job = await owner.CreateVmAsync("vm");
         Assert.Equal(22, job.ResultElement("endpoint").GetProperty("sshPort").GetInt32());
         Assert.Null((await app.Vms.GetAsync("vm", default))!.SshForwardPort);
@@ -31,6 +32,8 @@ public sealed class VmNetworkSettingsTests
         Assert.Equal("direct", body.GetProperty("kind").GetString());
         Assert.Equal("http://vm.fake.local:3000/", body.GetProperty("url").GetString());
         Assert.Empty(await app.Forwards.ListAsync("vm", default));
+        Assert.Empty(app.Forwards.Materialized);
+        app.Forwards.Failure = null;
         Assert.Equal(HttpStatusCode.Created, (await guest.PostAsJsonAsync("/api/v1/vms/vm/forwards", new { vmPort = 3000, target = "client" })).StatusCode);
         app.Driver.ReportEndpoint = false;
         var unknown = await guest.GetAsync("/api/v1/vms/vm/endpoint");
@@ -179,5 +182,43 @@ public sealed class VmNetworkSettingsTests
         Assert.Equal(HttpStatusCode.BadRequest, (await owner.GetAsync("/api/v1/vms/vm/network")).StatusCode);
         var inventory = await owner.GetFromJsonAsync<JsonElement>("/api/v1/vms/vm");
         Assert.False(inventory.TryGetProperty("network", out _));
+    }
+
+    [Fact]
+    public async Task AppliedAndPendingNetworkSettingsSurviveServiceRestart()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "construct-network-" + Guid.NewGuid().ToString("n"));
+        var database = Path.Combine(directory, "service.db");
+        var options = new Dictionary<string, string?> { ["Constructd:Backend"] = "proxmox" };
+        try
+        {
+            using (var app = TestApp.WithSqlite(database, options))
+            {
+                using var owner = await app.CreateUserClientAsync("alice");
+                await owner.CreateVmAsync("vm");
+                var vm = (await app.Vms.GetAsync("vm", default))!;
+                var settings = app.Service<VmNetworkSettings>();
+                await settings.SaveAsync(vm, new(vm.Created, "direct", "10.0.3.50/22", "10.0.0.1", ["10.0.0.2"]), "admin", default);
+                app.Driver.SetState("vm", VmState.Off);
+                vm = await settings.ApplyAsync(vm, VmState.Off, default);
+                await settings.SaveAsync(vm, new(vm.Created, "direct", "10.0.3.51/22", "10.0.0.1", null), "admin", default);
+            }
+            using (var app = TestApp.WithSqlite(database, options))
+            {
+                var vm = (await app.Vms.GetAsync("vm", default))!;
+                var settings = app.Service<VmNetworkSettings>();
+                var view = await settings.ProjectAsync(vm, true, default);
+                Assert.Equal("direct", view.EffectiveMode);
+                Assert.Equal("10.0.3.50", view.Address);
+                Assert.Equal("10.0.3.51/22", view.PendingAddress);
+                Assert.Null(vm.SshForwardPort);
+                Assert.Null(await settings.GetAsync(vm with { Created = vm.Created.AddSeconds(1) }, default, applied: true));
+            }
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
     }
 }

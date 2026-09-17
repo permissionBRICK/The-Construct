@@ -123,8 +123,8 @@ A create request (`POST /vms`) runs the same job as on Windows; only the platfor
 | Install media | autoinstall ISO from the catalog (or per VM through WSL) | **one cloud-init snippet per VM**: hostname, seed user `construct` with passwordless sudo and a locked password, the bootstrap public key, `qemu-guest-agent` |
 | Create | `Create-AgentVM.ps1` → Gen-2 VM, fresh VHDX, ISO attached | `qm create` cloning the cached cloud image (`--scsi0 <storage>:0,import-from=<image>`), a cloud-init drive (`--ide2 <storage>:cloudinit`), `--cicustom user=<snippet>`, `--agent enabled=1`, `cpu host`, bridged DHCP; then `qm disk resize` to the requested size and `qm start` |
 | Wait for SSH | the driver's socket poll on `<name>.mshome.net` | the guest agent reports the DHCP address (`network-get-interfaces`); SSH is probed on it |
-| Detach media | eject the ISO | nothing (the cloud-init drive is inert after first boot) |
-| Endpoint | `PublicHost:<forward>` via `netsh portproxy` | `PublicHost:<forward>` via an **in-process TCP relay** (section 5) |
+| Detach media | eject the ISO | keep the cloud-init drive attached for later network configuration changes |
+| Endpoint | `PublicHost:<forward>` via `netsh portproxy` | `PublicHost:<forward>` through the relay, or the guest's LAN address on port 22 in direct mode (section 5) |
 | Power | `Start-VM` / `Stop-VM` / `Save-VM` | `qm start` / `qm shutdown --forceStop 1` / `qm suspend --todisk 1` |
 | Remove | `Remove-VM` + disk chain | `qm stop` (if running) + `qm destroy --purge 1 --destroy-unreferenced-disks 1` + the seed snippet |
 
