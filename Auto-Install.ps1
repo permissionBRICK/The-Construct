@@ -2621,7 +2621,7 @@ if ($RemoteInstall) {
             $savedProfiles = @(Get-BackupProjectNames -BackupDir $bk)
             Write-Ok "Saved config loaded; it will be restored automatically after the install."
             if ($savedProfiles.Count -gt 0) {
-                Write-Note "The backup carries $($savedProfiles.Count) project profile(s) from the VM it was saved on; pick the ones this VM should provision in the project selection."
+                Write-Ok "The backup carries $($savedProfiles.Count) project profile(s) from the VM it was saved on; pick the ones this VM should provision in the project selection."
             }
         }
     }
@@ -3452,7 +3452,7 @@ if (-not $SkipCreateVm -and -not $existingVmHandled) {
         $savedProfiles = @(Get-BackupProjectNames -BackupDir $bk)
         Write-Ok "Saved config loaded; it will be restored automatically after the install."
         if ($savedProfiles.Count -gt 0) {
-            Write-Note "The backup carries $($savedProfiles.Count) project profile(s) from the VM it was saved on; pick the ones this VM should provision in the project selection."
+            Write-Ok "The backup carries $($savedProfiles.Count) project profile(s) from the VM it was saved on; pick the ones this VM should provision in the project selection."
         }
     }
 }
