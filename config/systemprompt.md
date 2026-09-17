@@ -61,15 +61,33 @@ reinstalls, record them in a project profile under
     construct project set <name> --file profile.json
     echo '{"name":"x","repos":[...],...}' | construct project set x
 
-The CLI validates the JSON and writes the canonical form. You can also edit the
-file directly; changes sync to the host on the next cycle. Anything NOT recorded
-in a profile is lost on reinstall.
+The CLI validates each profile's JSON and writes the canonical form. It does
+not check for conflicting repository directories across profiles. You can also
+edit the file directly; changes sync to the host on the next cycle. Anything
+NOT recorded in a profile is lost on reinstall.
 
 `default` is a reserved name — create a named profile instead.
 
 Write profiles so a fresh VM installs everything needed to build, test, and run
 the project. Declare runtimes in `sdks`, system packages in `hostPackages` where
 applicable, and the remaining setup in `provisionCommands`.
+
+Before adding a profile, inspect the existing profiles with `construct project
+list` and `construct project get <name>`. Construct deduplicates repository
+checkouts by URL across selected profiles. Profiles using the same repository
+URL must use the same `repos[].directory`. A second profile name or a different
+`directory` does not create a second checkout of that URL. For example, desktop
+and Android profiles for one repository should both use `directory: slidesaver`.
+If separate checkouts are needed, provision them explicitly and use their paths
+in each command that needs them.
+
+Each provisioning command starts in the profile's first repository directory
+under `WORKSPACE_ROOT`, normally `/root/repos`. With no repository, or if that
+directory is missing, it starts in `WORKSPACE_ROOT` instead. A `cd` in one
+command does not carry over to the next command. After changing repository
+entries, run `/opt/construct/repo/bin/generate-runtime-config.sh` and check that
+the `repos` and `provisionCommands[].dir` entries in
+`/opt/construct/runtime/generated.json` refer to the intended checkouts.
 
 `provisionCommands` run on EVERY provision, including reprovisions. Make them
 complete on a fresh install and incremental when run again:
