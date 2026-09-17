@@ -9,8 +9,11 @@ printf '{}\n' > "$task_dir/publish/appsettings.json"
 mkdir "$task_dir/fdd"
 head -c 4096 /dev/urandom > "$task_dir/fdd/Constructd.Api.exe"
 printf '%s' '{"runtimeOptions":{"frameworks":[{"name":"Microsoft.NETCore.App","version":"10.0.0"},{"name":"Microsoft.AspNetCore.App","version":"10.0.0"}]}}' > "$task_dir/fdd/Constructd.Api.runtimeconfig.json"
+mkdir "$task_dir/linux"
+head -c 65536 /dev/urandom > "$task_dir/linux/Constructd.Api"
+printf '{}\n' > "$task_dir/linux/appsettings.json"
 commit=$(git rev-parse HEAD)
-pwsh -NoProfile -File service/host/New-ConstructHostPackage.ps1 -PublishDir "$task_dir/publish" -FrameworkDependentPublishDir "$task_dir/fdd" -OutputDir "$task_dir/output" -Commit "$commit"
+pwsh -NoProfile -File service/host/New-ConstructHostPackage.ps1 -PublishDir "$task_dir/publish" -FrameworkDependentPublishDir "$task_dir/fdd" -LinuxPublishDir "$task_dir/linux" -OutputDir "$task_dir/output" -Commit "$commit"
 python3 scripts/package-construct-release.py --output "$task_dir/output" --commit "$commit" --repository permissionBRICK/The-Construct
 python3 - "$task_dir/output" "$commit" <<'PY'
 import hashlib,json,pathlib,sys,zipfile
@@ -41,5 +44,41 @@ for prefix in ('payload','frameworkDependent'):
         assert files[m['updaterPath']]==m['updaterSha256'];checks+=1
         assert z.read('scripts/config/iso-builder.json')==pathlib.Path('config/iso-builder.json').read_bytes();checks+=1
         assert not any('appsettings.Production.json' in p or '/keys/' in p for p in files);checks+=1
+linux=root/m['linuxAsset']
+assert m['linuxAsset']=='construct-host-'+sys.argv[2][:7]+'-linux-x64.zip';checks+=1
+assert linux.stat().st_size==m['linuxSizeBytes'];checks+=1
+assert hashlib.sha256(linux.read_bytes()).hexdigest()==m['linuxSha256'];checks+=1
+with zipfile.ZipFile(linux) as z:
+    assert {'service/Constructd.Api','scripts/bin/provision.sh','updater/update-construct-host.sh'} <= set(z.namelist());checks+=1
+    sums=z.read('SHA256SUMS')
+    assert hashlib.sha256(sums).hexdigest()==m['linuxSumsSha256'];checks+=1
+    files=dict((line[66:],line[:64]) for line in sums.decode().splitlines())
+    assert set(z.namelist())==set(files)|{'SHA256SUMS'};checks+=1
+    assert sum(i.file_size for i in z.infolist())==m['linuxUncompressedSizeBytes'];checks+=1
+    assert m['linuxUpdaterPath']=='updater/update-construct-host.sh';checks+=1
+    assert files[m['linuxUpdaterPath']]==m['linuxUpdaterSha256'];checks+=1
+    for path,sha in files.items():
+        assert hashlib.sha256(z.read(path)).hexdigest()==sha;checks+=1
+assert (m['linuxSha256']+'  '+m['linuxAsset']) in (root/'SHA256SUMS').read_text();checks+=1
 print(f'host-package: {checks} assertions passed ({len(files)} payload files); fixture executable, no Windows publish performed')
+PY
+
+# A directory link must be refused too, even when no file is reached through it.
+ln -s "$task_dir/linux" "$task_dir/linux/link"
+if pwsh -NoProfile -File service/host/New-ConstructHostPackage.ps1 -PublishDir "$task_dir/publish" -LinuxPublishDir "$task_dir/linux" -OutputDir "$task_dir/linked-output" -Commit "$commit" >"$task_dir/refusal.log" 2>&1; then
+  echo 'Packager accepted a Linux publish directory link' >&2; exit 1
+fi
+python3 - "$task_dir/refusal.log" <<'PY'
+import pathlib,sys
+assert 'Package cannot contain links' in pathlib.Path(sys.argv[1]).read_text()
+PY
+unlink "$task_dir/linux/link"
+printf '{}\n' >"$task_dir/linux/install.json"
+if pwsh -NoProfile -File service/host/New-ConstructHostPackage.ps1 -PublishDir "$task_dir/publish" -LinuxPublishDir "$task_dir/linux" -OutputDir "$task_dir/preserved-output" -Commit "$commit" >"$task_dir/refusal.log" 2>&1; then
+  echo 'Packager accepted a preserved Linux ledger' >&2; exit 1
+fi
+python3 - "$task_dir/refusal.log" <<'PY'
+import pathlib,sys
+assert 'Preserved file in package' in pathlib.Path(sys.argv[1]).read_text()
+print('host-package: directory links and preserved Linux files refused')
 PY

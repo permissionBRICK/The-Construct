@@ -5,12 +5,16 @@
 # it answers ONE question for the host service: is anything happening on this VM?
 #
 #   POST {CONSTRUCT_SERVICE_URL}/api/v1/vms/{instance}/activity
-#   {"busy":true,"reasons":["ssh-session","agent-cpu:claude"]}
+#   {"busy":true,"reasons":["ssh-session","agent-log:claude"]}
 #
 # The service saves a VM whose forwards are idle AND whose guest says it is idle,
 # so a `busy` heartbeat is what keeps an unattended agent job alive with nobody
-# connected. The probes are therefore deliberately GENEROUS: a false `busy` costs
-# some host RAM, a false idle kills someone's long-running job.
+# connected. The probes read what says WORK is happening -- a connection, an
+# agent transcript being written, a T3 Code thread at work, provisioning -- and
+# nothing that merely says a process exists: resident agent servers burn CPU
+# around the clock and would otherwise pin every VM as busy forever
+# (decided 2026-09-17). An agent waiting on a question writes nothing and
+# is idle by design.
 #
 # Local installs have no service: with CONSTRUCT_SERVICE_URL empty this exits 0
 # without doing anything, and provision.sh does not even install the timer.
@@ -25,16 +29,11 @@ set -uo pipefail
 
 CONFIG_FILE="${CONFIG_FILE:-/etc/construct/config.env}"
 VM_TOKEN_FILE="${CONSTRUCT_VM_TOKEN_FILE:-/etc/construct/vm-token}"
-STATE_FILE="${CONSTRUCT_IDLE_STATE_FILE:-/run/construct/idle-state.json}"
 PROVISION_MARKER="${CONSTRUCT_PROVISION_MARKER:-/run/construct/provisioning}"
 PROC_DIR="${CONSTRUCT_IDLE_PROC_DIR:-/proc}"
 SS_CMD="${CONSTRUCT_IDLE_SS:-ss}"
 WHO_CMD="${CONSTRUCT_IDLE_WHO:-who}"
-TMUX_CMD="${CONSTRUCT_IDLE_TMUX:-tmux}"
 CURL="${CONSTRUCT_IDLE_CURL:-${CONSTRUCT_CURL:-curl}}"
-# CPU ticks (USER_HZ, 100/s on Linux) an agent process must burn between two runs
-# to count as working. 10 ticks = 0.1 CPU-seconds — low on purpose.
-CPU_TICKS="${CONSTRUCT_IDLE_CPU_TICKS:-10}"
 SSH_PORT="${CONSTRUCT_IDLE_SSH_PORT:-22}"
 DRY_RUN="${CONSTRUCT_IDLE_DRY_RUN:-false}"
 API_TIMEOUT="${CONSTRUCT_SERVICE_TIMEOUT_SEC:-20}"
@@ -138,163 +137,75 @@ probe_ssh_sessions() {
   fi
 }
 
-# The agent processes worth watching. `node`/`bun` only count when their command
-# line names one of the agent stacks (t3code, opencode, …), so an unrelated build
-# tool does not pin the VM as busy forever.
-_agent_name_for() {
-  local comm="$1" cmdline="$2" keyword
-  case "${comm}" in
-    claude|codex|opencode|t3) printf '%s' "${comm}"; return 0 ;;
-    node|bun|python3)
-      for keyword in t3code t3 opencode claude codex; do
-        case "${cmdline}" in
-          *"${keyword}"*) printf '%s' "${keyword}"; return 0 ;;
-        esac
-      done
-      ;;
-  esac
-  return 1
+# (b) An agent is actually working: its own transcript is being written. Claude
+# Code appends to ~/.claude/projects/<project>/<session>.jsonl, Codex to
+# ~/.codex/sessions/<y>/<m>/<d>/rollout-*.jsonl, OpenCode to its SQLite database
+# (~/.local/share/opencode/opencode.db and its -wal). A record that moved within
+# the report interval means a turn is in progress. An agent blocked on a question
+# writes nothing and therefore reads as idle -- intended. Homes: root plus every
+# /home/* (CONSTRUCT_IDLE_AGENT_HOMES overrides, colon-separated).
+AGENT_HOMES="${CONSTRUCT_IDLE_AGENT_HOMES:-}"
+if [[ -z "${AGENT_HOMES}" ]]; then
+  AGENT_HOMES="/root"
+  for _home in /home/*; do [[ -d "${_home}" ]] && AGENT_HOMES="${AGENT_HOMES}:${_home}"; done
+fi
+# The interval plus a margin: a report that runs a little late must not miss the
+# write that happened just before the previous one.
+ACTIVITY_WINDOW=$(( INTERVAL + 30 ))
+
+_recent_file_in() { # <dir> <find name tests...>: true when any matching file changed within the window
+  local dir="$1"; shift
+  [[ -d "${dir}" ]] || return 1
+  find "${dir}" -type f \( "$@" \) -newermt "@$(( $(date +%s) - ACTIVITY_WINDOW ))" -print -quit 2>/dev/null | grep -q .
 }
 
-# One pass over /proc: parent, CPU ticks and (for the recognized ones) the agent
-# name, for EVERY process. The parent map is what lets a child's CPU count for
-# the agent that spawned it — an agent running a test suite or a build sits at
-# ~0% itself while its children do the work.
-declare -A _PARENT_OF=()
-declare -A _TICKS_OF=()
-declare -A _AGENT_NAME_OF=()
-
-scan_processes() {
-  local stat_file rest pid comm tail_fields cmdline name
-  local -a fields
-  _PARENT_OF=(); _TICKS_OF=(); _AGENT_NAME_OF=()
-  shopt -s nullglob
-  for stat_file in "${PROC_DIR}"/[0-9]*/stat; do
-    # 2>/dev/null FIRST: a process that exits mid-scan makes the redirection
-    # itself fail, and that message must not reach the journal.
-    read -r rest 2>/dev/null <"${stat_file}" || continue
-    [[ -n "${rest}" ]] || continue
-    pid="${rest%% *}"
-    # comm is parenthesized and may contain spaces: take what is between the
-    # first '(' and the last ')', and the numeric fields after it.
-    comm="${rest#*\(}"; comm="${comm%%)*}"
-    tail_fields="${rest##*) }"
-    # shellcheck disable=SC2206  # deliberate word splitting of a numeric field list
-    fields=(${tail_fields})
-    # tail_fields starts at /proc stat field 3 (state), so field 4 (ppid) is
-    # index 1 and fields 14/15 (utime/stime) are indexes 11 and 12.
-    [[ "${fields[1]:-}" =~ ^[0-9]+$ ]] || continue
-    [[ "${fields[11]:-}" =~ ^[0-9]+$ && "${fields[12]:-}" =~ ^[0-9]+$ ]] || continue
-    _PARENT_OF["${pid}"]="${fields[1]}"
-    _TICKS_OF["${pid}"]=$(( fields[11] + fields[12] ))
-
-    cmdline=""
-    case "${comm}" in
-      node|bun|python3)
-        if [[ -r "${PROC_DIR}/${pid}/cmdline" ]]; then
-          cmdline="$(tr '\0' ' ' <"${PROC_DIR}/${pid}/cmdline" 2>/dev/null || true)"
-        fi
-        ;;
-    esac
-    if name="$(_agent_name_for "${comm}" "${cmdline}")"; then
-      _AGENT_NAME_OF["${pid}"]="${name}"
-    fi
+probe_agent_transcripts() {
+  local home
+  local -a homes
+  IFS=':' read -r -a homes <<<"${AGENT_HOMES}"
+  for home in "${homes[@]}"; do
+    [[ -n "${home}" && -d "${home}" ]] || continue
+    _recent_file_in "${home}/.claude/projects" -name '*.jsonl' && add_reason "agent-log:claude"
+    _recent_file_in "${home}/.codex/sessions" -name 'rollout-*.jsonl' && add_reason "agent-log:codex"
+    _recent_file_in "${home}/.local/share/opencode" -name 'opencode.db' -o -name 'opencode.db-wal' && add_reason "agent-log:opencode"
   done
-  shopt -u nullglob
+  return 0
 }
 
-# The agent a process belongs to: itself, or the nearest ancestor that is one.
-owner_of_pid() {
-  local pid="$1" hops=0 name
-  while (( hops < 16 )); do
-    name="${_AGENT_NAME_OF[${pid}]:-}"
-    if [[ -n "${name}" ]]; then printf '%s' "${name}"; return 0; fi
-    pid="${_PARENT_OF[${pid}]:-}"
-    [[ -n "${pid}" && "${pid}" != "0" && "${pid}" != "1" ]] || return 1
-    hops=$((hops + 1))
-  done
-  return 1
-}
-
-declare -A _BEFORE=()
-read_state() {
-  local pair key value
-  _BEFORE=()
-  [[ -f "${STATE_FILE}" ]] || return 0
-  while IFS= read -r pair; do
-    [[ -n "${pair}" ]] || continue
-    key="${pair%%:*}"; key="${key//\"/}"
-    value="${pair##*:}"
-    _BEFORE["${key}"]="${value}"
-  done < <(tr -d ' \n' <"${STATE_FILE}" 2>/dev/null | grep -o '"[0-9]\+":[0-9]\+' || true)
-}
-
-# (b) An agent is actually working: utime+stime from /proc/<pid>/stat grew since
-# the previous run, for the agent process itself or anything it spawned. The
-# previous sample lives in STATE_FILE (tmpfs), so a reboot starts a fresh
-# baseline.
-probe_agent_cpu() {
-  local pid owner previous delta
-  local -a samples=() names=()
-  scan_processes
-  read_state
-  for pid in "${!_TICKS_OF[@]}"; do
-    owner="$(owner_of_pid "${pid}")" || continue
-    samples+=("\"${pid}\":${_TICKS_OF[${pid}]}")
-    previous="${_BEFORE[${pid}]:-}"
-    if [[ -n "${previous}" ]]; then
-      delta=$(( _TICKS_OF[${pid}] - previous ))
-    else
-      # No baseline yet -- the first run after a reboot, or a process that
-      # appeared since the last one. Count everything it has burned so far:
-      # "we cannot tell" must read as BUSY. An explicit idle heartbeat buys the
-      # guest no grace period in the service, so a wrong `false` here can save a
-      # VM out from under a working agent; a wrong `true` only costs host RAM
-      # until the next tick, which then has a baseline.
-      delta="${_TICKS_OF[${pid}]}"
-    fi
-    if (( delta > CPU_TICKS )); then names+=("${owner}"); fi
-  done
-  # Sorted + deduplicated so the reasons array is stable across runs (an
-  # associative array iterates in an unspecified order).
-  if (( ${#names[@]} > 0 )); then
-    while IFS= read -r owner; do
-      [[ -n "${owner}" ]] && add_reason "agent-cpu:${owner}"
-    done < <(printf '%s\n' "${names[@]}" | sort -u)
-  fi
-  write_state "$(IFS=,; printf '%s' "${samples[*]-}")"
-}
-
-write_state() {
-  local joined="$1" dir tmp
-  dir="$(dirname "${STATE_FILE}")"
-  mkdir -p "${dir}" 2>/dev/null || true
-  tmp="${STATE_FILE}.tmp.$$"
-  if printf '{"v":1,"at":%s,"samples":{%s}}\n' "$(date +%s)" "${joined}" >"${tmp}" 2>/dev/null; then
-    chmod 0644 "${tmp}" 2>/dev/null || true
-    mv -f "${tmp}" "${STATE_FILE}" 2>/dev/null || rm -f "${tmp}"
-  fi
-}
-
-# (c) A tmux window produced output recently — how an agent left running in a
-# detached session looks from the outside.
-#
-# #{window_activity}, NOT #{pane_activity}: the pane variant exists in the format
-# vocabulary but resolves to an EMPTY string on the tmux this VM ships (verified
-# against tmux 3.4), which would silently report a busy detached agent as idle —
-# the one failure mode §4.7 calls make-or-break. window_activity advances
-# whenever any pane in the window produces output.
-probe_tmux() {
-  local activity now
-  command -v "${TMUX_CMD}" >/dev/null 2>&1 || return 0
-  now="$(date +%s)"
-  while IFS= read -r activity; do
-    [[ "${activity}" =~ ^[0-9]+$ ]] || continue
-    if (( now - activity <= INTERVAL )); then
-      add_reason "tmux-activity"
+# (c) T3 Code has a thread at work: a session in status "running" whose thread is
+# not waiting on the user (no pending input, no pending approval) -- the GUI's
+# "working" and "monitoring" states. A thread blocked on a question or stopped is
+# not work. Read from T3's SQLite projections, read-only, so the live server is
+# never disturbed. No python3, no database or an unreadable one means this probe
+# says nothing; the transcript probe still sees the agent such a thread drives.
+probe_t3_threads() {
+  local home db count
+  local -a homes
+  command -v python3 >/dev/null 2>&1 || return 0
+  IFS=':' read -r -a homes <<<"${AGENT_HOMES}"
+  for home in "${homes[@]}"; do
+    db="${home}/.t3/userdata/state.sqlite"
+    [[ -f "${db}" ]] || continue
+    count="$(python3 - "${db}" 2>/dev/null <<'PY'
+import sqlite3, sys
+try:
+    c = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True, timeout=2)
+    n = c.execute("""select count(*) from projection_thread_sessions s
+                     join projection_threads t on t.thread_id = s.thread_id
+                     where s.status = 'running' and t.deleted_at is null
+                       and coalesce(t.pending_user_input_count, 0) = 0
+                       and coalesce(t.pending_approval_count, 0) = 0""").fetchone()[0]
+    print(n)
+except Exception:
+    print("")
+PY
+)"
+    if [[ "${count}" =~ ^[0-9]+$ ]] && (( count > 0 )); then
+      add_reason "t3-thread-running"
       return 0
     fi
-  done < <("${TMUX_CMD}" list-panes -a -F '#{window_activity}' 2>/dev/null || true)
+  done
+  return 0
 }
 
 # (d) Provisioning is running. provision.sh writes its PID into the marker and
@@ -360,8 +271,8 @@ post_activity() {
 
 main() {
   probe_ssh_sessions
-  probe_agent_cpu
-  probe_tmux
+  probe_agent_transcripts
+  probe_t3_threads
   probe_provisioning
 
   local busy="false"

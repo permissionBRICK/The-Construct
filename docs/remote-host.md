@@ -63,6 +63,10 @@ you dial* change.
 
 ## 2. Admin: set the host up once
 
+> A **Proxmox VE node** can be the host instead of a Windows machine: the same service, installed
+> by `service/host/install-construct-host.sh` — see [docs/proxmox-host.md](proxmox-host.md). The
+> rest of this guide applies to both; the Windows steps below are the Hyper-V host's.
+
 If you already have a local Construct VM, connect to it in VS Code and open
 **Construct Settings → Make this PC a Construct host…**. Review the prefilled
 address and optional AC wake setting, then approve Windows elevation. Setup installs
@@ -544,8 +548,10 @@ which applies the cap locally so the number in the box is the number that takes 
 
 The "in-guest activity" signal is the VM's own heartbeat: `construct-idle-report.timer`
 posts `{busy, reasons[]}` every 60 s (`CONSTRUCT_IDLE_REPORT_INTERVAL_SEC`), reporting busy
-for an SSH session, an agent process (or any of its **descendants**) burning CPU, recent
-tmux window activity, or a provisioning run in flight. It is deliberately generous: a false
+for an SSH session, an agent transcript (Claude Code, Codex, OpenCode) that is still being
+written, a T3 Code thread that is running and not waiting on you, or a provisioning run in
+flight. It ignores CPU and terminal output on purpose — resident servers never stop doing
+either. It is deliberately generous: a false
 `busy` costs some host RAM until the next tick, a false idle kills someone's unattended job.
 The timer is installed only when `CONSTRUCT_SERVICE_URL` is set — a local install gets no
 new unit. Details in [`construct expose` § Activity heartbeat](expose.md#activity-heartbeat).

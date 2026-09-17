@@ -267,6 +267,47 @@ function fakeClient(answers = {}) {
     eq("overview: CPU with a budget", ha.toCapacityBars({ cpu: { logical: 16, budget: 10, active: 5 } })[1].pct, 50);
   }
 
+  console.log("\n=== measured RAM card ===");
+  {
+    const ram = { totalBytes: 8 * ha.GIB, usedBytes: 4 * ha.GIB, vmResidentBytes: 3 * ha.GIB, hostOwnBytes: ha.GIB,
+      physicalFreeBytes: 4 * ha.GIB, reservedBytes: 4 * ha.GIB, unmanagedBytes: 0, headroomBytes: ha.GIB, availableBytes: 0,
+      committedBytes: 4 * ha.GIB, admission: { enforced: false, lineBytes: 7 * ha.GIB, availableBytes: 0 },
+      swap: { totalBytes: 2 * ha.GIB, usedBytes: ha.GIB } };
+    const card = (changes = {}) => ha.toCapacityBars({ ram: { ...ram, ...changes } })[0];
+    const measured = card();
+    eq("RAM: measured usage drives the bar", measured.pct, 50);
+    eq("RAM: label uses existing GiB formatting", measured.text, "4.0 GiB in use of 8.0 GiB");
+    deep("RAM: VM and host segments", measured.segments, [{ id: "vms", pct: 37.5 }, { id: "host", pct: 12.5 }]);
+    eq("RAM: free means physical free, with observe note", measured.details, "VMs 3.0 GiB · host 1.0 GiB · free 4.0 GiB · admission not enforced (observe mode)");
+    eq("RAM: observe hides the admission line", measured.admission, null);
+    eq("RAM: ordinary commitments", measured.committed.text, "4.0 GiB committed to VMs (50 %)");
+    eq("RAM: ordinary commitments are not hot", measured.committed.hot, false);
+    deep("RAM: swap has independent scale", measured.swap, { pct: 50, text: "1.0 GiB of 2.0 GiB swap" });
+    const enforced = card({ admission: { enforced: true, lineBytes: 7 * ha.GIB } });
+    deep("RAM: enforce shows admission and headroom tooltip", enforced.admission, { pct: 87.5, title: "admission line: 1.0 GiB headroom" });
+    ok("RAM: enforce omits observe note", !enforced.details.includes("observe"));
+    const over = card({ committedBytes: 12 * ha.GIB });
+    eq("RAM: commitments can exceed 100 percent", over.committed.text, "12 GiB committed to VMs (150 %)");
+    eq("RAM: overcommit is hot", over.committed.hot, true);
+    deep("RAM: overcommit does not change measured segments", over.segments, measured.segments);
+    eq("RAM: exactly 100 percent is not hot", card({ committedBytes: 8 * ha.GIB }).committed.hot, false);
+    for (const swap of [undefined, null, { totalBytes: 0, usedBytes: 0 }, { totalBytes: ha.GIB, usedBytes: null }])
+      eq("RAM: absent, zero or incomplete swap is hidden", card({ swap }).swap, null);
+    eq("RAM: unused configured swap remains visible", card({ swap: { totalBytes: ha.GIB, usedBytes: 0 } }).swap.pct, 0);
+    const mismatch = card({ vmResidentBytes: 12 * ha.GIB, hostOwnBytes: 0 });
+    eq("RAM: sample mismatch cannot overflow measured usage", mismatch.segments.reduce((sum, s) => sum + s.pct, 0), 50);
+    const { usedBytes, vmResidentBytes, hostOwnBytes, committedBytes, admission, swap, ...legacy } = ram;
+    const old = ha.toCapacityBars({ ram: legacy })[0];
+    eq("RAM: old service keeps its text", old.text, "0 B available of 8.0 GiB (reserved 4.0 GiB, unmanaged 0 B, headroom 1.0 GiB)");
+    eq("RAM: old service keeps its percentage", old.pct, 63);
+    eq("RAM: old service has no measured segments", old.segments, undefined);
+    eq("RAM: unknown measurement uses legacy fallback", card({ usedBytes: null }).text, old.text);
+    ok("RAM: missing totals do not create NaN", !JSON.stringify(card({ totalBytes: 0 })).includes("NaN"));
+    const summary = { ram, cpu: { logical: 8, budget: 8, active: 2 }, volumes: [{ root: "local", totalBytes: 100 * ha.GIB, freeBytes: 80 * ha.GIB, headroomBytes: 20 * ha.GIB }] };
+    deep("RAM: CPU and storage models are unchanged", ha.toCapacityBars(summary).slice(1), ha.toCapacityBars({ ...summary, ram: legacy }).slice(1));
+    eq("RAM: capacity report takes precedence in overview", ha.toOverview({ capacity: { ram: legacy } }, { summary }).capacity[0].text, measured.text);
+  }
+
   console.log("\n=== users, media, jobs, audit, config, updates ===");
   {
     const u = ha.toUserRow({ name: "alice", role: "Admin", enabled: true, maxVms: 2, allowHostForwards: false, created: "2026-01-01T00:00:00Z",

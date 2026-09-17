@@ -23,7 +23,7 @@ public sealed class UpdateFlowTests
         try
         {
             using var app=new TestApp(new Dictionary<string,string?>{["Constructd:DatabasePath"]=Path.Combine(root,"db"),["Constructd:ScriptsDir"]=root},
-                s=>s.AddSingleton<IUpdateStager>(sp=>sp.GetRequiredService<PackageStager>()));
+                s=>s.AddSingleton(PackageTests.WindowsStager).AddSingleton<IUpdateStager>(sp=>sp.GetRequiredService<PackageStager>()));
             using var admin=await app.CreateUserClientAsync("admin",Role.Admin);
             var config=app.Service<IHostConfigStore>();await config.SetAsync("updates",HostAdminDefaults.Updates,"test",default);
             var source=app.Service<FakeReleaseSource>();
@@ -136,7 +136,7 @@ public sealed class UpdateFlowTests
         var root=Path.Combine(Path.GetTempPath(),"update-cancel-"+Guid.NewGuid().ToString("n"));Directory.CreateDirectory(root);
         try
         {
-            using var app=new TestApp(new Dictionary<string,string?>{["Constructd:DatabasePath"]=Path.Combine(root,"db")},s=>s.AddSingleton<IUpdateStager>(sp=>sp.GetRequiredService<PackageStager>()));
+            using var app=new TestApp(new Dictionary<string,string?>{["Constructd:DatabasePath"]=Path.Combine(root,"db")},s=>s.AddSingleton(PackageTests.WindowsStager).AddSingleton<IUpdateStager>(sp=>sp.GetRequiredService<PackageStager>()));
             using var admin=await app.CreateUserClientAsync("admin",Role.Admin);
             await app.Service<IHostConfigStore>().SetAsync("updates",HostAdminDefaults.Updates,"test",default);
             var id=new string('d',32);var old=UpdateTests.Row(id) with{Commit=new string('e',40),State=HostUpdateState.HandedOff};

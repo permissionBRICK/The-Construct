@@ -296,7 +296,9 @@ AGENT_NAME="${AGENT_NAME:-$(hostname)-agent}"
 PROJECTS="${PROJECTS:-default}"
 SSH_USER="${SSH_USER:-${SUDO_USER:-agent}}"
 AI_TOOLS="${AI_TOOLS:-opencode,claude-code,codex}"
-ALLOW_HOST_PACKAGES="${ALLOW_HOST_PACKAGES:-false}"
+# Project profiles may declare hostPackages; they are installed by default. The switch
+# is an opt-out, not a sandbox: provisionCommands already run as root and can apt-get.
+ALLOW_HOST_PACKAGES="${ALLOW_HOST_PACKAGES:-true}"
 # Where project repos are checked out. Defaults to /root/repos because the
 # VS Code Remote-SSH / agent connection uses root.
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-/root/repos}"
@@ -1037,7 +1039,25 @@ run_step optional "Installing construct CLI" install_construct_cli
 
 # The browser console is part of a service-managed primary, alongside its CLI.
 # Configuration/identity have been written and Docker installed by this point.
-if [[ -n "${CONSTRUCT_SERVICE_URL}" ]]; then
+#
+# It is a gateway to Hyper-V's VMConnect, so a host whose service does not offer the
+# `console` feature (a Proxmox host) has nothing for it to reach: the step is skipped
+# there. An older service without /health, or one that cannot be asked, keeps today's
+# behaviour and installs the gateway.
+service_offers_feature() {
+  local feature="$1" token_file="${CONSTRUCT_VM_TOKEN_FILE:-/etc/construct/vm-token}" ca="/etc/construct/service-ca.pem"
+  local -a args=(--silent --show-error --max-time 15 -H "Accept: application/json")
+  [[ -r "${token_file}" ]] || return 0
+  [[ -f "${ca}" ]] && args+=(--cacert "${ca}")
+  local body
+  body="$(curl "${args[@]}" -H "Authorization: VmToken $(cat "${token_file}")" "${CONSTRUCT_SERVICE_URL%/}/api/v1/health" 2>/dev/null)" || return 0
+  printf '%s' "${body}" | grep -q '"apiFeatures"' || return 0
+  printf '%s' "${body}" | grep -q "\"${feature}\"" && return 0
+  return 1
+}
+if [[ -n "${CONSTRUCT_SERVICE_URL}" ]] && ! service_offers_feature console; then
+  note "==> Skipping the browser console gateway (the host service offers no console)"
+elif [[ -n "${CONSTRUCT_SERVICE_URL}" ]]; then
   run_step critical "Installing browser console gateway" \
     bash "${REPO_DIR}/console-viewer/install.sh"
 elif command -v docker >/dev/null 2>&1; then

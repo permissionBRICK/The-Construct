@@ -14,13 +14,25 @@ function Get-ConstructHostInventory {
         if ($v.DriveLetter) { return ([string]$v.DriveLetter + ':\') }
         return [string]$v.Path
     }
+    $usedRam = $null
     try {
         $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
         $computer = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
         $totalRam = [int64]$os.TotalVisibleMemorySize * 1KB
         $freeRam = [int64]$os.FreePhysicalMemory * 1KB
+        $usedRam = [Math]::Max([int64]0, $totalRam - $freeRam)
         $cpus = [int]$computer.NumberOfLogicalProcessors
     } catch { $problems.Add('host-resources-unavailable'); $totalRam = 0; $freeRam = 0; $cpus = 0 }
+    # Page-file telemetry is optional and must not block inventory or admission.
+    $swapTotal = $null; $swapUsed = $null
+    try {
+        $pageFiles = @(Get-CimInstance Win32_PageFileUsage -ErrorAction Stop)
+        $swapTotal = [int64]0; $swapUsed = [int64]0
+        foreach ($pageFile in $pageFiles) {
+            $swapTotal += [int64]$pageFile.AllocatedBaseSize * 1MB
+            $swapUsed += [int64]$pageFile.CurrentUsage * 1MB
+        }
+    } catch { $swapTotal = $null; $swapUsed = $null }
     try {
         foreach ($v in @(Get-CimInstance Win32_Volume -Filter 'DriveType=3' -ErrorAction Stop)) {
             $root = [string]$v.Name
@@ -124,6 +136,7 @@ function Get-ConstructHostInventory {
     }
     $now = [DateTimeOffset]::UtcNow.ToString('o')
     return @{ epoch = 0; observedAt = $now; host = @{ logicalCpus = $cpus; totalRamBytes = $totalRam; freeRamBytes = $freeRam;
+        usedRamBytes = $usedRam; swapTotalBytes = $swapTotal; swapUsedBytes = $swapUsed;
         volumes = @($volumes.ToArray()); observedAt = $now }; vms = @($allVms.ToArray()); complete = ($problems.Count -eq 0);
         problems = @($problems.ToArray()); artifacts = @($observedArtifacts.ToArray()) }
 }

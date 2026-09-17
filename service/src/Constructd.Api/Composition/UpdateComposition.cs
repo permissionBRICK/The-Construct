@@ -25,7 +25,8 @@ public static class UpdateComposition
             services.AddSingleton<IHostLock>(new FileHostLock(data));
             services.AddSingleton<IReleaseSource>(_=>new GitHubReleaseSource(new HttpClient(new HttpClientHandler{AllowAutoRedirect=false}){Timeout=TimeSpan.FromMinutes(30)}, options.HostAdmin.Source.MaxItemBytes));
             services.AddSingleton<IUpdateStager>(sp=>sp.GetRequiredService<PackageStager>());
-            services.AddSingleton<IUpdaterLauncher>(sp=>new ScheduledTaskUpdaterLauncher(sp.GetRequiredService<IProcessRunner>(),sp.GetRequiredService<IHostLock>(),data));
+            if(options.IsProxmox) services.AddSingleton<IUpdaterLauncher>(sp=>new Constructd.Proxmox.Updates.SystemdUpdaterLauncher(sp.GetRequiredService<IProcessRunner>(),sp.GetRequiredService<IHostLock>(),data));
+            else services.AddSingleton<IUpdaterLauncher>(sp=>new ScheduledTaskUpdaterLauncher(sp.GetRequiredService<IProcessRunner>(),sp.GetRequiredService<IHostLock>(),data));
         }
         if(options.EffectivePersistence==PersistenceMode.Memory)
         {services.AddSingleton<InMemoryHostUpdateStore>();services.AddSingleton<IHostUpdateStore>(sp=>sp.GetRequiredService<InMemoryHostUpdateStore>());}

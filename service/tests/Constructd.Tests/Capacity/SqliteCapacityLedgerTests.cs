@@ -23,6 +23,23 @@ public sealed class SqliteCapacityLedgerTests : IDisposable
     }
     private static ReservationRequest Request(string vm, long ram = Gb, params ReservationLine[] extra) =>
         new("alice", vm, "start-" + vm, [new(ReservationResource.Ram, ram, null, null), .. extra], TimeSpan.FromMinutes(10));
+    [Theory]
+    [InlineData("proxmox", 1, 1)]
+    [InlineData("hyperv", 4, 4)]
+    public async Task PlatformDefaultsAndResidencyReachThePersistedLedger(string backend, int headroom, int resident)
+    {
+        _options.Backend = backend;
+        _inventory.Snapshot = Inventory(4 * Gb, Actual("external", VmState.Running, 4 * Gb) with { MemoryDemandBytes = Gb })
+            with { Host = Inventory().Host with { TotalRamBytes = 8 * Gb, FreeRamBytes = 4 * Gb, UsedRamBytes = 4 * Gb, SwapTotalBytes = 2 * Gb, SwapUsedBytes = Gb } };
+        var ledger = new SqliteCapacityLedger(_database, _clock, _inventory, _options);
+        var snapshot = await ledger.SnapshotAsync(true, default);
+        Assert.Equal(headroom * Gb, snapshot.RamHeadroomBytes);
+        Assert.Equal(resident * Gb, snapshot.VmResidentRamBytes);
+        Assert.Equal(4 * Gb, snapshot.RamUsedBytes);
+        Assert.Equal(2 * Gb, snapshot.SwapTotalBytes);
+        Assert.Equal(Gb, snapshot.SwapUsedBytes);
+    }
+
     [Fact]
     public async Task ParallelStartsOnlyOneGetsLastGb()
     {

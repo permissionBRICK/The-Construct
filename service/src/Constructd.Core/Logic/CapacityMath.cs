@@ -47,7 +47,8 @@ public static class CapacityMath
     }
 
     public static HostCapacitySnapshot Calculate(InventorySnapshot inventory, CapacityConfig config,
-        IReadOnlyList<Reservation> reservations, IReadOnlyList<Vm> managed)
+        IReadOnlyList<Reservation> reservations, IReadOnlyList<Vm> managed,
+        long defaultRamHeadroomBytes = 4L << 30, bool useGuestMemoryDemand = false)
     {
         var persisted = reservations;
         reservations = AccountedReservations(inventory, reservations, managed);
@@ -65,7 +66,14 @@ public static class CapacityMath
             return Math.Max(0, group.Sum(r => r.Amount) - assigned);
         });
         var externalRam = unmanaged.Where(v => !ReservationRules.Terminal(v.State)).Sum(Memory);
-        var headroom = config.RamHeadroomBytes ?? Math.Max(4L << 30, inventory.Host.TotalRamBytes / 8);
+        var headroom = config.RamHeadroomBytes ?? Math.Max(defaultRamHeadroomBytes, inventory.Host.TotalRamBytes / 8);
+        // Proxmox's assigned value is the allocation used by admission. Its mem/demand
+        // sample is resident usage; Hyper-V reports residency in MemoryAssigned instead.
+        var resident = inventory.Vms.Where(v => v.State == VmState.Running).Sum(v =>
+            Math.Max(0, useGuestMemoryDemand ? v.MemoryDemandBytes ?? 0 : v.MemoryAssignedBytes));
+        var used = inventory.Host.TotalRamBytes > 0
+            ? Math.Clamp(inventory.Host.UsedRamBytes ?? inventory.Host.TotalRamBytes - inventory.Host.FreeRamBytes, 0, inventory.Host.TotalRamBytes)
+            : (long?)null;
         var available = Math.Max(0, Math.Min(inventory.Host.TotalRamBytes - headroom - ram - externalRam,
             inventory.Host.FreeRamBytes - headroom - unreflected));
         long cpus = reservations.Where(r => r.Resource == ReservationResource.Cpu).Sum(r => r.Amount)
@@ -125,7 +133,8 @@ public static class CapacityMath
         }, StringComparer.OrdinalIgnoreCase);
         return new(inventory.Epoch, inventory.ObservedAt, complete, inventory.Host.TotalRamBytes, headroom, ram, externalRam,
             inventory.Host.FreeRamBytes, available, inventory.Host.LogicalCpus, config.CpuBudget, (int)Math.Min(int.MaxValue, cpus),
-            config.CpuBudget is int budget ? (int)Math.Max(0, budget - cpus) : null, volumes, persisted.ToArray(), unmanaged, problems.Distinct().ToArray(), byVm, reservations);
+            config.CpuBudget is int budget ? (int)Math.Max(0, budget - cpus) : null, volumes, persisted.ToArray(), unmanaged, problems.Distinct().ToArray(), byVm, reservations,
+            used, used is null ? null : resident, inventory.Host.SwapTotalBytes, inventory.Host.SwapUsedBytes);
     }
 
     public static CapacityDecision Decide(ReservationRequest request, HostCapacitySnapshot snapshot, CapacityConfig config,

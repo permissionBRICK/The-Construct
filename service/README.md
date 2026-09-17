@@ -524,6 +524,10 @@ Bound from the `Constructd` section of `appsettings.json`, from environment vari
 | Key | Default | Meaning |
 |---|---|---|
 | `Fake` | `false` | Use the in-memory hypervisor/ISO/forward fakes (`--fake`). Development only. |
+| `Backend` | `hyperv` | The platform: `hyperv` (this Windows host) or `proxmox` (the service runs on a Proxmox VE node — see *The Proxmox platform* and `docs/proxmox-host.md`). |
+| `Negotiate:Enabled` | – (Windows: on, elsewhere: off) | Register the Kerberos/NTLM scheme. On Linux this needs a keytab for `HTTP/<PublicHost>` (`KRB5_KTNAME`), which `install-construct-host.sh --keytab` installs. |
+| `Negotiate:DomainName` / `Negotiate:Realm` | – | Map a Kerberos principal `user@REALM` onto `DOMAIN\user` (the form a Windows host and the user store use). Empty `Realm` maps every realm. |
+| `Proxmox:Node` / `Storage` / `ImageVolume` / `SnippetStorage` / `SnippetDir` / `Bridge` / `CpuType` / `QmPath` / `PveshPath` | this host / `local-lvm` / `local:import/construct-ubuntu-noble-cloudimg-amd64.qcow2` / `local` / `/var/lib/vz/snippets` / `vmbr0` / `host` / `qm` / `pvesh` | The Proxmox platform's node, VM-disk storage, cached cloud image, snippet storage and directory, guest bridge, QEMU CPU type and the two commands. Only read with `Backend = proxmox`. |
 | `Persistence` | `Sqlite` (`Memory` in fake mode) | Where users, tokens, VMs, jobs and the audit trail live. |
 | `DatabasePath` | `constructd.db` | SQLite file; on a real host under `C:\ProgramData\Construct\service\`. |
 | `ListenUrl` | `https://0.0.0.0:7462` | What the service listens on. |
@@ -592,6 +596,10 @@ exists; a timestamp requires an exact match. A conflict returns `409 config-conf
 | `network` | `hostForwardsEnabled`, `directAddressReporting` | both true |
 | `updates` | `repository`, `channel`, `drainTimeoutMinutes`, `healthTimeoutSeconds` | `permissionBRICK/The-Construct`, `main`, 60 min, 120 s |
 
+When `capacity.ramHeadroomBytes` is null, RAM headroom is `max(1 GiB, total RAM / 8)`
+on Proxmox and `max(4 GiB, total RAM / 8)` on Hyper-V. A configured byte value,
+including zero, overrides either default.
+
 Disabling `network.hostForwardsEnabled` refuses new primary host forwards immediately; the default
 preserves existing behavior. Stored user allowances override defaults, host caps narrow them, and
 per-primary overrides can only restrict the result. Lowered limits do not delete existing VMs.
@@ -609,6 +617,28 @@ epoch and current ledger rows. Before the first inventory it reports incomplete.
 explicit refresh, admission with an invalid/expired epoch, or the reconciliation tick
 performs the inventory read. A reconciliation pass reads inventory once, regardless of
 VM count; its individual database mutations never call the hypervisor.
+
+The host administration Overview RAM card shows measured memory in use. Its stacked
+bar separates memory resident in running VMs from the host's own usage, with physical
+free RAM left empty. Proxmox supplies `memory.used` and each guest's `mem` sample;
+Hyper-V supplies total minus free physical memory and each VM's assigned memory.
+The host portion is the used total minus VM residency, bounded at zero. The panel
+bounds segment widths if samples disagree and keeps the reported values in the text.
+
+VM commitments appear as a separate number and turn hot above 100% of physical RAM.
+This is the existing reserved plus unmanaged allocation total, including pending
+starts and conservative holds awaiting reconciliation. It does not fill the usage bar.
+The admission marker is total RAM minus headroom and appears only in `enforce` mode.
+In `observe` mode the card says admission is not enforced. A thin swap bar appears
+when Linux swap or Windows page files have a positive total and a known used value.
+Windows sums all page files; a failed page-file query leaves swap unknown without
+failing inventory.
+
+Both `/host/status` and `/host/capacity` add `usedBytes`, `vmResidentBytes`,
+`hostOwnBytes`, `committedBytes`, `admission`, and nullable `swap` to the RAM summary.
+The existing RAM fields retain their admission meaning. Older services keep the
+panel's legacy capacity display, and existing readers such as the Companion can
+continue using the original fields. CPU and storage bars are unchanged.
 
 RAM admission uses the lesser of the physical-free and committed-allocation bounds.
 Both retain OS headroom. Memory promised to pending **or held** reservations but not yet
@@ -634,7 +664,7 @@ Stored `host_config.capacity` takes precedence over bootstrap mode. Configure it
 | Field | Default | Meaning |
 |---|---|---|
 | `mode` | `observe` for migrated hosts | Accounting only, or enforced admission. Fresh installers may explicitly select `enforce`. |
-| `ramHeadroomBytes` | null | Null computes `max(4 GiB, physical RAM / 8)`. |
+| `ramHeadroomBytes` | null | Null computes `max(1 GiB, physical RAM / 8)` on Proxmox and `max(4 GiB, physical RAM / 8)` on Hyper-V. A byte value overrides the default. |
 | `storageHeadroomBytes` | 20 GiB | Headroom on each volume. |
 | `cpuBudget` | null | Optional host active-vCPU budget. |
 | `maxVcpusPerVm` | null | Optional per-VM CPU ceiling; backend hardware validation also applies. |
@@ -728,7 +758,7 @@ exactly one place — `Composition/ServiceComposition.cs`, which has two indepen
 
 | Interface | Implementation |
 |---|---|
-| `IHypervisorDriver` | `HyperVDriver`: `powershell.exe` running the repo's own `drivers/Load-ConstructDriver.ps1` contract (`docs/drivers.md`). A future Proxmox driver maps the same operations onto its REST API. |
+| `IHypervisorDriver` | `HyperVDriver`: `powershell.exe` running the repo's own `drivers/Load-ConstructDriver.ps1` contract (`docs/drivers.md`). With `Backend = proxmox`: `ProxmoxDriver` (`Constructd.Proxmox`), `qm`/`pvesh` on the node — see *The Proxmox platform*. |
 | `IIsoBuilder` (consume) | By `Iso:Mode`: `OnDemandIsoBuilder` (default — reuses media or builds it on demand) or `WslIsoBuilder` (builds one ISO per VM through `wsl.exe`). See *ISO build strategies*. |
 | `IIsoMediaBuilder` (produce) | `NativeIsoBuilder` for `Native` and `Prebuilt`; `WslIsoBuilder` only for explicit `PerVm`. Driven by on-demand VM jobs and `admin iso build`. |
 | `IIsoCatalog` | `FileIsoCatalog`: versioned ISOs, sidecars and the `current.pointer` in `Iso:CacheDir`. Any build strategy publishes into it. |
@@ -1072,6 +1102,29 @@ carrying on would add a rule on top of one still aimed at the VM's old address.
 its SSH forward plus every host forward. Only established rows count: the portproxy listener is always
 `Listen`, and a closed session lingers in `TimeWait` for minutes, so counting either would mean a VM is
 never idle. A client tunnel rides the VM's SSH connection, so it is seen on the SSH forward (§4.6).
+
+## The Proxmox platform
+
+`Constructd:Backend = proxmox` composes the service for a Proxmox VE node it runs ON (as root, so
+`qm` and `pvesh` work). The API, the stores, the jobs, the idle policy and the clients are the
+ones above; only the platform seams change (`Composition/ProxmoxComposition.cs`):
+
+| Interface | Implementation |
+|---|---|
+| `IHypervisorDriver`, `IVmCpuDriver`, `IVmMemoryDriver` | `ProxmoxDriver`: `qm create` cloning the cached Ubuntu cloud image (`--scsi0 <storage>:0,import-from=<image>`) with a cloud-init drive and `--cicustom user=<seed>`, then `qm disk resize` and `qm start`; `qm shutdown --forceStop 1`, `qm suspend --todisk 1`, `qm destroy --purge 1 --destroy-unreferenced-disks 1`; state from `pvesh get …/status/current` (`lock: suspended` → saved), the endpoint from the guest agent's `network-get-interfaces`. VMs are found by NAME in `pvesh get /cluster/resources --type vm` on every call; `absent` only from a successfully read list. |
+| `IIsoBuilder` | `CloudInitSeedBuilder`: one root-only cloud-config per VM in the snippets directory (hostname, seed user with a locked password and passwordless sudo, the bootstrap key, `qemu-guest-agent`); returns its volume id in the `IsoPath` slot; removed with the VM. |
+| `IPortForwardManager` | `TcpRelayPortForwardManager`: the same ranges, store-first ordering, per-VM gate and reconciliation as the netsh manager, materialized as in-process TCP listeners that resolve the guest's current address (cached 60 s) when a connection arrives. `CountActiveConnectionsAsync` is the listeners' own live count, so no TCP-table reader is needed. |
+| `IHypervisorInventory` | `ProxmoxInventory`: node CPUs/RAM, one volume per active storage, every QEMU VM's configured CPUs/RAM/disk, and presence evidence for `disk:` reservations by VM name (placement is decided before Proxmox assigns the numeric id). |
+| `IChildVmDriver`, `IChildVmStorage`, `IChildVmCreationOwnership` | `ProxmoxChildVmPlatform`: the Core's unsupported child driver plus a placement on the configured storage. |
+| `IUpdaterLauncher` | `SystemdUpdaterLauncher`: starts the verified Bash/Python updater through `systemd-run --unit construct-host-update-<id> --collect`. Its separate cgroup survives `constructd` stopping. The Maintenance tab offers self-update; logs are `/var/lib/constructd/updates/updater.log` and `journalctl -u construct-host-update-<id>`. |
+| `IConsoleTransport`, `IInteractiveConsole`, `IGuestAddressProvider`, `IIsoCatalog`, `IHostPowerGuard` | The unsupported/no-op implementations (`UnsupportedConsoleTransport`, `UnsupportedInteractiveConsole`, `UnsupportedFeaturePlatform`, `UnsupportedIsoCatalog`, `NullHostPowerGuard`). `ReleaseInfo.ApiFeatures` drops `children`, `media`, `console` and `network` accordingly, so clients hide what the host cannot do. |
+
+Startup validation: `ScriptsDir` must hold `bin/provision.sh`, `Iso:BootstrapPublicKeyPath` must
+exist, and `Proxmox:ImageVolume` must be an `import` volume id. Negotiate is not registered off
+Windows, so clients enrol with `-ServiceAuth token`. Installer: `service/host/install-construct-host.sh`;
+user guide: `docs/proxmox-host.md`. Tests: `tests/Constructd.Tests/Proxmox/` (argv-level driver
+tests over `RecordingProcessRunner`, the seed's exact text, the relay over real loopback sockets,
+and the SQLite-backed composition through `WebApplicationFactory`).
 
 ## Admin CLI
 
@@ -1804,8 +1857,9 @@ and phase history persist in migration 600's `host_updates` table. Staging/appli
 acceptance persists the queued job, replay key and update transition in one SQLite
 transaction. The job's operation ID remains readable after reconnecting.
 
-Host releases contain compressed self-contained and framework-dependent ZIPs.
-Conversion and staging prefer FDD when `dotnet --list-runtimes` reports the
+Host releases contain compressed self-contained and framework-dependent Windows ZIPs and a
+self-contained Linux ZIP with matching scripts and `updater/update-construct-host.sh`.
+Linux staging selects `linux`; Windows conversion and staging prefer FDD when `dotnet --list-runtimes` reports the
 manifest's required shared frameworks, currently .NET 10 and ASP.NET Core 10.
 Missing runtimes or older manifests select self-contained. The selected source is
 recorded in `install.json`; the installer validates a supplied FDD publish directory
@@ -1823,6 +1877,12 @@ Mutating admin CLI verbs hold `admin.lock` and recheck the maintenance marker;
 `admin db check --json` opens SQLite read-only and runs `PRAGMA quick_check` without
 migration, platform initialization or taking that lock.
 
+On Proxmox, `update-construct-host.sh` runs in a transient systemd unit, uses the same durable
+recovery records and fences, and takes locks with `flock`. Python verifies SHA-256 coverage and
+the health endpoint's SHA-1 certificate pin before sending the handoff credential. The pin is
+derived from the host's PFX when no `CertThumbprint` is configured. The Linux installer records
+owned-file hashes in `install.json`; package scripts are used unless `--source` selects a checkout.
+
 The `updates` API feature becomes available after manual installation. Releases need no
 signing configuration; downloads use the host-local GitHub repository over HTTPS and
 verify manifest identity and SHA-256 payload coverage. See
@@ -1834,6 +1894,7 @@ Additional Linux checks:
 ```sh
 bash test/host-package.test.sh
 pwsh -NoProfile -File service/tests/host-updater.test.ps1
+bash service/tests/host-updater.test.sh
 pwsh -NoProfile -File service/tests/host-release-installer.test.ps1
 dotnet test service/Constructd.sln --filter 'FullyQualifiedName~Updates'
 ```

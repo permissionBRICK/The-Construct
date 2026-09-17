@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using Constructd.Api.Admin;
 using Constructd.Core.Abstractions;
@@ -72,7 +73,18 @@ public sealed class HostUpdateJob(IHostUpdateStore store, IReleaseSource source,
     }
     public async Task<object> ApplyAsync(string id, string actor, CancellationToken ct, OperationKeyRecord? operation=null)
     {
-        if (!options.Fake && string.IsNullOrWhiteSpace(options.CertThumbprint)) throw new UpdateException("update-health-pin-required");
+        var thumbprint = options.CertThumbprint;
+        if (!OperatingSystem.IsWindows() && string.IsNullOrWhiteSpace(thumbprint) && !string.IsNullOrWhiteSpace(options.CertPath))
+        {
+            try
+            {
+                using var certificate = X509CertificateLoader.LoadPkcs12FromFile(options.CertPath, options.CertPassword);
+                thumbprint = certificate.Thumbprint;
+            }
+            catch (Exception ex) when (ex is CryptographicException or IOException or UnauthorizedAccessException or ArgumentException)
+            { throw new UpdateException("update-health-pin-required"); }
+        }
+        if (!options.Fake && string.IsNullOrWhiteSpace(thumbprint)) throw new UpdateException("update-health-pin-required");
         var row=await store.GetAsync(id,ct) ?? throw new UpdateException("update-not-staged");
         var fence=await launcher.ReadFenceAsync(ct);
         var authorizedRollback=row.State==HostUpdateState.ResolvedByAdmin && fence?.UpdateId==id && fence.Disposition==FenceDisposition.RollbackAuthorized;
@@ -113,8 +125,8 @@ public sealed class HostUpdateJob(IHostUpdateStore store, IReleaseSource source,
                     while(gate.LiveHandles>0)
                     { if(elapsed.Elapsed>=timeout) throw new UpdateException("drain-timeout"); await Task.Delay(25,token); }
                     handoff=new(id,row.Commit,staged.StagedPath,AppContext.BaseDirectory,options.ScriptsDir,DataDir,"constructd",release.Installed.Commit,
-                        "https://127.0.0.1:"+(new Uri(options.ListenUrl ?? "https://0.0.0.0:7462").Port)+"/api/v1/health",options.CertThumbprint ?? "",
-                        Path.Combine(AppContext.BaseDirectory,"Constructd.Api.exe"),Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32)),clock.UtcNow,release.SchemaVersion,settings.HealthTimeoutSeconds);
+                        "https://127.0.0.1:"+(new Uri(options.ListenUrl ?? "https://0.0.0.0:7462").Port)+"/api/v1/health",thumbprint ?? "",
+                        Path.Combine(AppContext.BaseDirectory,OperatingSystem.IsWindows() ? "Constructd.Api.exe" : "Constructd.Api"),Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32)),clock.UtcNow,release.SchemaVersion,settings.HealthTimeoutSeconds);
                     LaunchInProgress=true;
                     row=await PhaseAsync(row,HostUpdateState.HandedOff,"handoff");
                     await config.SetAsync("maintenance",new MaintenanceMarker(MaintenanceState.Maintenance,id,clock.UtcNow),actor,token);

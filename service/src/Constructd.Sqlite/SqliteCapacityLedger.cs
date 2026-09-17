@@ -11,6 +11,8 @@ public sealed partial class SqliteCapacityLedger(SqliteDatabase database, IClock
     ConstructdOptions options) : ICapacityLedger
 {
     private readonly IClock _clock = clock;
+    private readonly long _defaultRamHeadroomBytes = options.IsProxmox ? 1L << 30 : 4L << 30;
+    private readonly bool _useGuestMemoryDemand = options.IsProxmox;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private InventorySnapshot? _snapshot;
     private DateTimeOffset _readAt;
@@ -131,7 +133,8 @@ public sealed partial class SqliteCapacityLedger(SqliteDatabase database, IClock
                 return result;
             }
         }
-        public HostCapacitySnapshot Snapshot => CapacityMath.Calculate(_inventory, _ledger.Config(Connection, Sql), Rows, Vms);
+        public HostCapacitySnapshot Snapshot => CapacityMath.Calculate(_inventory, _ledger.Config(Connection, Sql), Rows, Vms,
+            _ledger._defaultRamHeadroomBytes, _ledger._useGuestMemoryDemand);
         private EffectiveAllowance? Allowance(string owner)
         {
             var defaults = Section<UserDefaultsConfig>(Connection, Sql, "userDefaults") ?? HostAdminDefaults.UserDefaults;

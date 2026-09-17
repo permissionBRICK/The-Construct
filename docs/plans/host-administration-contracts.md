@@ -51,7 +51,7 @@ Every row is a new choice; each states its rationale and its effect on existing 
 | Choice | Value | Rationale | Compatibility effect |
 |---|---|---|---|
 | Capacity enforcement mode (§4.3) | `capacity.mode`: `observe` when no `host_config.capacity` row exists (every migrated host), `enforce` written by the installer on fresh hosts and settable by admins | zero-change: a migrated host must not start refusing `POST /vms` that Hyper-V used to accept; the ledger still records everything so the admin sees what enforcement would do | none until an admin switches to `enforce` |
-| RAM headroom default | `max(4 GiB, 12.5 % of physical RAM)` | the host OS plus Hyper-V root partition need a floor; the probe host (32 GiB) had ~6 GiB free with one 16 GiB VM | applies only in `enforce` |
+| RAM headroom default | Hyper-V: `max(4 GiB, 12.5 % of physical RAM)`; Proxmox: `max(1 GiB, 12.5 % of physical RAM)` | platform floor for host memory; `capacity.ramHeadroomBytes` overrides either | applies only in `enforce` |
 | Storage headroom default | 20 GiB per volume | saved-state files, ISO transfers and Windows updates need slack the ledger does not model | applies only in `enforce` |
 | User RAM/storage budget `null` | "no user budget; host capacity still binds" | the requirements forbid a guessed numeric default | none |
 | Finite lifetime bounds | minimum `5m`; **no maximum** other than policy (`maxChildLifetimeSeconds`) | a lease shorter than the scheduler tick is meaningless; a hard upper bound would contradict "unlimited by default" | none |
@@ -1082,7 +1082,9 @@ HostStatusResponse   { version: { commit, packageVersion, installedAt, source: "
                        activeJobs: [{ id, kind, vmName?, owner, initiator?, phase?, created }],
                        leaseOverdueCount: int, unmanagedVmCount: int }
 HostCapacitySummary  { epoch, observedAt, complete,
-                       ram: { totalBytes, headroomBytes, reservedBytes, unmanagedBytes, physicalFreeBytes, availableBytes },
+                       ram: { totalBytes, headroomBytes, reservedBytes, unmanagedBytes, physicalFreeBytes, availableBytes,
+                              usedBytes?, vmResidentBytes?, hostOwnBytes?, committedBytes,
+                              admission: { enforced, lineBytes, availableBytes }, swap: { totalBytes, usedBytes } | null },
                        cpu: { logical, budget?, active, available? },
                        volumes: [{ root, totalBytes, freeBytes, headroomBytes, growthReservedBytes, availableBytes }] }
 HostCapacityResponse { summary: HostCapacitySummary, problems: string[],
@@ -1090,6 +1092,14 @@ HostCapacityResponse { summary: HostCapacitySummary, problems: string[],
                        unmanaged: [{ name, id, state, cpus, memoryStartupBytes, memoryAssignedBytes, dynamicMemory, memoryMaximumBytes?, disks: [{ path, maxBytes, fileBytes, readable }] }],
                        perUser: [{ user, primaries, children, cpus, ramBytes, storageBytes }] }
 ```
+
+The Overview RAM bar uses measured `usedBytes`, split into `vmResidentBytes` and
+`hostOwnBytes`, with physical free RAM left empty. `committedBytes` is reserved plus
+unmanaged allocations and appears separately, hot above 100%. Only Enforce mode
+draws the admission line at total minus headroom. Observe mode instead says
+"admission not enforced (observe mode)". Swap is a separate thin bar when its total
+is positive and usage is known. Missing measured fields retain the legacy panel
+display; the original capacity fields and the CPU and storage bars keep their meaning.
 
 ### 8.3 Inventory (existing routes, additive fields)
 

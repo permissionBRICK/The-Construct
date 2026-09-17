@@ -537,7 +537,8 @@ On **Windows**, both `Auto-Install.ps1` and the remote-host installer use the in
 [native .NET ISO builder](native-iso.md). It builds a local source checkout when a .NET 10
 SDK is available, otherwise downloads a checksum-verified self-contained Windows release.
 No WSL, Docker, or installed .NET runtime is needed. The shell builder above remains for
-Linux/Proxmox use.
+Linux use. (A [Proxmox host](proxmox-host.md) needs no ISO at all: its VMs are cloned from a
+cloud image and seeded with cloud-init.)
 The build requires the committed bootstrap public key at `keys/bootstrap_ed25519.pub`. The
 output is `<source-dir>/<hostname>-autoinstall.iso`.
 

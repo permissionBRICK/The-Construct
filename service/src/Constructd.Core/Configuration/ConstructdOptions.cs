@@ -46,6 +46,21 @@ public sealed class ConstructdOptions
     /// <summary>Thumbprint of a certificate in the Windows store (what the client pins at enrollment).</summary>
     public string? CertThumbprint { get; set; }
 
+    /// <summary>
+    /// Which hypervisor platform this host runs on: <c>hyperv</c> (the default: the Windows host with
+    /// the Hyper-V driver, WSL/native ISO media and netsh forwards) or <c>proxmox</c> (a Proxmox VE
+    /// node: VMs are cloned from a cached Ubuntu cloud image and seeded with cloud-init through
+    /// <c>qm</c>, and the service relays SSH/app forwards in-process). Fake mode ignores it.
+    /// </summary>
+    public string Backend { get; set; } = "hyperv";
+
+    /// <summary>True when <see cref="Backend"/> selects the Proxmox VE platform.</summary>
+    public bool IsProxmox => string.Equals(Backend?.Trim(), "proxmox", StringComparison.OrdinalIgnoreCase);
+
+    public ProxmoxOptions Proxmox { get; set; } = new();
+
+    public NegotiateOptions Negotiate { get; set; } = new();
+
     /// <summary>The Construct checkout the service invokes (ISO build, Create-AgentVM, …).</summary>
     public string ScriptsDir { get; set; } = string.Empty;
 
@@ -141,6 +156,71 @@ public sealed class ConstructdOptions
     /// real token has been issued.
     /// </summary>
     public string? BootstrapAdminToken { get; set; }
+}
+
+/// <summary>
+/// The Proxmox VE platform (<c>Constructd:Backend = proxmox</c>). The service runs ON the node, as a
+/// user that may run <c>qm</c> and <c>pvesh</c> (root), so no API token and no TLS pin towards the
+/// node exist: the client pins the SERVICE's certificate exactly as it does for a Windows host.
+/// <c>service/host/install-construct-host.sh</c> writes these values.
+/// </summary>
+public sealed class ProxmoxOptions
+{
+    /// <summary>Proxmox node name. Empty (the default) means the node this service runs on.</summary>
+    public string Node { get; set; } = string.Empty;
+
+    /// <summary>Storage that receives each VM's disk and cloud-init drive (<c>images</c> content).</summary>
+    public string Storage { get; set; } = "local-lvm";
+
+    /// <summary>
+    /// The cached Ubuntu cloud image every VM is cloned from, as a Proxmox volume id on a storage with
+    /// <c>import</c> content (<c>qm create --scsi0 &lt;storage&gt;:0,import-from=&lt;this&gt;</c>).
+    /// </summary>
+    public string ImageVolume { get; set; } = "local:import/construct-ubuntu-noble-cloudimg-amd64.qcow2";
+
+    /// <summary>Storage whose <c>snippets</c> directory holds the per-VM cloud-init user data.</summary>
+    public string SnippetStorage { get; set; } = "local";
+
+    /// <summary>The directory behind <see cref="SnippetStorage"/>'s snippets content, on this node.</summary>
+    public string SnippetDir { get; set; } = "/var/lib/vz/snippets";
+
+    /// <summary>Bridge new VMs are attached to; the guest takes a DHCP lease on it.</summary>
+    public string Bridge { get; set; } = "vmbr0";
+
+    /// <summary>QEMU CPU type. <c>host</c> passes the node's CPU through, which is what nested KVM needs.</summary>
+    public string CpuType { get; set; } = "host";
+
+    /// <summary>The <c>qm</c> command (VM lifecycle).</summary>
+    public string QmPath { get; set; } = "qm";
+
+    /// <summary>The <c>pvesh</c> command (read-only API queries).</summary>
+    public string PveshPath { get; set; } = "pvesh";
+}
+
+/// <summary>
+/// Kerberos/NTLM sign-in (the Negotiate scheme). On Windows it is on by default and needs nothing:
+/// the service runs as a domain identity. On Linux it is off unless <see cref="Enabled"/> says
+/// otherwise; then the service authenticates through GSSAPI with a keytab for its
+/// <c>HTTP/&lt;public host&gt;</c> principal (<c>KRB5_KTNAME</c>, written by the installer), and the
+/// identity Kerberos yields — <c>user@REALM</c> — is mapped to the <c>DOMAIN\user</c> form a Windows
+/// host produces, so one user record serves both kinds of host.
+/// </summary>
+public sealed class NegotiateOptions
+{
+    /// <summary>Register the Negotiate scheme. Null (the default) means "on Windows only".</summary>
+    public bool? Enabled { get; set; }
+
+    /// <summary>
+    /// The NetBIOS domain name (<c>HOME</c>) a Kerberos principal <c>user@REALM</c> is mapped onto
+    /// (<c>HOME\user</c>). Empty leaves principal names as Kerberos reports them.
+    /// </summary>
+    public string DomainName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The Kerberos realm (<c>DC.EXAMPLE.NET</c>) whose principals are mapped. Empty maps every realm;
+    /// set it when the service can be reached by principals from a trusted foreign realm.
+    /// </summary>
+    public string Realm { get; set; } = string.Empty;
 }
 
 /// <summary>Where durable state is kept.</summary>

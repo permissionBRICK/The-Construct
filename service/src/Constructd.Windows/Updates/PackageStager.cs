@@ -11,6 +11,17 @@ namespace Constructd.Windows.Updates;
 public sealed record CheckedRelease(ReleaseDescriptor Release, ReleaseManifest Manifest, string[] Reasons, string Source = "self-contained");
 public sealed class PackageStager(IReleaseSource source, IHostConfigStore config, ConstructdOptions options, IReleaseInfo installed, IProcessRunner? runner = null) : IUpdateStager
 {
+    // Tests exercise Windows selection on Linux without changing the production OS decision.
+    internal bool IsWindows { get; init; } = OperatingSystem.IsWindows();
+    private sealed record Payload(string Asset, string Hash, long? Size, string SumsHash, long? Total, string Updater, string UpdaterHash);
+    private static Payload SelectPayload(ReleaseManifest m, string source) => source switch
+    {
+        "linux" when m.LinuxAsset is not null => new(m.LinuxAsset, m.LinuxSha256!, m.LinuxSizeBytes, m.LinuxSumsSha256!, m.LinuxUncompressedSizeBytes, m.LinuxUpdaterPath!, m.LinuxUpdaterSha256!),
+        "linux" => throw new UpdateException("no-linux-asset"),
+        "framework-dependent" => new(m.FrameworkDependentAsset!, m.FrameworkDependentSha256!, m.FrameworkDependentSizeBytes, m.FrameworkDependentSumsSha256!, m.FrameworkDependentUncompressedSizeBytes, m.UpdaterPath, m.UpdaterSha256),
+        "self-contained" => new(m.PayloadAsset, m.PayloadSha256, m.PayloadSizeBytes, m.SumsSha256, m.PayloadUncompressedSizeBytes, m.UpdaterPath, m.UpdaterSha256),
+        _ => throw new UpdateException("incompatible")
+    };
     public string UpdatesDir => Path.Combine(Path.GetDirectoryName(Path.GetFullPath(options.DatabasePath))!, "updates");
     public async Task<UpdatesConfig> SettingsAsync(CancellationToken ct) => HostUpdateTrust.Apply(await config.GetAsync<UpdatesConfig>("updates", ct) ?? HostAdminDefaults.Updates, options);
     public async Task<CheckedRelease?> CheckAsync(string? releaseTag, CancellationToken ct)
@@ -29,15 +40,19 @@ public sealed class PackageStager(IReleaseSource source, IHostConfigStore config
         await source.DownloadAsync(Asset(release, "manifest.json", 1024 * 1024), Path.Combine(dir, "manifest.json"), null, ct);
         var manifest = await ReadManifestAsync(dir, release, settings, ct);
         var reasons = UpdateCompatibility.Reasons(manifest, installed.SchemaVersion, installed.SchemaMinReadableBy, 1, HasSetting).ToList();
-        var variant = await SelectSourceAsync(manifest, ct);
-        var payload = Asset(release, variant == "framework-dependent" ? manifest.FrameworkDependentAsset! : manifest.PayloadAsset, 1024L * 1024 * 1024);
+        string variant;
+        try { variant = await SelectSourceAsync(manifest, ct); }
+        catch (UpdateException ex) when (ex.Code == "no-linux-asset")
+        { return new(release, manifest, [.. reasons, ex.Code], "linux"); }
+        var payload = Asset(release, SelectPayload(manifest, variant).Asset, 1024L * 1024 * 1024);
         var needed = checked(2 * payload.SizeBytes + 1024L * 1024 * 1024);
         foreach (var root in new[] { UpdatesDir, AppContext.BaseDirectory })
-            if (new DriveInfo(Path.GetPathRoot(Path.GetFullPath(root))!).AvailableFreeSpace < needed) reasons.Add("insufficient-space");
+            if (new DriveInfo(Path.GetFullPath(root)).AvailableFreeSpace < needed) reasons.Add("insufficient-space");
         return new(release, manifest, reasons.Distinct().ToArray(), variant);
     }
     private async Task<string> SelectSourceAsync(ReleaseManifest manifest, CancellationToken ct)
     {
+        if (!IsWindows) return manifest.LinuxAsset is not null ? "linux" : throw new UpdateException("no-linux-asset");
         if (manifest.FrameworkDependentAsset is null || runner is null) return "self-contained";
         try
         {
@@ -86,7 +101,7 @@ public sealed class PackageStager(IReleaseSource source, IHostConfigStore config
             progress?.Report("check"); var check = await CheckReleaseAsync(release, dir, ct);
             if (check.Reasons.Length > 0) throw new UpdateException(check.Reasons[0]);
             progress?.Report("download");
-            await source.DownloadAsync(Asset(release, check.Source == "framework-dependent" ? check.Manifest.FrameworkDependentAsset! : check.Manifest.PayloadAsset, 1024L * 1024 * 1024), Path.Combine(dir, "package.zip"), null, ct);
+            await source.DownloadAsync(Asset(release, SelectPayload(check.Manifest, check.Source).Asset, 1024L * 1024 * 1024), Path.Combine(dir, "package.zip"), null, ct);
             progress?.Report("verify"); var files = ExtractAndVerify(dir, check.Manifest, check.Source);
             await UpdateFiles.WriteAsync(Path.Combine(dir, "verified.json"), new VerifiedFiles(updateId, check.Manifest.Commit, DateTimeOffset.UtcNow, files, check.Source), ct);
             return new(updateId, check.Manifest, dir, files.Select(f => f.Path).ToArray(), check.Source);
@@ -105,12 +120,11 @@ public sealed class PackageStager(IReleaseSource source, IHostConfigStore config
     private static IReadOnlyList<UpdateFile> ExtractAndVerifyCore(string dir, ReleaseManifest manifest, string source)
     {
         var zip = Path.Combine(dir, "package.zip");
-        var fdd = source == "framework-dependent";
-        var size = fdd ? manifest.FrameworkDependentSizeBytes : manifest.PayloadSizeBytes;
-        var declaredTotal = fdd ? manifest.FrameworkDependentUncompressedSizeBytes : manifest.PayloadUncompressedSizeBytes;
-        if (source is not ("framework-dependent" or "self-contained")) throw new UpdateException("incompatible");
+        var payload = SelectPayload(manifest, source);
+        var size = payload.Size;
+        var declaredTotal = payload.Total;
         if (size is not null && new FileInfo(zip).Length != size) throw new UpdateException("payload-size-mismatch");
-        if (UpdateFiles.Sha256(zip) != (fdd ? manifest.FrameworkDependentSha256 : manifest.PayloadSha256)) throw new UpdateException("payload-hash-mismatch");
+        if (UpdateFiles.Sha256(zip) != payload.Hash) throw new UpdateException("payload-hash-mismatch");
         var extracted = Path.Combine(dir, "extracted"); UpdateFiles.NoLinks(extracted);
         using (var archive = ZipFile.OpenRead(zip))
         {
@@ -118,7 +132,7 @@ public sealed class PackageStager(IReleaseSource source, IHostConfigStore config
             // Verify inflated lengths and hashes before creating destination files. Some ZIP
             // implementations truncate entry streams to the declared length, so count alone is insufficient.
             var hashes = archive.Entries.ToDictionary(e => e.FullName, e => CopyEntry(e, Stream.Null), StringComparer.OrdinalIgnoreCase);
-            if (!hashes.TryGetValue("SHA256SUMS", out var sumsHash) || sumsHash != (fdd ? manifest.FrameworkDependentSumsSha256 : manifest.SumsSha256))
+            if (!hashes.TryGetValue("SHA256SUMS", out var sumsHash) || sumsHash != payload.SumsHash)
                 throw new UpdateException("coverage-failed");
             using (var reader = new StreamReader(archive.GetEntry("SHA256SUMS")!.Open()))
             {
@@ -136,6 +150,11 @@ public sealed class PackageStager(IReleaseSource source, IHostConfigStore config
             {
                 var target = Path.Combine(extracted, entry.FullName); Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                 using var output = File.Create(target); CopyEntry(entry, output);
+                if (!OperatingSystem.IsWindows() && source == "linux")
+                {
+                    var mode = (entry.ExternalAttributes >> 16) & 0x1FF;
+                    File.SetUnixFileMode(target, (UnixFileMode)(mode == 0 ? 0x1A4 : mode));
+                }
             }
         }
         return VerifyFiles(extracted, manifest, source);
@@ -170,8 +189,9 @@ public sealed class PackageStager(IReleaseSource source, IHostConfigStore config
     }
     public static IReadOnlyList<UpdateFile> VerifyFiles(string extracted, ReleaseManifest manifest, string source = "self-contained")
     {
+        var payload = SelectPayload(manifest, source);
         var sums = Path.Combine(extracted, "SHA256SUMS");
-        if (!File.Exists(sums) || UpdateFiles.Sha256(sums) != (source == "framework-dependent" ? manifest.FrameworkDependentSumsSha256 : manifest.SumsSha256)) throw new UpdateException("coverage-failed");
+        if (!File.Exists(sums) || UpdateFiles.Sha256(sums) != payload.SumsHash) throw new UpdateException("coverage-failed");
         var files = new Dictionary<string, UpdateFile>(StringComparer.OrdinalIgnoreCase);
         foreach (var line in File.ReadAllLines(sums))
         {
@@ -185,7 +205,7 @@ public sealed class PackageStager(IReleaseSource source, IHostConfigStore config
             if (!files.TryGetValue(relative, out var record) || UpdateFiles.Sha256(file) != record.Sha256) throw new UpdateException("coverage-failed");
         }
         if (files.Values.Any(f => !File.Exists(Path.Combine(extracted, f.Path))) ||
-            !files.TryGetValue(manifest.UpdaterPath, out var updater) || updater.Sha256 != manifest.UpdaterSha256) throw new UpdateException("coverage-failed");
+            !files.TryGetValue(payload.Updater, out var updater) || updater.Sha256 != payload.UpdaterHash) throw new UpdateException("coverage-failed");
         return files.Values.ToArray();
     }
     public async Task<bool> VerifyStagedAsync(StagedUpdate staged, CancellationToken ct)
@@ -195,15 +215,16 @@ public sealed class PackageStager(IReleaseSource source, IHostConfigStore config
             var dir = DirectoryFor(staged.UpdateId); if (dir != staged.StagedPath) return false;
             var m = await ReadManifestAsync(dir, new(staged.Manifest.ReleaseTag, staged.Manifest.Commit, default, []), await SettingsAsync(ct), ct);
             var verified = await UpdateFiles.ReadAsync<VerifiedFiles>(Path.Combine(dir, "verified.json"), ct);
-            if (verified is null || verified.Source != staged.Source || staged.Source is not ("framework-dependent" or "self-contained")) return false;
+            if (verified is null || verified.Source != staged.Source || staged.Source is not ("framework-dependent" or "self-contained" or "linux")) return false;
             var fdd = staged.Source == "framework-dependent";
             if (fdd && await SelectSourceAsync(m, ct) != "framework-dependent") return false;
             var zip = Path.Combine(dir, "package.zip");
-            var size = fdd ? m.FrameworkDependentSizeBytes : m.PayloadSizeBytes;
-            if (m.Commit != staged.Manifest.Commit || UpdateFiles.Sha256(zip) != (fdd ? m.FrameworkDependentSha256 : m.PayloadSha256) ||
+            var payload = SelectPayload(m, staged.Source);
+            var size = payload.Size;
+            if (m.Commit != staged.Manifest.Commit || UpdateFiles.Sha256(zip) != payload.Hash ||
                 size is not null && new FileInfo(zip).Length != size) return false;
             using (var archive = ZipFile.OpenRead(zip))
-                CheckArchiveLengths(archive, fdd ? m.FrameworkDependentUncompressedSizeBytes : m.PayloadUncompressedSizeBytes);
+                CheckArchiveLengths(archive, payload.Total);
             var files = VerifyFiles(Path.Combine(dir, "extracted"), m, staged.Source);
             return verified.UpdateId == staged.UpdateId && verified.Commit == m.Commit && files.SequenceEqual(verified.Files);
         }

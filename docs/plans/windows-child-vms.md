@@ -1,0 +1,132 @@
+# Windows child VMs: OS type, unattended install, license keys
+
+Status: **draft for discussion**, 2026-09-17. Not dispatched. Open decisions in §6.
+
+## 1. Goal
+
+An agent asks for a Windows child VM and gets one that installs itself, comes up with SSH,
+and is activated with a key the admin put into a pool on the host, without the agent ever
+handling the key. Without a pool key the guest installs with the generic edition key and runs
+the normal grace period. The host can tell whether the install finished and whether the key
+activated. Linux children stay as they are.
+
+## 2. The proven recipe (from `examples/winvm-blank`)
+
+The example in `examples/winvm-blank/` is a working rig on a Hyper-V host; the feature
+generalises it. What it established, and what the host-side implementation must keep:
+
+- **UEFI + TPM 2.0 is mandatory for Windows 11 media.** On legacy BIOS the 25H2 media crashes
+  in the offline specialize pass (`tssysprep.dll`, 0xc0000005) and it looks like a media bug.
+  Gen 2, Microsoft Secure Boot template, TPM on, GPT layout in the answer file.
+- **Stock media stops at "Press any key to boot from CD".** The ISO is repacked once with its
+  own `efi/microsoft/boot/efisys_noprompt.bin` (the media stores files in UDF, so mount and
+  copy, then `xorriso -as mkisofs … -eltorito-platform efi -e efi/microsoft/boot/efisys_noprompt.bin`).
+  Cache the repacked ISO next to the original (`prepare-media.sh`).
+- **Boot order `disk,installMedia`** avoids a reboot loop: once setup's first phase has written
+  the Windows Boot Manager NVRAM entry, the disk wins; before that the empty disk falls through
+  to the DVD. Requires the firmware variables to persist per VM (Hyper-V does; Proxmox via the
+  EFI disk).
+- **The answer file is the auxiliary ISO** (`autounattend.xml` + `firstlogon.ps1`,
+  `genisoimage -J -R -V UNATTEND`). Windows Setup finds it on any removable medium.
+  `FirstLogonCommands` runs `firstlogon.ps1` straight from the CD (`for %d in (D E F G H)`).
+- **No RDP/TerminalServices components in the answer file** (same specialize crash on 25H2);
+  RDP is switched on in the first-logon script instead. SSH is the primary channel.
+- **First logon** installs OpenSSH server (and its firewall rule, which the 25H2 capability
+  install omits), sets PowerShell as the SSH shell, enables RDP and WinRM, strips consumer
+  Appx (keeping frameworks, Get Help, the Defender UI, App Installer), turns off consumer
+  content, Copilot, widgets, telemetry, Windows Update, search indexing, and keeps the desktop
+  awake for UI automation. It ends by writing `C:\provision\firstlogon.done`.
+- **Completion and hygiene.** The controller polls `firstlogon.done` over SSH, stops the VM,
+  detaches **both** media slots so the answer file can never be applied again, starts it, and
+  writes `install-complete.done`. Re-running resumes; `--force` recreates.
+- **Credentials** live in the answer file (built-in Administrator, auto-logon) and in the
+  controller config; the example uses throwaway lab credentials and documents that.
+- **The generic edition key** (`VK7JG-NPHTM-C97JM-9MPGT-3V66T` for Pro) selects the edition
+  and does not activate; the LabConfig bypass keys are belt and braces only.
+- **The ISO itself** has no stable URL; Fido resolves the official download. Server 2022
+  evaluation media has a stable link and 180 days.
+
+## 3. Design (proposed)
+
+1. **OS type on child create**: `--os linux|windows|other`; `windows` implies the current
+   `--preset windows` firmware and unlocks the unattended options below.
+2. **Host-built auxiliary ISO.** `construct vm create --os windows --iso … --unattend-*`
+   parameters (admin password, hostname, locale, time zone, extra first-logon script, extra
+   files) are rendered by the host into `autounattend.xml` + `firstlogon.ps1` from the template
+   in `examples/winvm-blank/vm/unattend-win11/`, the key from the pool is inserted on the host,
+   the ISO is built on the host (`xorriso`/`genisoimage` on Linux, the existing ISO builder
+   seam on Windows) and attached as auxiliary media. The agent can still supply its own
+   auxiliary ISO instead, in which case the host injects nothing.
+3. **The host fetches the Windows ISO itself.** Decided 2026-09-17: a media action
+   `construct vm media acquire --windows 11 --edition pro --lang en` (and `--windows server-2022`
+   for the evaluation media, which has a stable link) resolves the official download on the
+   host the way the example's `download-images.sh` does (Fido, run under `pwsh` on the host or
+   ported to the host's own resolver), stores the result as a shared media item (owner: host,
+   readable by every user, counted once), and also performs the no-prompt repack once and
+   caches the repacked variant beside it. The item shows `edition`, `build`, `language` and
+   `sha256` in `construct vm media list`. Agents then only supply the configuration (answer
+   file parameters) and never download or repack anything; an agent-supplied ISO keeps working
+   for other media. The repack stays available on its own for uploaded media
+   (`construct vm media prepare-windows <id>`).
+   Not too roundabout means: one CLI verb, one host job with progress, one cached item; no
+   new service, no extra daemon.
+4. **Key pool.** Admin adds keys (edition, kind retail/MAK/KMS-client, activation budget for
+   MAK, notes) through the host admin panel or CLI. Encrypted at rest; the API returns only the
+   last five characters. Assignment records per VM incarnation with states assigned, installed,
+   activated, failed; released on delete (a MAK activation does not return). Auto-assign by the
+   edition the guest reports, manual assign from the panel, audit entries. No matching key, or a
+   KMS domain: nothing is pushed, the guest stays on the generic edition key and its grace
+   period, i.e. trial as normal. The pool records the edition per key; the host-built answer
+   file selects the install image from the requested or assigned edition.
+5. **The key never enters the answer file.** The answer file carries only the public generic
+   edition key (as the template does today), so an agent-built auxiliary ISO holds no secret.
+   The template's `firstlogon.ps1` ends with a drop-in Construct block that reports the edition
+   and the stage "first logon done", waits a bounded time for a key, applies it with
+   `slmgr /ipk` and `/ato`, and reports the activation state and the partial key back. The
+   key travels host to guest through the platform's guest channel, never through the agent:
+   - Hyper-V: Data Exchange (KVP). The host writes the key as a host-to-guest item, the guest
+     reads it from `HKLM\SOFTWARE\Microsoft\Virtual Machine\External`, the host removes the
+     item once activation is reported; the guest's report goes into the Guest KVP pool the host
+     already reads for addresses.
+   - Proxmox: once the first-logon block has installed the QEMU guest agent from the virtio
+     ISO, the host runs `slmgr` inside the guest itself (`qm guest exec`) and reads the output;
+     nothing is stored in the guest.
+   The host records the report per VM incarnation, checks the partial key against the assigned
+   key, shows the state in the panel (marked guest-reported on Hyper-V), and detaches the
+   auxiliary ISO after the "first logon done" beacon. Retail and MAK keys need internet from
+   the guest at activation time; KMS client keys need the KMS host.
+6. **Proxmox specifics.** Windows on QEMU needs the virtio storage driver during setup:
+   the host adds the virtio-win ISO as a third medium or injects the driver folder into the
+   auxiliary ISO with a `PnpCustomizationsWinPE` driver path; e1000 NIC until the virtio NIC
+   driver is installed. Depends on the Proxmox child VM work.
+
+## 4. Work (once decided)
+
+1. OS type + unattended parameters in the create contract and CLI; template rendering with
+   tests on the rendered XML (no secrets in logs).
+2. Host-side ISO build (auxiliary) and the no-prompt repack as media operations.
+3. Key pool store, encryption, admin routes and panel, assignment and audit.
+4. Guest write-back reader (KVP on Hyper-V; guest agent on Proxmox) and the auto-detach.
+5. Docs, written for the agent that wants a Windows guest: a "Windows guests" section in
+   `docs/child-vms.md` (the file agents already reach from `construct vm --help`), covering the
+   host-side ISO fetch, the answer-file parameters, the key pool behaviour (what "no key" means),
+   the first-logon report, and where the SSH credentials come from; `construct vm --help` and
+   `construct vm create --help` name the section; the `examples/winvm-blank` README points at
+   the feature. Not in the system prompt.
+
+## 5. Acceptance
+
+A `construct vm create --os windows --iso <win11.iso> --cpus 4 --ram-gb 8 --disk-gb 100
+--lifetime 4h --unattend-admin-password …` on a Hyper-V host reaches the desktop unattended,
+answers SSH with the given password, shows "installed, activated with key …3V66T" (or
+"installed, not activated, grace period") in the panel, and has no auxiliary medium attached
+afterwards.
+
+## 6. Decisions and what is still open
+
+Decided (2026-09-17): the host stays credential-free; the key is pushed post-install through
+the guest channel and never baked into the answer file; verification comes from the same
+channel.
+
+Open: Hyper-V first, Proxmox once child VMs land there (the Proxmox path depends on the
+child VM thread and on the virtio driver handling in §3.6).

@@ -21,9 +21,11 @@ jobs:
           dotnet-version: '10.0.x'
       - run: dotnet publish service/src/Constructd.Api -c Release -r win-x64 --self-contained true -p:InformationalVersion=1.0.0+${{ github.sha }} -p:IncludeSourceRevisionInInformationalVersion=false -o /tmp/host-publish
       - run: dotnet publish service/src/Constructd.Api -c Release -r win-x64 --self-contained false -p:InformationalVersion=1.0.0+${{ github.sha }} -p:IncludeSourceRevisionInInformationalVersion=false -o /tmp/host-publish-fdd
+      # The Linux service for Proxmox hosts (docs/proxmox-host.md); install-construct-host.sh downloads it.
+      - run: dotnet publish service/src/Constructd.Api -c Release -r linux-x64 --self-contained true -p:InformationalVersion=1.0.0+${{ github.sha }} -p:IncludeSourceRevisionInInformationalVersion=false -o /tmp/host-publish-linux
       - name: Package pinned commit
         shell: pwsh
-        run: ./service/host/New-ConstructHostPackage.ps1 -PublishDir /tmp/host-publish -FrameworkDependentPublishDir /tmp/host-publish-fdd -OutputDir /tmp/host-release -Commit "${{ github.sha }}" -Repository "$env:GITHUB_REPOSITORY"
+        run: ./service/host/New-ConstructHostPackage.ps1 -PublishDir /tmp/host-publish -FrameworkDependentPublishDir /tmp/host-publish-fdd -LinuxPublishDir /tmp/host-publish-linux -OutputDir /tmp/host-release -Commit "${{ github.sha }}" -Repository "$env:GITHUB_REPOSITORY"
       - name: Decide which Companion release this commit installs
         id: companion
         env:

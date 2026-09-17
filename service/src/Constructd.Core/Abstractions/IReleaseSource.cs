@@ -40,7 +40,14 @@ public sealed record ReleaseManifest(
     long? FrameworkDependentSizeBytes = null,
     string? FrameworkDependentSumsSha256 = null,
     long? FrameworkDependentUncompressedSizeBytes = null,
-    IReadOnlyList<SharedRuntime>? Runtimes = null);
+    IReadOnlyList<SharedRuntime>? Runtimes = null,
+    string? LinuxAsset = null,
+    string? LinuxSha256 = null,
+    long? LinuxSizeBytes = null,
+    string? LinuxSumsSha256 = null,
+    long? LinuxUncompressedSizeBytes = null,
+    string? LinuxUpdaterPath = null,
+    string? LinuxUpdaterSha256 = null);
 public sealed record StagedUpdate(string UpdateId, ReleaseManifest Manifest, string StagedPath, IReadOnlyList<string> Files, string Source = "self-contained");
 public interface IUpdateStager
 {
