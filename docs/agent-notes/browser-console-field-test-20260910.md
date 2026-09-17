@@ -44,7 +44,6 @@ host session API. Full deployment validation is recorded below after installatio
 
 See [installation and session boundaries](../../console-viewer/README.md).
 The new CLI is `construct vm console NAME --web --minutes 30`.
-The named `construct-browser-console` project profile records reproducible setup.
 
 No host administrator password is needed by the viewer. Temporary VMConnect
 credentials are deliberately restricted to trusted primary-VM gateways, never
