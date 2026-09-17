@@ -77,7 +77,7 @@ performed during this repair. See remote-host.md section 9 for the upgrade path.
 
 ## Explicit credential upgrade, 2026-09-08
 
-At the project owner's request, haus-vm's credential was upgraded from legacy to primary
+At Christoph's request, haus-vm's credential was upgraded from legacy to primary
 at approximately 16:21 UTC. main-pc authenticated as the owner through the shared
 `Request-ConstructVmTokenRotation` helper. Delivery was preflighted over SSH stdin;
 the returned credential stayed in process memory on Windows and was atomically

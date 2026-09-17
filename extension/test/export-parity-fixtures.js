@@ -428,6 +428,16 @@ function hostAdminIpc() {
  for(const [kind,fn] of [["overview","toOverview"],["capacity","toCapacityBars"],["media","toMediaRow"],["iso","toIsoCatalogView"],["job","toJobRow"],["audit","toAuditRow"],["config","toConfigView"],["capabilities","toCapabilityRows"],["updates","toUpdateView"],["updateActions","updateActionsFor"],["user","toUserRow"],["allowanceForm","allowanceForm"],["allowanceText","allowanceText"]]) {
   add(kind,{},m[fn]({}));
  }
+ const ramFull = { totalBytes: 8245506048, headroomBytes: 1073741824, reservedBytes: 7516192768, unmanagedBytes: 0, physicalFreeBytes: 356577280, availableBytes: 0,
+  usedBytes: 7888928768, vmResidentBytes: 6546935808, hostOwnBytes: 1341992960, committedBytes: 7516192768,
+  admission: { enforced: false, lineBytes: 7171764224, availableBytes: 0 }, swap: { totalBytes: 4294963200, usedBytes: 1648934912 } };
+ for (const ram of [
+  ramFull,
+  { ...ramFull, admission: { enforced: true, lineBytes: 7171764224, availableBytes: 0 }, swap: null },
+  { ...ramFull, committedBytes: 12884901888, usedBytes: 9000000000, swap: { totalBytes: 0, usedBytes: 0 } },
+  { ...ramFull, usedBytes: null },
+  { totalBytes: 34359738368, headroomBytes: 4294967296, reservedBytes: 8589934592, unmanagedBytes: 2147483648, availableBytes: 17179869184 },
+ ]) { const input = { ram, cpu: { active: 6, budget: 16, logical: 16 } }; add("capacity", input, m.toCapacityBars(input)); }
  for (const sizeBytes of [0,1,"0",null]) for (const sidecarReadable of [true,false,null]) { const input={entries:[{fileName:"test.iso",sizeBytes,sidecarReadable}]}; add("iso",input,m.toIsoCatalogView(input)); }
  for (const state of ["running","paused","off"]) for(const deleting of [true,false]) for(const allowedActions of [undefined,[],["console"]]) for(const currentOperation of [null,{kind:"provision"}]) {
    const input=[{name:"guest",state,deleting,allowedActions,currentOperation}]; add("children",input,m.childRows(input,now));

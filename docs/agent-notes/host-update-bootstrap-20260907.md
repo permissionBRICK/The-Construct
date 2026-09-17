@@ -69,7 +69,7 @@ changed from 12296 to 2216. `install.json` records the update and 431 owned file
 Final `/health`: `ok`, schema 700, maintenance null, expected commit and all six
 features. `admin db check` returned `ok`, schema 700. Production settings remained
 byte-identical. `haus-vm` remained Running with continuous uptime, its SSH endpoint
-remained `standpc.corp.example.com:2201`, and T3 HTTPS on port 2301 returned HTTP 200.
+remained `standpc.dc.htl-sky.net:2201`, and T3 HTTPS on port 2301 returned HTTP 200.
 
 One deferred display issue: the in-memory `ReleaseInfo` retains the installation
 timestamp loaded before the updater commits the new `install.json`. On-disk metadata

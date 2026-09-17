@@ -1,6 +1,6 @@
 # Guided local-to-host conversion
 
-Source: the project owner's requested flow and agreed design, 2026-09-10, haus-vm.
+Source: Christoph's requested flow and agreed design, 2026-09-10, haus-vm.
 
 In the connected local VM's Settings, **Make this PC a Construct host…** opens one
 prefilled review page. The original Windows identity becomes the host admin, even
@@ -210,7 +210,7 @@ Upstream behavior: [VS Code module patching](https://github.com/microsoft/vscode
 [proxy agent replacement](https://github.com/microsoft/vscode-proxy-agent/blob/main/src/index.ts).
 
 Earlier builds automatically retried client completion once per VS Code session;
-this explained the conversion button disappearing after the TLS fix. The project owner
+this explained the conversion button disappearing after the TLS fix. Christoph
 rejected completion triggered merely by opening VS Code because the outcome was
 too easy to miss. The watcher now only shows the saved result and a **Finish host
 conversion** action. Settings retain the pending result, saved error, and a
