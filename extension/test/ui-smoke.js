@@ -1459,17 +1459,10 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await admin.locator("#haVmSettingsCancel").click();
 
   check("admin: Delete posts deleteVm with name and kind", aposted.some((m) => m.action === "deleteVm" && m.args.name === "work-vm" && m.args.kind === "primary"));
-  const networkState = { ...ADMIN_STATE, activeTab: "overview", features: { ...ADMIN_STATE.features, networkMode: true },
-    networkSection: { key: "network", expectedUpdatedAt: null, text: JSON.stringify({ hostForwardsEnabled: false, directAddressReporting: true, defaultMode: "relayed", ownerMaySwitchMode: false }) } };
+  const networkState = { ...ADMIN_STATE, activeTab: "overview", features: { ...ADMIN_STATE.features, networkMode: true } };
   await pushAdmin(networkState);
   await admin.waitForTimeout(60);
-  check("network: host card visible on supported host", await admin.locator("#hostNetworkCard").isVisible());
-  await admin.locator("#hostNetworkMode").selectOption("direct");
-  await admin.locator("#hostNetworkOwner").check();
-  await admin.locator("#hostNetworkSave").click();
-  const networkSave = await admin.evaluate(() => window.__posted.filter(m => m.action === "saveConfig").at(-1));
-  const networkBody = JSON.parse(networkSave.args.sections[0].text);
-  check("network: card preserves existing forward policy", networkBody.defaultMode === "direct" && networkBody.ownerMaySwitchMode && networkBody.hostForwardsEnabled === false);
+  check("admin: Overview has no configuration inputs", await admin.locator("#tab-overview input, #tab-overview select, #tab-overview textarea").count() === 0);
   await pushAdmin({ ...networkState, activeTab: "vms" });
   await admin.getByRole("button", { name: "VM settings…", exact: true }).click();
   settingsRequest = await admin.evaluate(() => window.__posted.filter(m => m.action === "loadVmSettings").at(-1));
