@@ -8,7 +8,7 @@ namespace Constructd.Core.Configuration;
 /// </summary>
 public sealed class ConstructdOptions
 {
-    /// <summary>Enable per-session, unprivileged Hyper-V console accounts for the trusted browser gateway.</summary>
+    /// <summary>Enable per-session display credentials for the trusted browser gateway.</summary>
     public bool BrowserConsoleEnabled { get; set; } = true;
     public HostAdminOptions HostAdmin { get; set; } = new();
 

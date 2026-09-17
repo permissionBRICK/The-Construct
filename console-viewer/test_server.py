@@ -1,6 +1,8 @@
 import asyncio
 import importlib.util
+import os
 from pathlib import Path
+import tempfile
 import time
 import unittest
 from aiohttp import ClientSession, CookieJar, WSMsgType, web
@@ -232,6 +234,92 @@ class VncGatewayTests(GatewayTests):
             self.assertFalse(self.gateway.tickets['id']['active'])
         self.assertEqual(5, self.calls.count(('DELETE', '/api/v1/vms/test-vm/console/sessions/host-session')))
         self.assertEqual(self.params, {})
+
+    async def test_cli_and_panel_buttons_reach_vnc_gateway_through_real_opener(self):
+        root = Path(__file__).resolve().parent.parent
+        control = web.Application()
+        control.router.add_post('/tickets', self.gateway.mint)
+        runner = web.AppRunner(control)
+        await runner.setup()
+        try:
+            with tempfile.TemporaryDirectory(prefix='construct-console-e2e-') as directory:
+                directory = Path(directory)
+                socket = directory / 'control.sock'
+                await web.UnixSite(runner, str(socket)).start()
+                config = directory / 'config.env'
+                config.write_text("CONSTRUCT_INSTANCE_NAME='test-vm'\n")
+                opener = directory / 'open.py'
+                # Replace only machine-specific socket/exposure paths. CLI argument parsing,
+                # opener, tickets, WebSocket, protocol handshake, and input are the real code.
+                opener.write_text(f'''
+import asyncio, importlib.util, sys
+sys.path.insert(0, {str(root / 'console-viewer')!r})
+spec = importlib.util.spec_from_file_location('console_opener', {str(root / 'console-viewer/open.py')!r})
+opener = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(opener)
+connector = opener.UnixConnector
+opener.UnixConnector = lambda path: connector(path={str(socket)!r})
+opener.read_config = lambda path: {{}}
+opener.expose_viewer = lambda port: {self.origin!r}
+sys.exit(asyncio.run(opener.main()))
+''')
+                env = {key: value for key, value in os.environ.items() if not key.startswith('CONSTRUCT_')}
+                env.update(CONFIG_FILE=str(config), CONSTRUCT_CONSOLE_OPENER=str(opener),
+                           PATH=str(root / 'bin') + os.pathsep + env['PATH'])
+                panel = '''
+const cp = require('child_process');
+const root = process.argv[1], child = process.argv[2] === 'child';
+const consoleApi = require(root + '/extension/src/console');
+const instance = require(root + '/extension/src/instances').deriveDefaults('test-vm', {backend:'hyperv-remote'});
+const deps = {
+  platform: 'linux', probeLink: async () => true,
+  _ssh: {runRemoteScript: async script => {
+    if (script === consoleApi.buildEnsureGatewayScript()) return {code:0, stdout:'CONSOLE_GATEWAY=ready'};
+    return new Promise(resolve => cp.execFile('bash', ['-c', script], (error, stdout, stderr) =>
+      resolve({code:error ? error.code : 0, stdout, stderr})));
+  }},
+  _vscode: {ProgressLocation:{Notification:1}, Uri:{parse:x=>x},
+    window:{withProgress:async (_, action)=>action({report(){}})},
+    env:{openExternal:async url=>{process.stdout.write(url + '\\n'); return true;}}}
+};
+const opened = child ? require(root + '/extension/src/guest-console').openGuestConsole(instance, 'test-vm', deps)
+                     : consoleApi.open({instance}, deps);
+opened.catch(()=>{process.exitCode=1;});
+'''
+                commands = [
+                    ['bash', str(root / 'bin/construct'), 'vm', 'console', 'self', '--web'],
+                    ['node', '-e', panel, str(root), 'primary'],
+                    ['node', '-e', panel, str(root), 'child'],
+                ]
+                for command in commands:
+                    self.ended.clear()
+                    process = await asyncio.create_subprocess_exec(*command, env=env,
+                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                    try:
+                        stdout, stderr = await asyncio.wait_for(process.communicate(), 10)
+                    finally:
+                        if process.returncode is None:
+                            process.kill()
+                            await process.wait()
+                    self.assertEqual(process.returncode, 0, stderr.decode())
+                    self.assertNotIn(b'PRIVATE', stdout + stderr)
+                    link = stdout.decode().strip()
+                    self.assertTrue(link.startswith(self.origin + '/#'))
+                    fragment = link.split('#')[1]
+                    ident = fragment.split('.')[0]
+                    redeemed = await self.client.post('/redeem', headers={'Origin': self.origin}, json={'ticket': fragment})
+                    self.assertEqual(redeemed.status, 200)
+                    ws = await self.client.ws_connect('/ws/' + ident, protocols=['guacamole'], headers={'Origin': self.origin})
+                    self.assertEqual((await ws.receive(timeout=2)).data, '0.,13.connection-id;')
+                    self.assertIn('sync', (await ws.receive(timeout=2)).data)
+                    self.assertEqual(self.params['hostname'], 'pve-node')
+                    self.assertEqual(self.params['port'], '5907')
+                    await ws.send_str('3.key,2.65,1.1;')
+                    await ws.close()
+                    await asyncio.wait_for(self.ended.wait(), 2)
+                    self.assertIn(b'3.key,2.65,1.1;', self.browser_input)
+        finally:
+            await runner.cleanup()
 
 
 class LocalGatewayTests(unittest.IsolatedAsyncioTestCase):

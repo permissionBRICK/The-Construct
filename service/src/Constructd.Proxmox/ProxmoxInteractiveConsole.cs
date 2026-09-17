@@ -93,6 +93,7 @@ public sealed class ProxmoxInteractiveConsole : IInteractiveConsole, IAsyncDispo
             var remaining = session.ExpiresAt - clock.UtcNow;
             if (remaining <= TimeSpan.Zero || sessions.Get(session.Id, clock.UtcNow) is null || !proxy.Renew(remaining))
             {
+                sessions.Remove(session.Id);
                 await RemoveCoreAsync(session.Id);
                 throw new ConsoleTransportException();
             }
