@@ -87,6 +87,8 @@ public static class HostAdminEndpoints
             {
                 network.HostForwardsEnabled,
                 network.DirectAddressReporting,
+                network.DefaultMode,
+                network.OwnerMaySwitchMode,
                 defaults.AllowNeverLifetime,
                 defaults.MaxChildLifetimeSeconds,
                 capacityMode = (await CapacityConfigAsync(config, options, ct)).Mode
@@ -153,7 +155,8 @@ public static class HostAdminEndpoints
                 if (!supplied.Add(field.Name) || field.Name != "expectedUpdatedAt" && !allowed.Contains(field.Name)) return CodedProblems.Validation(property.Name + "." + field.Name, "Unknown field.");
             // A replacement must specify every required (non-nullable) property; omitted optional fields become null.
             foreach (var field in fallback.GetType().GetProperties())
-                if (field.PropertyType.IsValueType && Nullable.GetUnderlyingType(field.PropertyType) is null &&
+                if (!(fallback is NetworkConfig && field.Name == nameof(NetworkConfig.OwnerMaySwitchMode)) &&
+                    field.PropertyType.IsValueType && Nullable.GetUnderlyingType(field.PropertyType) is null &&
                     !property.Value.TryGetProperty(JsonNamingPolicy.CamelCase.ConvertName(field.Name), out _))
                     return CodedProblems.Validation(property.Name + "." + JsonNamingPolicy.CamelCase.ConvertName(field.Name), "Required in a section replacement.");
             object value;
@@ -164,6 +167,8 @@ public static class HostAdminEndpoints
             }
             catch (Exception ex) when (ex is JsonException or FormatException or InvalidOperationException) { return CodedProblems.Validation(property.Name, "Invalid section value."); }
             if (HostConfigValidation.Validate(value) is { } error) return CodedProblems.Validation(property.Name, error);
+            if (HostConfigValidation.UnsupportedOnPlatform(value, options.IsProxmox))
+                return CodedProblems.Create(400, "unsupported-on-platform", "Direct network mode requires Proxmox.");
             if (value is UpdatesConfig updates && HostUpdateTrust.Apply(updates, options) != updates)
                 return CodedProblems.Validation("updates", "The update repository is pinned by the host-local installation.");
             sections.Add(new(property.Name, JsonSerializer.Serialize(value, ApiJson.Options), clock.UtcNow, http.User.Actor()));
