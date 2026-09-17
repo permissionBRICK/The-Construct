@@ -36,7 +36,7 @@ const CHILD_ACTIONS = [
 ];
 
 /** The host-config sections of §1.5, in display order. */
-const CONFIG_SECTIONS = ["capacity", "userDefaults", "userCaps", "lifecycle", "media", "network", "updates"];
+const CONFIG_SECTIONS = ["capacity", "userDefaults", "userCaps", "lifecycle", "media", "network", "virtualization", "updates"];
 
 /** The tabs of §10.2 and the feature each one needs. `host-admin` gates the module. */
 const TABS = [
@@ -527,6 +527,7 @@ function toUserRow(user) {
     enabled: u.enabled !== false,
     maxVms: num(u.maxVms),
     allowHostForwards: u.allowHostForwards !== false,
+    allowNested: typeof u.allowNested === "boolean" ? u.allowNested : null,
     created: formatWhen(u.created),
     primaries: num(vms.primaries) || 0,
     children: num(vms.children) || 0,
@@ -831,6 +832,7 @@ function parseUserForm(form) {
   if (maxVms !== null) body.maxVms = maxVms;
   const hf = parseTri(f.allowHostForwards, "allowHostForwards", problems);
   if (hf !== null) body.allowHostForwards = hf;
+  if (Object.hasOwn(f, "allowNested")) body.allowNested = parseTri(f.allowNested, "allowNested", problems);
   if (!problems.length && !Object.keys(body).length) problems.push({ field: "", reason: "nothing to change" });
   return { ok: problems.length === 0, body, problems };
 }
@@ -1208,11 +1210,12 @@ function createHostAdminModel(deps = {}) {
     // reload that follows it. `perform` clears it when the next action starts.
     try {
       if (id === "overview") {
-        const [status, capacity] = await Promise.allSettled([client.hostStatus(), client.hostCapacity(false)]);
+        const [status, capacity, capabilities] = await Promise.allSettled([client.hostStatus(), client.hostCapacity(false), client.hostCapabilities()]);
         if (status.status === "rejected") throw status.reason;
         if (capacity.status === "rejected" && refused(capacity.reason)) throw capacity.reason;
         state.overview = toOverview(status.value, capacity.status === "fulfilled" ? capacity.value :
           { problems: [`Capacity details unavailable: ${errText(capacity.reason)}`] });
+        state.overview.nested = capabilities.status === "fulfilled" ? capabilities.value.nested : null;
       } else if (id === "vms") {
         const list = await client.vms({ kind: "all" });
         state.vms = { rows: toVmRows(list, now()), childrenFeature: state.features.children };

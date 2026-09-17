@@ -354,7 +354,11 @@ function fakeClient(answers = {}) {
       capacity: { value: { mode: "observe", storageHeadroomBytes: 21474836480 }, source: "stored", updatedAt: "2026-09-07T09:00:00Z" },
       lifecycle: { gracefulShutdownTimeoutSeconds: 300, leaseTickSeconds: 30, leaseRetrySeconds: 600, source: "default" },
     });
-    eq("config: every §1.5 section is a row", cfg.length, 7);
+    eq("config: every §1.5 section is a row", cfg.length, 8);
+    eq("nested: absent user override inherits", ha.toUserRow({}).allowNested, null);
+    eq("nested: false user override survives projection", ha.toUserRow({ allowNested: false }).allowNested, false);
+    deep("nested: inherit clears override", ha.parseUserForm({ allowNested: "" }).body, { allowNested: null });
+    deep("nested: false is an explicit override", ha.parseUserForm({ allowNested: "false" }).body, { allowNested: false });
     eq("config: a stored section keeps its source", cfg[0].source, "stored");
     eq("config: ...and its updatedAt for CAS", cfg[0].expectedUpdatedAt, "2026-09-07T09:00:00Z");
     ok("config: the JSON text is the value only", cfg[0].text.indexOf('"mode": "observe"') >= 0 && cfg[0].text.indexOf("updatedAt") < 0);
@@ -600,7 +604,7 @@ function fakeClient(answers = {}) {
     eq("model: jobs", m.state.operations.jobs.length, 1);
     eq("model: audit", m.state.operations.audit.length, 1);
     await m.load("config");
-    eq("model: config sections", m.state.config.sections.length, 7);
+    eq("model: config sections", m.state.config.sections.length, 8);
     ok("model: capabilities loaded", !!m.state.config.capabilities);
     await m.load("maintenance");
     eq("model: update view", m.state.maintenanceTab.installed.commit, "abc");

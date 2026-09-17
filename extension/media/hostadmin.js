@@ -164,6 +164,7 @@
     text("ovMaint", o.maintenance ? `${o.maintenance.phase} since ${o.maintenance.since}` : "open");
     text("ovOverdue", o.leaseOverdueCount);
     text("ovUnmanaged", o.unmanagedVmCount);
+    text("ovNested", o.nested ? `Nested virtualization: ${o.nested.available ? "available" : "unavailable"}, default ${o.nested.default ? "on" : "off"}, selection ${o.nested.selectable ? "allowed" : "disabled"}` : "Nested virtualization: not reported");
     const mode = $("ovCapMode");
     if (mode) { mode.textContent = o.capacityMode; mode.className = "tag " + (o.capacityMode === "enforce" ? "upd" : "ok"); }
     const bars = $("ovCapacity");
@@ -372,6 +373,7 @@
     uf.appendChild(field("Enabled", "ue_enabled", r.enabled ? "true" : "false", { options: [["true", "enabled"], ["false", "disabled"]], field: "enabled" }));
     uf.appendChild(field("Max primaries", "ue_maxVms", r.maxVms == null ? "" : r.maxVms, { type: "number", field: "maxVms" }));
     uf.appendChild(field("Host forwards", "ue_allowHostForwards", r.allowHostForwards ? "true" : "false", { options: [["true", "allowed"], ["false", "refused"]], field: "allowHostForwards" }));
+    uf.appendChild(field("Nested virtualization", "ue_allowNested", r.allowNested, { options: TRI, field: "allowNested" }));
     const af = $("ueAllowanceForm");
     clear(af);
     const a = r.allowance || {};

@@ -14,6 +14,7 @@ public static partial class HostConfigValidation
         ["lifecycle"] = HostAdminDefaults.Lifecycle,
         ["media"] = HostAdminDefaults.Media,
         ["network"] = HostAdminDefaults.Network,
+        ["virtualization"] = HostAdminDefaults.Virtualization,
         ["updates"] = HostAdminDefaults.Updates,
     };
     public static string? Allowance(UserAllowance a) => a.MaxRetainedChildren < 0 || a.CpuBudget < 0 || a.RamBudgetBytes < 0 || a.StorageBudgetBytes < 0

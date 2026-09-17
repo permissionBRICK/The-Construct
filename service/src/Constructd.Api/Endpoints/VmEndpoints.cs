@@ -115,6 +115,13 @@ public static class VmEndpoints
             return Problems.Forbidden("You are not enrolled on this host.");
         }
 
+        var virtualization = await http.RequestServices.GetRequiredService<IHostConfigStore>()
+            .GetAsync<VirtualizationConfig>("virtualization", cancellationToken) ?? HostAdminDefaults.Virtualization;
+        if (request.Opts?.Nested == true && !NestedPolicy.MaySelect(user, virtualization))
+            return CodedProblems.Create(403, "policy-denied", "Nested virtualization selection is disabled for this user.");
+        var nested = (request.Opts?.Nested ?? virtualization.NestedDefault) &&
+            http.RequestServices.GetRequiredService<IHypervisorDriver>().NestedAvailable;
+
         var vm = new Vm(
             Name: name,
             Owner: actor,
@@ -129,7 +136,7 @@ public static class VmEndpoints
             Forwards: Vm.NoForwards);
 
         var descriptor = new VmDescriptor(name, cpu, ramGb, diskGb, IsoPath: null,
-            Nested: request.Opts?.Nested ?? false, AutomaticCheckpoints: request.Opts?.AutomaticCheckpoints ?? false);
+            Nested: nested, AutomaticCheckpoints: request.Opts?.AutomaticCheckpoints ?? false);
         return await PrimaryVmAdmission.CreateAsync(vm, descriptor, request, http, cancellationToken);
     }
 
