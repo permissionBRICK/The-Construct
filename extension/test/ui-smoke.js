@@ -1315,6 +1315,39 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     (await admin.locator("#ovCapacity .ha-bar").count()) === 2 && (await admin.locator("#ovCapMode").textContent()) === "enforce");
   check("admin: overview active job listed", (await admin.locator("#ovJobs .ha-row").count()) === 2);
   check("admin: overdue count rendered", (await admin.locator("#ovOverdue").textContent()) === "1");
+  const ramModel = require("../src/hostadmin");
+  const measuredRam = { totalBytes: 8 * ramModel.GIB, usedBytes: 4 * ramModel.GIB,
+    vmResidentBytes: 3 * ramModel.GIB, hostOwnBytes: ramModel.GIB, physicalFreeBytes: 4 * ramModel.GIB,
+    headroomBytes: ramModel.GIB, committedBytes: 12 * ramModel.GIB,
+    admission: { enforced: false, lineBytes: 7 * ramModel.GIB }, swap: { totalBytes: 2 * ramModel.GIB, usedBytes: ramModel.GIB } };
+  const pushRam = async (ram) => {
+    await pushAdmin({ ...ADMIN_STATE, overview: { ...ADMIN_STATE.overview,
+      capacity: [ramModel.toCapacityBars({ ram })[0], ADMIN_STATE.overview.capacity[1]] } });
+    await admin.waitForTimeout(60);
+  };
+  await pushRam(measuredRam);
+  check("admin RAM: measured label and physical free", (await admin.locator("#ovCapacity").innerText()).includes("4.0 GiB in use of 8.0 GiB")
+    && (await admin.locator("#ovCapacity").innerText()).includes("free 4.0 GiB"));
+  check("admin RAM: stacked widths reflect usage", await admin.locator(".ha-ram-vms").evaluate(e => e.style.width) === "37.5%"
+    && await admin.locator(".ha-ram-host").evaluate(e => e.style.width) === "12.5%");
+  check("admin RAM: overcommit is visible and hot", (await admin.locator(".ha-ram-committed.hot").innerText()) === "12 GiB committed to VMs (150 %)");
+  check("admin RAM: observe has a note and no marker", !(await admin.locator(".ha-admission-line").count())
+    && (await admin.locator(".ha-ram-bar").getAttribute("title")).includes("admission not enforced (observe mode)"));
+  check("admin RAM: swap is thin with its own scale", await admin.locator(".ha-bar-thin span").evaluate(e => e.style.width) === "50%"
+    && (await admin.locator(".ha-bar-thin").getAttribute("title")) === "1.0 GiB of 2.0 GiB swap");
+  check("admin RAM: stacked segments do not overflow", await admin.locator(".ha-ram-bar").evaluate(e => {
+    const spans = [...e.querySelectorAll("span")];
+    return spans.reduce((sum, s) => sum + s.getBoundingClientRect().width, 0) <= e.clientWidth;
+  }));
+  await pushRam({ ...measuredRam, admission: { enforced: true, lineBytes: 7 * ramModel.GIB }, swap: null });
+  check("admin RAM: enforce shows headroom marker", await admin.locator(".ha-admission-line").isVisible()
+    && await admin.locator(".ha-admission-line").getAttribute("title") === "admission line: 1.0 GiB headroom");
+  check("admin RAM: enforce omits observe and absent swap", !(await admin.locator("#ovCapacity").innerText()).includes("observe mode")
+    && !(await admin.locator(".ha-bar-thin").count()));
+  await pushAdmin(ADMIN_STATE);
+  await admin.waitForTimeout(60);
+  check("admin RAM: older service still renders legacy card", !(await admin.locator(".ha-ram-bar").count())
+    && (await admin.locator("#ovCapacity").innerText()).includes("10 GiB available of 32 GiB"));
   await admin.evaluate(() => { window.__posted.length = 0; });
   await admin.click('#haTabs button[data-tab="vms"]');
   aposted = await admin.evaluate(() => window.__posted);
