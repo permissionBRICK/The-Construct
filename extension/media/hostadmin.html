@@ -64,6 +64,7 @@
             <div class="row"><span class="k">Maintenance</span><span class="v" id="ovMaint">—</span></div>
             <div class="row"><span class="k">Leases overdue</span><span class="v" id="ovOverdue">—</span></div>
             <div class="row"><span class="k">Unmanaged VMs</span><span class="v" id="ovUnmanaged">—</span></div>
+            <div class="row"><span class="v" id="ovNested">Nested virtualization: not reported</span></div>
             <div class="settings-actions ha-inline-actions">
               <button class="btn" data-act="createFirstVm" id="ovCreateFirst" hidden>Create first Construct VM here</button>
             </div>
@@ -248,6 +249,7 @@
         </div>
         <label>CPU count <input id="haVmCpus" type="number" min="1" max="64" step="1" required></label>
         <label>RAM (GB) <input id="haVmRam" type="number" min="1" max="1024" step="1" required></label>
+        <label>Nested virtualization <select id="haVmNested"><option value="false">Off</option><option value="true">On</option></select></label>
         <label>Idle timeout (minutes; 0 disables) <input id="haVmTimeout" type="number" min="0" max="2147483647" step="1" required></label>
         <label>Idle action <select id="haVmIdleAction"><option value="save">Save</option><option value="shutdown">Shut down</option><option value="off">Off — disable idle handling</option></select></label>
       </fieldset>

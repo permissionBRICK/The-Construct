@@ -98,6 +98,11 @@ node with `--build` / for a non-main `--ref`. In order it does:
 8. **First admin** — `admin users add <name> --role Admin --max-vms 10` and one API token, printed once. Re-runs keep the token; `--rotate-token` issues a new one.
 9. **Start and verify** — restarts the unit and waits for `/api/v1/health`.
 
+The installer also checks the active `kvm_intel` or `kvm_amd` nesting parameter. If it is
+off, it writes `options <module> nested=1` to `/etc/modprobe.d/construct-kvm.conf` and
+reports that a reboot, or a module reload after stopping all guests, is needed. It never
+reloads KVM itself. The service reports the live parameter, not the saved configuration.
+
 Re-running the script is the install/repair path: `--host-release latest` (or a new `--package`, or
 `--build`) replaces the service in place; the existing VMs keep running and their SSH forwards are
 re-established from the database when the service comes back. Without such a flag a re-run keeps
@@ -164,7 +169,7 @@ A create request (`POST /vms`) runs the same job as on Windows; only the platfor
 | Step | Windows host | Proxmox host |
 |---|---|---|
 | Install media | autoinstall ISO from the catalog (or per VM through WSL) | **one cloud-init snippet per VM**: hostname, seed user `construct` with passwordless sudo and a locked password, the bootstrap public key, `qemu-guest-agent` |
-| Create | `Create-AgentVM.ps1` → Gen-2 VM, fresh VHDX, ISO attached | `qm create` cloning the cached cloud image (`--scsi0 <storage>:0,import-from=<image>`), a cloud-init drive (`--ide2 <storage>:cloudinit`), `--cicustom user=<snippet>`, `--agent enabled=1`, `cpu host`, bridged DHCP; then `qm disk resize` to the requested size and `qm start` |
+| Create | `Create-AgentVM.ps1` → Gen-2 VM, fresh VHDX, ISO attached | `qm create` cloning the cached cloud image (`--scsi0 <storage>:0,import-from=<image>`), a cloud-init drive (`--ide2 <storage>:cloudinit`), `--cicustom user=<snippet>`, `--agent enabled=1`, CPU model selected by the nested setting, bridged DHCP; then `qm disk resize` to the requested size and `qm start` |
 | Wait for SSH | the driver's socket poll on `<name>.mshome.net` | the guest agent reports the DHCP address (`network-get-interfaces`); SSH is probed on it |
 | Detach media | eject the ISO | keep the cloud-init drive attached for later network configuration changes |
 | Endpoint | `PublicHost:<forward>` via `netsh portproxy` | `PublicHost:<forward>` through the relay, or the guest's LAN address on port 22 in direct mode (section 5) |
@@ -176,8 +181,10 @@ it, first boot plus `apt-get install qemu-guest-agent` the rest. The client then
 guest with `bin/provision.sh` exactly as it would any other Construct VM — the guest payload is
 identical.
 
-Guests have `cpu: host`, so nested virtualization is available when the node's `kvm_intel`/`kvm_amd`
-module has `nested=1` (the default on Proxmox 9).
+Nested virtualization defaults to off. Enabled guests use `Proxmox:CpuType` (`host`);
+disabled guests use `Proxmox:CpuTypeWithoutNesting` (`x86-64-v2-AES`). The node must also
+have its `kvm_intel`/`kvm_amd` nesting parameter enabled. See section 7 for policy and changes
+to existing VMs.
 
 ## 5. Relayed or direct
 
@@ -426,7 +433,8 @@ update the A record; the SPN and keytab are name-based and stay valid.
 - **NTLM fallback** — the Linux Negotiate handler speaks Kerberos; a PC that cannot get a ticket for
   the host's SPN (wrong URL name, no domain reachability) falls back to a token prompt.
 - **Cluster** — one node; `Constructd:Proxmox:Node` names it, and VMs of the same name on other
-  nodes are not this host's.
+  nodes are not this host's. A future path is a cluster created and managed by Construct only;
+  joining an existing cluster is not planned because the service needs management access to the API.
 
 ## 7. Settings reference (`Constructd:Proxmox`)
 
@@ -439,12 +447,28 @@ update the A record; the SPN and keytab are name-based and stay valid.
 | `Proxmox:ImageVolume` | `local:import/construct-ubuntu-noble-cloudimg-amd64.qcow2` | the cached cloud image |
 | `Proxmox:SnippetStorage` / `SnippetDir` | `local` / `/var/lib/vz/snippets` | where per-VM seeds go |
 | `Proxmox:Bridge` | `vmbr0` | guest network |
-| `Proxmox:CpuType` | `host` | QEMU CPU type |
+| `Proxmox:CpuType` | `host` | QEMU CPU model with nesting enabled |
+| `Proxmox:CpuTypeWithoutNesting` | `x86-64-v2-AES` | QEMU CPU model with nesting disabled; must not expose VMX/SVM |
 | `Proxmox:QmPath` / `PveshPath` | `qm` / `pvesh` | the commands |
 | `Proxmox:PvesmPath` / `PythonPath` | `pvesm` / `python3` | owned-volume cleanup and the local QMP client |
 
 Everything else (`PublicHost`, port ranges, idle policy, `Iso:SeedUser`, `Iso:BootstrapPublicKeyPath`,
 persistence) is the common configuration documented in [service/README.md](../service/README.md).
+
+The stored host configuration section `virtualization` has `nestedDefault: false` and
+`nestedSelectable: true`. An omitted create option uses the host default. Per-user
+`allowNested` is nullable: null inherits `nestedSelectable`, while true or false overrides
+it. A user who cannot select nesting gets `403 policy-denied` for an explicit request to
+enable it; admins may always select it. Disabling remains allowed. Setting the host default
+to true is refused with `409 unsupported-on-host` while the live KVM parameter is off.
+
+The host administration Overview shows availability, default and selectability. The VM
+settings modal saves a desired nested setting: it applies immediately when Off, otherwise
+on the next full stop/start. Resuming a saved VM or rebooting Ubuntu does not apply it.
+`Auto-Install.ps1 -Nested true|false` selects it at creation; omitting the argument uses
+the remote host default. The client prints the effective setting and any explicitly enabled
+options the backend ignored, such as automatic checkpoints on Proxmox or nesting on a host
+where it is unavailable. Ignoring an unsupported option does not fail creation.
 
 RAM headroom defaults to `max(1 GiB, total RAM / 8)` on Proxmox. Hyper-V uses
 `max(4 GiB, total RAM / 8)`. The stored host setting `capacity.ramHeadroomBytes`

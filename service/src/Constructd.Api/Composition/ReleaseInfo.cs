@@ -14,8 +14,8 @@ public sealed class ReleaseInfo : IReleaseInfo
     /// `network-mode` (relayed or direct guest networking) exists on Proxmox only.
     /// </summary>
     public IReadOnlyList<string> ApiFeatures => options?.IsProxmox == true
-        ? ["host-admin", "updates", "primary-cpu", "primary-memory", "network-mode", "children", "media", "console", "network", .. SourceCache]
-        : ["host-admin", "children", "media", "console", "updates", "network", "primary-cpu", "primary-memory", .. SourceCache];
+        ? ["host-admin", "updates", "primary-cpu", "primary-memory", "primary-nested", "network-mode", "children", "media", "console", "network", .. SourceCache]
+        : ["host-admin", "children", "media", "console", "updates", "network", "primary-cpu", "primary-memory", "primary-nested", .. SourceCache];
     private string[] SourceCache => options?.HostAdmin.Source.Enabled != false ? ["source-cache"] : [];
     private readonly Constructd.Core.Configuration.ConstructdOptions? options;
     public ReleaseInfo(Constructd.Core.Configuration.ConstructdOptions? options = null)

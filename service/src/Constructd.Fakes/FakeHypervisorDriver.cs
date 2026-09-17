@@ -9,7 +9,7 @@ namespace Constructd.Fakes;
 /// so the API, the creation job and the idle engine can be tested on Linux. The real driver (B7)
 /// implements the same interface by invoking PowerShell.
 /// </summary>
-public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver, IGuestNetworkConfigurator
+public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver, IGuestNetworkConfigurator, IVmNestedDriver
 {
     public Exception? NetworkFailure { get; set; }
     public Task ConfigureNetworkAsync(string name, string? address, string? gateway, IReadOnlyList<string>? dns, CancellationToken ct)
@@ -20,6 +20,19 @@ public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver, IVmM
         Calls.Enqueue($"network:{name}:{address ?? "dhcp"}:{gateway}:{string.Join(" ", dns ?? [])}");
         return Task.CompletedTask;
     }
+    public bool NestedAvailable { get; set; } = true;
+    public ConcurrentDictionary<string, bool> NestedValues { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public Task<bool> GetNestedAsync(string name, CancellationToken ct) => Task.FromResult(NestedValues.GetValueOrDefault(name));
+    public Task SetNestedAsync(string name, bool enabled, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (StateOf(name) != VmState.Off) throw new InvalidOperationException("VM must be off.");
+        if (PowerFailure is not null) throw PowerFailure;
+        Calls.Enqueue($"nested:{name}:{enabled}");
+        NestedValues[name] = enabled;
+        return Task.CompletedTask;
+    }
+    public ConcurrentDictionary<string, VmDescriptor> Descriptors { get; } = new(StringComparer.OrdinalIgnoreCase);
     public ConcurrentDictionary<string, int> MemorySizes { get; } = new(StringComparer.OrdinalIgnoreCase);
     public Exception? MemoryFailure { get; set; }
     public Task SetMemoryAsync(string name, int ramGb, CancellationToken ct)
@@ -84,6 +97,8 @@ public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver, IVmM
         ArgumentNullException.ThrowIfNull(descriptor);
         cancellationToken.ThrowIfCancellationRequested();
         Calls.Enqueue($"create:{descriptor.Name}");
+        Descriptors[descriptor.Name] = descriptor;
+        NestedValues[descriptor.Name] = descriptor.Nested;
 
         if (HoldCreate)
         {

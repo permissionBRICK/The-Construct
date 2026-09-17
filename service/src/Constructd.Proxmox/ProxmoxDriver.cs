@@ -46,7 +46,7 @@ public sealed class ProxmoxOperationException(string operation, string vmName, s
 /// looked up in the cluster resource list on every call rather than cached, so a VM recreated behind
 /// the service's back is never driven under a stale id.
 /// </summary>
-public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver, IGuestNetworkConfigurator
+public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver, IGuestNetworkConfigurator, IVmNestedDriver
 {
     /// <summary>Cloning the image and starting the VM; well short of leaving a hung <c>qm</c> forever.</summary>
     private static readonly TimeSpan CreateTimeout = TimeSpan.FromMinutes(30);
@@ -99,6 +99,25 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
     /// <summary>The node this driver addresses: the configured one, or the machine it runs on.</summary>
     public string Node => ResolveNode(_options);
 
+    public bool NestedAvailable => ProxmoxNestedCapability.IsAvailable();
+
+    private string CpuType(bool nested) => ArgumentGuard.Text(
+        nested ? _options.Proxmox.CpuType : _options.Proxmox.CpuTypeWithoutNesting,
+        nested ? "Constructd:Proxmox:CpuType" : "Constructd:Proxmox:CpuTypeWithoutNesting", 64);
+
+    public async Task<bool> GetNestedAsync(string name, CancellationToken ct)
+    {
+        var (vmName, _, vmId) = await RequireVmWithIdAsync("get-nested", name, ct);
+        var config = await PveshAsync("get-nested", vmName, ["get", VmPath(vmId) + "/config"], ct);
+        return string.Equals(ReadString(config, "cpu")?.Split(',')[0], CpuType(true), StringComparison.Ordinal);
+    }
+
+    public async Task SetNestedAsync(string name, bool enabled, CancellationToken ct)
+    {
+        var (vmName, id) = await RequireVmAsync("set-nested", name, ct);
+        await RunQmAsync("set-nested", vmName, ["set", id, "--cpu", CpuType(enabled)], ShortTimeout, null, ct);
+    }
+
     /// <summary><c>Constructd:Proxmox:Node</c>, or this machine's short host name when unset.</summary>
     public static string ResolveNode(ConstructdOptions options) =>
         string.IsNullOrWhiteSpace(options.Proxmox.Node)
@@ -120,7 +139,7 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
         var storage = ArgumentGuard.Text(_options.Proxmox.Storage, "Constructd:Proxmox:Storage", 64);
         var image = ArgumentGuard.Text(_options.Proxmox.ImageVolume, "Constructd:Proxmox:ImageVolume", 256);
         var bridge = ArgumentGuard.Text(_options.Proxmox.Bridge, "Constructd:Proxmox:Bridge", 32);
-        var cpuType = ArgumentGuard.Text(_options.Proxmox.CpuType, "Constructd:Proxmox:CpuType", 64);
+        var cpuType = CpuType(descriptor.Nested);
 
         if (await TryResolveVmIdAsync(name, cancellationToken).ConfigureAwait(false) is not null)
         {

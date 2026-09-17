@@ -980,6 +980,25 @@ Write-Host "=== Registry entry writing (Add-ConstructInstance) ===" -ForegroundC
     Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# Run only the remote descriptor construction, with no installer or host calls.
+$descriptorAssignment = $autoAst.Find({ param($node)
+    $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -eq '$remoteDescriptor'
+}, $true).Extent.Text
+$nestedSelection = $autoAst.Find({ param($node)
+    $node -is [System.Management.Automation.Language.IfStatementAst] -and
+    $node.Extent.Text.StartsWith("if (`$Nested -ne '') { `$remoteDescriptor['Nested']")
+}, $true).Extent.Text
+$instName = 'options-test'; $remoteCpu = 2; $chosenMemGB = 4; $chosenDiskGB = 40
+$AutomaticCheckpoints = 'false'; $remoteRedownload = $false
+foreach ($Nested in @('', 'true', 'false')) {
+    Invoke-Expression $descriptorAssignment
+    Invoke-Expression $nestedSelection
+    ok "nested option '$Nested': omitted inherits; explicit values are booleans" $(
+        if ($Nested -eq '') { -not $remoteDescriptor.ContainsKey('Nested') }
+        else { $remoteDescriptor.ContainsKey('Nested') -and $remoteDescriptor.Nested -eq ($Nested -eq 'true') }
+    )
+}
+
 # ── Summary ─────────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "==============================" -ForegroundColor Cyan

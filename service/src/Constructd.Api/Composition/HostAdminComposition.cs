@@ -43,6 +43,8 @@ public static class HostAdminComposition
         services.AddSingleton<Constructd.Api.Jobs.PrimaryCpuSettings>();
         services.AddSingleton<Constructd.Api.Jobs.PrimaryMemorySettings>();
         services.AddSingleton<Constructd.Api.Jobs.VmNetworkSettings>();
+        services.AddSingleton<IVmNestedDriver>(sp => (IVmNestedDriver)sp.GetRequiredService<IHypervisorDriver>());
+        services.AddSingleton<Constructd.Api.Jobs.PrimaryNestedSettings>();
         services.AddSingleton<Constructd.Api.Jobs.ChildLifecycleJobs>();
         services.AddSingleton<Constructd.Api.Jobs.LifecycleJobAdmission>();
         services.AddSingleton<Constructd.Api.Jobs.CascadeJobs>();

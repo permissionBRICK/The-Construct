@@ -1379,6 +1379,12 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await admin.locator("#haVmRam").fill("10");
   check("admin: changed over-cap hardware shows its validation error", await admin.locator("#haVmSettingsApply").isDisabled() && /RAM.*between 1 and 0/.test(await admin.locator("#haVmSettingsError").innerText()));
   await settingsReply({ settings });
+  await settingsReply({ settings: { ...settings, nested: { current: false, desired: true, pending: true, available: true, selectable: true } } });
+  check("admin: pending nested setting is visible", await admin.locator("#haVmNested").inputValue() === "true"
+    && /Nested virtualization: off; pending: on/.test(await admin.locator("#haVmSettingsCurrent").innerText()));
+  await settingsReply({ settings: { ...settings, nested: { current: false, desired: false, available: false, selectable: true } } });
+  check("admin: unavailable nesting disables On", await admin.locator('#haVmNested option[value="true"]').evaluate(e => e.disabled));
+  await settingsReply({ settings });
   await checkPaletteControls(admin, "admin dialog");
   check("admin: current and pending hardware visible", /Current CPU: 4; pending: 6/.test(await admin.locator("#haVmSettingsCurrent").innerText()) && /pending: 12 GB/.test(await admin.locator("#haVmSettingsCurrent").innerText()));
   await admin.locator("#haVmRam").fill("16.5");

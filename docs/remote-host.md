@@ -795,6 +795,20 @@ the forward is for the plain listener and the advertised origin is
 `http://<publicHost>:<forwarded port>`, which is equally the only address a client can reach.
 The guest banner, the panel's T3 entry and the provisioner's summary all follow that origin.
 
+Both the default and named-instance pairing helpers use `CONSTRUCT_EXTERNAL_HOST` from
+`/etc/construct/config.env`, falling back to `<hostname>.mshome.net` when absent. Editing
+this file can redirect the pairing address, just as it already redirects SSH and other tools.
+The shared `t3base` helper retains the effective public origin and allocated forward port;
+it does not assume that the guest's listener port is reachable on the service host.
+
+Pairing JSON includes `links: [{kind: "forwarded", pairUrl}, …]`. If the guest also has
+`CONSTRUCT_DIRECT_HOST`, a second entry with `kind: "direct"` uses that address and the
+guest's effective TLS or plain T3 listener port. Each route gets its own pairing token,
+bound to its origin. The legacy `pairUrl` remains the first entry. The direct address is
+optional input for the future direct-network feature; these helpers do not configure routing.
+`Get-ConstructT3PairingLink.ps1` returns all links, and the extension and Companion control
+panels offer each route by kind and origin before opening it.
+
 Because the forward is requested *before* T3 is set up, the forward alone does not say what
 is listening on it: a request for the TLS port whose HTTPS setup then failed looks exactly
 like a working plain forward. So the guest records the **effective** origin as a second line,
