@@ -15,6 +15,11 @@ public static class ChildVmComposition
             services.AddSingleton(sp => new FakeChildVmDriver(sp.GetRequiredService<FakeHypervisorDriver>()));
             services.AddSingleton<IChildVmDriver>(sp => sp.GetRequiredService<FakeChildVmDriver>());
         }
+        else if (options.IsProxmox)
+        {
+            services.AddSingleton<Constructd.Proxmox.ProxmoxChildVmPlatform>();
+            services.AddSingleton<IChildVmDriver>(sp => sp.GetRequiredService<Constructd.Proxmox.ProxmoxChildVmPlatform>());
+        }
         else services.AddSingleton<IChildVmDriver, HyperVChildDriver>();
         if (options.EffectivePersistence == PersistenceMode.Memory)
         {

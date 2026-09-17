@@ -88,6 +88,10 @@ The VM can live on a shared Hyper-V machine instead of your PC. Install the serv
 
 Or just click the convert to Host button in the settings panel.
 
+The host can also be a **Proxmox VE node**: one script installs the same service there
+([docs/proxmox-host.md](docs/proxmox-host.md)), and the command above enrols against it unchanged
+(add `-ServiceAuth token`, since a Linux host has no Windows sign-in).
+
 ## 📚 Documentation
 
 | Guide | What's inside |

@@ -1,0 +1,355 @@
+#!/usr/bin/env bash
+# Turn a Proxmox VE node into a Construct host: the constructd service on the node itself, with
+# the Proxmox platform (Constructd:Backend=proxmox). The Linux counterpart of
+# Install-ConstructHost.ps1 -- same layout of steps, same enrolment details at the end.
+#
+#   bash service/host/install-construct-host.sh --package <constructd-linux-x64.zip | publish dir> [options]
+#
+# Run as root ON THE NODE, from a Construct checkout (this script's repository is what gets
+# installed as the scripts the service serves to guests). Re-running is safe: every step checks
+# before it changes anything, and the admin token is kept unless --rotate-token is passed.
+#
+# Options (all optional):
+#   --public-host <name|ip>   address clients dial; default: the node's primary IPv4
+#   --package <zip|dir>       linux-x64 publish of Constructd.Api (dotnet publish -r linux-x64 --self-contained)
+#   --source <dir>            Construct checkout to install (default: the one this script is in)
+#   --admin <name>            first admin user (default: admin); clients authenticate with its token
+#   --storage <id>            Proxmox storage for VM disks, needs 'images' content (default: local-lvm)
+#   --image-storage <id>      directory storage for the cloud image and cloud-init snippets (default: local)
+#   --bridge <name>           bridge the VMs attach to (default: vmbr0)
+#   --release <name>          Ubuntu release of the cloud image (default: noble)
+#   --listen-port <n>         API port (default: 7462)
+#   --ssh-ports <a-b>         public SSH forward range (default: 2201-2299)
+#   --app-ports <a-b>         public app forward range (default: 2300-2999)
+#   --rotate-token            issue a new admin token even when one exists
+#   --skip-image              do not download the cloud image (it must already be cached)
+#
+# What it leaves behind:
+#   /opt/construct/host        the service (Constructd.Api, appsettings.Production.json)
+#   /opt/construct/scripts     the Construct checkout the service hands to guests (bin/, keys/, ...)
+#   /var/lib/constructd        constructd.db, iso/, media/, source/
+#   /etc/constructd            tls.pfx + tls.pass (root-only), install.json
+#   <image-storage>:import/construct-ubuntu-<release>-cloudimg-amd64.qcow2   the VM image
+#   <image-storage>:snippets/  one cloud-init user-data file per VM, written by the service
+#   systemd unit constructd.service, listening on https://0.0.0.0:<listen-port>
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOURCE_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+PACKAGE=""
+PUBLIC_HOST=""
+ADMIN="admin"
+STORAGE="local-lvm"
+IMAGE_STORAGE="local"
+BRIDGE="vmbr0"
+RELEASE="noble"
+LISTEN_PORT=7462
+SSH_PORTS="2201-2299"
+APP_PORTS="2300-2999"
+ROTATE=0
+SKIP_IMAGE=0
+
+HOST_DIR=/opt/construct/host
+SCRIPTS_DIR=/opt/construct/scripts
+DATA_DIR=/var/lib/constructd
+ETC_DIR=/etc/constructd
+UNIT=/etc/systemd/system/constructd.service
+
+usage() { sed -n '2,38p' "${BASH_SOURCE[0]}"; exit "${1:-0}"; }
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --public-host)   PUBLIC_HOST="$2"; shift 2 ;;
+    --package)       PACKAGE="$2"; shift 2 ;;
+    --source)        SOURCE_DIR="$(cd "$2" && pwd)"; shift 2 ;;
+    --admin)         ADMIN="$2"; shift 2 ;;
+    --storage)       STORAGE="$2"; shift 2 ;;
+    --image-storage) IMAGE_STORAGE="$2"; shift 2 ;;
+    --bridge)        BRIDGE="$2"; shift 2 ;;
+    --release)       RELEASE="$2"; shift 2 ;;
+    --listen-port)   LISTEN_PORT="$2"; shift 2 ;;
+    --ssh-ports)     SSH_PORTS="$2"; shift 2 ;;
+    --app-ports)     APP_PORTS="$2"; shift 2 ;;
+    --rotate-token)  ROTATE=1; shift ;;
+    --skip-image)    SKIP_IMAGE=1; shift ;;
+    -h|--help)       usage 0 ;;
+    *) echo "Unknown argument: $1" >&2; usage 2 ;;
+  esac
+done
+
+say()  { printf '\n==> %s\n' "$*"; }
+note() { printf '    %s\n' "$*"; }
+die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+json_field() { python3 -c 'import json,sys; d=json.load(sys.stdin); v=d
+for k in sys.argv[1:]:
+    v=v.get(k) if isinstance(v,dict) else None
+print("" if v is None else v)' "$@"; }
+
+# ── 0. Check the inputs ──────────────────────────────────────────────────────
+say "Checking the inputs"
+[[ "$(id -u)" -eq 0 ]] || die "run as root on the Proxmox node"
+for tool in pvesh qm pveversion python3 openssl curl rsync systemctl; do
+  command -v "${tool}" >/dev/null || die "'${tool}' is required (is this a Proxmox VE node?)"
+done
+[[ -f "${SOURCE_DIR}/bin/provision.sh" && -f "${SOURCE_DIR}/keys/bootstrap_ed25519.pub" ]] \
+  || die "'${SOURCE_DIR}' is not a Construct checkout (bin/provision.sh and keys/bootstrap_ed25519.pub expected); pass --source"
+[[ "${SSH_PORTS}" =~ ^[0-9]+-[0-9]+$ && "${APP_PORTS}" =~ ^[0-9]+-[0-9]+$ ]] || die "port ranges look like 2201-2299"
+SSH_START="${SSH_PORTS%-*}"; SSH_END="${SSH_PORTS#*-}"; APP_START="${APP_PORTS%-*}"; APP_END="${APP_PORTS#*-}"
+(( SSH_START <= SSH_END && APP_START <= APP_END )) || die "a port range must be ascending"
+(( SSH_END < APP_START || APP_END < SSH_START )) || die "the SSH and app forward ranges overlap"
+[[ "${ADMIN}" =~ ^[A-Za-z0-9._@\\-]{1,64}$ ]] || die "'${ADMIN}' is not a usable admin user name"
+
+NODE="$(hostname -s)"
+pvesh get "/nodes/${NODE}/status" --output-format json >/dev/null || die "node '${NODE}' does not answer through the API"
+[[ -n "${PUBLIC_HOST}" ]] || PUBLIC_HOST="$(hostname -I | awk '{print $1}')"
+[[ -n "${PUBLIC_HOST}" ]] || die "could not determine this node's address; pass --public-host"
+
+# The service binary: a zip or a publish directory, or the already installed one on a re-run.
+STAGE=""
+if [[ -n "${PACKAGE}" ]]; then
+  if [[ -d "${PACKAGE}" ]]; then
+    STAGE="$(cd "${PACKAGE}" && pwd)"
+  elif [[ -f "${PACKAGE}" ]]; then
+    command -v unzip >/dev/null || die "'unzip' is required to unpack ${PACKAGE}"
+    STAGE="$(mktemp -d)"; unzip -q "${PACKAGE}" -d "${STAGE}"
+    # A release zip may nest the payload one level down.
+    if [[ ! -x "${STAGE}/Constructd.Api" && -x "${STAGE}/service/Constructd.Api" ]]; then STAGE="${STAGE}/service"; fi
+  else
+    die "--package '${PACKAGE}' is neither a zip nor a directory"
+  fi
+  [[ -f "${STAGE}/Constructd.Api" ]] || die "'${PACKAGE}' holds no Constructd.Api (publish it with: dotnet publish service/src/Constructd.Api -c Release -r linux-x64 --self-contained true)"
+elif [[ -x "${HOST_DIR}/Constructd.Api" ]]; then
+  note "no --package given; keeping the installed service in ${HOST_DIR}"
+else
+  die "--package is required on a first install"
+fi
+note "node ${NODE}, public host ${PUBLIC_HOST}, source ${SOURCE_DIR}"
+
+# ── 1. Directories ───────────────────────────────────────────────────────────
+say "Directories"
+install -d -m 0755 /opt/construct "${HOST_DIR}" "${SCRIPTS_DIR}"
+install -d -m 0750 "${DATA_DIR}" "${DATA_DIR}/iso" "${DATA_DIR}/media" "${DATA_DIR}/source"
+install -d -m 0700 "${ETC_DIR}"
+note "${HOST_DIR}, ${SCRIPTS_DIR}, ${DATA_DIR}, ${ETC_DIR}"
+
+# ── 2. Proxmox prerequisites: storages, content types, the bridge ────────────
+say "Proxmox storage and network"
+storage_json() { pvesh get "/storage/$1" --output-format json 2>/dev/null; }
+DISK_JSON="$(storage_json "${STORAGE}")" || die "storage '${STORAGE}' does not exist (pass --storage)"
+printf ',%s,' "$(printf '%s' "${DISK_JSON}" | json_field content)" | grep -q ',images,' || die "storage '${STORAGE}' has no 'images' content; VM disks cannot go there"
+IMG_JSON="$(storage_json "${IMAGE_STORAGE}")" || die "storage '${IMAGE_STORAGE}' does not exist (pass --image-storage)"
+[[ "$(printf '%s' "${IMG_JSON}" | json_field type)" == "dir" ]] || die "'${IMAGE_STORAGE}' must be a directory storage (it holds the image and the snippets)"
+IMG_PATH="$(printf '%s' "${IMG_JSON}" | json_field path)"
+CONTENT="$(printf '%s' "${IMG_JSON}" | json_field content)"
+NEW_CONTENT="${CONTENT}"
+for want in import snippets; do
+  printf ',%s,' "${NEW_CONTENT}" | grep -q ",${want}," || NEW_CONTENT="${NEW_CONTENT:+${NEW_CONTENT},}${want}"
+done
+if [[ "${NEW_CONTENT}" != "${CONTENT}" ]]; then
+  pvesh set "/storage/${IMAGE_STORAGE}" --content "${NEW_CONTENT}" >/dev/null
+  note "'${IMAGE_STORAGE}' content types now: ${NEW_CONTENT}"
+else
+  note "'${IMAGE_STORAGE}' already allows import and snippets"
+fi
+pvesh get "/nodes/${NODE}/network" --type bridge --output-format json \
+  | python3 -c 'import json,sys; b=sys.argv[1]; sys.exit(0 if any(i.get("iface")==b for i in json.load(sys.stdin)) else 1)' "${BRIDGE}" \
+  || die "bridge '${BRIDGE}' does not exist on ${NODE} (pass --bridge)"
+SNIPPET_DIR="${IMG_PATH}/snippets"
+install -d -m 0755 "${SNIPPET_DIR}"
+note "VM disks on '${STORAGE}', image and seeds on '${IMAGE_STORAGE}' (${IMG_PATH}), bridge ${BRIDGE}"
+
+# ── 3. The Ubuntu cloud image ────────────────────────────────────────────────
+say "Ubuntu ${RELEASE} cloud image"
+IMAGE_NAME="construct-ubuntu-${RELEASE}-cloudimg-amd64.qcow2"
+IMAGE_VOLID="${IMAGE_STORAGE}:import/${IMAGE_NAME}"
+IMAGE_URL="https://cloud-images.ubuntu.com/${RELEASE}/current/${RELEASE}-server-cloudimg-amd64.img"
+have_image() {
+  pvesh get "/nodes/${NODE}/storage/${IMAGE_STORAGE}/content" --content import --output-format json \
+    | python3 -c 'import json,sys; v=sys.argv[1]; sys.exit(0 if any(e.get("volid")==v for e in json.load(sys.stdin)) else 1)' "${IMAGE_VOLID}"
+}
+if have_image; then
+  note "cached: ${IMAGE_VOLID}"
+elif [[ "${SKIP_IMAGE}" -eq 1 ]]; then
+  die "the image ${IMAGE_VOLID} is not cached and --skip-image was given"
+else
+  SUM="$(curl -fsSL --max-time 60 "$(dirname "${IMAGE_URL}")/SHA256SUMS" | awk -v f="*$(basename "${IMAGE_URL}")" '$2==f {print $1}')" || SUM=""
+  note "downloading ${IMAGE_URL}${SUM:+ (sha256 ${SUM})}"
+  # pvesh follows the download task and returns when it is done.
+  if [[ -n "${SUM}" ]]; then
+    pvesh create "/nodes/${NODE}/storage/${IMAGE_STORAGE}/download-url" --content import --filename "${IMAGE_NAME}" \
+      --url "${IMAGE_URL}" --checksum-algorithm sha256 --checksum "${SUM}" >/dev/null
+  else
+    pvesh create "/nodes/${NODE}/storage/${IMAGE_STORAGE}/download-url" --content import --filename "${IMAGE_NAME}" \
+      --url "${IMAGE_URL}" >/dev/null
+  fi
+  have_image || die "the image download did not leave ${IMAGE_VOLID} behind"
+  note "cached: ${IMAGE_VOLID}"
+fi
+
+# ── 4. TLS certificate (clients pin its fingerprint at enrolment) ─────────────
+say "TLS certificate"
+PFX="${ETC_DIR}/tls.pfx"; PFX_PASS_FILE="${ETC_DIR}/tls.pass"; CRT="${ETC_DIR}/tls.crt"
+if [[ ! -f "${PFX}" || ! -f "${PFX_PASS_FILE}" || ! -f "${CRT}" ]]; then
+  KEY="$(mktemp)"; trap 'rm -f "${KEY}"' EXIT
+  SAN="DNS:${NODE}"
+  if [[ "${PUBLIC_HOST}" =~ ^[0-9.]+$ ]]; then SAN="${SAN},IP:${PUBLIC_HOST}"; else SAN="${SAN},DNS:${PUBLIC_HOST}"; fi
+  openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes -keyout "${KEY}" -out "${CRT}" \
+    -subj "/CN=${PUBLIC_HOST}" -addext "subjectAltName=${SAN}" >/dev/null 2>&1
+  openssl rand -hex 24 >"${PFX_PASS_FILE}"; chmod 0600 "${PFX_PASS_FILE}"
+  openssl pkcs12 -export -inkey "${KEY}" -in "${CRT}" -out "${PFX}" -passout "file:${PFX_PASS_FILE}" \
+    -keypbe AES-256-CBC -certpbe AES-256-CBC -macalg sha256
+  chmod 0600 "${PFX}"
+  note "created a self-signed certificate for ${PUBLIC_HOST} (10 years)"
+else
+  note "keeping ${PFX}"
+fi
+FINGERPRINT="$(openssl x509 -in "${CRT}" -noout -fingerprint -sha256 | sed 's/^.*=//')"
+note "SHA-256 fingerprint ${FINGERPRINT}"
+
+# ── 5. Install the service and the scripts ───────────────────────────────────
+say "Installing files"
+if systemctl is-active --quiet constructd 2>/dev/null; then systemctl stop constructd; note "stopped constructd"; fi
+if [[ -n "${STAGE}" ]]; then
+  rsync -a --delete --exclude 'appsettings.Production.json' "${STAGE}/" "${HOST_DIR}/"
+  chmod 0755 "${HOST_DIR}/Constructd.Api"
+  note "service -> ${HOST_DIR}"
+fi
+rsync -a --delete --exclude '.git' --exclude 'node_modules' --exclude '.construct-tools' --exclude '.construct-backup' \
+  --exclude '*.db' --exclude 'settings.json' "${SOURCE_DIR}/" "${SCRIPTS_DIR}/"
+chmod 0600 "${SCRIPTS_DIR}/keys/bootstrap_ed25519" 2>/dev/null || true
+note "scripts -> ${SCRIPTS_DIR}"
+
+# ── 6. appsettings.Production.json ───────────────────────────────────────────
+say "Writing ${HOST_DIR}/appsettings.Production.json"
+PFX_PASS="$(cat "${PFX_PASS_FILE}")"
+python3 - "${HOST_DIR}/appsettings.Production.json" <<PY
+import json, sys
+settings = {
+  "Logging": {"LogLevel": {"Default": "Information", "Microsoft.AspNetCore": "Warning"}},
+  "Constructd": {
+    "Backend": "proxmox",
+    "Persistence": "Sqlite",
+    "DatabasePath": "${DATA_DIR}/constructd.db",
+    "ListenUrl": "https://0.0.0.0:${LISTEN_PORT}",
+    "CertPath": "${PFX}",
+    "CertPassword": "${PFX_PASS}",
+    "ScriptsDir": "${SCRIPTS_DIR}",
+    "PublicHost": "${PUBLIC_HOST}",
+    "ListenAddress": "0.0.0.0",
+    "SshForwardPorts": {"Start": ${SSH_START}, "End": ${SSH_END}},
+    "AppForwardPorts": {"Start": ${APP_START}, "End": ${APP_END}},
+    "Power": {"KeepHostAwake": False},
+    "Iso": {
+      "SeedUser": "construct",
+      "BootstrapPublicKeyPath": "${SCRIPTS_DIR}/keys/bootstrap_ed25519.pub",
+      "CacheDir": "${DATA_DIR}/iso"
+    },
+    "HostAdmin": {"Media": {"RootDir": "${DATA_DIR}/media"}, "Source": {"RootDir": "${DATA_DIR}/source"}},
+    "Proxmox": {
+      "Node": "${NODE}",
+      "Storage": "${STORAGE}",
+      "ImageVolume": "${IMAGE_VOLID}",
+      "SnippetStorage": "${IMAGE_STORAGE}",
+      "SnippetDir": "${SNIPPET_DIR}",
+      "Bridge": "${BRIDGE}"
+    }
+  }
+}
+with open(sys.argv[1], "w") as f:
+    json.dump(settings, f, indent=2)
+    f.write("\n")
+PY
+chmod 0600 "${HOST_DIR}/appsettings.Production.json"
+note "written (root-only: it carries the certificate password)"
+
+# ── 7. systemd unit ──────────────────────────────────────────────────────────
+say "systemd unit"
+cat >"${UNIT}" <<UNIT
+[Unit]
+Description=The Construct host service (constructd) on Proxmox VE
+After=network-online.target pve-cluster.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=${HOST_DIR}
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=DOTNET_ENVIRONMENT=Production
+Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
+ExecStart=${HOST_DIR}/Constructd.Api
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable constructd >/dev/null 2>&1
+note "${UNIT} (root: qm and pvesh need it)"
+
+# ── 8. First admin and their token ───────────────────────────────────────────
+say "Admin user '${ADMIN}'"
+admin_cli() { (cd "${HOST_DIR}" && ASPNETCORE_ENVIRONMENT=Production DOTNET_ENVIRONMENT=Production "${HOST_DIR}/Constructd.Api" admin "$@"); }
+if admin_cli users list --json | python3 -c 'import json,sys; u=sys.argv[1]; d=json.load(sys.stdin); users=d if isinstance(d,list) else d.get("users",d.get("result",[])); sys.exit(0 if any((x.get("name") if isinstance(x,dict) else x)==u for x in users) else 1)' "${ADMIN}"; then
+  note "exists"
+  HAVE_ADMIN=1
+else
+  admin_cli users add "${ADMIN}" --role Admin --max-vms 10 --json >/dev/null
+  note "created"
+  HAVE_ADMIN=0
+fi
+TOKEN=""
+if [[ "${HAVE_ADMIN}" -eq 0 || "${ROTATE}" -eq 1 || ! -f "${ETC_DIR}/install.json" ]]; then
+  TOKEN="$(admin_cli tokens issue "${ADMIN}" --label "install-$(date -u +%Y%m%d)" --json | json_field token)"
+  [[ -n "${TOKEN}" ]] || die "the admin CLI issued no token"
+  note "token issued (shown once below)"
+else
+  note "keeping the existing token (pass --rotate-token for a new one)"
+fi
+python3 - "${ETC_DIR}/install.json" <<PY
+import json, sys, datetime
+json.dump({"installedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(), "publicHost": "${PUBLIC_HOST}",
+           "node": "${NODE}", "fingerprint": "${FINGERPRINT}", "admin": "${ADMIN}", "listenPort": ${LISTEN_PORT},
+           "source": "${SOURCE_DIR}"}, open(sys.argv[1], "w"), indent=2)
+PY
+
+# ── 9. Start and verify ──────────────────────────────────────────────────────
+say "Starting constructd"
+systemctl restart constructd
+HEALTH=""
+for _ in $(seq 1 30); do
+  sleep 1
+  if [[ -n "${TOKEN}" ]]; then
+    HEALTH="$(curl -sk --max-time 5 -H "Authorization: Bearer ${TOKEN}" "https://127.0.0.1:${LISTEN_PORT}/api/v1/health" || true)"
+  else
+    HEALTH="$(curl -sk --max-time 5 -o /dev/null -w '%{http_code}' "https://127.0.0.1:${LISTEN_PORT}/api/v1/health" || true)"
+  fi
+  [[ -n "${HEALTH}" && "${HEALTH}" != "000" ]] && break
+done
+if [[ -z "${HEALTH}" || "${HEALTH}" == "000" ]]; then
+  journalctl -u constructd -n 20 --no-pager >&2 || true
+  if [[ -n "${TOKEN}" ]]; then
+    echo "The admin token was issued before the service failed; keep it: ${ADMIN} = ${TOKEN}" >&2
+  fi
+  die "constructd did not come up on port ${LISTEN_PORT} (journalctl -u constructd)"
+fi
+note "listening on https://${PUBLIC_HOST}:${LISTEN_PORT}"
+
+echo
+echo "The Construct host is ready. On a Windows PC with The Construct installed, enrol with:"
+echo
+echo "    .\\Auto-Install.ps1 -Backend hyperv-remote -ServiceUrl https://${PUBLIC_HOST}:${LISTEN_PORT} -ServiceAuth token -InstanceName <name>"
+echo
+echo "    Service URL : https://${PUBLIC_HOST}:${LISTEN_PORT}"
+echo "    Fingerprint : ${FINGERPRINT}   (confirm this when the installer shows it)"
+echo "    Admin user  : ${ADMIN}"
+if [[ -n "${TOKEN}" ]]; then
+  echo "    Admin token : ${TOKEN}   (shown once; the installer stores it on the PC)"
+else
+  echo "    Admin token : unchanged (re-run with --rotate-token to issue a new one)"
+fi
+echo
+echo "More users: ${HOST_DIR}/Constructd.Api admin users add <name> --max-vms 3   then   admin tokens issue <name>"
+echo "Logs:       journalctl -u constructd -f"
