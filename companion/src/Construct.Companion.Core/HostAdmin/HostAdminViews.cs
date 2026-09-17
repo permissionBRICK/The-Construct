@@ -53,6 +53,7 @@ public static partial class HostAdminViews
         r["kind"] = Default(v["kind"], "primary").ToLowerInvariant(); r["sharing"] = Default(v["sharing"], "private").ToLowerInvariant(); r["state"] = Default(v["state"], "unknown").ToLowerInvariant();
         foreach (var k in new[] { "shared", "deleting", "childCreationClosed" }) r[k] = StateJson.Boolean(v[k]) == true;
         r["pendingCpu"] = Number(v["pendingCpu"]);
+        r["savedBy"] = Text(r["state"]) == "saved" && Text(v["savedBy"]) == "memory-pressure" ? "memory-pressure" : null;
         r["pendingRamGb"] = Number(v["pendingRamGb"]);
         r["tokenKind"] = Text(v["tokenKind"]).Length > 0 ? Text(v["tokenKind"]) : null;
         var hw = v["hardware"] as JsonObject ?? new JsonObject { ["cpus"] = Copy(v["cpu"]), ["ramMb"] = Number(v["ramGb"]) * 1024, ["diskGb"] = Copy(v["diskGb"]) };
@@ -89,7 +90,7 @@ public static partial class HostAdminViews
         return new() { ["primary"] = Text(input["primary"]), ["visible"] = true, ["items"] = Children(items, now),
             ["problem"] = Text(input["problem"]) is { Length: > 0 } problem ? problem : items is null ? "could not read the child VMs" : "" };
     }
-    public static JsonArray Config(JsonNode? config) => new(ConfigSections.Select(key =>
+    public static JsonArray Config(JsonNode? config) => new(ConfigSections.Where(key => key != "memoryPressure" || config?[key] is not null).Select(key =>
     {
         var section = config?[key] as JsonObject; var value = section?["value"] as JsonObject ?? section; var clean = value?.DeepClone().AsObject() ?? []; clean.Remove("source"); clean.Remove("updatedAt");
         return (JsonNode)new JsonObject { ["key"] = key, ["source"] = Default(section?["source"], section is null ? "default" : "stored"), ["updatedAt"] = section?["updatedAt"] is null ? "" : FormatWhen(section["updatedAt"]), ["expectedUpdatedAt"] = Text(section?["updatedAt"]).Length > 0 ? Text(section?["updatedAt"]) : null, ["text"] = StateJson.Stringify(clean, true), ["present"] = section is not null };
@@ -100,7 +101,7 @@ public static partial class HostAdminViews
         void Walk(string prefix, JsonObject obj)
         { foreach (var (k, v) in obj) if (v is JsonObject o) Walk(prefix + k + ".", o); else if (k != "notes") rows.Add(new JsonObject { ["key"] = prefix + k, ["value"] = v is JsonArray a ? string.Join(", ", a.Select(Text)) : Text(v) }); }
         Walk("", body?["capabilities"] as JsonObject ?? []);
-        foreach (var (k, v) in body?["policy"] as JsonObject ?? []) rows.Add(new JsonObject { ["key"] = "policy." + k, ["value"] = Text(v) });
+        Walk("policy.", body?["policy"] as JsonObject ?? []);
         return new() { ["backend"] = Text(body?["backend"]), ["rows"] = rows, ["notes"] = Copy(body?["capabilities"]?["notes"]) ?? new JsonArray() };
     }
     public static JsonObject Job(JsonNode? input)

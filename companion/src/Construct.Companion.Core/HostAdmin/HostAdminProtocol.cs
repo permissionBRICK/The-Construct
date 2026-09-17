@@ -7,7 +7,7 @@ namespace Construct.Companion.Core.HostAdmin;
 public static partial class HostAdminProtocol
 {
     public static readonly string[] Tabs = ["overview", "vms", "users", "media", "operations", "config", "maintenance"];
-    public static readonly string[] ConfigSections = ["capacity", "userDefaults", "userCaps", "lifecycle", "media", "network", "updates"];
+    public static readonly string[] ConfigSections = ["capacity", "memoryPressure", "userDefaults", "userCaps", "lifecycle", "media", "network", "updates"];
     public static string Text(JsonNode? node) => StateJson.Trim(node is null ? "" : StateJson.String(node));
     public static JsonObject Features(JsonNode? health)
     {

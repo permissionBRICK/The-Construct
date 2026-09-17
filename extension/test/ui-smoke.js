@@ -1320,12 +1320,16 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     vmResidentBytes: 3 * ramModel.GIB, hostOwnBytes: ramModel.GIB, physicalFreeBytes: 4 * ramModel.GIB,
     headroomBytes: ramModel.GIB, committedBytes: 12 * ramModel.GIB,
     admission: { enforced: false, lineBytes: 7 * ramModel.GIB }, swap: { totalBytes: 2 * ramModel.GIB, usedBytes: ramModel.GIB } };
-  const pushRam = async (ram) => {
+  const pushRam = async (ram, memoryPressure) => {
     await pushAdmin({ ...ADMIN_STATE, overview: { ...ADMIN_STATE.overview,
-      capacity: [ramModel.toCapacityBars({ ram })[0], ADMIN_STATE.overview.capacity[1]] } });
+      capacity: [ramModel.toCapacityBars({ ram }, memoryPressure)[0], ADMIN_STATE.overview.capacity[1]] } });
     await admin.waitForTimeout(60);
   };
-  await pushRam(measuredRam);
+  await pushRam(measuredRam, { enabled: true, state: "insufficient-candidates", usedPercent: 93,
+    lastAction: { vmName: "<work-vm>", at: new Date(Date.now() - 120000).toISOString() } });
+  check("admin RAM: pressure and saved VM are rendered as text", (await admin.locator(".ha-memory-pressure").innerText()).includes("93% used")
+    && (await admin.locator(".ha-memory-pressure").innerText()).includes("pressure remains")
+    && (await admin.locator(".ha-memory-pressure").innerText()).includes("saved <work-vm> 2m ago"));
   check("admin RAM: measured label and physical free", (await admin.locator("#ovCapacity").innerText()).includes("4.0 GiB in use of 8.0 GiB")
     && (await admin.locator("#ovCapacity").innerText()).includes("free 4.0 GiB"));
   check("admin RAM: stacked widths reflect usage", await admin.locator(".ha-ram-vms").evaluate(e => e.style.width) === "37.5%"
@@ -1360,6 +1364,13 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("admin: the shared child is badged", /public · host users/i.test(await admin.locator("#vmsTable .ha-row").nth(2).innerText()));
   check("admin: unknown guest facts print unknown", (await admin.locator("#vmsTable .ha-row").nth(1).innerText()).includes("provisioned unknown"));
   check("admin: a busy child's buttons are disabled", await admin.locator("#vmsTable .ha-row").nth(2).locator("button").first().isDisabled());
+  await pushAdmin({ ...ADMIN_STATE, activeTab: "vms", vms: { ...ADMIN_STATE.vms,
+    rows: ADMIN_STATE.vms.rows.map((row, index) => index === 0 ? { ...row, state: "saved", savedBy: "memory-pressure" } : row) } });
+  await admin.waitForTimeout(60);
+  check("admin: saved VM shows the memory pressure badge",
+    await admin.locator("#vmsTable .ha-state-cell .ha-badge").textContent() === "saved (memory pressure)");
+  await pushAdmin({ ...ADMIN_STATE, activeTab: "vms", notice: null });
+  await admin.waitForTimeout(60);
   const buttonLabels = await admin.locator("#haAdmin button").allInnerTexts();
   check("admin: no guest update/provision/reinstall action in the module",
     buttonLabels.length > 0 && !buttonLabels.some((t) => /provision|reinstall|redownload|update guest|update agents/i.test(t)));

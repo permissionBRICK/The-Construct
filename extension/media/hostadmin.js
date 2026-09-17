@@ -208,6 +208,7 @@
         wrap.appendChild(bar);
       }
       if (!b.segments) wrap.appendChild(el("div", "ha-bar-text", b.text));
+      if (b.memoryPressure) wrap.appendChild(el("div", "ha-bar-text ha-memory-pressure", b.memoryPressure));
       bars.appendChild(wrap);
     });
     text("ovCapEpoch", `Inventory epoch ${o.capacityEpoch.epoch || "—"}, observed ${o.capacityEpoch.observedAt}${o.capacityEpoch.complete ? "" : " — INCOMPLETE"}${o.capacityProblems && o.capacityProblems.length ? " · " + o.capacityProblems.join("; ") : ""}`);
@@ -249,7 +250,9 @@
       if (r.deleting) kind.appendChild(el("span", "ha-badge off", "deleting"));
       if (r.childCreationClosed) kind.appendChild(el("span", "ha-badge off", "closed"));
       name.appendChild(kind);
-      row.appendChild(cell(r.state, "ha-state-cell"));
+      const stateCell = cell(r.savedBy === "memory-pressure" ? "" : r.state, "ha-state-cell");
+      if (r.savedBy === "memory-pressure") stateCell.appendChild(el("span", "ha-badge", "saved (memory pressure)"));
+      row.appendChild(stateCell);
       const usage = cell("", "ha-vm-usage");
       for (const [label, percent] of [[r.usage.cpu, r.usage.cpuPercent], [r.usage.ram, r.usage.ramPercent]]) {
         usage.appendChild(el("div", "", label));
