@@ -21,7 +21,8 @@ public sealed partial class HostAdministration
         var results = await Task.WhenAll(
             Read("cpu", StateJson.Boolean(m.State["features"]?["primaryCpu"]) == true && (changes is null || changes.ContainsKey("cpus")), () => client.VmCpuAsync(name, ct)),
             Read("memory", StateJson.Boolean(m.State["features"]?["primaryMemory"]) == true && (changes is null || changes.ContainsKey("ramGb")), () => client.VmMemoryAsync(name, ct)),
-            Read("idle", changes is null || changes.ContainsKey("timeoutMinutes") || changes.ContainsKey("action"), () => client.VmIdlePolicyAsync(name, ct)));
+            Read("idle", changes is null || changes.ContainsKey("timeoutMinutes") || changes.ContainsKey("action"), () => client.VmIdlePolicyAsync(name, ct)),
+            Read("network", StateJson.Boolean(m.State["features"]?["networkMode"]) == true && (changes is null || changes.ContainsKey("network")), () => client.VmNetworkAsync(name, ct)));
         var settings = new JsonObject(); var warnings = new HashSet<string>(StringComparer.Ordinal);
         foreach (var (key, value, error) in results)
         {
@@ -42,7 +43,7 @@ public sealed partial class HostAdministration
         var error = "";
         try
         {
-            if (Text(m.State["mode"]) != "admin") throw new VmSettingsValidationException("Not an administrator of this host.");
+            if (Text(m.State["mode"]) != "admin" && !OwnerNetworkView(m)) throw new VmSettingsValidationException("Not an administrator of this host.");
             if (action == "setVmSettings" && m.State["maintenance"] is not null) throw new VmSettingsValidationException("The host is updating; mutations are disabled until it is back.");
             if (action == "setVmSettings")
             {
@@ -72,6 +73,8 @@ public sealed partial class HostAdministration
                 if (memory is not null && ram != StateJson.CoerceNumber(memory["desiredRamGb"])) await client.SetVmMemoryAsync(name, new JsonObject { ["ramGb"] = ram }, ct);
                 if (idle is not null && (timeout != StateJson.CoerceNumber(idle["timeoutMinutes"]) || idleAction != Text(idle["action"])))
                     await client.SetVmIdlePolicyAsync(name, new JsonObject { ["timeoutMinutes"] = timeout, ["action"] = idleAction }, ct);
+                if (StateJson.Boolean(m.State["features"]?["networkMode"]) == true && args["network"] is JsonObject network)
+                    await client.SetVmNetworkAsync(name, network.DeepClone(), ct);
                 saved = true;
                 m.State["notice"] = new JsonObject { ["level"] = "info", ["text"] = $"{name}: settings saved." };
             }
@@ -84,7 +87,7 @@ public sealed partial class HostAdministration
         if (error.Length > 0)
         {
             settings = null;
-            if (action == "setVmSettings" && Text(m.State["mode"]) == "admin" && m.State["maintenance"] is null)
+            if (action == "setVmSettings" && (Text(m.State["mode"]) == "admin" || OwnerNetworkView(m)) && m.State["maintenance"] is null)
             {
                 try { settings = await ReadVmSettings(m, client, name, ct); }
                 catch (RemoteApiException ex) { Refusal(m, ex); }

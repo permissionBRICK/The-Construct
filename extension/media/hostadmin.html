@@ -80,6 +80,13 @@
             <div class="ha-table" id="ovJobs"></div>
             <p class="cost-note" id="ovJobsEmpty">No job is running.</p>
           </section>
+          <section class="module" id="hostNetworkCard" hidden>
+            <div class="mhead"><h2 class="seclabel">Network</h2></div>
+            <label>Default VM mode <select id="hostNetworkMode"><option value="relayed">Relayed</option><option value="direct">Direct</option></select></label>
+            <label><input type="checkbox" id="hostNetworkOwner"> Owners may switch their VM's mode</label>
+            <p>Applies to VMs following the host default on their next full stop/start.</p>
+            <button type="button" class="btn" id="hostNetworkSave">Save network policy</button>
+          </section>
         </div>
       </div>
     </section>
@@ -87,7 +94,7 @@
     <!-- VMs -->
     <section class="ha-tab" id="tab-vms" hidden>
       <section class="module">
-        <div class="mhead"><h2 class="seclabel">Virtual machines · all users</h2><span class="meta" id="vmsMeta"></span></div>
+        <div class="mhead"><h2 class="seclabel" id="vmsTitle">Virtual machines · all users</h2><span class="meta" id="vmsMeta"></span></div>
         <div class="ha-table" id="vmsTable"></div>
         <p class="cost-note" id="vmsEmpty" hidden>No VMs are registered on this host.</p>
         <p class="cost-note">Usage is sampled from the host. RAM demand is the host’s estimate; disk usage is the size of virtual-disk files, including checkpoints. Shut down requests a graceful guest shutdown.</p>
@@ -229,6 +236,16 @@
       <p id="haVmSettingsCurrent"></p>
       <p>CPU and RAM apply immediately when the VM is off; otherwise, after a full stop/start. Resuming saved state or rebooting Ubuntu keeps them pending. Idle policy applies immediately.</p>
       <fieldset id="haVmSettingsFields" disabled>
+        <div id="haVmNetwork" hidden>
+          <label id="haVmNetworkModeRow">Network mode <select id="haVmNetworkMode"><option value="">Host default</option><option value="relayed">Relayed</option><option value="direct">Direct</option></select></label>
+          <div id="haVmNetworkAddressFields" hidden>
+            <label>Fixed IPv4 address (CIDR, empty for DHCP) <input id="haVmAddress" placeholder="203.0.113.50/24"></label>
+            <label>Gateway <input id="haVmGateway" placeholder="203.0.113.1"></label>
+            <label>DNS addresses (space separated, empty for node default) <input id="haVmDns"></label>
+          </div>
+          <p id="haVmNetworkCurrent"></p>
+          <p>Network changes apply on the next full stop/start. A mode change removes existing forwards.</p>
+        </div>
         <label>CPU count <input id="haVmCpus" type="number" min="1" max="64" step="1" required></label>
         <label>RAM (GB) <input id="haVmRam" type="number" min="1" max="1024" step="1" required></label>
         <label>Idle timeout (minutes; 0 disables) <input id="haVmTimeout" type="number" min="0" max="2147483647" step="1" required></label>

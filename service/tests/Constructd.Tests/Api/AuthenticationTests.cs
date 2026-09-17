@@ -195,6 +195,9 @@ public class AuthenticationTests
             ("GET", "/api/v1/vms/shared"), ("GET", "/api/v1/vms/work-vm/capabilities"),
         ];
         refused = refused.Concat(adminOnly).Concat(primaryDiscovery).Distinct().ToArray();
+        var ownEndpoint = (Method: "GET", Url: "/api/v1/vms/work-vm/endpoint");
+        refused = refused.Where(route => route != ownEndpoint).ToArray();
+        allowed = allowed.Append(ownEndpoint).ToArray();
         if (kind == VmTokenKind.Primary)
         {
             refused = refused.Except(primaryDiscovery).ToArray();

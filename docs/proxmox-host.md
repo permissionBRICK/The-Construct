@@ -1,6 +1,7 @@
 # A Construct host on Proxmox VE
 
 > **Status: implemented and field-tested on a single Proxmox VE 9 node (2026-09-17).**
+> Direct network mode has local test coverage and still needs the field tests in section 5.
 > The same `constructd` service that runs on a Windows Hyper-V host runs on the Proxmox node
 > itself with the Proxmox platform selected (`Constructd:Backend = proxmox`). Every client is
 > unchanged: `Auto-Install.ps1 -Backend hyperv-remote`, the VS Code extension and the Companion
@@ -160,8 +161,8 @@ A create request (`POST /vms`) runs the same job as on Windows; only the platfor
 | Install media | autoinstall ISO from the catalog (or per VM through WSL) | **one cloud-init snippet per VM**: hostname, seed user `construct` with passwordless sudo and a locked password, the bootstrap public key, `qemu-guest-agent` |
 | Create | `Create-AgentVM.ps1` → Gen-2 VM, fresh VHDX, ISO attached | `qm create` cloning the cached cloud image (`--scsi0 <storage>:0,import-from=<image>`), a cloud-init drive (`--ide2 <storage>:cloudinit`), `--cicustom user=<snippet>`, `--agent enabled=1`, `cpu host`, bridged DHCP; then `qm disk resize` to the requested size and `qm start` |
 | Wait for SSH | the driver's socket poll on `<name>.mshome.net` | the guest agent reports the DHCP address (`network-get-interfaces`); SSH is probed on it |
-| Detach media | eject the ISO | nothing (the cloud-init drive is inert after first boot) |
-| Endpoint | `PublicHost:<forward>` via `netsh portproxy` | `PublicHost:<forward>` via an **in-process TCP relay** (section 5) |
+| Detach media | eject the ISO | keep the cloud-init drive attached for later network configuration changes |
+| Endpoint | `PublicHost:<forward>` via `netsh portproxy` | `PublicHost:<forward>` through the relay, or the guest's LAN address on port 22 in direct mode (section 5) |
 | Power | `Start-VM` / `Stop-VM` / `Save-VM` | `qm start` / `qm shutdown --forceStop 1` / `qm suspend --todisk 1` |
 | Remove | `Remove-VM` + disk chain | `qm stop` (if running) + `qm destroy --purge 1 --destroy-unreferenced-disks 1` + the seed snippet |
 
@@ -173,21 +174,53 @@ identical.
 Guests have `cpu: host`, so nested virtualization is available when the node's `kvm_intel`/`kvm_amd`
 module has `nested=1` (the default on Proxmox 9).
 
-## 5. Networking
+## 5. Relayed or direct
 
-Guests take a DHCP lease on the node's bridge, so they are ordinary LAN machines. Clients still
-dial the **service host** on an allocated port (`192.0.2.10:2201` → guest `:22`), because that is
-what the API contract promises and what keeps a PC's SSH config valid across a guest's lease
-changes: the relay looks the guest's current address up through the guest agent when a connection
-arrives (cached for a minute), so a rebooted guest with a new address is reached without anyone
-editing anything.
+The default is **relayed**. Clients connect to the service host on an allocated SSH port,
+for example `node.example:2201`. The service resolves the guest's current address through
+the QEMU guest agent when a connection arrives, with a short cache. Host-target app forwards
+work the same way. The listeners run inside constructd, without kernel NAT rules.
 
-The relay is the service's own listener, not a kernel forward: no `iptables`/`nftables` rules, no
-`ip_forward`, no masquerading, and the idle policy's "no client connections" signal is the relay's
-own live connection count. `construct expose --to host` forwards are relayed the same way.
+In **direct** mode, the endpoint is the VM's own IPv4 address on port 22. Construct allocates
+no SSH relay port. `construct expose 3000 --to host` prints `http://<vm-address>:3000/`
+without creating a listener or saving a forward. Client-target forwards still use the
+client's SSH tunnel. Host-forward policy switches continue to govern relayed VMs.
 
-Ports: the API on `7462`, SSH forwards `2201-2299`, app forwards `2300-2999` by default. Proxmox's
-own firewall is off by default; if you enable it, allow those on the node.
+In either mode, a Proxmox VM on the LAN bridge is an ordinary LAN machine. Every port an
+agent binds on all interfaces is reachable by anyone on that LAN unless your firewall
+blocks it. Direct connections need no Construct forward and produce no Construct access
+audit. An explicit expose request is audited, but traffic to the resulting URL is not.
+In direct mode the guest activity heartbeat, including established SSH sessions on port 22,
+provides the idle signal; there is no relay traffic to observe.
+
+On the host overview, admins can use the **Network** card to choose the default and allow
+owners to switch modes. The raw Configuration editor accepts the same `network` keys:
+`defaultMode: "relayed" | "direct"` and `ownerMaySwitchMode: false | true`. Hyper-V remains
+relay-only and does not offer these controls.
+
+Open **VM settings** to choose Host default, Relayed or Direct. Owners reach the same modal
+through the host panel's **My VMs** tab. Admins can enter a fixed IPv4 CIDR, gateway and
+optional DNS server addresses, for example `203.0.113.50/24`, `203.0.113.1` and `203.0.113.2`.
+Clear the address and gateway to use DHCP. Empty DNS uses the node's resolver. Proxmox stores
+each VM's MAC address, so a DHCP reservation also gives a stable address without a Construct
+setting. Recreating a VM can change its MAC; review reservations after a reinstall.
+
+Network changes, including inherited host-default changes, apply on the next full stop/start.
+Saved-state resume and an Ubuntu reboot do not apply them. A mode switch releases existing
+forwards, including client requests; request them again after starting. The driver writes
+`qm set --ipconfig0` and `--nameserver` or deletes the nameserver override, then runs
+`qm cloudinit update` before starting. Cloud-init's next-boot application after a changed
+configuration still needs verification on the target image and Proxmox version. Automated
+tests assert the command arguments, not a real guest boot.
+
+Service-managed guests install `construct-endpoint-refresh.service`. At boot it asks the
+service for the applied endpoint, updates the external host/SSH port in `config.env`, and
+regenerates the agent prompts. Failed refreshes retry. Guests that already have the unit
+need no reprovision for a mode change. After changing addresses, refresh the client's
+connection details from the endpoint before reconnecting. A DHCP reservation avoids lease changes.
+
+The API listens on `7462`; relayed SSH uses `2201-2299` and relayed apps use `2300-2999`
+by default. Allow the required node and guest ports if you enable a firewall.
 
 ## 5b. Windows sign-in (Kerberos)
 

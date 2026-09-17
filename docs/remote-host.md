@@ -67,6 +67,15 @@ you dial* change.
 > by `service/host/install-construct-host.sh` — see [docs/proxmox-host.md](proxmox-host.md). The
 > rest of this guide applies to both; the Windows steps below are the Hyper-V host's.
 
+Proxmox hosts can use **direct** networking instead of the default relay. The host's
+Network card sets the default and whether owners may change it; VM settings lets admins
+set an optional fixed IPv4 address and gateway. Direct VMs advertise their own address on
+SSH port 22, and `construct expose --to host` returns a direct URL without allocating a
+forward. Changes apply on a full stop/start, which removes old forwards. The guest refreshes
+its advertised endpoint and agent prompt at boot. A direct VM exposes ports bound to its
+LAN interface to that LAN; Construct does not audit those connections. Hyper-V remains
+relay-only. See [Relayed or direct](proxmox-host.md#5-relayed-or-direct).
+
 If you already have a local Construct VM, connect to it in VS Code and open
 **Construct Settings → Make this PC a Construct host…**. Review the prefilled
 address and optional AC wake setting, then approve Windows elevation. Setup installs

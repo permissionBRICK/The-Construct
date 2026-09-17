@@ -10,7 +10,7 @@ using Constructd.Core.Logic;
 namespace Constructd.Api.Endpoints;
 
 public sealed class VmInventoryProjection(IVmRepository vms, IVmDelegationRepository delegation, IUserStore users,
-    IDelegationPolicy policy, ICapacityLedger capacity, IMediaStore media, IJobStore jobs, IPortForwardManager forwards, ConstructdOptions options, IOperationKeyStore keys, Constructd.Api.Hosting.VmResourceUsageReader usage, PrimaryCpuSettings cpuSettings, PrimaryMemorySettings memorySettings)
+    IDelegationPolicy policy, ICapacityLedger capacity, IMediaStore media, IJobStore jobs, IPortForwardManager forwards, ConstructdOptions options, IOperationKeyStore keys, Constructd.Api.Hosting.VmResourceUsageReader usage, PrimaryCpuSettings cpuSettings, PrimaryMemorySettings memorySettings, VmNetworkSettings networkSettings)
 {
     public async Task<VmResponse> ProjectAsync(Vm vm, ClaimsPrincipal caller, CancellationToken ct)
     {
@@ -30,12 +30,15 @@ public sealed class VmInventoryProjection(IVmRepository vms, IVmDelegationReposi
         var observed = vm.Observed ?? new(null, null, [], null);
         var memorySetting = owned && vm.Kind == VmKind.Primary ? await memorySettings.GetAsync(vm, ct) : null;
         var cpuSetting = owned && vm.Kind == VmKind.Primary ? await cpuSettings.GetAsync(vm, ct) : null;
+        var network = networkSettings.Supported && vm.Kind == VmKind.Primary ? await networkSettings.ProjectAsync(vm, caller.IsAdmin(), ct) : null;
         // The durable intent is the flag: capacity observation cannot erase an unresolved attachment.
         if (vm.Kind == VmKind.Child && (await keys.ListInFlightAsync(vm.Name, ct)).Any(k => k.Kind == "child-media" && ConfigurationIntent.Applies(k, vm)))
             observed = observed with { StorageProblem = "media-unverified" };
         return result with
         {
             Kind = vm.Kind,
+            Network = network,
+            PublicHost = network?.EffectiveMode == "direct" ? network.Address ?? "" : result.PublicHost,
             Parent = vm.Parent,
             Sharing = vm.Sharing,
             Shared = relationship == ForwardRelationship.Shared,

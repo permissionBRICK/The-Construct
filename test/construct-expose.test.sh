@@ -339,6 +339,14 @@ ok "remote: fails loudly rather than trusting an unverified certificate" \
 ok "remote: asks curl to keep the body of a failed response" \
   grep -q -- '--fail-with-body' "${stub_dir}/argv"
 
+# A direct URL needs neither an id nor an acknowledgement poll.
+reset_stub
+printf '200' >"${stub_dir}/code"
+printf '{"kind":"direct","vmPort":3000,"target":"host","publicPort":null,"url":"http://203.0.113.50:3000/"}' >"${stub_dir}/response"
+remote_out="$(remote 3000 --to host 2>&1)"; remote_code=$?
+ok "direct: prints the VM address and exits successfully" test "${remote_code}:${remote_out}" = "0:http://203.0.113.50:3000/"
+ok "direct: does not poll for an acknowledgement" test "$(cat "${stub_dir}/calls")" = 1
+
 # A client forward that the extension opens on the second poll.
 reset_stub
 printf '201' >"${stub_dir}/code"

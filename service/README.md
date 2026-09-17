@@ -593,7 +593,7 @@ exists; a timestamp requires an exact match. A conflict returns `409 config-conf
 | `userCaps` | Caps on retained children, CPU/RAM/storage, lifetime, never-lifetime and sharing; null leaves the value uncapped. | every cap null |
 | `lifecycle` | `gracefulShutdownTimeoutSeconds`, `leaseTickSeconds`, `leaseRetrySeconds` | `300, 30, 600` seconds |
 | `media` | `maxBytes`, `maxItemsPerUser`, `uploadChunkBytes`, `uploadTtlHours`, `acquireTimeoutMinutes`, `allowHttp`, `unreferencedTtlHours` | 16 GiB, 20 items, 8 MiB chunks, 24 h, 180 min, HTTP allowed, no automatic unreferenced cleanup |
-| `network` | `hostForwardsEnabled`, `directAddressReporting` | both true |
+| `network` | `hostForwardsEnabled`, `directAddressReporting`, `defaultMode`, `ownerMaySwitchMode` | `true`, `true`, `"relayed"`, `false` |
 | `updates` | `repository`, `channel`, `drainTimeoutMinutes`, `healthTimeoutSeconds` | `permissionBRICK/The-Construct`, `main`, 60 min, 120 s |
 
 When `capacity.ramHeadroomBytes` is null, RAM headroom is `max(1 GiB, total RAM / 8)`
@@ -603,6 +603,32 @@ including zero, overrides either default.
 Disabling `network.hostForwardsEnabled` refuses new primary host forwards immediately; the default
 preserves existing behavior. Stored user allowances override defaults, host caps narrow them, and
 per-primary overrides can only restrict the result. Lowered limits do not delete existing VMs.
+
+Proxmox advertises `network-mode`. Its `defaultMode` accepts `relayed` or `direct`; Hyper-V
+rejects `direct` with `unsupported-on-platform`. Capabilities include `defaultMode` and
+`ownerMaySwitchMode` under `policy`. Old two-field network replacements remain valid.
+
+`GET`/`PUT /vms/{name}/network` use the existing user settings authorization and VM gate.
+PUT patches `{mode, address, gateway, dns}`; null mode follows the host default. Only admins
+may write address, gateway or DNS fields, including null to clear them. Owners may write mode
+when the host enables `ownerMaySwitchMode`; otherwise the response is `403 policy-denied`.
+Fixed addresses require an IPv4 CIDR and IPv4 gateway together. DNS accepts up to eight IPv4
+addresses. Fixed settings are used only in direct mode; empty DNS uses the node resolver.
+
+Desired settings live in `network:<vm>` and the applied snapshot in `network-applied:<vm>`,
+both stamped with the VM creation time. The snapshot keeps endpoints stable while changes
+are pending, including host-default changes. Network settings apply only at a full Off-to-Start
+transition; failure prevents startup and retains the desired settings. Inventory's `network`
+object includes `mode`, `effectiveMode`, `address`, `pendingMode`, `pendingAddress`, `pending`,
+and editable values and permissions. `pending` also signals cleared addresses and DNS-only
+changes. Existing VMs without a snapshot remain relayed until their next cold start.
+
+In direct mode `GET /vms/{name}/endpoint` returns the fixed address without its CIDR prefix,
+or the guest-agent address, on port 22. It returns `409 no-address` when neither is known.
+The VM's own token can read this route. `SshForwardPort` remains null. Host-target expose
+returns HTTP 200 with a flat forward response containing `kind: "direct"` and a URL, without
+allocating or persisting a forward. A mode switch removes old forwards at application time.
+See [Proxmox networking](../docs/proxmox-host.md#5-relayed-or-direct) for guest refresh and LAN exposure.
 
 ## Capacity accounting
 
@@ -1113,6 +1139,7 @@ ones above; only the platform seams change (`Composition/ProxmoxComposition.cs`)
 |---|---|
 | `IHypervisorDriver`, `IVmCpuDriver`, `IVmMemoryDriver` | `ProxmoxDriver`: `qm create` cloning the cached Ubuntu cloud image (`--scsi0 <storage>:0,import-from=<image>`) with a cloud-init drive and `--cicustom user=<seed>`, then `qm disk resize` and `qm start`; `qm shutdown --forceStop 1`, `qm suspend --todisk 1`, `qm destroy --purge 1 --destroy-unreferenced-disks 1`; state from `pvesh get …/status/current` (`lock: suspended` → saved), the endpoint from the guest agent's `network-get-interfaces`. VMs are found by NAME in `pvesh get /cluster/resources --type vm` on every call; `absent` only from a successfully read list. |
 | `IIsoBuilder` | `CloudInitSeedBuilder`: one root-only cloud-config per VM in the snippets directory (hostname, seed user with a locked password and passwordless sudo, the bootstrap key, `qemu-guest-agent`); returns its volume id in the `IsoPath` slot; removed with the VM. |
+| `IGuestNetworkConfigurator` | `ProxmoxDriver`: Off-only `qm set --ipconfig0` with fixed IPv4/gateway or DHCP, a nameserver override or deletion, and `qm cloudinit update`. Other real platforms reject this operation. |
 | `IPortForwardManager` | `TcpRelayPortForwardManager`: the same ranges, store-first ordering, per-VM gate and reconciliation as the netsh manager, materialized as in-process TCP listeners that resolve the guest's current address (cached 60 s) when a connection arrives. `CountActiveConnectionsAsync` is the listeners' own live count, so no TCP-table reader is needed. |
 | `IHypervisorInventory` | `ProxmoxInventory`: node CPUs/RAM, one volume per active storage, every QEMU VM's configured CPUs/RAM/disk, and presence evidence for `disk:` reservations by VM name (placement is decided before Proxmox assigns the numeric id). |
 | `IChildVmDriver`, `IChildVmStorage`, `IChildVmCreationOwnership` | `ProxmoxChildVmPlatform`: the Core's unsupported child driver plus a placement on the configured storage. |

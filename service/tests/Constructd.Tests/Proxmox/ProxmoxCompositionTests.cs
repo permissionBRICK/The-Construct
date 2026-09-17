@@ -29,6 +29,8 @@ public sealed class ProxmoxCompositionTests : IDisposable
         var features = app.Service<IReleaseInfo>().ApiFeatures;
         Assert.Contains("host-admin", features);
         Assert.Contains("primary-cpu", features);
+        Assert.Contains("network-mode", features);
+        Assert.DoesNotContain("network-mode", new Constructd.Api.Composition.ReleaseInfo().ApiFeatures);
         Assert.DoesNotContain("children", features);
         Assert.DoesNotContain("console", features);
         Assert.Contains("updates", features);
