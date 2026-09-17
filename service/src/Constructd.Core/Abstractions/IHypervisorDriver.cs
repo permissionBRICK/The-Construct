@@ -96,6 +96,9 @@ public interface IHypervisorDriver
 {
     DriverCapabilities Capabilities { get; }
 
+    /// <summary>Whether this host can expose virtualization extensions to a guest.</summary>
+    bool NestedAvailable => true;
+
     /// <summary>Creates the VM and starts the unattended install. Progress lines flow to the job.</summary>
     Task CreateVmAsync(VmDescriptor descriptor, IProgress<string>? progress, CancellationToken cancellationToken);
 

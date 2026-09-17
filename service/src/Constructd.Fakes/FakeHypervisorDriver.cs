@@ -11,6 +11,8 @@ namespace Constructd.Fakes;
 /// </summary>
 public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver
 {
+    public bool NestedAvailable { get; set; } = true;
+    public ConcurrentDictionary<string, VmDescriptor> Descriptors { get; } = new(StringComparer.OrdinalIgnoreCase);
     public ConcurrentDictionary<string, int> MemorySizes { get; } = new(StringComparer.OrdinalIgnoreCase);
     public Exception? MemoryFailure { get; set; }
     public Task SetMemoryAsync(string name, int ramGb, CancellationToken ct)
@@ -74,6 +76,7 @@ public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver, IVmM
         ArgumentNullException.ThrowIfNull(descriptor);
         cancellationToken.ThrowIfCancellationRequested();
         Calls.Enqueue($"create:{descriptor.Name}");
+        Descriptors[descriptor.Name] = descriptor;
 
         if (HoldCreate)
         {

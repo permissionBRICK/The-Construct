@@ -5,7 +5,7 @@ namespace Constructd.Api.Contracts;
 // silent default, and every enum arrives as a string that the endpoint parses explicitly — a typo
 // then produces a 400 problem document instead of a deserializer exception.
 
-public sealed record CreateUserRequest(string? Name, string? Role, int? MaxVms, bool? AllowHostForwards, UserAllowance? Allowance = null);
+public sealed record CreateUserRequest(string? Name, string? Role, int? MaxVms, bool? AllowHostForwards, UserAllowance? Allowance = null, bool? AllowNested = null);
 
 public sealed record CreateTokenRequest(string? Label);
 
