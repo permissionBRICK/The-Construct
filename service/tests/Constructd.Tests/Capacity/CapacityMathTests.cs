@@ -21,6 +21,47 @@ public class CapacityMathTests
             amount, phase, ReservationOrigin.Api, "op", Now, Now.AddMinutes(10), null);
 
     [Theory]
+    [InlineData(8, 1, null, 1)]
+    [InlineData(8, 4, null, 4)]
+    [InlineData(64, 1, null, 8)]
+    [InlineData(64, 4, null, 8)]
+    [InlineData(8, 1, 2, 2)]
+    [InlineData(8, 4, 0, 0)]
+    public void HeadroomUsesPlatformFloorOrExplicitOverride(int total, int floor, int? configured, int expected)
+    {
+        var inventory = Inventory() with { Host = Inventory().Host with { TotalRamBytes = total * Gb, FreeRamBytes = total * Gb } };
+        var result = CapacityMath.Calculate(inventory, Config with { RamHeadroomBytes = configured * Gb }, [], [], floor * Gb);
+        Assert.Equal(expected * Gb, result.RamHeadroomBytes);
+        Assert.Equal((total - expected) * Gb, result.RamAvailableBytes);
+    }
+
+    [Theory]
+    [InlineData(false, 7)]
+    [InlineData(true, 3)]
+    public void ResidencyUsesRunningManagedAndUnmanagedSamplesWithoutChangingAllocations(bool useDemand, int expected)
+    {
+        var inventory = Inventory(20 * Gb,
+            Actual("a", VmState.Running, 4 * Gb) with { MemoryDemandBytes = 2 * Gb },
+            Actual("external", VmState.Running, 3 * Gb) with { MemoryDemandBytes = Gb },
+            Actual("off", VmState.Off, 8 * Gb) with { MemoryDemandBytes = 8 * Gb },
+            Actual("saved", VmState.Saved, 8 * Gb) with { MemoryDemandBytes = 8 * Gb });
+        var result = CapacityMath.Calculate(inventory, Config, [], [Vm()], Gb, useDemand);
+        Assert.Equal(expected * Gb, result.VmResidentRamBytes);
+        Assert.Equal(12 * Gb, result.RamUsedBytes);
+        Assert.Equal(8 * Gb, result.RamReservedBytes);
+        Assert.Equal(8 * Gb, result.RamUnmanagedBytes);
+        Assert.Null(result.SwapTotalBytes);
+    }
+
+    [Fact]
+    public void MissingHostSampleDoesNotReportZeroMeasuredUsage()
+    {
+        var result = CapacityMath.Calculate(Inventory() with { Host = new(0, 0, 0, [], Now), Complete = false }, Config, [], []);
+        Assert.Null(result.RamUsedBytes);
+        Assert.Null(result.VmResidentRamBytes);
+    }
+
+    [Theory]
     [InlineData(27, 0, 0, 23)]
     [InlineData(12, 8, 0, 0)]
     [InlineData(8, 4, 0, 0)]

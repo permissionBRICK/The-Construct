@@ -10,6 +10,8 @@ public sealed partial class InMemoryCapacityLedger(IClock clock) : ICapacityLedg
     private readonly Dictionary<string, Reservation> _reservations = new();
     public HostCapacitySnapshot Inventory { get; set; } = new(0, DateTimeOffset.MinValue, false, 0, 0, 0, 0, 0, 0, 0, null, 0, null, [], [], []);
     public CapacityMode Mode { get; set; } = CapacityMode.Enforce;
+    public long DefaultRamHeadroomBytes { get; set; } = 4L << 30;
+    public bool UseGuestMemoryDemand { get; set; }
     // Opt-in full evidence mode for feature tests; the precomputed Inventory seam remains compatible.
     public Func<InventorySnapshot>? ReadInventory { get; set; }
     public Func<IReadOnlyList<Vm>>? ReadManagedVms { get; set; }
@@ -141,7 +143,7 @@ public sealed partial class InMemoryCapacityLedger(IClock clock) : ICapacityLedg
     private HostCapacitySnapshot Snapshot(InventorySnapshot? evidence = null)
     {
         if (ReadInventory is not null) return CapacityMath.Calculate(evidence ?? ReadInventory(), ReadConfig?.Invoke() ?? HostAdminDefaults.Capacity with { Mode = Mode },
-            _reservations.Values.ToArray(), ReadManagedVms?.Invoke() ?? []);
+            _reservations.Values.ToArray(), ReadManagedVms?.Invoke() ?? [], DefaultRamHeadroomBytes, UseGuestMemoryDemand);
         var ram = _reservations.Values.Where(r => r.Resource == ReservationResource.Ram).Sum(r => r.Amount);
         var cpu = _reservations.Values.Where(r => r.Resource == ReservationResource.Cpu).Sum(r => r.Amount);
         return Inventory with
