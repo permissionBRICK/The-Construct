@@ -15,7 +15,6 @@ public sealed partial class ProxmoxChildVmPlatform(IProcessRunner processes, IHy
 {
     private readonly ProxmoxCommands commands = new(processes, options);
     private readonly ProxmoxMediaVolumes media = new(options);
-    private readonly UnsupportedChildVmDriver pending = new(driver);
     private const CapabilityLevel Supported = CapabilityLevel.Supported;
     private const CapabilityLevel Unsupported = CapabilityLevel.Unsupported;
     private const CapabilityLevel Conditional = CapabilityLevel.Conditional;
@@ -113,9 +112,4 @@ public sealed partial class ProxmoxChildVmPlatform(IProcessRunner processes, IHy
         return id is null ? null : ProxmoxCommands.Incarnation(await commands.ConfigAsync(id.Value, ct)) ?? throw ProxmoxCommands.Failure();
     }
 
-    public Task UpdateHardwareAsync(string name, ChildHardware hardware, bool resendTemplate, CancellationToken ct) => pending.UpdateHardwareAsync(name, hardware, resendTemplate, ct);
-    public Task SetMediaAsync(string name, string? installMediaPath, string? auxiliaryMediaPath, IReadOnlyList<BootDevice> bootOrder, CancellationToken ct) => pending.SetMediaAsync(name, installMediaPath, auxiliaryMediaPath, bootOrder, ct);
-    public Task<AttachedMedia> GetAttachedMediaAsync(string name, CancellationToken ct) => pending.GetAttachedMediaAsync(name, ct);
-    public Task<GracefulShutdownOutcome> ShutdownGracefulAsync(string name, TimeSpan timeout, IProgress<string>? progress, CancellationToken ct) => pending.ShutdownGracefulAsync(name, timeout, progress, ct);
-    public Task<VmCapabilitiesSnapshot> GetVmCapabilitiesAsync(string name, CancellationToken ct) => pending.GetVmCapabilitiesAsync(name, ct);
 }
