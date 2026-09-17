@@ -6,6 +6,7 @@ using Constructd.Core.Abstractions;
 using Constructd.Core.Configuration;
 using Constructd.Core.Domain;
 using Constructd.Core.Logic;
+using Constructd.Core.Services;
 namespace Constructd.Api.Endpoints;
 
 public static class HostAdminEndpoints
@@ -115,18 +116,23 @@ public static class HostAdminEndpoints
         c.Volumes
     };
     private static async Task<IResult> StatusAsync(IReleaseInfo release, ICapacityLedger capacity, IHostConfigStore config, IMaintenanceGate maintenance,
-        IJobQueryStore jobs, IVmRepository vms, ConstructdOptions options, CancellationToken ct)
+        IJobQueryStore jobs, IVmRepository vms, ConstructdOptions options, MemoryPressureState pressure, CancellationToken ct)
     {
         var snapshot = await capacity.SnapshotAsync(false, ct); var all = await vms.ListAsync(null, ct);
         var mode = (await CapacityConfigAsync(config, options, ct)).Mode;
         var marker = await config.GetAsync<MaintenanceMarker>("maintenance", ct);
         var hypervisor = snapshot.Complete ? "ok" : "unreachable";
+        var pressureConfig = await config.GetAsync<MemoryPressureConfig>("memoryPressure", ct) ?? HostAdminDefaults.MemoryPressure;
+        var pressureEnabled = pressureConfig.Enabled && options.Idle.SchedulerEnabled;
+        var pressureStatus = pressure.Status;
         return Results.Ok(new
         {
             version = release.Installed,
             health = new { hypervisor, database = "ok", media = Directory.Exists(options.HostAdmin.Media.RootDir) ? "ok" : "missing-root", inventory = snapshot.Complete ? "complete" : "incomplete" },
             capacity = CapacitySummary(snapshot, mode),
             capacityMode = mode,
+            memoryPressure = pressureStatus with { Enabled = pressureEnabled,
+                State = !pressureEnabled ? "off" : pressureStatus.State == "off" ? "idle" : pressureStatus.State },
             maintenance = new { phase = maintenance.State, since = marker?.Since, updateId = marker?.UpdateId },
             activeJobs = (await jobs.ListAsync(ct)).Where(j => j.State is JobState.Queued or JobState.Running).Select(j => new { j.Id, j.Kind, j.VmName, j.Owner, j.Initiator, j.Phase, j.Created }),
             leaseOverdueCount = all.Count(v => v.Lease is { State: LeaseState.Overdue }),

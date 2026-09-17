@@ -403,6 +403,22 @@ function hostAdminIpc() {
   add("vm",input,m.toVmRow(input,now)); add("childDelete",input,m.childDeleteConfirmation(input)); add("children",[input],m.childRows([input],now));
  }
  add("vms",[vm,{name:"agent-vm"},{name:"orphan",kind:"child",parent:"gone"}],m.toVmRows([vm,{name:"agent-vm"},{name:"orphan",kind:"child",parent:"gone"}],now));
+ for (const state of ["saved", "running"]) {
+  const input = { name: "pressure-vm", state, savedBy: "memory-pressure" };
+  add("vm", input, m.toVmRow(input, now));
+ }
+ for (const state of ["idle", "pressure", "insufficient-candidates", "waiting-for-measurement", "cooldown", "unavailable", "save-failed"]) {
+  const input = { memoryPressure: { enabled: true, state, usedPercent: 93,
+    lastAction: { vmName: "pressure-vm", at: "2026-09-11T11:58:00Z" } } };
+  add("overview", input, m.toOverview(input, null, now));
+ }
+ const pressureOff = { memoryPressure: { enabled: false, state: "off" } };
+ add("overview", pressureOff, m.toOverview(pressureOff, null, now));
+ const pressureConfig = { memoryPressure: { cooldownMinutesAfterSave: 10, enabled: true, highWaterPercent: 90,
+  lowWaterPercent: 80, minSecondsBetweenSaves: 60, source: "default", swapHighWaterPercent: 50 } };
+ add("config", pressureConfig, m.toConfigView(pressureConfig));
+ const pressureCapabilities = { backend: "proxmox", policy: pressureConfig };
+ add("capabilities", pressureCapabilities, m.toCapabilityRows(pressureCapabilities));
  for(const [kind,fn] of [["overview","toOverview"],["capacity","toCapacityBars"],["media","toMediaRow"],["iso","toIsoCatalogView"],["job","toJobRow"],["audit","toAuditRow"],["config","toConfigView"],["capabilities","toCapabilityRows"],["updates","toUpdateView"],["updateActions","updateActionsFor"],["user","toUserRow"],["allowanceForm","allowanceForm"],["allowanceText","allowanceText"]]) {
   add(kind,{},m[fn]({}));
  }

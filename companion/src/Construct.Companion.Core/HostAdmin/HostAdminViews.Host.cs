@@ -5,7 +5,7 @@ using static Construct.Companion.Core.HostAdmin.HostAdminProtocol;
 namespace Construct.Companion.Core.HostAdmin;
 public static partial class HostAdminViews
 {
-    public static JsonArray Capacity(JsonNode? input)
+    public static JsonArray Capacity(JsonNode? input, JsonNode? memoryPressure = null, DateTimeOffset? now = null)
     {
         var s = input as JsonObject ?? []; var ram = s["ram"] as JsonObject ?? []; var cpu = s["cpu"] as JsonObject ?? [];
         var used = (Number(ram["reservedBytes"]) ?? 0) + (Number(ram["unmanagedBytes"]) ?? 0) + (Number(ram["headroomBytes"]) ?? 0);
@@ -18,16 +18,37 @@ public static partial class HostAdminViews
             used = (Number(v["totalBytes"]) ?? 0) - (Number(v["freeBytes"]) ?? 0) + (Number(v["headroomBytes"]) ?? 0);
             result.Add(new JsonObject { ["id"] = "vol:" + Text(v["root"]), ["label"] = unmounted ? "Storage (unmounted volume)" : "Storage " + Text(v["root"]), ["pct"] = Pct(JsonValue.Create(used), v["totalBytes"]), ["text"] = $"{Bytes(v["availableBytes"])} available of {Bytes(v["totalBytes"])} (free {Bytes(v["freeBytes"])}, growth reserved {Bytes(v["growthReservedBytes"])}, headroom {Bytes(v["headroomBytes"])})" });
         }
+        if (memoryPressure is JsonObject pressure) result[0]!["memoryPressure"] = MemoryPressureText(pressure, now ?? DateTimeOffset.UtcNow);
         return result;
     }
-    public static JsonObject Overview(JsonNode? input, JsonNode? capacityReport = null)
+    private static string MemoryPressureText(JsonObject pressure, DateTimeOffset now)
+    {
+        if (StateJson.Boolean(pressure["enabled"]) == false) return "memory pressure: off";
+        var state = Text(pressure["state"]) switch
+        {
+            "pressure" => "under pressure",
+            "insufficient-candidates" => "insufficient idle VMs; pressure remains",
+            "waiting-for-measurement" => "waiting for a new measurement",
+            "cooldown" => "waiting between saves",
+            "unavailable" => "measurement or evaluation unavailable",
+            "save-failed" => "save failed; see audit",
+            _ => "idle"
+        };
+        var parts = new List<string> { state };
+        if (Number(pressure["usedPercent"]) is { } used) parts.Insert(0, N(Round(used)) + "% used");
+        if (pressure["lastAction"] is JsonObject action && Text(action["vmName"]).Length > 0 &&
+            DateTimeOffset.TryParse(Text(action["at"]), out var at))
+            parts.Add($"saved {Text(action["vmName"])} {Duration((now - at).TotalSeconds)} ago");
+        return "memory pressure: " + string.Join("; ", parts);
+    }
+    public static JsonObject Overview(JsonNode? input, JsonNode? capacityReport = null, DateTimeOffset? now = null)
     {
         var s = input as JsonObject ?? []; var version = s["version"] as JsonObject ?? []; var health = s["health"] as JsonObject ?? []; var cap = capacityReport?["summary"] as JsonObject ?? s["capacity"] as JsonObject ?? []; var maint = s["maintenance"] as JsonObject ?? [];
         var problems = new JsonArray(); var healthView = new JsonObject();
         foreach (var key in new[] { "hypervisor", "database", "media", "inventory" })
         { healthView[key] = Default(health[key], "unknown"); if (Text(health[key]).Length > 0 && Text(health[key]) != (key == "inventory" ? "complete" : "ok")) problems.Add(key + " " + Text(health[key])); }
         var vv = new JsonObject(); foreach (var key in new[] { "commit", "packageVersion", "source" }) vv[key] = Default(version[key], "unknown"); vv["installedAt"] = FormatWhen(version["installedAt"]);
-        return new() { ["version"] = vv, ["health"] = healthView, ["problems"] = problems, ["capacityMode"] = Text(s["capacityMode"]).ToLowerInvariant() == "enforce" ? "enforce" : "observe", ["capacity"] = Capacity(cap), ["capacityEpoch"] = new JsonObject { ["epoch"] = Text(cap["epoch"]), ["observedAt"] = FormatWhen(cap["observedAt"]), ["complete"] = StateJson.Boolean(cap["complete"]) != false },
+        return new() { ["version"] = vv, ["health"] = healthView, ["problems"] = problems, ["capacityMode"] = Text(s["capacityMode"]).ToLowerInvariant() == "enforce" ? "enforce" : "observe", ["capacity"] = Capacity(cap, s["memoryPressure"], now), ["capacityEpoch"] = new JsonObject { ["epoch"] = Text(cap["epoch"]), ["observedAt"] = FormatWhen(cap["observedAt"]), ["complete"] = StateJson.Boolean(cap["complete"]) != false },
             ["capacityProblems"] = new JsonArray(Array(capacityReport?["problems"]).Select(p => (JsonNode?)JsonValue.Create(Text(p))).ToArray()),
             ["maintenance"] = Text(maint["phase"]) is not ("" or "open") ? new JsonObject { ["phase"] = Text(maint["phase"]), ["since"] = FormatWhen(maint["since"]), ["updateId"] = Text(maint["updateId"]).Length > 0 ? Text(maint["updateId"]) : null } : null,
             ["activeJobs"] = Map(s["activeJobs"], j => { var r = Strings(j as JsonObject ?? [], "id", "kind", "vmName", "owner", "initiator", "phase"); r["created"] = FormatWhen(j?["created"]); return r; }), ["leaseOverdueCount"] = Number(s["leaseOverdueCount"]) ?? 0, ["unmanagedVmCount"] = Number(s["unmanagedVmCount"]) ?? 0 };
