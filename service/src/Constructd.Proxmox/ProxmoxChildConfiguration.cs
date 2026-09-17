@@ -158,7 +158,17 @@ public sealed partial class ProxmoxChildVmPlatform
         var vga = ProxmoxCommands.String(config, "vga") ?? "std";
         var video = vga != "none" && !vga.StartsWith("serial", StringComparison.Ordinal);
         var tablet = Number(config, "tablet", 1) != 0;
-        return new(name, state, video, true, tablet, true, null, null, false,
+        int? width = null, height = null;
+        if (video && state is VmState.Running or VmState.Paused)
+        {
+            try
+            {
+                var screen = await new ProxmoxConsoleTransport(processes, options).GetScreenAsync(name, ct);
+                width = screen.NativeWidth; height = screen.NativeHeight;
+            }
+            catch (ConsoleTransportException) { /* Device capabilities remain readable when a capture fails. */ }
+        }
+        return new(name, state, video, true, tablet, true, width, height, false,
             ProxmoxCommands.String(config, "bios") == "ovmf" ? 2 : 1,
             Number(config, "acpi", 1) != 0 || AgentEnabled(config) ? Conditional : Unsupported,
             new(Supported, ProxmoxCommands.HasChildTag(config) ? Unsupported : Supported, Unsupported));
