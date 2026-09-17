@@ -10,7 +10,7 @@ using Constructd.Core.Logic;
 namespace Constructd.Api.Endpoints;
 
 public sealed class VmInventoryProjection(IVmRepository vms, IVmDelegationRepository delegation, IUserStore users,
-    IDelegationPolicy policy, ICapacityLedger capacity, IMediaStore media, IJobStore jobs, IPortForwardManager forwards, ConstructdOptions options, IOperationKeyStore keys, Constructd.Api.Hosting.VmResourceUsageReader usage, PrimaryCpuSettings cpuSettings, PrimaryMemorySettings memorySettings)
+    IDelegationPolicy policy, ICapacityLedger capacity, IMediaStore media, IJobStore jobs, IPortForwardManager forwards, ConstructdOptions options, IOperationKeyStore keys, Constructd.Api.Hosting.VmResourceUsageReader usage, PrimaryCpuSettings cpuSettings, PrimaryMemorySettings memorySettings, VmNetworkSettings networkSettings)
 {
     public async Task<VmResponse> ProjectAsync(Vm vm, ClaimsPrincipal caller, CancellationToken ct)
     {
@@ -36,6 +36,7 @@ public sealed class VmInventoryProjection(IVmRepository vms, IVmDelegationReposi
         return result with
         {
             Kind = vm.Kind,
+            Network = networkSettings.Supported && vm.Kind == VmKind.Primary ? await networkSettings.ProjectAsync(vm, caller.IsAdmin(), ct) : null,
             Parent = vm.Parent,
             Sharing = vm.Sharing,
             Shared = relationship == ForwardRelationship.Shared,
