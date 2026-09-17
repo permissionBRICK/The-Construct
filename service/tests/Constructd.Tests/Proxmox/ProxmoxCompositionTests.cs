@@ -31,7 +31,8 @@ public sealed class ProxmoxCompositionTests : IDisposable
         Assert.Contains("primary-cpu", features);
         Assert.DoesNotContain("children", features);
         Assert.DoesNotContain("console", features);
-        Assert.DoesNotContain("updates", features);
+        Assert.Contains("updates", features);
+        Assert.IsType<Constructd.Proxmox.Updates.SystemdUpdaterLauncher>(app.Service<IUpdaterLauncher>());
 
         var client = await app.CreateUserClientAsync("alice");
         var whoami = await client.GetAsync("/api/v1/whoami");
@@ -40,6 +41,7 @@ public sealed class ProxmoxCompositionTests : IDisposable
         var health = await client.GetFromJsonAsync<HealthBody>("/api/v1/health");
         Assert.NotNull(health);
         Assert.DoesNotContain("children", health!.ApiFeatures);
+        Assert.Contains("updates", health.ApiFeatures);
     }
 
     [Fact]

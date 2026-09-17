@@ -1,8 +1,8 @@
 # Host releases and deployment
 
-Construct uses one published commit for source, the control panel, and the Windows
-host. Every push to `main` runs `.github/workflows/host-release.yml`: build the
-self-contained and framework-dependent Windows x64 executables, package their scripts and the source archive,
+Construct uses one published commit for source, the control panel, and the Windows and Proxmox
+hosts. Every push to `main` runs `.github/workflows/host-release.yml`: build the
+self-contained and framework-dependent Windows x64 executables and the self-contained Linux host, package their scripts and the source archive,
 generate the manifest, then publish. **No tests run in GitHub Actions.** Run the
 regression checks locally before pushing. The ISO builder retains its separate
 `config/iso-builder.json` dependency pin.
@@ -23,9 +23,9 @@ are:
 | `construct-host-<commit7>-linux-x64.zip` | Self-contained Proxmox host in `service/`, matching `scripts/`, `updater/update-construct-host.sh`, and an in-archive `SHA256SUMS`. |
 | `construct-source-<commit40>.zip` | Pinned Construct source archive |
 | `manifest.json` | Identity, compatibility, runtime requirements, hashes, sizes and `companionReleaseTag` (the Companion release this commit installs) |
-| `SHA256SUMS` | Host payload file hashes and the three archive hashes |
+| `SHA256SUMS` | Host payload file hashes and all release archive hashes |
 
-Both the panel and Windows host discover the current release at:
+The panel and both host platforms discover the current release at:
 
 ```
 https://github.com/permissionBRICK/The-Construct/releases/latest/download/manifest.json
@@ -138,10 +138,17 @@ or certificate settings. Successful access from a development machine does not
 establish access from the affected host. A failure during staging does not replace
 the service or interrupt VMs.
 
-Production apply requires `Constructd:CertThumbprint` for the updater's loopback health
-pin. A host configured only with `CertPath` is refused with
-`update-health-pin-required` before drain or replacement; configure a supported
-certificate-store thumbprint before using host updates.
+Windows production apply requires `Constructd:CertThumbprint` for the updater's loopback health
+pin. On Linux, an absent thumbprint is derived from `CertPath`/`CertPassword` at handoff time.
+Missing or unreadable certificate configuration is refused with `update-health-pin-required`
+before drain or replacement.
+
+Proxmox staging selects the `linux` variant and reports `no-linux-asset` when a release lacks it.
+The launcher starts a transient systemd unit in its own cgroup. The Bash/Python updater takes
+`updater.lock` and `admin.lock` with `flock`, checks the Linux archive and extracted files again,
+and uses the same phases, fences and recovery outcomes as Windows. It records `source: release`
+in the committed ledger. Logs are `<DataDir>/updates/updater.log` and
+`journalctl -u construct-host-update-<updateId>`. See [the Proxmox update guide](proxmox-host.md#updating).
 
 For a local package, publish to a new directory, then invoke:
 
@@ -207,12 +214,15 @@ verification, service startup, loopback health authentication, and a read-only S
 `quick_check` succeed. A failed recovery remains in maintenance; it is never reported
 as a successful rollback.
 
-Linux validation uses PowerShell service/health fakes, recording process runners,
+Linux validation uses Bash and PowerShell service/health fakes, recording process runners,
 SQLite persistence, in-process HTTP integration tests, and package fixtures.
 `Test-UpdateHealth` is fully replaced in the PowerShell suite; its real HTTP, certificate
 and read-only CLI calls are not exercised there. Authorized rollback and `commitOnly`
 resume control flow are exercised with those fakes. SCM survival, LocalSystem ACLs, real certificate pinning, running Hyper-V VM continuity,
 and a Windows-client reconnection remain items for the contract's field-test checklist.
+The Linux suite also tests real TLS pinning against a temporary loopback HTTPS server and a
+fake admin CLI. A human must still test Proxmox systemd handoff survival, root ownership,
+real database health, rollback and VM continuity on a node.
 
 Phase 6 validation on Linux: .NET build **0 warnings / 0 errors**, **932 / 932**
 tests; **24 Node suites**, **19 PowerShell suites**, and **21 Bash suites** passed.

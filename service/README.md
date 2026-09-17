@@ -1090,7 +1090,8 @@ ones above; only the platform seams change (`Composition/ProxmoxComposition.cs`)
 | `IPortForwardManager` | `TcpRelayPortForwardManager`: the same ranges, store-first ordering, per-VM gate and reconciliation as the netsh manager, materialized as in-process TCP listeners that resolve the guest's current address (cached 60 s) when a connection arrives. `CountActiveConnectionsAsync` is the listeners' own live count, so no TCP-table reader is needed. |
 | `IHypervisorInventory` | `ProxmoxInventory`: node CPUs/RAM, one volume per active storage, every QEMU VM's configured CPUs/RAM/disk, and presence evidence for `disk:` reservations by VM name (placement is decided before Proxmox assigns the numeric id). |
 | `IChildVmDriver`, `IChildVmStorage`, `IChildVmCreationOwnership` | `ProxmoxChildVmPlatform`: the Core's unsupported child driver plus a placement on the configured storage. |
-| `IConsoleTransport`, `IInteractiveConsole`, `IGuestAddressProvider`, `IIsoCatalog`, `IUpdaterLauncher`, `IHostPowerGuard` | The unsupported/no-op implementations (`UnsupportedConsoleTransport`, `UnsupportedInteractiveConsole`, `UnsupportedFeaturePlatform`, `UnsupportedIsoCatalog`, `NoUpdaterLauncher`, `NullHostPowerGuard`). `ReleaseInfo.ApiFeatures` drops `children`, `media`, `console`, `updates` and `network` accordingly, so clients hide what the host cannot do. |
+| `IUpdaterLauncher` | `SystemdUpdaterLauncher`: starts the verified Bash/Python updater through `systemd-run --unit construct-host-update-<id> --collect`. Its separate cgroup survives `constructd` stopping. The Maintenance tab offers self-update; logs are `/var/lib/constructd/updates/updater.log` and `journalctl -u construct-host-update-<id>`. |
+| `IConsoleTransport`, `IInteractiveConsole`, `IGuestAddressProvider`, `IIsoCatalog`, `IHostPowerGuard` | The unsupported/no-op implementations (`UnsupportedConsoleTransport`, `UnsupportedInteractiveConsole`, `UnsupportedFeaturePlatform`, `UnsupportedIsoCatalog`, `NullHostPowerGuard`). `ReleaseInfo.ApiFeatures` drops `children`, `media`, `console` and `network` accordingly, so clients hide what the host cannot do. |
 
 Startup validation: `ScriptsDir` must hold `bin/provision.sh`, `Iso:BootstrapPublicKeyPath` must
 exist, and `Proxmox:ImageVolume` must be an `import` volume id. Negotiate is not registered off
@@ -1830,8 +1831,9 @@ and phase history persist in migration 600's `host_updates` table. Staging/appli
 acceptance persists the queued job, replay key and update transition in one SQLite
 transaction. The job's operation ID remains readable after reconnecting.
 
-Host releases contain compressed self-contained and framework-dependent ZIPs.
-Conversion and staging prefer FDD when `dotnet --list-runtimes` reports the
+Host releases contain compressed self-contained and framework-dependent Windows ZIPs and a
+self-contained Linux ZIP with matching scripts and `updater/update-construct-host.sh`.
+Linux staging selects `linux`; Windows conversion and staging prefer FDD when `dotnet --list-runtimes` reports the
 manifest's required shared frameworks, currently .NET 10 and ASP.NET Core 10.
 Missing runtimes or older manifests select self-contained. The selected source is
 recorded in `install.json`; the installer validates a supplied FDD publish directory
@@ -1849,6 +1851,12 @@ Mutating admin CLI verbs hold `admin.lock` and recheck the maintenance marker;
 `admin db check --json` opens SQLite read-only and runs `PRAGMA quick_check` without
 migration, platform initialization or taking that lock.
 
+On Proxmox, `update-construct-host.sh` runs in a transient systemd unit, uses the same durable
+recovery records and fences, and takes locks with `flock`. Python verifies SHA-256 coverage and
+the health endpoint's SHA-1 certificate pin before sending the handoff credential. The pin is
+derived from the host's PFX when no `CertThumbprint` is configured. The Linux installer records
+owned-file hashes in `install.json`; package scripts are used unless `--source` selects a checkout.
+
 The `updates` API feature becomes available after manual installation. Releases need no
 signing configuration; downloads use the host-local GitHub repository over HTTPS and
 verify manifest identity and SHA-256 payload coverage. See
@@ -1860,6 +1868,7 @@ Additional Linux checks:
 ```sh
 bash test/host-package.test.sh
 pwsh -NoProfile -File service/tests/host-updater.test.ps1
+bash service/tests/host-updater.test.sh
 pwsh -NoProfile -File service/tests/host-release-installer.test.ps1
 dotnet test service/Constructd.sln --filter 'FullyQualifiedName~Updates'
 ```
