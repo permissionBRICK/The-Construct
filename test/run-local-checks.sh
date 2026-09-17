@@ -27,6 +27,7 @@ if [[ "$group" == t3 || "$group" == all ]]; then
   python3 test/t3-pairing-forward.test.py
 fi
 if [[ "$group" == service || "$group" == all ]]; then
+  bash test/proxmox-nested-installer.test.sh
   /usr/bin/python3 -m unittest discover -s console-viewer -p 'test_*.py' -v
   node --check console-viewer/static/viewer.js
   bash -n console-viewer/install.sh bin/construct-vm.sh bin/provision.sh bin/fetch-construct-source.sh
