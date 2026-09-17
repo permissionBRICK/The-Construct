@@ -172,6 +172,9 @@ public sealed class ProxmoxOptions
     /// <summary>Storage that receives each VM's disk and cloud-init drive (<c>images</c> content).</summary>
     public string Storage { get; set; } = "local-lvm";
 
+    /// <summary>Directory storage exposing the child media root as ISO content.</summary>
+    public string MediaStorage { get; set; } = "construct-media";
+
     /// <summary>
     /// The cached Ubuntu cloud image every VM is cloned from, as a Proxmox volume id on a storage with
     /// <c>import</c> content (<c>qm create --scsi0 &lt;storage&gt;:0,import-from=&lt;this&gt;</c>).
