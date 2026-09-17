@@ -63,16 +63,28 @@ generalises it. What it established, and what the host-side implementation must 
 4. **Key pool.** Admin adds keys (edition, kind retail/MAK/KMS-client, activation budget for
    MAK, notes) through the host admin panel or CLI. Encrypted at rest; the API returns only the
    last five characters. Assignment records per VM incarnation with states assigned, installed,
-   activated, failed; released on delete (a MAK activation does not return). Auto-assign by
-   edition, manual assign from the panel, audit entries. Default when the pool has no matching
-   key: the generic edition key, i.e. trial as normal; on a KMS domain the generic key is also
-   the right answer.
-5. **Guest write-back.** The generated first-logon script reports install stage, activation
-   state (`slmgr /dli` partial key and status), hostname and addresses through the platform's
-   guest channel: Hyper-V KVP (Data Exchange, already read for addresses), Proxmox QEMU guest
-   agent (installed by the first-logon script from the virtio-win ISO). The host records it,
-   shows it in the panel as guest-reported, and detaches the auxiliary ISO once the installed
-   beacon arrives.
+   activated, failed; released on delete (a MAK activation does not return). Auto-assign by the
+   edition the guest reports, manual assign from the panel, audit entries. No matching key, or a
+   KMS domain: nothing is pushed, the guest stays on the generic edition key and its grace
+   period, i.e. trial as normal. The pool records the edition per key; the host-built answer
+   file selects the install image from the requested or assigned edition.
+5. **The key never enters the answer file.** The answer file carries only the public generic
+   edition key (as the template does today), so an agent-built auxiliary ISO holds no secret.
+   The template's `firstlogon.ps1` ends with a drop-in Construct block that reports the edition
+   and the stage "first logon done", waits a bounded time for a key, applies it with
+   `slmgr /ipk` and `/ato`, and reports the activation state and the partial key back. The
+   key travels host to guest through the platform's guest channel, never through the agent:
+   - Hyper-V: Data Exchange (KVP). The host writes the key as a host-to-guest item, the guest
+     reads it from `HKLM\SOFTWARE\Microsoft\Virtual Machine\External`, the host removes the
+     item once activation is reported; the guest's report goes into the Guest KVP pool the host
+     already reads for addresses.
+   - Proxmox: once the first-logon block has installed the QEMU guest agent from the virtio
+     ISO, the host runs `slmgr` inside the guest itself (`qm guest exec`) and reads the output;
+     nothing is stored in the guest.
+   The host records the report per VM incarnation, checks the partial key against the assigned
+   key, shows the state in the panel (marked guest-reported on Hyper-V), and detaches the
+   auxiliary ISO after the "first logon done" beacon. Retail and MAK keys need internet from
+   the guest at activation time; KMS client keys need the KMS host.
 6. **Proxmox specifics.** Windows on QEMU needs the virtio storage driver during setup:
    the host adds the virtio-win ISO as a third medium or injects the driver folder into the
    auxiliary ISO with a `PnpCustomizationsWinPE` driver path; e1000 NIC until the virtio NIC
@@ -96,12 +108,11 @@ answers SSH with the given password, shows "installed, activated with key …3V6
 "installed, not activated, grace period") in the panel, and has no auxiliary medium attached
 afterwards.
 
-## 6. Open decisions
+## 6. Decisions and what is still open
 
-- Guest channel: KVP / guest agent write-back (host stays credential-free), or should the host
-  keep the generated Administrator credentials and use PowerShell Direct / SSH for full control
-  and verification?
-- Is the key readable from inside the guest during setup acceptable (the agent could read the
-  mounted auxiliary ISO before the detach), or must the key be pushed post-install through the
-  guest channel instead of baked into the answer file?
-- Hyper-V first, Proxmox once child VMs land there?
+Decided (2026-09-17): the host stays credential-free; the key is pushed post-install through
+the guest channel and never baked into the answer file; verification comes from the same
+channel.
+
+Open: Hyper-V first, Proxmox once child VMs land there (the Proxmox path depends on the
+child VM thread and on the virtio driver handling in §3.6).
