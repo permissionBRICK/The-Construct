@@ -417,6 +417,33 @@ function toCapacityBars(summary) {
     pct: num(cpu.budget) !== null ? pct(cpu.active, cpu.budget) : null,
     text: `${num(cpu.active) === null ? "—" : cpu.active} allocated vCPU` + (num(cpu.budget) !== null ? ` of a ${cpu.budget} budget` : ` on ${num(cpu.logical) === null ? "—" : cpu.logical} logical CPUs (no budget)`),
   }];
+  const total = num(ram.totalBytes), used = num(ram.usedBytes);
+  const resident = num(ram.vmResidentBytes), host = num(ram.hostOwnBytes);
+  if (total > 0 && used !== null && resident !== null && host !== null) {
+    // Bound only the geometry. Keep the reported samples and commitments in the
+    // text even when samples disagree or allocations exceed physical capacity.
+    const usedForBar = Math.max(0, Math.min(total, used));
+    const vmForBar = Math.max(0, Math.min(usedForBar, resident));
+    const hostForBar = Math.max(0, Math.min(usedForBar - vmForBar, host));
+    const admission = ram.admission;
+    const committed = num(ram.committedBytes);
+    const swap = ram.swap;
+    bars[0] = {
+      id: "ram", label: "RAM", pct: pct(used, total),
+      text: `${formatBytes(used)} in use of ${formatBytes(total)}`,
+      segments: [{ id: "vms", pct: vmForBar / total * 100 }, { id: "host", pct: hostForBar / total * 100 }],
+      details: `VMs ${formatBytes(resident)} · host ${formatBytes(host)} · free ${formatBytes(ram.physicalFreeBytes)}`
+        + (admission && admission.enforced === false ? " · admission not enforced (observe mode)" : ""),
+      admission: admission && admission.enforced === true && num(admission.lineBytes) !== null
+        ? { pct: Math.max(0, Math.min(100, num(admission.lineBytes) / total * 100)), title: `admission line: ${formatBytes(ram.headroomBytes)} headroom` } : null,
+      committed: committed === null ? null : {
+        text: `${formatBytes(committed)} committed to VMs (${Math.round(committed / total * 100)} %)`,
+        hot: committed > total,
+      },
+      swap: swap && num(swap.totalBytes) > 0 && num(swap.usedBytes) !== null
+        ? { pct: pct(swap.usedBytes, swap.totalBytes), text: `${formatBytes(swap.usedBytes)} of ${formatBytes(swap.totalBytes)} swap` } : null,
+    };
+  }
   for (const v of (Array.isArray(s.volumes) ? s.volumes : [])) {
     // Windows also inventories hidden EFI/recovery volumes. Keep their accounting
     // on the server, but don't present unmounted, unused partitions as VM storage.
