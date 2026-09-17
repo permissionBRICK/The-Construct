@@ -159,7 +159,11 @@ public sealed class ProxmoxInventory(IProcessRunner runner, ConstructdOptions op
                 : new CapacityArtifactInfo(row.Artifact, path, row.Volume ?? diskStorage, owner.Disks[0].FileBytes, ArtifactPresence.Present));
         }
 
-        return new InventorySnapshot(epoch, now, new HostResourcesInfo(cpus, totalRam, freeRam, volumes, now), vms, Complete: true, Problems: [], artifacts);
+        var usedRam = Long(memory, "used");
+        var swapTotal = status.TryGetProperty("swap", out var swap) && swap.ValueKind == JsonValueKind.Object ? Long(swap, "total") : -1;
+        var swapUsed = swap.ValueKind == JsonValueKind.Object ? Long(swap, "used") : -1;
+        return new InventorySnapshot(epoch, now, new HostResourcesInfo(cpus, totalRam, freeRam, volumes, now,
+            usedRam >= 0 ? usedRam : null, swapTotal >= 0 ? swapTotal : null, swapUsed >= 0 ? swapUsed : null), vms, Complete: true, Problems: [], artifacts);
     }
 
     private async Task<JsonElement?> QueryAsync(string path, CancellationToken ct)
