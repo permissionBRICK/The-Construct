@@ -310,7 +310,7 @@ the child. There is no abandon/supersede configuration API.
 - Generation 2 and fixed RAM are supported; Generation 1, dynamic memory and memory
   overcommit are not. Disk growth through `hardware --disk-gb` currently returns
   `unsupported-capability`.
-- Interactive VMConnect/RDP/VNC video is not exposed. Screenshot and keyboard are
+- Interactive video uses the trusted [browser gateway](../console-viewer/README.md). Screenshot and keyboard are
   supported by the bounded WMI transport; mouse is conditional and may return
   `applied:false`. LocalSystem screenshot capture and raw scancode input were verified
   on Alpine; other guest/input combinations still need field testing.
@@ -362,12 +362,15 @@ behaviour still require a human field test on a node.
   movement requires the USB tablet; relative movement and button events use QMP.
   The transport uses a local QMP socket through Python so typed input stays on
   stdin and explicit key release is possible.
-- Interactive console is Conditional. A console session includes `interactiveUrl`
-  for the node's native noVNC page on `PublicHost:8006`. Opening it requires a
-  separate Proxmox login with permission for that VM. No root VNC ticket or login
-  credential is issued to Construct callers. The existing `--web`/extension
-  Guacamole-to-VMConnect viewer cannot consume this link; its connection route
-  returns a coded 409. Screenshot/input routes still use Construct authorization.
+- Interactive console is supported through `construct vm console NAME --web` and
+  the panel's console buttons, including boot and installer screens. The gateway
+  uses a session-bound `qm vncproxy` stream with an eight-character random password;
+  users need only Construct authorization. The node accepts one TCP connection per
+  session on `Constructd:ListenAddress`, from `Constructd:Proxmox:ConsolePorts`
+  (default `5900-5999`, separate from SSH and app forwarding ranges). The primary
+  must reach this range on `Constructd:PublicHost`. This LAN hop carries unencrypted
+  VNC, so restrict it to the trusted primary network. Session expiry or removal
+  terminates the proxy; reconnect creates a new session and password.
 - Address reporting requires a running QEMU guest agent. Reports are bound to
   host-configured adapter MACs and remain unverified. Client forwards, refusal
   of child host forwards, and lack of packet isolation match Hyper-V.
@@ -390,15 +393,17 @@ screenshots, type and click in its installer, enable its guest agent and inspect
 addresses, then exercise shutdown, save/start, lease renewal/expiry, sharing and
 deletion. Also create a Windows-preset child with Secure Boot and TPM, verify its
 OVMF keys, disk/NIC drivers and two ISO slots, change hardware/media while Off,
-and confirm deletion removes guest, EFI, TPM and saved-state volumes. Test native
-noVNC with a separately authorized Proxmox account and repeat installer setup to
-check storage idempotency.
+and confirm deletion removes guest, EFI, TPM and saved-state volumes. Open the
+browser console for a fresh child during its installer and for the primary,
+without a Proxmox login. Verify keyboard, mouse, reconnect, expiry and proxy cleanup.
+Repeat installer setup to check storage idempotency.
 
 ## Browser console
 
-An opt-in browser viewer is available with `construct vm console NAME --web`.
-It connects through Guacamole to Hyper-V VMConnect and supports boot/installer
-consoles. See [gateway installation and session boundaries](../console-viewer/README.md).
+A browser viewer is enabled by default with `construct vm console NAME --web`.
+It connects through Guacamole to Hyper-V VMConnect or Proxmox VNC and supports
+boot/installer consoles without guest networking or a guest agent.
+See [gateway installation and session boundaries](../console-viewer/README.md).
 
 The main panel's **Console** button opens the selected primary itself; child
 **Connect VNC** buttons continue to open their named child through that primary.

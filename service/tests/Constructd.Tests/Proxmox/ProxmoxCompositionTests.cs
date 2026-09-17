@@ -31,6 +31,7 @@ public sealed class ProxmoxCompositionTests : IDisposable
         var capabilities = await app.Service<ICapabilityAggregator>().GetAsync(default);
         Assert.Equal(Constructd.Core.Domain.CapabilityLevel.Supported, capabilities.Suspend);
         Assert.True(capabilities.Legacy.Suspend);
+        Assert.Equal(Constructd.Core.Domain.CapabilityLevel.Supported, capabilities.Console.Interactive);
 
         var features = app.Service<IReleaseInfo>().ApiFeatures;
         Assert.Contains("host-admin", features);
