@@ -48,7 +48,7 @@ public sealed class BearerTokenAuthenticationHandler(
 
 /// <summary>
 /// <c>Authorization: VmToken &lt;secret&gt;</c> — the scoped token injected into a VM at provision
-/// time (plan §4.6). It authorizes nothing but its own VM's forwards and activity heartbeat; the
+/// time (plan §4.6). It authorizes scoped guest routes, including forwards, activity and usage intake; the
 /// principal deliberately has no <see cref="ConstructdClaims.KnownUser"/> claim, so every
 /// user-facing policy rejects it.
 /// </summary>

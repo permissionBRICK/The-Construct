@@ -9,6 +9,7 @@ public static partial class HostConfigValidation
     public static readonly IReadOnlyDictionary<string, object> Defaults = new Dictionary<string, object>
     {
         ["capacity"] = HostAdminDefaults.Capacity,
+        ["usage"] = HostAdminDefaults.Usage,
         ["memoryPressure"] = HostAdminDefaults.MemoryPressure,
         ["userDefaults"] = HostAdminDefaults.UserDefaults,
         ["userCaps"] = HostAdminDefaults.UserCaps,
@@ -22,6 +23,7 @@ public static partial class HostConfigValidation
         ? "Budgets and counts must be non-negative." : a.MaxChildLifetimeSeconds is < 300 ? "A finite lifetime limit must be at least 300 seconds." : null;
     public static string? Validate(object value) => value switch
     {
+        UsageConfig u when u.RetentionDays is < 1 or > 36500 => "Usage retention must be between 1 and 36500 days.",
         NetworkConfig n when n.DefaultMode is not ("relayed" or "direct") => "Network defaultMode must be relayed or direct.",
         MemoryPressureConfig m when m.LowWaterPercent <= 0 || m.LowWaterPercent >= m.HighWaterPercent || m.HighWaterPercent > 100 ||
             m.SwapHighWaterPercent is < 0 or > 100 || m.MinSecondsBetweenSaves < 1 || m.CooldownMinutesAfterSave < 0 =>

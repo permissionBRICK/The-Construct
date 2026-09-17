@@ -8,10 +8,11 @@ const names = [
   "forwards-remove", "forwards-release", "notify-claim-function", "notify-claim", "notify-watch",
   "project-clone", "project-scan", "probe", "audio-enable", "audio-disable", "t3-pairing", "t3-pairing-instance", "construct-t3-pairing-base", "usage",
   "construct-rec-shim", "construct-audio-enable", "construct-audio-disable",
-  "construct-patch-status", "construct-partial-streaming-enable", "construct-partial-streaming-disable",
+  "construct-patch-status", "construct-partial-streaming-enable", "construct-partial-streaming-disable", "usage-collect",
 ];
 const templates = Object.fromEntries(names.map(name => [name,
   fs.readFileSync(path.join(__dirname, "..", "vm", name + ".sh"), "utf8")]));
+templates.usage = templates.usage.replace("# construct:usage-collect", templates["usage-collect"]);
 function render(name, values = {}) {
   if (!Object.hasOwn(templates, name)) throw new Error("Unknown guest script");
   return templates[name].replace(/\{\{([A-Za-z][A-Za-z0-9]*)\}\}/g, (_, key) => {

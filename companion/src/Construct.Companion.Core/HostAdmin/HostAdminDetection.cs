@@ -46,6 +46,7 @@ public static partial class HostAdminProtocol
     public static int? PollInterval(JsonObject state)
     {
         if (state["maintenance"] is not null || StateJson.Truthy(state["updatePending"]) || Text(state["maintenanceTab"]?["current"]?["state"]) is "checking" or "draining" or "handedOff" or "applying") return 5000;
+        if (Text(state["activeTab"]) == "usage" && StateJson.Boolean(state["features"]?["usage"]) == true && Text(state["mode"]) is "admin" or "user") return 60000;
         return Text(state["mode"]) != "admin" ? null : Text(state["activeTab"]) == "vms" ? 10000 : StateJson.Boolean(state["features"]?["updates"]) == true ? 60000 : null;
     }
 }

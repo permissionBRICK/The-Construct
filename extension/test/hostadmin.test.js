@@ -22,7 +22,7 @@ function apiErr(status, body, message) {
   return e;
 }
 
-const HEALTH_FULL = { status: "ok", schemaVersion: 7, apiFeatures: ["host-admin", "children", "media", "console", "updates", "network", "primary-cpu", "primary-memory"] };
+const HEALTH_FULL = { status: "ok", schemaVersion: 7, apiFeatures: ["host-admin", "children", "media", "console", "updates", "network", "primary-cpu", "primary-memory", "usage"] };
 const ME_ADMIN = { name: "DOMAIN\\alice", known: true, role: "admin", enabled: true, maxVms: 2, apiFeatures: HEALTH_FULL.apiFeatures };
 const ME_USER = { ...ME_ADMIN, name: "DOMAIN\\bob", role: "user" };
 
@@ -55,9 +55,9 @@ function fakeClient(answers = {}) {
 
 (async () => {
   console.log("\n=== feature detection ===");
-  deep("features: every flag false without apiFeatures", ha.featureSet({}), { hostAdmin: false, children: false, media: false, console: false, updates: false, network: false, networkMode: false, primaryCpu: false, primaryMemory: false, primaryNested: false });
-  deep("features: the full list", ha.featureSet(HEALTH_FULL), { hostAdmin: true, children: true, media: true, console: true, updates: true, network: true, networkMode: false, primaryCpu: true, primaryMemory: true, primaryNested: false });
-  deep("features: stage-1 service advertises host-admin only", ha.featureSet({ apiFeatures: ["host-admin"] }), { hostAdmin: true, children: false, media: false, console: false, updates: false, network: false, networkMode: false, primaryCpu: false, primaryMemory: false, primaryNested: false });
+  deep("features: every flag false without apiFeatures", ha.featureSet({}), { hostAdmin: false, usage: false, children: false, media: false, console: false, updates: false, network: false, networkMode: false, primaryCpu: false, primaryMemory: false, primaryNested: false });
+  deep("features: the full list", ha.featureSet(HEALTH_FULL), { hostAdmin: true, usage: true, children: true, media: true, console: true, updates: true, network: true, networkMode: false, primaryCpu: true, primaryMemory: true, primaryNested: false });
+  deep("features: stage-1 service advertises host-admin only", ha.featureSet({ apiFeatures: ["host-admin"] }), { hostAdmin: true, usage: false, children: false, media: false, console: false, updates: false, network: false, networkMode: false, primaryCpu: false, primaryMemory: false, primaryNested: false });
   ok("maintenance: a 503 maintenance error is recognised", ha.isMaintenanceError(apiErr(503, { code: "maintenance", phase: "draining" })));
   ok("maintenance: a 503 without a body is treated as maintenance", ha.isMaintenanceError(apiErr(503, null)));
   ok("maintenance: a 500 is not", !ha.isMaintenanceError(apiErr(500, { code: "maintenance" })));
@@ -142,7 +142,7 @@ function fakeClient(answers = {}) {
   console.log("\n=== tabs and polling ===");
   {
     const tabs = ha.tabsFor({ features: ha.featureSet({ apiFeatures: ["host-admin"] }) });
-    eq("tabs: seven tabs", tabs.length, 7);
+    eq("tabs: eight tabs", tabs.length, 8);
     ok("tabs: overview available with host-admin", tabs.find((t) => t.id === "overview").available);
     const m = tabs.find((t) => t.id === "maintenance");
     ok("tabs: maintenance needs the updates feature", !m.available && /not available on this host version/.test(m.reason));
@@ -710,7 +710,7 @@ function fakeClient(answers = {}) {
     await m.detect();
     eq("model: an ordinary user is the user state", m.state.mode, "user");
     await m.load("vms");
-    ok("model: a user loads nothing (the module is absent)", m.state.vms === null && !c.calls.some((x) => x.method === "vms"));
+    ok("model: a user can load their VM list when usage is available", m.state.vms !== null && c.calls.some((x) => x.method === "vms"));
   }
   {
     const c = fakeClient({ health: HEALTH_FULL, whoami: ME_ADMIN, media: apiErr(404, { code: "not-found" }) });
