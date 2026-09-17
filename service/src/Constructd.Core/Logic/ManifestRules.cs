@@ -14,6 +14,15 @@ public static class ManifestRules
     {
         if (m.PayloadSizeBytes is <= 0 or > 1073741824 || m.PayloadUncompressedSizeBytes is <= 0 or > 1073741824)
             throw new UpdateException("incompatible");
+        if (m.LinuxAsset is not null || m.LinuxSha256 is not null || m.LinuxSizeBytes is not null ||
+            m.LinuxSumsSha256 is not null || m.LinuxUncompressedSizeBytes is not null ||
+            m.LinuxUpdaterPath is not null || m.LinuxUpdaterSha256 is not null)
+        {
+            if (m.Commit is null || m.Commit.Length != 40 || m.LinuxAsset != $"construct-host-{m.Commit[..7]}-linux-x64.zip" ||
+                !Hash(m.LinuxSha256) || !Hash(m.LinuxSumsSha256) || !Hash(m.LinuxUpdaterSha256) ||
+                m.LinuxSizeBytes is not (> 0 and <= 1073741824) || m.LinuxUncompressedSizeBytes is not (> 0 and <= 1073741824) ||
+                m.LinuxUpdaterPath != "updater/update-construct-host.sh") throw new UpdateException("incompatible");
+        }
         if (m.FrameworkDependentAsset is null && m.FrameworkDependentSha256 is null && m.FrameworkDependentSizeBytes is null &&
             m.FrameworkDependentSumsSha256 is null && m.FrameworkDependentUncompressedSizeBytes is null && m.Runtimes is null) return;
         if (m.Commit is null || m.Commit.Length != 40 || m.FrameworkDependentAsset != $"construct-host-{m.Commit[..7]}-win-x64-fdd.zip" ||

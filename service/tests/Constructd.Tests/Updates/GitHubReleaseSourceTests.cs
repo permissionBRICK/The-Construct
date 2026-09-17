@@ -122,6 +122,26 @@ public sealed class GitHubReleaseSourceTests
         try { await source.DownloadAsync(asset, destination, null, default); Assert.Equal(new byte[] { 1, 2, 3 }, await File.ReadAllBytesAsync(destination)); }
         finally { File.Delete(destination); }
     }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Linux_download_is_allowlisted_only_with_complete_metadata(bool broken)
+    {
+        var row=System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(Manifest()))!.AsObject();
+        row["linuxAsset"]="construct-host-aaaaaaa-linux-x64.zip";
+        row["linuxSha256"]=new string('a',64);row["linuxSumsSha256"]=new string('b',64);
+        row["linuxSizeBytes"]=3;row["linuxUncompressedSizeBytes"]=100;
+        row["linuxUpdaterPath"]="updater/update-construct-host.sh";row["linuxUpdaterSha256"]=new string('c',64);
+        if(broken)row.Remove("linuxUpdaterSha256");
+        using var client=new HttpClient(new Handler(request=>new(HttpStatusCode.OK){Content=request.RequestUri!.AbsolutePath.EndsWith("manifest.json")?new StringContent(row.ToJsonString()):new ByteArrayContent([1,2,3])}));
+        var source=new GitHubReleaseSource(client);
+        if(broken){await Assert.ThrowsAsync<UpdateException>(()=>source.ListHostReleasesAsync("owner/repo",default));return;}
+        var release=Assert.Single(await source.ListHostReleasesAsync("owner/repo",default));
+        var asset=Assert.Single(release.Assets,a=>a.Name.EndsWith("-linux-x64.zip"));
+        var path=Path.GetTempFileName();
+        try{await source.DownloadAsync(asset,path,null,default);Assert.Equal(new byte[]{1,2,3},await File.ReadAllBytesAsync(path));}
+        finally{File.Delete(path);}
+    }
     private static object Manifest(string commit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") => new
     {
         schemaVersion = 1, repository = "owner/repo", @ref = "refs/heads/main", commit,

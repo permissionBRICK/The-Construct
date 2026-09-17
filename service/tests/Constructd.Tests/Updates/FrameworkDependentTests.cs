@@ -50,7 +50,7 @@ public sealed class FrameworkDependentTests
         var runner = new RuntimeRunner(scenario);
         try
         {
-            var stager = new PackageStager(source, new InMemoryHostConfigStore(new MutableClock()), new() { DatabasePath = Path.Combine(root, "db") }, new FakeReleaseInfo(), runner);
+            var stager = new PackageStager(source, new InMemoryHostConfigStore(new MutableClock()), new() { DatabasePath = Path.Combine(root, "db") }, new FakeReleaseInfo(), runner) { IsWindows = true };
             var staged = await stager.StageAsync(Guid.NewGuid().ToString("n"), release, null, default);
             Assert.Equal(expected, staged.Source);
             Assert.Equal(expected == "framework-dependent" ? manifest.FrameworkDependentAsset : manifest.PayloadAsset, source.Downloads.Last().Name);
