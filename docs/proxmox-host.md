@@ -80,7 +80,7 @@ node with `--build` / for a non-main `--ref`. In order it does:
 4. **TLS** — a self-signed certificate (10 years, SAN = public host and node name) as PFX; kept on re-runs.
 5. **Files** — the service into `/opt/construct/host`, the checkout into `/opt/construct/scripts`.
 6. **`appsettings.Production.json`** — root-only, since it carries the PFX password. Every value the Proxmox platform reads is in it (section 4).
-7. **systemd** — `constructd.service`, enabled, running as root because `qm`/`pvesh` need it.
+7. **systemd** — `constructd.service`, enabled, running as root because `qm`/`pvesh` need it. Sleep, suspend and hibernate are masked and logind ignores the lid, the suspend keys and idleness, so a laptop node stays up under its guests (the Windows installer's `powercfg` step).
 8. **First admin** — `admin users add <name> --role Admin --max-vms 10` and one API token, printed once. Re-runs keep the token; `--rotate-token` issues a new one.
 9. **Start and verify** — restarts the unit and waits for `/api/v1/health`.
 
