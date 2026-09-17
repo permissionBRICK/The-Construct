@@ -29,7 +29,7 @@ public sealed partial class ProxmoxChildVmPlatform(IProcessRunner processes, IHy
             Unsupported, Unsupported, driver.Capabilities.Suspend ? Supported : Unsupported, Conditional,
             ["Both Secure Boot templates use OVMF's bundled Microsoft keys. Guest agent addresses are unverified.",
              "Console text uses US-layout ASCII; unsupported keys and scancodes are refused.",
-             "Native noVNC requires a separate Proxmox login; the VMConnect browser gateway is unsupported."]));
+             "Browser consoles use session-bound VNC through the trusted Construct gateway. The primary-to-node VNC hop is unencrypted."]));
     }
 
     public Task<ChildStoragePlacement> ResolvePrimaryStorageAsync(string name, CancellationToken ct) => ResolveStorageAsync(name, ct);

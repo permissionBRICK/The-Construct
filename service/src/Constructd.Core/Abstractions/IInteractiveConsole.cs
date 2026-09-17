@@ -22,9 +22,3 @@ public interface IInteractiveConsole
     Task RemoveAsync(string sessionId, CancellationToken ct);
     Task ReconcileAsync(CancellationToken ct);
 }
-
-/// <summary>A native viewer requiring its own host login, without Construct gateway credentials.</summary>
-public interface IInteractiveConsoleLink
-{
-    Task<string> GetLaunchUrlAsync(string vmName, CancellationToken ct);
-}

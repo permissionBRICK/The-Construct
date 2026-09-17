@@ -1040,10 +1040,9 @@ run_step optional "Installing construct CLI" install_construct_cli
 # The browser console is part of a service-managed primary, alongside its CLI.
 # Configuration/identity have been written and Docker installed by this point.
 #
-# It is a gateway to Hyper-V's VMConnect, so a host whose service does not offer the
-# `console` feature (a Proxmox host) has nothing for it to reach: the step is skipped
-# there. An older service without /health, or one that cannot be asked, keeps today's
-# behaviour and installs the gateway.
+# The gateway supports Hyper-V VMConnect and Proxmox VNC. Skip hosts without the
+# `console` feature. An older service without /health, or one that cannot be asked,
+# keeps the existing behaviour and installs the gateway.
 service_offers_feature() {
   local feature="$1" token_file="${CONSTRUCT_VM_TOKEN_FILE:-/etc/construct/vm-token}" ca="/etc/construct/service-ca.pem"
   local -a args=(--silent --show-error --max-time 15 -H "Accept: application/json")

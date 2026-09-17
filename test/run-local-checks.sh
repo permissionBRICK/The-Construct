@@ -35,6 +35,7 @@ if [[ "$group" == service || "$group" == all ]]; then
   node --check console-viewer/static/viewer.js
   bash -n console-viewer/install.sh bin/construct-vm.sh bin/provision.sh bin/fetch-construct-source.sh
   pwsh -NoProfile -File test/browser-console-install.test.ps1
+  bash test/browser-console-provision.test.sh
   node extension/test/drivers.test.js
   node extension/test/hostadmin.test.js
   bash test/construct-vm.test.sh
