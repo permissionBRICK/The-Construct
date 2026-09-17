@@ -59,6 +59,8 @@ public sealed class ConstructdOptions
 
     public ProxmoxOptions Proxmox { get; set; } = new();
 
+    public NegotiateOptions Negotiate { get; set; } = new();
+
     /// <summary>The Construct checkout the service invokes (ISO build, Create-AgentVM, …).</summary>
     public string ScriptsDir { get; set; } = string.Empty;
 
@@ -193,6 +195,32 @@ public sealed class ProxmoxOptions
 
     /// <summary>The <c>pvesh</c> command (read-only API queries).</summary>
     public string PveshPath { get; set; } = "pvesh";
+}
+
+/// <summary>
+/// Kerberos/NTLM sign-in (the Negotiate scheme). On Windows it is on by default and needs nothing:
+/// the service runs as a domain identity. On Linux it is off unless <see cref="Enabled"/> says
+/// otherwise; then the service authenticates through GSSAPI with a keytab for its
+/// <c>HTTP/&lt;public host&gt;</c> principal (<c>KRB5_KTNAME</c>, written by the installer), and the
+/// identity Kerberos yields — <c>user@REALM</c> — is mapped to the <c>DOMAIN\user</c> form a Windows
+/// host produces, so one user record serves both kinds of host.
+/// </summary>
+public sealed class NegotiateOptions
+{
+    /// <summary>Register the Negotiate scheme. Null (the default) means "on Windows only".</summary>
+    public bool? Enabled { get; set; }
+
+    /// <summary>
+    /// The NetBIOS domain name (<c>HOME</c>) a Kerberos principal <c>user@REALM</c> is mapped onto
+    /// (<c>HOME\user</c>). Empty leaves principal names as Kerberos reports them.
+    /// </summary>
+    public string DomainName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The Kerberos realm (<c>DC.EXAMPLE.NET</c>) whose principals are mapped. Empty maps every realm;
+    /// set it when the service can be reached by principals from a trusted foreign realm.
+    /// </summary>
+    public string Realm { get; set; } = string.Empty;
 }
 
 /// <summary>Where durable state is kept.</summary>

@@ -1,5 +1,7 @@
 using System.Security.Claims;
 using Constructd.Core.Abstractions;
+using Constructd.Core.Configuration;
+using Constructd.Core.Logic;
 using Microsoft.AspNetCore.Authentication;
 
 namespace Constructd.Api.Auth;
@@ -13,7 +15,7 @@ namespace Constructd.Api.Auth;
 /// <c>authenticated</c> rejects it — <c>GET /whoami</c> still answers, which is how enrollment
 /// reports "you are not enrolled on this host".
 /// </summary>
-public sealed class UserClaimsTransformation(IUserStore users) : IClaimsTransformation
+public sealed class UserClaimsTransformation(IUserStore users, ConstructdOptions? options = null) : IClaimsTransformation
 {
     public async Task<ClaimsPrincipal> TransformAsync(ClaimsPrincipal principal)
     {
@@ -36,8 +38,15 @@ public sealed class UserClaimsTransformation(IUserStore users) : IClaimsTransfor
             return principal;
         }
 
-        var user = await users.GetAsync(name, CancellationToken.None).ConfigureAwait(false);
-        if (user is null || !user.Enabled)
+        // Kerberos on a Linux host names the user `user@REALM`; the store (and every Windows host)
+        // knows them as `DOMAIN\user`. One spelling from here on, so `whoami`, the audit trail and
+        // the user lookup agree — see PrincipalNames.
+        var negotiate = options?.Negotiate;
+        var mapped = PrincipalNames.Normalize(name, negotiate?.DomainName, negotiate?.Realm);
+        var renamed = !string.Equals(mapped, name, StringComparison.Ordinal);
+
+        var user = await users.GetAsync(mapped, CancellationToken.None).ConfigureAwait(false);
+        if ((user is null || !user.Enabled) && !renamed)
         {
             return principal;
         }
@@ -45,8 +54,22 @@ public sealed class UserClaimsTransformation(IUserStore users) : IClaimsTransfor
         // Clone: the transformation may run more than once per request on a cached principal.
         var transformed = new ClaimsPrincipal(principal.Identities.Select(i => i.Clone()));
         var identity = (ClaimsIdentity)transformed.Identity!;
-        identity.AddClaim(new Claim(ConstructdClaims.KnownUser, "true"));
-        identity.AddClaim(new Claim(identity.RoleClaimType, user.Role.ToString()));
+        if (renamed)
+        {
+            foreach (var claim in identity.FindAll(identity.NameClaimType).ToList())
+            {
+                identity.RemoveClaim(claim);
+            }
+
+            identity.AddClaim(new Claim(identity.NameClaimType, mapped));
+        }
+
+        if (user is { Enabled: true })
+        {
+            identity.AddClaim(new Claim(ConstructdClaims.KnownUser, "true"));
+            identity.AddClaim(new Claim(identity.RoleClaimType, user.Role.ToString()));
+        }
+
         return transformed;
     }
 }
