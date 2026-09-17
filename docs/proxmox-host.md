@@ -415,6 +415,19 @@ they do not fill the usage bar. Proxmox defaults to Observe mode, so the card sa
 "admission not enforced (observe mode)". The headroom marker appears only in Enforce
 mode. Changing the headroom default does not enable capacity enforcement.
 
+The `memoryPressure` host policy saves idle VMs to disk when measured RAM use exceeds 90%
+or swap use exceeds 50%, even in Observe mode. It continues until RAM falls below 80% and
+swap is no longer above its threshold. Users resume saved VMs; the policy never resumes or
+shuts them down. A VM with a connection, a fresh busy heartbeat, provisioning or a running
+job is never touched, and an effective idle policy of Off or timeout 0 exempts it.
+The closest idle timeout goes first, with larger guest resident `mem` breaking ties.
+The service waits at least 60 seconds and requires a new measurement between saves;
+recently started or saved VMs get a 10-minute cooldown. Admins can adjust or disable the
+policy in Host Administration's Configuration tab. The RAM card shows pressure and the
+last save, the VM list shows "saved (memory pressure)", and each attempt is audited as
+`vm.pressure-save`. If every VM is busy, the host stays under pressure and the panel says
+there are insufficient idle VMs. This policy does not change ballooning or KSM settings.
+
 ## 8. Troubleshooting
 
 - `journalctl -u constructd -f` — the service log. Driver failures name the operation and the VM;
