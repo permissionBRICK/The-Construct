@@ -30,4 +30,5 @@
   </ItemGroup>
 
   <ItemGroup><None Update="Foundation/PreFeatureSchema.sql" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
+  <ItemGroup><Content Include="../../../test/fixtures/companion-parity/hostadmin-config-schema.json" Link="hostadmin-config-schema.json" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>
 </Project>
