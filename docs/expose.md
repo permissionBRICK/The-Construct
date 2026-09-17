@@ -381,22 +381,22 @@ Each run evaluates four probes and posts the result to
 `POST {url}/api/v1/vms/{instance}/activity` with the VM token:
 
 ```json
-{"busy":true,"reasons":["ssh-session","agent-cpu:claude","tmux-activity"]}
+{"busy":true,"reasons":["ssh-session","agent-log:claude","t3-thread-running"]}
 ```
 
 | Reason | Probe |
 |---|---|
 | `ssh-session` | An established TCP connection to port 22 (`ss -tn state established '( sport = :22 )'`), or a login in `who` when `ss` is missing **or fails**. A probe that cannot answer falls through to the next source; it never counts as "nobody is connected". |
-| `agent-cpu:<name>` | An agent process — `claude`, `codex`, `opencode`, `t3`, or a `node`/`bun`/`python3` whose command line names one of those stacks — **or any of its descendants** whose `utime+stime` in `/proc/<pid>/stat` grew by more than `CONSTRUCT_IDLE_CPU_TICKS` (default 10 ticks ≈ 0.1 CPU-seconds) since the previous run. Descendants matter: an agent running a test suite sits at ~0% itself while its children do the work, so the CPU of a process is attributed to the nearest ancestor that is an agent. The previous sample is kept in `/run/construct/idle-state.json`. |
-| `tmux-activity` | A `tmux` window whose `#{window_activity}` is newer than the report interval. (`#{pane_activity}` is a valid format field that resolves to an *empty string* on tmux 3.x — using it would report a busy detached agent as idle.) Skipped when `tmux` is not installed. |
+| `agent-log:<claude\|codex\|opencode>` | An agent transcript written within the last interval + 30 s: Claude Code session files under `~/.claude/projects/**/*.jsonl`, Codex rollouts under `~/.codex/sessions/**/rollout-*.jsonl`, or the OpenCode database (`~/.local/share/opencode/opencode.db` and its `-wal`). Every home directory is checked (`/root` and `/home/*`; override with `CONSTRUCT_IDLE_AGENT_HOMES`). Agents append to their transcript on every model turn and tool call, so a working agent keeps its file fresh while an idle one, or a resident server process, does not. |
+| `t3-thread-running` | The T3 Code database (`~/.t3/userdata/**/*.db`) has a thread whose session status is `running`, is not deleted, and is not waiting on the user (no pending question and no pending approval). A thread blocked on a question or an approval is *not* busy — nobody is going to answer it while the VM sits unattended. |
 | `provisioning` | `/run/construct/provisioning` exists **and** the PID it contains is still alive. `provision.sh` writes the marker at the start of a run and removes it at the end; the PID check is what keeps a run killed mid-flight (dropped SSH, reboot) from pinning the VM as busy forever. |
 
 `busy` is `true` when any reason fired. The heartbeat is deliberately generous — a false
 `busy` costs some host RAM until the next tick, a false idle kills someone's unattended job.
-That asymmetry decides the "we cannot tell yet" case: a process the reporter has **no
-previous sample for** (the first run after a reboot, or one that appeared since the last
-run) is judged on all the CPU it has burned so far rather than on a delta, so a working
-agent reads as busy from its very first heartbeat. An explicit `busy: false` buys the guest
+The reporter deliberately does **not** look at CPU usage or terminal output: resident
+servers (a language server, a dev server, a T3 Code daemon) burn CPU and print forever, and
+counted that way a VM never goes idle. What an agent *writes* is the signal — a transcript
+that stops growing means the agent has stopped. An explicit `busy: false` buys the guest
 no grace window in the service — only silence does — so guessing `false` there could hand a
 VM to the idle scheduler while an agent is mid-job.
 
@@ -406,9 +406,8 @@ retried by the next tick. The token is passed to `curl` through the same `0600` 
 as `expose`.
 
 Environment overrides (used by `test/idle-report.test.sh`, and available for debugging):
-`CONSTRUCT_IDLE_STATE_FILE`, `CONSTRUCT_IDLE_PROC_DIR`, `CONSTRUCT_IDLE_SS`,
-`CONSTRUCT_IDLE_WHO`, `CONSTRUCT_IDLE_TMUX`, `CONSTRUCT_IDLE_CURL`,
-`CONSTRUCT_PROVISION_MARKER`, `CONSTRUCT_IDLE_CPU_TICKS`, `CONSTRUCT_IDLE_SSH_PORT`,
+`CONSTRUCT_IDLE_PROC_DIR`, `CONSTRUCT_IDLE_SS`, `CONSTRUCT_IDLE_WHO`, `CONSTRUCT_IDLE_CURL`,
+`CONSTRUCT_IDLE_AGENT_HOMES`, `CONSTRUCT_PROVISION_MARKER`, `CONSTRUCT_IDLE_SSH_PORT`,
 `CONSTRUCT_IDLE_DRY_RUN` (print the JSON instead of posting it).
 
 ## Related
