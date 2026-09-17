@@ -33,6 +33,8 @@ public static class ServiceComposition
     {
         ArgumentNullException.ThrowIfNull(options);
 
+        if (options.IsProxmox) options.Proxmox.ValidateConsolePorts(options.SshForwardPorts, options.AppForwardPorts);
+
         // Platform-agnostic and therefore checked in EVERY mode, fake included: a
         // PublicHostPattern that does not render to a host name would otherwise surface as a
         // URL nobody can open, weeks after it was configured (plan §4.12).
