@@ -37,6 +37,10 @@ public sealed class TokenUsageApiTests
         Assert.Equal(100m, vm.TokenUsage!.Today.Tokens); Assert.Equal(100m, vm.TokenUsage.Month.Tokens);
         var user = await (await admin.GetAsync("/api/v1/users/alice")).ReadAsync<UserDetailResponse>();
         Assert.Equal(200m, user.UsageTokensMonth);
+        await alice.CreateVmAsync("silent");
+        var silent = await (await alice.GetAsync("/api/v1/vms/silent/usage")).ReadAsync<TokenUsageSummary>();
+        Assert.Null(Assert.Single(silent.ByVm).LastReportedAt);
+        Assert.Equal(0m, silent.Totals.Tokens);
     }
 
     [Fact]

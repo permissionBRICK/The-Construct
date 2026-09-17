@@ -18,6 +18,9 @@ else error("unrecognized collector report") end
     cacheReadTokens: (.cacheReadTokens // .cachedInputTokens // 0), totalTokens: tokens,
     costUsd: cost, models: models})
 | . as $rows
+| if all($rows[]; (.day | type) == "string" and
+    (.day | test(if $report == "daily" then "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" else "^[0-9]{4}-[0-9]{2}$" end)))
+  then . else error("invalid collector period") end
 | $periods | map(. as $day | ($rows | map(select(.day == $day))) as $matches |
     if ($matches | length) > 1 then error("duplicate collector period")
     elif ($matches | length) == 1 then $matches[0]

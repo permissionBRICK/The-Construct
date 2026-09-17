@@ -16,11 +16,11 @@ public sealed class TokenUsageCleanupService(ITokenUsageStore usage, IHostConfig
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         using var timer = new PeriodicTimer(TimeSpan.FromHours(24));
-        do
+        while (await timer.WaitForNextTickAsync(stoppingToken))
         {
             try { await PruneAsync(stoppingToken); }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { return; }
             catch { logger.LogWarning("Token usage cleanup failed; it will retry on the next daily tick."); }
-        } while (await timer.WaitForNextTickAsync(stoppingToken));
+        }
     }
 }

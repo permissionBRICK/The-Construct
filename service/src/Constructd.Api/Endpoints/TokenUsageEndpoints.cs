@@ -20,12 +20,13 @@ public static class TokenUsageEndpoints
         return api;
     }
 
-    private static async Task<IResult> HostAsync(string? window, HttpContext http, ITokenUsageStore store, IClock clock, CancellationToken ct)
+    private static async Task<IResult> HostAsync(string? window, HttpContext http, ITokenUsageStore store, IVmRepository vms, IClock clock, CancellationToken ct)
     {
         window ??= "today";
         if (!TokenUsageMath.ValidWindow(window)) return Problems.BadRequest("window must be today, month or all.");
         var rows = await store.ListAsync(http.User.IsAdmin() ? null : http.User.NameOrEmpty(), null, ct);
-        return TypedResults.Ok(TokenUsageMath.Aggregate(rows, window, clock.UtcNow));
+        return TypedResults.Ok(TokenUsageMath.Aggregate(rows, window, clock.UtcNow,
+            await vms.ListAsync(http.User.IsAdmin() ? null : http.User.NameOrEmpty(), ct)));
     }
 
     private static async Task<IResult> VmAsync(string name, string? window, HttpContext http, IVmRepository repository,
@@ -35,7 +36,7 @@ public static class TokenUsageEndpoints
         if (!lookup.Ok) return lookup.Failure!;
         window ??= "today";
         if (!TokenUsageMath.ValidWindow(window)) return Problems.BadRequest("window must be today, month or all.");
-        return TypedResults.Ok(TokenUsageMath.Aggregate(await store.ListAsync(http.User.IsAdmin() ? null : http.User.NameOrEmpty(), lookup.Vm!.Name, ct), window, clock.UtcNow));
+        return TypedResults.Ok(TokenUsageMath.Aggregate(await store.ListAsync(http.User.IsAdmin() ? null : http.User.NameOrEmpty(), lookup.Vm!.Name, ct), window, clock.UtcNow, [lookup.Vm]));
     }
 
     private static bool ValidCost(decimal? cost) => cost is >= 0 and <= 9223372036854.775807m;

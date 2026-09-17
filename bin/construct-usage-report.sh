@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Guest token telemetry. Only the timer retries; no credentials are passed in argv.
+# shellcheck source-path=SCRIPTDIR
 set -uo pipefail
 CONFIG_FILE="${CONFIG_FILE:-/etc/construct/config.env}"
 VM_TOKEN_FILE="${CONSTRUCT_VM_TOKEN_FILE:-/etc/construct/vm-token}"
@@ -50,6 +51,7 @@ work="$(mktemp -d)" || exit 0
 trap 'rm -r -- "${work}"' EXIT
 collector="${SCRIPT_DIR}/lib/usage-collect.sh"
 [[ -f "${collector}" ]] || collector="${SCRIPT_DIR}/../extension/vm/usage-collect.sh"
+# shellcheck source=../extension/vm/usage-collect.sh
 source "${collector}"
 ensure_ccusage
 today="$(date +%Y%m%d)"

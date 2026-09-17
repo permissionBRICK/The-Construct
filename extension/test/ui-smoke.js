@@ -1318,6 +1318,8 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await pushAdmin({ ...usageState, mode: "user", tabs: usageModel.tabsFor({ mode: "user", features: { usage: true } }) });
   check("usage: users can view usage without network-mode", await admin.locator("#tab-usage").isVisible());
   check("usage: by-user table is admin-only", !(await admin.locator("#usageUsers").isVisible()));
+  await pushAdmin({ ...usageState, mode: "user", usage: null, vms: null, tabs: usageModel.tabsFor({ mode: "user", features: { usage: true } }) });
+  check("usage: cleared identity data leaves no previous VM rows", (await admin.locator("#usageVmTable .ha-row").count()) === 0 && (await admin.locator("#vmsTable .ha-row").count()) === 0);
   await pushAdmin({ ...ADMIN_STATE, activeTab: "vms", vms: { ...ADMIN_STATE.vms, rows: ADMIN_STATE.vms.rows.map(r => ({ ...r, tokenUsage: "1.2K today / 1.2M month" })) } });
   check("usage: VM rows show today and month", (await admin.locator("#vmsTable").innerText()).includes("1.2K today / 1.2M month"));
   await pushAdmin({ ...ADMIN_STATE, activeTab: "users", users: { rows: ADMIN_STATE.users.rows.map(r => ({ ...r, usageTokensMonth: "1.2M" })) } });

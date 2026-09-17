@@ -233,7 +233,11 @@
   function renderTokenUsage(s) {
     const usage = s.usage;
     show($("usageUsers"), s.mode === "admin");
-    if (!usage) return;
+    if (!usage) {
+      clear($("usageUserTable")); clear($("usageVmTable"));
+      text("hostUsageTotals", "Waiting for usage reports."); text("usageGeneratedAt", "");
+      return;
+    }
     $("usageWindow").value = usage.window;
     text("hostUsageTotals", `${usage.totals.tokens} tokens · ${usage.totals.cost} estimated cost`);
     text("usageGeneratedAt", "Updated " + usage.generatedAt);
@@ -256,7 +260,8 @@
   function renderVms(s) {
     const v = s.vms;
     const table = $("vmsTable");
-    if (!v || !table) return;
+    if (!table) return;
+    if (!v) { clear(table); return; }
     clear(table);
     show($("vmsEmpty"), !v.rows.length);
     text("vmsMeta", `${v.rows.length} VM${v.rows.length === 1 ? "" : "s"} · refreshes every 10 s${v.childrenFeature ? "" : " · child VMs not available on this host version"}`);

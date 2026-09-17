@@ -1128,7 +1128,6 @@ else
   remove_idle_report_timer || true
 fi
 
-# The endpoint can change after provisioning when a Proxmox VM changes mode or address.
 setup_usage_report_timer() {
   local unit_dir="${CONSTRUCT_SYSTEMD_DIR:-/etc/systemd/system}"
   local bin_dir="${CONSTRUCT_BIN_DIR:-/usr/local/bin}"
