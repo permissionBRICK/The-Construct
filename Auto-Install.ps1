@@ -2614,8 +2614,15 @@ if ($RemoteInstall) {
         $bk = Get-ConstructBackupDir -Dir $PSScriptRoot
         if (Confirm-ConstructSavedConfigRestore -BackupDir $bk -BackupMode $BackupMode) {
             $restoreDir = $bk
-            $restoredProjectNames = Get-BackupProjectNames -BackupDir $bk
+            # A NEW instance restores the saved config (auth, memory, skills, credentials, the
+            # profile files) but not another VM's workspace: the profiles the save generated stay
+            # out of the selection, which is the user's own. Only a reinstall of the SAME instance
+            # folds them back in (the reinstall flow above sets $restoredProjectNames).
+            $savedProfiles = @(Get-BackupProjectNames -BackupDir $bk)
             Write-Ok "Saved config loaded; it will be restored automatically after the install."
+            if ($savedProfiles.Count -gt 0) {
+                Write-Note "The backup carries $($savedProfiles.Count) project profile(s) from the VM it was saved on; pick the ones this VM should provision in the project selection."
+            }
         }
     }
 
@@ -3440,8 +3447,13 @@ if ($PSBoundParameters.ContainsKey('Action') -and $Action -eq 'add-config' -and 
 if (-not $SkipCreateVm -and -not $existingVmHandled) {
     if (Confirm-ConstructSavedConfigRestore -BackupDir $bk -BackupMode $BackupMode) {
         $restoreDir = $bk
-        $restoredProjectNames = Get-BackupProjectNames -BackupDir $bk
+        # Fresh install: restore the config, not the saved VM's workspace -- the project
+        # selection below is authoritative (see the remote path for the same rule).
+        $savedProfiles = @(Get-BackupProjectNames -BackupDir $bk)
         Write-Ok "Saved config loaded; it will be restored automatically after the install."
+        if ($savedProfiles.Count -gt 0) {
+            Write-Note "The backup carries $($savedProfiles.Count) project profile(s) from the VM it was saved on; pick the ones this VM should provision in the project selection."
+        }
     }
 }
 
