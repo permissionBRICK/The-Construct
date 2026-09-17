@@ -27,7 +27,8 @@ public static class MediaComposition
         }
         else
         {
-            var root=Path.TrimEndingDirectorySeparator(Path.GetFullPath(options.HostAdmin.Media.RootDir ?? @"C:\ProgramData\Construct\service\media"));
+            var root=Path.TrimEndingDirectorySeparator(Path.GetFullPath(options.HostAdmin.Media.RootDir ??
+                (options.IsProxmox ? "/var/lib/constructd/media/template/iso" : @"C:\ProgramData\Construct\service\media")));
             var catalog=Path.TrimEndingDirectorySeparator(Path.GetFullPath(options.Iso.CacheDir));
             var comparison=OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
             if(root.Equals(catalog,comparison) || root.StartsWith(catalog+Path.DirectorySeparatorChar,comparison) || catalog.StartsWith(root+Path.DirectorySeparatorChar,comparison))

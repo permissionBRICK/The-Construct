@@ -5,7 +5,8 @@ namespace Constructd.Core.Services;
 public sealed class CapabilityAggregator(IHypervisorDriver legacy, IChildVmDriver child, IConsoleTransport console) : ICapabilityAggregator
 {
     public async Task<BackendCapabilities> GetAsync(CancellationToken ct) =>
-        (await child.GetCapabilitiesAsync(ct)) with { Legacy = legacy.Capabilities, Console = console.Capabilities };
+        (await child.GetCapabilitiesAsync(ct)) with { Legacy = legacy.Capabilities, Console = console.Capabilities,
+            Suspend = legacy.Capabilities.Suspend ? CapabilityLevel.Supported : CapabilityLevel.Unsupported };
 }
 
 public static class UnsupportedCapabilities
