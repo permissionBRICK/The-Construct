@@ -18,4 +18,5 @@ public sealed record User(
     DateTimeOffset Created,
     bool AllowHostForwards = true,
     bool Enabled = true,
-    UserAllowance? Allowance = null);
+    UserAllowance? Allowance = null,
+    bool? AllowNested = null);

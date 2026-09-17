@@ -23,6 +23,64 @@ public sealed class ProxmoxDriverTests
         new("work-vm", Cpu: 4, RamGb: 8, DiskGb: 60, IsoPath: "local:snippets/construct-work-vm-user.yaml",
             Nested: true, AutomaticCheckpoints: false);
 
+    [Theory]
+    [InlineData(true, "host")]
+    [InlineData(false, "x86-64-v2-AES")]
+    public async Task Nested_selects_cpu_for_create_and_pending_setting(bool nested, string model)
+    {
+        var (driver, runner, _) = Driver(new RecordingProcessRunner().RespondStdout("[]").RespondStdout("104")
+            .RespondStdout("").RespondStdout("").RespondStdout("").RespondStdout(Resources).RespondStdout(""));
+        await driver.CreateVmAsync(Descriptor with { Nested = nested }, null, default);
+        var argv = runner[2].Arguments.ToArray();
+        Assert.Equal(model, argv[Array.IndexOf(argv, "--cpu") + 1]);
+        await driver.SetNestedAsync("work-vm", nested, default);
+        Assert.Equal(["set", "104", "--cpu", model], runner[6].Arguments);
+    }
+
+    [Theory]
+    [InlineData("kvm_intel", "Y", true)]
+    [InlineData("kvm_amd", "1", true)]
+    [InlineData("kvm_intel", "N", false)]
+    [InlineData("kvm_amd", "0", false)]
+    public void Nested_probe_reads_loaded_module_parameter(string module, string value, bool expected)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "construct-kvm-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Assert.False(ProxmoxNestedCapability.IsAvailable(root));
+            var path = Path.Combine(root, module, "parameters");
+            Directory.CreateDirectory(path);
+            File.WriteAllText(Path.Combine(path, "nested"), value + "\n");
+            Assert.Equal(expected, ProxmoxNestedCapability.IsAvailable(root));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Network_configuration_updates_cloud_init_only_while_off(bool fixedAddress)
+    {
+        var (driver, runner, _) = Driver(new RecordingProcessRunner().RespondStdout(Resources)
+            .RespondStdout("""{"status":"stopped"}""").RespondStdout("").RespondStdout(""));
+        await driver.ConfigureNetworkAsync("work-vm", fixedAddress ? "203.0.113.50/24" : null,
+            fixedAddress ? "203.0.113.1" : null, fixedAddress ? ["203.0.113.2", "203.0.113.3"] : null, default);
+        Assert.Equal(fixedAddress
+            ? new[] { "set", "104", "--ipconfig0", "ip=203.0.113.50/24,gw=203.0.113.1", "--nameserver", "203.0.113.2 203.0.113.3" }
+            : new[] { "set", "104", "--ipconfig0", "ip=dhcp", "--delete", "nameserver" }, runner[2].Arguments);
+        Assert.Equal(["cloudinit", "update", "104"], runner[3].Arguments);
+    }
+
+    [Theory]
+    [InlineData("""{"status":"running"}""")]
+    [InlineData("""{"status":"stopped","lock":"suspended"}""")]
+    public async Task Network_configuration_refuses_running_and_saved_guests(string state)
+    {
+        var (driver, runner, _) = Driver(new RecordingProcessRunner().RespondStdout(Resources).RespondStdout(state));
+        await Assert.ThrowsAsync<ProxmoxOperationException>(() => driver.ConfigureNetworkAsync("work-vm", null, null, null, default));
+        Assert.All(runner.Calls, call => Assert.Equal("pvesh", call.FileName));
+    }
+
     [Fact]
     public async Task Create_clones_the_image_seeds_cloud_init_resizes_and_starts()
     {

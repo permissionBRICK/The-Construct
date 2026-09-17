@@ -273,6 +273,20 @@ function Remove-ConstructVm {
     Remove-AgentVm -VmName $Name
 }
 
+function Get-ConstructVmNested {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name)
+    [bool](Get-VMProcessor -VMName $Name -ErrorAction Stop).ExposeVirtualizationExtensions
+}
+
+function Set-ConstructVmNested {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][bool]$Enabled)
+    $vm = Get-VM -Name $Name -ErrorAction Stop
+    if ($vm.State -ne 'Off') { throw "VM '$Name' must be off to change nested virtualization." }
+    Set-VMProcessor -VM $vm -ExposeVirtualizationExtensions $Enabled -ErrorAction Stop
+}
+
 function Set-ConstructVmCpuCount {
     <#
         Change the vCPU count of an EXISTING VM (capability: Resources). Virtual

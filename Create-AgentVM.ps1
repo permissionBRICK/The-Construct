@@ -85,6 +85,8 @@ param(
     # to an existing VM). "true"/"false".
     [ValidateSet("true", "false")]
     [string]$AutomaticCheckpoints = "false",
+    [ValidateSet("true", "false")]
+    [string]$Nested = "true",
     # Forwarded to Provision-AgentVM.ps1: the config-sync branch this VM's host-config
     # store lives on. EMPTY (the default, and every existing install) means "let the
     # provisioner derive it from the host alias" -- nothing is forwarded and the splat
@@ -553,7 +555,7 @@ New-ConstructVm -Descriptor @{
     SwitchName           = $SwitchName
     Generation           = $Generation
     IsoPath              = $isoPath
-    Nested               = $true
+    Nested               = ($Nested -eq 'true')
     AutomaticCheckpoints = $AutoCheckpoints
     CheckpointType       = $CheckpointType
     AutomaticStartAction = $AutoStart

@@ -1379,6 +1379,12 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await admin.locator("#haVmRam").fill("10");
   check("admin: changed over-cap hardware shows its validation error", await admin.locator("#haVmSettingsApply").isDisabled() && /RAM.*between 1 and 0/.test(await admin.locator("#haVmSettingsError").innerText()));
   await settingsReply({ settings });
+  await settingsReply({ settings: { ...settings, nested: { current: false, desired: true, pending: true, available: true, selectable: true } } });
+  check("admin: pending nested setting is visible", await admin.locator("#haVmNested").inputValue() === "true"
+    && /Nested virtualization: off; pending: on/.test(await admin.locator("#haVmSettingsCurrent").innerText()));
+  await settingsReply({ settings: { ...settings, nested: { current: false, desired: false, available: false, selectable: true } } });
+  check("admin: unavailable nesting disables On", await admin.locator('#haVmNested option[value="true"]').evaluate(e => e.disabled));
+  await settingsReply({ settings });
   await checkPaletteControls(admin, "admin dialog");
   check("admin: current and pending hardware visible", /Current CPU: 4; pending: 6/.test(await admin.locator("#haVmSettingsCurrent").innerText()) && /pending: 12 GB/.test(await admin.locator("#haVmSettingsCurrent").innerText()));
   await admin.locator("#haVmRam").fill("16.5");
@@ -1421,6 +1427,33 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await admin.locator("#haVmSettingsCancel").click();
 
   check("admin: Delete posts deleteVm with name and kind", aposted.some((m) => m.action === "deleteVm" && m.args.name === "work-vm" && m.args.kind === "primary"));
+  const networkState = { ...ADMIN_STATE, activeTab: "overview", features: { ...ADMIN_STATE.features, networkMode: true },
+    networkSection: { key: "network", expectedUpdatedAt: null, text: JSON.stringify({ hostForwardsEnabled: false, directAddressReporting: true, defaultMode: "relayed", ownerMaySwitchMode: false }) } };
+  await pushAdmin(networkState);
+  await admin.waitForTimeout(60);
+  check("network: host card visible on supported host", await admin.locator("#hostNetworkCard").isVisible());
+  await admin.locator("#hostNetworkMode").selectOption("direct");
+  await admin.locator("#hostNetworkOwner").check();
+  await admin.locator("#hostNetworkSave").click();
+  const networkSave = await admin.evaluate(() => window.__posted.filter(m => m.action === "saveConfig").at(-1));
+  const networkBody = JSON.parse(networkSave.args.sections[0].text);
+  check("network: card preserves existing forward policy", networkBody.defaultMode === "direct" && networkBody.ownerMaySwitchMode && networkBody.hostForwardsEnabled === false);
+  await pushAdmin({ ...networkState, activeTab: "vms" });
+  await admin.getByRole("button", { name: "VM settings…", exact: true }).click();
+  settingsRequest = await admin.evaluate(() => window.__posted.filter(m => m.action === "loadVmSettings").at(-1));
+  const networkSettings = { mode: null, effectiveMode: "relayed", desiredAddress: null, gateway: null, dns: null, maySwitchMode: true, maySetAddress: true };
+  await settingsReply({ settings: { ...settings, network: networkSettings } });
+  await admin.locator("#haVmNetworkMode").selectOption("direct");
+  await admin.locator("#haVmAddress").fill("203.0.113.50/24");
+  await admin.locator("#haVmGateway").fill("203.0.113.1");
+  await admin.locator("#haVmSettingsApply").click();
+  appliedSettings = await admin.evaluate(() => window.__posted.filter(m => m.action === "setVmSettings").at(-1));
+  check("network: modal saves mode and fixed address", appliedSettings.args.network.mode === "direct" && appliedSettings.args.network.address === "203.0.113.50/24");
+  await settingsReply({ settings: { ...settings, network: { ...networkSettings, maySetAddress: false, maySwitchMode: false } } });
+  check("network: owner cannot edit fixed address or forbidden mode", !await admin.locator("#haVmNetworkAddressFields").isVisible() && !await admin.locator("#haVmNetworkModeRow").isVisible());
+  await settingsReply({ settings: { ...settings, network: { ...networkSettings, maySetAddress: false, maySwitchMode: true } } });
+  check("network: allowed owner can select a mode", await admin.locator("#haVmNetworkModeRow").isVisible() && !await admin.locator("#haVmNetworkAddressFields").isVisible());
+  await admin.locator("#haVmSettingsCancel").click();
   await pushAdmin({ ...ADMIN_STATE, activeTab: "users" });
   await admin.waitForTimeout(60);
   await admin.locator("#usrTable button", { hasText: "Edit" }).click();

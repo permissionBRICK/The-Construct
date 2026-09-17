@@ -31,7 +31,7 @@ public static class HostAdminEndpoints
     {
         var effective = await EffectiveAsync(user.Name, null, policy, ct);
         return new(user.Name, user.Role, user.Enabled, user.MaxVms, user.AllowHostForwards, user.Created, user.Allowance ?? UserAllowance.Unset,
-            effective, new(effective.Usage.Primaries, effective.Usage.Children), (await tokens.ListAsync(user.Name, ct)).Count);
+            effective, new(effective.Usage.Primaries, effective.Usage.Children), (await tokens.ListAsync(user.Name, ct)).Count, user.AllowNested);
     }
     private static async Task<IResult> UsersAsync(IUserStore users, IDelegationPolicy policy, ITokenService tokens, CancellationToken ct)
     {
@@ -53,7 +53,15 @@ public static class HostAdminEndpoints
         if (user is { Enabled: true, Role: Role.Admin } && (!enabled || role != Role.Admin) &&
             !(await users.ListAsync(ct)).Any(u => u.Enabled && u.Role == Role.Admin && !Ownership.SameName(u.Name, name)))
             return CodedProblems.Create(409, "last-admin", "The last enabled admin cannot be removed.");
-        user = user with { Role = role, Enabled = enabled, MaxVms = request.MaxVms ?? user.MaxVms, AllowHostForwards = request.AllowHostForwards ?? user.AllowHostForwards };
+        if (request.AllowNested.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null or JsonValueKind.True or JsonValueKind.False))
+            return CodedProblems.Validation("allowNested", "Expected true, false or null to inherit.");
+        var allowNested = request.AllowNested.ValueKind switch
+        {
+            JsonValueKind.Undefined => user.AllowNested,
+            JsonValueKind.Null => null,
+            _ => (bool?)request.AllowNested.GetBoolean()
+        };
+        user = user with { Role = role, Enabled = enabled, MaxVms = request.MaxVms ?? user.MaxVms, AllowHostForwards = request.AllowHostForwards ?? user.AllowHostForwards, AllowNested = allowNested };
         if (!await users.UpdateAsync(user, ct)) return Problems.NotFound("Unknown user.");
         if (!enabled) { sessions.RemoveForPrincipal(user.Name); foreach (var vm in await vms.ListAsync(user.Name, ct)) sessions.RemoveForPrincipal("vm:" + vm.Name); }
         CodedProblems.Audit(http, "user.update", user.Name, target: user.Name);
@@ -75,18 +83,22 @@ public static class HostAdminEndpoints
         CodedProblems.Audit(http, "token.revoke", name, target: id);
         return await tokens.RevokeAsync(name, id, ct) ? Results.NoContent() : Problems.NotFound("Unknown token.");
     }
-    private static async Task<IResult> CapabilitiesAsync(ICapabilityAggregator aggregator, IHostConfigStore config, ConstructdOptions options, CancellationToken ct)
+    private static async Task<IResult> CapabilitiesAsync(ICapabilityAggregator aggregator, IHostConfigStore config, ConstructdOptions options, IHypervisorDriver driver, CancellationToken ct)
     {
         var caps = await aggregator.GetAsync(ct); var network = await config.GetAsync<NetworkConfig>("network", ct) ?? HostAdminDefaults.Network;
         var defaults = await config.GetAsync<UserDefaultsConfig>("userDefaults", ct) ?? HostAdminDefaults.UserDefaults;
+        var virtualization = await config.GetAsync<VirtualizationConfig>("virtualization", ct) ?? HostAdminDefaults.Virtualization;
         return Results.Ok(new
         {
             backend = caps.Backend,
             capabilities = caps,
+            nested = new { available = driver.NestedAvailable, @default = virtualization.NestedDefault, selectable = virtualization.NestedSelectable },
             policy = new
             {
                 network.HostForwardsEnabled,
                 network.DirectAddressReporting,
+                network.DefaultMode,
+                network.OwnerMaySwitchMode,
                 defaults.AllowNeverLifetime,
                 defaults.MaxChildLifetimeSeconds,
                 capacityMode = (await CapacityConfigAsync(config, options, ct)).Mode
@@ -149,7 +161,7 @@ public static class HostAdminEndpoints
         }
         return Results.Ok(result);
     }
-    private static async Task<IResult> UpdateConfigAsync(JsonElement request, HttpContext http, IHostConfigMetadata metadata, IClock clock, ConstructdOptions options, CancellationToken ct)
+    private static async Task<IResult> UpdateConfigAsync(JsonElement request, HttpContext http, IHostConfigMetadata metadata, IClock clock, ConstructdOptions options, IHypervisorDriver driver, CancellationToken ct)
     {
         if (request.ValueKind != JsonValueKind.Object) return CodedProblems.Validation("config", "Expected an object of sections.");
         var sections = new List<HostConfigSection>(); var expected = new Dictionary<string, DateTimeOffset?>(); var seen = new HashSet<string>();
@@ -163,7 +175,8 @@ public static class HostAdminEndpoints
                 if (!supplied.Add(field.Name) || field.Name != "expectedUpdatedAt" && !allowed.Contains(field.Name)) return CodedProblems.Validation(property.Name + "." + field.Name, "Unknown field.");
             // A replacement must specify every required (non-nullable) property; omitted optional fields become null.
             foreach (var field in fallback.GetType().GetProperties())
-                if (field.PropertyType.IsValueType && Nullable.GetUnderlyingType(field.PropertyType) is null &&
+                if (!(fallback is NetworkConfig && field.Name == nameof(NetworkConfig.OwnerMaySwitchMode)) &&
+                    field.PropertyType.IsValueType && Nullable.GetUnderlyingType(field.PropertyType) is null &&
                     !property.Value.TryGetProperty(JsonNamingPolicy.CamelCase.ConvertName(field.Name), out _))
                     return CodedProblems.Validation(property.Name + "." + JsonNamingPolicy.CamelCase.ConvertName(field.Name), "Required in a section replacement.");
             object value;
@@ -174,6 +187,10 @@ public static class HostAdminEndpoints
             }
             catch (Exception ex) when (ex is JsonException or FormatException or InvalidOperationException) { return CodedProblems.Validation(property.Name, "Invalid section value."); }
             if (HostConfigValidation.Validate(value) is { } error) return CodedProblems.Validation(property.Name, error);
+            if (HostConfigValidation.UnsupportedOnPlatform(value, options.IsProxmox))
+                return CodedProblems.Create(400, "unsupported-on-platform", "Direct network mode requires Proxmox.");
+            if (value is VirtualizationConfig { NestedDefault: true } && !driver.NestedAvailable)
+                return CodedProblems.Create(409, "unsupported-on-host", "Nested virtualization is unavailable on this host.");
             if (value is UpdatesConfig updates && HostUpdateTrust.Apply(updates, options) != updates)
                 return CodedProblems.Validation("updates", "The update repository is pinned by the host-local installation.");
             sections.Add(new(property.Name, JsonSerializer.Serialize(value, ApiJson.Options), clock.UtcNow, http.User.Actor()));

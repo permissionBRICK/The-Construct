@@ -135,7 +135,9 @@ AGENT_SYSTEM_PROMPT_FILES=(".claude/CLAUDE.md" ".codex/AGENTS.md" ".config/openc
 # The full instruction text: the shipped template with the live DNS name, then
 # the custom file (when present and non-empty) separated by one blank line.
 render_agent_system_prompt() {
-  sed "s|__AGENT_DNS__|${AGENT_DNS}|g" "${AGENT_SYSTEM_PROMPT_SRC}"
+  local address_kind="DNS name"
+  if [[ "${AGENT_DNS}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ || "${AGENT_DNS}" == *:* ]]; then address_kind="address"; fi
+  sed -e "s|__AGENT_DNS__|${AGENT_DNS}|g" -e "s|__AGENT_ADDRESS_KIND__|${address_kind}|g" "${AGENT_SYSTEM_PROMPT_SRC}"
   if [[ -s "${AGENT_SYSTEM_PROMPT_CUSTOM}" ]]; then
     printf '\n'
     cat "${AGENT_SYSTEM_PROMPT_CUSTOM}"

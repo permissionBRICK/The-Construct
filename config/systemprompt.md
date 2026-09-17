@@ -17,7 +17,7 @@ about this environment are worth knowing up front:
 
 ## Reaching this machine
 
-This VM is reachable from the user's machine under the DNS name:
+This VM is reachable from the user's machine under the __AGENT_ADDRESS_KIND__:
 
     __AGENT_DNS__
 

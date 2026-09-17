@@ -176,5 +176,14 @@ exit 0
         return Regex.Match(stdout ?? "", "\"pairUrl\"\\s*:\\s*\"([^\"]+)\"").Groups[1].Value;
     }
     public static string BaseUrl(string? host, string? probedUrl) => ProbeParser.IsSafeOrigin(probedUrl) ? probedUrl! : "http://" + (string.IsNullOrEmpty(host) ? "agent-vm.mshome.net" : host) + ":5177";
+    public sealed record PairLink(string Kind, string PairUrl);
+    public static IReadOnlyList<PairLink> ExtractPairLinks(string? stdout)
+    {
+        var links = StateJson.ParseObject(stdout)?["links"] as JsonArray;
+        return (links ?? []).OfType<JsonObject>().Where(link =>
+            StateJson.Text(link["kind"]) is "forwarded" or "direct" &&
+            Uri.TryCreate(StateJson.Text(link["pairUrl"]), UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https")
+            .Select(link => new PairLink(StateJson.Text(link["kind"])!, StateJson.Text(link["pairUrl"])!)).ToArray();
+    }
     public static JsonObject? PlanLiveAction(bool want, bool had, string newChannel, string oldChannel) => want && !had ? new JsonObject { ["action"] = "enable", ["channel"] = newChannel } : !want && had ? new JsonObject { ["action"] = "disable" } : want && had && newChannel != oldChannel ? new JsonObject { ["action"] = "setChannel", ["channel"] = newChannel } : null;
 }

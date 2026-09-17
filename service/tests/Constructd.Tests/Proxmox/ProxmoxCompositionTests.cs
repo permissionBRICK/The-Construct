@@ -25,12 +25,22 @@ public sealed class ProxmoxCompositionTests : IDisposable
         Assert.IsType<TcpRelayPortForwardManager>(app.Service<IPortForwardManager>());
         Assert.IsType<ProxmoxChildVmPlatform>(app.Service<IChildVmDriver>());
         Assert.IsType<ProxmoxInventory>(app.Service<IHypervisorInventory>());
+        Assert.IsType<ProxmoxConsoleTransport>(app.Service<IConsoleTransport>());
+        Assert.IsType<ProxmoxInteractiveConsole>(app.Service<IInteractiveConsole>());
+        Assert.IsType<ProxmoxGuestAddressProvider>(app.Service<IGuestAddressProvider>());
+        var capabilities = await app.Service<ICapabilityAggregator>().GetAsync(default);
+        Assert.Equal(Constructd.Core.Domain.CapabilityLevel.Supported, capabilities.Suspend);
+        Assert.True(capabilities.Legacy.Suspend);
 
         var features = app.Service<IReleaseInfo>().ApiFeatures;
         Assert.Contains("host-admin", features);
         Assert.Contains("primary-cpu", features);
-        Assert.DoesNotContain("children", features);
-        Assert.DoesNotContain("console", features);
+        Assert.Contains("network-mode", features);
+        Assert.DoesNotContain("network-mode", new Constructd.Api.Composition.ReleaseInfo().ApiFeatures);
+        Assert.Contains("children", features);
+        Assert.Contains("console", features);
+        Assert.Contains("media", features);
+        Assert.Contains("network", features);
         Assert.Contains("updates", features);
         Assert.IsType<Constructd.Proxmox.Updates.SystemdUpdaterLauncher>(app.Service<IUpdaterLauncher>());
 
@@ -40,7 +50,7 @@ public sealed class ProxmoxCompositionTests : IDisposable
 
         var health = await client.GetFromJsonAsync<HealthBody>("/api/v1/health");
         Assert.NotNull(health);
-        Assert.DoesNotContain("children", health!.ApiFeatures);
+        Assert.Contains("children", health!.ApiFeatures);
         Assert.Contains("updates", health.ApiFeatures);
     }
 

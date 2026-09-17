@@ -41,7 +41,7 @@ public static class VmEndpoints
             .RequireAuthorization(Policies.UserOrPrimaryToken).WithName("GetVmState");
 
         api.MapGet("/vms/{name}/endpoint", EndpointAsync)
-            .RequireAuthorization(Policies.UserOrPrimaryToken).WithName("GetVmEndpoint");
+            .RequireAuthorization(Policies.VmScoped).WithName("GetVmEndpoint");
 
         return api;
     }
@@ -115,6 +115,13 @@ public static class VmEndpoints
             return Problems.Forbidden("You are not enrolled on this host.");
         }
 
+        var virtualization = await http.RequestServices.GetRequiredService<IHostConfigStore>()
+            .GetAsync<VirtualizationConfig>("virtualization", cancellationToken) ?? HostAdminDefaults.Virtualization;
+        if (request.Opts?.Nested == true && !NestedPolicy.MaySelect(user, virtualization))
+            return CodedProblems.Create(403, "policy-denied", "Nested virtualization selection is disabled for this user.");
+        var nested = (request.Opts?.Nested ?? virtualization.NestedDefault) &&
+            http.RequestServices.GetRequiredService<IHypervisorDriver>().NestedAvailable;
+
         var vm = new Vm(
             Name: name,
             Owner: actor,
@@ -129,7 +136,7 @@ public static class VmEndpoints
             Forwards: Vm.NoForwards);
 
         var descriptor = new VmDescriptor(name, cpu, ramGb, diskGb, IsoPath: null,
-            Nested: request.Opts?.Nested ?? false, AutomaticCheckpoints: request.Opts?.AutomaticCheckpoints ?? false);
+            Nested: nested, AutomaticCheckpoints: request.Opts?.AutomaticCheckpoints ?? false);
         return await PrimaryVmAdmission.CreateAsync(vm, descriptor, request, http, cancellationToken);
     }
 
@@ -286,21 +293,18 @@ public static class VmEndpoints
     }
 
     /// <remarks>
-    /// The endpoint of a remote VM is defined as the service host plus its allocated forward
-    /// (plan §4.2/§4.4). Until that forward exists there is no dialable address — the VM sits on an
-    /// internal NAT switch the client cannot reach — so the call reports "not ready yet" instead of
-    /// handing out an address that cannot work.
+    /// The endpoint reflects the applied network mode, including changes made after provisioning.
     /// </remarks>
     private static async Task<IResult> EndpointAsync(
         string name,
         HttpContext http,
         IVmRepository repository,
         IAuthorizationService authorization,
-        ConstructdOptions options,
+        VmNetworkSettings network,
         CancellationToken cancellationToken)
     {
         var lookup = await ApiHelpers.ResolveVmAsync(http, repository, authorization, name,
-            Policies.ChildOperator, cancellationToken).ConfigureAwait(false);
+            Policies.ForwardRequester, cancellationToken).ConfigureAwait(false);
 
         if (!lookup.Ok)
         {
@@ -309,14 +313,11 @@ public static class VmEndpoints
 
         var vm = lookup.Vm!;
         if (vm.Kind == VmKind.Child) return CodedProblems.Create(409, "no-endpoint", "Children have no primary SSH endpoint.");
-        // sshHost is where SSH is dialled (the service host plus the allocated forward); publicHost is
-        // the name this VM's WEB forwards are advertised under (plan §4.12). Without a
-        // PublicHostPattern the two are the same string, which is what makes this addition invisible
-        // to an existing host.
-        return vm.SshForwardPort is int port
-            ? TypedResults.Ok(new EndpointResponse(options.PublicHost, port, options.PublicHostFor(vm.Name)))
-            : Problems.UnavailableYet(
-                $"VM '{vm.Name}' has no ssh forward yet; wait for its creation job to finish.");
+        var endpoint = await network.EndpointAsync(vm, cancellationToken);
+        if (endpoint is not null) return TypedResults.Ok(EndpointResponse.From(endpoint));
+        return (await network.CurrentAsync(vm, cancellationToken)).Mode == "direct"
+            ? CodedProblems.Create(409, "no-address", "The guest has not reported an address yet.")
+            : Problems.UnavailableYet($"VM '{vm.Name}' has no ssh forward yet; wait for its creation job to finish.");
     }
 
     /// <summary>Parses and clamps an idle policy from a request body.</summary>

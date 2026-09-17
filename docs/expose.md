@@ -13,6 +13,14 @@ http://localhost:5173/
 
 The link is the thing to hand to the user. Everything below is the contract behind it.
 
+On a Proxmox VM in **direct** network mode, `construct expose 3000 --to host` returns
+`http://<vm-address>:3000/` immediately. It allocates no relay port, creates no listener,
+and saves no forward to list or close. The service responds with `kind: "direct"` and
+audits the request. The app must listen on the VM's LAN interface. Direct LAN access
+itself has no Construct audit and does not depend on host-forward permissions.
+`--to client` keeps its SSH tunnel behavior. Switching modes on a full stop/start removes
+old forwards, so request them again. See [Proxmox networking](proxmox-host.md#5-relayed-or-direct).
+
 - [The two targets](#the-two-targets)
 - [Command reference](#command-reference)
 - [Exit codes](#exit-codes)

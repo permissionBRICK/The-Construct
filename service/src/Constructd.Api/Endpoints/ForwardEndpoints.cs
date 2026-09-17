@@ -1,6 +1,7 @@
 using Constructd.Api.Auth;
 using Constructd.Api.Contracts;
 using Constructd.Api.Infrastructure;
+using Constructd.Api.Jobs;
 using Constructd.Core.Abstractions;
 using Constructd.Core.Configuration;
 using Constructd.Core.Domain;
@@ -128,9 +129,24 @@ public static class ForwardEndpoints
         }
 
         var label = request.Label?.Trim() ?? string.Empty;
+        var network = http.RequestServices.GetRequiredService<VmNetworkSettings>();
+        await using var networkGate = network.Supported
+            ? await PrimaryOperationGate.AcquireAsync(http.RequestServices.GetRequiredService<IVmOperationGate>(), name, http.TraceIdentifier, cancellationToken) : null;
+        if (network.Supported && networkGate is null) return LifecycleEndpoints.Busy(vm.CurrentJobId);
+        vm = (await repository.GetAsync(name, cancellationToken))!;
+        if (vm is null || vm.Deleting) return Problems.Conflict("VM is gone or being deleted.");
 
         if (target == ForwardTarget.Host)
         {
+            if ((await network.CurrentAsync(vm, cancellationToken)).Mode == "direct")
+            {
+                var endpoint = await network.EndpointAsync(vm, cancellationToken);
+                if (endpoint is null) return CodedProblems.Create(409, "no-address", "The guest has not reported an address yet.");
+                http.SetAuditDetail($"kind=direct, vmPort={vmPort}");
+                return Results.Ok(new ForwardResponse("", vm.Name, vmPort, null, target, label,
+                    http.RequestServices.GetRequiredService<IClock>().UtcNow,
+                    $"http://{ForwardHost.ForUrl(endpoint.SshHost)}:{vmPort}/", Kind: "direct"));
+            }
             if ((await hostConfig.GetAsync<NetworkConfig>("network", cancellationToken)) is { HostForwardsEnabled: false })
                 return CodedProblems.Create(403, "host-forwards-disabled", "Host-target forwards are disabled on this host.");
             // The policy follows the VM's OWNER, not the caller: an admin acting on someone else's VM

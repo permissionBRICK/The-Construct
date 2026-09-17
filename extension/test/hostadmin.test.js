@@ -55,9 +55,9 @@ function fakeClient(answers = {}) {
 
 (async () => {
   console.log("\n=== feature detection ===");
-  deep("features: every flag false without apiFeatures", ha.featureSet({}), { hostAdmin: false, children: false, media: false, console: false, updates: false, network: false, primaryCpu: false, primaryMemory: false });
-  deep("features: the full list", ha.featureSet(HEALTH_FULL), { hostAdmin: true, children: true, media: true, console: true, updates: true, network: true, primaryCpu: true, primaryMemory: true });
-  deep("features: stage-1 service advertises host-admin only", ha.featureSet({ apiFeatures: ["host-admin"] }), { hostAdmin: true, children: false, media: false, console: false, updates: false, network: false, primaryCpu: false, primaryMemory: false });
+  deep("features: every flag false without apiFeatures", ha.featureSet({}), { hostAdmin: false, children: false, media: false, console: false, updates: false, network: false, networkMode: false, primaryCpu: false, primaryMemory: false, primaryNested: false });
+  deep("features: the full list", ha.featureSet(HEALTH_FULL), { hostAdmin: true, children: true, media: true, console: true, updates: true, network: true, networkMode: false, primaryCpu: true, primaryMemory: true, primaryNested: false });
+  deep("features: stage-1 service advertises host-admin only", ha.featureSet({ apiFeatures: ["host-admin"] }), { hostAdmin: true, children: false, media: false, console: false, updates: false, network: false, networkMode: false, primaryCpu: false, primaryMemory: false, primaryNested: false });
   ok("maintenance: a 503 maintenance error is recognised", ha.isMaintenanceError(apiErr(503, { code: "maintenance", phase: "draining" })));
   ok("maintenance: a 503 without a body is treated as maintenance", ha.isMaintenanceError(apiErr(503, null)));
   ok("maintenance: a 500 is not", !ha.isMaintenanceError(apiErr(500, { code: "maintenance" })));
@@ -354,7 +354,11 @@ function fakeClient(answers = {}) {
       capacity: { value: { mode: "observe", storageHeadroomBytes: 21474836480 }, source: "stored", updatedAt: "2026-09-07T09:00:00Z" },
       lifecycle: { gracefulShutdownTimeoutSeconds: 300, leaseTickSeconds: 30, leaseRetrySeconds: 600, source: "default" },
     });
-    eq("config: every §1.5 section is a row", cfg.length, 7);
+    eq("config: every §1.5 section is a row", cfg.length, 8);
+    eq("nested: absent user override inherits", ha.toUserRow({}).allowNested, null);
+    eq("nested: false user override survives projection", ha.toUserRow({ allowNested: false }).allowNested, false);
+    deep("nested: inherit clears override", ha.parseUserForm({ allowNested: "" }).body, { allowNested: null });
+    deep("nested: false is an explicit override", ha.parseUserForm({ allowNested: "false" }).body, { allowNested: false });
     eq("config: a stored section keeps its source", cfg[0].source, "stored");
     eq("config: ...and its updatedAt for CAS", cfg[0].expectedUpdatedAt, "2026-09-07T09:00:00Z");
     ok("config: the JSON text is the value only", cfg[0].text.indexOf('"mode": "observe"') >= 0 && cfg[0].text.indexOf("updatedAt") < 0);
@@ -600,7 +604,7 @@ function fakeClient(answers = {}) {
     eq("model: jobs", m.state.operations.jobs.length, 1);
     eq("model: audit", m.state.operations.audit.length, 1);
     await m.load("config");
-    eq("model: config sections", m.state.config.sections.length, 7);
+    eq("model: config sections", m.state.config.sections.length, 8);
     ok("model: capabilities loaded", !!m.state.config.capabilities);
     await m.load("maintenance");
     eq("model: update view", m.state.maintenanceTab.installed.commit, "abc");

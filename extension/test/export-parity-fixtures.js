@@ -390,7 +390,7 @@ function hostAdminIpc() {
  for(const input of [{},{mode:"admin",activeTab:"vms"},{mode:"admin",features:{updates:true}},{mode:"user"},{maintenance:{phase:"draining"}},{updatePending:{id:"one"}}])add("poll",input,m.pollIntervalMs(input));
  for(const input of [null,"", "5m", "4m", "24h", "2d", "never", "NEVER", " 12h ", "0m", "-5h", "99999999999999999999d", "five"])
   add("lifetime",input,m.parseLifetime(input));
- for(const features of [[],["host-admin"],["host-admin","children","updates"],["host-admin","children","media","updates","network","console","primary-cpu","primary-memory"]]) {
+ for(const features of [[],["host-admin"],["host-admin","network-mode"],["host-admin","children","updates"],["host-admin","children","media","updates","network","console","primary-cpu","primary-memory"]]) {
   const input={apiFeatures:features}; add("features",input,m.featureSet(input)); add("tabs",input,m.tabsFor({features:m.featureSet(input)}));
  }
  for(const form of [{},{name:"alice",role:"admin",enabled:"false",maxVms:"3",allowHostForwards:"true"},{name:"",role:"root",enabled:"invalid",maxVms:"-1"},{allowChildCreation:"true",maxRetainedChildren:"4",cpuBudget:"8",ramBudgetGiB:"1.5",storageBudgetGiB:"100",maxChildLifetime:"24h",allowNeverLifetime:"false",allowSharing:"inherit"},{maxChildLifetime:"never",ramBudgetGiB:"bad",maxRetainedChildren:"1.5"}])
