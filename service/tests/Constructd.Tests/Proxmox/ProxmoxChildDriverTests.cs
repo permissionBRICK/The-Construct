@@ -61,7 +61,7 @@ public sealed partial class ProxmoxChildDriverTests : IDisposable
             "--sockets", "1", "--tablet", "1", "--tags", "construct-child", "--smbios1", config["smbios1"],
             "--description", config["description"], "--tpmstate0", "local-lvm:1,version=v2.0", "--ide2",
             "construct-media:iso/" + Path.GetFileName(Install) + ",media=cdrom", "--ide0",
-            "construct-media:iso/" + Path.GetFileName(Auxiliary) + ",media=cdrom", "--net0", "virtio,bridge=vmbr0",
+            "construct-media:iso/" + Path.GetFileName(Auxiliary) + ",media=cdrom", "--net0", "e1000e,bridge=vmbr0",
             "--boot", "order=ide2;ide0;sata0;net0" }, call.Arguments);
         Assert.DoesNotContain(runner.Calls, c => c.Arguments[0] is "start" or "agent");
         NamedConfig(); var id = await driver.GetVmIdAsync("child", default); Assert.True(Guid.TryParse(id, out _));
