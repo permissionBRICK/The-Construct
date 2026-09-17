@@ -152,6 +152,8 @@ pvesh get "/nodes/${NODE}/status" --output-format json >/dev/null || die "node '
 #                          addresses (never an mDNS .local name), otherwise the primary IPv4
 if [[ -z "${PUBLIC_HOST}" && -f "${ETC_DIR}/install.json" ]]; then
   PUBLIC_HOST="$(json_field publicHost <"${ETC_DIR}/install.json")"
+  # An mDNS name recorded by an older run is not an identity worth keeping; derive afresh.
+  [[ "${PUBLIC_HOST}" == *.local ]] && PUBLIC_HOST=""
   [[ -n "${PUBLIC_HOST}" ]] && note "public host ${PUBLIC_HOST} (from the previous install; --public-host changes it)"
 fi
 if [[ -z "${PUBLIC_HOST}" ]]; then

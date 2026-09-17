@@ -20,6 +20,7 @@ are:
 |---|---|
 | `construct-host-<commit7>-win-x64.zip` | Self-contained host, scripts and updater |
 | `construct-host-<commit7>-win-x64-fdd.zip` | Framework-dependent host, same scripts and updater |
+| `construct-host-<commit7>-linux-x64.zip` | Self-contained service for a Proxmox host (no scripts; `install-construct-host.sh` fetches them with the source asset). Manifest keys `linuxAsset`/`linuxSha256`/`linuxSizeBytes`; optional, absent in older releases. |
 | `construct-source-<commit40>.zip` | Pinned Construct source archive |
 | `manifest.json` | Identity, compatibility, runtime requirements, hashes, sizes and `companionReleaseTag` (the Companion release this commit installs) |
 | `SHA256SUMS` | Host payload file hashes and the three archive hashes |
