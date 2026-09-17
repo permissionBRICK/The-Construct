@@ -57,9 +57,19 @@ generalises it. What it established, and what the host-side implementation must 
    the ISO is built on the host (`xorriso`/`genisoimage` on Linux, the existing ISO builder
    seam on Windows) and attached as auxiliary media. The agent can still supply its own
    auxiliary ISO instead, in which case the host injects nothing.
-3. **Media repack on the host.** The no-prompt repack becomes a host-side media operation
-   (`construct vm media prepare-windows <id>`), cached per media item, so agents do not need
-   `xorriso` and 8 GB of scratch space in the primary.
+3. **The host fetches the Windows ISO itself.** Decided 2026-09-17: a media action
+   `construct vm media acquire --windows 11 --edition pro --lang en` (and `--windows server-2022`
+   for the evaluation media, which has a stable link) resolves the official download on the
+   host the way the example's `download-images.sh` does (Fido, run under `pwsh` on the host or
+   ported to the host's own resolver), stores the result as a shared media item (owner: host,
+   readable by every user, counted once), and also performs the no-prompt repack once and
+   caches the repacked variant beside it. The item shows `edition`, `build`, `language` and
+   `sha256` in `construct vm media list`. Agents then only supply the configuration (answer
+   file parameters) and never download or repack anything; an agent-supplied ISO keeps working
+   for other media. The repack stays available on its own for uploaded media
+   (`construct vm media prepare-windows <id>`).
+   Not too roundabout means: one CLI verb, one host job with progress, one cached item; no
+   new service, no extra daemon.
 4. **Key pool.** Admin adds keys (edition, kind retail/MAK/KMS-client, activation budget for
    MAK, notes) through the host admin panel or CLI. Encrypted at rest; the API returns only the
    last five characters. Assignment records per VM incarnation with states assigned, installed,
@@ -97,8 +107,12 @@ generalises it. What it established, and what the host-side implementation must 
 2. Host-side ISO build (auxiliary) and the no-prompt repack as media operations.
 3. Key pool store, encryption, admin routes and panel, assignment and audit.
 4. Guest write-back reader (KVP on Hyper-V; guest agent on Proxmox) and the auto-detach.
-5. Docs: `docs/child-vms.md` Windows section; `examples/winvm-blank` README points at the
-   feature.
+5. Docs, written for the agent that wants a Windows guest: a "Windows guests" section in
+   `docs/child-vms.md` (the file agents already reach from `construct vm --help`), covering the
+   host-side ISO fetch, the answer-file parameters, the key pool behaviour (what "no key" means),
+   the first-logon report, and where the SSH credentials come from; `construct vm --help` and
+   `construct vm create --help` name the section; the `examples/winvm-blank` README points at
+   the feature. Not in the system prompt.
 
 ## 5. Acceptance
 
