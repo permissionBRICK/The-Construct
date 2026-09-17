@@ -1,3 +1,7 @@
+// SHARED WEBVIEW CODE. This file is copied unchanged into the Construct Companion desktop app,
+// the primary UI; the VS Code extension only hosts it as a fallback. Changes here reach both.
+// The model logic that feeds it lives twice: extension/src/*.js (legacy) and the Companion's C#
+// views; keep them in parity (extension/test/export-parity-fixtures.js).
 /* global acquireVsCodeApi */
 (function () {
   "use strict";

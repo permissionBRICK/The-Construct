@@ -1,4 +1,10 @@
 "use strict";
+// LEGACY / FALLBACK. The Construct Companion desktop app (companion/) is the primary UI; this
+// VS Code extension is kept only as a fallback. Do not implement features here first: implement
+// them in the Companion (its C# views under companion/src/Construct.Companion.Core/HostAdmin and
+// the dispatch under companion/src/Construct.Companion.Host) and mirror them here only when the
+// fallback needs them, with real inputs in the parity fixtures (extension/test/export-parity-fixtures.js).
+// The webview files under extension/media are shared with the Companion and are not legacy.
 
 /**
  * UI design (theme) registry for the two webview surfaces.
