@@ -107,6 +107,7 @@ public sealed partial class InMemoryVmRepository(IJobStore? jobs = null, IClock?
         {
             cancellationToken.ThrowIfCancellationRequested();
             _activity.TryRemove(name, out _);
+            MarkUsageDeleted(name);
             return Task.FromResult(_vms.TryRemove(name, out _));
 
         }
