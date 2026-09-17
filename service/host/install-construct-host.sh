@@ -145,13 +145,27 @@ SSH_START="${SSH_PORTS%-*}"; SSH_END="${SSH_PORTS#*-}"; APP_START="${APP_PORTS%-
 
 NODE="$(hostname -s)"
 pvesh get "/nodes/${NODE}/status" --output-format json >/dev/null || die "node '${NODE}' does not answer through the API"
-# The public host: the node's DNS name when it has one that resolves (Kerberos needs a name),
-# otherwise its primary address.
+# The public host is the host's identity (certificate, Kerberos service name, what clients dial):
+#   --public-host          explicit
+#   a previous install     kept (install.json), so a re-run never renames the host by accident
+#   first install          <short host>.<DNS domain> when that name resolves to one of the node's own
+#                          addresses (never an mDNS .local name), otherwise the primary IPv4
+if [[ -z "${PUBLIC_HOST}" && -f "${ETC_DIR}/install.json" ]]; then
+  PUBLIC_HOST="$(json_field publicHost <"${ETC_DIR}/install.json")"
+  [[ -n "${PUBLIC_HOST}" ]] && note "public host ${PUBLIC_HOST} (from the previous install; --public-host changes it)"
+fi
 if [[ -z "${PUBLIC_HOST}" ]]; then
-  FQDN="$(hostname -f 2>/dev/null || true)"
-  if [[ "${FQDN}" == *.* ]] && getent hosts "${FQDN}" >/dev/null 2>&1; then PUBLIC_HOST="${FQDN}"; else PUBLIC_HOST="$(hostname -I | awk '{print $1}')"; fi
+  OWN_ADDRS=" $(hostname -I) "
+  for domain in "$(dnsdomainname 2>/dev/null || true)" "$(awk '/^(domain|search)/{print $2; exit}' /etc/resolv.conf 2>/dev/null || true)"; do
+    [[ -n "${domain}" && "${domain}" != "local" ]] || continue
+    candidate="$(hostname -s).${domain}"
+    resolved="$(getent ahostsv4 "${candidate}" 2>/dev/null | awk '{print $1}' | sort -u | head -1)"
+    if [[ -n "${resolved}" && "${OWN_ADDRS}" == *" ${resolved} "* ]]; then PUBLIC_HOST="${candidate}"; break; fi
+  done
+  [[ -n "${PUBLIC_HOST}" ]] || PUBLIC_HOST="$(hostname -I | awk '{print $1}')"
 fi
 [[ -n "${PUBLIC_HOST}" ]] || die "could not determine this node's address; pass --public-host"
+[[ "${PUBLIC_HOST}" != *.local ]] || die "'${PUBLIC_HOST}' is an mDNS name; Windows PCs on other subnets cannot resolve it and Kerberos needs a domain name. Pass --public-host <fqdn|ip>."
 
 # ── 0a. The Construct checkout (the scripts guests are provisioned from) ──────
 # From the checkout this script lives in, or -- when run as `curl | bash` -- fetched: the pinned
