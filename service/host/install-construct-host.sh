@@ -23,6 +23,10 @@
 #   --app-ports <a-b>         public app forward range (default: 2300-2999)
 #   --rotate-token            issue a new admin token even when one exists
 #   --skip-image              do not download the cloud image (it must already be cached)
+#   --keytab <file>           Kerberos keytab for HTTP/<public-host> (from New-ConstructKerberosPrincipal.ps1
+#                             on a domain controller); turns Windows sign-in (Negotiate) on
+#   --netbios-domain <NAME>   the domain's NetBIOS name (HOME): Kerberos users become NAME\user
+#   --realm <REALM>           the Kerberos realm (default: the public host's DNS domain, upper-cased)
 #
 # What it leaves behind:
 #   /opt/construct/host        the service (Constructd.Api, appsettings.Production.json)
@@ -48,6 +52,9 @@ SSH_PORTS="2201-2299"
 APP_PORTS="2300-2999"
 ROTATE=0
 SKIP_IMAGE=0
+KEYTAB=""
+NETBIOS_DOMAIN=""
+REALM=""
 
 HOST_DIR=/opt/construct/host
 SCRIPTS_DIR=/opt/construct/scripts
@@ -55,7 +62,7 @@ DATA_DIR=/var/lib/constructd
 ETC_DIR=/etc/constructd
 UNIT=/etc/systemd/system/constructd.service
 
-usage() { sed -n '2,38p' "${BASH_SOURCE[0]}"; exit "${1:-0}"; }
+usage() { sed -n '2,42p' "${BASH_SOURCE[0]}"; exit "${1:-0}"; }
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --public-host)   PUBLIC_HOST="$2"; shift 2 ;;
@@ -71,6 +78,9 @@ while [[ $# -gt 0 ]]; do
     --app-ports)     APP_PORTS="$2"; shift 2 ;;
     --rotate-token)  ROTATE=1; shift ;;
     --skip-image)    SKIP_IMAGE=1; shift ;;
+    --keytab)        KEYTAB="$2"; shift 2 ;;
+    --netbios-domain) NETBIOS_DOMAIN="$2"; shift 2 ;;
+    --realm)         REALM="$2"; shift 2 ;;
     -h|--help)       usage 0 ;;
     *) echo "Unknown argument: $1" >&2; usage 2 ;;
   esac
@@ -205,6 +215,43 @@ fi
 FINGERPRINT="$(openssl x509 -in "${CRT}" -noout -fingerprint -sha256 | sed 's/^.*=//')"
 note "SHA-256 fingerprint ${FINGERPRINT}"
 
+# ── 4b. Kerberos (Windows sign-in) ────────────────────────────────────────────
+# A keytab for HTTP/<public host> lets the service accept Negotiate from domain PCs like a
+# Windows host does. The NetBIOS name and realm are remembered for re-runs without --keytab.
+say "Kerberos"
+KEYTAB_PATH="${ETC_DIR}/krb5.keytab"; KRB_ENV="${ETC_DIR}/kerberos.env"
+if [[ -n "${KEYTAB}" ]]; then
+  [[ -f "${KEYTAB}" ]] || die "--keytab '${KEYTAB}' does not exist"
+  [[ -n "${NETBIOS_DOMAIN}" ]] || die "--keytab needs --netbios-domain <NAME> (the domain's short name, e.g. HOME)"
+  [[ "${PUBLIC_HOST}" =~ \. && ! "${PUBLIC_HOST}" =~ ^[0-9.]+$ ]] || die "--keytab needs --public-host to be the host's DNS name (the SPN is HTTP/<public-host>), not an address"
+  [[ -n "${REALM}" ]] || REALM="$(printf '%s' "${PUBLIC_HOST#*.}" | tr '[:lower:]' '[:upper:]')"
+  install -m 0600 -o root -g root "${KEYTAB}" "${KEYTAB_PATH}"
+  printf 'NETBIOS_DOMAIN=%s\nREALM=%s\n' "${NETBIOS_DOMAIN}" "${REALM}" >"${KRB_ENV}"; chmod 0600 "${KRB_ENV}"
+  note "keytab installed at ${KEYTAB_PATH} (realm ${REALM}, domain ${NETBIOS_DOMAIN})"
+elif [[ -f "${KEYTAB_PATH}" && -f "${KRB_ENV}" ]]; then
+  # shellcheck disable=SC1090
+  source "${KRB_ENV}"
+  note "keeping ${KEYTAB_PATH} (realm ${REALM}, domain ${NETBIOS_DOMAIN})"
+fi
+NEGOTIATE=false
+if [[ -f "${KEYTAB_PATH}" && -n "${NETBIOS_DOMAIN:-}" ]]; then
+  NEGOTIATE=true
+  if [[ ! -f /etc/krb5.conf ]]; then
+    cat >/etc/krb5.conf <<KRB
+[libdefaults]
+    default_realm = ${REALM}
+    dns_lookup_kdc = true
+    dns_lookup_realm = false
+    rdns = false
+KRB
+    note "wrote /etc/krb5.conf (realm ${REALM}, KDCs from DNS)"
+  else
+    note "/etc/krb5.conf exists; make sure realm ${REALM} resolves its KDCs"
+  fi
+else
+  note "no keytab: Windows sign-in stays off, clients use tokens (-ServiceAuth token)"
+fi
+
 # ── 5. Install the service and the scripts ───────────────────────────────────
 say "Installing files"
 if systemctl is-active --quiet constructd 2>/dev/null; then systemctl stop constructd; note "stopped constructd"; fi
@@ -238,6 +285,7 @@ settings = {
     "SshForwardPorts": {"Start": ${SSH_START}, "End": ${SSH_END}},
     "AppForwardPorts": {"Start": ${APP_START}, "End": ${APP_END}},
     "Power": {"KeepHostAwake": False},
+    "Negotiate": {"Enabled": ${NEGOTIATE^}, "DomainName": "${NETBIOS_DOMAIN:-}", "Realm": "${REALM:-}"},
     "Iso": {
       "SeedUser": "construct",
       "BootstrapPublicKeyPath": "${SCRIPTS_DIR}/keys/bootstrap_ed25519.pub",
@@ -276,6 +324,7 @@ WorkingDirectory=${HOST_DIR}
 Environment=ASPNETCORE_ENVIRONMENT=Production
 Environment=DOTNET_ENVIRONMENT=Production
 Environment=DOTNET_CLI_TELEMETRY_OPTOUT=1
+$( [[ "${NEGOTIATE}" == true ]] && printf 'Environment=KRB5_KTNAME=%s\n' "${KEYTAB_PATH}" )
 ExecStart=${HOST_DIR}/Constructd.Api
 Restart=on-failure
 RestartSec=5
@@ -340,7 +389,15 @@ note "listening on https://${PUBLIC_HOST}:${LISTEN_PORT}"
 echo
 echo "The Construct host is ready. On a Windows PC with The Construct installed, enrol with:"
 echo
-echo "    .\\Auto-Install.ps1 -Backend hyperv-remote -ServiceUrl https://${PUBLIC_HOST}:${LISTEN_PORT} -ServiceAuth token -InstanceName <name>"
+if [[ "${NEGOTIATE}" == true ]]; then
+  echo "    .\\Auto-Install.ps1 -Backend hyperv-remote -ServiceUrl https://${PUBLIC_HOST}:${LISTEN_PORT} -InstanceName <name>"
+  echo
+  echo "    Windows sign-in is ON: domain users authenticate with their own account. Add them as"
+  echo "    ${HOST_DIR}/Constructd.Api admin users add '${NETBIOS_DOMAIN}\\<user>' --max-vms 3"
+  echo "    Tokens keep working too (-ServiceAuth token)."
+else
+  echo "    .\\Auto-Install.ps1 -Backend hyperv-remote -ServiceUrl https://${PUBLIC_HOST}:${LISTEN_PORT} -ServiceAuth token -InstanceName <name>"
+fi
 echo
 echo "    Service URL : https://${PUBLIC_HOST}:${LISTEN_PORT}"
 echo "    Fingerprint : ${FINGERPRINT}   (confirm this when the installer shows it)"

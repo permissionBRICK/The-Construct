@@ -20,6 +20,9 @@ public static class AuthenticationSetup
         // In fake mode the Windows-identity path is simulated by a header-based scheme so the
         // ownership/role logic can be exercised on Linux. Never enabled on a real host.
         var testIdentityEnabled = options.Fake;
+        // Kerberos/NTLM: on Windows by default (the service's own domain identity); elsewhere only
+        // when the administrator installed a keytab and switched it on (docs/proxmox-host.md).
+        var negotiateEnabled = options.Negotiate.Enabled ?? OperatingSystem.IsWindows();
 
         var builder = services.AddAuthentication(ConstructdSchemes.Default);
 
@@ -46,7 +49,7 @@ public static class AuthenticationSetup
                 }
 
                 // No usable credential: challenge with the host's primary scheme.
-                if (OperatingSystem.IsWindows())
+                if (negotiateEnabled)
                 {
                     return Microsoft.AspNetCore.Authentication.Negotiate.NegotiateDefaults.AuthenticationScheme;
                 }
@@ -74,7 +77,7 @@ public static class AuthenticationSetup
         // Kerberos/NTLM for the VS Code extension's and PowerShell's process identity. Requires the
         // host to be domain-joined; the identity is then mapped to a user record by
         // UserClaimsTransformation exactly like a token identity.
-        if (OperatingSystem.IsWindows())
+        if (negotiateEnabled)
         {
             builder.AddNegotiate();
         }

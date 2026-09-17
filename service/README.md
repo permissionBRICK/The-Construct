@@ -525,6 +525,8 @@ Bound from the `Constructd` section of `appsettings.json`, from environment vari
 |---|---|---|
 | `Fake` | `false` | Use the in-memory hypervisor/ISO/forward fakes (`--fake`). Development only. |
 | `Backend` | `hyperv` | The platform: `hyperv` (this Windows host) or `proxmox` (the service runs on a Proxmox VE node — see *The Proxmox platform* and `docs/proxmox-host.md`). |
+| `Negotiate:Enabled` | – (Windows: on, elsewhere: off) | Register the Kerberos/NTLM scheme. On Linux this needs a keytab for `HTTP/<PublicHost>` (`KRB5_KTNAME`), which `install-construct-host.sh --keytab` installs. |
+| `Negotiate:DomainName` / `Negotiate:Realm` | – | Map a Kerberos principal `user@REALM` onto `DOMAIN\user` (the form a Windows host and the user store use). Empty `Realm` maps every realm. |
 | `Proxmox:Node` / `Storage` / `ImageVolume` / `SnippetStorage` / `SnippetDir` / `Bridge` / `CpuType` / `QmPath` / `PveshPath` | this host / `local-lvm` / `local:import/construct-ubuntu-noble-cloudimg-amd64.qcow2` / `local` / `/var/lib/vz/snippets` / `vmbr0` / `host` / `qm` / `pvesh` | The Proxmox platform's node, VM-disk storage, cached cloud image, snippet storage and directory, guest bridge, QEMU CPU type and the two commands. Only read with `Backend = proxmox`. |
 | `Persistence` | `Sqlite` (`Memory` in fake mode) | Where users, tokens, VMs, jobs and the audit trail live. |
 | `DatabasePath` | `constructd.db` | SQLite file; on a real host under `C:\ProgramData\Construct\service\`. |

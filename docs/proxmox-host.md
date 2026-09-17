@@ -59,8 +59,8 @@ Options: `--admin`, `--storage`, `--image-storage`, `--bridge`, `--release`, `--
 
 ## 3. Enrol from a PC
 
-Exactly like a Windows host, except that the node has no Windows identity to negotiate with, so
-the token is mandatory:
+Exactly like a Windows host. Without a Kerberos keytab on the node (section 5b) there is no
+Windows sign-in, so the token is mandatory:
 
 ```powershell
 .\Auto-Install.ps1 -Backend hyperv-remote -ServiceUrl https://10.0.3.184:7462 -ServiceAuth token -InstanceName work-vm
@@ -114,13 +114,58 @@ own live connection count. `construct expose --to host` forwards are relayed the
 Ports: the API on `7462`, SSH forwards `2201-2299`, app forwards `2300-2999` by default. Proxmox's
 own firewall is off by default; if you enable it, allow those on the node.
 
+## 5b. Windows sign-in (Kerberos)
+
+A Windows host accepts your domain account because the service runs as a domain identity. A Linux
+host can do the same once it owns a Kerberos identity of its own: a service account in Active
+Directory with the service principal name `HTTP/<host FQDN>`, and a keytab for it on the node.
+Three steps, all scripted:
+
+1. **On a domain controller**, as a domain admin (needs RSAT's ActiveDirectory and DnsServer modules and `ktpass`):
+
+   ```powershell
+   .\service\host\New-ConstructKerberosPrincipal.ps1 -HostFqdn test-proxmox.corp.example.com -Address 10.0.3.184 -KeytabPath C:\constructd.keytab
+   ```
+
+   It creates `svc-constructd` (random never-expiring password, AES-256), adds the SPN, adds the
+   A record in the AD DNS zone when the name does not resolve yet, and writes the keytab. Re-runs
+   change nothing unless `-RotateKeytab` (which resets the password: install the new keytab).
+
+2. **On the node**, copy the keytab over and re-run the installer with the host's DNS name as the
+   public host (the SPN, the certificate SAN and the URL clients type must all be that name):
+
+   ```sh
+   bash service/host/install-construct-host.sh --public-host test-proxmox.corp.example.com \
+        --keytab /root/constructd.keytab --netbios-domain HOME --realm CORP.EXAMPLE.COM
+   ```
+
+   The keytab goes to `/etc/constructd/krb5.keytab` (root-only), the unit gets `KRB5_KTNAME`, a
+   minimal `/etc/krb5.conf` is written when none exists (KDCs from DNS), and the settings gain
+   `Negotiate: { Enabled, DomainName, Realm }`. Later re-runs keep all of it without the flags.
+
+3. **On the node**, add people by their domain name, then they enrol without a token:
+
+   ```sh
+   /opt/construct/host/Constructd.Api admin users add 'HOME\alice' --max-vms 3
+   ```
+
+   ```powershell
+   .\Auto-Install.ps1 -Backend hyperv-remote -ServiceUrl https://test-proxmox.corp.example.com:7462 -InstanceName work-vm
+   ```
+
+Kerberos names the user `alice@CORP.EXAMPLE.COM`; the service maps that onto `HOME\alice`
+(`Negotiate:DomainName`, optionally restricted to `Negotiate:Realm`) so the same user record
+serves a Windows host and this one. Tokens keep working alongside. If the node's address changes,
+update the A record; the SPN and keytab are name-based and stay valid.
+
 ## 6. What is not there (yet)
 
 - **Child VMs** (`construct vm …`), the **screenshot console** and the **host self-update** report
   `unsupported-capability`; the health endpoint does not list them, so the extension does not offer them.
 - **Capacity enforcement** — the ledger observes (`HostAdmin:Capacity:Mode = Observe`) with a real
   inventory (`pvesh get /nodes/<node>/status|storage|qemu`), but nothing is refused for capacity.
-- **Negotiate/Kerberos** — tokens only.
+- **NTLM fallback** — the Linux Negotiate handler speaks Kerberos; a PC that cannot get a ticket for
+  the host's SPN (wrong URL name, no domain reachability) falls back to a token prompt.
 - **Cluster** — one node; `Constructd:Proxmox:Node` names it, and VMs of the same name on other
   nodes are not this host's.
 - **A Linux release asset** — the release workflow publishes Windows host packages; the Linux
