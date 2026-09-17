@@ -23,6 +23,7 @@
   <ItemGroup>
     <!-- The Proxmox platform reuses the argument guards and the process runner. -->
     <InternalsVisibleTo Include="Constructd.Proxmox" />
+    <InternalsVisibleTo Include="Constructd.Tests" />
   </ItemGroup>
 
   <ItemGroup>
