@@ -866,51 +866,31 @@ The scheduler evaluates once a minute.
 ### 11.3 The test that actually matters: an unattended agent
 
 The reporter has four probes, and the workload has to trip one of the two that survive a
-disconnect. **Pick a workload deliberately** — an anonymous CPU burner whose output is
-discarded trips *nothing*: `sha256sum` is not one of the recognized agent commands, and with
-its output redirected the tmux window's activity clock never advances.
-
-The two probes to aim at:
+disconnect. It does **not** watch CPU or terminal output — an anonymous CPU burner in a
+tmux window trips *nothing*. What counts is what an agent **writes**:
 
 | Reason | What actually fires it |
 |---|---|
-| `tmux-activity` | any tmux window whose **output** moved within the report interval (`#{window_activity}`) |
-| `agent-cpu:<name>` | a process named `claude`, `codex`, `opencode` or `t3` — or a `node`/`bun`/`python3` whose **command line names one of those stacks** — or **any descendant** of one, whose CPU ticks grew since the previous run |
+| `agent-log:<claude\|codex\|opencode>` | an agent transcript modified within the last interval + 30 s (`~/.claude/projects/**/*.jsonl`, `~/.codex/sessions/**/rollout-*.jsonl`, the OpenCode database) in `/root` or any `/home/*` |
+| `t3-thread-running` | a T3 Code thread whose session is `running` and which is not waiting on a question or an approval |
 
-- [ ] On `work-vm`, start a workload that trips **both**, then disconnect completely — no SSH
-      session, no VS Code, nothing.
+- [ ] On `work-vm`, start a workload that keeps a transcript fresh, then disconnect
+      completely — no SSH session, no VS Code, nothing.
 
-The CPU probe compares **CPU ticks burned since the previous run** against
-`CONSTRUCT_IDLE_CPU_TICKS` (default 10 ticks = 0.1 CPU-seconds). A workload that sleeps
-between iterations can fall under that in a short sampling window, so burn CPU
-**continuously** — that is also what a real agent job looks like:
+The honest test is a real agent: start `claude -p` (or `codex exec`) on a long task in a
+detached tmux session and leave. If you would rather not spend tokens, simulate the write
+pattern — the probe only looks at the file's modification time, so a loop that appends to
+a transcript-shaped file once a second is indistinguishable from a working agent:
 
 ```bash
 ssh work-vm
-apt-get install -y python3 tmux >/dev/null
-# Two things at once: "claude" on the command line makes python3 count as an agent (the
-# same rule that attributes a real agent's child processes), and the periodic print keeps
-# the tmux window's activity clock moving. The hashing loop never sleeps, so it burns
-# ~100 ticks per second — far above the 10-tick threshold in any sampling window.
+apt-get install -y tmux >/dev/null
+mkdir -p ~/.claude/projects/field-test
 tmux new -d -s fieldtest \
-  'python3 -c "
-import hashlib, time
-block = b\"x\" * 65536
-last = 0.0
-while True:
-    for _ in range(200):
-        hashlib.sha256(block).hexdigest()
-    now = time.time()
-    if now - last >= 1.0:
-        print(now, flush=True)
-        last = now
-" claude-field-test'
+  'while true; do echo "{\"type\":\"progress\",\"at\":$(date +%s)}" >> ~/.claude/projects/field-test/session.jsonl; sleep 1; done'
 tmux ls          # confirm the session exists before you leave
 exit
 ```
-
-> This pins one core for as long as it runs. That is deliberate — it is the signal being
-> tested — but do not leave it running on a shared host after step 11.
 
 - [ ] Confirm the heartbeat sees it, **without contaminating the result**. Running the probe
       over SSH would create an established connection on port 22 and report `ssh-session`,
@@ -924,13 +904,10 @@ ssh work-vm "CONSTRUCT_IDLE_SSH_PORT=9 CONSTRUCT_IDLE_DRY_RUN=1 /usr/local/bin/c
 **Expect** (the JSON is printed, not posted):
 
 ```json
-{"busy":true,"reasons":["agent-cpu:claude","tmux-activity"]}
+{"busy":true,"reasons":["agent-log:claude"]}
 ```
 
-`ssh-session` must **not** appear — that is what the port override is for. If `agent-cpu` is
-missing on the very first run, run it once more: the CPU probe compares against the previous
-sample (a process with no previous sample is judged on its total CPU, so it should appear
-immediately).
+`ssh-session` must **not** appear — that is what the port override is for.
 
 - [ ] Now disconnect and **wait well past the idle timeout plus the grace window**.
 
@@ -940,7 +917,7 @@ alive is that heartbeat — and that is the entire point of unattended agents.
 - [ ] Kill the workload and wait again:
 
 ```bash
-ssh work-vm "tmux kill-session -t fieldtest"
+ssh work-vm "tmux kill-session -t fieldtest; rm -rf ~/.claude/projects/field-test"
 ```
 
 **Expect:** the next dry run reports `{"busy":false,"reasons":[]}` (with the same
