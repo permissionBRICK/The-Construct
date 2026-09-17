@@ -635,12 +635,6 @@
     renderStateCard(s);
     if (s.mode !== "admin" && !(s.mode === "user" && (s.features?.networkMode || s.features?.usage))) return;
     text("vmsTitle", s.mode === "admin" ? "Virtual machines · all users" : "My virtual machines");
-    show($("hostNetworkCard"), s.mode === "admin" && !!s.features?.networkMode && !!s.networkSection);
-    if (s.networkSection && JSON.stringify(previous?.networkSection) !== JSON.stringify(s.networkSection)) {
-      const network = JSON.parse(s.networkSection.text);
-      $("hostNetworkMode").value = network.defaultMode || "relayed";
-      $("hostNetworkOwner").checked = !!network.ownerMaySwitchMode;
-    }
     renderTabs(s);
     renderOverview(s);
     renderVms(s);
@@ -688,14 +682,6 @@
       if (ta && ta.value !== ta.dataset.original) sections.push({ key: sec.dataset.key, text: ta.value, expectedUpdatedAt: sec.dataset.expectedUpdatedAt || null });
     });
     act("saveConfig", { sections });
-  });
-  $("hostNetworkSave").addEventListener("click", () => {
-    const section = state?.networkSection;
-    if (!section) return;
-    const network = JSON.parse(section.text);
-    network.defaultMode = $("hostNetworkMode").value;
-    network.ownerMaySwitchMode = $("hostNetworkOwner").checked;
-    act("saveConfig", { sections: [{ key: "network", text: JSON.stringify(network), expectedUpdatedAt: section.expectedUpdatedAt }] });
   });
   $("updCheck") && $("updCheck").addEventListener("click", () => act("updatesCheck", { releaseTag: $("updTag").value }));
   $("updStage") && $("updStage").addEventListener("click", () => act("updatesStage", { releaseTag: $("updTag").value }));
