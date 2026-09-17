@@ -52,7 +52,9 @@ function New-HostPayload([string]$PublishDir, [string]$UpdaterName, [string]$Rid
     $payload = Join-Path $OutputDir ('payload-' + $Rid)
     [IO.Directory]::CreateDirectory($payload) | Out-Null
     $publishRoot = (Resolve-Path -LiteralPath $PublishDir).Path.TrimEnd([IO.Path]::DirectorySeparatorChar)
-    foreach ($file in Get-ChildItem -LiteralPath $publishRoot -Recurse -File -Force) {
+    foreach ($file in Get-ChildItem -LiteralPath $publishRoot -Recurse -Force) {
+        if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Package cannot contain links.' }
+        if ($file.PSIsContainer) { continue }
         $relative = $file.FullName.Substring($publishRoot.Length + 1).Replace('\','/')
         Copy-PayloadFile $file.FullName ('service/' + $relative)
     }
