@@ -196,6 +196,9 @@ public sealed class ProxmoxOptions
     /// <summary>The <c>qm</c> command (VM lifecycle).</summary>
     public string QmPath { get; set; } = "qm";
 
+    /// <summary>The storage command, used to finish deletion of journalled child disks.</summary>
+    public string PvesmPath { get; set; } = "pvesm";
+
     /// <summary>The <c>pvesh</c> command (read-only API queries).</summary>
     public string PveshPath { get; set; } = "pvesh";
 }
