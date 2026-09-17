@@ -97,6 +97,7 @@ public class RouteCoverageTests
         "GET /api/v1/vms/{name}/idle-policy",
         "PUT /api/v1/vms/{name}/idle-policy",
         "POST /api/v1/vms/{name}/activity",
+        "POST /api/v1/vms/{name}/usage",
         "GET /api/v1/jobs",
         "POST /api/v1/jobs/{id}/cancel",
         "POST /api/v1/vms/{name}/lifecycle",
