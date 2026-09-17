@@ -1430,6 +1430,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   const networkState = { ...ADMIN_STATE, activeTab: "overview", features: { ...ADMIN_STATE.features, networkMode: true },
     networkSection: { key: "network", expectedUpdatedAt: null, text: JSON.stringify({ hostForwardsEnabled: false, directAddressReporting: true, defaultMode: "relayed", ownerMaySwitchMode: false }) } };
   await pushAdmin(networkState);
+  await admin.waitForTimeout(60);
   check("network: host card visible on supported host", await admin.locator("#hostNetworkCard").isVisible());
   await admin.locator("#hostNetworkMode").selectOption("direct");
   await admin.locator("#hostNetworkOwner").check();
