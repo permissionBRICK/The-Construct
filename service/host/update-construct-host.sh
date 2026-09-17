@@ -193,10 +193,10 @@ def make_backup():
     r['backupComplete'] = True; write_json(record_path, r)
 
 def apply_modes():
-    # Refuse links before recursive ownership repair, including preserved subtrees.
+    # Owned targets were checked individually. Do not follow links in preserved or unowned trees.
     for base in (pathlib.Path(h['publishDir']), pathlib.Path(h['scriptsDir'])):
-        for path in base.rglob('*'): assert_update_no_links(path)
-        subprocess.run(['chown', '-R', 'root:root', '--', str(base)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        assert_update_no_links(base)
+        subprocess.run(['chown', '-R', '-h', '-P', 'root:root', '--', str(base)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     pathlib.Path(h['publishDir'], 'Constructd.Api').chmod(0o755)
     key = pathlib.Path(h['scriptsDir'], 'keys/bootstrap_ed25519'); assert_update_no_links(key)
     if key.exists(): key.chmod(0o600)

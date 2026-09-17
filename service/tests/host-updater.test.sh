@@ -152,7 +152,9 @@ run_update() {
 stops() { if [[ -f "$UPDATER_TEST_CASE/control.log" ]]; then awk '$1=="stop"{n++}END{print n+0}' "$UPDATER_TEST_CASE/control.log"; else echo 0; fi; }
 
 fixture success
+ln -s "$UPDATER_TEST_CASE/data/constructd.db" "$UPDATER_TEST_CASE/scripts/unowned-link"
 run_update 0
+[[ -L "$UPDATER_TEST_CASE/scripts/unowned-link" ]]
 fixture_action assert succeeded
 fixture_action check-success
 before=$(stops); run_update 0 true true; [[ $(stops) == "$before" ]]
