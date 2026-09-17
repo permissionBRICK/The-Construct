@@ -2277,6 +2277,194 @@
     "input": {
       "apiFeatures": [
         "host-admin",
+        "primary-nested",
+        "usage"
+      ]
+    },
+    "kind": "features",
+    "now": 1789128000000,
+    "output": {
+      "children": false,
+      "console": false,
+      "hostAdmin": true,
+      "media": false,
+      "network": false,
+      "networkMode": false,
+      "primaryCpu": false,
+      "primaryMemory": false,
+      "primaryNested": true,
+      "updates": false,
+      "usage": true
+    }
+  },
+  {
+    "input": {
+      "apiFeatures": [
+        "host-admin",
+        "primary-nested",
+        "usage"
+      ]
+    },
+    "kind": "tabs",
+    "now": 1789128000000,
+    "output": [
+      {
+        "available": true,
+        "id": "overview",
+        "label": "Overview",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "vms",
+        "label": "VMs",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "users",
+        "label": "Users",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "usage",
+        "label": "Usage",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "media",
+        "label": "Media",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "operations",
+        "label": "Operations",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "config",
+        "label": "Configuration",
+        "reason": ""
+      },
+      {
+        "available": false,
+        "id": "maintenance",
+        "label": "Maintenance",
+        "reason": "not available on this host version"
+      }
+    ]
+  },
+  {
+    "input": {
+      "apiFeatures": [
+        "host-admin",
+        "children",
+        "media",
+        "console",
+        "network",
+        "network-mode",
+        "primary-nested",
+        "usage",
+        "updates",
+        "primary-cpu",
+        "primary-memory",
+        "source-cache"
+      ]
+    },
+    "kind": "features",
+    "now": 1789128000000,
+    "output": {
+      "children": true,
+      "console": true,
+      "hostAdmin": true,
+      "media": true,
+      "network": true,
+      "networkMode": true,
+      "primaryCpu": true,
+      "primaryMemory": true,
+      "primaryNested": true,
+      "updates": true,
+      "usage": true
+    }
+  },
+  {
+    "input": {
+      "apiFeatures": [
+        "host-admin",
+        "children",
+        "media",
+        "console",
+        "network",
+        "network-mode",
+        "primary-nested",
+        "usage",
+        "updates",
+        "primary-cpu",
+        "primary-memory",
+        "source-cache"
+      ]
+    },
+    "kind": "tabs",
+    "now": 1789128000000,
+    "output": [
+      {
+        "available": true,
+        "id": "overview",
+        "label": "Overview",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "vms",
+        "label": "VMs",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "users",
+        "label": "Users",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "usage",
+        "label": "Usage",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "media",
+        "label": "Media",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "operations",
+        "label": "Operations",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "config",
+        "label": "Configuration",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "maintenance",
+        "label": "Maintenance",
+        "reason": ""
+      }
+    ]
+  },
+  {
+    "input": {
+      "apiFeatures": [
+        "host-admin",
         "children",
         "updates"
       ]
@@ -4273,6 +4461,244 @@
         "state": "unknown"
       }
     ]
+  },
+  {
+    "input": {
+      "kind": "primary",
+      "name": "agent-vm",
+      "nested": {
+        "available": true,
+        "desired": true,
+        "selectable": true
+      },
+      "network": {
+        "address": null,
+        "appliesOn": "next-stop-start",
+        "desiredAddress": null,
+        "dns": null,
+        "effectiveMode": "relayed",
+        "gateway": null,
+        "maySetAddress": true,
+        "maySwitchMode": true,
+        "mode": null,
+        "pending": false,
+        "pendingAddress": null,
+        "pendingMode": null
+      },
+      "owner": "alice",
+      "state": "running"
+    },
+    "kind": "vm",
+    "now": 1789128000000,
+    "output": {
+      "allowedActions": [],
+      "childCreationClosed": false,
+      "children": [],
+      "deleting": false,
+      "guest": "Construct unknown · provisioned unknown · reinstalled unknown",
+      "kind": "primary",
+      "lease": "",
+      "lifetime": "",
+      "media": 0,
+      "name": "agent-vm",
+      "network": {
+        "address": null,
+        "appliesOn": "next-stop-start",
+        "desiredAddress": null,
+        "dns": null,
+        "effectiveMode": "relayed",
+        "gateway": null,
+        "maySetAddress": true,
+        "maySwitchMode": true,
+        "mode": null,
+        "pending": false,
+        "pendingAddress": null,
+        "pendingMode": null
+      },
+      "operation": "",
+      "operationJobId": "",
+      "overdue": false,
+      "owner": "alice",
+      "parent": "",
+      "pendingCpu": null,
+      "pendingRamGb": null,
+      "reservations": "—",
+      "resources": "—",
+      "savedBy": null,
+      "shared": false,
+      "sharing": "private",
+      "state": "running",
+      "tokenKind": null,
+      "usage": {
+        "cpu": "CPU usage unavailable",
+        "cpuPercent": null,
+        "disk": "Disk usage unavailable",
+        "ram": "RAM usage unavailable",
+        "ramPercent": null,
+        "sample": "Usage unavailable on this host",
+        "stale": false
+      }
+    }
+  },
+  {
+    "input": {
+      "kind": "primary",
+      "name": "agent-vm",
+      "nested": {
+        "available": true,
+        "desired": true,
+        "selectable": true
+      },
+      "network": {
+        "address": "192.0.2.50",
+        "appliesOn": "next-stop-start",
+        "desiredAddress": "192.0.2.50/24",
+        "dns": [
+          "192.0.2.2"
+        ],
+        "effectiveMode": "direct",
+        "gateway": "192.0.2.1",
+        "maySetAddress": false,
+        "maySwitchMode": false,
+        "mode": "direct",
+        "pending": false,
+        "pendingAddress": null,
+        "pendingMode": null
+      },
+      "owner": "alice",
+      "state": "running"
+    },
+    "kind": "vm",
+    "now": 1789128000000,
+    "output": {
+      "allowedActions": [],
+      "childCreationClosed": false,
+      "children": [],
+      "deleting": false,
+      "guest": "Construct unknown · provisioned unknown · reinstalled unknown",
+      "kind": "primary",
+      "lease": "",
+      "lifetime": "",
+      "media": 0,
+      "name": "agent-vm",
+      "network": {
+        "address": "192.0.2.50",
+        "appliesOn": "next-stop-start",
+        "desiredAddress": "192.0.2.50/24",
+        "dns": [
+          "192.0.2.2"
+        ],
+        "effectiveMode": "direct",
+        "gateway": "192.0.2.1",
+        "maySetAddress": false,
+        "maySwitchMode": false,
+        "mode": "direct",
+        "pending": false,
+        "pendingAddress": null,
+        "pendingMode": null
+      },
+      "operation": "",
+      "operationJobId": "",
+      "overdue": false,
+      "owner": "alice",
+      "parent": "",
+      "pendingCpu": null,
+      "pendingRamGb": null,
+      "reservations": "—",
+      "resources": "—",
+      "savedBy": null,
+      "shared": false,
+      "sharing": "private",
+      "state": "running",
+      "tokenKind": null,
+      "usage": {
+        "cpu": "CPU usage unavailable",
+        "cpuPercent": null,
+        "disk": "Disk usage unavailable",
+        "ram": "RAM usage unavailable",
+        "ramPercent": null,
+        "sample": "Usage unavailable on this host",
+        "stale": false
+      }
+    }
+  },
+  {
+    "input": {
+      "kind": "primary",
+      "name": "agent-vm",
+      "nested": {
+        "available": true,
+        "desired": true,
+        "selectable": true
+      },
+      "network": {
+        "address": null,
+        "appliesOn": "next-stop-start",
+        "desiredAddress": "192.0.2.51/24",
+        "dns": null,
+        "effectiveMode": "relayed",
+        "gateway": "192.0.2.1",
+        "maySetAddress": true,
+        "maySwitchMode": true,
+        "mode": "direct",
+        "pending": true,
+        "pendingAddress": "192.0.2.51",
+        "pendingMode": "direct"
+      },
+      "owner": "alice",
+      "state": "running"
+    },
+    "kind": "vm",
+    "now": 1789128000000,
+    "output": {
+      "allowedActions": [],
+      "childCreationClosed": false,
+      "children": [],
+      "deleting": false,
+      "guest": "Construct unknown · provisioned unknown · reinstalled unknown",
+      "kind": "primary",
+      "lease": "",
+      "lifetime": "",
+      "media": 0,
+      "name": "agent-vm",
+      "network": {
+        "address": null,
+        "appliesOn": "next-stop-start",
+        "desiredAddress": "192.0.2.51/24",
+        "dns": null,
+        "effectiveMode": "relayed",
+        "gateway": "192.0.2.1",
+        "maySetAddress": true,
+        "maySwitchMode": true,
+        "mode": "direct",
+        "pending": true,
+        "pendingAddress": "192.0.2.51",
+        "pendingMode": "direct"
+      },
+      "operation": "",
+      "operationJobId": "",
+      "overdue": false,
+      "owner": "alice",
+      "parent": "",
+      "pendingCpu": null,
+      "pendingRamGb": null,
+      "reservations": "—",
+      "resources": "—",
+      "savedBy": null,
+      "shared": false,
+      "sharing": "private",
+      "state": "running",
+      "tokenKind": null,
+      "usage": {
+        "cpu": "CPU usage unavailable",
+        "cpuPercent": null,
+        "disk": "Disk usage unavailable",
+        "ram": "RAM usage unavailable",
+        "ramPercent": null,
+        "sample": "Usage unavailable on this host",
+        "stale": false
+      }
+    }
   },
   {
     "input": [
