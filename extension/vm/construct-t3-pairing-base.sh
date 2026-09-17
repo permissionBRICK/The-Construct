@@ -44,3 +44,34 @@ t3base() {
   (( 10#$selected_port >= 1 && 10#$selected_port <= 65535 )) || { echo 'The forward returned an invalid port.' >&2; return 1; }
   printf '%s://%s' "$scheme" "$authority"
 }
+
+# Mint separately for each origin. T3 binds authentication proofs to that origin.
+# Preserve all original fields and pairUrl for clients predating links.
+t3pair() {
+  local base="$1" first direct="" direct_host public scheme=http port="$T3CODE_PORT"
+  shift
+  first="$(t3 auth pairing create "$@" --base-url "$base")" || return
+  direct_host="$(cfgget CONSTRUCT_DIRECT_HOST)"
+  if [[ -n "$direct_host" ]]; then
+    public="$(cfgget T3CODE_PUBLIC_BASE_URL)"
+    if [[ "$public" == https://* ]]; then
+      scheme=https
+      port="$(cfgget T3CODE_HTTPS_PORT)"; port="${port:-5178}"
+    fi
+    # Bracket a bare IPv6 address when building its URL.
+    if [[ "$direct_host" == *:* && "$direct_host" != \[*\] ]]; then direct_host="[$direct_host]"; fi
+    direct="$(t3 auth pairing create "$@" --base-url "$scheme://$direct_host:$port")" || return
+  fi
+  printf '%s\n%s\n' "$first" "$direct" | python3 -c '
+import json, sys
+decoder = json.JSONDecoder()
+text = sys.stdin.read().lstrip()
+first, end = decoder.raw_decode(text)
+links = [{"kind": "forwarded", "pairUrl": first["pairUrl"]}]
+rest = text[end:].strip()
+if rest:
+    links.append({"kind": "direct", "pairUrl": json.loads(rest)["pairUrl"]})
+first["links"] = links
+print(json.dumps(first, separators=(",", ":")))
+'
+}

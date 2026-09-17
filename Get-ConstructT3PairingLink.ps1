@@ -57,7 +57,7 @@ $ErrorActionPreference = "Stop"
 # hidden reads exactly that. Diagnostics go to stderr.
 function Write-Result([hashtable]$obj) {
     $ordered = [ordered]@{}
-    foreach ($k in @('ok', 'instance', 'pairUrl', 'scopes', 'error')) {
+    foreach ($k in @('ok', 'instance', 'pairUrl', 'links', 'scopes', 'error')) {
         if ($obj.ContainsKey($k)) { $ordered[$k] = $obj[$k] }
     }
     [Console]::Out.WriteLine(([pscustomobject]$ordered | ConvertTo-Json -Compress -Depth 3))
@@ -133,15 +133,8 @@ try {
     # from what it advertises; the label names the instance so the server's connection
     # list says which machine a session belongs to.
     $label = if ($script:IsDefault) { "construct-t3-desktop" } else { "construct-t3-desktop-$($script:ResolvedName)" }
-    $hostExpr = if ($script:IsDefault) {
-        # The default VM is reached at its own mshome name; CONSTRUCT_EXTERNAL_HOST is
-        # deliberately NOT read for it (config.env is user-editable).
-        '$(hostname).mshome.net'
-    } else {
-        # A remote/forwarded VM is not reachable at its mshome name: prefer the
-        # client-reachable host the provisioner recorded, fall back to the mshome name.
-        '${ext:-$(hostname).mshome.net}'
-    }
+    # config.env already controls SSH and other client routes; pairing uses it too.
+    $hostExpr = '${ext:-$(hostname).mshome.net}'
     $wantScopes = $Scopes
     # Send the installed client helper over SSH as well, so this works before a
     # guest reprovision and stays identical to VS Code's forwarding fallback.
@@ -169,7 +162,7 @@ extra=""
 if [ "$wantScopes" = "administrative" ] && t3 auth pairing create --help 2>&1 | grep -q -- '--scopes'; then
   scopes=administrative; extra="--scopes administrative"
 fi
-out="`$(t3 auth pairing create --json --ttl '$Ttl' --label '$label' --base-url "`$base" `$extra --log-level none 2>&1)" || { printf '%s\n' "`$out" >&2; exit 3; }
+out="`$(t3pair "`$base" --json --ttl '$Ttl' --label '$label' `$extra --log-level none)" || exit 3
 printf 'CONSTRUCT_PAIRING_SCOPES=%s\n' "`$scopes"
 printf '%s\n' "`$out"
 "@
@@ -203,10 +196,10 @@ printf '%s\n' "`$out"
 
     $scopesUsed = "standard"
     if ("$raw" -match '(?m)^CONSTRUCT_PAIRING_SCOPES=(\w+)\s*$') { $scopesUsed = $matches[1] }
-    $pairUrl = ""
-    if ("$raw" -match '"pairUrl"\s*:\s*"([^"]+)"') { $pairUrl = $matches[1] }
+    $pairing = (("$raw" -replace '(?m)^CONSTRUCT_PAIRING_SCOPES=\w+\s*$', '').Trim() | ConvertFrom-Json)
+    $pairUrl = [string]$pairing.pairUrl
     if (-not $pairUrl) { Fail "the VM's t3 printed no pairing link" }
-    Write-Result @{ ok = $true; instance = $script:ResolvedName; pairUrl = $pairUrl; scopes = $scopesUsed }
+    Write-Result @{ ok = $true; instance = $script:ResolvedName; pairUrl = $pairUrl; links = @($pairing.links); scopes = $scopesUsed }
     exit 0
 } catch {
     Fail ("$($_.Exception.Message)".Trim())
