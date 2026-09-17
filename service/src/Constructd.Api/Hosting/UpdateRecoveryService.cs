@@ -134,7 +134,7 @@ public sealed class UpdateRecoveryService(HostUpdateJob work,IHostUpdateStore st
             // Preserve the previous gate state and retry. A normal host with no recovery work must
             // not be locked out because of a transient filesystem/store read failure.
             // Only a marker, active update or handoff observed above can close the gate.
-            logger.LogWarning("Update recovery check failed; retrying with the current maintenance state.");
+            logger.LogWarning("Update recovery check failed ({Error}); retrying with the current maintenance state.", Constructd.Core.Logic.SafeError.Describe(ex));
         }
         finally {work.Acceptance.Release();}
     }

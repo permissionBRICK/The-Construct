@@ -20,7 +20,8 @@ public sealed record HypervisorVmInfo(
     bool Complete,
     double? CpuUsagePercent = null, long? MemoryDemandBytes = null, double? UptimeSeconds = null);
 public sealed record VolumeInfo(string Root, long TotalBytes, long FreeBytes);
-public sealed record HostResourcesInfo(int LogicalCpus, long TotalRamBytes, long FreeRamBytes, IReadOnlyList<VolumeInfo> Volumes, DateTimeOffset ObservedAt);
+public sealed record HostResourcesInfo(int LogicalCpus, long TotalRamBytes, long FreeRamBytes, IReadOnlyList<VolumeInfo> Volumes, DateTimeOffset ObservedAt,
+    long? UsedRamBytes = null, long? SwapTotalBytes = null, long? SwapUsedBytes = null);
 /// <summary>ONE epoch: VMs, host resources and volume free space read in the same pass; Complete=false ⇒ admission fails closed.</summary>
 public enum ArtifactPresence { Unknown, Absent, Present }
 /// <summary>Evidence collected in the same pass as volume free space. Key is the reservation artifact.</summary>

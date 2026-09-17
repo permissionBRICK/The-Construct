@@ -44,6 +44,13 @@
 .ha-bar.hot > span { background: var(--warn); }
 .ha-bar.full > span { background: var(--crit); }
 .ha-bar-text { font-size: 10.5px; color: var(--faint); margin-top: 3px; }
+.ha-ram-bar { display: flex; position: relative; }
+.ha-ram-bar > span { flex: 0 0 auto; }
+.ha-ram-bar > .ha-ram-host { opacity: 0.45; }
+.ha-admission-line { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--text); }
+.ha-ram-committed { font-size: 11px; color: var(--dim); margin-top: 5px; }
+.ha-ram-committed.hot { color: var(--warn); }
+.ha-bar-thin { height: 4px; margin-top: 7px; }
 
 .ha-form { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px 14px; margin: 8px 0; }
 .ha-form label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--dim); }

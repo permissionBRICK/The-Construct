@@ -95,12 +95,21 @@ public static class HostAdminEndpoints
     }
     internal static async Task<CapacityConfig> CapacityConfigAsync(IHostConfigStore config, ConstructdOptions options, CancellationToken ct) =>
         await config.GetAsync<CapacityConfig>("capacity", ct) ?? HostAdminDefaults.Capacity with { Mode = options.HostAdmin.Capacity.Mode };
-    internal static object CapacitySummary(HostCapacitySnapshot c) => new
+    internal static object CapacitySummary(HostCapacitySnapshot c, CapacityMode mode) => new
     {
         c.Epoch,
         c.ObservedAt,
         c.Complete,
-        ram = new { totalBytes = c.RamTotalBytes, headroomBytes = c.RamHeadroomBytes, reservedBytes = c.RamReservedBytes, unmanagedBytes = c.RamUnmanagedBytes, physicalFreeBytes = c.RamPhysicalFreeBytes, availableBytes = c.RamAvailableBytes },
+        ram = new
+        {
+            totalBytes = c.RamTotalBytes, headroomBytes = c.RamHeadroomBytes, reservedBytes = c.RamReservedBytes,
+            unmanagedBytes = c.RamUnmanagedBytes, physicalFreeBytes = c.RamPhysicalFreeBytes, availableBytes = c.RamAvailableBytes,
+            usedBytes = c.RamUsedBytes, vmResidentBytes = c.VmResidentRamBytes,
+            hostOwnBytes = c.RamUsedBytes is long used && c.VmResidentRamBytes is long resident ? Math.Max(0, used - resident) : (long?)null,
+            committedBytes = c.RamReservedBytes + c.RamUnmanagedBytes,
+            admission = new { enforced = mode == CapacityMode.Enforce, lineBytes = Math.Max(0, c.RamTotalBytes - c.RamHeadroomBytes), availableBytes = c.RamAvailableBytes },
+            swap = c.SwapTotalBytes is long total && c.SwapUsedBytes is long swapUsed ? new { totalBytes = total, usedBytes = swapUsed } : null
+        },
         cpu = new { logical = c.CpuLogical, budget = c.CpuBudget, active = c.CpuActive, available = c.CpuAvailable },
         c.Volumes
     };
@@ -108,14 +117,15 @@ public static class HostAdminEndpoints
         IJobQueryStore jobs, IVmRepository vms, ConstructdOptions options, CancellationToken ct)
     {
         var snapshot = await capacity.SnapshotAsync(false, ct); var all = await vms.ListAsync(null, ct);
+        var mode = (await CapacityConfigAsync(config, options, ct)).Mode;
         var marker = await config.GetAsync<MaintenanceMarker>("maintenance", ct);
         var hypervisor = snapshot.Complete ? "ok" : "unreachable";
         return Results.Ok(new
         {
             version = release.Installed,
             health = new { hypervisor, database = "ok", media = Directory.Exists(options.HostAdmin.Media.RootDir) ? "ok" : "missing-root", inventory = snapshot.Complete ? "complete" : "incomplete" },
-            capacity = CapacitySummary(snapshot),
-            capacityMode = (await CapacityConfigAsync(config, options, ct)).Mode,
+            capacity = CapacitySummary(snapshot, mode),
+            capacityMode = mode,
             maintenance = new { phase = maintenance.State, since = marker?.Since, updateId = marker?.UpdateId },
             activeJobs = (await jobs.ListAsync(ct)).Where(j => j.State is JobState.Queued or JobState.Running).Select(j => new { j.Id, j.Kind, j.VmName, j.Owner, j.Initiator, j.Phase, j.Created }),
             leaseOverdueCount = all.Count(v => v.Lease is { State: LeaseState.Overdue }),

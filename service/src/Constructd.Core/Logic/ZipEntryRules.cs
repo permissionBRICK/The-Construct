@@ -13,7 +13,8 @@ public static class ZipEntryRules
             !Regex.IsMatch(p, @"^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.|$)", RegexOptions.IgnoreCase));
     }
     public static bool IsPayloadFile(string path) => IsSafe(path) &&
-        (path.StartsWith("service/", StringComparison.Ordinal) || path.StartsWith("scripts/", StringComparison.Ordinal) || path == "updater/Update-ConstructHost.ps1");
+        (path.StartsWith("service/", StringComparison.Ordinal) || path.StartsWith("scripts/", StringComparison.Ordinal) ||
+         path is "updater/Update-ConstructHost.ps1" or "updater/update-construct-host.sh");
     public static bool IsPreserved(string path) => path.Split('/').Any(p =>
         p.Equals("appsettings.Production.json", StringComparison.OrdinalIgnoreCase) ||
         p.Equals("install.json", StringComparison.OrdinalIgnoreCase) || p.Contains(".db", StringComparison.OrdinalIgnoreCase) ||

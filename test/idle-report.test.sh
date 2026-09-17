@@ -8,7 +8,7 @@
 # Run: bash test/idle-report.test.sh
 #
 # Every probe reads its command/path from an overridable variable, so all of this
-# runs against stubbed ss/who/tmux/curl and a fake /proc — nothing here touches
+# runs against stubbed ss/who/curl, a fake /proc, a scratch home tree and a T3 fixture DB — nothing here touches
 # the real machine, its units or its token.
 
 set -u
@@ -62,17 +62,6 @@ cat >"${stubs}/who" <<'STUB'
 #!/usr/bin/env bash
 cat "${WHO_OUT}" 2>/dev/null || true
 STUB
-cat >"${stubs}/tmux" <<'STUB'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >>"${TMUX_ARGV}"
-# Mimic the real tmux (3.x): only #{window_activity} resolves to a timestamp.
-# #{pane_activity} is a valid format field that expands to an EMPTY string, so
-# asking for it yields one blank line per pane -- never a timestamp.
-case "$*" in
-  *'#{window_activity}'*) cat "${TMUX_OUT}" 2>/dev/null || true ;;
-  *) sed -e 's/.*//' "${TMUX_OUT}" 2>/dev/null || true ;;
-esac
-STUB
 cat >"${stubs}/curl" <<'STUB'
 #!/usr/bin/env bash
 d="${STUB_DIR}"
@@ -99,46 +88,28 @@ chmod +x "${stubs}"/*
 
 ss_out="${tmp}/ss.out"
 who_out="${tmp}/who.out"
-tmux_out="${tmp}/tmux.out"
 ss_argv="${tmp}/ss.argv"
-tmux_argv="${tmp}/tmux.argv"
 proc="${tmp}/proc"
-state="${tmp}/idle-state.json"
 marker="${tmp}/provisioning"
 stub_dir="${tmp}/curlstub"
 SS_EXIT=0     # a scenario sets this to make the ss stub fail
 
-# A /proc/<pid>/stat line: field 4 (ppid) is what the probe walks to attribute a
-# child's CPU to its agent, fields 14 (utime) and 15 (stime) are what it samples;
-# everything in between is padding.
-fake_proc() { # <pid> <comm> <utime> <stime> [cmdline] [ppid]
-  local pid="$1" comm="$2" utime="$3" stime="$4" cmdline="${5:-}" ppid="${6:-1}" pad=""
-  mkdir -p "${proc}/${pid}"
-  for _ in $(seq 1 9); do pad="${pad} 0"; done
-  printf '%s (%s) S %s%s %s %s 0 0 0 0\n' "${pid}" "${comm}" "${ppid}" "${pad}" "${utime}" "${stime}" \
-    >"${proc}/${pid}/stat"
-  if [[ -n "${cmdline}" ]]; then
-    printf '%s' "${cmdline}" | tr ' ' '\0' >"${proc}/${pid}/cmdline"
-  fi
-}
-
 reset_scene() {
-  rm -rf "${proc}" "${state}" "${marker}" "${stub_dir}" "${ss_argv}" "${tmux_argv}"
+  rm -rf "${proc}" "${marker}" "${stub_dir}" "${ss_argv}"
   mkdir -p "${proc}" "${stub_dir}"
   : >"${ss_out}"
   : >"${who_out}"
-  : >"${tmux_out}"
 }
 
 # Run the reporter in dry-run mode (prints the report instead of posting it).
 report() {
-  SS_OUT="${ss_out}" WHO_OUT="${who_out}" TMUX_OUT="${tmux_out}" \
-  SS_ARGV="${ss_argv}" TMUX_ARGV="${tmux_argv}" SS_EXIT="${SS_EXIT:-0}" \
+  SS_OUT="${ss_out}" WHO_OUT="${who_out}" \
+  SS_ARGV="${ss_argv}" SS_EXIT="${SS_EXIT:-0}" \
   PATH="${stubs}:${PATH}" \
   CONFIG_FILE="${empty_cfg}" \
   CONSTRUCT_IDLE_DRY_RUN=true \
-  CONSTRUCT_IDLE_STATE_FILE="${state}" \
   CONSTRUCT_IDLE_PROC_DIR="${proc}" \
+  CONSTRUCT_IDLE_AGENT_HOMES="${tmp}/home" \
   CONSTRUCT_PROVISION_MARKER="${marker}" \
     bash "${REPORTER}"
 }
@@ -148,10 +119,10 @@ report() {
 reset_scene
 printf 'ESTAB 0 0 10.0.0.5:22 10.0.0.9:51000\n' >"${ss_out}"
 out="${tmp}/local.out"
-SS_OUT="${ss_out}" WHO_OUT="${who_out}" TMUX_OUT="${tmux_out}" \
-  SS_ARGV="${ss_argv}" TMUX_ARGV="${tmux_argv}" PATH="${stubs}:${PATH}" \
-  CONFIG_FILE="${empty_cfg}" CONSTRUCT_IDLE_STATE_FILE="${state}" \
-  CONSTRUCT_IDLE_PROC_DIR="${proc}" CONSTRUCT_PROVISION_MARKER="${marker}" \
+SS_OUT="${ss_out}" WHO_OUT="${who_out}" \
+  SS_ARGV="${ss_argv}" PATH="${stubs}:${PATH}" \
+  CONFIG_FILE="${empty_cfg}" \
+  CONSTRUCT_IDLE_PROC_DIR="${proc}" CONSTRUCT_PROVISION_MARKER="${marker}" CONSTRUCT_IDLE_AGENT_HOMES="${tmp}/home" \
   STUB_DIR="${stub_dir}" bash "${REPORTER}" >"${out}" 2>"${out}.err"
 rc=$?
 ok "no service URL: exits 0" test "${rc}" = 0
@@ -175,10 +146,10 @@ ok "the ss probe asks for established sessions on port 22" \
 # who is the fallback when ss is unavailable.
 reset_scene
 printf 'root pts/0 2026-09-01 09:00 (10.0.0.9)\n' >"${who_out}"
-noss_report="$(SS_OUT="${ss_out}" WHO_OUT="${who_out}" TMUX_OUT="${tmux_out}" \
-  SS_ARGV="${ss_argv}" TMUX_ARGV="${tmux_argv}" PATH="${stubs}:${PATH}" \
+noss_report="$(SS_OUT="${ss_out}" WHO_OUT="${who_out}" \
+  SS_ARGV="${ss_argv}" PATH="${stubs}:${PATH}" CONSTRUCT_IDLE_AGENT_HOMES="${tmp}/home" \
   CONFIG_FILE="${empty_cfg}" CONSTRUCT_IDLE_DRY_RUN=true \
-  CONSTRUCT_IDLE_STATE_FILE="${state}" CONSTRUCT_IDLE_PROC_DIR="${proc}" \
+  CONSTRUCT_IDLE_PROC_DIR="${proc}" \
   CONSTRUCT_PROVISION_MARKER="${marker}" CONSTRUCT_IDLE_SS=definitely-no-such-command \
   bash "${REPORTER}")"
 ok "who is used when ss is missing" test "${noss_report}" = '{"busy":true,"reasons":["ssh-session"]}'
@@ -202,120 +173,76 @@ ok "a failing ss and no who at all report idle rather than crashing" \
   test "$(CONSTRUCT_IDLE_WHO=definitely-no-such-command report)" = '{"busy":false,"reasons":[]}'
 SS_EXIT=0
 
-# An agent we have never sampled cannot be shown to be idle — and an explicit
-# `busy:false` buys the guest NO grace in the service, so "we cannot tell yet"
-# has to read as busy or the very next scheduler tick can save a VM out from
-# under a working agent.
+# (b) Agent transcripts. A transcript written within the window is work; one that
+# went quiet (an agent waiting on a question, a finished turn) is not.
+home="${tmp}/home"
+recent=$(( $(date +%s) - 10 ))
+stale=$(( $(date +%s) - 3600 ))
 reset_scene
-fake_proc 4242 claude 100 20
-first="$(report)"
-ok "an agent with no baseline yet is reported busy, never idle" \
-  test "${first}" = '{"busy":true,"reasons":["agent-cpu:claude"]}'
-ok "the first run persists its sample" grep -q '"4242":120' "${state}"
-ok "the state file is one line of JSON with a version" grep -q '{"v":1,"at":' "${state}"
-ok "the state file is published atomically" test -z "$(find "$(dirname "${state}")" -name '*.tmp.*')"
+rm -rf "${home}"; mkdir -p "${home}"
+ok "no agent files at all: idle" test "$(report)" = '{"busy":false,"reasons":[]}'
 
-fake_proc 4242 claude 400 20
-ok "an agent burning CPU is busy" test "$(report)" = '{"busy":true,"reasons":["agent-cpu:claude"]}'
-
-fake_proc 4242 claude 402 20
-ok "a couple of ticks stays under the threshold" test "$(report)" = '{"busy":false,"reasons":[]}'
-
-# A brand-new process that has done nothing yet is not evidence of work.
-reset_scene
-fake_proc 4243 claude 0 0
-ok "a freshly spawned agent that has burned nothing is not busy" \
+mkdir -p "${home}/.claude/projects/-root-repos-x"
+touch -d "@${recent}" "${home}/.claude/projects/-root-repos-x/session.jsonl"
+ok "a Claude Code transcript written just now is busy" \
+  test "$(report)" = '{"busy":true,"reasons":["agent-log:claude"]}'
+touch -d "@${stale}" "${home}/.claude/projects/-root-repos-x/session.jsonl"
+ok "a Claude Code transcript that went quiet is idle (a question left unanswered is not work)" \
   test "$(report)" = '{"busy":false,"reasons":[]}'
 
-# The make-or-break case: the agent delegates the work. `claude` waits at ~0%
-# while the test suite it started burns CPU in a child, so the child's CPU has to
-# be attributed to the agent that owns it.
-reset_scene
-fake_proc 500 claude 100 0
-fake_proc 501 bash 10 0 "bash -c npm test" 500
-fake_proc 502 node 10 0 "node /root/repos/app/node_modules/.bin/jest" 501
-report >/dev/null
-fake_proc 500 claude 101 0
-fake_proc 501 bash 11 0 "bash -c npm test" 500
-fake_proc 502 node 900 0 "node /root/repos/app/node_modules/.bin/jest" 501
-ok "CPU burned by an agent's child counts for the agent" \
-  test "$(report)" = '{"busy":true,"reasons":["agent-cpu:claude"]}'
+mkdir -p "${home}/.codex/sessions/2026/09/17"
+touch -d "@${recent}" "${home}/.codex/sessions/2026/09/17/rollout-2026-09-17T10-00-00-abc.jsonl"
+ok "a Codex rollout written just now is busy" test "$(report)" = '{"busy":true,"reasons":["agent-log:codex"]}'
+touch -d "@${stale}" "${home}/.codex/sessions/2026/09/17/rollout-2026-09-17T10-00-00-abc.jsonl"
 
-# …but the same process tree without an agent at its root stays idle.
-reset_scene
-fake_proc 601 bash 10 0 "bash -c npm test"
-fake_proc 602 node 10 0 "node /root/repos/app/node_modules/.bin/jest" 601
-report >/dev/null
-fake_proc 601 bash 11 0 "bash -c npm test"
-fake_proc 602 node 900 0 "node /root/repos/app/node_modules/.bin/jest" 601
-ok "an unrelated build tree does not pin the VM as busy" \
-  test "$(report)" = '{"busy":false,"reasons":[]}'
+mkdir -p "${home}/.local/share/opencode"
+touch -d "@${stale}" "${home}/.local/share/opencode/opencode.db"
+touch -d "@${recent}" "${home}/.local/share/opencode/opencode.db-wal"
+ok "an OpenCode database write just now is busy" test "$(report)" = '{"busy":true,"reasons":["agent-log:opencode"]}'
+touch -d "@${stale}" "${home}/.local/share/opencode/opencode.db-wal"
 
-# node counts on its own only when its command line names an agent stack.
-reset_scene
-fake_proc 77 node 10 0 "node /usr/lib/node_modules/t3/dist/t3code-serve.js"
-fake_proc 88 node 10 0 "node /root/repos/some-app/build.js"
-report >/dev/null
-fake_proc 77 node 500 0 "node /usr/lib/node_modules/t3/dist/t3code-serve.js"
-fake_proc 88 node 500 0 "node /root/repos/some-app/build.js"
-ok "a node process running an agent stack counts" \
-  test "$(report)" = '{"busy":true,"reasons":["agent-cpu:t3code"]}'
+# Files that are not transcripts do not count, however fresh.
+touch -d "@${recent}" "${home}/.claude/projects/-root-repos-x/notes.txt" "${home}/.codex/sessions/2026/09/17/other.log"
+ok "fresh non-transcript files under the agent dirs are not work" test "$(report)" = '{"busy":false,"reasons":[]}'
 
-reset_scene
-fake_proc 88 node 10 0 "node /root/repos/some-app/build.js"
-report >/dev/null
-fake_proc 88 node 900 0 "node /root/repos/some-app/build.js"
-ok "an unrelated node process does not pin the VM as busy" \
-  test "$(report)" = '{"busy":false,"reasons":[]}'
+# Several agents at once: one reason per agent, in a stable order.
+touch -d "@${recent}" "${home}/.claude/projects/-root-repos-x/session.jsonl" "${home}/.codex/sessions/2026/09/17/rollout-2026-09-17T10-00-00-abc.jsonl"
+printf 'ESTAB 0 0 10.0.0.5:22 10.0.0.9:51000\n' >"${ss_out}"
+ok "connections and several agents: one stable reason each" \
+  test "$(report)" = '{"busy":true,"reasons":["ssh-session","agent-log:claude","agent-log:codex"]}'
+touch -d "@${stale}" "${home}/.claude/projects/-root-repos-x/session.jsonl" "${home}/.codex/sessions/2026/09/17/rollout-2026-09-17T10-00-00-abc.jsonl"
+: >"${ss_out}"
 
-# tmux windows with recent output. The stub answers ONLY for a format field the
-# installed tmux actually resolves (see the real-tmux checks below): asking for
-# #{pane_activity} must not look like activity, because on tmux 3.x it is empty.
-reset_scene
-date +%s >"${tmux_out}"
-ok "a tmux window with recent activity is busy" test "$(report)" = '{"busy":true,"reasons":["tmux-activity"]}'
-ok "the tmux probe reads window_activity for every pane" \
-  grep -q 'list-panes -a -F #{window_activity}' "${tmux_argv}"
-
-reset_scene
-printf '%s\n' "$(( $(date +%s) - 3600 ))" >"${tmux_out}"
-ok "a long-quiet tmux window is not busy" test "$(report)" = '{"busy":false,"reasons":[]}'
-
-# The real thing: the field the probe asks for must actually carry a timestamp on
-# the tmux that is installed. This is the check that catches a format field which
-# exists in the vocabulary but resolves to nothing.
-if command -v tmux >/dev/null 2>&1; then
-  tsock="construct-idle-test-$$"
-  tmux -L "${tsock}" kill-server 2>/dev/null || true
-  tmux -L "${tsock}" new-session -d -s busy 'while true; do echo tick; sleep 1; done' 2>/dev/null
-  sleep 2
-  field_used="$(tmux -L "${tsock}" list-panes -a -F '#{window_activity}' 2>/dev/null | head -1)"
-  field_pane="$(tmux -L "${tsock}" list-panes -a -F '#{pane_activity}' 2>/dev/null | head -1)"
-  ok "real tmux: the field the probe uses carries a timestamp" \
-    sh -c "printf '%s' '${field_used}' | grep -qE '^[0-9]+$'"
-  ok "real tmux: #{pane_activity} would NOT have (the bug this pins)" \
-    sh -c "! printf '%s' '${field_pane}' | grep -qE '^[0-9]+$'"
-
-  # And end to end, against the real tmux binary rather than the stub.
-  # Absolute path: ${stubs} is first on PATH during the run, and a bare `tmux`
-  # here would resolve straight back to the stub.
-  tmux_bin="$(command -v tmux)"
-  cat >"${stubs}/tmux-real" <<STUBEOF
-#!/usr/bin/env bash
-exec "${tmux_bin}" -L "${tsock}" "\$@"
-STUBEOF
-  chmod +x "${stubs}/tmux-real"
-  reset_scene
-  real_tmux_report="$(SS_OUT="${ss_out}" WHO_OUT="${who_out}" PATH="${stubs}:${PATH}" \
-    CONFIG_FILE="${empty_cfg}" CONSTRUCT_IDLE_DRY_RUN=true \
-    CONSTRUCT_IDLE_STATE_FILE="${state}" CONSTRUCT_IDLE_PROC_DIR="${proc}" \
-    CONSTRUCT_PROVISION_MARKER="${marker}" CONSTRUCT_IDLE_SS=definitely-no-such-command \
-    CONSTRUCT_IDLE_WHO=definitely-no-such-command \
-    CONSTRUCT_IDLE_TMUX="${stubs}/tmux-real" bash "${REPORTER}")"
-  ok "real tmux: a session producing output is reported busy" \
-    test "${real_tmux_report}" = '{"busy":true,"reasons":["tmux-activity"]}'
-  tmux -L "${tsock}" kill-server 2>/dev/null || true
-fi
+# (c) T3 Code threads. Only a running session whose thread is not waiting on the
+# user counts; blocked, stopped and deleted threads do not.
+t3db="${home}/.t3/userdata/state.sqlite"
+mkdir -p "$(dirname "${t3db}")"
+seed_t3() { # <session status> <pending_user_input> <pending_approval> [deleted_at]
+  rm -f "${t3db}" "${t3db}-wal" "${t3db}-shm"
+  python3 - "${t3db}" "$1" "$2" "$3" "${4:-}" <<'PY'
+import sqlite3, sys
+db, status, pending_input, pending_approval, deleted = sys.argv[1:6]
+c = sqlite3.connect(db)
+c.execute("create table projection_threads (thread_id text, deleted_at text, pending_user_input_count integer, pending_approval_count integer)")
+c.execute("create table projection_thread_sessions (thread_id text, status text)")
+c.execute("insert into projection_threads values ('t1', ?, ?, ?)", (deleted or None, int(pending_input), int(pending_approval)))
+c.execute("insert into projection_thread_sessions values ('t1', ?)", (status,))
+c.commit()
+PY
+}
+seed_t3 running 0 0
+ok "a running T3 thread with nothing pending is busy" test "$(report)" = '{"busy":true,"reasons":["t3-thread-running"]}'
+seed_t3 running 1 0
+ok "a T3 thread waiting for the user's answer is idle" test "$(report)" = '{"busy":false,"reasons":[]}'
+seed_t3 running 0 1
+ok "a T3 thread waiting for an approval is idle" test "$(report)" = '{"busy":false,"reasons":[]}'
+seed_t3 stopped 0 0
+ok "a stopped T3 thread is idle" test "$(report)" = '{"busy":false,"reasons":[]}'
+seed_t3 running 0 0 2026-09-17T00:00:00Z
+ok "a deleted T3 thread is idle" test "$(report)" = '{"busy":false,"reasons":[]}'
+printf 'not a database' >"${t3db}"
+ok "an unreadable T3 database says nothing rather than crashing" test "$(report)" = '{"busy":false,"reasons":[]}'
+rm -f "${t3db}"
 
 # Provisioning in progress: the marker plus a live PID.
 reset_scene
@@ -331,14 +258,14 @@ ok "a marker left behind by a dead provision is ignored" \
 # Several signals at once, in a stable order.
 reset_scene
 printf 'Recv-Q Send-Q Local Address:Port\n0 0 10.0.0.5:22 10.0.0.9:51000\n' >"${ss_out}"
-date +%s >"${tmux_out}"
 mkdir -p "${proc}/9999"
 printf '9999\n' >"${marker}"
-fake_proc 4242 codex 10 0
-report >/dev/null
-fake_proc 4242 codex 900 0
+touch -d "@${recent}" "${home}/.codex/sessions/2026/09/17/rollout-2026-09-17T10-00-00-abc.jsonl"
+seed_t3 running 0 0
 ok "every reason is reported, in a stable order" \
-  test "$(report)" = '{"busy":true,"reasons":["ssh-session","agent-cpu:codex","tmux-activity","provisioning"]}'
+  test "$(report)" = '{"busy":true,"reasons":["ssh-session","agent-log:codex","t3-thread-running","provisioning"]}'
+touch -d "@${stale}" "${home}/.codex/sessions/2026/09/17/rollout-2026-09-17T10-00-00-abc.jsonl"
+rm -f "${t3db}"
 
 # ── the POST ─────────────────────────────────────────────────────────────────
 
@@ -347,12 +274,12 @@ printf 'sekrit-vm-token-value\n' >"${token_file}"
 chmod 0600 "${token_file}"
 
 post() {
-  SS_OUT="${ss_out}" WHO_OUT="${who_out}" TMUX_OUT="${tmux_out}" \
-  SS_ARGV="${ss_argv}" TMUX_ARGV="${tmux_argv}" PATH="${stubs}:${PATH}" \
+  SS_OUT="${ss_out}" WHO_OUT="${who_out}" \
+  SS_ARGV="${ss_argv}" PATH="${stubs}:${PATH}" \
   STUB_DIR="${stub_dir}" \
   CONFIG_FILE="${remote_cfg}" \
-  CONSTRUCT_IDLE_STATE_FILE="${state}" CONSTRUCT_IDLE_PROC_DIR="${proc}" \
-  CONSTRUCT_PROVISION_MARKER="${marker}" \
+  CONSTRUCT_IDLE_PROC_DIR="${proc}" \
+  CONSTRUCT_PROVISION_MARKER="${marker}" CONSTRUCT_IDLE_AGENT_HOMES="${tmp}/home" \
   CONSTRUCT_VM_TOKEN_FILE="${1:-${token_file}}" \
     bash "${REPORTER}"
 }
@@ -513,11 +440,12 @@ for bad_interval in 0 -5 99999 "" abc; do
 done
 
 # …and the same value must not shrink the reporter's own freshness window: with
-# INTERVAL=0 a tmux window that moved a second ago would look stale.
+# INTERVAL=0 a transcript written half a minute ago would look stale.
 reset_scene
-printf '%s\n' "$(( $(date +%s) - 30 ))" >"${tmux_out}"
-ok "the reporter ignores a zero interval too (tmux activity still counts)" \
-  test "$(CONSTRUCT_IDLE_REPORT_INTERVAL_SEC=0 report)" = '{"busy":true,"reasons":["tmux-activity"]}'
+touch -d "@$(( $(date +%s) - 30 ))" "${home}/.claude/projects/-root-repos-x/session.jsonl"
+ok "the reporter ignores a zero interval too (a fresh transcript still counts)" \
+  test "$(CONSTRUCT_IDLE_REPORT_INTERVAL_SEC=0 report)" = '{"busy":true,"reasons":["agent-log:claude"]}'
+touch -d "@${stale}" "${home}/.claude/projects/-root-repos-x/session.jsonl"
 
 zero_cfg="${tmp}/config_zero.env"
 printf 'CONSTRUCT_SERVICE_URL=https://buildbox.example.local:7462\nCONSTRUCT_IDLE_REPORT_INTERVAL_SEC=0\n' \

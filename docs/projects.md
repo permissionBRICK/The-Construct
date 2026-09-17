@@ -29,7 +29,7 @@ selected project may declare:
 - repos to clone
 - SDK versions needed by project containers
 - MCP servers (see below)
-- optional host packages (disabled by default)
+- optional host packages (installed by default; `ALLOW_HOST_PACKAGES=false` in the VM config opts out)
 - custom provisioning commands run on every provision (see below)
 - test commands and notes
 

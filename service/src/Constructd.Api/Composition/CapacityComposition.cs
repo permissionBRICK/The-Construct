@@ -16,6 +16,7 @@ public static class CapacityComposition
             services.AddSingleton<FakeHypervisorInventory>();
             services.AddSingleton<IHypervisorInventory>(sp => sp.GetRequiredService<FakeHypervisorInventory>());
         }
+        else if (options.IsProxmox) services.AddSingleton<IHypervisorInventory, Constructd.Proxmox.ProxmoxInventory>();
         else services.AddSingleton<IHypervisorInventory, HyperVInventory>();
         if (options.EffectivePersistence == PersistenceMode.Sqlite)
         {
@@ -33,7 +34,12 @@ public static class CapacityComposition
         }
         else
         {
-            services.AddSingleton<InMemoryCapacityLedger>(sp => new(sp.GetRequiredService<IClock>()) { Mode = HostAdminDefaults.Capacity.Mode });
+            services.AddSingleton<InMemoryCapacityLedger>(sp => new(sp.GetRequiredService<IClock>())
+            {
+                Mode = HostAdminDefaults.Capacity.Mode,
+                DefaultRamHeadroomBytes = options.IsProxmox ? 1L << 30 : 4L << 30,
+                UseGuestMemoryDemand = options.IsProxmox
+            });
             services.AddSingleton<ICapacityLedger>(sp => sp.GetRequiredService<InMemoryCapacityLedger>());
         }
         services.AddSingleton<IDelegationPolicy>(sp => new CapacityDelegationPolicy(

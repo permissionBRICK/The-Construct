@@ -1504,11 +1504,28 @@ $bootstrapPubKey = Join-Path $PSScriptRoot "keys\bootstrap_ed25519.pub"
 function Start-ConstructGitPreflight {
     # One in-process session spans config import, project selection and handoff.
     if (-not $script:ConstructGitCredentialSession) {
-        $hasBackupCredentials = $restoreDir -and (Test-BackupHasGitCredentials -BackupDir $restoreDir)
+        # Host-aware: a restore backup makes the prompt redundant only when its credential
+        # store covers every http(s) repo host a profile on this PC declares. Otherwise
+        # prompting stays allowed, and the session is SEEDED with the backup's entries so
+        # only the hosts it does not cover are asked for -- never the ones it does.
+        $profileUrls = @()
+        if ($restoreDir -and (Get-Command Get-ProjectRepoUrls -ErrorAction SilentlyContinue)) {
+            $profDir = if (Get-Command Get-ConstructConfigProjectsDir -ErrorAction SilentlyContinue) {
+                Get-ConstructConfigProjectsDir -ScriptsDir $PSScriptRoot
+            } else { Join-Path $PSScriptRoot 'projects' }
+            $profNames = @(Get-ChildItem -LiteralPath $profDir -Filter '*.json' -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -ne 'project.schema.json' } | ForEach-Object { $_.BaseName })
+            if ($profNames.Count -gt 0) { $profileUrls = @(Get-ProjectRepoUrls -ProjectsDir $profDir -Names $profNames) }
+        }
+        $hasBackupCredentials = $restoreDir -and (Test-BackupHasGitCredentials -BackupDir $restoreDir -Urls $profileUrls)
         $noPrompt = -not (Test-ConstructGitCredentialPromptAllowed -ExistingInstall:$script:ConstructGitExistingInstall `
             -Action $Action -InputRedirected:([Console]::IsInputRedirected) -BackupHasCredentials:$hasBackupCredentials)
         $script:ConstructGitCredentialSession = New-ConstructGitCredentialSession -NoPrompt:$noPrompt -CredentialsB64 $GitCloneCredentialsB64 `
             -ExistingInstall:($script:ConstructGitExistingInstall -or $hasBackupCredentials)
+        if ($restoreDir -and -not $GitCloneCredentialsB64 -and (Get-Command Add-ConstructGitSessionCredentials -ErrorAction SilentlyContinue)) {
+            [void](Add-ConstructGitSessionCredentials -Session $script:ConstructGitCredentialSession `
+                -CredentialsB64 (Get-BackupGitCredentialsB64 -BackupDir $restoreDir))
+        }
     }
     # Explicit config sources must be imported BEFORE choosing project profiles.
     # Local add-config owns its import below (including collision handling).
@@ -2597,8 +2614,15 @@ if ($RemoteInstall) {
         $bk = Get-ConstructBackupDir -Dir $PSScriptRoot
         if (Confirm-ConstructSavedConfigRestore -BackupDir $bk -BackupMode $BackupMode) {
             $restoreDir = $bk
-            $restoredProjectNames = Get-BackupProjectNames -BackupDir $bk
+            # A NEW instance restores the saved config (auth, memory, skills, credentials, the
+            # profile files) but not another VM's workspace: the profiles the save generated stay
+            # out of the selection, which is the user's own. Only a reinstall of the SAME instance
+            # folds them back in (the reinstall flow above sets $restoredProjectNames).
+            $savedProfiles = @(Get-BackupProjectNames -BackupDir $bk)
             Write-Ok "Saved config loaded; it will be restored automatically after the install."
+            if ($savedProfiles.Count -gt 0) {
+                Write-Ok "The backup carries $($savedProfiles.Count) project profile(s) from the VM it was saved on; pick the ones this VM should provision in the project selection."
+            }
         }
     }
 
@@ -2647,9 +2671,9 @@ if ($RemoteInstall) {
         } else { Join-Path $PSScriptRoot 'projects' }
         $ccParams = @{ ProjectsDir = $freshProjDir; Names = $chosenProjects; Session = $script:ConstructGitCredentialSession }
         if ($restoreDir -and (Get-Command Test-BackupHasGitCredentials -ErrorAction SilentlyContinue) `
-                        -and (Test-BackupHasGitCredentials -BackupDir $restoreDir)) {
+                        -and (Test-BackupHasGitCredentials -BackupDir $restoreDir -Urls @(Get-ProjectRepoUrls -ProjectsDir $freshProjDir -Names $chosenProjects))) {
             $ccParams['NoPrompt'] = $true
-            Write-Note "Reusing the saved git credentials from the restore for cloning -- skipping the credential prompt."
+            Write-Note "Reusing the saved git credentials from the restore for cloning -- they cover every repo host; skipping the credential prompt."
         }
         $chosenCloneCredB64 = Resolve-GitCloneCredential @ccParams
     }
@@ -3423,8 +3447,13 @@ if ($PSBoundParameters.ContainsKey('Action') -and $Action -eq 'add-config' -and 
 if (-not $SkipCreateVm -and -not $existingVmHandled) {
     if (Confirm-ConstructSavedConfigRestore -BackupDir $bk -BackupMode $BackupMode) {
         $restoreDir = $bk
-        $restoredProjectNames = Get-BackupProjectNames -BackupDir $bk
+        # Fresh install: restore the config, not the saved VM's workspace -- the project
+        # selection below is authoritative (see the remote path for the same rule).
+        $savedProfiles = @(Get-BackupProjectNames -BackupDir $bk)
         Write-Ok "Saved config loaded; it will be restored automatically after the install."
+        if ($savedProfiles.Count -gt 0) {
+            Write-Ok "The backup carries $($savedProfiles.Count) project profile(s) from the VM it was saved on; pick the ones this VM should provision in the project selection."
+        }
     }
 }
 
@@ -3524,9 +3553,9 @@ if (-not $SkipCreateVm) {
         } else { Join-Path $PSScriptRoot 'projects' }
         $ccParams = @{ ProjectsDir = $freshProjDir; Names = $chosenProjects; Session = $script:ConstructGitCredentialSession }
         if ($restoreDir -and (Get-Command Test-BackupHasGitCredentials -ErrorAction SilentlyContinue) `
-                        -and (Test-BackupHasGitCredentials -BackupDir $restoreDir)) {
+                        -and (Test-BackupHasGitCredentials -BackupDir $restoreDir -Urls @(Get-ProjectRepoUrls -ProjectsDir $freshProjDir -Names $chosenProjects))) {
             $ccParams['NoPrompt'] = $true
-            Write-Note "Reusing the saved git credentials from the restore for cloning -- skipping the credential prompt."
+            Write-Note "Reusing the saved git credentials from the restore for cloning -- they cover every repo host; skipping the credential prompt."
         }
         $chosenCloneCredB64 = Resolve-GitCloneCredential @ccParams
     }
