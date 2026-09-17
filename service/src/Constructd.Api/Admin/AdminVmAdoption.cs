@@ -13,6 +13,8 @@ public static partial class AdminCli
     private static async Task<int> AdoptVmAsync(IReadOnlyList<string> args,
         IServiceProvider services, AdminOutput writer, CancellationToken ct)
     {
+        if (services.GetRequiredService<Constructd.Core.Configuration.ConstructdOptions>().IsProxmox)
+            return writer.Error(AdminExitCode.Conflict, "Adoption requires an existing Hyper-V VM.");
         if (!writer.Json) return writer.Usage("adoption requires --json for its one-time credential handoff");
         var name = args.ElementAtOrDefault(2);
         var opts = new OptionSet(args.Skip(3),

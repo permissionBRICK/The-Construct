@@ -30,13 +30,15 @@ public sealed class VmInventoryProjection(IVmRepository vms, IVmDelegationReposi
         var observed = vm.Observed ?? new(null, null, [], null);
         var memorySetting = owned && vm.Kind == VmKind.Primary ? await memorySettings.GetAsync(vm, ct) : null;
         var cpuSetting = owned && vm.Kind == VmKind.Primary ? await cpuSettings.GetAsync(vm, ct) : null;
+        var network = networkSettings.Supported && vm.Kind == VmKind.Primary ? await networkSettings.ProjectAsync(vm, caller.IsAdmin(), ct) : null;
         // The durable intent is the flag: capacity observation cannot erase an unresolved attachment.
         if (vm.Kind == VmKind.Child && (await keys.ListInFlightAsync(vm.Name, ct)).Any(k => k.Kind == "child-media" && ConfigurationIntent.Applies(k, vm)))
             observed = observed with { StorageProblem = "media-unverified" };
         return result with
         {
             Kind = vm.Kind,
-            Network = networkSettings.Supported && vm.Kind == VmKind.Primary ? await networkSettings.ProjectAsync(vm, caller.IsAdmin(), ct) : null,
+            Network = network,
+            PublicHost = network?.EffectiveMode == "direct" ? network.Address ?? "" : result.PublicHost,
             Parent = vm.Parent,
             Sharing = vm.Sharing,
             Shared = relationship == ForwardRelationship.Shared,

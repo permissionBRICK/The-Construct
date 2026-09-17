@@ -674,6 +674,13 @@ remote_expose() {
     body="${API_BODY}"
   fi
 
+  # A direct answer has a URL but no durable forward id or relay port.
+  if [[ "$(json_field "${body}" kind)" == "direct" ]]; then
+    link="$(json_field "${body}" url)"
+    [[ -n "${link}" ]] || api_unreadable "$(forwards_path)"
+    printf '%s\n' "${link}"
+    return 0
+  fi
   id="$(json_field "${body}" id)"
   link="$(link_from_forward "${body}")" || rc=$?
   if (( rc == 2 )); then exit 1; fi

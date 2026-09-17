@@ -61,6 +61,7 @@ public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver, IVmM
 
     /// <summary>Host name pattern the fake endpoint uses.</summary>
     public string EndpointHostSuffix { get; set; } = ".fake.local";
+    public bool ReportEndpoint { get; set; } = true;
 
     /// <summary>
     /// Optional gate that <see cref="CreateVmAsync"/> waits on, so a test can observe the service
@@ -158,7 +159,7 @@ public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver, IVmM
     public Task<Endpoint?> GetEndpointAsync(string name, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        Endpoint? endpoint = _states.ContainsKey(name) ? new Endpoint($"{name}{EndpointHostSuffix}", 22) : null;
+        Endpoint? endpoint = ReportEndpoint && _states.ContainsKey(name) ? new Endpoint($"{name}{EndpointHostSuffix}", 22) : null;
         return Task.FromResult(endpoint);
     }
 

@@ -12,6 +12,60 @@ public sealed class VmNetworkSettingsTests
 {
     private static TestApp Proxmox() => new(new Dictionary<string, string?> { ["Constructd:Backend"] = "proxmox" });
 
+    [Fact]
+    public async Task DirectCreationAndExposeNeverAllocatePortsAndGuestCanReadItsEndpoint()
+    {
+        using var app = Proxmox();
+        using var owner = await app.CreateUserClientAsync("alice", allowHostForwards: false);
+        await app.Service<IHostConfigStore>().SetAsync("network", new NetworkConfig(false, false, "direct"), "admin", default);
+        var job = await owner.CreateVmAsync("vm");
+        Assert.Equal(22, job.ResultElement("endpoint").GetProperty("sshPort").GetInt32());
+        Assert.Null((await app.Vms.GetAsync("vm", default))!.SshForwardPort);
+        using var guest = app.CreateVmTokenClient(job.VmToken());
+        var endpoint = await guest.GetFromJsonAsync<JsonElement>("/api/v1/vms/vm/endpoint");
+        Assert.Equal("vm.fake.local", endpoint.GetProperty("sshHost").GetString());
+        Assert.Equal(22, endpoint.GetProperty("sshPort").GetInt32());
+        var exposed = await guest.PostAsJsonAsync("/api/v1/vms/vm/forwards", new { vmPort = 3000, target = "host" });
+        Assert.Equal(HttpStatusCode.OK, exposed.StatusCode);
+        var body = await exposed.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("direct", body.GetProperty("kind").GetString());
+        Assert.Equal("http://vm.fake.local:3000/", body.GetProperty("url").GetString());
+        Assert.Empty(await app.Forwards.ListAsync("vm", default));
+        Assert.Equal(HttpStatusCode.Created, (await guest.PostAsJsonAsync("/api/v1/vms/vm/forwards", new { vmPort = 3000, target = "client" })).StatusCode);
+        app.Driver.ReportEndpoint = false;
+        var unknown = await guest.GetAsync("/api/v1/vms/vm/endpoint");
+        Assert.Equal(HttpStatusCode.Conflict, unknown.StatusCode);
+        Assert.Equal("no-address", (await unknown.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("code").GetString());
+        Assert.Equal(HttpStatusCode.Conflict, (await guest.PostAsJsonAsync("/api/v1/vms/vm/forwards", new { vmPort = 3000, target = "host" })).StatusCode);
+    }
+
+    [Fact]
+    public async Task ModeChangesReleaseOldForwardsAndHostDefaultChangesWaitForStart()
+    {
+        using var app = Proxmox();
+        using var owner = await app.CreateUserClientAsync("alice");
+        await owner.CreateVmAsync("vm");
+        await owner.PostAsJsonAsync("/api/v1/vms/vm/forwards", new { vmPort = 3000, target = "host" });
+        var settings = app.Service<VmNetworkSettings>();
+        var vm = (await app.Vms.GetAsync("vm", default))!;
+        await app.Service<IHostConfigStore>().SetAsync("network", new NetworkConfig(true, true, "direct"), "admin", default);
+        Assert.Equal("relayed", (await settings.CurrentAsync(vm, default)).Mode);
+        app.Driver.SetState("vm", VmState.Off);
+        Assert.Equal(HttpStatusCode.OK, (await owner.PostAsJsonAsync("/api/v1/vms/vm/power", new { action = "start" })).StatusCode);
+        vm = (await app.Vms.GetAsync("vm", default))!;
+        Assert.Null(vm.SshForwardPort);
+        Assert.Empty(await app.Forwards.ListAsync("vm", default));
+        await settings.SaveAsync(vm, new(vm.Created, "direct", "203.0.113.50/24", "203.0.113.1", null), "admin", default);
+        app.Driver.SetState("vm", VmState.Off);
+        await settings.ApplyAsync(vm, VmState.Off, default);
+        app.Driver.ReportEndpoint = false;
+        Assert.Equal("203.0.113.50", (await settings.EndpointAsync(vm, default))!.SshHost);
+        await settings.SaveAsync(vm, new(vm.Created, "relayed", null, null, null), "admin", default);
+        vm = await settings.ApplyAsync(vm, VmState.Off, default);
+        Assert.NotNull(vm.SshForwardPort);
+        Assert.Equal(vm.SshForwardPort, (await settings.EndpointAsync(vm, default))!.SshPort);
+    }
+
     [Theory]
     [InlineData(VmState.Running)]
     [InlineData(VmState.Saved)]
