@@ -556,6 +556,18 @@ either. It is deliberately generous: a false
 The timer is installed only when `CONSTRUCT_SERVICE_URL` is set — a local install gets no
 new unit. Details in [`construct expose` § Activity heartbeat](expose.md#activity-heartbeat).
 
+The host also saves idle VMs early when measured memory is tight, on both Hyper-V and Proxmox.
+The default `memoryPressure` policy starts above 90% RAM use or 50% swap use and continues
+until RAM falls below 80% and swap is no longer above its threshold. It saves to disk; users
+resume the VM. A busy VM is never touched: connections, a fresh busy heartbeat, provisioning
+or another queued/running job all block a save. An effective idle policy of Off or timeout 0
+excludes the VM too. VMs closest to their idle timeout go first, at most one per tick and at
+least 60 seconds apart, with a new measurement required after each save. Recently started or
+saved VMs get a 10-minute cooldown. Admins can change these settings or disable the policy
+in Host Administration's Configuration tab. The RAM card shows pressure and the last save;
+saved VMs carry a "saved (memory pressure)" badge and a `vm.pressure-save` audit entry.
+If every VM is busy, the host stays under pressure and the panel reports insufficient idle VMs.
+
 ---
 
 ## 7. Troubleshooting

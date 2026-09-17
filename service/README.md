@@ -470,12 +470,35 @@ needs no grace — the guest itself says it is idle.
 The decision logic is the pure `IdleEvaluator`; `IdlePolicyEngine` gathers the signals, applies the
 decision through the driver and audit-logs it; `IdleSchedulerService` ticks it once a minute (and is
 switched off in tests, which drive `TickAsync` — or the engine — directly). `Idle:SchedulerEnabled`
-switches **only** the idle evaluation; the same loop also carries the host power reconcile below,
+switches the idle evaluation and its memory-pressure phase; the same loop also carries the host power reconcile below,
 which has its own setting.
 
 Users set their own VM's policy; the admin sets the service-wide default and an optional cap. The cap
 is applied when a policy is stored **and** when it is evaluated, so lowering it also affects VMs
 configured earlier.
+
+Memory pressure can save an idle VM before its timeout on Hyper-V and Proxmox. By default it
+starts above 90% measured RAM use or 50% swap use, then continues until RAM falls below 80%
+and swap is no longer above its threshold. It saves to disk; it never shuts down or resumes a
+VM. Users resume saved VMs themselves. Connections, a fresh busy heartbeat, queued or running
+jobs, and child jobs under a primary all block a save. An effective idle policy of Off or timeout
+0 also excludes the VM. Missing heartbeats retain the normal grace window.
+
+Candidates closest to their idle timeout go first, with larger resident RAM breaking ties.
+The scheduler attempts one save per tick, at least 60 seconds apart, and requires a measurement
+taken after the previous save completed. Inventory must be no older than twice
+`capacity.reconcileSeconds`; missing memory data prevents action. Storage-only inventory problems
+do not invalidate usable memory measurements. Newly observed or restarted VMs get the same
+10-minute cooldown as pressure-saved VMs. Swap-triggered saves below the RAM low-water mark
+still attempt one VM before remeasuring, because resident RAM cannot predict swap reclamation.
+
+Admins edit `memoryPressure` in the Configuration tab or replace the section through
+`PUT /host/config`; `enabled: false` switches it off. `GET /host/capabilities` includes the
+section under `policy.memoryPressure`. `GET /host/status` includes `memoryPressure` with
+`enabled`, `state`, `lastAction`, `usedPercent` and `detail`. Saves are audited as
+`vm.pressure-save`; VM inventory carries `savedBy: "memory-pressure"` while that saved state
+is current. The RAM card shows the status and last save, and the VM list shows the cause.
+If every VM is busy, the host stays under pressure and the panel reports insufficient idle VMs.
 
 ### Keeping the host awake (plan §4.13)
 
@@ -589,6 +612,7 @@ exists; a timestamp requires an exact match. A conflict returns `409 config-conf
 | Section | Configuration fields | Default when no row exists |
 |---|---|---|
 | `capacity` | `mode`, `ramHeadroomBytes`, `storageHeadroomBytes`, `cpuBudget`, `maxVcpusPerVm`, `reconcileSeconds`, `orphanReservationTimeoutSeconds` | `observe`, null RAM headroom, 20 GiB storage headroom, null CPU/per-VM caps, 60 s reconcile, 600 s orphan timeout |
+| `memoryPressure` | `enabled`, `highWaterPercent`, `lowWaterPercent`, `swapHighWaterPercent`, `minSecondsBetweenSaves`, `cooldownMinutesAfterSave` | `true`, 90%, 80%, 50%, 60 seconds, 10 minutes |
 | `userDefaults` | `maxPrimaries`, `allowChildCreation`, `maxRetainedChildren`, `cpuBudget`, `ramBudgetBytes`, `storageBudgetBytes`, `maxChildLifetimeSeconds`, `allowNeverLifetime`, `allowSharing` | `1, true, 1, null, null, null, null, true, true` in field order |
 | `userCaps` | Caps on retained children, CPU/RAM/storage, lifetime, never-lifetime and sharing; null leaves the value uncapped. | every cap null |
 | `lifecycle` | `gracefulShutdownTimeoutSeconds`, `leaseTickSeconds`, `leaseRetrySeconds` | `300, 30, 600` seconds |
@@ -599,6 +623,11 @@ exists; a timestamp requires an exact match. A conflict returns `409 config-conf
 When `capacity.ramHeadroomBytes` is null, RAM headroom is `max(1 GiB, total RAM / 8)`
 on Proxmox and `max(4 GiB, total RAM / 8)` on Hyper-V. A configured byte value,
 including zero, overrides either default.
+
+Memory-pressure thresholds require `0 < lowWaterPercent < highWaterPercent <= 100`.
+`swapHighWaterPercent` accepts 0–100, where 0 ignores swap; the save interval must be positive
+and the cooldown non-negative. The policy uses measured usage independently of capacity's
+Observe/Enforce admission mode.
 
 Disabling `network.hostForwardsEnabled` refuses new primary host forwards immediately; the default
 preserves existing behavior. Stored user allowances override defaults, host caps narrow them, and
