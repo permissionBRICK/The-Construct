@@ -132,6 +132,8 @@ elif action=='check-manual':assert len(read(rp)['manualSteps'])==3
 elif action=='tamper-backup':
     (pathlib.Path(read(rp)['backupPath'])/'service/Constructd.Api').write_text('bad')
 elif action=='mixed':(b/'publish/Constructd.Api').write_text('mixed')
+elif action=='missing-ledger':(b/'publish/install.json').unlink()
+elif action=='stale-fence':write(root/'fence.json',dict(updateId='f'*32,disposition='closed',actor='test',at=h['writtenAt']))
 else:raise AssertionError(action)
 PY
 }
@@ -228,5 +230,23 @@ handoff="$UPDATER_TEST_CASE/link/updates/handoff.json"
 run_update 1
 [[ $(stops) == 0 ]]
 
+fixture scoped-fence
+fixture_action stale-fence
+run_update 0
+fixture_action assert succeeded
+
+fixture no-ledger
+fixture_action missing-ledger
+run_update 1
+[[ $(cat "$UPDATER_TEST_CASE/state") == active ]]
+[[ $(cat "$UPDATER_TEST_CASE/publish/Constructd.Api") == old ]]
+
+# A revocation written between phases is observed before backup or replacement.
+fixture revoked-after-stop
+stop_update_service() { systemctl stop "$1"; fixture_action fence closed; }
+run_update 4
+[[ $(cat "$UPDATER_TEST_CASE/publish/Constructd.Api") == old ]]
+
 printf 'host-updater-linux: %s scenarios passed (service control and health faked)\n' "$passed"
 python3 service/tests/host-updater-health.test.py
+python3 service/tests/host-installer-ledger.test.py
