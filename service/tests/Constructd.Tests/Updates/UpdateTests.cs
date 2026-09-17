@@ -110,6 +110,9 @@ public class UpdateTests
     [Fact] public async Task Maintenance_freezes_mutations_but_health_and_status_remain_readable()
     {
         using var app=new TestApp();using var admin=await app.CreateUserClientAsync("admin",Role.Admin);
+        // This middleware test sets maintenance without a real update. Recovery would
+        // correctly clear it on its next tick, racing the requests below.
+        await app.Service<Constructd.Api.Hosting.UpdateRecoveryService>().StopAsync(default);
         app.Service<IMaintenanceGate>().Enter(MaintenanceState.Maintenance,"update");
         var refused=await admin.PostAsJsonAsync("/api/v1/users",new{name="other"});
         Assert.Equal(HttpStatusCode.ServiceUnavailable,refused.StatusCode);Assert.NotNull(refused.Headers.RetryAfter);
