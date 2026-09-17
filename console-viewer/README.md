@@ -36,8 +36,7 @@ redeemed. Reconnect works from the current page while its link remains valid.
 The gateway is installed under `/opt/construct/console-viewer` and managed by
 `construct-console-viewer.service`. guacd is a separate, digest-pinned container,
 bound **only to 127.0.0.1:4822**, with connection settings supplied by the trusted gateway.
-The optional `construct-browser-console` profile remains available for older
-provisioners; current service-managed primaries install the gateway automatically.
+Service-managed primaries install the gateway automatically.
 
 Optional machine-local settings in `/etc/construct/console-viewer.env`:
 
