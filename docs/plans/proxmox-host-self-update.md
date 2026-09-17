@@ -124,6 +124,6 @@ Port `Update-ConstructHost.ps1` phase by phase; keep function names recognisable
 ## 6. Rules for the implementing agent
 
 - Work on `feat/proxmox-backend` (or a branch off it, and say so). Commit in small steps with the noreply author already configured in the repo; never put any other email in commits or files.
-- Do not run the installer or the updater on any real host, and do not touch `test-proxmox`; the suites and fakes are the verification here.
+- Do not run the installer or the updater on any real host, and do not touch the test node; the suites and fakes are the verification here.
 - Keep the Windows updater and its tests byte-for-byte; extend, do not fork, the shared C# classes.
 - Where this plan and the code disagree, the code's existing contract wins; note the deviation in the final report.
