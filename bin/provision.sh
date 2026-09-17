@@ -450,14 +450,23 @@ CONSTRUCT_EXTERNAL_SSH_PORT="${CONSTRUCT_EXTERNAL_SSH_PORT:-${_external_ssh_port
 _service_url_saved=""
 _instance_name_saved=""
 _idle_interval_saved=""
+_usage_interval_saved=""
+_usage_enabled_saved=""
 if [[ -f "${CONFIG_FILE}" ]]; then
   _service_url_saved="$(_cfg_unquote "$(sed -n 's/^CONSTRUCT_SERVICE_URL=//p' "${CONFIG_FILE}" | head -1 || true)")"
   _instance_name_saved="$(_cfg_unquote "$(sed -n 's/^CONSTRUCT_INSTANCE_NAME=//p' "${CONFIG_FILE}" | head -1 || true)")"
   _idle_interval_saved="$(_cfg_unquote "$(sed -n 's/^CONSTRUCT_IDLE_REPORT_INTERVAL_SEC=//p' "${CONFIG_FILE}" | head -1 || true)")"
+  _usage_interval_saved="$(_cfg_unquote "$(sed -n 's/^CONSTRUCT_USAGE_REPORT_INTERVAL_MIN=//p' "${CONFIG_FILE}" | head -1 || true)")"
+  _usage_enabled_saved="$(_cfg_unquote "$(sed -n 's/^CONSTRUCT_USAGE_REPORT_ENABLED=//p' "${CONFIG_FILE}" | head -1 || true)")"
 fi
 CONSTRUCT_SERVICE_URL="${CONSTRUCT_SERVICE_URL:-${_service_url_saved:-}}"
 CONSTRUCT_INSTANCE_NAME="${CONSTRUCT_INSTANCE_NAME:-${_instance_name_saved:-$(hostname 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo vm)}}"
 CONSTRUCT_IDLE_REPORT_INTERVAL_SEC="${CONSTRUCT_IDLE_REPORT_INTERVAL_SEC:-${_idle_interval_saved:-60}}"
+CONSTRUCT_USAGE_REPORT_INTERVAL_MIN="${CONSTRUCT_USAGE_REPORT_INTERVAL_MIN:-${_usage_interval_saved:-15}}"
+CONSTRUCT_USAGE_REPORT_ENABLED="${CONSTRUCT_USAGE_REPORT_ENABLED:-${_usage_enabled_saved:-true}}"
+if ! [[ "${CONSTRUCT_USAGE_REPORT_INTERVAL_MIN}" =~ ^[0-9]{1,4}$ ]] || (( 10#${CONSTRUCT_USAGE_REPORT_INTERVAL_MIN} < 5 )); then
+  CONSTRUCT_USAGE_REPORT_INTERVAL_MIN=15
+fi
 # Positive and bounded, not just numeric: systemd treats OnUnitActiveSec=0 as a
 # DISABLED timer, so a stray 0 here would silently stop a service-managed VM from
 # ever reporting -- and a VM that never reports gets saved as idle. Anything
@@ -683,6 +692,10 @@ write_configuration() {
     cfg CONSTRUCT_IDLE_REPORT_INTERVAL_SEC "${CONSTRUCT_IDLE_REPORT_INTERVAL_SEC}" || return
   fi
   install -d -m 0755 "${WORKSPACE_ROOT}"
+  if [[ -n "${CONSTRUCT_SERVICE_URL}" || -n "${_usage_interval_saved}" || -n "${_usage_enabled_saved}" ]]; then
+    cfg CONSTRUCT_USAGE_REPORT_INTERVAL_MIN "${CONSTRUCT_USAGE_REPORT_INTERVAL_MIN}" || return
+    cfg CONSTRUCT_USAGE_REPORT_ENABLED "${CONSTRUCT_USAGE_REPORT_ENABLED}" || return
+  fi
 }
 run_step critical "Writing configuration to ${CONFIG_FILE}" write_configuration
 
@@ -1113,6 +1126,29 @@ if [[ -n "${CONSTRUCT_SERVICE_URL}" ]]; then
     setup_idle_report_timer "${CONSTRUCT_IDLE_REPORT_INTERVAL_SEC}"
 else
   remove_idle_report_timer || true
+fi
+
+# The endpoint can change after provisioning when a Proxmox VM changes mode or address.
+setup_usage_report_timer() {
+  local unit_dir="${CONSTRUCT_SYSTEMD_DIR:-/etc/systemd/system}"
+  local bin_dir="${CONSTRUCT_BIN_DIR:-/usr/local/bin}"
+  local systemctl_bin="${CONSTRUCT_SYSTEMCTL:-systemctl}"
+  local state_dir="${CONSTRUCT_USAGE_STATE_DIR:-/var/lib/construct/usage}"
+  install -d -m 0755 "${unit_dir}" "${bin_dir}/lib" || return 1
+  install -m 0755 "${REPO_DIR}/bin/construct-usage-report.sh" "${bin_dir}/construct-usage-report.sh" || return 1
+  install -m 0644 "${REPO_DIR}/extension/vm/usage-collect.sh" "${bin_dir}/lib/usage-collect.sh" || return 1
+  install -m 0644 "${REPO_DIR}/bin/lib/usage-normalize.jq" "${bin_dir}/lib/usage-normalize.jq" || return 1
+  install -m 0644 "${REPO_DIR}/systemd/construct-usage-report.service" "${unit_dir}/construct-usage-report.service" || return 1
+  install -m 0644 "${REPO_DIR}/systemd/construct-usage-report.timer" "${unit_dir}/construct-usage-report.timer" || return 1
+  sed -i "s/^OnUnitActiveSec=.*/OnUnitActiveSec=${CONSTRUCT_USAGE_REPORT_INTERVAL_MIN}min/" "${unit_dir}/construct-usage-report.timer" || return 1
+  [[ ! -f "${state_dir}/backfilled" ]] || rm -- "${state_dir}/backfilled" || return 1
+  "${systemctl_bin}" daemon-reload || return 1
+  "${systemctl_bin}" enable --now construct-usage-report.timer
+}
+if [[ -n "${CONSTRUCT_SERVICE_URL}" ]]; then
+  run_step optional "Setting up the token usage timer" setup_usage_report_timer
+elif [[ -f "${CONSTRUCT_SYSTEMD_DIR:-/etc/systemd/system}/construct-usage-report.timer" ]]; then
+  "${CONSTRUCT_SYSTEMCTL:-systemctl}" disable --now construct-usage-report.timer >/dev/null 2>&1 || true
 fi
 
 # The endpoint can change after provisioning when a Proxmox VM changes mode or address.
