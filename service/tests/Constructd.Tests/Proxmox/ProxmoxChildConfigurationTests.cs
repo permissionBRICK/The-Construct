@@ -35,7 +35,7 @@ public sealed partial class ProxmoxChildDriverTests
         await driver.UpdateHardwareAsync("child", Hardware with { Cpus = 4, RamMb = 2048, SecureBootTemplate = SecureBootTemplate.MicrosoftUefiCertificateAuthority,
             BootOrder = [BootDevice.Disk, BootDevice.InstallMedia] }, false, default);
         var set = runner.Calls.Single(c => c.Arguments[0] == "set");
-        Assert.Equal(new[] { "set", "101", "--cores", "4", "--sockets", "1", "--memory", "2048", "--balloon", "0", "--boot", "order=scsi0;ide2" }, set.Arguments);
+        Assert.Equal(new[] { "set", "101", "--cores", "4", "--sockets", "1", "--memory", "2048", "--balloon", "0", "--boot", "order=sata0;ide2" }, set.Arguments);
         Assert.Contains("template=microsoftWindows", config["description"].ToString());
     }
     [Fact]
@@ -67,8 +67,8 @@ public sealed partial class ProxmoxChildDriverTests
         Assert.DoesNotContain(runner.Calls, c => c.Arguments[0] == "set");
         OffConfig(); ApplySet(); runner.Respond(call =>
         {
-            Assert.Equal(new[] { "disk", "resize", "101", "scsi0", "8G" }, call.Arguments);
-            config["scsi0"] = "local-lvm:vm-101-disk-1,size=8G"; return new(0, "", "", false);
+            Assert.Equal(new[] { "disk", "resize", "101", "sata0", "8G" }, call.Arguments);
+            config["sata0"] = "local-lvm:vm-101-disk-1,size=8G"; return new(0, "", "", false);
         }); QueryConfig(); runner.RespondStdout("{\"status\":\"stopped\"}");
         await driver.UpdateHardwareAsync("child", Hardware with { DiskGb = 8 }, false, default);
     }
@@ -95,7 +95,7 @@ public sealed partial class ProxmoxChildDriverTests
         Assert.Equal(new(Install, Auxiliary, true), await driver.GetAttachedMediaAsync("child", default));
         OffConfig(); ApplySet(); QueryConfig(); runner.RespondStdout("{\"status\":\"stopped\"}");
         await driver.SetMediaAsync("child", null, null, [BootDevice.Disk], default);
-        Assert.Equal(new[] { "set", "101", "--delete", "ide2,ide0", "--boot", "order=scsi0" },
+        Assert.Equal(new[] { "set", "101", "--delete", "ide2,ide0", "--boot", "order=sata0" },
             runner.Calls.Single(c => c.Arguments[0] == "set").Arguments);
         NamedConfig(); Assert.Equal(new(null, null, true), await driver.GetAttachedMediaAsync("child", default));
         config["ide2"] = "foreign:iso/not-managed.iso,media=cdrom"; NamedConfig();
@@ -108,7 +108,7 @@ public sealed partial class ProxmoxChildDriverTests
         await driver.SetMediaAsync("child", Auxiliary, null, [BootDevice.Network, BootDevice.AuxiliaryMedia, BootDevice.InstallMedia, BootDevice.Disk], default);
         var args = runner.Calls.Single(c => c.Arguments[0] == "set").Arguments;
         Assert.Contains("construct-media:iso/" + Path.GetFileName(Auxiliary) + ",media=cdrom", args);
-        Assert.Contains("order=ide2;scsi0", args);
+        Assert.Contains("order=ide2;sata0", args);
         NamedConfig(); Assert.Equal(new(Auxiliary, null, true), await driver.GetAttachedMediaAsync("child", default));
     }
     [Theory]

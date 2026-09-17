@@ -27,7 +27,8 @@ public sealed partial class ProxmoxChildVmPlatform
         var (id, config, owner) = await OffChildAsync(name, ct);
         if (ProxmoxCommands.String(config, "bios") != "ovmf" || hardware.NetworkAttached != config.TryGetProperty("net0", out _))
             throw new ChildValidationException("unsupported-capability", "hardware");
-        var disk = DiskBytes(ProxmoxCommands.String(config, "scsi0"));
+        var slot = ProxmoxChildVmPlatform.DiskSlot(config);
+        var disk = DiskBytes(ProxmoxCommands.String(config, slot));
         var requested = (long)hardware.DiskGb << 30;
         if (disk is null) throw ProxmoxCommands.Failure();
         if (requested < disk) throw new ChildValidationException("validation", "diskGb");
@@ -49,15 +50,15 @@ public sealed partial class ProxmoxChildVmPlatform
         if (replaceEfi) args.AddRange(["--efidisk0", Efi(hardware.SecureBoot)]);
         if (resendTemplate) args.AddRange(["--description", Description(owner, template)]);
         if (hardware.Tpm && !config.TryGetProperty("tpmstate0", out _)) args.AddRange(["--tpmstate0", Storage + ":1,version=v2.0"]);
-        args.AddRange(["--boot", "order=" + Boot(hardware.BootOrder, HasMedia(config, "ide2"), HasMedia(config, "ide0"), hardware.NetworkAttached)]);
+        args.AddRange(["--boot", "order=" + Boot(hardware.BootOrder, HasMedia(config, "ide2"), HasMedia(config, "ide0"), hardware.NetworkAttached, slot)]);
         await commands.QmAsync(args, ct);
-        if (requested > disk) await commands.QmAsync(["disk", "resize", number, "scsi0", ProxmoxCommands.Number(hardware.DiskGb) + "G"], ct);
+        if (requested > disk) await commands.QmAsync(["disk", "resize", number, slot, ProxmoxCommands.Number(hardware.DiskGb) + "G"], ct);
         var actual = await commands.ConfigAsync(id, ct);
         VerifyOwner(actual, owner);
         WriteOwnership(owner with { Volumes = owner.Volumes.Concat(OwnedVolumes(actual, id)).Distinct().ToArray() });
         if (Number(actual, "cores") != hardware.Cpus || Number(actual, "sockets", 1) != 1 ||
             Number(actual, "memory") != hardware.RamMb || Number(actual, "balloon", 0) != 0 ||
-            DiskBytes(ProxmoxCommands.String(actual, "scsi0")) != requested ||
+            DiskBytes(ProxmoxCommands.String(actual, slot)) != requested ||
             (ProxmoxCommands.Property(ProxmoxCommands.String(actual, "efidisk0"), "pre-enrolled-keys") == "1") != hardware.SecureBoot ||
             actual.TryGetProperty("tpmstate0", out _) != hardware.Tpm ||
             ProxmoxCommands.Property(ProxmoxCommands.String(actual, "boot"), "order") != args[^1]![6..] ||
@@ -84,7 +85,7 @@ public sealed partial class ProxmoxChildVmPlatform
         ArgumentGuard.VmName(name);
         var install = installMediaPath is null ? null : media.ToVolume(installMediaPath);
         var auxiliary = auxiliaryMediaPath is null ? null : media.ToVolume(auxiliaryMediaPath);
-        _ = Boot(bootOrder, install is not null, auxiliary is not null, true);
+        _ = Boot(bootOrder, install is not null, auxiliary is not null, true, "scsi0");
         var (id, config, owner) = await OffChildAsync(name, ct);
         var args = new List<string> { "set", ProxmoxCommands.Number(id) };
         var delete = new List<string>();
@@ -96,7 +97,7 @@ public sealed partial class ProxmoxChildVmPlatform
             else if (config.TryGetProperty(slot, out _)) delete.Add(slot);
         }
         if (delete.Count > 0) args.AddRange(["--delete", string.Join(',', delete)]);
-        var order = Boot(bootOrder, install is not null, auxiliary is not null, config.TryGetProperty("net0", out _));
+        var order = Boot(bootOrder, install is not null, auxiliary is not null, config.TryGetProperty("net0", out _), ProxmoxChildVmPlatform.DiskSlot(config));
         args.AddRange(["--boot", "order=" + order]);
         await commands.QmAsync(args, ct);
         var actual = await commands.ConfigAsync(id, ct); VerifyOwner(actual, owner);
