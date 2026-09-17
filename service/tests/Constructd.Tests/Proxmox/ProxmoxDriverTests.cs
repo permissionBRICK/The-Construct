@@ -24,6 +24,39 @@ public sealed class ProxmoxDriverTests
             Nested: true, AutomaticCheckpoints: false);
 
     [Theory]
+    [InlineData(true, "host")]
+    [InlineData(false, "x86-64-v2-AES")]
+    public async Task Nested_selects_cpu_for_create_and_pending_setting(bool nested, string model)
+    {
+        var (driver, runner, _) = Driver(new RecordingProcessRunner().RespondStdout("[]").RespondStdout("104")
+            .RespondStdout("").RespondStdout("").RespondStdout("").RespondStdout(Resources).RespondStdout(""));
+        await driver.CreateVmAsync(Descriptor with { Nested = nested }, null, default);
+        var argv = runner[2].Arguments.ToArray();
+        Assert.Equal(model, argv[Array.IndexOf(argv, "--cpu") + 1]);
+        await driver.SetNestedAsync("work-vm", nested, default);
+        Assert.Equal(["set", "104", "--cpu", model], runner[6].Arguments);
+    }
+
+    [Theory]
+    [InlineData("kvm_intel", "Y", true)]
+    [InlineData("kvm_amd", "1", true)]
+    [InlineData("kvm_intel", "N", false)]
+    [InlineData("kvm_amd", "0", false)]
+    public void Nested_probe_reads_loaded_module_parameter(string module, string value, bool expected)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "construct-kvm-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Assert.False(ProxmoxNestedCapability.IsAvailable(root));
+            var path = Path.Combine(root, module, "parameters");
+            Directory.CreateDirectory(path);
+            File.WriteAllText(Path.Combine(path, "nested"), value + "\n");
+            Assert.Equal(expected, ProxmoxNestedCapability.IsAvailable(root));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public async Task Network_configuration_updates_cloud_init_only_while_off(bool fixedAddress)

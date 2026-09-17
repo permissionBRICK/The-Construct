@@ -36,7 +36,7 @@ const CHILD_ACTIONS = [
 ];
 
 /** The host-config sections of §1.5, in display order. */
-const CONFIG_SECTIONS = ["capacity", "userDefaults", "userCaps", "lifecycle", "media", "network", "updates"];
+const CONFIG_SECTIONS = ["capacity", "userDefaults", "userCaps", "lifecycle", "media", "network", "virtualization", "updates"];
 
 /** The tabs of §10.2 and the feature each one needs. `host-admin` gates the module. */
 const TABS = [
@@ -118,6 +118,7 @@ function featureSet(health) {
     networkMode: list.indexOf("network-mode") >= 0,
     primaryCpu: list.indexOf("primary-cpu") >= 0,
     primaryMemory: list.indexOf("primary-memory") >= 0,
+    primaryNested: list.indexOf("primary-nested") >= 0,
   };
 }
 
@@ -530,6 +531,7 @@ function toUserRow(user) {
     enabled: u.enabled !== false,
     maxVms: num(u.maxVms),
     allowHostForwards: u.allowHostForwards !== false,
+    allowNested: typeof u.allowNested === "boolean" ? u.allowNested : null,
     created: formatWhen(u.created),
     primaries: num(vms.primaries) || 0,
     children: num(vms.children) || 0,
@@ -834,6 +836,7 @@ function parseUserForm(form) {
   if (maxVms !== null) body.maxVms = maxVms;
   const hf = parseTri(f.allowHostForwards, "allowHostForwards", problems);
   if (hf !== null) body.allowHostForwards = hf;
+  if (Object.hasOwn(f, "allowNested")) body.allowNested = parseTri(f.allowNested, "allowNested", problems);
   if (!problems.length && !Object.keys(body).length) problems.push({ field: "", reason: "nothing to change" });
   return { ok: problems.length === 0, body, problems };
 }
@@ -1212,12 +1215,13 @@ function createHostAdminModel(deps = {}) {
     // reload that follows it. `perform` clears it when the next action starts.
     try {
       if (id === "overview") {
-        const [status, capacity] = await Promise.allSettled([client.hostStatus(), client.hostCapacity(false)]);
+        const [status, capacity, capabilities] = await Promise.allSettled([client.hostStatus(), client.hostCapacity(false), client.hostCapabilities()]);
         if (status.status === "rejected") throw status.reason;
         if (capacity.status === "rejected" && refused(capacity.reason)) throw capacity.reason;
         state.overview = toOverview(status.value, capacity.status === "fulfilled" ? capacity.value :
           { problems: [`Capacity details unavailable: ${errText(capacity.reason)}`] });
         if (state.features.networkMode) state.networkSection = toConfigView(await client.hostConfig()).find(s => s.key === "network");
+        state.overview.nested = capabilities.status === "fulfilled" ? capabilities.value.nested : null;
       } else if (id === "vms") {
         const list = await client.vms({ kind: "all" });
         state.vms = { rows: toVmRows(list, now()), childrenFeature: state.features.children };
@@ -1282,12 +1286,13 @@ function createHostAdminModel(deps = {}) {
       switch (a) {
         case "loadVmSettings": {
           const name = str(args.name);
-          const fields = ["cpu", "memory", "idle", "network"];
+          const fields = ["cpu", "memory", "idle", "nested", "network"];
           const results = await Promise.allSettled([
             state.features.primaryCpu ? client.vmCpu(name) : Promise.resolve(null),
             state.features.primaryMemory ? client.vmMemory(name) : Promise.resolve(null),
             client.vmIdlePolicy(name),
             state.features.networkMode ? client.vmNetwork(name) : Promise.resolve(null),
+            state.features.primaryNested ? client.vmNested(name) : Promise.resolve(null),
           ]);
           const settings = { warnings: [] };
           results.forEach((result, i) => {
@@ -1307,6 +1312,8 @@ function createHostAdminModel(deps = {}) {
           const name = str(args.name);
           const changeCpu = state.features.primaryCpu && Object.prototype.hasOwnProperty.call(args, "cpus");
           const changeMemory = state.features.primaryMemory && Object.prototype.hasOwnProperty.call(args, "ramGb");
+          const changeNested = state.features.primaryNested && Object.hasOwn(args, "nested");
+          if (changeNested && typeof args.nested !== "boolean") throw new Error("Choose on or off for nested virtualization.");
           const changeIdle = Object.prototype.hasOwnProperty.call(args, "timeoutMinutes") || Object.prototype.hasOwnProperty.call(args, "action");
           const whole = (value, min, max) => typeof value === "number" && Number.isInteger(value) && value >= min && value <= max;
           if (changeCpu && !whole(args.cpus, 1, 64)) throw new Error("Choose a whole CPU count from 1 to 64.");
@@ -1321,6 +1328,7 @@ function createHostAdminModel(deps = {}) {
               (idle.forceEnabled && args.action === "off"))) throw new Error("Choose an idle timeout and action within the host cap.");
           if (cpu && args.cpus !== cpu.desiredCpus) await client.setVmCpu(name, { cpus: args.cpus });
           if (memory && args.ramGb !== memory.desiredRamGb) await client.setVmMemory(name, { ramGb: args.ramGb });
+          if (changeNested) await client.setVmNested(name, { enabled: args.nested });
           if (idle && (args.timeoutMinutes !== idle.timeoutMinutes || args.action !== idle.action))
             await client.setVmIdlePolicy(name, { timeoutMinutes: args.timeoutMinutes, action: args.action });
           if (state.features.networkMode && args.network) await client.setVmNetwork(name, args.network);

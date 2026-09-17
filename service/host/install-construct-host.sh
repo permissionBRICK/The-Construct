@@ -594,6 +594,27 @@ LOGIND
 systemctl try-restart systemd-logind >/dev/null 2>&1 || systemctl kill -s HUP systemd-logind >/dev/null 2>&1 || true
 note "sleep/suspend/hibernate masked; lid, suspend key and idle ignored"
 
+# ── 7c. Nested virtualization ────────────────────────────────────────────────
+say "Nested virtualization"
+configure_nested_virtualization() {
+  local modules_path="${1:-/sys/module}" config_path="${2:-/etc/modprobe.d/construct-kvm.conf}" module value
+  for module in kvm_intel kvm_amd; do
+    [[ -r "${modules_path}/${module}/parameters/nested" ]] || continue
+    value="$(cat "${modules_path}/${module}/parameters/nested")"
+    if [[ "${value}" == Y || "${value}" == y || "${value}" == 1 ]]; then
+      note "${module}: nested virtualization is live; VM exposure follows the host/user policy"
+    else
+      install -d -m 0755 "$(dirname "${config_path}")"
+      printf 'options %s nested=1\n' "${module}" >"${config_path}"
+      note "${module}: nested virtualization is not live; wrote ${config_path}"
+      note "Reboot the node or reload the module after stopping all guests. No modules were reloaded."
+    fi
+    return 0
+  done
+  note "No loaded KVM nested parameter found; nested virtualization is unavailable on this host"
+}
+configure_nested_virtualization
+
 # ── 8. First admin and their token ───────────────────────────────────────────
 say "Admin user '${ADMIN}'"
 admin_cli() { (cd "${HOST_DIR}" && ASPNETCORE_ENVIRONMENT=Production DOTNET_ENVIRONMENT=Production "${HOST_DIR}/Constructd.Api" admin "$@"); }

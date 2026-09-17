@@ -9,6 +9,7 @@ public static class HostAdminDefaults
     public static LifecycleConfig Lifecycle { get; } = new(300, 30, 600);
     public static MediaConfig Media { get; } = new(16L << 30, 20, 8 << 20, 24, 180, true, null);
     public static NetworkConfig Network { get; } = new(true, true);
+    public static VirtualizationConfig Virtualization { get; } = new(false, true);
     public static UpdatesConfig Updates { get; } = new("permissionBRICK/The-Construct", "main", 60, 120);
 }
 

@@ -220,23 +220,11 @@ exit 0
  * Bash: mint a one-time pairing token and print the ready-to-open JSON
  * ({... "pairUrl": "https://<dns>:<port>/pair#token=..."}).
  *
- * TWO VARIANTS, and which one runs is decided by the instance:
- *
- *   DEFAULT INSTANCE (and no instance at all) — the host name comes from the VM's
- *   own $(hostname).mshome.net and CONSTRUCT_EXTERNAL_HOST is deliberately NOT read
- *   (config.env is user-editable, so a value left behind by anything else must not
- *   silently redirect the default install's pairing URL).
- *
- *   NON-DEFAULT INSTANCE — prefers CONSTRUCT_EXTERNAL_HOST, the client-reachable name
- *   B2 records in config.env, because a remote/port-forwarded VM is NOT reachable at
- *   its own mshome name; it falls back to $(hostname).mshome.net when the key is absent.
- *
- * THE PAIRING LABEL names the INSTANCE for a non-default VM (`construct-<name>`, plan
- * section 4.12 "Naming"): T3 Code Desktop links several remotes at once, and a session
- * list in which every VM's link is called "construct-control-panel" cannot say which
- * machine a session belongs to. The default instance keeps the historical label, so its
- * script stays byte-identical. (`construct-` is the reserved INSTANCE-name prefix, which
- * is exactly why it is safe here: no instance can be named this.)
+ * Both instances prefer CONSTRUCT_EXTERNAL_HOST, falling back to the VM's
+ * hostname.mshome.net. config.env already controls SSH and other client routes;
+ * using its address for the default instance is intentional.
+ * Named instances retain their own pairing label. links lists the forwarded
+ * route and an optional direct route when CONSTRUCT_DIRECT_HOST is known.
  *
  * BOTH variants pick the SCHEME from the VM: Construct now serves T3 over HTTPS
  * (bin/setup-t3-https.sh), and a browser only exposes getUserMedia() — T3's
@@ -276,6 +264,16 @@ function extractPairUrl(stdout) {
   return m ? m[1] : "";
 }
 
+function extractPairLinks(stdout) {
+  try {
+    const value = JSON.parse(String(stdout));
+    return (Array.isArray(value.links) ? value.links : []).filter(link => {
+      if (!["forwarded", "direct"].includes(link?.kind) || typeof link.pairUrl !== "string") return false;
+      try { return ["http:", "https:"].includes(new URL(link.pairUrl).protocol); } catch (_) { return false; }
+    });
+  } catch (_) { return []; }
+}
+
 /** Fallback web-UI URL when pairing-link minting fails (an already-paired
  *  browser session still gets in). `probedUrl` is the origin the last VM probe
  *  reported (probe.js `toState` -> the t3code agent's `url`), which knows whether
@@ -301,6 +299,14 @@ async function openWebUi(opts = {}) {
     return "";
   }
   let url = r.code === 0 ? extractPairUrl(r.stdout) : "";
+  const links = r.code === 0 ? extractPairLinks(r.stdout) : [];
+  if (links.length) {
+    const chosen = await vscode.window.showQuickPick(links.map(link => ({
+      label: link.kind, description: new URL(link.pairUrl).origin, pairUrl: link.pairUrl,
+    })), { title: "T3 Code pairing links", placeHolder: "Choose a route to open" });
+    if (!chosen) return "";
+    url = chosen.pairUrl;
+  }
   if (!url) {
     url = baseUrl(opts.cfg, opts.webUrl);
     vscode.window.showWarningMessage(
@@ -410,7 +416,7 @@ function planT3LiveAction(wantT3, hadT3, newCh, oldCh) {
 module.exports = {
   SERVICE, DEFAULT_PORT, npmTag,
   buildInstallScript, buildDisableScript, buildPairingScript,
-  extractPairUrl, baseUrl,
+  extractPairUrl, extractPairLinks, baseUrl,
   openWebUi, enableOnVm, disableOnVm, setChannelOnVm,
   planT3LiveAction, _resetQueue,
 };

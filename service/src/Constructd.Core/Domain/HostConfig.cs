@@ -8,5 +8,6 @@ public sealed record LifecycleConfig(int GracefulShutdownTimeoutSeconds, int Lea
 public sealed record MediaConfig(long MaxBytes, int MaxItemsPerUser, int UploadChunkBytes, int UploadTtlHours, int AcquireTimeoutMinutes, bool AllowHttp, int? UnreferencedTtlHours);
 public sealed record NetworkConfig(bool HostForwardsEnabled, bool DirectAddressReporting,
     string DefaultMode = "relayed", bool OwnerMaySwitchMode = false);
+public sealed record VirtualizationConfig(bool NestedDefault, bool NestedSelectable);
 public sealed record UpdatesConfig(string Repository, string Channel, int DrainTimeoutMinutes, int HealthTimeoutSeconds);
 public sealed record MaintenanceMarker(MaintenanceState State, string? UpdateId, DateTimeOffset Since);

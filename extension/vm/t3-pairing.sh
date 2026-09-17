@@ -20,5 +20,6 @@ T3CODE_PORT="$(cfgget T3CODE_PORT)"; T3CODE_PORT="${T3CODE_PORT:-5177}"
 WORKSPACE_ROOT="$(cfgget WORKSPACE_ROOT)"; WORKSPACE_ROOT="${WORKSPACE_ROOT:-/root/repos}"
 {{pairingBase}}
 command -v t3 >/dev/null 2>&1 || { echo "t3 is not installed" >&2; exit 1; }
-base="$(t3base "$(hostname).mshome.net")" || exit 7
-t3 auth pairing create --json --ttl 10m --label "construct-control-panel" --base-url "$base" --log-level none
+ext="$(cfgget CONSTRUCT_EXTERNAL_HOST)"
+base="$(t3base "${ext:-$(hostname).mshome.net}")" || exit 7
+t3pair "$base" --json --ttl 10m --label "construct-control-panel" --log-level none

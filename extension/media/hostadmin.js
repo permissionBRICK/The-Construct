@@ -164,6 +164,7 @@
     text("ovMaint", o.maintenance ? `${o.maintenance.phase} since ${o.maintenance.since}` : "open");
     text("ovOverdue", o.leaseOverdueCount);
     text("ovUnmanaged", o.unmanagedVmCount);
+    text("ovNested", o.nested ? `Nested virtualization: ${o.nested.available ? "available" : "unavailable"}, default ${o.nested.default ? "on" : "off"}, selection ${o.nested.selectable ? "allowed" : "disabled"}` : "Nested virtualization: not reported");
     const mode = $("ovCapMode");
     if (mode) { mode.textContent = o.capacityMode; mode.className = "tag " + (o.capacityMode === "enforce" ? "upd" : "ok"); }
     const bars = $("ovCapacity");
@@ -373,6 +374,7 @@
     uf.appendChild(field("Enabled", "ue_enabled", r.enabled ? "true" : "false", { options: [["true", "enabled"], ["false", "disabled"]], field: "enabled" }));
     uf.appendChild(field("Max primaries", "ue_maxVms", r.maxVms == null ? "" : r.maxVms, { type: "number", field: "maxVms" }));
     uf.appendChild(field("Host forwards", "ue_allowHostForwards", r.allowHostForwards ? "true" : "false", { options: [["true", "allowed"], ["false", "refused"]], field: "allowHostForwards" }));
+    uf.appendChild(field("Nested virtualization", "ue_allowNested", r.allowNested, { options: TRI, field: "allowNested" }));
     const af = $("ueAllowanceForm");
     clear(af);
     const a = r.allowance || {};
@@ -702,7 +704,7 @@
     const forcedOff = vmSettingsData?.idle?.forceEnabled && $("haVmIdleAction").value === "off";
     $("haVmIdleAction").setCustomValidity(forcedOff ? "The host requires idle handling." : "");
     const invalid = [...$("haVmSettingsForm").elements].find(input => input.willValidate && !input.validity.valid);
-    $("haVmSettingsApply").disabled = !vmSettingsData || ![vmSettingsData.cpu, vmSettingsData.memory, vmSettingsData.idle, vmSettingsData.network].some(Boolean) || vmSettingsSaving || !allowed || !!invalid;
+    $("haVmSettingsApply").disabled = !vmSettingsData || ![vmSettingsData.cpu, vmSettingsData.memory, vmSettingsData.idle, vmSettingsData.network, vmSettingsData.nested].some(Boolean) || vmSettingsSaving || !allowed || !!invalid;
     if (vmSettingsData && !vmSettingsSaving) text("haVmSettingsError", invalid ? invalid.validationMessage : !allowed ? "Editing is unavailable while host administration is disabled or updating." : [vmSettingsServerError, ...(vmSettingsData.warnings || [])].filter(Boolean).join(" "));
   }
   function receiveVmSettings(m) {
@@ -715,7 +717,7 @@
     vmSettingsServerError = m.error ? `${m.error} ${m.settings ? "Some changes may already be saved. Review the reloaded values before retrying." : "Reload to retry reading settings."}` : "";
     text("haVmSettingsError", vmSettingsServerError);
     if (m.settings) {
-      const { cpu, memory, idle, network } = m.settings;
+      const { cpu, memory, idle, network, nested } = m.settings;
       show($("haVmNetwork"), !!network);
       show($("haVmNetworkModeRow"), !!network?.maySwitchMode);
       show($("haVmNetworkAddressFields"), !!network?.maySetAddress);
@@ -725,6 +727,9 @@
         $(id).value = value || ""; $(id).disabled = !network?.maySetAddress;
       }
       text("haVmNetworkCurrent", network ? `Current: ${network.effectiveMode}${network.address ? " at " + network.address : ""}${network.pending ? "; change pending" : ""}` : "");
+      $("haVmNested").disabled = !nested;
+      $("haVmNested").value = String(nested?.desired ?? false);
+      $("haVmNested").querySelector('[value="true"]').disabled = !nested?.available || !nested?.selectable;
       $("haVmCpus").disabled = !cpu; $("haVmRam").disabled = !memory;
       $("haVmCpus").value = cpu ? cpu.desiredCpus : "";
       $("haVmCpus").max = cpu ? Math.max(cpu.maximumCpus ?? 64, cpu.desiredCpus) : 64;
@@ -737,7 +742,8 @@
       $("haVmIdleAction").value = idle?.action ?? "save";
       $("haVmIdleAction").querySelector('[value="off"]').disabled = !!idle?.forceEnabled;
       text("haVmSettingsCurrent", [cpu ? `Current CPU: ${cpu.currentCpus}${cpu.pending ? `; pending: ${cpu.desiredCpus}` : ""}` : "CPU settings unavailable",
-        memory ? `Current RAM: ${memory.currentRamGb} GB${memory.pending ? `; pending: ${memory.desiredRamGb} GB` : ""}` : "RAM settings unavailable"].join(". "));
+        memory ? `Current RAM: ${memory.currentRamGb} GB${memory.pending ? `; pending: ${memory.desiredRamGb} GB` : ""}` : "RAM settings unavailable",
+        nested ? `Nested virtualization: ${nested.current ? "on" : "off"}${nested.pending ? `; pending: ${nested.desired ? "on" : "off"}` : ""}` : "Nested settings unavailable"].join(". "));
       text("haVmSettingsLimits", `Owner/host maxima: CPU ${cpu?.maximumCpus ?? "unavailable"}, RAM ${memory?.maximumRamGb != null ? memory.maximumRamGb + " GB" : "unavailable"}. Idle cap: ${!idle ? "unavailable" : idle.maxTimeoutMinutes > 0 ? idle.maxTimeoutMinutes + " minutes" : "none"}${idle?.forceEnabled ? "; idle handling required" : ""}. Changes are checked when saved and applied.`);
     }
     validateVmSettings();
@@ -752,7 +758,7 @@
     if ($("haVmSettingsApply").disabled) return;
     vmSettingsSaving = true;
     const args = { ...vmSettingsRequest };
-    const { cpu, memory, idle, network } = vmSettingsData;
+    const { cpu, memory, idle, network, nested } = vmSettingsData;
     const changes = {};
     if (network?.maySwitchMode && ($("haVmNetworkMode").value || null) !== network.mode) changes.mode = $("haVmNetworkMode").value || null;
     if (network?.maySetAddress) {
@@ -763,6 +769,7 @@
       if (JSON.stringify(values.dns) !== JSON.stringify(network.dns)) changes.dns = values.dns;
     }
     if (Object.keys(changes).length) args.network = changes;
+    if (nested && ($("haVmNested").value === "true") !== nested.desired) args.nested = $("haVmNested").value === "true";
     if (cpu && Number($("haVmCpus").value) !== cpu.desiredCpus) args.cpus = Number($("haVmCpus").value);
     if (memory && Number($("haVmRam").value) !== memory.desiredRamGb) args.ramGb = Number($("haVmRam").value);
     if (idle && (Number($("haVmTimeout").value) !== idle.timeoutMinutes || $("haVmIdleAction").value !== idle.action)) {

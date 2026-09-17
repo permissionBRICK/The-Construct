@@ -298,6 +298,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -329,6 +330,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -359,6 +361,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -389,6 +392,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -424,6 +428,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -459,6 +464,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -493,6 +499,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -527,6 +534,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -568,6 +576,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -609,6 +618,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -649,6 +659,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -689,6 +700,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -720,6 +732,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -751,6 +764,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -781,6 +795,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -811,6 +826,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -846,6 +862,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": {
@@ -888,6 +905,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": {
@@ -929,6 +947,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": {
@@ -970,6 +989,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": {
@@ -1018,6 +1038,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": true
       },
       "identity": {
@@ -1070,6 +1091,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": true
       },
       "identity": {
@@ -1121,6 +1143,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": true
       },
       "identity": {
@@ -1172,6 +1195,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": true
       },
       "identity": {
@@ -1218,6 +1242,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -1253,6 +1278,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -1288,6 +1314,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -1323,6 +1350,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -1358,6 +1386,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -1393,6 +1422,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -1428,6 +1458,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -1463,6 +1494,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -1498,6 +1530,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": {
@@ -1544,6 +1577,7 @@
         "networkMode": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": {
@@ -1756,6 +1790,7 @@
       "networkMode": false,
       "primaryCpu": false,
       "primaryMemory": false,
+      "primaryNested": false,
       "updates": false
     }
   },
@@ -1827,6 +1862,7 @@
       "networkMode": false,
       "primaryCpu": false,
       "primaryMemory": false,
+      "primaryNested": false,
       "updates": false
     }
   },
@@ -1901,6 +1937,7 @@
       "networkMode": true,
       "primaryCpu": false,
       "primaryMemory": false,
+      "primaryNested": false,
       "updates": false
     }
   },
@@ -1977,6 +2014,7 @@
       "networkMode": false,
       "primaryCpu": false,
       "primaryMemory": false,
+      "primaryNested": false,
       "updates": true
     }
   },
@@ -2059,6 +2097,7 @@
       "networkMode": false,
       "primaryCpu": true,
       "primaryMemory": true,
+      "primaryNested": false,
       "updates": true
     }
   },
@@ -4284,6 +4323,14 @@
       },
       {
         "expectedUpdatedAt": null,
+        "key": "virtualization",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
         "key": "updates",
         "present": false,
         "source": "default",
@@ -4349,6 +4396,7 @@
     "now": 1789128000000,
     "output": {
       "allowHostForwards": true,
+      "allowNested": null,
       "allowance": {
         "allowChildCreation": "",
         "allowNeverLifetime": "",

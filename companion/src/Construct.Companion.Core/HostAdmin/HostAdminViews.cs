@@ -135,7 +135,7 @@ public static partial class HostAdminViews
     }
     public static JsonObject User(JsonNode? input)
     {
-        var u = input as JsonObject ?? []; return new() { ["name"] = Text(u["name"]), ["role"] = Default(u["role"], "user").ToLowerInvariant(), ["enabled"] = StateJson.Boolean(u["enabled"]) != false, ["maxVms"] = Number(u["maxVms"]), ["allowHostForwards"] = StateJson.Boolean(u["allowHostForwards"]) != false, ["created"] = FormatWhen(u["created"]), ["primaries"] = Number(u["vms"]?["primaries"]) ?? 0, ["children"] = Number(u["vms"]?["children"]) ?? 0, ["tokens"] = Number(u["tokens"]) ?? 0, ["allowance"] = AllowanceForm(u["allowance"]), ["effective"] = AllowanceText(u["effective"]) };
+        var u = input as JsonObject ?? []; return new() { ["name"] = Text(u["name"]), ["role"] = Default(u["role"], "user").ToLowerInvariant(), ["enabled"] = StateJson.Boolean(u["enabled"]) != false, ["maxVms"] = Number(u["maxVms"]), ["allowHostForwards"] = StateJson.Boolean(u["allowHostForwards"]) != false, ["allowNested"] = StateJson.Boolean(u["allowNested"]), ["created"] = FormatWhen(u["created"]), ["primaries"] = Number(u["vms"]?["primaries"]) ?? 0, ["children"] = Number(u["vms"]?["children"]) ?? 0, ["tokens"] = Number(u["tokens"]) ?? 0, ["allowance"] = AllowanceForm(u["allowance"]), ["effective"] = AllowanceText(u["effective"]) };
     }
     private static JsonObject Strings(JsonObject obj, params string[] keys)
     { var result = new JsonObject(); foreach (var key in keys) result[key] = Text(obj[key]); return result; }

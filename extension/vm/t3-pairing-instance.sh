@@ -25,4 +25,4 @@ command -v t3 >/dev/null 2>&1 || { echo "t3 is not installed" >&2; exit 1; }
 # mshome name); absent, fall back to the local $(hostname).mshome.net.
 ext="$(cfgget CONSTRUCT_EXTERNAL_HOST)"
 base="$(t3base "${ext:-$(hostname).mshome.net}")" || exit 7
-t3 auth pairing create --json --ttl 10m --label "construct-{{instance}}" --base-url "$base" --log-level none
+t3pair "$base" --json --ttl 10m --label "construct-{{instance}}" --log-level none
