@@ -17,6 +17,8 @@ public sealed class HyperVInventory(IProcessRunner runner, ConstructdOptions opt
     public async Task<InventorySnapshot> ReadAsync(IReadOnlyList<Reservation> reservations, CancellationToken ct)
     {
         var epoch = Interlocked.Increment(ref _epoch);
+        // A slow inventory must not make a pre-save memory sample look newer than the save.
+        var observedAt = clock.UtcNow;
         try
         {
             var artifacts = new List<object>();
@@ -62,7 +64,7 @@ public sealed class HyperVInventory(IProcessRunner runner, ConstructdOptions opt
             if (snapshot is null || snapshot.Host is null || snapshot.Vms is null || snapshot.Host.Volumes is null || snapshot.Problems is null ||
                 snapshot.Host.TotalRamBytes <= 0 || snapshot.Host.FreeRamBytes < 0 || snapshot.Host.LogicalCpus <= 0 ||
                 snapshot.Host.Volumes.Any(v => v.TotalBytes < 0 || v.FreeBytes < 0) || snapshot.Vms.Any(v => v.Disks is null || v.MemoryAssignedBytes < 0 || v.MemoryStartupBytes < 0)) return Unavailable(epoch);
-            return snapshot with { Epoch = epoch, ObservedAt = clock.UtcNow, Host = snapshot.Host with { ObservedAt = clock.UtcNow } };
+            return snapshot with { Epoch = epoch, ObservedAt = observedAt, Host = snapshot.Host with { ObservedAt = observedAt } };
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch { return Unavailable(epoch); }

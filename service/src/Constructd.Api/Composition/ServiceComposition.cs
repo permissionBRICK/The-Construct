@@ -71,13 +71,19 @@ public static class ServiceComposition
         });
         services.AddSingleton<IJobEngine>(sp => sp.GetRequiredService<InProcessJobEngine>());
 
+        services.AddSingleton<MemoryPressureState>();
+        services.AddSingleton(sp => new MemoryPressureServices(sp.GetRequiredService<IHostConfigStore>(),
+            sp.GetRequiredService<ICapacityLedger>(), sp.GetRequiredService<IJobQueryStore>(),
+            sp.GetRequiredService<IVmMetadataStore>(), sp.GetRequiredService<IClock>(),
+            sp.GetRequiredService<MemoryPressureState>(), options.IsProxmox));
         services.AddSingleton<IIdlePolicyEngine>(sp => new IdlePolicyEngine(
             sp.GetRequiredService<IVmRepository>(),
             sp.GetRequiredService<IPortForwardManager>(),
             sp.GetRequiredService<IHypervisorDriver>(),
             sp.GetRequiredService<IAuditLog>(),
             options.Idle,
-            sp.GetRequiredService<IVmOperationGate>()));
+            sp.GetRequiredService<IVmOperationGate>(),
+            sp.GetRequiredService<MemoryPressureServices>()));
 
         // Keeping the host awake is platform-agnostic policy over the VM registry (plan §4.13); only
         // the guard under it is a platform call, and off Windows that guard does nothing.
