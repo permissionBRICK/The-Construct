@@ -1,5 +1,7 @@
 namespace Constructd.Core.Domain;
 
+public sealed record MemoryPressureConfig(bool Enabled = true, int HighWaterPercent = 90, int LowWaterPercent = 80,
+    int SwapHighWaterPercent = 50, int MinSecondsBetweenSaves = 60, int CooldownMinutesAfterSave = 10);
 public sealed record CapacityConfig(CapacityMode Mode, long? RamHeadroomBytes, long StorageHeadroomBytes, int? CpuBudget, int? MaxVcpusPerVm, int ReconcileSeconds, int OrphanReservationTimeoutSeconds);
 /// <summary>Host-wide HARD ceilings applied after user resolution (null = no cap).</summary>
 public sealed record UserCapsConfig(int? MaxRetainedChildren, int? CpuBudget, long? RamBudgetBytes, long? StorageBudgetBytes, long? MaxChildLifetimeSeconds, bool? AllowNeverLifetime, bool? AllowSharing);

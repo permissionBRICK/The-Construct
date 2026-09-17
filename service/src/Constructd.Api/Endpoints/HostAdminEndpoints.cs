@@ -89,7 +89,8 @@ public static class HostAdminEndpoints
                 network.DirectAddressReporting,
                 defaults.AllowNeverLifetime,
                 defaults.MaxChildLifetimeSeconds,
-                capacityMode = (await CapacityConfigAsync(config, options, ct)).Mode
+                capacityMode = (await CapacityConfigAsync(config, options, ct)).Mode,
+                memoryPressure = await config.GetAsync<MemoryPressureConfig>("memoryPressure", ct) ?? HostAdminDefaults.MemoryPressure
             }
         });
     }
