@@ -342,6 +342,16 @@ try {
     ok "backup-creds: whitespace-only file -> false" (-not (Test-BackupHasGitCredentials -BackupDir $bkTest))
     Set-Content -LiteralPath $credFile -Value "https://user:token@github.com" -Encoding UTF8
     ok "backup-creds: non-empty file -> true" (Test-BackupHasGitCredentials -BackupDir $bkTest)
+    # Host-aware: the store must cover every http(s) repo host of the profiles being installed.
+    ok "backup-creds: covers github.com repo -> true" (Test-BackupHasGitCredentials -BackupDir $bkTest -Urls @('https://github.com/o/r.git'))
+    ok "backup-creds: private GitLab not in the store -> false" (-not (Test-BackupHasGitCredentials -BackupDir $bkTest -Urls @('https://github.com/o/r.git', 'https://git.example.net/p/jarvis.git')))
+    ok "backup-creds: ssh URLs need no store entry" (Test-BackupHasGitCredentials -BackupDir $bkTest -Urls @('git@github.com:o/r.git'))
+    ok "backup-creds: no urls -> file-level answer" (Test-BackupHasGitCredentials -BackupDir $bkTest -Urls @())
+    ok "backup-creds: b64 blob round-trips the store" ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String((Get-BackupGitCredentialsB64 -BackupDir $bkTest))) -eq 'https://user:token@github.com')
+    $seeded = New-ConstructGitCredentialSession
+    $n = Add-ConstructGitSessionCredentials -Session $seeded -CredentialsB64 ([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("https://user:token@github.com`nnot a url`nhttps://alice:t2@git.example.net")))
+    ok "session-seed: two valid entries added, junk skipped" ($n -eq 2 -and $seeded.Supplied.ContainsKey('https://github.com') -and $seeded.Supplied['https://git.example.net'].User -eq 'alice')
+    ok "session-seed: seeding does not make the session unattended" (-not $seeded.Unattended -and -not $seeded.NoPrompt)
 } finally { Remove-Item -LiteralPath $bkTest -Recurse -Force -ErrorAction SilentlyContinue }
 
 # ── Set-ConstructInstalledMarker: a failed SHA fetch must NOT clobber the marker ──
