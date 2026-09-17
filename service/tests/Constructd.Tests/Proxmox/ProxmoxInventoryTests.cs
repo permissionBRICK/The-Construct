@@ -113,7 +113,7 @@ public sealed class ProxmoxInventoryTests
         var snapshot = await new ProxmoxInventory(runner, Options(), new SystemClock()).ReadAsync([ChildDisk()], default);
         Assert.True(snapshot.Complete); var vm = Assert.Single(snapshot.Vms);
         Assert.Equal("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", vm.Id);
-        Assert.Equal(3, vm.Disks.Count); Assert.Equal("local-lvm:vm-101-disk-2", vm.Disks[0].Path);
+        Assert.Equal(3, vm.Disks.Count); Assert.Equal("local-lvm:vm-child-disk-0", vm.Disks[0].Path);
         Assert.Equal(4L << 30, vm.Disks[0].MaxBytes); Assert.Equal(0, vm.Disks[0].FileBytes);
         var evidence = Assert.Single(snapshot.Artifacts!); Assert.Equal(vm.Disks[0].Path, evidence.Path);
         Assert.Equal(ArtifactPresence.Present, evidence.Presence);
@@ -121,6 +121,9 @@ public sealed class ProxmoxInventoryTests
             Kind: VmKind.Child, Incarnation: vm.Id);
         Assert.True(Constructd.Core.Logic.CapacityMath.Matches(managed, vm));
         Assert.False(Constructd.Core.Logic.CapacityMath.Matches(managed with { Incarnation = Guid.NewGuid().ToString() }, vm));
+        var accounted = Constructd.Core.Logic.CapacityMath.AccountedReservations(snapshot, [ChildDisk()], [managed]);
+        Assert.Equal(4L << 30, accounted.Where(r => r.Artifact == ChildDisk().Artifact).Sum(r => r.Amount));
+        Assert.Equal((4L << 30) + (8L << 20), accounted.Where(r => r.Artifact?.StartsWith("disk:") == true).Sum(r => r.Amount));
         Assert.Equal(new[] { "get", "/nodes/pve1/qemu/101/config", "--output-format", "json" }, runner.Calls[3].Arguments);
     }
     [Fact]
@@ -133,6 +136,7 @@ public sealed class ProxmoxInventoryTests
         var snapshot = await new ProxmoxInventory(runner, Options(), new SystemClock()).ReadAsync(default);
         Assert.True(snapshot.Complete); var vm = Assert.Single(snapshot.Vms);
         Assert.Equal(VmState.Saved, vm.State); Assert.Equal(1234, vm.SavedStateBytes); Assert.Equal(0, vm.MemoryAssignedBytes);
+        Assert.Equal("local-lvm:vm-101-disk-2", vm.Disks[0].Path); // Native volume when there is no placement hold.
     }
     [Fact]
     public async Task Child_config_identity_mismatch_is_incomplete_evidence()
