@@ -28,6 +28,9 @@ public sealed class ProxmoxInventoryTests
         Assert.Equal(8, snapshot.Host.LogicalCpus);
         Assert.Equal(8000000000, snapshot.Host.TotalRamBytes);
         Assert.Equal(6000000000, snapshot.Host.FreeRamBytes);
+        Assert.Equal(2000000000, snapshot.Host.UsedRamBytes);
+        Assert.Null(snapshot.Host.SwapTotalBytes);
+        Assert.Null(snapshot.Host.SwapUsedBytes);
         Assert.Equal(["local", "local-lvm"], snapshot.Host.Volumes.Select(v => v.Root));
         Assert.Equal(2, snapshot.Vms.Count);
         var running = snapshot.Vms[0];
@@ -39,6 +42,7 @@ public sealed class ProxmoxInventoryTests
         Assert.Equal("local-lvm:vm-104-disk-0", running.Disks[0].Path);
         Assert.Equal(64424509440, running.Disks[0].MaxBytes);
         Assert.Equal(25, running.CpuUsagePercent);
+        Assert.Equal(1000000, running.MemoryDemandBytes);
         Assert.Equal("local-lvm", running.ConfigVolume);
         Assert.Equal("local-lvm", running.Disks[0].Volume);
         Assert.Equal(VmState.Off, snapshot.Vms[1].State);
@@ -94,4 +98,17 @@ public sealed class ProxmoxInventoryTests
     }
 
     private static ConstructdOptions Options() => new() { Backend = "proxmox", Proxmox = new ProxmoxOptions { Node = "pve1" } };
+
+    [Theory]
+    [InlineData(4000000000, 1200000000)]
+    [InlineData(0, 0)]
+    public void Parses_optional_swap(long total, long used)
+    {
+        using var status = JsonDocument.Parse(Status[..^1] + $",\"swap\":{{\"total\":{total},\"used\":{used}}}}}");
+        using var empty = JsonDocument.Parse("[]");
+        var snapshot = ProxmoxInventory.Parse(1, DateTimeOffset.UtcNow, status.RootElement, empty.RootElement, empty.RootElement, "local-lvm");
+        Assert.NotNull(snapshot);
+        Assert.Equal(total, snapshot.Host.SwapTotalBytes);
+        Assert.Equal(used, snapshot.Host.SwapUsedBytes);
+    }
 }
