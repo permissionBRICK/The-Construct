@@ -30,6 +30,7 @@ old forwards, so request them again. See [Proxmox networking](proxmox-host.md#5-
 - [The extension side](#the-extension-side)
 - [The VM token](#the-vm-token)
 - [Activity heartbeat](#activity-heartbeat)
+- [Token usage reports](#token-usage-reports)
 
 ## The two targets
 
@@ -293,6 +294,27 @@ directory, never passed as an argument, so the token never appears in `ps`, in a
 history or in an error message. `CONSTRUCT_SERVICE_CA_FILE`, when set, is passed as
 `--cacert`.
 
+## Token usage reports
+
+Service-managed guests also run `construct-usage-report.timer`. It posts
+`{generatedAt, days:[{day, tool, inputTokens, outputTokens, cacheCreateTokens,
+cacheReadTokens, totalTokens, costUsd, models}]}` to
+`POST /api/v1/vms/{instance}/usage` every 15 minutes. `day` is `YYYY-MM-DD`, or
+`YYYY-MM` for monthly backfill; each model has `totalTokens` and `costUsd`.
+The route accepts up to 200 rows and 64 models per row and overwrites repeated
+VM-incarnation/tool/date keys. Negative counts or costs, unknown tools and invalid
+calendar dates are rejected. The host records receipt time for freshness.
+
+The matching VM token can write usage as well as its activity heartbeat. It cannot
+read host usage, read another VM's usage, or post for another VM. Owners and admins
+can read usage with their user credential. Deletion revokes the VM token and fences
+intake. Reporting reads configuration through the heartbeat's narrow key lookup and
+passes authorization through a private header file, never a command-line argument.
+Response bodies and curl diagnostics are not written to the journal.
+
+See [Host usage](control-panel.md#host-usage) for the timer settings, backfill rule
+and panel views. Local guests without `CONSTRUCT_SERVICE_URL` install no usage timer.
+
 ## The extension side
 
 Everything above is the contract; the other end of it is the VS Code extension's
@@ -357,7 +379,7 @@ What matters from the guest's side is only this:
 
 `/etc/construct/vm-token` — mode `0600`, owned by root, one line, no trailing newline
 required. It is the per-VM scoped credential from plan §2/§4.6: it authorizes **only** that
-one VM's forward management and its activity heartbeat, and nothing else — not `/whoami`, not
+one VM's forward management, activity heartbeat and token-usage intake, but not `/whoami`, not
 another VM's forwards, not any user-level route.
 
 It is written by `provision.sh` when the host passes `CONSTRUCT_VM_TOKEN_B64` (base64, to
@@ -370,7 +392,7 @@ kind `primary`) or use `Provision-AgentVM.ps1 -RotateVmToken`; the old hash is i
 immediately and the new plaintext travels once through the existing SSH-stdin provisioning
 channel. Ordinary reprovisioning does not rotate. Existing primaries migrated from an older
 service keep a `legacy` token until upgraded: it still authorizes this VM's existing
-heartbeat and self-forward routes, but no child delegation. A VM whose token file is missing
+heartbeat, usage intake and self-forward routes, but no child delegation. A VM whose token file is missing
 or unreadable in remote mode gets a clear error from `expose` (exit 8) and a logged warning
 from the heartbeat—never a stack trace and never the token itself.
 
