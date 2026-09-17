@@ -44,6 +44,29 @@ public sealed class SqlitePersistenceTests : IDisposable
     }
 
     [Fact]
+    public async Task Pressure_save_cause_survives_restart_and_is_fenced_by_power_generation()
+    {
+        var repository = new SqliteVmRepository(Open());
+        var vm = new Vm("pressure-vm", "alice", 2, 4, 20, Now, VmState.Running, null, null, new(60, IdleAction.Save), []);
+        await repository.AddAsync(vm, 10, default);
+        Assert.False(await repository.RecordPressureSaveAsync(vm.Name, 1, Now, default));
+        Assert.True(await repository.RecordPressureSaveAsync(vm.Name, 0, Now, default));
+        var reopened = new SqliteVmRepository(Open());
+        var saved = (await reopened.GetAsync(vm.Name, default))!;
+        Assert.Equal("memory-pressure", saved.SavedBy);
+        Assert.Equal(Now, saved.PressureSavedAt);
+        Assert.Equal(1, saved.PowerGeneration);
+        await reopened.UpdateAsync(saved with { Cpu = 3 }, default);
+        Assert.Equal("memory-pressure", (await reopened.GetAsync(vm.Name, default))!.SavedBy);
+        // A subsequent lifecycle operation increments the generation; a manual save has no pressure badge.
+        using var connection = Open().Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE vms SET power_generation=power_generation+1 WHERE name='pressure-vm'";
+        command.ExecuteNonQuery();
+        Assert.Null((await reopened.GetAsync(vm.Name, default))!.SavedBy);
+    }
+
+    [Fact]
     public async Task Users_and_vms_survive_a_restart()
     {
         var vm = new Vm("work-vm", "DOMAIN\\alice", 4, 8, 64, Now, VmState.Running, 2201, "hash",

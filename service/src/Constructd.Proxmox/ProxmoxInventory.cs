@@ -22,6 +22,8 @@ public sealed partial class ProxmoxInventory(IProcessRunner runner, ConstructdOp
     public async Task<InventorySnapshot> ReadAsync(IReadOnlyList<Reservation> reservations, CancellationToken ct)
     {
         var epoch = Interlocked.Increment(ref _epoch);
+        // The oldest reading determines freshness, including the fence after a pressure save.
+        var observedAt = clock.UtcNow;
         var node = ProxmoxDriver.ResolveNode(options);
         try
         {
@@ -43,7 +45,7 @@ public sealed partial class ProxmoxInventory(IProcessRunner runner, ConstructdOp
                 return Unavailable(epoch);
             }
 
-            var snapshot = Parse(epoch, clock.UtcNow, status.Value, storages.Value, guests.Value, options.Proxmox.Storage, reservations);
+            var snapshot = Parse(epoch, observedAt, status.Value, storages.Value, guests.Value, options.Proxmox.Storage, reservations);
             return snapshot is null ? Unavailable(epoch) : await WithChildrenAsync(snapshot, guests.Value, reservations, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)

@@ -36,7 +36,7 @@ const CHILD_ACTIONS = [
 ];
 
 /** The host-config sections of §1.5, in display order. */
-const CONFIG_SECTIONS = ["capacity", "userDefaults", "userCaps", "lifecycle", "media", "network", "virtualization", "updates"];
+const CONFIG_SECTIONS = ["capacity", "memoryPressure", "userDefaults", "userCaps", "lifecycle", "media", "network", "virtualization", "updates"];
 
 /** The tabs of §10.2 and the feature each one needs. `host-admin` gates the module. */
 const TABS = [
@@ -361,6 +361,7 @@ function toVmRow(vm, now) {
     sharing: str(v.sharing).toLowerCase() || "private",
     shared: v.shared === true,
     state: str(v.state).toLowerCase() || "unknown",
+    savedBy: str(v.state).toLowerCase() === "saved" && v.savedBy === "memory-pressure" ? v.savedBy : null,
     tokenKind: str(v.tokenKind) || null,
     deleting: v.deleting === true,
     childCreationClosed: v.childCreationClosed === true,
@@ -407,7 +408,7 @@ function toVmRows(list, now) {
 }
 
 /** Capacity bars of the Overview (`HostCapacitySummary`, §8.2). Pure. */
-function toCapacityBars(summary) {
+function toCapacityBars(summary, memoryPressure, now = Date.now()) {
   const s = summary && typeof summary === "object" ? summary : {};
   const ram = s.ram && typeof s.ram === "object" ? s.ram : {};
   const cpu = s.cpu && typeof s.cpu === "object" ? s.cpu : {};
@@ -448,6 +449,19 @@ function toCapacityBars(summary) {
         ? { pct: pct(swap.usedBytes, swap.totalBytes), text: `${formatBytes(swap.usedBytes)} of ${formatBytes(swap.totalBytes)} swap` } : null,
     };
   }
+  if (memoryPressure && typeof memoryPressure === "object") {
+    const states = {
+      idle: "idle", pressure: "under pressure", "insufficient-candidates": "insufficient idle VMs; pressure remains",
+      "waiting-for-measurement": "waiting for a new measurement", cooldown: "waiting between saves",
+      unavailable: "measurement or evaluation unavailable", "save-failed": "save failed; see audit",
+    };
+    const parts = [states[memoryPressure.state] || "idle"];
+    if (num(memoryPressure.usedPercent) !== null) parts.unshift(`${Math.round(memoryPressure.usedPercent)}% used`);
+    const action = memoryPressure.lastAction;
+    const at = Date.parse(action?.at);
+    if (action?.vmName && Number.isFinite(at)) parts.push(`saved ${str(action.vmName)} ${formatDuration((now - at) / 1000)} ago`);
+    bars[0].memoryPressure = "memory pressure: " + (memoryPressure.enabled === false ? "off" : parts.join("; "));
+  }
   for (const v of (Array.isArray(s.volumes) ? s.volumes : [])) {
     // Windows also inventories hidden EFI/recovery volumes. Keep their accounting
     // on the server, but don't present unmounted, unused partitions as VM storage.
@@ -466,7 +480,7 @@ function toCapacityBars(summary) {
 }
 
 /** The Overview tab from `HostStatusResponse` (§8.2). Pure. */
-function toOverview(status, capacityReport) {
+function toOverview(status, capacityReport, now) {
   const s = status && typeof status === "object" ? status : {};
   const version = s.version && typeof s.version === "object" ? s.version : {};
   const health = s.health && typeof s.health === "object" ? s.health : {};
@@ -488,7 +502,7 @@ function toOverview(status, capacityReport) {
     health: { hypervisor: str(health.hypervisor) || "unknown", database: str(health.database) || "unknown", media: str(health.media) || "unknown", inventory: str(health.inventory) || "unknown" },
     problems,
     capacityMode: str(s.capacityMode).toLowerCase() === "enforce" ? "enforce" : "observe",
-    capacity: toCapacityBars(cap),
+    capacity: toCapacityBars(cap, s.memoryPressure, now),
     capacityEpoch: { epoch: str(cap.epoch), observedAt: formatWhen(cap.observedAt), complete: cap.complete !== false },
     capacityProblems: Array.isArray(capacityReport && capacityReport.problems) ? capacityReport.problems.map(str) : [],
     maintenance: str(maint.phase) && str(maint.phase) !== "open"
@@ -612,7 +626,7 @@ function toAuditRow(entry) {
 /** The Configuration tab: one editable JSON text per §1.5 section. Pure. */
 function toConfigView(config) {
   const c = config && typeof config === "object" ? config : {};
-  return CONFIG_SECTIONS.map((key) => {
+  return CONFIG_SECTIONS.filter((key) => key !== "memoryPressure" || c[key]).map((key) => {
     const section = c[key] && typeof c[key] === "object" ? c[key] : null;
     const value = section && section.value && typeof section.value === "object" ? section.value : section;
     const meta = section && typeof section === "object" ? section : {};
@@ -643,7 +657,7 @@ function toCapabilityRows(body) {
   };
   walk("", caps);
   const policy = b.policy && typeof b.policy === "object" ? b.policy : {};
-  for (const k of Object.keys(policy)) rows.push({ key: "policy." + k, value: str(policy[k]) });
+  walk("policy.", policy);
   return { backend: str(b.backend), rows, notes: Array.isArray(caps.notes) ? caps.notes.map(str) : [] };
 }
 

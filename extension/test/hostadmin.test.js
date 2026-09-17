@@ -252,6 +252,25 @@ function fakeClient(answers = {}) {
     eq("overview: version", ov.version.commit, "deadbeef");
     eq("overview: draining maintenance shows", ha.toOverview({ maintenance: { phase: "draining", since: "2026-09-07T09:00:00Z" } }).maintenance.phase, "draining");
     eq("overview: empty status does not throw", ha.toOverview(null).version.commit, "unknown");
+    const pressure = { enabled: true, state: "pressure", usedPercent: 93,
+      lastAction: { vmName: "work-vm", at: "2026-09-17T12:00:00Z" } };
+    const ram = ha.toOverview({ memoryPressure: pressure }, null, Date.parse("2026-09-17T12:02:00Z")).capacity[0];
+    eq("pressure: RAM card shows measured usage and last save", ram.memoryPressure,
+      "memory pressure: 93% used; under pressure; saved work-vm 2m ago");
+    eq("pressure: disabled ignores previous action", ha.toOverview({ memoryPressure: { ...pressure, enabled: false } }).capacity[0].memoryPressure,
+      "memory pressure: off");
+    ok("pressure: no candidates leaves pressure visible", /insufficient idle VMs; pressure remains/.test(
+      ha.toOverview({ memoryPressure: { ...pressure, state: "insufficient-candidates" } }).capacity[0].memoryPressure));
+    eq("pressure: old hosts have no invented status", ha.toOverview({}).capacity[0].memoryPressure, undefined);
+    eq("pressure: saved VM has a badge cause", ha.toVmRow({ state: "saved", savedBy: "memory-pressure" }).savedBy, "memory-pressure");
+    eq("pressure: running VM has no stale badge", ha.toVmRow({ state: "running", savedBy: "memory-pressure" }).savedBy, null);
+    eq("pressure: manual save has no pressure badge", ha.toVmRow({ state: "saved" }).savedBy, null);
+    const pressureConfig = { enabled: true, highWaterPercent: 90, lowWaterPercent: 80, swapHighWaterPercent: 50,
+      minSecondsBetweenSaves: 60, cooldownMinutesAfterSave: 10 };
+    ok("pressure: advertised config section is editable", ha.toConfigView({ memoryPressure: pressureConfig }).some(s => s.key === "memoryPressure"));
+    ok("pressure: old hosts omit the new config section", !ha.toConfigView({}).some(s => s.key === "memoryPressure"));
+    deep("pressure: config replacement round trips", ha.buildConfigRequest([{ key: "memoryPressure", text: JSON.stringify(pressureConfig) }]).body,
+      { memoryPressure: pressureConfig });
     const hiddenRoot = "\\\\?\\Volume{a8247be4-28f0-4613-95f3-bb60e74a2876}\\";
     const storageBars = ha.toCapacityBars({ volumes: [
       { root: hiddenRoot, totalBytes: 500000000, growthReservedBytes: 0 },
