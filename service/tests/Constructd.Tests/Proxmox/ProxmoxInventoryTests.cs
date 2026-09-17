@@ -16,6 +16,22 @@ public sealed class ProxmoxInventoryTests
     private const string Guests = """[{"vmid":104,"name":"work-vm","status":"running","cpus":4,"maxmem":8589934592,"maxdisk":64424509440,"mem":1000000,"cpu":0.25,"uptime":120},{"vmid":105,"name":"idle","status":"stopped","cpus":2,"maxmem":2147483648,"maxdisk":10737418240}]""";
 
     [Fact]
+    public async Task Collection_timestamp_predates_all_queries()
+    {
+        var clock = new MutableClock();
+        var started = clock.UtcNow;
+        var runner = new RecordingProcessRunner().Respond(_ =>
+        {
+            clock.UtcNow = started.AddMinutes(1);
+            return new(0, Status, "", false);
+        }).RespondStdout(Storages).RespondStdout(Guests);
+        var snapshot = await new ProxmoxInventory(runner, Options(), clock).ReadAsync(default);
+        Assert.True(snapshot.Complete);
+        Assert.Equal(started, snapshot.ObservedAt);
+        Assert.Equal(started, snapshot.Host.ObservedAt);
+    }
+
+    [Fact]
     public async Task Reads_host_volumes_and_vms_from_the_node()
     {
         var runner = new RecordingProcessRunner().RespondStdout(Status).RespondStdout(Storages).RespondStdout(Guests);

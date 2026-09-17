@@ -62,7 +62,7 @@ public sealed class IdleSchedulerService(
     }
 
     /// <summary>
-    /// One tick: the idle evaluation, when <c>Idle:SchedulerEnabled</c> asks for it, and then the
+    /// One tick: idle evaluation and its memory-pressure phase, when <c>Idle:SchedulerEnabled</c> asks for it, and then the
     /// host power reconcile, which is switched independently. Public for the same reason
     /// <c>Idle:SchedulerEnabled</c> exists — a test drives a tick directly rather than waiting on a
     /// real timer.
