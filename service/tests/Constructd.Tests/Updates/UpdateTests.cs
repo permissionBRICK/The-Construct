@@ -110,6 +110,12 @@ public class UpdateTests
     [Fact] public async Task Maintenance_freezes_mutations_but_health_and_status_remain_readable()
     {
         using var app=new TestApp();using var admin=await app.CreateUserClientAsync("admin",Role.Admin);
+        // This test enters maintenance without a persisted update. Keep the recovery timer
+        // from correctly reopening that orphaned gate while the HTTP assertions run.
+        var acceptance=app.Service<Constructd.Api.Jobs.HostUpdateJob>().Acceptance;
+        await acceptance.WaitAsync();
+        try
+        {
         app.Service<IMaintenanceGate>().Enter(MaintenanceState.Maintenance,"update");
         var refused=await admin.PostAsJsonAsync("/api/v1/users",new{name="other"});
         Assert.Equal(HttpStatusCode.ServiceUnavailable,refused.StatusCode);Assert.NotNull(refused.Headers.RetryAfter);
@@ -117,6 +123,8 @@ public class UpdateTests
         Assert.Equal(HttpStatusCode.OK,(await admin.GetAsync("/api/v1/host/updates/status")).StatusCode);
         var health=await app.CreateAnonymousClient().GetFromJsonAsync<JsonElement>("/api/v1/health");
         Assert.Equal("maintenance",health.GetProperty("status").GetString());Assert.False(health.TryGetProperty("commit",out _));
+        }
+        finally { acceptance.Release(); }
     }
     [Fact] public async Task Failed_stage_survives_reconnect_and_is_audited()
     {
