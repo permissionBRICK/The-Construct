@@ -688,7 +688,7 @@
     const forcedOff = vmSettingsData?.idle?.forceEnabled && $("haVmIdleAction").value === "off";
     $("haVmIdleAction").setCustomValidity(forcedOff ? "The host requires idle handling." : "");
     const invalid = [...$("haVmSettingsForm").elements].find(input => input.willValidate && !input.validity.valid);
-    $("haVmSettingsApply").disabled = !vmSettingsData || ![vmSettingsData.cpu, vmSettingsData.memory, vmSettingsData.idle].some(Boolean) || vmSettingsSaving || !allowed || !!invalid;
+    $("haVmSettingsApply").disabled = !vmSettingsData || ![vmSettingsData.cpu, vmSettingsData.memory, vmSettingsData.idle, vmSettingsData.nested].some(Boolean) || vmSettingsSaving || !allowed || !!invalid;
     if (vmSettingsData && !vmSettingsSaving) text("haVmSettingsError", invalid ? invalid.validationMessage : !allowed ? "Editing is unavailable while host administration is disabled or updating." : [vmSettingsServerError, ...(vmSettingsData.warnings || [])].filter(Boolean).join(" "));
   }
   function receiveVmSettings(m) {
@@ -701,7 +701,10 @@
     vmSettingsServerError = m.error ? `${m.error} ${m.settings ? "Some changes may already be saved. Review the reloaded values before retrying." : "Reload to retry reading settings."}` : "";
     text("haVmSettingsError", vmSettingsServerError);
     if (m.settings) {
-      const { cpu, memory, idle } = m.settings;
+      const { cpu, memory, idle, nested } = m.settings;
+      $("haVmNested").disabled = !nested;
+      $("haVmNested").value = String(nested?.desired ?? false);
+      $("haVmNested").querySelector('[value="true"]').disabled = !nested?.available || !nested?.selectable;
       $("haVmCpus").disabled = !cpu; $("haVmRam").disabled = !memory;
       $("haVmCpus").value = cpu ? cpu.desiredCpus : "";
       $("haVmCpus").max = cpu ? Math.max(cpu.maximumCpus ?? 64, cpu.desiredCpus) : 64;
@@ -714,7 +717,8 @@
       $("haVmIdleAction").value = idle?.action ?? "save";
       $("haVmIdleAction").querySelector('[value="off"]').disabled = !!idle?.forceEnabled;
       text("haVmSettingsCurrent", [cpu ? `Current CPU: ${cpu.currentCpus}${cpu.pending ? `; pending: ${cpu.desiredCpus}` : ""}` : "CPU settings unavailable",
-        memory ? `Current RAM: ${memory.currentRamGb} GB${memory.pending ? `; pending: ${memory.desiredRamGb} GB` : ""}` : "RAM settings unavailable"].join(". "));
+        memory ? `Current RAM: ${memory.currentRamGb} GB${memory.pending ? `; pending: ${memory.desiredRamGb} GB` : ""}` : "RAM settings unavailable",
+        nested ? `Nested virtualization: ${nested.current ? "on" : "off"}${nested.pending ? `; pending: ${nested.desired ? "on" : "off"}` : ""}` : "Nested settings unavailable"].join(". "));
       text("haVmSettingsLimits", `Owner/host maxima: CPU ${cpu?.maximumCpus ?? "unavailable"}, RAM ${memory?.maximumRamGb != null ? memory.maximumRamGb + " GB" : "unavailable"}. Idle cap: ${!idle ? "unavailable" : idle.maxTimeoutMinutes > 0 ? idle.maxTimeoutMinutes + " minutes" : "none"}${idle?.forceEnabled ? "; idle handling required" : ""}. Changes are checked when saved and applied.`);
     }
     validateVmSettings();
@@ -729,7 +733,8 @@
     if ($("haVmSettingsApply").disabled) return;
     vmSettingsSaving = true;
     const args = { ...vmSettingsRequest };
-    const { cpu, memory, idle } = vmSettingsData;
+    const { cpu, memory, idle, nested } = vmSettingsData;
+    if (nested && ($("haVmNested").value === "true") !== nested.desired) args.nested = $("haVmNested").value === "true";
     if (cpu && Number($("haVmCpus").value) !== cpu.desiredCpus) args.cpus = Number($("haVmCpus").value);
     if (memory && Number($("haVmRam").value) !== memory.desiredRamGb) args.ramGb = Number($("haVmRam").value);
     if (idle && (Number($("haVmTimeout").value) !== idle.timeoutMinutes || $("haVmIdleAction").value !== idle.action)) {

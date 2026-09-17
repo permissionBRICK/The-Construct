@@ -278,6 +278,8 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
                     var capacityTask = ReadCapacity();
                     await Task.WhenAll(statusTask, capacityTask);
                     m.State["overview"] = HostAdminViews.Overview(await statusTask, await capacityTask);
+                    try { m.State["overview"]!["nested"] = (await client.HostCapabilitiesAsync(ct))?["nested"]?.DeepClone(); }
+                    catch (RemoteApiException ex) when (ex.Status is not (401 or 403)) { }
                     break;
                 case "vms": m.State["vms"] = new JsonObject { ["rows"] = HostAdminViews.Vms(await client.VmsAsync(new() { ["kind"] = "all" }, ct), clock.UtcNow), ["childrenFeature"] = m.State["features"]?["children"]?.DeepClone() }; break;
                 case "users": m.State["users"] = new JsonObject { ["rows"] = HostAdminViews.Map(await client.UsersAsync(ct), HostAdminViews.User) }; break;

@@ -77,6 +77,12 @@ internal static class HyperVScript
     public static string SetMemory(string scriptsDir, string vmName, int ramGb) => Build(scriptsDir,
         $"Set-ConstructVmMemory -Name {PowerShellLiteral.Quote(ArgumentGuard.VmName(vmName))} -MemoryGB {ArgumentGuard.Positive(ramGb, "ramGb", 1024)}");
 
+    public static string GetNested(string scriptsDir, string vmName) => Build(scriptsDir,
+        $"$result = [bool](Get-ConstructVmNested -Name {PowerShellLiteral.Quote(ArgumentGuard.VmName(vmName))})");
+
+    public static string SetNested(string scriptsDir, string vmName, bool enabled) => Build(scriptsDir,
+        $"Set-ConstructVmNested -Name {PowerShellLiteral.Quote(ArgumentGuard.VmName(vmName))} -Enabled {PowerShellLiteral.Bool(enabled)}");
+
     public static string SetCpuCount(string scriptsDir, string vmName, int cpus) => Build(scriptsDir,
         $"Set-ConstructVmCpuCount -Name {PowerShellLiteral.Quote(ArgumentGuard.VmName(vmName))} -ProcessorCount {ArgumentGuard.Positive(cpus, "cpus", 64)}");
 

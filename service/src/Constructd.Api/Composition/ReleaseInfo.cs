@@ -15,8 +15,8 @@ public sealed class ReleaseInfo : IReleaseInfo
     /// extension shows what is listed here and hides the rest (host-administration contract §8.1).
     /// </summary>
     public IReadOnlyList<string> ApiFeatures => options?.IsProxmox == true
-        ? ["host-admin", "updates", "primary-cpu", "primary-memory", .. SourceCache]
-        : ["host-admin", "children", "media", "console", "updates", "network", "primary-cpu", "primary-memory", .. SourceCache];
+        ? ["host-admin", "updates", "primary-cpu", "primary-memory", "primary-nested", .. SourceCache]
+        : ["host-admin", "children", "media", "console", "updates", "network", "primary-cpu", "primary-memory", "primary-nested", .. SourceCache];
     private string[] SourceCache => options?.HostAdmin.Source.Enabled != false ? ["source-cache"] : [];
     private readonly Constructd.Core.Configuration.ConstructdOptions? options;
     public ReleaseInfo(Constructd.Core.Configuration.ConstructdOptions? options = null)

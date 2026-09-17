@@ -117,6 +117,7 @@ function featureSet(health) {
     network: list.indexOf("network") >= 0,
     primaryCpu: list.indexOf("primary-cpu") >= 0,
     primaryMemory: list.indexOf("primary-memory") >= 0,
+    primaryNested: list.indexOf("primary-nested") >= 0,
   };
 }
 
@@ -1279,11 +1280,12 @@ function createHostAdminModel(deps = {}) {
       switch (a) {
         case "loadVmSettings": {
           const name = str(args.name);
-          const fields = ["cpu", "memory", "idle"];
+          const fields = ["cpu", "memory", "idle", "nested"];
           const results = await Promise.allSettled([
             state.features.primaryCpu ? client.vmCpu(name) : Promise.resolve(null),
             state.features.primaryMemory ? client.vmMemory(name) : Promise.resolve(null),
             client.vmIdlePolicy(name),
+            state.features.primaryNested ? client.vmNested(name) : Promise.resolve(null),
           ]);
           const settings = { warnings: [] };
           results.forEach((result, i) => {
@@ -1303,6 +1305,8 @@ function createHostAdminModel(deps = {}) {
           const name = str(args.name);
           const changeCpu = state.features.primaryCpu && Object.prototype.hasOwnProperty.call(args, "cpus");
           const changeMemory = state.features.primaryMemory && Object.prototype.hasOwnProperty.call(args, "ramGb");
+          const changeNested = state.features.primaryNested && Object.hasOwn(args, "nested");
+          if (changeNested && typeof args.nested !== "boolean") throw new Error("Choose on or off for nested virtualization.");
           const changeIdle = Object.prototype.hasOwnProperty.call(args, "timeoutMinutes") || Object.prototype.hasOwnProperty.call(args, "action");
           const whole = (value, min, max) => typeof value === "number" && Number.isInteger(value) && value >= min && value <= max;
           if (changeCpu && !whole(args.cpus, 1, 64)) throw new Error("Choose a whole CPU count from 1 to 64.");
@@ -1317,6 +1321,7 @@ function createHostAdminModel(deps = {}) {
               (idle.forceEnabled && args.action === "off"))) throw new Error("Choose an idle timeout and action within the host cap.");
           if (cpu && args.cpus !== cpu.desiredCpus) await client.setVmCpu(name, { cpus: args.cpus });
           if (memory && args.ramGb !== memory.desiredRamGb) await client.setVmMemory(name, { ramGb: args.ramGb });
+          if (changeNested) await client.setVmNested(name, { enabled: args.nested });
           if (idle && (args.timeoutMinutes !== idle.timeoutMinutes || args.action !== idle.action))
             await client.setVmIdlePolicy(name, { timeoutMinutes: args.timeoutMinutes, action: args.action });
           notice("info", `${name}: settings saved.`);
