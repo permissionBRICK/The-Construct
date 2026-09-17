@@ -18,6 +18,7 @@ public sealed class ProxmoxConsoleApiTests
     [InlineData(true)]
     public async Task Primary_gateway_gets_a_VNC_endpoint_with_scoped_auth_cleanup_and_no_logged_secrets(bool fail)
     {
+        if (OperatingSystem.IsWindows()) return; // The Proxmox process fixture needs python3.
         var fixture = new ProxmoxInteractiveConsoleTests.FixtureRunner { Fail = fail };
         var commands = new RecordingProcessRunner().RespondStdout("""[{"type":"qemu","node":"pve1","name":"primary","vmid":101}]""");
         var listener = new TcpListener(IPAddress.Loopback, 0);
