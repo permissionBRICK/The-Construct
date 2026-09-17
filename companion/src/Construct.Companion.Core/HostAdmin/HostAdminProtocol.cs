@@ -7,12 +7,12 @@ namespace Construct.Companion.Core.HostAdmin;
 public static partial class HostAdminProtocol
 {
     public static readonly string[] Tabs = ["overview", "vms", "users", "media", "operations", "config", "maintenance"];
-    public static readonly string[] ConfigSections = ["capacity", "userDefaults", "userCaps", "lifecycle", "media", "network", "updates"];
+    public static readonly string[] ConfigSections = ["capacity", "userDefaults", "userCaps", "lifecycle", "media", "network", "virtualization", "updates"];
     public static string Text(JsonNode? node) => StateJson.Trim(node is null ? "" : StateJson.String(node));
     public static JsonObject Features(JsonNode? health)
     {
         var flags = (health?["apiFeatures"] as JsonArray ?? []).Select(Text).ToHashSet();
-        return new() { ["hostAdmin"] = flags.Contains("host-admin"), ["children"] = flags.Contains("children"), ["media"] = flags.Contains("media"), ["console"] = flags.Contains("console"), ["updates"] = flags.Contains("updates"), ["network"] = flags.Contains("network"), ["primaryCpu"] = flags.Contains("primary-cpu"), ["primaryMemory"] = flags.Contains("primary-memory") };
+        return new() { ["hostAdmin"] = flags.Contains("host-admin"), ["children"] = flags.Contains("children"), ["media"] = flags.Contains("media"), ["console"] = flags.Contains("console"), ["updates"] = flags.Contains("updates"), ["network"] = flags.Contains("network"), ["primaryCpu"] = flags.Contains("primary-cpu"), ["primaryMemory"] = flags.Contains("primary-memory"), ["primaryNested"] = flags.Contains("primary-nested") };
     }
     public static JsonArray TabsFor(JsonObject features) => new(Tabs.Select((id, i) => (JsonNode)new JsonObject
     { ["id"] = id, ["label"] = new[] { "Overview", "VMs", "Users", "Media", "Operations", "Configuration", "Maintenance" }[i], ["available"] = StateJson.Boolean(features[id == "maintenance" ? "updates" : "hostAdmin"]) == true, ["reason"] = StateJson.Boolean(features[id == "maintenance" ? "updates" : "hostAdmin"]) == true ? "" : "not available on this host version" }).ToArray());
@@ -95,6 +95,7 @@ public static partial class HostAdminProtocol
             if (kind != "newUser" && Tri("enabled") is { } enabled) body["enabled"] = enabled;
             if (Number("maxVms") is { } max) body["maxVms"] = max;
             if (Tri("allowHostForwards") is { } forwards) body["allowHostForwards"] = forwards;
+            if (kind != "newUser" && form.ContainsKey("allowNested")) body["allowNested"] = Tri("allowNested");
             if (body.Count == 0 && problems.Count == 0) Problem("", "nothing to change");
         }
         return new() { ["ok"] = problems.Count == 0, ["body"] = body, ["problems"] = problems };

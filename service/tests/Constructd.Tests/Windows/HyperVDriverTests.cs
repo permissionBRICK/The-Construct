@@ -19,6 +19,15 @@ namespace Constructd.Tests.Windows;
 public sealed class HyperVDriverTests
 {
     [Fact]
+    public async Task Nested_setting_uses_shared_driver_and_reads_current_flag()
+    {
+        var (driver, runner) = Driver(new RecordingProcessRunner().Respond(Ok("true")).Respond(Ok("null")));
+        Assert.True(await driver.GetNestedAsync("work-vm", default));
+        await driver.SetNestedAsync("work-vm", false, default);
+        Assert.Contains("Get-ConstructVmNested -Name 'work-vm'", Script(runner[0]));
+        Assert.Contains("Set-ConstructVmNested -Name 'work-vm' -Enabled $false", Script(runner[1]));
+    }
+    [Fact]
     public async Task Cpu_change_uses_the_guarded_shared_driver_contract()
     {
         var (driver, runner) = Driver(new RecordingProcessRunner().Respond(Ok("null")));

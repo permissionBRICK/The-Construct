@@ -21,6 +21,7 @@ public sealed partial class HostAdministration
         var results = await Task.WhenAll(
             Read("cpu", StateJson.Boolean(m.State["features"]?["primaryCpu"]) == true && (changes is null || changes.ContainsKey("cpus")), () => client.VmCpuAsync(name, ct)),
             Read("memory", StateJson.Boolean(m.State["features"]?["primaryMemory"]) == true && (changes is null || changes.ContainsKey("ramGb")), () => client.VmMemoryAsync(name, ct)),
+            Read("nested", StateJson.Boolean(m.State["features"]?["primaryNested"]) == true && (changes is null || changes.ContainsKey("nested")), () => client.VmNestedAsync(name, ct)),
             Read("idle", changes is null || changes.ContainsKey("timeoutMinutes") || changes.ContainsKey("action"), () => client.VmIdlePolicyAsync(name, ct)));
         var settings = new JsonObject(); var warnings = new HashSet<string>(StringComparer.Ordinal);
         foreach (var (key, value, error) in results)
@@ -56,6 +57,8 @@ public sealed partial class HostAdministration
                 }
                 var changeCpu = StateJson.Boolean(m.State["features"]?["primaryCpu"]) == true && args.ContainsKey("cpus");
                 var changeRam = StateJson.Boolean(m.State["features"]?["primaryMemory"]) == true && args.ContainsKey("ramGb");
+                var changeNested = StateJson.Boolean(m.State["features"]?["primaryNested"]) == true && args.ContainsKey("nested");
+                if (changeNested && StateJson.Boolean(args["nested"]) is null) throw new VmSettingsValidationException("Choose on or off for nested virtualization.");
                 var changeIdle = args.ContainsKey("timeoutMinutes") || args.ContainsKey("action");
                 var cpus = changeCpu ? Whole(args["cpus"], 1, 64, "Choose a whole CPU count from 1 to 64.") : 0;
                 var ram = changeRam ? Whole(args["ramGb"], 1, 1024, "Choose whole RAM (GB) from 1 to 1024.") : 0;
@@ -70,6 +73,7 @@ public sealed partial class HostAdministration
                 if (idle is not null && (timeout < (forced ? 1 : 0) || cap > 0 && timeout > cap || forced && idleAction == "off")) throw new VmSettingsValidationException(idleError);
                 if (cpu is not null && cpus != StateJson.CoerceNumber(cpu["desiredCpus"])) await client.SetVmCpuAsync(name, new JsonObject { ["cpus"] = cpus }, ct);
                 if (memory is not null && ram != StateJson.CoerceNumber(memory["desiredRamGb"])) await client.SetVmMemoryAsync(name, new JsonObject { ["ramGb"] = ram }, ct);
+                if (changeNested) await client.SetVmNestedAsync(name, new JsonObject { ["enabled"] = args["nested"]?.DeepClone() }, ct);
                 if (idle is not null && (timeout != StateJson.CoerceNumber(idle["timeoutMinutes"]) || idleAction != Text(idle["action"])))
                     await client.SetVmIdlePolicyAsync(name, new JsonObject { ["timeoutMinutes"] = timeout, ["action"] = idleAction }, ct);
                 saved = true;

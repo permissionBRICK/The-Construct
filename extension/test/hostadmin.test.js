@@ -55,9 +55,9 @@ function fakeClient(answers = {}) {
 
 (async () => {
   console.log("\n=== feature detection ===");
-  deep("features: every flag false without apiFeatures", ha.featureSet({}), { hostAdmin: false, children: false, media: false, console: false, updates: false, network: false, primaryCpu: false, primaryMemory: false });
-  deep("features: the full list", ha.featureSet(HEALTH_FULL), { hostAdmin: true, children: true, media: true, console: true, updates: true, network: true, primaryCpu: true, primaryMemory: true });
-  deep("features: stage-1 service advertises host-admin only", ha.featureSet({ apiFeatures: ["host-admin"] }), { hostAdmin: true, children: false, media: false, console: false, updates: false, network: false, primaryCpu: false, primaryMemory: false });
+  deep("features: every flag false without apiFeatures", ha.featureSet({}), { hostAdmin: false, children: false, media: false, console: false, updates: false, network: false, primaryCpu: false, primaryMemory: false, primaryNested: false });
+  deep("features: the full list", ha.featureSet(HEALTH_FULL), { hostAdmin: true, children: true, media: true, console: true, updates: true, network: true, primaryCpu: true, primaryMemory: true, primaryNested: false });
+  deep("features: stage-1 service advertises host-admin only", ha.featureSet({ apiFeatures: ["host-admin"] }), { hostAdmin: true, children: false, media: false, console: false, updates: false, network: false, primaryCpu: false, primaryMemory: false, primaryNested: false });
   ok("maintenance: a 503 maintenance error is recognised", ha.isMaintenanceError(apiErr(503, { code: "maintenance", phase: "draining" })));
   ok("maintenance: a 503 without a body is treated as maintenance", ha.isMaintenanceError(apiErr(503, null)));
   ok("maintenance: a 500 is not", !ha.isMaintenanceError(apiErr(500, { code: "maintenance" })));

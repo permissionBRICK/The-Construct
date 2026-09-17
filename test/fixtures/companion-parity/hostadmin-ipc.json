@@ -297,6 +297,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -327,6 +328,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -356,6 +358,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -385,6 +388,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -419,6 +423,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -453,6 +458,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -486,6 +492,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -519,6 +526,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -559,6 +567,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -599,6 +608,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -638,6 +648,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -677,6 +688,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -707,6 +719,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -737,6 +750,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -766,6 +780,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -795,6 +810,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -829,6 +845,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": {
@@ -870,6 +887,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": {
@@ -910,6 +928,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": {
@@ -950,6 +969,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": {
@@ -997,6 +1017,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": true
       },
       "identity": {
@@ -1048,6 +1069,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": true
       },
       "identity": {
@@ -1098,6 +1120,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": true
       },
       "identity": {
@@ -1148,6 +1171,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": true
       },
       "identity": {
@@ -1193,6 +1217,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -1227,6 +1252,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -1261,6 +1287,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -1295,6 +1322,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -1329,6 +1357,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -1363,6 +1392,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -1397,6 +1427,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -1431,6 +1462,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": null,
@@ -1465,6 +1497,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": {
@@ -1510,6 +1543,7 @@
         "network": false,
         "primaryCpu": false,
         "primaryMemory": false,
+        "primaryNested": false,
         "updates": false
       },
       "identity": {
@@ -1721,6 +1755,7 @@
       "network": false,
       "primaryCpu": false,
       "primaryMemory": false,
+      "primaryNested": false,
       "updates": false
     }
   },
@@ -1791,6 +1826,7 @@
       "network": false,
       "primaryCpu": false,
       "primaryMemory": false,
+      "primaryNested": false,
       "updates": false
     }
   },
@@ -1865,6 +1901,7 @@
       "network": false,
       "primaryCpu": false,
       "primaryMemory": false,
+      "primaryNested": false,
       "updates": true
     }
   },
@@ -1946,6 +1983,7 @@
       "network": true,
       "primaryCpu": true,
       "primaryMemory": true,
+      "primaryNested": false,
       "updates": true
     }
   },
@@ -4171,6 +4209,14 @@
       },
       {
         "expectedUpdatedAt": null,
+        "key": "virtualization",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
         "key": "updates",
         "present": false,
         "source": "default",
@@ -4236,6 +4282,7 @@
     "now": 1789128000000,
     "output": {
       "allowHostForwards": true,
+      "allowNested": null,
       "allowance": {
         "allowChildCreation": "",
         "allowNeverLifetime": "",

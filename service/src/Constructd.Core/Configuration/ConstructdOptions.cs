@@ -190,6 +190,9 @@ public sealed class ProxmoxOptions
     /// <summary>QEMU CPU type. <c>host</c> passes the node's CPU through, which is what nested KVM needs.</summary>
     public string CpuType { get; set; } = "host";
 
+    /// <summary>CPU model used when virtualization extensions are disabled.</summary>
+    public string CpuTypeWithoutNesting { get; set; } = "x86-64-v2-AES";
+
     /// <summary>The <c>qm</c> command (VM lifecycle).</summary>
     public string QmPath { get; set; } = "qm";
 

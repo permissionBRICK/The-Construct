@@ -39,8 +39,14 @@ public sealed class HypervisorOperationException(string operation, string vmName
 /// The service therefore shares one implementation with the local install instead of reimplementing
 /// Hyper-V against raw cmdlets — which is the whole point of the driver extraction (plan §4.2, B4).
 /// </summary>
-public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver
+public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver, IVmNestedDriver
 {
+    public async Task<bool> GetNestedAsync(string name, CancellationToken ct) =>
+        (await RunAsync("get-nested", name, HyperVScript.GetNested(_options.ScriptsDir, name), ShortTimeout, null, ct)).GetBoolean();
+
+    public async Task SetNestedAsync(string name, bool enabled, CancellationToken ct) =>
+        await RunAsync("set-nested", name, HyperVScript.SetNested(_options.ScriptsDir, name, enabled), ShortTimeout, null, ct);
+
     public async Task SetMemoryAsync(string name, int ramGb, CancellationToken ct) =>
         await RunAsync("set-memory", name, HyperVScript.SetMemory(_options.ScriptsDir, name, ramGb), ShortTimeout, null, ct);
 
