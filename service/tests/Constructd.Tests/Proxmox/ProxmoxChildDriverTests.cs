@@ -40,7 +40,8 @@ public sealed partial class ProxmoxChildDriverTests : IDisposable
         {
             Assert.True(File.Exists(Marker));
             for (var i = 2; i < call.Arguments.Count; i += 2) config[call.Arguments[i][2..]] = call.Arguments[i + 1];
-            config["scsi0"] = "local-lvm:vm-101-disk-1,discard=on,size=4G";
+            var slot = ProxmoxChildVmPlatform.DiskSlot(hardware ?? Hardware);
+            config[slot] = "local-lvm:vm-101-disk-1,discard=on,size=4G";
             config["efidisk0"] = "local-lvm:vm-101-disk-0,efitype=4m,pre-enrolled-keys=1,size=4M";
             if (config.ContainsKey("tpmstate0")) config["tpmstate0"] = "local-lvm:vm-101-disk-2,version=v2.0,size=4M";
             return fail ? new(1, "dependency-secret", "dependency-secret", false) : new(0, "", "", false);
@@ -55,13 +56,13 @@ public sealed partial class ProxmoxChildDriverTests : IDisposable
         var call = runner.Calls[2]; Assert.Equal("qm", call.FileName);
         Assert.Equal(TimeSpan.FromMinutes(30), call.Timeout);
         Assert.Equal(new[] { "create", "101", "--name", "child", "--ostype", "win11", "--machine", "q35",
-            "--bios", "ovmf", "--efidisk0", "local-lvm:1,efitype=4m,pre-enrolled-keys=1", "--scsihw", "virtio-scsi-single",
-            "--scsi0", "local-lvm:4,discard=on", "--agent", "enabled=1", "--memory", "512", "--balloon", "0", "--cores", "2",
+            "--bios", "ovmf", "--efidisk0", "local-lvm:1,efitype=4m,pre-enrolled-keys=1", "--cpu", "x86-64-v2-AES", "--scsihw", "virtio-scsi-single",
+            "--sata0", "local-lvm:4,discard=on", "--agent", "enabled=1", "--memory", "512", "--balloon", "0", "--cores", "2",
             "--sockets", "1", "--tablet", "1", "--tags", "construct-child", "--smbios1", config["smbios1"],
             "--description", config["description"], "--tpmstate0", "local-lvm:1,version=v2.0", "--ide2",
             "construct-media:iso/" + Path.GetFileName(Install) + ",media=cdrom", "--ide0",
             "construct-media:iso/" + Path.GetFileName(Auxiliary) + ",media=cdrom", "--net0", "virtio,bridge=vmbr0",
-            "--boot", "order=ide2;ide0;scsi0;net0" }, call.Arguments);
+            "--boot", "order=ide2;ide0;sata0;net0" }, call.Arguments);
         Assert.DoesNotContain(runner.Calls, c => c.Arguments[0] is "start" or "agent");
         NamedConfig(); var id = await driver.GetVmIdAsync("child", default); Assert.True(Guid.TryParse(id, out _));
         NamedConfig(); Assert.Equal("job-operation", await driver.GetCreationOperationAsync("child", default));

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using Constructd.Core.Abstractions;
@@ -77,7 +78,14 @@ public sealed partial class ProxmoxChildVmPlatform(IProcessRunner processes, IHy
         var args = new List<string> { "create", ProxmoxCommands.Number(id), "--name", name,
             "--ostype", h.SecureBootTemplate == SecureBootTemplate.MicrosoftWindows ? "win11" : "l26",
             "--machine", "q35", "--bios", "ovmf", "--efidisk0", Efi(h.SecureBoot),
-            "--scsihw", "virtio-scsi-single", "--scsi0", $"{Storage}:{h.DiskGb},discard=on",
+            // Same CPU model as a primary without nesting. Without --cpu, qm falls back to kvm64,
+            // which hides POPCNT and SSE4.2; Windows 11 since 24H2 refuses to boot on that and
+            // loops in the boot manager (seen on the first Windows child field test).
+            "--cpu", ArgumentGuard.Text(options.Proxmox.CpuTypeWithoutNesting, "Constructd:Proxmox:CpuTypeWithoutNesting", 64),
+            "--scsihw", "virtio-scsi-single",
+            // Windows has no in-box virtio driver: Setup shows no disk on virtio-scsi. The Windows
+            // preset therefore gets a SATA (AHCI) disk, which Setup sees without a driver ISO.
+            "--" + DiskSlot(h), $"{Storage}:{h.DiskGb},discard=on",
             "--agent", "enabled=1", "--memory", ProxmoxCommands.Number(h.RamMb), "--balloon", "0",
             "--cores", ProxmoxCommands.Number(h.Cpus), "--sockets", "1", "--tablet", "1",
             "--tags", "construct-child", "--smbios1", "uuid=" + owner.Incarnation,
@@ -86,7 +94,7 @@ public sealed partial class ProxmoxChildVmPlatform(IProcessRunner processes, IHy
         if (install is not null) args.AddRange(["--ide2", install + ",media=cdrom"]);
         if (auxiliary is not null) args.AddRange(["--ide0", auxiliary + ",media=cdrom"]);
         if (h.NetworkAttached) args.AddRange(["--net0", "virtio,bridge=" + bridge]);
-        var boot = Boot(h.BootOrder, install is not null, auxiliary is not null, h.NetworkAttached);
+        var boot = Boot(h.BootOrder, install is not null, auxiliary is not null, h.NetworkAttached, DiskSlot(h));
         if (boot.Length > 0) args.AddRange(["--boot", "order=" + boot]);
         await commands.QmAsync(args, ct, TimeSpan.FromMinutes(30));
         var config = await commands.ConfigAsync(id, ct);
@@ -97,14 +105,18 @@ public sealed partial class ProxmoxChildVmPlatform(IProcessRunner processes, IHy
     private string Efi(bool secure) => Storage + ":1,efitype=4m,pre-enrolled-keys=" + (secure ? "1" : "0");
     private static string Description(ChildOwnership owner, string template) =>
         $"construct-child parent={owner.Parent} template={template} created={owner.Created:O} operation={owner.OperationId} uuid={owner.Incarnation}";
-    private static string Boot(IReadOnlyList<BootDevice> order, bool install, bool auxiliary, bool network)
+    /// <summary>The system disk slot: SATA for the Windows preset (in-box driver), virtio-scsi otherwise.</summary>
+    public static string DiskSlot(ChildHardware h) => h.SecureBootTemplate == SecureBootTemplate.MicrosoftWindows ? "sata0" : "scsi0";
+    /// <summary>The slot a created VM actually uses, from its config (either slot may be present).</summary>
+    public static string DiskSlot(JsonElement config) => config.TryGetProperty("sata0", out _) ? "sata0" : "scsi0";
+    private static string Boot(IReadOnlyList<BootDevice> order, bool install, bool auxiliary, bool network, string disk)
     {
         if (order.Any(d => !Enum.IsDefined(d)) || order.Distinct().Count() != order.Count)
             throw new ChildValidationException("validation", "bootOrder");
         return string.Join(';', order.Select(d => d switch
         {
             BootDevice.InstallMedia when install => "ide2", BootDevice.AuxiliaryMedia when auxiliary => "ide0",
-            BootDevice.Disk => "scsi0", BootDevice.Network when network => "net0", _ => null
+            BootDevice.Disk => disk, BootDevice.Network when network => "net0", _ => null
         }).OfType<string>());
     }
 

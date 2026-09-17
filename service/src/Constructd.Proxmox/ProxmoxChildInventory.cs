@@ -38,10 +38,11 @@ public sealed partial class ProxmoxInventory
                 throw ProxmoxCommands.Failure();
             var state = await commands.StateAsync(id, ct);
             var disks = new List<HypervisorDiskInfo>();
-            foreach (var slot in new[] { "scsi0", "efidisk0", "tpmstate0" })
+            var system = ProxmoxChildVmPlatform.DiskSlot(config);
+            foreach (var slot in new[] { system, "efidisk0", "tpmstate0" })
             {
                 var text = ProxmoxCommands.String(config, slot);
-                if (text is null) { if (slot == "scsi0") throw ProxmoxCommands.Failure(); else continue; }
+                if (text is null) { if (slot == system) throw ProxmoxCommands.Failure(); else continue; }
                 var volume = text.Split(',')[0]; var storage = volume.Split(':')[0];
                 if (!volume.Contains(':')) throw ProxmoxCommands.Failure();
                 var size = Bytes(ProxmoxCommands.Property(text, "size")) ?? throw ProxmoxCommands.Failure();
