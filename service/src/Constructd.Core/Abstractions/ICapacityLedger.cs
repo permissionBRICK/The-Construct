@@ -39,7 +39,8 @@ public sealed record HostCapacitySnapshot(
     long? RamUsedBytes = null,
     long? VmResidentRamBytes = null,
     long? SwapTotalBytes = null,
-    long? SwapUsedBytes = null);
+    long? SwapUsedBytes = null,
+    IReadOnlyList<HypervisorVmInfo>? MeasuredVms = null);
 
 public interface ICapacityLedger
 {

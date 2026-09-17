@@ -43,8 +43,12 @@ public sealed record Vm(
     HostObservation? Observed = null,
     bool ChildCreationClosed = false,
     string? CurrentJobId = null,
-    string? SourceCommit = null)
+    string? SourceCommit = null,
+    DateTimeOffset? PressureSavedAt = null,
+    long? PressureSavedGeneration = null)
 {
+    public string? SavedBy => State == VmState.Saved && PressureSavedGeneration == PowerGeneration
+        && PressureSavedAt is not null ? "memory-pressure" : null;
     public long RamBytes => RamMb is int mb ? mb * 1048576L : RamGb * 1073741824L;
 
     public static IReadOnlyList<PortForward> NoForwards { get; } = Array.Empty<PortForward>();

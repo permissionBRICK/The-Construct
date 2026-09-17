@@ -134,7 +134,7 @@ public static class CapacityMath
         return new(inventory.Epoch, inventory.ObservedAt, complete, inventory.Host.TotalRamBytes, headroom, ram, externalRam,
             inventory.Host.FreeRamBytes, available, inventory.Host.LogicalCpus, config.CpuBudget, (int)Math.Min(int.MaxValue, cpus),
             config.CpuBudget is int budget ? (int)Math.Max(0, budget - cpus) : null, volumes, persisted.ToArray(), unmanaged, problems.Distinct().ToArray(), byVm, reservations,
-            used, used is null ? null : resident, inventory.Host.SwapTotalBytes, inventory.Host.SwapUsedBytes);
+            used, used is null ? null : resident, inventory.Host.SwapTotalBytes, inventory.Host.SwapUsedBytes, inventory.Vms);
     }
 
     public static CapacityDecision Decide(ReservationRequest request, HostCapacitySnapshot snapshot, CapacityConfig config,

@@ -9,6 +9,7 @@ public static partial class HostConfigValidation
     public static readonly IReadOnlyDictionary<string, object> Defaults = new Dictionary<string, object>
     {
         ["capacity"] = HostAdminDefaults.Capacity,
+        ["memoryPressure"] = HostAdminDefaults.MemoryPressure,
         ["userDefaults"] = HostAdminDefaults.UserDefaults,
         ["userCaps"] = HostAdminDefaults.UserCaps,
         ["lifecycle"] = HostAdminDefaults.Lifecycle,
@@ -22,6 +23,9 @@ public static partial class HostConfigValidation
     public static string? Validate(object value) => value switch
     {
         NetworkConfig n when n.DefaultMode is not ("relayed" or "direct") => "Network defaultMode must be relayed or direct.",
+        MemoryPressureConfig m when m.LowWaterPercent <= 0 || m.LowWaterPercent >= m.HighWaterPercent || m.HighWaterPercent > 100 ||
+            m.SwapHighWaterPercent is < 0 or > 100 || m.MinSecondsBetweenSaves < 1 || m.CooldownMinutesAfterSave < 0 =>
+            "Memory pressure requires 0 < low < high <= 100, swap 0–100, a positive save interval and a non-negative cooldown.",
         CapacityConfig c when !Enum.IsDefined(c.Mode) || c.RamHeadroomBytes < 0 || c.StorageHeadroomBytes < 0 || c.CpuBudget < 0 || c.MaxVcpusPerVm < 1 ||
             c.ReconcileSeconds < 30 || c.OrphanReservationTimeoutSeconds < 30 => "Capacity limits must be non-negative and timeouts at least 30 seconds.",
         UserDefaultsConfig d when d.MaxPrimaries < 0 => "Primary count must be non-negative.",
