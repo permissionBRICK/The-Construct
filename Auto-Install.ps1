@@ -149,6 +149,9 @@ param(
     # can also apply it to an existing VM via Set-AgentVmCheckpoints.ps1. "true"/"false".
     [ValidateSet("true", "false")]
     [string]$AutomaticCheckpoints = "false",
+    # Empty uses the remote host default. Local installs retain their existing default.
+    [ValidateSet("", "true", "false")]
+    [string]$Nested = "",
     # First-install defaults. Explicit component parameters always win.
     [ValidateSet('', 'minimal', 'full', 'custom')]
     [string]$FeatureSet = '',
@@ -2716,18 +2719,19 @@ if ($RemoteInstall) {
     # One function, so the create -> registry-check -> rollback-or-record sequence can be
     # driven end to end in test/remote-install.test.ps1 instead of only being described by
     # source-order assertions.
+    $remoteDescriptor = @{
+        Name = $instName
+        ProcessorCount = $remoteCpu
+        MemoryGB = $chosenMemGB
+        DiskGB = $chosenDiskGB
+        AutomaticCheckpoints = ($AutomaticCheckpoints -eq 'true')
+        Redownload = $remoteRedownload
+    }
+    if ($Nested -ne '') { $remoteDescriptor['Nested'] = ($Nested -eq 'true') }
     $record   = New-ConstructRemoteVmRecord -Name $instName -ServiceUrl $svcUrl `
                     -ServiceAuth $remoteAuthMode -Owner $remoteOwner `
                     -RegistryPath ([string]$registry.Path) -MakeDefault:(-not $registry.Exists) `
-                    -Descriptor @{
-                        Name                 = $instName
-                        ProcessorCount       = $remoteCpu
-                        MemoryGB             = $chosenMemGB
-                        DiskGB               = $chosenDiskGB
-                        Nested               = $true
-                        AutomaticCheckpoints = ($AutomaticCheckpoints -eq 'true')
-                        Redownload           = $remoteRedownload
-                    }
+                    -Descriptor $remoteDescriptor
     # The size this VM was created with, recorded as the control panel's settings for
     # THIS instance (vmMemoryGB / vmDiskGB / vmCpuCount): the panel shows them and a
     # rebuild launched from there passes them back, instead of falling back to its own
@@ -3793,6 +3797,7 @@ $createArgs = @{
 # the command line) sizes the local VM too; omitted, Create-AgentVM keeps giving the VM
 # every host logical processor, exactly as before.
 if ($VmCpuCount -gt 0) { $createArgs['ProcessorCount'] = $VmCpuCount }
+if ($Nested -ne '') { $createArgs['Nested'] = $Nested }
 # The size this VM is created with, recorded as the control panel's settings for THIS
 # instance (vmMemoryGB / vmDiskGB, and the vCPU count when one was chosen): the panel
 # shows them and a rebuild launched from there passes them back, instead of falling

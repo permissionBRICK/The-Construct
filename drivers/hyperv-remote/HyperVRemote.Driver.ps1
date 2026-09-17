@@ -307,6 +307,14 @@ function New-ConstructVm {
     $accepted = Invoke-ConstructRemoteApi -Method POST -Path '/vms' -Body $body
     $jobId = Get-ConstructRemoteJobId -Response $accepted -What "create $name"
     Write-Note "job $jobId accepted"
+    if ($accepted.PSObject.Properties['nested']) {
+        $nestedState = if ($accepted.nested) { 'on' } else { 'off' }
+        $nestedSource = if ($accepted.PSObject.Properties['nestedFromHostDefault'] -and $accepted.nestedFromHostDefault) { ' (host default)' } else { '' }
+        Write-Note "nested virtualization: $nestedState$nestedSource"
+    }
+    if ($accepted.PSObject.Properties['ignoredOptions']) {
+        foreach ($option in @($accepted.ignoredOptions)) { Write-Note "Create option ignored by this host: $option" }
+    }
 
     $result = Wait-ConstructRemoteJob -JobId $jobId -TimeoutSeconds $TimeoutSeconds
 
