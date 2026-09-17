@@ -26,10 +26,10 @@
     the account password — the previous keytab stops working.
 
 .EXAMPLE
-    .\New-ConstructKerberosPrincipal.ps1 -HostFqdn test-proxmox.corp.example.com -Address 203.0.113.184 -InstallOnHost root@test-proxmox.corp.example.com
+    .\New-ConstructKerberosPrincipal.ps1 -HostFqdn pve1.corp.example.com -Address 192.0.2.10 -InstallOnHost root@pve1.corp.example.com
 
 .EXAMPLE
-    .\New-ConstructKerberosPrincipal.ps1 -HostFqdn test-proxmox.corp.example.com -KeytabPath C:\constructd.keytab
+    .\New-ConstructKerberosPrincipal.ps1 -HostFqdn pve1.corp.example.com -KeytabPath C:\constructd.keytab
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(

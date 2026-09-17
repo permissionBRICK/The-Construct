@@ -34,7 +34,7 @@
 #   --skip-image              do not download the cloud image (it must already be cached)
 #   --keytab <file>           Kerberos keytab for HTTP/<public-host> (from New-ConstructKerberosPrincipal.ps1
 #                             on a domain controller); turns Windows sign-in (Negotiate) on
-#   --netbios-domain <NAME>   the domain's NetBIOS name (HOME): Kerberos users become NAME\user
+#   --netbios-domain <NAME>   the domain's NetBIOS name (CORP): Kerberos users become NAME\user
 #   --realm <REALM>           the Kerberos realm (default: the public host's DNS domain, upper-cased)
 #
 # What it leaves behind:
@@ -354,7 +354,7 @@ say "Kerberos"
 KEYTAB_PATH="${ETC_DIR}/krb5.keytab"; KRB_ENV="${ETC_DIR}/kerberos.env"
 if [[ -n "${KEYTAB}" ]]; then
   [[ -f "${KEYTAB}" ]] || die "--keytab '${KEYTAB}' does not exist"
-  [[ -n "${NETBIOS_DOMAIN}" ]] || die "--keytab needs --netbios-domain <NAME> (the domain's short name, e.g. HOME)"
+  [[ -n "${NETBIOS_DOMAIN}" ]] || die "--keytab needs --netbios-domain <NAME> (the domain's short name, e.g. CORP)"
   [[ "${PUBLIC_HOST}" =~ \. && ! "${PUBLIC_HOST}" =~ ^[0-9.]+$ ]] || die "--keytab needs --public-host to be the host's DNS name (the SPN is HTTP/<public-host>), not an address"
   [[ -n "${REALM}" ]] || REALM="$(printf '%s' "${PUBLIC_HOST#*.}" | tr '[:lower:]' '[:upper:]')"
   install -m 0600 -o root -g root "${KEYTAB}" "${KEYTAB_PATH}"
