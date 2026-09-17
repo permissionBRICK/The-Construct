@@ -44,7 +44,6 @@ public static class ConsoleEndpoints
         return api;
     }
     private static bool BrowserEnabled(HttpContext http) => http.RequestServices.GetRequiredService<Constructd.Core.Configuration.ConstructdOptions>().BrowserConsoleEnabled;
-    private static bool NativeViewer(HttpContext http) => http.RequestServices.GetRequiredService<IInteractiveConsole>() is IInteractiveConsoleLink;
     private static Vm Vm(HttpContext http) => (Vm)http.Items[VmKey]!;
     private static string Principal(HttpContext http) => http.User.IsPrimaryToken() ? "vm:" + http.User.VmTokenName() : http.User.NameOrEmpty();
     private static void Audit(HttpContext http, string action, string? extra = null)
@@ -75,7 +74,7 @@ public static class ConsoleEndpoints
         return JsonSerializer.Deserialize<T>(buffer.ToArray(), ApiJson.Options);
     }
     private static async Task<IResult> Capabilities(HttpContext http, IConsoleTransport transport, CancellationToken ct) =>
-        Results.Ok(ConsoleCapabilitiesResponse.From(transport.Capabilities, await transport.GetScreenAsync(Vm(http).Name, ct), BrowserEnabled(http), NativeViewer(http)));
+        Results.Ok(ConsoleCapabilitiesResponse.From(transport.Capabilities, await transport.GetScreenAsync(Vm(http).Name, ct), BrowserEnabled(http)));
     private static bool Usable(ConsoleScreen s) => s.VideoHeadPresent && s.NativeWidth > 0 && s.NativeHeight > 0;
     private static async Task<IResult> Create(HttpContext http, IConsoleTransport transport, IConsoleSessionStore sessions, IClock clock, CancellationToken ct)
     {
@@ -83,14 +82,12 @@ public static class ConsoleEndpoints
         if (request?.OperationKey is { Length: > 128 }) return CodedProblems.Validation("operationKey", "Operation key is too long.");
         var screen = await transport.GetScreenAsync(Vm(http).Name, ct);
         if (!Usable(screen) || transport.Capabilities.Screenshot == CapabilityLevel.Unsupported) return Unavailable("videoHead");
-        var interactiveUrl = http.RequestServices.GetRequiredService<IInteractiveConsole>() is IInteractiveConsoleLink link
-            ? await link.GetLaunchUrlAsync(Vm(http).Name, ct) : null;
         var s = sessions.TryCreate(Vm(http).Name, Principal(http), screen.NativeWidth, screen.NativeHeight, ConsoleSessionRules.Ttl, clock.UtcNow);
         if (s is null) return Rate(http, 60);
         Audit(http, "console-session-create");
         return Results.Created($"/api/v1/vms/{s.VmName}/console/sessions/{s.Id}", new { sessionId = s.Id, expiresAt = s.ExpiresAt,
-            screen = new { width = screen.NativeWidth, height = screen.NativeHeight }, interactiveUrl,
-            capabilities = ConsoleCapabilitiesResponse.From(transport.Capabilities, screen, BrowserEnabled(http), NativeViewer(http)) });
+            screen = new { width = screen.NativeWidth, height = screen.NativeHeight },
+            capabilities = ConsoleCapabilitiesResponse.From(transport.Capabilities, screen, BrowserEnabled(http)) });
     }
     private static async Task<IResult> Connection(string sid, HttpContext http, IConsoleSessionStore sessions,
         IClock clock, IInteractiveConsole interactive, Constructd.Core.Configuration.ConstructdOptions options, CancellationToken ct)

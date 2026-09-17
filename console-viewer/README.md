@@ -1,13 +1,14 @@
-# Browser console for Hyper-V guests
+# Browser console for Hyper-V and Proxmox guests
 
 `construct vm console NAME --web` opens a VM-scoped browser viewer through Apache
-Guacamole 1.6.0 and Hyper-V VMConnect. It works at boot and in ISO installers,
+Guacamole 1.6.0, using Hyper-V VMConnect or Proxmox VNC. It works at boot and in ISO installers,
 without guest networking or a guest remote-desktop agent. The guest VM continues
-to run directly on the Windows Hyper-V host.
+to run directly on its hypervisor host. Proxmox consoles require only Construct
+authorization; users do not need a Proxmox account or browser login.
 
 ## Installation
 
-The browser console is enabled by default on the Windows host. Normal primary
+The browser console is enabled by default on both host platforms. Normal primary
 VM provisioning installs the Linux gateway and its pinned guacd container;
 no separate project profile or enable command is needed.
 
@@ -22,9 +23,14 @@ including when rerunning the host installer. Administrators can still use
 service) to disable it, or omit `-Disable` to re-enable it.
 
 For an existing primary, reprovision to install the gateway, or run
-`bash /path/to/construct/console-viewer/install.sh` with Docker running. TCP
-2179 must be reachable from the primary. The gateway obtains the VMConnect
-certificate fingerprint through the authenticated host API.
+`bash /path/to/construct/console-viewer/install.sh` with Docker running. On Hyper-V,
+TCP 2179 must be reachable from the primary. The gateway obtains the VMConnect
+certificate fingerprint through the authenticated host API. On Proxmox, allow the
+primary to reach `Constructd:PublicHost` on the configured
+`Constructd:Proxmox:ConsolePorts` range, default TCP `5900-5999`. The node binds
+listeners to `Constructd:ListenAddress`; the range must not overlap SSH or app
+forwarding ranges. VNC on the primary-to-node LAN hop is unencrypted, so restrict
+these ports to trusted primaries. No port 8006 browser session is involved.
 
 The command uses `construct expose` to print a working client-forwarded link.
 The viewer listens on port 6080. Links default to 24 hours (1440 minutes).
@@ -56,7 +62,7 @@ in a profile shared between different hosts.
 ## Session and credential boundaries
 
 - Only the root-only Unix control socket can mint links. The browser never sees
-  the primary VM token or Windows password. Link secrets arrive in a URL fragment
+  the primary VM token or host console password. Link secrets arrive in a URL fragment
   and are exchanged for an HttpOnly, SameSite cookie scoped to that connection.
 - The gateway creates an ordinary host console session and calls the new
   `POST /api/v1/vms/{name}/console/sessions/{sid}/connection` endpoint. All existing
@@ -65,20 +71,31 @@ in a profile shared between different hosts.
   host-shared children they are authorized to operate. The connection endpoint
   uses the same sharing rules as screenshots/input; it requires a session owned
   by the requesting principal. Private VMs remain inaccessible to other gateways.
-- The host creates a random-password local account, with no group membership,
+- On Hyper-V, the host creates a random-password local account, with no group membership,
   and grants VMConnect access only to the selected native VM GUID. Credentials
   are sent over the pinned host API to the trusted primary gateway, then over
   pinned TLS to VMConnect. They are never logged or written to a credential file.
+- On Proxmox, the node starts `qm vncproxy <vmid>` with an eight-character random
+  password in `LC_PVE_TICKET`. Proxmox applies it to QEMU and expires authentication
+  after 30 seconds. The TCP listener accepts one connection and then closes;
+  disconnect or expiry kills the process. Passwords are sent only through the
+  authenticated host API and the gateway's loopback guacd connection. They never
+  enter argv, logs, browser messages or credential files. The VNC hop itself has
+  no TLS or certificate fingerprint. See the [Proxmox implementation](https://lists.proxmox.com/pipermail/pve-devel/2021-May/048326.html)
+  and the [node field checklist](../docs/proxmox-host.md#6-browser-console-and-remaining-limitations).
 - The gateway renews the 60-second host session every 20 seconds and closes the
   stream if authorization/renewal fails or the link expires. Disconnect deletes
-  the host session, revokes VMConnect permission, and removes the account.
-- Accounts expire 30 seconds after their last session expiry. A host cleanup loop
+  the host session. Hyper-V revokes VMConnect permission and removes the account;
+  Proxmox kills the proxy and frees the listener port. Reconnect creates a fresh
+  host session, listener and password on Proxmox.
+- Hyper-V accounts expire 30 seconds after their last session expiry. A host cleanup loop
   reaps revoked/expired sessions and expired orphan accounts every 30 seconds.
   Account expiry alone is not a forced disconnect for an existing RDP connection;
   the trusted gateway enforces stream lifetime. The primary VM is therefore part
-  of the trusted console infrastructure, not an untrusted public gateway.
+  of the trusted console infrastructure. Proxmox also enforces the session deadline
+  on the node and reconciles revoked sessions and completed proxies every 30 seconds.
 - File transfer, clipboard transfer, and audio are disabled for this initial
-  console. Keyboard uses Guacamole's RDP key mapping rather than WMI TypeText.
+  console. Keyboard uses Guacamole's RDP or VNC key mapping.
   Mouse behavior still depends on the guest integration/boot environment.
 
 ## Validation

@@ -66,7 +66,7 @@ function connect() {
         else if (state === 5) { display.cancel(); stopProgress(); message(connectionError || 'Disconnected. Reconnect while this link is valid, or create a new link.', !!connectionError); cad.disabled = true; }
         else if (state < 3 && !connectionError) message(phase + '…');
     };
-    // Guacamole sends X11 keysyms through RDP, avoiding the WMI TypeText path.
+    // Guacamole sends X11 keysyms through the host's display protocol.
     keyboard = new Guacamole.Keyboard(screen);
     keyboard.onkeydown = keysym => { active.sendKeyEvent(1, keysym); return false; };
     keyboard.onkeyup = keysym => active.sendKeyEvent(0, keysym);

@@ -11,7 +11,7 @@ public sealed class ProxmoxConsoleTransport(IProcessRunner runner, ConstructdOpt
     private readonly ProxmoxQmp qmp = new(runner, options);
     private readonly SemaphoreSlim[] gates = Enumerable.Range(0, 64).Select(_ => new SemaphoreSlim(1)).ToArray();
     public ConsoleCapabilities Capabilities { get; } = new(CapabilityLevel.Supported, CapabilityLevel.Supported,
-        CapabilityLevel.Supported, CapabilityLevel.Supported, CapabilityLevel.Conditional, ConsoleSessionRules.MaxScreenshotBytes, true);
+        CapabilityLevel.Supported, CapabilityLevel.Supported, CapabilityLevel.Supported, ConsoleSessionRules.MaxScreenshotBytes, true);
     private async Task<T> WithVm<T>(string name, Func<int, Task<T>> action, CancellationToken ct)
     {
         var gate = gates[(uint)StringComparer.OrdinalIgnoreCase.GetHashCode(name) % gates.Length];

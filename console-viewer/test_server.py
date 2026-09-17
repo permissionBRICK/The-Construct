@@ -1,6 +1,8 @@
 import asyncio
 import importlib.util
+import os
 from pathlib import Path
+import tempfile
 import time
 import unittest
 from aiohttp import ClientSession, CookieJar, WSMsgType, web
@@ -35,11 +37,15 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.gateway.config = {'CONSTRUCT_VMCONNECT_CERT_FINGERPRINT': 'sha256:trusted-fingerprint'}
         self.calls, self.params = [], {}
         self.ended = asyncio.Event()
+        self.protocol = 'rdp'
+        self.host_connection = dict(username='vm-only-user', password='PRIVATE-HOST-PASSWORD', domain='HOST', vmId='native-id', certificateFingerprint='sha256:trusted-fingerprint')
+        self.guacd_error = False
+        self.browser_input = None
 
         async def host_api(method, path):
             self.calls.append((method, path))
             if path.endswith('/connection'):
-                return dict(username='vm-only-user', password='PRIVATE-HOST-PASSWORD', domain='HOST', vmId='native-id', certificateFingerprint='sha256:trusted-fingerprint')
+                return dict(self.host_connection)
             if path.endswith('/sessions'):
                 return dict(sessionId='host-session')
             return {}
@@ -47,17 +53,20 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
 
         async def guacd(reader, writer):
             try:
-                self.assertEqual(await viewer.read_instruction(reader), ['select', 'rdp'])
-                names = ['VERSION_1_5_0', 'hostname', 'password', 'preconnection-blob', 'cert-fingerprints']
+                selected = await viewer.read_instruction(reader)
+                self.assertEqual(selected, ['select', self.protocol])
+                names = ['VERSION_1_5_0', 'hostname', 'port', 'password', 'preconnection-blob', 'cert-fingerprints', 'security', 'username', 'domain']
                 writer.write(viewer.instruction('args', *names)); await writer.drain()
                 for unused in range(4):
                     await viewer.read_instruction(reader)
                 values = await viewer.read_instruction(reader)
                 self.params.update(zip(names, values[1:]))
-                writer.write(viewer.instruction('ready', 'connection-id'))
+                writer.write(viewer.instruction('error', 'PRIVATE-HOST-PASSWORD') if self.guacd_error else viewer.instruction('ready', 'connection-id'))
                 writer.write(viewer.instruction('sync', '123'))
                 await writer.drain()
-                await reader.read()
+                self.browser_input = await reader.read()
+            except asyncio.IncompleteReadError:
+                pass  # Invalid host connection data is rejected before select.
             finally:
                 writer.close()
                 await writer.wait_closed()
@@ -114,8 +123,14 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('sync', display.data)
         self.assertNotIn('PASSWORD', first.data + display.data)
         self.assertEqual(self.params['password'], 'PRIVATE-HOST-PASSWORD')
-        self.assertEqual(self.params['hostname'], 'trusted-host')
-        self.assertEqual(self.params['preconnection-blob'], 'native-id')
+        self.assertEqual(self.params['hostname'], self.host_connection.get('host', 'trusted-host'))
+        self.assertEqual(self.params['port'], str(self.host_connection.get('port', 2179)))
+        if self.protocol == 'rdp':
+            self.assertEqual(self.params['preconnection-blob'], 'native-id')
+        else:
+            for key in ('preconnection-blob', 'cert-fingerprints', 'security', 'username', 'domain'):
+                self.assertEqual(self.params[key], '')
+        await ws.send_str('3.key,2.65,1.1;')
         await ws.send_str('0.,4.ping,3.123;')
         self.assertEqual((await ws.receive(timeout=2)).data, '0.,4.ping,3.123;')
         await ws.close()
@@ -123,6 +138,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(.02)
         self.assertIn(('DELETE', '/api/v1/vms/test-vm/console/sessions/host-session'), self.calls)
         self.assertFalse(self.gateway.tickets['id']['active'])
+        self.assertIn(b'3.key,2.65,1.1;', self.browser_input)
 
     async def test_connection_status_requires_the_ticket_cookie_and_redacts_failures(self):
         response = await self.client.get('/ws/id/status')
@@ -184,6 +200,126 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         await ws.receive(timeout=2)
         await ws.send_str('6.select,3.ssh;')
         self.assertEqual((await ws.receive(timeout=2)).type, WSMsgType.CLOSE)
+
+
+class VncGatewayTests(GatewayTests):
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.protocol = 'vnc'
+        self.host_connection = dict(protocol='vnc', host='pve-node', port=5907, password='PRIVATE-HOST-PASSWORD',
+                               username='', domain='', vmId='101', certificateFingerprint='')
+
+    async def test_vnc_failure_uses_vnc_phase_and_redacts_daemon_output(self):
+        self.guacd_error = True
+        await self.redeem()
+        ws = await self.client.ws_connect('/ws/id', protocols=['guacamole'], headers={'Origin': self.origin})
+        failure = await ws.receive(timeout=2)
+        self.assertIn('Connecting to the VM display on the host (VNC)', failure.data)
+        self.assertNotIn('PRIVATE', failure.data)
+        status = await (await self.client.get('/ws/id/status')).json()
+        self.assertNotIn('PRIVATE', str(status))
+        await ws.close()
+
+    async def test_invalid_endpoint_or_unknown_protocol_is_rejected_and_session_removed(self):
+        original = dict(self.host_connection)
+        for change in ({'port': 0}, {'port': True}, {'port': 65536}, {'host': ''}, {'protocol': 'ssh'}):
+            self.host_connection = {**original, **change}
+            self.ended.clear()
+            await self.redeem()
+            ws = await self.client.ws_connect('/ws/id', protocols=['guacamole'], headers={'Origin': self.origin})
+            self.assertIn('Connection failed', (await ws.receive(timeout=2)).data)
+            await ws.close()
+            await asyncio.wait_for(self.ended.wait(), 2)
+            await asyncio.sleep(.02)
+            self.assertFalse(self.gateway.tickets['id']['active'])
+        self.assertEqual(5, self.calls.count(('DELETE', '/api/v1/vms/test-vm/console/sessions/host-session')))
+        self.assertEqual(self.params, {})
+
+    async def test_cli_and_panel_buttons_reach_vnc_gateway_through_real_opener(self):
+        root = Path(__file__).resolve().parent.parent
+        control = web.Application()
+        control.router.add_post('/tickets', self.gateway.mint)
+        runner = web.AppRunner(control)
+        await runner.setup()
+        try:
+            with tempfile.TemporaryDirectory(prefix='construct-console-e2e-') as directory:
+                directory = Path(directory)
+                socket = directory / 'control.sock'
+                await web.UnixSite(runner, str(socket)).start()
+                config = directory / 'config.env'
+                config.write_text("CONSTRUCT_INSTANCE_NAME='test-vm'\n")
+                opener = directory / 'open.py'
+                # Replace only machine-specific socket/exposure paths. CLI argument parsing,
+                # opener, tickets, WebSocket, protocol handshake, and input are the real code.
+                opener.write_text(f'''
+import asyncio, importlib.util, sys
+sys.path.insert(0, {str(root / 'console-viewer')!r})
+spec = importlib.util.spec_from_file_location('console_opener', {str(root / 'console-viewer/open.py')!r})
+opener = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(opener)
+connector = opener.UnixConnector
+opener.UnixConnector = lambda path: connector(path={str(socket)!r})
+opener.read_config = lambda path: {{}}
+opener.expose_viewer = lambda port: {self.origin!r}
+sys.exit(asyncio.run(opener.main()))
+''')
+                env = {key: value for key, value in os.environ.items() if not key.startswith('CONSTRUCT_')}
+                env.update(CONFIG_FILE=str(config), CONSTRUCT_CONSOLE_OPENER=str(opener),
+                           PATH=str(root / 'bin') + os.pathsep + env['PATH'])
+                panel = '''
+const cp = require('child_process');
+const root = process.argv[1], child = process.argv[2] === 'child';
+const consoleApi = require(root + '/extension/src/console');
+const instance = require(root + '/extension/src/instances').deriveDefaults('test-vm', {backend:'hyperv-remote'});
+const deps = {
+  platform: 'linux', probeLink: async () => true,
+  _ssh: {runRemoteScript: async script => {
+    if (script === consoleApi.buildEnsureGatewayScript()) return {code:0, stdout:'CONSOLE_GATEWAY=ready'};
+    return new Promise(resolve => cp.execFile('bash', ['-c', script], (error, stdout, stderr) =>
+      resolve({code:error ? error.code : 0, stdout, stderr})));
+  }},
+  _vscode: {ProgressLocation:{Notification:1}, Uri:{parse:x=>x},
+    window:{withProgress:async (_, action)=>action({report(){}})},
+    env:{openExternal:async url=>{process.stdout.write(url + '\\n'); return true;}}}
+};
+const opened = child ? require(root + '/extension/src/guest-console').openGuestConsole(instance, 'test-vm', deps)
+                     : consoleApi.open({instance}, deps);
+opened.catch(()=>{process.exitCode=1;});
+'''
+                commands = [
+                    ['bash', str(root / 'bin/construct'), 'vm', 'console', 'self', '--web'],
+                    ['node', '-e', panel, str(root), 'primary'],
+                    ['node', '-e', panel, str(root), 'child'],
+                ]
+                for command in commands:
+                    self.ended.clear()
+                    process = await asyncio.create_subprocess_exec(*command, env=env,
+                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                    try:
+                        stdout, stderr = await asyncio.wait_for(process.communicate(), 10)
+                    finally:
+                        if process.returncode is None:
+                            process.kill()
+                            await process.wait()
+                    self.assertEqual(process.returncode, 0, stderr.decode())
+                    self.assertNotIn(b'PRIVATE', stdout + stderr)
+                    link = stdout.decode().strip()
+                    self.assertTrue(link.startswith(self.origin + '/#'))
+                    fragment = link.split('#')[1]
+                    ident = fragment.split('.')[0]
+                    redeemed = await self.client.post('/redeem', headers={'Origin': self.origin}, json={'ticket': fragment})
+                    self.assertEqual(redeemed.status, 200)
+                    ws = await self.client.ws_connect('/ws/' + ident, protocols=['guacamole'], headers={'Origin': self.origin})
+                    self.assertEqual((await ws.receive(timeout=2)).data, '0.,13.connection-id;')
+                    self.assertIn('sync', (await ws.receive(timeout=2)).data)
+                    self.assertEqual(self.params['hostname'], 'pve-node')
+                    self.assertEqual(self.params['port'], '5907')
+                    await ws.send_str('3.key,2.65,1.1;')
+                    await ws.close()
+                    await asyncio.wait_for(self.ended.wait(), 2)
+                    self.assertIn(b'3.key,2.65,1.1;', self.browser_input)
+        finally:
+            await runner.cleanup()
 
 
 class LocalGatewayTests(unittest.IsolatedAsyncioTestCase):

@@ -8,7 +8,7 @@ namespace Constructd.Core.Configuration;
 /// </summary>
 public sealed class ConstructdOptions
 {
-    /// <summary>Enable per-session, unprivileged Hyper-V console accounts for the trusted browser gateway.</summary>
+    /// <summary>Enable per-session display credentials for the trusted browser gateway.</summary>
     public bool BrowserConsoleEnabled { get; set; } = true;
     public HostAdminOptions HostAdmin { get; set; } = new();
 
@@ -166,6 +166,17 @@ public sealed class ConstructdOptions
 /// </summary>
 public sealed class ProxmoxOptions
 {
+    /// <summary>Session-bound VNC listeners on the node, reachable from the primary gateway.</summary>
+    public PortRangeOptions ConsolePorts { get; set; } = new(5900, 5999);
+
+    public void ValidateConsolePorts(PortRangeOptions ssh, PortRangeOptions app)
+    {
+        if (ConsolePorts.Start < 1 || ConsolePorts.End > 65535 || ConsolePorts.Start > ConsolePorts.End)
+            throw new InvalidOperationException("Constructd:Proxmox:ConsolePorts must be an inclusive range within 1-65535.");
+        if (new[] { ssh, app }.Any(range => ConsolePorts.Start <= range.End && range.Start <= ConsolePorts.End))
+            throw new InvalidOperationException("Constructd:Proxmox:ConsolePorts must not overlap SshForwardPorts or AppForwardPorts.");
+    }
+
     /// <summary>Proxmox node name. Empty (the default) means the node this service runs on.</summary>
     public string Node { get; set; } = string.Empty;
 
