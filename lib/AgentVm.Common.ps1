@@ -1056,25 +1056,95 @@ function Get-ConstructBackupDir {
     return (Join-Path $Dir ".construct-backup")
 }
 
-function Test-BackupHasGitCredentials {
+function Get-BackupGitCredentialLines {
     <#
-        $true when a saved config backup holds a non-empty git-credentials file
-        (extracted\home\.git-credentials). This is exactly the credential
+        The non-empty lines of a saved config backup's git credential store
+        (extracted\home\.git-credentials), or @() when there is none. Every line is
+        a credential-store entry, https://user:token@host[:port]. This is the file
         Provision-AgentVM.ps1 falls back to for cloning private project repos on a
-        restore, so when it's present the up-front clone-credential prompt is
-        redundant and can be skipped -- the checkout still authenticates from the
-        restored credentials. (Path mirrors the restore fallback in
-        Provision-AgentVM.ps1.)
+        restore, and what Auto-Install.ps1 seeds its credential session with.
     #>
     [CmdletBinding()]
     param([AllowEmptyString()][AllowNull()][string]$BackupDir)
-    if ([string]::IsNullOrWhiteSpace($BackupDir)) { return $false }
+    if ([string]::IsNullOrWhiteSpace($BackupDir)) { return @() }
     $credFile = Join-Path $BackupDir "extracted\home\.git-credentials"
-    if (-not (Test-Path -LiteralPath $credFile)) { return $false }
-    try {
-        $lines = @(Get-Content -LiteralPath $credFile -ErrorAction Stop | Where-Object { $_.Trim() })
-        return ($lines.Count -gt 0)
-    } catch { return $false }
+    if (-not (Test-Path -LiteralPath $credFile)) { return @() }
+    try { return @(Get-Content -LiteralPath $credFile -ErrorAction Stop | Where-Object { $_.Trim() }) }
+    catch { return @() }
+}
+
+function Get-BackupGitCredentialsB64 {
+    <# The backup's credential store as the base64 blob -GitCloneCredentialsB64 takes; "" when empty. #>
+    [CmdletBinding()]
+    param([AllowEmptyString()][AllowNull()][string]$BackupDir)
+    $lines = @(Get-BackupGitCredentialLines -BackupDir $BackupDir)
+    if ($lines.Count -eq 0) { return "" }
+    return [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($lines -join "`n")))
+}
+
+function Test-BackupHasGitCredentials {
+    <#
+        Does a saved config backup carry the git credentials the clone-credential
+        prompt would otherwise ask for? With -Urls (the repo URLs of the profiles
+        being installed) that is HOST-AWARE: $true only when every http(s) repo
+        host has an entry in the backup's credential store -- a backup that knows
+        github.com but not the private GitLab a profile clones from must still
+        prompt, or the checkout fails with "could not read Username" while the
+        installer believes it had nothing to ask. Without -Urls, or with none that
+        are http(s), it is the old file-level test: any non-empty store. The path
+        mirrors the restore fallback in Provision-AgentVM.ps1.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowEmptyString()][AllowNull()][string]$BackupDir,
+        [AllowNull()][string[]]$Urls
+    )
+    $lines = @(Get-BackupGitCredentialLines -BackupDir $BackupDir)
+    if ($lines.Count -eq 0) { return $false }
+    $stored = @{}
+    foreach ($line in $lines) {
+        $u = $null
+        if ([uri]::TryCreate($line.Trim(), [UriKind]::Absolute, [ref]$u) -and $u.Scheme -in @('http', 'https')) {
+            $stored[$u.GetLeftPart([UriPartial]::Authority) -replace '://[^/]+@', '://'] = $true
+        }
+    }
+    $needed = @()
+    foreach ($url in @($Urls)) {
+        if ([string]::IsNullOrWhiteSpace($url)) { continue }
+        $u = $null
+        if ([uri]::TryCreate($url.Trim(), [UriKind]::Absolute, [ref]$u) -and $u.Scheme -in @('http', 'https')) {
+            $needed += ($u.GetLeftPart([UriPartial]::Authority) -replace '://[^/]+@', '://')
+        }
+    }
+    if ($needed.Count -eq 0) { return $true }
+    foreach ($key in $needed) { if (-not $stored.ContainsKey($key)) { return $false } }
+    return $true
+}
+
+function Add-ConstructGitSessionCredentials {
+    <#
+        Seed a credential session with stored entries (a restore backup's
+        .git-credentials) WITHOUT switching it to unattended mode: hosts the entries
+        cover are verified silently, hosts they do not cover may still prompt. A
+        malformed line is skipped rather than fatal -- it is somebody's old store,
+        not an argument. Returns how many entries were added.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Session, [AllowEmptyString()][AllowNull()][string]$CredentialsB64)
+    if ([string]::IsNullOrWhiteSpace($CredentialsB64)) { return 0 }
+    $added = 0
+    try { $lines = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($CredentialsB64)) -split '\r?\n' } catch { return 0 }
+    foreach ($line in $lines) {
+        if (-not $line.Trim()) { continue }
+        $u = $null
+        if (-not [uri]::TryCreate($line.Trim(), [UriKind]::Absolute, [ref]$u)) { continue }
+        if ($u.Scheme -notin @('http', 'https') -or $u.UserInfo -notmatch '^([^:]+):(.+)$') { continue }
+        $key = $u.GetLeftPart([UriPartial]::Authority) -replace '://[^/]+@', '://'
+        if ($Session.Supplied.ContainsKey($key)) { continue }
+        $Session.Supplied[$key] = @{ User = [uri]::UnescapeDataString($matches[1]); Token = [uri]::UnescapeDataString($matches[2]) }
+        $added++
+    }
+    return $added
 }
 
 function Get-ProjectRepoUrls {
