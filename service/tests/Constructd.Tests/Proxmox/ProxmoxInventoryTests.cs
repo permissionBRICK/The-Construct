@@ -110,6 +110,7 @@ public sealed class ProxmoxInventoryTests
         Assert.NotNull(snapshot);
         Assert.Equal(total, snapshot.Host.SwapTotalBytes);
         Assert.Equal(used, snapshot.Host.SwapUsedBytes);
+    }
     private const string Child = """[{"vmid":101,"name":"child","tags":"construct-child","status":"running","cpus":2,"maxmem":2147483648,"maxdisk":4294967296}]""";
     private const string ChildConfig = """
         {"name":"child","tags":"construct-child","smbios1":"uuid=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
