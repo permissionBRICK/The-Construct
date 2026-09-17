@@ -49,7 +49,16 @@ assert m['linuxAsset']=='construct-host-'+sys.argv[2][:7]+'-linux-x64.zip';check
 assert linux.stat().st_size==m['linuxSizeBytes'];checks+=1
 assert hashlib.sha256(linux.read_bytes()).hexdigest()==m['linuxSha256'];checks+=1
 with zipfile.ZipFile(linux) as z:
-    assert set(z.namelist())=={'Constructd.Api','appsettings.json'};checks+=1
+    assert {'service/Constructd.Api','scripts/bin/provision.sh','updater/update-construct-host.sh'} <= set(z.namelist());checks+=1
+    sums=z.read('SHA256SUMS')
+    assert hashlib.sha256(sums).hexdigest()==m['linuxSumsSha256'];checks+=1
+    files=dict((line[66:],line[:64]) for line in sums.decode().splitlines())
+    assert set(z.namelist())==set(files)|{'SHA256SUMS'};checks+=1
+    assert sum(i.file_size for i in z.infolist())==m['linuxUncompressedSizeBytes'];checks+=1
+    assert m['linuxUpdaterPath']=='updater/update-construct-host.sh';checks+=1
+    assert files[m['linuxUpdaterPath']]==m['linuxUpdaterSha256'];checks+=1
+    for path,sha in files.items():
+        assert hashlib.sha256(z.read(path)).hexdigest()==sha;checks+=1
 assert (m['linuxSha256']+'  '+m['linuxAsset']) in (root/'SHA256SUMS').read_text();checks+=1
 print(f'host-package: {checks} assertions passed ({len(files)} payload files); fixture executable, no Windows publish performed')
 PY
