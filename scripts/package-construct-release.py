@@ -18,8 +18,12 @@ def package(root, output, commit, repository, companion_release_tag=None):
     manifest = json.loads(manifest_path.read_text())
     if manifest['commit'] != commit or manifest['releaseTag'] != 'host-' + commit or manifest['repository'] != repository:
         raise ValueError('Host package identity does not match source')
-    for prefix, expected in [('payload', f'construct-host-{commit[:7]}-win-x64.zip'),
-                             ('frameworkDependent', f'construct-host-{commit[:7]}-win-x64-fdd.zip')]:
+    expected_assets = [('payload', f'construct-host-{commit[:7]}-win-x64.zip'),
+                       ('frameworkDependent', f'construct-host-{commit[:7]}-win-x64-fdd.zip')]
+    # The Linux service zip (for install-construct-host.sh) is optional in a package, verified when present.
+    if 'linuxAsset' in manifest:
+        expected_assets.append(('linux', f'construct-host-{commit[:7]}-linux-x64.zip'))
+    for prefix, expected in expected_assets:
         if manifest[prefix + 'Asset'] != expected:
             raise ValueError('Invalid host asset identity')
         asset = output / expected

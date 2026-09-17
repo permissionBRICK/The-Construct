@@ -43,6 +43,9 @@ def publish(output):
     expected = {'payload': f'construct-host-{commit[:7]}-win-x64.zip',
                 'frameworkDependent': f'construct-host-{commit[:7]}-win-x64-fdd.zip',
                 'source': f'construct-source-{commit}.zip'}
+    # The Linux service zip rides along when the package carries one (older packages have none).
+    if 'linuxAsset' in manifest:
+        expected['linux'] = f'construct-host-{commit[:7]}-linux-x64.zip'
     if manifest.get('releaseTag') != 'host-' + commit or any(manifest.get(key + 'Asset') != name for key, name in expected.items()):
         raise ValueError('Invalid release asset identity')
     if 'companionReleaseTag' in manifest and not re.fullmatch(r'companion-[0-9a-f]{40}', str(manifest['companionReleaseTag'])):

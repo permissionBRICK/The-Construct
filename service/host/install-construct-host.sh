@@ -3,17 +3,26 @@
 # the Proxmox platform (Constructd:Backend=proxmox). The Linux counterpart of
 # Install-ConstructHost.ps1 -- same layout of steps, same enrolment details at the end.
 #
-#   bash service/host/install-construct-host.sh --package <constructd-linux-x64.zip | publish dir> [options]
+#   One shot on a fresh node (fetches the release source and the Linux service itself):
+#     curl -fsSL https://raw.githubusercontent.com/permissionBRICK/The-Construct/main/service/host/install-construct-host.sh | bash
+#   From a checkout (installs that checkout's scripts; the service comes from the release, or is
+#   built here with --build / for a non-main --ref):
+#     bash service/host/install-construct-host.sh [options]
 #
-# Run as root ON THE NODE, from a Construct checkout (this script's repository is what gets
-# installed as the scripts the service serves to guests). Re-running is safe: every step checks
-# before it changes anything, and the admin token is kept unless --rotate-token is passed.
+# Run as root ON THE NODE. Re-running is safe: every step checks before it changes anything, the
+# installed service, certificate, keytab and admin token are kept unless a flag asks otherwise.
 #
 # Options (all optional):
-#   --public-host <name|ip>   address clients dial; default: the node's primary IPv4
-#   --package <zip|dir>       linux-x64 publish of Constructd.Api (dotnet publish -r linux-x64 --self-contained)
+#   --public-host <name|ip>   address clients dial and the Kerberos service name; default: the node's
+#                             FQDN when it resolves, else its primary IPv4
+#   --package <zip|dir>       a linux-x64 publish of Constructd.Api you built yourself
+#   --host-release <tag>      fetch the service from this release (default: latest); refreshes an install
+#   --build                   build the service from the checkout with the .NET SDK (fetched once
+#                             into /opt/construct/dotnet); automatic for a non-main --ref
+#   --repo <owner/name>       source repository (default: permissionBRICK/The-Construct)
+#   --ref <git ref>           which source to fetch when not run from a checkout (default: main)
 #   --source <dir>            Construct checkout to install (default: the one this script is in)
-#   --admin <name>            first admin user (default: admin); clients authenticate with its token
+#   --admin <name>            first admin user (default: admin); its token is printed once
 #   --storage <id>            Proxmox storage for VM disks, needs 'images' content (default: local-lvm)
 #   --image-storage <id>      directory storage for the cloud image and cloud-init snippets (default: local)
 #   --bridge <name>           bridge the VMs attach to (default: vmbr0)
@@ -38,8 +47,15 @@
 #   systemd unit constructd.service, listening on https://0.0.0.0:<listen-port>
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SOURCE_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+# Where this script runs from: a checkout (the usual case) or a bare `curl | bash`, in which case
+# the checkout is fetched below.
+if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  SOURCE_DIR="$(cd "${SCRIPT_DIR}/../.." 2>/dev/null && pwd || true)"
+else
+  SCRIPT_DIR=""
+  SOURCE_DIR=""
+fi
 PACKAGE=""
 PUBLIC_HOST=""
 ADMIN="admin"
@@ -55,14 +71,22 @@ SKIP_IMAGE=0
 KEYTAB=""
 NETBIOS_DOMAIN=""
 REALM=""
+REPO="permissionBRICK/The-Construct"
+REF="main"
+HOST_RELEASE=""
+BUILD=0
 
 HOST_DIR=/opt/construct/host
 SCRIPTS_DIR=/opt/construct/scripts
 DATA_DIR=/var/lib/constructd
 ETC_DIR=/etc/constructd
+DOTNET_DIR=/opt/construct/dotnet
 UNIT=/etc/systemd/system/constructd.service
 
-usage() { sed -n '2,42p' "${BASH_SOURCE[0]}"; exit "${1:-0}"; }
+usage() {
+  if [[ -n "${SCRIPT_DIR}" ]]; then sed -n '2,50p' "${BASH_SOURCE[0]}"; else echo "see docs/proxmox-host.md"; fi
+  exit "${1:-0}"
+}
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --public-host)   PUBLIC_HOST="$2"; shift 2 ;;
@@ -81,6 +105,10 @@ while [[ $# -gt 0 ]]; do
     --keytab)        KEYTAB="$2"; shift 2 ;;
     --netbios-domain) NETBIOS_DOMAIN="$2"; shift 2 ;;
     --realm)         REALM="$2"; shift 2 ;;
+    --repo)          REPO="$2"; shift 2 ;;
+    --ref)           REF="$2"; shift 2 ;;
+    --host-release)  HOST_RELEASE="$2"; shift 2 ;;
+    --build)         BUILD=1; shift ;;
     -h|--help)       usage 0 ;;
     *) echo "Unknown argument: $1" >&2; usage 2 ;;
   esac
@@ -93,44 +121,115 @@ json_field() { python3 -c 'import json,sys; d=json.load(sys.stdin); v=d
 for k in sys.argv[1:]:
     v=v.get(k) if isinstance(v,dict) else None
 print("" if v is None else v)' "$@"; }
+TMP_ROOT="$(mktemp -d)"
+trap 'rm -rf "${TMP_ROOT}"' EXIT
 
 # ── 0. Check the inputs ──────────────────────────────────────────────────────
 say "Checking the inputs"
 [[ "$(id -u)" -eq 0 ]] || die "run as root on the Proxmox node"
-for tool in pvesh qm pveversion python3 openssl curl rsync systemctl; do
+for tool in pvesh qm pveversion systemctl; do
   command -v "${tool}" >/dev/null || die "'${tool}' is required (is this a Proxmox VE node?)"
 done
-[[ -f "${SOURCE_DIR}/bin/provision.sh" && -f "${SOURCE_DIR}/keys/bootstrap_ed25519.pub" ]] \
-  || die "'${SOURCE_DIR}' is not a Construct checkout (bin/provision.sh and keys/bootstrap_ed25519.pub expected); pass --source"
+MISSING=()
+for tool in curl unzip rsync python3 openssl; do command -v "${tool}" >/dev/null || MISSING+=("${tool}"); done
+if (( ${#MISSING[@]} )); then
+  note "installing ${MISSING[*]}"
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${MISSING[@]}" >/dev/null 2>&1 || die "could not install ${MISSING[*]}"
+fi
 [[ "${SSH_PORTS}" =~ ^[0-9]+-[0-9]+$ && "${APP_PORTS}" =~ ^[0-9]+-[0-9]+$ ]] || die "port ranges look like 2201-2299"
 SSH_START="${SSH_PORTS%-*}"; SSH_END="${SSH_PORTS#*-}"; APP_START="${APP_PORTS%-*}"; APP_END="${APP_PORTS#*-}"
 (( SSH_START <= SSH_END && APP_START <= APP_END )) || die "a port range must be ascending"
 (( SSH_END < APP_START || APP_END < SSH_START )) || die "the SSH and app forward ranges overlap"
 [[ "${ADMIN}" =~ ^[A-Za-z0-9._@\\-]{1,64}$ ]] || die "'${ADMIN}' is not a usable admin user name"
+[[ "${REPO}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "--repo must be owner/name"
 
 NODE="$(hostname -s)"
 pvesh get "/nodes/${NODE}/status" --output-format json >/dev/null || die "node '${NODE}' does not answer through the API"
-[[ -n "${PUBLIC_HOST}" ]] || PUBLIC_HOST="$(hostname -I | awk '{print $1}')"
+# The public host: the node's DNS name when it has one that resolves (Kerberos needs a name),
+# otherwise its primary address.
+if [[ -z "${PUBLIC_HOST}" ]]; then
+  FQDN="$(hostname -f 2>/dev/null || true)"
+  if [[ "${FQDN}" == *.* ]] && getent hosts "${FQDN}" >/dev/null 2>&1; then PUBLIC_HOST="${FQDN}"; else PUBLIC_HOST="$(hostname -I | awk '{print $1}')"; fi
+fi
 [[ -n "${PUBLIC_HOST}" ]] || die "could not determine this node's address; pass --public-host"
 
-# The service binary: a zip or a publish directory, or the already installed one on a re-run.
-STAGE=""
-if [[ -n "${PACKAGE}" ]]; then
-  if [[ -d "${PACKAGE}" ]]; then
-    STAGE="$(cd "${PACKAGE}" && pwd)"
-  elif [[ -f "${PACKAGE}" ]]; then
-    command -v unzip >/dev/null || die "'unzip' is required to unpack ${PACKAGE}"
-    STAGE="$(mktemp -d)"; unzip -q "${PACKAGE}" -d "${STAGE}"
-    # A release zip may nest the payload one level down.
-    if [[ ! -x "${STAGE}/Constructd.Api" && -x "${STAGE}/service/Constructd.Api" ]]; then STAGE="${STAGE}/service"; fi
+# ── 0a. The Construct checkout (the scripts guests are provisioned from) ──────
+# From the checkout this script lives in, or -- when run as `curl | bash` -- fetched: the pinned
+# source of the latest release for the main ref, the branch archive for any other ref.
+fetch_manifest() {
+  [[ -n "${MANIFEST_JSON:-}" ]] && return 0
+  local tag="${HOST_RELEASE:-latest}" url
+  if [[ "${tag}" == "latest" ]]; then url="https://github.com/${REPO}/releases/latest/download/manifest.json"
+  else url="https://github.com/${REPO}/releases/download/${tag}/manifest.json"; fi
+  MANIFEST_JSON="$(curl -fsSL --max-time 60 "${url}")" || return 1
+  MANIFEST_TAG="$(printf '%s' "${MANIFEST_JSON}" | json_field releaseTag)"
+  [[ "${MANIFEST_TAG}" =~ ^host-[0-9a-f]{40}$ ]] || { MANIFEST_JSON=""; return 1; }
+}
+download_asset() { # <asset name> <sha256> <dest>
+  local url="https://github.com/${REPO}/releases/download/${MANIFEST_TAG}/$1"
+  curl -fsSL --max-time 900 -o "$3" "${url}" || return 1
+  [[ "$(sha256sum "$3" | cut -d' ' -f1)" == "$2" ]] || { rm -f "$3"; return 1; }
+}
+if [[ -z "${SOURCE_DIR}" || ! -f "${SOURCE_DIR}/bin/provision.sh" ]]; then
+  say "Fetching the Construct source (${REPO} ${REF})"
+  SOURCE_DIR="${TMP_ROOT}/source"; mkdir -p "${SOURCE_DIR}"
+  if [[ "${REF}" == "main" ]] && fetch_manifest; then
+    SRC_ASSET="$(printf '%s' "${MANIFEST_JSON}" | json_field sourceAsset)"; SRC_SHA="$(printf '%s' "${MANIFEST_JSON}" | json_field sourceSha256)"
+    download_asset "${SRC_ASSET}" "${SRC_SHA}" "${TMP_ROOT}/source.zip" || die "could not download ${SRC_ASSET} (release ${MANIFEST_TAG})"
+    note "release ${MANIFEST_TAG:5:7} source, checksum verified"
   else
-    die "--package '${PACKAGE}' is neither a zip nor a directory"
+    curl -fsSL --max-time 300 -o "${TMP_ROOT}/source.zip" "https://codeload.github.com/${REPO}/zip/${REF}" || die "could not download the ${REF} archive of ${REPO}"
+    note "branch archive ${REF} (no release checksum for a non-main ref)"
   fi
-  [[ -f "${STAGE}/Constructd.Api" ]] || die "'${PACKAGE}' holds no Constructd.Api (publish it with: dotnet publish service/src/Constructd.Api -c Release -r linux-x64 --self-contained true)"
-elif [[ -x "${HOST_DIR}/Constructd.Api" ]]; then
-  note "no --package given; keeping the installed service in ${HOST_DIR}"
+  unzip -q "${TMP_ROOT}/source.zip" -d "${TMP_ROOT}/unpacked"
+  INNER="$(find "${TMP_ROOT}/unpacked" -mindepth 1 -maxdepth 1 -type d | head -1)"
+  [[ -f "${INNER}/bin/provision.sh" ]] || die "the downloaded archive is not a Construct checkout"
+  SOURCE_DIR="${INNER}"
+fi
+[[ -f "${SOURCE_DIR}/bin/provision.sh" && -f "${SOURCE_DIR}/keys/bootstrap_ed25519.pub" ]] \
+  || die "'${SOURCE_DIR}' is not a Construct checkout (bin/provision.sh and keys/bootstrap_ed25519.pub expected); pass --source"
+
+# ── 0b. The service binary ────────────────────────────────────────────────────
+#   --package <zip|dir>   what you built yourself (dotnet publish -r linux-x64 --self-contained)
+#   installed already     kept, unless --host-release/--build ask for a refresh
+#   otherwise             the release's linux-x64 zip for the main ref; built from the checkout
+#                         with the .NET SDK (fetched into /opt/construct/dotnet) for any other ref
+STAGE=""
+stage_from_zip() {
+  local dir="${TMP_ROOT}/service"; mkdir -p "${dir}"; unzip -q "$1" -d "${dir}"
+  if [[ ! -f "${dir}/Constructd.Api" && -f "${dir}/service/Constructd.Api" ]]; then dir="${dir}/service"; fi
+  [[ -f "${dir}/Constructd.Api" ]] || die "'$1' holds no Constructd.Api"
+  STAGE="${dir}"
+}
+build_service() {
+  say "Building the service from the checkout (.NET SDK)"
+  if ! "${DOTNET_DIR}/dotnet" --version >/dev/null 2>&1; then
+    note "fetching the .NET 10 SDK into ${DOTNET_DIR} (once)"
+    curl -fsSL --max-time 120 -o "${TMP_ROOT}/dotnet-install.sh" https://dot.net/v1/dotnet-install.sh || die "could not download dotnet-install.sh"
+    bash "${TMP_ROOT}/dotnet-install.sh" --channel 10.0 --install-dir "${DOTNET_DIR}" >/dev/null || die "the .NET SDK install failed"
+  fi
+  local out="${TMP_ROOT}/publish"
+  ( cd "${SOURCE_DIR}" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 "${DOTNET_DIR}/dotnet" publish service/src/Constructd.Api -c Release -r linux-x64 --self-contained true -o "${out}" -v q >"${TMP_ROOT}/build.log" 2>&1 ) \
+    || { tail -20 "${TMP_ROOT}/build.log" >&2; die "dotnet publish failed (log above)"; }
+  [[ -f "${out}/Constructd.Api" ]] || die "the build produced no Constructd.Api"
+  STAGE="${out}"
+  note "built $(cd "${SOURCE_DIR}" && cat .construct-revision 2>/dev/null || echo "${REF}")"
+}
+if [[ -n "${PACKAGE}" ]]; then
+  if [[ -d "${PACKAGE}" ]]; then STAGE="$(cd "${PACKAGE}" && pwd)"; [[ -f "${STAGE}/Constructd.Api" ]] || die "'${PACKAGE}' holds no Constructd.Api"
+  elif [[ -f "${PACKAGE}" ]]; then stage_from_zip "${PACKAGE}"
+  else die "--package '${PACKAGE}' is neither a zip nor a directory"; fi
+elif [[ -x "${HOST_DIR}/Constructd.Api" && -z "${HOST_RELEASE}" && "${BUILD}" -eq 0 ]]; then
+  note "keeping the installed service in ${HOST_DIR} (pass --host-release latest or --build to refresh it)"
+elif [[ "${BUILD}" -eq 0 && "${REF}" == "main" ]] && fetch_manifest && [[ -n "$(printf '%s' "${MANIFEST_JSON}" | json_field linuxAsset)" ]]; then
+  say "Downloading the service (release ${MANIFEST_TAG:5:7})"
+  LNX_ASSET="$(printf '%s' "${MANIFEST_JSON}" | json_field linuxAsset)"; LNX_SHA="$(printf '%s' "${MANIFEST_JSON}" | json_field linuxSha256)"
+  download_asset "${LNX_ASSET}" "${LNX_SHA}" "${TMP_ROOT}/service.zip" || die "could not download ${LNX_ASSET}"
+  stage_from_zip "${TMP_ROOT}/service.zip"
+  note "${LNX_ASSET}, checksum verified"
 else
-  die "--package is required on a first install"
+  [[ "${BUILD}" -eq 1 || "${REF}" != "main" ]] || note "this release ships no Linux service yet; building it here"
+  build_service
 fi
 note "node ${NODE}, public host ${PUBLIC_HOST}, source ${SOURCE_DIR}"
 
@@ -266,10 +365,14 @@ if [[ -n "${STAGE}" ]]; then
   chmod 0755 "${HOST_DIR}/Constructd.Api"
   note "service -> ${HOST_DIR}"
 fi
-rsync -a --delete --exclude '.git' --exclude 'node_modules' --exclude '.construct-tools' --exclude '.construct-backup' \
-  --exclude '*.db' --exclude 'settings.json' "${SOURCE_DIR}/" "${SCRIPTS_DIR}/"
+if [[ "$(cd "${SOURCE_DIR}" && pwd)" != "${SCRIPTS_DIR}" ]]; then
+  rsync -a --delete --exclude '.git' --exclude 'node_modules' --exclude '.construct-tools' --exclude '.construct-backup' \
+    --exclude '*.db' --exclude 'settings.json' "${SOURCE_DIR}/" "${SCRIPTS_DIR}/"
+  note "scripts -> ${SCRIPTS_DIR}"
+else
+  note "scripts already in ${SCRIPTS_DIR}"
+fi
 chmod 0600 "${SCRIPTS_DIR}/keys/bootstrap_ed25519" 2>/dev/null || true
-note "scripts -> ${SCRIPTS_DIR}"
 
 # ── 6. appsettings.Production.json ───────────────────────────────────────────
 say "Writing ${HOST_DIR}/appsettings.Production.json"

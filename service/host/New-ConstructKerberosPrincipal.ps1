@@ -16,22 +16,33 @@
          Invoke-WebRequest -UseDefaultCredentials asks the KDC for when it dials
          https://<host FQDN>:7462, so the URL clients use MUST be this name,
       3. an A record <host> -> <address> in the AD DNS zone, unless it already resolves,
-      4. a keytab (ktpass) written to -KeytabPath, to be copied to the host and installed with
-         install-construct-host.sh --keytab <file> --netbios-domain <NETBIOS> --realm <REALM>.
+      4. a keytab (ktpass, which also sets the account password) written to -KeytabPath; with
+         -InstallOnHost root@<host> it is copied to the node and install-construct-host.sh is run
+         there with --keytab/--netbios-domain/--realm, so the host accepts Windows sign-in when
+         this script returns. Without it, carry the keytab over and run that command yourself.
 
     Re-running is safe: the account, the SPN and the record are kept; the keytab is regenerated
-    only with -RotateKeytab, which resets the account password (the old keytab stops working).
+    only with -RotateKeytab (or when this script's own account has no keytab yet), which resets
+    the account password — the previous keytab stops working.
 
 .EXAMPLE
-    .\New-ConstructKerberosPrincipal.ps1 -HostFqdn test-proxmox.dc.htl-sky.net -Address 10.0.3.184 -KeytabPath C:\constructd.keytab
+    .\New-ConstructKerberosPrincipal.ps1 -HostFqdn test-proxmox.dc.htl-sky.net -Address 10.0.3.184 -InstallOnHost root@test-proxmox.dc.htl-sky.net
+
+.EXAMPLE
+    .\New-ConstructKerberosPrincipal.ps1 -HostFqdn test-proxmox.dc.htl-sky.net -KeytabPath C:\constructd.keytab
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [Parameter(Mandatory)][ValidatePattern('^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$')][string]$HostFqdn,
-    [Parameter(Mandatory)][ValidatePattern('^\d{1,3}(\.\d{1,3}){3}$')][string]$Address,
-    [Parameter(Mandatory)][string]$KeytabPath,
+    # The host's address for the DNS record. Optional when the name already resolves.
+    [ValidatePattern('^(\d{1,3}(\.\d{1,3}){3})?$')][string]$Address = '',
+    [string]$KeytabPath = (Join-Path $env:TEMP 'constructd.keytab'),
     [ValidatePattern('^[A-Za-z][A-Za-z0-9._-]{0,19}$')][string]$AccountName = 'svc-constructd',
-    [switch]$RotateKeytab
+    [switch]$RotateKeytab,
+    # root@<host>: copy the keytab there with scp and finish the host with install-construct-host.sh
+    # over ssh (asks for the node's root password twice unless key auth is set up). The keytab is
+    # deleted here afterwards.
+    [string]$InstallOnHost = ''
 )
 $ErrorActionPreference = 'Stop'
 Import-Module ActiveDirectory -ErrorAction Stop
@@ -108,7 +119,12 @@ if ($existing -notcontains $spn) {
 # ── 3. The DNS record ─────────────────────────────────────────────────────────
 $resolved = $null
 try { $resolved = @(Resolve-DnsName -Name $HostFqdn -Type A -ErrorAction Stop | Where-Object { $_.Type -eq 'A' } | Select-Object -ExpandProperty IPAddress) } catch { $resolved = @() }
-if ($resolved -contains $Address) {
+if (-not $Address -and $resolved.Count -gt 0) {
+    $Address = $resolved[0]
+    Write-Host "    $HostFqdn resolves to $Address"
+} elseif (-not $Address) {
+    throw "$HostFqdn does not resolve yet; pass -Address <ip> so the A record can be created."
+} elseif ($resolved -contains $Address) {
     Write-Host "    $HostFqdn already resolves to $Address"
 } elseif ($resolved.Count -gt 0) {
     Write-Warning "$HostFqdn resolves to $($resolved -join ', '), not $Address. Fix the record by hand (Set-DnsServerResourceRecord) or pass the address it should have."
@@ -155,6 +171,25 @@ if ($password) {
     Write-Host "    keytab not regenerated (account existed; pass -RotateKeytab to reset the password and write a new one)"
 }
 
+if ($InstallOnHost) {
+    if ($InstallOnHost -notmatch '^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$') { throw "-InstallOnHost must look like root@host" }
+    if (-not (Test-Path -LiteralPath $KeytabPath)) { throw "No keytab at $KeytabPath to install (run again with -RotateKeytab)." }
+    foreach ($tool in 'scp.exe', 'ssh.exe') { if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "$tool not found (Windows OpenSSH client)." } }
+    Write-Host "==> Installing the keytab on $InstallOnHost"
+    & scp.exe -q $KeytabPath "${InstallOnHost}:/root/constructd.keytab"
+    if ($LASTEXITCODE -ne 0) { throw "scp to $InstallOnHost failed." }
+    $remote = "bash /opt/construct/scripts/service/host/install-construct-host.sh --public-host '$HostFqdn' --keytab /root/constructd.keytab --netbios-domain '$netbios' --realm '$realm'; rc=`$?; rm -f /root/constructd.keytab; exit `$rc"
+    & ssh.exe $InstallOnHost $remote
+    if ($LASTEXITCODE -ne 0) { throw "install-construct-host.sh on $InstallOnHost failed (exit $LASTEXITCODE)." }
+    Remove-Item -LiteralPath $KeytabPath -Force
+    Write-Host "    keytab installed on $InstallOnHost and removed here"
+    Write-Host ""
+    Write-Host "Done. Enrol from a PC with your Windows account:"
+    Write-Host "    .\Auto-Install.ps1 -Backend hyperv-remote -ServiceUrl https://${HostFqdn}:7462 -InstanceName <name>"
+    Write-Host "and add users on the host as $netbios\<user>:"
+    Write-Host "    ssh $InstallOnHost /opt/construct/host/Constructd.Api admin users add '$netbios\<user>' --max-vms 3"
+    return
+}
 Write-Host ""
 Write-Host "On the Construct host (as root, from the checkout):"
 Write-Host "    bash service/host/install-construct-host.sh --public-host $HostFqdn --keytab /root/constructd.keytab --netbios-domain $netbios --realm $realm"

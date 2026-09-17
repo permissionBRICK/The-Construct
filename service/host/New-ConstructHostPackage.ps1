@@ -8,7 +8,10 @@ param(
     [string]$RepositoryRoot = (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent),
     [string]$Repository = 'permissionBRICK/The-Construct',
     [DateTimeOffset]$BuiltAt = [DateTimeOffset]::UtcNow,
-    [string]$FrameworkDependentPublishDir
+    [string]$FrameworkDependentPublishDir,
+    # A linux-x64 self-contained publish of Constructd.Api: packaged as-is (no scripts payload, the
+    # node installer brings the checkout itself) so install-construct-host.sh can fetch it.
+    [string]$LinuxPublishDir
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '../../lib/Construct.Runtime.ps1')
@@ -99,10 +102,24 @@ try {
             $manifest.runtimes=@(Get-ConstructRequiredRuntimes (Join-Path $FrameworkDependentPublishDir 'Constructd.Api.runtimeconfig.json'))
         } finally { if (Test-Path -LiteralPath $fddOutput) { Remove-Item -LiteralPath $fddOutput -Recurse -Force } }
     }
+    if ($LinuxPublishDir) {
+        $linuxRoot = (Resolve-Path -LiteralPath $LinuxPublishDir).Path.TrimEnd([IO.Path]::DirectorySeparatorChar)
+        if (-not (Test-Path -LiteralPath (Join-Path $linuxRoot 'Constructd.Api'))) { throw 'Linux x64 publish output is required (Constructd.Api).' }
+        foreach ($file in Get-ChildItem -LiteralPath $linuxRoot -Recurse -File) {
+            $rel = $file.FullName.Substring($linuxRoot.Length + 1).Replace('\','/')
+            if ($rel -match '(^|/)appsettings\.Production\.json$' -or $rel -match '\.db($|[-.])') { throw 'Preserved file in Linux package.' }
+            if ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Linux package cannot contain links.' }
+        }
+        $manifest.linuxAsset='construct-host-'+$Commit.Substring(0,7)+'-linux-x64.zip'
+        [IO.Compression.ZipFile]::CreateFromDirectory($linuxRoot, (Join-Path $OutputDir $manifest.linuxAsset), [IO.Compression.CompressionLevel]::Optimal, $false)
+        $manifest.linuxSha256=(Get-FileHash (Join-Path $OutputDir $manifest.linuxAsset) -Algorithm SHA256).Hash.ToLowerInvariant()
+        $manifest.linuxSizeBytes=(Get-Item -LiteralPath (Join-Path $OutputDir $manifest.linuxAsset)).Length
+    }
     $manifestPath = Join-Path $OutputDir 'manifest.json'
     [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 10), $utf8)
     Copy-Item -LiteralPath (Join-Path $payload 'SHA256SUMS') -Destination (Join-Path $OutputDir 'SHA256SUMS')
     $archiveSums=$manifest.payloadSha256+'  '+$asset+"`n"
     if ($FrameworkDependentPublishDir) { $archiveSums+=$manifest.frameworkDependentSha256+'  '+$manifest.frameworkDependentAsset+"`n" }
+    if ($LinuxPublishDir) { $archiveSums+=$manifest.linuxSha256+'  '+$manifest.linuxAsset+"`n" }
     [IO.File]::AppendAllText((Join-Path $OutputDir 'SHA256SUMS'),$archiveSums,$utf8)
 } finally { if (Test-Path -LiteralPath $payload) { Remove-Item -LiteralPath $payload -Recurse -Force } }
