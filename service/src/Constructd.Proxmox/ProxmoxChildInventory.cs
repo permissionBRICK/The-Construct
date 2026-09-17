@@ -49,6 +49,12 @@ public sealed partial class ProxmoxInventory
                 // until an allocation-aware storage reader is available.
                 disks.Add(new(volume, size, 0, null, storage, true));
             }
+            // Admission chose this logical path before a numeric VM ID existed. The ledger's
+            // observed-disk hold must use the same key, otherwise it adds a second full disk hold.
+            var placementPath = $"{options.Proxmox.Storage}:vm-{old.Name}-disk-0";
+            if (reservations.Any(r => string.Equals(r.VmName, old.Name, StringComparison.OrdinalIgnoreCase) &&
+                                      r.Artifact == "disk:" + placementPath))
+                disks[0] = disks[0] with { Path = placementPath };
             long? savedBytes = null;
             var savedVolume = ProxmoxCommands.String(config, "vmstate")?.Split(',')[0];
             if (savedVolume is not null)
