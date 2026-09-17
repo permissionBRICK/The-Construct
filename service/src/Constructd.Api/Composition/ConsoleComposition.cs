@@ -13,10 +13,11 @@ public static class ConsoleComposition
             services.AddSingleton(sp => new FakeConsoleTransport { IsRunning = name => sp.GetRequiredService<FakeHypervisorDriver>().StateOf(name) == Constructd.Core.Domain.VmState.Running });
             services.AddSingleton<IConsoleTransport>(sp => sp.GetRequiredService<FakeConsoleTransport>());
         }
-        else if (options.IsProxmox) services.AddSingleton<IConsoleTransport, Constructd.Core.Services.UnsupportedConsoleTransport>();
+        else if (options.IsProxmox) services.AddSingleton<IConsoleTransport, Constructd.Proxmox.ProxmoxConsoleTransport>();
         else services.AddSingleton<IConsoleTransport, HyperVConsoleTransport>();
         services.AddSingleton<IConsoleSessionStore, InMemoryConsoleSessionStore>();
-        if (options.Fake || options.IsProxmox) services.AddSingleton<IInteractiveConsole, Constructd.Core.Services.UnsupportedInteractiveConsole>();
+        if (options.Fake) services.AddSingleton<IInteractiveConsole, Constructd.Core.Services.UnsupportedInteractiveConsole>();
+        else if (options.IsProxmox) services.AddSingleton<IInteractiveConsole, Constructd.Proxmox.ProxmoxInteractiveConsole>();
         else services.AddSingleton<IInteractiveConsole, HyperVInteractiveConsole>();
         services.AddHostedService<Constructd.Api.Hosting.ConsoleCredentialCleanup>();
         return services;

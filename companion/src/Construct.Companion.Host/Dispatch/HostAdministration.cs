@@ -165,7 +165,7 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
                     }
                 }
                 finally { model.Serial.Release(); }
-                if (Text(model.View["mode"]) == "admin")
+                if (Text(model.View["mode"]) == "admin" || OwnerNetworkView(model))
                 {
                     offer = new JsonObject { ["url"] = client.BaseUrl, ["host"] = client.Host };
                     if (StateJson.Boolean(model.View["maintenanceTab"]?["updateAvailable"]) == true) offer["updateAvailable"] = true;
@@ -253,14 +253,18 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
                 try { input["whoami"] = await client.WhoamiAsync(ct); } catch (RemoteApiException e) { input["whoamiError"] = Error(e); }
             var resolved = Classify(input);
             foreach (var (key, value) in resolved) m.State[key] = value?.DeepClone();
-            m.State["tabs"] = TabsFor(m.State["features"]!.AsObject());
+            m.State["tabs"] = OwnerNetworkView(m)
+                ? new JsonArray(new JsonObject { ["id"] = "vms", ["label"] = "My VMs", ["available"] = true, ["reason"] = "" })
+                : TabsFor(m.State["features"]!.AsObject());
+            if (OwnerNetworkView(m)) m.State["activeTab"] = "vms";
             if (Text(m.State["mode"]) is "admin" or "user") m.State["lastKnownAt"] = clock.UtcNow.ToString("O");
         }
         finally { m.State["busy"] = false; }
     }
+    private static bool OwnerNetworkView(Model m) => Text(m.State["mode"]) == "user" && StateJson.Boolean(m.State["features"]?["networkMode"]) == true;
     private async Task Load(Model m, RemoteHostClient client, CancellationToken ct)
     {
-        if (Text(m.State["mode"]) != "admin") return;
+        if (Text(m.State["mode"]) != "admin" && !(OwnerNetworkView(m) && Text(m.State["activeTab"]) == "vms")) return;
         var tab = Text(m.State["activeTab"]); if (tab == "maintenance" && StateJson.Boolean(m.State["features"]?["updates"]) != true) return;
         m.State["busy"] = true;
         try
@@ -278,6 +282,10 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
                     var capacityTask = ReadCapacity();
                     await Task.WhenAll(statusTask, capacityTask);
                     m.State["overview"] = HostAdminViews.Overview(await statusTask, await capacityTask);
+                    if (StateJson.Boolean(m.State["features"]?["networkMode"]) == true)
+                        m.State["networkSection"] = HostAdminViews.Config(await client.HostConfigAsync(ct)).OfType<JsonObject>().First(s => Text(s["key"]) == "network").DeepClone();
+                    try { m.State["overview"]!["nested"] = (await client.HostCapabilitiesAsync(ct))?["nested"]?.DeepClone(); }
+                    catch (RemoteApiException ex) when (ex.Status is not (401 or 403)) { }
                     break;
                 case "vms": m.State["vms"] = new JsonObject { ["rows"] = HostAdminViews.Vms(await client.VmsAsync(new() { ["kind"] = "all" }, ct), clock.UtcNow), ["childrenFeature"] = m.State["features"]?["children"]?.DeepClone() }; break;
                 case "users": m.State["users"] = new JsonObject { ["rows"] = HostAdminViews.Map(await client.UsersAsync(ct), HostAdminViews.User) }; break;
@@ -296,7 +304,7 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
     {
         if (action is "loadVmSettings" or "setVmSettings")
         { await VmSettingsAction(m, client, action, args, ct); return; }
-        if (Text(m.State["mode"]) != "admin" && action is not ("shutdownVm" or "deleteVm" or "cancelJob" or "createFirstVm")) { Notice(m, "Not an administrator of this host."); return; }
+        if (Text(m.State["mode"]) != "admin" && !(OwnerNetworkView(m) && action is "startVm" or "restartVm" or "refresh") && action is not ("shutdownVm" or "deleteVm" or "cancelJob" or "createFirstVm")) { Notice(m, "Not an administrator of this host."); return; }
         if (m.State["maintenance"] is not null && action is not ("refresh" or "updatesApply" or "updatesResolve")) { Notice(m, "The host is updating; mutations are disabled until it is back."); return; }
         var name = Text(args["name"]); var id = Text(args["id"]); JsonNode? result = null;
         m.State["notice"] = null;

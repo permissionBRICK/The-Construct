@@ -67,6 +67,15 @@ you dial* change.
 > by `service/host/install-construct-host.sh` — see [docs/proxmox-host.md](proxmox-host.md). The
 > rest of this guide applies to both; the Windows steps below are the Hyper-V host's.
 
+Proxmox hosts can use **direct** networking instead of the default relay. The host's
+Network card sets the default and whether owners may change it; VM settings lets admins
+set an optional fixed IPv4 address and gateway. Direct VMs advertise their own address on
+SSH port 22, and `construct expose --to host` returns a direct URL without allocating a
+forward. Changes apply on a full stop/start, which removes old forwards. The guest refreshes
+its advertised endpoint and agent prompt at boot. A direct VM exposes ports bound to its
+LAN interface to that LAN; Construct does not audit those connections. Hyper-V remains
+relay-only. See [Relayed or direct](proxmox-host.md#5-relayed-or-direct).
+
 If you already have a local Construct VM, connect to it in VS Code and open
 **Construct Settings → Make this PC a Construct host…**. Review the prefilled
 address and optional AC wake setting, then approve Windows elevation. Setup installs
@@ -785,6 +794,20 @@ port you can actually reach. That holds **with or without HTTPS**: with `T3CODE_
 the forward is for the plain listener and the advertised origin is
 `http://<publicHost>:<forwarded port>`, which is equally the only address a client can reach.
 The guest banner, the panel's T3 entry and the provisioner's summary all follow that origin.
+
+Both the default and named-instance pairing helpers use `CONSTRUCT_EXTERNAL_HOST` from
+`/etc/construct/config.env`, falling back to `<hostname>.mshome.net` when absent. Editing
+this file can redirect the pairing address, just as it already redirects SSH and other tools.
+The shared `t3base` helper retains the effective public origin and allocated forward port;
+it does not assume that the guest's listener port is reachable on the service host.
+
+Pairing JSON includes `links: [{kind: "forwarded", pairUrl}, …]`. If the guest also has
+`CONSTRUCT_DIRECT_HOST`, a second entry with `kind: "direct"` uses that address and the
+guest's effective TLS or plain T3 listener port. Each route gets its own pairing token,
+bound to its origin. The legacy `pairUrl` remains the first entry. The direct address is
+optional input for the future direct-network feature; these helpers do not configure routing.
+`Get-ConstructT3PairingLink.ps1` returns all links, and the extension and Companion control
+panels offer each route by kind and origin before opening it.
 
 Because the forward is requested *before* T3 is set up, the forward alone does not say what
 is listening on it: a request for the TLS port whose HTTPS setup then failed looks exactly

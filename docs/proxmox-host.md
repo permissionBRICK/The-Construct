@@ -1,11 +1,12 @@
 # A Construct host on Proxmox VE
 
 > **Status: implemented and field-tested on a single Proxmox VE 9 node (2026-09-17).**
+> Direct network mode has local test coverage and still needs the field tests in section 5.
 > The same `constructd` service that runs on a Windows Hyper-V host runs on the Proxmox node
 > itself with the Proxmox platform selected (`Constructd:Backend = proxmox`). Every client is
 > unchanged: `Auto-Install.ps1 -Backend hyperv-remote`, the VS Code extension and the Companion
-> talk to the same API and see the same instance registry entries; the only difference they can
-> observe is a shorter feature list (no child VMs or screenshot console).
+> talk to the same API and see the same instance registry entries. Child VMs, media, screenshots,
+> input and guest addresses are implemented with local tests; child VM field testing is still pending.
 > Host self-update is implemented; its systemd handoff and rollback still need human field testing.
 > The design background is [docs/remote-host.md](remote-host.md); this page is the Proxmox specifics.
 
@@ -97,12 +98,22 @@ node with `--build` / for a non-main `--ref`. In order it does:
 8. **First admin** — `admin users add <name> --role Admin --max-vms 10` and one API token, printed once. Re-runs keep the token; `--rotate-token` issues a new one.
 9. **Start and verify** — restarts the unit and waits for `/api/v1/health`.
 
+The installer also checks the active `kvm_intel` or `kvm_amd` nesting parameter. If it is
+off, it writes `options <module> nested=1` to `/etc/modprobe.d/construct-kvm.conf` and
+reports that a reboot, or a module reload after stopping all guests, is needed. It never
+reloads KVM itself. The service reports the live parameter, not the saved configuration.
+
 Re-running the script is the install/repair path: `--host-release latest` (or a new `--package`, or
 `--build`) replaces the service in place; the existing VMs keep running and their SSH forwards are
 re-established from the database when the service comes back. Without such a flag a re-run keeps
 the installed service and only refreshes scripts and settings.
 
-Options: `--admin`, `--storage`, `--image-storage`, `--bridge`, `--release`, `--listen-port`,
+Child media uses directory storage `construct-media` at `/var/lib/constructd/media`, with files
+under `template/iso`. `--media-storage` changes the storage ID. The installer verifies `swtpm`
+and `pve-edk2-firmware` and enables ISO content without removing existing content types.
+See [child mappings, limitations and upgrade setup](child-vms.md#on-a-proxmox-host).
+
+Options: `--admin`, `--storage`, `--image-storage`, `--media-storage`, `--bridge`, `--release`, `--listen-port`,
 `--ssh-ports a-b`, `--app-ports a-b`, `--skip-image`, `--rotate-token`, `--repo`, `--ref`,
 `--host-release`, `--build`, `--package`, `--source`, and the Kerberos trio `--keytab`,
 `--netbios-domain`, `--realm` (section 5b).
@@ -158,10 +169,10 @@ A create request (`POST /vms`) runs the same job as on Windows; only the platfor
 | Step | Windows host | Proxmox host |
 |---|---|---|
 | Install media | autoinstall ISO from the catalog (or per VM through WSL) | **one cloud-init snippet per VM**: hostname, seed user `construct` with passwordless sudo and a locked password, the bootstrap public key, `qemu-guest-agent` |
-| Create | `Create-AgentVM.ps1` → Gen-2 VM, fresh VHDX, ISO attached | `qm create` cloning the cached cloud image (`--scsi0 <storage>:0,import-from=<image>`), a cloud-init drive (`--ide2 <storage>:cloudinit`), `--cicustom user=<snippet>`, `--agent enabled=1`, `cpu host`, bridged DHCP; then `qm disk resize` to the requested size and `qm start` |
+| Create | `Create-AgentVM.ps1` → Gen-2 VM, fresh VHDX, ISO attached | `qm create` cloning the cached cloud image (`--scsi0 <storage>:0,import-from=<image>`), a cloud-init drive (`--ide2 <storage>:cloudinit`), `--cicustom user=<snippet>`, `--agent enabled=1`, CPU model selected by the nested setting, bridged DHCP; then `qm disk resize` to the requested size and `qm start` |
 | Wait for SSH | the driver's socket poll on `<name>.mshome.net` | the guest agent reports the DHCP address (`network-get-interfaces`); SSH is probed on it |
-| Detach media | eject the ISO | nothing (the cloud-init drive is inert after first boot) |
-| Endpoint | `PublicHost:<forward>` via `netsh portproxy` | `PublicHost:<forward>` via an **in-process TCP relay** (section 5) |
+| Detach media | eject the ISO | keep the cloud-init drive attached for later network configuration changes |
+| Endpoint | `PublicHost:<forward>` via `netsh portproxy` | `PublicHost:<forward>` through the relay, or the guest's LAN address on port 22 in direct mode (section 5) |
 | Power | `Start-VM` / `Stop-VM` / `Save-VM` | `qm start` / `qm shutdown --forceStop 1` / `qm suspend --todisk 1` |
 | Remove | `Remove-VM` + disk chain | `qm stop` (if running) + `qm destroy --purge 1 --destroy-unreferenced-disks 1` + the seed snippet |
 
@@ -170,24 +181,58 @@ it, first boot plus `apt-get install qemu-guest-agent` the rest. The client then
 guest with `bin/provision.sh` exactly as it would any other Construct VM — the guest payload is
 identical.
 
-Guests have `cpu: host`, so nested virtualization is available when the node's `kvm_intel`/`kvm_amd`
-module has `nested=1` (the default on Proxmox 9).
+Nested virtualization defaults to off. Enabled guests use `Proxmox:CpuType` (`host`);
+disabled guests use `Proxmox:CpuTypeWithoutNesting` (`x86-64-v2-AES`). The node must also
+have its `kvm_intel`/`kvm_amd` nesting parameter enabled. See section 7 for policy and changes
+to existing VMs.
 
-## 5. Networking
+## 5. Relayed or direct
 
-Guests take a DHCP lease on the node's bridge, so they are ordinary LAN machines. Clients still
-dial the **service host** on an allocated port (`192.0.2.10:2201` → guest `:22`), because that is
-what the API contract promises and what keeps a PC's SSH config valid across a guest's lease
-changes: the relay looks the guest's current address up through the guest agent when a connection
-arrives (cached for a minute), so a rebooted guest with a new address is reached without anyone
-editing anything.
+The default is **relayed**. Clients connect to the service host on an allocated SSH port,
+for example `node.example:2201`. The service resolves the guest's current address through
+the QEMU guest agent when a connection arrives, with a short cache. Host-target app forwards
+work the same way. The listeners run inside constructd, without kernel NAT rules.
 
-The relay is the service's own listener, not a kernel forward: no `iptables`/`nftables` rules, no
-`ip_forward`, no masquerading, and the idle policy's "no client connections" signal is the relay's
-own live connection count. `construct expose --to host` forwards are relayed the same way.
+In **direct** mode, the endpoint is the VM's own IPv4 address on port 22. Construct allocates
+no SSH relay port. `construct expose 3000 --to host` prints `http://<vm-address>:3000/`
+without creating a listener or saving a forward. Client-target forwards still use the
+client's SSH tunnel. Host-forward policy switches continue to govern relayed VMs.
 
-Ports: the API on `7462`, SSH forwards `2201-2299`, app forwards `2300-2999` by default. Proxmox's
-own firewall is off by default; if you enable it, allow those on the node.
+In either mode, a Proxmox VM on the LAN bridge is an ordinary LAN machine. Every port an
+agent binds on all interfaces is reachable by anyone on that LAN unless your firewall
+blocks it. Direct connections need no Construct forward and produce no Construct access
+audit. An explicit expose request is audited, but traffic to the resulting URL is not.
+In direct mode the guest activity heartbeat, including established SSH sessions on port 22,
+provides the idle signal; there is no relay traffic to observe.
+
+On the host overview, admins can use the **Network** card to choose the default and allow
+owners to switch modes. The raw Configuration editor accepts the same `network` keys:
+`defaultMode: "relayed" | "direct"` and `ownerMaySwitchMode: false | true`. Hyper-V remains
+relay-only and does not offer these controls.
+
+Open **VM settings** to choose Host default, Relayed or Direct. Owners reach the same modal
+through the host panel's **My VMs** tab. Admins can enter a fixed IPv4 CIDR, gateway and
+optional DNS server addresses, for example `10.0.3.50/22`, `10.0.0.1` and `10.0.0.2`.
+Clear the address and gateway to use DHCP. Empty DNS uses the node's resolver. Proxmox stores
+each VM's MAC address, so a DHCP reservation also gives a stable address without a Construct
+setting. Recreating a VM can change its MAC; review reservations after a reinstall.
+
+Network changes, including inherited host-default changes, apply on the next full stop/start.
+Saved-state resume and an Ubuntu reboot do not apply them. A mode switch releases existing
+forwards, including client requests; request them again after starting. The driver writes
+`qm set --ipconfig0` and `--nameserver` or deletes the nameserver override, then runs
+`qm cloudinit update` before starting. Cloud-init's next-boot application after a changed
+configuration still needs verification on the target image and Proxmox version. Automated
+tests assert the command arguments, not a real guest boot.
+
+Service-managed guests install `construct-endpoint-refresh.service`. At boot it asks the
+service for the applied endpoint, updates the external host/SSH port in `config.env`, and
+regenerates the agent prompts. Failed refreshes retry. Guests that already have the unit
+need no reprovision for a mode change. After changing addresses, refresh the client's
+connection details from the endpoint before reconnecting. A DHCP reservation avoids lease changes.
+
+The API listens on `7462`; relayed SSH uses `2201-2299` and relayed apps use `2300-2999`
+by default. Allow the required node and guest ports if you enable a firewall.
 
 ## 5b. Windows sign-in (Kerberos)
 
@@ -379,14 +424,17 @@ update the A record; the SPN and keytab are name-based and stay valid.
 
 ## 6. What is not there (yet)
 
-- **Child VMs** (`construct vm …`) and the **screenshot console** report
-  `unsupported-capability`; the health endpoint does not list them, so the extension does not offer them.
+- **VMConnect browser gateway** is unsupported. Console sessions include a native noVNC URL
+  that requires a separate Proxmox login; screenshot and input routes work through Construct.
+- **Distinct Secure Boot key sets and Unicode typing** are unavailable. OVMF combines the
+  Microsoft keys; console text uses US-layout ASCII. See [all child differences](child-vms.md#on-a-proxmox-host).
 - **Capacity enforcement** — the ledger observes (`HostAdmin:Capacity:Mode = Observe`) with a real
   inventory (`pvesh get /nodes/<node>/status|storage|qemu`), but nothing is refused for capacity.
 - **NTLM fallback** — the Linux Negotiate handler speaks Kerberos; a PC that cannot get a ticket for
   the host's SPN (wrong URL name, no domain reachability) falls back to a token prompt.
 - **Cluster** — one node; `Constructd:Proxmox:Node` names it, and VMs of the same name on other
-  nodes are not this host's.
+  nodes are not this host's. A future path is a cluster created and managed by Construct only;
+  joining an existing cluster is not planned because the service needs management access to the API.
 
 ## 7. Settings reference (`Constructd:Proxmox`)
 
@@ -395,14 +443,32 @@ update the A record; the SPN and keytab are name-based and stay valid.
 | `Backend` | `hyperv` | `proxmox` selects this platform |
 | `Proxmox:Node` | this machine's host name | the node addressed |
 | `Proxmox:Storage` | `local-lvm` | VM disks and cloud-init drives (`images` content) |
+| `Proxmox:MediaStorage` | `construct-media` | Directory storage with ISO content; `HostAdmin:Media:RootDir` defaults to `/var/lib/constructd/media/template/iso` |
 | `Proxmox:ImageVolume` | `local:import/construct-ubuntu-noble-cloudimg-amd64.qcow2` | the cached cloud image |
 | `Proxmox:SnippetStorage` / `SnippetDir` | `local` / `/var/lib/vz/snippets` | where per-VM seeds go |
 | `Proxmox:Bridge` | `vmbr0` | guest network |
-| `Proxmox:CpuType` | `host` | QEMU CPU type |
+| `Proxmox:CpuType` | `host` | QEMU CPU model with nesting enabled |
+| `Proxmox:CpuTypeWithoutNesting` | `x86-64-v2-AES` | QEMU CPU model with nesting disabled; must not expose VMX/SVM |
 | `Proxmox:QmPath` / `PveshPath` | `qm` / `pvesh` | the commands |
+| `Proxmox:PvesmPath` / `PythonPath` | `pvesm` / `python3` | owned-volume cleanup and the local QMP client |
 
 Everything else (`PublicHost`, port ranges, idle policy, `Iso:SeedUser`, `Iso:BootstrapPublicKeyPath`,
 persistence) is the common configuration documented in [service/README.md](../service/README.md).
+
+The stored host configuration section `virtualization` has `nestedDefault: false` and
+`nestedSelectable: true`. An omitted create option uses the host default. Per-user
+`allowNested` is nullable: null inherits `nestedSelectable`, while true or false overrides
+it. A user who cannot select nesting gets `403 policy-denied` for an explicit request to
+enable it; admins may always select it. Disabling remains allowed. Setting the host default
+to true is refused with `409 unsupported-on-host` while the live KVM parameter is off.
+
+The host administration Overview shows availability, default and selectability. The VM
+settings modal saves a desired nested setting: it applies immediately when Off, otherwise
+on the next full stop/start. Resuming a saved VM or rebooting Ubuntu does not apply it.
+`Auto-Install.ps1 -Nested true|false` selects it at creation; omitting the argument uses
+the remote host default. The client prints the effective setting and any explicitly enabled
+options the backend ignored, such as automatic checkpoints on Proxmox or nesting on a host
+where it is unavailable. Ignoring an unsupported option does not fail creation.
 
 RAM headroom defaults to `max(1 GiB, total RAM / 8)` on Proxmox. Hyper-V uses
 `max(4 GiB, total RAM / 8)`. The stored host setting `capacity.ramHeadroomBytes`

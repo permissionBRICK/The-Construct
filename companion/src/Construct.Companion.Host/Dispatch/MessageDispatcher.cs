@@ -115,6 +115,14 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
                 if (Text(m, "agent") != "t3code") { Refuse(name, id, "Only T3 Code exposes a web UI."); break; }
                 var pairing = await entry.Ssh.RunRemoteScriptAsync(T3Code.BuildPairingScript(entry.Definition), TimeSpan.FromSeconds(90), ct);
                 var pairUrl = T3Code.ExtractPairUrl(pairing.Stdout);
+                var pairLinks = pairing.Code == 0 ? T3Code.ExtractPairLinks(pairing.Stdout) : [];
+                if (pairLinks.Count > 0)
+                {
+                    var chosenLink = await prompts.PickAsync(new("T3 Code pairing links", pairLinks.Select((link, index) =>
+                        new PickItem(index.ToString(System.Globalization.CultureInfo.InvariantCulture), link.Kind, new Uri(link.PairUrl).GetLeftPart(UriPartial.Authority))).ToArray()), ct);
+                    if (chosenLink?.Count != 1 || !int.TryParse(chosenLink[0], out var index) || index < 0 || index >= pairLinks.Count) break;
+                    pairUrl = pairLinks[index].PairUrl;
+                }
                 if (pairing.Code == 7) { Refuse(name, id, "T3 Code's port forward is not ready. Keep the Construct client connected and retry."); break; }
                 if (pairing.Code != 0 || !Uri.TryCreate(pairUrl, UriKind.Absolute, out var pairUri) || pairUri.Scheme is not ("http" or "https")) Refuse(name, id, "T3 Code did not return a pairing link.");
                 else await launcher.OpenAsync(pairUrl, ct); break;

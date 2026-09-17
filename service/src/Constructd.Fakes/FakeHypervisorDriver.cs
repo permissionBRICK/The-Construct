@@ -9,8 +9,30 @@ namespace Constructd.Fakes;
 /// so the API, the creation job and the idle engine can be tested on Linux. The real driver (B7)
 /// implements the same interface by invoking PowerShell.
 /// </summary>
-public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver
+public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver, IGuestNetworkConfigurator, IVmNestedDriver
 {
+    public Exception? NetworkFailure { get; set; }
+    public Task ConfigureNetworkAsync(string name, string? address, string? gateway, IReadOnlyList<string>? dns, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (StateOf(name) != VmState.Off) throw new InvalidOperationException("VM must be off.");
+        if (NetworkFailure is not null) throw NetworkFailure;
+        Calls.Enqueue($"network:{name}:{address ?? "dhcp"}:{gateway}:{string.Join(" ", dns ?? [])}");
+        return Task.CompletedTask;
+    }
+    public bool NestedAvailable { get; set; } = true;
+    public ConcurrentDictionary<string, bool> NestedValues { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public Task<bool> GetNestedAsync(string name, CancellationToken ct) => Task.FromResult(NestedValues.GetValueOrDefault(name));
+    public Task SetNestedAsync(string name, bool enabled, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (StateOf(name) != VmState.Off) throw new InvalidOperationException("VM must be off.");
+        if (PowerFailure is not null) throw PowerFailure;
+        Calls.Enqueue($"nested:{name}:{enabled}");
+        NestedValues[name] = enabled;
+        return Task.CompletedTask;
+    }
+    public ConcurrentDictionary<string, VmDescriptor> Descriptors { get; } = new(StringComparer.OrdinalIgnoreCase);
     public ConcurrentDictionary<string, int> MemorySizes { get; } = new(StringComparer.OrdinalIgnoreCase);
     public Exception? MemoryFailure { get; set; }
     public Task SetMemoryAsync(string name, int ramGb, CancellationToken ct)
@@ -52,6 +74,7 @@ public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver, IVmM
 
     /// <summary>Host name pattern the fake endpoint uses.</summary>
     public string EndpointHostSuffix { get; set; } = ".fake.local";
+    public bool ReportEndpoint { get; set; } = true;
 
     /// <summary>
     /// Optional gate that <see cref="CreateVmAsync"/> waits on, so a test can observe the service
@@ -74,6 +97,8 @@ public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver, IVmM
         ArgumentNullException.ThrowIfNull(descriptor);
         cancellationToken.ThrowIfCancellationRequested();
         Calls.Enqueue($"create:{descriptor.Name}");
+        Descriptors[descriptor.Name] = descriptor;
+        NestedValues[descriptor.Name] = descriptor.Nested;
 
         if (HoldCreate)
         {
@@ -149,7 +174,7 @@ public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver, IVmM
     public Task<Endpoint?> GetEndpointAsync(string name, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        Endpoint? endpoint = _states.ContainsKey(name) ? new Endpoint($"{name}{EndpointHostSuffix}", 22) : null;
+        Endpoint? endpoint = ReportEndpoint && _states.ContainsKey(name) ? new Endpoint($"{name}{EndpointHostSuffix}", 22) : null;
         return Task.FromResult(endpoint);
     }
 

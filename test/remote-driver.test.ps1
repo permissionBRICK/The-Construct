@@ -35,7 +35,8 @@ function Get-ThrowMessage([scriptblock]$Script) {
 # the way -- exactly what the real host scripts do.
 function Write-Step($msg) { }
 function Write-Ok($msg)   { }
-function Write-Note($msg) { }
+function Write-Note($msg) { $script:notes += [string]$msg }
+$script:notes = @()
 
 $driverLoader = Join-Path $repoRoot "drivers/Load-ConstructDriver.ps1"
 
@@ -193,7 +194,7 @@ ok "endpoint: any other failure throws" (Test-Throws { Get-ConstructVmEndpoint -
 Write-Host ""
 Write-Host "=== New-ConstructVm ===" -ForegroundColor Cyan
 Reset-Api
-Answer 'POST /vms' ([pscustomobject]@{ jobId = 'job-1' }) 202
+Answer 'POST /vms' ([pscustomobject]@{ jobId = 'job-1'; nested = $false; nestedFromHostDefault = $true; ignoredOptions = @('automaticCheckpoints') }) 202
 $script:jobResult = [pscustomobject]@{
     name = 'work-vm'
     endpoint = [pscustomobject]@{ sshHost = 'buildbox.example.local'; sshPort = 2201 }
@@ -214,6 +215,8 @@ ok "create: it returns the endpoint (there is no name convention to rebuild it f
     ($created.Endpoint.SshHost -eq 'buildbox.example.local' -and $created.Endpoint.SshPort -eq 2201)
 ok "create: ...and the ONE-TIME VM token" ($created.VmToken -eq 'ONE-TIME-SECRET')
 ok "create: ...and the name" ($created.Name -eq 'work-vm')
+ok "create: prints effective nested host default" ($script:notes -contains 'nested virtualization: off (host default)')
+ok "create: prints ignored option" ($script:notes -contains 'Create option ignored by this host: automaticCheckpoints')
 
 # MemoryBytes wins and rounds to the NEAREST GB: rounding 7.9 GB down to 7 would quietly
 # hand the user less RAM than the local path would have given them.

@@ -1115,6 +1115,20 @@ else
   remove_idle_report_timer || true
 fi
 
+# The endpoint can change after provisioning when a Proxmox VM changes mode or address.
+setup_endpoint_refresh() {
+  local unit_dir="${CONSTRUCT_SYSTEMD_DIR:-/etc/systemd/system}"
+  local bin_dir="${CONSTRUCT_BIN_DIR:-/usr/local/bin}"
+  local systemctl_bin="${CONSTRUCT_SYSTEMCTL:-systemctl}"
+  install -m 0755 "${REPO_DIR}/bin/construct-endpoint-refresh.sh" "${bin_dir}/construct-endpoint-refresh.sh" || return 1
+  install -m 0644 "${REPO_DIR}/systemd/construct-endpoint-refresh.service" "${unit_dir}/construct-endpoint-refresh.service" || return 1
+  "${systemctl_bin}" daemon-reload || return 1
+  "${systemctl_bin}" enable construct-endpoint-refresh.service
+}
+if [[ -n "${CONSTRUCT_SERVICE_URL}" ]]; then
+  run_step optional "Setting up endpoint refresh at boot" setup_endpoint_refresh
+fi
+
 # 5. Merge selected project profiles into the runtime config.
 run_step optional "Generating runtime config" bash "${REPO_DIR}/bin/generate-runtime-config.sh"
 

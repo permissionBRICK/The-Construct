@@ -17,17 +17,21 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class PairingForwardTests(unittest.TestCase):
     def run_pairing(self, client, *, host_exit=0, client_exit=0, tls=True,
-                    managed=True, client_url='http://user-pc:18807/', host_url='http://host.example:29991/'):
+                    managed=True, client_url='http://user-pc:18807/', host_url='http://host.example:29991/',
+                    external=None, direct=None):
         with tempfile.TemporaryDirectory() as directory:
             tmp = Path(directory)
             config = tmp / 'config.env'
             config.write_text('T3CODE_PORT=5177\nT3CODE_HTTPS_PORT=5443\n' +
                               ('CONSTRUCT_SERVICE_URL=https://host.example:7462\n' if managed else '') +
-                              ('T3CODE_PUBLIC_BASE_URL=https://host.example:5443\n' if tls else ''))
+                              ('T3CODE_PUBLIC_BASE_URL=https://host.example:5443\n' if tls else '') +
+                              (f'CONSTRUCT_EXTERNAL_HOST={external}\n' if external else '') +
+                              (f'CONSTRUCT_DIRECT_HOST={direct}\n' if direct else ''))
             log = tmp / 'calls.jsonl'
             bindir = tmp / 'bin'
             bindir.mkdir()
             scripts = {
+                'hostname': 'print("fixture-vm")',
                 'construct': '''
                     import json, os, sys
                     args = sys.argv[1:]
@@ -63,7 +67,8 @@ class PairingForwardTests(unittest.TestCase):
                 command = ['pwsh', '-NoProfile', '-File', str(ROOT / 'Get-ConstructT3PairingLink.ps1')]
                 result = subprocess.run(command, env=env, text=True, capture_output=True, timeout=20)
             else:
-                script = subprocess.check_output(['node', '-e', 'process.stdout.write(require("./extension/src/t3code").buildPairingScript())'], cwd=ROOT, text=True)
+                instance = '{name:"named-vm",backend:"hyperv-remote"}' if client == 'named-extension' else ''
+                script = subprocess.check_output(['node', '-e', f'process.stdout.write(require("./extension/src/t3code").buildPairingScript({instance}))'], cwd=ROOT, text=True)
                 script = script.replace('CONFIG_FILE=/etc/construct/config.env', 'CONFIG_FILE=' + str(config))
                 result = subprocess.run(['bash', '-c', script], env=env, text=True, capture_output=True, timeout=20)
             calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
@@ -115,6 +120,32 @@ class PairingForwardTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
                 self.assertEqual(json.loads(result.stdout)['pairUrl'], 'https://host.example:5443/pair#token=TEST-PAIRING')
                 self.assertEqual(calls, [])
+
+    def test_both_scripts_prefer_external_host_and_keep_mshome_fallback(self):
+        for client in ('desktop', 'extension', 'named-extension'):
+            for external in (None, 'external.example'):
+                with self.subTest(client=client, external=external):
+                    result, calls = self.run_pairing(client, managed=False, tls=False, external=external)
+                    self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+                    data = json.loads(result.stdout)
+                    expected = f'http://{external or "fixture-vm.mshome.net"}:5177/pair#token=TEST-PAIRING'
+                    self.assertEqual(data['pairUrl'], expected)
+                    self.assertEqual(data['links'], [{'kind': 'forwarded', 'pairUrl': expected}])
+                    self.assertEqual(calls, [])
+
+    def test_direct_link_uses_guest_listener_port_and_effective_tls(self):
+        for client in ('desktop', 'extension', 'named-extension'):
+            for tls in (True, False):
+                for direct in ('guest.example', '2001:db8::12'):
+                    with self.subTest(client=client, tls=tls, direct=direct):
+                        result, _ = self.run_pairing(client, tls=tls, external='external.example', direct=direct)
+                        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+                        data = json.loads(result.stdout)
+                        self.assertEqual(data['pairUrl'], data['links'][0]['pairUrl'])
+                        self.assertEqual(data['links'][0]['kind'], 'forwarded')
+                        host = f'[{direct}]' if ':' in direct else direct
+                        expected = f'{"https" if tls else "http"}://{host}:{5443 if tls else 5177}/pair#token=TEST-PAIRING'
+                        self.assertEqual(data['links'][1], {'kind': 'direct', 'pairUrl': expected})
 
 
 if __name__ == '__main__':

@@ -4,6 +4,10 @@ public sealed partial class RemoteHostClient
 {
     public Task<JsonNode?> VmDefaultsAsync(CancellationToken cancellationToken = default) => RequestAsync("GET", "/vm-defaults", cancellationToken: cancellationToken);
     public Task<JsonNode?> VmMemoryAsync(string name, CancellationToken cancellationToken = default) => RequestAsync("GET", $"/vms/{RemoteHost.Encode(name)}/memory", cancellationToken: cancellationToken);
+    public Task<JsonNode?> VmNetworkAsync(string name, CancellationToken cancellationToken = default) => RequestAsync("GET", $"/vms/{RemoteHost.Encode(name)}/network", cancellationToken: cancellationToken);
+    public Task<JsonNode?> SetVmNetworkAsync(string name, JsonNode? body, CancellationToken cancellationToken = default) => RequestAsync("PUT", $"/vms/{RemoteHost.Encode(name)}/network", body, cancellationToken);
+    public Task<JsonNode?> VmNestedAsync(string name, CancellationToken cancellationToken = default) => RequestAsync("GET", $"/vms/{RemoteHost.Encode(name)}/nested", cancellationToken: cancellationToken);
+    public Task<JsonNode?> SetVmNestedAsync(string name, JsonNode? body, CancellationToken cancellationToken = default) => RequestAsync("PUT", $"/vms/{RemoteHost.Encode(name)}/nested", body, cancellationToken);
     public Task<JsonNode?> SetVmMemoryAsync(string name, JsonNode? body, CancellationToken cancellationToken = default) => RequestAsync("PUT", $"/vms/{RemoteHost.Encode(name)}/memory", body, cancellationToken);
     public Task<JsonNode?> VmIdlePolicyAsync(string name, CancellationToken cancellationToken = default) => RequestAsync("GET", $"/vms/{RemoteHost.Encode(name)}/idle-policy", cancellationToken: cancellationToken);
     public Task<JsonNode?> SetVmIdlePolicyAsync(string name, JsonNode? body, CancellationToken cancellationToken = default) => RequestAsync("PUT", $"/vms/{RemoteHost.Encode(name)}/idle-policy", body, cancellationToken);

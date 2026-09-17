@@ -9,7 +9,7 @@ public enum SecureBootTemplate { MicrosoftWindows, MicrosoftUefiCertificateAutho
 public enum BootDevice { InstallMedia, AuxiliaryMedia, Disk, Network }
 public enum GuestReportProvenance { Unknown, Provisioner }
 public enum GuestAddressFamily { Ipv4, Ipv6 }
-public enum GuestAddressSource { Kvp, Dhcp, Unknown }
+public enum GuestAddressSource { Kvp, Dhcp, Unknown, GuestAgent }
 public enum MediaRole { Install, Auxiliary }
 public enum MediaSource { Url, Upload }
 public enum MediaState { Pending, Transferring, Ready, Failed, Deleting }

@@ -14,12 +14,14 @@ public static partial class HostConfigValidation
         ["lifecycle"] = HostAdminDefaults.Lifecycle,
         ["media"] = HostAdminDefaults.Media,
         ["network"] = HostAdminDefaults.Network,
+        ["virtualization"] = HostAdminDefaults.Virtualization,
         ["updates"] = HostAdminDefaults.Updates,
     };
     public static string? Allowance(UserAllowance a) => a.MaxRetainedChildren < 0 || a.CpuBudget < 0 || a.RamBudgetBytes < 0 || a.StorageBudgetBytes < 0
         ? "Budgets and counts must be non-negative." : a.MaxChildLifetimeSeconds is < 300 ? "A finite lifetime limit must be at least 300 seconds." : null;
     public static string? Validate(object value) => value switch
     {
+        NetworkConfig n when n.DefaultMode is not ("relayed" or "direct") => "Network defaultMode must be relayed or direct.",
         CapacityConfig c when !Enum.IsDefined(c.Mode) || c.RamHeadroomBytes < 0 || c.StorageHeadroomBytes < 0 || c.CpuBudget < 0 || c.MaxVcpusPerVm < 1 ||
             c.ReconcileSeconds < 30 || c.OrphanReservationTimeoutSeconds < 30 => "Capacity limits must be non-negative and timeouts at least 30 seconds.",
         UserDefaultsConfig d when d.MaxPrimaries < 0 => "Primary count must be non-negative.",
@@ -30,6 +32,8 @@ public static partial class HostConfigValidation
         UpdatesConfig u when string.IsNullOrEmpty(u.Repository) || !RepositoryPattern().IsMatch(u.Repository) || u.Channel != "main" || u.DrainTimeoutMinutes < 1 || u.HealthTimeoutSeconds < 30 => "Updates require owner/repository, main channel and positive timeouts (health at least 30 seconds).",
         _ => null,
     };
+    public static bool UnsupportedOnPlatform(object value, bool isProxmox) =>
+        value is NetworkConfig { DefaultMode: "direct" } && !isProxmox;
     [GeneratedRegex(@"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")]
     private static partial Regex RepositoryPattern();
 }

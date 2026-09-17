@@ -10,6 +10,9 @@ public static class HostAdminComposition
     public static IServiceCollection AddHostAdminCore(this IServiceCollection services, ConstructdOptions options)
     {
         services.AddSingleton<UnsupportedFeaturePlatform>();
+        services.AddSingleton<IGuestNetworkConfigurator>(sp => options.Fake
+            ? sp.GetRequiredService<FakeHypervisorDriver>() : options.IsProxmox
+                ? sp.GetRequiredService<Constructd.Proxmox.ProxmoxDriver>() : sp.GetRequiredService<UnsupportedFeaturePlatform>());
         services.AddSingleton<IVmMetadataStore>(sp => (IVmMetadataStore)sp.GetRequiredService<IVmRepository>());
         services.AddSingleton<IVmDelegationRepository>(sp => sp.GetRequiredService<IVmRepository>() as IVmDelegationRepository ?? throw new InvalidOperationException("IVmRepository must also implement IVmDelegationRepository."));
         services.AddSingleton<IUserAllowanceStore>(sp => sp.GetRequiredService<IUserStore>() as IUserAllowanceStore ?? throw new InvalidOperationException("IUserStore must also implement IUserAllowanceStore."));
@@ -29,7 +32,7 @@ public static class HostAdminComposition
         services.AddSingleton<IOperationRegistry, InMemoryOperationRegistry>();
         services.AddSingleton<IDelegationPolicy, DelegationPolicy>();
         services.AddSingleton<ICapabilityAggregator, CapabilityAggregator>();
-        if (options.Fake) services.AddSingleton<IReleaseInfo>(_ => new FakeReleaseInfo { ApiFeatures = new FakeReleaseInfo().ApiFeatures.Where(f => f != "source-cache" || options.HostAdmin.Source.Enabled).ToArray() });
+        if (options.Fake) services.AddSingleton<IReleaseInfo>(_ => new FakeReleaseInfo { ApiFeatures = new ReleaseInfo(options).ApiFeatures });
         else services.AddSingleton<IReleaseInfo, ReleaseInfo>();
         services.AddMediaPlatform(options);
         services.AddSourcePlatform(options);
@@ -39,6 +42,9 @@ public static class HostAdminComposition
         services.AddSingleton<Constructd.Api.Jobs.LifecycleStart>();
         services.AddSingleton<Constructd.Api.Jobs.PrimaryCpuSettings>();
         services.AddSingleton<Constructd.Api.Jobs.PrimaryMemorySettings>();
+        services.AddSingleton<Constructd.Api.Jobs.VmNetworkSettings>();
+        services.AddSingleton<IVmNestedDriver>(sp => (IVmNestedDriver)sp.GetRequiredService<IHypervisorDriver>());
+        services.AddSingleton<Constructd.Api.Jobs.PrimaryNestedSettings>();
         services.AddSingleton<Constructd.Api.Jobs.ChildLifecycleJobs>();
         services.AddSingleton<Constructd.Api.Jobs.LifecycleJobAdmission>();
         services.AddSingleton<Constructd.Api.Jobs.CascadeJobs>();

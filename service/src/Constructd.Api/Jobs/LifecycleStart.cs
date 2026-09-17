@@ -7,7 +7,7 @@ namespace Constructd.Api.Jobs;
 
 /// <summary>Caller holds the VM gate. An accepted start keeps its original clock across retries.</summary>
 public sealed class LifecycleStart(IVmRepository vms, IHypervisorDriver driver, IChildVmStorage storage,
-    ICapacityLedger capacity, IAdmissionStore admission, IOperationKeyStore keys, IClock clock, ChildStartIntent childStarts, IJobStore jobs, IOperationRegistry operations, PrimaryCpuSettings cpuSettings, PrimaryMemorySettings memorySettings)
+    ICapacityLedger capacity, IAdmissionStore admission, IOperationKeyStore keys, IClock clock, ChildStartIntent childStarts, IJobStore jobs, IOperationRegistry operations, PrimaryCpuSettings cpuSettings, PrimaryMemorySettings memorySettings, VmNetworkSettings networkSettings, PrimaryNestedSettings nestedSettings)
 {
     public sealed record Intent(string? Lifetime, long? Seconds, long LeaseVersion, DateTimeOffset ActivationBase,
         IReadOnlyList<ReservationLine> Lines, string OperationId, bool Restart = false);
@@ -26,6 +26,8 @@ public sealed class LifecycleStart(IVmRepository vms, IHypervisorDriver driver, 
         {
             vm = await cpuSettings.ApplyAsync(vm, state, ct);
             vm = await memorySettings.ApplyAsync(vm, state, ct);
+            vm = await networkSettings.ApplyAsync(vm, state, ct);
+            await nestedSettings.ApplyAsync(vm, state, ct);
         }
         if (key is null)
         {

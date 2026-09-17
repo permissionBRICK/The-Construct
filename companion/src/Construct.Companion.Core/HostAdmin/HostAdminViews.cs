@@ -54,6 +54,7 @@ public static partial class HostAdminViews
         foreach (var k in new[] { "shared", "deleting", "childCreationClosed" }) r[k] = StateJson.Boolean(v[k]) == true;
         r["pendingCpu"] = Number(v["pendingCpu"]);
         r["pendingRamGb"] = Number(v["pendingRamGb"]);
+        if (v["network"] is JsonObject network) r["network"] = network.DeepClone();
         r["tokenKind"] = Text(v["tokenKind"]).Length > 0 ? Text(v["tokenKind"]) : null;
         var hw = v["hardware"] as JsonObject ?? new JsonObject { ["cpus"] = Copy(v["cpu"]), ["ramMb"] = Number(v["ramGb"]) * 1024, ["diskGb"] = Copy(v["diskGb"]) };
         var resources = new List<string>(); if (Number(hw["cpus"]).HasValue) resources.Add(Text(hw["cpus"]) + " vCPU"); if (Number(hw["ramMb"]) is { } ram) resources.Add(Bytes(JsonValue.Create(ram * 1048576))); if (Number(hw["diskGb"]).HasValue) resources.Add(Text(hw["diskGb"]) + " GB disk");
@@ -134,7 +135,7 @@ public static partial class HostAdminViews
     }
     public static JsonObject User(JsonNode? input)
     {
-        var u = input as JsonObject ?? []; return new() { ["name"] = Text(u["name"]), ["role"] = Default(u["role"], "user").ToLowerInvariant(), ["enabled"] = StateJson.Boolean(u["enabled"]) != false, ["maxVms"] = Number(u["maxVms"]), ["allowHostForwards"] = StateJson.Boolean(u["allowHostForwards"]) != false, ["created"] = FormatWhen(u["created"]), ["primaries"] = Number(u["vms"]?["primaries"]) ?? 0, ["children"] = Number(u["vms"]?["children"]) ?? 0, ["tokens"] = Number(u["tokens"]) ?? 0, ["allowance"] = AllowanceForm(u["allowance"]), ["effective"] = AllowanceText(u["effective"]) };
+        var u = input as JsonObject ?? []; return new() { ["name"] = Text(u["name"]), ["role"] = Default(u["role"], "user").ToLowerInvariant(), ["enabled"] = StateJson.Boolean(u["enabled"]) != false, ["maxVms"] = Number(u["maxVms"]), ["allowHostForwards"] = StateJson.Boolean(u["allowHostForwards"]) != false, ["allowNested"] = StateJson.Boolean(u["allowNested"]), ["created"] = FormatWhen(u["created"]), ["primaries"] = Number(u["vms"]?["primaries"]) ?? 0, ["children"] = Number(u["vms"]?["children"]) ?? 0, ["tokens"] = Number(u["tokens"]) ?? 0, ["allowance"] = AllowanceForm(u["allowance"]), ["effective"] = AllowanceText(u["effective"]) };
     }
     private static JsonObject Strings(JsonObject obj, params string[] keys)
     { var result = new JsonObject(); foreach (var key in keys) result[key] = Text(obj[key]); return result; }

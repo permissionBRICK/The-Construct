@@ -25,6 +25,7 @@
 #   --admin <name>            first admin user (default: admin); its token is printed once
 #   --storage <id>            Proxmox storage for VM disks, needs 'images' content (default: local-lvm)
 #   --image-storage <id>      directory storage for the cloud image and cloud-init snippets (default: local)
+#   --media-storage <id>      directory storage for child ISOs (default: construct-media)
 #   --bridge <name>           bridge the VMs attach to (default: vmbr0)
 #   --release <name>          Ubuntu release of the cloud image (default: noble)
 #   --listen-port <n>         API port (default: 7462)
@@ -61,6 +62,7 @@ PUBLIC_HOST=""
 ADMIN="admin"
 STORAGE="local-lvm"
 IMAGE_STORAGE="local"
+MEDIA_STORAGE="construct-media"
 BRIDGE="vmbr0"
 RELEASE="noble"
 LISTEN_PORT=7462
@@ -99,6 +101,7 @@ while [[ $# -gt 0 ]]; do
     --admin)         ADMIN="$2"; shift 2 ;;
     --storage)       STORAGE="$2"; shift 2 ;;
     --image-storage) IMAGE_STORAGE="$2"; shift 2 ;;
+    --media-storage) MEDIA_STORAGE="$2"; shift 2 ;;
     --bridge)        BRIDGE="$2"; shift 2 ;;
     --release)       RELEASE="$2"; shift 2 ;;
     --listen-port)   LISTEN_PORT="$2"; shift 2 ;;
@@ -131,9 +134,12 @@ trap 'rm -r "${TMP_ROOT}"' EXIT
 # ── 0. Check the inputs ──────────────────────────────────────────────────────
 say "Checking the inputs"
 [[ "$(id -u)" -eq 0 ]] || die "run as root on the Proxmox node"
-for tool in pvesh qm pveversion systemctl; do
+for tool in pvesh pvesm qm pveversion systemctl swtpm; do
   command -v "${tool}" >/dev/null || die "'${tool}' is required (is this a Proxmox VE node?)"
 done
+[[ "$(dpkg-query -W -f='${Status}' pve-edk2-firmware 2>/dev/null)" == 'install ok installed' ]] \
+  || die "pve-edk2-firmware is required for child UEFI and Secure Boot"
+[[ "${MEDIA_STORAGE}" =~ ^[A-Za-z][A-Za-z0-9_-]*$ ]] || die "--media-storage must be a Proxmox storage id"
 MISSING=()
 for tool in curl unzip rsync python3 openssl; do command -v "${tool}" >/dev/null || MISSING+=("${tool}"); done
 if (( ${#MISSING[@]} )); then
@@ -304,6 +310,25 @@ pvesh get "/nodes/${NODE}/network" --type bridge --output-format json \
 SNIPPET_DIR="${IMG_PATH}/snippets"
 install -d -m 0755 "${SNIPPET_DIR}"
 note "VM disks on '${STORAGE}', image and seeds on '${IMAGE_STORAGE}' (${IMG_PATH}), bridge ${BRIDGE}"
+
+ensure_media_storage() {
+  local existing content
+  existing="$(pvesh get /storage --output-format json)" || die "could not list Proxmox storage"
+  if printf '%s' "${existing}" | python3 -c 'import json,sys; sys.exit(0 if any(s.get("storage")==sys.argv[1] for s in json.load(sys.stdin)) else 1)' "${MEDIA_STORAGE}"; then
+    existing="$(storage_json "${MEDIA_STORAGE}")" || die "could not read media storage"
+    [[ "$(printf '%s' "${existing}" | json_field type)" == dir && \
+       "$(printf '%s' "${existing}" | json_field path)" == "${DATA_DIR}/media" ]] \
+      || die "media storage must be a directory storage at ${DATA_DIR}/media"
+    content="$(printf '%s' "${existing}" | json_field content)"
+    if [[ ",${content}," != *,iso,* ]]; then
+      pvesm set "${MEDIA_STORAGE}" --content "${content:+${content},}iso"
+    fi
+  else
+    pvesm add dir "${MEDIA_STORAGE}" --path "${DATA_DIR}/media" --content iso
+  fi
+  install -d -m 0755 "${DATA_DIR}/media/template/iso"
+}
+ensure_media_storage
 
 # ── 3. The Ubuntu cloud image ────────────────────────────────────────────────
 say "Ubuntu ${RELEASE} cloud image"
@@ -501,10 +526,11 @@ settings = {
       "BootstrapPublicKeyPath": "${SCRIPTS_DIR}/keys/bootstrap_ed25519.pub",
       "CacheDir": "${DATA_DIR}/iso"
     },
-    "HostAdmin": {"Media": {"RootDir": "${DATA_DIR}/media"}, "Source": {"RootDir": "${DATA_DIR}/source"}},
+    "HostAdmin": {"Media": {"RootDir": "${DATA_DIR}/media/template/iso"}, "Source": {"RootDir": "${DATA_DIR}/source"}},
     "Proxmox": {
       "Node": "${NODE}",
       "Storage": "${STORAGE}",
+      "MediaStorage": "${MEDIA_STORAGE}",
       "ImageVolume": "${IMAGE_VOLID}",
       "SnippetStorage": "${IMAGE_STORAGE}",
       "SnippetDir": "${SNIPPET_DIR}",
@@ -567,6 +593,27 @@ IdleAction=ignore
 LOGIND
 systemctl try-restart systemd-logind >/dev/null 2>&1 || systemctl kill -s HUP systemd-logind >/dev/null 2>&1 || true
 note "sleep/suspend/hibernate masked; lid, suspend key and idle ignored"
+
+# ── 7c. Nested virtualization ────────────────────────────────────────────────
+say "Nested virtualization"
+configure_nested_virtualization() {
+  local modules_path="${1:-/sys/module}" config_path="${2:-/etc/modprobe.d/construct-kvm.conf}" module value
+  for module in kvm_intel kvm_amd; do
+    [[ -r "${modules_path}/${module}/parameters/nested" ]] || continue
+    value="$(cat "${modules_path}/${module}/parameters/nested")"
+    if [[ "${value}" == Y || "${value}" == y || "${value}" == 1 ]]; then
+      note "${module}: nested virtualization is live; VM exposure follows the host/user policy"
+    else
+      install -d -m 0755 "$(dirname "${config_path}")"
+      printf 'options %s nested=1\n' "${module}" >"${config_path}"
+      note "${module}: nested virtualization is not live; wrote ${config_path}"
+      note "Reboot the node or reload the module after stopping all guests. No modules were reloaded."
+    fi
+    return 0
+  done
+  note "No loaded KVM nested parameter found; nested virtualization is unavailable on this host"
+}
+configure_nested_virtualization
 
 # ── 8. First admin and their token ───────────────────────────────────────────
 say "Admin user '${ADMIN}'"

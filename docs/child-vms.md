@@ -321,6 +321,79 @@ the child. There is no abandon/supersede configuration API.
   `microsoftUefiCertificateAuthority`. Hyper-V locks the template after TPM
   initialization, so later template changes are refused.
 
+## On a Proxmox host
+
+Proxmox advertises `children`, `media`, `console` and `network` through the same
+API. The existing CLI, leases, sharing, admission and lifecycle jobs apply.
+The backend has Linux fixture and process-runner tests; child boot and device
+behaviour still require a human field test on a node.
+
+- Generation 2 maps to Q35/OVMF, fixed RAM with ballooning disabled, a VirtIO SCSI
+  disk, an optional VirtIO NIC on the configured bridge, and an optional TPM 2.0.
+  `ide2` holds the installation ISO and `ide0` the auxiliary ISO. Windows setup
+  may need a VirtIO driver ISO in the auxiliary drive. Children receive no
+  Construct provisioning or service credentials.
+- Both Secure Boot template names map to OVMF's combined pre-enrolled Microsoft
+  Windows and UEFI CA keys. The requested name is retained in the description,
+  but it does not select distinct key sets. Proxmox does not lock the template
+  after TPM initialization. Changing Secure Boot or its template while Off
+  recreates the EFI variables disk and loses custom firmware variables. Turning
+  TPM off deletes its state; turning it back on creates a new TPM. A guest using
+  TPM-bound encryption may require its recovery key after these changes.
+- The installer registers directory storage `construct-media` at
+  `/var/lib/constructd/media`, with `iso` content. `--media-storage` selects its
+  ID, stored as `Proxmox:MediaStorage`. `HostAdmin:Media:RootDir` points to
+  `/var/lib/constructd/media/template/iso`; generated ISO paths map to
+  `<media-storage>:iso/<id>.iso`. Existing storage must be a directory at that
+  path. The node needs `swtpm`, `pve-edk2-firmware`, `pvesm` and Python 3.
+- Child disks use `Proxmox:Storage`; arbitrary filesystem disk placements are
+  refused. A durable ownership journal beside the database records the numeric
+  ID, SMBIOS UUID, operation and allocated volumes. Keep its `children/`
+  directory with the database during backup or repair. Cleanup retains ownership
+  evidence on failure and refuses foreign incarnations or volumes.
+- Inventory matches children by name, tag and UUID and resolves the actual guest
+  disk separately from EFI/TPM disks. It reserves full possible disk growth
+  because config data has no thin-allocation byte count. Capacity therefore can
+  be conservative; the installer still defaults to Observe mode.
+- Screenshots use QMP screendump and native-resolution PNGs, bounded by the same
+  pixel and byte caps as Hyper-V. Keyboard input supports common PC virtual keys,
+  set-1 scancodes, Ctrl-Alt-Delete, and US-layout ASCII text. Unicode text and
+  unrecognised keys/scancodes are rejected before sending input. Absolute mouse
+  movement requires the USB tablet; relative movement and button events use QMP.
+  The transport uses a local QMP socket through Python so typed input stays on
+  stdin and explicit key release is possible.
+- Interactive console is Conditional. A console session includes `interactiveUrl`
+  for the node's native noVNC page on `PublicHost:8006`. Opening it requires a
+  separate Proxmox login with permission for that VM. No root VNC ticket or login
+  credential is issued to Construct callers. The existing `--web`/extension
+  Guacamole-to-VMConnect viewer cannot consume this link; its connection route
+  returns a coded 409. Screenshot/input routes still use Construct authorization.
+- Address reporting requires a running QEMU guest agent. Reports are bound to
+  host-configured adapter MACs and remain unverified. Client forwards, refusal
+  of child host forwards, and lack of packet isolation match Hyper-V.
+- Hardware and media changes require Off. Graceful shutdown uses ACPI or the
+  guest agent without forced power-off; save uses `qm suspend --todisk 1`.
+  Although the driver supports disk growth, the shared hardware endpoint still
+  returns `unsupported-capability`, as on Hyper-V. The backend contract has no
+  preset field, so QEMU `ostype` follows the Windows Secure Boot template or
+  defaults to Linux; it does not choose or install an operating system.
+
+For an older Proxmox installation with media in the former flat `media/` root,
+back up its database and files before changing the root. Registry entries contain
+absolute paths, so moving files alone is insufficient. Existing items need a
+registry-aware migration or re-upload; this change does not migrate them. A binary
+self-update alone does not register storage or change the media root; apply the
+installer's storage/settings setup before using child media.
+
+Human acceptance on the node: create and boot an Alpine child, inspect native
+screenshots, type and click in its installer, enable its guest agent and inspect
+addresses, then exercise shutdown, save/start, lease renewal/expiry, sharing and
+deletion. Also create a Windows-preset child with Secure Boot and TPM, verify its
+OVMF keys, disk/NIC drivers and two ISO slots, change hardware/media while Off,
+and confirm deletion removes guest, EFI, TPM and saved-state volumes. Test native
+noVNC with a separately authorized Proxmox account and repeat installer setup to
+check storage idempotency.
+
 ## Browser console
 
 An opt-in browser viewer is available with `construct vm console NAME --web`.
