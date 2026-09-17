@@ -17,7 +17,11 @@ public static class ConsoleComposition
         else services.AddSingleton<IConsoleTransport, HyperVConsoleTransport>();
         services.AddSingleton<IConsoleSessionStore, InMemoryConsoleSessionStore>();
         if (options.Fake) services.AddSingleton<IInteractiveConsole, Constructd.Core.Services.UnsupportedInteractiveConsole>();
-        else if (options.IsProxmox) services.AddSingleton<IInteractiveConsole, Constructd.Proxmox.ProxmoxInteractiveConsole>();
+        else if (options.IsProxmox)
+        {
+            services.AddSingleton<IStreamingProcessRunner, Constructd.Windows.Process.StreamingProcessRunner>();
+            services.AddSingleton<IInteractiveConsole, Constructd.Proxmox.ProxmoxInteractiveConsole>();
+        }
         else services.AddSingleton<IInteractiveConsole, HyperVInteractiveConsole>();
         services.AddHostedService<Constructd.Api.Hosting.ConsoleCredentialCleanup>();
         return services;
