@@ -8,7 +8,8 @@ namespace Constructd.Api.Jobs;
 
 /// <summary>Desired and applied settings are tied to the VM's creation identity. Callers hold its gate for writes.</summary>
 public sealed class VmNetworkSettings(IHostConfigStore config, IHostNetworkPolicy policy,
-    ConstructdOptions options, IHypervisorDriver driver, IGuestNetworkConfigurator configurator)
+    ConstructdOptions options, IHypervisorDriver driver, IGuestNetworkConfigurator configurator,
+    IPortForwardManager forwards, IVmRepository vms)
 {
     public sealed record Setting(DateTimeOffset Created, string? Mode, string? Address, string? Gateway, string[]? Dns);
     public sealed record View(string? Mode, string EffectiveMode, string? Address, string? PendingMode,
@@ -35,8 +36,31 @@ public sealed class VmNetworkSettings(IHostConfigStore config, IHostNetworkPolic
         try { await configurator.ConfigureNetworkAsync(vm.Name, desired.Address, desired.Gateway, desired.Dns, ct); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch { throw new LifecycleException("network-apply-failed"); }
+        var current = await CurrentAsync(vm, ct);
+        if (current.Mode != desired.Mode)
+        {
+            await forwards.RemoveAllForwardsAsync(vm.Name, ct);
+            await forwards.ReleaseSshForwardAsync(vm.Name, ct);
+        }
+        if (desired.Mode == "relayed") await forwards.AllocateSshForwardAsync(vm.Name, ct);
         await config.SetAsync(Section(vm, applied: true), desired, "system", ct);
-        return vm;
+        return await vms.GetAsync(vm.Name, ct) ?? throw new LifecycleException("vm-deleting");
+    }
+
+    public async Task InitializeAsync(Vm vm, CancellationToken ct)
+    {
+        if (Supported) await config.SetAsync(Section(vm, applied: true), await DesiredAsync(vm, ct), "system", ct);
+    }
+
+    public async Task<Constructd.Core.Domain.Endpoint?> EndpointAsync(Vm vm, CancellationToken ct)
+    {
+        var current = await CurrentAsync(vm, ct);
+        if (current.Mode == "direct")
+        {
+            var address = await AddressAsync(vm, current, ct);
+            return address is null ? null : new(address, 22, address);
+        }
+        return vm.SshForwardPort is int port ? new(options.PublicHost, port, options.PublicHostFor(vm.Name)) : null;
     }
 
     public async Task<Setting> DesiredAsync(Vm vm, CancellationToken ct)

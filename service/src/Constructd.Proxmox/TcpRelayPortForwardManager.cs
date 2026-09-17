@@ -291,31 +291,32 @@ public sealed class TcpRelayPortForwardManager : IPortForwardManager, IAsyncDisp
 
         foreach (var vm in await _vms.ListAsync(owner: null, cancellationToken).ConfigureAwait(false))
         {
-            if (vm.SshForwardPort is not int port)
+            var gate = GateFor(vm.Name);
+            await gate.WaitAsync(cancellationToken);
+            try
             {
-                continue;
+                // A mode change may have released the allocation since the list was read.
+                var current = await _vms.GetAsync(vm.Name, cancellationToken);
+                if (current?.SshForwardPort is not int port) continue;
+                _sshForwards[vm.Name] = port;
+                _sshPorts.TryReserve(port);
+                if (EnsureListener(SshKey(vm.Name), port, vm.Name, ct => ResolveVmAsync(vm.Name, null, ct))) repaired++;
             }
-
-            _sshForwards[vm.Name] = port;
-            _sshPorts.TryReserve(port);
-            if (EnsureListener(SshKey(vm.Name), port, vm.Name, ct => ResolveVmAsync(vm.Name, null, ct)))
-            {
-                repaired++;
-            }
+            finally { gate.Release(); }
         }
 
         foreach (var forward in await _store.ListAsync(vmName: null, cancellationToken).ConfigureAwait(false))
         {
-            if (forward.PublicPort is not int port)
+            var gate = GateFor(forward.VmName);
+            await gate.WaitAsync(cancellationToken);
+            try
             {
-                continue;
+                var current = await _store.GetAsync(forward.Id, cancellationToken);
+                if (current?.PublicPort is not int port) continue;
+                _appPorts.TryReserve(port);
+                if (EnsureListener(current.Id, port, current.VmName, TargetFor(current))) repaired++;
             }
-
-            _appPorts.TryReserve(port);
-            if (EnsureListener(forward.Id, port, forward.VmName, TargetFor(forward)))
-            {
-                repaired++;
-            }
+            finally { gate.Release(); }
         }
 
         return repaired;

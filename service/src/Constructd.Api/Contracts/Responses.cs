@@ -66,7 +66,8 @@ public sealed record ForwardResponse(
     string? HostLabel = null,
     string? Message = null,
     DateTimeOffset? AckedAt = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] ForwardDestination? Destination = null)
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] ForwardDestination? Destination = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Kind = null)
 {
     /// <summary>
     /// <paramref name="publicHost"/> is the LAN name host forwards are advertised on. A client
