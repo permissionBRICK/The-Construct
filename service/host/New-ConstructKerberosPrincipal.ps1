@@ -54,26 +54,43 @@ function New-RandomPassword {
 Write-Host "==> Domain $($domain.DNSRoot) (realm $realm, NetBIOS $netbios)"
 
 # ── 1. The service account ────────────────────────────────────────────────────
-$account = Get-ADUser -Filter "SamAccountName -eq '$AccountName'" -ErrorAction SilentlyContinue
+$marker = "The Construct host service on $HostFqdn (Kerberos service principal)"
+$account = Get-ADUser -Filter "SamAccountName -eq '$AccountName'" -Properties Description -ErrorAction SilentlyContinue
 $password = $null
 if (-not $account) {
     $password = New-RandomPassword
     if ($PSCmdlet.ShouldProcess($AccountName, "create service account")) {
+        # The bare create first; every extra attribute is its own write with its own error message,
+        # so a refused ACL change (CannotChangePassword) or encryption-type write is visible as such
+        # and never masks the creation.
         New-ADUser -Name $AccountName -SamAccountName $AccountName -UserPrincipalName "$AccountName@$($domain.DNSRoot)" `
-            -Description "The Construct host service on $HostFqdn (Kerberos service principal)" `
-            -AccountPassword (ConvertTo-SecureString $password -AsPlainText -Force) -Enabled $true `
-            -PasswordNeverExpires $true -CannotChangePassword $true -KerberosEncryptionType AES256
-        $account = Get-ADUser -Identity $AccountName
+            -Description $marker -AccountPassword (ConvertTo-SecureString $password -AsPlainText -Force) -Enabled $true
+        $account = Get-ADUser -Identity $AccountName -Properties Description
         Write-Host "    created $AccountName"
     }
 } else {
     Write-Host "    account $AccountName exists"
-    if ($RotateKeytab) {
+    # Our own account with no keytab yet (an earlier run stopped before ktpass): a new password is
+    # the only way to a keytab, and nothing else uses it. A foreign account is only touched on request.
+    $ours = [string]$account.Description -eq $marker
+    if ($RotateKeytab -or ($ours -and -not (Test-Path -LiteralPath $KeytabPath))) {
         $password = New-RandomPassword
         if ($PSCmdlet.ShouldProcess($AccountName, "reset password (keytab rotation)")) {
             Set-ADAccountPassword -Identity $AccountName -Reset -NewPassword (ConvertTo-SecureString $password -AsPlainText -Force)
-            Set-ADUser -Identity $AccountName -KerberosEncryptionType AES256
             Write-Host "    password reset for a new keytab"
+        }
+    }
+}
+if ($account -and $PSCmdlet.ShouldProcess($AccountName, "set service-account attributes")) {
+    foreach ($step in @(
+        @{ What = 'PasswordNeverExpires';    Do = { Set-ADUser -Identity $AccountName -PasswordNeverExpires $true } },
+        @{ What = 'KerberosEncryptionType';  Do = { Set-ADUser -Identity $AccountName -KerberosEncryptionType AES256 } },
+        @{ What = 'CannotChangePassword';    Do = { Set-ADUser -Identity $AccountName -CannotChangePassword $true } }
+    )) {
+        try { & $step.Do; Write-Host "    $($step.What) set" }
+        catch {
+            if ($step.What -eq 'KerberosEncryptionType') { throw "Could not set AES-256 on ${AccountName}: $($_.Exception.Message)" }
+            Write-Warning "$($step.What) could not be set on ${AccountName} ($($_.Exception.Message)); continuing, it is not required for Kerberos."
         }
     }
 }
