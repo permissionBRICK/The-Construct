@@ -3,9 +3,6 @@ using Constructd.Core.Configuration;
 using Constructd.Core.Domain;
 using Constructd.Core.Logic;
 
-// Disambiguate from Microsoft.AspNetCore.Http.Endpoint.
-using DomainEndpoint = Constructd.Core.Domain.Endpoint;
-
 namespace Constructd.Api.Jobs;
 
 /// <summary>

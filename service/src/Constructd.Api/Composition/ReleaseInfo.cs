@@ -11,7 +11,7 @@ public sealed class ReleaseInfo : IReleaseInfo
     public int SchemaMinReadableBy => SqliteMigrations.MinReadableBy;
     /// <summary>
     /// What this host's platform really offers. A Proxmox node has no child VMs, media catalog,
-    /// screenshot console, self-update or guest-network policy yet, and must not advertise them: the
+    /// screenshot console, self-update or child-network policy yet, and must not advertise them: the
     /// extension shows what is listed here and hides the rest (host-administration contract §8.1).
     /// </summary>
     public IReadOnlyList<string> ApiFeatures => options?.IsProxmox == true
