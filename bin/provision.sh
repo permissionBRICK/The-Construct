@@ -296,7 +296,9 @@ AGENT_NAME="${AGENT_NAME:-$(hostname)-agent}"
 PROJECTS="${PROJECTS:-default}"
 SSH_USER="${SSH_USER:-${SUDO_USER:-agent}}"
 AI_TOOLS="${AI_TOOLS:-opencode,claude-code,codex}"
-ALLOW_HOST_PACKAGES="${ALLOW_HOST_PACKAGES:-false}"
+# Project profiles may declare hostPackages; they are installed by default. The switch
+# is an opt-out, not a sandbox: provisionCommands already run as root and can apt-get.
+ALLOW_HOST_PACKAGES="${ALLOW_HOST_PACKAGES:-true}"
 # Where project repos are checked out. Defaults to /root/repos because the
 # VS Code Remote-SSH / agent connection uses root.
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-/root/repos}"

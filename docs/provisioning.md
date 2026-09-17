@@ -137,7 +137,7 @@ Recognized variables:
 | `PROJECTS` | — | Comma-separated project profiles to activate |
 | `SSH_USER` | — | Seed SSH user |
 | `AI_TOOLS` | `opencode,claude-code,codex` | Agent CLIs to install |
-| `ALLOW_HOST_PACKAGES` | — | Allow project profiles to install host packages |
+| `ALLOW_HOST_PACKAGES` | `true` | Install the `hostPackages` project profiles declare. `false` only warns; it is not a sandbox, since `provisionCommands` run as root anyway. |
 | `WORKSPACE_ROOT` | `/root/repos` | Where project repos are cloned |
 | `CLAUDE_USER` | `root` | User Claude Code's CLI and VS Code extension settings are written for |
 | `SETUP_ROOT_SSH_KEY` | `true` | Generate a root SSH key |
