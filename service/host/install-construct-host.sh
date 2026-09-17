@@ -198,6 +198,12 @@ fi
 # ── 4. TLS certificate (clients pin its fingerprint at enrolment) ─────────────
 say "TLS certificate"
 PFX="${ETC_DIR}/tls.pfx"; PFX_PASS_FILE="${ETC_DIR}/tls.pass"; CRT="${ETC_DIR}/tls.crt"
+# A certificate that does not name the public host is reissued: clients pin the fingerprint, so
+# tell them (the installer prints the new one) — a stale name would fail every TLS handshake anyway.
+if [[ -f "${CRT}" ]] && ! openssl x509 -in "${CRT}" -noout -ext subjectAltName 2>/dev/null | grep -qE "(DNS|IP( Address)?):${PUBLIC_HOST}(,|$)"; then
+  note "the existing certificate does not name ${PUBLIC_HOST}; issuing a new one (clients must re-confirm the fingerprint)"
+  rm -f "${PFX}" "${PFX_PASS_FILE}" "${CRT}"
+fi
 if [[ ! -f "${PFX}" || ! -f "${PFX_PASS_FILE}" || ! -f "${CRT}" ]]; then
   KEY="$(mktemp)"; trap 'rm -f "${KEY}"' EXIT
   SAN="DNS:${NODE}"
