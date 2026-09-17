@@ -27,7 +27,9 @@ public sealed partial class ProxmoxChildVmPlatform(IProcessRunner processes, IHy
             false, 2, Supported, Supported, UnsupportedCapabilities.Console,
             new(Supported, Supported, Unsupported, Conditional, Unsupported, Unsupported),
             Unsupported, Unsupported, driver.Capabilities.Suspend ? Supported : Unsupported, Conditional,
-            ["Both Secure Boot templates use OVMF's bundled Microsoft keys. Guest agent addresses are unverified."]));
+            ["Both Secure Boot templates use OVMF's bundled Microsoft keys. Guest agent addresses are unverified.",
+             "Console text uses US-layout ASCII; unsupported keys and scancodes are refused.",
+             "Native noVNC requires a separate Proxmox login; the VMConnect browser gateway is unsupported."]));
     }
 
     public Task<ChildStoragePlacement> ResolvePrimaryStorageAsync(string name, CancellationToken ct) => ResolveStorageAsync(name, ct);
