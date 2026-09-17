@@ -63,7 +63,13 @@ def publish(output):
     latest_commit = latest_tag[5:] if re.fullmatch(r'host-[0-9a-f]{40}', latest_tag) else None
     if latest and latest_commit is None:
         raise ValueError('Latest release is not a Construct commit release; refusing to replace it')
+    def known(sha):
+        return subprocess.run(['git', 'cat-file', '-e', sha + '^{commit}'], capture_output=True).returncode == 0
     def ancestor(a, b):
+        # A release commit the repository no longer contains (history was rewritten) is
+        # unrelated to every current commit; only the main tip may then replace it.
+        if not (known(a) and known(b)):
+            return False
         code = subprocess.run(['git', 'merge-base', '--is-ancestor', a, b]).returncode
         if code not in (0, 1):
             raise RuntimeError('Cannot establish release ancestry')
