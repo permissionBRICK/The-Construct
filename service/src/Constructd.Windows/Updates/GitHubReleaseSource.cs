@@ -60,6 +60,8 @@ public sealed class GitHubReleaseSource(HttpClient client, long maxSourceBytes =
                                      new(payload, new Uri(baseUrl + payload), size)];
             if (manifest.FrameworkDependentAsset is { } fdd)
                 assets.Add(new(fdd, new Uri(baseUrl + fdd), manifest.FrameworkDependentSizeBytes!.Value));
+            if (manifest.LinuxAsset is { } linux)
+                assets.Add(new(linux, new Uri(baseUrl + linux), manifest.LinuxSizeBytes!.Value));
             foreach (var asset in assets) _allowed[asset.Url] = asset.SizeBytes;
             return [new(tag, commit, row.GetProperty("builtAt").GetDateTimeOffset(), assets)];
         }

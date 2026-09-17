@@ -7,6 +7,7 @@ using Constructd.Core.Configuration;
 using Constructd.Core.Logic;
 using Constructd.Fakes;
 using Constructd.Windows.Updates;
+using Microsoft.Extensions.DependencyInjection;
 namespace Constructd.Tests.Updates;
 
 public sealed class PackageTests : IDisposable
@@ -15,10 +16,15 @@ public sealed class PackageTests : IDisposable
     public PackageTests()=>Directory.CreateDirectory(_root);
     public void Dispose()=>Directory.Delete(_root,true);
     private static string Hash(byte[] bytes)=>Convert.ToHexStringLower(SHA256.HashData(bytes));
-    internal (ReleaseManifest Manifest,byte[] Zip) Package(string? extra=null,int attributes=0,bool listed=true)
+    internal (ReleaseManifest Manifest,byte[] Zip) Package(string? extra=null,int attributes=0,bool listed=true,bool linux=false)
     {
         var files=new Dictionary<string,byte[]>{["service/Constructd.Api.exe"]=RandomNumberGenerator.GetBytes(4096),
             ["scripts/drivers/driver.ps1"]=Encoding.UTF8.GetBytes("driver"),["updater/Update-ConstructHost.ps1"]=Encoding.UTF8.GetBytes("updater")};
+        if(linux)
+        {
+            files["service/Constructd.Api"]=files["service/Constructd.Api.exe"]; files.Remove("service/Constructd.Api.exe");
+            files["updater/update-construct-host.sh"]=files["updater/Update-ConstructHost.ps1"];
+        }
         if(extra is not null && listed) files[extra]=Encoding.UTF8.GetBytes("extra");
         var sums=Encoding.UTF8.GetBytes(string.Concat(files.Select(f=>$"{Hash(f.Value)}  {f.Key}\n")));
         using var output=new MemoryStream();
@@ -31,6 +37,9 @@ public sealed class PackageTests : IDisposable
         var zip=output.ToArray();var commit=new string('a',40);
         var m=new ReleaseManifest(1,commit,"refs/heads/main","test",DateTimeOffset.UtcNow,"permissionBRICK/The-Construct","host-"+commit,
             "construct-host-aaaaaaa-win-x64.zip",Hash(zip),Hash(sums),"updater/Update-ConstructHost.ps1",Hash(files["updater/Update-ConstructHost.ps1"]),new(600,0,[]),new(1,1,[],[]),new("2026-08-01",0));
+        if(linux) m=m with {LinuxAsset="construct-host-aaaaaaa-linux-x64.zip",LinuxSha256=Hash(zip),LinuxSizeBytes=zip.Length,
+            LinuxSumsSha256=Hash(sums),LinuxUncompressedSizeBytes=files.Sum(f=>f.Value.Length)+sums.Length,
+            LinuxUpdaterPath="updater/update-construct-host.sh",LinuxUpdaterSha256=Hash(files["updater/update-construct-host.sh"])};
         return(m,zip);
     }
     [Fact] public async Task Production_stage_without_signing_is_pinned_and_every_file_is_reverified()
@@ -41,7 +50,7 @@ public sealed class PackageTests : IDisposable
             var uri=new Uri("https://github.com/permissionBRICK/The-Construct/releases/download/"+manifest.ReleaseTag+"/"+a.Item1);source.Assets[uri]=a.Item2;return new ReleaseAsset(a.Item1,uri,a.Item2.Length);}).ToArray();
         var release=new ReleaseDescriptor(manifest.ReleaseTag,manifest.Commit,DateTimeOffset.UtcNow,assets);source.Releases.Add(release);
         var config=new InMemoryHostConfigStore(new MutableClock());
-        var stager=new PackageStager(source,config,new(){DatabasePath=Path.Combine(_root,"db"),Fake=false},new FakeReleaseInfo());
+        var stager=new PackageStager(source,config,new(){DatabasePath=Path.Combine(_root,"db"),Fake=false},new FakeReleaseInfo()){IsWindows=true};
         var check=await stager.CheckAsync(null,default);Assert.NotNull(check);Assert.Empty(check.Reasons);
         var staged=await stager.StageAsync(Guid.NewGuid().ToString("n"),release,null,default);
         Assert.True(await stager.VerifyStagedAsync(staged,default));
@@ -126,7 +135,9 @@ public sealed class PackageTests : IDisposable
         Assert.Contains(files,f=>f.Path=="scripts/service/host/Update-ConstructHost.ps1");
         Assert.Contains(files,f=>f.Path=="service/Constructd.Api.exe");
     }
-    private static async Task Run(string executable,params string[] args)
+    internal static PackageStager WindowsStager(IServiceProvider sp)=>new(sp.GetRequiredService<IReleaseSource>(),sp.GetRequiredService<IHostConfigStore>(),
+        sp.GetRequiredService<ConstructdOptions>(),sp.GetRequiredService<IReleaseInfo>(),sp.GetService<IProcessRunner>()){IsWindows=true};
+    internal static async Task Run(string executable,params string[] args)
     {
         var start=new System.Diagnostics.ProcessStartInfo(executable){UseShellExecute=false,RedirectStandardOutput=true,RedirectStandardError=true};
         foreach(var arg in args)start.ArgumentList.Add(arg);
