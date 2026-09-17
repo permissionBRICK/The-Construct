@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('publisher', Path(__file__).parents[1] / 'scripts/publish-construct-release.py')
@@ -102,6 +103,28 @@ class ReleaseTests(unittest.TestCase):
     def test_history_rewrite_requires_current_main(self):
         self.assertFalse(publisher.should_promote('abandoned', 'unrelated', lambda a, b: False, 'main'))
         self.assertTrue(publisher.should_promote('main', 'unrelated', lambda a, b: False, 'main'))
+
+    def test_latest_commit_missing_after_history_rewrite_promotes_only_main_tip(self):
+        commit, gone = 'a' * 40, 'b' * 40
+        for main_head, promoted in ((commit, True), ('c' * 40, False)):
+            with self.subTest(main_head=main_head), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory)
+                fixture(output, commit)
+                latest = dict(tag_name='host-' + gone, draft=False, assets=[])
+                def run(command, **kwargs):
+                    if command[1:3] == ['cat-file', '-e']:
+                        return SimpleNamespace(returncode=0 if command[3].startswith(commit) else 1)
+                    if command[1:2] == ['merge-base']:
+                        raise AssertionError('merge-base must not run for an unknown commit')
+                    return SimpleNamespace(returncode=0)
+                api = lambda path: latest if path == '/releases/latest' else None
+                with patch.dict(os.environ, GITHUB_SHA=commit, GITHUB_REPOSITORY='owner/repo'), \
+                     patch.object(publisher, 'api', side_effect=api), \
+                     patch.object(publisher.subprocess, 'check_output', return_value=main_head + '\trefs/heads/main'), \
+                     patch.object(publisher.subprocess, 'run', side_effect=run) as mocked:
+                    publisher.publish(output)
+                commands = [call.args[0] for call in mocked.call_args_list]
+                self.assertEqual(any(command[1:3] == ['release', 'edit'] and command[-1] == '--latest' for command in commands), promoted)
 
     def test_upload_failure_leaves_latest_untouched_and_release_in_draft(self):
         commit = 'a' * 40
