@@ -74,11 +74,10 @@ if (-not $account) {
     # the only way to a keytab, and nothing else uses it. A foreign account is only touched on request.
     $ours = [string]$account.Description -eq $marker
     if ($RotateKeytab -or ($ours -and -not (Test-Path -LiteralPath $KeytabPath))) {
-        $password = New-RandomPassword
-        if ($PSCmdlet.ShouldProcess($AccountName, "reset password (keytab rotation)")) {
-            Set-ADAccountPassword -Identity $AccountName -Reset -NewPassword (ConvertTo-SecureString $password -AsPlainText -Force)
-            Write-Host "    password reset for a new keytab"
-        }
+        # ktpass sets a fresh random password itself while writing the keytab (step 4); the AD
+        # module's password reset is not used, since it is refused on some domains where ktpass is not.
+        $password = 'rotate'
+        Write-Host "    the keytab step will reset the password"
     }
 }
 if ($account -and $PSCmdlet.ShouldProcess($AccountName, "set service-account attributes")) {
@@ -88,10 +87,7 @@ if ($account -and $PSCmdlet.ShouldProcess($AccountName, "set service-account att
         @{ What = 'CannotChangePassword';    Do = { Set-ADUser -Identity $AccountName -CannotChangePassword $true } }
     )) {
         try { & $step.Do; Write-Host "    $($step.What) set" }
-        catch {
-            if ($step.What -eq 'KerberosEncryptionType') { throw "Could not set AES-256 on ${AccountName}: $($_.Exception.Message)" }
-            Write-Warning "$($step.What) could not be set on ${AccountName} ($($_.Exception.Message)); continuing, it is not required for Kerberos."
-        }
+        catch { Write-Warning "$($step.What) could not be set on ${AccountName} ($($_.Exception.Message)); continuing (ktpass sets AES-256 itself)." }
     }
 }
 
@@ -128,8 +124,10 @@ if ($password) {
     $ktpass = Get-Command ktpass.exe -ErrorAction SilentlyContinue
     if (-not $ktpass) { throw "ktpass.exe not found (RSAT / a domain controller has it)." }
     if (Test-Path -LiteralPath $KeytabPath) { Remove-Item -LiteralPath $KeytabPath -Force }
-    # /mapop set is deliberate: the SPN is already on the account; ktpass must not add a second UPN mapping.
-    & $ktpass.Source /princ $principal /mapuser "$netbios\$AccountName" /crypto AES256-SHA1 /ptype KRB5_NT_PRINCIPAL /pass $password /out $KeytabPath /mapop set /setupn 2>&1 | ForEach-Object { "    ktpass: $_" } | Write-Host
+    # /pass +rndPass: ktpass generates the password and sets it on the account itself (SAM, not the AD
+    # web service), so the keytab and the account always agree and no password ever passes through
+    # PowerShell. /mapop set: the SPN is already on the account; no second mapping is added.
+    & $ktpass.Source /princ $principal /mapuser "$netbios\$AccountName" /crypto AES256-SHA1 /ptype KRB5_NT_PRINCIPAL /pass +rndPass /out $KeytabPath /mapop set /setupn 2>&1 | ForEach-Object { "    ktpass: $_" } | Write-Host
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $KeytabPath)) { throw "ktpass failed; no keytab written." }
     Write-Host "    keytab written to $KeytabPath (copy it to the host, then delete it here)"
 } else {
