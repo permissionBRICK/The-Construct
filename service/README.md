@@ -596,6 +596,10 @@ exists; a timestamp requires an exact match. A conflict returns `409 config-conf
 | `network` | `hostForwardsEnabled`, `directAddressReporting` | both true |
 | `updates` | `repository`, `channel`, `drainTimeoutMinutes`, `healthTimeoutSeconds` | `permissionBRICK/The-Construct`, `main`, 60 min, 120 s |
 
+When `capacity.ramHeadroomBytes` is null, RAM headroom is `max(1 GiB, total RAM / 8)`
+on Proxmox and `max(4 GiB, total RAM / 8)` on Hyper-V. A configured byte value,
+including zero, overrides either default.
+
 Disabling `network.hostForwardsEnabled` refuses new primary host forwards immediately; the default
 preserves existing behavior. Stored user allowances override defaults, host caps narrow them, and
 per-primary overrides can only restrict the result. Lowered limits do not delete existing VMs.
@@ -613,6 +617,28 @@ epoch and current ledger rows. Before the first inventory it reports incomplete.
 explicit refresh, admission with an invalid/expired epoch, or the reconciliation tick
 performs the inventory read. A reconciliation pass reads inventory once, regardless of
 VM count; its individual database mutations never call the hypervisor.
+
+The host administration Overview RAM card shows measured memory in use. Its stacked
+bar separates memory resident in running VMs from the host's own usage, with physical
+free RAM left empty. Proxmox supplies `memory.used` and each guest's `mem` sample;
+Hyper-V supplies total minus free physical memory and each VM's assigned memory.
+The host portion is the used total minus VM residency, bounded at zero. The panel
+bounds segment widths if samples disagree and keeps the reported values in the text.
+
+VM commitments appear as a separate number and turn hot above 100% of physical RAM.
+This is the existing reserved plus unmanaged allocation total, including pending
+starts and conservative holds awaiting reconciliation. It does not fill the usage bar.
+The admission marker is total RAM minus headroom and appears only in `enforce` mode.
+In `observe` mode the card says admission is not enforced. A thin swap bar appears
+when Linux swap or Windows page files have a positive total and a known used value.
+Windows sums all page files; a failed page-file query leaves swap unknown without
+failing inventory.
+
+Both `/host/status` and `/host/capacity` add `usedBytes`, `vmResidentBytes`,
+`hostOwnBytes`, `committedBytes`, `admission`, and nullable `swap` to the RAM summary.
+The existing RAM fields retain their admission meaning. Older services keep the
+panel's legacy capacity display, and existing readers such as the Companion can
+continue using the original fields. CPU and storage bars are unchanged.
 
 RAM admission uses the lesser of the physical-free and committed-allocation bounds.
 Both retain OS headroom. Memory promised to pending **or held** reservations but not yet
@@ -638,7 +664,7 @@ Stored `host_config.capacity` takes precedence over bootstrap mode. Configure it
 | Field | Default | Meaning |
 |---|---|---|
 | `mode` | `observe` for migrated hosts | Accounting only, or enforced admission. Fresh installers may explicitly select `enforce`. |
-| `ramHeadroomBytes` | null | Null computes `max(4 GiB, physical RAM / 8)`. |
+| `ramHeadroomBytes` | null | Null computes `max(1 GiB, physical RAM / 8)` on Proxmox and `max(4 GiB, physical RAM / 8)` on Hyper-V. A byte value overrides the default. |
 | `storageHeadroomBytes` | 20 GiB | Headroom on each volume. |
 | `cpuBudget` | null | Optional host active-vCPU budget. |
 | `maxVcpusPerVm` | null | Optional per-VM CPU ceiling; backend hardware validation also applies. |
