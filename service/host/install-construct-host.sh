@@ -216,18 +216,29 @@ stage_from_zip() {
   STAGE="${dir}"
 }
 build_service() {
-  say "Building the service from the checkout (.NET SDK)"
+  say "Building the service from source (.NET SDK)"
+  # Archives (release source zip, GitHub branch zip) omit service/src by .gitattributes export-ignore:
+  # the service is a release artifact, not part of the scripts payload. A build therefore needs a
+  # real clone of the ref.
+  local src="${SOURCE_DIR}"
+  if [[ ! -d "${src}/service/src/Constructd.Api" ]]; then
+    command -v git >/dev/null || { note "installing git"; DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git >/dev/null 2>&1 || die "could not install git"; }
+    src="${TMP_ROOT}/clone"
+    note "cloning ${REPO} (${REF}) for the service source"
+    git clone -q --depth 1 --branch "${REF}" "https://github.com/${REPO}.git" "${src}" || die "could not clone ${REPO} ${REF}"
+  fi
   if ! "${DOTNET_DIR}/dotnet" --version >/dev/null 2>&1; then
     note "fetching the .NET 10 SDK into ${DOTNET_DIR} (once)"
     curl -fsSL --max-time 120 -o "${TMP_ROOT}/dotnet-install.sh" https://dot.net/v1/dotnet-install.sh || die "could not download dotnet-install.sh"
     bash "${TMP_ROOT}/dotnet-install.sh" --channel 10.0 --install-dir "${DOTNET_DIR}" >/dev/null || die "the .NET SDK install failed"
   fi
-  local out="${TMP_ROOT}/publish"
-  ( cd "${SOURCE_DIR}" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 "${DOTNET_DIR}/dotnet" publish service/src/Constructd.Api -c Release -r linux-x64 --self-contained true -o "${out}" -v q >"${TMP_ROOT}/build.log" 2>&1 ) \
-    || { tail -20 "${TMP_ROOT}/build.log" >&2; die "dotnet publish failed (log above)"; }
+  local out="${TMP_ROOT}/publish" log=/var/log/constructd-build.log
+  note "dotnet publish (a few minutes; log: ${log})"
+  ( cd "${src}" && DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 "${DOTNET_DIR}/dotnet" publish service/src/Constructd.Api -c Release -r linux-x64 --self-contained true -o "${out}" -v q >"${log}" 2>&1 ) \
+    || { grep -E 'error' "${log}" | head -20 >&2; die "dotnet publish failed (see ${log})"; }
   [[ -f "${out}/Constructd.Api" ]] || die "the build produced no Constructd.Api"
   STAGE="${out}"
-  note "built $(cd "${SOURCE_DIR}" && cat .construct-revision 2>/dev/null || echo "${REF}")"
+  note "built $(git -C "${src}" rev-parse --short HEAD 2>/dev/null || cat "${src}/.construct-revision" 2>/dev/null || echo "${REF}")"
 }
 if [[ -n "${PACKAGE}" ]]; then
   if [[ -d "${PACKAGE}" ]]; then STAGE="$(cd "${PACKAGE}" && pwd)"; [[ -f "${STAGE}/Constructd.Api" ]] || die "'${PACKAGE}' holds no Constructd.Api"
