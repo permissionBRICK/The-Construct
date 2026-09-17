@@ -5,7 +5,8 @@
 > itself with the Proxmox platform selected (`Constructd:Backend = proxmox`). Every client is
 > unchanged: `Auto-Install.ps1 -Backend hyperv-remote`, the VS Code extension and the Companion
 > talk to the same API and see the same instance registry entries; the only difference they can
-> observe is a shorter feature list (no child VMs, no screenshot console, no host self-update).
+> observe is a shorter feature list (no child VMs or screenshot console).
+> Host self-update is implemented; its systemd handoff and rollback still need human field testing.
 > The design background is [docs/remote-host.md](remote-host.md); this page is the Proxmox specifics.
 
 ## Quick start (four steps)
@@ -45,9 +46,10 @@
    Confirm the certificate fingerprint the node printed in step 2. Without step 3 add
    `-ServiceAuth token` and paste the admin token when asked.
 
-To update the host later, repeat step 2 with `--host-release latest`; certificate, keytab, users
-and VMs stay. To test an unreleased branch, add `--ref <branch>` (the service is then built on the
-node, which fetches a .NET SDK once).
+To update a host that supports self-update, open the extension's **Maintenance** tab and click
+**Update**. See Updating below. To install the first supporting build or repair an installation,
+repeat step 2 with `--host-release latest`. To try an unreleased branch, add `--ref <branch>`;
+the installer builds the service on the node and fetches a .NET SDK once.
 
 ## 1. What the node ends up running
 
@@ -67,8 +69,10 @@ lifecycle. **Do not rename or renumber them behind the service's back** — it a
 ## 2. Install (or update) the host
 
 The one-liner of the quick start is `service/host/install-construct-host.sh`, the Linux counterpart
-of `Install-ConstructHost.ps1`. From a checkout it installs that checkout's scripts; run bare it
-fetches the release's pinned source itself. The service binary comes from the release's
+of `Install-ConstructHost.ps1`. Release packages supply their matching scripts unless `--source`
+explicitly selects a checkout. The source checkout supplies bootstrap keys on a fresh install;
+existing keys are preserved when installing release scripts. Run bare, the installer fetches
+the release's pinned source itself. The service binary comes from the release's
 `construct-host-<commit>-linux-x64.zip` (checksum-verified against the manifest), from `--package`
 (a `dotnet publish -r linux-x64 --self-contained true` output, directory or zip), or is built on the
 node with `--build` / for a non-main `--ref`. In order it does:
@@ -84,7 +88,7 @@ node with `--build` / for a non-main `--ref`. In order it does:
 8. **First admin** — `admin users add <name> --role Admin --max-vms 10` and one API token, printed once. Re-runs keep the token; `--rotate-token` issues a new one.
 9. **Start and verify** — restarts the unit and waits for `/api/v1/health`.
 
-Re-running the script is the update path: `--host-release latest` (or a new `--package`, or
+Re-running the script is the install/repair path: `--host-release latest` (or a new `--package`, or
 `--build`) replaces the service in place; the existing VMs keep running and their SSH forwards are
 re-established from the database when the service comes back. Without such a flag a re-run keeps
 the installed service and only refreshes scripts and settings.
@@ -112,6 +116,31 @@ the node.
 The backend id stays `hyperv-remote` on the client: it means "a VM on a host running constructd",
 which is what this is. The registry entry, the SSH alias, VS Code Remote-SSH and the config-sync
 branch are all as for a Windows host.
+
+### Updating
+
+In the extension's host administration panel, open **Maintenance** and click **Update**.
+The service verifies the Linux release, drains active jobs, then launches
+`construct-host-update-<updateId>` through `systemd-run`. That unit survives the service stop.
+It backs up owned files and the database, replaces the service and matching scripts, restarts
+`constructd`, and checks the pinned loopback health response and `admin db check --json`.
+Failed health checks roll back; failed recovery stays in maintenance for an administrator.
+The certificate pin comes from the configured `CertPath`/`CertPassword` PFX.
+
+Logs are `/var/lib/constructd/updates/updater.log` and
+`journalctl -u construct-host-update-<updateId>`. Recovery state is in the same directory's
+`last-update.json`; `handoff.json` contains a private health credential and must not be shared.
+The installer writes `/opt/construct/host/install.json` with hashes of owned files, so the
+first self-update has a file ledger. Releases without the Linux metadata report `no-linux-asset`.
+An installation without a ledger needs an installer repair before its first self-update;
+the Linux updater refuses to infer ownership by scanning unknown host files.
+Raw local publishes without release metadata receive an `unknown` ledger version/commit;
+the running binary still reports its compiled commit. A build from a checkout records its commit.
+
+Use `install-construct-host.sh --host-release latest` for the first supporting build or for
+repair. It accepts both older service-only archives and the new release layout. `--source`
+keeps explicit checkout scripts; otherwise a release package supplies its own scripts. Settings,
+certificate and service registration remain installer responsibilities. Self-update preserves them.
 
 ## 4. How a VM comes to be
 
@@ -200,7 +229,7 @@ update the A record; the SPN and keytab are name-based and stay valid.
 
 ## 6. What is not there (yet)
 
-- **Child VMs** (`construct vm …`), the **screenshot console** and the **host self-update** report
+- **Child VMs** (`construct vm …`) and the **screenshot console** report
   `unsupported-capability`; the health endpoint does not list them, so the extension does not offer them.
 - **Capacity enforcement** — the ledger observes (`HostAdmin:Capacity:Mode = Observe`) with a real
   inventory (`pvesh get /nodes/<node>/status|storage|qemu`), but nothing is refused for capacity.

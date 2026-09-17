@@ -5,8 +5,8 @@
 #
 #   One shot on a fresh node (fetches the release source and the Linux service itself):
 #     curl -fsSL https://raw.githubusercontent.com/permissionBRICK/The-Construct/main/service/host/install-construct-host.sh | bash
-#   From a checkout (installs that checkout's scripts; the service comes from the release, or is
-#   built here with --build / for a non-main --ref):
+#   From a checkout (release scripts by default, or checkout scripts with --source; the service
+#   comes from the release, or is built here with --build / for a non-main --ref):
 #     bash service/host/install-construct-host.sh [options]
 #
 # Run as root ON THE NODE. Re-running is safe: every step checks before it changes anything, the
@@ -21,7 +21,7 @@
 #                             into /opt/construct/dotnet); automatic for a non-main --ref
 #   --repo <owner/name>       source repository (default: permissionBRICK/The-Construct)
 #   --ref <git ref>           which source to fetch when not run from a checkout (default: main)
-#   --source <dir>            Construct checkout to install (default: the one this script is in)
+#   --source <dir>            prefer this checkout's scripts over a release package's scripts
 #   --admin <name>            first admin user (default: admin); its token is printed once
 #   --storage <id>            Proxmox storage for VM disks, needs 'images' content (default: local-lvm)
 #   --image-storage <id>      directory storage for the cloud image and cloud-init snippets (default: local)
@@ -75,6 +75,10 @@ REPO="permissionBRICK/The-Construct"
 REF="main"
 HOST_RELEASE=""
 BUILD=0
+SOURCE_EXPLICIT=0
+PACKAGE_SCRIPTS=""
+INSTALL_COMMIT=""
+INSTALL_VERSION=""
 
 HOST_DIR=/opt/construct/host
 SCRIPTS_DIR=/opt/construct/scripts
@@ -91,7 +95,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --public-host)   PUBLIC_HOST="$2"; shift 2 ;;
     --package)       PACKAGE="$2"; shift 2 ;;
-    --source)        SOURCE_DIR="$(cd "$2" && pwd)"; shift 2 ;;
+    --source)        SOURCE_DIR="$(cd "$2" && pwd)"; SOURCE_EXPLICIT=1; shift 2 ;;
     --admin)         ADMIN="$2"; shift 2 ;;
     --storage)       STORAGE="$2"; shift 2 ;;
     --image-storage) IMAGE_STORAGE="$2"; shift 2 ;;
@@ -122,7 +126,7 @@ for k in sys.argv[1:]:
     v=v.get(k) if isinstance(v,dict) else None
 print("" if v is None else v)' "$@"; }
 TMP_ROOT="$(mktemp -d)"
-trap 'rm -rf "${TMP_ROOT}"' EXIT
+trap 'rm -r "${TMP_ROOT}"' EXIT
 
 # ── 0. Check the inputs ──────────────────────────────────────────────────────
 say "Checking the inputs"
@@ -213,6 +217,11 @@ fi
 STAGE=""
 stage_from_zip() {
   local dir="${TMP_ROOT}/service"; mkdir -p "${dir}"; unzip -q "$1" -d "${dir}"
+  if [[ -f "${dir}/service/Constructd.Api" && -f "${dir}/scripts/.construct-revision" ]]; then
+    INSTALL_COMMIT="$(cat "${dir}/scripts/.construct-revision")"
+    [[ "${INSTALL_COMMIT}" =~ ^[0-9a-f]{40}$ ]] || die "invalid package revision"
+    if [[ "${SOURCE_EXPLICIT}" -eq 0 ]]; then PACKAGE_SCRIPTS="${dir}/scripts"; fi
+  fi
   if [[ ! -f "${dir}/Constructd.Api" && -f "${dir}/service/Constructd.Api" ]]; then dir="${dir}/service"; fi
   [[ -f "${dir}/Constructd.Api" ]] || die "'$1' holds no Constructd.Api"
   STAGE="${dir}"
@@ -240,6 +249,7 @@ build_service() {
     || { grep -E 'error' "${log}" | head -20 >&2; die "dotnet publish failed (see ${log})"; }
   [[ -f "${out}/Constructd.Api" ]] || die "the build produced no Constructd.Api"
   STAGE="${out}"
+  INSTALL_COMMIT="$(git -C "${src}" rev-parse HEAD 2>/dev/null || cat "${src}/.construct-revision" 2>/dev/null || echo unknown)"
   note "built $(git -C "${src}" rev-parse --short HEAD 2>/dev/null || cat "${src}/.construct-revision" 2>/dev/null || echo "${REF}")"
 }
 if [[ -n "${PACKAGE}" ]]; then
@@ -253,6 +263,8 @@ elif [[ "${BUILD}" -eq 0 && "${REF}" == "main" ]] && fetch_manifest && [[ -n "$(
   LNX_ASSET="$(printf '%s' "${MANIFEST_JSON}" | json_field linuxAsset)"; LNX_SHA="$(printf '%s' "${MANIFEST_JSON}" | json_field linuxSha256)"
   download_asset "${LNX_ASSET}" "${LNX_SHA}" "${TMP_ROOT}/service.zip" || die "could not download ${LNX_ASSET}"
   stage_from_zip "${TMP_ROOT}/service.zip"
+  INSTALL_COMMIT="$(printf '%s' "${MANIFEST_JSON}" | json_field commit)"
+  INSTALL_VERSION="$(printf '%s' "${MANIFEST_JSON}" | json_field packageVersion)"
   note "${LNX_ASSET}, checksum verified"
 else
   [[ "${BUILD}" -eq 1 || "${REF}" != "main" ]] || note "this release ships no Linux service yet; building it here"
@@ -331,7 +343,7 @@ if [[ -f "${CRT}" ]] && ! openssl x509 -in "${CRT}" -noout -ext subjectAltName 2
   rm -f "${PFX}" "${PFX_PASS_FILE}" "${CRT}"
 fi
 if [[ ! -f "${PFX}" || ! -f "${PFX_PASS_FILE}" || ! -f "${CRT}" ]]; then
-  KEY="$(mktemp)"; trap 'rm -f "${KEY}"' EXIT
+  KEY="${TMP_ROOT}/tls.key"
   SAN="DNS:${NODE}"
   if [[ "${PUBLIC_HOST}" =~ ^[0-9.]+$ ]]; then SAN="${SAN},IP:${PUBLIC_HOST}"; else SAN="${SAN},DNS:${PUBLIC_HOST}"; fi
   openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes -keyout "${KEY}" -out "${CRT}" \
@@ -388,18 +400,80 @@ fi
 say "Installing files"
 if systemctl is-active --quiet constructd 2>/dev/null; then systemctl stop constructd; note "stopped constructd"; fi
 if [[ -n "${STAGE}" ]]; then
-  rsync -a --delete --exclude 'appsettings.Production.json' "${STAGE}/" "${HOST_DIR}/"
+  rsync -a --delete --exclude 'appsettings.Production.json' --exclude 'install.json' --exclude '*.db*' \
+    --exclude 'keys' --exclude 'projects' --exclude 'settings.json' --exclude 'data' --exclude 'media' \
+    --exclude 'iso' --exclude '.construct-tools' --exclude '.git' "${STAGE}/" "${HOST_DIR}/"
   chmod 0755 "${HOST_DIR}/Constructd.Api"
   note "service -> ${HOST_DIR}"
 fi
-if [[ "$(cd "${SOURCE_DIR}" && pwd)" != "${SCRIPTS_DIR}" ]]; then
+SCRIPTS_STAGE="${PACKAGE_SCRIPTS:-${SOURCE_DIR}}"
+SCRIPT_EXCLUDES=()
+if [[ -n "${PACKAGE_SCRIPTS}" ]]; then
+  # Keys are deliberately absent from release payloads. Seed them once from the source checkout;
+  # existing host keys survive both installer repairs and self-updates.
+  install -d -m 0700 "${SCRIPTS_DIR}/keys"
+  rsync -a --ignore-existing "${SOURCE_DIR}/keys/" "${SCRIPTS_DIR}/keys/"
+  SCRIPT_EXCLUDES+=(--exclude=keys)
+fi
+if [[ "$(cd "${SCRIPTS_STAGE}" && pwd)" != "${SCRIPTS_DIR}" ]]; then
   rsync -a --delete --exclude '.git' --exclude 'node_modules' --exclude '.construct-tools' --exclude '.construct-backup' \
-    --exclude '*.db' --exclude 'settings.json' "${SOURCE_DIR}/" "${SCRIPTS_DIR}/"
+    --exclude '*.db*' --exclude 'settings.json' --exclude 'projects' --exclude 'data' --exclude 'media' --exclude 'iso' \
+    --exclude 'appsettings.Production.json' --exclude 'install.json' \
+    "${SCRIPT_EXCLUDES[@]}" "${SCRIPTS_STAGE}/" "${SCRIPTS_DIR}/"
   note "scripts -> ${SCRIPTS_DIR}"
 else
   note "scripts already in ${SCRIPTS_DIR}"
 fi
 chmod 0600 "${SCRIPTS_DIR}/keys/bootstrap_ed25519" 2>/dev/null || true
+
+# The self-updater owns only files recorded here. Raw local publishes without a release revision
+# have unknown identity; never label them with an unrelated source checkout's commit.
+python3 - "${HOST_DIR}" "${SCRIPTS_DIR}" "${STAGE}" "${PACKAGE_SCRIPTS}" "${INSTALL_COMMIT}" "${INSTALL_VERSION}" <<'LEDGER_PY'
+import datetime, hashlib, json, os, pathlib, sys, tempfile
+host, scripts = map(pathlib.Path, sys.argv[1:3])
+stage, package_scripts, commit, version = sys.argv[3:]
+ledger = host/'install.json'
+def no_links(path):
+    for p in (path, *path.parents):
+        if p.is_symlink(): raise ValueError('Installation ledger cannot contain links')
+def preserved(path):
+    return any(p.lower() in ('appsettings.production.json','install.json','settings.json','projects','keys','.git','.construct-tools','data','media','iso') or '.db' in p.lower() for p in path.parts)
+no_links(ledger)
+previous = json.loads(ledger.read_text()) if ledger.exists() else {}
+files = []
+def record(prefix, relative, installed):
+    if preserved(relative): return
+    target = installed/relative; no_links(target)
+    with target.open('rb') as stream: digest = hashlib.file_digest(stream,'sha256').hexdigest()
+    files.append(dict(path=prefix+'/'+relative.as_posix(),sha256=digest))
+if not stage and previous.get('files'):
+    for f in previous['files']:
+        if f['path'].startswith('service/'):
+            relative=pathlib.Path(f['path'][8:])
+            if relative.is_absolute() or '..' in relative.parts: raise ValueError('Unsafe ledger path')
+            record('service',relative,host)
+else:
+    base=pathlib.Path(stage) if stage else host
+    for path in sorted(base.rglob('*')):
+        no_links(path)
+        if path.is_file(): record('service',path.relative_to(base),host)
+if package_scripts:
+    base=pathlib.Path(package_scripts)
+    for path in sorted(base.rglob('*')):
+        no_links(path)
+        if path.is_file(): record('scripts',path.relative_to(base),scripts)
+stamp=datetime.datetime.now(datetime.timezone.utc).isoformat()
+value=dict(source='installer',commit=commit or (previous.get('commit','unknown') if not stage else 'unknown'),
+           packageVersion=version or (previous.get('packageVersion','unknown') if not stage else 'unknown'),
+           installedAt=stamp,previousCommit=previous.get('commit'),updateId=None,files=files)
+fd,temp=tempfile.mkstemp(prefix='install.json.',suffix='.tmp',dir=host)
+try:
+    with os.fdopen(fd,'w') as stream:
+        json.dump(value,stream);stream.write('\n');stream.flush();os.fsync(stream.fileno())
+    os.replace(temp,ledger)
+finally:
+    if os.path.exists(temp): os.unlink(temp)
+LEDGER_PY
 
 # ── 6. appsettings.Production.json ───────────────────────────────────────────
 say "Writing ${HOST_DIR}/appsettings.Production.json"
