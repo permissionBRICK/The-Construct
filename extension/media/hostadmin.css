@@ -4,6 +4,7 @@
 .ha-shell { max-width: 1180px; }
 /* The `hidden` attribute must win over every display: flex/grid rule below. */
 .ha-shell [hidden] { display: none !important; }
+#haVmSettings [hidden] { display: none !important; }
 .ha-title { font-size: 26px; word-break: break-all; }
 .ha-maint .ub-text { color: var(--warn); }
 

@@ -10,6 +10,29 @@ namespace Construct.Companion.Tests.Ipc;
 
 public sealed class HostAdminVmSettingsTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NetworkSettingsUseTheSharedDialogAndKeepFailuresOpen(bool failWrite)
+    {
+        var remote = new RemoteSettings();
+        var original = remote.Api.Handle;
+        remote.Api.Handle = request => request.Url.AbsolutePath switch
+        {
+            "/api/v1/health" => new(200, JsonSerializer.SerializeToElement(new { apiFeatures = new[] { "host-admin", "network-mode" } })),
+            "/api/v1/vms/build/network" when request.Method == "PUT" && failWrite => new(400, JsonSerializer.SerializeToElement(new { code = "validation", detail = "Bad network address" })),
+            "/api/v1/vms/build/network" => new(200, JsonSerializer.SerializeToElement(new { mode = "direct", effectiveMode = "relayed", maySwitchMode = true, maySetAddress = true })),
+            _ => original(request)
+        };
+        await using var h = await Enroll(remote.Api);
+        var loaded = await Send(h, "loadVmSettings", new { name = "build" });
+        Assert.Equal("direct", loaded.GetProperty("settings").GetProperty("network").GetProperty("mode").GetString());
+        var saved = await Send(h, "setVmSettings", new { name = "build", network = new { mode = "direct" } });
+        Assert.Equal(!failWrite, saved.GetProperty("saved").GetBoolean());
+        Assert.Equal("/api/v1/vms/build/network", Assert.Single(remote.Api.Requests, r => r.Method == "PUT").Url.AbsolutePath);
+        if (failWrite) Assert.Equal("direct", saved.GetProperty("settings").GetProperty("network").GetProperty("mode").GetString());
+    }
+
     private const string Route = "/v1/hosts/host.example_7462/messages";
     private static async Task<Harness> Enroll(RoutingRemoteApi api)
     {

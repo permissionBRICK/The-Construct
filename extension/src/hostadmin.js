@@ -27,7 +27,7 @@
 //                  tab, perform an action — every step re-classifying on refusal
 
 /** The `apiFeatures` names a current service advertises (§3.4). */
-const FEATURE_NAMES = ["host-admin", "children", "media", "console", "updates", "network", "primary-cpu", "primary-memory"];
+const FEATURE_NAMES = ["host-admin", "children", "media", "console", "updates", "network", "primary-cpu", "primary-memory", "network-mode"];
 
 /** The exhaustive `ChildAction` enum of §2.2, for rendering `allowedActions`. */
 const CHILD_ACTIONS = [
@@ -115,6 +115,7 @@ function featureSet(health) {
     console: list.indexOf("console") >= 0,
     updates: list.indexOf("updates") >= 0,
     network: list.indexOf("network") >= 0,
+    networkMode: list.indexOf("network-mode") >= 0,
     primaryCpu: list.indexOf("primary-cpu") >= 0,
     primaryMemory: list.indexOf("primary-memory") >= 0,
   };
@@ -252,6 +253,7 @@ function applyRefusal(state, error, host) {
 /** The webview's tab list for a state: each tab says whether the host version has it. Pure. */
 function tabsFor(state) {
   const f = (state && state.features) || featureSet(null);
+  if (state?.mode === "user" && f.networkMode) return [{ id: "vms", label: "My VMs", available: true, reason: "" }];
   return TABS.map((t) => {
     const key = t.feature === "host-admin" ? "hostAdmin" : t.feature;
     const available = !!f[key];
@@ -363,6 +365,7 @@ function toVmRow(vm, now) {
     childCreationClosed: v.childCreationClosed === true,
     pendingCpu: num(v.pendingCpu),
     pendingRamGb: num(v.pendingRamGb),
+    ...(v.network ? { network: v.network } : {}),
     resources: resourcesText(v.hardware || { cpus: v.cpu, ramMb: num(v.ramGb) === null ? null : v.ramGb * 1024, diskGb: v.diskGb }),
     usage: resourceUsageView(v.resourceUsage, now),
     lease: leaseText(v.lease, now),
@@ -1165,6 +1168,7 @@ function createHostAdminModel(deps = {}) {
         maintenance: resolved.maintenance, features: resolved.features, identity: resolved.identity,
       });
       if (resolved.mode === "admin" || resolved.mode === "user") state.lastKnownAt = new Date(now()).toISOString();
+      if (resolved.mode === "user" && state.features.networkMode) state.activeTab = "vms";
       return state;
     } finally { state.busy = false; }
   };
@@ -1173,7 +1177,7 @@ function createHostAdminModel(deps = {}) {
   model.load = async function load(tab) {
     const id = str(tab) || state.activeTab;
     state.activeTab = id;
-    if (state.mode !== "admin" || !client) return state;
+    if (!client || state.mode !== "admin" && !(state.mode === "user" && state.features.networkMode && id === "vms")) return state;
     const available = state.tabs.find((t) => t.id === id);
     if (!available || !available.available) return state;
     state.busy = true;
@@ -1186,6 +1190,7 @@ function createHostAdminModel(deps = {}) {
         if (capacity.status === "rejected" && refused(capacity.reason)) throw capacity.reason;
         state.overview = toOverview(status.value, capacity.status === "fulfilled" ? capacity.value :
           { problems: [`Capacity details unavailable: ${errText(capacity.reason)}`] });
+        if (state.features.networkMode) state.networkSection = toConfigView(await client.hostConfig()).find(s => s.key === "network");
       } else if (id === "vms") {
         const list = await client.vms({ kind: "all" });
         state.vms = { rows: toVmRows(list, now()), childrenFeature: state.features.children };
@@ -1234,7 +1239,8 @@ function createHostAdminModel(deps = {}) {
   model.perform = async function perform(action, args = {}) {
     const a = str(action);
     if (!client) return { ok: false, error: state.problem || "no client for this host" };
-    if (state.mode !== "admin" && ["shutdownVm", "deleteVm", "cancelJob"].indexOf(a) < 0) {
+    const ownerSettings = state.mode === "user" && state.features.networkMode && ["loadVmSettings", "setVmSettings", "startVm", "restartVm", "refresh"].includes(a);
+    if (state.mode !== "admin" && !ownerSettings && ["shutdownVm", "deleteVm", "cancelJob"].indexOf(a) < 0) {
       notice("error", `not an administrator of ${host}`);
       return { ok: false, error: `not an administrator of ${host}` };
     }
@@ -1249,11 +1255,12 @@ function createHostAdminModel(deps = {}) {
       switch (a) {
         case "loadVmSettings": {
           const name = str(args.name);
-          const fields = ["cpu", "memory", "idle"];
+          const fields = ["cpu", "memory", "idle", "network"];
           const results = await Promise.allSettled([
             state.features.primaryCpu ? client.vmCpu(name) : Promise.resolve(null),
             state.features.primaryMemory ? client.vmMemory(name) : Promise.resolve(null),
             client.vmIdlePolicy(name),
+            state.features.networkMode ? client.vmNetwork(name) : Promise.resolve(null),
           ]);
           const settings = { warnings: [] };
           results.forEach((result, i) => {
@@ -1289,6 +1296,7 @@ function createHostAdminModel(deps = {}) {
           if (memory && args.ramGb !== memory.desiredRamGb) await client.setVmMemory(name, { ramGb: args.ramGb });
           if (idle && (args.timeoutMinutes !== idle.timeoutMinutes || args.action !== idle.action))
             await client.setVmIdlePolicy(name, { timeoutMinutes: args.timeoutMinutes, action: args.action });
+          if (state.features.networkMode && args.network) await client.setVmNetwork(name, args.network);
           notice("info", `${name}: settings saved.`);
           return { ok: true };
         }
@@ -1314,7 +1322,7 @@ function createHostAdminModel(deps = {}) {
         }
         case "refresh": {
           await model.detect();
-          if (state.mode === "admin") await model.load(state.activeTab);
+          if (state.mode === "admin" || ownerSettings) await model.load(state.activeTab);
           return { ok: true };
         }
         case "capacityRefresh": {
