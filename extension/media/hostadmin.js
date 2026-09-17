@@ -172,16 +172,42 @@
       const wrap = el("div", "ha-bar-wrap");
       const lbl = el("div", "ha-bar-label");
       lbl.appendChild(el("span", null, b.label));
-      lbl.appendChild(el("span", null, b.pct == null ? "No limit" : b.pct + "%"));
+      lbl.appendChild(el("span", null, b.segments ? b.text : b.pct == null ? "No limit" : b.pct + "%"));
       wrap.appendChild(lbl);
-      if (b.pct != null) {
+      if (b.segments) {
+        const bar = el("div", "ha-bar ha-ram-bar");
+        bar.title = b.details;
+        b.segments.forEach((segment) => {
+          const fill = el("span", "ha-ram-" + segment.id);
+          fill.style.width = segment.pct + "%";
+          bar.appendChild(fill);
+        });
+        if (b.admission) {
+          const marker = el("i", "ha-admission-line");
+          marker.style.left = `clamp(0px, ${b.admission.pct}%, calc(100% - 1px))`;
+          marker.title = b.admission.title;
+          bar.appendChild(marker);
+        }
+        wrap.appendChild(bar);
+        wrap.appendChild(el("div", "ha-bar-text", b.details));
+        if (b.committed) wrap.appendChild(el("div", "ha-ram-committed" + (b.committed.hot ? " hot" : ""), b.committed.text));
+        if (b.swap) {
+          const swap = el("div", "ha-bar ha-bar-thin");
+          swap.title = b.swap.text;
+          const fill = el("span");
+          fill.style.width = b.swap.pct + "%";
+          swap.appendChild(fill);
+          wrap.appendChild(swap);
+          wrap.appendChild(el("div", "ha-bar-text", b.swap.text));
+        }
+      } else if (b.pct != null) {
         const bar = el("div", "ha-bar " + (b.pct >= 95 ? "full" : b.pct >= 80 ? "hot" : ""));
         const fill = el("span");
         fill.style.width = b.pct + "%";
         bar.appendChild(fill);
         wrap.appendChild(bar);
       }
-      wrap.appendChild(el("div", "ha-bar-text", b.text));
+      if (!b.segments) wrap.appendChild(el("div", "ha-bar-text", b.text));
       bars.appendChild(wrap);
     });
     text("ovCapEpoch", `Inventory epoch ${o.capacityEpoch.epoch || "—"}, observed ${o.capacityEpoch.observedAt}${o.capacityEpoch.complete ? "" : " — INCOMPLETE"}${o.capacityProblems && o.capacityProblems.length ? " · " + o.capacityProblems.join("; ") : ""}`);
