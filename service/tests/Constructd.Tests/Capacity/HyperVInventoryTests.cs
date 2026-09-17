@@ -11,6 +11,22 @@ namespace Constructd.Tests.Capacity;
 public class HyperVInventoryTests
 {
     [Fact]
+    public async Task Slow_collection_does_not_refresh_an_older_memory_sample()
+    {
+        var clock = new MutableClock(Now);
+        var runner = new RecordingProcessRunner().Respond(_ =>
+        {
+            clock.UtcNow = Now.AddMinutes(1);
+            return new(0, JsonSerializer.Serialize(new { ok = true, value = Inventory() }, new JsonSerializerOptions(JsonSerializerDefaults.Web)), "", false);
+        });
+        var inventory = new HyperVInventory(runner, new ConstructdOptions { ScriptsDir = @"C:\Construct" }, clock);
+        var sample = await inventory.ReadAsync(default);
+        Assert.True(sample.Complete);
+        Assert.Equal(Now, sample.ObservedAt);
+        Assert.Equal(Now, sample.Host.ObservedAt);
+    }
+
+    [Fact]
     public async Task PinsArgvAndArtifactStdinAndMapsOneEpoch()
     {
         var runner = new RecordingProcessRunner(); var json = new JsonSerializerOptions(JsonSerializerDefaults.Web) { Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) } };

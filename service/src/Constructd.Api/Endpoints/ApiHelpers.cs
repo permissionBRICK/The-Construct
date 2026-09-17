@@ -94,7 +94,7 @@ internal static class ApiHelpers
             publicHost,
             vm.Deleting,
             ToResponse(vm.IdlePolicy, options.Idle, clamped: false),
-            [.. list.Select(f => ForwardResponse.From(f, publicHost))]);
+            [.. list.Select(f => ForwardResponse.From(f, publicHost))], SavedBy: vm.SavedBy);
     }
 
     public static IdlePolicyResponse ToResponse(IdlePolicy policy, IdleOptions idle, bool clamped) =>

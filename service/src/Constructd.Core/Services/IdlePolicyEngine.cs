@@ -14,13 +14,14 @@ namespace Constructd.Core.Services;
 /// This is a real implementation, not a fake — it is platform-agnostic and moves to the Windows host
 /// unchanged; only the driver and the forward manager under it get swapped.
 /// </summary>
-public sealed class IdlePolicyEngine(
+public sealed partial class IdlePolicyEngine(
     IVmRepository vms,
     IPortForwardManager forwards,
     IHypervisorDriver driver,
     IAuditLog audit,
     IdleOptions options,
-    IVmOperationGate vmGate) : IIdlePolicyEngine
+    IVmOperationGate vmGate,
+    MemoryPressureServices? pressure = null) : IIdlePolicyEngine
 {
     /// <summary>
     /// Per-VM "last seen active" watermark, so the timeout measures a continuous idle window.
@@ -54,6 +55,12 @@ public sealed class IdlePolicyEngine(
                 outcomes.Add(await EvaluateVmAsync(current, now, cancellationToken).ConfigureAwait(false));
             }
 
+            if (pressure is not null)
+            {
+                // Ordinary idle actions also change measured usage. Wait for post-action evidence.
+                if (outcomes.Any(o => o.Applied)) _pressureMeasurementAfter = pressure.Clock.UtcNow;
+                await EvaluatePressureAsync(now, cancellationToken).ConfigureAwait(false);
+            }
             return outcomes;
         }
         finally
@@ -70,6 +77,7 @@ public sealed class IdlePolicyEngine(
         try
         {
             var state = await driver.GetStateAsync(vm.Name, ct).ConfigureAwait(false);
+            if (pressure is not null) ObservePressureVm(vm, state, now);
             if (state != vm.State)
             {
                 await vms.UpdateAsync(vm with { State = state }, ct).ConfigureAwait(false);
@@ -87,6 +95,9 @@ public sealed class IdlePolicyEngine(
                 reportInterval,
                 options.MissingReportGraceMultiple);
             _lastActiveAt[vm.Name] = lastActiveAt;
+
+            if (pressure is not null && HasRunningJob(vm, await vms.ListAsync(null, ct), await pressure.Jobs.ListAsync(ct)))
+                return new IdleOutcome(vm.Name, new(IdleDecisionKind.KeepAlive, "VM has a running job"), false, null);
 
             var decision = IdleEvaluator.Evaluate(new IdleEvaluationInput(
                 vm.Name,

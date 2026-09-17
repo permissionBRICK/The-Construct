@@ -256,7 +256,9 @@ public sealed partial class SqliteVmRepository(SqliteDatabase database, IClock? 
         ReadObservation(reader),
         reader.GetBool("child_creation_closed"),
         reader.GetStringOrNull("current_job_id"),
-        reader.GetStringOrNull("source_commit"));
+        reader.GetStringOrNull("source_commit"),
+        reader.GetTime("pressure_saved_at"),
+        reader.GetLongOrNull("pressure_saved_generation"));
 
     private static Lease? ReadLease(SqliteDataReader r) => r.GetStringOrNull("lease_requested_text") is string text
         ? new(text, r.GetLongOrNull("lease_requested_seconds"), r.GetTime("lease_activated_at"), r.GetTime("lease_expires_at"),

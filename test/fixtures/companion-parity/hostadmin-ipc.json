@@ -3504,6 +3504,7 @@
       "pendingRamGb": null,
       "reservations": "—",
       "resources": "—",
+      "savedBy": null,
       "shared": false,
       "sharing": "private",
       "state": "unknown",
@@ -3596,6 +3597,7 @@
       "pendingRamGb": 12,
       "reservations": "—",
       "resources": "4 vCPU · 2.0 GiB · 80 GB disk",
+      "savedBy": null,
       "shared": false,
       "sharing": "host",
       "state": "running",
@@ -3764,6 +3766,7 @@
       "pendingRamGb": 12,
       "reservations": "—",
       "resources": "4 vCPU · 2.0 GiB · 80 GB disk",
+      "savedBy": null,
       "shared": false,
       "sharing": "host",
       "state": "paused",
@@ -3910,6 +3913,7 @@
       "pendingRamGb": null,
       "reservations": "—",
       "resources": "—",
+      "savedBy": null,
       "shared": false,
       "sharing": "private",
       "state": "unknown",
@@ -4044,6 +4048,7 @@
         "pendingRamGb": null,
         "reservations": "—",
         "resources": "—",
+        "savedBy": null,
         "shared": false,
         "sharing": "private",
         "state": "unknown",
@@ -4081,6 +4086,7 @@
         "pendingRamGb": 12,
         "reservations": "—",
         "resources": "4 vCPU · 2.0 GiB · 80 GB disk",
+        "savedBy": null,
         "shared": false,
         "sharing": "host",
         "state": "running",
@@ -4115,6 +4121,7 @@
         "pendingRamGb": null,
         "reservations": "—",
         "resources": "—",
+        "savedBy": null,
         "shared": false,
         "sharing": "private",
         "state": "unknown",
@@ -4130,6 +4137,678 @@
         }
       }
     ]
+  },
+  {
+    "input": {
+      "name": "pressure-vm",
+      "savedBy": "memory-pressure",
+      "state": "saved"
+    },
+    "kind": "vm",
+    "now": 1789128000000,
+    "output": {
+      "allowedActions": [],
+      "childCreationClosed": false,
+      "children": [],
+      "deleting": false,
+      "guest": "Construct unknown · provisioned unknown · reinstalled unknown",
+      "kind": "primary",
+      "lease": "",
+      "lifetime": "",
+      "media": 0,
+      "name": "pressure-vm",
+      "operation": "",
+      "operationJobId": "",
+      "overdue": false,
+      "owner": "",
+      "parent": "",
+      "pendingCpu": null,
+      "pendingRamGb": null,
+      "reservations": "—",
+      "resources": "—",
+      "savedBy": "memory-pressure",
+      "shared": false,
+      "sharing": "private",
+      "state": "saved",
+      "tokenKind": null,
+      "usage": {
+        "cpu": "CPU usage unavailable",
+        "cpuPercent": null,
+        "disk": "Disk usage unavailable",
+        "ram": "RAM usage unavailable",
+        "ramPercent": null,
+        "sample": "Usage unavailable on this host",
+        "stale": false
+      }
+    }
+  },
+  {
+    "input": {
+      "name": "pressure-vm",
+      "savedBy": "memory-pressure",
+      "state": "running"
+    },
+    "kind": "vm",
+    "now": 1789128000000,
+    "output": {
+      "allowedActions": [],
+      "childCreationClosed": false,
+      "children": [],
+      "deleting": false,
+      "guest": "Construct unknown · provisioned unknown · reinstalled unknown",
+      "kind": "primary",
+      "lease": "",
+      "lifetime": "",
+      "media": 0,
+      "name": "pressure-vm",
+      "operation": "",
+      "operationJobId": "",
+      "overdue": false,
+      "owner": "",
+      "parent": "",
+      "pendingCpu": null,
+      "pendingRamGb": null,
+      "reservations": "—",
+      "resources": "—",
+      "savedBy": null,
+      "shared": false,
+      "sharing": "private",
+      "state": "running",
+      "tokenKind": null,
+      "usage": {
+        "cpu": "CPU usage unavailable",
+        "cpuPercent": null,
+        "disk": "Disk usage unavailable",
+        "ram": "RAM usage unavailable",
+        "ramPercent": null,
+        "sample": "Usage unavailable on this host",
+        "stale": false
+      }
+    }
+  },
+  {
+    "input": {
+      "memoryPressure": {
+        "enabled": true,
+        "lastAction": {
+          "at": "2026-09-11T11:58:00Z",
+          "vmName": "pressure-vm"
+        },
+        "state": "idle",
+        "usedPercent": 93
+      }
+    },
+    "kind": "overview",
+    "now": 1789128000000,
+    "output": {
+      "activeJobs": [],
+      "capacity": [
+        {
+          "id": "ram",
+          "label": "RAM",
+          "memoryPressure": "memory pressure: 93% used; idle; saved pressure-vm 2m ago",
+          "pct": 0,
+          "text": "— available of — (reserved —, unmanaged —, headroom —)"
+        },
+        {
+          "id": "cpu",
+          "label": "CPU allocation",
+          "pct": null,
+          "text": "— allocated vCPU on — logical CPUs (no budget)"
+        }
+      ],
+      "capacityEpoch": {
+        "complete": true,
+        "epoch": "",
+        "observedAt": "—"
+      },
+      "capacityMode": "observe",
+      "capacityProblems": [],
+      "health": {
+        "database": "unknown",
+        "hypervisor": "unknown",
+        "inventory": "unknown",
+        "media": "unknown"
+      },
+      "leaseOverdueCount": 0,
+      "maintenance": null,
+      "problems": [],
+      "unmanagedVmCount": 0,
+      "version": {
+        "commit": "unknown",
+        "installedAt": "—",
+        "packageVersion": "unknown",
+        "source": "unknown"
+      }
+    }
+  },
+  {
+    "input": {
+      "memoryPressure": {
+        "enabled": true,
+        "lastAction": {
+          "at": "2026-09-11T11:58:00Z",
+          "vmName": "pressure-vm"
+        },
+        "state": "pressure",
+        "usedPercent": 93
+      }
+    },
+    "kind": "overview",
+    "now": 1789128000000,
+    "output": {
+      "activeJobs": [],
+      "capacity": [
+        {
+          "id": "ram",
+          "label": "RAM",
+          "memoryPressure": "memory pressure: 93% used; under pressure; saved pressure-vm 2m ago",
+          "pct": 0,
+          "text": "— available of — (reserved —, unmanaged —, headroom —)"
+        },
+        {
+          "id": "cpu",
+          "label": "CPU allocation",
+          "pct": null,
+          "text": "— allocated vCPU on — logical CPUs (no budget)"
+        }
+      ],
+      "capacityEpoch": {
+        "complete": true,
+        "epoch": "",
+        "observedAt": "—"
+      },
+      "capacityMode": "observe",
+      "capacityProblems": [],
+      "health": {
+        "database": "unknown",
+        "hypervisor": "unknown",
+        "inventory": "unknown",
+        "media": "unknown"
+      },
+      "leaseOverdueCount": 0,
+      "maintenance": null,
+      "problems": [],
+      "unmanagedVmCount": 0,
+      "version": {
+        "commit": "unknown",
+        "installedAt": "—",
+        "packageVersion": "unknown",
+        "source": "unknown"
+      }
+    }
+  },
+  {
+    "input": {
+      "memoryPressure": {
+        "enabled": true,
+        "lastAction": {
+          "at": "2026-09-11T11:58:00Z",
+          "vmName": "pressure-vm"
+        },
+        "state": "insufficient-candidates",
+        "usedPercent": 93
+      }
+    },
+    "kind": "overview",
+    "now": 1789128000000,
+    "output": {
+      "activeJobs": [],
+      "capacity": [
+        {
+          "id": "ram",
+          "label": "RAM",
+          "memoryPressure": "memory pressure: 93% used; insufficient idle VMs; pressure remains; saved pressure-vm 2m ago",
+          "pct": 0,
+          "text": "— available of — (reserved —, unmanaged —, headroom —)"
+        },
+        {
+          "id": "cpu",
+          "label": "CPU allocation",
+          "pct": null,
+          "text": "— allocated vCPU on — logical CPUs (no budget)"
+        }
+      ],
+      "capacityEpoch": {
+        "complete": true,
+        "epoch": "",
+        "observedAt": "—"
+      },
+      "capacityMode": "observe",
+      "capacityProblems": [],
+      "health": {
+        "database": "unknown",
+        "hypervisor": "unknown",
+        "inventory": "unknown",
+        "media": "unknown"
+      },
+      "leaseOverdueCount": 0,
+      "maintenance": null,
+      "problems": [],
+      "unmanagedVmCount": 0,
+      "version": {
+        "commit": "unknown",
+        "installedAt": "—",
+        "packageVersion": "unknown",
+        "source": "unknown"
+      }
+    }
+  },
+  {
+    "input": {
+      "memoryPressure": {
+        "enabled": true,
+        "lastAction": {
+          "at": "2026-09-11T11:58:00Z",
+          "vmName": "pressure-vm"
+        },
+        "state": "waiting-for-measurement",
+        "usedPercent": 93
+      }
+    },
+    "kind": "overview",
+    "now": 1789128000000,
+    "output": {
+      "activeJobs": [],
+      "capacity": [
+        {
+          "id": "ram",
+          "label": "RAM",
+          "memoryPressure": "memory pressure: 93% used; waiting for a new measurement; saved pressure-vm 2m ago",
+          "pct": 0,
+          "text": "— available of — (reserved —, unmanaged —, headroom —)"
+        },
+        {
+          "id": "cpu",
+          "label": "CPU allocation",
+          "pct": null,
+          "text": "— allocated vCPU on — logical CPUs (no budget)"
+        }
+      ],
+      "capacityEpoch": {
+        "complete": true,
+        "epoch": "",
+        "observedAt": "—"
+      },
+      "capacityMode": "observe",
+      "capacityProblems": [],
+      "health": {
+        "database": "unknown",
+        "hypervisor": "unknown",
+        "inventory": "unknown",
+        "media": "unknown"
+      },
+      "leaseOverdueCount": 0,
+      "maintenance": null,
+      "problems": [],
+      "unmanagedVmCount": 0,
+      "version": {
+        "commit": "unknown",
+        "installedAt": "—",
+        "packageVersion": "unknown",
+        "source": "unknown"
+      }
+    }
+  },
+  {
+    "input": {
+      "memoryPressure": {
+        "enabled": true,
+        "lastAction": {
+          "at": "2026-09-11T11:58:00Z",
+          "vmName": "pressure-vm"
+        },
+        "state": "cooldown",
+        "usedPercent": 93
+      }
+    },
+    "kind": "overview",
+    "now": 1789128000000,
+    "output": {
+      "activeJobs": [],
+      "capacity": [
+        {
+          "id": "ram",
+          "label": "RAM",
+          "memoryPressure": "memory pressure: 93% used; waiting between saves; saved pressure-vm 2m ago",
+          "pct": 0,
+          "text": "— available of — (reserved —, unmanaged —, headroom —)"
+        },
+        {
+          "id": "cpu",
+          "label": "CPU allocation",
+          "pct": null,
+          "text": "— allocated vCPU on — logical CPUs (no budget)"
+        }
+      ],
+      "capacityEpoch": {
+        "complete": true,
+        "epoch": "",
+        "observedAt": "—"
+      },
+      "capacityMode": "observe",
+      "capacityProblems": [],
+      "health": {
+        "database": "unknown",
+        "hypervisor": "unknown",
+        "inventory": "unknown",
+        "media": "unknown"
+      },
+      "leaseOverdueCount": 0,
+      "maintenance": null,
+      "problems": [],
+      "unmanagedVmCount": 0,
+      "version": {
+        "commit": "unknown",
+        "installedAt": "—",
+        "packageVersion": "unknown",
+        "source": "unknown"
+      }
+    }
+  },
+  {
+    "input": {
+      "memoryPressure": {
+        "enabled": true,
+        "lastAction": {
+          "at": "2026-09-11T11:58:00Z",
+          "vmName": "pressure-vm"
+        },
+        "state": "unavailable",
+        "usedPercent": 93
+      }
+    },
+    "kind": "overview",
+    "now": 1789128000000,
+    "output": {
+      "activeJobs": [],
+      "capacity": [
+        {
+          "id": "ram",
+          "label": "RAM",
+          "memoryPressure": "memory pressure: 93% used; measurement or evaluation unavailable; saved pressure-vm 2m ago",
+          "pct": 0,
+          "text": "— available of — (reserved —, unmanaged —, headroom —)"
+        },
+        {
+          "id": "cpu",
+          "label": "CPU allocation",
+          "pct": null,
+          "text": "— allocated vCPU on — logical CPUs (no budget)"
+        }
+      ],
+      "capacityEpoch": {
+        "complete": true,
+        "epoch": "",
+        "observedAt": "—"
+      },
+      "capacityMode": "observe",
+      "capacityProblems": [],
+      "health": {
+        "database": "unknown",
+        "hypervisor": "unknown",
+        "inventory": "unknown",
+        "media": "unknown"
+      },
+      "leaseOverdueCount": 0,
+      "maintenance": null,
+      "problems": [],
+      "unmanagedVmCount": 0,
+      "version": {
+        "commit": "unknown",
+        "installedAt": "—",
+        "packageVersion": "unknown",
+        "source": "unknown"
+      }
+    }
+  },
+  {
+    "input": {
+      "memoryPressure": {
+        "enabled": true,
+        "lastAction": {
+          "at": "2026-09-11T11:58:00Z",
+          "vmName": "pressure-vm"
+        },
+        "state": "save-failed",
+        "usedPercent": 93
+      }
+    },
+    "kind": "overview",
+    "now": 1789128000000,
+    "output": {
+      "activeJobs": [],
+      "capacity": [
+        {
+          "id": "ram",
+          "label": "RAM",
+          "memoryPressure": "memory pressure: 93% used; save failed; see audit; saved pressure-vm 2m ago",
+          "pct": 0,
+          "text": "— available of — (reserved —, unmanaged —, headroom —)"
+        },
+        {
+          "id": "cpu",
+          "label": "CPU allocation",
+          "pct": null,
+          "text": "— allocated vCPU on — logical CPUs (no budget)"
+        }
+      ],
+      "capacityEpoch": {
+        "complete": true,
+        "epoch": "",
+        "observedAt": "—"
+      },
+      "capacityMode": "observe",
+      "capacityProblems": [],
+      "health": {
+        "database": "unknown",
+        "hypervisor": "unknown",
+        "inventory": "unknown",
+        "media": "unknown"
+      },
+      "leaseOverdueCount": 0,
+      "maintenance": null,
+      "problems": [],
+      "unmanagedVmCount": 0,
+      "version": {
+        "commit": "unknown",
+        "installedAt": "—",
+        "packageVersion": "unknown",
+        "source": "unknown"
+      }
+    }
+  },
+  {
+    "input": {
+      "memoryPressure": {
+        "enabled": false,
+        "state": "off"
+      }
+    },
+    "kind": "overview",
+    "now": 1789128000000,
+    "output": {
+      "activeJobs": [],
+      "capacity": [
+        {
+          "id": "ram",
+          "label": "RAM",
+          "memoryPressure": "memory pressure: off",
+          "pct": 0,
+          "text": "— available of — (reserved —, unmanaged —, headroom —)"
+        },
+        {
+          "id": "cpu",
+          "label": "CPU allocation",
+          "pct": null,
+          "text": "— allocated vCPU on — logical CPUs (no budget)"
+        }
+      ],
+      "capacityEpoch": {
+        "complete": true,
+        "epoch": "",
+        "observedAt": "—"
+      },
+      "capacityMode": "observe",
+      "capacityProblems": [],
+      "health": {
+        "database": "unknown",
+        "hypervisor": "unknown",
+        "inventory": "unknown",
+        "media": "unknown"
+      },
+      "leaseOverdueCount": 0,
+      "maintenance": null,
+      "problems": [],
+      "unmanagedVmCount": 0,
+      "version": {
+        "commit": "unknown",
+        "installedAt": "—",
+        "packageVersion": "unknown",
+        "source": "unknown"
+      }
+    }
+  },
+  {
+    "input": {
+      "memoryPressure": {
+        "cooldownMinutesAfterSave": 10,
+        "enabled": true,
+        "highWaterPercent": 90,
+        "lowWaterPercent": 80,
+        "minSecondsBetweenSaves": 60,
+        "source": "default",
+        "swapHighWaterPercent": 50
+      }
+    },
+    "kind": "config",
+    "now": 1789128000000,
+    "output": [
+      {
+        "expectedUpdatedAt": null,
+        "key": "capacity",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "key": "memoryPressure",
+        "present": true,
+        "source": "default",
+        "text": "{\n  \"cooldownMinutesAfterSave\": 10,\n  \"enabled\": true,\n  \"highWaterPercent\": 90,\n  \"lowWaterPercent\": 80,\n  \"minSecondsBetweenSaves\": 60,\n  \"swapHighWaterPercent\": 50\n}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "key": "userDefaults",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "key": "userCaps",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "key": "lifecycle",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "key": "media",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "key": "network",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "key": "virtualization",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "key": "updates",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      }
+    ]
+  },
+  {
+    "input": {
+      "backend": "proxmox",
+      "policy": {
+        "memoryPressure": {
+          "cooldownMinutesAfterSave": 10,
+          "enabled": true,
+          "highWaterPercent": 90,
+          "lowWaterPercent": 80,
+          "minSecondsBetweenSaves": 60,
+          "source": "default",
+          "swapHighWaterPercent": 50
+        }
+      }
+    },
+    "kind": "capabilities",
+    "now": 1789128000000,
+    "output": {
+      "backend": "proxmox",
+      "notes": [],
+      "rows": [
+        {
+          "key": "policy.memoryPressure.cooldownMinutesAfterSave",
+          "value": "10"
+        },
+        {
+          "key": "policy.memoryPressure.enabled",
+          "value": "true"
+        },
+        {
+          "key": "policy.memoryPressure.highWaterPercent",
+          "value": "90"
+        },
+        {
+          "key": "policy.memoryPressure.lowWaterPercent",
+          "value": "80"
+        },
+        {
+          "key": "policy.memoryPressure.minSecondsBetweenSaves",
+          "value": "60"
+        },
+        {
+          "key": "policy.memoryPressure.source",
+          "value": "default"
+        },
+        {
+          "key": "policy.memoryPressure.swapHighWaterPercent",
+          "value": "50"
+        }
+      ]
+    }
   },
   {
     "input": {},
