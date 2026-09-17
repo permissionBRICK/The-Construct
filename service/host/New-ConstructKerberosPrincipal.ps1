@@ -82,6 +82,7 @@ if (-not $account) {
 }
 if ($account -and $PSCmdlet.ShouldProcess($AccountName, "set service-account attributes")) {
     foreach ($step in @(
+        @{ What = 'Enabled';                 Do = { Enable-ADAccount -Identity $AccountName } },
         @{ What = 'PasswordNeverExpires';    Do = { Set-ADUser -Identity $AccountName -PasswordNeverExpires $true } },
         @{ What = 'KerberosEncryptionType';  Do = { Set-ADUser -Identity $AccountName -KerberosEncryptionType AES256 } },
         @{ What = 'CannotChangePassword';    Do = { Set-ADUser -Identity $AccountName -CannotChangePassword $true } }
@@ -124,6 +125,15 @@ if ($password) {
     $ktpass = Get-Command ktpass.exe -ErrorAction SilentlyContinue
     if (-not $ktpass) { throw "ktpass.exe not found (RSAT / a domain controller has it)." }
     if (Test-Path -LiteralPath $KeytabPath) { Remove-Item -LiteralPath $KeytabPath -Force }
+    # THE SALT: Active Directory derives a user account's AES key from the password and a salt made
+    # of the realm and the account's user principal name; ktpass derives the keytab's key with the
+    # salt of the principal it is given. The two agree only when the UPN IS the principal, which is
+    # why the UPN is set to it here, before the password is set, and why ktpass is told +setupn too.
+    $current = (Get-ADUser -Identity $AccountName -Properties userPrincipalName).userPrincipalName
+    if ($current -cne $principal) {
+        Set-ADUser -Identity $AccountName -UserPrincipalName $principal
+        Write-Host "    UPN set to $principal (the AES key salt must match the keytab's)"
+    }
     # /pass +rndPass: ktpass generates the password and sets it on the account itself (SAM, not the AD
     # web service), so the keytab and the account always agree and no password ever passes through
     # PowerShell. /mapop set: the SPN is already on the account; no second mapping is added.
@@ -132,11 +142,14 @@ if ($password) {
     $previousPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        & $ktpass.Source /princ $principal /mapuser "$netbios\$AccountName" /crypto AES256-SHA1 /ptype KRB5_NT_PRINCIPAL /pass +rndPass /out $KeytabPath /mapop set /setupn 2>&1 |
+        & $ktpass.Source /princ $principal /mapuser "$netbios\$AccountName" /crypto AES256-SHA1 /ptype KRB5_NT_PRINCIPAL /pass +rndPass /out $KeytabPath /mapop set +setupn +DumpSalt 2>&1 |
             ForEach-Object { "    ktpass: $($_.ToString().Trim())" } | Write-Host
         $ktpassExit = $LASTEXITCODE
     } finally { $ErrorActionPreference = $previousPreference }
     if ($ktpassExit -ne 0 -or -not (Test-Path -LiteralPath $KeytabPath)) { throw "ktpass failed (exit $ktpassExit); no keytab written." }
+    $after = Get-ADUser -Identity $AccountName -Properties userPrincipalName, msDS-KeyVersionNumber
+    if ($after.userPrincipalName -cne $principal) { throw "The UPN is '$($after.userPrincipalName)', not '$principal'; the keytab's key would not match the account's. Set it and re-run with -RotateKeytab." }
+    Write-Host "    account key version $($after.'msDS-KeyVersionNumber') (the keytab must carry the same kvno)"
     Write-Host "    keytab written to $KeytabPath (copy it to the host, then delete it here)"
 } else {
     Write-Host "    keytab not regenerated (account existed; pass -RotateKeytab to reset the password and write a new one)"
