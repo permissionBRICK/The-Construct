@@ -10,6 +10,7 @@ if [[ "$group" == panel || "$group" == all ]]; then
   node extension/test/guest-console.test.js
   node extension/test/console.test.js
   node extension/test/hostadmin.test.js
+  node extension/test/host-usage.test.js
   node extension/test/network-mode.test.js
   node extension/test/hostadmin-ui.test.js
   node extension/test/hostadmin-discovery.test.js

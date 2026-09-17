@@ -379,6 +379,11 @@ function stateJsonBytes() {
 function hostAdminIpc() {
  const m=require("../src/hostadmin"), f=forwarderui, rows=[], now=Date.parse("2026-09-11T12:00:00Z");
  const add=(kind,input,output)=>rows.push({kind,input,output,now});
+ for (const input of [null, {}, { window: "month", generatedAt: "2026-09-11T12:00:00Z", totals: { tokens: 1234567, costUsd: 12.34 },
+   byUser: [{ user: "alice", tokens: 1234567, costUsd: 12.34, vms: 2 }],
+   byVm: [{ vm: "gone", user: "alice", deleted: true, tokens: 1234567, costUsd: 12.34, lastReportedAt: "2026-09-11T10:00:00Z", tools: [{ tool: "claude", tokens: 1234567, costUsd: 12.34 }] }] }]) add("tokenUsage", input, m.toTokenUsageView(input));
+ for (const input of [{ tokenUsage: { today: { tokens: 1234 }, month: { tokens: 1234567 }, lastReportedAt: "2026-09-11T10:00:00Z" } }, { tokenUsage: { lastReportedAt: null } }]) add("vm", input, m.toVmRow(input, now));
+ add("user", { usageTokensMonth: 1234567 }, m.toUserRow({ usageTokensMonth: 1234567 }));
  for(const input of [null,{}, {repos:[]},{repos:[{url:"https://example.test/a.git"}]},{repos:[{url:"git@host:repo.git"}]},{repos:[{directory:"a/b",url:"x"}]},{repos:[{directory:"../escape",url:"x"}]},{repos:[{directory:"a#b",url:"x"}]},{repos:[{url:"a"},{url:"b"}]}])add("projectOpenPath",input,require("../src/remote").projectOpenPath(input));
  for(const code of ["cascade-confirmation-required","cascade-scope-changed","cascade-token-expired","other"])for(const status of [409,400]) add("cascadeKind",{code,status},m.cascadeKindOf({code,status}));
  for(const problem of [{},{code:"cascade-scope-changed",children:["child"]},{children:[{name:"one",sharing:"host",state:"Running",diskGb:4,mediaCount:2},{name:"two",sharing:"private"}],cascadeToken:"fake",expiresAt:"2026-09-11T13:00:00Z"}])add("cascade",{primary:"agent-vm",problem},m.cascadeConfirmation({primary:"agent-vm",problem}));

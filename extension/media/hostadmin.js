@@ -120,7 +120,7 @@
     denied: "Access denied", user: "Not an administrator", local: "Local instance",
   };
   function renderStateCard(s) {
-    const admin = s.mode === "admin" || s.mode === "user" && s.features?.networkMode;
+    const admin = s.mode === "admin" || s.mode === "user" && (s.features?.networkMode || s.features?.usage);
     show($("haState"), !admin);
     show($("haAdmin"), admin);
     if (admin) return;
@@ -230,6 +230,29 @@
   }
 
   // ── VMs ─────────────────────────────────────────────────────────────────────
+  function renderTokenUsage(s) {
+    const usage = s.usage;
+    show($("usageUsers"), s.mode === "admin");
+    if (!usage) return;
+    $("usageWindow").value = usage.window;
+    text("hostUsageTotals", `${usage.totals.tokens} tokens · ${usage.totals.cost} estimated cost`);
+    text("usageGeneratedAt", "Updated " + usage.generatedAt);
+    for (const [id, rows, userTable] of [["usageUserTable", usage.byUser, true], ["usageVmTable", usage.byVm, false]]) {
+      const table = $(id); clear(table);
+      if (userTable && s.mode !== "admin") continue;
+      if (!rows.length) { table.appendChild(el("p", "cost-note", "No usage reported yet.")); continue; }
+      table.appendChild(headRow([userTable ? "user" : "VM", userTable ? "VMs" : "owner", "tokens", "estimated cost", "last report"]));
+      for (const r of rows) {
+        const row = el("div", "ha-row" + (r.deleted ? " disabled" : ""));
+        row.title = r.tools || "No tool usage in this window";
+        row.tabIndex = 0;
+        for (const value of [userTable ? r.user : r.vm + (r.deleted ? " (deleted)" : ""), userTable ? r.vms : r.user, r.tokens, r.cost, r.lastReported]) row.appendChild(cell(value));
+        table.appendChild(row);
+      }
+    }
+  }
+  $("usageWindow")?.addEventListener("change", e => post({ type: "hostadmin.tab", tab: "usage", window: e.target.value }));
+
   function renderVms(s) {
     const v = s.vms;
     const table = $("vmsTable");
@@ -265,11 +288,12 @@
       }
       usage.appendChild(el("div", "", r.usage.disk));
       usage.appendChild(el("div", "ha-vm-sample" + (r.usage.stale ? " stale" : ""), r.usage.sample));
+      if (r.tokenUsage) usage.appendChild(el("div", "ha-token-usage", r.tokenUsage));
       row.appendChild(usage);
       row.appendChild(cell(r.resources, "ha-vm-allocation"));
       const actions = cell("", "actions");
       const busy = !!r.operation || r.deleting;
-      if (r.kind === "primary") {
+      if (r.kind === "primary" && (s.mode === "admin" || s.features?.networkMode)) {
         const cpu = btn("VM settings…", "ghost", () => openVmSettings(r.name));
         cpu.disabled = busy;
         actions.appendChild(cpu);
@@ -346,7 +370,7 @@
     const table = $("usrTable");
     if (!u || !table) return;
     clear(table);
-    if (u.rows.length) table.appendChild(headRow(["name", "role", "primaries / children", "tokens", "effective allowance", ""]));
+    if (u.rows.length) table.appendChild(headRow(["name", "role", "primaries / children", "API tokens / usage", "effective allowance", ""]));
     u.rows.forEach((r) => {
       const row = el("div", "ha-row " + (r.enabled ? "" : "disabled"));
       row.appendChild(cell(r.name, "name"));
@@ -356,7 +380,9 @@
       if (!r.allowHostForwards) role.appendChild(el("span", "ha-badge", "no host forwards"));
       row.appendChild(role);
       row.appendChild(cell(`${r.primaries} / ${r.children} (max ${r.maxVms == null ? "—" : r.maxVms})`));
-      row.appendChild(cell(r.tokens));
+      const tokens = cell(r.tokens + " API tokens");
+      if (r.usageTokensMonth != null) tokens.appendChild(el("div", "ha-token-usage", r.usageTokensMonth + " tokens this month"));
+      row.appendChild(tokens);
       const eff = cell(r.effective, "wide");
       row.appendChild(eff);
       const actions = cell("", "actions");
@@ -602,7 +628,7 @@
     state = s;
     renderHeader(s);
     renderStateCard(s);
-    if (s.mode !== "admin" && !(s.mode === "user" && s.features?.networkMode)) return;
+    if (s.mode !== "admin" && !(s.mode === "user" && (s.features?.networkMode || s.features?.usage))) return;
     text("vmsTitle", s.mode === "admin" ? "Virtual machines · all users" : "My virtual machines");
     show($("hostNetworkCard"), s.mode === "admin" && !!s.features?.networkMode && !!s.networkSection);
     if (s.networkSection && JSON.stringify(previous?.networkSection) !== JSON.stringify(s.networkSection)) {
@@ -613,6 +639,7 @@
     renderTabs(s);
     renderOverview(s);
     renderVms(s);
+    renderTokenUsage(s);
     const refreshForms = !previous || previous.activeTab !== s.activeTab || !!previous.maintenance !== !!s.maintenance;
     if (refreshForms || JSON.stringify(previous.users) !== JSON.stringify(s.users)) renderUsers(s);
     renderMedia(s);
