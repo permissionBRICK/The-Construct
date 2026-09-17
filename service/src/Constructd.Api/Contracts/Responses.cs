@@ -137,7 +137,8 @@ public sealed record VmResponse(
     GuestReport? Guest = null, HostObservation? Observed = null, VmReservationsResponse? Reservations = null,
     CurrentOperationResponse? CurrentOperation = null, IReadOnlyList<string>? Children = null, IReadOnlyList<ChildAction>? AllowedActions = null, VmResourceUsageResponse? ResourceUsage = null, int? PendingCpu = null, int? PendingRamGb = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? SourceCommit = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] Jobs.VmNetworkSettings.View? Network = null);
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] Jobs.VmNetworkSettings.View? Network = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? SavedBy = null);
 
 /// <param name="PublicHost">
 /// The name this VM's web forwards are advertised under (plan §4.12). Equal to
