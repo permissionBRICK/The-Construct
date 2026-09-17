@@ -102,8 +102,8 @@ ok("disable: tears the HTTPS proxy down with --teardown (preference + CA kept)",
 
 // ── buildPairingScript ────────────────────────────────────────────────────────
 const pair = t3.buildPairingScript();
-ok("pairing: mints a one-time token as JSON against the mshome.net base URL",
-  /t3 auth pairing create --json/.test(pair) && /mshome\.net/.test(pair) && /--base-url/.test(pair));
+ok("pairing: mints tokens as JSON through the shared helper",
+  /t3pair "\$base" --json/.test(pair) && /mshome\.net/.test(pair) && /--base-url/.test(pair));
 ok("pairing: silences CLI logs so stdout stays parseable", /--log-level none/.test(pair));
 
 // FULL-SCRIPT PIN. This string is the remote command an existing install sends
@@ -115,7 +115,7 @@ ok("pairing: silences CLI logs so stdout stays parseable", /--log-level none/.te
 // pin therefore moved to the new value rather than being dropped — an unintended
 // edit still fails here. Note what did NOT change: on a VM with no TLS proxy every
 // new key reads empty and t3base() produces exactly the old http URL, and the
-// default instance still reads no CONSTRUCT_EXTERNAL_HOST.
+// default instance now also reads CONSTRUCT_EXTERNAL_HOST.
 const PAIRING_DEFAULT_SCRIPT = `set -uo pipefail
 CONFIG_FILE=/etc/construct/config.env
 # Undo config-set.sh's rendering: it writes values made only of its safe charset
@@ -138,14 +138,15 @@ T3CODE_PORT="$(cfgget T3CODE_PORT)"; T3CODE_PORT="\${T3CODE_PORT:-5177}"
 WORKSPACE_ROOT="$(cfgget WORKSPACE_ROOT)"; WORKSPACE_ROOT="\${WORKSPACE_ROOT:-/root/repos}"
 ` + fs.readFileSync(path.join(repoRoot, "extension/vm/construct-t3-pairing-base.sh"), "utf8") + `
 command -v t3 >/dev/null 2>&1 || { echo "t3 is not installed" >&2; exit 1; }
-base="$(t3base "$(hostname).mshome.net")" || exit 7
-t3 auth pairing create --json --ttl 10m --label "construct-control-panel" --base-url "$base" --log-level none
+ext="$(cfgget CONSTRUCT_EXTERNAL_HOST)"
+base="$(t3base "\${ext:-$(hostname).mshome.net}")" || exit 7
+t3pair "$base" --json --ttl 10m --label "construct-control-panel" --log-level none
 `;
 ok("pairing(default): the WHOLE script matches the pin",
   pair === PAIRING_DEFAULT_SCRIPT,
   JSON.stringify(pair));
 ok("pairing: desktop and extension embed the same forwarding helper", pairingScript.includes("construct-t3-pairing-base.sh"));
-ok("pairing(default): reads NO CONSTRUCT_EXTERNAL_HOST", !/CONSTRUCT_EXTERNAL_HOST/.test(pair));
+ok("pairing(default): reads CONSTRUCT_EXTERNAL_HOST", /cfgget CONSTRUCT_EXTERNAL_HOST/.test(pair));
 
 // ── HTTPS-aware pairing URL ──────────────────────────────────────────────────
 // The scheme decision lives in the generated bash, so it is EXECUTED here (with
@@ -169,7 +170,7 @@ ok("pairing(default): reads NO CONSTRUCT_EXTERNAL_HOST", !/CONSTRUCT_EXTERNAL_HO
     fsx.mkdirSync(bin);
     // Stubs: `t3` echoes the base URL it was given, `hostname` is fixed.
     fsx.writeFileSync(path.join(bin, "t3"),
-      '#!/bin/sh\nwhile [ $# -gt 0 ]; do if [ "$1" = "--base-url" ]; then echo "$2"; fi; shift; done\n', { mode: 0o755 });
+      '#!/usr/bin/env python3\nimport sys,json\nprint(json.dumps({"pairUrl":sys.argv[sys.argv.index("--base-url")+1]}))\n', { mode: 0o755 });
     fsx.writeFileSync(path.join(bin, "hostname"), "#!/bin/sh\necho testvm\n", { mode: 0o755 });
     // Point the script at the fixture config.env without touching /etc.
     const script = t3.buildPairingScript(instance).replace(
@@ -178,7 +179,7 @@ ok("pairing(default): reads NO CONSTRUCT_EXTERNAL_HOST", !/CONSTRUCT_EXTERNAL_HO
       encoding: "utf8", env: { ...process.env, PATH: bin + ":" + process.env.PATH },
     });
     fsx.rmSync(dir, { recursive: true, force: true });
-    return { out: (r.stdout || "").trim(), code: r.status, err: (r.stderr || "").trim() };
+    return { out: t3.extractPairUrl(r.stdout), code: r.status, err: (r.stderr || "").trim() };
   };
   if (cp.spawnSync("bash", ["-c", "true"]).error) {
     console.log("  SKIP  pairing base-url execution — bash unavailable");
@@ -233,12 +234,12 @@ ok("pairing(default instance object): same script as passing nothing",
 ok("pairing(spelled-out default registry entry): same script",
   t3.buildPairingScript(instances.deriveDefaults("agent-vm", {})) === pair);
 // A NON-default instance may be reachable only under a forwarded/external name, so
-// there (and only there) the VM's recorded CONSTRUCT_EXTERNAL_HOST wins.
+// the VM's recorded CONSTRUCT_EXTERNAL_HOST wins for both instance variants.
 const pairRemote = t3.buildPairingScript(instances.deriveDefaults("work-vm", { sshHost: "buildbox.local", sshPort: 2201 }));
 ok("pairing(instance): prefers the recorded external host", /cfgget CONSTRUCT_EXTERNAL_HOST/.test(pairRemote));
 ok("pairing(instance): still falls back to the mshome name", /ext:-\$\(hostname\)\.mshome\.net/.test(pairRemote));
 ok("pairing(instance): still mints the same kind of link",
-  /t3 auth pairing create --json --ttl 10m --label "construct-work-vm"/.test(pairRemote));
+  /t3pair "\$base" --json --ttl 10m --label "construct-work-vm"/.test(pairRemote));
 // B14: the label NAMES the instance for a non-default VM, so a T3 session list that
 // holds several linked Construct VMs can say which machine a session belongs to. The
 // default instance keeps "construct-control-panel" (asserted with the whole pinned
@@ -307,6 +308,16 @@ try {
 // resolves. Uses setChannelOnVm (single runRemoteScript call, no pairing
 // side-effect) for clean ordering assertions.
 (async () => {
+  const links = [{ kind: "forwarded", pairUrl: "https://host.example:2300/pair#token=one" },
+    { kind: "direct", pairUrl: "https://guest.example:5178/pair#token=two" }];
+  let offered, opened;
+  const pairingVscode = { window: { showQuickPick: async items => { offered = items; return items[1]; } },
+    env: { openExternal: async url => { opened = url; } }, Uri: { parse: url => url } };
+  const pairingSsh = { runRemoteScript: async () => ({ code: 0, stdout: JSON.stringify({ pairUrl: links[0].pairUrl, links }) }) };
+  await t3.openWebUi({ _vscode: pairingVscode, _ssh: pairingSsh });
+  ok("pairing picker: offers both kinds and opens the chosen route", offered.map(x => x.label).join(",") === "forwarded,direct" && opened === links[1].pairUrl);
+  ok("pairing picker: does not display secret tokens", offered.every(x => !x.description.includes("token=")));
+  ok("pairing parser: rejects non-web links", t3.extractPairLinks(JSON.stringify({ links: [{ kind: "direct", pairUrl: "file:///tmp/x" }] })).length === 0);
   let active = 0, maxActive = 0, vmChannel = "stable";
   const log = [];
   const resolvers = [];
