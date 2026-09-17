@@ -404,6 +404,17 @@ update the A record; the SPN and keytab are name-based and stay valid.
 Everything else (`PublicHost`, port ranges, idle policy, `Iso:SeedUser`, `Iso:BootstrapPublicKeyPath`,
 persistence) is the common configuration documented in [service/README.md](../service/README.md).
 
+RAM headroom defaults to `max(1 GiB, total RAM / 8)` on Proxmox. Hyper-V uses
+`max(4 GiB, total RAM / 8)`. The stored host setting `capacity.ramHeadroomBytes`
+overrides either default, including when set to zero.
+
+The host administration Overview shows measured RAM usage, split into running VM
+residency and host usage, with physical free RAM left empty. It also shows swap when
+configured. VM commitments are a separate number that can exceed 100% and turn hot;
+they do not fill the usage bar. Proxmox defaults to Observe mode, so the card says
+"admission not enforced (observe mode)". The headroom marker appears only in Enforce
+mode. Changing the headroom default does not enable capacity enforcement.
+
 ## 8. Troubleshooting
 
 - `journalctl -u constructd -f` — the service log. Driver failures name the operation and the VM;
