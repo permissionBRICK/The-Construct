@@ -1,4 +1,6 @@
 using System.Security.Cryptography;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 namespace Constructd.Windows.Media;
 
@@ -6,13 +8,24 @@ public sealed class WindowsKeyCipher(string directory)
 {
     private byte[]? master;
     private readonly object sync = new();
+    // The random host master survives service restarts and identifies the owning host.
+    public string HostId => Convert.ToHexStringLower(SHA256.HashData(Master()));
     private byte[] Master()
     {
         lock (sync)
         {
             if (master is not null) return master;
             Directory.CreateDirectory(directory);
-            if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            if (OperatingSystem.IsWindows())
+            {
+                var acl = new DirectorySecurity();
+                acl.SetAccessRuleProtection(true, false);
+                foreach (var sid in new[] { WellKnownSidType.LocalSystemSid, WellKnownSidType.BuiltinAdministratorsSid })
+                    acl.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(sid, null), FileSystemRights.FullControl,
+                        InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+                new DirectoryInfo(directory).SetAccessControl(acl);
+            }
+            else File.SetUnixFileMode(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             var path = Path.Combine(directory, "windows-master.key");
             if (!File.Exists(path))
             {

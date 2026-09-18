@@ -7,6 +7,7 @@ public static class WindowsUnattendRenderer
 {
     public static WindowsSelection Parse(string selector)
     {
+        if (string.IsNullOrEmpty(selector)) throw Invalid("windows");
         var split = selector.IndexOf('-');
         if (split < 0) throw Invalid("windows");
         var p = selector[..split]; var e = selector[(split + 1)..];
@@ -18,11 +19,12 @@ public static class WindowsUnattendRenderer
     public static void Validate(WindowsUnattend u)
     {
         if (string.IsNullOrEmpty(u.AdminPassword) || u.AdminPassword.Length > 256 || u.AdminPassword.Any(char.IsControl)) throw Invalid("unattend.adminPassword");
-        if (!Regex.IsMatch(u.Hostname, @"\A[a-zA-Z][a-zA-Z0-9-]{0,14}\z")) throw Invalid("unattend.hostname");
-        if (!Regex.IsMatch(u.Locale, @"\A[a-z]{2,3}-[A-Z]{2}\z") || string.IsNullOrWhiteSpace(u.TimeZone) || u.TimeZone.Length > 128 || u.TimeZone.Any(char.IsControl)) throw Invalid("unattend.locale");
-        if ((u.FirstLogonScript?.Length ?? 0) > 262144 || (u.Files?.Count ?? 0) > 64 || (u.Files?.Sum(f => f.Value.Length) ?? 0) > 1048576) throw Invalid("unattend.files");
+        if (u.Hostname is null || !Regex.IsMatch(u.Hostname, @"\A[a-zA-Z][a-zA-Z0-9-]{0,14}\z")) throw Invalid("unattend.hostname");
+        if (u.Locale is null || !Regex.IsMatch(u.Locale, @"\A[a-z]{2,3}-[A-Z]{2}\z") || string.IsNullOrWhiteSpace(u.TimeZone) || u.TimeZone.Length > 128 || u.TimeZone.Any(char.IsControl)) throw Invalid("unattend.locale");
+        if ((u.FirstLogonScript?.Length ?? 0) > 262144 || (u.Files?.Count ?? 0) > 64 || u.Files?.Any(f => f.Value is null) == true || (u.Files?.Sum(f => (long)f.Value.Length) ?? 0) > 1048576) throw Invalid("unattend.files");
         foreach (var f in u.Files ?? new Dictionary<string, string>())
             if (!Regex.IsMatch(f.Key, @"\A[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}\z") || f.Key.EndsWith('.') || f.Key.Contains("..") ||
+                Regex.IsMatch(f.Key, @"\A(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)", RegexOptions.IgnoreCase) ||
                 new[] { "autounattend.xml", "firstlogon.ps1", "extra.ps1", "construct-report.ps1" }.Contains(f.Key, StringComparer.OrdinalIgnoreCase)) throw Invalid("unattend.files");
     }
 

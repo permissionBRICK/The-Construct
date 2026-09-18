@@ -49,4 +49,30 @@ public class WindowsGuestReconcilerTests
         Assert.DoesNotContain(driver.Calls, c => c.StartsWith("windows-eject:"));
         Assert.Equal("guest-product-edition-mismatch", Assert.Single((await store.SnapshotAsync(default)).Guests).Error);
     }
+    [Fact]
+    public async Task Proxmox_first_reboot_ejects_install_before_guest_agent_is_available()
+    {
+        await using var app = new TestApp(new Dictionary<string,string?> { ["Constructd:Backend"] = "proxmox" });
+        var (vm, driver, store) = await Setup(app);
+        driver.WindowsObservation = new(200, null);
+        var worker = app.Service<WindowsGuestReconciler>(); await worker.ReconcileAsync(default);
+        Assert.DoesNotContain(driver.Calls, c => c.StartsWith("windows-eject:"));
+        driver.WindowsObservation = new(2, null); await worker.ReconcileAsync(default);
+        var guest = Assert.Single((await store.SnapshotAsync(default)).Guests);
+        Assert.True(guest.InstallEjected); Assert.False(guest.AuxiliaryEjected);
+        var media = await driver.GetAttachedMediaAsync(vm.Name, default);
+        Assert.Null(media.InstallPath); Assert.NotNull(media.AuxiliaryPath);
+    }
+    [Fact]
+    public async Task Recreated_VM_cannot_receive_an_old_incarnations_key()
+    {
+        await using var app = new TestApp(); var (vm, driver, store) = await Setup(app);
+        await store.AddAsync("win11", "pro", "retail", "ABCDE-FGHIJ-KLMNO-PQRST-UVWXY", null, null, "admin", default);
+        Assert.True(await app.Vms.RemoveAsync(vm.Name, default));
+        Assert.Equal(VmAddOutcome.Added, await app.Vms.AddAsync(vm with { Incarnation = Guid.NewGuid().ToString() }, 5, default));
+        driver.WindowsObservation = new(200, new("win11", "pro", true, "not-activated", "3V66T"));
+        await app.Service<WindowsGuestReconciler>().ReconcileAsync(default);
+        Assert.Null(driver.DeliveredPartialKey);
+        Assert.DoesNotContain(driver.Calls, c => c.StartsWith("windows-eject:"));
+    }
 }

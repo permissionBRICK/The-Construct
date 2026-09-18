@@ -54,7 +54,8 @@ public sealed class WindowsGuestReconciler(WindowsLicenseStore licenses, IChildV
                     }
                     else
                     {
-                        guest = guest with { Stage = "installed", GuestReported = !options.IsProxmox, Kms = report.Kms };
+                        guest = guest with { Stage = "installed", GuestReported = !options.IsProxmox, Kms = report.Kms,
+                            Evaluation = report.Evaluation, Error = report.Evaluation ? "evaluation-media-requires-conversion" : guest.Error };
                         if (!guest.AuxiliaryEjected) { await Eject(false); guest = guest with { InstallEjected = true, AuxiliaryEjected = true }; }
                         if (guest.KeyId is not null && guest.Attempted && report.Activation is "activated" or "failed")
                         {

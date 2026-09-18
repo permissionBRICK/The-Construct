@@ -10,7 +10,10 @@ public static partial class AdminCli
         switch (args.ElementAtOrDefault(1))
         {
             case "list":
-                var s = await store.SnapshotAsync(ct); return writer.Result(new { keys = s.Keys, guests = s.Guests }, "Windows license pool.");
+                var s = await store.SnapshotAsync(ct);
+                var lines = s.Keys.Select(k => $"{k.Id} {k.Product}-{k.Edition} {k.Kind} …{k.PartialKey} used={k.Used} budget={k.Budget?.ToString() ?? "unlimited"}")
+                    .Concat(s.Guests.Select(g => $"{g.VmName} {g.Product}-{g.Edition} {g.Stage}, {g.Activation}, released={g.Released}"));
+                return writer.Result(new { keys = s.Keys, guests = s.Guests }, string.Join(Environment.NewLine, lines.DefaultIfEmpty("Windows license pool is empty.")));
             case "add":
                 var line = await Console.In.ReadLineAsync(ct);
                 if (line is null || line.Length > 8192) return writer.Usage("Supply a key record as one JSON line on stdin.");
