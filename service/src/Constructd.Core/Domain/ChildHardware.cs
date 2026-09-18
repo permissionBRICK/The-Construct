@@ -11,6 +11,7 @@ public sealed record ChildHardware(
     bool Tpm,
     IReadOnlyList<BootDevice> BootOrder,
     bool NetworkAttached,
-    DynamicMemoryPolicy? DynamicMemory = null);
+    DynamicMemoryPolicy? DynamicMemory = null,
+    string Os = "linux", string? Windows = null);
 
 public sealed record DynamicMemoryPolicy(long MinimumBytes, long StartupBytes, long MaximumBytes);

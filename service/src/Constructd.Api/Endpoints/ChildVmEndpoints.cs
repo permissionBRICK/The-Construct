@@ -33,7 +33,21 @@ public static class ChildVmEndpoints
             if (request.Lifetime is null) return CodedProblems.Create(400, "lifetime-required", "An explicit lifetime is required.");
             seconds = ParseLifetime(request.Lifetime, clock.UtcNow);
             var fw = request.Firmware;
+            if (request.Os is not ("linux" or "windows") || request.Os != "windows" && request.Unattend is not null) throw new ChildValidationException("validation", "os");
+            if (request.Os == "windows")
+            {
+                _ = WindowsUnattendRenderer.Parse(request.Windows);
+                if (request.Unattend is not null)
+                {
+                    WindowsUnattendRenderer.Validate(request.Unattend);
+                    if (request.Media?.AuxiliaryMediaId is not null) throw new ChildValidationException("validation", "unattend");
+                }
+                if (request.Preset is not (null or "windows") || fw?.Generation is not (null or 2) || fw?.SecureBoot == false || fw?.Tpm == false || fw?.SecureBootTemplate is not (null or SecureBootTemplate.MicrosoftWindows)) throw new ChildValidationException("validation", "firmware");
+                request = request with { Preset = "windows", Firmware = (fw ?? new()) with { BootOrder = fw?.BootOrder ?? [BootDevice.Disk, BootDevice.InstallMedia] } };
+                fw = request.Firmware;
+            }
             hardware = HardwarePresets.Resolve(request.Cpus, request.RamMb, request.DiskGb, request.Preset, fw?.Generation, fw?.SecureBoot, fw?.SecureBootTemplate, fw?.Tpm, fw?.BootOrder, request.Media?.AuxiliaryMediaId is not null, request.Network?.Attach ?? true);
+            hardware = hardware with { Os = request.Os, Windows = request.Os == "windows" ? request.Windows : null };
             if (request.Media is null || string.IsNullOrWhiteSpace(request.Media.InstallMediaId)) return CodedProblems.Validation("media", "Install media is required.");
         }
         catch (JsonException) { return CodedProblems.Validation("body", "Invalid child VM request."); }
