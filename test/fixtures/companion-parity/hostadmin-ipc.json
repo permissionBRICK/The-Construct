@@ -1,6 +1,354 @@
 [
   {
     "input": null,
+    "kind": "windows",
+    "now": 1789128000000,
+    "output": {
+      "guests": [],
+      "keys": []
+    }
+  },
+  {
+    "input": {},
+    "kind": "windows",
+    "now": 1789128000000,
+    "output": {
+      "guests": [],
+      "keys": []
+    }
+  },
+  {
+    "input": {
+      "guests": [
+        {
+          "activation": "activated",
+          "auxiliaryEjected": true,
+          "edition": "pro",
+          "guestReported": true,
+          "hostId": "fixture-host",
+          "incarnation": "generation-a",
+          "installEjected": true,
+          "keyId": "retail-1",
+          "partialKey": "3V66T",
+          "product": "win11",
+          "stage": "installed",
+          "vmName": "desktop"
+        },
+        {
+          "activation": "assigned",
+          "edition": "datacenter-core",
+          "incarnation": "generation-b",
+          "installEjected": true,
+          "keyId": "mak-1",
+          "partialKey": "YP6DF",
+          "product": "server2025",
+          "stage": "installed",
+          "vmName": "server"
+        },
+        {
+          "activation": "not-activated",
+          "auxiliaryEjected": true,
+          "edition": "standard",
+          "error": "evaluation-media-requires-conversion",
+          "evaluation": true,
+          "incarnation": "generation-c",
+          "installEjected": true,
+          "product": "server2022",
+          "stage": "installed",
+          "vmName": "trial"
+        },
+        {
+          "activation": "failed",
+          "edition": "education",
+          "error": "partial-key-mismatch",
+          "incarnation": "generation-d",
+          "product": "win11",
+          "stage": "installed",
+          "vmName": "failed"
+        },
+        {
+          "activation": "activated",
+          "edition": "pro",
+          "incarnation": "old-generation",
+          "product": "win11",
+          "released": true,
+          "stage": "installed",
+          "vmName": "deleted"
+        }
+      ],
+      "keys": [
+        {
+          "budget": null,
+          "edition": "pro",
+          "hostId": "fixture-host",
+          "id": "retail-1",
+          "kind": "retail",
+          "notes": "Lab",
+          "partialKey": "3V66T",
+          "product": "win11",
+          "used": 0
+        },
+        {
+          "budget": 10,
+          "edition": "datacenter-core",
+          "id": "mak-1",
+          "kind": "mak",
+          "notes": "Server pool",
+          "partialKey": "YP6DF",
+          "product": "server2025",
+          "used": 3
+        }
+      ]
+    },
+    "kind": "windows",
+    "now": 1789128000000,
+    "output": {
+      "guests": [
+        {
+          "activation": "activated",
+          "auxiliaryEjected": true,
+          "edition": "pro",
+          "error": "",
+          "guestReported": true,
+          "hostId": "fixture-host",
+          "incarnation": "generation-a",
+          "installEjected": true,
+          "keyId": "retail-1",
+          "kms": false,
+          "partialKey": "3V66T",
+          "product": "win11",
+          "released": false,
+          "stage": "installed",
+          "status": "installed, activated (…3V66T) · guest-reported",
+          "vmName": "desktop"
+        },
+        {
+          "activation": "assigned",
+          "auxiliaryEjected": false,
+          "edition": "datacenter-core",
+          "error": "",
+          "guestReported": false,
+          "hostId": "",
+          "incarnation": "generation-b",
+          "installEjected": true,
+          "keyId": "mak-1",
+          "kms": false,
+          "partialKey": "YP6DF",
+          "product": "server2025",
+          "released": false,
+          "stage": "installed",
+          "status": "installed, assigned (…YP6DF)",
+          "vmName": "server"
+        },
+        {
+          "activation": "not-activated",
+          "auxiliaryEjected": true,
+          "edition": "standard",
+          "error": "evaluation-media-requires-conversion",
+          "guestReported": false,
+          "hostId": "",
+          "incarnation": "generation-c",
+          "installEjected": true,
+          "keyId": "",
+          "kms": false,
+          "partialKey": "",
+          "product": "server2022",
+          "released": false,
+          "stage": "installed",
+          "status": "installed, not-activated",
+          "vmName": "trial"
+        },
+        {
+          "activation": "failed",
+          "auxiliaryEjected": false,
+          "edition": "education",
+          "error": "partial-key-mismatch",
+          "guestReported": false,
+          "hostId": "",
+          "incarnation": "generation-d",
+          "installEjected": false,
+          "keyId": "",
+          "kms": false,
+          "partialKey": "",
+          "product": "win11",
+          "released": false,
+          "stage": "installed",
+          "status": "installed, failed",
+          "vmName": "failed"
+        },
+        {
+          "activation": "activated",
+          "auxiliaryEjected": false,
+          "edition": "pro",
+          "error": "",
+          "guestReported": false,
+          "hostId": "",
+          "incarnation": "old-generation",
+          "installEjected": false,
+          "keyId": "",
+          "kms": false,
+          "partialKey": "",
+          "product": "win11",
+          "released": true,
+          "stage": "installed",
+          "status": "installed, activated",
+          "vmName": "deleted"
+        }
+      ],
+      "keys": [
+        {
+          "budget": null,
+          "edition": "pro",
+          "hostId": "fixture-host",
+          "id": "retail-1",
+          "kind": "retail",
+          "notes": "Lab",
+          "partialKey": "3V66T",
+          "product": "win11",
+          "used": 0
+        },
+        {
+          "budget": 10,
+          "edition": "datacenter-core",
+          "hostId": "",
+          "id": "mak-1",
+          "kind": "mak",
+          "notes": "Server pool",
+          "partialKey": "YP6DF",
+          "product": "server2025",
+          "used": 3
+        }
+      ]
+    }
+  },
+  {
+    "input": {
+      "id": "windows-media",
+      "name": "Server 2025",
+      "owner": "host",
+      "role": "install",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "shared": true,
+      "state": "ready",
+      "windows": {
+        "images": [
+          {
+            "build": "26100",
+            "edition": "datacenter-core",
+            "evaluation": true,
+            "imageName": "Windows Server 2025 SERVERDATACENTERCORE",
+            "index": 3,
+            "product": "server2025"
+          }
+        ],
+        "language": "en-US",
+        "prepared": false,
+        "product": "server2025"
+      }
+    },
+    "kind": "media",
+    "now": 1789128000000,
+    "output": {
+      "created": "—",
+      "dedicatedTo": "",
+      "deletable": true,
+      "error": "",
+      "id": "windows-media",
+      "jobId": "",
+      "name": "Server 2025",
+      "owner": "host",
+      "readyAt": "—",
+      "references": 0,
+      "reserved": "—",
+      "role": "install",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "shared": true,
+      "size": "—",
+      "source": "",
+      "sourceUrl": "",
+      "state": "ready",
+      "windows": {
+        "images": [
+          {
+            "build": "26100",
+            "edition": "datacenter-core",
+            "evaluation": true,
+            "imageName": "Windows Server 2025 SERVERDATACENTERCORE",
+            "index": 3,
+            "product": "server2025"
+          }
+        ],
+        "language": "en-US",
+        "prepared": false,
+        "product": "server2025"
+      }
+    }
+  },
+  {
+    "input": {
+      "id": "windows-media",
+      "name": "Server 2025",
+      "owner": "host",
+      "role": "install",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "shared": true,
+      "state": "ready",
+      "windows": {
+        "images": [
+          {
+            "build": "26100",
+            "edition": "datacenter-core",
+            "evaluation": true,
+            "imageName": "Windows Server 2025 SERVERDATACENTERCORE",
+            "index": 3,
+            "product": "server2025"
+          }
+        ],
+        "language": "en-US",
+        "prepared": true,
+        "product": "server2025"
+      }
+    },
+    "kind": "media",
+    "now": 1789128000000,
+    "output": {
+      "created": "—",
+      "dedicatedTo": "",
+      "deletable": true,
+      "error": "",
+      "id": "windows-media",
+      "jobId": "",
+      "name": "Server 2025",
+      "owner": "host",
+      "readyAt": "—",
+      "references": 0,
+      "reserved": "—",
+      "role": "install",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "shared": true,
+      "size": "—",
+      "source": "",
+      "sourceUrl": "",
+      "state": "ready",
+      "windows": {
+        "images": [
+          {
+            "build": "26100",
+            "edition": "datacenter-core",
+            "evaluation": true,
+            "imageName": "Windows Server 2025 SERVERDATACENTERCORE",
+            "index": 3,
+            "product": "server2025"
+          }
+        ],
+        "language": "en-US",
+        "prepared": true,
+        "product": "server2025"
+      }
+    }
+  },
+  {
+    "input": null,
     "kind": "tokenUsage",
     "now": 1789128000000,
     "output": {
@@ -523,7 +871,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": false,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": null,
       "maintenance": null,
@@ -556,7 +905,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": false,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": null,
       "maintenance": null,
@@ -588,7 +938,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": false,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": null,
       "maintenance": null,
@@ -620,7 +971,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": false,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": null,
       "maintenance": null,
@@ -657,7 +1009,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": false,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": null,
       "maintenance": null,
@@ -694,7 +1047,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": false,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": null,
       "maintenance": null,
@@ -730,7 +1084,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": false,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": null,
       "maintenance": null,
@@ -766,7 +1121,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": false,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": null,
       "maintenance": null,
@@ -809,7 +1165,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": false,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": null,
       "maintenance": null,
@@ -852,7 +1209,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": false,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": null,
       "maintenance": null,
@@ -894,7 +1252,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": false,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": null,
       "maintenance": null,
@@ -936,7 +1295,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": false,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": null,
       "maintenance": null,
@@ -969,7 +1329,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": false,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": null,
       "maintenance": null,
@@ -1002,7 +1363,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": false,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": null,
       "maintenance": null,
@@ -1034,7 +1396,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": false,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": null,
       "maintenance": null,
@@ -1066,7 +1429,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": false,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": null,
       "maintenance": null,
@@ -1103,7 +1467,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": false,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": {
         "effective": null,
@@ -1147,7 +1512,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": false,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": {
         "effective": null,
@@ -1190,7 +1556,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": false,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": {
         "effective": null,
@@ -1233,7 +1600,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": false,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": {
         "effective": null,
@@ -1283,7 +1651,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": true,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": {
         "effective": null,
@@ -1337,7 +1706,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": true,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": {
         "effective": null,
@@ -1390,7 +1760,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": true,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": {
         "effective": null,
@@ -1443,7 +1814,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": true,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": {
         "effective": null,
@@ -1491,7 +1863,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": false,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": null,
       "maintenance": null,
@@ -1528,7 +1901,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": false,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": null,
       "maintenance": null,
@@ -1565,7 +1939,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": false,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": null,
       "maintenance": null,
@@ -1602,7 +1977,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": false,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": null,
       "maintenance": null,
@@ -1639,7 +2015,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": false,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": null,
       "maintenance": null,
@@ -1676,7 +2053,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": false,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": null,
       "maintenance": null,
@@ -1713,7 +2091,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": false,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": null,
       "maintenance": null,
@@ -1750,7 +2129,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": false,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": null,
       "maintenance": null,
@@ -1787,7 +2167,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": false,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": {
         "effective": null,
@@ -1835,7 +2216,8 @@
         "primaryMemory": false,
         "primaryNested": false,
         "updates": false,
-        "usage": false
+        "usage": false,
+        "windowsGuests": false
       },
       "identity": {
         "effective": null,
@@ -2049,7 +2431,8 @@
       "primaryMemory": false,
       "primaryNested": false,
       "updates": false,
-      "usage": false
+      "usage": false,
+      "windowsGuests": false
     }
   },
   {
@@ -2112,6 +2495,92 @@
   {
     "input": {
       "apiFeatures": [
+        "host-admin",
+        "windows-guests",
+        "media"
+      ]
+    },
+    "kind": "features",
+    "now": 1789128000000,
+    "output": {
+      "children": false,
+      "console": false,
+      "hostAdmin": true,
+      "media": true,
+      "network": false,
+      "networkMode": false,
+      "primaryCpu": false,
+      "primaryMemory": false,
+      "primaryNested": false,
+      "updates": false,
+      "usage": false,
+      "windowsGuests": true
+    }
+  },
+  {
+    "input": {
+      "apiFeatures": [
+        "host-admin",
+        "windows-guests",
+        "media"
+      ]
+    },
+    "kind": "tabs",
+    "now": 1789128000000,
+    "output": [
+      {
+        "available": true,
+        "id": "overview",
+        "label": "Overview",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "vms",
+        "label": "VMs",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "users",
+        "label": "Users",
+        "reason": ""
+      },
+      {
+        "available": false,
+        "id": "usage",
+        "label": "Usage",
+        "reason": "not available on this host version"
+      },
+      {
+        "available": true,
+        "id": "media",
+        "label": "Media",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "operations",
+        "label": "Operations",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "config",
+        "label": "Configuration",
+        "reason": ""
+      },
+      {
+        "available": false,
+        "id": "maintenance",
+        "label": "Maintenance",
+        "reason": "not available on this host version"
+      }
+    ]
+  },
+  {
+    "input": {
+      "apiFeatures": [
         "host-admin"
       ]
     },
@@ -2128,7 +2597,8 @@
       "primaryMemory": false,
       "primaryNested": false,
       "updates": false,
-      "usage": false
+      "usage": false,
+      "windowsGuests": false
     }
   },
   {
@@ -2210,7 +2680,8 @@
       "primaryMemory": false,
       "primaryNested": false,
       "updates": false,
-      "usage": false
+      "usage": false,
+      "windowsGuests": false
     }
   },
   {
@@ -2294,7 +2765,8 @@
       "primaryMemory": false,
       "primaryNested": true,
       "updates": false,
-      "usage": true
+      "usage": true,
+      "windowsGuests": false
     }
   },
   {
@@ -2388,7 +2860,8 @@
       "primaryMemory": true,
       "primaryNested": true,
       "updates": true,
-      "usage": true
+      "usage": true,
+      "windowsGuests": false
     }
   },
   {
@@ -2482,7 +2955,8 @@
       "primaryMemory": false,
       "primaryNested": false,
       "updates": true,
-      "usage": false
+      "usage": false,
+      "windowsGuests": false
     }
   },
   {
@@ -2572,7 +3046,8 @@
       "primaryMemory": true,
       "primaryNested": false,
       "updates": true,
-      "usage": false
+      "usage": false,
+      "windowsGuests": false
     }
   },
   {
@@ -5609,10 +6084,13 @@
       "references": 0,
       "reserved": "—",
       "role": "",
+      "sha256": "",
+      "shared": false,
       "size": "—",
       "source": "",
       "sourceUrl": "",
-      "state": "unknown"
+      "state": "unknown",
+      "windows": null
     }
   },
   {

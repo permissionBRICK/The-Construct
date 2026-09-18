@@ -120,6 +120,7 @@ public static partial class HostAdminViews
     public static JsonObject Media(JsonNode? input)
     {
         var m = input as JsonObject ?? []; var result = Strings(m, "id", "owner", "name", "role", "source", "sourceUrl", "error", "jobId", "dedicatedTo");
+        result["shared"] = StateJson.Boolean(m["shared"]) == true; result["windows"] = Copy(m["windows"]); result["sha256"] = Text(m["sha256"]);
         result["state"] = Default(m["state"], "unknown").ToLowerInvariant(); result["size"] = Bytes(m["sizeBytes"]); result["reserved"] = Bytes(m["reservedBytes"]); result["created"] = FormatWhen(m["created"]); result["readyAt"] = FormatWhen(m["readyAt"]); result["references"] = Number(m["references"]) ?? 0; result["deletable"] = (Number(m["references"]) ?? 0) == 0; return result;
     }
     public static JsonObject AllowanceForm(JsonNode? input)

@@ -14,6 +14,7 @@ public sealed class HostAdminIpcParityTests
         JsonNode? actual = kind switch
         {
             "projectOpenPath" => JsonValue.Create(ProjectNavigation.OpenPath(input)),
+            "windows" => HostAdminViews.Windows(input),
             "tokenUsage" => HostAdminViews.TokenUsage(input),
             "cascade" => HostAdminProtocol.CascadeConfirmation(input!.AsObject()), "cascadeKind" => JsonValue.Create(HostAdminProtocol.CascadeKind(input!.AsObject())),
             "classify" => HostAdminProtocol.Classify(input!.AsObject()), "poll" => JsonValue.Create(HostAdminProtocol.PollInterval(input!.AsObject())),

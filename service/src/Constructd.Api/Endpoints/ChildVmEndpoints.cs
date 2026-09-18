@@ -17,6 +17,7 @@ public static class ChildVmEndpoints
     public static RouteGroupBuilder MapChildVmEndpoints(this RouteGroupBuilder api)
     {
         api.MapPost("/vms/{parent}/children", CreateAsync).RequireAuthorization(Policies.UserOrPrimaryToken).Audited("child.create").WithName("CreateChildVm");
+        api.MapWindowsLicenseEndpoints();
         return api;
     }
 
@@ -33,7 +34,21 @@ public static class ChildVmEndpoints
             if (request.Lifetime is null) return CodedProblems.Create(400, "lifetime-required", "An explicit lifetime is required.");
             seconds = ParseLifetime(request.Lifetime, clock.UtcNow);
             var fw = request.Firmware;
+            if (request.Os is not ("linux" or "windows") || request.Os != "windows" && request.Unattend is not null) throw new ChildValidationException("validation", "os");
+            if (request.Os == "windows")
+            {
+                _ = WindowsUnattendRenderer.Parse(request.Windows);
+                if (request.Unattend is not null)
+                {
+                    WindowsUnattendRenderer.Validate(request.Unattend);
+                    if (request.Media?.AuxiliaryMediaId is not null) throw new ChildValidationException("validation", "unattend");
+                }
+                if (request.Preset is not (null or "windows") || fw?.Generation is not (null or 2) || fw?.SecureBoot == false || fw?.Tpm == false || fw?.SecureBootTemplate is not (null or SecureBootTemplate.MicrosoftWindows)) throw new ChildValidationException("validation", "firmware");
+                request = request with { Preset = "windows", Firmware = (fw ?? new()) with { BootOrder = fw?.BootOrder ?? [BootDevice.Disk, BootDevice.InstallMedia] } };
+                fw = request.Firmware;
+            }
             hardware = HardwarePresets.Resolve(request.Cpus, request.RamMb, request.DiskGb, request.Preset, fw?.Generation, fw?.SecureBoot, fw?.SecureBootTemplate, fw?.Tpm, fw?.BootOrder, request.Media?.AuxiliaryMediaId is not null, request.Network?.Attach ?? true);
+            hardware = hardware with { Os = request.Os, Windows = request.Os == "windows" ? request.Windows : null };
             if (request.Media is null || string.IsNullOrWhiteSpace(request.Media.InstallMediaId)) return CodedProblems.Validation("media", "Install media is required.");
         }
         catch (JsonException) { return CodedProblems.Validation("body", "Invalid child VM request."); }
@@ -83,7 +98,7 @@ public static class ChildVmEndpoints
                 if (pair.Item1 is null) continue;
                 var item = await media.GetAsync(pair.Item1, ct);
                 if (item is null) return Problems.NotFound("Unknown media.");
-                if (!http.User.IsAdmin() && !Ownership.SameName(item.Owner, parentVm.Owner)) return Problems.Forbidden("Media belongs to another owner.");
+                if (!item.Shared && !http.User.IsAdmin() && !Ownership.SameName(item.Owner, parentVm.Owner)) return Problems.Forbidden("Media belongs to another owner.");
                 if (item.State != MediaState.Ready) return CodedProblems.Create(409, "media-not-ready", "Media is not ready.");
                 if (item.DedicatedTo is not null && !Ownership.SameName(item.DedicatedTo, name)) return Problems.Forbidden("Media is dedicated to another VM.");
                 if (item.Role != (pair.Item2 == MediaSlot.Install ? MediaRole.Install : MediaRole.Auxiliary)) return CodedProblems.Validation("media", "Media role does not match its slot.");
@@ -106,7 +121,7 @@ public static class ChildVmEndpoints
             if (result.Outcome != AdmissionOutcome.Accepted) return AdmissionProblem(result);
             try
             {
-                await runner.StartPersistedAsync(job, maintenanceHandle, (progress, token) => worker.RunAsync(job, vm, placement, request.Start, result.ReservationIds, progress, token), CancellationToken.None);
+                await runner.StartPersistedAsync(job, maintenanceHandle, (progress, token) => worker.RunAsync(job, vm, placement, request.Start, result.ReservationIds, progress, token, request.Unattend), CancellationToken.None);
                 maintenanceHandle = null;
             }
             catch

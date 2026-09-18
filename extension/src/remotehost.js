@@ -714,6 +714,12 @@ function createClient(opts = {}) {
     mediaReferences: (id) => request("GET", `/media/${encodeURIComponent(id)}/references`),
     deleteMedia: (id) => request("DELETE", `/media/${encodeURIComponent(id)}`),
     mediaCleanup: () => request("POST", "/media/cleanup", {}),
+    windows: () => request("GET", "/host/windows"),
+    addWindowsKey: (body) => request("POST", "/host/windows/keys", body),
+    deleteWindowsKey: (id) => request("DELETE", `/host/windows/keys/${encodeURIComponent(id)}`),
+    assignWindowsKey: (name, body) => request("POST", `/host/windows/guests/${encodeURIComponent(name)}/assign`, body),
+    acquireWindowsMedia: (body) => request("POST", "/media/acquire-windows", body),
+    prepareWindowsMedia: (id) => request("POST", `/media/${encodeURIComponent(id)}/prepare-windows`, {}),
     // Jobs and audit (§8.16).
     jobs: (query) => request("GET", "/jobs" + buildQuery(query)),
     cancelJob: (id) => request("POST", `/jobs/${encodeURIComponent(id)}/cancel`, {}),

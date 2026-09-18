@@ -6,7 +6,7 @@ namespace Constructd.Api.Jobs;
 public sealed class ChildDeleteJob(IVmRepository vms, IVmDelegationRepository metadata, IChildVmDriver driver,
     IHypervisorDriver hypervisor, IChildVmCreationOwnership ownership, ICapacityLedger capacity, IMediaStore media, IMediaGate mediaGate,
     MediaJobs mediaJobs, IPortForwardManager forwards, INetworkPolicyReconciler network,
-    IVmOperationGate vmGate, IPersistedJobRunner runner, IAuditLog audit, IClock clock)
+    IVmOperationGate vmGate, IPersistedJobRunner runner, IAuditLog audit, IClock clock, WindowsLicenseStore licenses)
 {
     public async Task<JobOutcome> RunAsync(Job job, Vm vm, IProgress<string> progress, CancellationToken ct)
     {
@@ -89,5 +89,6 @@ public sealed class ChildDeleteJob(IVmRepository vms, IVmDelegationRepository me
         var ids = (await capacity.SnapshotAsync(false, ct)).Reservations.Where(x => x.VmName == vm.Name).Select(x => x.Id).ToArray();
         await capacity.ReleaseAsync(ids, VmState.Absent, "child artifacts confirmed removed", ct);
         await vms.RemoveAsync(vm.Name, ct);
+        if (vm.Incarnation is not null) await licenses.ReleaseAsync(vm.Name, vm.Incarnation, ct);
     }
 }

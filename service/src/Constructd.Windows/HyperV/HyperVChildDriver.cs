@@ -6,7 +6,7 @@ using Constructd.Core.Logic;
 using Constructd.Windows.Internal;
 namespace Constructd.Windows.HyperV;
 
-public sealed class HyperVChildDriver(IProcessRunner processes, ConstructdOptions options, IHypervisorDriver legacy) : IChildVmDriver, IChildVmStorage, IChildVmCreationOwnership
+public sealed partial class HyperVChildDriver(IProcessRunner processes, ConstructdOptions options, IHypervisorDriver legacy) : IChildVmDriver, IChildVmStorage, IChildVmCreationOwnership, IWindowsGuestChannel
 {
     private BackendCapabilities? _capabilities;
     private readonly SemaphoreSlim _capabilityGate = new(1, 1);

@@ -113,7 +113,7 @@ public static class ChildConfigurationEndpoints
                 if (pair.Item1 is null) continue;
                 var item = await media.GetAsync(pair.Item1, ct);
                 if (item is null) return Problems.NotFound("Unknown media.");
-                if (!http.User.IsAdmin() && !Ownership.SameName(item.Owner, vm.Owner) || item.DedicatedTo is not null && !Ownership.SameName(item.DedicatedTo, name))
+                if (!item.Shared && !http.User.IsAdmin() && !Ownership.SameName(item.Owner, vm.Owner) || item.DedicatedTo is not null && !Ownership.SameName(item.DedicatedTo, name))
                     return LifecycleEndpoints.Problem("not-owner", 403);
                 if (item.State != MediaState.Ready) return LifecycleEndpoints.Problem("media-not-ready");
                 if (item.Role != (pair.Item2 == MediaSlot.Install ? MediaRole.Install : MediaRole.Auxiliary)) return CodedProblems.Validation("media", "Media role does not match slot.");
@@ -139,7 +139,7 @@ public static class ChildConfigurationEndpoints
             if (!confirmed.Complete || !SamePath(confirmed.InstallPath, installPath) || !SamePath(confirmed.AuxiliaryPath, auxiliaryPath)) return LifecycleEndpoints.Problem("media-unverified");
             if (await s.GetRequiredService<IHypervisorDriver>().GetStateAsync(name, ct) != VmState.Off)
                 throw new LifecycleException("configuration-unverified");
-            foreach (var reference in oldReferences.Where(r => !targetRefs.Any(t => t.MediaId == r.MediaId && t.Slot == r.Slot)))
+            foreach (var reference in oldReferences.Where(r => r.Slot != MediaSlot.GuestAgent && !targetRefs.Any(t => t.MediaId == r.MediaId && t.Slot == r.Slot)))
                 await media.RemoveReferenceAsync(reference.MediaId, name, reference.Slot, ct);
             object response = mediaChange ? mediaResponse : intent.Hardware;
             var completed = await admission.MutateAsync(key, async scope =>

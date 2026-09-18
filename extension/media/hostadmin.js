@@ -453,6 +453,7 @@
   function renderMedia(s) {
     const m = s.media;
     if (!m) return;
+    renderWindows(m.windows);
     const c = m.catalog || { mode: "unavailable", source: {}, entries: [] };
     text("isoMode", c.mode);
     text("isoSource", m.catalogProblem || `${c.source.path || c.source.url || "—"} · ${c.source.present ? "present" : "absent"} · ${c.source.size}${c.source.sha256Configured ? " · sha256 configured" : ""}`);
@@ -482,6 +483,7 @@
       const row = el("div", "ha-row " + (x.state === "failed" ? "failed" : ""));
       const name = cell(x.name || x.id, "name");
       name.title = x.id + (x.sourceUrl ? " · " + x.sourceUrl : "") + (x.dedicatedTo ? " · dedicated to " + x.dedicatedTo : "");
+      if (x.windows) name.appendChild(el("div", "cost-note", `${x.shared ? "Shared · " : ""}${x.windows.product} · ${x.windows.language} · ${x.windows.prepared ? "prepared" : "original"} · ${(x.windows.images || []).map(i => i.imageName + " build " + i.build).join(", ")} · SHA-256 ${x.sha256}`));
       row.appendChild(name);
       row.appendChild(cell(x.owner || "—"));
       row.appendChild(cell(x.role));
@@ -493,12 +495,55 @@
       const del = btn("Delete", "danger", () => act("deleteMedia", { id: x.id, name: x.name }), x.deletable ? "Delete this media item" : "Referenced by a VM; detach it first");
       del.disabled = !x.deletable;
       actions.appendChild(del);
+      if (s.features.windowsGuests && x.role === "install" && x.state === "ready" && !(x.windows && x.windows.prepared)) actions.appendChild(btn("Prepare Windows", "", () => act("prepareWindowsMedia", { id: x.id })));
       row.appendChild(actions);
       t.appendChild(row);
     });
   }
 
   // ── Operations ──────────────────────────────────────────────────────────────
+  function renderWindows(w) {
+    show($("windowsGuestsPanel"), !!w);
+    if (!w) return;
+    for (const [formId, productField] of [["windowsAcquireForm", "windows"], ["windowsKeyForm", "product"]]) {
+      const form = $(formId), product = form.elements[productField], edition = form.elements.edition;
+      const updateEditions = () => {
+        const previous = edition.value;
+        const choices = product.value.startsWith("server") ? ["standard", "datacenter", "standard-core", "datacenter-core"] : ["pro", "pro-n", "enterprise", "education"];
+        clear(edition);
+        for (const value of choices) { const option = el("option", "", value); option.value = value; edition.appendChild(option); }
+        edition.value = choices.includes(previous) ? previous : choices[0];
+      };
+      product.onchange = updateEditions;
+      if (!edition.options.length) updateEditions();
+    }
+    $("windowsAcquireForm").onsubmit = event => {
+      event.preventDefault(); act("acquireWindowsMedia", Object.fromEntries(new FormData(event.target)));
+    };
+    $("windowsKeyForm").onsubmit = event => {
+      event.preventDefault(); const args = Object.fromEntries(new FormData(event.target));
+      args.budget = args.kind === "mak" && args.budget ? Number(args.budget) : null;
+      event.target.elements.key.value = ""; act("addWindowsKey", args);
+    };
+    const keys = $("windowsKeys"); clear(keys);
+    for (const key of w.keys) {
+      const row = el("div", "ha-row");
+      row.appendChild(cell(`${key.product} ${key.edition} · ${key.kind} · …${key.partialKey} · ${key.used}/${key.budget === null ? "unlimited" : key.budget} · ${key.notes}`));
+      const remove = btn("Remove", "danger", () => act("deleteWindowsKey", { id: key.id }));
+      remove.disabled = w.guests.some(g => g.keyId === key.id && !g.released); row.appendChild(remove); keys.appendChild(row);
+    }
+    const guests = $("windowsGuests"); clear(guests);
+    for (const guest of w.guests) {
+      const row = el("div", "ha-row"); row.appendChild(cell(`${guest.vmName} · ${guest.product} ${guest.edition} · ${guest.status}${guest.released ? " · released" : ""} · install ${guest.installEjected ? "ejected" : "attached"} · answer file ${guest.auxiliaryEjected ? "ejected" : "attached"}${guest.error ? " · " + guest.error : ""}`));
+      if (!guest.released && guest.stage === "installed" && !guest.keyId && !guest.kms && guest.error !== "evaluation-media-requires-conversion") {
+        const select = el("select");
+        for (const key of w.keys.filter(k => k.hostId === guest.hostId && k.product === guest.product && k.edition === guest.edition)) { const option = el("option", "", `${key.kind} …${key.partialKey}`); option.value = key.id; select.appendChild(option); }
+        row.appendChild(select); const assign = btn("Assign", "", () => act("assignWindowsKey", { name: guest.vmName, incarnation: guest.incarnation, keyId: select.value })); assign.disabled = !select.options.length; row.appendChild(assign);
+      }
+      guests.appendChild(row);
+    }
+  }
+
   function renderOperations(s) {
     const o = s.operations;
     if (!o) return;
