@@ -204,6 +204,13 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
             progress?.Report($"powering VM {id} off");
             await RunQmAsync("stop-vm", name, ["stop", id], ShortTimeout, progress, cancellationToken)
                 .ConfigureAwait(false);
+            // `qm stop` returns once the kill is sent; `qm destroy` refuses a VM whose process is
+            // still winding down ("VM is running - destroy failed"). Wait for the node to agree.
+            for (var attempt = 0; attempt < 30; attempt++)
+            {
+                if (await ReadStateAsync(name, vmId.Value, cancellationToken).ConfigureAwait(false) == VmState.Off) break;
+                await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+            }
         }
 
         progress?.Report($"destroying VM {id} and its disks");
