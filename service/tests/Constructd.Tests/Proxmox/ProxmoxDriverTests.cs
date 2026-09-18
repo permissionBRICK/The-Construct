@@ -38,6 +38,24 @@ public sealed class ProxmoxDriverTests
     }
 
     [Theory]
+    [InlineData("x86-64-v2-AES", "flags\t\t: fpu sse4_2 popcnt aes avx", "x86-64-v2-AES")]
+    [InlineData("x86-64-v2-AES", "flags\t\t: fpu sse4_2 popcnt", "x86-64-v2")]
+    [InlineData("host", "flags\t\t: fpu sse4_2 popcnt", "host")]
+    [InlineData("x86-64-v3", "flags\t\t: fpu", "x86-64-v3")]
+    public void Cpu_model_drops_the_AES_suffix_only_on_hosts_without_AES(string configured, string cpuInfo, string expected)
+    {
+        var path = Path.Combine(Path.GetTempPath(), "construct-cpuinfo-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            File.WriteAllText(path, "processor\t: 0\n" + cpuInfo + "\nbugs\t\t: none\n");
+            Assert.Equal(expected, ProxmoxCpuModel.Resolve(configured, path));
+        }
+        finally { File.Delete(path); }
+    }
+    [Fact]
+    public void Cpu_model_keeps_the_configured_model_when_cpuinfo_is_unreadable() =>
+        Assert.Equal("x86-64-v2-AES", ProxmoxCpuModel.Resolve("x86-64-v2-AES", Path.Combine(Path.GetTempPath(), "missing-" + Guid.NewGuid().ToString("N"))));
+    [Theory]
     [InlineData("kvm_intel", "Y", true)]
     [InlineData("kvm_amd", "1", true)]
     [InlineData("kvm_intel", "N", false)]

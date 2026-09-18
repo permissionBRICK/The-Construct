@@ -101,9 +101,9 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
 
     public bool NestedAvailable => ProxmoxNestedCapability.IsAvailable();
 
-    private string CpuType(bool nested) => ArgumentGuard.Text(
+    private string CpuType(bool nested) => ProxmoxCpuModel.Resolve(ArgumentGuard.Text(
         nested ? _options.Proxmox.CpuType : _options.Proxmox.CpuTypeWithoutNesting,
-        nested ? "Constructd:Proxmox:CpuType" : "Constructd:Proxmox:CpuTypeWithoutNesting", 64);
+        nested ? "Constructd:Proxmox:CpuType" : "Constructd:Proxmox:CpuTypeWithoutNesting", 64));
 
     public async Task<bool> GetNestedAsync(string name, CancellationToken ct)
     {

@@ -81,7 +81,7 @@ public sealed partial class ProxmoxChildVmPlatform(IProcessRunner processes, IHy
             // Same CPU model as a primary without nesting. Without --cpu, qm falls back to kvm64,
             // which hides POPCNT and SSE4.2; Windows 11 since 24H2 refuses to boot on that and
             // loops in the boot manager (seen on the first Windows child field test).
-            "--cpu", ArgumentGuard.Text(options.Proxmox.CpuTypeWithoutNesting, "Constructd:Proxmox:CpuTypeWithoutNesting", 64),
+            "--cpu", ProxmoxCpuModel.Resolve(ArgumentGuard.Text(options.Proxmox.CpuTypeWithoutNesting, "Constructd:Proxmox:CpuTypeWithoutNesting", 64)),
             "--scsihw", "virtio-scsi-single",
             // Windows has no in-box virtio driver: Setup shows no disk on virtio-scsi. The Windows
             // preset therefore gets a SATA (AHCI) disk, which Setup sees without a driver ISO.
