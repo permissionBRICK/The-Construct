@@ -53,11 +53,16 @@ generalises it. What it established, and what the host-side implementation must 
    behaviour and injects nothing). `windows` implies the firmware preset, the SATA system disk
    and the e1000e card the Proxmox driver already gives the Windows preset, unlocks the
    host-prepared Windows media, the host-rendered answer file and the key injection below.
-   An agent-supplied ISO keeps working for either OS. `--windows-edition <name>` (default
-   `pro`) selects the edition; the host lists the editions present on the chosen media (the
-   image names inside its install image, e.g. "Windows 11 Pro", "Windows 11 Enterprise",
-   "Windows Server 2025 Datacenter") and refuses an edition the media lacks. The answer file
-   installs exactly that image with that edition's public generic key.
+   An agent-supplied ISO keeps working for either OS. `--windows <product>-<edition>` (default
+   `win11-pro`) selects **product and edition together**: products are `win11` and
+   `server2022`/`server2025` (the rig ships distinct answer files and first-logon scripts for
+   the client and the server family: `examples/winvm-blank/vm/unattend-win11/` and
+   `examples/winvm-blank/vm/unattend/`; keep them as two templates, selected by product), editions
+   are `pro`, `pro-n`, `enterprise`, `education` for the client family and `standard`,
+   `datacenter` (each also as `-core`) for the server family. The host lists what the chosen
+   media actually contains (the image names inside its install image, e.g. "Windows 11 Pro",
+   "Windows Server 2025 Datacenter") and refuses a product or edition the media lacks. The
+   answer file installs exactly that image with that product and edition's public generic key.
 2. **Host-built auxiliary ISO.** `construct vm create --os windows --iso … --unattend-*`
    parameters (admin password, hostname, locale, time zone, extra first-logon script, extra
    files) are rendered by the host into `autounattend.xml` + `firstlogon.ps1` from the template
@@ -151,10 +156,14 @@ needed for the install itself. The QEMU guest agent is installed by the first-lo
 from the virtio driver ISO the host attaches as a third medium when the platform is Proxmox,
 and only then does the key push use `qm guest exec`; until the agent is up the host waits.
 
-Editions: every pool key has an edition (pro, pro-n, enterprise, education, server-standard,
-server-datacenter) and a kind (retail, mak, kms-client; MAK with an activation budget). The
-guest reports its installed edition at first logon; auto-assignment matches the edition
-exactly, a manual assignment from the panel is validated against it. No matching key: the
+Products and editions: every pool key has a product (`win11`, `server2022`, `server2025`, …)
+**and** an edition (client: pro, pro-n, enterprise, education; server: standard, datacenter,
+with or without desktop experience) and a kind (retail, mak, kms-client; MAK with an activation
+budget). The guest reports its installed product and edition at first logon (from the OS
+caption and edition id); auto-assignment matches both exactly, a manual assignment from the
+panel is validated against both. The host-fetched media carries its product too (`--windows 11`
+or `--windows server-2022`/`server-2025` on acquire), so the create command can refuse a
+product that the selected media does not contain. No matching key: the
 guest stays on the generic key and its grace period, and the panel shows "not activated".
 
 Key storage: encrypted at rest with a host key that is DPAPI-protected on Windows and a
