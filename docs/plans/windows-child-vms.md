@@ -175,3 +175,13 @@ Media: the host fetches official Windows media (Fido resolver, `construct vm med
 patch (§6a), never a repack; both the fetched original and the prepared variant are shared
 media items readable by every user (the media store gains a `shared` flag; deletion admin-only).
 Install media is ejected by the host when the first-logon beacon arrives.
+
+## 7. Future: clusters
+
+When Construct hosts form a cluster (a future, Construct-managed cluster only, see the Proxmox
+guide), license keys must be bound to one physical host inside it: Windows activation is tied
+to the hardware it was performed on, a MAK activation counts per installation, and an OEM key
+is legally tied to its machine. Record the owning host on every pool key from day one
+(`hostId`, today always the local host) and on every assignment, refuse to assign a key on a
+different host, and treat a VM migration between hosts as an event that needs a new
+assignment. Nothing else in this plan changes for a single host. (Noted 2026-09-18.)
