@@ -1,6 +1,7 @@
 # Windows child VMs: OS type, unattended install, license keys
 
-Status: **draft for discussion**, 2026-09-17. Not dispatched. Open decisions in §6.
+Status: plan, dispatched 2026-09-18. Branch `feat/windows-child-vms` (off `main`). Implementation is
+handed to a T3 Code thread; this document is the brief. Decisions in §6 are final.
 
 ## 1. Goal
 
@@ -48,8 +49,15 @@ generalises it. What it established, and what the host-side implementation must 
 
 ## 3. Design (proposed)
 
-1. **OS type on child create**: `--os linux|windows|other`; `windows` implies the current
-   `--preset windows` firmware and unlocks the unattended options below.
+1. **OS type on child create**: `--os linux|windows` (default `linux`, which is exactly today's
+   behaviour and injects nothing). `windows` implies the firmware preset, the SATA system disk
+   and the e1000e card the Proxmox driver already gives the Windows preset, unlocks the
+   host-prepared Windows media, the host-rendered answer file and the key injection below.
+   An agent-supplied ISO keeps working for either OS. `--windows-edition <name>` (default
+   `pro`) selects the edition; the host lists the editions present on the chosen media (the
+   image names inside its install image, e.g. "Windows 11 Pro", "Windows 11 Enterprise",
+   "Windows Server 2025 Datacenter") and refuses an edition the media lacks. The answer file
+   installs exactly that image with that edition's public generic key.
 2. **Host-built auxiliary ISO.** `construct vm create --os windows --iso … --unattend-*`
    parameters (admin password, hostname, locale, time zone, extra first-logon script, extra
    files) are rendered by the host into `autounattend.xml` + `firstlogon.ps1` from the template
@@ -131,11 +139,30 @@ answers SSH with the given password, shows "installed, activated with key …3V6
 "installed, not activated, grace period") in the panel, and has no auxiliary medium attached
 afterwards.
 
-## 6. Decisions and what is still open
+## 6. Decisions
 
 Decided (2026-09-17): the host stays credential-free; the key is pushed post-install through
 the guest channel and never baked into the answer file; verification comes from the same
 channel.
 
-Open: Hyper-V first, Proxmox once child VMs land there (the Proxmox path depends on the
-child VM thread and on the virtio driver handling in §3.6).
+Decided (2026-09-18): both platforms in scope now; the Proxmox child VMs landed and the Windows
+preset there already uses a SATA disk and an e1000e card, so no virtio driver handling is
+needed for the install itself. The QEMU guest agent is installed by the first-logon script
+from the virtio driver ISO the host attaches as a third medium when the platform is Proxmox,
+and only then does the key push use `qm guest exec`; until the agent is up the host waits.
+
+Editions: every pool key has an edition (pro, pro-n, enterprise, education, server-standard,
+server-datacenter) and a kind (retail, mak, kms-client; MAK with an activation budget). The
+guest reports its installed edition at first logon; auto-assignment matches the edition
+exactly, a manual assignment from the panel is validated against it. No matching key: the
+guest stays on the generic key and its grace period, and the panel shows "not activated".
+
+Key storage: encrypted at rest with a host key that is DPAPI-protected on Windows and a
+root-only file under `/etc/constructd/keys/` on Linux; the API returns only the last five
+characters, the audit log never the key.
+
+Media: the host fetches official Windows media (Fido resolver, `construct vm media acquire
+--windows 11 --edition pro --lang en`) and prepares it with the four-byte El Torito catalog
+patch (§6a), never a repack; both the fetched original and the prepared variant are shared
+media items readable by every user (the media store gains a `shared` flag; deletion admin-only).
+Install media is ejected by the host when the first-logon beacon arrives.
