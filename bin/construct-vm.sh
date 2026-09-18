@@ -34,6 +34,10 @@ Child VMs:
   identity [--json]
   create (--iso-url URL | --iso PATH | --media ID) [--aux-iso PATH | --aux-media ID]
          --cpus N (--ram-gb G | --ram-mb M) --disk-gb D --lifetime L [options]
+         [--os linux|windows] [--windows win11-pro|server2022-standard|...]
+         [--unattend-admin-password PASSWORD] [--unattend-hostname NAME]
+         [--unattend-locale en-US] [--unattend-time-zone UTC]
+         [--unattend-first-logon SCRIPT.ps1] [--unattend-files FILES.json]
   list [--owned-only] [--json]    Own children and accessible shared guests by default
   inspect NAME [--json]
   start NAME --lifetime L [--json]
@@ -54,6 +58,9 @@ Media:
          [--dedicated-to VM] [--operation-id ID] [--json]
   media acquire URL [--role install|auxiliary] [--name NAME] [--sha256 HEX]
          [--operation-id ID] [--no-wait] [--json]
+  media acquire --windows 11|server-2022|server-2025 --edition EDITION --lang en
+         [--no-wait] [--json]
+  media prepare-windows ID [--no-wait] [--json]
   media attach NAME (--install ID | --aux ID) [--boot-order LIST] [--json]
   media detach NAME (--install | --aux) [--json]
   media delete ID --yes [--json]
@@ -80,6 +87,7 @@ Common mutation options:
 
 Lifetimes are "never" or an integer followed by m, h or d (minimum 5m).
 Run `construct vm <command> --help` for this command summary.
+Windows setup, credentials and activation: docs/child-vms.md, "Windows guests".
 
 Exit codes:
   0 success; 1 usage/local error; 2 invalid request; 3 not found; 4 refused;
@@ -497,7 +505,7 @@ cmd_list() {
 }
 
 cmd_inspect() {
-  local name="${1:-}" json=false encoded vm addresses capabilities result
+  local name="${1:-}" json=false encoded vm addresses capabilities result windows=null
   [[ -n "${name}" ]] || die 'inspect requires a VM name'; shift
   while [[ $# -gt 0 ]]; do case "$1" in --json) json=true;; *) die "unknown inspect option: $1";; esac; shift; done
   encoded="$(urlencode "${name}")"
@@ -505,10 +513,15 @@ cmd_inspect() {
   api_request GET "/api/v1/vms/${encoded}/addresses"; expect_json object; addresses="${API_BODY}"
   api_request GET "/api/v1/vms/${encoded}/capabilities"; expect_json object; capabilities="${API_BODY}"
   result="$(jq -cn --argjson vm "${vm}" --argjson addresses "${addresses}" --argjson capabilities "${capabilities}" '{vm:$vm,addresses:$addresses,capabilities:$capabilities}')"
+  if [[ "$(printf '%s' "${vm}" | jq -r '.hardware.os // "linux"')" == windows ]]; then
+    api_request GET "/api/v1/vms/${encoded}/windows"; expect_json object; windows="${API_BODY}"
+    result="$(printf '%s' "${result}" | jq -c --argjson windows "${windows}" '. + {windows:$windows}')"
+  fi
   if [[ "${json}" == true ]]; then printf '%s\n' "${result}"; else
     print_human_object "${vm}"
     if [[ "$(printf '%s' "${addresses}" | jq '.addresses | length')" -eq 0 ]]; then printf '%s\n' 'addresses: no address yet'; else printf '%s' "${addresses}" | jq -r '.addresses[] | "address: \(.address) (verified=\(.verified))"'; fi
     printf 'capabilities: %s\n' "$(printf '%s' "${capabilities}" | jq -c .)"
+    if [[ "${windows}" != null ]]; then printf 'windows: %s\n' "$(printf '%s' "${windows}" | jq -c .)"; fi
   fi
 }
 
@@ -683,6 +696,7 @@ cmd_media_upload() {
 }
 
 cmd_media_acquire() {
+  if [[ "${1:-}" == --windows ]]; then cmd_windows_media acquire "$@"; return; fi
   local url="${1:-}" role=install display_name="" sha256="" operation_id="" json=false no_wait=false key
   [[ -n "${url}" ]] || die 'media acquire requires a URL'; shift
   while [[ $# -gt 0 ]]; do case "$1" in --role) shift; [[ $# -gt 0 ]] || die '--role requires a value'; role="$1";; --name) shift; [[ $# -gt 0 ]] || die '--name requires a value'; display_name="$1";; --sha256) shift; [[ $# -gt 0 ]] || die '--sha256 requires a value'; sha256="$1";; --operation-id) shift; [[ $# -gt 0 ]] || die '--operation-id requires a value'; operation_id="$1";; --no-wait) no_wait=true;; --json) json=true;; *) die "unknown media acquire option: $1";; esac; shift; done
@@ -695,6 +709,32 @@ cmd_media_list() {
   local json=false; while [[ $# -gt 0 ]]; do case "$1" in --json) json=true;; *) die "unknown media list option: $1";; esac; shift; done
   api_request GET /api/v1/media; expect_json array
   if [[ "${json}" == true ]]; then printf '%s\n' "$(printf '%s' "${API_BODY}" | jq -c .)"; else printf '%-34s %-10s %-12s %10s %s\n' ID ROLE STATE SIZE NAME; printf '%s' "${API_BODY}" | jq -r '.[] | [.id,.role,.state,(.sizeBytes//"-"),.name] | @tsv' | while IFS=$'\t' read -r id role state size name; do printf '%-34s %-10s %-12s %10s %s\n' "$id" "$role" "$state" "$size" "$name"; done; fi
+  if [[ "${json}" != true ]]; then
+    printf '%s' "${API_BODY}" | jq -r '.[] | select(.windows) | "\(.id): \(.windows.product) \(.windows.language) prepared=\(.windows.prepared) shared=\(.shared) sha256=\(.sha256)\n  \([.windows.images[] | "\(.edition) (\(.imageName), build \(.build))"] | join("; "))"'
+  fi
+}
+
+cmd_windows_media() {
+  local action="$1"; shift
+  local product=11 edition=pro lang=en id="" json=false no_wait=false body path
+  if [[ "${action}" == prepare ]]; then id="${1:-}"; [[ -n "${id}" ]] || die 'prepare-windows requires a media id'; shift; fi
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --windows) shift; [[ $# -gt 0 ]] || die '--windows requires a product'; product="$1";;
+      --edition) shift; [[ $# -gt 0 ]] || die '--edition requires an edition'; edition="$1";;
+      --lang) shift; [[ $# -gt 0 ]] || die '--lang requires a language'; lang="$1";;
+      --json) json=true;; --no-wait) no_wait=true;; *) die "unknown Windows media option: $1";;
+    esac; shift
+  done
+  if [[ "${action}" == acquire ]]; then
+    body="$(jq -cn --arg windows "${product}" --arg edition "${edition}" --arg lang "${lang}" '{windows:$windows,edition:$edition,lang:$lang}')"; path=/api/v1/media/acquire-windows
+  else body='{}'; path="/api/v1/media/$(urlencode "${id}")/prepare-windows"; fi
+  api_request POST "${path}" "${body}"; expect_json object
+  if [[ "${no_wait}" == true ]]; then print_result "${API_BODY}" "${json}" ""; return; fi
+  follow_job "$(printf '%s' "${API_BODY}" | jq -r '.jobId')" 10800 false
+  id="$(printf '%s' "${JOB_RESULT}" | jq -r '.result.mediaId // empty')"
+  [[ -n "${id}" ]] || die 'Windows media job omitted mediaId'
+  media_get "${id}"; print_result "${MEDIA_RESULT}" "${json}" ""
 }
 
 cmd_media_attach_detach() {
@@ -716,6 +756,7 @@ cmd_media_delete() {
 }
 
 cmd_media() {
+  if [[ "${1:-}" == prepare-windows ]]; then shift; cmd_windows_media prepare "$@"; return; fi
   local sub="${1:-}"; [[ -n "${sub}" ]] || die 'media requires list, upload, acquire, attach, detach or delete'; shift
   case "${sub}" in list) cmd_media_list "$@";; upload) cmd_media_upload "$@";; acquire) cmd_media_acquire "$@";; attach|detach) cmd_media_attach_detach "${sub}" "$@";; delete) cmd_media_delete "$@";; *) die "unknown media command: ${sub}";; esac
 }
@@ -728,9 +769,24 @@ derive_child_name() {
 }
 
 cmd_create() {
+  local os=linux windows=win11-pro unattend='{}' option field value
   local iso_url="" iso_file="" install_media="" aux_file="" aux_media="" cpus="" ram_gb="" ram_mb="" disk_gb="" lifetime="" name="" preset="" generation="" secure_boot="" template="" tpm="" boot_order="" no_network=false no_start=false sha256="" operation_id="" no_wait=false json=false json_progress=false key child_name install_item aux_item="" fw body accepted job final_vm result source_count=0 aux_count=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --os|--windows|--unattend-admin-password|--unattend-hostname|--unattend-locale|--unattend-time-zone|--unattend-first-logon|--unattend-files)
+        option="$1"; shift; [[ $# -gt 0 ]] || die "${option} requires a value"; value="$1"
+        case "${option}" in
+          --os) os="${value}";; --windows) windows="${value}";;
+          *)
+            case "${option}" in
+              --unattend-admin-password) field=adminPassword;; --unattend-hostname) field=hostname;;
+              --unattend-locale) field='locale';; --unattend-time-zone) field=timeZone;;
+              --unattend-first-logon) field=firstLogonScript; value="$(cat -- "${value}")";;
+              --unattend-files) field=files; value="$(cat -- "${value}")";;
+            esac
+            if [[ "${field}" == files ]]; then unattend="$(jq -cn --argjson old "${unattend}" --argjson value "${value}" '$old + {files:$value}')";
+            else unattend="$(jq -cn --argjson old "${unattend}" --arg field "${field}" --arg value "${value}" '$old + {($field):$value}')"; fi;;
+        esac;;
       --iso-url) shift; [[ $# -gt 0 ]] || die '--iso-url requires a URL'; iso_url="$1";; --iso) shift; [[ $# -gt 0 ]] || die '--iso requires a file'; iso_file="$1";; --media) shift; [[ $# -gt 0 ]] || die '--media requires an id'; install_media="$1";;
       --aux-iso) shift; [[ $# -gt 0 ]] || die '--aux-iso requires a file'; aux_file="$1";; --aux-media) shift; [[ $# -gt 0 ]] || die '--aux-media requires an id'; aux_media="$1";;
       --cpus) shift; [[ $# -gt 0 ]] || die '--cpus requires a value'; cpus="$1";; --ram-gb) shift; [[ $# -gt 0 ]] || die '--ram-gb requires a value'; ram_gb="$1";; --ram-mb) shift; [[ $# -gt 0 ]] || die '--ram-mb requires a value'; ram_mb="$1";; --disk-gb) shift; [[ $# -gt 0 ]] || die '--disk-gb requires a value'; disk_gb="$1";; --lifetime) shift; [[ $# -gt 0 ]] || die '--lifetime requires a value'; lifetime="$1";;
@@ -750,6 +806,9 @@ cmd_create() {
   is_positive "${ram_mb}" || die 'create requires --ram-gb G or --ram-mb M'; (( 10#${ram_mb} >= 512 && 10#${ram_mb} % 2 == 0 )) || die 'RAM must be at least 512 MiB and a multiple of 2 MiB'
   is_positive "${disk_gb}" || die 'create requires --disk-gb D'; [[ -n "${lifetime}" ]] || die 'create requires --lifetime L'; validate_lifetime "${lifetime}"
   [[ -z "${preset}" || "${preset}" == windows || "${preset}" == linux ]] || die '--preset must be windows or linux'; [[ -z "${secure_boot}" ]] || validate_on_off --secure-boot "${secure_boot}"; [[ -z "${tpm}" ]] || validate_on_off --tpm "${tpm}"; [[ -z "${boot_order}" ]] || validate_boot_order "${boot_order}"; [[ -z "${sha256}" ]] || validate_sha256 "${sha256}"
+  [[ "${os}" == linux || "${os}" == windows ]] || die '--os must be linux or windows'
+  [[ "${os}" == windows || "${unattend}" == '{}' ]] || die '--unattend options require --os windows'
+  [[ "${unattend}" == '{}' || ${aux_count} == 0 ]] || die 'unattend options cannot be combined with auxiliary media'
   require_create_allowed; key="$(operation_key "${operation_id}")"
   (( ${#key} <= 120 )) || die 'create --operation-id must be at most 120 characters to leave room for media sub-keys'
   child_name="${name:-$(derive_child_name "${key}")}"
@@ -762,6 +821,7 @@ cmd_create() {
   [[ -z "${aux_item}" ]] || require_media_ready
   fw="$(firmware_json "${generation}" "${secure_boot}" "${template}" "${tpm}" "${boot_order}")"
   body="$(jq -cn --arg name "${child_name}" --arg cpus "${cpus}" --arg ram "${ram_mb}" --arg disk "${disk_gb}" --arg lifetime "${lifetime}" --arg install "${install_media}" --arg aux "${aux_media}" --arg preset "${preset}" --argjson firmware "${fw}" --argjson attach "$([[ "${no_network}" == true ]] && printf false || printf true)" --argjson start "$([[ "${no_start}" == true ]] && printf false || printf true)" '{name:$name,cpus:($cpus|tonumber),ramMb:($ram|tonumber),diskGb:($disk|tonumber),lifetime:$lifetime,media:({installMediaId:$install} + (if $aux!="" then {auxiliaryMediaId:$aux} else {} end)),network:{attach:$attach},start:$start} + (if $preset!="" then {preset:$preset} else {} end) + (if ($firmware|length)>0 then {firmware:$firmware} else {} end)')"
+  body="$(printf '%s' "${body}" | jq -c --arg os "${os}" --arg windows "${windows}" --argjson unattend "${unattend}" '. + {os:$os,windows:$windows} + (if $unattend == {} then {} else {unattend:$unattend} end)')"
   api_request POST "/api/v1/vms/$(urlencode "${INSTANCE_NAME}")/children" "${body}" "${key}:create"; expect_json object; accepted="${API_BODY}"
   if [[ "${no_wait}" == true ]]; then job="${accepted}"; final_vm=null; else follow_job "$(printf '%s' "${accepted}" | jq -r '.jobId')" 10800 "${json_progress}"; job="${JOB_RESULT}"; api_request GET "/api/v1/vms/$(urlencode "${child_name}")"; expect_json object; final_vm="${API_BODY}"; fi
   result="$(jq -cn --arg operationKey "${key}" --argjson install "${install_item}" --argjson aux "${aux_item:-null}" --argjson job "${job}" --argjson vm "${final_vm}" '{operationKey:$operationKey,media:([$install] + (if $aux==null then [] else [$aux] end)),job:$job,vm:$vm}')"

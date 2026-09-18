@@ -120,6 +120,7 @@ function featureSet(health) {
   return {
     hostAdmin: list.indexOf("host-admin") >= 0,
     usage: list.includes("usage"),
+    windowsGuests: list.includes("windows-guests"),
     children: list.indexOf("children") >= 0,
     media: list.indexOf("media") >= 0,
     console: list.indexOf("console") >= 0,
@@ -574,6 +575,17 @@ function toUserRow(user) {
 }
 
 /** One Media row (`MediaItemResponse`, §8.10). Pure. */
+function toWindowsView(input) {
+  const v = input || {};
+  const fields = (x, names) => Object.fromEntries(names.map(k => [k, str(x[k])]));
+  return {
+    keys: (Array.isArray(v.keys) ? v.keys : []).map(k => ({ ...fields(k, ["id", "product", "edition", "kind", "partialKey", "notes", "hostId"]), budget: num(k.budget), used: num(k.used) || 0 })),
+    guests: (Array.isArray(v.guests) ? v.guests : []).map(g => ({ ...fields(g, ["vmName", "incarnation", "product", "edition", "stage", "activation", "partialKey", "keyId", "error", "hostId"]),
+      released: g.released === true, guestReported: g.guestReported === true, installEjected: g.installEjected === true, auxiliaryEjected: g.auxiliaryEjected === true, kms: g.kms === true,
+      status: str(g.stage) + ", " + str(g.activation) + (str(g.partialKey) ? " (…" + str(g.partialKey) + ")" : "") + (g.guestReported === true ? " · guest-reported" : "") }))
+  };
+}
+
 function toMediaRow(item) {
   const m = item && typeof item === "object" ? item : {};
   return {
@@ -582,6 +594,7 @@ function toMediaRow(item) {
     size: formatBytes(m.sizeBytes), reserved: formatBytes(m.reservedBytes),
     error: str(m.error), jobId: str(m.jobId), dedicatedTo: str(m.dedicatedTo),
     created: formatWhen(m.created), readyAt: formatWhen(m.readyAt),
+    shared: m.shared === true, windows: m.windows || null, sha256: str(m.sha256),
     references: num(m.references) || 0,
     deletable: (num(m.references) || 0) === 0,
   };
@@ -1281,6 +1294,7 @@ function createHostAdminModel(deps = {}) {
           mediaProblem = "child media is not available on this host version";
         }
         state.media = { catalog, catalogProblem, items: items || [], mediaProblem };
+        if (state.features.windowsGuests) state.media.windows = toWindowsView(await client.windows());
       } else if (id === "operations") {
         const jobs = (await client.jobs({ limit: 100 })).map(toJobRow);
         let audit = [], auditProblem = "";
@@ -1449,6 +1463,11 @@ function createHostAdminModel(deps = {}) {
           notice("info", res && res.cancelled ? `Job ${str(args.id)} cancelled.` : `Job ${str(args.id)} could not be cancelled (already finished?).`);
           return { ok: true, cancelled: !!(res && res.cancelled) };
         }
+        case "addWindowsKey": await client.addWindowsKey(args); return { ok: true };
+        case "deleteWindowsKey": await client.deleteWindowsKey(str(args.id)); return { ok: true };
+        case "assignWindowsKey": await client.assignWindowsKey(str(args.name), { incarnation: str(args.incarnation), keyId: str(args.keyId) }); return { ok: true };
+        case "acquireWindowsMedia": { const res = await client.acquireWindowsMedia(args); notice("info", `Windows media job ${str(res.jobId)} started.`); return { ok: true, jobId: str(res.jobId) }; }
+        case "prepareWindowsMedia": { const res = await client.prepareWindowsMedia(str(args.id)); notice("info", `Windows media job ${str(res.jobId)} started.`); return { ok: true, jobId: str(res.jobId) }; }
         case "mediaCleanup": {
           const res = await client.mediaCleanup();
           notice("info", `Media cleanup started (job ${str(res && res.jobId) || "?"}).`);
@@ -1600,7 +1619,7 @@ module.exports = {
   childRows, childrenCardState, shutdownOutcome, awaitJob,
   cascadeKindOf, cascadeConfirmation, childDeleteConfirmation,
   firstVmOffers, discoverHosts, hostEntryFor,
-  resourceUsageView, createHostAdminModel,
+  resourceUsageView, createHostAdminModel, toWindowsView,
   toTokenUsageView,
 };
 

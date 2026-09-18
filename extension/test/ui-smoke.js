@@ -1515,6 +1515,18 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await pushAdmin({ ...ADMIN_STATE, activeTab: "media" });
   await admin.waitForTimeout(60);
   check("admin: a referenced media item cannot be deleted from here", await admin.locator("#mediaTable button", { hasText: "Delete" }).isDisabled());
+  const windowsFixture = require("../../test/fixtures/companion-parity/hostadmin-ipc.json").find(row => row.kind === "windows" && row.output.keys.length > 0).output;
+  await pushAdmin({ ...ADMIN_STATE, activeTab: "media", features: { ...ADMIN_STATE.features, windowsGuests: true }, media: { ...ADMIN_STATE.media, windows: windowsFixture } });
+  await admin.waitForTimeout(60);
+  check("admin: Windows fixtures show masked keys and activation reports", (await admin.locator("#windowsKeys").textContent()).includes("3V66T") && (await admin.locator("#windowsGuests").textContent()).includes("guest-reported"));
+  await admin.selectOption('#windowsAcquireForm [name="windows"]', 'server-2025');
+  check("admin: server product changes its edition choices", await admin.locator('#windowsAcquireForm [name="edition"]').inputValue() === "standard" && await admin.locator('#windowsAcquireForm [name="edition"] option[value="pro"]').count() === 0);
+  await admin.selectOption('#windowsAcquireForm [name="edition"]', 'datacenter-core');
+  await admin.locator('#windowsAcquireForm button').click();
+  check("admin: acquisition sends product and edition", (await admin.evaluate(() => window.__posted)).some(m => m.action === "acquireWindowsMedia" && m.args.windows === "server-2025" && m.args.edition === "datacenter-core"));
+  await admin.fill('#windowsKeyForm [name="key"]', 'ABCDE-FGHIJ-KLMNO-PQRST-UVWXY');
+  await admin.locator('#windowsKeyForm button').click();
+  check("admin: adding a key clears the password input", await admin.locator('#windowsKeyForm [name="key"]').inputValue() === "");
   await pushAdmin({ ...ADMIN_STATE, activeTab: "overview", maintenance: { phase: "draining", retryAfterSeconds: 5, updateId: "u1" } });
   await admin.waitForTimeout(60);
   check("admin: maintenance shows the banner with the phase",

@@ -3,8 +3,11 @@
 > **Template.** This is a working, field-proven example of an unattended Windows 11 child VM
 > driven from a Linux primary: media repack, answer-file ISO, first-logon debloat, SSH channel,
 > media detach after install. It is the reference recipe for the host-side Windows guest
-> feature planned in `docs/plans/windows-child-vms.md` (draft). Until that lands, it is also
-> the way to get a Windows child today on a Hyper-V host.
+> feature described in [Windows guests](../../docs/child-vms.md#windows-guests).
+
+For host-managed installation, media acquisition and activation, use
+[Windows guests](../../docs/child-vms.md#windows-guests). The service embeds this rig's
+client and server templates; the scripts below remain a standalone reference.
 
 Creates an unattended Windows 11 Pro guest as a Construct child VM next to the
 Linux agent VM, reachable over SSH, with the consumer bloat stripped out. It

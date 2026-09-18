@@ -12,7 +12,7 @@ namespace Constructd.Proxmox;
 
 public sealed partial class ProxmoxChildVmPlatform(IProcessRunner processes, IHypervisorDriver driver,
     ConstructdOptions options, IVmRepository vms, IClock clock)
-    : IChildVmDriver, IChildVmStorage, IChildVmCreationOwnership
+    : IChildVmDriver, IChildVmStorage, IChildVmCreationOwnership, IWindowsGuestChannel
 {
     private readonly ProxmoxCommands commands = new(processes, options);
     private readonly ProxmoxMediaVolumes media = new(options);
@@ -93,6 +93,7 @@ public sealed partial class ProxmoxChildVmPlatform(IProcessRunner processes, IHy
         if (h.Tpm) args.AddRange(["--tpmstate0", Storage + ":1,version=v2.0"]);
         if (install is not null) args.AddRange(["--ide2", install + ",media=cdrom"]);
         if (auxiliary is not null) args.AddRange(["--ide0", auxiliary + ",media=cdrom"]);
+        if (descriptor.GuestAgentMediaPath is not null) args.AddRange(["--ide1", media.ToVolume(descriptor.GuestAgentMediaPath) + ",media=cdrom"]);
         // Windows also lacks an in-box virtio-net driver; the Windows preset gets an e1000e card.
         if (h.NetworkAttached) args.AddRange(["--net0", NicModel(h) + ",bridge=" + bridge]);
         var boot = Boot(h.BootOrder, install is not null, auxiliary is not null, h.NetworkAttached, DiskSlot(h));

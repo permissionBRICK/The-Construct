@@ -378,6 +378,15 @@ ok 'create sends structured media, preset, firmware and no-start' grep -q '"medi
 ok 'create derives the child sub-key' grep -q '^X-Construct-Operation-Key: create-key-1:create$' "${stub}/state/headers"
 
 reset_stub
+vm create --media media-install --os windows --windows server2025-datacenter-core --unattend-admin-password 'fixture<&Password' --unattend-hostname LABSERVER --cpus 4 --ram-gb 8 --disk-gb 100 --lifetime 4h --name kid-one --no-wait --json >"${tmp}/windows-create.json" 2>"${tmp}/windows-create.err"
+ok 'Windows create accepts product and edition with unattended parameters' test "$?" = 0
+ok 'Windows create sends the exact selector and escaped password' grep -q '"os":"windows","windows":"server2025-datacenter-core","unattend":{"adminPassword":"fixture<&Password","hostname":"LABSERVER"}' "${stub}/state/bodies"
+ok 'Windows password does not appear in HTTP argv or progress' sh -c "! grep -a -q 'fixture<&Password' '${stub}/state/argv' '${tmp}/windows-create.err' '${tmp}/windows-create.json'"
+reset_stub
+vm create --media media-install --aux-media media-aux --os windows --unattend-admin-password fixture --cpus 4 --ram-gb 8 --disk-gb 100 --lifetime 4h --name kid-one >"${tmp}/windows-invalid.out" 2>/dev/null
+ok 'Windows create rejects mixing custom auxiliary media and host unattended files' test "$?" = 1
+
+reset_stub
 vm create --iso-url https://example.test/os.iso --cpus 1 --ram-mb 512 --disk-gb 8 --lifetime 30m --name kid-one --operation-id url-create-1 --no-wait --json >"${tmp}/url-create.json" 2>/dev/null
 ok 'URL create acquires media before submitting the child' sh -c "test \"\$(grep -n '^POST[[:space:]]/api/v1/media/acquire' '${stub}/state/requests' | cut -d: -f1)\" -lt \"\$(grep -n '^POST[[:space:]]/api/v1/vms/parent-vm/children' '${stub}/state/requests' | cut -d: -f1)\""
 ok 'URL acquisition uses the install sub-key' grep -q '^X-Construct-Operation-Key: url-create-1:install$' "${stub}/state/headers"

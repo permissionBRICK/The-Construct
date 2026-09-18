@@ -11,6 +11,8 @@ public sealed class SqliteMediaStore(SqliteDatabase database) : IMediaStore
     private static void Bind(SqliteCommand cmd, MediaItem i)
     {
         cmd.With("$id", i.Id);
+        cmd.With("$shared", i.Shared ? 1 : 0);
+        cmd.With("$windows", i.Windows is null ? null : JsonSerializer.Serialize(i.Windows));
         cmd.With("$owner", i.Owner);
         cmd.With("$name", i.Name);
         cmd.With("$role", i.Role.ToString().ToLowerInvariant());
@@ -47,11 +49,11 @@ public sealed class SqliteMediaStore(SqliteDatabase database) : IMediaStore
         r.GetStringOrNull("dedicated_to"),
         SqliteDatabase.ReadTime(r.GetString("created")),
         SqliteDatabase.ReadTimeOrNull(r["ready_at"]),
-        SqliteDatabase.ReadTimeOrNull(r["last_referenced_at"]));
+        SqliteDatabase.ReadTimeOrNull(r["last_referenced_at"]), r.GetInt("shared") == 1, r.GetStringOrNull("windows_json") is { } json ? JsonSerializer.Deserialize<WindowsMedia>(json) : null);
     /// <summary>Called by the shared admission transaction, never opens a second connection.</summary>
     public static void InsertInTransaction(SqliteConnection connection, SqliteTransaction transaction, MediaItem item)
     {
-        using var cmd = Command(connection, transaction, "INSERT INTO media (id, owner, name, role, source, source_url, path, state, size_bytes, reserved_bytes, sha256, expected_sha256, error, job_id, dedicated_to, created, ready_at, last_referenced_at) VALUES ($id, $owner, $name, $role, $source, $source_url, $path, $state, $size_bytes, $reserved_bytes, $sha256, $expected_sha256, $error, $job_id, $dedicated_to, $created, $ready_at, $last_referenced_at);");
+        using var cmd = Command(connection, transaction, "INSERT INTO media (id, owner, name, role, source, source_url, path, state, size_bytes, reserved_bytes, sha256, expected_sha256, error, job_id, dedicated_to, created, ready_at, last_referenced_at, shared, windows_json) VALUES ($id, $owner, $name, $role, $source, $source_url, $path, $state, $size_bytes, $reserved_bytes, $sha256, $expected_sha256, $error, $job_id, $dedicated_to, $created, $ready_at, $last_referenced_at, $shared, $windows);");
         Bind(cmd, item); cmd.ExecuteNonQuery();
     }
     public Task AddAsync(MediaItem item, CancellationToken ct)
@@ -59,14 +61,14 @@ public sealed class SqliteMediaStore(SqliteDatabase database) : IMediaStore
     public Task<MediaItem?> GetAsync(string id, CancellationToken ct)
     { ct.ThrowIfCancellationRequested(); using var c = database.Open(); using var cmd = Command(c, null, "SELECT * FROM media WHERE id=$id;").With("$id", id); using var r = cmd.ExecuteReader(); return Task.FromResult(r.Read() ? Read(r) : null); }
     public Task<IReadOnlyList<MediaItem>> ListAsync(string? owner, CancellationToken ct)
-    { ct.ThrowIfCancellationRequested(); using var c = database.Open(); using var cmd = Command(c, null, "SELECT * FROM media WHERE $owner IS NULL OR owner=$owner;").With("$owner", owner); using var r = cmd.ExecuteReader(); var list = new List<MediaItem>(); while(r.Read()) list.Add(Read(r)); return Task.FromResult<IReadOnlyList<MediaItem>>(list); }
+    { ct.ThrowIfCancellationRequested(); using var c = database.Open(); using var cmd = Command(c, null, "SELECT * FROM media WHERE $owner IS NULL OR owner=$owner OR shared=1;").With("$owner", owner); using var r = cmd.ExecuteReader(); var list = new List<MediaItem>(); while(r.Read()) list.Add(Read(r)); return Task.FromResult<IReadOnlyList<MediaItem>>(list); }
     public Task<int> CountByOwnerAsync(string owner, CancellationToken ct)
     { ct.ThrowIfCancellationRequested(); using var c = database.Open(); using var cmd = Command(c, null, "SELECT COUNT(*) FROM media WHERE owner=$owner AND state IN ('pending','transferring','ready');").With("$owner", owner); return Task.FromResult(Convert.ToInt32(cmd.ExecuteScalar())); }
     public Task<bool> TryTransitionAsync(string id, MediaState expected, MediaItem updated, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested(); if (updated.Id != id) return Task.FromResult(false);
         using var c = database.Open();
-        using var cmd = Command(c, null, "UPDATE media SET name=$name, role=$role, source=$source, source_url=$source_url, path=$path, state=$state, size_bytes=$size_bytes, reserved_bytes=$reserved_bytes, sha256=$sha256, expected_sha256=$expected_sha256, error=$error, job_id=$job_id, dedicated_to=$dedicated_to, created=$created, ready_at=$ready_at, last_referenced_at=$last_referenced_at WHERE id=$id AND owner=$owner AND state=$expected AND ($state!='deleting' OR NOT EXISTS (SELECT 1 FROM media_references WHERE media_id=$id));");
+        using var cmd = Command(c, null, "UPDATE media SET shared=$shared, windows_json=$windows, name=$name, role=$role, source=$source, source_url=$source_url, path=$path, state=$state, size_bytes=$size_bytes, reserved_bytes=$reserved_bytes, sha256=$sha256, expected_sha256=$expected_sha256, error=$error, job_id=$job_id, dedicated_to=$dedicated_to, created=$created, ready_at=$ready_at, last_referenced_at=$last_referenced_at WHERE id=$id AND owner=$owner AND state=$expected AND ($state!='deleting' OR NOT EXISTS (SELECT 1 FROM media_references WHERE media_id=$id));");
         Bind(cmd, updated); cmd.With("$expected", expected.ToString().ToLowerInvariant()); return Task.FromResult(cmd.ExecuteNonQuery() == 1);
     }
     public Task<bool> RemoveAsync(string id, CancellationToken ct)
