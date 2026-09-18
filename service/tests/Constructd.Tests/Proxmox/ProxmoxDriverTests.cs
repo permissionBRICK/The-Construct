@@ -185,13 +185,18 @@ public sealed class ProxmoxDriverTests
             .RespondStdout(Resources)
             .RespondStdout("""{"status":"running","qmpstatus":"running"}""")
             .RespondStdout("")
+            .RespondStdout("""{"status":"running","qmpstatus":"running"}""")
+            .RespondStdout("""{"status":"stopped"}""")
             .RespondStdout(""));
 
         await driver.RemoveVmAsync("work-vm", null, CancellationToken.None);
 
         Assert.Equal(["get", "/nodes/pve1/qemu/104/status/current", "--output-format", "json"], runner[1].Arguments);
         Assert.Equal(["stop", "104"], runner[2].Arguments);
-        Assert.Equal(["destroy", "104", "--purge", "1", "--destroy-unreferenced-disks", "1", "--skiplock", "1"], runner[3].Arguments);
+        // The destroy waits until the node reports the VM off; qm stop returns before the process is gone.
+        Assert.Equal(["get", "/nodes/pve1/qemu/104/status/current", "--output-format", "json"], runner[3].Arguments);
+        Assert.Equal(["get", "/nodes/pve1/qemu/104/status/current", "--output-format", "json"], runner[4].Arguments);
+        Assert.Equal(["destroy", "104", "--purge", "1", "--destroy-unreferenced-disks", "1", "--skiplock", "1"], runner[5].Arguments);
         Assert.Equal(["work-vm"], seeds.Removed);
     }
 
