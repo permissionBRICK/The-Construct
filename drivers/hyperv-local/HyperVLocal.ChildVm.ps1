@@ -143,6 +143,68 @@ function Get-ConstructHostInventory {
 # end capacity
 
 #Requires -Version 5.1
+function Get-ConstructWindowsVm {
+    param([string]$Name, [string]$Incarnation)
+    Assert-ConstructChildVmName $Name
+    $vm = Get-VM -Id ([Guid]$Incarnation) -ErrorAction Stop
+    if ($vm.Name -ine $Name) { throw 'vm-incarnation-conflict' }
+    return $vm
+}
+
+function Get-ConstructWindowsGuest {
+    param([string]$Name, [string]$Incarnation)
+    $vm = Get-ConstructWindowsVm $Name $Incarnation
+    $system = Get-WmiObject -Namespace root\virtualization\v2 -Class Msvm_ComputerSystem -Filter ("Name='" + $vm.Id + "'") -ErrorAction Stop
+    $component = @($system.GetRelated('Msvm_KvpExchangeComponent')) | Select-Object -First 1
+    $report = $null
+    foreach ($item in @($component.GuestExchangeItems)) {
+        if (-not $item -or $item.Length -gt 16384) { continue }
+        $xml = New-Object System.Xml.XmlDocument
+        $xml.XmlResolver = $null
+        $xml.LoadXml($item)
+        if ([string]$xml.SelectSingleNode("/INSTANCE/PROPERTY[@NAME='Name']/VALUE").InnerText -eq 'Construct.WindowsReport') {
+            $value = [string]$xml.SelectSingleNode("/INSTANCE/PROPERTY[@NAME='Data']/VALUE").InnerText
+            if ($value.Length -le 4096) { try { $report = $value | ConvertFrom-Json } catch { } }
+        }
+    }
+    return @{ uptime = $vm.Uptime.TotalSeconds; report = $report }
+}
+
+function Set-ConstructWindowsKey {
+    param([string]$Name, [string]$Incarnation, [string]$Key)
+    $vm = Get-ConstructWindowsVm $Name $Incarnation
+    if ($Key -and $Key -cnotmatch '^[A-Z0-9]{5}(-[A-Z0-9]{5}){4}$') { throw 'validation' }
+    $system = Get-WmiObject -Namespace root\virtualization\v2 -Class Msvm_ComputerSystem -Filter ("Name='" + $vm.Id + "'") -ErrorAction Stop
+    $service = Get-WmiObject -Namespace root\virtualization\v2 -Class Msvm_VirtualSystemManagementService -ErrorAction Stop
+    $item = ([wmiclass]'\\.\root\virtualization\v2:Msvm_KvpExchangeDataItem').CreateInstance()
+    $item.Name = 'Construct.WindowsKey'; $item.Data = $Key; $item.Source = 0
+    $component = @($system.GetRelated('Msvm_KvpExchangeComponent')) | Select-Object -First 1
+    $settings = @($component.GetRelated('Msvm_KvpExchangeComponentSettingData')) | Select-Object -First 1
+    $exists = @($settings.HostExchangeItems | Where-Object { $_ -match '<VALUE>Construct.WindowsKey</VALUE>' }).Count -gt 0
+    if (-not $Key -and -not $exists) { return }
+    if (-not $Key) { $result = $service.RemoveKvpItems($system, @($item.GetText(1))) }
+    elseif ($exists) { $result = $service.ModifyKvpItems($system, @($item.GetText(1))) }
+    else { $result = $service.AddKvpItems($system, @($item.GetText(1))) }
+    if ($result.ReturnValue -eq 4096) {
+        $job = [wmi]$result.Job
+        $deadline = [DateTime]::UtcNow.AddSeconds(60)
+        while ($job.JobState -in @(3,4) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 200; $job.Get() }
+        if ($job.JobState -ne 7 -or $job.ErrorCode -ne 0) { throw 'windows-key-failed' }
+    } elseif ($result.ReturnValue -ne 0) { throw 'windows-key-failed' }
+}
+
+function Remove-ConstructWindowsMedia {
+    param([string]$Name, [string]$Incarnation, [bool]$InstallOnly)
+    $vm = Get-ConstructWindowsVm $Name $Incarnation
+    foreach ($drive in @(Get-VMDvdDrive -VM $vm -ErrorAction Stop)) {
+        if ($drive.ControllerNumber -eq 0 -and ($drive.ControllerLocation -eq 1 -or (-not $InstallOnly -and $drive.ControllerLocation -eq 2))) {
+            Set-VMDvdDrive -VMDvdDrive $drive -Path $null -ErrorAction Stop
+        }
+    }
+    $attached = Get-ConstructChildAttachedMedia $Name
+    if ($attached.installPath -or (-not $InstallOnly -and $attached.auxiliaryPath)) { throw 'media-not-ready' }
+}
+
 # childvm -- optional general-purpose hardware; never loaded by the primary path.
 function Get-ConstructDriverExtendedCapabilities {
     @{

@@ -261,6 +261,7 @@ public static partial class MediaEndpoints
         try
         {
             var item=await store.GetAsync(id,ct); if(item is null || !await OwnAsync(http,item.Owner,vms,ct)) return Error("not-found");
+            if(item.Shared && !http.User.IsAdmin()) return Error("not-found");
             if(item.State is MediaState.Pending or MediaState.Transferring) return Error("media-not-ready");
             Job job;
             await using(var handle=await gate.AcquireAsync(id,http.TraceIdentifier,ct))

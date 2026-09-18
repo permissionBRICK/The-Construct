@@ -29,7 +29,7 @@ public class WindowsLicenseTests : IDisposable
         var guests = new List<WindowsGuestStatus>();
         foreach (var name in new[] { "one", "two" }) { var g = (await store.RegisterAsync(Vm(name), default)) with { Stage = "installed" }; await store.SaveAsync(g, default); guests.Add(g); }
         var assigned = await Task.WhenAll(guests.Select(g => store.AssignAsync(g, null, "system", default)));
-        Assert.Single(assigned.Where(g => g.KeyId == key.Id));
+        Assert.Single(assigned, g => g.KeyId == key.Id);
         var server = (await store.RegisterAsync(Vm("server", "server2025-standard"), default)) with { Stage = "installed" }; await store.SaveAsync(server, default);
         await Assert.ThrowsAsync<ChildValidationException>(() => store.AssignAsync(server, key.Id, "admin", default));
     }

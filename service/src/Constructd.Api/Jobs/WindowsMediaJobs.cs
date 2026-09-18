@@ -8,7 +8,7 @@ using Constructd.Windows.Media;
 namespace Constructd.Api.Jobs;
 
 public sealed class WindowsMediaJobs(IMediaStore store, IMediaFiles files, IMediaTransfer transfer, IMediaGate gate,
-    IClock clock, Constructd.Windows.Media.WindowsMediaResolver resolver, ICapacityLedger capacity, MediaJobs mediaJobs)
+    IClock clock, Constructd.Windows.Media.WindowsMediaResolver resolver, ICapacityLedger capacity, MediaJobs mediaJobs, ConstructdOptions options)
 {
     private static string Id(string text) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)))[..32];
     public async Task<MediaItem> PrepareAsync(MediaItem source, IProgress<string>? progress, CancellationToken ct)
@@ -67,7 +67,8 @@ public sealed class WindowsMediaJobs(IMediaStore store, IMediaFiles files, IMedi
         var id = Id("windows-unattend:" + vm.CurrentJobId);
         await using var locked = await gate.AcquireAsync(id, "windows-unattend", ct);
         if (await store.GetAsync(id, ct) is { State: MediaState.Ready } existing) return existing;
-        var content = WindowsUnattendRenderer.Render(WindowsUnattendRenderer.Parse(vm.Hardware!.Windows!), image, request);
+        var content = new Dictionary<string, string>(WindowsUnattendRenderer.Render(WindowsUnattendRenderer.Parse(vm.Hardware!.Windows!), image, request))
+        { ["construct-report.ps1"] = WindowsUnattendRenderer.GuestReportScript(options.IsProxmox) };
         var item = new MediaItem(id, vm.Owner, "Windows answer file", MediaRole.Auxiliary, MediaSource.Upload, null, files.PathFor(id), MediaState.Transferring,
             null, 4L << 20, null, null, null, vm.CurrentJobId, vm.Name, clock.UtcNow, null, null);
         await ResetAsync(item, ct);
@@ -81,6 +82,22 @@ public sealed class WindowsMediaJobs(IMediaStore store, IMediaFiles files, IMedi
             return await ReadyAsync(item, ct);
         }
         catch { await FailedAsync(item); throw new MediaException("windows-unattend-failed"); }
+    }
+    public async Task<MediaItem> GuestAgentAsync(IProgress<string>? progress, CancellationToken ct)
+    {
+        if (options.Fake) throw new MediaException("windows-guest-agent-unavailable");
+        var id = Id("virtio-win-stable");
+        await using var locked = await gate.AcquireAsync(id, "guest-agent-media", ct);
+        if (await store.GetAsync(id, ct) is { State: MediaState.Ready } cached) return cached;
+        var item = new MediaItem(id, "host", "virtio-win guest agent", MediaRole.Auxiliary, MediaSource.Url, null,
+            files.PathFor(id), MediaState.Transferring, null, 1L << 30, null, null, null, null, null, clock.UtcNow, null, null, true);
+        await ResetAsync(item, ct);
+        try
+        {
+            await transfer.AcquireAsync(item, new("https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso"), 1L << 30, TimeSpan.FromHours(1), progress, ct);
+            return await ReadyAsync(item, ct);
+        }
+        catch { await FailedAsync(item); throw new MediaException("windows-guest-agent-media-failed"); }
     }
     private async Task ResetAsync(MediaItem item, CancellationToken ct)
     {

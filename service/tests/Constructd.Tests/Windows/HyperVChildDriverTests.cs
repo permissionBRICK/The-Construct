@@ -23,6 +23,19 @@ public sealed class HyperVChildDriverTests
     }
     private static ProcessResult Ok(object? value) => new(0, JsonSerializer.Serialize(new { ok = true, value }, Json), "", false);
     private static string Script(RecordedProcess call) => Encoding.Unicode.GetString(Convert.FromBase64String(call.Arguments[5]));
+    [Fact]
+    public async Task Windows_key_is_only_in_stdin_with_immutable_identity()
+    {
+        var runner = new RecordingProcessRunner { Default = Ok(null) };
+        var driver = new HyperVChildDriver(runner, new ConstructdOptions { ScriptsDir = @"C:\Construct" }, new FakeHypervisorDriver());
+        var id = Guid.NewGuid().ToString(); const string key = "ABCDE-FGHIJ-KLMNO-PQRST-UVWXY";
+        await driver.DeliverWindowsKeyAsync("child", id, key, default);
+        var call = Assert.Single(runner.Calls);
+        Assert.DoesNotContain(key, Script(call)); Assert.DoesNotContain(call.Arguments, a => a.Contains(key));
+        using var input = JsonDocument.Parse(call.StandardInput!);
+        Assert.Equal(id, input.RootElement.GetProperty("incarnation").GetString());
+        Assert.Equal(key, input.RootElement.GetProperty("key").GetString());
+    }
 
     [Theory]
     [InlineData("vm-not-off")]

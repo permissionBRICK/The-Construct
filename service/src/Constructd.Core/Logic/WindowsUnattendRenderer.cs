@@ -70,6 +70,7 @@ public static class WindowsUnattendRenderer
         ("server2025", "datacenter") => "D764K-2NDRG-47T6Q-P8T8W-YP6DF",
         _ => throw Invalid("windows")
     };
+    public static string GuestReportScript(bool proxmox) => Resource("WindowsGuestReport.ps1").Replace("__CONSTRUCT_PLATFORM__", proxmox ? "proxmox" : "hyperv");
     private static string Resource(string name) { using var stream = typeof(WindowsUnattendRenderer).Assembly.GetManifestResourceStream(name)!; using var reader = new StreamReader(stream); return reader.ReadToEnd(); }
     private static ChildValidationException Invalid(string field) => new("validation", field);
 }

@@ -139,7 +139,7 @@ public static class ChildConfigurationEndpoints
             if (!confirmed.Complete || !SamePath(confirmed.InstallPath, installPath) || !SamePath(confirmed.AuxiliaryPath, auxiliaryPath)) return LifecycleEndpoints.Problem("media-unverified");
             if (await s.GetRequiredService<IHypervisorDriver>().GetStateAsync(name, ct) != VmState.Off)
                 throw new LifecycleException("configuration-unverified");
-            foreach (var reference in oldReferences.Where(r => !targetRefs.Any(t => t.MediaId == r.MediaId && t.Slot == r.Slot)))
+            foreach (var reference in oldReferences.Where(r => r.Slot != MediaSlot.GuestAgent && !targetRefs.Any(t => t.MediaId == r.MediaId && t.Slot == r.Slot)))
                 await media.RemoveReferenceAsync(reference.MediaId, name, reference.Slot, ct);
             object response = mediaChange ? mediaResponse : intent.Hardware;
             var completed = await admission.MutateAsync(key, async scope =>
