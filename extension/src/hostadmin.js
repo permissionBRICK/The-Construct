@@ -579,8 +579,8 @@ function toWindowsView(input) {
   const v = input || {};
   const fields = (x, names) => Object.fromEntries(names.map(k => [k, str(x[k])]));
   return {
-    keys: (Array.isArray(v.keys) ? v.keys : []).map(k => ({ ...fields(k, ["id", "product", "edition", "kind", "partialKey", "notes"]), budget: num(k.budget), used: num(k.used) || 0 })),
-    guests: (Array.isArray(v.guests) ? v.guests : []).map(g => ({ ...fields(g, ["vmName", "incarnation", "product", "edition", "stage", "activation", "partialKey", "keyId", "error"]),
+    keys: (Array.isArray(v.keys) ? v.keys : []).map(k => ({ ...fields(k, ["id", "product", "edition", "kind", "partialKey", "notes", "hostId"]), budget: num(k.budget), used: num(k.used) || 0 })),
+    guests: (Array.isArray(v.guests) ? v.guests : []).map(g => ({ ...fields(g, ["vmName", "incarnation", "product", "edition", "stage", "activation", "partialKey", "keyId", "error", "hostId"]),
       released: g.released === true, guestReported: g.guestReported === true, installEjected: g.installEjected === true, auxiliaryEjected: g.auxiliaryEjected === true, kms: g.kms === true,
       status: str(g.stage) + ", " + str(g.activation) + (str(g.partialKey) ? " (…" + str(g.partialKey) + ")" : "") + (g.guestReported === true ? " · guest-reported" : "") }))
   };

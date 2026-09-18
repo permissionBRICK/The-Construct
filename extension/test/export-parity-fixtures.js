@@ -380,11 +380,11 @@ function hostAdminIpc() {
  const m=require("../src/hostadmin"), f=forwarderui, rows=[], now=Date.parse("2026-09-11T12:00:00Z");
  const add=(kind,input,output)=>rows.push({kind,input,output,now});
  for (const input of [null, {}, {
-   keys: [{id:"retail-1",product:"win11",edition:"pro",kind:"retail",partialKey:"3V66T",budget:null,used:0,notes:"Lab"}, {id:"mak-1",product:"server2025",edition:"datacenter-core",kind:"mak",partialKey:"YP6DF",budget:10,used:3,notes:"Server pool"}],
+   keys: [{id:"retail-1",hostId:"fixture-host",product:"win11",edition:"pro",kind:"retail",partialKey:"3V66T",budget:null,used:0,notes:"Lab"}, {id:"mak-1",product:"server2025",edition:"datacenter-core",kind:"mak",partialKey:"YP6DF",budget:10,used:3,notes:"Server pool"}],
    guests: [
-     {vmName:"desktop",incarnation:"generation-a",product:"win11",edition:"pro",stage:"installed",activation:"activated",partialKey:"3V66T",keyId:"retail-1",guestReported:true,installEjected:true,auxiliaryEjected:true},
+     {vmName:"desktop",hostId:"fixture-host",incarnation:"generation-a",product:"win11",edition:"pro",stage:"installed",activation:"activated",partialKey:"3V66T",keyId:"retail-1",guestReported:true,installEjected:true,auxiliaryEjected:true},
      {vmName:"server",incarnation:"generation-b",product:"server2025",edition:"datacenter-core",stage:"installed",activation:"assigned",partialKey:"YP6DF",keyId:"mak-1",installEjected:true},
-     {vmName:"trial",incarnation:"generation-c",product:"server2022",edition:"standard",stage:"installed",activation:"not-activated",installEjected:true,auxiliaryEjected:true},
+     {vmName:"trial",incarnation:"generation-c",product:"server2022",edition:"standard",stage:"installed",activation:"not-activated",evaluation:true,error:"evaluation-media-requires-conversion",installEjected:true,auxiliaryEjected:true},
      {vmName:"failed",incarnation:"generation-d",product:"win11",edition:"education",stage:"installed",activation:"failed",error:"partial-key-mismatch"},
      {vmName:"deleted",incarnation:"old-generation",product:"win11",edition:"pro",stage:"installed",activation:"activated",released:true}
    ] }]) add("windows", input, m.toWindowsView(input));
@@ -409,7 +409,7 @@ function hostAdminIpc() {
  for(const input of [{},{mode:"admin",activeTab:"vms"},{mode:"admin",features:{updates:true}},{mode:"user"},{maintenance:{phase:"draining"}},{updatePending:{id:"one"}}])add("poll",input,m.pollIntervalMs(input));
  for(const input of [null,"", "5m", "4m", "24h", "2d", "never", "NEVER", " 12h ", "0m", "-5h", "99999999999999999999d", "five"])
   add("lifetime",input,m.parseLifetime(input));
- for(const features of [[],["host-admin"],["host-admin","network-mode"],["host-admin","primary-nested","usage"],["host-admin","children","media","console","network","network-mode","primary-nested","usage","updates","primary-cpu","primary-memory","source-cache"],["host-admin","children","updates"],["host-admin","children","media","updates","network","console","primary-cpu","primary-memory"]]) {
+ for(const features of [[],["host-admin","windows-guests","media"],["host-admin"],["host-admin","network-mode"],["host-admin","primary-nested","usage"],["host-admin","children","media","console","network","network-mode","primary-nested","usage","updates","primary-cpu","primary-memory","source-cache"],["host-admin","children","updates"],["host-admin","children","media","updates","network","console","primary-cpu","primary-memory"]]) {
   const input={apiFeatures:features}; add("features",input,m.featureSet(input)); add("tabs",input,m.tabsFor({features:m.featureSet(input)}));
  }
  for(const form of [{},{name:"alice",role:"admin",enabled:"false",maxVms:"3",allowHostForwards:"true"},{name:"",role:"root",enabled:"invalid",maxVms:"-1"},{allowChildCreation:"true",maxRetainedChildren:"4",cpuBudget:"8",ramBudgetGiB:"1.5",storageBudgetGiB:"100",maxChildLifetime:"24h",allowNeverLifetime:"false",allowSharing:"inherit"},{maxChildLifetime:"never",ramBudgetGiB:"bad",maxRetainedChildren:"1.5"}])

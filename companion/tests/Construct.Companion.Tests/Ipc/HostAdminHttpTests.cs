@@ -13,6 +13,31 @@ namespace Construct.Companion.Tests.Ipc;
 public sealed class HostAdminHttpTests
 {
     [Fact]
+    public async Task WindowsMediaAndPoolLoadInCompanionWhenPrimaryIsoCatalogIsUnsupported()
+    {
+        var rows = Parity.ParityTests.Rows("hostadmin-ipc").Select(r => (JsonElement)r[0]).ToArray();
+        var windows = rows.Single(r => r.GetProperty("kind").GetString() == "windows" && r.GetProperty("input").ValueKind == JsonValueKind.Object && r.GetProperty("input").TryGetProperty("keys", out _));
+        var media = rows.First(r => r.GetProperty("kind").GetString() == "media" && r.GetProperty("input").TryGetProperty("windows", out _));
+        var api = new RoutingRemoteApi(); var previous = api.Handle;
+        api.Handle = r => r.Url.AbsolutePath switch
+        {
+            "/api/v1/health" => new(200, JsonSerializer.SerializeToElement(new { apiFeatures = new[] { "host-admin", "media", "windows-guests" } })),
+            "/api/v1/host/iso-catalog" => new(404, JsonSerializer.SerializeToElement(new { code = "unsupported-capability" })),
+            "/api/v1/host/windows" => new(200, windows.GetProperty("input")),
+            "/api/v1/media" => new(200, JsonSerializer.SerializeToElement(new[] { media.GetProperty("input") })),
+            _ => previous(r)
+        };
+        await using var h = await Enroll(api);
+        using var ready = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.ready" });
+        using var response = await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.tab", tab = "media" });
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        var snapshot = await h.Client.GetFromJsonAsync<JsonObject>("/v1/hosts/host.example_7462/snapshot");
+        Assert.Equal("3V66T", snapshot!["state"]!["media"]!["windows"]!["keys"]![0]!["partialKey"]!.GetValue<string>());
+        Assert.Equal("server2025", snapshot["state"]!["media"]!["items"]![0]!["windows"]!["product"]!.GetValue<string>());
+        Assert.Equal(5, snapshot["state"]!["media"]!["windows"]!["guests"]!.AsArray().Count);
+    }
+
+    [Fact]
     public async Task UsageWindowLoadsForOrdinaryUsersAndSurvivesRefresh()
     {
         var api = new RoutingRemoteApi(); var previous = api.Handle;

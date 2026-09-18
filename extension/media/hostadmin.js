@@ -505,6 +505,18 @@
   function renderWindows(w) {
     show($("windowsGuestsPanel"), !!w);
     if (!w) return;
+    for (const [formId, productField] of [["windowsAcquireForm", "windows"], ["windowsKeyForm", "product"]]) {
+      const form = $(formId), product = form.elements[productField], edition = form.elements.edition;
+      const updateEditions = () => {
+        const previous = edition.value;
+        const choices = product.value.startsWith("server") ? ["standard", "datacenter", "standard-core", "datacenter-core"] : ["pro", "pro-n", "enterprise", "education"];
+        clear(edition);
+        for (const value of choices) { const option = el("option", "", value); option.value = value; edition.appendChild(option); }
+        edition.value = choices.includes(previous) ? previous : choices[0];
+      };
+      product.onchange = updateEditions;
+      if (!edition.options.length) updateEditions();
+    }
     $("windowsAcquireForm").onsubmit = event => {
       event.preventDefault(); act("acquireWindowsMedia", Object.fromEntries(new FormData(event.target)));
     };
@@ -523,9 +535,9 @@
     const guests = $("windowsGuests"); clear(guests);
     for (const guest of w.guests) {
       const row = el("div", "ha-row"); row.appendChild(cell(`${guest.vmName} · ${guest.product} ${guest.edition} · ${guest.status}${guest.released ? " · released" : ""} · install ${guest.installEjected ? "ejected" : "attached"} · answer file ${guest.auxiliaryEjected ? "ejected" : "attached"}${guest.error ? " · " + guest.error : ""}`));
-      if (!guest.released && guest.stage === "installed" && !guest.keyId && !guest.kms) {
+      if (!guest.released && guest.stage === "installed" && !guest.keyId && !guest.kms && guest.error !== "evaluation-media-requires-conversion") {
         const select = el("select");
-        for (const key of w.keys.filter(k => k.product === guest.product && k.edition === guest.edition)) { const option = el("option", "", `${key.kind} …${key.partialKey}`); option.value = key.id; select.appendChild(option); }
+        for (const key of w.keys.filter(k => k.hostId === guest.hostId && k.product === guest.product && k.edition === guest.edition)) { const option = el("option", "", `${key.kind} …${key.partialKey}`); option.value = key.id; select.appendChild(option); }
         row.appendChild(select); const assign = btn("Assign", "", () => act("assignWindowsKey", { name: guest.vmName, incarnation: guest.incarnation, keyId: select.value })); assign.disabled = !select.options.length; row.appendChild(assign);
       }
       guests.appendChild(row);

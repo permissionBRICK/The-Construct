@@ -8,12 +8,12 @@ public static partial class HostAdminViews
     {
         var keys = Map(input?["keys"], k =>
         {
-            var row = Strings(k as JsonObject ?? [], "id", "product", "edition", "kind", "partialKey", "notes");
+            var row = Strings(k as JsonObject ?? [], "id", "product", "edition", "kind", "partialKey", "notes", "hostId");
             row["budget"] = Number(k?["budget"]); row["used"] = Number(k?["used"]) ?? 0; return row;
         });
         var guests = Map(input?["guests"], g =>
         {
-            var row = Strings(g as JsonObject ?? [], "vmName", "incarnation", "product", "edition", "stage", "activation", "partialKey", "keyId", "error");
+            var row = Strings(g as JsonObject ?? [], "vmName", "incarnation", "product", "edition", "stage", "activation", "partialKey", "keyId", "error", "hostId");
             foreach (var key in new[] { "released", "guestReported", "installEjected", "auxiliaryEjected", "kms" }) row[key] = StateJson.Boolean(g?[key]) == true;
             row["status"] = Text(g?["stage"]) + ", " + Text(g?["activation"]) + (Text(g?["partialKey"]).Length > 0 ? " (…" + Text(g?["partialKey"]) + ")" : "") + (StateJson.Boolean(g?["guestReported"]) == true ? " · guest-reported" : "");
             return row;

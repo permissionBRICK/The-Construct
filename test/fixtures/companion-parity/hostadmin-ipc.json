@@ -25,6 +25,7 @@
           "auxiliaryEjected": true,
           "edition": "pro",
           "guestReported": true,
+          "hostId": "fixture-host",
           "incarnation": "generation-a",
           "installEjected": true,
           "keyId": "retail-1",
@@ -48,6 +49,8 @@
           "activation": "not-activated",
           "auxiliaryEjected": true,
           "edition": "standard",
+          "error": "evaluation-media-requires-conversion",
+          "evaluation": true,
           "incarnation": "generation-c",
           "installEjected": true,
           "product": "server2022",
@@ -77,6 +80,7 @@
         {
           "budget": null,
           "edition": "pro",
+          "hostId": "fixture-host",
           "id": "retail-1",
           "kind": "retail",
           "notes": "Lab",
@@ -106,6 +110,7 @@
           "edition": "pro",
           "error": "",
           "guestReported": true,
+          "hostId": "fixture-host",
           "incarnation": "generation-a",
           "installEjected": true,
           "keyId": "retail-1",
@@ -123,6 +128,7 @@
           "edition": "datacenter-core",
           "error": "",
           "guestReported": false,
+          "hostId": "",
           "incarnation": "generation-b",
           "installEjected": true,
           "keyId": "mak-1",
@@ -138,8 +144,9 @@
           "activation": "not-activated",
           "auxiliaryEjected": true,
           "edition": "standard",
-          "error": "",
+          "error": "evaluation-media-requires-conversion",
           "guestReported": false,
+          "hostId": "",
           "incarnation": "generation-c",
           "installEjected": true,
           "keyId": "",
@@ -157,6 +164,7 @@
           "edition": "education",
           "error": "partial-key-mismatch",
           "guestReported": false,
+          "hostId": "",
           "incarnation": "generation-d",
           "installEjected": false,
           "keyId": "",
@@ -174,6 +182,7 @@
           "edition": "pro",
           "error": "",
           "guestReported": false,
+          "hostId": "",
           "incarnation": "old-generation",
           "installEjected": false,
           "keyId": "",
@@ -190,6 +199,7 @@
         {
           "budget": null,
           "edition": "pro",
+          "hostId": "fixture-host",
           "id": "retail-1",
           "kind": "retail",
           "notes": "Lab",
@@ -200,6 +210,7 @@
         {
           "budget": 10,
           "edition": "datacenter-core",
+          "hostId": "",
           "id": "mak-1",
           "kind": "mak",
           "notes": "Server pool",
@@ -2472,6 +2483,92 @@
         "id": "config",
         "label": "Configuration",
         "reason": "not available on this host version"
+      },
+      {
+        "available": false,
+        "id": "maintenance",
+        "label": "Maintenance",
+        "reason": "not available on this host version"
+      }
+    ]
+  },
+  {
+    "input": {
+      "apiFeatures": [
+        "host-admin",
+        "windows-guests",
+        "media"
+      ]
+    },
+    "kind": "features",
+    "now": 1789128000000,
+    "output": {
+      "children": false,
+      "console": false,
+      "hostAdmin": true,
+      "media": true,
+      "network": false,
+      "networkMode": false,
+      "primaryCpu": false,
+      "primaryMemory": false,
+      "primaryNested": false,
+      "updates": false,
+      "usage": false,
+      "windowsGuests": true
+    }
+  },
+  {
+    "input": {
+      "apiFeatures": [
+        "host-admin",
+        "windows-guests",
+        "media"
+      ]
+    },
+    "kind": "tabs",
+    "now": 1789128000000,
+    "output": [
+      {
+        "available": true,
+        "id": "overview",
+        "label": "Overview",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "vms",
+        "label": "VMs",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "users",
+        "label": "Users",
+        "reason": ""
+      },
+      {
+        "available": false,
+        "id": "usage",
+        "label": "Usage",
+        "reason": "not available on this host version"
+      },
+      {
+        "available": true,
+        "id": "media",
+        "label": "Media",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "operations",
+        "label": "Operations",
+        "reason": ""
+      },
+      {
+        "available": true,
+        "id": "config",
+        "label": "Configuration",
+        "reason": ""
       },
       {
         "available": false,
