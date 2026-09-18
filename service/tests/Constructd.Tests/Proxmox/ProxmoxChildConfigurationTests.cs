@@ -93,10 +93,13 @@ public sealed partial class ProxmoxChildDriverTests
     {
         await Create(); NamedConfig();
         Assert.Equal(new(Install, Auxiliary, true), await driver.GetAttachedMediaAsync("child", default));
-        OffConfig(); ApplySet(); QueryConfig(); runner.RespondStdout("{\"status\":\"stopped\"}");
+        OffConfig(); ApplySet(); ApplySet(); QueryConfig(); runner.RespondStdout("{\"status\":\"stopped\"}");
         await driver.SetMediaAsync("child", null, null, [BootDevice.Disk], default);
-        Assert.Equal(new[] { "set", "101", "--delete", "ide2,ide0", "--boot", "order=sata0" },
-            runner.Calls.Single(c => c.Arguments[0] == "set").Arguments);
+        // Drive changes first, the boot order on its own afterwards: Proxmox appends a (re)added
+        // drive to the boot order, so an order sent in the same command would not survive.
+        var sets = runner.Calls.Where(c => c.Arguments[0] == "set").Select(c => c.Arguments).ToArray();
+        Assert.Equal(new[] { "set", "101", "--delete", "ide2,ide0" }, sets[0]);
+        Assert.Equal(new[] { "set", "101", "--boot", "order=sata0" }, sets[1]);
         NamedConfig(); Assert.Equal(new(null, null, true), await driver.GetAttachedMediaAsync("child", default));
         config["ide2"] = "foreign:iso/not-managed.iso,media=cdrom"; NamedConfig();
         Assert.False((await driver.GetAttachedMediaAsync("child", default)).Complete);
@@ -104,11 +107,12 @@ public sealed partial class ProxmoxChildDriverTests
     [Fact]
     public async Task Media_attaches_slots_and_filters_boot_devices_to_present_hardware()
     {
-        await Create(); config.Remove("net0"); OffConfig(); ApplySet(); QueryConfig(); runner.RespondStdout("{\"status\":\"stopped\"}");
+        await Create(); config.Remove("net0"); OffConfig(); ApplySet(); ApplySet(); QueryConfig(); runner.RespondStdout("{\"status\":\"stopped\"}");
         await driver.SetMediaAsync("child", Auxiliary, null, [BootDevice.Network, BootDevice.AuxiliaryMedia, BootDevice.InstallMedia, BootDevice.Disk], default);
-        var args = runner.Calls.Single(c => c.Arguments[0] == "set").Arguments;
-        Assert.Contains("construct-media:iso/" + Path.GetFileName(Auxiliary) + ",media=cdrom", args);
-        Assert.Contains("order=ide2;sata0", args);
+        var sets = runner.Calls.Where(c => c.Arguments[0] == "set").Select(c => c.Arguments).ToArray();
+        // The install slot changes (auxiliary volume moves into ide2) and ide0 is deleted; unchanged slots are not re-sent.
+        Assert.Equal(new[] { "set", "101", "--ide2", "construct-media:iso/" + Path.GetFileName(Auxiliary) + ",media=cdrom", "--delete", "ide0" }, sets[0]);
+        Assert.Equal(new[] { "set", "101", "--boot", "order=ide2;sata0" }, sets[1]);
         NamedConfig(); Assert.Equal(new(Auxiliary, null, true), await driver.GetAttachedMediaAsync("child", default));
     }
     [Theory]
