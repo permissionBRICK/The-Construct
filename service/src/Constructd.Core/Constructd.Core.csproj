@@ -15,6 +15,7 @@
   -->
 
   <ItemGroup>
+    <EmbeddedResource Include="Logic/WindowsGuestReport.ps1" LogicalName="WindowsGuestReport.ps1" />
     <EmbeddedResource Include="../../../examples/winvm-blank/vm/unattend-win11/*" LogicalName="WindowsClient.%(Filename)%(Extension)" />
     <EmbeddedResource Include="../../../examples/winvm-blank/vm/unattend/*" LogicalName="WindowsServer.%(Filename)%(Extension)" />
   </ItemGroup>

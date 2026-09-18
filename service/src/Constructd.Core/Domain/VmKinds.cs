@@ -13,7 +13,7 @@ public enum GuestAddressSource { Kvp, Dhcp, Unknown, GuestAgent }
 public enum MediaRole { Install, Auxiliary }
 public enum MediaSource { Url, Upload }
 public enum MediaState { Pending, Transferring, Ready, Failed, Deleting }
-public enum MediaSlot { Install, Auxiliary }
+public enum MediaSlot { Install, Auxiliary, GuestAgent }
 public enum UploadState { Open, Completing, Done, Aborted, Expired }
 public enum ReservationResource { Ram, Cpu, Storage }
 public enum ReservationPhase { Pending, Held }

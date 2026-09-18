@@ -122,7 +122,7 @@ public sealed class WindowsLicenseStore(string path, WindowsKeyCipher cipher, IA
             if (!guest.Attempted)
             {
                 var key = s.Keys[k]; if (key.Info.Kind == "mak") s.Keys[k] = key with { Info = key.Info with { Used = key.Info.Used + 1 } };
-                guest = guest with { Attempted = true }; s.Guests[index] = guest; Write(s);
+                guest = guest with { Attempted = true, DeliveredAt = clock.UtcNow }; s.Guests[index] = guest; Write(s);
                 await Audit("system", "windows-key.deliver", guest.VmName);
             }
             return (guest, cipher.Decrypt(s.Keys[k].Ciphertext));

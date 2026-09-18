@@ -5,8 +5,24 @@ using Constructd.Core.Services;
 using Constructd.Core.Logic;
 namespace Constructd.Fakes;
 
-public sealed class FakeChildVmDriver(FakeHypervisorDriver hypervisor) : IChildVmDriver, IChildVmStorage, IChildVmCreationOwnership
+public sealed class FakeChildVmDriver(FakeHypervisorDriver hypervisor) : IChildVmDriver, IChildVmStorage, IChildVmCreationOwnership, IWindowsGuestChannel
 {
+    public WindowsGuestObservation WindowsObservation { get; set; } = new(null, null);
+    public string? DeliveredPartialKey { get; private set; }
+    public Task<WindowsGuestObservation> ObserveWindowsAsync(string name, string incarnation, CancellationToken ct)
+    { CheckWindows(name, incarnation); return Task.FromResult(WindowsObservation); }
+    public Task DeliverWindowsKeyAsync(string name, string incarnation, string key, CancellationToken ct)
+    { CheckWindows(name, incarnation); DeliveredPartialKey = key[^5..]; Calls.Enqueue("windows-key:" + name); return Task.CompletedTask; }
+    public Task ClearWindowsKeyAsync(string name, string incarnation, CancellationToken ct)
+    { CheckWindows(name, incarnation); DeliveredPartialKey = null; Calls.Enqueue("windows-key-clear:" + name); return Task.CompletedTask; }
+    public Task EjectWindowsMediaAsync(string name, string incarnation, bool installOnly, CancellationToken ct)
+    {
+        CheckWindows(name, incarnation); var old = _vms[name];
+        _vms[name] = (old.Descriptor with { InstallMediaPath = null, AuxiliaryMediaPath = installOnly ? old.Descriptor.AuxiliaryMediaPath : null }, old.Id);
+        Calls.Enqueue("windows-eject:" + name + ":" + installOnly); return Task.CompletedTask;
+    }
+    private void CheckWindows(string name, string incarnation)
+    { if (!_vms.TryGetValue(name, out var value) || value.Id != incarnation) throw new ChildValidationException("vm-incarnation-conflict", "vm"); }
     private readonly ConcurrentDictionary<string, string> _creationOperations = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, bool> _templateLocked = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, (ChildVmDescriptor Descriptor, string Id)> _vms = new(StringComparer.OrdinalIgnoreCase);

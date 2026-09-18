@@ -8,7 +8,7 @@ public sealed record ChildVmDescriptor(
     string? VhdPath,
     string? InstallMediaPath,
     string? AuxiliaryMediaPath,
-    string SwitchName);
+    string SwitchName, string? GuestAgentMediaPath = null);
 
 public sealed record AttachedMedia(string? InstallPath, string? AuxiliaryPath, bool Complete);
 

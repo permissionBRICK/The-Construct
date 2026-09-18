@@ -32,6 +32,8 @@ public static class ChildVmComposition
         services.AddSingleton<Constructd.Api.Jobs.ChildStartIntent>();
         services.AddSingleton<Constructd.Api.Jobs.ChildCreateJob>();
         services.AddSingleton<Constructd.Api.Jobs.ChildDeleteJob>();
+        services.AddSingleton<Constructd.Api.Hosting.WindowsGuestReconciler>();
+        services.AddHostedService(sp => sp.GetRequiredService<Constructd.Api.Hosting.WindowsGuestReconciler>());
         services.AddSingleton(sp =>
         {
             var root = options.Fake ? sp.GetRequiredService<IMediaFiles>().Root : Path.GetDirectoryName(Path.GetFullPath(options.DatabasePath))!;
