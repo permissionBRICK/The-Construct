@@ -683,6 +683,7 @@ cmd_media_upload() {
 }
 
 cmd_media_acquire() {
+  if [[ "${1:-}" == --windows ]]; then cmd_windows_media acquire "$@"; return; fi
   local url="${1:-}" role=install display_name="" sha256="" operation_id="" json=false no_wait=false key
   [[ -n "${url}" ]] || die 'media acquire requires a URL'; shift
   while [[ $# -gt 0 ]]; do case "$1" in --role) shift; [[ $# -gt 0 ]] || die '--role requires a value'; role="$1";; --name) shift; [[ $# -gt 0 ]] || die '--name requires a value'; display_name="$1";; --sha256) shift; [[ $# -gt 0 ]] || die '--sha256 requires a value'; sha256="$1";; --operation-id) shift; [[ $# -gt 0 ]] || die '--operation-id requires a value'; operation_id="$1";; --no-wait) no_wait=true;; --json) json=true;; *) die "unknown media acquire option: $1";; esac; shift; done
@@ -695,6 +696,29 @@ cmd_media_list() {
   local json=false; while [[ $# -gt 0 ]]; do case "$1" in --json) json=true;; *) die "unknown media list option: $1";; esac; shift; done
   api_request GET /api/v1/media; expect_json array
   if [[ "${json}" == true ]]; then printf '%s\n' "$(printf '%s' "${API_BODY}" | jq -c .)"; else printf '%-34s %-10s %-12s %10s %s\n' ID ROLE STATE SIZE NAME; printf '%s' "${API_BODY}" | jq -r '.[] | [.id,.role,.state,(.sizeBytes//"-"),.name] | @tsv' | while IFS=$'\t' read -r id role state size name; do printf '%-34s %-10s %-12s %10s %s\n' "$id" "$role" "$state" "$size" "$name"; done; fi
+}
+
+cmd_windows_media() {
+  local action="$1"; shift
+  local product=11 edition=pro lang=en id="" json=false no_wait=false body path
+  if [[ "${action}" == prepare ]]; then id="${1:-}"; [[ -n "${id}" ]] || die 'prepare-windows requires a media id'; shift; fi
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --windows) shift; [[ $# -gt 0 ]] || die '--windows requires a product'; product="$1";;
+      --edition) shift; [[ $# -gt 0 ]] || die '--edition requires an edition'; edition="$1";;
+      --lang) shift; [[ $# -gt 0 ]] || die '--lang requires a language'; lang="$1";;
+      --json) json=true;; --no-wait) no_wait=true;; *) die "unknown Windows media option: $1";;
+    esac; shift
+  done
+  if [[ "${action}" == acquire ]]; then
+    body="$(jq -cn --arg windows "${product}" --arg edition "${edition}" --arg lang "${lang}" '{windows:$windows,edition:$edition,lang:$lang}')"; path=/api/v1/media/acquire-windows
+  else body='{}'; path="/api/v1/media/$(urlencode "${id}")/prepare-windows"; fi
+  api_request POST "${path}" "${body}"; expect_json object
+  if [[ "${no_wait}" == true ]]; then print_result "${API_BODY}" "${json}" ""; return; fi
+  follow_job "$(printf '%s' "${API_BODY}" | jq -r '.jobId')" 10800 false
+  id="$(printf '%s' "${JOB_RESULT}" | jq -r '.result.mediaId // empty')"
+  [[ -n "${id}" ]] || die 'Windows media job omitted mediaId'
+  media_get "${id}"; print_result "${MEDIA_RESULT}" "${json}" ""
 }
 
 cmd_media_attach_detach() {
@@ -716,6 +740,7 @@ cmd_media_delete() {
 }
 
 cmd_media() {
+  if [[ "${1:-}" == prepare-windows ]]; then shift; cmd_windows_media prepare "$@"; return; fi
   local sub="${1:-}"; [[ -n "${sub}" ]] || die 'media requires list, upload, acquire, attach, detach or delete'; shift
   case "${sub}" in list) cmd_media_list "$@";; upload) cmd_media_upload "$@";; acquire) cmd_media_acquire "$@";; attach|detach) cmd_media_attach_detach "${sub}" "$@";; delete) cmd_media_delete "$@";; *) die "unknown media command: ${sub}";; esac
 }

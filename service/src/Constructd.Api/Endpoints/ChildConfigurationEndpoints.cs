@@ -113,7 +113,7 @@ public static class ChildConfigurationEndpoints
                 if (pair.Item1 is null) continue;
                 var item = await media.GetAsync(pair.Item1, ct);
                 if (item is null) return Problems.NotFound("Unknown media.");
-                if (!http.User.IsAdmin() && !Ownership.SameName(item.Owner, vm.Owner) || item.DedicatedTo is not null && !Ownership.SameName(item.DedicatedTo, name))
+                if (!item.Shared && !http.User.IsAdmin() && !Ownership.SameName(item.Owner, vm.Owner) || item.DedicatedTo is not null && !Ownership.SameName(item.DedicatedTo, name))
                     return LifecycleEndpoints.Problem("not-owner", 403);
                 if (item.State != MediaState.Ready) return LifecycleEndpoints.Problem("media-not-ready");
                 if (item.Role != (pair.Item2 == MediaSlot.Install ? MediaRole.Install : MediaRole.Auxiliary)) return CodedProblems.Validation("media", "Media role does not match slot.");

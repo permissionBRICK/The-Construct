@@ -19,7 +19,8 @@ public sealed record MediaItem(
     string? DedicatedTo,
     DateTimeOffset Created,
     DateTimeOffset? ReadyAt,
-    DateTimeOffset? LastReferencedAt);
+    DateTimeOffset? LastReferencedAt,
+    bool Shared = false, WindowsMedia? Windows = null);
 
 public sealed record MediaReference(string MediaId, string VmName, MediaSlot Slot, DateTimeOffset Created);
 

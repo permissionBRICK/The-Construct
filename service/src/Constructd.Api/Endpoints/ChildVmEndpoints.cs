@@ -97,7 +97,7 @@ public static class ChildVmEndpoints
                 if (pair.Item1 is null) continue;
                 var item = await media.GetAsync(pair.Item1, ct);
                 if (item is null) return Problems.NotFound("Unknown media.");
-                if (!http.User.IsAdmin() && !Ownership.SameName(item.Owner, parentVm.Owner)) return Problems.Forbidden("Media belongs to another owner.");
+                if (!item.Shared && !http.User.IsAdmin() && !Ownership.SameName(item.Owner, parentVm.Owner)) return Problems.Forbidden("Media belongs to another owner.");
                 if (item.State != MediaState.Ready) return CodedProblems.Create(409, "media-not-ready", "Media is not ready.");
                 if (item.DedicatedTo is not null && !Ownership.SameName(item.DedicatedTo, name)) return Problems.Forbidden("Media is dedicated to another VM.");
                 if (item.Role != (pair.Item2 == MediaSlot.Install ? MediaRole.Install : MediaRole.Auxiliary)) return CodedProblems.Validation("media", "Media role does not match its slot.");
@@ -120,7 +120,7 @@ public static class ChildVmEndpoints
             if (result.Outcome != AdmissionOutcome.Accepted) return AdmissionProblem(result);
             try
             {
-                await runner.StartPersistedAsync(job, maintenanceHandle, (progress, token) => worker.RunAsync(job, vm, placement, request.Start, result.ReservationIds, progress, token), CancellationToken.None);
+                await runner.StartPersistedAsync(job, maintenanceHandle, (progress, token) => worker.RunAsync(job, vm, placement, request.Start, result.ReservationIds, progress, token, request.Unattend), CancellationToken.None);
                 maintenanceHandle = null;
             }
             catch

@@ -21,6 +21,7 @@ public static class MediaComposition
         services.AddSingleton<IMediaConnectionFactory,MediaConnectionFactory>();
         if(options.Fake)
         {
+            services.AddSingleton<IProcessRunner, RecordingProcessRunner>();
             services.AddSingleton<FakeMediaTransfer>();
             services.AddSingleton<IMediaTransfer>(sp=>sp.GetRequiredService<FakeMediaTransfer>());
             services.AddSingleton<IMediaFiles>(sp=>new MediaFileStore(sp.GetRequiredService<FakeMediaTransfer>().Root));
@@ -39,6 +40,8 @@ public static class MediaComposition
                 sp.GetRequiredService<IUrlAdmissionPolicy>(),sp.GetRequiredService<IMediaConnectionFactory>()));
         }
         services.AddSingleton<MediaJobs>();
+        services.AddSingleton<WindowsMediaResolver>();
+        services.AddSingleton<WindowsMediaJobs>();
         services.AddHostedService<MediaCleanupService>();
         return services;
     }

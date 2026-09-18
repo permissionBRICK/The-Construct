@@ -19,7 +19,7 @@ public sealed partial class InMemoryMediaStore : IMediaStore
     {
         lock (InMemoryTransaction.Gate)
         {
-            return Task.FromResult<IReadOnlyList<MediaItem>>(_items.Values.Where(i => owner is null || Ownership.SameName(i.Owner, owner)).ToArray());
+            return Task.FromResult<IReadOnlyList<MediaItem>>(_items.Values.Where(i => owner is null || i.Shared || Ownership.SameName(i.Owner, owner)).ToArray());
         }
     }
     public Task<int> CountByOwnerAsync(string owner, CancellationToken ct)
