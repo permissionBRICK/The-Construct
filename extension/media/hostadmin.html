@@ -166,6 +166,29 @@
         <p class="cost-note" id="mediaProblem" hidden></p>
         <div class="ha-table" id="mediaTable"></div>
         <p class="cost-note" id="mediaEmpty" hidden>No child media on this host.</p>
+        <section id="windowsGuestsPanel" hidden>
+          <h3>Windows guests</h3>
+          <p>Acquire official media on the host, or prepare an uploaded ISO. Progress appears under Operations.</p>
+          <form id="windowsAcquireForm">
+            <label>Product <select name="windows"><option value="11">Windows 11</option><option value="server-2022">Server 2022</option><option value="server-2025">Server 2025</option></select></label>
+            <label>Edition <input name="edition" value="pro" required></label>
+            <label>Language <input name="lang" value="en" required></label>
+            <button type="submit">Acquire and prepare</button>
+          </form>
+          <h3>License key pool</h3>
+          <form id="windowsKeyForm" autocomplete="off">
+            <label>Product <select name="product"><option value="win11">Windows 11</option><option value="server2022">Server 2022</option><option value="server2025">Server 2025</option></select></label>
+            <label>Edition <input name="edition" value="pro" required></label>
+            <label>Kind <select name="kind"><option value="retail">Retail</option><option value="mak">MAK</option><option value="kms-client">KMS client</option></select></label>
+            <label>Key <input name="key" type="password" autocomplete="new-password" required></label>
+            <label>MAK budget <input name="budget" type="number" min="1"></label>
+            <label>Notes <input name="notes" maxlength="1024"></label>
+            <button type="submit">Add key</button>
+          </form>
+          <div id="windowsKeys"></div>
+          <h3>Assignments and activation</h3>
+          <div id="windowsGuests"></div>
+        </section>
       </section>
     </section>
 

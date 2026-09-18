@@ -58,6 +58,9 @@ public static partial class AdminCli
           iso build [--force]
           iso status
           iso prune
+          windows-keys list
+          windows-keys add    Read product, edition, kind, key, budget and notes as JSON from stdin
+          windows-keys delete <id>
 
         Options:
           --json    machine-readable output on stdout (errors on stderr)
@@ -102,6 +105,7 @@ public static partial class AdminCli
                 ("iso", "build") => await IsoBuildAsync(positional, services, writer, output, cancellationToken).ConfigureAwait(false),
                 ("iso", "status") => IsoStatus(positional, services, writer),
                 ("iso", "prune") => IsoPrune(positional, services, writer),
+                ("windows-keys", _) => await WindowsKeysAsync(positional, services, writer, cancellationToken),
                 _ => writer.Usage($"unknown command '{string.Join(' ', positional.Take(2))}'"),
             };
         }

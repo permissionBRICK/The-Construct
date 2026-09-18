@@ -379,6 +379,19 @@ function stateJsonBytes() {
 function hostAdminIpc() {
  const m=require("../src/hostadmin"), f=forwarderui, rows=[], now=Date.parse("2026-09-11T12:00:00Z");
  const add=(kind,input,output)=>rows.push({kind,input,output,now});
+ for (const input of [null, {}, {
+   keys: [{id:"retail-1",product:"win11",edition:"pro",kind:"retail",partialKey:"3V66T",budget:null,used:0,notes:"Lab"}, {id:"mak-1",product:"server2025",edition:"datacenter-core",kind:"mak",partialKey:"YP6DF",budget:10,used:3,notes:"Server pool"}],
+   guests: [
+     {vmName:"desktop",incarnation:"generation-a",product:"win11",edition:"pro",stage:"installed",activation:"activated",partialKey:"3V66T",keyId:"retail-1",guestReported:true,installEjected:true,auxiliaryEjected:true},
+     {vmName:"server",incarnation:"generation-b",product:"server2025",edition:"datacenter-core",stage:"installed",activation:"assigned",partialKey:"YP6DF",keyId:"mak-1",installEjected:true},
+     {vmName:"trial",incarnation:"generation-c",product:"server2022",edition:"standard",stage:"installed",activation:"not-activated",installEjected:true,auxiliaryEjected:true},
+     {vmName:"failed",incarnation:"generation-d",product:"win11",edition:"education",stage:"installed",activation:"failed",error:"partial-key-mismatch"},
+     {vmName:"deleted",incarnation:"old-generation",product:"win11",edition:"pro",stage:"installed",activation:"activated",released:true}
+   ] }]) add("windows", input, m.toWindowsView(input));
+ for (const prepared of [false,true]) {
+   const input={id:"windows-media",owner:"host",name:"Server 2025",role:"install",state:"ready",shared:true,sha256:"a".repeat(64),windows:{product:"server2025",language:"en-US",prepared,images:[{product:"server2025",edition:"datacenter-core",imageName:"Windows Server 2025 SERVERDATACENTERCORE",build:"26100",index:3,evaluation:true}]}};
+   add("media",input,m.toMediaRow(input));
+ }
  for (const input of [null, {}, { window: "month", generatedAt: "2026-09-11T12:00:00Z", totals: { tokens: 1234567, costUsd: 12.34 },
    byUser: [{ user: "alice", tokens: 1234567, costUsd: 12.34, vms: 2 }],
    byVm: [{ vm: "gone", user: "alice", deleted: true, tokens: 1234567, costUsd: 12.34, lastReportedAt: "2026-09-11T10:00:00Z", tools: [{ tool: "claude", tokens: 1234567, costUsd: 12.34 }] }] }]) add("tokenUsage", input, m.toTokenUsageView(input));

@@ -17,6 +17,7 @@ public static class ChildVmEndpoints
     public static RouteGroupBuilder MapChildVmEndpoints(this RouteGroupBuilder api)
     {
         api.MapPost("/vms/{parent}/children", CreateAsync).RequireAuthorization(Policies.UserOrPrimaryToken).Audited("child.create").WithName("CreateChildVm");
+        api.MapWindowsLicenseEndpoints();
         return api;
     }
 
