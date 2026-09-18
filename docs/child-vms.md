@@ -14,6 +14,138 @@ API/UI, while the existing primary provisioning flow remains unchanged.
 > networking and recovery coverage still requires the
 > [host-administration field test](field-test-host-admin.md).
 
+## Windows guests
+
+The service supports unattended Windows 11, Server 2022 and Server 2025 children on
+Hyper-V and Proxmox. Choose a product and edition together. `--os windows` defaults
+to `--windows win11-pro`; omitting `--os` preserves the existing Linux/manual flow.
+
+| Product | Editions |
+| --- | --- |
+| `win11` | `pro`, `pro-n`, `enterprise`, `education` |
+| `server2022`, `server2025` | `standard`, `datacenter`, `standard-core`, `datacenter-core` |
+
+Acquire official media once on the host, then use the returned media ID:
+
+```bash
+construct vm media acquire --windows 11 --edition pro --lang en --json
+# Server evaluation media:
+construct vm media acquire --windows server-2022 --edition standard --lang en --json
+
+construct vm create --name windows-lab --os windows --windows win11-pro \
+  --media MEDIA_ID --cpus 4 --ram-gb 8 --disk-gb 100 --lifetime 4h \
+  --unattend-admin-password 'YOUR-DISPOSABLE-LAB-PASSWORD' \
+  --unattend-hostname WINDOWS-LAB --unattend-locale en-US --unattend-time-zone UTC
+```
+
+The acquire job resolves Windows 11 with a pinned [Fido resolver](https://github.com/pbatard/Fido/tree/3d47260b8915385c58e20c73e24b36e9a9536f3f).
+The host needs PowerShell for that resolver, `pwsh` on Proxmox. Server acquisition
+uses Microsoft's evaluation downloads and currently supports English. Microsoft's
+consumer download may not contain Enterprise or Education; supply licensed media
+for editions absent from that download. The service checks the WIM/ESD image metadata
+and refuses unavailable products or editions before allocating VM hardware.
+
+Both the original and prepared download are host-owned shared media. They appear in
+`construct vm media list --json` with `shared`, `sha256` and `windows` metadata containing
+product, language, image names, editions and builds. Only an administrator can delete
+shared media. Downloads and preparation run as host jobs with progress under Operations.
+Repeated acquisition uses the cached product/language item. Delete unused cached items
+as an administrator to fetch a newer release.
+
+Use `--iso ./windows.iso` or `--media ID` for supplied media. The host prepares it during
+creation, or prepare it separately with `construct vm media prepare-windows ID`.
+Preparation copies the original and patches the four-byte EFI boot catalog pointer to
+the ISO's own `efisys_noprompt.bin`. It preserves UDF and does not repack the install ISO.
+ISO reading and answer-file creation use managed libraries on both hosts.
+
+The host renders a client or server answer file with GPT partitions, an exact install
+image index, and only a public setup key. Server evaluation images omit the setup key.
+Windows children require generation 2/UEFI, Microsoft Secure Boot and TPM, with disk
+before install media in the boot order. Proxmox uses a real CPU model, SATA system disk
+and e1000e NIC. It attaches the virtio-win ISO as a third medium so first logon can install
+the serial driver and QEMU guest agent.
+
+`--unattend-admin-password` sets the built-in `Administrator` password, including
+autologon. These are also the SSH credentials. Setup installs and starts OpenSSH, adds
+its firewall rule, selects PowerShell as its shell, enables RDP/WinRM and applies the
+reference rig's disposable-lab settings. Client and server keep separate provisioning
+scripts. The supplied password exists in the generated answer-file ISO on the host;
+that dedicated media is deleted with the child. The service does not use guest passwords
+for monitoring or activation. Keep these guests and credentials within your lab network.
+
+Optional settings are `--unattend-hostname`, `--unattend-locale`, and
+`--unattend-time-zone`, using a Windows time-zone ID. `--unattend-first-logon PATH.ps1`
+sends an extra script to run before the completion beacon. `--unattend-files PATH.json`
+sends a JSON object mapping flat filenames to UTF-8 text. Files are available beside the
+script on the answer-file CD; copy anything needed later into the guest before completion.
+The combined extra text is limited to 1 MiB. An administrator password is required whenever
+unattend options are supplied. Alternatively supply `--aux-iso` or `--aux-media`; these
+cannot be combined with unattended options and the host does not modify their contents.
+
+Creation finishes when the VM starts. Installation continues in the guest. In the
+Companion host panel, open Media, then Windows guests, for the key pool, assignments,
+activation state and media preparation. A first-logon report proves the provisioning
+script reached its final block with SSH running; it is not inferred from an IP address.
+Hyper-V reports are labelled guest-reported. The service ejects install and answer-file
+media after that beacon, and Proxmox also ejects its guest-agent medium. On Proxmox it
+additionally watches for the first uptime reset and ejects the install DVD at that point
+to avoid restarting Setup. Monitoring survives service restarts through per-incarnation
+records. Ejection failures retain media references for retry.
+
+Administrators add pool keys in the Companion or on the host:
+
+```bash
+constructd admin windows-keys list --json
+# Feed a single JSON line through stdin. Do not put the real key in shell history.
+constructd admin windows-keys add --json < /secure/path/key-record.json
+constructd admin windows-keys delete KEY_ID
+```
+
+The record has `product`, `edition`, `kind`, `key`, optional `notes`, and a positive
+`budget` for `kind: "mak"`. Other kinds are `retail` and `kms-client`. Keys are encrypted
+with AES-GCM; the host master key uses machine DPAPI on Windows and a root-only file in
+`/etc/constructd/keys/` on Linux. Back up the license store and its protection material
+together. API responses and audit records never contain the full key.
+
+Automatic and manual assignment require an exact match with the guest's reported product
+and edition. No matching key means the generic key and the product's normal evaluation
+or unactivated behavior; the panel says `not-activated`. A detected KMS DNS service leaves
+activation to KMS. Retail and MAK activation require guest internet access. Server evaluation
+to retail conversion is not automated. Evaluation guests do not consume pool keys and show
+`evaluation-media-requires-conversion`; use licensed installation media for pool activation.
+
+The host delivers keys after installation through Hyper-V KVP or Proxmox guest-agent
+stdin, never through the parent agent or answer file. The host checks the reported partial
+key against the assignment and removes the Hyper-V KVP key after the report or timeout.
+The guest waits up to 30 minutes for a Hyper-V assignment. Assign within that interval;
+a later assignment requires rerunning `C:\provision\construct-report.ps1` inside the guest.
+Keys and assignments carry the persistent local host ID; cross-host assignment is refused.
+Assignments remain tied to the VM incarnation and are released on deletion. A MAK delivery
+attempt consumes its budget before sending the key, including uncertain interrupted attempts;
+retries and deletion do not refund it.
+
+### Windows field validation
+
+Local automated tests cover contracts, generated XML/ISO, media metadata, key storage,
+assignment races, guest-channel commands, reconciliation and Companion parity. A human
+must validate these on each host before relying on unattended provisioning:
+
+- On Hyper-V, acquire and prepare Windows 11 media, create with a disposable password,
+  confirm UEFI/Secure Boot/TPM boot without a prompt, desktop and SSH, KVP first-logon report,
+  masked activation with an appropriate real key, key removal from External KVP and both
+  DVDs ejected. Repeat with no key, a failed activation and a service restart during setup.
+- On Proxmox, confirm the CPU model boots current Windows 11, SATA/e1000e work without
+  setup drivers, the first setup reboot resets the observed uptime and causes timely DVD
+  ejection, and setup continues from disk. Verify the third ISO installs the serial driver
+  and QEMU guest agent, activation reaches the host through guest exec, and all three media
+  are ejected after completion. Restart the service during setup and confirm recovery.
+- On both platforms, install Server 2022 and Server 2025 in desktop and Core variants from
+  the corresponding media, using both Standard and Datacenter. Repeat client selection with
+  Pro N, Enterprise and Education media. Confirm exact image selection, SSH, the no-key evaluation path,
+  and licensed-media activation. Exercise Companion acquire/prepare, add/remove key,
+  manual assignment, product mismatch refusal, MAK budget exhaustion and delete/recreate
+  with the same VM name. Confirm the old assignment cannot affect the new incarnation.
+
 ## Before the first command
 
 The CLI reads the same service identity as [`construct expose`](expose.md):
@@ -328,11 +460,11 @@ API. The existing CLI, leases, sharing, admission and lifecycle jobs apply.
 The backend has Linux fixture and process-runner tests; child boot and device
 behaviour still require a human field test on a node.
 
-- Generation 2 maps to Q35/OVMF, fixed RAM with ballooning disabled, a VirtIO SCSI
-  disk, an optional VirtIO NIC on the configured bridge, and an optional TPM 2.0.
-  `ide2` holds the installation ISO and `ide0` the auxiliary ISO. Windows setup
-  may need a VirtIO driver ISO in the auxiliary drive. Children receive no
-  Construct provisioning or service credentials.
+- Generation 2 maps to Q35/OVMF and fixed RAM with ballooning disabled. Linux uses
+  VirtIO SCSI and an optional VirtIO NIC. The Windows preset uses a SATA disk,
+  e1000e NIC and a real CPU model. `ide2` holds the installation ISO and `ide0`
+  the auxiliary ISO. Host-rendered Windows installations also attach the virtio
+  guest-agent ISO at `ide1`. Children receive no Construct service credentials.
 - Both Secure Boot template names map to OVMF's combined pre-enrolled Microsoft
   Windows and UEFI CA keys. The requested name is retained in the description,
   but it does not select distinct key sets. Proxmox does not lock the template
