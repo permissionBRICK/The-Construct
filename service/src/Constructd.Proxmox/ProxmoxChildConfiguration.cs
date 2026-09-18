@@ -87,19 +87,24 @@ public sealed partial class ProxmoxChildVmPlatform
         var auxiliary = auxiliaryMediaPath is null ? null : media.ToVolume(auxiliaryMediaPath);
         _ = Boot(bootOrder, install is not null, auxiliary is not null, true, "scsi0");
         var (id, config, owner) = await OffChildAsync(name, ct);
-        var args = new List<string> { "set", ProxmoxCommands.Number(id) };
+        var number = ProxmoxCommands.Number(id);
+        var args = new List<string> { "set", number };
         var delete = new List<string>();
         foreach (var (slot, volume) in new[] { ("ide2", install), ("ide0", auxiliary) })
         {
-            if (config.TryGetProperty(slot, out _) && !(ProxmoxCommands.String(config, slot) ?? "").Split(',').Contains("media=cdrom"))
+            var current = ProxmoxCommands.String(config, slot);
+            if (current is not null && !current.Split(',').Contains("media=cdrom"))
                 throw new ChildValidationException("artifact-ownership-unverified", "media");
-            if (volume is not null) args.AddRange(["--" + slot, volume + ",media=cdrom"]);
-            else if (config.TryGetProperty(slot, out _)) delete.Add(slot);
+            // Only changed slots are sent: Proxmox treats a re-sent drive as newly added and appends
+            // it to the boot order, which would undo the order set below.
+            if (volume is not null) { if (current?.Split(',')[0] != volume) args.AddRange(["--" + slot, volume + ",media=cdrom"]); }
+            else if (current is not null) delete.Add(slot);
         }
         if (delete.Count > 0) args.AddRange(["--delete", string.Join(',', delete)]);
+        if (args.Count > 2) await commands.QmAsync(args, ct);
+        // The boot order goes last and on its own, after every drive change has been applied.
         var order = Boot(bootOrder, install is not null, auxiliary is not null, config.TryGetProperty("net0", out _), ProxmoxChildVmPlatform.DiskSlot(config));
-        args.AddRange(["--boot", "order=" + order]);
-        await commands.QmAsync(args, ct);
+        await commands.QmAsync(["set", number, "--boot", "order=" + order], ct);
         var actual = await commands.ConfigAsync(id, ct); VerifyOwner(actual, owner);
         var attached = Attached(actual);
         if (!attached.Complete || attached.InstallPath != installMediaPath || attached.AuxiliaryPath != auxiliaryMediaPath ||
