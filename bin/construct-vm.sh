@@ -34,6 +34,10 @@ Child VMs:
   identity [--json]
   create (--iso-url URL | --iso PATH | --media ID) [--aux-iso PATH | --aux-media ID]
          --cpus N (--ram-gb G | --ram-mb M) --disk-gb D --lifetime L [options]
+         [--os linux|windows] [--windows win11-pro|server2022-standard|...]
+         [--unattend-admin-password PASSWORD] [--unattend-hostname NAME]
+         [--unattend-locale en-US] [--unattend-time-zone UTC]
+         [--unattend-first-logon SCRIPT.ps1] [--unattend-files FILES.json]
   list [--owned-only] [--json]    Own children and accessible shared guests by default
   inspect NAME [--json]
   start NAME --lifetime L [--json]
@@ -54,6 +58,9 @@ Media:
          [--dedicated-to VM] [--operation-id ID] [--json]
   media acquire URL [--role install|auxiliary] [--name NAME] [--sha256 HEX]
          [--operation-id ID] [--no-wait] [--json]
+  media acquire --windows 11|server-2022|server-2025 --edition EDITION --lang en
+         [--no-wait] [--json]
+  media prepare-windows ID [--no-wait] [--json]
   media attach NAME (--install ID | --aux ID) [--boot-order LIST] [--json]
   media detach NAME (--install | --aux) [--json]
   media delete ID --yes [--json]
@@ -80,6 +87,7 @@ Common mutation options:
 
 Lifetimes are "never" or an integer followed by m, h or d (minimum 5m).
 Run `construct vm <command> --help` for this command summary.
+Windows setup, credentials and activation: docs/child-vms.md, "Windows guests".
 
 Exit codes:
   0 success; 1 usage/local error; 2 invalid request; 3 not found; 4 refused;
@@ -497,7 +505,7 @@ cmd_list() {
 }
 
 cmd_inspect() {
-  local name="${1:-}" json=false encoded vm addresses capabilities result
+  local name="${1:-}" json=false encoded vm addresses capabilities result windows=null
   [[ -n "${name}" ]] || die 'inspect requires a VM name'; shift
   while [[ $# -gt 0 ]]; do case "$1" in --json) json=true;; *) die "unknown inspect option: $1";; esac; shift; done
   encoded="$(urlencode "${name}")"
@@ -505,10 +513,15 @@ cmd_inspect() {
   api_request GET "/api/v1/vms/${encoded}/addresses"; expect_json object; addresses="${API_BODY}"
   api_request GET "/api/v1/vms/${encoded}/capabilities"; expect_json object; capabilities="${API_BODY}"
   result="$(jq -cn --argjson vm "${vm}" --argjson addresses "${addresses}" --argjson capabilities "${capabilities}" '{vm:$vm,addresses:$addresses,capabilities:$capabilities}')"
+  if [[ "$(printf '%s' "${vm}" | jq -r '.hardware.os // "linux"')" == windows ]]; then
+    api_request GET "/api/v1/vms/${encoded}/windows"; expect_json object; windows="${API_BODY}"
+    result="$(printf '%s' "${result}" | jq -c --argjson windows "${windows}" '. + {windows:$windows}')"
+  fi
   if [[ "${json}" == true ]]; then printf '%s\n' "${result}"; else
     print_human_object "${vm}"
     if [[ "$(printf '%s' "${addresses}" | jq '.addresses | length')" -eq 0 ]]; then printf '%s\n' 'addresses: no address yet'; else printf '%s' "${addresses}" | jq -r '.addresses[] | "address: \(.address) (verified=\(.verified))"'; fi
     printf 'capabilities: %s\n' "$(printf '%s' "${capabilities}" | jq -c .)"
+    if [[ "${windows}" != null ]]; then printf 'windows: %s\n' "$(printf '%s' "${windows}" | jq -c .)"; fi
   fi
 }
 
@@ -696,6 +709,9 @@ cmd_media_list() {
   local json=false; while [[ $# -gt 0 ]]; do case "$1" in --json) json=true;; *) die "unknown media list option: $1";; esac; shift; done
   api_request GET /api/v1/media; expect_json array
   if [[ "${json}" == true ]]; then printf '%s\n' "$(printf '%s' "${API_BODY}" | jq -c .)"; else printf '%-34s %-10s %-12s %10s %s\n' ID ROLE STATE SIZE NAME; printf '%s' "${API_BODY}" | jq -r '.[] | [.id,.role,.state,(.sizeBytes//"-"),.name] | @tsv' | while IFS=$'\t' read -r id role state size name; do printf '%-34s %-10s %-12s %10s %s\n' "$id" "$role" "$state" "$size" "$name"; done; fi
+  if [[ "${json}" != true ]]; then
+    printf '%s' "${API_BODY}" | jq -r '.[] | select(.windows) | "\(.id): \(.windows.product) \(.windows.language) prepared=\(.windows.prepared) shared=\(.shared) sha256=\(.sha256)\n  \([.windows.images[] | "\(.edition) (\(.imageName), build \(.build))"] | join("; "))"'
+  fi
 }
 
 cmd_windows_media() {
@@ -764,7 +780,7 @@ cmd_create() {
           *)
             case "${option}" in
               --unattend-admin-password) field=adminPassword;; --unattend-hostname) field=hostname;;
-              --unattend-locale) field=locale;; --unattend-time-zone) field=timeZone;;
+              --unattend-locale) field='locale';; --unattend-time-zone) field=timeZone;;
               --unattend-first-logon) field=firstLogonScript; value="$(cat -- "${value}")";;
               --unattend-files) field=files; value="$(cat -- "${value}")";;
             esac
