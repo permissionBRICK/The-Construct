@@ -1,13 +1,16 @@
 # A Construct host on Proxmox VE
 
-> **Status: implemented and field-tested on a single Proxmox VE 9 node (2026-09-17).**
-> Direct network mode has local test coverage and still needs the field tests in section 5.
+> **Status: implemented and field-tested on a single Proxmox VE 9 node (2026-09-17/18).**
 > The same `constructd` service that runs on a Windows Hyper-V host runs on the Proxmox node
 > itself with the Proxmox platform selected (`Constructd:Backend = proxmox`). Every client is
 > unchanged: `Auto-Install.ps1 -Backend hyperv-remote`, the VS Code extension and the Companion
-> talk to the same API and see the same instance registry entries. Child VMs, media, screenshots,
-> input and guest addresses are implemented with local tests; child VM field testing is still pending.
-> Host self-update is implemented; its systemd handoff and rollback still need human field testing.
+> talk to the same API and see the same instance registry entries.
+> Field-tested on the node: install, Kerberos sign-in, primary create/provision/power/delete,
+> memory over-commit, host self-update (five updates through the Maintenance tab and the API:
+> backup, replace, health, commit), child VMs including a fully unattended Windows 11 install
+> from host-side media (see [Windows guests](child-vms.md#windows-guests)), console screenshots
+> and keyboard input. Still waiting for a field test: direct network mode (section 5), the
+> browser console gateway (section 6), the token usage reporter and the license key push.
 > The design background is [docs/remote-host.md](remote-host.md); this page is the Proxmox specifics.
 
 The host's **Usage** tab shows guest-reported tokens and estimated cost by VM and,
@@ -168,6 +171,13 @@ repair. It accepts both older service-only archives and the new release layout. 
 keeps explicit checkout scripts; otherwise a release package supplies its own scripts. Settings,
 certificate and service registration remain installer responsibilities. Self-update preserves them.
 
+A node that self-updates from a build older than child VM support keeps its old media layout:
+no `construct-media` storage and `HostAdmin:Media:RootDir` at `/var/lib/constructd/media`. Run
+the installer once after such an update; it registers the storage and moves the root to
+`template/iso`, but it does **not** move media files that were already there. Move any
+`*.iso` from the old root into `template/iso` yourself before restarting the service, or the
+media items keep pointing at files the child driver refuses (`validation (mediaPath)`).
+
 ## 4. How a VM comes to be
 
 A create request (`POST /vms`) runs the same job as on Windows; only the platform steps differ:
@@ -188,7 +198,10 @@ guest with `bin/provision.sh` exactly as it would any other Construct VM — the
 identical.
 
 Nested virtualization defaults to off. Enabled guests use `Proxmox:CpuType` (`host`);
-disabled guests use `Proxmox:CpuTypeWithoutNesting` (`x86-64-v2-AES`). The node must also
+disabled guests and child VMs use `Proxmox:CpuTypeWithoutNesting` (`x86-64-v2-AES`). Proxmox
+starts named models with `enforce`, so on a node whose CPU lacks AES-NI the service drops the
+`-AES` suffix by itself (the model becomes `x86-64-v2`); a model without a CPU line would be
+`kvm64`, which hides POPCNT and makes Windows 11 loop in its boot manager. The node must also
 have its `kvm_intel`/`kvm_amd` nesting parameter enabled. See section 7 for policy and changes
 to existing VMs.
 
@@ -482,7 +495,7 @@ Remaining limitations:
 | `Proxmox:SnippetStorage` / `SnippetDir` | `local` / `/var/lib/vz/snippets` | where per-VM seeds go |
 | `Proxmox:Bridge` | `vmbr0` | guest network |
 | `Proxmox:CpuType` | `host` | QEMU CPU model with nesting enabled |
-| `Proxmox:CpuTypeWithoutNesting` | `x86-64-v2-AES` | QEMU CPU model with nesting disabled; must not expose VMX/SVM |
+| `Proxmox:CpuTypeWithoutNesting` | `x86-64-v2-AES` | QEMU CPU model with nesting disabled and for child VMs; must not expose VMX/SVM. The `-AES` suffix is dropped automatically on hosts without AES-NI |
 | `Proxmox:QmPath` / `PveshPath` | `qm` / `pvesh` | the commands |
 | `Proxmox:PvesmPath` / `PythonPath` | `pvesm` / `python3` | owned-volume cleanup and the local QMP client |
 
