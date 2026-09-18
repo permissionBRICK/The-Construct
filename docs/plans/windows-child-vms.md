@@ -95,6 +95,15 @@ generalises it. What it established, and what the host-side implementation must 
    key, shows the state in the panel (marked guest-reported on Hyper-V), and detaches the
    auxiliary ISO after the "first logon done" beacon. Retail and MAK keys need internet from
    the guest at activation time; KMS client keys need the KMS host.
+6a. **Proxmox lessons from the first field run (2026-09-18).** A Windows-preset child needs a
+   real CPU model (the driver now sets one; `kvm64` hides POPCNT and Windows 11 loops in the
+   boot manager), a SATA system disk and an e1000e card (no in-box virtio drivers; the driver
+   now does both). Instead of a full no-prompt repack, a four-byte patch of the stock ISO's
+   El Torito catalog pointing at its own `efisys_noprompt.bin` extent keeps UDF intact; make
+   that the host-side "prepare Windows media" operation. After Setup's first phase the OVMF
+   firmware boots the no-prompt DVD again instead of the disk (Hyper-V orders the Windows boot
+   entry first by itself), so the host must eject the install medium at the guest's first
+   reboot (uptime reset) for the install to stay unattended.
 6. **Proxmox specifics.** Windows on QEMU needs the virtio storage driver during setup:
    the host adds the virtio-win ISO as a third medium or injects the driver folder into the
    auxiliary ISO with a `PnpCustomizationsWinPE` driver path; e1000 NIC until the virtio NIC
