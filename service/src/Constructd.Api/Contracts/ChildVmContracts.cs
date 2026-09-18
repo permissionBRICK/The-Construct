@@ -5,7 +5,8 @@ namespace Constructd.Api.Contracts;
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ChildCreateRequest(string? Name, int Cpus, int RamMb, int DiskGb, string? Lifetime,
     ChildMediaRequest? Media, string? Preset = null, ChildFirmwareRequest? Firmware = null,
-    ChildNetworkRequest? Network = null, bool Start = true, string? OperationKey = null);
+    ChildNetworkRequest? Network = null, bool Start = true, string? OperationKey = null,
+    string Os = "linux", string Windows = "win11-pro", WindowsUnattend? Unattend = null);
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ChildMediaRequest(string InstallMediaId, string? AuxiliaryMediaId = null);
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]

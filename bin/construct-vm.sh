@@ -728,9 +728,24 @@ derive_child_name() {
 }
 
 cmd_create() {
+  local os=linux windows=win11-pro unattend='{}' option field value
   local iso_url="" iso_file="" install_media="" aux_file="" aux_media="" cpus="" ram_gb="" ram_mb="" disk_gb="" lifetime="" name="" preset="" generation="" secure_boot="" template="" tpm="" boot_order="" no_network=false no_start=false sha256="" operation_id="" no_wait=false json=false json_progress=false key child_name install_item aux_item="" fw body accepted job final_vm result source_count=0 aux_count=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --os|--windows|--unattend-admin-password|--unattend-hostname|--unattend-locale|--unattend-time-zone|--unattend-first-logon|--unattend-files)
+        option="$1"; shift; [[ $# -gt 0 ]] || die "${option} requires a value"; value="$1"
+        case "${option}" in
+          --os) os="${value}";; --windows) windows="${value}";;
+          *)
+            case "${option}" in
+              --unattend-admin-password) field=adminPassword;; --unattend-hostname) field=hostname;;
+              --unattend-locale) field=locale;; --unattend-time-zone) field=timeZone;;
+              --unattend-first-logon) field=firstLogonScript; value="$(cat -- "${value}")";;
+              --unattend-files) field=files; value="$(cat -- "${value}")";;
+            esac
+            if [[ "${field}" == files ]]; then unattend="$(jq -cn --argjson old "${unattend}" --argjson value "${value}" '$old + {files:$value}')";
+            else unattend="$(jq -cn --argjson old "${unattend}" --arg field "${field}" --arg value "${value}" '$old + {($field):$value}')"; fi;;
+        esac;;
       --iso-url) shift; [[ $# -gt 0 ]] || die '--iso-url requires a URL'; iso_url="$1";; --iso) shift; [[ $# -gt 0 ]] || die '--iso requires a file'; iso_file="$1";; --media) shift; [[ $# -gt 0 ]] || die '--media requires an id'; install_media="$1";;
       --aux-iso) shift; [[ $# -gt 0 ]] || die '--aux-iso requires a file'; aux_file="$1";; --aux-media) shift; [[ $# -gt 0 ]] || die '--aux-media requires an id'; aux_media="$1";;
       --cpus) shift; [[ $# -gt 0 ]] || die '--cpus requires a value'; cpus="$1";; --ram-gb) shift; [[ $# -gt 0 ]] || die '--ram-gb requires a value'; ram_gb="$1";; --ram-mb) shift; [[ $# -gt 0 ]] || die '--ram-mb requires a value'; ram_mb="$1";; --disk-gb) shift; [[ $# -gt 0 ]] || die '--disk-gb requires a value'; disk_gb="$1";; --lifetime) shift; [[ $# -gt 0 ]] || die '--lifetime requires a value'; lifetime="$1";;
@@ -750,6 +765,9 @@ cmd_create() {
   is_positive "${ram_mb}" || die 'create requires --ram-gb G or --ram-mb M'; (( 10#${ram_mb} >= 512 && 10#${ram_mb} % 2 == 0 )) || die 'RAM must be at least 512 MiB and a multiple of 2 MiB'
   is_positive "${disk_gb}" || die 'create requires --disk-gb D'; [[ -n "${lifetime}" ]] || die 'create requires --lifetime L'; validate_lifetime "${lifetime}"
   [[ -z "${preset}" || "${preset}" == windows || "${preset}" == linux ]] || die '--preset must be windows or linux'; [[ -z "${secure_boot}" ]] || validate_on_off --secure-boot "${secure_boot}"; [[ -z "${tpm}" ]] || validate_on_off --tpm "${tpm}"; [[ -z "${boot_order}" ]] || validate_boot_order "${boot_order}"; [[ -z "${sha256}" ]] || validate_sha256 "${sha256}"
+  [[ "${os}" == linux || "${os}" == windows ]] || die '--os must be linux or windows'
+  [[ "${os}" == windows || "${unattend}" == '{}' ]] || die '--unattend options require --os windows'
+  [[ "${unattend}" == '{}' || ${aux_count} == 0 ]] || die 'unattend options cannot be combined with auxiliary media'
   require_create_allowed; key="$(operation_key "${operation_id}")"
   (( ${#key} <= 120 )) || die 'create --operation-id must be at most 120 characters to leave room for media sub-keys'
   child_name="${name:-$(derive_child_name "${key}")}"
@@ -762,6 +780,7 @@ cmd_create() {
   [[ -z "${aux_item}" ]] || require_media_ready
   fw="$(firmware_json "${generation}" "${secure_boot}" "${template}" "${tpm}" "${boot_order}")"
   body="$(jq -cn --arg name "${child_name}" --arg cpus "${cpus}" --arg ram "${ram_mb}" --arg disk "${disk_gb}" --arg lifetime "${lifetime}" --arg install "${install_media}" --arg aux "${aux_media}" --arg preset "${preset}" --argjson firmware "${fw}" --argjson attach "$([[ "${no_network}" == true ]] && printf false || printf true)" --argjson start "$([[ "${no_start}" == true ]] && printf false || printf true)" '{name:$name,cpus:($cpus|tonumber),ramMb:($ram|tonumber),diskGb:($disk|tonumber),lifetime:$lifetime,media:({installMediaId:$install} + (if $aux!="" then {auxiliaryMediaId:$aux} else {} end)),network:{attach:$attach},start:$start} + (if $preset!="" then {preset:$preset} else {} end) + (if ($firmware|length)>0 then {firmware:$firmware} else {} end)')"
+  body="$(printf '%s' "${body}" | jq -c --arg os "${os}" --arg windows "${windows}" --argjson unattend "${unattend}" '. + {os:$os,windows:$windows} + (if $unattend == {} then {} else {unattend:$unattend} end)')"
   api_request POST "/api/v1/vms/$(urlencode "${INSTANCE_NAME}")/children" "${body}" "${key}:create"; expect_json object; accepted="${API_BODY}"
   if [[ "${no_wait}" == true ]]; then job="${accepted}"; final_vm=null; else follow_job "$(printf '%s' "${accepted}" | jq -r '.jobId')" 10800 "${json_progress}"; job="${JOB_RESULT}"; api_request GET "/api/v1/vms/$(urlencode "${child_name}")"; expect_json object; final_vm="${API_BODY}"; fi
   result="$(jq -cn --arg operationKey "${key}" --argjson install "${install_item}" --argjson aux "${aux_item:-null}" --argjson job "${job}" --argjson vm "${final_vm}" '{operationKey:$operationKey,media:([$install] + (if $aux==null then [] else [$aux] end)),job:$job,vm:$vm}')"

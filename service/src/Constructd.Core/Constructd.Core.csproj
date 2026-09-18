@@ -14,4 +14,8 @@
     transport-specific lives behind the interfaces in Abstractions/.
   -->
 
+  <ItemGroup>
+    <EmbeddedResource Include="../../../examples/winvm-blank/vm/unattend-win11/*" LogicalName="WindowsClient.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="../../../examples/winvm-blank/vm/unattend/*" LogicalName="WindowsServer.%(Filename)%(Extension)" />
+  </ItemGroup>
 </Project>
