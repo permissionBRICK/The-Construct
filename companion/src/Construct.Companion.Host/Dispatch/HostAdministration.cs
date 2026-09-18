@@ -302,7 +302,13 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
                 case "vms": m.State["vms"] = new JsonObject { ["rows"] = HostAdminViews.Vms(await client.VmsAsync(new() { ["kind"] = "all" }, ct), clock.UtcNow), ["childrenFeature"] = m.State["features"]?["children"]?.DeepClone() }; break;
                 case "users": m.State["users"] = new JsonObject { ["rows"] = HostAdminViews.Map(await client.UsersAsync(ct), HostAdminViews.User) }; break;
                 case "usage": m.State["usage"] = HostAdminViews.TokenUsage(await client.HostUsageAsync(m.UsageWindow, ct)); break;
-                case "media": m.State["media"] = new JsonObject { ["catalog"] = HostAdminViews.IsoCatalog(await client.IsoCatalogAsync(ct)), ["catalogProblem"] = "", ["items"] = StateJson.Boolean(m.State["features"]?["media"]) == true ? HostAdminViews.Map(await client.MediaAsync(null, ct), HostAdminViews.Media) : new JsonArray(), ["mediaProblem"] = "" }; break;
+                case "media":
+                    JsonNode? catalog = null; var catalogProblem = "";
+                    try { catalog = HostAdminViews.IsoCatalog(await client.IsoCatalogAsync(ct)); }
+                    catch (RemoteApiException e) when (e.Status is not (401 or 403)) { catalogProblem = e.Message; }
+                    m.State["media"] = new JsonObject { ["catalog"] = catalog, ["catalogProblem"] = catalogProblem, ["items"] = StateJson.Boolean(m.State["features"]?["media"]) == true ? HostAdminViews.Map(await client.MediaAsync(null, ct), HostAdminViews.Media) : new JsonArray(), ["mediaProblem"] = "" };
+                    if (StateJson.Boolean(m.State["features"]?["windowsGuests"]) == true) m.State["media"]!["windows"] = HostAdminViews.Windows(await client.RequestAsync("GET", "/host/windows", null, ct));
+                    break;
                 case "operations": m.State["operations"] = new JsonObject { ["jobs"] = HostAdminViews.Map(await client.JobsAsync(new() { ["limit"] = 100 }, ct), HostAdminViews.Job), ["audit"] = HostAdminViews.Map(await client.AuditAsync(new() { ["limit"] = 50 }, ct), HostAdminViews.Audit), ["auditProblem"] = "" }; break;
                 case "config":
                     var config = await client.HostConfigAsync(ct);
@@ -362,6 +368,11 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
                 var lifetime = ParseLifetime(JsonValue.Create(value)); if (StateJson.Boolean(lifetime["ok"]) != true) { Notice(m, Text(lifetime["reason"])); return; }
                 result = await client.RenewVmLeaseAsync(name, new JsonObject { ["lifetime"] = lifetime["text"]?.DeepClone() }, ct); break;
             case "cancelJob": result = await client.CancelJobAsync(id, ct); break;
+            case "addWindowsKey": result = await client.RequestAsync("POST", "/host/windows/keys", args, ct); break;
+            case "deleteWindowsKey": result = await client.RequestAsync("DELETE", "/host/windows/keys/" + HostIdentity.Encode(id), null, ct); break;
+            case "assignWindowsKey": result = await client.RequestAsync("POST", "/host/windows/guests/" + HostIdentity.Encode(name) + "/assign", new JsonObject { ["incarnation"] = args["incarnation"]?.DeepClone(), ["keyId"] = args["keyId"]?.DeepClone() }, ct); break;
+            case "acquireWindowsMedia": result = await client.RequestAsync("POST", "/media/acquire-windows", args, ct); break;
+            case "prepareWindowsMedia": result = await client.RequestAsync("POST", "/media/" + HostIdentity.Encode(id) + "/prepare-windows", new JsonObject(), ct); break;
             case "mediaCleanup": result = await client.MediaCleanupAsync(ct); break;
             case "deleteMedia": result = await client.DeleteMediaAsync(id, ct); break;
             case "createUser": result = await client.CreateUserAsync(RequireForm("newUser", args), ct); break;
