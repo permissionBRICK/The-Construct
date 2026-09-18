@@ -172,7 +172,7 @@ public sealed class MediaJobs(IMediaStore store, IMediaTransfer transfer, IMedia
             if(item.State!=MediaState.Deleting && item.DedicatedTo is { } vm && await vms.GetAsync(vm,ct) is not null)
             { retained[item.Id]="dedicated"; continue; }
             var eligible=item.State==MediaState.Deleting || item.State==MediaState.Failed && item.Created.AddHours(limits.UploadTtlHours)<=clock.UtcNow ||
-                item.State==MediaState.Ready && item.DedicatedTo is null && limits.UnreferencedTtlHours is int ttl && (item.LastReferencedAt ?? item.ReadyAt ?? item.Created).AddHours(ttl)<=clock.UtcNow;
+                item.State==MediaState.Ready && !item.Shared && item.DedicatedTo is null && limits.UnreferencedTtlHours is int ttl && (item.LastReferencedAt ?? item.ReadyAt ?? item.Created).AddHours(ttl)<=clock.UtcNow;
             if(!eligible) { retained[item.Id]="not-eligible"; continue; }
             var gone=await DeleteLockedAsync(item,ct);
             if(gone) removed.Add(item.Id); else retained[item.Id]="held-open";

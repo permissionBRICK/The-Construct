@@ -13,7 +13,7 @@ using Constructd.Core.Logic;
 using Constructd.Windows.Media;
 namespace Constructd.Api.Endpoints;
 
-public static class MediaEndpoints
+public static partial class MediaEndpoints
 {
     public static RouteGroupBuilder MapMediaEndpoints(this RouteGroupBuilder api)
     {
@@ -24,6 +24,8 @@ public static class MediaEndpoints
             catch(NotSupportedException) { return Error("unsupported-capability",new {capability="media",level="unsupported"}); }
         });
         media.MapPost("/acquire",AcquireAsync).Audited("media.acquire").WithName("AcquireMedia");
+        media.MapPost("/acquire-windows",AcquireWindowsAsync).Audited("media.acquire-windows");
+        media.MapPost("/{id}/prepare-windows",PrepareWindowsAsync).Audited("media.prepare-windows", "id");
         media.MapPost("/uploads",BeginAsync).Audited("media.upload.begin").WithName("BeginMediaUpload");
         media.MapPut("/uploads/{id}/chunks/{index:int}",ChunkAsync).Audited("media.upload.chunk","id").WithName("MediaUploadChunk");
         media.MapGet("/uploads/{id}",UploadAsync).WithName("GetMediaUpload");
@@ -244,7 +246,7 @@ public static class MediaEndpoints
     private static async Task<IResult> GetAsync(string id,HttpContext http,IMediaStore store,IVmRepository vms,IUserStore users,CancellationToken ct)
     {
         var item=await store.GetAsync(id,ct); if(item is null) return Error("not-found");
-        if(await OwnAsync(http,item.Owner,vms,ct)) return Results.Ok(await ResponseAsync(item,store,ct));
+        if(item.Shared || await OwnAsync(http,item.Owner,vms,ct)) return Results.Ok(await ResponseAsync(item,store,ct));
         foreach(var reference in await store.ListReferencesAsync(id,ct))
             if(await vms.GetAsync(reference.VmName,ct) is {Kind:VmKind.Child,Sharing:SharingScope.Host,Deleting:false} vm && await users.GetAsync(vm.Owner,ct) is {Enabled:true})
                 return Results.Ok(new {item.Id,item.Name,item.Role,item.SizeBytes});

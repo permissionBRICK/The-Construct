@@ -7,10 +7,10 @@ namespace Constructd.Api.Jobs;
 public sealed class ChildCreateJob(IVmRepository vms, IVmMetadataStore identity,
     IChildVmDriver driver, IChildVmCreationOwnership ownership, IHypervisorDriver hypervisor, ICapacityLedger capacity, IMediaStore media,
     IVmOperationGate vmGate, IGuestAddressProvider addresses, INetworkPolicyReconciler network,
-    IPersistedJobRunner runner, IAdmissionStore admission, IOperationKeyStore keys, ChildStartIntent starter, ChildDeleteJob cleanup, IAuditLog audit, IClock clock, ConstructdOptions options)
+    IPersistedJobRunner runner, IAdmissionStore admission, IOperationKeyStore keys, ChildStartIntent starter, ChildDeleteJob cleanup, IAuditLog audit, IClock clock, ConstructdOptions options, WindowsMediaJobs windowsMedia)
 {
     public async Task<JobOutcome> RunAsync(Job job, Vm vm, ChildStoragePlacement placement, bool start,
-        IReadOnlyList<string> reservationIds, IProgress<string> progress, CancellationToken ct)
+        IReadOnlyList<string> reservationIds, IProgress<string> progress, CancellationToken ct, WindowsUnattend? unattend = null)
     {
         await using var parentGate = await vmGate.AcquireAsync(vm.Parent!, job.Id, ct);
         await using var childGate = await vmGate.AcquireAsync(vm.Name, job.Id, ct);
@@ -31,7 +31,29 @@ public sealed class ChildCreateJob(IVmRepository vms, IVmMetadataStore identity,
                 {
                     var item = await media.GetAsync(reference.MediaId, ct);
                     if (item is not { State: MediaState.Ready }) throw new ChildValidationException("media-not-ready", "media");
-                    if (reference.Slot == MediaSlot.Install) install = item.Path; else auxiliary = item.Path;
+                    if (reference.Slot == MediaSlot.Install)
+                    {
+                        if (vm.Hardware?.Os == "windows")
+                        {
+                            item = await windowsMedia.PrepareAsync(item, progress, ct);
+                            var selection = WindowsUnattendRenderer.Parse(vm.Hardware.Windows!);
+                            var image = item.Windows!.Images.FirstOrDefault(i => i.Product == selection.Product && i.Edition == selection.Edition)
+                                ?? throw new ChildValidationException("windows-image-missing", "windows");
+                            if (item.Id != reference.MediaId)
+                            {
+                                if (!await media.TryAddReferenceAsync(new(item.Id, vm.Name, MediaSlot.Install, clock.UtcNow), ct)) throw new MediaException("media-not-ready");
+                                await media.RemoveReferenceAsync(reference.MediaId, vm.Name, MediaSlot.Install, ct);
+                            }
+                            if (unattend is not null)
+                            {
+                                var answer = await windowsMedia.AuxiliaryAsync(vm, image, unattend, ct);
+                                if (!await media.TryAddReferenceAsync(new(answer.Id, vm.Name, MediaSlot.Auxiliary, clock.UtcNow), ct)) throw new MediaException("media-not-ready");
+                                auxiliary = answer.Path;
+                            }
+                        }
+                        install = item.Path;
+                    }
+                    else auxiliary = item.Path;
                 }
                 if (install is null) throw new ChildValidationException("media-not-ready", "installMediaId");
                 await Phase("hardware");
