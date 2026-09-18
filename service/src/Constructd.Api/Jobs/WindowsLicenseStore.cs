@@ -41,14 +41,14 @@ public sealed class WindowsLicenseStore(string path, WindowsKeyCipher cipher, IA
     public async Task<WindowsKeyInfo> AddAsync(string product, string edition, string kind, string value, int? budget, string? notes, string actor, CancellationToken ct)
     {
         _ = WindowsUnattendRenderer.Parse(product + "-" + edition);
-        if (kind is not ("retail" or "mak" or "kms-client") || !Regex.IsMatch(value, @"\A[A-Z0-9]{5}(?:-[A-Z0-9]{5}){4}\z") ||
+        if (kind is not ("retail" or "mak" or "kms-client") || string.IsNullOrEmpty(value) || !Regex.IsMatch(value, @"\A[A-Z0-9]{5}(?:-[A-Z0-9]{5}){4}\z") ||
             kind == "mak" && budget is not > 0 || kind != "mak" && budget is not null || (notes?.Length ?? 0) > 1024) throw new ChildValidationException("validation", "key");
         await gate.WaitAsync(ct);
         try
         {
             var s = Read();
             if (s.Keys.Any(k => cipher.Decrypt(k.Ciphertext) == value)) throw new ChildValidationException("key-exists", "key");
-            var info = new WindowsKeyInfo(Guid.NewGuid().ToString("n"), product, edition, kind, value[^5..], budget, 0, notes ?? "");
+            var info = new WindowsKeyInfo(Guid.NewGuid().ToString("n"), product, edition, kind, value[^5..], budget, 0, notes ?? "", cipher.HostId);
             s.Keys.Add(new(info, cipher.Encrypt(value))); Write(s);
             await Audit(actor, "windows-key.add", info.Id); return info;
         }
@@ -72,7 +72,7 @@ public sealed class WindowsLicenseStore(string path, WindowsKeyCipher cipher, IA
         {
             var s = Read(); var existing = s.Guests.Find(g => g.Incarnation == vm.Incarnation && g.VmName == vm.Name);
             if (existing is not null) return existing;
-            var guest = new WindowsGuestStatus(vm.Name, vm.Incarnation!, selection.Product, selection.Edition);
+            var guest = new WindowsGuestStatus(vm.Name, vm.Incarnation!, selection.Product, selection.Edition, HostId: cipher.HostId);
             s.Guests.Add(guest); Write(s); return guest;
         }
         finally { fileLock?.Dispose(); fileLock = null; gate.Release(); }
@@ -84,7 +84,9 @@ public sealed class WindowsLicenseStore(string path, WindowsKeyCipher cipher, IA
         {
             var s = Read(); var index = s.Guests.FindIndex(g => g.VmName == guest.VmName && g.Incarnation == guest.Incarnation);
             if (index < 0 || s.Guests[index].Released) return;
-            var old = s.Guests[index]; s.Guests[index] = guest;
+            var old = s.Guests[index];
+            if (old == guest) return;
+            s.Guests[index] = guest;
             Write(s);
             if (old.Stage != guest.Stage || old.Activation != guest.Activation) await Audit("system", "windows-guest." + guest.Activation, guest.VmName);
         }
@@ -98,9 +100,14 @@ public sealed class WindowsLicenseStore(string path, WindowsKeyCipher cipher, IA
             var s = Read(); var index = s.Guests.FindIndex(g => g.VmName == guest.VmName && g.Incarnation == guest.Incarnation && !g.Released);
             if (index < 0) throw new ChildValidationException("vm-incarnation-conflict", "vm");
             guest = s.Guests[index];
-            if (guest.KeyId is not null) return guest;
-            if (guest.Stage != "installed" || guest.Kms) { if (keyId is not null) throw new ChildValidationException("guest-not-ready", "vm"); return guest; }
-            bool Available(Key k) => k.Info.Product == guest.Product && k.Info.Edition == guest.Edition &&
+            if (guest.HostId != cipher.HostId) throw new ChildValidationException("key-host-mismatch", "key");
+            if (guest.KeyId is not null)
+            {
+                if (keyId is not null && keyId != guest.KeyId) throw new ChildValidationException("key-already-assigned", "key");
+                return guest;
+            }
+            if (guest.Stage != "installed" || guest.Kms || guest.Evaluation) { if (keyId is not null) throw new ChildValidationException("guest-not-ready", "vm"); return guest; }
+            bool Available(Key k) => k.Info.HostId == guest.HostId && k.Info.Product == guest.Product && k.Info.Edition == guest.Edition &&
                 (k.Info.Kind != "retail" || !s.Guests.Any(g => g.KeyId == k.Info.Id && !g.Released)) &&
                 (k.Info.Kind != "mak" || k.Info.Used + s.Guests.Count(g => g.KeyId == k.Info.Id && !g.Released && !g.Attempted) < k.Info.Budget);
             var key = s.Keys.FirstOrDefault(k => (keyId is null || k.Info.Id == keyId) && Available(k));
@@ -119,6 +126,7 @@ public sealed class WindowsLicenseStore(string path, WindowsKeyCipher cipher, IA
             var s = Read(); var index = s.Guests.FindIndex(g => g.VmName == guest.VmName && g.Incarnation == guest.Incarnation && !g.Released);
             if (index < 0) return (guest, null); guest = s.Guests[index];
             var k = s.Keys.FindIndex(k => k.Info.Id == guest.KeyId); if (k < 0) return (guest, null);
+            if (guest.HostId != cipher.HostId || s.Keys[k].Info.HostId != guest.HostId) throw new ChildValidationException("key-host-mismatch", "key");
             if (!guest.Attempted)
             {
                 var key = s.Keys[k]; if (key.Info.Kind == "mak") s.Keys[k] = key with { Info = key.Info with { Used = key.Info.Used + 1 } };

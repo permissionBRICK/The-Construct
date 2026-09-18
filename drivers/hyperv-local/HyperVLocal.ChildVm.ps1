@@ -158,7 +158,7 @@ function Get-ConstructWindowsGuest {
     $component = @($system.GetRelated('Msvm_KvpExchangeComponent')) | Select-Object -First 1
     $report = $null
     foreach ($item in @($component.GuestExchangeItems)) {
-        if (-not $item -or $item.Length -gt 16384) { continue }
+        if (-not $item -or $item.Length -gt 16384 -or $item -match '<!DOCTYPE') { continue }
         $xml = New-Object System.Xml.XmlDocument
         $xml.XmlResolver = $null
         $xml.LoadXml($item)

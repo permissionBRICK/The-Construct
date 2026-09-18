@@ -8,7 +8,7 @@ public sealed class WindowsMediaResolver(IProcessRunner runner, ConstructdOption
     public async Task<Uri> ResolveAsync(string product, string language, CancellationToken ct)
     {
         if (options.Fake) throw new MediaException("windows-resolver-unavailable");
-        if (!Regex.IsMatch(language, @"\A[a-z]{2}(?:-[A-Z]{2})?\z")) throw new MediaException("validation");
+        if (language is null || !Regex.IsMatch(language, @"\A[a-z]{2}(?:-[A-Z]{2})?\z")) throw new MediaException("validation");
         if (product is "server2022" or "server2025")
         {
             if (language is not ("en" or "en-US")) throw new MediaException("windows-language-unsupported");

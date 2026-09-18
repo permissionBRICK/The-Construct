@@ -45,5 +45,22 @@ public class WindowsLicenseTests : IDisposable
         var next = (await store.RegisterAsync(Vm("two", "server2022-standard"), default)) with { Stage = "installed" }; await store.SaveAsync(next, default);
         Assert.Null((await store.AssignAsync(next, null, "system", default)).KeyId);
     }
+    [Fact]
+    public async Task Assignment_is_bound_to_host_and_KMS_guests_do_not_consume_pool_keys()
+    {
+        var store = Store();
+        var key = await store.AddAsync("win11", "pro", "retail", "ABCDE-FGHIJ-KLMNO-PQRST-UVWXY", null, null, "admin", default);
+        var guest = (await store.RegisterAsync(Vm("domain"), default)) with { Stage = "installed", Kms = true };
+        Assert.Equal(key.HostId, guest.HostId); Assert.NotEmpty(key.HostId);
+        await store.SaveAsync(guest, default);
+        Assert.Null((await store.AssignAsync(guest, null, "system", default)).KeyId);
+        await Assert.ThrowsAsync<ChildValidationException>(() => store.AssignAsync(guest, key.Id, "admin", default));
+        guest = guest with { Kms = false, Evaluation = true };
+        await store.SaveAsync(guest, default);
+        Assert.Null((await store.AssignAsync(guest, null, "system", default)).KeyId);
+        guest = guest with { Kms = false, HostId = "different-host" };
+        await store.SaveAsync(guest, default);
+        await Assert.ThrowsAsync<ChildValidationException>(() => store.AssignAsync(guest, key.Id, "admin", default));
+    }
     public void Dispose() { if (Directory.Exists(root)) Directory.Delete(root, true); }
 }

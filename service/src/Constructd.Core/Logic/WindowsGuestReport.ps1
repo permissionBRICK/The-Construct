@@ -33,7 +33,7 @@ try { $kms = @(Resolve-DnsName -Name '_vlmcs._tcp' -Type SRV -ErrorAction Stop).
 function Send-ConstructWindowsReport([string]$Activation) {
     $license = Get-CimInstance SoftwareLicensingProduct -Filter "ApplicationID='55c92734-d682-4d71-983e-d6ec3f16059f'" | Where-Object { $_.PartialProductKey } | Select-Object -First 1
     if ($license.LicenseStatus -eq 1) { $Activation = 'activated' }
-    $report = @{ product=$product; edition=$edition; firstLogonDone=$true; activation=$Activation; partialKey=[string]$license.PartialProductKey; kms=$kms } | ConvertTo-Json -Compress
+    $report = @{ product=$product; edition=$edition; firstLogonDone=$true; activation=$Activation; partialKey=[string]$license.PartialProductKey; kms=$kms; evaluation=([string]$version.EditionID -match 'Eval') } | ConvertTo-Json -Compress
     Set-Content -LiteralPath 'C:\provision\windows-report.json' -Value $report -Encoding UTF8
     if ('__CONSTRUCT_PLATFORM__' -eq 'hyperv') {
         New-Item 'HKLM:\SOFTWARE\Microsoft\Virtual Machine\Guest' -Force | Out-Null
@@ -41,7 +41,7 @@ function Send-ConstructWindowsReport([string]$Activation) {
     }
 }
 Send-ConstructWindowsReport 'not-activated'
-if ('__CONSTRUCT_PLATFORM__' -eq 'proxmox' -or $kms) { return }
+if ('__CONSTRUCT_PLATFORM__' -eq 'proxmox' -or $kms -or [string]$version.EditionID -match 'Eval') { return }
 $deadline = (Get-Date).AddMinutes(30)
 while ((Get-Date) -lt $deadline) {
     $key = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Virtual Machine\External' -ErrorAction SilentlyContinue).'Construct.WindowsKey'

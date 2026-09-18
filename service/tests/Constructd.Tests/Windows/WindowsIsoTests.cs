@@ -6,6 +6,31 @@ namespace Constructd.Tests.Windows;
 public class WindowsIsoTests
 {
     [Fact]
+    public async Task Preparing_UDF_media_changes_only_the_four_byte_EFI_pointer()
+    {
+        // Synthetic UDF/Joliet fixture, no Microsoft content: 2 KiB 'B' BIOS image,
+        // 4 KiB 'P' EFI image, 4 KiB 'N' no-prompt image, and a WIM XML header.
+        // Built with genisoimage -udf -J -b bios.bin -no-emul-boot -eltorito-alt-boot
+        // -e efi/microsoft/boot/efisys.bin -no-emul-boot -o fixture.iso tree/.
+        var encoded = await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "Windows", "synthetic-windows.iso.gz.b64"));
+        using var compressed = new MemoryStream(Convert.FromBase64String(encoded));
+        using var gzip = new System.IO.Compression.GZipStream(compressed, System.IO.Compression.CompressionMode.Decompress);
+        using var input = new MemoryStream(); await gzip.CopyToAsync(input);
+        var original = input.ToArray(); input.Position = 0;
+        var before = WindowsIso.Inspect(input);
+        Assert.Equal("win11", before.Product); Assert.Equal("pro", Assert.Single(before.Images).Edition);
+        using var output = new MemoryStream(); await WindowsIso.PrepareAsync(input, output, default);
+        var patched = output.ToArray(); var offset = (int)WindowsIso.EfiPointerOffset(input);
+        Assert.Equal(original.Length, patched.Length);
+        Assert.Equal(original[..offset], patched[..offset]); Assert.Equal(original[(offset + 4)..], patched[(offset + 4)..]);
+        Assert.NotEqual(original[offset..(offset + 4)], patched[offset..(offset + 4)]);
+        var sector = BinaryPrimitives.ReadUInt32LittleEndian(patched.AsSpan(offset));
+        Assert.All(patched[(int)(sector * 2048)..(int)(sector * 2048 + 4096)], b => Assert.Equal((byte)'N', b));
+        output.Position = 0;
+        Assert.Equal(before.Images, WindowsIso.Inspect(output).Images);
+    }
+
+    [Fact]
     public async Task Answer_iso_contains_Joliet_names_and_exact_content()
     {
         using var output = new MemoryStream();

@@ -14,10 +14,10 @@ public sealed partial class ProxmoxChildVmPlatform
     }
     private async Task<JsonElement?> WindowsExecAsync(int id, string script, string? input, CancellationToken ct)
     {
-        var args = new List<string> { "guest", "exec", ProxmoxCommands.Number(id), "--timeout", "60" };
+        var args = new List<string> { "guest", "exec", ProxmoxCommands.Number(id), "--timeout", input is null ? "5" : "60" };
         if (input is not null) args.AddRange(["--pass-stdin", "1"]);
         args.AddRange(["--", "powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(script))]);
-        var result = await commands.RunAsync(options.Proxmox.QmPath, args, ct, TimeSpan.FromSeconds(90), input);
+        var result = await commands.RunAsync(options.Proxmox.QmPath, args, ct, TimeSpan.FromSeconds(input is null ? 10 : 90), input);
         if (!result.Succeeded || result.StandardOutput.Length > 65536) return null;
         try
         {
