@@ -101,4 +101,5 @@ if ($ServiceUrl) {
 if ($Include -contains "ChildVm") {
     if ($Backend -ne "hyperv-local") { throw "ChildVm is unsupported for this backend." }
     . (Join-Path (Join-Path $PSScriptRoot "hyperv-local") "HyperVLocal.ChildVm.ps1")
+    . (Join-Path (Join-Path $PSScriptRoot "hyperv-local") "HyperVLocal.WindowsLicense.ps1")
 }

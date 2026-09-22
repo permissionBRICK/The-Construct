@@ -2247,3 +2247,13 @@ Audit actions are `vm.source.ensure`, `vm.source.fetch`, `source.fetch.completed
 `host.source.cleanup` and `host.source.delete`. Job errors are bare safe codes, and neither
 job results nor audit details contain tokens. See the [source contract](../docs/plans/remote-reprovision-source-cache.md)
 for response headers, failure codes and concurrency details.
+
+### Hyper-V Windows license reuse preview
+
+`Constructd:WindowsLicenseReuse` is disabled by default pending real-license and
+tenant-security validation. `Constructd:VamtModulePath` identifies the installed
+Microsoft VAMT PowerShell manifest for proxy CID acquisition. The
+[Windows guest guide](../docs/child-vms.md#hyper-v-license-reuse-preview) describes
+the retained-machine lifecycle, explicit reactivation action, budget accounting,
+status fields and remaining live validation requirements. Proxmox retains its
+existing activation/deletion behavior and gains periodic license observations.

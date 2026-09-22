@@ -7,11 +7,15 @@ using Constructd.Windows.Media;
 namespace Constructd.Api.Jobs;
 
 /// <summary>One atomic encrypted pool file; only masked projections leave this service.</summary>
-public sealed class WindowsLicenseStore(string path, WindowsKeyCipher cipher, IAuditLog audit, IClock clock)
+public sealed partial class WindowsLicenseStore(string path, WindowsKeyCipher cipher, IAuditLog audit, IClock clock)
 {
     private readonly SemaphoreSlim gate = new(1, 1);
-    private sealed record Key(WindowsKeyInfo Info, string Ciphertext);
-    private sealed record State(List<Key> Keys, List<WindowsGuestStatus> Guests);
+    private sealed record Key(WindowsKeyInfo Info, string Ciphertext, bool Retiring = false);
+    private sealed record State(List<Key> Keys, List<WindowsGuestStatus> Guests)
+    {
+        public List<WindowsLicenseMachine> Machines { get; init; } = [];
+        public Dictionary<string, string> Confirmations { get; init; } = [];
+    }
     private FileStream? fileLock;
     private State Read()
     {
@@ -59,12 +63,12 @@ public sealed class WindowsLicenseStore(string path, WindowsKeyCipher cipher, IA
         await gate.WaitAsync(ct);
         try
         {
-            var s = Read(); if (s.Guests.Any(g => g.KeyId == id && !g.Released)) throw new ChildValidationException("key-in-use", "key");
+            var s = Read(); if (s.Guests.Any(g => g.KeyId == id && !g.Released) || s.Machines.Any(m => m.KeyId == id)) throw new ChildValidationException("key-in-use", "key");
             if (s.Keys.RemoveAll(k => k.Info.Id == id) > 0) { Write(s); await Audit(actor, "windows-key.delete", id); }
         }
         finally { fileLock?.Dispose(); fileLock = null; gate.Release(); }
     }
-    public async Task<WindowsGuestStatus> RegisterAsync(Vm vm, CancellationToken ct)
+    public async Task<WindowsGuestStatus> RegisterAsync(Vm vm, CancellationToken ct, bool reusable = false)
     {
         var selection = WindowsUnattendRenderer.Parse(vm.Hardware!.Windows!);
         await gate.WaitAsync(ct);
@@ -72,7 +76,16 @@ public sealed class WindowsLicenseStore(string path, WindowsKeyCipher cipher, IA
         {
             var s = Read(); var existing = s.Guests.Find(g => g.Incarnation == vm.Incarnation && g.VmName == vm.Name);
             if (existing is not null) return existing;
-            var guest = new WindowsGuestStatus(vm.Name, vm.Incarnation!, selection.Product, selection.Edition, HostId: cipher.HostId);
+            var guest = new WindowsGuestStatus(vm.Name, vm.Incarnation!, selection.Product, selection.Edition, HostId: cipher.HostId,
+                AllocationId: reusable ? Allocation(vm) : null, Hardware: reusable ? vm.Hardware : null);
+            var machine = s.Machines.Find(m => m.AllocationId == guest.AllocationId && m.VmName == vm.Name && m.State == "reserved");
+            if (machine is not null)
+            {
+                var key = s.Keys.Single(k => k.Info.Id == machine.KeyId);
+                guest = guest with { KeyId = machine.KeyId, PartialKey = key.Info.PartialKey, MachineId = machine.Id,
+                    Operation = new(Guid.NewGuid().ToString("n"), guest.AllocationId!, "replay", "waiting"), Activation = "assigned" };
+                s.Machines[s.Machines.IndexOf(machine)] = machine with { State = "assigned" };
+            }
             s.Guests.Add(guest); Write(s); return guest;
         }
         finally { fileLock?.Dispose(); fileLock = null; gate.Release(); }
@@ -106,13 +119,20 @@ public sealed class WindowsLicenseStore(string path, WindowsKeyCipher cipher, IA
                 if (keyId is not null && keyId != guest.KeyId) throw new ChildValidationException("key-already-assigned", "key");
                 return guest;
             }
-            if (guest.Stage != "installed" || guest.Kms || guest.Evaluation) { if (keyId is not null) throw new ChildValidationException("guest-not-ready", "vm"); return guest; }
-            bool Available(Key k) => k.Info.HostId == guest.HostId && k.Info.Product == guest.Product && k.Info.Edition == guest.Edition &&
-                (k.Info.Kind != "retail" || !s.Guests.Any(g => g.KeyId == k.Info.Id && !g.Released)) &&
-                (k.Info.Kind != "mak" || k.Info.Used + s.Guests.Count(g => g.KeyId == k.Info.Id && !g.Released && !g.Attempted) < k.Info.Budget);
+            if (guest.Stage != "installed" || guest.Kms || guest.Evaluation || guest.License?.Status == 1 || guest.Activation == "activated") { if (keyId is not null) throw new ChildValidationException("guest-not-ready", "vm"); return guest; }
+            bool Available(Key k) => !k.Retiring && (guest.AllocationId is null || k.Info.Kind is "retail" or "mak") && k.Info.HostId == guest.HostId && k.Info.Product == guest.Product && k.Info.Edition == guest.Edition &&
+                (k.Info.Kind != "retail" || !s.Guests.Any(g => g.KeyId == k.Info.Id && !g.Released) && !s.Machines.Any(m => m.KeyId == k.Info.Id)) &&
+                (k.Info.Kind != "mak" || k.Info.Used + s.Guests.Count(g => g.KeyId == k.Info.Id && !g.Released && !g.Attempted && g.Operation?.Mode != "replay") < k.Info.Budget);
             var key = s.Keys.FirstOrDefault(k => (keyId is null || k.Info.Id == keyId) && Available(k));
             if (key is null) { if (keyId is not null) throw new ChildValidationException("key-unavailable", "key"); return guest; }
             guest = guest with { KeyId = key.Info.Id, Activation = "assigned", PartialKey = key.Info.PartialKey };
+            if (guest.AllocationId is not null && guest.Hardware is not null && key.Info.Kind is "retail" or "mak")
+            {
+                var machine = new WindowsLicenseMachine(Guid.NewGuid().ToString("n"), key.Info.Id, cipher.HostId,
+                    guest.Incarnation, guest.Hardware, "assigned", guest.VmName, guest.AllocationId, [guest.VmName]);
+                s.Machines.Add(machine);
+                guest = guest with { MachineId = machine.Id, Operation = new(Guid.NewGuid().ToString("n"), guest.AllocationId, "initial", "waiting") };
+            }
             s.Guests[index] = guest; Write(s); await Audit(actor, "windows-key.assign", guest.VmName); return guest;
         }
         finally { fileLock?.Dispose(); fileLock = null; gate.Release(); }

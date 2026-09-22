@@ -21,6 +21,20 @@ public class WindowsUnattendTests
         Assert.Contains("sshd", files["firstlogon.ps1"]);
         Assert.Equal(selector.StartsWith("win11"), files["firstlogon.ps1"].Contains("Get-AppxPackage"));
     }
+    [Theory]
+    [InlineData("win11-pro")]
+    [InlineData("server2022-standard")]
+    [InlineData("server2025-datacenter-core")]
+    public void Reuse_preview_requests_skip_auto_activation_in_specialize(string selector)
+    {
+        var selection = WindowsUnattendRenderer.Parse(selector);
+        var files = WindowsUnattendRenderer.Render(selection, new(selection.Product, selection.Edition, "image", 1, "26100"), new("secret"), true);
+        var xml = XDocument.Parse(files["autounattend.xml"]); XNamespace n = "urn:schemas-microsoft-com:unattend";
+        var skip = Assert.Single(xml.Descendants(n + "SkipAutoActivation"));
+        Assert.Equal("true", skip.Value);
+        Assert.Equal("specialize", (string?)skip.Parent!.Parent!.Attribute("pass"));
+        Assert.False(new Constructd.Core.Configuration.ConstructdOptions().WindowsLicenseReuse);
+    }
     [Fact]
     public void Refuses_cross_product_editions_and_path_traversal()
     {

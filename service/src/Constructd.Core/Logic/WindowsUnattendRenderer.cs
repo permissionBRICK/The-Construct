@@ -28,7 +28,7 @@ public static class WindowsUnattendRenderer
                 new[] { "autounattend.xml", "firstlogon.ps1", "extra.ps1", "construct-report.ps1" }.Contains(f.Key, StringComparer.OrdinalIgnoreCase)) throw Invalid("unattend.files");
     }
 
-    public static IReadOnlyDictionary<string, string> Render(WindowsSelection selection, WindowsImage image, WindowsUnattend u)
+    public static IReadOnlyDictionary<string, string> Render(WindowsSelection selection, WindowsImage image, WindowsUnattend u, bool skipAutoActivation = false)
     {
         Validate(u);
         if (image.Product != selection.Product || image.Edition != selection.Edition) throw Invalid("windows");
@@ -52,6 +52,13 @@ public static class WindowsUnattendRenderer
         userdata.Element(ns + "ProductKey")?.Remove();
         // Evaluation Server media refuses retail/KMS setup keys; it selects its image by index.
         if (!image.Evaluation) userdata.Add(new XElement(ns + "ProductKey", new XElement(ns + "Key", GenericKey(selection))));
+        if (skipAutoActivation)
+        {
+            var specialize = doc.Descendants(ns + "settings").Single(e => (string?)e.Attribute("pass") == "specialize");
+            specialize.Add(new XElement(ns + "component", new XAttribute("name", "Microsoft-Windows-Security-SPP-UX"),
+                new XAttribute("processorArchitecture", "amd64"), new XAttribute("publicKeyToken", "31bf3856ad364e35"),
+                new XAttribute("language", "neutral"), new XAttribute("versionScope", "nonSxS"), new XElement(ns + "SkipAutoActivation", "true")));
+        }
         var script = Resource(family + ".firstlogon.ps1");
         script += "\nnetsh advfirewall firewall add rule name=sshd dir=in action=allow protocol=TCP localport=22 | Out-Null\nreg add 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server' /v fDenyTSConnections /t REG_DWORD /d 0 /f | Out-Null\nEnable-NetFirewallRule -DisplayGroup 'Remote Desktop' -ErrorAction SilentlyContinue\n";
         script += "\nif (Test-Path \"$PSScriptRoot\\extra.ps1\") { & \"$PSScriptRoot\\extra.ps1\" }\nif (Test-Path \"$PSScriptRoot\\construct-report.ps1\") { & \"$PSScriptRoot\\construct-report.ps1\" }\n";
@@ -72,7 +79,10 @@ public static class WindowsUnattendRenderer
         ("server2025", "datacenter") => "D764K-2NDRG-47T6Q-P8T8W-YP6DF",
         _ => throw Invalid("windows")
     };
-    public static string GuestReportScript(bool proxmox) => Resource("WindowsGuestReport.ps1").Replace("__CONSTRUCT_PLATFORM__", proxmox ? "proxmox" : "hyperv");
+    public static string GuestReportScript(bool proxmox, string? allocationId = null, string? setupKeySuffix = null) => Resource("WindowsGuestReport.ps1")
+        .Replace("__CONSTRUCT_PLATFORM__", proxmox ? "proxmox" : "hyperv")
+        .Replace("__CONSTRUCT_ALLOCATION__", allocationId ?? "")
+        .Replace("__CONSTRUCT_SETUP_KEY__", setupKeySuffix ?? "");
     private static string Resource(string name) { using var stream = typeof(WindowsUnattendRenderer).Assembly.GetManifestResourceStream(name)!; using var reader = new StreamReader(stream); return reader.ReadToEnd(); }
     private static ChildValidationException Invalid(string field) => new("validation", field);
 }

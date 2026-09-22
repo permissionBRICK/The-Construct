@@ -9,7 +9,7 @@ internal static class HyperVChildScript
     { Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) } };
 
     internal static readonly string[] SafeCodes = ["validation", "name-taken", "vm-not-off", "media-not-ready",
-        "unsupported-capability", "secure-boot-template-locked", "artifact-ownership-unverified",
+        "cleanup-unverified", "key-in-use", "vamt-unavailable", "activation-result-uncertain", "unsupported-capability", "secure-boot-template-locked", "artifact-ownership-unverified",
         "vm-incarnation-conflict", "disk-chain-invalid", "vm-identity-ambiguous", "vm-incarnation-changed", "storage-placement-unavailable"];
 
     // Descriptor data travels on stdin, never on argv or in dependency diagnostics.

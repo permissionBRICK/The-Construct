@@ -15,6 +15,7 @@ public sealed class ChildCreateJob(IVmRepository vms, IVmMetadataStore identity,
         await using var parentGate = await vmGate.AcquireAsync(vm.Parent!, job.Id, ct);
         await using var childGate = await vmGate.AcquireAsync(vm.Name, job.Id, ct);
         var allocationAttempted = false;
+        WindowsLicenseMachine? retained = null;
         var startIntentExists = await keys.GetAsync(vm.Owner, "child-start", job.Id + ":start", ct) is not null;
         var recoveringStart = startIntentExists;
         try
@@ -67,11 +68,16 @@ public sealed class ChildCreateJob(IVmRepository vms, IVmMetadataStore identity,
                 HardwarePresets.ValidateCapabilities(vm.Hardware!, await driver.GetCapabilitiesAsync(ct), auxiliary is not null);
                 // Any create attempt may allocate before reporting failure. Cleanup uses its ownership marker.
                 allocationAttempted = true;
-                await ownership.CreateOwnedAsync(new(vm.Name, vm.Hardware!, placement.DiskPath, install, auxiliary, options.SwitchName, guestAgent), job.Id, progress, ct);
+                var descriptor = new ChildVmDescriptor(vm.Name, vm.Hardware!, placement.DiskPath, install, auxiliary, options.SwitchName, guestAgent);
+                retained = options.WindowsLicenseReuse && !options.IsProxmox && vm.Hardware?.Os == "windows"
+                    ? await licenses.ReserveMachineAsync(vm, ct) : null;
+                if (retained is not null && driver is IWindowsLicenseMachines pool)
+                    await pool.ReuseWindowsAsync(retained, descriptor, job.Id, ct);
+                else await ownership.CreateOwnedAsync(descriptor, job.Id, progress, ct);
                 var id = await driver.GetVmIdAsync(vm.Name, ct) ?? throw new ChildValidationException("cleanup-unverified", "incarnation");
                 if (!await identity.UpdateIncarnationAsync(vm.Name, id, ct)) throw new ChildValidationException("vm-deleting", "vm");
                 vm = vm with { Incarnation = id };
-                if (vm.Hardware?.Os == "windows") await licenses.RegisterAsync(vm, ct);
+                if (vm.Hardware?.Os == "windows") await licenses.RegisterAsync(vm, ct, options.WindowsLicenseReuse && !options.IsProxmox);
                 await Phase("disk");
                 await Phase("attach");
                 var attached = await driver.GetAttachedMediaAsync(vm.Name, ct);
@@ -129,7 +135,8 @@ public sealed class ChildCreateJob(IVmRepository vms, IVmMetadataStore identity,
                 }
                 else if (allocationAttempted)
                 {
-                    if (await ownership.GetCreationOperationAsync(vm.Name, CancellationToken.None) != job.Id)
+                    if (await ownership.GetCreationOperationAsync(vm.Name, CancellationToken.None) != job.Id &&
+                        !(retained is not null && await driver.GetVmIdAsync(vm.Name, CancellationToken.None) is null))
                         throw new ChildValidationException("artifact-ownership-unverified", "vm");
                     await cleanup.CleanupAsync(vm, progress, null, CancellationToken.None, deleteDedicated: false);
                 }

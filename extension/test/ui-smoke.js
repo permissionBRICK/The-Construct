@@ -1519,6 +1519,9 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await pushAdmin({ ...ADMIN_STATE, activeTab: "media", features: { ...ADMIN_STATE.features, windowsGuests: true }, media: { ...ADMIN_STATE.media, windows: windowsFixture } });
   await admin.waitForTimeout(60);
   check("admin: Windows fixtures show masked keys and activation reports", (await admin.locator("#windowsKeys").textContent()).includes("3V66T") && (await admin.locator("#windowsGuests").textContent()).includes("guest-reported"));
+  check("admin: license observations show their time and grace", (await admin.locator("#windowsGuests").textContent()).includes("60 minutes at observation"));
+  await admin.locator("#windowsGuests button", { hasText: "Activate again" }).click();
+  check("admin: reactivation carries the failed operation identity", (await admin.evaluate(() => window.__posted)).some(m => m.action === "reactivateWindows" && m.args.operationId === "operation" && m.args.incarnation === "generation-d"));
   await admin.selectOption('#windowsAcquireForm [name="windows"]', 'server-2025');
   check("admin: server product changes its edition choices", await admin.locator('#windowsAcquireForm [name="edition"]').inputValue() === "standard" && await admin.locator('#windowsAcquireForm [name="edition"] option[value="pro"]').count() === 0);
   await admin.selectOption('#windowsAcquireForm [name="edition"]', 'datacenter-core');

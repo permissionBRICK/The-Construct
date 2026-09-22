@@ -172,17 +172,23 @@ function Get-ConstructWindowsGuest {
 
 function Set-ConstructWindowsKey {
     param([string]$Name, [string]$Incarnation, [string]$Key)
-    $vm = Get-ConstructWindowsVm $Name $Incarnation
     if ($Key -and $Key -cnotmatch '^[A-Z0-9]{5}(-[A-Z0-9]{5}){4}$') { throw 'validation' }
+    Set-ConstructWindowsKvp -Name $Name -Incarnation $Incarnation -Slot 'Construct.WindowsKey' -Value $Key
+}
+
+function Set-ConstructWindowsKvp {
+    param([string]$Name, [string]$Incarnation, [string]$Slot, [string]$Value)
+    if ($Slot -notin @('Construct.WindowsKey','Construct.WindowsActivation') -or $Value.Length -gt 4096) { throw 'validation' }
+    $vm = Get-ConstructWindowsVm $Name $Incarnation
     $system = Get-WmiObject -Namespace root\virtualization\v2 -Class Msvm_ComputerSystem -Filter ("Name='" + $vm.Id + "'") -ErrorAction Stop
     $service = Get-WmiObject -Namespace root\virtualization\v2 -Class Msvm_VirtualSystemManagementService -ErrorAction Stop
     $item = ([wmiclass]'\\.\root\virtualization\v2:Msvm_KvpExchangeDataItem').CreateInstance()
-    $item.Name = 'Construct.WindowsKey'; $item.Data = $Key; $item.Source = 0
+    $item.Name = $Slot; $item.Data = $Value; $item.Source = 0
     $component = @($system.GetRelated('Msvm_KvpExchangeComponent')) | Select-Object -First 1
     $settings = @($component.GetRelated('Msvm_KvpExchangeComponentSettingData')) | Select-Object -First 1
-    $exists = @($settings.HostExchangeItems | Where-Object { $_ -match '<VALUE>Construct.WindowsKey</VALUE>' }).Count -gt 0
-    if (-not $Key -and -not $exists) { return }
-    if (-not $Key) { $result = $service.RemoveKvpItems($system, @($item.GetText(1))) }
+    $exists = @($settings.HostExchangeItems | Where-Object { $_ -match ('<VALUE>' + [regex]::Escape($Slot) + '</VALUE>') }).Count -gt 0
+    if (-not $Value -and -not $exists) { return }
+    if (-not $Value) { $result = $service.RemoveKvpItems($system, @($item.GetText(1))) }
     elseif ($exists) { $result = $service.ModifyKvpItems($system, @($item.GetText(1))) }
     else { $result = $service.AddKvpItems($system, @($item.GetText(1))) }
     if ($result.ReturnValue -eq 4096) {
@@ -373,13 +379,29 @@ function New-ConstructChildVm {
     if (-not $h.networkAttached) { Get-VMNetworkAdapter -VMName $name | Remove-VMNetworkAdapter -ErrorAction Stop }
     Set-VM -Name $name -AutomaticCheckpointsEnabled $false -AutomaticStopAction Save -AutomaticStartAction StartIfRunning -ErrorAction Stop
     Set-ConstructChildHardware -Name $name -Hardware $h -ResendTemplate $true
+    if ($Descriptor.licenseBaseline) {
+        $pool = Get-ConstructLicensePath -Incarnation ([string]$vm.Id) -PoolRoot (Split-Path $disk -Parent)
+        $record.licensePool = $pool
+        Write-ConstructChildOwnership -Marker $marker -Record $record
+        New-Item -ItemType Directory -Path $pool -Force | Out-Null
+        Set-VM -VM $vm -AutomaticStartAction Nothing -ErrorAction Stop
+        # Allocate and pin a MAC before first boot, so restoring the baseline does
+        # not silently allocate another network identity.
+        foreach ($nic in @(Get-VMNetworkAdapter -VM $vm)) {
+            $mac = [string]$nic.MacAddress
+            if (-not $mac -or $mac -eq '000000000000') { $mac = '02' + ([guid]$vm.Id).ToString('N').Substring(0,10) }
+            Set-VMNetworkAdapter -VMNetworkAdapter $nic -StaticMacAddress $mac -ErrorAction Stop
+        }
+        Export-VM -VM $vm -Path (Join-Path $pool 'baseline') -ErrorAction Stop
+        @{ id=[string]$vm.Id; pool=$pool } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $pool 'owner.json') -Encoding UTF8
+    }
     $null = New-VHD -Path $disk -Dynamic -SizeBytes ([long]$h.diskGb * 1GB) -ErrorAction Stop
     Add-VMHardDiskDrive -VMName $name -ControllerType SCSI -ControllerNumber 0 -ControllerLocation 0 -Path $disk -ErrorAction Stop
     Set-ConstructChildMedia -Name $name -InstallMediaPath $Descriptor.installMediaPath -AuxiliaryMediaPath $Descriptor.auxiliaryMediaPath -BootOrder $h.bootOrder
 }
 
 function Remove-ConstructChildVm {
-    param([string]$Name, [string]$VhdPath)
+    param([string]$Name, [string]$VhdPath, [switch]$KeepLicenseBaseline)
     $disk = Get-ConstructChildDiskPath -Name $Name -VhdPath $VhdPath
     $marker = $disk + '.childvm.json'
     $vm = Get-ConstructChildVmObject $Name
@@ -422,6 +444,9 @@ function Remove-ConstructChildVm {
         if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -ErrorAction Stop }
     }
     if ($record.configPath -and (Test-Path -LiteralPath $record.configPath)) { Remove-Item -LiteralPath $record.configPath -Recurse -ErrorAction Stop }
+    if (-not $KeepLicenseBaseline -and $record.licensePool -and (Test-Path -LiteralPath $record.licensePool)) {
+        Remove-Item -LiteralPath $record.licensePool -Recurse -ErrorAction Stop
+    }
     Remove-Item -LiteralPath $marker -ErrorAction Stop
 }
 

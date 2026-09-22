@@ -1,8 +1,9 @@
 # Reusable Windows license machines
 
-Design draft, 2026-09-22. This records the requested behavior; production code is
-not implemented. Disk replacement, security cleanup and activation replay require
-a real Hyper-V proof before the pool lifecycle can be implemented with confidence.
+Design and validation requirements, 2026-09-22. The implementation is an opt-in
+Hyper-V preview. See [the operator guide](../child-vms.md#hyper-v-license-reuse-preview)
+for configuration and conservative compatibility restrictions. Real-license replay
+and tenant security cleanup still require the proof described below.
 
 ## Agreed behavior
 

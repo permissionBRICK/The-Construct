@@ -15,7 +15,15 @@ public sealed class ChildDeleteJob(IVmRepository vms, IVmDelegationRepository me
         {
             await Phase("fence");
             var current = await vms.GetAsync(vm.Name, ct);
-            if (current is null) return new(new { name = vm.Name, outcome = "removed", retained = Array.Empty<object>() });
+            if (current is null)
+            {
+                // A crash after the repository deletion can only leave the final
+                // pool transition pending: all tenant cleanup preceded that commit.
+                if (vm.Incarnation is not null) await licenses.ReleaseAsync(vm.Name, vm.Incarnation, ct);
+                foreach (var machine in (await licenses.MachinesAsync(ct)).Where(m => m.VmName == vm.Name && m.AllocationId == WindowsLicenseStore.Allocation(vm) && m.State == "cleaning"))
+                    await licenses.FinishCleaningAsync(machine.Id, ct);
+                return new(new { name = vm.Name, outcome = "removed", retained = Array.Empty<object>() });
+            }
             if (current.Kind != VmKind.Child || current.Incarnation != vm.Incarnation) throw new ChildValidationException("vm-incarnation-conflict", "vm");
             if (!current.Deleting && !await metadata.TryFenceAsync(vm.Name, job.Id, false, ct)) throw new ChildValidationException("vm-deleting", "vm");
             await CleanupAsync(vm, progress, Phase, ct);
@@ -51,7 +59,10 @@ public sealed class ChildDeleteJob(IVmRepository vms, IVmDelegationRepository me
                 throw new ChildValidationException("artifact-ownership-unverified", "vm");
         }
         if (phase is not null) await phase("vm");
-        await driver.RemoveAsync(vm.Name, progress, ct);
+        var retained = driver is IWindowsLicenseMachines ? await licenses.BeginCleaningAsync(vm, ct) : null;
+        if (retained is not null)
+            await ((IWindowsLicenseMachines)driver).ParkWindowsAsync(vm.Name, retained.Incarnation, ct);
+        else await driver.RemoveAsync(vm.Name, progress, ct);
         if (await hypervisor.GetStateAsync(vm.Name, ct) != VmState.Absent) throw new ChildValidationException("cleanup-unverified", "vm");
         if (phase is not null) await phase("forwards");
         await forwards.RemoveAllForwardsAsync(vm.Name, ct);
@@ -90,5 +101,6 @@ public sealed class ChildDeleteJob(IVmRepository vms, IVmDelegationRepository me
         await capacity.ReleaseAsync(ids, VmState.Absent, "child artifacts confirmed removed", ct);
         await vms.RemoveAsync(vm.Name, ct);
         if (vm.Incarnation is not null) await licenses.ReleaseAsync(vm.Name, vm.Incarnation, ct);
+        if (retained is not null) await licenses.FinishCleaningAsync(retained.Id, ct);
     }
 }
