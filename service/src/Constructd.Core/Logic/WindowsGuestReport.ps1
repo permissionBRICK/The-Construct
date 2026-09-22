@@ -1,10 +1,16 @@
 # Construct's guest channel runs after the family-specific first-logon script.
 # Copy locally before sending the beacon: the host may eject every DVD immediately.
+param([switch]$PollKey)
 $ErrorActionPreference = 'Stop'
 $local = 'C:\provision\construct-report.ps1'
+if ('__CONSTRUCT_PLATFORM__' -eq 'hyperv') {
+    # The SYSTEM task must execute from a directory ordinary users cannot modify.
+    $local = Join-Path $env:ProgramFiles 'Construct\WindowsActivation\construct-report.ps1'
+    New-Item -ItemType Directory -Path (Split-Path $local -Parent) -Force | Out-Null
+}
 if ($PSCommandPath -ne $local) {
     Copy-Item -LiteralPath $PSCommandPath -Destination $local -Force
-    & $local
+    & $local -PollKey:$PollKey
     return
 }
 if ('__CONSTRUCT_PLATFORM__' -eq 'proxmox') {
@@ -21,7 +27,7 @@ if ('__CONSTRUCT_PLATFORM__' -eq 'proxmox') {
     Set-Service QEMU-GA -StartupType Automatic
     Start-Service QEMU-GA
 }
-if ((Get-Service sshd).Status -ne 'Running') { throw 'OpenSSH server is not running' }
+if (-not $PollKey -and (Get-Service sshd).Status -ne 'Running') { throw 'OpenSSH server is not running' }
 $os = Get-CimInstance Win32_OperatingSystem
 $version = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
 $product = if ($os.Caption -match '2025') { 'server2025' } elseif ($os.Caption -match '2022') { 'server2022' } elseif ($os.Caption -match 'Windows 11') { 'win11' } else { 'unknown' }
@@ -40,18 +46,41 @@ function Send-ConstructWindowsReport([string]$Activation) {
         New-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Virtual Machine\Guest' -Name 'Construct.WindowsReport' -Value $report -PropertyType String -Force | Out-Null
     }
 }
-Send-ConstructWindowsReport 'not-activated'
-if ('__CONSTRUCT_PLATFORM__' -eq 'proxmox' -or $kms -or [string]$version.EditionID -match 'Eval') { return }
-$deadline = (Get-Date).AddMinutes(30)
-while ((Get-Date) -lt $deadline) {
-    $key = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Virtual Machine\External' -ErrorAction SilentlyContinue).'Construct.WindowsKey'
-    if ($key -match '^[A-Z0-9]{5}(-[A-Z0-9]{5}){4}$') {
+if ('__CONSTRUCT_PLATFORM__' -eq 'proxmox' -or $kms -or [string]$version.EditionID -match 'Eval') {
+    Send-ConstructWindowsReport 'not-activated'
+    return
+}
+if (-not $PollKey) {
+    $action = New-ScheduledTaskAction -Execute "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $local + '" -PollKey')
+    $triggers = @(
+        New-ScheduledTaskTrigger -AtStartup
+        New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 1)
+    )
+    $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
+    Register-ScheduledTask -TaskName 'Construct Windows activation' -Action $action -Trigger $triggers -Settings $settings -User 'SYSTEM' -RunLevel Highest -Force | Out-Null
+    Send-ConstructWindowsReport 'not-activated'
+    Start-ScheduledTask -TaskName 'Construct Windows activation'
+    return
+}
+
+# One short check per task run, indefinitely, including after guest reboots.
+# Persist a receipt before activation so crashes and failed activations do not
+# cause repeated attempts. Store only a digest, never the product key.
+$receipt = Join-Path (Split-Path $local -Parent) 'attempted-key.sha256'
+$activation = if (Test-Path -LiteralPath $receipt) { 'failed' } else { 'not-activated' }
+$key = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Virtual Machine\External' -ErrorAction SilentlyContinue).'Construct.WindowsKey'
+if ($key -cmatch '^[A-Z0-9]{5}(-[A-Z0-9]{5}){4}$') {
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $digest = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($key))) }
+    finally { $sha.Dispose() }
+    $attempted = if (Test-Path -LiteralPath $receipt) { (Get-Content -LiteralPath $receipt -Raw).Trim() } else { '' }
+    if ($attempted -ne $digest) {
+        Set-Content -LiteralPath $receipt -Value $digest -Encoding ASCII
+        $activation = 'failed'
         # The template's transcript has ended; never echo the key or slmgr output.
         & cscript.exe //Nologo "$env:SystemRoot\System32\slmgr.vbs" /ipk $key *> $null
         if ($LASTEXITCODE -eq 0) { & cscript.exe //Nologo "$env:SystemRoot\System32\slmgr.vbs" /ato *> $null }
-        $key = $null
-        Send-ConstructWindowsReport 'failed'
-        return
     }
-    Start-Sleep -Seconds 5
 }
+$key = $null
+Send-ConstructWindowsReport $activation
