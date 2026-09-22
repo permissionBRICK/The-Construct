@@ -47,7 +47,8 @@ public static class ChildVmEndpoints
                 request = request with { Preset = "windows", Firmware = (fw ?? new()) with { BootOrder = fw?.BootOrder ?? [BootDevice.Disk, BootDevice.InstallMedia] } };
                 fw = request.Firmware;
             }
-            hardware = HardwarePresets.Resolve(request.Cpus, request.RamMb, request.DiskGb, request.Preset, fw?.Generation, fw?.SecureBoot, fw?.SecureBootTemplate, fw?.Tpm, fw?.BootOrder, request.Media?.AuxiliaryMediaId is not null, request.Network?.Attach ?? true);
+            // Validate the request now; resolve an omitted CPU count after authorization and replay checks.
+            hardware = HardwarePresets.Resolve(request.Cpus ?? 1, request.RamMb, request.DiskGb, request.Preset, fw?.Generation, fw?.SecureBoot, fw?.SecureBootTemplate, fw?.Tpm, fw?.BootOrder, request.Media?.AuxiliaryMediaId is not null, request.Network?.Attach ?? true);
             hardware = hardware with { Os = request.Os, Windows = request.Os == "windows" ? request.Windows : null };
             if (request.Media is null || string.IsNullOrWhiteSpace(request.Media.InstallMediaId)) return CodedProblems.Validation("media", "Install media is required.");
         }
@@ -104,10 +105,22 @@ public static class ChildVmEndpoints
                 if (item.Role != (pair.Item2 == MediaSlot.Install ? MediaRole.Install : MediaRole.Auxiliary)) return CodedProblems.Validation("media", "Media role does not match its slot.");
                 references.Add(new(item.Id, name, pair.Item2, clock.UtcNow));
             }
+            if (request.Cpus is null)
+            {
+                try
+                {
+                    var limits = await http.RequestServices.GetRequiredService<PrimaryCpuSettings>()
+                        .LimitsAsync(parentVm.Owner, null, ct, supportedMaximumCpus: 512);
+                    if (limits.RecommendedCpus < 1)
+                        return CodedProblems.Create(409, "capacity-exhausted", "No CPU allowance remains for another VM.");
+                    hardware = hardware with { Cpus = limits.RecommendedCpus };
+                }
+                catch (LifecycleException ex) { return LifecycleEndpoints.Problem(ex.Code); }
+            }
             try { HardwarePresets.ValidateCapabilities(hardware, await driver.GetCapabilitiesAsync(ct), request.Media.AuxiliaryMediaId is not null); }
             catch (ChildValidationException ex) { return Problem(ex); }
             var capacityConfig = await HostAdminEndpoints.CapacityConfigAsync(config, options, ct);
-            if (capacityConfig.MaxVcpusPerVm is int maxCpu && request.Cpus > maxCpu) return CodedProblems.Validation("cpus", "CPU count exceeds the host per-VM limit.");
+            if (capacityConfig.MaxVcpusPerVm is int maxCpu && hardware.Cpus > maxCpu) return CodedProblems.Validation("cpus", "CPU count exceeds the host per-VM limit.");
             if (await driver.GetVmIdAsync(name, ct) is not null) return CodedProblems.Create(409, "name-taken", "The hypervisor name is already in use.");
             var placement = await storage.ResolveStorageAsync(name, ct);
             var lease = new Lease(request.Lifetime!, seconds, null, null, LeaseState.Inactive, 0, null, null);

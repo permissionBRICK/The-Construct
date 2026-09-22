@@ -88,7 +88,7 @@ credentials must not freeze the permissions that existed at provisioning time.
 | RAM/storage budgets | Explicit host/user configuration; no guessed generous numeric default |
 | Maximum child lifetime | Unlimited; caller may request `never` |
 | Requested lifetime | Mandatory at child creation and start/resume; never silently defaulted |
-| Child VM resources | CPU, RAM and disk size mandatory; no implicit OS-independent sizes |
+| Child VM resources | CPU count optional and omitted by default, using the host allowance; RAM and disk size mandatory |
 | Sharing | Private initially; owner may mark host-wide shared |
 
 User budgets aggregate all owned primaries and children on that host. Multiple primary
@@ -269,8 +269,8 @@ for audit. Revoke delegation on primary deletion or user disable/removal.
 Implemented CLI shape (the frozen wire details live in the contracts document):
 
 ```sh
-construct vm create --iso-url https://example.org/os.iso --cpus 4 --ram-gb 8 --disk-gb 80 --lifetime 4h
-construct vm create --iso ./custom.iso --aux-iso ./answer-files.iso --cpus 4 --ram-gb 8 --disk-gb 80 --lifetime never --no-start
+construct vm create --iso-url https://example.org/os.iso --ram-gb 8 --disk-gb 80 --lifetime 4h
+construct vm create --iso ./custom.iso --aux-iso ./answer-files.iso --ram-gb 8 --disk-gb 80 --lifetime never --no-start
 construct vm list --json
 construct vm inspect CHILD --json
 construct vm start CHILD --lifetime 2h

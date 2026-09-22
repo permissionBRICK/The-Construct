@@ -33,7 +33,7 @@ construct vm media acquire --windows 11 --edition pro --lang en --json
 construct vm media acquire --windows server-2022 --edition standard --lang en --json
 
 construct vm create --name windows-lab --os windows --windows win11-pro \
-  --media MEDIA_ID --cpus 4 --ram-gb 8 --disk-gb 100 --lifetime 4h \
+  --media MEDIA_ID --ram-gb 8 --disk-gb 100 --lifetime 4h \
   --unattend-admin-password 'YOUR-DISPOSABLE-LAB-PASSWORD' \
   --unattend-hostname WINDOWS-LAB --unattend-locale en-US --unattend-time-zone UTC
 ```
@@ -242,26 +242,31 @@ from the owner PC; ordinary reprovisioning does not rotate the token.
 
 ## Create a child
 
-CPU, RAM, maximum disk size and lifetime are always explicit. A lifetime is `never` or
+Omit `--cpus` by default. The service uses all host logical CPUs, capped by its
+supported maximum, the configured per-VM limit and remaining host/user CPU budgets.
+Use `--cpus N` only to override that choice. The service resolves this once at creation;
+it does not resize existing VMs when host limits change.
+
+RAM, maximum disk size and lifetime are always explicit. A lifetime is `never` or
 an integer followed by `m`, `h` or `d`, with a minimum of five minutes:
 
 ```bash
 # The host downloads a public ISO, then creates and starts the child.
 construct vm create \
   --iso-url https://example.org/linux.iso \
-  --cpus 2 --ram-gb 4 --disk-gb 40 --lifetime 4h \
+  --ram-gb 4 --disk-gb 40 --lifetime 4h \
   --preset linux
 
 # Upload local install and answer-file media and leave the VM powered off.
 construct vm create \
   --iso ./windows.iso --aux-iso ./answer-files.iso \
-  --cpus 4 --ram-gb 8 --disk-gb 80 --lifetime never \
+  --ram-gb 8 --disk-gb 80 --lifetime never \
   --preset windows --no-start
 
 # Reuse media already present on the host.
 construct vm create \
   --media MEDIA_ID --aux-media AUX_ID \
-  --cpus 2 --ram-mb 2048 --disk-gb 30 --lifetime 2h
+  --ram-mb 2048 --disk-gb 30 --lifetime 2h
 ```
 
 `--sha256 HEX` verifies URL or local install media. Local files are uploaded in
@@ -282,8 +287,9 @@ Hardware options are capability-checked by the service:
 --no-start
 ```
 
-Presets provide firmware hints only. They never invent CPU, RAM, disk or lifetime
-values. The host reports hardware/media preparation and VM boot; it does not claim an
+Presets provide firmware hints only; CPU defaults come from host policy independently
+of the preset. RAM, disk size and lifetime have no implicit values.
+The host reports hardware/media preparation and VM boot; it does not claim an
 arbitrary guest OS finished installing.
 
 ## Inventory and lifecycle
