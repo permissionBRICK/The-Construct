@@ -26,7 +26,7 @@ chmod +x "$scratch/bin/construct" "$scratch/bin/sshpass"
 export PATH="$scratch/bin:$PATH" E2E_HOME="$scratch/state"
 unset VM_BACKEND VM_CPUS VM_RAM VM_DISK_SIZE
 source "$vm/config.sh"
-[[ "$VM_BACKEND" = construct && "$VM_RAM" = 12288 && "$VM_DISK_SIZE" = 100G ]]
+[[ "$VM_BACKEND" = construct && -z "$VM_CPUS" && "$VM_RAM" = 12288 && "$VM_DISK_SIZE" = 100G ]]
 vm_exists
 vm_running
 [[ $(guest_address) = 172.22.1.20 ]]
@@ -46,5 +46,5 @@ rc=0; "$vm/vm.sh" snap golden > "$scratch/snap.log" 2>&1 || rc=$?
 export VM_BACKEND=qemu
 unset VM_RAM VM_DISK_SIZE VM_CPUS
 source "$vm/config.sh"
-[[ "$VM_BACKEND" = qemu && "$VM_DISK_SIZE" = 140G ]]
+[[ "$VM_BACKEND" = qemu && "$VM_CPUS" = "$(nproc)" && "$VM_DISK_SIZE" = 140G ]]
 echo 'PASS: backend defaults, IPv4 discovery, SSH, SCP both directions, inventory errors, QEMU override'

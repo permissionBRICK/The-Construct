@@ -7,7 +7,7 @@ namespace Constructd.Api.Hosting;
 
 public sealed class WindowsGuestReconciler(WindowsLicenseStore licenses, IChildVmDriver driver, IVmRepository vms,
     IVmOperationGate gates, IMediaStore media, IMediaGate mediaGate, IMaintenanceGate maintenance, IClock clock,
-    IJobStore jobs, ConstructdOptions options, ILogger<WindowsGuestReconciler> logger) : BackgroundService
+    IJobStore jobs, ConstructdOptions options, ILogger<WindowsGuestReconciler> logger, WindowsActivationCoordinator activation) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -43,7 +43,7 @@ public sealed class WindowsGuestReconciler(WindowsLicenseStore licenses, IChildV
                     await Eject(true); guest = guest with { InstallEjected = true };
                 }
                 if (observation.Uptime is >= 0) guest = guest with { Uptime = observation.Uptime };
-                if (observation.Report is { FirstLogonDone: true } report)
+                if (observation.Report is { FirstLogonDone: true } report && (guest.AllocationId is null || report.AllocationId == guest.AllocationId))
                 {
                     // Guest-controlled strings are never copied into audit, error or product fields.
                     var match = report.Product == guest.Product && report.Edition == guest.Edition;
@@ -54,10 +54,23 @@ public sealed class WindowsGuestReconciler(WindowsLicenseStore licenses, IChildV
                     }
                     else
                     {
-                        guest = guest with { Stage = "installed", GuestReported = !options.IsProxmox, Kms = report.Kms,
+                        var license = report.License;
+                        if (license is not null && license.ObservedAt <= clock.UtcNow.AddMinutes(5) &&
+                            license.ObservedAt >= (guest.License?.ObservedAt ?? DateTimeOffset.MinValue))
+                        {
+                            guest = guest with { License = license with {
+                                ActivationId = Guid.TryParse(license.ActivationId, out var activationId) ? activationId.ToString() : null,
+                                PartialKey = license.PartialKey is { Length: 5 } partial && partial.All(char.IsAsciiLetterOrDigit) ? partial : null,
+                                Channel = license.Channel is "Retail" or "OEM:DM" or "OEM:SLP" or "Volume:MAK" or "Volume:GVLK" or "Volume:CSVLK" ? license.Channel : null,
+                                Status = license.Status is >= 0 and <= 6 ? license.Status : null,
+                                GraceMinutes = license.GraceMinutes is >= 0 ? license.GraceMinutes : null,
+                                EvaluationEnd = report.Evaluation && license.EvaluationEnd?.Year is > 2000 and < 9999 ? license.EvaluationEnd : null
+                            } };
+                        }
+                        guest = guest with { Stage = "installed", GuestReported = true, Kms = report.Kms,
                             Evaluation = report.Evaluation, Error = report.Evaluation ? "evaluation-media-requires-conversion" : guest.Error };
                         if (!guest.AuxiliaryEjected) { await Eject(false); guest = guest with { InstallEjected = true, AuxiliaryEjected = true }; }
-                        if (guest.KeyId is not null && guest.Attempted && report.Activation is "activated" or "failed")
+                        if (guest.Operation is null && guest.KeyId is not null && guest.Attempted && report.Activation is "activated" or "failed")
                         {
                             var verified = report.PartialKey == guest.PartialKey;
                             guest = guest with { Activation = verified ? report.Activation : "failed", Error = verified ? null : "partial-key-mismatch" };
@@ -66,6 +79,11 @@ public sealed class WindowsGuestReconciler(WindowsLicenseStore licenses, IChildV
                         else if (guest.KeyId is null && report.Activation == "activated") guest = guest with { Activation = "activated" };
                         await licenses.SaveAsync(guest, ct);
                         if (guest.KeyId is null && guest.Activation != "activated") guest = await licenses.AssignAsync(guest, null, "system", ct);
+                        if (guest.Operation is not null && driver is IWindowsLicenseMachines provider)
+                        {
+                            await activation.ReconcileAsync(guest, report, provider, channel, ct);
+                            continue; // The coordinator persisted its operation; do not overwrite it with this snapshot.
+                        }
                         if (guest.KeyId is not null && guest.Activation == "assigned" && !guest.Attempted)
                         {
                             var delivery = await licenses.BeginActivationAsync(guest, ct);

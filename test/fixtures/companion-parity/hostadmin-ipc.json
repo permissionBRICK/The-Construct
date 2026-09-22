@@ -5,7 +5,8 @@
     "now": 1789128000000,
     "output": {
       "guests": [],
-      "keys": []
+      "keys": [],
+      "machines": []
     }
   },
   {
@@ -14,7 +15,8 @@
     "now": 1789128000000,
     "output": {
       "guests": [],
-      "keys": []
+      "keys": [],
+      "machines": []
     }
   },
   {
@@ -62,6 +64,22 @@
           "edition": "education",
           "error": "partial-key-mismatch",
           "incarnation": "generation-d",
+          "license": {
+            "activationId": "sku",
+            "channel": "Retail",
+            "evaluationEnd": null,
+            "graceMinutes": 60,
+            "observedAt": "2026-09-22T10:00:00Z",
+            "partialKey": "ABCDE",
+            "reason": 3221549193,
+            "status": 0
+          },
+          "operation": {
+            "error": "local-activation-failed",
+            "id": "operation",
+            "mode": "replay",
+            "stage": "failed"
+          },
           "product": "win11",
           "stage": "installed",
           "vmName": "failed"
@@ -98,6 +116,18 @@
           "product": "server2025",
           "used": 3
         }
+      ],
+      "machines": [
+        {
+          "hasConfirmationId": true,
+          "hostId": "fixture-host",
+          "id": "machine",
+          "incarnation": "physical-id",
+          "keyId": "retail-1",
+          "reuses": 3,
+          "state": "available",
+          "vmName": null
+        }
       ]
     },
     "kind": "windows",
@@ -109,12 +139,15 @@
           "auxiliaryEjected": true,
           "edition": "pro",
           "error": "",
+          "evaluation": false,
           "guestReported": true,
           "hostId": "fixture-host",
           "incarnation": "generation-a",
           "installEjected": true,
           "keyId": "retail-1",
           "kms": false,
+          "license": null,
+          "operation": null,
           "partialKey": "3V66T",
           "product": "win11",
           "released": false,
@@ -127,12 +160,15 @@
           "auxiliaryEjected": false,
           "edition": "datacenter-core",
           "error": "",
+          "evaluation": false,
           "guestReported": false,
           "hostId": "",
           "incarnation": "generation-b",
           "installEjected": true,
           "keyId": "mak-1",
           "kms": false,
+          "license": null,
+          "operation": null,
           "partialKey": "YP6DF",
           "product": "server2025",
           "released": false,
@@ -145,12 +181,15 @@
           "auxiliaryEjected": true,
           "edition": "standard",
           "error": "evaluation-media-requires-conversion",
+          "evaluation": true,
           "guestReported": false,
           "hostId": "",
           "incarnation": "generation-c",
           "installEjected": true,
           "keyId": "",
           "kms": false,
+          "license": null,
+          "operation": null,
           "partialKey": "",
           "product": "server2022",
           "released": false,
@@ -163,12 +202,29 @@
           "auxiliaryEjected": false,
           "edition": "education",
           "error": "partial-key-mismatch",
+          "evaluation": false,
           "guestReported": false,
           "hostId": "",
           "incarnation": "generation-d",
           "installEjected": false,
           "keyId": "",
           "kms": false,
+          "license": {
+            "activationId": "sku",
+            "channel": "Retail",
+            "evaluationEnd": "",
+            "graceMinutes": 60,
+            "observedAt": "2026-09-22T10:00:00Z",
+            "partialKey": "ABCDE",
+            "reason": 3221549193,
+            "status": 0
+          },
+          "operation": {
+            "error": "local-activation-failed",
+            "id": "operation",
+            "mode": "replay",
+            "stage": "failed"
+          },
           "partialKey": "",
           "product": "win11",
           "released": false,
@@ -181,12 +237,15 @@
           "auxiliaryEjected": false,
           "edition": "pro",
           "error": "",
+          "evaluation": false,
           "guestReported": false,
           "hostId": "",
           "incarnation": "old-generation",
           "installEjected": false,
           "keyId": "",
           "kms": false,
+          "license": null,
+          "operation": null,
           "partialKey": "",
           "product": "win11",
           "released": true,
@@ -217,6 +276,18 @@
           "partialKey": "YP6DF",
           "product": "server2025",
           "used": 3
+        }
+      ],
+      "machines": [
+        {
+          "hasConfirmationId": true,
+          "hostId": "fixture-host",
+          "id": "machine",
+          "incarnation": "physical-id",
+          "keyId": "retail-1",
+          "reuses": 3,
+          "state": "available",
+          "vmName": ""
         }
       ]
     }

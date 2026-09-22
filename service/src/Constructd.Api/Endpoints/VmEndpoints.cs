@@ -85,7 +85,8 @@ public static class VmEndpoints
 
         http.SetAuditTarget(name);
 
-        if (request!.Cpu is not int cpu || cpu is < MinCpu or > MaxCpu)
+        var cpu = request!.Cpu ?? 1; // Omitted CPU count is resolved during admission, after replay checks.
+        if (cpu is < MinCpu or > MaxCpu)
         {
             return Problems.BadRequest($"'cpu' must be between {MinCpu} and {MaxCpu}.");
         }

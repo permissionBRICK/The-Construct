@@ -33,7 +33,7 @@ construct vm media acquire --windows 11 --edition pro --lang en --json
 construct vm media acquire --windows server-2022 --edition standard --lang en --json
 
 construct vm create --name windows-lab --os windows --windows win11-pro \
-  --media MEDIA_ID --cpus 4 --ram-gb 8 --disk-gb 100 --lifetime 4h \
+  --media MEDIA_ID --ram-gb 8 --disk-gb 100 --lifetime 4h \
   --unattend-admin-password 'YOUR-DISPOSABLE-LAB-PASSWORD' \
   --unattend-hostname WINDOWS-LAB --unattend-locale en-US --unattend-time-zone UTC
 ```
@@ -117,12 +117,85 @@ to retail conversion is not automated. Evaluation guests do not consume pool key
 The host delivers keys after installation through Hyper-V KVP or Proxmox guest-agent
 stdin, never through the parent agent or answer file. The host checks the reported partial
 key against the assignment and removes the Hyper-V KVP key after the report or timeout.
-The guest waits up to 30 minutes for a Hyper-V assignment. Assign within that interval;
-a later assignment requires rerunning `C:\provision\construct-report.ps1` inside the guest.
+The Hyper-V guest checks for assignments every minute and after reboot, without a
+waiting deadline. Adding a matching key later can activate an already installed guest.
+New installations report license status periodically on both backends, including
+user-managed, KMS and evaluation installations. The panel distinguishes the installed
+key, Windows license status, the activation operation and observation time. Grace
+minutes are the value at observation; evaluation expiry is shown only when Windows
+reports it. Stale observations are labelled.
 Keys and assignments carry the persistent local host ID; cross-host assignment is refused.
 Assignments remain tied to the VM incarnation and are released on deletion. A MAK delivery
 attempt consumes its budget before sending the key, including uncertain interrupted attempts;
 retries and deletion do not refund it.
+
+### Hyper-V license reuse preview
+
+`Constructd:WindowsLicenseReuse` defaults to `false`. Enable it only on a test host
+until fresh-disk CID replay, tenant security cleanup and native Windows activation
+behavior have been validated with a real eligible license. The implementation uses
+`SkipAutoActivation` in generated answer files; this setting alone is not evidence
+that Windows can never independently activate after reboot or network restoration.
+Do not enable the preview where that guarantee is required before completing the
+validation in [the reuse design](plans/windows-license-reuse.md).
+
+Configure `Constructd:VamtModulePath` with the installed VAMT PowerShell manifest.
+The host calls Microsoft's `Get-VamtConfirmationId -Products` for initial activation;
+it needs internet access. The guest installs the key, reports its installation ID,
+and applies the resulting confirmation ID locally. Missing VAMT leaves a visible
+prerequisite and does not spend a MAK attempt. Guest setup continues regardless.
+KMS activation remains managed by Windows; KMS client keys do not enter the preview
+pool. Existing installations retain their previous activation path; they do not acquire
+a clean security baseline retroactively. Use host-generated answer media for the
+preview so the guest's allocation identifier and activation protocol are present.
+
+Adding a key creates no VM. New machines briefly boot disconnected firmware before
+attaching any disk or installation media, so the exported baseline contains an
+initialized TPM but no tenant state. This requires temporary CPU/RAM capacity even
+with `--no-start`; those reservations are released once the VM is confirmed off.
+The guest OS does not boot until requested. Earlier experimental baselines without
+this initialization cannot be reused; retire their idle machines and create new ones.
+
+A new request first reserves an available machine with
+the exact original hardware profile, or creates the requested hardware. Each eligible
+Retail/MAK assignment binds the key to that Hyper-V identity. Deletion removes tenant
+disks, checkpoint chains, saved state and configuration, then imports the pristine
+firmware-initialized export with the same VM GUID and vTPM identity. The idle machine has no disks,
+network connection, owner or parent, and automatic startup is disabled. A VM that
+never received a managed key is fully deleted. Personal keys are not harvested.
+
+Each reuse gets a fresh allocation identifier. A machine never reuses a prior user
+name, so old name/incarnation requests cannot address a later allocation. This
+conservative restriction can mean an incompatible name request creates an unlicensed
+VM while an otherwise compatible machine stays idle. Hardware changes are not
+performed to force a match.
+
+A reused installation applies its saved CID and verifies Windows' actual state.
+A failure leaves the allocation running, marks it for host attention and makes no
+new proxy activation request. **Activate again** authorizes one new operation with
+the same key. Each initial acquisition is charged before contacting Microsoft;
+an uncertain result is not retried automatically. Local replay never spends or
+refunds the MAK budget. The budget is a local attempt ledger, not Microsoft's count.
+
+The host panel lists retained machines and successful reuses. Removing a key there
+retires its idle machines first; active assignments block removal. The offline key
+CLI refuses removal while retained machines exist, so use the host panel to retire
+them. Partial tenant cleanup keeps the machine unavailable for allocation.
+
+The admin API adds `POST /api/v1/host/windows/guests/{name}/reactivate` with
+`incarnation` and the failed `operationId`; duplicate authorization with the old ID
+is rejected. `GET /api/v1/host/windows` includes masked `machines` plus guest
+`license` observations and `operation` state. Full keys and CIDs are never returned.
+
+The diskless lifecycle can be checked without a Windows license or installation:
+
+```powershell
+# Elevated Windows PowerShell; boots only isolated firmware and cleans up in finally.
+.\test\windows-license-lifecycle.live.ps1 -StorageRoot D:\VmTests -LifetimeMinutes 5
+```
+
+This verifies configuration/storage mechanics, not Windows activation or removal
+of secrets written by a previous guest to its vTPM/firmware.
 
 ### Windows field validation
 
@@ -176,26 +249,31 @@ from the owner PC; ordinary reprovisioning does not rotate the token.
 
 ## Create a child
 
-CPU, RAM, maximum disk size and lifetime are always explicit. A lifetime is `never` or
+Omit `--cpus` by default. The service uses all host logical CPUs, capped by its
+supported maximum, the configured per-VM limit and remaining host/user CPU budgets.
+Use `--cpus N` only to override that choice. The service resolves this once at creation;
+it does not resize existing VMs when host limits change.
+
+RAM, maximum disk size and lifetime are always explicit. A lifetime is `never` or
 an integer followed by `m`, `h` or `d`, with a minimum of five minutes:
 
 ```bash
 # The host downloads a public ISO, then creates and starts the child.
 construct vm create \
   --iso-url https://example.org/linux.iso \
-  --cpus 2 --ram-gb 4 --disk-gb 40 --lifetime 4h \
+  --ram-gb 4 --disk-gb 40 --lifetime 4h \
   --preset linux
 
 # Upload local install and answer-file media and leave the VM powered off.
 construct vm create \
   --iso ./windows.iso --aux-iso ./answer-files.iso \
-  --cpus 4 --ram-gb 8 --disk-gb 80 --lifetime never \
+  --ram-gb 8 --disk-gb 80 --lifetime never \
   --preset windows --no-start
 
 # Reuse media already present on the host.
 construct vm create \
   --media MEDIA_ID --aux-media AUX_ID \
-  --cpus 2 --ram-mb 2048 --disk-gb 30 --lifetime 2h
+  --ram-mb 2048 --disk-gb 30 --lifetime 2h
 ```
 
 `--sha256 HEX` verifies URL or local install media. Local files are uploaded in
@@ -216,8 +294,9 @@ Hardware options are capability-checked by the service:
 --no-start
 ```
 
-Presets provide firmware hints only. They never invent CPU, RAM, disk or lifetime
-values. The host reports hardware/media preparation and VM boot; it does not claim an
+Presets provide firmware hints only; CPU defaults come from host policy independently
+of the preset. RAM, disk size and lifetime have no implicit values.
+The host reports hardware/media preparation and VM boot; it does not claim an
 arbitrary guest OS finished installing.
 
 ## Inventory and lifecycle

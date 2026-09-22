@@ -30,9 +30,11 @@ if ! jq -e --arg name "$VM_NAME" 'any(.[]; .name == $name)' <<<"$inventory" >/de
     # Persist retry identity across interrupted media uploads / CLI connections.
     key_file="$E2E_RUN/create-operation-id"
     [ -s "$key_file" ] || cat /proc/sys/kernel/random/uuid > "$key_file"
-    construct vm create --name "$VM_NAME" \
+    cpu_args=()
+    if [ -n "$VM_CPUS" ]; then cpu_args=(--cpus "$VM_CPUS"); fi
+    construct vm create --name "$VM_NAME" "${cpu_args[@]}" \
         --iso "${WIN_ISO%.iso}-noprompt.iso" --aux-iso "$UNATTEND_ISO" \
-        --cpus "$VM_CPUS" --ram-mb "$VM_RAM" --disk-gb "${VM_DISK_SIZE%G}" \
+        --ram-mb "$VM_RAM" --disk-gb "${VM_DISK_SIZE%G}" \
         --lifetime "$VM_LIFETIME" --preset windows --generation 2 \
         --secure-boot on --secure-boot-template microsoftWindows --tpm on \
         --boot-order disk,installMedia --operation-id "$(cat "$key_file")"

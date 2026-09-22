@@ -10,6 +10,10 @@ public sealed class ConstructdOptions
 {
     /// <summary>Enable per-session display credentials for the trusted browser gateway.</summary>
     public bool BrowserConsoleEnabled { get; set; } = true;
+    /// <summary>Opt in to Hyper-V diskless license reuse after validating the host's activation/security baseline.</summary>
+    public bool WindowsLicenseReuse { get; set; }
+    /// <summary>Installed VAMT PowerShell module manifest. Required for proxy activation.</summary>
+    public string VamtModulePath { get; set; } = string.Empty;
     public HostAdminOptions HostAdmin { get; set; } = new();
 
     public const string SectionName = "Constructd";

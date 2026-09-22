@@ -174,7 +174,7 @@ rollout is therefore manual; later ones use Maintenance. Do not rerun
   construct vm create \
     --name ha-linux \
     --iso-url '<official public ISO URL>' --sha256 '<publisher SHA-256>' \
-    --cpus 2 --ram-gb 4 --disk-gb 40 --lifetime 4h \
+    --ram-gb 4 --disk-gb 40 --lifetime 4h \
     --preset linux --generation 2 --secure-boot off \
     --operation-id field-ha-linux-01 --json-progress
   ```
@@ -197,7 +197,7 @@ rollout is therefore manual; later ones use Maintenance. Do not rerun
   ```bash
   construct vm create \
     --name ha-windows --iso ./windows.iso --sha256 '<SHA-256>' \
-    --cpus 4 --ram-gb 8 --disk-gb 80 --lifetime 4h \
+    --ram-gb 8 --disk-gb 80 --lifetime 4h \
     --preset windows --generation 2 --secure-boot on \
     --secure-boot-template microsoftWindows --tpm on \
     --boot-order installMedia,disk,network --no-start \

@@ -14,10 +14,23 @@ public static partial class HostAdminViews
         var guests = Map(input?["guests"], g =>
         {
             var row = Strings(g as JsonObject ?? [], "vmName", "incarnation", "product", "edition", "stage", "activation", "partialKey", "keyId", "error", "hostId");
-            foreach (var key in new[] { "released", "guestReported", "installEjected", "auxiliaryEjected", "kms" }) row[key] = StateJson.Boolean(g?[key]) == true;
+            foreach (var key in new[] { "released", "guestReported", "installEjected", "auxiliaryEjected", "kms", "evaluation" }) row[key] = StateJson.Boolean(g?[key]) == true;
+            row["operation"] = g?["operation"] is JsonObject operation ? Strings(operation, "id", "mode", "stage", "error") : null;
+            row["license"] = null;
+            if (g?["license"] is JsonObject license)
+            {
+                var observed = Strings(license, "observedAt", "activationId", "partialKey", "channel", "evaluationEnd");
+                foreach (var key in new[] { "status", "reason", "graceMinutes" }) observed[key] = Number(license[key]);
+                row["license"] = observed;
+            }
             row["status"] = Text(g?["stage"]) + ", " + Text(g?["activation"]) + (Text(g?["partialKey"]).Length > 0 ? " (…" + Text(g?["partialKey"]) + ")" : "") + (StateJson.Boolean(g?["guestReported"]) == true ? " · guest-reported" : "");
             return row;
         });
-        return new() { ["keys"] = keys, ["guests"] = guests };
+        var machines = Map(input?["machines"], m => {
+            var row = Strings(m as JsonObject ?? [], "id", "keyId", "hostId", "incarnation", "state", "vmName");
+            row["hasConfirmationId"] = StateJson.Boolean(m?["hasConfirmationId"]) == true;
+            row["reuses"] = Number(m?["reuses"]) ?? 0; return row;
+        });
+        return new() { ["keys"] = keys, ["guests"] = guests, ["machines"] = machines };
     }
 }

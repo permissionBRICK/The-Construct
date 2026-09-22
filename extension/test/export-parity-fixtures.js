@@ -385,9 +385,9 @@ function hostAdminIpc() {
      {vmName:"desktop",hostId:"fixture-host",incarnation:"generation-a",product:"win11",edition:"pro",stage:"installed",activation:"activated",partialKey:"3V66T",keyId:"retail-1",guestReported:true,installEjected:true,auxiliaryEjected:true},
      {vmName:"server",incarnation:"generation-b",product:"server2025",edition:"datacenter-core",stage:"installed",activation:"assigned",partialKey:"YP6DF",keyId:"mak-1",installEjected:true},
      {vmName:"trial",incarnation:"generation-c",product:"server2022",edition:"standard",stage:"installed",activation:"not-activated",evaluation:true,error:"evaluation-media-requires-conversion",installEjected:true,auxiliaryEjected:true},
-     {vmName:"failed",incarnation:"generation-d",product:"win11",edition:"education",stage:"installed",activation:"failed",error:"partial-key-mismatch"},
+     {license:{observedAt:"2026-09-22T10:00:00Z",activationId:"sku",partialKey:"ABCDE",channel:"Retail",status:0,reason:3221549193,graceMinutes:60,evaluationEnd:null},operation:{id:"operation",mode:"replay",stage:"failed",error:"local-activation-failed"},vmName:"failed",incarnation:"generation-d",product:"win11",edition:"education",stage:"installed",activation:"failed",error:"partial-key-mismatch"},
      {vmName:"deleted",incarnation:"old-generation",product:"win11",edition:"pro",stage:"installed",activation:"activated",released:true}
-   ] }]) add("windows", input, m.toWindowsView(input));
+   ], machines:[{id:"machine",keyId:"retail-1",hostId:"fixture-host",incarnation:"physical-id",state:"available",vmName:null,hasConfirmationId:true,reuses:3}] }]) add("windows", input, m.toWindowsView(input));
  for (const prepared of [false,true]) {
    const input={id:"windows-media",owner:"host",name:"Server 2025",role:"install",state:"ready",shared:true,sha256:"a".repeat(64),windows:{product:"server2025",language:"en-US",prepared,images:[{product:"server2025",edition:"datacenter-core",imageName:"Windows Server 2025 SERVERDATACENTERCORE",build:"26100",index:3,evaluation:true}]}};
    add("media",input,m.toMediaRow(input));

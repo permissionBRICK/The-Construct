@@ -1172,7 +1172,8 @@ token of `{parent}` with kind `primary`); audited `child.create` with target = c
 ```
 ChildCreateRequest {
   name?: string,                         // derived when absent (§1.7)
-  cpus: int, ramMb: int, diskGb: int,    // all required; ramMb multiple of 2, ≥ 512; diskGb ≥ 1; cpus ≤ maxVcpusPerVm
+  cpus?: int,                         // omit by default; host selects its available CPU allowance
+  ramMb: int, diskGb: int,             // required; ramMb multiple of 2, ≥ 512; diskGb ≥ 1
   lifetime: string,                      // required (§5.1)
   media: { installMediaId: string, auxiliaryMediaId?: string },   // ready items the caller may attach (§6.2)
   preset?: "windows"|"linux",            // firmware hints only (§8.6.1); never fills cpus/ram/disk/lifetime
@@ -1503,7 +1504,7 @@ allowChildCreation = false` → `create` exits 4 with the service's problem `det
 | Command | Route(s) | Notes |
 |---|---|---|
 | `construct vm identity [--json]` | `GET /vms/{me}/identity` | prints kind, token kind, owner, delegation limits and usage |
-| `construct vm create (--iso-url URL \| --iso PATH \| --media ID) [--aux-iso PATH \| --aux-media ID] --cpus N (--ram-gb G \| --ram-mb M) --disk-gb D --lifetime L [--name NAME] [--preset windows\|linux] [--secure-boot on\|off] [--secure-boot-template T] [--tpm on\|off] [--boot-order a,b,c] [--no-network] [--no-start] [--sha256 HEX] [--operation-id ID] [--no-wait] [--json]` | `POST /media/acquire` or the upload protocol (§6.4) for each local file (uploads set `dedicatedTo` = the child name, so they are removed with it), **always waits** for every media job to reach `ready` (a create cannot be submitted against media that is not ready), then `POST /vms/{me}/children`; follows the create job unless `--no-wait` | `--ram-gb G` is `ramMb = G × 1024`. All four resource/lifetime inputs are mandatory; the CLI never defaults them. Upload progress: `uploaded 512 MiB of 4.0 GiB`. Sub-keys `<id>:install`, `<id>:aux`, `<id>:create` (§7.3). |
+| `construct vm create (--iso-url URL \| --iso PATH \| --media ID) [--aux-iso PATH \| --aux-media ID] [--cpus N] (--ram-gb G \| --ram-mb M) --disk-gb D --lifetime L [--name NAME] [--preset windows\|linux] [--secure-boot on\|off] [--secure-boot-template T] [--tpm on\|off] [--boot-order a,b,c] [--no-network] [--no-start] [--sha256 HEX] [--operation-id ID] [--no-wait] [--json]` | `POST /media/acquire` or the upload protocol (§6.4) for each local file (uploads set `dedicatedTo` = the child name, so they are removed with it), **always waits** for every media job to reach `ready` (a create cannot be submitted against media that is not ready), then `POST /vms/{me}/children`; follows the create job unless `--no-wait` | `--ram-gb G` is `ramMb = G × 1024`. RAM, disk size and lifetime are mandatory. Omit `--cpus` by default: the service selects all host logical CPUs, capped by the backend limit, host per-VM limit and remaining host/user CPU budgets. An explicit `--cpus N` overrides this choice. Upload progress: `uploaded 512 MiB of 4.0 GiB`. Sub-keys `<id>:install`, `<id>:aux`, `<id>:create` (§7.3). |
 | `construct vm list [--all-shared] [--json]` | `GET /vms?parent={me}` (+ `GET /vms/shared`) | table: name, state, lease expiry/overdue, cpus/ram/disk, sharing, current operation |
 | `construct vm inspect NAME [--json]` | `GET /vms/{name}`, `GET /vms/{name}/addresses`, `GET /vms/{name}/capabilities` | full record, addresses ("no address yet" is normal), capabilities |
 | `construct vm start NAME --lifetime L [--json]` | `POST /vms/{name}/lifecycle {start}` | §5.3a: starts an off VM, resumes a saved or paused one, always with the new lifetime; missing `--lifetime` is a usage error (exit 1) before any call; `already-running` → exit 5 |

@@ -117,7 +117,7 @@ Everything lives under `/api/v1`, speaks JSON with camelCase properties and came
 | `POST /users/{name}/tokens` | admin | Issues an API token `{label}`; the plaintext is in the response **once** and is never stored or logged. |
 | `GET /audit` | admin | Audit trail, newest first, `?limit=`. |
 | `GET /vms` | user or primary token | Owned VMs (token: its primary and children); all for admin. Optional `kind=primary|child|all`, `parent`, and admin-only `owner` filters. |
-| `POST /vms` | user | `{name, cpu, ramGb, diskGb, opts:{nested?, automaticCheckpoints?, idlePolicy?}}` → `202 {jobId, nested, nestedFromHostDefault, ignoredOptions}`. `nested` is the effective value; unsupported explicitly enabled options appear in `ignoredOptions`. Name uniqueness and the quota are enforced by the insert itself. |
+| `POST /vms` | user | `{name, cpu?, ramGb, diskGb, opts:{nested?, automaticCheckpoints?, idlePolicy?}}` → `202 {jobId, nested, nestedFromHostDefault, ignoredOptions}`. `nested` is the effective value; unsupported explicitly enabled options appear in `ignoredOptions`. Omit `cpu` by default to use all host logical CPUs within the supported maximum, host per-VM limit and remaining host/user CPU budgets. Name uniqueness and the quota are enforced by the insert itself. |
 | `GET /vms/{name}` | owner/admin | The VM including its `publicHost`, forwards and host-administration metadata. Never exposes the VM token hash. |
 | `DELETE /vms/{name}` | owner/admin | → `202 {jobId}`; accepting it fences the VM (see below) and the job removes the VM, its forwards and its SSH port. |
 | `POST /vms/{name}/power` | owner/admin | `{action: start\|stop\|save}`, synchronous, returns the new state. `save` needs the driver's suspend capability. |
@@ -1833,9 +1833,12 @@ initiators and honors runner cancellation without editing those shared routes.
 
 ### Stage 2 child VM driver and jobs
 
-`POST /api/v1/vms/{parent}/children` accepts explicit `cpus`, `ramMb`, `diskGb`,
+`POST /api/v1/vms/{parent}/children` accepts optional `cpus`, explicit `ramMb`, `diskGb`,
 `lifetime` and ready media ids. Optional `windows`/`linux` presets supply firmware
-hints only; `start:false` leaves hardware Off with an inactive lease. Owner/admin
+hints only; `start:false` leaves hardware Off with an inactive lease. Omit `cpus`
+by default to use all host logical CPUs within the supported maximum, host per-VM
+limit and remaining host/user CPU budgets. The service chooses the count once
+during creation; an explicit positive value overrides that choice. Owner/admin
 access uses the foundation's `ParentDelegate` policy hook; rotated primary tokens
 can create their own children under the owner's current allowance. Existing child list/read and
 capability routes project the new records. `DELETE /vms/{child}` runs `child-delete`.
@@ -2247,3 +2250,13 @@ Audit actions are `vm.source.ensure`, `vm.source.fetch`, `source.fetch.completed
 `host.source.cleanup` and `host.source.delete`. Job errors are bare safe codes, and neither
 job results nor audit details contain tokens. See the [source contract](../docs/plans/remote-reprovision-source-cache.md)
 for response headers, failure codes and concurrency details.
+
+### Hyper-V Windows license reuse preview
+
+`Constructd:WindowsLicenseReuse` is disabled by default pending real-license and
+tenant-security validation. `Constructd:VamtModulePath` identifies the installed
+Microsoft VAMT PowerShell manifest for proxy CID acquisition. The
+[Windows guest guide](../docs/child-vms.md#hyper-v-license-reuse-preview) describes
+the retained-machine lifecycle, explicit reactivation action, budget accounting,
+status fields and remaining live validation requirements. Proxmox retains its
+existing activation/deletion behavior and gains periodic license observations.
