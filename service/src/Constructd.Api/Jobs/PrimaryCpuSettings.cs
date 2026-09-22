@@ -14,13 +14,13 @@ public sealed class PrimaryCpuSettings(IHostConfigStore config, ICapacityLedger 
     public sealed record Limits(int HostLogicalCpus, int MaximumCpus, int RecommendedCpus, IReadOnlyList<string> Warnings);
     private static string Section(Vm vm) => "primary-cpu:" + vm.Name.ToLowerInvariant();
 
-    public async Task<Limits> LimitsAsync(string owner, Vm? vm, CancellationToken ct, bool refresh = true)
+    public async Task<Limits> LimitsAsync(string owner, Vm? vm, CancellationToken ct, bool refresh = true, int supportedMaximumCpus = 64)
     {
         var snapshot = await capacity.SnapshotAsync(refresh, ct);
         if (!CapacityMath.RuntimeInventoryComplete(snapshot) || snapshot.CpuLogical < 1) throw new LifecycleException("capacity-unavailable");
         var allowance = await policy.ResolveAsync(owner, null, ct);
         var settings = await HostAdminEndpoints.CapacityConfigAsync(config, options, ct);
-        var maximum = Math.Min(64, snapshot.CpuLogical);
+        var maximum = Math.Min(supportedMaximumCpus, snapshot.CpuLogical);
         if (settings.MaxVcpusPerVm is int perVm) maximum = Math.Min(maximum, perVm);
         var other = snapshot.Reservations.Where(r => r.Resource == ReservationResource.Cpu &&
             (vm is null || !Ownership.SameName(r.VmName, vm.Name))).ToArray();

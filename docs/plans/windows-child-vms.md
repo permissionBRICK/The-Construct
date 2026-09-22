@@ -138,7 +138,7 @@ generalises it. What it established, and what the host-side implementation must 
 
 ## 5. Acceptance
 
-A `construct vm create --os windows --iso <win11.iso> --cpus 4 --ram-gb 8 --disk-gb 100
+A `construct vm create --os windows --iso <win11.iso> --ram-gb 8 --disk-gb 100
 --lifetime 4h --unattend-admin-password …` on a Hyper-V host reaches the desktop unattended,
 answers SSH with the given password, shows "installed, activated with key …3V66T" (or
 "installed, not activated, grace period") in the panel, and has no auxiliary medium attached

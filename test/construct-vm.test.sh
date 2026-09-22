@@ -373,9 +373,21 @@ ok 'confirmed deletion carries its operation key' grep -q '^X-Construct-Operatio
 reset_stub
 vm create --media media-install --aux-media media-aux --cpus 2 --ram-gb 2 --disk-gb 30 --lifetime 4h --name kid-one --preset linux --secure-boot off --tpm on --no-start --operation-id create-key-1 --json >"${tmp}/create.json" 2>"${tmp}/create.err"
 ok 'create returns the documented composite JSON result' jq -e '.operationKey=="create-key-1" and (.media|length)==2 and .job.state=="succeeded" and .vm.name=="kid-one"' "${tmp}/create.json"
-ok 'create converts GiB to MiB and sends all required resources' grep -q '"cpus":2,"ramMb":2048,"diskGb":30,"lifetime":"4h"' "${stub}/state/bodies"
+cut -f3- "${stub}/state/bodies" >"${tmp}/create-bodies.json"
+ok 'create converts GiB to MiB and honors the CPU override' jq -e 'select(.ramMb) | .cpus==2 and .ramMb==2048 and .diskGb==30 and .lifetime=="4h"' "${tmp}/create-bodies.json"
 ok 'create sends structured media, preset, firmware and no-start' grep -q '"media":{"installMediaId":"media-install","auxiliaryMediaId":"media-aux"}.*"start":false.*"preset":"linux".*"secureBoot":false.*"tpm":true' "${stub}/state/bodies"
 ok 'create derives the child sub-key' grep -q '^X-Construct-Operation-Key: create-key-1:create$' "${stub}/state/headers"
+
+reset_stub
+vm create --media media-install --ram-mb 512 --disk-gb 8 --lifetime 30m --name kid-one --no-wait --json >"${tmp}/default-cpu.json" 2>/dev/null
+ok 'create accepts omitted CPUs' test "$?" = 0
+cut -f3- "${stub}/state/bodies" >"${tmp}/default-cpu-bodies.json"
+ok 'omitted CPUs let the host select its allowance' jq -e 'select(.ramMb) | has("cpus") | not' "${tmp}/default-cpu-bodies.json"
+
+reset_stub
+vm create --media media-install --cpus 0 --ram-mb 512 --disk-gb 8 --lifetime 30m --name kid-one >"${tmp}/zero-cpu.out" 2>/dev/null
+ok 'explicit zero CPUs is invalid' test "$?" = 1
+ok 'invalid CPUs send no create request' sh -c "! grep -q '^POST' '${stub}/state/requests'"
 
 reset_stub
 vm create --media media-install --os windows --windows server2025-datacenter-core --unattend-admin-password 'fixture<&Password' --unattend-hostname LABSERVER --cpus 4 --ram-gb 8 --disk-gb 100 --lifetime 4h --name kid-one --no-wait --json >"${tmp}/windows-create.json" 2>"${tmp}/windows-create.err"
