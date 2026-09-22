@@ -6,13 +6,17 @@ a real Hyper-V proof before the pool lifecycle can be implemented with confidenc
 
 ## Agreed behavior
 
-- Adding an eligible Retail or MAK key automatically queues its first activation.
-  Prefer an existing compatible VM waiting for a host license; otherwise create
-  a host-owned Windows VM and install the matching OS. Never replace a user's own
-  activation automatically. Storing a key alone cannot activate it. Missing media
-  or capacity leaves a visible queued prerequisite, rather than consuming an
-  activation attempt. After an unused enrollment succeeds, delete its setup disk
-  through the same verified cleanup path and retain the machine idle.
+- Adding an eligible Retail or MAK key stores it in the pool. It does not prepare
+  a VM or consume an activation. VM creation and initial activation are driven by
+  an actual user request, using that request's product, edition, CPU, RAM, disk
+  size and other hardware settings. Never create a speculative machine with default
+  sizing and resize it later to fit the first request.
+- For a requested VM, prefer a compatible idle licensed machine. Otherwise use an
+  available key or MAK allowance to create and initially activate the requested
+  machine. An existing requested VM waiting for a host license can receive a key
+  when one becomes available, using its existing hardware. Never replace a user's
+  own activation automatically. Missing media or capacity leaves a visible queued
+  prerequisite, rather than consuming an activation attempt.
 - The first activation contacts Microsoft using proxy activation and retains the
   installation ID and confirmation ID. A bare `slmgr /ato` call is insufficient as
   the enrollment workflow because it does not give Construct that saved record.
@@ -31,11 +35,10 @@ a real Hyper-V proof before the pool lifecycle can be implemented with confidenc
 - All Windows guests periodically report licensing state, whether activated by
   the pool, by their user, through KMS, or not activated.
 
-MAK initialization quantity remains a design choice: prepare one VM when the key
-is added and grow on demand within its budget, or prepare the entire budget at
-once. One initially is the proposed default, pending Christoph's answer. Each
-MAK machine needs its own activation record; the CID is never shared across machines.
-KMS client keys use KMS and do not enter the CID pool.
+MAK machines are created only on demand within the key's activation budget. Adding
+a key with a budget of ten creates zero machines. Each requested machine that
+needs a new activation receives its own record; the CID is never shared across
+machines. KMS client keys use KMS and do not enter the CID pool.
 
 ## Activation protocol
 
@@ -93,11 +96,19 @@ previous user's requests cannot affect the next installation. The existing code
 uses the hypervisor incarnation as an installation discriminator in several places;
 audit those uses rather than globally replacing it with the new allocation ID.
 
-Create flow: atomically reserve a compatible idle machine, admit its CPU/RAM/disk
-requirements, attach fresh storage, install Windows, replay activation and assign
-the fresh user allocation. A machine cannot be reused concurrently. A replay failure
-stays attached to that allocation and waits for host action. It does not silently
-switch to another key or consume another machine's initial activation.
+Create flow: match the request against idle machines using the OS and validated
+hardware compatibility rules. Initially require the original sizing and hardware
+profile; broaden compatibility only after testing proves which changes preserve
+activation. Atomically reserve a match, admit the requested CPU/RAM/disk resources,
+attach fresh storage, install Windows, replay activation and assign the fresh user
+allocation. When there is no match, create a machine with the requested profile
+and perform its first activation only if an available key or MAK allowance permits
+it. Do not resize an incompatible retained machine automatically. Without a license,
+provision normally through the unactivated path.
+
+A machine cannot be reused concurrently. A replay failure stays attached to that
+allocation and waits for host action. It does not silently switch to another key
+or consume another machine's initial activation.
 
 Delete flow: fence the allocation, revoke access, turn off the VM, remove all user
 disks and checkpoint chains, saved memory, answer media, forwarding rules and old
@@ -184,7 +195,9 @@ not Microsoft's authoritative remaining activation count.
 6. Add persistent machine/allocation records, then resumable admission, deletion,
    cleanup and reuse jobs. Add the admin actions and the UI status projections.
 7. Validate simultaneous allocation, partial cleanup, parent deletion, manual key
-   changes, interrupted CID acquisition and host restart recovery.
+   changes, interrupted CID acquisition and host restart recovery. Verify that
+   adding keys creates no VMs, first requests use their requested hardware, and
+   incompatible idle machines are not resized or reused without matching policy.
 
 Start retained-machine reuse on Hyper-V. Keep the reporting contract applicable
 to both Hyper-V and Proxmox; Proxmox retention and identity preservation require a
