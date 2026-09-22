@@ -37,14 +37,15 @@ VM_DISK="$E2E_DISKS/$VM_NAME.qcow2"
 # All values overridable via env (VM_CPUS=4 ./vm.sh start).
 #
 if [ "$VM_BACKEND" = construct ]; then
-    VM_CPUS="${VM_CPUS:-$(nproc)}"
+    # Leave CPU sizing to the Construct host unless explicitly overridden.
+    VM_CPUS="${VM_CPUS:-}"
     VM_RAM="${VM_RAM:-12288}"
     VM_DISK_SIZE="${VM_DISK_SIZE:-100G}"
 fi
 VM_LIFETIME="${VM_LIFETIME:-never}"
 
-# CPUs: all but 2 host cores (min 4).
-VM_CPUS="${VM_CPUS:-$(( $(nproc) > 6 ? $(nproc) - 2 : 4 ))}"
+# The local QEMU backend uses all CPUs available to this machine.
+if [ "$VM_BACKEND" = qemu ]; then VM_CPUS="${VM_CPUS:-$(nproc)}"; fi
 # RAM: cap the guest at 14 GB and always leave >=9 GB for the Linux host
 # (a 16 GB guest on a 23 GB construct host was OOM-killed mid-session).
 _host_ram_mb=$(( $(awk '/MemTotal/{print $2}' /proc/meminfo) / 1024 ))

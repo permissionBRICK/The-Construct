@@ -28,6 +28,26 @@ public class WindowsGuestReconcilerTests
         Assert.Null((await driver.GetAttachedMediaAsync(vm.Name, default)).AuxiliaryPath); Assert.Null(driver.DeliveredPartialKey);
     }
     [Fact]
+    public async Task Key_added_days_after_install_is_delivered_and_verified()
+    {
+        await using var app = new TestApp(); var (_, driver, store) = await Setup(app);
+        driver.WindowsObservation = new(200, new("win11", "pro", true, "not-activated", "3V66T"));
+        var worker = app.Service<WindowsGuestReconciler>();
+        await worker.ReconcileAsync(default);
+        app.Clock.Advance(TimeSpan.FromDays(2));
+        await store.AddAsync("win11", "pro", "mak", "ABCDE-FGHIJ-KLMNO-PQRST-UVWXY", 1, null, "admin", default);
+        await worker.ReconcileAsync(default);
+        Assert.Equal("UVWXY", driver.DeliveredPartialKey);
+        driver.WindowsObservation = new(300, new("win11", "pro", true, "activated", "UVWXY"));
+        await worker.ReconcileAsync(default);
+        await worker.ReconcileAsync(default);
+        var snapshot = await store.SnapshotAsync(default);
+        Assert.Equal("activated", Assert.Single(snapshot.Guests).Activation);
+        Assert.Equal(1, Assert.Single(snapshot.Keys).Used);
+        Assert.Single(driver.Calls, c => c == "windows-key:windows-child");
+        Assert.Null(driver.DeliveredPartialKey);
+    }
+    [Fact]
     public async Task Assignment_delivers_once_checks_partial_key_and_clears_secret()
     {
         await using var app = new TestApp(); var (_, driver, store) = await Setup(app);

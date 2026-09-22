@@ -201,6 +201,7 @@ public sealed class HostAdminHttpTests
     [InlineData("mediaCleanup", "POST", "/api/v1/media/cleanup")]
     [InlineData("addWindowsKey", "POST", "/api/v1/host/windows/keys")]
     [InlineData("deleteWindowsKey", "DELETE", "/api/v1/host/windows/keys/j1")]
+    [InlineData("reactivateWindows", "POST", "/api/v1/host/windows/guests/build/reactivate")]
     [InlineData("assignWindowsKey", "POST", "/api/v1/host/windows/guests/build/assign")]
     [InlineData("prepareWindowsMedia", "POST", "/api/v1/media/j1/prepare-windows")]
     [InlineData("acquireWindowsMedia", "POST", "/api/v1/media/acquire-windows")]

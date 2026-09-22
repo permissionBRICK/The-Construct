@@ -717,6 +717,7 @@ function createClient(opts = {}) {
     windows: () => request("GET", "/host/windows"),
     addWindowsKey: (body) => request("POST", "/host/windows/keys", body),
     deleteWindowsKey: (id) => request("DELETE", `/host/windows/keys/${encodeURIComponent(id)}`),
+    reactivateWindows: (name, body) => request("POST", `/host/windows/guests/${encodeURIComponent(name)}/reactivate`, body),
     assignWindowsKey: (name, body) => request("POST", `/host/windows/guests/${encodeURIComponent(name)}/assign`, body),
     acquireWindowsMedia: (body) => request("POST", "/media/acquire-windows", body),
     prepareWindowsMedia: (id) => request("POST", `/media/${encodeURIComponent(id)}/prepare-windows`, {}),

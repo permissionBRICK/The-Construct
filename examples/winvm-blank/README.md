@@ -92,7 +92,7 @@ Everything is env-overridable, e.g. `VM_RAM=8192 ./create-vm.sh`.
 | --- | --- | --- |
 | `E2E_HOME` | `/opt/winvm` | ISOs, disks, run state, results. Deliberately outside the repo. |
 | `VM_NAME` | `winvm-win11` | Construct child name. |
-| `VM_CPUS` | all host CPUs | |
+| `VM_CPUS` | omitted | Optional override. Construct uses the host CPU allowance; QEMU uses all local CPUs. |
 | `VM_RAM` | `12288` (MiB) | |
 | `VM_DISK_SIZE` | `100G` | |
 | `VM_LIFETIME` | `never` | Construct requires an explicit lifetime. |

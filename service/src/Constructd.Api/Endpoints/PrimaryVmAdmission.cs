@@ -5,6 +5,7 @@ using Constructd.Api.Infrastructure;
 using Constructd.Core.Abstractions;
 using Constructd.Core.Domain;
 using Constructd.Core.Logic;
+using Constructd.Api.Jobs;
 namespace Constructd.Api.Endpoints;
 
 /// <summary>Admission around the existing primary provisioning workflow; the workflow is unchanged.</summary>
@@ -37,6 +38,17 @@ public static class PrimaryVmAdmission
             http.SetAuditDetail(observed == VmState.Unknown ? "state unknown" : "name already taken");
             return observed == VmState.Unknown ? LifecycleEndpoints.Problem("vm-state-unknown") :
                 Problems.Conflict($"A VM named '{vm.Name}' already exists on this host.");
+        }
+        if (request.Cpu is null)
+        {
+            try
+            {
+                var limits = await services.GetRequiredService<PrimaryCpuSettings>().LimitsAsync(vm.Owner, null, ct);
+                if (limits.RecommendedCpus < 1) return LifecycleEndpoints.Problem("capacity-exhausted");
+                vm = vm with { Cpu = limits.RecommendedCpus };
+                descriptor = descriptor with { Cpu = limits.RecommendedCpus };
+            }
+            catch (LifecycleException ex) { return LifecycleEndpoints.Problem(ex.Code); }
         }
         ChildStoragePlacement? placement = null;
         try { placement = await services.GetRequiredService<IChildVmStorage>().ResolvePrimaryStorageAsync(vm.Name, ct); }

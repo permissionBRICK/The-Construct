@@ -37,6 +37,18 @@ public sealed class HyperVChildDriverTests
         Assert.Equal(key, input.RootElement.GetProperty("key").GetString());
     }
 
+    [Fact]
+    public async Task Parking_deletes_tenant_state_and_imports_baseline_in_separate_processes()
+    {
+        var runner = new RecordingProcessRunner { Default = Ok(null) };
+        var driver = new HyperVChildDriver(runner, new ConstructdOptions { ScriptsDir = @"C:\Construct", VmStorageRoot = @"C:\VMs" }, new FakeHypervisorDriver());
+        await driver.ParkWindowsAsync("child", Guid.NewGuid().ToString(), default);
+        Assert.Equal(2, runner.Calls.Count);
+        Assert.Contains("Clear-ConstructLicenseAllocation", Script(runner.Calls[0]));
+        Assert.DoesNotContain("Save-ConstructLicenseMachine", Script(runner.Calls[0]));
+        Assert.Contains("Save-ConstructLicenseMachine", Script(runner.Calls[1]));
+    }
+
     [Theory]
     [InlineData("vm-not-off")]
     [InlineData("secure-boot-template-locked")]

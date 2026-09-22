@@ -5,8 +5,39 @@ using Constructd.Core.Services;
 using Constructd.Core.Logic;
 namespace Constructd.Fakes;
 
-public sealed class FakeChildVmDriver(FakeHypervisorDriver hypervisor) : IChildVmDriver, IChildVmStorage, IChildVmCreationOwnership, IWindowsGuestChannel
+public sealed class FakeChildVmDriver(FakeHypervisorDriver hypervisor) : IChildVmDriver, IChildVmStorage, IChildVmCreationOwnership, IWindowsGuestChannel, IWindowsLicenseMachines
 {
+    private readonly ConcurrentDictionary<string, (ChildVmDescriptor Descriptor, string Id)> _licensed = new();
+    public WindowsActivationCommand? ActivationCommand { get; private set; }
+    public bool ActivationProviderReady { get; set; } = true;
+    public Exception? ActivationFailure { get; set; }
+    public int OnlineActivations { get; private set; }
+    public Task ParkWindowsAsync(string name, string incarnation, CancellationToken ct)
+    {
+        Check(ct); if (RemoveFailure is not null) throw RemoveFailure;
+        if (_vms.TryGetValue(name, out var vm))
+        {
+            CheckWindows(name, incarnation); _licensed[incarnation] = vm;
+            _vms.TryRemove(name, out _); _creationOperations.TryRemove(name, out _);
+            hypervisor.SetState(name, VmState.Absent);
+        }
+        else if (!_licensed.ContainsKey(incarnation)) throw new ChildValidationException("artifact-ownership-unverified", "vm");
+        Calls.Enqueue("windows-park:" + name); return Task.CompletedTask;
+    }
+    public Task ReuseWindowsAsync(WindowsLicenseMachine machine, ChildVmDescriptor descriptor, string operationId, CancellationToken ct)
+    {
+        Check(ct);
+        if (!_licensed.ContainsKey(machine.Incarnation)) throw new ChildValidationException("artifact-ownership-unverified", "vm");
+        _vms[descriptor.Name] = (descriptor, machine.Incarnation); _creationOperations[descriptor.Name] = operationId;
+        hypervisor.SetState(descriptor.Name, VmState.Off); Calls.Enqueue("windows-reuse:" + descriptor.Name); return Task.CompletedTask;
+    }
+    public Task RetireWindowsAsync(string incarnation, CancellationToken ct)
+    { Check(ct); _licensed.TryRemove(incarnation, out _); return Task.CompletedTask; }
+    public Task DeliverActivationAsync(string name, string incarnation, WindowsActivationCommand command, CancellationToken ct)
+    { CheckWindows(name, incarnation); ActivationCommand = command; return Task.CompletedTask; }
+    public Task<bool> ActivationProviderReadyAsync(CancellationToken ct) => Task.FromResult(ActivationProviderReady);
+    public Task<string> AcquireConfirmationIdAsync(string kind, WindowsActivationReport report, CancellationToken ct)
+    { OnlineActivations++; if (ActivationFailure is not null) throw ActivationFailure; return Task.FromResult(new string('1', 48)); }
     public WindowsGuestObservation WindowsObservation { get; set; } = new(null, null);
     public string? DeliveredPartialKey { get; private set; }
     public Task<WindowsGuestObservation> ObserveWindowsAsync(string name, string incarnation, CancellationToken ct)
@@ -14,7 +45,7 @@ public sealed class FakeChildVmDriver(FakeHypervisorDriver hypervisor) : IChildV
     public Task DeliverWindowsKeyAsync(string name, string incarnation, string key, CancellationToken ct)
     { CheckWindows(name, incarnation); DeliveredPartialKey = key[^5..]; Calls.Enqueue("windows-key:" + name); return Task.CompletedTask; }
     public Task ClearWindowsKeyAsync(string name, string incarnation, CancellationToken ct)
-    { CheckWindows(name, incarnation); DeliveredPartialKey = null; Calls.Enqueue("windows-key-clear:" + name); return Task.CompletedTask; }
+    { CheckWindows(name, incarnation); DeliveredPartialKey = null; ActivationCommand = null; Calls.Enqueue("windows-key-clear:" + name); return Task.CompletedTask; }
     public Task EjectWindowsMediaAsync(string name, string incarnation, bool installOnly, CancellationToken ct)
     {
         CheckWindows(name, incarnation); var old = _vms[name];
@@ -30,6 +61,7 @@ public sealed class FakeChildVmDriver(FakeHypervisorDriver hypervisor) : IChildV
     public Exception? Failure { get; set; }
     public Exception? RemoveFailure { get; set; }
     public Exception? FailureAfterCreate { get; set; }
+    public Action<ChildVmDescriptor>? Creating { get; set; }
     public Exception? FailureAfterHardware { get; set; }
     public Action<string>? HardwareApplied { get; set; }
     public Exception? FailureAfterMedia { get; set; }
@@ -63,6 +95,7 @@ public sealed class FakeChildVmDriver(FakeHypervisorDriver hypervisor) : IChildV
     public Task CreateOwnedAsync(ChildVmDescriptor descriptor, string operationId, IProgress<string>? progress, CancellationToken ct)
     {
         Check(ct); HardwarePresets.ValidateCapabilities(descriptor.Hardware, Capabilities, descriptor.AuxiliaryMediaPath is not null);
+        Creating?.Invoke(descriptor);
         if (!_vms.TryAdd(descriptor.Name, (descriptor, Guid.NewGuid().ToString()))) throw new InvalidOperationException("VM already exists.");
         _creationOperations[descriptor.Name] = operationId; _templateLocked[descriptor.Name] = descriptor.Hardware.Tpm; hypervisor.SetState(descriptor.Name, VmState.Off); Calls.Enqueue("create:" + descriptor.Name); if (FailureAfterCreate is not null) throw FailureAfterCreate; return Task.CompletedTask;
     }

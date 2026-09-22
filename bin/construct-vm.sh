@@ -33,7 +33,7 @@ Usage: construct vm <command> [options]
 Child VMs:
   identity [--json]
   create (--iso-url URL | --iso PATH | --media ID) [--aux-iso PATH | --aux-media ID]
-         --cpus N (--ram-gb G | --ram-mb M) --disk-gb D --lifetime L [options]
+         (--ram-gb G | --ram-mb M) --disk-gb D --lifetime L [--cpus N] [options]
          [--os linux|windows] [--windows win11-pro|server2022-standard|...]
          [--unattend-admin-password PASSWORD] [--unattend-hostname NAME]
          [--unattend-locale en-US] [--unattend-time-zone UTC]
@@ -80,6 +80,8 @@ Jobs:
   cancel JOBID [--json]
 
 Common mutation options:
+  --cpus N          Optional create override. Omit to use all host CPUs allowed by
+                    the host's per-VM limit and remaining host/user CPU budgets.
   --operation-id ID   Reuse this id for a safe retry (8–128 chars; create max 120).
   --no-wait           Return after the service accepts a background job.
   --json              Emit one JSON result and no other stdout text.
@@ -801,7 +803,7 @@ cmd_create() {
   [[ -n "${aux_file}" ]] && aux_count=$((aux_count + 1))
   [[ -n "${aux_media}" ]] && aux_count=$((aux_count + 1))
   (( aux_count <= 1 )) || die 'use at most one of --aux-iso and --aux-media'
-  is_positive "${cpus}" || die 'create requires --cpus N'; if [[ -n "${ram_gb}" && -n "${ram_mb}" ]]; then die 'use only one of --ram-gb and --ram-mb'; fi
+  [[ -z "${cpus}" ]] || is_positive "${cpus}" || die '--cpus must be positive'; if [[ -n "${ram_gb}" && -n "${ram_mb}" ]]; then die 'use only one of --ram-gb and --ram-mb'; fi
   if [[ -n "${ram_gb}" ]]; then is_positive "${ram_gb}" || die '--ram-gb must be positive'; ram_mb=$((10#${ram_gb} * 1024)); fi
   is_positive "${ram_mb}" || die 'create requires --ram-gb G or --ram-mb M'; (( 10#${ram_mb} >= 512 && 10#${ram_mb} % 2 == 0 )) || die 'RAM must be at least 512 MiB and a multiple of 2 MiB'
   is_positive "${disk_gb}" || die 'create requires --disk-gb D'; [[ -n "${lifetime}" ]] || die 'create requires --lifetime L'; validate_lifetime "${lifetime}"
@@ -820,7 +822,7 @@ cmd_create() {
   if [[ -n "${aux_file}" ]]; then media_upload_impl "${aux_file}" auxiliary "" "" "${child_name}" "${key}:aux" true; aux_item="${MEDIA_RESULT}"; aux_media="$(printf '%s' "${aux_item}" | jq -r '.id // empty')"; elif [[ -n "${aux_media}" ]]; then media_get "${aux_media}"; aux_item="${MEDIA_RESULT}"; fi
   [[ -z "${aux_item}" ]] || require_media_ready
   fw="$(firmware_json "${generation}" "${secure_boot}" "${template}" "${tpm}" "${boot_order}")"
-  body="$(jq -cn --arg name "${child_name}" --arg cpus "${cpus}" --arg ram "${ram_mb}" --arg disk "${disk_gb}" --arg lifetime "${lifetime}" --arg install "${install_media}" --arg aux "${aux_media}" --arg preset "${preset}" --argjson firmware "${fw}" --argjson attach "$([[ "${no_network}" == true ]] && printf false || printf true)" --argjson start "$([[ "${no_start}" == true ]] && printf false || printf true)" '{name:$name,cpus:($cpus|tonumber),ramMb:($ram|tonumber),diskGb:($disk|tonumber),lifetime:$lifetime,media:({installMediaId:$install} + (if $aux!="" then {auxiliaryMediaId:$aux} else {} end)),network:{attach:$attach},start:$start} + (if $preset!="" then {preset:$preset} else {} end) + (if ($firmware|length)>0 then {firmware:$firmware} else {} end)')"
+  body="$(jq -cn --arg name "${child_name}" --arg cpus "${cpus}" --arg ram "${ram_mb}" --arg disk "${disk_gb}" --arg lifetime "${lifetime}" --arg install "${install_media}" --arg aux "${aux_media}" --arg preset "${preset}" --argjson firmware "${fw}" --argjson attach "$([[ "${no_network}" == true ]] && printf false || printf true)" --argjson start "$([[ "${no_start}" == true ]] && printf false || printf true)" '{name:$name,ramMb:($ram|tonumber),diskGb:($disk|tonumber),lifetime:$lifetime,media:({installMediaId:$install} + (if $aux!="" then {auxiliaryMediaId:$aux} else {} end)),network:{attach:$attach},start:$start} + (if $cpus!="" then {cpus:($cpus|tonumber)} else {} end) + (if $preset!="" then {preset:$preset} else {} end) + (if ($firmware|length)>0 then {firmware:$firmware} else {} end)')"
   body="$(printf '%s' "${body}" | jq -c --arg os "${os}" --arg windows "${windows}" --argjson unattend "${unattend}" '. + {os:$os,windows:$windows} + (if $unattend == {} then {} else {unattend:$unattend} end)')"
   api_request POST "/api/v1/vms/$(urlencode "${INSTANCE_NAME}")/children" "${body}" "${key}:create"; expect_json object; accepted="${API_BODY}"
   if [[ "${no_wait}" == true ]]; then job="${accepted}"; final_vm=null; else follow_job "$(printf '%s' "${accepted}" | jq -r '.jobId')" 10800 "${json_progress}"; job="${JOB_RESULT}"; api_request GET "/api/v1/vms/$(urlencode "${child_name}")"; expect_json object; final_vm="${API_BODY}"; fi

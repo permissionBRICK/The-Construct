@@ -370,6 +370,7 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
             case "cancelJob": result = await client.CancelJobAsync(id, ct); break;
             case "addWindowsKey": result = await client.RequestAsync("POST", "/host/windows/keys", args, ct); break;
             case "deleteWindowsKey": result = await client.RequestAsync("DELETE", "/host/windows/keys/" + HostIdentity.Encode(id), null, ct); break;
+            case "reactivateWindows": result = await client.RequestAsync("POST", "/host/windows/guests/" + HostIdentity.Encode(name) + "/reactivate", new JsonObject { ["incarnation"] = args["incarnation"]?.DeepClone(), ["operationId"] = args["operationId"]?.DeepClone() }, ct); break;
             case "assignWindowsKey": result = await client.RequestAsync("POST", "/host/windows/guests/" + HostIdentity.Encode(name) + "/assign", new JsonObject { ["incarnation"] = args["incarnation"]?.DeepClone(), ["keyId"] = args["keyId"]?.DeepClone() }, ct); break;
             case "acquireWindowsMedia": result = await client.RequestAsync("POST", "/media/acquire-windows", args, ct); break;
             case "prepareWindowsMedia": result = await client.RequestAsync("POST", "/media/" + HostIdentity.Encode(id) + "/prepare-windows", new JsonObject(), ct); break;

@@ -579,8 +579,15 @@ function toWindowsView(input) {
   const v = input || {};
   const fields = (x, names) => Object.fromEntries(names.map(k => [k, str(x[k])]));
   return {
+    machines: (Array.isArray(v.machines) ? v.machines : []).map(m => ({ ...fields(m, ["id", "keyId", "hostId", "incarnation", "state", "vmName"]), hasConfirmationId: m.hasConfirmationId === true, reuses: num(m.reuses) || 0 })),
     keys: (Array.isArray(v.keys) ? v.keys : []).map(k => ({ ...fields(k, ["id", "product", "edition", "kind", "partialKey", "notes", "hostId"]), budget: num(k.budget), used: num(k.used) || 0 })),
     guests: (Array.isArray(v.guests) ? v.guests : []).map(g => ({ ...fields(g, ["vmName", "incarnation", "product", "edition", "stage", "activation", "partialKey", "keyId", "error", "hostId"]),
+      operation: g.operation ? fields(g.operation, ["id", "mode", "stage", "error"]) : null,
+      license: g.license && typeof g.license === "object" ? {
+        ...fields(g.license, ["observedAt", "activationId", "partialKey", "channel", "evaluationEnd"]),
+        status: num(g.license.status), reason: num(g.license.reason), graceMinutes: num(g.license.graceMinutes)
+      } : null,
+      evaluation: g.evaluation === true,
       released: g.released === true, guestReported: g.guestReported === true, installEjected: g.installEjected === true, auxiliaryEjected: g.auxiliaryEjected === true, kms: g.kms === true,
       status: str(g.stage) + ", " + str(g.activation) + (str(g.partialKey) ? " (…" + str(g.partialKey) + ")" : "") + (g.guestReported === true ? " · guest-reported" : "") }))
   };
@@ -1465,6 +1472,7 @@ function createHostAdminModel(deps = {}) {
         }
         case "addWindowsKey": await client.addWindowsKey(args); return { ok: true };
         case "deleteWindowsKey": await client.deleteWindowsKey(str(args.id)); return { ok: true };
+        case "reactivateWindows": await client.reactivateWindows(str(args.name), { incarnation: str(args.incarnation), operationId: str(args.operationId) }); return { ok: true };
         case "assignWindowsKey": await client.assignWindowsKey(str(args.name), { incarnation: str(args.incarnation), keyId: str(args.keyId) }); return { ok: true };
         case "acquireWindowsMedia": { const res = await client.acquireWindowsMedia(args); notice("info", `Windows media job ${str(res.jobId)} started.`); return { ok: true, jobId: str(res.jobId) }; }
         case "prepareWindowsMedia": { const res = await client.prepareWindowsMedia(str(args.id)); notice("info", `Windows media job ${str(res.jobId)} started.`); return { ok: true, jobId: str(res.jobId) }; }
