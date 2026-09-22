@@ -166,6 +166,27 @@ or `--windows server-2022`/`server-2025` on acquire), so the create command can 
 product that the selected media does not contain. No matching key: the
 guest stays on the generic key and its grace period, and the panel shows "not activated".
 
+Hyper-V checks for a delivered key through the `Construct Windows activation` SYSTEM
+scheduled task, at startup and every minute without an expiry. First logon installs
+the task and returns immediately. The script lives under
+`%ProgramFiles%\Construct\WindowsActivation`, where ordinary users cannot modify it.
+A digest receipt written before invoking `slmgr` prevents another task run or a reboot
+from repeating an attempted activation, including failed or interrupted attempts.
+The host still allows 30 minutes after delivery for a result. Proxmox continues to
+activate directly through the QEMU guest agent.
+
+Existing Hyper-V guests created with the old 30-minute first-logon listener need the
+updated, Hyper-V-rendered `construct-report.ps1` run once as administrator inside
+the guest to install this task. Updating the host alone does not replace guest files.
+Run the script without `-PollKey` for setup. If the host already marked an assignment
+failed or cleared its key, installing the task alone does not reset that assignment
+or retry activation.
+
+Stopping or saving a VM retains its key assignment. Full deletion releases the
+assignment after the VM and its storage have been removed. This makes a Retail key
+available to another matching guest in Construct; it does not undo activation with
+Microsoft. MAK usage is an attempt counter and is not refunded on deletion.
+
 Key storage: encrypted at rest with a host key that is DPAPI-protected on Windows and a
 root-only file under `/etc/constructd/keys/` on Linux; the API returns only the last five
 characters, the audit log never the key.

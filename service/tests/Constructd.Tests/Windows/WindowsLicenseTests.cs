@@ -34,6 +34,20 @@ public class WindowsLicenseTests : IDisposable
         await Assert.ThrowsAsync<ChildValidationException>(() => store.AssignAsync(server, key.Id, "admin", default));
     }
     [Fact]
+    public async Task Released_retail_key_can_be_assigned_to_another_VM()
+    {
+        var store = Store();
+        var key = await store.AddAsync("win11", "pro", "retail", "ABCDE-FGHIJ-KLMNO-PQRST-UVWXY", null, null, "admin", default);
+        var first = (await store.RegisterAsync(Vm("one"), default)) with { Stage = "installed" };
+        var second = (await store.RegisterAsync(Vm("two"), default)) with { Stage = "installed" };
+        await store.SaveAsync(first, default); await store.SaveAsync(second, default);
+        first = await store.AssignAsync(first, null, "system", default);
+        await store.BeginActivationAsync(first, default);
+        Assert.Null((await store.AssignAsync(second, null, "system", default)).KeyId);
+        await store.ReleaseAsync(first.VmName, first.Incarnation, default);
+        Assert.Equal(key.Id, (await store.AssignAsync(second, null, "system", default)).KeyId);
+    }
+    [Fact]
     public async Task Mak_budget_is_not_refunded_on_delete_or_double_charged_on_retry()
     {
         var store = Store(); var key = await store.AddAsync("server2022", "standard", "mak", "ABCDE-FGHIJ-KLMNO-PQRST-UVWXY", 1, null, "admin", default);

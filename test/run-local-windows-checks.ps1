@@ -13,6 +13,7 @@ try {
         'test/hyperv-prereqs.test.ps1',
         'service/tests/host-installer.test.ps1',
         'service/tests/Constructd.Tests/Network/network-script.test.ps1',
+        'service/tests/Constructd.Tests/Windows/windows-guest-report.test.ps1',
         'test/remote-driver.test.ps1',
         'test/remote-install.test.ps1'
     )) {
