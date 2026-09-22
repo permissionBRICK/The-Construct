@@ -135,10 +135,10 @@ and an auxiliary ISO for unattended-install files. Auxiliary uploads can contain
 apply owner/reference access controls and do not expose contents or credentials in logs.
 Create powered on by default; support powered-off creation for setup before first boot.
 
-Explicit hardware inputs include CPU count, fixed RAM and maximum disk size. Expose
+Hardware inputs include an optional CPU override, required fixed RAM and maximum disk size. Expose
 capability-checked settings for firmware/generation, Secure Boot and its template,
 virtual TPM, boot order and supported optical attachments. Optional Windows/Linux presets
-may help select firmware options but cannot fill in missing CPU/RAM/disk/lifetime values.
+may help select firmware options. CPU defaults come from the host allowance; RAM, disk size and lifetime remain explicit.
 Reject unsupported combinations before allocating a VM. Report image transfer/VM boot as
 such; do not promise generic OS installation completion without guest-specific evidence.
 
