@@ -6,7 +6,7 @@ using Constructd.Core.Logic;
 using Constructd.Windows.Internal;
 namespace Constructd.Windows.HyperV;
 
-public sealed partial class HyperVChildDriver(IProcessRunner processes, ConstructdOptions options, IHypervisorDriver legacy) : IChildVmDriver, IChildVmStorage, IChildVmCreationOwnership, IWindowsGuestChannel
+public sealed partial class HyperVChildDriver(IProcessRunner processes, ConstructdOptions options, IHypervisorDriver legacy) : IChildVmDriver, IChildVmStorage, IChildVmCreationOwnership, IWindowsGuestChannel, IWindowsLicenseMachines
 {
     private BackendCapabilities? _capabilities;
     private readonly SemaphoreSlim _capabilityGate = new(1, 1);
@@ -54,7 +54,7 @@ public sealed partial class HyperVChildDriver(IProcessRunner processes, Construc
         HardwarePresets.ValidateCapabilities(descriptor.Hardware, await GetCapabilitiesAsync(ct), descriptor.AuxiliaryMediaPath is not null);
         var canonicalDisk = DiskPath(descriptor.Name) ?? (await ResolveStorageAsync(descriptor.Name, ct)).DiskPath;
         progress?.Report("Creating general-purpose VM hardware and disk.");
-        await RunAsync("create", "New-ConstructChildVm", "-Descriptor $inputData", new { descriptor.Name, descriptor.Hardware, VhdPath = descriptor.VhdPath ?? canonicalDisk, OwnershipPath = canonicalDisk + ".childvm.json", descriptor.InstallMediaPath, descriptor.AuxiliaryMediaPath, descriptor.SwitchName, OperationId = operationId }, ct, TimeSpan.FromMinutes(30));
+        await RunAsync("create", "New-ConstructChildVm", "-Descriptor $inputData", new { descriptor.Name, descriptor.Hardware, VhdPath = descriptor.VhdPath ?? canonicalDisk, OwnershipPath = canonicalDisk + ".childvm.json", descriptor.InstallMediaPath, descriptor.AuxiliaryMediaPath, descriptor.SwitchName, OperationId = operationId, LicenseBaseline = options.WindowsLicenseReuse && descriptor.Hardware.Os == "windows" }, ct, TimeSpan.FromMinutes(30));
     }
     public async Task RemoveAsync(string name, IProgress<string>? progress, CancellationToken ct)
     {

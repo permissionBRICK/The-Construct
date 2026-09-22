@@ -528,18 +528,43 @@
     const keys = $("windowsKeys"); clear(keys);
     for (const key of w.keys) {
       const row = el("div", "ha-row");
-      row.appendChild(cell(`${key.product} ${key.edition} · ${key.kind} · …${key.partialKey} · ${key.used}/${key.budget === null ? "unlimited" : key.budget} · ${key.notes}`));
+      row.appendChild(cell(`${key.product} ${key.edition} · ${key.kind} · …${key.partialKey} · ${key.used} online attempts${key.budget === null ? "" : " / " + key.budget + " local budget"} · ${key.notes}`));
       const remove = btn("Remove", "danger", () => act("deleteWindowsKey", { id: key.id }));
       remove.disabled = w.guests.some(g => g.keyId === key.id && !g.released); row.appendChild(remove); keys.appendChild(row);
     }
     const guests = $("windowsGuests"); clear(guests);
     for (const guest of w.guests) {
-      const row = el("div", "ha-row"); row.appendChild(cell(`${guest.vmName} · ${guest.product} ${guest.edition} · ${guest.status}${guest.released ? " · released" : ""} · install ${guest.installEjected ? "ejected" : "attached"} · answer file ${guest.auxiliaryEjected ? "ejected" : "attached"}${guest.error ? " · " + guest.error : ""}`));
-      if (!guest.released && guest.stage === "installed" && !guest.keyId && !guest.kms && guest.error !== "evaluation-media-requires-conversion") {
+      const row = el("div", "ha-row"); row.appendChild(cell(`${guest.vmName} · ${guest.product} ${guest.edition} · ${guest.stage} · last Construct result: ${guest.activation}${guest.guestReported ? " · guest-reported" : ""}${guest.released ? " · released" : ""} · install ${guest.installEjected ? "ejected" : "attached"} · answer file ${guest.auxiliaryEjected ? "ejected" : "attached"}${guest.error ? " · " + guest.error : ""}`));
+      if (guest.license) {
+        const l = guest.license;
+        const states = ["Not activated", "Activated", "Initial activation grace", "Hardware change grace", "Non-genuine grace", "Notification", "Extended grace"];
+        const checked = Date.parse(l.observedAt);
+        const stale = !Number.isFinite(checked) || Date.now() - checked > 5 * 60 * 1000;
+        const details = [states[l.status] || "License status unknown"];
+        if (l.partialKey) details.push(`installed key …${l.partialKey}`);
+        if (l.channel) details.push(l.channel);
+        if (guest.keyId) details.push(l.partialKey === guest.partialKey ? "host key installed" : "host key differs");
+        else if (l.status === 1) details.push("user-managed activation");
+        if (guest.evaluation && l.evaluationEnd) details.push(`evaluation expires ${l.evaluationEnd}`);
+        if (l.graceMinutes > 0) details.push(`${guest.kms ? "KMS renewal" : "activation grace"}: ${l.graceMinutes} minutes at observation`);
+        if (l.reason) details.push(`reason 0x${l.reason.toString(16).toUpperCase().padStart(8, "0")}`);
+        details.push(`checked ${l.observedAt || "unknown"}${stale ? " · stale" : ""}`);
+        row.appendChild(cell(details.join(" · ")));
+      } else row.appendChild(cell("License observation unavailable"));
+      if (!guest.released && guest.stage === "installed" && !guest.keyId && guest.activation !== "activated" && !guest.kms && guest.error !== "evaluation-media-requires-conversion") {
         const select = el("select");
         for (const key of w.keys.filter(k => k.hostId === guest.hostId && k.product === guest.product && k.edition === guest.edition)) { const option = el("option", "", `${key.kind} …${key.partialKey}`); option.value = key.id; select.appendChild(option); }
         row.appendChild(select); const assign = btn("Assign", "", () => act("assignWindowsKey", { name: guest.vmName, incarnation: guest.incarnation, keyId: select.value })); assign.disabled = !select.options.length; row.appendChild(assign);
       }
+      if (!guest.released && (guest.operation?.stage === "failed" || guest.operation?.stage === "verified" && guest.license?.status != null && guest.license.status !== 1)) {
+        row.appendChild(btn("Activate again", "", () => act("reactivateWindows", { name: guest.vmName, incarnation: guest.incarnation, operationId: guest.operation.id })));
+      }
+      if (guest.operation) row.appendChild(cell(`Activation operation: ${guest.operation.mode} · ${guest.operation.stage}`));
+      guests.appendChild(row);
+    }
+    for (const machine of w.machines || []) {
+      const row = el("div", "ha-row");
+      row.appendChild(cell(`Retained VM ${machine.incarnation} · ${machine.state} · ${machine.vmName || "unassigned"} · ${machine.hasConfirmationId ? "confirmation saved" : "no confirmation"} · ${machine.reuses} reuses`));
       guests.appendChild(row);
     }
   }

@@ -67,8 +67,8 @@ public sealed class WindowsMediaJobs(IMediaStore store, IMediaFiles files, IMedi
         var id = Id("windows-unattend:" + vm.CurrentJobId);
         await using var locked = await gate.AcquireAsync(id, "windows-unattend", ct);
         if (await store.GetAsync(id, ct) is { State: MediaState.Ready } existing) return existing;
-        var content = new Dictionary<string, string>(WindowsUnattendRenderer.Render(WindowsUnattendRenderer.Parse(vm.Hardware!.Windows!), image, request))
-        { ["construct-report.ps1"] = WindowsUnattendRenderer.GuestReportScript(options.IsProxmox) };
+        var content = new Dictionary<string, string>(WindowsUnattendRenderer.Render(WindowsUnattendRenderer.Parse(vm.Hardware!.Windows!), image, request, options.WindowsLicenseReuse && !options.IsProxmox))
+        { ["construct-report.ps1"] = WindowsUnattendRenderer.GuestReportScript(options.IsProxmox, options.WindowsLicenseReuse && !options.IsProxmox ? WindowsLicenseStore.Allocation(vm) : null, WindowsUnattendRenderer.GenericKey(WindowsUnattendRenderer.Parse(vm.Hardware.Windows!))[^5..]) };
         var item = new MediaItem(id, vm.Owner, "Windows answer file", MediaRole.Auxiliary, MediaSource.Upload, null, files.PathFor(id), MediaState.Transferring,
             null, 4L << 20, null, null, null, vm.CurrentJobId, vm.Name, clock.UtcNow, null, null);
         await ResetAsync(item, ct);

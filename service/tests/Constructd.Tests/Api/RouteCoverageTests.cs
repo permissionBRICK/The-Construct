@@ -31,6 +31,7 @@ public class RouteCoverageTests
         "POST /api/v1/host/windows/keys",
         "DELETE /api/v1/host/windows/keys/{id}",
         "POST /api/v1/host/windows/guests/{name}/assign",
+        "POST /api/v1/host/windows/guests/{name}/reactivate",
         "GET /api/v1/vms/{name}/windows",
         "POST /api/v1/media/uploads",
         "PUT /api/v1/media/uploads/{id}/chunks/{index:int}",
