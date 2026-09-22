@@ -66,11 +66,27 @@ public sealed class ChildCreateJob(IVmRepository vms, IVmMetadataStore identity,
                 if (install is null) throw new ChildValidationException("media-not-ready", "installMediaId");
                 await Phase("hardware");
                 HardwarePresets.ValidateCapabilities(vm.Hardware!, await driver.GetCapabilitiesAsync(ct), auxiliary is not null);
-                // Any create attempt may allocate before reporting failure. Cleanup uses its ownership marker.
-                allocationAttempted = true;
                 var descriptor = new ChildVmDescriptor(vm.Name, vm.Hardware!, placement.DiskPath, install, auxiliary, options.SwitchName, guestAgent);
                 retained = options.WindowsLicenseReuse && !options.IsProxmox && vm.Hardware?.Os == "windows"
                     ? await licenses.ReserveMachineAsync(vm, ct) : null;
+                if (!start && retained is null && options.WindowsLicenseReuse && !options.IsProxmox && vm.Hardware?.Os == "windows")
+                {
+                    // New reusable machines briefly boot disconnected firmware to
+                    // initialize their TPM before any tenant disk is attached.
+                    var held = (await capacity.SnapshotAsync(false, ct)).Reservations
+                        .Where(r => r.VmName == vm.Name && r.OperationId == job.Id && r.Resource != ReservationResource.Storage).ToArray();
+                    var needed = new ReservationLine[] { new(ReservationResource.Ram, vm.RamBytes, null, null), new(ReservationResource.Cpu, vm.Cpu, null, null) }
+                        .Select(l => l with { Amount = l.Amount - held.Where(r => r.Resource == l.Resource).Sum(r => r.Amount) }).Where(l => l.Amount > 0).ToArray();
+                    reservationIds = reservationIds.Concat(held.Select(r => r.Id)).Distinct().ToArray();
+                    if (needed.Length > 0)
+                    {
+                        var reserved = await capacity.TryReserveAsync(new(vm.Owner, vm.Name, job.Id, needed, TimeSpan.FromHours(2)), ct);
+                        if (!reserved.Allowed) throw new ChildValidationException(reserved.Reason == "inventory-incomplete" ? "capacity-unavailable" : "capacity-exhausted", "baseline");
+                        reservationIds = reservationIds.Concat(reserved.ReservationIds).ToArray();
+                    }
+                }
+                // Any create attempt may allocate before reporting failure. Cleanup uses its ownership marker.
+                allocationAttempted = true;
                 if (retained is not null && driver is IWindowsLicenseMachines pool)
                     await pool.ReuseWindowsAsync(retained, descriptor, job.Id, ct);
                 else await ownership.CreateOwnedAsync(descriptor, job.Id, progress, ct);
@@ -101,8 +117,11 @@ public sealed class ChildCreateJob(IVmRepository vms, IVmMetadataStore identity,
             else
             {
                 if (state != VmState.Off) throw new ChildValidationException("create-state-unverified", "state");
+                var runtime = (await capacity.SnapshotAsync(false, ct)).Reservations
+                    .Where(r => reservationIds.Contains(r.Id) && r.Resource != ReservationResource.Storage).Select(r => r.Id).ToArray();
                 var confirmed = await admission.MutateAsync(null, async scope =>
                 {
+                    await scope.ReleaseReservationsAsync(runtime, state, "firmware baseline prepared");
                     await scope.ConfirmReservationsAsync(reservationIds, state);
                     return true;
                 }, ct);

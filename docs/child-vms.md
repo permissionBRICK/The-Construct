@@ -149,11 +149,18 @@ pool. Existing installations retain their previous activation path; they do not 
 a clean security baseline retroactively. Use host-generated answer media for the
 preview so the guest's allocation identifier and activation protocol are present.
 
-Adding a key creates no VM. A new request first reserves an available machine with
+Adding a key creates no VM. New machines briefly boot disconnected firmware before
+attaching any disk or installation media, so the exported baseline contains an
+initialized TPM but no tenant state. This requires temporary CPU/RAM capacity even
+with `--no-start`; those reservations are released once the VM is confirmed off.
+The guest OS does not boot until requested. Earlier experimental baselines without
+this initialization cannot be reused; retire their idle machines and create new ones.
+
+A new request first reserves an available machine with
 the exact original hardware profile, or creates the requested hardware. Each eligible
 Retail/MAK assignment binds the key to that Hyper-V identity. Deletion removes tenant
 disks, checkpoint chains, saved state and configuration, then imports the pristine
-pre-boot export with the same VM GUID and vTPM identity. The idle machine has no disks,
+firmware-initialized export with the same VM GUID and vTPM identity. The idle machine has no disks,
 network connection, owner or parent, and automatic startup is disabled. A VM that
 never received a managed key is fully deleted. Personal keys are not harvested.
 
@@ -183,8 +190,8 @@ is rejected. `GET /api/v1/host/windows` includes masked `machines` plus guest
 The diskless lifecycle can be checked without a Windows license or installation:
 
 ```powershell
-# Elevated Windows PowerShell; the test never starts its VM and cleans up in finally.
-.\test\windows-license-lifecycle.live.ps1 -StorageRoot D:\VmTests
+# Elevated Windows PowerShell; boots only isolated firmware and cleans up in finally.
+.\test\windows-license-lifecycle.live.ps1 -StorageRoot D:\VmTests -LifetimeMinutes 5
 ```
 
 This verifies configuration/storage mechanics, not Windows activation or removal

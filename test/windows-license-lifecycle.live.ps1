@@ -1,8 +1,9 @@
 #Requires -Version 5.1
 #Requires -Modules Hyper-V
-# Run elevated on a disposable Hyper-V test host. Creates only an OFF VM; no
-# Windows installation, key or Microsoft activation is involved.
-param([Parameter(Mandatory=$true)][string]$StorageRoot)
+# Run elevated on a disposable Hyper-V test host. Briefly boots only isolated
+# firmware; no Windows installation, key or Microsoft activation is involved.
+param([Parameter(Mandatory=$true)][string]$StorageRoot,
+    [Parameter(Mandatory=$true)][ValidateRange(5,60)][int]$LifetimeMinutes)
 . (Join-Path $PSScriptRoot '../drivers/hyperv-local/HyperVLocal.ChildVm.ps1')
 . (Join-Path $PSScriptRoot '../drivers/hyperv-local/HyperVLocal.WindowsLicense.ps1')
 $ErrorActionPreference='Stop'
@@ -12,6 +13,10 @@ if ($StorageRoot.Contains("'")) { throw 'Use a test storage path without apostro
 $root=Join-Path $StorageRoot $name
 $id=$null
 $configs=@()
+$taskName='Construct-LicenseProof-'+$suffix
+$action=New-ScheduledTaskAction -Execute powershell.exe -Argument ('-NoProfile -NonInteractive -Command "Get-VM -Name '+$name+','+$name+'-next -ErrorAction SilentlyContinue | Stop-VM -TurnOff -Confirm:$false"')
+$trigger=New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes($LifetimeMinutes)
+Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -User SYSTEM -RunLevel Highest -Force|Out-Null
 try {
     New-Item -ItemType Directory -Path $root | Out-Null
     $helper=Join-Path $root 'functions.ps1'
@@ -21,7 +26,7 @@ try {
         & powershell.exe -NoProfile -NonInteractive -EncodedCommand ([Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script)))
         if ($LASTEXITCODE -ne 0) { throw 'Isolated driver operation failed' }
     }
-    $h=@{ cpus=2; ramMb=4096; diskGb=1; generation=2; secureBoot=$true; secureBootTemplate='microsoftWindows'; tpm=$true; bootOrder=@('disk'); networkAttached=$true }
+    $h=@{ cpus=[int](Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors; ramMb=512; diskGb=1; generation=2; secureBoot=$true; secureBootTemplate='microsoftWindows'; tpm=$true; bootOrder=@('disk'); networkAttached=$true }
     $switch=(Get-VMSwitch | Select-Object -First 1).Name
     $disk=Join-Path $root 'first.vhdx'
     @{name=$name;hardware=$h;vhdPath=$disk;switchName=$switch;operationId='proof-first';licenseBaseline=$true} | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $root 'descriptor.json')
@@ -58,4 +63,5 @@ try {
     if ($id) { Get-VM -Id ([guid]$id) -ErrorAction SilentlyContinue | Remove-VM -Force -ErrorAction Stop }
     foreach ($config in @($configs | Select-Object -Unique)) { if (Test-Path -LiteralPath $config) { Remove-Item -LiteralPath $config -Recurse -ErrorAction Stop } }
     if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -ErrorAction Stop }
+    $scheduler=New-Object -ComObject Schedule.Service; $scheduler.Connect(); $scheduler.GetFolder('\').DeleteTask($taskName,0)
 }

@@ -61,6 +61,7 @@ public sealed class FakeChildVmDriver(FakeHypervisorDriver hypervisor) : IChildV
     public Exception? Failure { get; set; }
     public Exception? RemoveFailure { get; set; }
     public Exception? FailureAfterCreate { get; set; }
+    public Action<ChildVmDescriptor>? Creating { get; set; }
     public Exception? FailureAfterHardware { get; set; }
     public Action<string>? HardwareApplied { get; set; }
     public Exception? FailureAfterMedia { get; set; }
@@ -94,6 +95,7 @@ public sealed class FakeChildVmDriver(FakeHypervisorDriver hypervisor) : IChildV
     public Task CreateOwnedAsync(ChildVmDescriptor descriptor, string operationId, IProgress<string>? progress, CancellationToken ct)
     {
         Check(ct); HardwarePresets.ValidateCapabilities(descriptor.Hardware, Capabilities, descriptor.AuxiliaryMediaPath is not null);
+        Creating?.Invoke(descriptor);
         if (!_vms.TryAdd(descriptor.Name, (descriptor, Guid.NewGuid().ToString()))) throw new InvalidOperationException("VM already exists.");
         _creationOperations[descriptor.Name] = operationId; _templateLocked[descriptor.Name] = descriptor.Hardware.Tpm; hypervisor.SetState(descriptor.Name, VmState.Off); Calls.Enqueue("create:" + descriptor.Name); if (FailureAfterCreate is not null) throw FailureAfterCreate; return Task.CompletedTask;
     }
