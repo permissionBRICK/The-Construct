@@ -40,17 +40,43 @@ function Get-ConstructLicensePath {
     return Join-Path (Join-Path $PoolRoot 'windows-license-pool') $id
 }
 function Assert-ConstructLicensePool {
-    param([string]$Pool, [string]$Incarnation)
+    param([string]$Pool, [string]$Incarnation, [switch]$Initialized)
     $marker = Join-Path $Pool 'owner.json'
     if (-not (Test-Path -LiteralPath $marker)) { throw 'artifact-ownership-unverified' }
     $owner = Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json
     if ([guid]$owner.id -ne [guid]$Incarnation -or $owner.pool -ine $Pool) { throw 'artifact-ownership-unverified' }
+    if ($Initialized -and $owner.version -ne 2) { throw 'artifact-ownership-unverified' }
+}
+function Initialize-ConstructLicenseFirmware {
+    param([string]$Name)
+    # A never-booted vTPM has no stable endorsement identity. Initialize it using
+    # only trusted firmware, before any tenant disk, media or network can run.
+    # The caller must hold runtime CPU/RAM capacity, even for --no-start.
+    $vm = Get-VM -Name $Name -ErrorAction Stop
+    if ([string]$vm.State -ne 'Off' -or @(Get-VMHardDiskDrive -VM $vm).Count -ne 0 -or
+        @(Get-VMDvdDrive -VM $vm).Count -ne 0 -or @(Get-VMSnapshot -VM $vm).Count -ne 0) { throw 'artifact-ownership-unverified' }
+    $adapters = @(Get-VMNetworkAdapter -VM $vm)
+    $connections = @($adapters | ForEach-Object { @{ Adapter=$_; SwitchName=[string]$_.SwitchName } })
+    try {
+        $adapters | Disconnect-VMNetworkAdapter -ErrorAction Stop
+        Start-VM -VM $vm -ErrorAction Stop
+        Start-Sleep -Seconds 5
+    } finally {
+        # Stop even after a partial Start-VM failure. Never reconnect while the
+        # firmware VM is running, and never export a running machine's state.
+        $vm = Get-VM -Name $Name -ErrorAction Stop
+        if ([string]$vm.State -ne 'Off') { Stop-VM -VM $vm -TurnOff -Confirm:$false -ErrorAction Stop }
+        if ([string](Get-VM -Name $Name).State -ne 'Off') { throw 'cleanup-unverified' }
+        foreach ($connection in $connections) {
+            if ($connection.SwitchName) { Connect-VMNetworkAdapter -VMNetworkAdapter $connection.Adapter -SwitchName $connection.SwitchName -ErrorAction Stop }
+        }
+    }
 }
 function Clear-ConstructLicenseAllocation {
     param([string]$Name, [string]$Incarnation, [string]$VhdPath)
     $disk = Get-ConstructChildDiskPath -Name $Name -VhdPath $VhdPath
     $pool = Get-ConstructLicensePath $Incarnation (Split-Path $disk -Parent)
-    Assert-ConstructLicensePool $pool $Incarnation
+    Assert-ConstructLicensePool $pool $Incarnation -Initialized
     $vm = Get-VM -Id ([guid]$Incarnation) -ErrorAction SilentlyContinue
     if ($vm -and $vm.Name -ine $Name) {
         # A retry after restoring the pristine definition must not destroy it.
@@ -65,7 +91,7 @@ function Save-ConstructLicenseMachine {
     param([string]$Name, [string]$Incarnation, [string]$VhdPath)
     $disk = Get-ConstructChildDiskPath -Name $Name -VhdPath $VhdPath
     $pool = Get-ConstructLicensePath $Incarnation (Split-Path $disk -Parent)
-    Assert-ConstructLicensePool $pool $Incarnation
+    Assert-ConstructLicensePool $pool $Incarnation -Initialized
     $poolName = 'lic-' + ([guid]$Incarnation).ToString('N')
     $working = Join-Path $pool 'working'
     $vm = Get-VM -Id ([guid]$Incarnation) -ErrorAction SilentlyContinue
@@ -93,7 +119,7 @@ function Restore-ConstructLicenseMachine {
     Assert-ConstructChildVmName $name
     Assert-ConstructChildHardware $Descriptor.hardware
     $pool = Get-ConstructLicensePath $Incarnation $PoolRoot
-    Assert-ConstructLicensePool $pool $Incarnation
+    Assert-ConstructLicensePool $pool $Incarnation -Initialized
     $vm = Get-VM -Id ([guid]$Incarnation) -ErrorAction Stop
     if ($vm.Name -ine ('lic-' + ([guid]$Incarnation).ToString('N')) -and $vm.Name -ine $name) { throw 'vm-incarnation-conflict' }
     if ([string]$vm.State -ne 'Off') { throw 'vm-not-off' }

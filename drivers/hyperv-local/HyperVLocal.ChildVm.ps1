@@ -392,8 +392,9 @@ function New-ConstructChildVm {
             if (-not $mac -or $mac -eq '000000000000') { $mac = '02' + ([guid]$vm.Id).ToString('N').Substring(0,10) }
             Set-VMNetworkAdapter -VMNetworkAdapter $nic -StaticMacAddress $mac -ErrorAction Stop
         }
+        Initialize-ConstructLicenseFirmware -Name $name
         Export-VM -VM $vm -Path (Join-Path $pool 'baseline') -ErrorAction Stop
-        @{ id=[string]$vm.Id; pool=$pool } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $pool 'owner.json') -Encoding UTF8
+        @{ id=[string]$vm.Id; pool=$pool; version=2 } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $pool 'owner.json') -Encoding UTF8
     }
     $null = New-VHD -Path $disk -Dynamic -SizeBytes ([long]$h.diskGb * 1GB) -ErrorAction Stop
     Add-VMHardDiskDrive -VMName $name -ControllerType SCSI -ControllerNumber 0 -ControllerLocation 0 -Path $disk -ErrorAction Stop

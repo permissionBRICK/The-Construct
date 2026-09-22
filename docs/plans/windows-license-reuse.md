@@ -2,7 +2,7 @@
 
 Design and validation requirements, 2026-09-22. The implementation is an opt-in
 Hyper-V preview. See [the operator guide](../child-vms.md#hyper-v-license-reuse-preview)
-for configuration and conservative compatibility restrictions. Real-license replay
+for configuration and conservative compatibility restrictions. Real CID replay
 and tenant security cleanup still require the proof described below.
 
 ## Agreed behavior
@@ -84,6 +84,15 @@ performs another online activation, that platform configuration does not meet th
 requirement. User-initiated activation with a personal key remains supported.
 
 ## Persistent machine and disposable user allocation
+
+The pristine baseline must be captured after TPM initialization but before tenant
+code runs. A never-booted Hyper-V export did not preserve the TPM endorsement key
+in live testing. Boot only disconnected firmware with no disks or optical drives,
+stop the machine, then export it. Reserve CPU/RAM for this step even when the user
+requests a powered-off VM, and release temporary holds after confirming Off.
+A live offline probe preserved the same EK across this baseline restore and fresh
+disks. Digital Windows 11 Pro reactivation also passed separately; neither result
+proves MAK/CID replay or removal of tenant TPM secrets.
 
 Separate three records:
 
