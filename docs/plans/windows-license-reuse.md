@@ -23,6 +23,9 @@ a real Hyper-V proof before the pool lifecycle can be implemented with confidenc
 - A key remains associated with its retained VM identity. Reuse installs Windows
   on a new disk, installs the same key, applies the saved confirmation ID and
   verifies the resulting Windows activation state.
+- Retention is only for machines associated with a host-managed pool key. A VM
+  that never had one is fully deleted, including its definition, vTPM state and
+  storage. Unactivated and evaluation-only VMs do not become reusable machines.
 - A failed replay never automatically obtains a new confirmation ID or starts a
   new online activation. The host displays the failure. An administrator can choose
   **Activate again** to authorize one new online activation and replace the saved
@@ -114,8 +117,11 @@ Delete flow: fence the allocation, revoke access, turn off the VM, remove all us
 disks and checkpoint chains, saved memory, answer media, forwarding rules and old
 guest-channel messages, then clean the retained security state. Verify completion
 before exposing the machine as idle. A partial cleanup remains unavailable and
-resumable. A VM with no managed pool identity is deleted normally, including VMs
-activated with a user's personal key; do not collect that key or its CID for reuse.
+resumable. A VM with no managed pool identity follows full deletion: remove its
+hypervisor definition, vTPM/security state and all owned storage, and create no
+idle pool entry. This includes never-licensed and evaluation-only VMs, and VMs
+activated solely with a user's personal key; do not collect that key or its CID
+for reuse.
 
 An idle machine has no user, no parent, no disks, disconnected network access and
 automatic startup disabled. It is absent from users' VM lists but visible in the
@@ -198,6 +204,8 @@ not Microsoft's authoritative remaining activation count.
    changes, interrupted CID acquisition and host restart recovery. Verify that
    adding keys creates no VMs, first requests use their requested hardware, and
    incompatible idle machines are not resized or reused without matching policy.
+   Verify full deletion without a retained pool entry for never-licensed,
+   evaluation-only and solely personal-key VMs.
 
 Start retained-machine reuse on Hyper-V. Keep the reporting contract applicable
 to both Hyper-V and Proxmox; Proxmox retention and identity preservation require a
