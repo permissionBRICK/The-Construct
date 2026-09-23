@@ -4,10 +4,8 @@
 
         pwsh -NoProfile -File test/remote-client.test.ps1
 
-    Self-contained and network-free: Invoke-WebRequest is SHADOWED by a function defined
-    in this script's scope, so every request the client makes is recorded instead of
-    sent. PowerShell resolves functions before cmdlets, and the library is dot-sourced
-    into this same scope, so its calls land on the stub.
+    Self-contained: most requests use a shadowed Invoke-WebRequest. PS 7 pinning tests
+    use a local TLS listener that swaps certificates between connections.
 
     What this pins:
       * URL/slug normalisation -- the two clients (PS + extension) must derive the SAME
@@ -289,38 +287,168 @@ namespace ConstructTest {
     ok "pinning: ...naming the enrolment step" ($msg -match 'Add the host')
     ok "pinning: ...and NO request was made" ($script:calls.Count -eq 0)
 
-    # With a pin in place, the PS7 path verifies the presented certificate BEFORE the
-    # request. Shadow the reader so no socket is opened.
-    $script:presented = $FP_A
-    function Get-ConstructRemoteFingerprint { param([string]$BaseUrl, [int]$TimeoutMs = 10000) return $script:presented }
-    [void](Save-ConstructRemotePin -BaseUrl $SVC -Fingerprint $FP_A -StoreDir $store)
-
-    Reset-Calls
-    $script:presented = $FP_A
-    [void](Invoke-ConstructApi -BaseUrl $SVC -Method GET -Path '/whoami' -Auth $tokenAuth -StoreDir $store)
-    ok "pinning: a matching certificate lets the request through" ($script:calls.Count -eq 1)
     if (Test-ConstructPwshCore) {
-        ok "pinning: PS7 skips the (useless) chain check after verifying itself" ($script:calls[0].SkipCertificateCheck -eq $true)
-    } else {
-        ok "pinning: PS 5.1 pins inside the handshake, so no skip flag is passed" ($script:calls[0].SkipCertificateCheck -eq $false)
+        Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Concurrent;
+using System.IO;
+using System.Net;
+using System.Net.Security;
+using System.Net.Sockets;
+using System.Security.Authentication;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+namespace ConstructTest {
+    public sealed class TlsConnection {
+        public string Certificate;
+        public volatile bool ReceivedHttp;
+        public volatile string Request = "";
     }
+    public sealed class SwappingTlsListener : IDisposable {
+        public readonly X509Certificate2 A = CreateCertificate("A");
+        public readonly X509Certificate2 B = CreateCertificate("B");
+        public readonly ConcurrentQueue<TlsConnection> Connections = new ConcurrentQueue<TlsConnection>();
+        readonly TcpListener listener = new TcpListener(IPAddress.Loopback, 0);
+        readonly CancellationTokenSource stop = new CancellationTokenSource();
+        readonly Task loop;
+        public int Port { get { return ((IPEndPoint)listener.LocalEndpoint).Port; } }
+        static X509Certificate2 CreateCertificate(string name) {
+            using (var key = RSA.Create(2048)) {
+                var request = new CertificateRequest("CN=" + name, key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+                using (var cert = request.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-1), DateTimeOffset.UtcNow.AddDays(1))) {
+                    return new X509Certificate2(cert.Export(X509ContentType.Pfx));
+                }
+            }
+        }
+        public SwappingTlsListener() {
+            listener.Start();
+            loop = Task.Run(Run);
+        }
+        async Task Run() {
+            try {
+                while (!stop.IsCancellationRequested) {
+                    using (var client = await listener.AcceptTcpClientAsync(stop.Token))
+                    using (var tls = new SslStream(client.GetStream(), false))
+                    using (var deadline = CancellationTokenSource.CreateLinkedTokenSource(stop.Token)) {
+                        deadline.CancelAfter(TimeSpan.FromSeconds(5));
+                        var token = deadline.Token;
+                        bool first = Connections.IsEmpty;
+                        var record = new TlsConnection { Certificate = first ? "A" : "B" };
+                        Connections.Enqueue(record);
+                        try {
+                            await tls.AuthenticateAsServerAsync(new SslServerAuthenticationOptions {
+                                ServerCertificate = first ? A : B,
+                                EnabledSslProtocols = SslProtocols.Tls12
+                            }, token);
+                            using (var bytes = new MemoryStream()) {
+                                var one = new byte[1];
+                                string headers = "";
+                                while (!headers.EndsWith("\r\n\r\n", StringComparison.Ordinal)) {
+                                    if (await tls.ReadAsync(one, token) == 0) break;
+                                    record.ReceivedHttp = true;
+                                    bytes.WriteByte(one[0]);
+                                    headers = Encoding.UTF8.GetString(bytes.ToArray());
+                                    record.Request = headers;
+                                }
+                                if (!record.ReceivedHttp) continue;
+                                int length = 0;
+                                foreach (var line in headers.Split(new[] { "\r\n" }, StringSplitOptions.None)) {
+                                    if (line.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase))
+                                        length = int.Parse(line.Substring("Content-Length:".Length).Trim());
+                                }
+                                for (int i = 0; i < length; i++) {
+                                    if (await tls.ReadAsync(one, token) == 0) break;
+                                    bytes.WriteByte(one[0]);
+                                }
+                                record.Request = Encoding.UTF8.GetString(bytes.ToArray());
+                                if (headers.Contains("/slow ")) { await Task.Delay(Timeout.Infinite, token); }
+                                bool error = headers.Contains("/error ");
+                                string body = error ? "{\"title\":\"Conflict\",\"detail\":\"refused\",\"code\":\"test-conflict\"}" : "{\"ok\":true}";
+                                string status = error ? "409 Conflict" : "200 OK";
+                                var reply = Encoding.UTF8.GetBytes("HTTP/1.1 " + status + "\r\nContent-Type: application/json\r\nContent-Length: " + Encoding.UTF8.GetByteCount(body) + "\r\nConnection: close\r\n\r\n" + body);
+                                await tls.WriteAsync(reply, token);
+                            }
+                        } catch (AuthenticationException) { }
+                          catch (IOException) { }
+                          catch (OperationCanceledException) { }
+                    }
+                }
+            } catch (OperationCanceledException) { }
+        }
+        public void Dispose() {
+            stop.Cancel();
+            loop.GetAwaiter().GetResult();
+            listener.Stop();
+            stop.Dispose();
+            A.Dispose();
+            B.Dispose();
+        }
+    }
+}
+'@
+        $listener = [ConstructTest.SwappingTlsListener]::new()
+        $originalWebRequest = ${function:Invoke-WebRequest}
+        Remove-Item Function:Invoke-WebRequest
+        try {
+            $tlsBase = "https://127.0.0.1:$($listener.Port)"
+            $pinA = Get-ConstructCertificateFingerprint -Certificate $listener.A
+            $pinB = Get-ConstructCertificateFingerprint -Certificate $listener.B
+            $threw = Test-Throws { Invoke-ConstructApi -BaseUrl $tlsBase -Path /whoami -Auth $tokenAuth -StoreDir $store }
+            ok "pinning: no pin opens no TLS connection" ($threw -and $listener.Connections.Count -eq 0)
+            [void](Save-ConstructRemotePin -BaseUrl $tlsBase -Fingerprint $pinA -StoreDir $store)
+            $result = Invoke-ConstructApi -BaseUrl $tlsBase -Path /whoami -Auth $tokenAuth -StoreDir $store
+            ok "pinning: matching A returns the parsed JSON body" ($result.ok -eq $true)
+            $connections = $listener.Connections.ToArray()
+            ok "pinning: first request uses one connection presenting A" ($connections.Count -eq 1 -and $connections[0].Certificate -eq 'A' -and $connections[0].ReceivedHttp)
+            ok "pinning: matching A receives the bearer token" ($connections[0].Request -match 'Authorization: Bearer abc123')
 
-    if (Test-ConstructPwshCore) {
+            $threw = $false; $msg = ''
+            try { Invoke-ConstructApi -BaseUrl $tlsBase -Path /whoami -Auth $tokenAuth -StoreDir $store | Out-Null }
+            catch { $threw = $true; $msg = $_.Exception.Message }
+            ok "pinning: swapped B is refused" $threw
+            ok "pinning: mismatch names both fingerprints and the pin file" ($msg.Contains($pinA) -and $msg.Contains($pinB) -and $msg.Contains((Get-ConstructRemotePinPath -BaseUrl $tlsBase -StoreDir $store)))
+            $result = Invoke-ConstructApi -BaseUrl $tlsBase -Path /whoami -Auth $tokenAuth -StoreDir $store -NoThrow -Bounded
+            ok "pinning: -NoThrow returns null with pin class" ($null -eq $result -and (Get-ConstructApiLastProblem).Class -eq 'pin' -and (Get-ConstructApiLastStatus) -eq 0)
+            $untrusted = @($listener.Connections.ToArray() | Where-Object Certificate -eq 'B')
+            ok "pinning: mismatched B receives no HTTP bytes" ($untrusted.Count -gt 0 -and @($untrusted | Where-Object ReceivedHttp).Count -eq 0)
+            ok "pinning: bearer token never reaches mismatched B" (@($untrusted | Where-Object { $_.Request -match 'Authorization: Bearer abc123' }).Count -eq 0)
+
+            $result = Invoke-ConstructApi -BaseUrl $tlsBase -Path /whoami -Auth $tokenAuth -StoreDir $store -Pin $pinB
+            ok "pinning: an explicit -Pin B overrides stored A" ($result.ok -eq $true -and $listener.Connections.ToArray()[-1].Request -match 'Authorization: Bearer abc123')
+            ok "pinning: success clears the last error and problem" ((Get-ConstructApiLastError) -eq '' -and (Get-ConstructApiLastProblem).Class -eq 'none' -and (Get-ConstructApiLastStatus) -eq 200)
+
+            $provider = New-ConstructApiAuth -Mode token -Token abc123 -Headers @{ 'X-Construct-Operation-Key' = 'op-key'; 'X-Constructd-Test-Identity' = 'test-user' }
+            $raw = Invoke-ConstructApi -BaseUrl $tlsBase -Path /echo -Method POST -Auth $provider -Pin $pinB -Body @{ name = 'Grüße' } -RawResponse
+            $request = $listener.Connections.ToArray()[-1].Request
+            ok "pinning: HTTPS forwards method, UTF-8 JSON and content type" ($request -match '^POST /api/v1/echo ' -and $request -match 'Content-Type: application/json; charset=utf-8' -and $request -match '"name":"Grüße"')
+            ok "pinning: HTTPS forwards Accept and provider headers" ($request -match 'Accept: application/json' -and $request -match 'X-Construct-Operation-Key: op-key' -and $request -match 'X-Constructd-Test-Identity: test-user')
+            ok "pinning: HTTPS raw response is unchanged" ($raw -ceq '{"ok":true}')
+            $result = Invoke-ConstructApi -BaseUrl $tlsBase -Path /error -Auth $tokenAuth -Pin $pinB -NoThrow
+            ok "pinning: HTTPS error keeps HTTP status and problem body" ($null -eq $result -and (Get-ConstructApiLastStatus) -eq 409 -and (Get-ConstructApiLastProblem).Class -eq 'http' -and (Get-ConstructApiLastProblem).Code -eq 'test-conflict' -and (Get-ConstructApiLastError) -match 'Conflict -- refused')
+            $result = Invoke-ConstructApi -BaseUrl $tlsBase -Path /slow -Auth $tokenAuth -Pin $pinB -TimeoutSec 1 -NoThrow -Bounded
+            ok "pinning: HTTPS timeout keeps timeout class" ($null -eq $result -and (Get-ConstructApiLastStatus) -eq 0 -and (Get-ConstructApiLastProblem).Class -eq 'timeout')
+        } finally {
+            $listener.Dispose()
+            Set-Item Function:Invoke-WebRequest $originalWebRequest
+        }
+    } else {
+        $script:presented = $FP_A
+        function Get-ConstructRemoteFingerprint { param([string]$BaseUrl, [int]$TimeoutMs = 10000) return $script:presented }
+        [void](Save-ConstructRemotePin -BaseUrl $SVC -Fingerprint $FP_A -StoreDir $store)
+        Reset-Calls
+        $script:presented = $FP_A
+        [void](Invoke-ConstructApi -BaseUrl $SVC -Method GET -Path '/whoami' -Auth $tokenAuth -StoreDir $store)
+        ok "pinning: a matching certificate lets the request through" ($script:calls.Count -eq 1)
+        ok "pinning: PS 5.1 pins inside the handshake, so no skip flag is passed" ($script:calls[0].SkipCertificateCheck -eq $false)
+        skip "pinning: a changed certificate is refused" "on Windows PowerShell 5.1 the pin is enforced inside the TLS handshake (ServicePointManager), which a shadowed Invoke-WebRequest cannot exercise -- the PS7 branch covers the comparison itself"
         Reset-Calls
         $script:presented = $FP_B
-        $threw = $false; $msg = ""
-        try { [void](Invoke-ConstructApi -BaseUrl $SVC -Method GET -Path '/whoami' -Auth $tokenAuth -StoreDir $store) }
-        catch { $threw = $true; $msg = $_.Exception.Message }
-        ok "pinning: a CHANGED certificate is refused" $threw
-        ok "pinning: ...naming both fingerprints" ($msg -match [regex]::Escape($FP_A) -and $msg -match [regex]::Escape($FP_B))
-        ok "pinning: ...and NO request was made" ($script:calls.Count -eq 0)
-    } else {
-        skip "pinning: a changed certificate is refused" "on Windows PowerShell 5.1 the pin is enforced inside the TLS handshake (ServicePointManager), which a shadowed Invoke-WebRequest cannot exercise -- the PS7 branch covers the comparison itself"
+        [void](Invoke-ConstructApi -BaseUrl $SVC -Method GET -Path '/whoami' -Auth $tokenAuth -Pin $FP_B -StoreDir $store)
+        ok "pinning: an explicit -Pin overrides the stored one" ($script:calls.Count -eq 1)
     }
-    Reset-Calls
-    $script:presented = $FP_B
-    [void](Invoke-ConstructApi -BaseUrl $SVC -Method GET -Path '/whoami' -Auth $tokenAuth -Pin $FP_B -StoreDir $store)
-    ok "pinning: an explicit -Pin overrides the stored one" ($script:calls.Count -eq 1)
 
     Reset-Calls
     [void](Invoke-ConstructApi -BaseUrl $DEV -Method GET -Path '/whoami' -Auth $tokenAuth -StoreDir $store)
