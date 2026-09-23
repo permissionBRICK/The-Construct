@@ -196,7 +196,7 @@ Write-Host "=== Helpers ===" -ForegroundColor Cyan
 foreach ($fn in $functions) {
     if ($fn.Name -in @("Split-PortRange", "Get-ListenPort", "Test-PublicHostPattern", "Get-ConstructAclPolicy",
                        "Get-ConstructTrustedSid", "Get-ConstructAncestorRiskMask",
-                       "Get-ConstructWriteRiskMask", "Get-ConstructUnsafeAce", "Resolve-ConstructAceSid", "Sort-ConstructHardeningOrder", "Format-ConstructCommandOutput",
+                       "Get-ConstructWriteRiskMask", "Get-ConstructUnsafeAce", "Test-ConstructVmMediaGrant", "Resolve-ConstructAceSid", "Sort-ConstructHardeningOrder", "Format-ConstructCommandOutput",
                        "ConvertTo-ConstructPayload", "New-ConstructRelaunchScript",
                        "Get-ConstructPowerSetting", "ConvertFrom-ConstructPowerQuery",
                        "ConvertFrom-ConstructActiveScheme", "Format-ConstructPowerTimeout",
@@ -364,6 +364,22 @@ ok "a protected child with an explicit untrusted write ACE is refused" (
 ok "creating entries in a CHILD still counts as write" (
     @(Get-ConstructUnsafeAce -Aces @($usersCreate) -RiskMask $writeMask).Count -eq 1)
 ok "an empty ACL is not a risk" (@(Get-ConstructUnsafeAce -Aces @() -RiskMask $writeMask).Count -eq 0)
+
+# Field failure (2026-09-10): re-hardening the media root stripped the read grant Hyper-V
+# had put on a child VM's attached ISO, and that VM no longer started.
+$vmSid = 'S-1-5-83-1-1234567890-1234567890-1234567890-1234567890'
+ok "hardening keeps a VM's read grant on attached media" (
+    Test-ConstructVmMediaGrant -Ace @{ Sid = $vmSid; Rights = 0x120089; Type = 'Allow' })
+ok "hardening removes a VM grant that carries a write right" (
+    -not (Test-ConstructVmMediaGrant -Ace @{ Sid = $vmSid; Rights = (0x120089 -bor 0x000002); Type = 'Allow' }))
+ok "hardening removes a read grant to the Virtual Machines group" (
+    -not (Test-ConstructVmMediaGrant -Ace @{ Sid = 'S-1-5-83-0'; Rights = 0x120089; Type = 'Allow' }))
+ok "hardening removes a read grant to an ordinary account" (
+    -not (Test-ConstructVmMediaGrant -Ace @{ Sid = 'S-1-5-21-1-2-3-1001'; Rights = 0x120089; Type = 'Allow' }))
+ok "hardening removes a VM Deny ACE" (
+    -not (Test-ConstructVmMediaGrant -Ace @{ Sid = $vmSid; Rights = 0x120089; Type = 'Deny' }))
+$pathAclText = ($functions | Where-Object Name -eq 'Set-ConstructPathAcl').Extent.Text
+ok "descendant cleanup skips the ACEs Test-ConstructVmMediaGrant keeps" ($pathAclText -match 'if \(Test-ConstructVmMediaGrant -Ace .*\) \{ continue \}')
 
 # Field failure (German host, 2026-09-02): Get-Acl hands back NTAccount names and
 # translating "APPLICATION PACKAGE AUTHORITY\ALLE ANWENDUNGSPAKETE" (present on every

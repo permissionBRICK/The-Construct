@@ -755,6 +755,20 @@ function Sort-ConstructHardeningOrder {
     return @($indexed | Sort-Object -Property @{ Expression = 'Depth' }, @{ Expression = 'Index' } | ForEach-Object { $_.Entry })
 }
 
+function Test-ConstructVmMediaGrant {
+    <#
+        Whether an explicit ACE (@{ Sid; Rights; Type }) is the read grant Hyper-V adds
+        for one VM (NT VIRTUAL MACHINE\<vm id>, S-1-5-83-1-...) when an ISO is attached
+        to it. Hyper-V adds it only at attach time, so removing it leaves that VM unable
+        to open its DVD media and start. A grant with any write right is not kept.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)]$Ace)
+
+    return ($Ace.Type -eq 'Allow' -and ([string]$Ace.Sid).StartsWith('S-1-5-83-1-') -and
+            (([int]$Ace.Rights -band (Get-ConstructWriteRiskMask)) -eq 0))
+}
+
 function Set-ConstructPathAcl {
     <#
         Harden a directory AND everything already inside it.
@@ -764,7 +778,8 @@ function Set-ConstructPathAcl {
         service would go on executing (or trusting) it. So every existing descendant
         has its protection cleared and its explicit ACEs removed, which makes it
         inherit exactly the policy set here -- and then the whole tree is re-read and
-        verified.
+        verified. The one explicit ACE kept is Hyper-V's per-VM read grant on attached
+        media (Test-ConstructVmMediaGrant).
     #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
@@ -812,11 +827,10 @@ function Set-ConstructPathAcl {
             $changed = $true
         }
 
-        foreach ($ace in @($childAcl.Access)) {
-            if (-not $ace.IsInherited) {
-                $null = $childAcl.RemoveAccessRule($ace)
-                $changed = $true
-            }
+        foreach ($ace in @($childAcl.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]))) {
+            if (Test-ConstructVmMediaGrant -Ace @{ Sid = $ace.IdentityReference.Value; Rights = [int]$ace.FileSystemRights; Type = [string]$ace.AccessControlType }) { continue }
+            $null = $childAcl.RemoveAccessRule($ace)
+            $changed = $true
         }
 
         if ($changed) { Set-Acl -LiteralPath $child.FullName -AclObject $childAcl }
