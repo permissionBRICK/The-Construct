@@ -233,7 +233,7 @@ gate: the resource policy is evaluated again inside every handler.
 | Discovery | `GET /health` | Anonymous reduced body; authenticated callers additionally get release details. |
 | Identity | `GET /whoami` | Any authenticated user identity; VM tokens refused. |
 | Admin users | `POST /users`; `GET /users`; `GET`, `PUT`, `DELETE /users/{name}`; `GET`, `PUT /users/{name}/allowance`; `POST`, `GET /users/{name}/tokens`; `DELETE /users/{name}/tokens/{id}` | Admin. Token plaintext is returned once only. |
-| Admin host | `GET /host/status`; `GET /host/capabilities`; `GET`, `PUT /host/config`; `GET /host/capacity` | Status/config/capacity are Admin; capabilities also allow an enrolled user or primary token. |
+| Admin host | `GET /host/status`; `GET /host/capabilities`; `GET`, `PUT /host/config`; `GET /host/capacity`; `GET /host/iso-catalog` | Status/config/capacity/ISO catalog are Admin; capabilities also allow an enrolled user or primary token. |
 | Audit | `GET /audit` | Admin; filters are `actor`, `target`, `action`, `since`, `limit`. |
 | VM inventory | `GET /vms`; `GET /vms/{name}`; `GET /vms/{name}/state`; `GET /vms/{name}/endpoint`; `GET /vms/{name}/capabilities`; `GET /vms/{name}/children`; `GET /vms/shared` | Filtered by owner/parent/sharing; Admin sees all. A primary token sees itself and its children, subject to token kind and current policy. |
 | Primary lifecycle | `POST /vms`; `POST /vms/{name}/power`; `DELETE /vms/{name}` | Enrolled user for create/power; owner/Admin for delete. Primary delete uses the cascade preview/token flow when children exist. |
@@ -248,10 +248,7 @@ gate: the resource policy is evaluated again inside every handler.
 | Host updates | `GET /host/updates/status`; `POST /host/updates/check`; `POST /host/updates/stage`; `POST /host/updates/apply`; `POST /host/updates/cancel`; `POST /host/updates/resolve` | Admin. Apply (including resume) and resolve are the only narrowly maintenance-exempt mutations. |
 
 There is deliberately no child-media content download route and no interactive-video
-console route. One contract/client mismatch remains: the extension calls
-`GET /host/iso-catalog`, but this build does **not** map it. Until that endpoint is added,
-use `constructd admin iso status` on the host; the Admin panel's primary-catalog read fails
-while its child-media inventory remains available.
+console route.
 
 ### Jobs, the event stream and the one-time secret
 
@@ -1717,8 +1714,6 @@ PowerShell fixtures, not a live Hyper-V service.
 - The host updater replaces the service and its matching host scripts after its first manual
   rollout. It intentionally does not update the user's PC-side Construct installation or the
   separately pinned ISO builder release.
-- The Admin UI/client expects `GET /host/iso-catalog`, but the service does not map it yet. Use
-  `constructd admin iso status` locally; child media is unaffected.
 - No **wake-on-SSH**: a connection to a saved VM's forward is not detected, so a saved VM is resumed by
   a user action rather than by dialing it (recorded as a stretch goal in plan §4.7).
 - The seed password is visible in the host's own process list for the duration of the ISO build. It is
