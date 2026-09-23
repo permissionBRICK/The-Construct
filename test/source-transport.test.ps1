@@ -205,11 +205,21 @@ foreach($pair in @(
     Check 'legacy status stays zero on transport error' ((Get-ConstructApiLastStatus) -eq 0)
 }
 $script:wireException=$null
-$originalFingerprint=${function:Get-ConstructRemoteFingerprint}
-function Get-ConstructRemoteFingerprint {param($BaseUrl,$TimeoutMs) return ('b'*64)}
+$originalPinnedRequest=${function:Invoke-ConstructPinnedWebRequest}
+function Invoke-ConstructPinnedWebRequest {
+    [CmdletBinding()]
+    param($Uri,$Method,$Headers,$Body,$ContentType,$TimeoutSec,$Credential,[switch]$UseDefaultCredentials,$Validator)
+    $key=[Security.Cryptography.RSA]::Create(2048)
+    $request=[Security.Cryptography.X509Certificates.CertificateRequest]::new('CN=mismatch',$key,[Security.Cryptography.HashAlgorithmName]::SHA256,[Security.Cryptography.RSASignaturePadding]::Pkcs1)
+    $cert=$request.CreateSelfSigned([DateTimeOffset]::UtcNow.AddMinutes(-1),[DateTimeOffset]::UtcNow.AddDays(1))
+    try {
+        [void]$Validator.Invoke($null,$cert,$null,[Net.Security.SslPolicyErrors]::None)
+        throw [Net.Http.HttpRequestException]::new('TLS handshake failed')
+    } finally { $cert.Dispose();$key.Dispose() }
+}
 Invoke-ConstructApi -BaseUrl https://example.invalid -Path /health -Pin ('a'*64) -Auth $auth -NoThrow | Out-Null
 Check 'fingerprint refusal has pin class' ((Get-ConstructApiLastProblem).Class -eq 'pin')
-Set-Item Function:Get-ConstructRemoteFingerprint $originalFingerprint
+Set-Item Function:Invoke-ConstructPinnedWebRequest $originalPinnedRequest
 $script:wireStatus=409;$script:wire=@{code='source-pinned';title='source-pinned'}
 Invoke-ConstructApi -BaseUrl $base -Path /health -Auth $auth -NoThrow | Out-Null
 Check 'problem code and legacy fields' ((Get-ConstructApiLastProblem).Code -eq 'source-pinned' -and (Get-ConstructApiLastStatus) -eq 409 -and (Get-ConstructApiLastError) -eq 'source-pinned')

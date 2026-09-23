@@ -42,11 +42,10 @@
         so the pin is checked INSIDE the handshake: the validation callback is set for
         the duration of the call (restored in a finally) and a mismatch fails the
         request before it is sent.
-      * PowerShell 7 -- Invoke-WebRequest uses SocketsHttpHandler, which IGNORES
-        ServicePointManager. So the certificate is read over a TLS connection of our
-        own and compared with the pin BEFORE the request, which then runs with
-        -SkipCertificateCheck. The verification is real; it happens one connection
-        earlier.
+      * PowerShell 7 -- a per-call HttpClient uses SocketsHttpHandler with the compiled
+        pin validator in SslOptions.RemoteCertificateValidationCallback. The pin is
+        checked INSIDE the request connection's handshake, before credentials are sent.
+        The client and handler are disposed after each call.
 
     NO PIN, NO CALL: an https base URL with no pinned thumbprint is refused, naming the
     enrolment step. A CHANGED fingerprint is a hard failure naming both values -- never
@@ -697,13 +696,14 @@ namespace Construct {
         // The pinned SHA-256 fingerprint, "AA:BB:...", set before every call.
         public static string Expected;
         public static bool Rejected;
+        public static string Presented;
         public static bool Validate(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors errors) {
             if (certificate == null || string.IsNullOrEmpty(Expected)) { return false; }
             byte[] hash;
             using (var sha = SHA256.Create()) { hash = sha.ComputeHash(certificate.GetRawCertData()); }
             var actual = BitConverter.ToString(hash).Replace("-", ":");
             var matched = string.Equals(actual, Expected, StringComparison.OrdinalIgnoreCase);
-            if (!matched) Rejected = true;
+            if (!matched) { Presented = actual; Rejected = true; }
             return matched;
         }
     }
@@ -717,6 +717,7 @@ namespace Construct {
     if ($type) {
         $type::Expected = $fp
         if ($type.GetField('Rejected')) { $type::Rejected = $false }
+        if ($type.GetField('Presented')) { $type::Presented = $null }
         return [System.Delegate]::CreateDelegate([System.Net.Security.RemoteCertificateValidationCallback], $type.GetMethod('Validate'))
     }
     $pinned = $fp
@@ -726,6 +727,50 @@ namespace Construct {
         $actual = Get-ConstructCertificateFingerprint -Certificate $certificate
         return (Test-ConstructFingerprintMatch -Expected $pinned -Actual $actual)
     }.GetNewClosure()
+}
+
+function Invoke-ConstructPinnedWebRequest {
+    [CmdletBinding()]
+    param(
+        [uri]$Uri, [string]$Method, [hashtable]$Headers, [int]$TimeoutSec,
+        [string]$Body, [string]$ContentType, [pscredential]$Credential,
+        [switch]$UseDefaultCredentials,
+        [System.Net.Security.RemoteCertificateValidationCallback]$Validator
+    )
+
+    $handler = [System.Net.Http.SocketsHttpHandler]::new()
+    $client = $null; $request = $null; $response = $null
+    try {
+        $handler.SslOptions.RemoteCertificateValidationCallback = $Validator
+        if ($UseDefaultCredentials) { $handler.Credentials = [System.Net.CredentialCache]::DefaultCredentials }
+        elseif ($Credential) { $handler.Credentials = $Credential.GetNetworkCredential() }
+        $client = [System.Net.Http.HttpClient]::new($handler)
+        $client.Timeout = if ($TimeoutSec -eq 0) { [System.Threading.Timeout]::InfiniteTimeSpan } else { [TimeSpan]::FromSeconds($TimeoutSec) }
+        $request = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::new($Method), $Uri)
+        foreach ($key in $Headers.Keys) { [void]$request.Headers.TryAddWithoutValidation($key, [string]$Headers[$key]) }
+        if ($PSBoundParameters.ContainsKey('Body')) {
+            $request.Content = [System.Net.Http.StringContent]::new($Body, [System.Text.Encoding]::UTF8, $ContentType)
+        }
+        $response = $client.SendAsync($request).GetAwaiter().GetResult()
+        $content = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        if (-not $response.IsSuccessStatusCode) {
+            $exception = [Microsoft.PowerShell.Commands.HttpResponseException]::new(
+                "Response status code does not indicate success: $([int]$response.StatusCode) ($($response.ReasonPhrase)).", $response)
+            $record = [System.Management.Automation.ErrorRecord]::new(
+                $exception, 'WebCmdletWebResponseException', [System.Management.Automation.ErrorCategory]::InvalidOperation, $request)
+            $record.ErrorDetails = [System.Management.Automation.ErrorDetails]::new($content)
+            $PSCmdlet.ThrowTerminatingError($record)
+        }
+        return [pscustomobject]@{ StatusCode = [int]$response.StatusCode; Content = $content }
+    } catch [System.Management.Automation.MethodInvocationException] {
+        # Preserve the transport exception and its inner exceptions for classification.
+        throw $_.Exception.InnerException
+    } finally {
+        if ($response) { $response.Dispose() }
+        if ($request) { $request.Dispose() }
+        if ($client) { $client.Dispose() }
+        $handler.Dispose()
+    }
 }
 
 function Invoke-ConstructApi {
@@ -741,7 +786,7 @@ function Invoke-ConstructApi {
         -Auth      a provider from New-ConstructApiAuth (default: negotiate)
         -Pin       an explicit expected fingerprint (default: the stored pin)
         -RawResponse return the unchanged response JSON (preserves empty/singleton arrays).
-        -Bounded   include the certificate preflight in TimeoutSec (source operations).
+        -Bounded   include request setup in TimeoutSec (source operations).
         -NoThrow   return $null instead of throwing; the status and message stay
                    readable via Get-ConstructApiLastStatus / Get-ConstructApiLastError.
                    This is how the enrolment flow tries Negotiate and falls back on 401.
@@ -772,6 +817,7 @@ function Invoke-ConstructApi {
     $preflight = $true
     $problemClass = 'none'; $base = $BaseUrl; $p = $Path
     $prevCallback = $null; $prevProtocol = $null; $restoreSpm = $false
+    $validator = $null
     try {
         $base = ConvertTo-ConstructServiceUrl -Value $BaseUrl
         # BEFORE a credential is even selected, let alone attached: an unencrypted, unpinned
@@ -834,19 +880,8 @@ function Invoke-ConstructApi {
 
         $preflight = $false
         if ($isHttps -and (Test-ConstructPwshCore)) {
-            # PS 7: SocketsHttpHandler ignores ServicePointManager, so verify the
-            # presented certificate ourselves first and then skip the (useless) chain
-            # check. docs\remote-host.md section 5 documents the ordering.
-            $problemClass = 'certificate'
-            $script:ConstructCertificateFailureClass = 'other'
-            if ($Bounded) { $actual = Get-ConstructRemoteFingerprint -BaseUrl $base -TimeoutMs ([int][Math]::Max(1, [Math]::Min(10000, $TimeoutSec * 1000 - $requestWatch.ElapsedMilliseconds))) }
-            else { $actual = Get-ConstructRemoteFingerprint -BaseUrl $base }
-            $problemClass = 'none'
-            if (-not (Test-ConstructFingerprintMatch -Expected $expected -Actual $actual)) {
-                $problemClass = 'pin'
-                throw "Certificate fingerprint mismatch for $base.`n    pinned:    $expected`n    presented: $actual`nRefusing to connect. If the host's certificate was legitimately replaced, remove the pin file ($(Get-ConstructRemotePinPath -BaseUrl $base -StoreDir $StoreDir)) and add the host again."
-            }
-            $req['SkipCertificateCheck'] = $true
+            $validator = Get-ConstructPinValidatorCallback -Expected $expected
+            $req.Remove('UseBasicParsing')
         } elseif ($isHttps) {
             # Windows PowerShell 5.1: pin INSIDE the handshake. Scoped to this call and
             # restored in the finally -- this is process-global state.
@@ -877,7 +912,8 @@ function Invoke-ConstructApi {
                 if ($remaining -le 0) { throw [TimeoutException]::new('Source request deadline elapsed.') }
                 $req.TimeoutSec = [int][Math]::Max(1, [Math]::Floor($remaining))
             }
-            $resp = Invoke-WebRequest @req
+            if ($validator) { $resp = Invoke-ConstructPinnedWebRequest @req -Validator $validator }
+            else { $resp = Invoke-WebRequest @req }
         } finally { $ProgressPreference = $previousProgress }
         $script:ConstructApiLastStatus = [int]$resp.StatusCode
         $script:ConstructApiLastProblem = @{ Status = [int]$resp.StatusCode; Code = ''; Class = 'none'; Detail = '' }
@@ -891,12 +927,15 @@ function Invoke-ConstructApi {
         if ($preflight -and -not $Bounded) { throw }
         $info = Get-ConstructApiErrorInfo -ErrorRecord $_
         $script:ConstructApiLastStatus = [int]$info.Status
-        $script:ConstructApiLastError  = [string]$info.Message
         $class = Get-ConstructApiFailureClass $_.Exception
         if ($info.Status) { $class = 'http' }
         elseif ($problemClass -eq 'pin') { $class = 'pin' }
-        elseif ($problemClass -eq 'certificate') { $class = $script:ConstructCertificateFailureClass }
-        elseif ($restoreSpm -and ('Construct.PinValidator' -as [type]) -and [Construct.PinValidator].GetField('Rejected') -and [Construct.PinValidator]::Rejected) { $class = 'pin' }
+        elseif (($restoreSpm -or $validator) -and ('Construct.PinValidator' -as [type]) -and [Construct.PinValidator].GetField('Rejected') -and [Construct.PinValidator]::Rejected) { $class = 'pin' }
+        if ($validator -and $class -eq 'pin') {
+            $actual = [Construct.PinValidator]::Presented
+            $info.Message = "Certificate fingerprint mismatch for $base.`n    pinned:    $expected`n    presented: $actual`nRefusing to connect. If the host's certificate was legitimately replaced, remove the pin file ($(Get-ConstructRemotePinPath -BaseUrl $base -StoreDir $StoreDir)) and add the host again."
+        }
+        $script:ConstructApiLastError = [string]$info.Message
         $script:ConstructApiLastProblem = @{ Status = [int]$info.Status; Code = [string]$info.Code; Class = $class; Detail = [string]$info.Message }
         if ($NoThrow) { return $null }
         $where = "$Method $p"
