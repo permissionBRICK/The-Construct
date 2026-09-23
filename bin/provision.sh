@@ -183,7 +183,8 @@ run_step() {
 
 # ── Free-disk preflight ──────────────────────────────────────────────────────
 # A full VM disk is the single most misleading failure mode this script has, so
-# it is checked BEFORE anything installs. ext4 reserves 5% of every filesystem
+# it is checked BEFORE anything installs. ext4 (the root file system of VMs installed
+# before the XFS default; XFS has no such reserve) reserves 5% of every filesystem
 # for uid 0, which makes a full disk look like a permission bug: root's own
 # writes keep succeeding while every write as another user fails with a cryptic
 # errno. The field report was exactly that -- root's git identity was written,
@@ -227,7 +228,7 @@ check_disk_space() {
       low)  warn "  ${path} (${dev}): only $((avail / 1024)) MiB free (${used} used) -- installs may run out of space" ;;
       full)
         err "  ${path} (${dev}): only $((avail / 1024)) MiB free (${used} used) -- the disk is FULL"
-        err "  ext4 keeps a 5% reserve for root, so root-owned writes still succeed while writes as"
+        err "  On ext4 (VMs installed before the XFS default) root's 5% reserve lets root-owned writes succeed while writes as"
         err "  ${SSH_USER:-agent} fail with confusing errors (e.g. git: 'failed to write new configuration file"
         err "  /home/${SSH_USER:-agent}/.gitconfig.lock'). Free space on the VM or grow its disk, then re-provision."
         err "  Set ALLOW_LOW_DISK=true to provision anyway."
@@ -1049,6 +1050,48 @@ install_construct_cli() {
     "${forwards_dir}/acks" "${forwards_dir}/close" || return 1
 }
 run_step optional "Installing construct CLI" install_construct_cli
+
+# 4c. Reflink-seeded git worktrees (docs/worktrees.md). A post-checkout hook copies the
+#     main worktree's ignored build outputs and dependencies into every new
+#     `git worktree add` as reflinks, which cost no disk on the XFS root of new VMs
+#     (the hook does nothing on ext4). It reaches repositories through git's init
+#     template -- never core.hooksPath, which would override every repository's own
+#     hooks -- and is added to the existing checkouts under WORKSPACE_ROOT that have
+#     no post-checkout hook of their own.
+setup_worktree_clone() {
+  local bin_dir="${CONSTRUCT_BIN_DIR:-/usr/local/bin}"
+  local template="${CONSTRUCT_GIT_TEMPLATE_DIR:-/usr/local/share/construct/git-template}"
+  local hook="${REPO_DIR}/bin/git-template/hooks/post-checkout"
+  local current gitdir target added=0
+  install -m 0755 "${REPO_DIR}/bin/construct-worktree-clone.sh" "${bin_dir}/construct-worktree-clone.sh" || return 1
+  # Start from git's stock template (description, info/exclude, sample hooks) so
+  # setting init.templateDir changes nothing else about new repositories.
+  rm -rf "${template}.new" && install -d -m 0755 "${template}.new" || return 1
+  if [[ -d /usr/share/git-core/templates ]]; then
+    cp -a /usr/share/git-core/templates/. "${template}.new/" || return 1
+  fi
+  install -D -m 0755 "${hook}" "${template}.new/hooks/post-checkout" || return 1
+  rm -rf "${template}" && mv "${template}.new" "${template}" || return 1
+  current="$(git config --system --get init.templateDir 2>/dev/null || true)"
+  if [[ -z "${current}" ]]; then
+    git config --system init.templateDir "${template}" || return 1
+  elif [[ "${current}" != "${template}" ]]; then
+    note "keeping the existing system init.templateDir (${current}); new clones get no worktree hook"
+  fi
+  for gitdir in "${WORKSPACE_ROOT}"/*/.git; do
+    [[ -d "${gitdir}" ]] || continue
+    [[ -z "$(git --git-dir="${gitdir}" config --get core.hooksPath 2>/dev/null)" ]] || continue
+    target="${gitdir}/hooks/post-checkout"
+    if [[ -e "${target}" ]] && ! grep -q "Installed by The Construct" "${target}" 2>/dev/null; then
+      continue
+    fi
+    install -D -m 0755 "${hook}" "${target}" || return 1
+    chown --reference="${gitdir}" "${target}" 2>/dev/null || true
+    added=$((added + 1))
+  done
+  ok "worktree hook in the git template and ${added} existing checkout(s)"
+}
+run_step optional "Setting up reflink-seeded git worktrees" setup_worktree_clone
 
 # The browser console is part of a service-managed primary, alongside its CLI.
 # Configuration/identity have been written and Docker installed by this point.

@@ -36,6 +36,16 @@ child VMs for isolated OS or installer tests. Start with `construct vm identity`
 to see the current delegation and `construct vm --help` for the command surface.
 Every child creation and start requires an explicit lifetime.
 
+## Git worktrees
+
+On an XFS root (`findmnt -no FSTYPE /`), `git worktree add` seeds the new
+worktree with reflink copies of the main worktree's ignored build outputs and
+dependencies (`target/`, `node_modules/`, `bin/`, `obj/`, ...). The copies share
+disk blocks until either side changes them, so for parallel work prefer
+worktrees of an existing checkout over fresh clones, and build in them directly
+instead of reinstalling dependencies. `du` counts shared blocks once per
+worktree; judge real disk use with `df`.
+
 ## Getting the user's attention
 
 When a long job finishes (or fails) and the user is probably looking at

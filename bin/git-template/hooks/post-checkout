@@ -1,0 +1,8 @@
+#!/bin/sh
+# Installed by The Construct: seeds a new `git worktree add` with reflink copies of the
+# main worktree's build outputs and dependencies (docs/worktrees.md). Remove this file to
+# opt a repository out, or set `git config construct.worktreeClone false`.
+if command -v construct-worktree-clone.sh >/dev/null 2>&1; then
+  construct-worktree-clone.sh "$@"
+fi
+exit 0

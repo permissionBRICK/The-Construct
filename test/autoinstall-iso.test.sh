@@ -155,8 +155,14 @@ autoinstall:
     id: ubuntu-server-minimal
     search_drivers: false
   storage:
-    layout:
-      name: direct
+    config:
+      - {type: disk, id: disk0, match: {size: largest}, ptable: gpt, wipe: superblock-recursive, preserve: false, grub_device: false}
+      - {type: partition, id: esp, device: disk0, number: 1, size: 1G, flag: boot, grub_device: true, wipe: superblock, preserve: false}
+      - {type: format, id: esp-fs, volume: esp, fstype: fat32}
+      - {type: partition, id: root, device: disk0, number: 2, size: -1, wipe: superblock, preserve: false}
+      - {type: format, id: root-fs, volume: root, fstype: xfs}
+      - {type: mount, id: root-mount, device: root-fs, path: /}
+      - {type: mount, id: esp-mount, device: esp-fs, path: /boot/efi}
   identity:
     realname: "The Construct"
     hostname: testvm
@@ -179,6 +185,8 @@ ok "the seed password is still a sha-512 crypt hash" \
   grep -Eq '^    password: "\$6\$' "${now}/nocloud/user-data"
 ok "the banner still names the VM's own mshome address" \
   contains "$(base64 -d <<<"${banner_b64}")" "Target : testvm.mshome.net"
+ok "the root file system is XFS (reflinks for worktrees)" \
+  grep -q "{type: format, id: root-fs, volume: root, fstype: xfs}" "${now}/nocloud/user-data"
 ok "default meta-data carries the real hostname" \
   is "instance-id: testvm
 local-hostname: testvm" "$(cat "${now}/nocloud/meta-data")"
