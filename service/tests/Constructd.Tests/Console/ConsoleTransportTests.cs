@@ -13,7 +13,7 @@ public sealed class ConsoleTransportTests
     private const string Png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
     [Fact]
     public void The_entire_Wmi_program_is_pinned_independently_of_the_argv_builder() =>
-        Assert.Equal("a9e38b4ccf22e7ea1bdabe2d4cac52a03fc7c5521348d1c8aa96a99ff27b877e", Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(HyperVConsoleScript.Source))));
+        Assert.Equal("ce02f777c08e6523102f1c52cf6b1b531d92bad8113b504525514bbd58392d2e", Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(HyperVConsoleScript.Source))));
 
     private static void Invocation(RecordedProcess call, string action)
     {
@@ -46,13 +46,13 @@ public sealed class ConsoleTransportTests
     public async Task Every_keyboard_invocation_keeps_payload_in_stdin(string kind, bool? press)
     {
         var runner = new RecordingProcessRunner().RespondStdout("""{"applied":true,"returnValue":0,"device":"keyboard","fallback":null}""");
-        var input = new KeyboardInput(Enum.Parse<KeyboardInputKind>(kind, true), kind == "text" ? "Grüße" : null,
+        var input = new KeyboardInput(Enum.Parse<KeyboardInputKind>(kind, true), kind == "text" ? "Aa!" : null,
             kind == "key" ? 13 : null, press, kind == "scancodes" ? new byte[] { 15, 143 } : null);
         Assert.True((await new HyperVConsoleTransport(runner).KeyboardAsync("probe-vm", input, default)).Applied);
         Invocation(runner[0], "keyboard");
         var expected = kind switch
         {
-            "text" => """{"action":"keyboard","vm":"probe-vm","input":{"kind":"text","text":"Gr\u00FC\u00DFe","keyCode":null,"press":null,"scancodes":null}}""",
+            "text" => """{"action":"keyboard","vm":"probe-vm","input":{"kind":"text","scancodeChunks":[[42,30,158,170,30,158,42,2,130,170]]}}""",
             "key" when press == true => """{"action":"keyboard","vm":"probe-vm","input":{"kind":"key","text":null,"keyCode":13,"press":true,"scancodes":null}}""",
             "key" when press == false => """{"action":"keyboard","vm":"probe-vm","input":{"kind":"key","text":null,"keyCode":13,"press":false,"scancodes":null}}""",
             "key" => """{"action":"keyboard","vm":"probe-vm","input":{"kind":"key","text":null,"keyCode":13,"press":null,"scancodes":null}}""",
@@ -63,8 +63,45 @@ public sealed class ConsoleTransportTests
         Assert.All(runner[0].StandardInput!, c => Assert.True(c <= 127, "stdin must remain ASCII regardless of the Windows input code page"));
         using var doc = JsonDocument.Parse(runner[0].StandardInput!);
         Assert.Equal(kind, doc.RootElement.GetProperty("input").GetProperty("kind").GetString());
-        if (input.Text is not null) Assert.Equal(input.Text, doc.RootElement.GetProperty("input").GetProperty("text").GetString());
+        if (input.Text is not null) Assert.False(doc.RootElement.GetProperty("input").TryGetProperty("text", out _));
         Assert.DoesNotContain("secret-", string.Join(" ", runner[0].Arguments));
+    }
+    [Fact]
+    public void Text_translation_uses_US_set_1_make_and_break_codes()
+    {
+        Assert.Equal(new byte[] { 0x1e, 0x9e, 0x2a, 0x1e, 0x9e, 0xaa, 0x2a, 0x02, 0x82, 0xaa,
+            0x39, 0xb9, 0x0c, 0x8c, 0x1c, 0x9c, 0x1c, 0x9c, 0x0f, 0x8f, 0x0e, 0x8e },
+            ConsoleSessionRules.TextScancodes("aA! -\n\r\t\b"));
+    }
+    [Fact]
+    public async Task Shifted_text_chunks_keep_complete_characters_and_one_invocation()
+    {
+        var runner = new RecordingProcessRunner().RespondStdout("""{"applied":true,"returnValue":0,"device":"keyboard","fallback":null}""");
+        var text = new string('A', 512);
+        Assert.True((await new HyperVConsoleTransport(runner).KeyboardAsync("probe-vm", new(KeyboardInputKind.Text, text, null, null, null), default)).Applied);
+        var call = Assert.Single(runner.Calls);
+        using var doc = JsonDocument.Parse(call.StandardInput!);
+        var input = doc.RootElement.GetProperty("input");
+        Assert.False(input.TryGetProperty("text", out _));
+        var chunks = input.GetProperty("scancodeChunks").EnumerateArray().ToArray();
+        Assert.All(chunks, chunk =>
+        {
+            var bytes = chunk.EnumerateArray().Select(x => x.GetByte()).ToArray();
+            Assert.InRange(bytes.Length, 1, 64);
+            Assert.Equal(0, bytes.Length % 4);
+            for (var i = 0; i < bytes.Length; i += 4) Assert.Equal(new byte[] { 0x2a, 0x1e, 0x9e, 0xaa }, bytes[i..(i + 4)]);
+        });
+        Assert.Equal(ConsoleSessionRules.TextScancodes(text), chunks.SelectMany(x => x.EnumerateArray().Select(y => y.GetByte())).ToArray());
+    }
+    [Fact]
+    public async Task Unsupported_text_and_empty_text_do_not_launch_a_process()
+    {
+        var runner = new RecordingProcessRunner(); var driver = new HyperVConsoleTransport(runner);
+        Assert.Null(ConsoleSessionRules.TextScancodes("Grüße"));
+        Assert.False(ConsoleSessionRules.Valid(new(KeyboardInputKind.Text, "Grüße", null, null, null)));
+        await Assert.ThrowsAsync<ConsoleTransportException>(() => driver.KeyboardAsync("probe-vm", new(KeyboardInputKind.Text, "Grüße", null, null, null), default));
+        Assert.True((await driver.KeyboardAsync("probe-vm", new(KeyboardInputKind.Text, "", null, null, null), default)).Applied);
+        Assert.Empty(runner.Calls);
     }
     [Theory]
     [InlineData(MouseInputKind.MoveAbsolute)] [InlineData(MouseInputKind.MoveRelative)] [InlineData(MouseInputKind.Click)]

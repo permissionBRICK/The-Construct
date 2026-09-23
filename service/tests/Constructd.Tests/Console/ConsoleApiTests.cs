@@ -123,6 +123,18 @@ public sealed class ConsoleApiTests
         Assert.Equal(0, app.Service<FakeConsoleTransport>().KeyboardCalls + app.Service<FakeConsoleTransport>().MouseCalls);
     }
     [Fact]
+    public async Task Unsupported_text_returns_specific_validation_before_driver()
+    {
+        using var app = new TestApp(); using var owner = await app.CreateUserClientAsync("owner"); await owner.CreateVmAsync("probe-vm"); var path = await Session(owner);
+        using var response = await owner.PostJsonAsync(path + "/keyboard", new { kind = "text", text = "Grüße" });
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.ReadAsync<JsonElement>();
+        Assert.Equal("validation", problem.GetProperty("code").GetString());
+        Assert.Equal("text", problem.GetProperty("field").GetString());
+        Assert.Contains("printable US-ASCII", problem.GetProperty("detail").GetString());
+        Assert.Equal(0, app.Service<FakeConsoleTransport>().KeyboardCalls);
+    }
+    [Fact]
     public async Task Bounds_device_failure_and_off_vm_are_truthful()
     {
         using var app = new TestApp(); using var owner = await app.CreateUserClientAsync("owner"); await owner.CreateVmAsync("probe-vm"); var path = await Session(owner);

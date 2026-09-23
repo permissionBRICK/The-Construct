@@ -64,7 +64,12 @@ public static class HyperVConsoleScript
                 if ($keyboard.Count -eq 0) { throw 'Keyboard unavailable' }
                 $k = $keyboard[0]; $i = $q.input
                 switch ($i.kind) {
-                    'text' { $r = $k.TypeText([string]$i.text) }
+                    'text' {
+                        foreach ($chunk in $i.scancodeChunks) {
+                            $r = $k.TypeScancodes([byte[]]$chunk)
+                            if ($r.ReturnValue -ne 0) { break }
+                        }
+                    }
                     'key' {
                         if ($null -eq $i.press) { $r = $k.TypeKey([int]$i.keyCode) }
                         elseif ($i.press) {
