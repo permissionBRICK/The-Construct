@@ -83,7 +83,7 @@ internal static class ProxmoxConsoleInput
         if (plain.IndexOf(c) is var p && p >= 0) return (keys[p], false);
         if (shifted.IndexOf(c) is var s && s >= 0) return (keys[s], true);
         if ("!@#$%^&*()".IndexOf(c) is var n && n >= 0) return (((n + 1) % 10).ToString(), true);
-        return c switch { ' ' => ("spc", false), '\n' or '\r' => ("ret", false), '\t' => ("tab", false), _ => throw new ConsoleTransportException() };
+        return c switch { ' ' => ("spc", false), '\n' or '\r' => ("ret", false), '\t' => ("tab", false), '\b' => ("backspace", false), _ => throw new ConsoleTransportException() };
     }
     internal static object Mouse(MouseInput input, int width, int height)
     {

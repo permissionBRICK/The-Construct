@@ -147,6 +147,8 @@ public static class ConsoleEndpoints
         if (r is null || (r.Kind is not ("text" or "key" or "scancodes" or "ctrlAltDel") || !Enum.TryParse<KeyboardInputKind>(r.Kind, true, out var kind)) || r.Scancodes?.Any(x => x < 0 || x > 255) == true)
             return CodedProblems.Validation("keyboard", "Invalid keyboard input.");
         var input = new KeyboardInput(kind, r.Text, r.KeyCode, r.Press, r.Scancodes?.Select(x => (byte)x).ToArray());
+        if (kind == KeyboardInputKind.Text && r.Text is { Length: <= 512 } && ConsoleSessionRules.TextScancodes(r.Text) is null)
+            return CodedProblems.Validation("text", "Text supports printable US-ASCII, Enter, Tab and Backspace; send other keys with --key or --scancodes.");
         if (!ConsoleSessionRules.Valid(input)) return CodedProblems.Validation("keyboard", "Invalid keyboard input.");
         Audit(http, "console-keyboard", $"kind={kind.ToString().ToLowerInvariant()}, chars={r.Text?.Length ?? 0}");
         if (transport.Capabilities.Keyboard == CapabilityLevel.Unsupported) return Unavailable("keyboard");
