@@ -27,7 +27,6 @@ bootstrap.sh   text eol=lf
 /companion/tests   export-ignore
 /companion/Construct.Companion.sln export-ignore
 /docs/plans        export-ignore
-/docs/agent-notes  export-ignore
 /.github           export-ignore
 /scripts           export-ignore
 /assets            export-ignore

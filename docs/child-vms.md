@@ -8,8 +8,8 @@ or another OS supported by the host backend.
 This command is for the guest shell. Host administrators use the host administration
 API/UI, while the existing primary provisioning flow remains unchanged.
 
-> **Validation status:** a [live Alpine smoke test](agent-notes/child-vm-alpine-field-test-20260910.md)
-> on PC-1 verified delegated creation, ISO boot, screenshots, raw keyboard input and
+> **Validation status:** a live Alpine smoke test on a Hyper-V host (recorded in the
+> maintainer's private notes) verified delegated creation, ISO boot, screenshots, raw keyboard input and
 > graceful shutdown through the production Hyper-V service. Broader Windows, sharing,
 > networking and recovery coverage still requires the
 > [host-administration field test](field-test-host-admin.md).

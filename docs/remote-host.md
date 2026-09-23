@@ -87,8 +87,9 @@ If you already have a local Construct VM, connect to it in VS Code and open
 **Construct Settings → Make this PC a Construct host…**. Review the prefilled
 address and optional AC wake setting, then approve Windows elevation. Setup installs
 the host, makes your current Windows account its administrator, and adopts the
-running VM automatically. Its data and SSH identity are preserved. See the
-[conversion flow and recovery notes](agent-notes/local-host-conversion.md).
+running VM automatically. Its data and SSH identity are preserved. The conversion,
+including VM identity checks and error recovery, was validated on a live Windows PC
+(the maintainer's private notes hold the details).
 
 1. **Install the service.** On the Hyper-V host, from a Construct checkout:
 
