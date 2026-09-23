@@ -1620,6 +1620,17 @@ if ($existingService) {
     Write-Ok "Created the service"
 }
 
+# Field failure (2026-09-05): constructd terminated unexpectedly and, with no failure
+# actions, the API stayed down until someone started it by hand. failureflag= 1 also
+# counts a stop with a non-zero exit code, not only a process crash.
+if ($PSCmdlet.ShouldProcess($ServiceName, "Restart the service automatically on failure")) {
+    & sc.exe failure $ServiceName reset= 86400 actions= restart/5000/restart/15000/restart/60000 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "sc.exe failure failed with exit code $LASTEXITCODE." }
+    & sc.exe failureflag $ServiceName 1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "sc.exe failureflag failed with exit code $LASTEXITCODE." }
+    Write-Ok "Restarts after 5 s, 15 s and 60 s on failure"
+}
+
 # LocalSystem: it has to drive Hyper-V and netsh, neither of which a restricted service
 # account can do here without further setup. ISO builds use the native tool rather than WSL;
 # media is published once into the catalog above.

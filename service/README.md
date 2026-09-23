@@ -1342,7 +1342,8 @@ switched off on request) → `appsettings.Production.json` next to the
 executable → **the autoinstall ISO, built with the native .NET tool** (`admin iso build`) →
 **the first admin and an API token, through the admin CLI, before the service
 starts** (so nothing contends for the SQLite file and the host is reachable the moment it comes up) →
-register the service as LocalSystem → start it → print the enrollment details.
+register the service as LocalSystem, with SCM restarts after 5 s, 15 s and 60 s on failure → start it →
+print the enrollment details.
 
 The ACL step comes **before** everything else on purpose: the ISO the service hands to Hyper-V and the
 database it authorizes against are both written into the service root, so the root has to be protected
