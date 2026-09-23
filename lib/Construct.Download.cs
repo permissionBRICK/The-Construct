@@ -20,7 +20,11 @@ namespace Construct.Download
         private long downloaded, total = -1;
         private int retryCount, active;
         private volatile string phase = "Connecting";
+#if NET
+        private string? validator;
+#else
         private string validator;
+#endif
         private bool ranged;
         public Task Completion { get; private set; }
         public long Downloaded { get { return Interlocked.Read(ref downloaded); } }
@@ -73,7 +77,11 @@ namespace Construct.Download
             }
         }
 
+#if NET
+        private static string? Validator(HttpResponseMessage response)
+#else
         private static string Validator(HttpResponseMessage response)
+#endif
         {
             if (response.Headers.ETag != null && !response.Headers.ETag.IsWeak) return response.Headers.ETag.ToString();
             if (response.Content.Headers.LastModified.HasValue) return response.Content.Headers.LastModified.Value.ToString("R");
