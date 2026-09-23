@@ -960,6 +960,17 @@ ok 'source cache receives Data ACL hardening' ($sourceInstaller.Contains('@{ Pat
 ok 'source root setting preserves operator value' ($sourceInstaller -match '\$sourceRootDir = \[string\]\$savedHostAdmin.Source.RootDir')
 ok 'source configuration is written' ($sourceInstaller -match 'HostAdmin\s*= \$savedHostAdmin')
 
+# Field failure (2026-09-05): constructd crashed and stayed down -- AutoStart alone does not
+# restart a service that terminates. Checked on exit codes only; sc.exe output is localized.
+$recoveryAt = $sourceInstaller.IndexOf('& sc.exe failure $ServiceName reset= 86400 actions= restart/5000/restart/15000/restart/60000')
+ok 'the service restarts itself on failure' ($recoveryAt -gt 0)
+ok '...counting non-zero exit codes as failures too' ($sourceInstaller.Contains('& sc.exe failureflag $ServiceName 1'))
+ok '...configured for new and existing services alike, before the service starts' (
+    $recoveryAt -gt $sourceInstaller.IndexOf('Write-Ok "Created the service"') -and
+    $recoveryAt -gt $sourceInstaller.IndexOf('Write-Ok "Updated the existing service"') -and
+    $recoveryAt -lt $sourceInstaller.IndexOf('Start-Service -Name $ServiceName'))
+ok '...and a failing sc.exe stops the install' ($sourceInstaller.Contains('throw "sc.exe failure failed with exit code $LASTEXITCODE."'))
+
 Write-Host "=== $script:pass passed, $script:fail failed ===" -ForegroundColor $(if ($script:fail -eq 0) { "Green" } else { "Red" })
 if ($script:fail -gt 0) { exit 1 }
 exit 0
