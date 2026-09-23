@@ -532,13 +532,11 @@ stacks differ:
   of the call (and restored in a `finally`) and compares the presented certificate's
   SHA-256 hash with the pin. A mismatched certificate fails the handshake — the request
   never happens.
-* **PowerShell 7** — `Invoke-WebRequest` uses `SocketsHttpHandler`, which **ignores**
-  `ServicePointManager`. So the client instead (a) opens a TLS connection itself, reads the
-  presented certificate and compares it with the pin **before** the request, and (b) makes
-  the request with `-SkipCertificateCheck`. The verification is real; it just happens one
-  connection earlier. The window between the two is a same-host, same-second reconnect —
-  materially, an attacker who can swap the certificate in that window can also swap it
-  before the check on 5.1.
+* **PowerShell 7** uses a per-call `HttpClient` and `SocketsHttpHandler`, whose
+  `SslOptions.RemoteCertificateValidationCallback` runs the compiled pin validator
+  *inside the request connection's TLS handshake*. A mismatched certificate fails the
+  handshake before any credentials are sent. The client and handler are disposed after
+  each call.
 
 Either way: **no pin, no call.** An unpinned host is refused with instructions to run the
 enrolment (fingerprint) step, and a changed fingerprint is a hard failure that names both
