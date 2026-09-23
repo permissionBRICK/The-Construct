@@ -71,6 +71,22 @@ public sealed class HyperVConsoleTransport(IProcessRunner runner, Constructd.Cor
     public Task<ConsoleInputResult> KeyboardAsync(string vmName, KeyboardInput input, CancellationToken ct)
     {
         if (!ConsoleSessionRules.Valid(input)) throw new ConsoleTransportException();
+        if (input.Kind == KeyboardInputKind.Text)
+        {
+            var codes = ConsoleSessionRules.TextScancodes(input.Text!)!;
+            if (codes.Length == 0) return Task.FromResult(new ConsoleInputResult(true, 0, "keyboard", null));
+            var chunks = new List<int[]>();
+            var chunk = new List<int>(64);
+            for (var offset = 0; offset < codes.Length;)
+            {
+                var length = codes[offset] == 0x2a ? 4 : 2;
+                if (chunk.Count + length > 64) { chunks.Add(chunk.ToArray()); chunk.Clear(); }
+                for (var i = 0; i < length; i++) chunk.Add(codes[offset + i]);
+                offset += length;
+            }
+            if (chunk.Count > 0) chunks.Add(chunk.ToArray());
+            return Input("keyboard", vmName, new { kind = input.Kind, scancodeChunks = chunks }, ct);
+        }
         return Input("keyboard", vmName, input, ct);
     }
     public Task<ConsoleInputResult> MouseAsync(string vmName, MouseInput input, CancellationToken ct)

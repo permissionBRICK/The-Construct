@@ -71,6 +71,8 @@ Console:
   console NAME --screenshot FILE.png [--width W --height H]
   console NAME (--type-stdin | --type-file FILE | --key CODE [--press|--release]
                | --scancodes HEX,... | --ctrl-alt-del)
+  Text uses US-layout set-1 scancodes in 64-byte chunks: printable ASCII, Enter,
+  Tab and Backspace. Other characters are refused; Hyper-V text verification is pending.
   console NAME (--move X,Y | --move-rel DX,DY | --click BTN
                | --press BTN | --release BTN)
 

@@ -396,9 +396,11 @@ support works independently of guest networking where the backend provides it. T
 initial Hyper-V backend does not provide an interactive video/VNC session, and mouse
 input can truthfully return unavailable with a fallback hint.
 
-In the Alpine text-console field test, Hyper-V's `TypeText` produced escape sequences;
-raw `--scancodes` input worked. Scancode requests accept at most 64 bytes. Split longer
-input at complete key sequences and release any modifiers before ending a request.
+Text input uses US-layout set-1 scancodes in 64-byte chunks: printable ASCII, Enter,
+Tab and Backspace. Other characters are refused. Raw `--scancodes` input worked in
+the Alpine text-console field test; live Hyper-V verification of the new text path
+is pending. Manual scancode requests accept at most 64 bytes. Split longer input at
+complete key sequences and release any modifiers before ending a request.
 
 ## Child forwards
 
@@ -524,7 +526,9 @@ the child. There is no abandon/supersede configuration API.
 - Interactive video uses the trusted [browser gateway](../console-viewer/README.md). Screenshot and keyboard are
   supported by the bounded WMI transport; mouse is conditional and may return
   `applied:false`. LocalSystem screenshot capture and raw scancode input were verified
-  on Alpine; other guest/input combinations still need field testing.
+  on Alpine. Text uses US-layout set-1 scancodes in 64-byte chunks for printable ASCII,
+  Enter, Tab and Backspace; other characters are refused. Live Hyper-V text-path
+  verification and other guest/input combinations still need field testing.
 - Child addresses are guest-reported and unverified. Client forwarding may use such an
   address with a warning; host forwarding to a child is refused. Recorded network rules
   are intended relationships only—this delivery enforces no packet isolation.
