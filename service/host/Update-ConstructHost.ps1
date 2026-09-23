@@ -9,11 +9,24 @@ function Read-UpdateJson([string]$Path) {
     if (Test-Path -LiteralPath $Path) { return (Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json) }
     return $null
 }
+function Move-UpdateJson([string]$Temp, [string]$Path) {
+    if (Test-Path -LiteralPath $Path) { [IO.File]::Replace($Temp, $Path, [NullString]::Value) }
+    else { [IO.File]::Move($Temp, $Path) }
+}
 function Write-UpdateJson([string]$Path, $Value) {
     $temp = $Path + '.' + [Guid]::NewGuid().ToString('n') + '.tmp'
-    [IO.File]::WriteAllText($temp, (ConvertTo-Json -InputObject $Value -Depth 30), (New-Object Text.UTF8Encoding($false)))
-    if (Test-Path -LiteralPath $Path) { [IO.File]::Replace($temp, $Path, [NullString]::Value) }
-    else { [IO.File]::Move($temp, $Path) }
+    try {
+        [IO.File]::WriteAllText($temp, (ConvertTo-Json -InputObject $Value -Depth 30), (New-Object Text.UTF8Encoding($false)))
+        # Scanners and indexers can briefly hold either file. ReplaceFile then fails with a sharing
+        # violation (32/33) or leaves both names intact (1175) or only the temp file (1176).
+        for ($attempt = 1; ; $attempt++) {
+            try { Move-UpdateJson $temp $Path; return }
+            catch [IO.IOException] {
+                if ($attempt -ge 5 -or ($_.Exception.GetBaseException().HResult -band 0xFFFF) -notin @(32, 33, 1175, 1176)) { throw }
+                Start-Sleep -Milliseconds (200 * $attempt)
+            }
+        }
+    } finally { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue }
 }
 function Test-UpdateTerminal($Record, [string]$UpdateId) { return ($Record -and (-not $UpdateId -or $Record.updateId -eq $UpdateId) -and $Record.outcome -in @('succeeded','rolledBack','rolledBackWithDatabase')) }
 function Get-UpdateAuthority($Record, $Fence, [string]$UpdateId) {
@@ -317,6 +330,7 @@ function Invoke-ConstructHostUpdate([string]$HandoffPath, [bool]$IsResume, [bool
                 if (-not (Test-UpdateHealth $h $h.commit $manifest.database.schemaVersion $h.healthTimeoutSeconds {$r.healthAttempts++; Write-UpdateJson $recordPath $r})) { throw 'Update health failed.' }
             }
             Set-Phase 'commit'
+            Get-ChildItem -LiteralPath $h.publishDir -Filter 'install.json.*.tmp' -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
             Write-UpdateJson (Join-Path $h.publishDir 'install.json') @{source=$manifest.installedSource;commit=$h.commit;packageVersion=$manifest.packageVersion;installedAt=[DateTimeOffset]::UtcNow.ToString('o');previousCommit=$h.previousCommit;updateId=$h.updateId;files=$newFiles}
             $r.outcome='succeeded'; Write-UpdateJson $recordPath $r
             & schtasks.exe /Delete /TN Construct-HostUpdate /F 2>$null | Out-Null
@@ -326,6 +340,9 @@ function Invoke-ConstructHostUpdate([string]$HandoffPath, [bool]$IsResume, [bool
             return 0
         } catch {
             $failureCode = Get-UpdateFailureCode $_.Exception.Message
+            # Type and HRESULT only: exception messages can carry arbitrary request or file data.
+            $failure = $_.Exception.GetBaseException()
+            try { [IO.File]::AppendAllText((Join-Path $root 'updater.log'), ([DateTimeOffset]::UtcNow.ToString('o') + ' failed phase=' + $r.phase + ' code=' + $failureCode + ' exception=' + $failure.GetType().FullName + ' hresult=0x' + $failure.HResult.ToString('X8') + [Environment]::NewLine), (New-Object Text.UTF8Encoding($false))) } catch { }
             # A terminal result is immutable even if cleanup failed afterwards.
             if (Test-UpdateTerminal (Read-UpdateJson $recordPath) $h.updateId) { return 0 }
             $a = Get-UpdateAuthority $r (Read-UpdateJson $fencePath) $h.updateId
