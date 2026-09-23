@@ -78,7 +78,7 @@ the installer builds the service on the node and fetches a .NET SDK once.
 | The Construct checkout | `/opt/construct/scripts` | `bin/`, `keys/`, `config/` … what guests are provisioned from and served through the source cache |
 | Data | `/var/lib/constructd` | `constructd.db` (SQLite), `iso/`, `media/`, `source/` |
 | TLS | `/etc/constructd/tls.pfx` (+ `tls.pass`) | A self-signed certificate for the public host; clients pin its fingerprint at enrolment |
-| The VM image | `<image-storage>:import/construct-ubuntu-<release>-cloudimg-amd64.qcow2` | The Ubuntu cloud image every VM is cloned from |
+| The VM image | `<image-storage>:import/construct-ubuntu-<release>-xfs-amd64.qcow2` | The Ubuntu cloud image, its root file system converted to XFS; every VM is cloned from it |
 | Per-VM seeds | `<image-storage>:snippets/construct-<vm>-user.yaml` | cloud-init user data the service writes per VM and deletes with it |
 
 Guests are ordinary QEMU VMs on the node: `qm config <id>` shows them, the Proxmox UI lists them
@@ -99,7 +99,7 @@ node with `--build` / for a non-main `--ref`. In order it does:
 0. **Inputs** — root, `pvesh`/`qm`, the small tools it needs (installed if missing), sane port ranges, the public host (the node's FQDN when it resolves, else its address).
 1. **Directories** — the layout above.
 2. **Storage and network** — the disk storage must offer `images` (default `local-lvm`); the image storage must be a *directory* storage (default `local`) and gets `import` and `snippets` content enabled; the bridge (default `vmbr0`) must exist.
-3. **Cloud image** — downloads `https://cloud-images.ubuntu.com/<release>/current/…` into the image storage through Proxmox's own `download-url`, checksum-verified against Ubuntu's `SHA256SUMS`. Skipped when already cached.
+3. **Cloud image** — downloads `https://cloud-images.ubuntu.com/<release>/current/…` into the image storage, checksum-verified against Ubuntu's `SHA256SUMS`, and rebuilds it with an XFS root (`service/host/xfs-cloud-image.sh`: same partitions and boot files, root copied onto XFS made by the image's own `mkfs.xfs`, fstab and the kernel command line switched to the root's UUID). XFS reflinks let a guest's git worktrees share their build outputs; see [worktrees.md](worktrees.md). Skipped when already cached; the ext4 image of earlier releases (`…-cloudimg-amd64.qcow2`) is removed.
 4. **TLS** — a self-signed certificate (10 years, SAN = public host and node name) as PFX; kept on re-runs.
 5. **Files** — the service into `/opt/construct/host`, the checkout into `/opt/construct/scripts`.
 6. **`appsettings.Production.json`** — root-only, since it carries the PFX password. Every value the Proxmox platform reads is in it (section 4).
@@ -491,7 +491,7 @@ Remaining limitations:
 | `Proxmox:Node` | this machine's host name | the node addressed |
 | `Proxmox:Storage` | `local-lvm` | VM disks and cloud-init drives (`images` content) |
 | `Proxmox:MediaStorage` | `construct-media` | Directory storage with ISO content; `HostAdmin:Media:RootDir` defaults to `/var/lib/constructd/media/template/iso` |
-| `Proxmox:ImageVolume` | `local:import/construct-ubuntu-noble-cloudimg-amd64.qcow2` | the cached cloud image |
+| `Proxmox:ImageVolume` | `local:import/construct-ubuntu-noble-xfs-amd64.qcow2` | the cached cloud image |
 | `Proxmox:SnippetStorage` / `SnippetDir` | `local` / `/var/lib/vz/snippets` | where per-VM seeds go |
 | `Proxmox:Bridge` | `vmbr0` | guest network |
 | `Proxmox:CpuType` | `host` | QEMU CPU model with nesting enabled |

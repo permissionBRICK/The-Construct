@@ -110,6 +110,7 @@ The host can also be a **Proxmox VE node**: one script installs the same service
 | [Hypervisor drivers](docs/drivers.md) | The backend contract and how to add one |
 | [Construct Companion](docs/companion.md) | The Windows tray app: install, settings, troubleshooting |
 | [Control panel](docs/control-panel.md) | The VS Code operator console |
+| [XFS & worktrees](docs/worktrees.md) | Why guests use XFS, and how new git worktrees get reflinked build outputs |
 | [Backup & restore](docs/backup-restore.md) | Carrying agent configuration and auth across reinstalls |
 | [Config sync](docs/config-sync.md) | How project profiles survive a reinstall and sync between VM and PC |
 

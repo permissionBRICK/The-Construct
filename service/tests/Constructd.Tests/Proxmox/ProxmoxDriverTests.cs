@@ -122,7 +122,7 @@ public sealed class ProxmoxDriverTests
         [
             "create", "104", "--name", "work-vm", "--cores", "4", "--sockets", "1", "--cpu", "host",
             "--memory", "8192", "--ostype", "l26", "--scsihw", "virtio-scsi-single",
-            "--scsi0", "local-lvm:0,import-from=local:import/construct-ubuntu-noble-cloudimg-amd64.qcow2,discard=on",
+            "--scsi0", "local-lvm:0,import-from=local:import/construct-ubuntu-noble-xfs-amd64.qcow2,discard=on",
             "--ide2", "local-lvm:cloudinit", "--net0", "virtio,bridge=vmbr0", "--boot", "order=scsi0",
             "--agent", "enabled=1", "--serial0", "socket", "--ipconfig0", "ip=dhcp",
             "--cicustom", "user=local:snippets/construct-work-vm-user.yaml", "--tags", "construct",

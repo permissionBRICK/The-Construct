@@ -221,12 +221,19 @@ inside the VM still follows the existing `GIT_CREDENTIAL_STORE` setting. No toke
 is saved to Windows Credential Manager. See [config sync](config-sync.md) for
 later PC authentication.
 
+### Reflink-seeded worktrees
+
+Every (re)provision installs a git `post-checkout` hook through the system git template and
+into existing checkouts under `WORKSPACE_ROOT`. On the XFS root of new VMs it seeds each new
+`git worktree add` with reflink copies of the main worktree's build outputs and dependencies;
+on ext4 it does nothing. See [worktrees.md](worktrees.md).
+
 ### Free-disk preflight
 
 The first step of every (re)provision reports free space on each filesystem it writes to and
 **stops** when one is essentially full (under 256 MiB free; under 2 GiB is a warning). This is
-deliberate: a full disk is the most misleading failure this script has. ext4 reserves 5% of
-every filesystem for uid 0, so root's writes keep succeeding while writes as any other user
+deliberate: a full disk is the most misleading failure this script has. On ext4 — the root file
+system of VMs installed before Construct switched to XFS — 5% of every filesystem is reserved for uid 0, so root's writes keep succeeding while writes as any other user
 fail — which surfaces as a scatter of unrelated-looking errors instead of "the disk is full".
 The classic one:
 

@@ -389,8 +389,14 @@ autoinstall:
     id: ${SOURCE_ID}
     search_drivers: false
   storage:
-    layout:
-      name: direct
+    config:
+      - {type: disk, id: disk0, match: {size: largest}, ptable: gpt, wipe: superblock-recursive, preserve: false, grub_device: false}
+      - {type: partition, id: esp, device: disk0, number: 1, size: 1G, flag: boot, grub_device: true, wipe: superblock, preserve: false}
+      - {type: format, id: esp-fs, volume: esp, fstype: fat32}
+      - {type: partition, id: root, device: disk0, number: 2, size: -1, wipe: superblock, preserve: false}
+      - {type: format, id: root-fs, volume: root, fstype: xfs}
+      - {type: mount, id: root-mount, device: root-fs, path: /}
+      - {type: mount, id: esp-mount, device: esp-fs, path: /boot/efi}
   identity:
     realname: "${VM_REALNAME}"
     hostname: ${IDENTITY_HOSTNAME}
