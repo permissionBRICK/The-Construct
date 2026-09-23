@@ -6,7 +6,31 @@ namespace Constructd.Api.Composition;
 
 public sealed class ReleaseInfo : IReleaseInfo
 {
-    public InstalledRelease Installed { get; }
+    private sealed record CachedRelease(DateTime LastWriteTimeUtc, InstalledRelease Release);
+    private readonly string installRecordPath;
+    private readonly InstalledRelease baseline;
+    private CachedRelease? cached;
+    public InstalledRelease Installed
+    {
+        get
+        {
+            var stamp = File.GetLastWriteTimeUtc(installRecordPath);
+            var current = Volatile.Read(ref cached);
+            if (current?.LastWriteTimeUtc == stamp) return current.Release;
+            var release = baseline;
+            try
+            {
+                if (File.Exists(installRecordPath))
+                {
+                    var record = System.Text.Json.JsonSerializer.Deserialize<Constructd.Windows.Updates.InstallRecord>(File.ReadAllText(installRecordPath),Constructd.Windows.Updates.UpdateFiles.Json);
+                    if(record?.Commit == baseline.Commit) release=baseline with {PackageVersion=record.PackageVersion, InstalledAt=record.InstalledAt, Source="release"};
+                }
+            }
+            catch (Exception ex) when(ex is IOException or System.Text.Json.JsonException) { }
+            Volatile.Write(ref cached, new(stamp, release));
+            return release;
+        }
+    }
     public int SchemaVersion => SqliteMigrations.SchemaVersion;
     public int SchemaMinReadableBy => SqliteMigrations.MinReadableBy;
     /// <summary>
@@ -18,22 +42,13 @@ public sealed class ReleaseInfo : IReleaseInfo
         : ["host-admin", "windows-guests", "usage", "children", "media", "console", "updates", "network", "primary-cpu", "primary-memory", "primary-nested", .. SourceCache];
     private string[] SourceCache => options?.HostAdmin.Source.Enabled != false ? ["source-cache"] : [];
     private readonly Constructd.Core.Configuration.ConstructdOptions? options;
-    public ReleaseInfo(Constructd.Core.Configuration.ConstructdOptions? options = null)
+    public ReleaseInfo(Constructd.Core.Configuration.ConstructdOptions? options = null, string? installRecordPath = null)
     {
         this.options = options;
+        this.installRecordPath = installRecordPath ?? Path.Combine(AppContext.BaseDirectory,"install.json");
         var assembly = typeof(ReleaseInfo).Assembly;
         var version = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "unknown";
         var plus = version.IndexOf('+');
-        Installed = new(plus >= 0 ? version[(plus + 1)..] : "unknown", plus >= 0 ? version[..plus] : version, null, "installer");
-        try
-        {
-            var path = Path.Combine(AppContext.BaseDirectory,"install.json");
-            if (File.Exists(path))
-            {
-                var record = System.Text.Json.JsonSerializer.Deserialize<Constructd.Windows.Updates.InstallRecord>(File.ReadAllText(path),Constructd.Windows.Updates.UpdateFiles.Json);
-                if(record?.Commit == Installed.Commit) Installed=Installed with {PackageVersion=record.PackageVersion, InstalledAt=record.InstalledAt, Source="release"};
-            }
-        }
-        catch (Exception ex) when(ex is IOException or System.Text.Json.JsonException) { }
+        baseline = new(plus >= 0 ? version[(plus + 1)..] : "unknown", plus >= 0 ? version[..plus] : version, null, "installer");
     }
 }
