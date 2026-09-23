@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Construct Setup</title>
+<link rel="stylesheet" href="common.css">
+<link rel="stylesheet" href="setup.css">
+</head>
+<body>
+<div class="stage-center">
+  <div class="win setup" id="win" role="dialog" aria-labelledby="bandTitle">
+    <div class="band"><canvas class="rain"></canvas><div class="band-inner" id="bandInner"></div></div>
+    <div class="main">
+      <nav class="rail" id="rail" aria-label="Setup steps"></nav>
+      <section class="content" id="content">
+        <div id="banner"></div>
+        <div class="page" id="page" tabindex="-1"></div>
+        <footer class="wiz-foot" id="foot"></footer>
+        <div class="logbar" id="logbar">
+          <div class="grip" id="grip" title="Drag to resize"></div>
+          <button class="details-toggle" id="detailsBtn" aria-expanded="false" aria-controls="drawer">Details <span class="chev"></span></button>
+          <span class="tail" id="tail"></span>
+          <span class="docked-note" id="dockedNote">Log is open in its own window · <button class="link" id="dockBack">Dock it back</button></span>
+          <button class="icon-btn light" id="popBtn" title="Pop out the log into its own window"></button>
+        </div>
+        <div class="drawer" id="drawer"><div id="logHost"><div id="log"></div></div></div>
+      </section>
+    </div>
+    <div class="restart-overlay" id="restartOv"><div><div class="spinner big"></div><p id="restartText">Restarting PC-1…</p></div></div>
+  </div>
+</div>
+
+<!-- popped-out log window -->
+<div class="win logwin" id="logWin" hidden>
+  <div class="logwin-bar"><span>Install log · agent-vm</span><span class="sp"></span><button class="icon-btn" id="logWinDock" title="Dock back into setup"></button><button class="icon-btn" id="logWinClose" title="Close"></button></div>
+  <div class="logwin-body" id="logWinBody"></div>
+</div>
+
+<!-- faux system dialogs -->
+<div class="uac-dim" id="uac" hidden>
+  <div class="uac" role="alertdialog" aria-labelledby="uacT">
+    <div class="uac-head">User Account Control</div>
+    <div class="uac-body">
+      <h2 id="uacT">Do you want to allow this app to make changes to your device?</h2>
+      <div class="uac-app"><span class="ps">&gt;_</span><div><b>Windows PowerShell</b><br><span>Verified publisher: Microsoft Windows</span></div></div>
+      <button class="link uac-more">Show more details</button>
+    </div>
+    <div class="uac-foot"><button class="uac-btn yes" data-uac="yes">Yes</button><button class="uac-btn" data-uac="no">No</button></div>
+  </div>
+</div>
+<div class="certdlg" id="certDlg" hidden role="alertdialog" aria-labelledby="certT">
+  <div class="certdlg-title"><span id="certT">Security Warning</span><button class="x" data-cert="no">✕</button></div>
+  <div class="certdlg-body">
+    <div class="shield"></div>
+    <div>
+      <p>You are about to install a certificate from a certification authority (CA) claiming to represent:</p>
+      <p><b>Construct T3 local CA (agent-vm)</b></p>
+      <p>Windows cannot validate that the certificate is actually from "Construct T3 local CA (agent-vm)". You should confirm its origin by contacting "Construct T3 local CA (agent-vm)". The following number will assist you in this process:</p>
+      <p>Thumbprint (sha1): <span class="mono">5A3C910E 7F22B408 C1D95E6A 0B4F37D2 88E1C0A4</span></p>
+      <p>Do you want to install this certificate?</p>
+    </div>
+  </div>
+  <div class="certdlg-foot"><button class="btn sm" data-cert="yes">Yes</button><button class="btn sm" data-cert="no">No</button></div>
+</div>
+
+<div class="page-toast" id="pageToast"></div>
+
+<div class="demo-bar" id="demo"></div>
+
+<script src="common.js"></script>
+<script src="setup.js"></script>
+</body>
+</html>

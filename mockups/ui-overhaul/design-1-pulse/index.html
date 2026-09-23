@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Construct · Design 1 · Pulse</title>
+<link rel="stylesheet" href="pulse.css">
+</head>
+<body>
+<div class="shell">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark"><svg class="i s20" viewBox="0 0 24 24" style="color:var(--live)"><path d="M12 2.8 20 7.4v9.2l-8 4.6-8-4.6V7.4z"/><path d="M12 12 20 7.4M12 12 4 7.4M12 12v9.2"/></svg></div>
+      <h1>Pulse<small>Design 1 · Construct UI overhaul</small></h1>
+    </div>
+    <p class="concept"><b>Status first, calm, native to Windows 11.</b> Every surface opens with the same answer: which VMs are up, whether an agent is still working, and which links are live. Each state gets a single context-aware <b>Next action</b> (Open, Resume, Reprovision when Claude finishes). The rest lives in a Windows-Settings-style panel where every setting says when it takes effect. Destructive actions are one layer further down, behind an impact preview and a typed confirmation. Green means only "live and healthy"; amber and red are reserved for things that need you.</p>
+    <div class="top-controls">
+      <div class="seg" id="surfSeg" role="tablist" aria-label="Surface">
+        <button data-s="popup" role="tab">Tray popup</button>
+        <button data-s="panel" role="tab">Control panel</button>
+        <button data-s="host" role="tab">Host panel</button>
+      </div>
+      <div class="seg" id="themeSeg" aria-label="Theme">
+        <button data-t="auto" title="Follow system">Auto</button>
+        <button data-t="light" title="Light">Light</button>
+        <button data-t="dark" title="Dark">Dark</button>
+      </div>
+    </div>
+  </header>
+  <div class="stage-wrap">
+    <main class="stage" id="stage">
+      <div class="fit-box" id="fitBox"><div class="fit" id="fit"></div></div>
+    </main>
+    <aside class="notes" id="notes" aria-label="Design notes">
+      <button class="notes-tab" id="notesOpen" title="Show design notes"><svg class="i" viewBox="0 0 24 24"><path d="m14.5 6-6 6 6 6"/></svg><span>Design notes</span></button>
+      <div class="notes-body">
+        <div class="notes-head"><b style="font-size:12px;color:var(--text-3);letter-spacing:.05em">DESIGN NOTES</b><button class="iconbtn" id="notesClose" title="Hide notes"><svg class="i" viewBox="0 0 24 24"><path d="m9.5 6 6 6-6 6"/></svg></button></div>
+        <div id="notesBody"></div>
+      </div>
+    </aside>
+  </div>
+</div>
+<script src="core.js"></script>
+<script src="popup.js"></script>
+<script src="panel.js"></script>
+<script src="host.js"></script>
+</body>
+</html>

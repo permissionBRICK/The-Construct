@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Construct · UI overhaul mockups</title>
+<style>
+  :root { --bg:#0b0f0d; --card:#121816; --line:#1f2a25; --text:#dfe9e3; --dim:#8a9a92; --acc:#37d98b; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.5 "Segoe UI Variable","Segoe UI",system-ui,sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width:1180px; margin:0 auto; padding:48px 28px 64px; }
+  h1 { font-size:30px; margin:0 0 6px; letter-spacing:-.01em; }
+  h1 span { color:var(--acc); }
+  p.lead { color:var(--dim); margin:0 0 36px; max-width:760px; }
+  h2 { font-size:13px; letter-spacing:.12em; text-transform:uppercase; color:var(--dim); margin:36px 0 14px; font-weight:600; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:16px; }
+  a.card { display:flex; flex-direction:column; gap:8px; padding:20px; background:var(--card); border:1px solid var(--line); border-radius:12px; color:inherit; text-decoration:none; transition:border-color .15s, transform .15s; }
+  a.card:hover { border-color:var(--acc); transform:translateY(-2px); }
+  .num { font:600 12px/1 ui-monospace,Consolas,monospace; color:var(--acc); }
+  .name { font-size:19px; font-weight:600; }
+  .desc { color:var(--dim); font-size:14px; }
+  .links { margin-top:auto; display:flex; gap:10px; font-size:13px; }
+  .links span { color:var(--acc); }
+  ul.res { color:var(--dim); padding-left:20px; }
+  ul.res a { color:var(--text); }
+</style>
+</head>
+<body>
+<main>
+  <h1>The Construct <span>·</span> UI overhaul mockups</h1>
+  <p class="lead">Four design directions for the Companion tray popup, the control panel and the host panel, plus a GUI installer and updater. Each design uses the same sample data, so you are comparing layout and style rather than content. Everything here is a static mockup, and no button does anything real.</p>
+
+  <h2>Designs: Companion, control panel, host panel</h2>
+  <div class="grid">
+    <a class="card" href="design-1-pulse/index.html">
+      <div class="num">01</div><div class="name">Pulse</div>
+      <div class="desc">Status comes first, in a calm native Windows 11 look with light and dark themes. Each VM has one "next action" button. The control panel uses Settings-style navigation. The host panel is built around an attention feed.</div>
+      <div class="links"><span>Open →</span></div>
+    </a>
+    <a class="card" href="design-2-mission/index.html">
+      <div class="num">02</div><div class="name">Mission Control</div>
+      <div class="desc">Built around what the agents are doing, in a refined version of the dark Matrix look. Agents are the main element, with a notify inbox and "wake me when done". The host panel is organised by person.</div>
+      <div class="links"><span>Open →</span></div>
+    </a>
+    <a class="card" href="design-3-operator/index.html">
+      <div class="num">03</div><div class="name">Operator Line</div>
+      <div class="desc">Keyboard first, with a command palette and an event timeline, styled like a dense developer tool. The host panel is an ops console with filterable tables and bulk actions.</div>
+      <div class="links"><span>Open →</span></div>
+    </a>
+    <a class="card" href="design-4-floorplan/index.html">
+      <div class="num">04</div><div class="name">Floorplan</div>
+      <div class="desc">A spatial layout where the machine topology is the interface: forwards are drawn as wires and agents as cards plugged into the VM. The host panel is a RAM treemap with a what-if slider.</div>
+      <div class="links"><span>Open →</span></div>
+    </a>
+  </div>
+
+  <h2>Installer and updater</h2>
+  <div class="grid">
+    <a class="card" href="installer/index.html">
+      <div class="num">05</div><div class="name">Installer, setup wizard and updater</div>
+      <div class="desc">A compact updater with a progress bar and a drop-down live log. There is also a full first-run setup wizard covering install progress, blocking prompts, reboot, failure and success. The PowerShell one-liner stays the entry point.</div>
+      <div class="links"><span>Open →</span></div>
+    </a>
+  </div>
+
+  <h2>Research behind the designs</h2>
+  <ul class="res">
+    <li><a href="research/operator-ux.md">Daily operator: jobs to be done, pain points, concepts</a></li>
+    <li><a href="research/host-admin-ux.md">Host admin: jobs to be done, pain points, concepts</a></li>
+    <li><a href="research/installer-ux.md">Installer: current questions, phases, UX recommendations</a></li>
+    <li><a href="research/sample-data.md">Shared sample data</a></li>
+  </ul>
+</main>
+</body>
+</html>

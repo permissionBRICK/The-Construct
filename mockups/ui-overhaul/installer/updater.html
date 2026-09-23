@@ -1,0 +1,510 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Updating The Construct</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  .updater { width: 480px; }
+  .updater .band { height: 40px; }
+  .updater .band-inner { padding-left: 14px; }
+  .updater .wordmark .logo { width: 22px; height: 22px; }
+  .updater .wordmark .wm { font-size: 11.5px; }
+
+  .u-body { padding: 14px 20px 12px; background: var(--bg); }
+  .u-head { display: flex; align-items: flex-start; gap: 12px; }
+  .u-head .titles { flex: 1; min-width: 0; }
+  .u-head h1 { margin: 0; font: 600 16px/1.3 var(--font-display); letter-spacing: -.005em; }
+  .u-head .sub { margin-top: 2px; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .u-head .sub code { font: 11.5px var(--mono); color: var(--ink-2); background: var(--surface-sunk); padding: 0 4px; border-radius: 3px; }
+  .pct { font: 600 26px/1 var(--font-display); font-variant-numeric: tabular-nums; color: var(--ink); letter-spacing: -.02em; padding-top: 2px; min-width: 64px; text-align: right; }
+  .pct small { font-size: 14px; color: var(--muted); font-weight: 500; margin-left: 1px; }
+  .state-badge { width: 30px; height: 30px; border-radius: 50%; display: none; place-items: center; margin-left: auto; }
+  .state-badge svg { width: 18px; height: 18px; }
+  .win[data-state=success] .state-badge { display: grid; background: var(--accent); color: var(--on-accent); }
+  .win[data-state=failure] .state-badge { display: grid; background: var(--danger); color: #fff; }
+  .win[data-state=success] .pct, .win[data-state=failure] .pct { display: none; }
+
+  .u-bar { margin-top: 14px; }
+  .pbar .seg { position: absolute; top: 0; bottom: 0; z-index: 0; transition: background .3s; }
+  .pbar .seg.active { background: rgba(31,191,117,.16); }
+  .pbar .fill { z-index: 1; }
+  .phase-legend { display: flex; margin-top: 5px; font-size: 10.5px; color: var(--faint); letter-spacing: .01em; user-select: none; }
+  .phase-legend span { overflow: hidden; white-space: nowrap; text-overflow: clip; padding-left: 3px; }
+  .phase-legend span.done { color: var(--muted); }
+  .phase-legend span.active { color: var(--accent-ink); font-weight: 600; }
+  .phase-legend span.failed { color: var(--danger); font-weight: 600; }
+
+  .u-status { display: flex; align-items: baseline; gap: 12px; margin-top: 8px; font-size: 13px; }
+  .u-status .st { flex: 1; min-width: 0; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .u-status .eta { color: var(--muted); font-size: 12.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .win[data-state=failure] .u-status .st { color: var(--danger-ink); white-space: normal; }
+
+  .notice { display: none; margin-top: 10px; gap: 10px; padding: 10px 12px; border-radius: var(--r-l); border: 1px solid; align-items: flex-start; }
+  .notice .ic { width: 18px; height: 18px; flex: none; margin-top: 1px; }
+  .notice .nt { flex: 1; min-width: 0; font-size: 12.5px; }
+  .notice .nt b { display: block; font-size: 13.5px; margin-bottom: 1px; }
+  .notice.warn { background: var(--warn-bg); border-color: var(--warn-line); color: var(--warn-ink); }
+  .notice.warn .ic { color: var(--warn); }
+  .notice.err { background: var(--danger-bg); border-color: var(--danger-line); color: var(--danger-ink); }
+  .notice.err .ic { color: var(--danger); }
+  .notice .code { font: 600 18px var(--mono); letter-spacing: .12em; color: var(--ink); background: #fff; border: 1px dashed var(--warn-line); border-radius: 6px; padding: 2px 10px; display: inline-block; margin: 4px 6px 0 0; }
+  .notice .acts { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .win[data-state=blocked] .notice.warn, .win[data-state=failure] .notice.err { display: flex; }
+  .win[data-state=blocked] .u-status .eta { color: var(--warn); }
+
+  .u-foot { display: flex; align-items: center; gap: 10px; margin-top: 12px; min-height: 28px; }
+  .details-toggle {
+    display: inline-flex; align-items: center; gap: 4px; border: 0; background: transparent; padding: 3px 6px 3px 4px; margin-left: -4px;
+    border-radius: 5px; color: var(--ink-2); font-size: 12.5px; font-weight: 600; cursor: pointer;
+  }
+  .details-toggle:hover { background: rgba(0,0,0,.05); }
+  .details-toggle svg { width: 12px; height: 12px; transition: transform .2s; }
+  .win.expanded .details-toggle svg { transform: rotate(180deg); }
+  .tail { flex: 1; min-width: 0; font: 11px var(--mono); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .win.expanded .tail { visibility: hidden; }
+  .u-actions { display: flex; gap: 6px; }
+
+  .u-drawer { height: 0; transition: height .28s cubic-bezier(.2,.7,.2,1); overflow: hidden; border-top: 1px solid transparent; }
+  .win.expanded .u-drawer { height: 250px; border-top-color: #1f2b26; }
+  .u-drawer .logview { height: 250px; }
+
+  .closed-ghost { display: none; text-align: center; color: #e8f5ee; }
+  .closed-ghost p { margin: 0 0 10px; font-size: 13px; opacity: .85; }
+  body.closed .win { display: none; }
+  body.closed .closed-ghost { display: block; }
+  body.embedded .closed-ghost { color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.5); }
+</style>
+</head>
+<body>
+<div class="stage-center">
+  <div class="win updater" id="win" data-state="running" role="dialog" aria-labelledby="title">
+    <div class="band"><canvas class="rain"></canvas><div class="band-inner" id="bandInner"></div></div>
+    <div class="u-body">
+      <div class="u-head">
+        <div class="titles">
+          <h1 id="title">Updating The Construct</h1>
+          <div class="sub" id="sub"></div>
+        </div>
+        <div class="pct" id="pct" aria-live="polite">0<small>%</small></div>
+        <div class="state-badge" id="badge"></div>
+      </div>
+      <div class="u-bar">
+        <div class="pbar" id="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"><div class="fill"></div></div>
+        <div class="phase-legend" id="legend"></div>
+      </div>
+      <div class="u-status"><span class="st" id="status">Starting…</span><span class="eta" id="eta"></span></div>
+      <div class="notice warn" id="blockNotice"></div>
+      <div class="notice err" id="failNotice"></div>
+      <div class="u-foot">
+        <button class="details-toggle" id="detailsBtn" aria-expanded="false" aria-controls="drawer">Details <span id="chev"></span></button>
+        <span class="tail" id="tail"></span>
+        <div class="u-actions" id="actions"></div>
+      </div>
+    </div>
+    <div class="u-drawer" id="drawer"><div id="log"></div></div>
+  </div>
+  <div class="closed-ghost" id="ghost"><p>The updater closed itself after success.</p><button class="btn sm" id="replay">Replay</button></div>
+</div>
+
+<div class="demo-bar" id="demo">
+  <span class="lbl">Mode</span>
+  <button class="chip" data-mode="update">Update Construct</button>
+  <button class="chip" data-mode="reprovision">Reprovision agent-vm</button>
+  <span class="lbl">State</span>
+  <button class="chip" data-state="running">Running</button>
+  <button class="chip" data-state="success">Success</button>
+  <button class="chip" data-state="failure">Failure</button>
+  <button class="chip" data-state="blocked">Blocked</button>
+  <span class="lbl">Speed</span>
+  <button class="chip" data-speed="1">1×</button>
+  <button class="chip" data-speed="10">10×</button>
+</div>
+
+<script src="common.js"></script>
+<script>
+(function () {
+  'use strict';
+  const { ICON, wordmark, captionButtons, CodeRain, LogView, Clock, Bridge } = CX;
+  const $ = id => document.getElementById(id);
+
+  $('bandInner').innerHTML = wordmark() + captionButtons();
+  CodeRain(document.querySelector('.band canvas'), { size: 11 });
+  $('chev').innerHTML = ICON.chevDown;
+
+  // ---------------- scripts ----------------
+  const UPDATE = {
+    title: 'Updating The Construct',
+    sub: 'Installed <code>b5c4348</code> → latest <code>3a91f0e</code> · 4 commits · the VM is not touched',
+    doneTitle: 'The Construct is up to date',
+    doneSub: 'Now on <code>3a91f0e</code> · updated from <code>b5c4348</code>',
+    doneStatus: 'Companion restarted · open VS Code windows reload the panel',
+    failTitle: "The update didn't finish",
+    blockTitle: 'Waiting for Construct Companion to close',
+    log: 'update-20260923-141203.log',
+    phases: [['Download', 40], ['Extract', 15], ['Panel', 20], ['Marker', 5], ['Companion', 20]],
+    steps: [
+      { ph: 0, to: .08, dur: 1.4, st: 'Checking for updates', logs: [
+        ['step', '==> Checking for updates (permissionBRICK/The-Construct@main)'],
+        ['dim', '    GET https://github.com/permissionBRICK/The-Construct/releases/latest/download/manifest.json'],
+        ['info', '    latest release: construct-3a91f0e  (installed b5c4348, 4 commits behind)']] },
+      { ph: 0, to: .92, dur: 6, st: f => `Downloading update · ${(4.8 * f).toFixed(1)} of 4.8 MB · 3.1 MB/s`, logs: [
+        ['step', '==> Downloading permissionBRICK/The-Construct (main) ...'],
+        ['dim', '    https://github.com/permissionBRICK/The-Construct/releases/download/construct-3a91f0e/construct-3a91f0e.zip'],
+        ['dim', '    construct-3a91f0e.zip  4.8 MB  -> %TEMP%\\construct-update-7f31\\']] },
+      { ph: 0, to: 1, dur: 1, st: 'Verifying checksum', logs: [
+        ['info', '    sha256 9f2c41d0a8…7be1e41a  \x1b[32mmatches manifest\x1b[0m']] },
+      { ph: 1, to: .6, dur: 2.2, st: 'Extracting files', logs: [
+        ['step', '==> Extracting to C:\\Users\\dana\\The-Construct'],
+        ['dim', '    412 files, 6.1 MB']] },
+      { ph: 1, to: .85, dur: 1, st: 'Removing files the release no longer ships', logs: [
+        ['info', '    removed 3 stale file(s) the release no longer ships'],
+        ['dim', '      - lib/AgentVm.LegacyForward.ps1'],
+        ['dim', '      - extension/media/themes/classic.css'],
+        ['dim', '      - docs/old-install.md']] },
+      { ph: 1, to: 1, dur: .8, st: 'Recording the source manifest', logs: [
+        ['step', '==> Updated Construct files in C:\\Users\\dana\\The-Construct'],
+        ['info', '    installed commit: 3a91f0e']] },
+      { ph: 2, to: 1, dur: 4, st: 'Reinstalling the VS Code control panel', logs: [
+        ['step', '==> Installing the Construct control panel into VS Code'],
+        ['dim', '    Installing extensions...'],
+        ['info', "    Extension 'construct-panel-3a91f0e.vsix' was successfully installed."]] },
+      { ph: 3, to: 1, dur: .8, st: 'Advancing the install marker', logs: [
+        ['step', '==> Advancing install marker b5c4348 -> 3a91f0e']] },
+      { ph: 4, to: .15, dur: 1.2, st: 'Checking Companion package · 1 of 5', logs: [
+        ['step', '==> Updating Construct Companion'],
+        ['info', '    manifest: ConstructCompanion 1.8.0 (win-x64) · sha256 \x1b[32mOK\x1b[0m']] },
+      { ph: 4, to: .35, dur: 2, st: 'Asking Companion to quit · 2 of 5', logs: [
+        ['info', '    asking Construct Companion to quit (POST 127.0.0.1:47613/v1/quit) ...'],
+        ['info', '    Construct Companion exited after 1.4 s']] },
+      { ph: 4, to: .75, dur: 3.2, st: f => `Swapping Companion files · 3 of 5 · ${Math.min(38, Math.round(38 * f))} of 38 files`, block: true, fail: true, logs: [
+        ['dim', '    backing up the installed files -> ConstructCompanion.previous'],
+        ['dim', '    moving the new files into place'],
+        ['dim', '      ConstructCompanion.exe'],
+        ['dim', '      ConstructCompanion.dll'],
+        ['dim', '      Construct.Companion.Core.dll  (+35 more)']] },
+      { ph: 4, to: .88, dur: 1, st: 'Registering Companion · 4 of 5', logs: [
+        ['dim', '    registering the app (HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\ConstructCompanion)']] },
+      { ph: 4, to: 1, dur: 1.4, st: 'Starting Companion · 5 of 5', logs: [
+        ['info', '    starting ConstructCompanion.exe --background'],
+        ['step', '==> Construct Companion installed and started.'],
+        ['dim', '    result: ok  -> %LOCALAPPDATA%\\Construct\\update-result.txt'],
+        ['ok', 'Update complete. Open VS Code windows reload the refreshed panel automatically.']] }
+    ],
+    blockLogs: [
+      ['warn', 'WARNING: ConstructCompanion.dll is in use; retrying (10 s per file)'],
+      ['warn', 'WARNING:   held by explorer.exe (pid 5120)']],
+    blockNotice: `<span class="ic">${ICON.warn}</span><div class="nt"><b>Close Construct Companion to continue</b>
+      <span>ConstructCompanion.dll is held by <b style="display:inline;font-size:inherit">explorer.exe</b> (pid 5120), usually an open Explorer window or a pinned tray preview. Nothing is killed; we retry each file for 10 s.</span>
+      <div class="acts"><button class="btn sm warn" data-act="unblock">${ICON.retry} Retry now</button><button class="btn sm" data-act="holders">Show what's holding it</button></div></div>`,
+    blockStatus: 'Swapping Companion files · 3 of 5 · paused',
+    blockEta: n => `retrying · ${n} s left`,
+    failLogs: [
+      ['err', 'ERROR: Companion update failed while moving the new files into place (ConstructCompanion.dll: The process cannot access the file because it is being used by another process; held by explorer.exe (pid 5120))'],
+      ['info', '    rolled back: restored ConstructCompanion.previous and restarted Companion 1.7.2'],
+      ['dim', '    result: fail  -> %LOCALAPPDATA%\\Construct\\update-result.txt'],
+      ['err', 'The update did not complete. Please reopen VS Code, then try the update again.']],
+    failStatus: '<b>Companion swap · moving the new files into place.</b> ConstructCompanion.dll is held by explorer.exe (pid 5120). Your previous Companion was restored; Construct files are already on 3a91f0e.',
+    failSub: 'Stopped at step 3 of 5 of the Companion swap · rolled back safely'
+  };
+
+  const PROV_STEPS = ['Checking root privileges', 'Checking free disk space', 'Granting agent passwordless sudo', 'Running core host bootstrap',
+    'Writing configuration to /etc/construct/construct.conf', 'Installing the VM service token', "Requesting host port forwards for this VM's web services",
+    'Configuring global git identity', 'Setting up SMB share for the host', 'Setting up root SSH key', 'Installing AI tool: claude', 'Installing AI tool: codex',
+    'Installing AI tool: opencode', 'Installing T3 Code web GUI', 'Recording the forwarded T3 address', 'Installing AI tool console integration',
+    'Installing construct CLI', 'Installing browser console gateway', 'Setting up the notification spool', 'Setting up the activity heartbeat timer',
+    'Setting up the token usage timer', 'Setting up endpoint refresh at boot', 'Generating runtime config', 'Configuring MCP servers for the AI tools',
+    'Installing project SDKs/runtimes', 'Seeding git credentials for repo checkout', 'Checking out project repos', 'Running project provisioning commands',
+    '(Re)starting construct service', 'Setting up VS Code server / serve-web / tunnel', 'Recording provisioning timestamps'];
+  const VM_DETAIL = {
+    'Checking free disk space': ['[vm] / has 17.6 GB free (146 GB, 88% used) \x1b[33m(low)\x1b[0m'],
+    'Running core host bootstrap': ['[vm] apt-get install -y --no-install-recommends jq socat inotify-tools ...', '[vm] 0 upgraded, 2 newly installed, 0 to remove and 4 not upgraded.'],
+    'Installing AI tool: claude': ['[vm] npm i -g @anthropic-ai/claude-code@latest', '[vm] changed 3 packages in 7s', '[vm] claude 2.4.1 -> 2.4.3'],
+    'Installing AI tool: codex': ['[vm] codex 0.61.0 already current'],
+    'Installing AI tool: opencode': ['[vm] opencode 1.9.2 already current'],
+    'Installing T3 Code web GUI': ['[vm] t3code 0.9.14-construct.3 (prebuilt) OK'],
+    'Installing project SDKs/runtimes': ['[vm] construct: node 22, dotnet 9.0 ... ok', '[vm] omniloop: node 22, python 3.12 ... ok', '[vm] jarvis: python 3.12 ... ok'],
+    'Checking out project repos': ['[vm] construct: fetch origin, fast-forward main (2 commits)', '[vm] omniloop: up to date', '[vm] gitgudlab: up to date', '[vm] jarvis: cloned https://gitlab.example.com/dana/jarvis.git'],
+    'Configuring MCP servers for the AI tools': ['[vm] claude: 3 servers · codex: 3 servers · opencode: 2 servers'],
+    '(Re)starting construct service': ['[vm] construct.service active (running)']
+  };
+  const REPROVISION = {
+    title: 'Reprovisioning agent-vm',
+    sub: 'agent-vm · Hyper-V on this PC · provisioned <code>c21978b</code> → <code>3a91f0e</code>',
+    doneTitle: 'agent-vm is up to date',
+    doneSub: 'Provisioned at <code>3a91f0e</code> · 31 steps, no warnings',
+    doneStatus: 'The VM kept running · agents were not interrupted',
+    failTitle: "Reprovisioning didn't finish",
+    blockTitle: 'VS Code tunnel needs a one-time sign-in',
+    log: 'reprovision-agent-vm-20260923-141203.log',
+    phases: [['Prepare', 5], ['SSH', 5], ['Upload', 10], ['Provision', 70], ['Host', 10]],
+    steps: []
+  };
+  (function buildReprovision() {
+    const S = REPROVISION.steps;
+    S.push({ ph: 0, to: 1, dur: 1.2, st: 'Resolving projects and git identity', logs: [
+      ['step', "==> Reprovisioning 'agent-vm'"],
+      ['info', '    projects: construct, omniloop, gitgudlab, jarvis  (emili-simulator deselected)'],
+      ['info', '    git identity: Dana A. <dana@example.com> (saved)']] });
+    S.push({ ph: 1, to: .5, dur: 1, st: 'Checking VM reachability', logs: [
+      ['step', '==> Checking VM reachability (agent-vm.mshome.net, SSH port 22)'], ['info', '    reachable (3 ms)']] });
+    S.push({ ph: 1, to: 1, dur: .8, st: 'Checking for a saved root key', logs: [
+      ['step', '==> Checking for a saved root key (re-provision fast path)'], ['info', '    Reusing the saved root SSH private key (VM key left unchanged)']] });
+    S.push({ ph: 2, to: .5, dur: 1.2, st: 'Packing the Construct repo', logs: [['step', '==> Packing repo (C:\\Users\\dana\\The-Construct) -> %TEMP%\\construct-repo.tar.gz'], ['dim', '    6.3 MB']] });
+    S.push({ ph: 2, to: 1, dur: 1.4, st: 'Uploading and unpacking on the VM', logs: [['step', '==> Uploading repo archive to /tmp/construct-repo.tar.gz'], ['step', '==> Unpacking repo on the VM']] });
+    PROV_STEPS.forEach((t, i) => {
+      const n = i + 1;
+      const extra = (VM_DETAIL[t] || []).map(x => ['vm', x]);
+      const logs = [['vmstep', `==> ${t}`]].concat(extra);
+      if (t === 'Checking free disk space') logs.push(['warn', 'WARNING: disk is 88% full; provisioning continues (needs 4 GB)']);
+      const s = { ph: 3, to: n / PROV_STEPS.length, dur: t.startsWith('Installing AI tool: claude') ? 3 : (extra.length ? 1.6 : .7), st: `Provision step ${n}/31: ${t}`, logs };
+      if (t === 'Setting up VS Code server / serve-web / tunnel') s.block = true;
+      if (t === 'Running core host bootstrap') s.fail = true;
+      S.push(s);
+    });
+    S[S.length - 1].logs.push(['ok', '[vm] provisioning finished: 31 steps, 0 failed']);
+    S.push({ ph: 4, to: .6, dur: 1.4, st: 'Configuring this PC (~\\.ssh and VS Code)', logs: [['step', '==> Configuring the Windows host (~\\.ssh and VS Code)'], ['info', '    ~\\.ssh\\config: Host agent-vm (unchanged)']] });
+    S.push({ ph: 4, to: 1, dur: 1, st: 'Checking T3 Code Desktop', logs: [['step', '==> Finishing up (no reboot -- reprovision leaves the VM running)'], ['ok', 'Provisioning complete.']] });
+    REPROVISION.blockLogs = [['vmstep', '==> VS Code tunnel: one-time device sign-in required'], ['info', '    To grant access to the server, please log into https://github.com/login/device and use code \x1b[1;97m8F2C-41D7\x1b[0m']];
+    REPROVISION.blockNotice = `<span class="ic">${ICON.key}</span><div class="nt"><b>Sign in to GitHub to register the VS Code tunnel</b>
+      <span>Open github.com/login/device and enter this code. The provision continues by itself once you're signed in.</span><br>
+      <span class="code">8F2C-41D7</span>
+      <div class="acts"><button class="btn sm" data-act="copycode">${ICON.copy} Copy code</button><button class="btn sm warn" data-act="opendevice">${ICON.ext} Open github.com/login/device</button><button class="btn sm subtle" data-act="unblock">Skip</button></div></div>`;
+    REPROVISION.blockStatus = 'Provision step 30/31: Setting up VS Code server / serve-web / tunnel · waiting for you';
+    REPROVISION.blockEta = n => `code expires in ${Math.floor(n / 60)}:${String(n % 60).padStart(2, '0')}`;
+    REPROVISION.failLogs = [
+      ['vm', '[vm] E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 1423 (unattended-upgr)'],
+      ['vm', '[vm] E: Unable to acquire the dpkg frontend lock (/var/lib/dpkg/lock-frontend), is another process using it?'],
+      ['err', 'ERROR: critical step failed: Running core host bootstrap (exit 100)'],
+      ['err', 'RESULT: PROVISIONING FAILED'],
+      ['info', '  Paste this into your AI coding agent on the VM to diagnose:'],
+      ['dim', '  On the last Construct provisioning run, the following step(s) failed: Running core host bootstrap. Read /var/log/construct/provision.log and diagnose and fix the underlying problem.']];
+    REPROVISION.failStatus = '<b>Provision step 4/31: Running core host bootstrap.</b> apt is locked by unattended-upgrades (pid 1423) inside the VM. Retrying in a minute usually works.';
+    REPROVISION.failSub = 'Critical step failed · the VM is untouched and still running';
+  })();
+
+  // ---------------- engine ----------------
+  let S = UPDATE, mode = 'update', target = 'running', speed = 1;
+  let i = 0, stepT = 0, logged = 0, progress = 0, stopped = false, blocked = false, blockLeft = 0, done = false, failLine = null, countdown = 0, timer = null;
+  let log;
+
+  function buildLog() {
+    $('log').innerHTML = '';
+    log = new LogView($('log'), { fileName: S.log, onLine: l => { $('tail').textContent = l.text.replace(/\x1b\[[\d;]*m/g, '').trim(); } });
+  }
+  function phaseStart(ph) { return S.phases.slice(0, ph).reduce((a, p) => a + p[1], 0); }
+  function stepFrom(k) {
+    if (k === 0) return 0;
+    const p = S.steps[k - 1];
+    return p.ph === S.steps[k].ph ? p.to : 0;
+  }
+  function buildBar() {
+    const bar = $('bar');
+    bar.querySelectorAll('.tick,.seg').forEach(n => n.remove());
+    let acc = 0;
+    $('legend').innerHTML = '';
+    S.phases.forEach(([name, w], k) => {
+      const seg = document.createElement('div');
+      seg.className = 'seg'; seg.style.left = acc + '%'; seg.style.width = w + '%'; seg.dataset.k = k;
+      bar.appendChild(seg);
+      const sp = document.createElement('span'); sp.style.width = w + '%'; sp.textContent = w >= 10 ? name : ''; sp.title = name; sp.dataset.k = k;
+      $('legend').appendChild(sp);
+      acc += w;
+      if (k < S.phases.length - 1) { const t = document.createElement('div'); t.className = 'tick'; t.style.left = `calc(${acc}% - 1px)`; t.title = name; bar.appendChild(t); }
+    });
+  }
+  function reset(newTarget) {
+    clearInterval(timer);
+    target = newTarget || target;
+    i = 0; stepT = 0; logged = 0; progress = 0; stopped = false; blocked = false; done = false; failLine = null; Clock.t = 0;
+    document.body.classList.remove('closed');
+    $('title').textContent = S.title; $('sub').innerHTML = S.sub;
+    buildBar(); buildLog();
+    setState('running');
+    log.add('dim', `Construct ${mode === 'update' ? 'update' : 'reprovision'} log -> %LOCALAPPDATA%\\Construct\\logs\\${S.log}`);
+    if (target === 'running') { timer = setInterval(() => tick(0.1 * speed), 100); }
+    else { fastForward(); }
+    render();
+  }
+  function fastForward() {
+    const bar = $('bar').querySelector('.fill');
+    bar.style.transition = 'none';
+    let guard = 0;
+    while (!stopped && !done && !blocked && guard++ < 5000) tick(0.25, true);
+    render();
+    void bar.offsetWidth;
+    bar.style.transition = '';
+    if (blocked) timer = setInterval(() => tick(0.1 * speed), 100);
+  }
+  function tick(dt, fast) {
+    if (stopped || done) return;
+    if (blocked) {
+      Clock.t += dt;
+      blockLeft = Math.max(0, blockLeft - dt);
+      if (mode === 'update' && blockLeft <= 0 && target === 'running') unblock();
+      else if (mode === 'update' && blockLeft <= 0) blockLeft = 10;
+      render(); return;
+    }
+    const s = S.steps[i];
+    Clock.t += dt;
+    stepT += dt;
+    const f = Math.min(1, stepT / s.dur);
+    const due = Math.min(s.logs.length, Math.floor(f * s.logs.length) + 1);
+    while (logged < due) { log.add(s.logs[logged][0], s.logs[logged][1]); logged++; }
+    const from = stepFrom(i);
+    const w = S.phases[s.ph][1];
+    progress = phaseStart(s.ph) + w * (from + (s.to - from) * f);
+    s._f = f;
+    // failure / block hooks fire mid-step
+    if (f >= .45 && s.fail && target === 'failure') return fail(s);
+    if (f >= .45 && s.block && !s._unblocked && target === 'blocked') return block();
+    if (f >= 1) {
+      i++; stepT = 0; logged = 0;
+      if (i >= S.steps.length) return finish();
+    }
+    if (!fast) render();
+  }
+  function block() {
+    blocked = true; blockLeft = mode === 'update' ? 10 : 897;
+    S.blockLogs.forEach(l => log.add(l[0], l[1]));
+    setState('blocked');
+    render();
+  }
+  function unblock() {
+    blocked = false;
+    S.steps[i]._unblocked = true;
+    log.add('info', mode === 'update' ? '    ConstructCompanion.dll released; continuing' : '    tunnel registered and live -- https://vscode.dev/tunnel/agent-vm');
+    setState('running');
+    if (target === 'blocked') { target = 'running'; }
+    if (!timer) timer = setInterval(() => tick(0.1 * speed), 100);
+  }
+  function fail(s) {
+    stopped = true; clearInterval(timer);
+    S.failLogs.forEach(l => { const ln = log.add(l[0], l[1]); if (!failLine && l[0] === 'err') failLine = ln; });
+    setState('failure');
+    render();
+    setExpanded(true);
+    setTimeout(() => log.focusLine(failLine), 320);
+  }
+  function finish() {
+    done = true; progress = 100; clearInterval(timer);
+    setState('success');
+    countdown = 3;
+    render();
+    timer = setInterval(() => {
+      if (keepOpen) { clearInterval(timer); render(); return; }
+      countdown -= 1; render();
+      if (countdown <= 0) { clearInterval(timer); document.body.classList.add('closed'); Bridge.post({ taskbar: null }); }
+    }, 1000 / Math.max(1, Math.min(speed, 3)));
+  }
+  let keepOpen = false;
+  function setState(st) {
+    $('win').dataset.state = st;
+    keepOpen = false;
+    const bar = $('bar');
+    bar.classList.toggle('success', st === 'success');
+    bar.classList.toggle('error', st === 'failure');
+    bar.classList.toggle('paused', st === 'blocked');
+    $('blockNotice').innerHTML = S.blockNotice;
+    $('failNotice').innerHTML = `<span class="ic">${ICON.err}</span><div class="nt">${S.failStatus}</div>`;
+    const badge = $('badge');
+    badge.innerHTML = st === 'success' ? ICON.check : st === 'failure' ? ICON.x : '';
+  }
+  function etaText() {
+    const left = 100 - progress;
+    const secs = Math.max(2, Math.round(left * (mode === 'update' ? .32 : 1.2)));
+    if (secs < 60) return `about ${Math.ceil(secs / 5) * 5} s left`;
+    const m = secs / 60;
+    return `about ${Math.max(1, Math.floor(m))}–${Math.ceil(m + .6)} min left`;
+  }
+  function render() {
+    const st = $('win').dataset.state;
+    const pct = Math.floor(progress);
+    $('pct').innerHTML = `${pct}<small>%</small>`;
+    const bar = $('bar');
+    bar.setAttribute('aria-valuenow', pct);
+    bar.querySelector('.fill').style.width = progress.toFixed(2) + '%';
+    const cur = S.steps[Math.min(i, S.steps.length - 1)];
+    bar.querySelectorAll('.seg').forEach(sg => sg.classList.toggle('active', st !== 'success' && +sg.dataset.k === cur.ph));
+    $('legend').querySelectorAll('span').forEach(sp => {
+      const k = +sp.dataset.k;
+      sp.className = st === 'success' || k < cur.ph ? 'done' : k === cur.ph ? (st === 'failure' ? 'failed' : 'active') : '';
+    });
+    const acts = $('actions');
+    if (st === 'running') {
+      $('title').textContent = S.title; $('sub').innerHTML = S.sub;
+      $('status').textContent = typeof cur.st === 'function' ? cur.st(cur._f || 0) : cur.st;
+      $('eta').textContent = etaText();
+      acts.innerHTML = '';
+    } else if (st === 'blocked') {
+      $('title').textContent = S.blockTitle; $('sub').innerHTML = S.sub;
+      $('status').textContent = S.blockStatus;
+      $('eta').textContent = S.blockEta(Math.ceil(blockLeft));
+      acts.innerHTML = '';
+    } else if (st === 'failure') {
+      $('title').textContent = S.failTitle; $('sub').innerHTML = S.failSub;
+      $('status').textContent = ''; $('eta').textContent = '';
+      acts.innerHTML = `<button class="btn sm" data-act="copylog">${ICON.copy} Copy log</button><button class="btn sm" data-act="close">Close</button><button class="btn sm primary" data-act="retry">${ICON.retry} Retry</button>`;
+    } else if (st === 'success') {
+      $('title').textContent = S.doneTitle; $('sub').innerHTML = S.doneSub;
+      $('status').textContent = S.doneStatus;
+      $('eta').textContent = keepOpen ? '' : `Closing in ${Math.max(0, countdown)} s`;
+      acts.innerHTML = keepOpen ? `<button class="btn sm primary" data-act="close">Close</button>` : `<button class="btn sm subtle" data-act="keep">Keep open</button><button class="btn sm primary" data-act="close">Close</button>`;
+    }
+    $('status').parentElement.style.display = st === 'failure' ? 'none' : '';
+    Bridge.post({ taskbar: { p: progress / 100, state: st === 'failure' ? 'error' : st === 'blocked' ? 'paused' : st === 'success' ? 'done' : 'normal', label: S.title } });
+  }
+  function setExpanded(on) {
+    $('win').classList.toggle('expanded', on);
+    $('detailsBtn').setAttribute('aria-expanded', String(on));
+    if (on) setTimeout(() => log.follow && log.scrollBottom(), 300);
+  }
+
+  // ---------------- events ----------------
+  $('detailsBtn').addEventListener('click', () => setExpanded(!$('win').classList.contains('expanded')));
+  document.addEventListener('click', e => {
+    const b = e.target.closest('[data-act]'); if (!b) return;
+    const a = b.dataset.act;
+    if (a === 'unblock') unblock();
+    if (a === 'holders') { setExpanded(true); log.add('info', '    Restart Manager: ConstructCompanion.dll <- explorer.exe (pid 5120, "Windows Explorer")'); }
+    if (a === 'copycode') { b.innerHTML = ICON.check + ' Copied'; }
+    if (a === 'opendevice') { log.add('dim', '    opened https://github.com/login/device in the default browser'); setTimeout(unblock, 1500 / speed); }
+    if (a === 'copylog') log.copy();
+    if (a === 'retry') { target = 'running'; S.steps.forEach(s => { s._seen = false; s._unblocked = false; }); reset('running'); }
+    if (a === 'keep') { keepOpen = true; render(); }
+    if (a === 'close') { clearInterval(timer); document.body.classList.add('closed'); }
+  });
+  $('replay').addEventListener('click', () => reset('running'));
+
+  function applyMode(m) { mode = m; S = m === 'reprovision' ? REPROVISION : UPDATE; S.steps.forEach(s => { s._seen = false; s._unblocked = false; }); }
+  function syncDemo() {
+    document.querySelectorAll('#demo [data-mode]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === mode)));
+    document.querySelectorAll('#demo [data-state]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.state === target)));
+    document.querySelectorAll('#demo [data-speed]').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.speed === speed)));
+  }
+  document.getElementById('demo').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.mode) { applyMode(b.dataset.mode); setExpanded(false); reset(); }
+    if (b.dataset.state) { S.steps.forEach(s => { s._seen = false; s._unblocked = false; }); setExpanded(false); reset(b.dataset.state); }
+    if (b.dataset.speed) { speed = +b.dataset.speed; if (timer && !done && !stopped) { clearInterval(timer); timer = setInterval(() => tick(0.1 * speed), 100); } }
+    syncDemo();
+  });
+  Bridge.listen(m => {
+    if (m.speed) { speed = m.speed; if (timer && !done && !stopped) { clearInterval(timer); timer = setInterval(() => tick(0.1 * speed), 100); } }
+    if (m.mode) applyMode(m.mode);
+    if (m.state || m.mode) { setExpanded(false); reset(m.state || target); }
+    if (m.details != null) setExpanded(!!m.details);
+    syncDemo();
+  });
+
+  const q = Bridge.params();
+  if (q.get('speed')) speed = +q.get('speed');
+  applyMode(q.get('mode') || 'update');
+  reset(q.get('state') || 'running');
+  if (q.get('details') === '1') setExpanded(true);
+  syncDemo();
+})();
+</script>
+</body>
+</html>

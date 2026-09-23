@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Operator Line · The Construct UI overhaul · Design 3</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar" id="topbar">
+  <div class="brand">
+    <span class="logo"><svg class="i" viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.2"/><path d="M4.5 6.2l2 1.8-2 1.8M8.2 10.2h3.3"/></svg></span>
+    <div><b>Operator Line</b> <span class="sub">· Design 3 · The Construct</span></div>
+  </div>
+  <nav class="switcher" aria-label="Surfaces">
+    <a href="#popup" data-s="popup"><svg class="i" viewBox="0 0 16 16"><rect x="4" y="1.8" width="8" height="10" rx="1.2"/><path d="M1.5 14.2h13"/></svg>Tray popup <span class="kbds"><kbd>Alt</kbd><kbd>1</kbd></span></a>
+    <a href="#panel" data-s="panel"><svg class="i" viewBox="0 0 16 16"><rect x="1.8" y="2.5" width="12.4" height="11" rx="1.2"/><path d="M6 2.5v11"/></svg>Control panel <span class="kbds"><kbd>Alt</kbd><kbd>2</kbd></span></a>
+    <a href="#host" data-s="host"><svg class="i" viewBox="0 0 16 16"><rect x="2" y="2.4" width="12" height="4.8" rx="1"/><rect x="2" y="8.8" width="12" height="4.8" rx="1"/></svg>Host panel <span class="kbds"><kbd>Alt</kbd><kbd>3</kbd></span></a>
+  </nav>
+  <div class="tools">
+    <button class="btn ghost" id="themeBtn" title="Toggle light / dark"><svg class="i" viewBox="0 0 16 16"><path d="M13.2 9.6A5.6 5.6 0 1 1 6.4 2.8a4.5 4.5 0 0 0 6.8 6.8z"/></svg><span id="themeLbl">Dark</span></button>
+    <button class="btn" id="notesBtn" aria-expanded="false" aria-controls="notes"><svg class="i" viewBox="0 0 16 16"><rect x="1.8" y="2.5" width="12.4" height="11" rx="1.2"/><path d="M10 2.5v11"/></svg>Design notes</button>
+  </div>
+  <p class="concept"><b>Keyboard first: a command bar over an event timeline.</b> Every Construct module is a verb you type (<span class="mono">5173</span> opens that forward, <span class="mono">rep</span> stages a reprovision, <span class="mono">ram 12</span> resizes, <span class="mono">switch dev-2</span>). What happened on the VM (expose, notify, provisioned @commit, idle-saved) reads as a timeline, and each event carries its own next action. The panels look like an IDE: an instance rail, a log, and a property-sheet inspector. Settings are one searchable key/value list tagged <span class="tag scope-live">live</span> <span class="tag scope-restart">restart</span> <span class="tag scope-reprovision">reprovision</span>. Destructive verbs never run from one click: you type the instance name.</p>
+</header>
+
+<div class="shell">
+  <main class="stage">
+    <div class="statebar" id="statebar"></div>
+    <div class="viewport" id="viewport">
+      <section class="surface" id="s-popup" aria-label="Tray popup">
+        <div class="fit" data-w="1180" data-h="772">
+          <div class="desk">
+            <div class="desk-wall"></div>
+            <div class="desk-app" aria-hidden="true">
+              <div class="da-bar"><span class="dot running" style="width:6px;height:6px;box-shadow:none"></span>agent-vm · Remote-SSH · construct — Visual Studio Code</div>
+<pre><span class="a">claude</span> › Refactoring forwarder retry backoff
+  <span class="g">✓</span> read src/forwarder/retry.ts
+  <span class="g">✓</span> edit src/forwarder/retry.ts  <span class="y">+42 −17</span>
+  <span class="g">✓</span> run  npm test -- forwarder
+    <span class="r">✗ 3 failing</span>  retry.spec.ts:88, 121, 140
+  <span class="a">$</span> construct notify "Test suite finished — 3 failures"
+  <span class="a">$</span> construct expose 5173 --label "vite dev server"
+  … thinking (6m 12s)</pre>
+            </div>
+            <div class="traymenu" id="traymenu" role="menu" aria-label="Tray menu"></div>
+            <div class="popup" id="popup" role="dialog" aria-label="Construct tray popup"></div>
+            <div class="taskbar">
+              <div class="tb-center">
+                <span class="tb-app"><span class="win-logo"><i></i><i></i><i></i><i></i></span></span>
+                <span class="tb-app"><svg class="i lg" viewBox="0 0 16 16"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg></span>
+                <span class="tb-app"><span class="app-sq" style="background:#2b7bd3"></span></span>
+                <span class="tb-app"><span class="app-sq" style="background:#e3a21a;border-radius:10px"></span></span>
+                <span class="tb-app"><span class="app-sq" style="background:#1f1f1f;border:1px solid #444"></span></span>
+              </div>
+              <div class="tb-tray">
+                <button class="tb-ico" title="Show hidden icons"><svg class="i" viewBox="0 0 16 16"><path d="M4 10l4-4 4 4"/></svg></button>
+                <button class="tb-ico on" id="trayIcon" title="The Construct · agent-vm running"><span class="cx"><svg class="i" viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.2"/><path d="M4.5 6.2l2 1.8-2 1.8M8.2 10.2h3.3"/></svg></span><span class="badge" id="trayBadge"></span></button>
+                <span class="tb-sys"><svg class="i" viewBox="0 0 16 16"><path d="M1.8 6a9 9 0 0 1 12.4 0M4 8.4a6 6 0 0 1 8 0M6.2 10.8a3 3 0 0 1 3.6 0"/></svg><svg class="i" viewBox="0 0 16 16"><path d="M2.5 6h2.5l3.5-3v10L5 10H2.5z"/><path d="M11 5.5a3.5 3.5 0 0 1 0 5"/></svg></span>
+                <span class="tb-clock">14:18<br>23.09.2026</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="surface" id="s-panel" aria-label="Control panel">
+        <div class="fit" data-w="1280" data-h="800"><div class="win" id="cpWin"></div></div>
+      </section>
+
+      <section class="surface" id="s-host" aria-label="Host panel">
+        <div class="fit" data-w="1280" data-h="800"><div class="win" id="hpWin"></div></div>
+      </section>
+    </div>
+  </main>
+
+  <aside class="notes" id="notes" aria-label="Design notes">
+    <button class="notes-tab" id="notesTab"><svg class="i" viewBox="0 0 16 16" style="transform:rotate(90deg)"><path d="M4 6l4 4 4-4"/></svg>Design notes</button>
+    <div class="notes-body scroll" style="overflow:auto;height:100%">
+      <h3>Design notes <span class="spacer"></span><button class="btn sm ghost icon" id="notesClose" aria-label="Close notes"><svg class="i" viewBox="0 0 16 16"><path d="M4 4l8 8M12 4l-8 8"/></svg></button></h3>
+      <div data-note="popup">
+        <p>The popup is a launcher, not a dashboard. The command bar gets focus first, so the most common jobs take a few keystrokes: open the forward, reprovision, toggle the mic, switch VM.</p>
+        <h4>Depth</h4>
+        <dl class="depth">
+          <dt>Glance</dt><dd>All instances as dots in the header, today's cost, mic state, behind/update/disk badges, the agent that is working, open forward chips.</dd>
+          <dt>1 step</dt><dd>Each timeline event has its own action (Open, Close, Ack, Resume, Reprovision). The palette finds everything else.</dd>
+          <dt>Deep</dt><dd>Reinstall, redownload and remove only appear as palette results that open the control panel's Danger tab. Nothing destructive runs from the tray.</dd>
+        </dl>
+        <h4>Why a timeline</h4>
+        <p><span class="mono">construct expose</span>, <span class="mono">construct notify</span>, idle saves and provisions are already events. Showing them in order answers "what did the agent do while I was away" and puts the action next to its cause.</p>
+        <h4>Try</h4>
+        <ul><li>Type <span class="mono">5173</span>, <span class="mono">rep</span> (it offers "when Claude finishes"), <span class="mono">ram 12</span>, or a new port such as <span class="mono">3001</span>.</li><li>Click <b>dev-2</b> in the header to see the saved state and its Resume action.</li><li>Ack the "3 failures" event. Hover the tray menu's Instance and Forwards items.</li></ul>
+      </div>
+      <div data-note="panel">
+        <p>An IDE layout: instance rail on the left, a log or table in the middle, a property-sheet inspector on the right. The inspector keeps its place, so selecting a row never scrolls you away.</p>
+        <h4>Depth</h4>
+        <dl class="depth">
+          <dt>Glance</dt><dd>Status bar (state, working agent, forwards, mic, sync, behind commit, cost, update) and the instance header facts.</dd>
+          <dt>1 step</dt><dd>Tabs by <kbd>g</kbd> + letter. Timeline filters with <kbd>1</kbd>–<kbd>5</kbd>. Every row opens in the inspector with its actions.</dd>
+          <dt>Deep</dt><dd>Danger tab: reinstall, redownload, clean wipe, remove, make this PC a host, config conflicts. Each shows an impact preview and asks you to type <span class="mono">agent-vm</span>.</dd>
+        </dl>
+        <h4>Settings</h4>
+        <p>One flat, searchable list (<span class="mono">scope:reprovision</span>, <span class="mono">t3</span>, <kbd>/</kbd>). Every key says when it applies. Live keys apply at once. The rest collect in a pending bar that sorts them into restart and reprovision.</p>
+        <h4>Where old features went</h4>
+        <ul><li>Mic passthrough: a reverse tunnel in Forwards, plus the rail toggle.</li><li>Child VMs: nested in the instance rail.</li><li>Config sync and remote config repos: Projects.</li><li>Idle policy: Settings (remote instances only).</li><li>UI settings and hotkey: Settings → Companion.</li></ul>
+      </div>
+      <div data-note="host">
+        <p>An ops console. A KPI strip answers "is the host OK and why is RAM tight". The VM table is the working surface, and jobs, audit and problems sit in a toggleable bottom panel, like a terminal panel in an IDE.</p>
+        <h4>Depth</h4>
+        <dl class="depth">
+          <dt>Glance</dt><dd>Health count, version, the RAM stacked bar (resident by kind, admission line, physical line, over-commit hatch), pressure, disk, jobs.</dd>
+          <dt>1 step</dt><dd>Saved filters (idle &gt; 1h, overdue leases, saved by pressure), sortable columns, multi-select bulk bar, split-view detail with overrides, usage and audit.</dd>
+          <dt>Deep</dt><dd>Policy (each key previews who it affects), licensing, service update with blocking jobs, backend capabilities folded away, raw JSON as a last resort.</dd>
+        </dl>
+        <h4>Try</h4>
+        <ul><li><kbd>Ctrl</kbd><kbd>K</kbd> and type <span class="mono">bob</span>.</li><li>Retry the failed job in the bottom panel. The overdue problem clears with it.</li><li>Tick two idle VMs to get the bulk bar. Delete asks you to type the count.</li><li>Policy → set idle to 60m to see the preview.</li></ul>
+      </div>
+      <h4>System</h4>
+      <p>13 px base, 11/12/13/14/16/22 scale, 6 px radii, graphite neutrals with one indigo accent. State colours are kept for status only. Data is set in a mono face. Light theme via the top-right toggle. Staleness is shown where it is true ("sampled 20 s ago").</p>
+    </div>
+  </aside>
+</div>
+
+<script src="shared.js"></script>
+<script src="popup.js"></script>
+<script src="panel.js"></script>
+<script src="host.js"></script>
+<script>
+(function () {
+  "use strict";
+  const OL = window.OL, S = OL.S;
+  const root = document.documentElement;
+  // theme
+  const saved = (location.search.match(/theme=(light|dark)/) || [])[1] || localStorage.getItem("ol-theme"); if (saved) root.dataset.theme = saved;
+  function syncTheme() { document.getElementById("themeLbl").textContent = root.dataset.theme === "light" ? "Light" : "Dark"; }
+  document.getElementById("themeBtn").onclick = () => { root.dataset.theme = root.dataset.theme === "light" ? "dark" : "light"; localStorage.setItem("ol-theme", root.dataset.theme); syncTheme(); };
+  syncTheme();
+
+  // notes
+  const notes = document.getElementById("notes");
+  function setNotes(open) { notes.classList.toggle("open", open); document.getElementById("notesBtn").setAttribute("aria-expanded", open); fit(); setTimeout(fit, 260); }
+  notes.addEventListener("transitionend", fit);
+  document.getElementById("notesBtn").onclick = () => setNotes(!notes.classList.contains("open"));
+  document.getElementById("notesTab").onclick = () => setNotes(true);
+  document.getElementById("notesClose").onclick = () => setNotes(false);
+
+  // fit-to-viewport scaling
+  function fit() {
+    const vp = document.getElementById("viewport");
+    document.querySelectorAll(".surface.on .fit").forEach((f) => {
+      const w = +f.dataset.w, h = +f.dataset.h;
+      const s = Math.min(1, (vp.clientWidth - 32) / w, (vp.clientHeight - 28) / h);
+      f.style.transform = "translateX(-50%) scale(" + s + ")";
+    });
+  }
+  window.addEventListener("resize", fit);
+  function topH() { document.documentElement.style.setProperty("--topbar-h", document.getElementById("topbar").offsetHeight + "px"); }
+
+  // scenario chips
+  const CHIPS = {
+    popup: [
+      ["agent-vm running", () => { S.active = "agent-vm"; S.emit(); }, () => S.active === "agent-vm"],
+      ["dev-2 saved by idle policy", () => { S.active = "dev-2"; S.vmState["dev-2"] = "saved"; S.emit(); }, () => S.active === "dev-2"],
+      ["win-test child VM", () => { S.active = "win-test"; S.emit(); }, () => S.active === "win-test"],
+      ["type “5173”", () => { S.active = "agent-vm"; S.emit(); OL.popupType("5173"); }],
+      ["type “rep”", () => { S.active = "agent-vm"; S.emit(); OL.popupType("rep"); }],
+      ["attention resolved", () => { ["e3", "e5"].forEach((i) => S.acked.add(i)); S.emit(); }, () => S.acked.has("e3") && S.acked.has("e5")],
+      ["tray menu", () => { const t = document.getElementById("traymenu"); t.classList.toggle("hide"); renderChips(); }, () => !document.getElementById("traymenu").classList.contains("hide")],
+    ],
+    panel: [
+      ["Timeline", () => OL.panelGo("timeline")],
+      ["Settings · filter “t3”", () => { OL.panelGo("settings"); const q = document.getElementById("cpSetQ"); q.value = "t3"; q.dispatchEvent(new Event("input", { bubbles: true })); }],
+      ["Danger · reinstall confirm", () => OL.panelDanger("Reinstall")],
+      ["Ctrl+K palette", () => OL.panelPalette("")],
+      ["palette “reinstall”", () => OL.panelPalette("reinstall")],
+      ["dev-2 (saved)", () => { S.active = "dev-2"; S.emit(); }, () => S.active === "dev-2"],
+      ["reprovision staged", () => { S.active = "agent-vm"; S.staged = S.staged ? null : "after-claude"; S.emit(); renderChips(); }, () => !!S.staged],
+    ],
+    host: [
+      ["Overdue lease detail", () => OL.hostOpenVm("bob/win-qa")],
+      ["Bulk-select idle VMs", () => { const H = OL.H; H.tab = "machines"; H.filter = "all"; H.checked = new Set(["alice/bench", "bob/win-qa"]); OL.hostRender(); }],
+      ["Retry failed job", () => OL.hostRetry()],
+      ["Search “bob”", () => OL.hostPalette("bob")],
+      ["Pressure normal", () => { OL.H.pressure = OL.H.pressure === "elevated" ? "normal" : "elevated"; OL.hostRender(); renderChips(); }, () => OL.H.pressure === "normal"],
+      ["Bottom panel", () => { OL.H.bottom = !OL.H.bottom; OL.hostRender(); renderChips(); }, () => OL.H.bottom],
+      ["Users · mara", () => { OL.H.tab = "users"; OL.H.openUser = "mara"; OL.hostRender(); }],
+    ],
+  };
+  let cur = "popup";
+  function renderChips() {
+    const sb = document.getElementById("statebar");
+    sb.innerHTML = '<span class="lbl">Try</span>' + CHIPS[cur].map((c, i) => '<button class="chip" data-c="' + i + '"' + (c[2] ? ' aria-pressed="' + !!c[2]() + '"' : "") + ">" + c[0] + "</button>").join("") +
+      '<span class="spacer"></span><span class="dim" style="font-size:11px">' + (cur === "popup" ? "focus the bar: click it or press <kbd>/</kbd>" : "keyboard: <kbd>Ctrl</kbd><kbd>K</kbd> · <kbd>g</kbd> then a letter") + "</span>";
+  }
+  document.getElementById("statebar").addEventListener("click", (e) => { const b = e.target.closest("[data-c]"); if (b) { CHIPS[cur][+b.dataset.c][1](); renderChips(); } });
+  S.listeners.push(() => renderChips());
+
+  // routing
+  function route() {
+    const h = (location.hash || "#popup").slice(1).split("/");
+    const s = ["popup", "panel", "host"].includes(h[0]) ? h[0] : "popup";
+    cur = s;
+    document.querySelectorAll(".surface").forEach((el) => el.classList.toggle("on", el.id === "s-" + s));
+    document.querySelectorAll(".switcher a").forEach((a) => a.setAttribute("aria-current", a.dataset.s === s ? "page" : "false"));
+    document.querySelectorAll("[data-note]").forEach((n) => n.style.display = n.dataset.note === s ? "" : "none");
+    if (s === "panel" && h[1]) OL.panelGo(h[1]);
+    if (s === "host" && ["machines", "users", "usage", "media", "policy", "service"].includes(h[1])) { OL.H.tab = h[1]; OL.hostRender(); }
+    if (s === "popup" && h[1] === "saved") { S.active = "dev-2"; S.emit(); }
+    if (s === "popup" && h[1] === "palette") setTimeout(() => OL.popupType(decodeURIComponent(h[2] || "5173")), 50);
+    if (s === "panel" && h[1] === "danger" && h[2] === "confirm") setTimeout(() => OL.panelDanger("Reinstall"), 50);
+    if (s === "panel" && h[2] === "palette") setTimeout(() => OL.panelPalette(decodeURIComponent(h[3] || "")), 50);
+    if (s === "host" && h[2] === "search") setTimeout(() => OL.hostPalette(decodeURIComponent(h[3] || "bob")), 50);
+    if (s === "host" && h[1] === "bulk") { OL.H.tab = "machines"; OL.H.checked = new Set(["alice/bench", "bob/win-qa"]); OL.hostRender(); }
+    if (location.search.includes("notes")) setNotes(true);
+    renderChips(); topH(); fit();
+  }
+  window.addEventListener("hashchange", route);
+
+  document.addEventListener("keydown", (e) => {
+    if (e.altKey && /^[123]$/.test(e.key)) { e.preventDefault(); location.hash = "#" + ["popup", "panel", "host"][+e.key - 1]; return; }
+    if (cur === "panel") return OL.panelKey(e);
+    if (cur === "host") return OL.hostKey(e);
+    if (cur === "popup") {
+      const typing = /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName);
+      if (!typing && (e.key === "/" || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k"))) { e.preventDefault(); OL.popup.input.focus(); }
+      if (!typing && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "p") { e.preventDefault(); location.hash = "#panel"; }
+    }
+  });
+  route();
+})();
+</script>
+</body>
+</html>

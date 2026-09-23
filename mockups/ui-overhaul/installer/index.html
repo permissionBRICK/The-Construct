@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Construct · Installer &amp; Updater mockups</title>
+<link rel="stylesheet" href="common.css">
+<style>
+  html, body { height: 100%; }
+  body { background: #0e1512; color: #e6efe9; display: flex; flex-direction: column; overflow: hidden; }
+  .top { flex: none; display: flex; gap: 24px; align-items: flex-start; padding: 12px 20px 10px; border-bottom: 1px solid #1f2b26; background: #0a100d; }
+  .top .brand { display: flex; align-items: center; gap: 10px; flex: none; }
+  .top .brand .logo { width: 28px; height: 28px; }
+  .top h1 { margin: 0; font: 600 15px var(--font-display); letter-spacing: .01em; }
+  .top h1 small { display: block; font: 12px var(--font); color: #86a597; font-weight: 400; }
+  .concept { flex: 1; font-size: 12.5px; color: #a8bdb2; line-height: 1.5; margin: 0; }
+  .nav-right { margin-left: auto; display: flex; gap: 6px; align-items: center; padding-bottom: 6px; }
+  .nav-right .lbl { font: 600 10.5px var(--font); text-transform: uppercase; letter-spacing: .09em; color: #6f8a7d; margin-right: 2px; }
+  .nav-right .chip { background: transparent; color: #cfe0d7; border-color: #2c3a34; }
+  .nav-right .chip[aria-pressed="true"] { background: #e6efe9; color: #0b1110; border-color: #e6efe9; }
+  .nav .notes-btn { margin: 0 0 6px 10px; }
+  .ctrl select { height: 24px; border-radius: 999px; background: #0b1110; color: #e6efe9; border: 1px solid #2c3a34; padding: 0 8px; font-size: 12px; }
+  .concept b { color: #e6efe9; font-weight: 600; }
+  .notes-btn { flex: none; }
+  .nav { flex: none; display: flex; align-items: center; gap: 4px; padding: 8px 20px 0; background: #0a100d; border-bottom: 1px solid #1f2b26; }
+  .tab { border: 0; background: transparent; color: #a8bdb2; padding: 8px 14px 10px; font-size: 13px; font-weight: 600; cursor: pointer; border-bottom: 2px solid transparent; display: inline-flex; gap: 8px; align-items: center; }
+  .tab:hover { color: #fff; }
+  .tab[aria-selected="true"] { color: #fff; border-bottom-color: var(--accent); }
+  .tab .sz { font: 10.5px var(--mono); color: #6f8a7d; font-weight: 400; }
+  .ctrl { flex: none; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 8px 20px; background: #0c1310; border-bottom: 1px solid #1f2b26; min-height: 42px; }
+  .ctrl .lbl { font: 600 10.5px var(--font); text-transform: uppercase; letter-spacing: .09em; color: #6f8a7d; margin: 0 4px 0 10px; }
+  .ctrl .lbl:first-child { margin-left: 0; }
+  .ctrl .chip { background: transparent; color: #cfe0d7; border-color: #2c3a34; }
+  .ctrl .chip:hover { border-color: #4b5d55; }
+  .ctrl .chip[aria-pressed="true"] { background: #e6efe9; color: #0b1110; border-color: #e6efe9; }
+  .ctrl .chip.go { border-color: #245a3f; }
+  .ctrl .sep { width: 1px; height: 18px; background: #24322b; margin: 0 6px; }
+  .ctrl .hint { color: #6f8a7d; font-size: 12px; margin-left: auto; }
+
+  .main { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 0; transition: grid-template-columns .25s; }
+  .main.notes-open { grid-template-columns: 1fr 340px; }
+  .stage {
+    position: relative; min-width: 0; overflow: hidden;
+    background:
+      radial-gradient(1200px 700px at 70% 115%, #1f6f58 0%, transparent 60%),
+      radial-gradient(900px 600px at 5% -10%, #274b7a 0%, transparent 60%),
+      linear-gradient(160deg, #0f2233, #173a3c 55%, #0c2a24);
+  }
+  .stage iframe { position: absolute; left: 0; top: 0; width: 100%; height: calc(100% - 48px); border: 0; background: transparent; }
+  /* faux Windows 11 taskbar */
+  .taskbar { position: absolute; left: 0; right: 0; bottom: 0; height: 48px; background: rgba(28,32,39,.86); backdrop-filter: blur(20px); border-top: 1px solid rgba(255,255,255,.06); display: flex; align-items: center; justify-content: center; }
+  .tb-icons { display: flex; gap: 4px; }
+  .tb-ic { width: 40px; height: 40px; border-radius: 5px; display: grid; place-items: center; position: relative; }
+  .tb-ic:hover { background: rgba(255,255,255,.07); }
+  .tb-ic svg { width: 22px; height: 22px; }
+  .tb-ic .run { position: absolute; bottom: 2px; left: 50%; width: 6px; height: 3px; border-radius: 2px; background: #8a94a3; transform: translateX(-50%); }
+  .tb-ic.active { background: rgba(255,255,255,.08); }
+  .tb-ic.active .run { width: 16px; background: #60cdff; }
+  .tb-prog { position: absolute; left: 4px; right: 4px; bottom: 1px; height: 3px; border-radius: 2px; background: rgba(255,255,255,.12); overflow: hidden; display: none; }
+  .tb-prog i { display: block; height: 100%; width: 0; background: #3fd08a; transition: width .4s; }
+  .tb-ic.has-prog .tb-prog { display: block; }
+  .tb-ic.has-prog .run { display: none; }
+  .tb-ic.p-paused .tb-prog i { background: #f5c451; }
+  .tb-ic.p-error .tb-prog i { background: #ff6b6b; }
+  .tb-ic.flash { animation: tbflash 1s ease-in-out infinite; }
+  @keyframes tbflash { 50% { background: rgba(245,196,81,.35); } }
+  .tray { position: absolute; right: 10px; top: 0; bottom: 0; display: flex; align-items: center; gap: 10px; color: #e6e9ee; font-size: 11.5px; }
+  .tray .cx { width: 20px; height: 20px; position: relative; border-radius: 4px; padding: 1px; }
+  .tray .cx svg { width: 18px; height: 18px; }
+  .tray .cx.pulse::after { content: ""; position: absolute; inset: -6px; border-radius: 6px; border: 2px solid #3fe39a; animation: pulse2 1s ease-in-out 4; }
+  @keyframes pulse2 { 50% { opacity: .15; transform: scale(1.1); } }
+  .tray .clk { text-align: right; line-height: 1.25; }
+  .tray .glyph { width: 14px; height: 14px; opacity: .85; }
+  /* Windows toast */
+  .wtoast { position: absolute; right: 12px; bottom: 60px; width: 360px; background: rgba(40,44,52,.96); color: #fff; border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,.45); padding: 12px 14px; border: 1px solid rgba(255,255,255,.08); transform: translateX(120%); transition: transform .3s cubic-bezier(.2,.7,.2,1); z-index: 5; }
+  .wtoast.show { transform: none; }
+  .wtoast .app { display: flex; gap: 8px; align-items: center; font-size: 11.5px; color: #c6ccd6; margin-bottom: 8px; }
+  .wtoast .app svg { width: 16px; height: 16px; }
+  .wtoast b { display: block; font-size: 13.5px; margin-bottom: 2px; }
+  .wtoast p { margin: 0; font-size: 12.5px; color: #d7dbe2; }
+  .wtoast .x { position: absolute; right: 8px; top: 8px; background: none; border: 0; color: #aab; cursor: pointer; }
+
+  .notes { overflow: auto; background: #0a100d; border-left: 1px solid #1f2b26; font-size: 12.5px; line-height: 1.55; color: #b9cbc1; }
+  .notes .in { padding: 16px 18px 30px; width: 340px; }
+  .notes h2 { font: 600 14px var(--font-display); color: #fff; margin: 0 0 8px; display: flex; align-items: center; }
+  .notes h2 button { margin-left: auto; }
+  .notes h3 { font: 600 11px var(--font); text-transform: uppercase; letter-spacing: .09em; color: #6fd6a2; margin: 16px 0 6px; }
+  .notes ul { margin: 0; padding-left: 16px; }
+  .notes li { margin: 3px 0; }
+  .notes code { font: 11.5px var(--mono); color: #d7f5e5; background: #13201a; padding: 0 4px; border-radius: 3px; }
+  .notes b { color: #e6efe9; }
+  .btn.dark { background: #13201a; border-color: #2c3a34; color: #e6efe9; box-shadow: none; }
+  .btn.dark:hover { background: #1a2a22; }
+  .btn.dark[aria-pressed="true"] { border-color: var(--accent); }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span id="logo"></span><h1>Front Door<small>The Construct · installer &amp; updater</small></h1></div>
+  <p class="concept"><b>One small window for jobs with no questions, one calm wizard for the jobs with many.</b> The PowerShell one-liner hands off to a Windows 11 app with the Construct's green-black band. Updates get a compact bar that closes itself; first-run setup asks everything up front, then its step rail becomes a live phase checklist. Amber appears only when Windows or GitHub needs you, and the log is always one click away.</p>
+</header>
+<nav class="nav" role="tablist" id="tabs">
+  <button class="tab" role="tab" data-tab="updater">Updater <span class="sz">480×210</span></button>
+  <button class="tab" role="tab" data-tab="setup">Setup · this PC <span class="sz">920×640</span></button>
+  <button class="tab" role="tab" data-tab="remote">Setup · shared host</button>
+  <button class="tab" role="tab" data-tab="existing">Existing VM</button>
+  <button class="tab" role="tab" data-tab="install">Install progress</button>
+  <span class="nav-right" id="navRight"></span>
+  <button class="btn sm dark notes-btn" id="notesBtn" aria-pressed="false" aria-controls="notes">Design notes</button>
+</nav>
+<div class="ctrl" id="ctrl"></div>
+<div class="main" id="main">
+  <div class="stage" id="stage">
+    <iframe id="frame" title="Mockup" allowtransparency="true"></iframe>
+    <div class="wtoast" id="wtoast" role="status"><button class="x" id="wtx" aria-label="Dismiss">✕</button><div class="app"><span id="tlogo"></span>The Construct</div><b id="wtT"></b><p id="wtB"></p></div>
+    <div class="taskbar">
+      <div class="tb-icons">
+        <span class="tb-ic" title="Start"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="8.5" height="8.5" rx="1" fill="#60cdff"/><rect x="12.5" y="3" width="8.5" height="8.5" rx="1" fill="#60cdff"/><rect x="3" y="12.5" width="8.5" height="8.5" rx="1" fill="#60cdff"/><rect x="12.5" y="12.5" width="8.5" height="8.5" rx="1" fill="#60cdff"/></svg></span>
+        <span class="tb-ic" title="Search"><svg viewBox="0 0 24 24" fill="none" stroke="#e6e9ee" stroke-width="2"><circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 5 5"/></svg></span>
+        <span class="tb-ic" title="File Explorer"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" fill="#f7c948"/><path d="M3 10h18v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" fill="#fbd56b"/></svg><span class="run"></span></span>
+        <span class="tb-ic" title="Microsoft Edge"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="#1f9fd8"/><path d="M6 14c1-5 9-7 12-2-2-1-6-1-7 2 0 2 3 3 6 2-3 4-10 3-11-2Z" fill="#4be08a"/></svg><span class="run"></span></span>
+        <span class="tb-ic" title="Visual Studio Code"><svg viewBox="0 0 16 16"><path fill="#23a9f2" d="M11.6 1 5.4 6.7 2.4 4.4 1 5.1v5.8l1.4.7 3-2.3 6.2 5.7L15 13.5V2.5ZM2.6 10V6l2 2Zm8.9 1.4L8 8l3.5-3.4Z"/></svg><span class="run"></span></span>
+        <span class="tb-ic" title="Windows Terminal"><svg viewBox="0 0 24 24"><rect x="2.5" y="4" width="19" height="16" rx="2" fill="#2b2f36" stroke="#8a94a3"/><path d="m6 9 3 3-3 3M11 15h6" stroke="#e6e9ee" stroke-width="1.6" fill="none"/></svg><span class="run"></span></span>
+        <span class="tb-ic active" id="appIc" title="The Construct"><span id="appLogo"></span><span class="run"></span><span class="tb-prog"><i id="tbFill"></i></span></span>
+      </div>
+      <div class="tray">
+        <svg class="glyph" viewBox="0 0 16 16" fill="none" stroke="#e6e9ee" stroke-width="1.4"><path d="M4 10l4-4 4 4"/></svg>
+        <span class="cx" id="trayCx" title="Construct Companion"></span>
+        <svg class="glyph" viewBox="0 0 16 16" fill="none" stroke="#e6e9ee" stroke-width="1.4"><path d="M2 6.5a9 9 0 0 1 12 0M4.3 9a5.6 5.6 0 0 1 7.4 0M6.6 11.5a2.2 2.2 0 0 1 2.8 0"/></svg>
+        <svg class="glyph" viewBox="0 0 16 16" fill="none" stroke="#e6e9ee" stroke-width="1.4"><path d="M3 6h2.5L9 3v10L5.5 10H3Z"/><path d="M11 6a3 3 0 0 1 0 4"/></svg>
+        <span class="clk">14:25<br>23/09/2026</span>
+      </div>
+    </div>
+  </div>
+  <aside class="notes" id="notes" aria-label="Design notes">
+    <div class="in">
+      <h2>Design notes <button class="btn sm dark" id="notesClose">Close</button></h2>
+      <p>Two windows because two jobs. When the scripts need no answers (Update Construct, Reprovision, the Companion swap), a wizard is noise. When they need a dozen, a console prompt is hostile.</p>
+      <h3>Glanceable</h3>
+      <ul>
+        <li>Percent from <b>phase weights</b> (Ubuntu download 20, unattended install 25, provision 30…), not step counts. ETA is a <b>range</b> ("about 8–12 min").</li>
+        <li>One plain sentence for "now" ("Ubuntu is installing itself inside the VM. Nothing to do.") plus one line of detail such as MB/s or <code>Provision step 14/31</code>.</li>
+        <li>The left rail becomes a phase checklist: done, active, pending, skipped ("ISO already present"), warn, failed, waiting.</li>
+        <li>Amber means "you're needed": the banner, striped bar, rail marker, taskbar overlay and Windows toast all agree.</li>
+      </ul>
+      <h3>One click deep</h3>
+      <ul>
+        <li><b>Details</b> opens the live log: ANSI colours, All/Steps/Warnings/Errors filters, search, copy/save/open folder, "Jump to live" when you scroll up. Tokens are masked before they reach the buffer.</li>
+        <li>Review lists every answer with an <b>Edit</b> link. Warnings on the finish page expand to cause and fix.</li>
+        <li>Blocking cards replace hidden console waits: UAC, the certificate dialog, the VS Code tunnel device code (Copy + open github.com/login/device), and live-verified git tokens.</li>
+      </ul>
+      <h3>Deep</h3>
+      <ul>
+        <li>Pop the log out into its own window, or drag the split to resize it.</li>
+        <li>"Show as a PowerShell command" shows the exact <code>Auto-Install.ps1</code> parameters the GUI passes (<code>-FeatureSet</code>, <code>-VmMemoryGB</code>, <code>-Projects</code>…).</li>
+        <li>Destructive existing-VM actions (Reinstall, Redownload, Remove) sit behind an unsaved-work scan, backup/restore questions and type-the-name confirmation.</li>
+        <li>BIOS virtualization and Windows Home guidance: open Setup · this PC, then Checks = BIOS off / Home.</li>
+      </ul>
+      <h3>New behaviour this assumes</h3>
+      <ul>
+        <li>A RunOnce entry reopens setup after the Hyper-V restart with the answers restored. Today the user has to re-run the script.</li>
+        <li>Every phase is idempotent, so "Retry from <i>phase</i>" is safe.</li>
+        <li>Scripts emit <code>##construct-progress{json}</code>; until then the GUI parses <code>==&gt;</code> step lines.</li>
+      </ul>
+      <h3>Updater specifics</h3>
+      <ul>
+        <li>Closes itself 3 s after success ("Keep open" stops it). Stays open on failure with Retry and Copy log, and the log opens at the error line.</li>
+        <li>Blocked = paused amber stripes plus the process name holding the file (from Restart Manager). It never kills a process, which matches the script.</li>
+      </ul>
+    </div>
+  </aside>
+</div>
+
+<script src="common.js"></script>
+<script>
+(function () {
+  const { LOGO, ICON } = CX;
+  const $ = id => document.getElementById(id);
+  $('logo').innerHTML = LOGO; $('tlogo').innerHTML = LOGO.replace('class="logo"', ''); $('appLogo').innerHTML = LOGO.replace('class="logo"', 'style="width:22px;height:22px;display:block"'); $('trayCx').innerHTML = LOGO.replace('class="logo"', '');
+  const frame = $('frame');
+  const S = { tab: 'updater', speed: 1, auto: true, up: { mode: 'update', state: 'running' }, setupPage: 'welcome', check: 'ok', remotePage: 'welcome', exAction: 'reprovision', inst: { variant: 'local', scene: 'run', preset: 'full' } };
+
+  const SCENES = [['run', 'From start'], ['uac', 'UAC'], ['reboot', 'Restart'], ['download', 'Download'], ['ubuntu', 'Ubuntu install'], ['provision', 'Provision'], ['tunnel', 'Tunnel code'], ['cert', 'Certificate'], ['failure', 'Failure'], ['warnings', '2 warnings'], ['success', 'Success'], ['isopresent', 'ISO present'], ['popout', 'Log popped out']];
+  const PAGES_LOCAL = ['welcome', 'location', 'features', 'resources', 'projects', 'identity', 'review'];
+  const PAGES_REMOTE = ['welcome', 'location', 'connect', 'instance', 'features', 'resources', 'projects', 'identity', 'review'];
+  const chip = (attr, v, label, on) => `<button class="chip" ${attr}="${v}" aria-pressed="${!!on}">${label}</button>`;
+  const speedChips = () => '';
+  function renderNavRight() { $('navRight').innerHTML = (S.tab === 'updater' || S.tab === 'install' || S.tab === 'setup' || S.tab === 'remote' || S.tab === 'existing') ? `<span class="lbl">Sim speed</span>${chip('data-speed', 1, '1×', S.speed === 1)}${chip('data-speed', 10, '10×', S.speed === 10)}${chip('data-auto', 1, 'Auto-answer prompts', S.auto)}` : ''; }
+
+  function renderCtrl() {
+    const c = $('ctrl');
+    let h = '';
+    if (S.tab === 'updater') {
+      h = `<span class="lbl">Mode</span>${chip('data-upmode', 'update', 'Update Construct', S.up.mode === 'update')}${chip('data-upmode', 'reprovision', 'Reprovision agent-vm', S.up.mode === 'reprovision')}
+        <span class="sep"></span><span class="lbl">State</span>${['running', 'success', 'failure', 'blocked'].map(s => chip('data-upstate', s, s[0].toUpperCase() + s.slice(1), S.up.state === s)).join('')}
+        <span class="sep"></span>${chip('data-details', 1, 'Details open', false)}${speedChips()}<span class="hint">Success closes the window after 3 s. Use Replay.</span>`;
+    } else if (S.tab === 'setup') {
+      h = `<span class="lbl">Page</span>${PAGES_LOCAL.map(p => chip('data-page', p, p, S.setupPage === p)).join('')}
+        <span class="sep"></span><span class="lbl">Checks</span>${chip('data-check', 'ok', 'All good', S.check === 'ok')}${chip('data-check', 'bios', 'BIOS off', S.check === 'bios')}${chip('data-check', 'home', 'Windows Home', S.check === 'home')}
+        <span class="hint">Click through it; Install starts the simulated run.</span>`;
+    } else if (S.tab === 'remote') {
+      h = `<span class="lbl">Page</span>${PAGES_REMOTE.map(p => chip('data-rpage', p, p, S.remotePage === p)).join('')}<span class="hint">Try instance names: dev-2, Dev_3</span>`;
+    } else if (S.tab === 'existing') {
+      h = `<span class="lbl">Action</span>${[['reprovision', 'Reprovision'], ['reinstall', 'Reinstall'], ['redownload', 'Redownload'], ['export', 'Export config'], ['addconfig', 'Add config'], ['remove', 'Remove']].map(([k, l]) => chip('data-exa', k, l, S.exAction === k)).join('')}
+        <span class="hint">Danger actions need an unsaved-work decision and the typed name.</span>`;
+    } else if (S.tab === 'install') {
+      const ivKey = S.inst.variant === 'local' ? (S.inst.preset === 'full' ? 'local' : 'local-min') : S.inst.variant;
+      h = `<span class="lbl">Run</span><select id="ivSel" aria-label="Which install to simulate">${[['local', 'This PC · Full + tunnel'], ['local-min', 'This PC · Minimal'], ['remote', 'Shared host'], ['existing', 'Reprovision agent-vm']].map(([k, l]) => `<option value="${k}" ${k === ivKey ? 'selected' : ''}>${l}</option>`).join('')}</select>
+        <span class="sep"></span><span class="lbl">Jump to</span>${SCENES.map(([k, l]) => chip('data-scene', k, l, S.inst.scene === k)).join('')}
+`;
+    }
+    c.innerHTML = h;
+  }
+  function src() {
+    const sp = `&speed=${S.speed}&auto=${S.auto ? 1 : 0}`;
+    switch (S.tab) {
+      case 'updater': return `updater.html?mode=${S.up.mode}&state=${S.up.state}${sp}`;
+      case 'setup': return `setup.html?variant=local&page=${S.setupPage}&check=${S.check}${sp}`;
+      case 'remote': return `setup.html?variant=remote&page=${S.remotePage}${sp}`;
+      case 'existing': return `setup.html?variant=existing&action=${S.exAction}&page=${({ reinstall: 'safety', redownload: 'safety', remove: 'remove' })[S.exAction] || 'existing'}${sp}`;
+      case 'install': {
+        const v = S.inst.variant;
+        const pre = v === 'local' ? (S.inst.preset === 'full' ? '&preset=full&tunnel=1' : '') : '';
+        return `setup.html?variant=${v}${pre}&scene=${S.inst.scene}${v === 'existing' ? '&action=reprovision' : ''}${sp}`;
+      }
+    }
+  }
+  function load() { resetTaskbar(); frame.src = src(); writeHash(); }
+  function writeHash() {
+    const sub = { updater: S.up.state === 'running' ? (S.up.mode === 'reprovision' ? 'reprovision' : '') : (S.up.mode === 'reprovision' ? 'reprovision-' : '') + S.up.state, setup: S.setupPage === 'welcome' ? (S.check !== 'ok' ? S.check : '') : S.setupPage, remote: S.remotePage === 'welcome' ? '' : S.remotePage, existing: S.exAction === 'reprovision' ? '' : S.exAction, install: S.inst.scene === 'run' ? '' : S.inst.scene }[S.tab];
+    history.replaceState(null, '', '#' + S.tab + (sub ? '/' + sub : ''));
+  }
+  function readHash() {
+    const [tab, sub] = location.hash.replace('#', '').split('/');
+    const alias = { popup: 'updater', panel: 'setup', host: 'install' };
+    S.tab = ['updater', 'setup', 'remote', 'existing', 'install'].includes(tab) ? tab : alias[tab] || 'updater';
+    if (!sub) return;
+    if (S.tab === 'updater') { if (sub.startsWith('reprovision')) { S.up.mode = 'reprovision'; const st = sub.split('-')[1]; if (st) S.up.state = st; } else S.up.state = sub; }
+    if (S.tab === 'setup') { if (sub === 'bios' || sub === 'home') S.check = sub; else S.setupPage = sub; }
+    if (S.tab === 'remote') S.remotePage = sub;
+    if (S.tab === 'existing') S.exAction = sub;
+    if (S.tab === 'install') S.inst.scene = sub;
+  }
+  function setTab(t) {
+    S.tab = t;
+    document.querySelectorAll('.tab').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === t)));
+    renderCtrl(); renderNavRight(); load();
+  }
+  const send = m => { try { frame.contentWindow.postMessage(Object.assign({ to: 'construct-installer' }, m), '*'); } catch (e) { } };
+
+  $('tabs').addEventListener('click', e => {
+    const b = e.target.closest('[data-tab]'); if (b) { setTab(b.dataset.tab); return; }
+    const c = e.target.closest('[data-speed],[data-auto]'); if (!c) return;
+    if (c.dataset.speed) { S.speed = +c.dataset.speed; send({ speed: S.speed }); }
+    if (c.dataset.auto) { S.auto = !S.auto; send({ auto: S.auto }); }
+    renderNavRight();
+  });
+  $('ctrl').addEventListener('change', e => {
+    if (e.target.id !== 'ivSel') return;
+    const v = e.target.value;
+    if (v === 'local-min') { S.inst.variant = 'local'; S.inst.preset = 'minimal'; } else { S.inst.variant = v; S.inst.preset = 'full'; }
+    renderCtrl(); load();
+  });
+  $('ctrl').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    const d = b.dataset;
+    if (d.speed) { S.speed = +d.speed; send({ speed: S.speed }); renderCtrl(); return; }
+    if (d.auto) { S.auto = !S.auto; send({ auto: S.auto }); renderCtrl(); return; }
+    if (d.details) { const on = b.getAttribute('aria-pressed') !== 'true'; b.setAttribute('aria-pressed', String(on)); send({ details: on }); return; }
+    if (d.upmode) S.up.mode = d.upmode;
+    if (d.upstate) S.up.state = d.upstate;
+    if (d.page) S.setupPage = d.page;
+    if (d.check) { S.check = d.check; S.setupPage = 'welcome'; }
+    if (d.rpage) S.remotePage = d.rpage;
+    if (d.exa) S.exAction = d.exa;
+    if (d.iv) { if (d.iv === 'local-min') { S.inst.variant = 'local'; S.inst.preset = 'minimal'; } else { S.inst.variant = d.iv; S.inst.preset = 'full'; } }
+    if (d.scene) S.inst.scene = d.scene;
+    renderCtrl(); load();
+  });
+
+  // ---- taskbar + toast from the embedded window ----
+  function resetTaskbar() { const ic = $('appIc'); ic.className = 'tb-ic active'; $('tbFill').style.width = '0'; }
+  let toastT;
+  window.addEventListener('message', e => {
+    const m = e.data; if (!m || m.from !== 'construct-installer') return;
+    if ('taskbar' in m) {
+      const ic = $('appIc');
+      if (!m.taskbar) { resetTaskbar(); return; }
+      const t = m.taskbar;
+      ic.className = 'tb-ic active' + (t.state === 'done' ? '' : ' has-prog') + (t.state === 'paused' ? ' p-paused flash' : '') + (t.state === 'error' ? ' p-error' : '');
+      $('tbFill').style.width = Math.round(t.p * 100) + '%';
+      ic.title = `${t.label} · ${Math.round(t.p * 100)}%`;
+    }
+    if (m.toast) {
+      $('wtT').textContent = m.toast.title; $('wtB').textContent = m.toast.body || '';
+      $('wtoast').classList.add('show'); clearTimeout(toastT); toastT = setTimeout(() => $('wtoast').classList.remove('show'), 5000);
+    }
+    if (m.trayPulse) { const c = $('trayCx'); c.classList.remove('pulse'); void c.offsetWidth; c.classList.add('pulse'); }
+  });
+  $('wtx').addEventListener('click', () => $('wtoast').classList.remove('show'));
+
+  // ---- notes ----
+  function setNotes(on) { $('main').classList.toggle('notes-open', on); $('notesBtn').setAttribute('aria-pressed', String(on)); }
+  $('notesBtn').addEventListener('click', () => setNotes(!$('main').classList.contains('notes-open')));
+  $('notesClose').addEventListener('click', () => setNotes(false));
+
+  readHash();
+  if (new URLSearchParams(location.search).get('notes') === '1') setNotes(true);
+  setTab(S.tab);
+})();
+</script>
+</body>
+</html>

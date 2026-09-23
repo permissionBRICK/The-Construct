@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design 4 · Floorplan · The Construct</title>
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/popup.css">
+<link rel="stylesheet" href="css/panel.css">
+<link rel="stylesheet" href="css/host.css">
+</head>
+<body>
+<div class="landing">
+  <header class="topbar">
+    <div class="brand">
+      <span class="dno">Design 4</span>
+      <h1>Floor<em>plan</em></h1>
+    </div>
+    <nav class="seg switcher" id="switcher" role="tablist" aria-label="Surface">
+      <button role="tab" data-s="popup">Tray popup</button>
+      <button role="tab" data-s="panel">Control panel</button>
+      <button role="tab" data-s="host">Host panel</button>
+    </nav>
+    <div class="tb-right">
+      <button class="chipbtn" id="themeBtn" title="Toggle light and dark">Dark</button>
+      <button class="chipbtn" id="notesBtn" aria-pressed="false" title="Show design notes beside the mockup"><svg class="i" viewBox="0 0 24 24"><path d="M5 4h10l4 4v12H5z"/><path d="M14 4v5h5M8 13h8M8 17h5"/></svg>Design notes</button>
+    </div>
+    <p class="concept"><b>The machine topology is the interface.</b> Every surface draws the real setup: your PC on the left, the VM as a device in the middle with agents, projects and services plugged into its slots, forwards and the mic as labelled wires between them, and child VMs hanging off the parent. You act on a thing by clicking the thing, and a side sheet opens with just its controls. The host panel uses the same idea: physical RAM is the floor, and every VM rents a block of it. A what-if slider shows how the floor changes before you change any policy.</p>
+  </header>
+
+  <div class="workspace">
+    <main class="stage">
+      <div class="frame-wrap">
+        <div class="frame">
+          <section class="surface" id="s-popup" aria-label="Tray popup"></section>
+          <section class="surface" id="s-panel" aria-label="Control panel"></section>
+          <section class="surface" id="s-host" aria-label="Host panel"></section>
+        </div>
+      </div>
+    </main>
+
+    <aside class="notes" aria-label="Design notes">
+      <div class="notes-in">
+        <div class="note-block" data-s="popup">
+          <h2>Tray popup: a pocket floorplan</h2>
+          <p>The popup is a small map of the machines you own. PC-1 is the rail on the left. Each VM is a tile, and the wires between them are live forwards and the mic link. The port labels sit on the wires, and clicking one opens the forward.</p>
+          <h3>Depth</h3>
+          <div class="depth">
+            <b>Glance</b><span>Every VM's state and RAM ring, which agent is working (pulsing avatar), open forwards on the wires, mic armed/live, today's spend, and badges for behind-host, disk over 85% and Construct update.</span>
+            <b>1 click</b><span>Each tile has one primary action (Open in VS Code, Resume, Console). Clicking a tile expands it in place to show agent activity, forwards and "reprovision when Claude finishes". The inbox bell keeps <code>construct notify</code> history.</span>
+            <b>Deep</b><span>Everything else opens the control panel. Reinstall, Redownload and Remove are not in the popup at all.</span>
+          </div>
+          <h3>Right-click menu</h3>
+          <p>The native menu is kept for keyboard and muscle-memory users, and it mirrors the popup: instance, forwards submenu, mic, power, update.</p>
+          <h3>Try</h3>
+          <ul><li>Use the <b>Scenario</b> card to stop agent-vm: the wires go slack, forwards grey out, and the primary action becomes "Start &amp; connect".</li><li>Dismiss the attention strip, or click a tile to expand it.</li><li>Click the <b>:5173</b> label on a wire.</li></ul>
+        </div>
+        <div class="note-block" data-s="panel">
+          <h2>Control panel: the machine diagram</h2>
+          <p>Instead of a long page of equal-weight cards, the panel draws the VM as a device. Agents are cards plugged into a bay, projects are cartridges (selected, deselected, new), and services are sockets. Your PC sits on the left with forwards and the mic as wires. Child VMs hang on the right. Clicking any part opens a side sheet with only that part's controls, and each control is tagged <span class="applies live">live</span>, <span class="applies restart">restart</span> or <span class="applies reprov">next reprovision</span>.</p>
+          <h3>Depth</h3>
+          <div class="depth">
+            <b>Glance</b><span>Running state, RAM ring, disk warning, the commit it's behind by, which agent is working, which forwards are open, and today's spend with a 7-day chart.</span>
+            <b>1 click</b><span>The side sheets: agent update, forward actions, profile editor, resources ("restart to apply"), access &amp; services, idle policy, child lease, usage export and the notify inbox.</span>
+            <b>Deep</b><span>The Lifecycle track at the bottom. Reprovision and Update are the routine steps. Reinstall, Redownload, Custom reinstall, Remove instance and "Make this PC a host" sit behind a lock, and each one has an impact preview and a typed-name confirmation.</span>
+          </div>
+          <h3>Try</h3>
+          <ul><li>Click a cartridge (omniloop) to edit the profile.</li><li>Click the RAM ring and drag the slider.</li><li>Unlock the lifecycle track and pick Reinstall.</li><li>Switch the instance to dev-2 (saved on buildbox) in the title bar.</li></ul>
+        </div>
+        <div class="note-block" data-s="host">
+          <h2>Host panel: floorplan of RAM</h2>
+          <p>The main view is a strip treemap. The x-axis is GB, each owner gets a column as wide as the RAM they hold, and VMs stack inside it. Because the x-axis is linear, the admission line (118 GB) and physical RAM (128 GB) can be drawn as real lines. The over-commit beyond 128 GB is visible at a glance. Colour shows state, and a hatch marks VMs that memory pressure saved.</p>
+          <p>Switch the measure to <b>Resident</b> and the saved VMs leave the floor. The <b>what-if slider</b> ("save VMs idle longer than N min") reflows the map and names the RAM freed, the new pressure state and who is affected. Saving does not reduce committed RAM, and the panel says so.</p>
+          <h3>Depth</h3>
+          <div class="depth">
+            <b>Glance</b><span>Health, pressure state, commit vs admission vs physical, the attention feed (failed job, overdue lease, inventory, activation, update).</span>
+            <b>1 click</b><span>Clicking an owner column zooms into that owner and shows their allowance line. Clicking a VM opens the inspector with its actions and overrides. The List toggle gives the table view of the same data.</span>
+            <b>Deep</b><span>The secondary tabs: People (allowance bullet bars, one-save editor, tokens), Spend, Licences (MAK meters), Jobs &amp; audit, Media, Service update and Config.</span>
+          </div>
+          <h3>Try</h3>
+          <ul><li>Drag the what-if slider to 30 min.</li><li>Click "alice" above her column.</li><li>Retry the failed job in the feed. It resolves and lands in the audit log.</li></ul>
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>
+<script src="js/app.js"></script>
+<script src="js/data.js"></script>
+<script src="js/popup.js"></script>
+<script src="js/panel.js"></script>
+<script src="js/host.js"></script>
+</body>
+</html>

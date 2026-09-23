@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design 2 · Mission Control — The Construct UI overhaul</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="shell">
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 26 26" aria-hidden="true">
+        <rect x="1" y="1" width="24" height="24" rx="6" fill="#08130d" stroke="#2b5139"/>
+        <path d="M7 8v10M11 6v14M15 9v8M19 7v12" stroke="#5fc58a" stroke-width="1.6" stroke-linecap="round"/>
+        <circle cx="15" cy="9" r="1.8" fill="#37ff8b"/>
+      </svg>
+      <div>
+        <small>Design 2 · Construct UI</small>
+        <h1>Mission Control</h1>
+      </div>
+    </div>
+    <p class="concept">
+      <b>Agents are the heroes, the machine is secondary.</b> Every surface opens on what the coding agents are doing right now: who is working, on which repo, for how long, what they served and what they told you. Machine state (power, RAM, reprovision) sits one column to the left, and the rare destructive work lives behind its own tab. The Matrix heritage stays, but disciplined: near-black green grounds, a phosphor tier scale, and a bright green that appears only on things that are live.
+    </p>
+    <nav class="switcher" aria-label="Surface">
+      <a href="#popup" data-surface="popup">Tray popup <kbd>1</kbd></a>
+      <a href="#panel" data-surface="panel">Control panel <kbd>2</kbd></a>
+      <a href="#host" data-surface="host">Host panel <kbd>3</kbd></a>
+    </nav>
+  </header>
+
+  <div class="body">
+    <div class="stage-wrap">
+      <div class="scenario" id="scenario"></div>
+      <main class="stage" id="stage"></main>
+    </div>
+    <aside class="notes" id="notes">
+      <button class="notes-toggle" id="notesToggle" aria-expanded="false">
+        <svg class="ic" viewBox="0 0 24 24"><path d="M4 5h16M4 12h16M4 19h10"/></svg>
+        Design notes
+      </button>
+      <div class="notes-body" id="notesBody"></div>
+    </aside>
+  </div>
+</div>
+<div class="tip" id="tip" role="tooltip"></div>
+
+<script src="common.js"></script>
+<script src="popup.js"></script>
+<script src="panel.js"></script>
+<script src="host.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
