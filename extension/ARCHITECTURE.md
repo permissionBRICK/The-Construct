@@ -1567,7 +1567,7 @@ VMs (`/vms?kind=all`: every user's VMs, children indented under their parent, ki
 sharing / power / resources / lease-or-OVERDUE / current operation / guest facts printed
 as **unknown** when unreported; Shut down, Delete, Overrides, Rotate token — filtered by
 `allowedActions`), Users (`/users`, the allowance editor with `null = inherit`, tokens
-issue/revoke; register/remove), Media (`/host/iso-catalog` intended read-only catalog + `/media?owner=all`
+issue/revoke; register/remove), Media (`/host/iso-catalog` read-only catalog + `/media?owner=all`
 with delete and cleanup), Operations (`/jobs` with cancel and the two retry buttons —
 a failed `child-delete`/`parent-cascade-delete` is retried by deleting again (§8.8), a
 failed `media-cleanup` by running it again — and `/audit`), Configuration (`/host/config`
