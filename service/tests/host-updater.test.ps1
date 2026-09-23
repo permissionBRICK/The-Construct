@@ -175,5 +175,39 @@ try {
     $f=New-Fixture 'incomplete-backup';$r=@{updateId=$f.h.updateId;commit=$f.h.commit;previousCommit=$f.h.previousCommit;phase='replace';phaseAt=[DateTimeOffset]::UtcNow.ToString('o');outcome=$null;error=$null;backupPath=(Join-Path (Split-Path $f.path -Parent) ('backup-'+$f.h.updateId));backupComplete=$false;replaceStarted=$true;stagedPath=$f.h.stagedPath;healthAttempts=0;manualSteps=@()};Write-UpdateJson $f.record $r
     Assert ((Invoke-ConstructHostUpdate $f.path $true $false) -eq 1) 'incomplete mixed backup rebuilt'
     Assert ((Read-UpdateJson $f.record).outcome -eq 'recoveryFailed') 'incomplete backup needs manual recovery'
+    # Linux rename ignores open handles, so a scanner holding the file is injected at the move.
+    $realMove=${function:Move-UpdateJson}
+    function Move-UpdateJson([string]$Temp,[string]$Path) {
+        if ($Path -eq $script:heldPath) { $script:moveCalls++; if ($script:moveCalls -le $script:moveFailures) {
+            # Without a backup name, ReplaceFile's 1176 leaves only the temp file.
+            if ($script:moveHResult -eq 0x80070498) { Remove-Item -LiteralPath $Path }
+            throw [IO.IOException]::new('held',$script:moveHResult)
+        } }
+        & $realMove $Temp $Path
+    }
+    $script:heldPath=Join-Path $root 'held.json'; Write-UpdateJson $script:heldPath @{v=1}
+    foreach ($case in @(@(0x80070020,2),@(0x80070497,1),@(0x80070498,1))) {
+        $script:moveHResult=$case[0];$script:moveFailures=$case[1];$script:moveCalls=0; Write-UpdateJson $script:heldPath @{v=$case[1]}
+        Assert ((Read-UpdateJson $script:heldPath).v -eq $case[1] -and $script:moveCalls -eq ($case[1]+1)) ('transient replace failure not retried: '+$case[0])
+    }
+    $script:moveHResult=0x80070020;$script:moveFailures=99;$script:moveCalls=0
+    $rejected=$false; try { Write-UpdateJson $script:heldPath @{v=9} } catch { $rejected=$true }
+    Assert ($rejected -and $script:moveCalls -eq 5 -and (Read-UpdateJson $script:heldPath).v -eq 1) 'persistent sharing violation not bounded'
+    $script:moveHResult=0x80070070;$script:moveFailures=1;$script:moveCalls=0
+    $rejected=$false; try { Write-UpdateJson $script:heldPath @{v=9} } catch { $rejected=$true }
+    Assert ($rejected -and $script:moveCalls -eq 1) 'non-sharing IO failure retried'
+    Assert (@(Get-ChildItem -LiteralPath $root -Filter 'held.json.*.tmp').Count -eq 0) 'failed replace left its temp file'
+    $f=New-Fixture 'ledger-held';$script:heldPath=Join-Path $f.h.publishDir 'install.json'
+    [IO.File]::WriteAllText(($script:heldPath+'.'+[Guid]::NewGuid().ToString('n')+'.tmp'),'stale')
+    $script:moveHResult=0x80070020;$script:moveFailures=2;$script:moveCalls=0
+    Assert ((Invoke-ConstructHostUpdate $f.path $false $false) -eq 0 -and (Read-UpdateJson $f.record).outcome -eq 'succeeded') 'transiently held ledger failed the update'
+    Assert ((Read-UpdateJson $script:heldPath).commit -eq $f.h.commit) 'held ledger not committed'
+    Assert (@(Get-ChildItem -LiteralPath $f.h.publishDir -Filter 'install.json.*.tmp').Count -eq 0) 'stale ledger temp file remained'
+    $f=New-Fixture 'ledger-locked';$script:heldPath=Join-Path $f.h.publishDir 'install.json'
+    $script:moveFailures=99;$script:moveCalls=0
+    Assert ((Invoke-ConstructHostUpdate $f.path $false $false) -eq 0) 'locked ledger rollback failed'
+    Assert ((Read-UpdateJson $f.record).outcome -eq 'rolledBack' -and (Read-UpdateJson $f.record).error -eq 'updater-step-failed') 'locked ledger did not roll back'
+    Assert ([IO.File]::ReadAllText((Join-Path (Split-Path $f.path -Parent) 'updater.log')).Contains(' failed phase=commit code=updater-step-failed exception=System.IO.IOException hresult=0x80070020')) 'ledger failure diagnostic missing'
+    Assert (@(Get-ChildItem -LiteralPath $f.h.publishDir -Filter 'install.json.*.tmp').Count -eq 0) 'locked ledger left its temp file'
     Write-Host "host-updater: $script:passed assertions passed (service control and health faked)"
 } finally {Remove-Item -LiteralPath $root -Recurse -Force}
