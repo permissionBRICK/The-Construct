@@ -194,7 +194,7 @@ public sealed class ProxmoxOptions
     /// The cached Ubuntu cloud image every VM is cloned from, as a Proxmox volume id on a storage with
     /// <c>import</c> content (<c>qm create --scsi0 &lt;storage&gt;:0,import-from=&lt;this&gt;</c>).
     /// </summary>
-    public string ImageVolume { get; set; } = "local:import/construct-ubuntu-noble-cloudimg-amd64.qcow2";
+    public string ImageVolume { get; set; } = "local:import/construct-ubuntu-noble-xfs-amd64.qcow2";
 
     /// <summary>Storage whose <c>snippets</c> directory holds the per-VM cloud-init user data.</summary>
     public string SnippetStorage { get; set; } = "local";

@@ -32,7 +32,7 @@
 #   --ssh-ports <a-b>         public SSH forward range (default: 2201-2299)
 #   --app-ports <a-b>         public app forward range (default: 2300-2999)
 #   --rotate-token            issue a new admin token even when one exists
-#   --skip-image              do not download the cloud image (it must already be cached)
+#   --skip-image              do not download and convert the cloud image (it must already be cached)
 #   --keytab <file>           Kerberos keytab for HTTP/<public-host> (from New-ConstructKerberosPrincipal.ps1
 #                             on a domain controller); turns Windows sign-in (Negotiate) on
 #   --netbios-domain <NAME>   the domain's NetBIOS name (CORP): Kerberos users become NAME\user
@@ -43,7 +43,7 @@
 #   /opt/construct/scripts     the Construct checkout the service hands to guests (bin/, keys/, ...)
 #   /var/lib/constructd        constructd.db, iso/, media/, source/
 #   /etc/constructd            tls.pfx + tls.pass (root-only), install.json
-#   <image-storage>:import/construct-ubuntu-<release>-cloudimg-amd64.qcow2   the VM image
+#   <image-storage>:import/construct-ubuntu-<release>-xfs-amd64.qcow2   the VM image (XFS root)
 #   <image-storage>:snippets/  one cloud-init user-data file per VM, written by the service
 #   systemd unit constructd.service, listening on https://0.0.0.0:<listen-port>
 set -euo pipefail
@@ -330,11 +330,15 @@ ensure_media_storage() {
 }
 ensure_media_storage
 
-# ── 3. The Ubuntu cloud image ────────────────────────────────────────────────
-say "Ubuntu ${RELEASE} cloud image"
-IMAGE_NAME="construct-ubuntu-${RELEASE}-cloudimg-amd64.qcow2"
+# ── 3. The Ubuntu cloud image, rebuilt with an XFS root ───────────────────────
+# Ubuntu ships its cloud images with ext4, which has no reflinks. Construct guests keep many git
+# worktrees whose build outputs and dependencies are reflink copies of each other, so the image is
+# converted once per node (service/host/xfs-cloud-image.sh) and cached under its own name.
+say "Ubuntu ${RELEASE} cloud image (XFS root)"
+IMAGE_NAME="construct-ubuntu-${RELEASE}-xfs-amd64.qcow2"
 IMAGE_VOLID="${IMAGE_STORAGE}:import/${IMAGE_NAME}"
 IMAGE_URL="https://cloud-images.ubuntu.com/${RELEASE}/current/${RELEASE}-server-cloudimg-amd64.img"
+LEGACY_IMAGE="${IMG_PATH}/import/construct-ubuntu-${RELEASE}-cloudimg-amd64.qcow2"
 have_image() {
   pvesh get "/nodes/${NODE}/storage/${IMAGE_STORAGE}/content" --content import --output-format json \
     | python3 -c 'import json,sys; v=sys.argv[1]; sys.exit(0 if any(e.get("volid")==v for e in json.load(sys.stdin)) else 1)' "${IMAGE_VOLID}"
@@ -344,18 +348,30 @@ if have_image; then
 elif [[ "${SKIP_IMAGE}" -eq 1 ]]; then
   die "the image ${IMAGE_VOLID} is not cached and --skip-image was given"
 else
+  command -v sfdisk >/dev/null || { note "installing fdisk"; DEBIAN_FRONTEND=noninteractive apt-get install -y -qq fdisk >/dev/null 2>&1 || die "could not install fdisk"; }
+  command -v qemu-img >/dev/null || die "'qemu-img' is required (part of Proxmox VE)"
+  install -d -m 0755 "${IMG_PATH}/import"
+  # The download and the conversion's work files stay on the image storage: a few GB that the
+  # node's root file system may not have to spare.
+  DL="$(mktemp -d "${IMG_PATH}/import/.download.XXXXXX")"
+  trap 'rm -rf "${DL}"; rm -r "${TMP_ROOT}"' EXIT
   SUM="$(curl -fsSL --max-time 60 "$(dirname "${IMAGE_URL}")/SHA256SUMS" | awk -v f="*$(basename "${IMAGE_URL}")" '$2==f {print $1}')" || SUM=""
   note "downloading ${IMAGE_URL}${SUM:+ (sha256 ${SUM})}"
-  # pvesh follows the download task and returns when it is done.
+  curl -fsSL --retry 3 -o "${DL}/cloudimg.img" "${IMAGE_URL}" || die "could not download ${IMAGE_URL}"
   if [[ -n "${SUM}" ]]; then
-    pvesh create "/nodes/${NODE}/storage/${IMAGE_STORAGE}/download-url" --content import --filename "${IMAGE_NAME}" \
-      --url "${IMAGE_URL}" --checksum-algorithm sha256 --checksum "${SUM}" >/dev/null
-  else
-    pvesh create "/nodes/${NODE}/storage/${IMAGE_STORAGE}/download-url" --content import --filename "${IMAGE_NAME}" \
-      --url "${IMAGE_URL}" >/dev/null
+    [[ "$(sha256sum "${DL}/cloudimg.img" | cut -d' ' -f1)" == "${SUM}" ]] || die "checksum mismatch for ${IMAGE_URL}"
   fi
-  have_image || die "the image download did not leave ${IMAGE_VOLID} behind"
+  note "converting the root file system to XFS"
+  bash "${SOURCE_DIR}/service/host/xfs-cloud-image.sh" "${DL}/cloudimg.img" "${IMG_PATH}/import/${IMAGE_NAME}" \
+    || die "could not convert the cloud image to XFS"
+  rm -rf "${DL}"
+  have_image || die "the conversion did not leave ${IMAGE_VOLID} behind"
   note "cached: ${IMAGE_VOLID}"
+fi
+# VMs are full copies of the image (import-from), so the ext4 image of older releases is unused.
+if [[ -f "${LEGACY_IMAGE}" ]]; then
+  rm -f "${LEGACY_IMAGE}"
+  note "removed the previous ext4 image $(basename "${LEGACY_IMAGE}")"
 fi
 
 # ── 4. TLS certificate (clients pin its fingerprint at enrolment) ─────────────

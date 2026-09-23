@@ -66,7 +66,7 @@ ok "non-numeric reading is unknown" verdict_is "n/a" unknown
 run_case full 'check_disk_space' _DISK_FULL_KB=999999999999 _DISK_LOW_KB=999999999999 SSH_USER=agent
 ok "a full disk fails the check" test "$(cat "${tmp}/full.rc")" = 1
 ok "a full disk says so" grep -q 'the disk is FULL' "${tmp}/full.out"
-ok "a full disk explains the root-reserve asymmetry" grep -q "5% reserve for root" "${tmp}/full.out"
+ok "a full disk explains the root-reserve asymmetry" grep -q "root's 5% reserve lets root-owned writes succeed" "${tmp}/full.out"
 ok "a full disk names the gitconfig symptom" grep -q '/home/agent/.gitconfig.lock' "${tmp}/full.out"
 ok "a full disk points at the escape hatch" grep -q 'ALLOW_LOW_DISK=true to provision anyway' "${tmp}/full.out"
 
