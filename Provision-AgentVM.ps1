@@ -579,6 +579,30 @@ function Ensure-BootstrapKey {
     )
 }
 
+# The transport failures ssh reports before sshd has said anything: no DNS, refused, timed
+# out, or a peer that accepted TCP and then dropped it (a forward with nothing behind it
+# reports kex_exchange_identification / banner exchange, not "connection refused").
+$script:SshTransportFailureRe = 'connect to host|Could not resolve hostname|Connection (refused|timed out|closed|reset)|Network is unreachable|Operation timed out|No route to host|kex_exchange_identification|banner exchange|Broken pipe'
+
+function Get-SshFailureLine {
+    <# The line of ssh output that names the failure, for a message the user can act on. #>
+    param([string]$Output)
+    $lines = @(($Output -split '\r?\n') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $hit = @($lines | Where-Object { $_ -match $script:SshTransportFailureRe }) | Select-Object -Last 1
+    if ($hit) { return $hit }
+    return ($lines | Select-Object -Last 1)
+}
+
+function Test-SshServerAnswered {
+    <# Did sshd itself answer this PreferredAuthentications=none probe? Only an exit of 0
+       or sshd's own refusal proves it; anything else, including output no pattern knows,
+       is not proof that a connection was made. #>
+    param([string]$Output, [int]$ExitCode)
+    if ($ExitCode -eq 0) { return $true }
+    if ($Output -match $script:SshTransportFailureRe) { return $false }
+    return [bool]($Output -match 'Permission denied|Too many authentication failures|Authentication failed')
+}
+
 function Ensure-VmReachable {
     while ($true) {
         Write-Step "Checking VM reachability ($script:VmHost, SSH port $SshPort)"
@@ -587,9 +611,9 @@ function Ensure-VmReachable {
         # progress/warning banner) at all. We don't need to AUTHENTICATE here,
         # only to confirm sshd is answering: PreferredAuthentications=none makes
         # ssh offer no method, so the daemon replies with a permission-denied the
-        # moment it's up. ssh's own stderr is captured, never printed. Only a
-        # transport-level failure (no DNS, refused, timeout) counts as "not up";
-        # an auth rejection means sshd answered, i.e. the VM is reachable.
+        # moment it's up. ssh's own stderr is captured and only its failure line is
+        # printed. Only that auth rejection (Test-SshServerAnswered) counts as
+        # reachable, so a port forward that accepts TCP but reaches no sshd fails here.
         $probeOpts = @(
             "-o", "BatchMode=yes",
             "-o", "StrictHostKeyChecking=no",
@@ -600,13 +624,13 @@ function Ensure-VmReachable {
         if ($SshPort -ne 22) { $probeOpts += @("-p", "$SshPort") }
         $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
         $probe = (& ssh.exe @probeOpts "$SeedUser@$($script:VmHost)" "true" 2>&1 | Out-String)
+        $probeExit = $LASTEXITCODE
         $ErrorActionPreference = $prevEAP
-        $reachable = ($probe -notmatch 'connect to host|Could not resolve hostname|Connection (refused|timed out|closed)|Network is unreachable|Operation timed out|No route to host')
-        if ($reachable) {
+        if (Test-SshServerAnswered -Output $probe -ExitCode $probeExit) {
             Write-Ok "VM is reachable at $($script:VmHost)"
             return
         }
-        Write-Warning "Cannot reach $($script:VmHost) over SSH (port $SshPort)."
+        Write-Warning "Cannot reach $($script:VmHost) over SSH (port $SshPort): $(Get-SshFailureLine -Output $probe)"
         if ($script:VmHost -match '\.mshome\.net$') {
             # Local Hyper-V form: the legacy short-name prompt (byte-identical), the
             # entered name becomes both the mshome host and the SSH alias.
@@ -1165,12 +1189,17 @@ function Enter-RootKeyFastPath {
     # Probe as the remote (root) user. Lower ErrorActionPreference so ssh's benign
     # stderr isn't promoted to a terminating error by the script-wide 'Stop'.
     $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-    & ssh.exe -n @script:SshPortArgs @opts "$RemoteUser@$VmHost" "true" 2>&1 | Out-Null
+    $probe = (& ssh.exe -n @script:SshPortArgs @opts "$RemoteUser@$VmHost" "true" 2>&1 | Out-String)
     $ok = ($LASTEXITCODE -eq 0)
     $ErrorActionPreference = $prevEAP
 
     if (-not $ok) {
         Remove-Item -LiteralPath $secureKey -Force -ErrorAction SilentlyContinue
+        # A connection that never reached sshd says nothing about the key, and the
+        # bootstrap and password fallbacks would fail the same way -- stop with the cause.
+        if ($probe -match $script:SshTransportFailureRe) {
+            throw "Could not connect to $VmHost (SSH port $SshPort): $(Get-SshFailureLine -Output $probe)"
+        }
         Write-Ok "Saved root key did not authenticate -- falling back to the bootstrap-key path"
         return $false
     }
@@ -1814,9 +1843,15 @@ if ($ServiceUrl) {
 # Accept the VM's host key before any SSH operations (overwrite to clear stale keys from previous VMs).
 Write-Step "Accepting VM host key"
 $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-& ssh-keyscan -T 5 @script:SshPortArgs $VmHost 2>$null | Out-File -Encoding ascii $script:KnownHostsFile
+$hostKeys = @(& ssh-keyscan -T 5 @script:SshPortArgs $VmHost 2>$null | Where-Object { $_ -and $_ -notmatch '^\s*#' })
 $ErrorActionPreference = $prevEAP
-Write-Ok "Host key stored"
+# Written even when empty, so a stale key from a previous VM never survives.
+$hostKeys | Out-File -Encoding ascii $script:KnownHostsFile
+if ($hostKeys.Count -gt 0) {
+    Write-Ok "Host key stored"
+} else {
+    Write-Warning "ssh-keyscan returned no host key for $VmHost (SSH port $SshPort); the first connection will record it instead."
+}
 
 # Re-provision fast path: if the root key saved from a previous run still lets us
 # in as root, use it for the whole run -- no bootstrap key, no agent password, no

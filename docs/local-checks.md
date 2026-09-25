@@ -70,6 +70,7 @@ pwsh -NoProfile -File test/source-transport.test.ps1
 pwsh -NoProfile -File test/source-release.test.ps1
 pwsh -NoProfile -File test/remote-client.test.ps1
 pwsh -NoProfile -File test/provision-seed-user.test.ps1
+pwsh -NoProfile -File test/provision-ssh-diagnostics.test.ps1
 pwsh -NoProfile -File test/instance-identity.test.ps1
 pwsh -NoProfile -File service/tests/host-installer.test.ps1
 bash test/fetch-construct-source.test.sh
