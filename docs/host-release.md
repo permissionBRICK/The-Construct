@@ -4,8 +4,8 @@ Construct uses one published commit for source, the control panel, and the Windo
 hosts. Every push to `main` runs `.github/workflows/host-release.yml`: build the
 self-contained and framework-dependent Windows x64 executables and the self-contained Linux host, package their scripts and the source archive,
 generate the manifest, then publish. **No tests run in GitHub Actions.** Run the
-regression checks locally before pushing. The ISO builder retains its separate
-`config/iso-builder.json` dependency pin.
+regression checks locally before pushing. The ISO builder is released separately and
+resolved through `config/iso-builder.json` (latest release by default).
 
 The per-user tray app ships independently as `companion-<commit>`; see
 [Construct Companion](companion.md) for its installer, package layout and release gates.

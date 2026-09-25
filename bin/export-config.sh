@@ -19,6 +19,11 @@
 #                                                 indexes
 #                                         Opencode ~/.local/share/opencode/storage/
 #                                                 and opencode.db*
+#                                       HISTORY_RETENTION_DAYS trims the Claude and
+#                                       Codex transcripts in the backup (never the
+#                                       live home) to the last N days by mtime;
+#                                       memory, the history/index files and the
+#                                       OpenCode/T3 databases are kept whole.
 #   - Subscription auth (INCLUDE_AUTH): ~/.claude/.credentials.json, ~/.claude.json,
 #                                       ~/.codex/auth.json,
 #                                       ~/.local/share/opencode/auth.json
@@ -61,6 +66,8 @@
 #   EXPORT_HOME    home to export from         (default /root)
 #   INCLUDE_AUTH   include subscription auth    (default true)
 #   INCLUDE_HISTORY include chat history        (default true)
+#   HISTORY_RETENTION_DAYS keep only transcripts touched in the last N days
+#                  (default 30; 0 keeps all history)
 #   OUT            output tarball path          (default /tmp/construct-config-backup.tar.gz)
 #   CONFIG_FILE    construct config.env         (default /etc/construct/config.env)
 #   WORKSPACE_ROOT where repos are cloned       (default from config / /root/repos)
@@ -72,6 +79,7 @@ set -euo pipefail
 EXPORT_HOME="${EXPORT_HOME:-/root}"
 INCLUDE_AUTH="${INCLUDE_AUTH:-true}"
 INCLUDE_HISTORY="${INCLUDE_HISTORY:-true}"
+HISTORY_RETENTION_DAYS="${HISTORY_RETENTION_DAYS:-30}"
 OUT="${OUT:-/tmp/construct-config-backup.tar.gz}"
 CONFIG_FILE="${CONFIG_FILE:-/etc/construct/config.env}"
 REPO_DIR="${REPO_DIR:-/opt/construct/repo}"
@@ -93,6 +101,19 @@ MANIFEST="${STAGE}/MANIFEST.txt"
 
 log()  { printf '  %s\n' "$*"; }
 note() { printf '  %s\n' "$*" >&2; }
+
+# Non-negative integer, else fall back to the default rather than abort the
+# backup a reinstall depends on. Leading zeros are stripped (bash would read
+# 08 as bad octal) and absurd values are capped so N*1440 minutes can't overflow.
+if [[ ! "${HISTORY_RETENTION_DAYS}" =~ ^[0-9]+$ ]]; then
+  note "warning: HISTORY_RETENTION_DAYS='${HISTORY_RETENTION_DAYS}' is not a non-negative integer; using 30"
+  HISTORY_RETENTION_DAYS=30
+fi
+HISTORY_RETENTION_DAYS="${HISTORY_RETENTION_DAYS#"${HISTORY_RETENTION_DAYS%%[!0]*}"}"
+HISTORY_RETENTION_DAYS="${HISTORY_RETENTION_DAYS:-0}"
+if [[ "${#HISTORY_RETENTION_DAYS}" -gt 9 ]]; then
+  HISTORY_RETENTION_DAYS=999999999
+fi
 
 # Copy a file or directory (given relative to EXPORT_HOME) into the staging
 # home tree, preserving its relative path. No-op when the source is absent.
@@ -342,6 +363,68 @@ if [[ "${T3CODE:-false}" == "true" || -d "${EXPORT_HOME}/.t3/userdata" ]]; then
   fi
 fi
 
+# ── Chat history retention ───────────────────────────────────────────────────
+# Trim the STAGED transcripts (cp -a kept their mtimes; the live home is never
+# touched) to the last HISTORY_RETENTION_DAYS days. Only per-session files are
+# dropped: Claude's memory/ + MEMORY.md, the history/session_index files (their
+# readers tolerate missing sessions) and the OpenCode/T3 databases (threads
+# can't be removed from them safely) stay whole.
+_prune_files=0
+_prune_bytes=0
+# Count the files under the given paths toward the current agent's summary.
+prune_tally() {
+  local n b
+  read -r n b < <(find "$@" -type f -printf '%s\n' 2>/dev/null \
+    | awk '{ n++; b += $1 } END { printf "%d %d\n", n, b }')
+  _prune_files=$((_prune_files + n))
+  _prune_bytes=$((_prune_bytes + b))
+}
+prune_summary() {
+  log "- $1 history older than ${HISTORY_RETENTION_DAYS} days: dropped ${_prune_files} file(s), $(awk -v b="${_prune_bytes}" 'BEGIN { printf "%.1f", b / 1048576 }') MB saved"
+  _prune_files=0
+  _prune_bytes=0
+}
+if [[ "${INCLUDE_HISTORY}" == "true" && "${HISTORY_RETENTION_DAYS}" -gt 0 ]]; then
+  _age_min=$((HISTORY_RETENTION_DAYS * 1440))
+  _uuid='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+  if [[ -d "${HOMEROOT}/.claude/projects" ]]; then
+    shopt -s nullglob
+    for slug in "${HOMEROOT}/.claude/projects"/*/; do
+      # Session transcripts directly in the slug dir.
+      for f in "${slug}"*.jsonl; do
+        [[ -f "${f}" && -n "$(find "${f}" -maxdepth 0 -mmin +"${_age_min}")" ]] || continue
+        prune_tally "${f}"
+        rm -f "${f}"
+      done
+      # Per-session dirs (subagents/, tool results), named by session UUID:
+      # dropped only once their newest file is past the window and their session's
+      # transcript was dropped too. memory/ never matches the UUID name.
+      for d in "${slug}"*/; do
+        d="${d%/}"
+        [[ "$(basename "${d}")" =~ ${_uuid} ]] || continue
+        [[ ! -e "${d}.jsonl" ]] || continue
+        [[ -z "$(find "${d}" -type f ! -mmin +"${_age_min}" -print -quit)" ]] || continue
+        prune_tally "${d}"
+        rm -rf "${d}"
+      done
+    done
+    shopt -u nullglob
+    prune_summary "Claude"
+  fi
+  _codex_dirs=()
+  for d in "${HOMEROOT}/.codex/sessions" "${HOMEROOT}/.codex/archived_sessions"; do
+    if [[ -d "${d}" ]]; then _codex_dirs+=("${d}"); fi
+  done
+  if [[ "${#_codex_dirs[@]}" -gt 0 ]]; then
+    while IFS= read -r -d '' f; do
+      prune_tally "${f}"
+      rm -f "${f}"
+    done < <(find "${_codex_dirs[@]}" -type f -name '*.jsonl' -mmin +"${_age_min}" -print0)
+    find "${_codex_dirs[@]}" -mindepth 1 -type d -empty -delete
+    prune_summary "Codex"
+  fi
+fi
+
 # ── Back up stored project profiles + generate profiles for loose repos ──────
 # The VM's persisted project profiles (PROJECTS_STORE) carry the real config the
 # user added -- notably MCP servers (which live in the project JSON) -- so copy
@@ -424,12 +507,14 @@ jq -n \
   --arg agents "${agents}" \
   --argjson includeAuth "$([[ "${INCLUDE_AUTH}" == "true" ]] && echo true || echo false)" \
   --argjson includeHistory "$([[ "${INCLUDE_HISTORY}" == "true" ]] && echo true || echo false)" \
+  --argjson historyRetentionDays "${HISTORY_RETENTION_DAYS}" \
   --argjson t3code "$([[ "${T3CODE:-false}" == "true" ]] && echo true || echo false)" \
   --arg t3codeChannel "${T3CODE_CHANNEL:-stable}" \
   --argjson opencodeBackgroundWatcher "$([[ "${OPENCODE_BACKGROUND_WATCHER:-false}" == "true" ]] && echo true || echo false)" \
   --argjson addedProjects "${gen_json}" '
   { created: $created, host: $host, agents: ($agents | split(",")),
     includeAuth: $includeAuth, includeHistory: $includeHistory,
+    historyRetentionDays: $historyRetentionDays,
     t3code: $t3code, t3codeChannel: $t3codeChannel,
     opencodeBackgroundWatcher: $opencodeBackgroundWatcher,
     addedProjects: $addedProjects }' \

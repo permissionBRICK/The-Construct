@@ -248,6 +248,13 @@ public abstract class IsoBuilderBase : IIsoBuilder, IIsoMediaBuilder, IDisposabl
         }
     }
 
+    public string? CurrentBuilderSha256()
+    {
+        if (string.IsNullOrWhiteSpace(_options.ScriptsDir)) return null;
+        var path = GetBuilderPath(_options.ScriptsDir.TrimEnd('\\', '/'));
+        return _files.FileExists(path) ? _files.ComputeSha256(path) : null;
+    }
+
     /// <summary>
     /// The Ubuntu ISO to remaster: the admin's own copy, or the configured URL fetched into the cache
     /// once and reused by every later build.

@@ -9,12 +9,30 @@ function Get-ConstructIsoBuilderPath {
 function Get-ConstructIsoRelease {
     param([Parameter(Mandatory = $true)][string]$ScriptsDir)
     $release = Get-Content -Raw -LiteralPath (Join-Path $ScriptsDir 'config\iso-builder.json') | ConvertFrom-Json
-    if ($release.repository -ne 'permissionBRICK/construct-iso' -or
-        $release.tag -notmatch '^build-[a-f0-9]{40}$' -or
+    if ($release.repository -ne 'permissionBRICK/construct-iso') {
+        throw 'Invalid ISO builder repository in config/iso-builder.json.'
+    }
+    if ($release.tag -eq 'latest') { return $release }
+    if ($release.tag -notmatch '^build-[a-f0-9]{40}$' -or
         $release.zipSha256 -notmatch '^[a-f0-9]{64}$' -or $release.exeSha256 -notmatch '^[a-f0-9]{64}$') {
         throw 'Invalid pinned ISO builder release in config/iso-builder.json.'
     }
     return $release
+}
+
+# The newest published release, verified by the SHA-256 digest GitHub records for the
+# uploaded archive. The executable hash is not published, so it stays empty.
+function Get-ConstructIsoLatestRelease {
+    param([Parameter(Mandatory = $true)][string]$Repository)
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $info = Invoke-RestMethod -UseBasicParsing -TimeoutSec 30 -Uri "https://api.github.com/repos/$Repository/releases/latest" `
+        -Headers @{ Accept = 'application/vnd.github+json' }
+    $asset = @($info.assets | Where-Object { $_.name -eq 'Construct.Iso-win-x64.zip' }) | Select-Object -First 1
+    $digest = if ($asset) { [string]$asset.digest } else { '' }
+    if ([string]$info.tag_name -notmatch '^build-[a-f0-9]{40}$' -or $digest -notmatch '^sha256:[a-f0-9]{64}$') {
+        throw 'The latest ISO tool release has no verifiable Windows archive.'
+    }
+    return [pscustomobject]@{ repository = $Repository; tag = [string]$info.tag_name; zipSha256 = $digest.Substring(7); exeSha256 = '' }
 }
 
 function Publish-ConstructIsoExecutable {
@@ -41,6 +59,8 @@ function Resolve-ConstructIsoBuilder {
     $destination = Get-ConstructIsoBuilderPath -ScriptsDir $ScriptsDir
     $cache = Split-Path -Parent $destination
     if (-not (Test-Path -LiteralPath $cache)) { New-Item -ItemType Directory -Path $cache -Force | Out-Null }
+    # Which release the executable came from, so "latest" downloads only when a newer one exists.
+    $record = Join-Path $cache 'Construct.Iso.release.json'
     if (-not $SourceDir) { $SourceDir = Join-Path (Split-Path -Parent $ScriptsDir) 'construct-iso' }
     $project = Join-Path $SourceDir 'src\Construct.Iso\Construct.Iso.csproj'
     $hasSdk = $false
@@ -58,6 +78,7 @@ function Resolve-ConstructIsoBuilder {
             $built = Join-Path $localBuild 'Construct.Iso.exe'
             if (-not (Test-Path -LiteralPath $built)) { throw 'Local ISO tool build produced no executable.' }
             Publish-ConstructIsoExecutable -Source $built -Destination $destination
+            if (Test-Path -LiteralPath $record) { Remove-Item -LiteralPath $record -Force }
         } finally {
             if (Test-Path -LiteralPath $localBuild) { Remove-Item -LiteralPath $localBuild -Recurse -Force }
         }
@@ -65,7 +86,20 @@ function Resolve-ConstructIsoBuilder {
     }
 
     $release = Get-ConstructIsoRelease -ScriptsDir $ScriptsDir
-    if ((Test-Path -LiteralPath $destination) -and
+    if ($release.tag -eq 'latest') {
+        $installed = $null
+        if (Test-Path -LiteralPath $record) { try { $installed = Get-Content -Raw -LiteralPath $record | ConvertFrom-Json } catch { } }
+        $haveTool = $installed -and [string]$installed.exeSha256 -and (Test-Path -LiteralPath $destination) -and
+            (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash -eq [string]$installed.exeSha256
+        try {
+            $release = Get-ConstructIsoLatestRelease -Repository $release.repository
+        } catch {
+            if (-not $haveTool) { throw "Could not resolve the latest ISO tool release: $($_.Exception.Message)" }
+            Write-Warning "Could not check for a newer ISO tool ($($_.Exception.Message)); using $($installed.tag)."
+            return $destination
+        }
+        if ($haveTool -and $installed.tag -eq $release.tag) { return $destination }
+    } elseif ((Test-Path -LiteralPath $destination) -and
         (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash -eq $release.exeSha256) {
         return $destination
     }
@@ -85,10 +119,12 @@ function Resolve-ConstructIsoBuilder {
         Expand-Archive -LiteralPath $zip -DestinationPath $unpacked
         $exe = Join-Path $unpacked 'Construct.Iso.exe'
         if (-not (Test-Path -LiteralPath $exe) -or
-            (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash -ne $release.exeSha256) {
+            ($release.exeSha256 -and (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash -ne $release.exeSha256)) {
             throw 'ISO tool executable checksum mismatch; the existing tool was retained.'
         }
         Publish-ConstructIsoExecutable -Source $exe -Destination $destination
+        @{ tag = $release.tag; exeSha256 = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant() } |
+            ConvertTo-Json | Set-Content -LiteralPath $record -Encoding UTF8
     } finally {
         if (Test-Path -LiteralPath $work) { Remove-Item -LiteralPath $work -Recurse -Force }
     }

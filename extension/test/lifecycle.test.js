@@ -109,6 +109,14 @@ ok("reprovision: drops the OpenCode watcher flag for old scripts",
 ok("rebuild: keeps the OpenCode watcher flag when supported",
   has(life.buildInvocation("reinstall", { settings: { opencodeBackgroundWatcher: true }, supportsOpenCodeBackgroundWatcher: true }).args, "-OpenCodeBackgroundWatcher", "true"));
 
+ok("export: passes -HistoryRetentionDays from the saved setting",
+  has(life.buildInvocation("exportConfig", { backupDir: "C:/b", settings: { historyRetentionDays: "0" } }).args, "-HistoryRetentionDays", "0"));
+ok("rebuild: passes -HistoryRetentionDays from the saved setting",
+  has(life.buildInvocation("reinstall", { settings: { historyRetentionDays: "14" } }).args, "-HistoryRetentionDays", "14"));
+ok("export: omits -HistoryRetentionDays when unset", !exp.args.includes("-HistoryRetentionDays"));
+ok("rebuild: drops -HistoryRetentionDays for old scripts",
+  !life.buildInvocation("redownload", { settings: { historyRetentionDays: "14" }, supportsHistoryRetentionDays: false }).args.includes("-HistoryRetentionDays"));
+
 const redNoRel = life.buildInvocation("redownload", { settings: {} });
 ok("redownload: omits -UbuntuRelease when unset", !redNoRel.args.includes("-UbuntuRelease"));
 
@@ -282,6 +290,16 @@ ok("watcher-capability: rebuild checks Auto-Install only",
 fs.writeFileSync(path.join(sdWatcher, "Provision-AgentVM.ps1"), "# $OpenCodeBackgroundWatcher is documented here\nparam([string]$T3Code)\n");
 ok("watcher-capability: a comment-only mention does not count",
   life.scriptSupportsOpenCodeBackgroundWatcher(sdWatcher, "reprovision") === false);
+
+// ── scriptSupportsHistoryRetentionDays (reads the script the action launches) ─
+const sdRetention = fs.mkdtempSync(path.join(os.tmpdir(), "construct-life-retention-"));
+fs.writeFileSync(path.join(sdRetention, "Provision-AgentVM.ps1"), "param(\n  [string]$HistoryRetentionDays = \"\"\n)\n");
+fs.writeFileSync(path.join(sdRetention, "Auto-Install.ps1"), "# $HistoryRetentionDays is documented here\nparam([string]$T3Code)\n");
+ok("retention-capability: export checks Provision",
+  life.scriptSupportsHistoryRetentionDays(sdRetention, "exportConfig") === true);
+ok("retention-capability: rebuild checks Auto-Install (comment-only mention does not count)",
+  life.scriptSupportsHistoryRetentionDays(sdRetention, "reinstall") === false);
+fs.rmSync(sdRetention, { recursive: true, force: true });
 
 ok("unknown action -> null", life.buildInvocation("bogus", {}) === null);
 

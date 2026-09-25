@@ -513,6 +513,7 @@ function buildInvocation(action, opts = {}) {
     case "exportConfig":
       addPair("-Action", "export");
       addPair("-BackupDir", opts.backupDir);
+      if (opts.supportsHistoryRetentionDays !== false) pushPair("-HistoryRetentionDays", s.historyRetentionDays);
       return done(PROVISION, { destructive: false, elevate: false, label: "Export config" });
 
     case "reinstall":
@@ -548,6 +549,9 @@ function buildInvocation(action, opts = {}) {
       pushBool("-T3Code", s.t3code);
       if (opts.supportsT3CodeChannel !== false) pushPair("-T3CodeChannel", s.t3codeChannel);
       if (opts.supportsT3CodeLimitResume !== false) pushBool("-T3CodeLimitResume", s.t3codeLimitResume);
+      // How much chat history the pre-delete config save keeps (Auto-Install forwards it
+      // to the export). Capability-gated like the flags above.
+      if (opts.supportsHistoryRetentionDays !== false) pushPair("-HistoryRetentionDays", s.historyRetentionDays);
       return done(AUTO_INSTALL, {
         destructive: true,
         // A REMOTE rebuild must NOT elevate. It creates no local VM, so it needs no
@@ -753,6 +757,13 @@ function scriptSupportsOpenCodeBackgroundWatcher(scriptsDir, action) {
   if (action === "reprovision") return check(PROVISION);
   if (action === "reinstall" || action === "redownload") return check(AUTO_INSTALL);
   return check(PROVISION) && check(AUTO_INSTALL);
+}
+
+/** Capability gate for -HistoryRetentionDays: the script the action launches
+ *  (Provision-AgentVM.ps1 for exportConfig, Auto-Install.ps1 for a rebuild) must
+ *  declare it, or passing it would fail to bind. */
+function scriptSupportsHistoryRetentionDays(scriptsDir, action) {
+  return scriptSupportsParam(scriptsDir, scriptForAction(action), "HistoryRetentionDays");
 }
 
 function scriptSupportsT3CodeChannel(scriptsDir, action) {
@@ -1121,6 +1132,7 @@ function run(action, opts = {}) {
     supportsT3CodeChannel: scriptSupportsT3CodeChannel(scriptsDir, action),
     supportsT3CodeLimitResume: scriptSupportsT3CodeLimitResume(scriptsDir, action),
     supportsOpenCodeBackgroundWatcher: scriptSupportsOpenCodeBackgroundWatcher(scriptsDir, action),
+    supportsHistoryRetentionDays: scriptSupportsHistoryRetentionDays(scriptsDir, action),
   });
   // A refusal, not an invocation: this install cannot TARGET the active instance, and
   // running anyway would hit the default VM. Say which and stop — never fall back.
@@ -1206,6 +1218,7 @@ module.exports = {
   scriptSupportsRemoveInstance,
   scriptSupportsT3CodeLimitResume,
   scriptSupportsOpenCodeBackgroundWatcher,
+  scriptSupportsHistoryRetentionDays,
   psSingleQuote, winQuoteArg, buildChildCommandLine, buildOuterCommand, buildCallCommand, buildHostLaunch,
   hostLaunchSpawnOptions, launchHostScript, run, runSettled, confirmDestructive, configure,
 };

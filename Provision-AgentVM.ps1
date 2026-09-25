@@ -157,6 +157,12 @@ param(
     # -Action export only: scan the project repos for uncommitted/unpushed work
     # and write repo-scan.json, without exporting the (much larger) config.
     [switch]$ScanReposOnly,
+    # -Action export only: how many days of Claude/Codex chat transcripts the backup
+    # keeps (bin/export-config.sh HISTORY_RETENTION_DAYS; 0 keeps all history).
+    # Empty = the export script's default (30 days). Digits only: it is spliced
+    # into the remote command line.
+    [ValidatePattern('\A[0-9]*\z')]
+    [string]$HistoryRetentionDays = "",
     # Restore a previously exported backup (a -BackupDir from a prior export run)
     # onto the VM at the end of provisioning. Used by the reinstall auto-restore.
     [string]$RestoreDir = "",
@@ -377,6 +383,8 @@ try {
 
 $RemoteKeyPath   = "/root/.ssh/codex_app_ed25519"        # produced by setup-root-ssh-key.sh
 $RemoteArchive   = "/tmp/construct-repo.tar.gz"
+$ExportScanScript   = "/tmp/construct-scan-repos.sh"
+$ExportConfigScript = "/tmp/construct-export-config.sh"
 $BootstrapKey    = Join-Path $PSScriptRoot "keys\bootstrap_ed25519"
 $BootstrapPubKey = Join-Path $PSScriptRoot "keys\bootstrap_ed25519.pub"
 
@@ -1777,7 +1785,9 @@ foreach ($f in @((Join-Path $HOME ".ssh\config"), (Join-Path $HOME ".ssh\$LocalK
     if (Test-Path -LiteralPath $f) { Protect-SshFile $f }
 }
 
-if (-not $ServiceUrl) { $archivePath = New-RepoArchive } else {
+# -Action export only reads the VM, and only needs the two scripts it runs (uploaded
+# below), so it never packs or replaces the guest repository.
+if (-not $ServiceUrl) { if ($Action -ne 'export') { $archivePath = New-RepoArchive } } else {
     . (Join-Path $PSScriptRoot 'lib/AgentVm.Remote.ps1')
     $sourceRef = $Ref
     if (-not $PSBoundParameters.ContainsKey('Ref')) {
@@ -1947,6 +1957,12 @@ Write-Ok "Repo in place at /opt/construct/repo"
             try { Invoke-Ssh -Sudo -Command ('if [ -f {0} ]; then rm -r -- {0}; fi' -f $script:SourceOverlayPath) | Out-Null } catch { }
         }
     }
+} elseif ($Action -eq 'export') {
+Write-Step "Uploading the export scripts"
+Invoke-Ssh -Sudo -Command "rm -f $ExportScanScript $ExportConfigScript"
+Invoke-Scp -LocalPath (Join-Path $PSScriptRoot 'bin\scan-repos.sh') -RemotePath $ExportScanScript
+Invoke-Scp -LocalPath (Join-Path $PSScriptRoot 'bin\export-config.sh') -RemotePath $ExportConfigScript
+Write-Ok "Export scripts in place (guest repository left unchanged)"
 } else {
 # Upload the archive via SCP (remove any stale copy owned by root from a previous run).
 Write-Step "Uploading repo archive to $RemoteArchive"
@@ -1962,9 +1978,9 @@ Write-Ok "Repo in place at /opt/construct/repo"
 }
 
 # ── -Action export: pull the current config back to the host, then stop ──────
-# The repo (with the current export/scan scripts) is now on the VM. We connected
-# above exactly like a provision would; from here we only read, never change the
-# VM, and we never reboot.
+# The current export/scan scripts are now on the VM (the guest repository is not
+# replaced). We connected above exactly like a provision would; from here we only
+# read, never change the VM, and we never reboot.
 if ($Action -eq 'export') {
     if (-not $BackupDir) { throw "-Action export requires -BackupDir." }
     New-Item -ItemType Directory -Force -Path $BackupDir | Out-Null
@@ -1976,10 +1992,10 @@ if ($Action -eq 'export') {
         # and chmod runs only on success (so the seed user can pull it on the
         # bootstrap path). The finally always removes the VM-side file.
         try {
-            Invoke-Ssh -Sudo -Command "bash /opt/construct/repo/bin/scan-repos.sh > /tmp/construct-repo-scan.json 2>/dev/null && chmod 644 /tmp/construct-repo-scan.json"
+            Invoke-Ssh -Sudo -Command "bash $ExportScanScript > /tmp/construct-repo-scan.json 2>/dev/null && chmod 644 /tmp/construct-repo-scan.json"
             Invoke-ScpFrom -RemotePath "/tmp/construct-repo-scan.json" -LocalPath (Join-Path $BackupDir "repo-scan.json")
         } finally {
-            try { Invoke-Ssh -Sudo -Command "rm -f /tmp/construct-repo-scan.json" } catch { }
+            try { Invoke-Ssh -Sudo -Command "rm -f /tmp/construct-repo-scan.json $ExportScanScript $ExportConfigScript" } catch { }
         }
         Write-Ok "Repo scan saved to $(Join-Path $BackupDir 'repo-scan.json')"
     } else {
@@ -1988,13 +2004,16 @@ if ($Action -eq 'export') {
         # VM-side copy -- even if the export, download, or extract throws. The
         # `&& chmod` keeps a failed export from being reported as success.
         $tgz = Join-Path $BackupDir "backup.tar.gz"
+        # Only when given (digits only, re-checked because it lands in a shell
+        # command); otherwise the export script's own default applies.
+        $retentionEnv = if ($HistoryRetentionDays -match '\A[0-9]+\z') { "HISTORY_RETENTION_DAYS=$HistoryRetentionDays " } else { "" }
         try {
             Write-Host "  --- live export output ---" -ForegroundColor DarkGray
-            Invoke-SshStream -Sudo -Command "EXPORT_HOME=/root INCLUDE_AUTH=true INCLUDE_HISTORY=true OUT=/tmp/construct-config-backup.tar.gz CONFIG_FILE=/etc/construct/config.env REPO_DIR=/opt/construct/repo PROJECTS_STORE=/opt/construct/projects bash /opt/construct/repo/bin/export-config.sh && chmod 644 /tmp/construct-config-backup.tar.gz"
+            Invoke-SshStream -Sudo -Command "EXPORT_HOME=/root INCLUDE_AUTH=true INCLUDE_HISTORY=true ${retentionEnv}OUT=/tmp/construct-config-backup.tar.gz CONFIG_FILE=/etc/construct/config.env REPO_DIR=/opt/construct/repo PROJECTS_STORE=/opt/construct/projects bash $ExportConfigScript && chmod 644 /tmp/construct-config-backup.tar.gz"
             Write-Host "  --- end export output ---" -ForegroundColor DarkGray
             Invoke-ScpFrom -RemotePath "/tmp/construct-config-backup.tar.gz" -LocalPath $tgz
         } finally {
-            try { Invoke-Ssh -Sudo -Command "rm -f /tmp/construct-config-backup.tar.gz" } catch { }
+            try { Invoke-Ssh -Sudo -Command "rm -f /tmp/construct-config-backup.tar.gz $ExportScanScript $ExportConfigScript" } catch { }
         }
         Write-Ok "Backup saved to $tgz"
 
@@ -2536,6 +2555,11 @@ if ($VmTokenB64) {
     $tokenCleanup = "; __rc=`$?; rm -f '$vmTokenRemotePath'; exit `$__rc"
 }
 $envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' GIT_CLONE_SKIP_HOSTS_B64='$cloneSkipHostsB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit' CONSTRUCT_VERSION='$constructVersion' SMB_SHARE='$SmbShare' CLAUDE_PARTIAL_STREAMING='$ClaudePartialStreaming' MIC_PASSTHROUGH='$MicPassthrough' OPENCODE_BACKGROUND_WATCHER='$OpenCodeBackgroundWatcher' T3CODE='$T3Code' T3CODE_CHANNEL='$T3CodeChannel' T3CODE_BUILD_SOURCE='$T3CodeBuildSource' T3CODE_LIMIT_RESUME='$T3CodeLimitResume' T3CODE_HTTPS='$T3CodeHttps'" + $externalEnv + $serviceEnv + " T3CODE_BUILD_MODE='server'"
+# A reinstall that restores a saved config runs the project provisioning commands only
+# after the restore (see below): commands that read ~/.secrets, tokens or the machine
+# identity found none on the fresh VM and silently skipped their setup.
+$deferProjectCommands = [bool]($RestoreDir -and (Test-Path -LiteralPath (Join-Path $RestoreDir "backup.tar.gz")))
+if ($deferProjectCommands) { $envPrefix += " DEFER_PROJECT_COMMANDS='true'" }
 Write-Host "  --- live provisioning output ---" -ForegroundColor DarkGray
 $provisionStream = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "$tokenExport$envPrefix bash /opt/construct/repo/bin/provision.sh$tokenCleanup"
 Write-Host "  --- end provisioning output ---" -ForegroundColor DarkGray
@@ -2577,7 +2601,8 @@ if ($provisionStream.ExitCode -eq 3) {
 # auto-restore). Done AFTER provision.sh so the user's saved instruction/config
 # files overwrite the freshly generated ones and auth/memory/skills come back;
 # the project checkout inside provision.sh already used the restored git
-# credentials (passed via the env above), so private repos cloned.
+# credentials (passed via the env above), so private repos cloned. The project
+# provisioning commands provision.sh deferred run after the restore.
 if ($RestoreDir) {
     $restoreTgz = Join-Path $RestoreDir "backup.tar.gz"
     if (Test-Path -LiteralPath $restoreTgz) {
@@ -2603,6 +2628,32 @@ if ($RestoreDir) {
             }
         }
         Write-Ok "Saved config restored"
+
+        if ($deferProjectCommands) {
+            Write-Step "Running project provisioning commands (after the restore)"
+            Write-Host "  --- live provisioning output ---" -ForegroundColor DarkGray
+            $projectStream = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "env PROVISION_PHASE=project-commands bash /opt/construct/repo/bin/provision.sh"
+            Write-Host "  --- end provisioning output ---" -ForegroundColor DarkGray
+            $projectResult = ConvertFrom-ConstructProvisionResult -Lines $projectStream.Lines
+            $projectErrors = @($projectResult.Errors)
+            if (-not $projectResult.IsValid -or $projectStream.ExitCode -notin @(0, 3)) {
+                $projectErrors = @([pscustomobject]@{ Title = 'Running project provisioning commands'; ExitCode = [int]$projectStream.ExitCode; LogPath = '' })
+            }
+            # One result block for both runs: the de-elevated parent and the result
+            # screen read only $script:ProvisionRawLines / $script:ProvisionResult.
+            $allErrors = @($script:ProvisionResult.Errors) + $projectErrors
+            $script:ProvisionRawLines = @('===CONSTRUCT-PROVISION-RESULT===', "errors=$($allErrors.Count)") +
+                @($allErrors | ForEach-Object { "error=$($_.Title)|$($_.ExitCode)|$($_.LogPath)" }) +
+                @('===END-CONSTRUCT-PROVISION-RESULT===')
+            $script:ProvisionResult = ConvertFrom-ConstructProvisionResult -Lines $script:ProvisionRawLines
+            $global:ConstructProvisionErrors = @($script:ProvisionResult.Errors)
+            if ($projectErrors.Count -gt 0) {
+                $global:ConstructProvisionHadErrors = $true
+                Write-Host "    Project provisioning commands reported errors; host setup will continue." -ForegroundColor Yellow
+            } else {
+                Write-Ok "Project provisioning commands finished"
+            }
+        }
     } else {
         Write-Host "    -RestoreDir set but no backup.tar.gz in $RestoreDir -- skipping restore." -ForegroundColor DarkGray
     }

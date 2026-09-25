@@ -83,6 +83,98 @@ ok 'round trip: private credential file mode preserved' \
   test "$(stat -c %a "${tmp}/restored-true/.config/glab-cli/config.yml" 2>/dev/null || true)" = 600
 ok 'round trip: auth=false restores no GitLab CLI directory' \
   test ! -e "${tmp}/restored-false/.config/glab-cli"
+# ── Chat history retention ───────────────────────────────────────────────────
+hist="${tmp}/history-home"
+slug="${hist}/.claude/projects/-root-repos-demo"
+old_sid='11111111-1111-4111-8111-111111111111'
+new_sid='22222222-2222-4222-8222-222222222222'
+resumed_sid='33333333-3333-4333-8333-333333333333'
+mkdir -p "${slug}/memory" "${slug}/${old_sid}/subagents" "${slug}/${new_sid}/subagents" \
+  "${hist}/.codex/sessions/2020/01/01" "${hist}/.codex/sessions/2026/01/01" \
+  "${hist}/.codex/archived_sessions"
+printf '{}\n' >"${slug}/${old_sid}.jsonl"
+printf '{}\n' >"${slug}/${new_sid}.jsonl"
+printf '{}\n' >"${slug}/${old_sid}/subagents/agent-a.jsonl"
+printf '{}\n' >"${slug}/${new_sid}/subagents/agent-b.jsonl"
+# A resumed session: recent transcript, subagent files from long ago.
+mkdir -p "${slug}/${resumed_sid}/subagents"
+printf '{}\n' >"${slug}/${resumed_sid}.jsonl"
+printf '{}\n' >"${slug}/${resumed_sid}/subagents/agent-c.jsonl"
+touch -d '100 days ago' "${slug}/${resumed_sid}/subagents/agent-c.jsonl"
+printf 'note\n' >"${slug}/memory/note.md"
+printf '# memory\n' >"${slug}/MEMORY.md"
+printf '{}\n' >"${hist}/.claude/history.jsonl"
+printf '{}\n' >"${hist}/.codex/sessions/2020/01/01/rollout-old.jsonl"
+printf '{}\n' >"${hist}/.codex/sessions/2026/01/01/rollout-new.jsonl"
+printf '{}\n' >"${hist}/.codex/archived_sessions/rollout-archived-old.jsonl"
+printf '{}\n' >"${hist}/.codex/session_index.jsonl"
+# Age the old session, its subagent dir, all memory and the index files; the
+# new session's subagent file stays fresh.
+touch -d '100 days ago' "${slug}/${old_sid}.jsonl" "${slug}/${old_sid}/subagents/agent-a.jsonl" \
+  "${slug}/memory/note.md" "${slug}/MEMORY.md" "${hist}/.claude/history.jsonl" \
+  "${hist}/.codex/sessions/2020/01/01/rollout-old.jsonl" \
+  "${hist}/.codex/archived_sessions/rollout-archived-old.jsonl" \
+  "${hist}/.codex/session_index.jsonl"
+touch -d '5 days ago' "${slug}/${new_sid}.jsonl" "${hist}/.codex/sessions/2026/01/01/rollout-new.jsonl"
+
+# export_history <name> [VAR=value...]: export the history fixture and list it.
+export_history() {
+  local name="$1"
+  shift
+  "${fixture_env[@]}" EXPORT_HOME="${hist}" INCLUDE_AUTH=false INCLUDE_HISTORY=true \
+    AI_TOOLS=claude-code,codex OUT="${tmp}/${name}.tar.gz" "$@" \
+    bash "${ROOT}/bin/export-config.sh" >"${tmp}/${name}.log" 2>"${tmp}/${name}.err"
+  tar -tzf "${tmp}/${name}.tar.gz" >"${tmp}/${name}.members"
+  tar -xOzf "${tmp}/${name}.tar.gz" ./backup-info.json >"${tmp}/${name}.info"
+}
+has() { grep -qxF "./home/$2" "${tmp}/$1.members"; }
+lacks() { ! grep -qF "./home/$2" "${tmp}/$1.members"; }
+cslug='.claude/projects/-root-repos-demo'
+
+export_history retain-default
+ok 'retention default: old Claude transcript dropped' lacks retain-default "${cslug}/${old_sid}.jsonl"
+ok 'retention default: old Claude session dir dropped' lacks retain-default "${cslug}/${old_sid}/"
+ok 'retention default: recent Claude transcript kept' has retain-default "${cslug}/${new_sid}.jsonl"
+ok 'retention default: session dir with a recent file kept' \
+  has retain-default "${cslug}/${new_sid}/subagents/agent-b.jsonl"
+ok 'retention default: old session dir of a kept transcript kept' \
+  has retain-default "${cslug}/${resumed_sid}/subagents/agent-c.jsonl"
+ok 'retention default: old memory kept' has retain-default "${cslug}/memory/note.md"
+ok 'retention default: old MEMORY.md kept' has retain-default "${cslug}/MEMORY.md"
+ok 'retention default: Claude prompt history kept' has retain-default '.claude/history.jsonl'
+ok 'retention default: old Codex session dropped' \
+  lacks retain-default '.codex/sessions/2020/01/01/rollout-old.jsonl'
+ok 'retention default: emptied Codex session dirs removed' lacks retain-default '.codex/sessions/2020/'
+ok 'retention default: old archived Codex session dropped' \
+  lacks retain-default '.codex/archived_sessions/rollout-archived-old.jsonl'
+ok 'retention default: recent Codex session kept' \
+  has retain-default '.codex/sessions/2026/01/01/rollout-new.jsonl'
+ok 'retention default: Codex session index kept' has retain-default '.codex/session_index.jsonl'
+ok 'retention default: summary logged per agent' \
+  bash -c 'grep -q "Claude history older than 30 days: dropped 2 file" "$1" &&
+    grep -q "Codex history older than 30 days: dropped 2 file" "$1"' _ "${tmp}/retain-default.log"
+ok 'retention default: recorded in backup-info.json' \
+  test "$(jq -r .historyRetentionDays "${tmp}/retain-default.info")" = 30
+ok 'retention: live home untouched' test -f "${slug}/${old_sid}.jsonl" -a \
+  -f "${hist}/.codex/sessions/2020/01/01/rollout-old.jsonl"
+
+export_history retain-zero HISTORY_RETENTION_DAYS=0
+ok 'retention 0: old Claude transcript kept' has retain-zero "${cslug}/${old_sid}.jsonl"
+ok 'retention 0: old Claude session dir kept' has retain-zero "${cslug}/${old_sid}/subagents/agent-a.jsonl"
+ok 'retention 0: old Codex session kept' has retain-zero '.codex/sessions/2020/01/01/rollout-old.jsonl'
+ok 'retention 0: recorded in backup-info.json' \
+  test "$(jq -r .historyRetentionDays "${tmp}/retain-zero.info")" = 0
+
+export_history retain-wide HISTORY_RETENTION_DAYS=365
+ok 'retention 365: 100-day-old transcript kept' has retain-wide "${cslug}/${old_sid}.jsonl"
+
+export_history retain-invalid HISTORY_RETENTION_DAYS=abc
+ok 'retention invalid: warns on stderr' grep -q 'HISTORY_RETENTION_DAYS' "${tmp}/retain-invalid.err"
+ok 'retention invalid: falls back to 30 days' lacks retain-invalid "${cslug}/${old_sid}.jsonl"
+ok 'retention invalid: recent transcript kept' has retain-invalid "${cslug}/${new_sid}.jsonl"
+ok 'retention invalid: 30 recorded in backup-info.json' \
+  test "$(jq -r .historyRetentionDays "${tmp}/retain-invalid.info")" = 30
+
 ok 'fixtures: no service operations requested' test ! -e "${tmp}/service-calls"
 
 printf '\n  export-config fixture tests — %d/%d passed\n\n' "${pass}" "$((pass + fail))"

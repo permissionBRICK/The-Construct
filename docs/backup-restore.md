@@ -33,6 +33,15 @@ For the installed agents, from `root`'s home — never from inside the project r
   fresh, empty index (`~/.codex/state_*.sqlite`) and restarts `codex-app-server`,
   making Codex re-index the restored rollouts. Titles come back from the transcripts;
   index-only metadata (archived flags) does not.
+  `HISTORY_RETENTION_DAYS` (default `30`, `0` keeps everything; the control panel's
+  **Settings → VM resources → Chat history kept in backups**, passed as
+  `-HistoryRetentionDays` to `Auto-Install.ps1` / `Provision-AgentVM.ps1 -Action export`)
+  limits how much of it the backup carries: Claude session transcripts and per-session
+  directories, and Codex rollouts, whose newest file is older than that many days are
+  left out of the tarball (the live VM is never touched). Memory (`memory/`,
+  `MEMORY.md`), `~/.claude/history.jsonl`, the Codex indexes and the Opencode / T3
+  databases are always kept whole. The value is recorded as `historyRetentionDays` in
+  `backup-info.json`.
 - **Subscription auth**, so you don't re-authenticate after a reinstall:
   `~/.claude/.credentials.json`, `~/.claude.json`, `~/.codex/auth.json`,
   `~/.local/share/opencode/auth.json`.

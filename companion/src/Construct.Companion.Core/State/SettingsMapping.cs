@@ -13,7 +13,8 @@ public static class SettingsMapping
         ("vsCodeServeWeb", "serveWeb", 'b'), ("vsCodeTunnel", "tunnel", 'b'), ("smbShare", "smb", 'b'),
         ("claudePartialStreaming", "partialStreaming", 'b'), ("opencodeBackgroundWatcher", "opencodeBackgroundWatcher", 'b'),
         ("micPassthrough", "mic", 'b'), ("t3code", "t3code", 'b'), ("t3codeChannel", "t3codeChannel", 'c'),
-        ("t3codeLimitResume", "t3codeLimitResume", 'b'), ("vmAutoCheckpoints", "autoCheckpoints", 'b')
+        ("t3codeLimitResume", "t3codeLimitResume", 'b'), ("vmAutoCheckpoints", "autoCheckpoints", 'b'),
+        ("historyRetentionDays", "historyRetentionDays", 'n')
     ];
     public static JsonObject MapToForm(JsonObject? raw)
     {

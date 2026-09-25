@@ -208,6 +208,8 @@ public sealed class FakeIsoMediaBuilder(FakeIsoFileSystem files) : IIsoMediaBuil
 
     public string ScriptSha256 { get; set; } = "script-hash";
 
+    public string? CurrentBuilderSha256() => ScriptSha256;
+
     public Task<IsoMediaResult> BuildMediaAsync(
         IsoMediaRequest request,
         IProgress<string>? progress,

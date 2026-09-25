@@ -59,6 +59,9 @@ public sealed class OnDemandIsoBuilder(
     private bool Matches(IsoSidecar sidecar, string user, string keyPath)
     {
         if (sidecar.SeedUser != user || sidecar.HostnameSource != options.Iso.HostnameSource) return false;
+        // Media from an older ISO tool lacks its install-layout changes; rebuild from the cached source.
+        var tool = builder.CurrentBuilderSha256();
+        if (tool is not null && !string.Equals(sidecar.ScriptSha256, tool, StringComparison.OrdinalIgnoreCase)) return false;
         var path = string.IsNullOrWhiteSpace(keyPath) ? options.Iso.BootstrapPublicKeyPath : keyPath;
         if (string.IsNullOrWhiteSpace(path)) path = options.ScriptsDir.TrimEnd('\\', '/') + @"\keys\bootstrap_ed25519.pub";
         try

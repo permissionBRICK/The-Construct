@@ -404,6 +404,7 @@
       gitName: val("setGitName"), gitEmail: val("setGitEmail"), gitCred: swOn($("setGitCred")),
       ram: val("setRam"), disk: val("setDisk"), cpu: val("setCpu"), ubuntu: val("setUbuntu"),
       autoCheckpoints: swOn($("setAutoCheckpoints")),
+      historyRetentionDays: val("setHistoryRetention"),
       serveWeb: swOn($("setServeWeb")), tunnel: swOn($("setTunnel")), smb: swOn($("setSmb")), mic: swOn($("setMic")),
       partialStreaming: swOn($("setPartialStreaming")),
       opencodeBackgroundWatcher: swOn($("setOpenCodeBackgroundWatcher")),
@@ -1226,6 +1227,7 @@
     setVal("setGitName", s.gitName); setVal("setGitEmail", s.gitEmail);
     setVal("setRam", s.ram); setVal("setDisk", s.disk); setVal("setCpu", s.cpu);
     setVal("setUbuntu", s.ubuntu);
+    setVal("setHistoryRetention", s.historyRetentionDays);
     setSw("setGitCred", s.gitCred); setSw("setServeWeb", s.serveWeb);
     setSw("setTunnel", s.tunnel); setSw("setSmb", s.smb); setSw("setMic", s.mic);
     setSw("setPartialStreaming", s.partialStreaming);

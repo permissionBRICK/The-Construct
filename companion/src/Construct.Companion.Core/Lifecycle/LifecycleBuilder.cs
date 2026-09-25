@@ -77,9 +77,9 @@ public static class LifecycleBuilder
         {
             case "reprovision":
                 Pair("-Action", JsonValue.Create("provision")); Projects(); Text("-GitUserName", "gitName"); Text("-GitEmail", "gitEmail"); Bool("-VsCodeServeWeb", "serveWeb"); Bool("-VsCodeTunnel", "tunnel"); Bool("-SmbShare", "smb"); Patches(); pairs.Add(new JsonObject { ["flag"] = "-NonInteractive" }); return Done("Provision-AgentVM.ps1", false, false, "Reprovision");
-            case "exportConfig": Pair("-Action", JsonValue.Create("export")); Pair("-BackupDir", options["backupDir"]); return Done("Provision-AgentVM.ps1", false, false, "Export config");
+            case "exportConfig": Pair("-Action", JsonValue.Create("export")); Pair("-BackupDir", options["backupDir"]); if (Supports("supportsHistoryRetentionDays")) Text("-HistoryRetentionDays", "historyRetentionDays"); return Done("Provision-AgentVM.ps1", false, false, "Export config");
             case "reinstall": case "redownload":
-                Pair("-Action", JsonValue.Create(action)); Pair("-BackupMode", JsonValue.Create(StateJson.Text(options["backupMode"]) is "existing" or "wipe" ? StateJson.Text(options["backupMode"]) : "save")); Projects(); Text("-VmMemoryGB", "ram"); Text("-VmDiskGB", "disk"); if (Supports("supportsVmCpuCount")) Text("-VmCpuCount", "cpu"); if (Supports("supportsCheckpoints")) Bool("-AutomaticCheckpoints", "autoCheckpoints"); if (action == "redownload") Text("-UbuntuRelease", "ubuntu"); Text("-GitUserName", "gitName"); Text("-GitEmail", "gitEmail"); Patches(); return Done("Auto-Install.ps1", true, !Instances.IsRemoteBackend(StateJson.Text(instance?["backend"])), Label(action));
+                Pair("-Action", JsonValue.Create(action)); Pair("-BackupMode", JsonValue.Create(StateJson.Text(options["backupMode"]) is "existing" or "wipe" ? StateJson.Text(options["backupMode"]) : "save")); Projects(); Text("-VmMemoryGB", "ram"); Text("-VmDiskGB", "disk"); if (Supports("supportsVmCpuCount")) Text("-VmCpuCount", "cpu"); if (Supports("supportsCheckpoints")) Bool("-AutomaticCheckpoints", "autoCheckpoints"); if (action == "redownload") Text("-UbuntuRelease", "ubuntu"); Text("-GitUserName", "gitName"); Text("-GitEmail", "gitEmail"); Patches(); if (Supports("supportsHistoryRetentionDays")) Text("-HistoryRetentionDays", "historyRetentionDays"); return Done("Auto-Install.ps1", true, !Instances.IsRemoteBackend(StateJson.Text(instance?["backend"])), Label(action));
             case "setCheckpoints":
                 if (StateJson.Boolean(options["enabled"]) is not bool enabled) return null;
                 Pair("-Enabled", JsonValue.Create(enabled ? "true" : "false")); return Done("Set-AgentVmCheckpoints.ps1", false, true, enabled ? "Enable automatic checkpoints" : "Disable automatic checkpoints");
@@ -110,6 +110,12 @@ public static class LifecycleBuilder
     {
         var code = Regex.Replace(Regex.Replace(source, @"<#[\s\S]*?#>", ""), @"^[ \t]*#.*$", "", RegexOptions.Multiline);
         return Regex.IsMatch(code, @"\$" + Regex.Escape(parameter) + @"\s*(?:=|,|\)|$)", RegexOptions.IgnoreCase | RegexOptions.Multiline);
+    }
+    // Does the script this action launches declare -<parameter>? Unreadable/absent -> false (drop the flag).
+    public static bool ActionScriptSupportsParameter(IFileSystem files, string directory, string action, string parameter)
+    {
+        var script = ScriptForAction(action); if (script is null) return false;
+        var bytes = files.ReadFile(Path.Combine(directory, script)); return bytes is not null && ScriptSupportsParameter(System.Text.Encoding.UTF8.GetString(bytes), parameter);
     }
     public static string[] InstanceParameterSupport(IFileSystem files, string directory, string action, JsonObject? instance)
     {

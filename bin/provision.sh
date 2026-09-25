@@ -278,6 +278,21 @@ require_root() {
 }
 run_step critical "Checking root privileges" require_root
 
+# PROVISION_PHASE=project-commands runs ONLY the project provisioning commands. A
+# reinstall that restores a saved config defers them (DEFER_PROJECT_COMMANDS) and
+# runs them this way after the restore, so commands that read restored files
+# (~/.secrets, tokens, machine identity) see them. The main run's failure logs are
+# kept; the result block is the same one the host already parses.
+if [[ "${PROVISION_PHASE:-}" == "project-commands" ]]; then
+  mkdir -p "${_PERSISTENT_LOG_DIR}"
+  _PROVISION_MARKER="${_PROVISION_MARKER:-/run/construct/provisioning}"
+  mkdir -p "$(dirname "${_PROVISION_MARKER}")" 2>/dev/null || true
+  printf '%s\n' "$$" >"${_PROVISION_MARKER}" 2>/dev/null || true
+  run_step optional "Running project provisioning commands" \
+    env AGENT_HOME="${AGENT_HOME:-/opt/construct}" bash "${REPO_DIR}/bin/run-provision-commands.sh"
+  _finish_provision 0
+fi
+
 # Create the persistent log directory and clean any logs from a previous run.
 # Only the current run's failure logs are kept; successful steps write nothing.
 mkdir -p "${_PERSISTENT_LOG_DIR}"
@@ -1296,9 +1311,13 @@ if [[ -n "${_clone_creds_file}" ]]; then rm -f "${_clone_creds_file}" || true; f
 #     runtimes. Runs every provision; a failing command warns but never aborts.
 #     The runner parallelizes profiles internally and waits for all of them:
 #     keep this synchronous call between checkout and the following stages.
-run_step optional "Running project provisioning commands" \
-  env WORKSPACE_ROOT="${WORKSPACE_ROOT}" AGENT_HOME="${AGENT_HOME:-/opt/construct}" \
-  bash "${REPO_DIR}/bin/run-provision-commands.sh"
+if [[ "${DEFER_PROJECT_COMMANDS:-false}" == "true" ]]; then
+  note "Project provisioning commands deferred until the saved config is restored"
+else
+  run_step optional "Running project provisioning commands" \
+    env WORKSPACE_ROOT="${WORKSPACE_ROOT}" AGENT_HOME="${AGENT_HOME:-/opt/construct}" \
+    bash "${REPO_DIR}/bin/run-provision-commands.sh"
+fi
 
 # 7. (Re)start the agent service. Use restart, NOT start: construct.service is
 #    Type=oneshot + RemainAfterExit=yes, so on a reprovision it is already "active"
