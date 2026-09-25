@@ -917,6 +917,32 @@ ok "auto-install: the saved preference is not read through a [bool] cast" (
 ok "auto-install: the create call passes the EFFECTIVE value, not the raw parameter" (
     $aiScript -match 'AutomaticCheckpoints = \$effectiveAutoCheckpoints')
 
+# ── Auto-Install.ps1 fatal-error visibility ─────────────────────────────────
+# A panel launch (-FromPanel, no -NoExit) closes the console the instant the script
+# ends. A fatal error caught by the outer catch or the trap must therefore force the
+# end-of-run pause, and every run leaves a transcript behind.
+ok "auto-install: Wait-Exit pauses on a fatal error even from the panel" (
+    $aiScript -match '\(-not \$FromPanel\) -or \$global:ConstructProvisionHadErrors -or \$global:ConstructInstallFailed')
+# Both "install failed" catches: the remote path's own, and the script-wide one.
+$catchSites = [regex]::Matches($aiScript, 'ERROR: install failed\.')
+ok "auto-install: every 'install failed' catch marks the run failed before its message" (
+    $catchSites.Count -eq 2 -and
+    @($catchSites | Where-Object { $aiScript.Substring($_.Index - 200, 200) -match 'ConstructInstallFailed = \$true' }).Count -eq 2)
+$trapPos = $aiScript.IndexOf("`ntrap {")
+$trapBlock = $aiScript.Substring($trapPos, 320)
+ok "auto-install: the trap marks the run failed before the pause" (
+    $trapBlock -match 'ConstructInstallFailed = \$true' -and
+    $trapBlock.IndexOf('ConstructInstallFailed') -lt $trapBlock.IndexOf('Wait-Exit'))
+ok "auto-install: a failed run names its log" ($aiScript -match 'ConstructInstallFailed -and \$script:InstallLogPath')
+ok "auto-install: every run starts a transcript under The-Construct\logs" (
+    $aiScript -match 'Start-Transcript -LiteralPath \$script:InstallLogPath' -and $aiScript -match 'The-Construct\\logs')
+ok "auto-install: no transcript when a credential was passed on the command line" (
+    $aiScript -match "ContainsKey\('AgentPassword'\) -or \`$PSBoundParameters\.ContainsKey\('GitCloneCredentialsB64'\)")
+ok "auto-install: the transcript starts before anything else runs" (
+    $aiScript.IndexOf('Start-Transcript') -lt $aiScript.IndexOf('function Wait-Exit'))
+ok "auto-install: the transcript is closed on both exit paths" (
+    ([regex]::Matches($aiScript, 'Stop-InstallTranscript')).Count -ge 3)
+
 # ── T3CodeChannel ValidateSet (finding #5: injection safety) ─────────────────
 # Each entry point must enforce the exact ""|"stable"|"nightly" contract via
 # ValidateSet so a hostile value (e.g. containing a single-quote) can't reach

@@ -272,6 +272,26 @@ param(
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "lib/AgentVm.FeatureSet.ps1")
 
+# Every run leaves its console output behind: a failure that closes the window, or that
+# nobody was watching, is otherwise gone. Skipped when a credential was passed on the
+# command line, because the transcript header records the host's command line.
+$global:ConstructInstallFailed = $false
+$script:InstallLogPath = ""
+if (-not ($PSBoundParameters.ContainsKey('AgentPassword') -or $PSBoundParameters.ContainsKey('GitCloneCredentialsB64'))) {
+    try {
+        $logRoot = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:TEMP }
+        $logDir = Join-Path $logRoot "The-Construct\logs"
+        New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+        # The ten newest runs are kept.
+        Get-ChildItem -LiteralPath $logDir -Filter 'install-*.log' -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -Skip 9 |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+        $script:InstallLogPath = Join-Path $logDir ("install-{0}.log" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+        Start-Transcript -LiteralPath $script:InstallLogPath -Force | Out-Null
+    } catch { $script:InstallLogPath = "" }
+}
+function Stop-InstallTranscript { if ($script:InstallLogPath) { try { Stop-Transcript | Out-Null } catch { } } }
+
 if ($T3CodeChannel) { $T3CodeChannel = $T3CodeChannel.ToLower() }
 
 # End-of-run pause. A clean control-panel run closes by itself; any provisioning
@@ -329,7 +349,12 @@ function Wait-Exit {
             Write-Host "  ............................................................" -ForegroundColor DarkGray
         }
     }
-    if ((-not $FromPanel) -or $global:ConstructProvisionHadErrors) {
+    # A fatal error (the outer catch / trap) pauses too: a panel-launched console
+    # would otherwise close in the same instant its message is printed.
+    if ($global:ConstructInstallFailed -and $script:InstallLogPath) {
+        Write-Host "    Log: $script:InstallLogPath" -ForegroundColor DarkGray
+    }
+    if ((-not $FromPanel) -or $global:ConstructProvisionHadErrors -or $global:ConstructInstallFailed) {
         Read-Host "Press Enter to exit" | Out-Null
     }
 }
@@ -338,10 +363,12 @@ function Wait-Exit {
 # virtualization disabled in firmware) would normally close the self-elevated
 # window before its guidance can be read. Hold the window open instead.
 trap {
+    $global:ConstructInstallFailed = $true
     Write-Host ""
     Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
     Write-Host ""
     Wait-Exit
+    Stop-InstallTranscript
     exit 1
 }
 
@@ -2857,6 +2884,7 @@ if ($RemoteInstall) {
             Write-Note "Tip: paste that link into a browser, or run:  start `"$openLink`""
         }
     } catch {
+        $global:ConstructInstallFailed = $true
         Write-Host ""
         Write-Host "ERROR: install failed." -ForegroundColor Red
         Write-Host "    $($_.Exception.Message)" -ForegroundColor Red
@@ -4058,10 +4086,12 @@ try {
 } catch {
     # Show the failure ABOVE the pause so it's readable even when the window was
     # launched by double-click / right-click "Run with PowerShell".
+    $global:ConstructInstallFailed = $true
     Write-Host ""
     Write-Host "ERROR: install failed." -ForegroundColor Red
     Write-Host "    $($_.Exception.Message)" -ForegroundColor Red
 } finally {
     Write-Host ""
     Wait-Exit
+    Stop-InstallTranscript
 }
