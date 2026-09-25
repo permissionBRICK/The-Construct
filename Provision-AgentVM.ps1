@@ -377,6 +377,8 @@ try {
 
 $RemoteKeyPath   = "/root/.ssh/codex_app_ed25519"        # produced by setup-root-ssh-key.sh
 $RemoteArchive   = "/tmp/construct-repo.tar.gz"
+$ExportScanScript   = "/tmp/construct-scan-repos.sh"
+$ExportConfigScript = "/tmp/construct-export-config.sh"
 $BootstrapKey    = Join-Path $PSScriptRoot "keys\bootstrap_ed25519"
 $BootstrapPubKey = Join-Path $PSScriptRoot "keys\bootstrap_ed25519.pub"
 
@@ -1777,7 +1779,9 @@ foreach ($f in @((Join-Path $HOME ".ssh\config"), (Join-Path $HOME ".ssh\$LocalK
     if (Test-Path -LiteralPath $f) { Protect-SshFile $f }
 }
 
-if (-not $ServiceUrl) { $archivePath = New-RepoArchive } else {
+# -Action export only reads the VM, and only needs the two scripts it runs (uploaded
+# below), so it never packs or replaces the guest repository.
+if (-not $ServiceUrl) { if ($Action -ne 'export') { $archivePath = New-RepoArchive } } else {
     . (Join-Path $PSScriptRoot 'lib/AgentVm.Remote.ps1')
     $sourceRef = $Ref
     if (-not $PSBoundParameters.ContainsKey('Ref')) {
@@ -1947,6 +1951,12 @@ Write-Ok "Repo in place at /opt/construct/repo"
             try { Invoke-Ssh -Sudo -Command ('if [ -f {0} ]; then rm -r -- {0}; fi' -f $script:SourceOverlayPath) | Out-Null } catch { }
         }
     }
+} elseif ($Action -eq 'export') {
+Write-Step "Uploading the export scripts"
+Invoke-Ssh -Sudo -Command "rm -f $ExportScanScript $ExportConfigScript"
+Invoke-Scp -LocalPath (Join-Path $PSScriptRoot 'bin\scan-repos.sh') -RemotePath $ExportScanScript
+Invoke-Scp -LocalPath (Join-Path $PSScriptRoot 'bin\export-config.sh') -RemotePath $ExportConfigScript
+Write-Ok "Export scripts in place (guest repository left unchanged)"
 } else {
 # Upload the archive via SCP (remove any stale copy owned by root from a previous run).
 Write-Step "Uploading repo archive to $RemoteArchive"
@@ -1962,9 +1972,9 @@ Write-Ok "Repo in place at /opt/construct/repo"
 }
 
 # ── -Action export: pull the current config back to the host, then stop ──────
-# The repo (with the current export/scan scripts) is now on the VM. We connected
-# above exactly like a provision would; from here we only read, never change the
-# VM, and we never reboot.
+# The current export/scan scripts are now on the VM (the guest repository is not
+# replaced). We connected above exactly like a provision would; from here we only
+# read, never change the VM, and we never reboot.
 if ($Action -eq 'export') {
     if (-not $BackupDir) { throw "-Action export requires -BackupDir." }
     New-Item -ItemType Directory -Force -Path $BackupDir | Out-Null
@@ -1976,10 +1986,10 @@ if ($Action -eq 'export') {
         # and chmod runs only on success (so the seed user can pull it on the
         # bootstrap path). The finally always removes the VM-side file.
         try {
-            Invoke-Ssh -Sudo -Command "bash /opt/construct/repo/bin/scan-repos.sh > /tmp/construct-repo-scan.json 2>/dev/null && chmod 644 /tmp/construct-repo-scan.json"
+            Invoke-Ssh -Sudo -Command "bash $ExportScanScript > /tmp/construct-repo-scan.json 2>/dev/null && chmod 644 /tmp/construct-repo-scan.json"
             Invoke-ScpFrom -RemotePath "/tmp/construct-repo-scan.json" -LocalPath (Join-Path $BackupDir "repo-scan.json")
         } finally {
-            try { Invoke-Ssh -Sudo -Command "rm -f /tmp/construct-repo-scan.json" } catch { }
+            try { Invoke-Ssh -Sudo -Command "rm -f /tmp/construct-repo-scan.json $ExportScanScript $ExportConfigScript" } catch { }
         }
         Write-Ok "Repo scan saved to $(Join-Path $BackupDir 'repo-scan.json')"
     } else {
@@ -1990,11 +2000,11 @@ if ($Action -eq 'export') {
         $tgz = Join-Path $BackupDir "backup.tar.gz"
         try {
             Write-Host "  --- live export output ---" -ForegroundColor DarkGray
-            Invoke-SshStream -Sudo -Command "EXPORT_HOME=/root INCLUDE_AUTH=true INCLUDE_HISTORY=true OUT=/tmp/construct-config-backup.tar.gz CONFIG_FILE=/etc/construct/config.env REPO_DIR=/opt/construct/repo PROJECTS_STORE=/opt/construct/projects bash /opt/construct/repo/bin/export-config.sh && chmod 644 /tmp/construct-config-backup.tar.gz"
+            Invoke-SshStream -Sudo -Command "EXPORT_HOME=/root INCLUDE_AUTH=true INCLUDE_HISTORY=true OUT=/tmp/construct-config-backup.tar.gz CONFIG_FILE=/etc/construct/config.env REPO_DIR=/opt/construct/repo PROJECTS_STORE=/opt/construct/projects bash $ExportConfigScript && chmod 644 /tmp/construct-config-backup.tar.gz"
             Write-Host "  --- end export output ---" -ForegroundColor DarkGray
             Invoke-ScpFrom -RemotePath "/tmp/construct-config-backup.tar.gz" -LocalPath $tgz
         } finally {
-            try { Invoke-Ssh -Sudo -Command "rm -f /tmp/construct-config-backup.tar.gz" } catch { }
+            try { Invoke-Ssh -Sudo -Command "rm -f /tmp/construct-config-backup.tar.gz $ExportScanScript $ExportConfigScript" } catch { }
         }
         Write-Ok "Backup saved to $tgz"
 
