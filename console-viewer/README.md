@@ -42,7 +42,13 @@ redeemed. Reconnect works from the current page while its link remains valid.
 The gateway is installed under `/opt/construct/console-viewer` and managed by
 `construct-console-viewer.service`. guacd is a separate, digest-pinned container,
 bound **only to 127.0.0.1:4822**, with connection settings supplied by the trusted gateway.
-Service-managed primaries install the gateway automatically.
+Service-managed primaries install the gateway automatically, as an **optional**
+provisioning step: the guacd image comes from Docker Hub, which a company network can
+block outright, and a VM without its browser console is still usable. The pull is retried
+five times; when it still fails, provisioning finishes without the gateway and reports the
+step in its summary. Re-run `sudo bash /opt/construct/repo/console-viewer/install.sh` once
+`registry-1.docker.io` is reachable, or point the VM's Docker daemon at a mirror first
+(`registry-mirrors` in `/etc/docker/daemon.json`, then `systemctl restart docker`).
 
 Optional machine-local settings in `/etc/construct/console-viewer.env`:
 

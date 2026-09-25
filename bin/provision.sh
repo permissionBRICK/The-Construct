@@ -21,7 +21,8 @@
 #            | writes; root SSH key setup when enabled
 #   OPTIONAL | sudoers convenience; SMB; each selected AI tool; construct CLI;
 #            | runtime config; MCP; SDKs; git identity/credential seeding;
-#            | project checkout/commands; service restarts; VS Code; timestamps
+#            | project checkout/commands; service restarts; VS Code; timestamps;
+#            | the browser console gateway (its image comes from Docker Hub)
 #
 # A critical step is limited to work without which the VM is unusable or the host
 # can be locked out. Everything else reaches the final loud failure summary so a
@@ -1125,10 +1126,15 @@ service_offers_feature() {
   printf '%s' "${body}" | grep -q "\"${feature}\"" && return 0
   return 1
 }
+# OPTIONAL on a service-managed primary too: the gateway's image comes from Docker Hub, which
+# a company network can block outright. A VM without its browser console is usable and the
+# host can still be reached; a VM whose provisioning stopped here was neither. The failure
+# reaches the loud summary, and console-viewer/install.sh can be re-run once the registry is
+# reachable (or a mirror is configured).
 if [[ -n "${CONSTRUCT_SERVICE_URL}" ]] && ! service_offers_feature console; then
   note "==> Skipping the browser console gateway (the host service offers no console)"
 elif [[ -n "${CONSTRUCT_SERVICE_URL}" ]]; then
-  run_step critical "Installing browser console gateway" \
+  run_step optional "Installing browser console gateway" \
     bash "${REPO_DIR}/console-viewer/install.sh"
 elif command -v docker >/dev/null 2>&1; then
   run_step optional "Installing browser console gateway" bash "${REPO_DIR}/console-viewer/install.sh"

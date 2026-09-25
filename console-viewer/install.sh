@@ -28,7 +28,8 @@ pull_image() {
     echo "docker pull failed (attempt $attempt of 5); retrying in $((attempt * 10))s..." >&2
     sleep $((attempt * 10))
   done
-  echo "Could not pull $image after 5 attempts." >&2
+  echo "Could not pull $image after 5 attempts: Docker Hub (registry-1.docker.io) is not reachable from this VM's network." >&2
+  echo "The browser console gateway stays uninstalled. Once the registry is reachable -- or a mirror is configured in /etc/docker/daemon.json (registry-mirrors) -- re-run: sudo bash /opt/construct/repo/console-viewer/install.sh" >&2
   return 1
 }
 if ! docker image inspect "$image" >/dev/null 2>&1; then pull_image; fi
