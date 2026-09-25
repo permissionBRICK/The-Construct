@@ -112,8 +112,8 @@ stop or uninstall an existing app. `-Force` does not override the opt-out.
 
 Open Settings from the tray or launch `ConstructCompanion.exe --settings`.
 Settings include active instance, UI theme, capture device, notifications, forwards
-and host label, repatch delay, scripts directory, debug logging, and Start with
-Windows. Updates preserve state and an existing `autostart: false` preference.
+and host label, repatch delay, scripts directory, debug logging (which also keeps
+the PowerShell consoles it launches open), and Start with Windows. Updates preserve state and an existing `autostart: false` preference.
 Instances and remote credentials retain the existing Construct paths and formats.
 
 The VS Code setting `construct.companion` defaults to `auto`: a live compatible
