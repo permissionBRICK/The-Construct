@@ -310,18 +310,21 @@ public sealed class HyperVDriverTests
         // The service composed this message itself, so it is safe to persist and show.
         Assert.Equal(ex.Message, SafeError.Describe(ex));
 
-        // What an operator gets is how it failed, in our words — not PowerShell's text, which routinely
-        // carries a script path or a whole command line.
+        // The persisted error says how it failed, in our words — not PowerShell's text, which routinely
+        // carries a script path or a whole command line. The service's OWN log (the operator's channel,
+        // never persisted, audited or returned) does carry that text: it is what the operator reads.
         Assert.Equal("powershell.exe exited with 1", ex.Detail);
-        Assert.DoesNotContain("secret-detail", logs.Text, StringComparison.Ordinal);
+        Assert.Contains("secret-detail", logs.Text, StringComparison.Ordinal);
         Assert.Contains("start-vm", logs.Text, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task No_child_output_ever_reaches_a_log_entry()
+    public async Task Child_stdout_never_reaches_a_log_entry_but_a_failed_scripts_stderr_does()
     {
-        // The driver is the one place in the service holding another process's stderr. The rule is the
-        // same as everywhere else: dependency text is not repeated verbatim, the log included.
+        // The driver is the one place in the service holding another process's output. Its stdout is
+        // progress and never logged. Its stderr on a failure, and an error the driver itself reports,
+        // go to the service's OWN log (the operator's channel) under the operation's name -- and to
+        // nothing that is persisted, audited or returned by the API.
         using var logs = new LogSink();
         var runner = new RecordingProcessRunner()
             .Respond(new ProcessResult(0, "==> step SENTINEL-OUT", "SENTINEL-ERR", TimedOut: false))
@@ -343,7 +346,8 @@ public sealed class HyperVDriverTests
         }
 
         Assert.DoesNotContain("SENTINEL-OUT", logs.Text, StringComparison.Ordinal);
-        Assert.DoesNotContain("SENTINEL-ERR", logs.Text, StringComparison.Ordinal);
+        Assert.Contains("powershell: SENTINEL-ERR", logs.Text, StringComparison.Ordinal);
+        Assert.Contains("driver: SENTINEL-ERR", logs.Text, StringComparison.Ordinal);
         Assert.Contains("get-state", logs.Text, StringComparison.Ordinal);
     }
 
@@ -380,13 +384,13 @@ public sealed class HyperVDriverTests
         var ex = await Assert.ThrowsAsync<HypervisorOperationException>(
             () => driver.CreateVmAsync(Descriptor, progress, CancellationToken.None));
 
-        // The job's owner sees WHY, in the job's progress -- the one channel that is not persisted
-        // as the error, not audited and not logged.
+        // The job's owner sees WHY in the job's progress and the operator in the service log --
+        // the two channels that are not persisted as the error, audited or returned by the API.
         Assert.Contains("powershell: New-VHD : The file 'agent-vm.vhdx' already exists.", progress.Lines);
         Assert.Equal("powershell.exe exited with 1", ex.Detail);
         Assert.DoesNotContain("already exists", ex.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("already exists", ex.Detail);
-        Assert.DoesNotContain("already exists", logs.Text, StringComparison.Ordinal);
+        Assert.Contains("already exists", logs.Text, StringComparison.Ordinal);
     }
 
     [Fact]

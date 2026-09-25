@@ -318,16 +318,17 @@ public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDri
 
         if (result.TimedOut)
         {
-            ReportStderr(progress, result.StandardError);
+            ReportScriptErrors(progress, operation, vmName, result.StandardError);
             throw Fail(operation, vmName, $"timed out after {timeout.TotalMinutes:0} minutes");
         }
 
         if (result.ExitCode != 0)
         {
             // The script's own error text goes to the job's PROGRESS, like the Proxmox driver's
-            // qm output: the job's owner sees why (a VHDX that exists, a missing switch) without it
-            // ever reaching the error, the audit trail or the log.
-            ReportStderr(progress, result.StandardError);
+            // qm output, and to the service's own log: the job's owner and the operator see why
+            // (a VHDX that exists, a missing switch) without it ever reaching the persisted error,
+            // the audit trail or the API.
+            ReportScriptErrors(progress, operation, vmName, result.StandardError);
             throw Fail(operation, vmName, $"powershell.exe exited with {result.ExitCode}");
         }
 
@@ -358,10 +359,11 @@ public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDri
 
             if (ok.ValueKind != JsonValueKind.True)
             {
-                if (progress is not null && root.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String &&
+                if (root.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String &&
                     error.GetString() is { Length: > 0 } text)
                 {
-                    progress.Report("driver: " + text);
+                    progress?.Report("driver: " + text);
+                    _logger.LogWarning("Hyper-V driver operation {Operation} for {Vm}: driver: {Text}", operation, vmName.Length == 0 ? "-" : vmName, text);
                 }
 
                 throw Fail(operation, vmName, "the driver reported the operation as failed");
@@ -383,13 +385,14 @@ public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDri
     /// driver's own progress output, which is streamed to the job as it happens.
     /// </summary>
     /// <summary>
-    /// The first lines of a failed script's stderr, as progress. Progress is the job owner's
-    /// channel and is neither persisted as the error nor audited, so the text can be PowerShell's
-    /// own -- capped, because a stack of "At line:" frames says nothing more than the first one.
+    /// The first lines of a failed script's stderr, as progress and in the service log. Progress is
+    /// the job owner's channel and the log is the operator's; neither is persisted as the error,
+    /// audited or returned by the API, so the text can be PowerShell's own -- capped, because a
+    /// stack of "At line:" frames says nothing more than the first one.
     /// </summary>
-    private static void ReportStderr(IProgress<string>? progress, string standardError)
+    private void ReportScriptErrors(IProgress<string>? progress, string operation, string vmName, string standardError)
     {
-        if (progress is null || string.IsNullOrWhiteSpace(standardError))
+        if (string.IsNullOrWhiteSpace(standardError))
         {
             return;
         }
@@ -403,7 +406,8 @@ public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDri
                 continue;
             }
 
-            progress.Report("powershell: " + text);
+            progress?.Report("powershell: " + text);
+            _logger.LogWarning("Hyper-V driver operation {Operation} for {Vm}: powershell: {Text}", operation, vmName.Length == 0 ? "-" : vmName, text);
             if (++shown == 6)
             {
                 break;

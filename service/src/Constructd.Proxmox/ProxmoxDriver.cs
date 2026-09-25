@@ -624,7 +624,7 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
 
         if (result.ExitCode != 0)
         {
-            ReportStderr(progress, result.StandardError);
+            ReportStderr(progress, operation, vmName, result.StandardError);
             throw Fail(operation, vmName, $"qm exited with {result.ExitCode}");
         }
     }
@@ -661,9 +661,11 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
         }
     }
 
-    private static void ReportStderr(IProgress<string>? progress, string standardError)
+    // The command's own error text goes to the job's progress AND the service's own log file (the
+    // operator's channel); never to the persisted error, the audit trail or the API.
+    private void ReportStderr(IProgress<string>? progress, string operation, string vmName, string standardError)
     {
-        if (progress is null || string.IsNullOrWhiteSpace(standardError))
+        if (string.IsNullOrWhiteSpace(standardError))
         {
             return;
         }
@@ -677,7 +679,8 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
                 continue;
             }
 
-            progress.Report("qm: " + text);
+            progress?.Report("qm: " + text);
+            _logger.LogWarning("Proxmox driver operation {Operation} for {Vm}: qm: {Text}", operation, vmName.Length == 0 ? "-" : vmName, text);
             if (++shown == 6)
             {
                 break;

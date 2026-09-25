@@ -34,6 +34,9 @@ public sealed class ConstructdOptions
     /// <summary>SQLite database file. Defaults to <c>constructd.db</c> next to the service.</summary>
     public string DatabasePath { get; set; } = "constructd.db";
 
+    /// <summary>The service's own log file (see <see cref="FileLogOptions"/>).</summary>
+    public FileLogOptions FileLog { get; set; } = new();
+
     /// <summary>The persistence actually in effect.</summary>
     public PersistenceMode EffectivePersistence =>
         Persistence ?? (Fake ? PersistenceMode.Memory : PersistenceMode.Sqlite);
@@ -168,6 +171,20 @@ public sealed class ConstructdOptions
 /// node exist: the client pins the SERVICE's certificate exactly as it does for a Windows host.
 /// <c>service/host/install-construct-host.sh</c> writes these values.
 /// </summary>
+/// <summary>
+/// The service's own log file: one file per UTC day, <c>constructd-yyyyMMdd.log</c>, kept for
+/// <see cref="RetentionDays"/> days. The Windows event log / journald keep everything they had;
+/// this is the file an operator reads for the reasons those channels only categorise (a driver
+/// script's error text, a job's failure). Default directory: <c>logs</c> next to the database;
+/// off in fake mode unless a directory is given.
+/// </summary>
+public sealed class FileLogOptions
+{
+    public bool Enabled { get; set; } = true;
+    public string? Directory { get; set; }
+    public int RetentionDays { get; set; } = 14;
+}
+
 public sealed class ProxmoxOptions
 {
     /// <summary>Session-bound VNC listeners on the node, reachable from the primary gateway.</summary>

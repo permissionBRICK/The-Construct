@@ -1498,6 +1498,7 @@ $settings = [ordered]@{
         BrowserConsoleEnabled = $browserConsoleEnabled
         Persistence      = "Sqlite"
         DatabasePath     = (Join-Path $DataDir "constructd.db")
+        FileLog          = [ordered]@{ Directory = (Join-Path $DataDir "logs") }
         ListenUrl        = $ListenUrl
         CertThumbprint   = $thumbprint
         ScriptsDir       = $ScriptsDir
@@ -1697,7 +1698,8 @@ Write-Host "  Host stays awake while VMs run (Constructd:Power:KeepHostAwake):"
 Write-Host "    powercfg /requests                        # the SYSTEM request the service holds"
 Write-Host "    powercfg /q SCHEME_CURRENT SUB_SLEEP      # this host's sleep timeouts"
 Write-Host ""
-Write-Host "  Logs: Get-EventLog -LogName Application -Source $ServiceName -Newest 50"
+Write-Host "  Logs: $(Join-Path $DataDir 'logs')\constructd-<yyyyMMdd>.log (one file per day, 14 kept; a driver script's error text lands here)"
+Write-Host "        Get-EventLog -LogName Application -Source $ServiceName -Newest 50"
 Write-Host ""
 
 # The installer consumes a pre-published directory; conversion/staging chooses the download.
