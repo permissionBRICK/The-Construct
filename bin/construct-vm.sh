@@ -63,6 +63,11 @@ Media:
   media prepare-windows ID [--no-wait] [--json]
   media attach NAME (--install ID | --aux ID) [--boot-order LIST] [--json]
   media detach NAME (--install | --aux) [--json]
+  media release NAME [--delete] [--json]
+                    Run once the guest OS is installed: ejects the install media
+                    (VM may be running) and unbinds it and every other dedicated
+                    medium the VM no longer uses, so other VMs can use them.
+                    --delete deletes them instead.
   media delete ID --yes [--json]
 
 Console:
@@ -752,6 +757,16 @@ cmd_media_attach_detach() {
   key="$(operation_key "${operation_id}")"; api_request PUT "/api/v1/vms/$(urlencode "${name}")/media" "${body}" "${key}"; expect_json array; print_result "$(jq -cn --argjson media "${API_BODY}" '{media:$media}')" "${json}" "${key}"
 }
 
+cmd_media_release() {
+  local name="${1:-}"; shift || true; local delete=false json=false
+  [[ -n "${name}" ]] || die 'media release requires a VM name'
+  while [[ $# -gt 0 ]]; do case "$1" in --delete) delete=true;; --json) json=true;; *) die "unknown media release option: $1";; esac; shift; done
+  api_request POST "/api/v1/vms/$(urlencode "${name}")/media/release" "$(jq -cn --argjson delete "${delete}" '{delete:$delete}')"; expect_json object
+  if [[ "${json}" == true ]]; then print_result "${API_BODY}" true; return; fi
+  if printf '%s' "${API_BODY}" | jq -e '.ejected' >/dev/null; then printf 'ejected install media from %s\n' "${name}"; else printf 'no install media attached to %s\n' "${name}"; fi
+  printf '%s' "${API_BODY}" | jq -r '.media[] | "\(.outcome) \(.id) \(.name)"'
+}
+
 cmd_media_delete() {
   local id="${1:-}"; shift || true; local yes=false json=false operation_id="" key
   [[ -n "${id}" ]] || die 'media delete requires an id'; while [[ $# -gt 0 ]]; do case "$1" in --yes) yes=true;; --json) json=true;; --operation-id) shift; [[ $# -gt 0 ]] || die '--operation-id requires a value'; operation_id="$1";; *) die "unknown media delete option: $1";; esac; shift; done
@@ -761,8 +776,8 @@ cmd_media_delete() {
 
 cmd_media() {
   if [[ "${1:-}" == prepare-windows ]]; then shift; cmd_windows_media prepare "$@"; return; fi
-  local sub="${1:-}"; [[ -n "${sub}" ]] || die 'media requires list, upload, acquire, attach, detach or delete'; shift
-  case "${sub}" in list) cmd_media_list "$@";; upload) cmd_media_upload "$@";; acquire) cmd_media_acquire "$@";; attach|detach) cmd_media_attach_detach "${sub}" "$@";; delete) cmd_media_delete "$@";; *) die "unknown media command: ${sub}";; esac
+  local sub="${1:-}"; [[ -n "${sub}" ]] || die 'media requires list, upload, acquire, attach, detach, release or delete'; shift
+  case "${sub}" in list) cmd_media_list "$@";; upload) cmd_media_upload "$@";; acquire) cmd_media_acquire "$@";; attach|detach) cmd_media_attach_detach "${sub}" "$@";; release) cmd_media_release "$@";; delete) cmd_media_delete "$@";; *) die "unknown media command: ${sub}";; esac
 }
 
 derive_child_name() {

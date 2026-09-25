@@ -115,6 +115,7 @@ public class RouteCoverageTests
         "PUT /api/v1/vms/{name}/sharing",
         "PUT /api/v1/vms/{name}/hardware",
         "PUT /api/v1/vms/{name}/media",
+        "POST /api/v1/vms/{name}/media/release",
         "GET /api/v1/jobs/{id}",
         "GET /api/v1/jobs/{id}/events",
     ];

@@ -25,7 +25,7 @@ public sealed partial class ProxmoxChildDriverTests
         await Create(); var incarnation = JsonDocument.Parse(File.ReadAllText(Marker)).RootElement.GetProperty("Incarnation").GetString()!;
         NamedConfig(); QueryConfig();
         runner.Respond(call => { Assert.Equal(new[] { "set", "101", "--ide2", "none,media=cdrom" }, call.Arguments); config["ide2"] = "none,media=cdrom"; return Ok(new { }); });
-        QueryConfig(); await driver.EjectWindowsMediaAsync("child", incarnation, true, default);
+        QueryConfig(); await driver.EjectMediaAsync("child", incarnation, true, default);
         Assert.Contains("media=cdrom", config["ide0"].ToString());
     }
 }

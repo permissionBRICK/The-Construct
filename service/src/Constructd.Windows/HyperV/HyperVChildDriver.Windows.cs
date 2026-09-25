@@ -49,9 +49,9 @@ public sealed partial class HyperVChildDriver
         await RunAsync("windows-key-clear", "Set-ConstructWindowsKey", "-Name $inputData.name -Incarnation $inputData.incarnation -Key ''", new { name, incarnation }, ct);
         await RunAsync("windows-activation-clear", "Set-ConstructWindowsActivation", "-Name $inputData.name -Incarnation $inputData.incarnation -Command $null", new { name, incarnation }, ct);
     }
-    public async Task EjectWindowsMediaAsync(string name, string incarnation, bool installOnly, CancellationToken ct)
+    public async Task EjectMediaAsync(string name, string incarnation, bool installOnly, CancellationToken ct)
     {
         WindowsIdentity(name, incarnation);
-        await RunAsync("windows-eject", "Remove-ConstructWindowsMedia", "-Name $inputData.name -Incarnation $inputData.incarnation -InstallOnly $inputData.installOnly", new { name, incarnation, installOnly }, ct);
+        await RunAsync("media-eject", "Dismount-ConstructChildMedia", "-Name $inputData.name -Incarnation $inputData.incarnation -InstallOnly $inputData.installOnly", new { name, incarnation, installOnly }, ct);
     }
 }

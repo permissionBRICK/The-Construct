@@ -105,7 +105,7 @@ public sealed class WindowsGuestReconciler(WindowsLicenseStore licenses, IChildV
 
             async Task Eject(bool installOnly)
             {
-                await channel.EjectWindowsMediaAsync(vm.Name, guest.Incarnation, installOnly, ct);
+                await channel.EjectMediaAsync(vm.Name, guest.Incarnation, installOnly, ct);
                 foreach (var reference in await media.ListReferencesForVmAsync(vm.Name, ct))
                 {
                     if (installOnly && reference.Slot != MediaSlot.Install) continue;

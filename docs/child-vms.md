@@ -90,7 +90,9 @@ Hyper-V reports are labelled guest-reported. The service ejects install and answ
 media after that beacon, and Proxmox also ejects its guest-agent medium. On Proxmox it
 additionally watches for the first uptime reset and ejects the install DVD at that point
 to avoid restarting Setup. Monitoring survives service restarts through per-incarnation
-records. Ejection failures retain media references for retry.
+records. Ejection failures retain media references for retry. Automatic ejection keeps
+the media files; run `construct vm media release CHILD --delete` after first logon to delete
+the install ISO and the answer-file ISO, which contains the administrator password.
 
 Administrators add pool keys in the Companion or on the host:
 
@@ -279,7 +281,9 @@ construct vm create \
 `--sha256 HEX` verifies URL or local install media. Local files are uploaded in
 resumable chunks and dedicated to the new child, so successful child deletion also
 collects that dedicated media. Creation waits until every media item is ready before it
-submits the VM job.
+submits the VM job. Once the guest OS is installed, run `construct vm media release CHILD`
+to eject the install media and unbind it (or `--delete` it) instead of keeping it bound until the child is deleted
+(see [Sharing, hardware and media](#sharing-hardware-and-media)).
 
 Hardware options are capability-checked by the service:
 
@@ -359,8 +363,18 @@ construct vm media acquire https://example.org/installer.iso --role install
 construct vm media attach CHILD --install MEDIA_ID \
   --boot-order installMedia,disk
 construct vm media detach CHILD --aux
+construct vm media release CHILD [--delete]
 construct vm media delete MEDIA_ID --yes
 ```
+
+`media release` is the step to run once the guest OS is installed. It ejects the install
+media while the child keeps running, then unbinds that medium and every other medium
+dedicated to the child that the child no longer uses, such as an answer-file ISO that was
+already ejected or detached, so they become ordinary media that other VMs can use.
+`--delete` deletes them instead. Media still attached to the child (an auxiliary disk, or the Windows answer
+file before first logon) is left alone. With `--delete`, media another VM still uses is
+reported as `in-use` and kept, and shared host media (such as official Windows ISOs) is only detached.
+Running the command again is safe.
 
 Uploads resume when the same `--operation-id` is used again. Only one chunk is staged
 locally at a time. Media deletion is refused while a VM still references the item;
@@ -509,6 +523,16 @@ currently returns `unsupported-capability`. Media null values detach the corresp
 slot. References protect both sides of a partial attachment. If configuration is
 interrupted, startup returns `configuration-incomplete`; retry the same configuration
 request to complete it. Runtime capacity is evaluated using the updated hardware on start.
+
+`POST /vms/{child}/media/release` (same callers, optional body `{"delete": true}`) ends the
+installation phase while the child is running or off. It live-ejects the install slot,
+removes the install references, and then clears the `dedicatedTo` binding of every released
+or dedicated medium the child no longer references. With `delete`, those media are deleted instead.
+Shared or foreign media is only detached. With `delete`, media still referenced by
+another VM is unbound and reported as `in-use`. The response is `{name, ejected, media: [{id, name,
+role, sizeBytes, outcome}]}` with outcome `deleted`, `released`, `in-use` or `retained`
+(the file is still held open; daily cleanup retries). The endpoint refuses during a job
+(`operation-in-progress`) or an unfinished configuration change (`configuration-incomplete`).
 
 An unresolved media change appears as `observed.storageProblem = "media-unverified"`
 in inventory and retains both old and intended media references. Settlement requires

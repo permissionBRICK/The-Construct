@@ -60,7 +60,7 @@ public sealed partial class ProxmoxChildVmPlatform
         if (await WindowsExecAsync(id, script, key, ct) is null) throw ProxmoxCommands.Failure();
     }
     public Task ClearWindowsKeyAsync(string name, string incarnation, CancellationToken ct) => Task.CompletedTask;
-    public async Task EjectWindowsMediaAsync(string name, string incarnation, bool installOnly, CancellationToken ct)
+    public async Task EjectMediaAsync(string name, string incarnation, bool installOnly, CancellationToken ct)
     {
         var id = await WindowsIdAsync(name, incarnation, ct); var config = await commands.ConfigAsync(id, ct);
         foreach (var slot in installOnly ? new[] { "ide2" } : new[] { "ide2", "ide0", "ide1" })

@@ -199,7 +199,7 @@ function Set-ConstructWindowsKvp {
     } elseif ($result.ReturnValue -ne 0) { throw 'windows-key-failed' }
 }
 
-function Remove-ConstructWindowsMedia {
+function Dismount-ConstructChildMedia {
     param([string]$Name, [string]$Incarnation, [bool]$InstallOnly)
     $vm = Get-ConstructWindowsVm $Name $Incarnation
     foreach ($drive in @(Get-VMDvdDrive -VM $vm -ErrorAction Stop)) {

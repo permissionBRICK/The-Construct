@@ -12,12 +12,15 @@ public static class ChildConfigurationEndpoints
 {
     private sealed record Firmware(bool? SecureBoot, SecureBootTemplate? SecureBootTemplate, bool? Tpm, IReadOnlyList<BootDevice>? BootOrder);
     private sealed record HardwareRequest(int? Cpus, int? RamMb, int? DiskGb, Firmware? Firmware);
+    private sealed record ReleaseRequest(bool? Delete);
     public static RouteGroupBuilder MapChildConfigurationEndpoints(this RouteGroupBuilder api)
     {
         api.MapPut("/vms/{name}/hardware", (string name, JsonElement body, HttpContext http, CancellationToken ct) => ChangeAsync(name, body, http, false, ct))
             .RequireAuthorization(Policies.UserOrPrimaryToken).Audited("vm.hardware");
         api.MapPut("/vms/{name}/media", (string name, JsonElement body, HttpContext http, CancellationToken ct) => ChangeAsync(name, body, http, true, ct))
             .RequireAuthorization(Policies.UserOrPrimaryToken).Audited("vm.media");
+        api.MapPost("/vms/{name}/media/release", (string name, ReleaseRequest? request, HttpContext http, CancellationToken ct) => ReleaseAsync(name, request?.Delete == true, http, ct))
+            .RequireAuthorization(Policies.UserOrPrimaryToken).Audited("vm.media.release");
         return api;
     }
     private static async Task<IResult> ChangeAsync(string name, JsonElement body, HttpContext http, bool mediaChange, CancellationToken ct)
@@ -153,6 +156,74 @@ public static class ChildConfigurationEndpoints
         catch (ChildValidationException ex) { return ex.Code == "validation" ? CodedProblems.Validation(ex.Field, "Invalid value.") : LifecycleEndpoints.Problem(ex.Code); }
         catch (LifecycleException ex) { return LifecycleEndpoints.Problem(ex.Code); }
         finally { foreach (var handle in handles.AsEnumerable().Reverse()) await handle.DisposeAsync(); }
+    }
+    // After installation: live-eject the install drive, drop the install references, then un-dedicate (or with delete, delete)
+    // the released media and any other dedicated media this VM no longer uses. Idempotent; a Windows auto-eject may already have run.
+    private static async Task<IResult> ReleaseAsync(string name, bool delete, HttpContext http, CancellationToken ct)
+    {
+        var s = http.RequestServices; var vms = s.GetRequiredService<IVmRepository>();
+        var vm = await vms.GetAsync(name, ct); if (vm is null) return Problems.NotFound("Unknown VM.");
+        if (await LifecycleEndpoints.AuthorizeAsync(vm, http, true, ct) is { } denied) return denied;
+        if (vm.Kind != VmKind.Child) return LifecycleEndpoints.Problem("not-a-child");
+        var gates = s.GetRequiredService<IVmOperationGate>();
+        await using var gate = await gates.TryAcquireAsync(name, http.TraceIdentifier, ct);
+        if (gate is null) { gates.IsHeld(name, out var operation); return LifecycleEndpoints.Busy(operation); }
+        vm = await vms.GetAsync(name, ct); if (vm is null) return Problems.NotFound("Unknown VM.");
+        if (await LifecycleEndpoints.AuthorizeAsync(vm, http, true, ct) is { } refused) return refused;
+        var driver = s.GetRequiredService<IChildVmDriver>(); var media = s.GetRequiredService<IMediaStore>();
+        var mediaGate = s.GetRequiredService<IMediaGate>(); var jobs = s.GetRequiredService<MediaJobs>();
+        if (driver is not IChildMediaEject eject) return LifecycleEndpoints.Problem("unsupported-capability");
+        try
+        {
+            if (await LifecycleEndpoints.LiveAsync(vm, s, ct)) return LifecycleEndpoints.Busy(vm.CurrentJobId);
+            if ((await s.GetRequiredService<IOperationKeyStore>().ListInFlightAsync(name, ct)).Any(k => ConfigurationIntent.Applies(k, vm)))
+                return LifecycleEndpoints.Problem("configuration-incomplete");
+            if (vm.Incarnation is null || await driver.GetVmIdAsync(name, ct) != vm.Incarnation) return LifecycleEndpoints.Problem("vm-incarnation-conflict");
+            var installs = (await media.ListReferencesForVmAsync(name, ct)).Where(r => r.Slot == MediaSlot.Install).ToArray();
+            var attached = await driver.GetAttachedMediaAsync(name, ct);
+            if (!attached.Complete) return LifecycleEndpoints.Problem("media-unverified");
+            CodedProblems.Audit(http, "vm.media.release", vm.Owner, vm.Parent, name, delete ? "delete=true" : null);
+            var ejected = attached.InstallPath is not null;
+            if (ejected)
+            {
+                await eject.EjectMediaAsync(name, vm.Incarnation, true, ct);
+                var confirmed = await driver.GetAttachedMediaAsync(name, ct);
+                if (!confirmed.Complete || confirmed.InstallPath is not null) return LifecycleEndpoints.Problem("media-unverified");
+            }
+            foreach (var reference in installs)
+            {
+                await using var held = await mediaGate.AcquireAsync(reference.MediaId, http.TraceIdentifier, ct);
+                await media.RemoveReferenceAsync(reference.MediaId, name, reference.Slot, ct);
+            }
+            var candidates = installs.Select(r => r.MediaId)
+                .Concat((await media.ListAsync(vm.Owner, ct)).Where(x => Ownership.SameName(x.DedicatedTo, name)).Select(x => x.Id)).Distinct().ToArray();
+            var released = new List<object>();
+            foreach (var id in candidates)
+            {
+                await using var held = await mediaGate.AcquireAsync(id, http.TraceIdentifier, ct);
+                var item = await media.GetAsync(id, ct);
+                // Unfinished uploads and media still attached here (auxiliary disks, a Windows answer file before first logon) stay untouched.
+                if (item is not { State: MediaState.Ready }) continue;
+                var references = await media.ListReferencesAsync(id, ct);
+                if (references.Any(r => Ownership.SameName(r.VmName, name))) continue;
+                string outcome;
+                if (item.Shared || !Ownership.SameName(item.Owner, vm.Owner)) outcome = "released";
+                else if (!delete || references.Count > 0)
+                {
+                    if (item.DedicatedTo is not null) await media.TryTransitionAsync(id, MediaState.Ready, item with { DedicatedTo = null }, ct);
+                    outcome = delete ? "in-use" : "released";
+                }
+                else
+                {
+                    try { outcome = await jobs.DeleteLockedAsync(item, ct) ? "deleted" : "retained"; }
+                    catch (MediaException) { outcome = "retained"; }
+                }
+                released.Add(new { item.Id, item.Name, item.Role, item.SizeBytes, outcome });
+            }
+            return Results.Ok(new { name, ejected, media = released });
+        }
+        catch (ChildValidationException ex) { return ex.Code == "validation" ? CodedProblems.Validation(ex.Field, "Invalid value.") : LifecycleEndpoints.Problem(ex.Code); }
+        catch (LifecycleException ex) { return LifecycleEndpoints.Problem(ex.Code); }
     }
     private static bool SamePath(string? a, string? b) => string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 }

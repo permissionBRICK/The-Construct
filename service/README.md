@@ -2110,6 +2110,16 @@ slot. References protect both sides of a partial attachment. If configuration is
 interrupted, startup returns `configuration-incomplete`; retry the same configuration
 request to complete it. Runtime capacity is evaluated using the updated hardware on start.
 
+`POST /vms/{child}/media/release` (same callers, optional body `{"delete": true}`) ends the
+installation phase while the child is running or off. It live-ejects the install slot,
+removes the install references, and then clears the `dedicatedTo` binding of every released
+or dedicated medium the child no longer references. With `delete`, those media are deleted instead.
+Shared or foreign media is only detached. With `delete`, media still referenced by
+another VM is unbound and reported as `in-use`. The response is `{name, ejected, media: [{id, name,
+role, sizeBytes, outcome}]}` with outcome `deleted`, `released`, `in-use` or `retained`
+(the file is still held open; daily cleanup retries). The endpoint refuses during a job
+(`operation-in-progress`) or an unfinished configuration change (`configuration-incomplete`).
+
 Pending media intents durably project `observed.storageProblem = "media-unverified"`;
 capacity reconciliation cannot clear the flag. Only successful same-request retry or
 VM deletion settles an interrupted attachment. Configuration retries tolerate intervening

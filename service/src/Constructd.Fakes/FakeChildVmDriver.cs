@@ -46,11 +46,11 @@ public sealed class FakeChildVmDriver(FakeHypervisorDriver hypervisor) : IChildV
     { CheckWindows(name, incarnation); DeliveredPartialKey = key[^5..]; Calls.Enqueue("windows-key:" + name); return Task.CompletedTask; }
     public Task ClearWindowsKeyAsync(string name, string incarnation, CancellationToken ct)
     { CheckWindows(name, incarnation); DeliveredPartialKey = null; ActivationCommand = null; Calls.Enqueue("windows-key-clear:" + name); return Task.CompletedTask; }
-    public Task EjectWindowsMediaAsync(string name, string incarnation, bool installOnly, CancellationToken ct)
+    public Task EjectMediaAsync(string name, string incarnation, bool installOnly, CancellationToken ct)
     {
         CheckWindows(name, incarnation); var old = _vms[name];
         _vms[name] = (old.Descriptor with { InstallMediaPath = null, AuxiliaryMediaPath = installOnly ? old.Descriptor.AuxiliaryMediaPath : null }, old.Id);
-        Calls.Enqueue("windows-eject:" + name + ":" + installOnly); return Task.CompletedTask;
+        Calls.Enqueue("media-eject:" + name + ":" + installOnly); return Task.CompletedTask;
     }
     private void CheckWindows(string name, string incarnation)
     { if (!_vms.TryGetValue(name, out var value) || value.Id != incarnation) throw new ChildValidationException("vm-incarnation-conflict", "vm"); }
