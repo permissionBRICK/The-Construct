@@ -391,6 +391,7 @@ The existing `HyperVLocal.Driver.ps1` functions are unchanged. Opt in with
 | `Set-ConstructChildHardware` | `Name`, `Hardware`, `ResendTemplate`; VM must be Off. Template is set before TPM initialization; false never resends it. |
 | `Set-ConstructChildMedia` | `Name`, nullable install/auxiliary paths, `BootOrder`; Off only, DVDs at SCSI 0:1 and 0:2, disk at 0:0. Null ejects media. Boot order uses device objects. |
 | `Get-ConstructChildAttachedMedia` | Actual paths by slot and completeness, used to reconcile references. |
+| `Dismount-ConstructChildMedia` | `Name`, `Incarnation`, `InstallOnly`; live eject for any guest OS, running or off. Empties SCSI 0:1 (and 0:2 unless install-only), keeps the drives and boot order, then verifies with `Get-ConstructChildAttachedMedia`. |
 | `Stop-ConstructChildVmGracefully` | `Name`, timeout seconds (300 default); non-forced WMI `InitiateShutdown`, then bounded Off polling. Returns `completed`, `timeout`, `unavailable` or `failed`. No force-off/save fallback. |
 | `Get-ConstructChildVmCapabilities` | VM-id-scoped WMI device presence, dimensions, firmware lock, generation and conditional shutdown availability. |
 | `Get-ConstructChildVmId` | Immutable Hyper-V id; null only after successful inventory confirms absence. |

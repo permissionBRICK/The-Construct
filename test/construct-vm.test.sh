@@ -121,6 +121,9 @@ case "${path}" in
   /api/v1/vms/kid-one/media)
     body='[{"id":"media-install","role":"install","state":"ready"}]'
     ;;
+  /api/v1/vms/kid-one/media/release)
+    body='{"name":"kid-one","ejected":true,"media":[{"id":"media-install","name":"installer.iso","role":"install","sizeBytes":4096,"outcome":"deleted"}]}'
+    ;;
   /api/v1/vms/kid-one/forwards)
     code=201
     if [[ -n "${data}" && "$(jq -r '.target' "${data}")" == client ]]; then body='{"id":"forward-1","vmPort":8080,"target":"client","url":null,"destination":{"verified":false}}'
@@ -338,6 +341,14 @@ ok 'media attach sends the install id and boot order' grep -q '"installMediaId":
 reset_stub
 vm media detach kid-one --aux --json >"${tmp}/detach.json" 2>/dev/null
 ok 'media detach uses an explicit null slot' grep -q '"auxiliaryMediaId":null' "${stub}/state/bodies"
+
+reset_stub
+vm media release kid-one --json >"${tmp}/release.json" 2>/dev/null
+ok 'media release keeps media by default' sh -c "grep -q '^POST[[:space:]]/api/v1/vms/kid-one/media/release' '${stub}/state/requests' && grep -q '{\"delete\":false}' '${stub}/state/bodies' && jq -e '.ejected==true' '${tmp}/release.json' >/dev/null"
+reset_stub
+vm media release kid-one --delete >"${tmp}/release.out" 2>/dev/null
+ok 'media release --delete asks to delete the media' grep -q '{"delete":true}' "${stub}/state/bodies"
+ok 'media release prints the eject and each medium' sh -c "grep -q 'ejected install media from kid-one' '${tmp}/release.out' && grep -q '^deleted media-install installer.iso' '${tmp}/release.out'"
 
 reset_stub
 vm media list --json >"${tmp}/media-list.json" 2>/dev/null

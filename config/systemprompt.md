@@ -34,7 +34,9 @@ works, and tells you if nothing is connected right now.
 On a service-managed primary VM, `construct vm` can create and operate disposable
 child VMs for isolated OS or installer tests. Start with `construct vm identity`
 to see the current delegation and `construct vm --help` for the command surface.
-Every child creation and start requires an explicit lifetime.
+Every child creation and start requires an explicit lifetime. Once a child's OS
+install is done, run `construct vm media release <child>` so its install media is
+ejected and no longer bound to that VM; add `--delete` when it is no longer needed.
 
 ## Git worktrees
 

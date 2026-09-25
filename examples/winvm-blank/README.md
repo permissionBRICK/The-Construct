@@ -2,7 +2,7 @@
 
 > **Template.** This is a working, field-proven example of an unattended Windows 11 child VM
 > driven from a Linux primary: media repack, answer-file ISO, first-logon debloat, SSH channel,
-> media detach after install. It is the reference recipe for the host-side Windows guest
+> media release after install. It is the reference recipe for the host-side Windows guest
 > feature described in [Windows guests](../../docs/child-vms.md#windows-guests).
 
 For host-managed installation, media acquisition and activation, use

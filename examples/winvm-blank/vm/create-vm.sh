@@ -46,10 +46,11 @@ until guest_ssh 'if (Test-Path C:\provision\firstlogon.done) { exit 0 }; exit 1'
     echo "[$(date +%H:%M:%S)] Windows installation in progress"
     sleep 20
 done
-# Remove the answer media so it cannot be applied on a subsequent boot.
+# Remove the answer media so it cannot be applied on a subsequent boot, then delete
+# both dedicated ISOs from the host (release ejects the install slot and collects them).
 ./vm.sh stop
-construct vm media detach "$VM_NAME" --install
 construct vm media detach "$VM_NAME" --aux
+construct vm media release "$VM_NAME" --delete
 ./vm.sh start
 # Mark completion only after both media slots have been detached.
 for _ in $(seq 1 90); do

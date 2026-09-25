@@ -66,7 +66,7 @@ public class WindowsGuestReconcilerTests
         await using var app = new TestApp(); var (_, driver, store) = await Setup(app);
         driver.WindowsObservation = new(200, new("server2022", "standard", true, "activated", "12345"));
         await app.Service<WindowsGuestReconciler>().ReconcileAsync(default);
-        Assert.DoesNotContain(driver.Calls, c => c.StartsWith("windows-eject:"));
+        Assert.DoesNotContain(driver.Calls, c => c.StartsWith("media-eject:"));
         Assert.Equal("guest-product-edition-mismatch", Assert.Single((await store.SnapshotAsync(default)).Guests).Error);
     }
     [Fact]
@@ -76,7 +76,7 @@ public class WindowsGuestReconcilerTests
         var (vm, driver, store) = await Setup(app);
         driver.WindowsObservation = new(200, null);
         var worker = app.Service<WindowsGuestReconciler>(); await worker.ReconcileAsync(default);
-        Assert.DoesNotContain(driver.Calls, c => c.StartsWith("windows-eject:"));
+        Assert.DoesNotContain(driver.Calls, c => c.StartsWith("media-eject:"));
         driver.WindowsObservation = new(2, null); await worker.ReconcileAsync(default);
         var guest = Assert.Single((await store.SnapshotAsync(default)).Guests);
         Assert.True(guest.InstallEjected); Assert.False(guest.AuxiliaryEjected);
@@ -93,6 +93,6 @@ public class WindowsGuestReconcilerTests
         driver.WindowsObservation = new(200, new("win11", "pro", true, "not-activated", "3V66T"));
         await app.Service<WindowsGuestReconciler>().ReconcileAsync(default);
         Assert.Null(driver.DeliveredPartialKey);
-        Assert.DoesNotContain(driver.Calls, c => c.StartsWith("windows-eject:"));
+        Assert.DoesNotContain(driver.Calls, c => c.StartsWith("media-eject:"));
     }
 }
