@@ -85,6 +85,11 @@ public sealed class NetshPortForwardManager : IPortForwardManager
     // so it cannot resurrect a removed forward or overwrite a newly allocated port.
     private readonly SemaphoreSlim _mutationGate = new(1, 1);
 
+    // VMs whose address the last reconciliation could not resolve. The pass runs every
+    // ForwardReconcileSeconds, so an off VM would otherwise log the same warning all day.
+    // Guarded by _mutationGate.
+    private readonly HashSet<string> _unresolved = new(StringComparer.OrdinalIgnoreCase);
+
     public NetshPortForwardManager(
         IClock clock,
         IVmRepository vms,
@@ -611,20 +616,32 @@ public sealed class NetshPortForwardManager : IPortForwardManager
 
             if (endpoint is null || address is null)
             {
-                _logger.LogWarning(
-                    "No IPv4 address for {Vm} while reconciling port forwards; leaving its rules as they are.",
-                    vmName);
+                if (_unresolved.Add(vmName))
+                {
+                    _logger.LogWarning(
+                        "No IPv4 address for {Vm} while reconciling port forwards; leaving its rules as they are until it has one again.",
+                        vmName);
+                }
+
                 return null;
+            }
+
+            if (_unresolved.Remove(vmName))
+            {
+                _logger.LogInformation("{Vm} has an IPv4 address again; reconciling its port forwards.", vmName);
             }
 
             return (address.ToString(), ArgumentGuard.Port(endpoint.SshPort, "vm ssh port"));
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogWarning(
-                "Could not resolve an address for {Vm} while reconciling port forwards: {Error}",
-                vmName,
-                SafeError.Describe(ex));
+            if (_unresolved.Add(vmName))
+            {
+                _logger.LogWarning(
+                    "Could not resolve an address for {Vm} while reconciling port forwards: {Error}",
+                    vmName,
+                    SafeError.Describe(ex));
+            }
 
             return null;
         }

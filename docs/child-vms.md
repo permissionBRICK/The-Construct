@@ -39,7 +39,12 @@ construct vm create --name windows-lab --os windows --windows win11-pro \
 ```
 
 The acquire job resolves Windows 11 with a pinned [Fido resolver](https://github.com/pbatard/Fido/tree/3d47260b8915385c58e20c73e24b36e9a9536f3f).
-The host needs PowerShell for that resolver, `pwsh` on Proxmox. Server acquisition
+The host needs PowerShell for that resolver, `pwsh` on Proxmox. `--lang` takes a
+language code such as `de`, `fr-CA` or `pt-BR`; codes without a Windows 11 ISO fail with
+`windows-language-unsupported`. Microsoft's download protection refuses some networks
+and rate-limits repeated requests; the job then fails with `windows-download-rejected`,
+and the service log carries the resolver's error line. Retry later, or download the ISO
+in a browser, upload it and prepare it. Server acquisition
 uses Microsoft's evaluation downloads and currently supports English. Microsoft's
 consumer download may not contain Enterprise or Education; supply licensed media
 for editions absent from that download. The service checks the WIM/ESD image metadata
