@@ -106,6 +106,16 @@ Choices are saved in the existing control-panel settings store. Named instances 
 VM settings in their own instance file; git credential storage keeps its existing shared
 setting. Provisioning writes the guest settings to `/etc/construct/config.env`.
 
+### Logs and failures
+
+Every `Auto-Install.ps1` run writes its console output to
+`%LOCALAPPDATA%\The-Construct\logs\install-<timestamp>.log`; the ten newest runs are
+kept. The transcript is skipped when a credential was passed on the command line, because
+its header records the command line. A run that ends in an error pauses with "Press Enter
+to exit" and prints the log path, also when the Companion or the control panel launched it;
+a clean panel-launched run still closes by itself. The Companion's debug setting
+additionally keeps every console it launches open.
+
 ## Option B — full bundle (repo + ISO together)
 
 The distributed bundle is this repo with an autoinstall ISO (`agent-vm-autoinstall.iso`)

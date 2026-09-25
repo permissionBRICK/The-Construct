@@ -29,7 +29,7 @@
       6. Configures the Windows host: ~\.ssh\ (private key + known_hosts +
          config Host entry) and VS Code's remote.SSH.remotePlatform.
 
-    Requires the OpenSSH client (ssh, scp, ssh-keyscan, ssh-keygen) and tar.exe
+    Requires the OpenSSH client (ssh, scp, ssh-keygen) and tar.exe
     that ship with Windows 10/11. No Posh-SSH dependency.
 
 .NOTES
@@ -43,7 +43,7 @@ param(
     [switch]$SkipCompanion,
     [string]$VmHost       = "agent-vm.mshome.net",
     [string]$HostAlias    = "agent-vm",
-    # Client-reachable SSH port for the VM. Thread into every ssh/scp/ssh-keyscan
+    # Client-reachable SSH port for the VM. Thread into every ssh/scp
     # invocation (-p/-P). Default 22 keeps backward compat; non-22 adjusts the
     # Host block's Port line and the known_hosts bracketed-host format.
     [ValidateRange(1, 65535)]
@@ -73,7 +73,7 @@ param(
     [string]$Projects     = "default",
     [string]$AgentName    = "",
     [string]$LocalKeyName = "agent_vm_ed25519",
-    # Dial the VM over IPv4 (ssh -o AddressFamily=inet, ssh-keyscan -4). Implied for a VM on
+    # Dial the VM over IPv4 (ssh -o AddressFamily=inet). Implied for a VM on
     # a host service; see $script:SshFamilyOpts below.
     [switch]$SshIpv4,
     [int]$OpencodePort    = 4096,
@@ -1878,6 +1878,16 @@ if (-not $ServiceUrl) { if ($Action -ne 'export') { $archivePath = New-RepoArchi
     $sourcePlan = Get-ConstructSourceTransportPlan -ServiceManaged $true -Mode $SourceMode -IncludeGit ([bool]$IncludeGit) `
         -FeatureAvailable $sourceFeature -Ref $sourceRef -Commit $sourceIdentity.Commit -TreeState $sourceIdentity.TreeState -Divergence $sourceIdentity.Divergence -Changes $sourceIdentity.Changes
 }
+# Start the run with an EMPTY run-private known_hosts file. Every connection below runs
+# with StrictHostKeyChecking=accept-new (=no for the auth-less reachability probe), so
+# the first connection records the VM's current key, and a key left behind by a previous
+# VM on the same name can never trip "REMOTE HOST IDENTIFICATION HAS CHANGED". No
+# ssh-keyscan pass: it trusts the first key seen exactly like accept-new does, and Windows
+# OpenSSH 9.5's ssh-keyscan cannot negotiate with an OpenSSH 9.x guest at all ("choose_kex:
+# unsupported KEX method sntrup761x25519-sha512@openssh.com" on every key type), so it
+# never returned a key and only cost time -- about a minute per run on a host service's
+# endpoint.
+[System.IO.File]::WriteAllText($script:KnownHostsFile, "")
 Ensure-VmReachable
 if ($ServiceUrl) {
     $sourceDeadline = [datetime]::UtcNow.AddSeconds($SourceEnsureTimeoutSec)
@@ -1885,20 +1895,6 @@ if ($ServiceUrl) {
         param($commit, $operationKey)
         Request-ConstructSourceEnsure -BaseUrl $ServiceUrl -VmName $InstanceName -Commit $commit -OperationKey $operationKey -Auth $ServiceApiAuth
     }
-}
-
-# Accept the VM's host key before any SSH operations (overwrite to clear stale keys from previous VMs).
-Write-Step "Accepting VM host key"
-$prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-$keyscanFamily = if ($script:SshFamilyOpts.Count -gt 0) { @("-4") } else { @() }
-$hostKeys = @(& ssh-keyscan -T 5 @keyscanFamily @script:SshPortArgs $VmHost 2>$null | Where-Object { $_ -and $_ -notmatch '^\s*#' })
-$ErrorActionPreference = $prevEAP
-# Written even when empty, so a stale key from a previous VM never survives.
-$hostKeys | Out-File -Encoding ascii $script:KnownHostsFile
-if ($hostKeys.Count -gt 0) {
-    Write-Ok "Host key stored"
-} else {
-    Write-Warning "ssh-keyscan returned no host key for $VmHost (SSH port $SshPort); the first connection will record it instead."
 }
 
 # Re-provision fast path: if the root key saved from a previous run still lets us
