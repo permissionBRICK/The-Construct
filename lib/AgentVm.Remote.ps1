@@ -69,7 +69,7 @@ $script:ConstructRemoteDefaultPort = 7462
 # pattern-matching a message.
 $script:ConstructApiLastStatus = 0
 $script:ConstructApiLastError  = ""
-$script:ConstructApiLastProblem = @{ Status = 0; Code = ""; Class = "none"; Detail = "" }
+$script:ConstructApiLastProblem = @{ Status = 0; Code = ""; Class = "none"; Detail = ""; Body = "" }
 # One warning per session for the http + Windows-credential case (see Invoke-ConstructApi).
 $script:ConstructApiWarnedUnencrypted = $false
 
@@ -811,7 +811,7 @@ function Invoke-ConstructApi {
 
     $script:ConstructApiLastStatus = 0
     $script:ConstructApiLastError  = ""
-    $script:ConstructApiLastProblem = @{ Status = 0; Code = ""; Class = "none"; Detail = "" }
+    $script:ConstructApiLastProblem = @{ Status = 0; Code = ""; Class = "none"; Detail = ""; Body = "" }
 
     $requestWatch = [Diagnostics.Stopwatch]::StartNew()
     $preflight = $true
@@ -916,7 +916,7 @@ function Invoke-ConstructApi {
             else { $resp = Invoke-WebRequest @req }
         } finally { $ProgressPreference = $previousProgress }
         $script:ConstructApiLastStatus = [int]$resp.StatusCode
-        $script:ConstructApiLastProblem = @{ Status = [int]$resp.StatusCode; Code = ''; Class = 'none'; Detail = '' }
+        $script:ConstructApiLastProblem = @{ Status = [int]$resp.StatusCode; Code = ''; Class = 'none'; Detail = ''; Body = '' }
         $content = ""
         try { $content = [string]$resp.Content } catch { $content = "" }
         if ([string]::IsNullOrWhiteSpace($content)) { return $null }
@@ -936,7 +936,9 @@ function Invoke-ConstructApi {
             $info.Message = "Certificate fingerprint mismatch for $base.`n    pinned:    $expected`n    presented: $actual`nRefusing to connect. If the host's certificate was legitimately replaced, remove the pin file ($(Get-ConstructRemotePinPath -BaseUrl $base -StoreDir $StoreDir)) and add the host again."
         }
         $script:ConstructApiLastError = [string]$info.Message
-        $script:ConstructApiLastProblem = @{ Status = [int]$info.Status; Code = [string]$info.Code; Class = $class; Detail = [string]$info.Message }
+        # Body: the problem document itself, for callers that act on more than its code
+        # (a cascade preview's children and token).
+        $script:ConstructApiLastProblem = @{ Status = [int]$info.Status; Code = [string]$info.Code; Class = $class; Detail = [string]$info.Message; Body = [string]$info.Body }
         if ($NoThrow) { return $null }
         $where = "$Method $p"
         if ($info.Status) {

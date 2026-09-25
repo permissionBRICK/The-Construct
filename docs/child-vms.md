@@ -518,7 +518,11 @@ current scope. Open job event streams may finish after access is revoked.
 
 Primary deletion previews **all** private and shared children. The exact scope must be
 confirmed with its short-lived token. Acceptance fences the complete scope and revokes
-primary delegation atomically. Cleanup failures retain ownership and remaining storage
+primary delegation atomically. A confirmation sent with `keep: "shared"` fences and
+deletes only the private children: every shared child stays exactly as it is, still
+parented by name, and a primary re-created under the same name is its parent again with
+nothing to re-attach — this is what a reinstall of the primary uses. While the primary is
+absent, a kept child stays operable for its owner and the users it is shared with. Cleanup failures retain ownership and remaining storage
 liability; retry from a fresh preview. Expiry never initiates this deletion workflow.
 
 Owner/admin and the owning primary token may update an off child's hardware or media with

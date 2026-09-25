@@ -20,8 +20,9 @@ public interface IVmDelegationRepository
     Task<bool> RemoveOverrideAsync(string vmName, CancellationToken ct);
     Task<CascadePreview> SaveCascadePreviewAsync(CascadePreview preview, CancellationToken ct);
     Task<CascadePreview?> GetCascadePreviewAsync(string parent, CancellationToken ct);
-    /// <summary>One transaction: token/children/sharing/incarnations equal the stored preview → fence parent + children; else the current list.</summary>
-    Task<CascadeAcceptance> TryAcceptCascadeAsync(string parent, string token, string jobId, CancellationToken ct);
+    /// <summary>One transaction: token/children/sharing/incarnations equal the stored preview → fence parent + children; else the current list.
+    /// With keepShared, non-private children are not fenced and the accepted preview marks them CascadeRules.KeptOutcome.</summary>
+    Task<CascadeAcceptance> TryAcceptCascadeAsync(string parent, string token, string jobId, bool keepShared, CancellationToken ct);
     Task<bool> UpdateGuestReportAsync(string name, GuestReport report, CancellationToken ct);
     Task<bool> UpdateObservationAsync(string name, HostObservation observation, CancellationToken ct);
 }

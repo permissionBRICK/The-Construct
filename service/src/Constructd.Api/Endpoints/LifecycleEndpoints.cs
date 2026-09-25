@@ -40,7 +40,8 @@ public static class LifecycleEndpoints
         if (!(await http.RequestServices.GetRequiredService<IAuthorizationService>().AuthorizeAsync(http.User, vm, policy)).Succeeded)
             return Problem("not-owner", 403);
         if (vm.Deleting) return Problem("vm-deleting");
-        if (vm.Parent is string parent && await http.RequestServices.GetRequiredService<IVmRepository>().GetAsync(parent, ct) is not { Deleting: false, ChildCreationClosed: false })
+        // An absent parent (a kept child between its primary's delete and rebuild) does not close the child.
+        if (vm.Parent is string parent && await http.RequestServices.GetRequiredService<IVmRepository>().GetAsync(parent, ct) is { } parentVm && (parentVm.Deleting || parentVm.ChildCreationClosed))
             return Problem("parent-closed");
         return null;
     }

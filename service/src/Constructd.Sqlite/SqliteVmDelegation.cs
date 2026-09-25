@@ -187,14 +187,14 @@ public sealed partial class SqliteVmRepository
         cmd.CommandText = "SELECT * FROM cascades WHERE parent=@parent"; cmd.With("@parent", parent);
         await using var r = await cmd.ExecuteReaderAsync(ct); return await r.ReadAsync(ct) ? ReadCascade(r) : null;
     }
-    public async Task<CascadeAcceptance> TryAcceptCascadeAsync(string parent, string token, string jobId, CancellationToken ct)
+    public async Task<CascadeAcceptance> TryAcceptCascadeAsync(string parent, string token, string jobId, bool keepShared, CancellationToken ct)
     {
         await using var c = await database.OpenAsync(ct); await using var tx = c.BeginTransaction(deferred: false);
-        var result = await AcceptCascadeInTransaction(c, tx, parent, token, jobId, clock?.UtcNow ?? DateTimeOffset.UtcNow, ct);
+        var result = await AcceptCascadeInTransaction(c, tx, parent, token, jobId, keepShared, clock?.UtcNow ?? DateTimeOffset.UtcNow, ct);
         if (result.Accepted) await tx.CommitAsync(ct);
         return result;
     }
-    internal static async Task<CascadeAcceptance> AcceptCascadeInTransaction(SqliteConnection c, SqliteTransaction tx, string parent, string token, string jobId, DateTimeOffset now, CancellationToken ct)
+    internal static async Task<CascadeAcceptance> AcceptCascadeInTransaction(SqliteConnection c, SqliteTransaction tx, string parent, string token, string jobId, bool keepShared, DateTimeOffset now, CancellationToken ct)
     {
         var vm = await ReadInTransaction(c, tx, parent, ct);
         var children = new List<Vm>();
@@ -223,14 +223,17 @@ public sealed partial class SqliteVmRepository
 
         if (vm is null || preview is null || !CascadeRules.Matches(preview, vm, current, token, now))
             return new(false, "cascade-mismatch", current, null);
+        // keep=shared: a non-private child is left untouched and recorded as kept in the accepted preview.
         await using var fence = c.CreateCommand(); fence.Transaction = tx;
         fence.CommandText = """
             UPDATE vms SET deleting=1,vm_token_hash=NULL,current_job_id=@job,
               child_creation_closed=CASE WHEN name=@parent THEN 1 ELSE child_creation_closed END
-            WHERE name=@parent OR parent=@parent;
-            UPDATE cascades SET state='accepted',job_id=@job WHERE parent=@parent;
+            WHERE name=@parent OR (parent=@parent AND (@keep=0 OR sharing=@private));
+            UPDATE cascades SET state='accepted',job_id=@job,outcomes_json=@outcomes WHERE parent=@parent;
             """;
-        fence.With("@parent", parent).With("@job", jobId); await fence.ExecuteNonQueryAsync(ct);
+        fence.With("@parent", parent).With("@job", jobId).With("@keep", keepShared ? 1 : 0).With("@private", WireJson.Enum(SharingScope.Private))
+            .With("@outcomes", WireJson.Serialize(CascadeRules.KeptOutcomes(current, keepShared)));
+        await fence.ExecuteNonQueryAsync(ct);
         return new(true, null, current, null);
     }
     public async Task<bool> UpdateIncarnationAsync(string name, string incarnation, CancellationToken ct)

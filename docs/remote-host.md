@@ -714,8 +714,11 @@ Children begin `private`. `host` sharing lets registered users and their upgrade
 primaries inspect and operate the child, use the console, and request an eligible client
 forward. It does not reveal guest credentials, move ownership, permit deletion or
 hardware/media changes, or provide network isolation. Every resource remains charged to
-the owner. Deleting a primary always cascades to all of its children, including shared
-ones, after an expiring scope preview and typed confirmation.
+the owner. Deleting a primary from the admin panel cascades to all of its children,
+including shared ones, after an expiring scope preview and typed confirmation. The
+installer's **reinstall** confirms that preview with `keep: "shared"` instead: private
+children go with the primary, shared children are kept and are the rebuilt primary's
+children again — without a prompt, since they are not deleted.
 
 Finite lifetimes are wall-clock leases. Creation and every start/resume require an
 explicit lifetime; restart, sharing, guest reboot and service restart do not renew it.

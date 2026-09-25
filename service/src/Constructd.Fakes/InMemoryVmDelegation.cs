@@ -137,7 +137,7 @@ public sealed partial class InMemoryVmRepository
             return Task.FromResult(_cascades.GetValueOrDefault(parent));
         }
     }
-    public Task<CascadeAcceptance> TryAcceptCascadeAsync(string parent, string token, string jobId, CancellationToken ct)
+    public Task<CascadeAcceptance> TryAcceptCascadeAsync(string parent, string token, string jobId, bool keepShared, CancellationToken ct)
     {
         lock (InMemoryTransaction.Gate)
         {
@@ -149,9 +149,11 @@ public sealed partial class InMemoryVmRepository
                 if (!_vms.TryGetValue(parent, out var vm) || !_cascades.TryGetValue(parent, out var preview) ||
                     !CascadeRules.Matches(preview, vm, current, token, (clock?.UtcNow ?? DateTimeOffset.UtcNow)))
                     return Task.FromResult(new CascadeAcceptance(false, "cascade-mismatch", current, null));
-                foreach (var child in children) _vms[child.Name] = child with { Deleting = true, VmTokenHash = null, CurrentJobId = jobId };
+                var kept = CascadeRules.KeptOutcomes(current, keepShared);
+                foreach (var child in children)
+                    if (!kept.ContainsKey(child.Name)) _vms[child.Name] = child with { Deleting = true, VmTokenHash = null, CurrentJobId = jobId };
                 _vms[parent] = vm with { Deleting = true, ChildCreationClosed = true, VmTokenHash = null, CurrentJobId = jobId };
-                _cascades[parent] = preview with { State = CascadeState.Accepted, JobId = jobId };
+                _cascades[parent] = preview with { State = CascadeState.Accepted, JobId = jobId, Outcomes = kept };
                 return Task.FromResult(new CascadeAcceptance(true, null, current, null));
             }
 

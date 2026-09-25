@@ -74,20 +74,28 @@ $script:defaultAnswer = @{ Body = $null; Status = 500 }
 $script:lastStatus = 0
 $script:lastError = ""
 
+$script:lastProblem = @{ Status = 0; Code = ""; Class = "none"; Detail = ""; Body = "" }
 function Invoke-ConstructApi {
     [CmdletBinding()]
     param([string]$BaseUrl, [string]$Method = 'GET', [string]$Path, $Body, $Auth, [string]$Pin, [string]$StoreDir, [int]$TimeoutSec = 100, [switch]$NoThrow)
     $script:calls.Add([pscustomobject]@{ BaseUrl = $BaseUrl; Method = $Method; Path = $Path; Body = $Body; Auth = $Auth })
     $key = "$Method $Path"
-    $a = if ($script:answers.ContainsKey($key)) { $script:answers[$key] } else { $script:defaultAnswer }
+    # Direct assignment, not `$a = if (...) { }`: an if-expression's output would unroll a queue.
+    $a = $script:defaultAnswer
+    if ($script:answers.ContainsKey($key)) { $a = $script:answers[$key] }
+    # A queued answer sequence (AnswerSequence) plays one answer per call and holds the last.
+    if ($a -is [System.Collections.Generic.Queue[object]]) { $a = if ($a.Count -gt 1) { $a.Dequeue() } else { $a.Peek() } }
     $script:lastStatus = [int]$a.Status
     $script:lastError = if ($a.ContainsKey('Error')) { [string]$a.Error } else { "" }
+    $script:lastProblem = @{ Status = [int]$a.Status; Code = $(if ($a.ContainsKey('Code')) { [string]$a.Code } else { "" }); Class = 'http'
+                             Detail = $script:lastError; Body = $(if ($a.ContainsKey('ProblemBody')) { [string]$a.ProblemBody } else { "" }) }
     if ($a.Status -ge 200 -and $a.Status -lt 300) { return $a.Body }
     if ($NoThrow) { return $null }
     throw "Construct host service refused $key (HTTP $($a.Status)): $($script:lastError)"
 }
 function Get-ConstructApiLastStatus { return [int]$script:lastStatus }
 function Get-ConstructApiLastError  { return [string]$script:lastError }
+function Get-ConstructApiLastProblem { return $script:lastProblem }
 
 $script:jobResult = $null
 $script:jobIds    = New-Object System.Collections.Generic.List[string]
@@ -105,6 +113,14 @@ function Reset-Api {
 }
 function Answer([string]$Key, $Body, [int]$Status = 200, [string]$ErrorText = "") {
     $script:answers[$Key] = @{ Body = $Body; Status = $Status; Error = $ErrorText }
+}
+function Problem([int]$Status, [string]$Code, [string]$ErrorText, $Document) {
+    @{ Body = $null; Status = $Status; Error = $ErrorText; Code = $Code; ProblemBody = ($Document | ConvertTo-Json -Depth 6 -Compress) }
+}
+function AnswerSequence([string]$Key, [object[]]$Answers) {
+    $q = New-Object 'System.Collections.Generic.Queue[object]'
+    foreach ($a in $Answers) { $q.Enqueue($a) }
+    $script:answers[$Key] = $q
 }
 
 # ── (c) Capabilities ────────────────────────────────────────────────────────
@@ -256,6 +272,49 @@ ok "remove: a missing VM is a NO-OP (the desired end state already holds)" ($scr
 Reset-Api
 Answer 'DELETE /vms/x' $null 403
 ok "remove: any other refusal throws" (Test-Throws { Remove-ConstructVm -Name 'x' })
+
+# A primary with children: the service answers 409 with the children and a preview token.
+$cascadeDoc = @{ code = 'cascade-confirmation-required'; title = 'VM operation refused'; detail = 'cascade confirmation required'
+                 children = @(@{ name = 'scratch'; sharing = 'private'; state = 'off' }, @{ name = 'lab'; sharing = 'host'; state = 'running' })
+                 cascadeToken = 'tok-1'; expiresAt = '2026-01-01T00:10:00Z' }
+$required = Problem 409 'cascade-confirmation-required' 'cascade-confirmation-required -- VM operation refused: cascade confirmation required.' $cascadeDoc
+Reset-Api; $script:notes = @()
+AnswerSequence 'DELETE /vms/parent' @($required, @{ Body = [pscustomobject]@{ jobId = 'job-cascade' }; Status = 202 })
+$msg = Get-ThrowMessage { Remove-ConstructVm -Name 'parent' }
+ok "remove: children without -KeepSharedChildren: stops, names them, confirms nothing" (
+    $msg -match "scratch \(private\)" -and $msg -match "lab \(host\)" -and $script:calls.Count -eq 1)
+
+Reset-Api; $script:notes = @(); $script:jobResult = [pscustomobject]@{ state = 'succeeded' }
+AnswerSequence 'DELETE /vms/parent' @($required, @{ Body = [pscustomobject]@{ jobId = 'job-cascade' }; Status = 202 })
+Remove-ConstructVm -Name 'parent' -KeepSharedChildren
+$confirm = $script:calls[1].Body
+ok "remove: -KeepSharedChildren confirms with the preview token and keep=shared" (
+    $script:calls.Count -eq 2 -and $null -eq $script:calls[0].Body -and
+    $confirm.cascade.token -eq 'tok-1' -and $confirm.cascade.keep -eq 'shared')
+ok "remove: ...and says which children go and which stay" (
+    (@($script:notes | Where-Object { $_ -match 'Deleting 1 private child VM\(s\) with it: scratch' }).Count -eq 1) -and
+    (@($script:notes | Where-Object { $_ -match "Keeping 1 shared child VM\(s\): lab" }).Count -eq 1))
+ok "remove: ...and follows the job" ($script:jobIds -contains 'job-cascade')
+
+$changedDoc = $cascadeDoc.Clone(); $changedDoc['code'] = 'cascade-scope-changed'; $changedDoc['cascadeToken'] = 'tok-2'
+$changed = Problem 409 'cascade-scope-changed' 'cascade-scope-changed' $changedDoc
+Reset-Api; $script:notes = @()
+AnswerSequence 'DELETE /vms/parent' @($required, $changed, @{ Body = [pscustomobject]@{ jobId = 'job-2' }; Status = 202 })
+Remove-ConstructVm -Name 'parent' -KeepSharedChildren
+ok "remove: a changed scope is re-read and confirmed with the fresh token" (
+    $script:calls.Count -eq 3 -and $script:calls[2].Body.cascade.token -eq 'tok-2')
+
+Reset-Api; $script:notes = @()
+AnswerSequence 'DELETE /vms/parent' @($required, $changed, $changed, $changed, $changed)
+ok "remove: a scope that keeps changing stops without deleting" (
+    (Get-ThrowMessage { Remove-ConstructVm -Name 'parent' -KeepSharedChildren }) -match 'keeps changing')
+
+Reset-Api
+$bare = Problem 409 'cascade-confirmation-required' 'no preview' @{ code = 'cascade-confirmation-required' }
+Answer 'DELETE /vms/parent' $null 409
+$script:answers['DELETE /vms/parent'] = $bare
+ok "remove: a cascade problem without a token is not silently confirmed" (
+    (Get-ThrowMessage { Remove-ConstructVm -Name 'parent' -KeepSharedChildren }) -match 'preview could not be read')
 
 # ── (i) Power ───────────────────────────────────────────────────────────────
 Write-Host ""
