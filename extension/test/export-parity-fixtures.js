@@ -75,6 +75,19 @@ function sshArgs() {
     for (const opts of [{}, { bindHost: "*" }, { bindHost: "::", connectAddress: "[2001:db8::1]", connectPort: 443 }, { bindHost: "bad", connectAddress: "child.example" }])
       rows.push({ kind: "forward", cfg, keyPath: hasKey ? keyPath : null, localPort: 18801, vmPort: 5173, opts, output: stable(ssh.buildLocalForwardArgs(cfg, 18801, 5173, hasKey, opts)) });
   }
+  // A VM on a host service is dialled over IPv4 (ssh.familyArgs).
+  for (const hasKey of [false, true]) for (const port of [22, 2222]) {
+    const cfg = { ...ssh.DEFAULTS, keyName: "test key", vmHost: "vm.example", hostAlias: "vm-alias", sshPort: port, ipv4: true };
+    const stable = args => args.map(arg => arg === ssh.keyPath(cfg) ? keyPath : arg);
+    rows.push({ kind: "run", cfg, keyPath: hasKey ? keyPath : null, command: "true", output: stable(ssh.buildSshArgs(cfg, "true", hasKey)) });
+    rows.push({ kind: "forward", cfg, keyPath: hasKey ? keyPath : null, localPort: 18801, vmPort: 5173, opts: {}, output: stable(ssh.buildLocalForwardArgs(cfg, 18801, 5173, hasKey, {})) });
+  }
+  // ...which instances.toSshCfg decides from the normalized instance.
+  for (const [backend, vmHost] of [["hyperv-remote", "buildbox.example"], ["hyperv-remote", "10.0.0.5"], ["hyperv-remote", "2001:db8::5"],
+                                   ["hyperv-remote", "fe80::5"], ["hyperv-local", "agent-vm.mshome.net"], ["", "vm.example"]]) {
+    const input = { backend, vmHost, hostAlias: "vm-alias", keyName: "test key", sshPort: 2201 };
+    rows.push({ kind: "instance", input, output: instances.toSshCfg(input) });
+  }
   for (const input of [null, "", "127.0.0.1", "001.2.3.4", "[::1]", "::ffff:1.2.3.004", "fe80::1%eth0", "[fe80::1%3]", "fe80::1%a_b", "fe80::1%a:b", "--option", "a/b", "foo_bar", "-host", "a".repeat(65), "\uFEFFchild.example\uFEFF", "\u0085child.example"]) rows.push({ kind: "address", input, output: ssh.normalizeConnectAddress(input) });
   for (const input of [null, "", "0.0.0.0", "*", "::", "bad", "\uFEFF*\uFEFF", "\u0085*"]) rows.push({ kind: "bind", input, output: ssh.normalizeBindHost(input) });
   for (const input of [0, -1, 22, 2222, 65535, 65536]) rows.push({ kind: "port", input, output: ssh.normalizeSshPort(input) });
@@ -284,8 +297,8 @@ function audioRuntime() {
     add("parse",stdout,{busy:audio.parseBusyPorts(stdout),patched:require("../src/repatch").confirmPatched("CONSTRUCT_GATE_PATCHED",stdout)});
   for(const busy of [[],[8767,8768],[8767,8768,8769,8770,8771,8772,8773,8774]]) add("ports",busy,audio.portCandidates(8767,8,busy));
   const keyPath="/fixture/home/.ssh/test key";
-  for(const hasKey of [false,true]) for(const port of [22,2222]) {
-    const cfg={...ssh.DEFAULTS,keyName:"test key",vmHost:"vm.example",hostAlias:"vm-alias",sshPort:port};
+  for(const hasKey of [false,true]) for(const port of [22,2222]) for(const ipv4 of [false,true]) {
+    const cfg={...ssh.DEFAULTS,keyName:"test key",vmHost:"vm.example",hostAlias:"vm-alias",sshPort:port,...(ipv4?{ipv4}:{})};
     const stable=args=>args.map(arg=>arg===ssh.keyPath(cfg)?keyPath:arg);
     add("tunnel",{cfg,keyPath:hasKey?keyPath:null},stable(audio.buildTunnelArgs(ssh,cfg,8767,30000,hasKey)));
     add("watchArgs",{cfg,keyPath:hasKey?keyPath:null},stable(notify.buildWatchArgs(ssh,cfg,hasKey,"echo test")));

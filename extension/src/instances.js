@@ -645,12 +645,16 @@ function isDefaultInstance(inst) {
  *  ssh.js defaults, which ARE the default instance. Pure. */
 function toSshCfg(inst) {
   if (!inst) return {};
-  return {
+  const cfg = {
     vmHost: inst.vmHost,
     hostAlias: inst.hostAlias,
     keyName: inst.keyName,
     sshPort: inst.sshPort,
   };
+  // A host service's SSH forwards listen on IPv4 only (ssh.familyArgs); an IPv6 literal
+  // endpoint is dialled as written.
+  if (isRemoteBackend(inst.backend) && !isIpv6Literal(inst.vmHost)) cfg.ipv4 = true;
+  return cfg;
 }
 
 // ── Parsing / validation ─────────────────────────────────────────────────────

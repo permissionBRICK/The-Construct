@@ -92,6 +92,7 @@ if ($InstanceName) {
     if (-not $PSBoundParameters.ContainsKey('HostAlias'))    { $HostAlias    = [string]$instanceTarget.HostAlias }
     if (-not $PSBoundParameters.ContainsKey('SshPort'))      { $SshPort      = [int]$instanceTarget.SshPort }
     if (-not $PSBoundParameters.ContainsKey('LocalKeyName')) { $LocalKeyName = [string]$instanceTarget.KeyName }
+    $script:SshFamilyOpts = @(Get-ConstructSshFamilyOptions -Ipv4 ([string]$instanceTarget.Backend -eq 'hyperv-remote') -VmHost $VmHost)
     $script:IsDefault = [bool]$instanceTarget.IsDefault
 }
 
@@ -107,6 +108,7 @@ try {
         $OutputEncoding = $utf8NoBom
     } catch { }
 
+    if (-not (Test-Path variable:script:SshFamilyOpts)) { $script:SshFamilyOpts = @() }
     $keyPath = Join-Path $HOME ".ssh\$LocalKeyName"
     $sshPortArgs = if ($SshPort -ne 22) { @("-p", "$SshPort") } else { @() }
     if (Test-Path -LiteralPath $keyPath) {
@@ -118,14 +120,14 @@ try {
             "-o", "UserKnownHostsFile=$HOME\.ssh\known_hosts",
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=15"
-        )
+        ) + $script:SshFamilyOpts
     } else {
         $sshTarget = $HostAlias
         $sshOpts = @(
             "-o", "StrictHostKeyChecking=accept-new",
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=15"
-        )
+        ) + $script:SshFamilyOpts
     }
 
     # The VM-side script: the control panel's pairing script (extension/src/t3code.js

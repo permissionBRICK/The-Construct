@@ -30,6 +30,16 @@ function keyPath(cfg) {
 }
 
 /**
+ * `-o AddressFamily=inet` for a cfg with `ipv4` set (instances.toSshCfg sets it for a VM
+ * on a host service). The service's SSH forwards listen on IPv4 only, while its advertised
+ * name can resolve to IPv6 first and Windows OpenSSH does not fall back. Empty otherwise,
+ * so every other argv is unchanged. Pure.
+ */
+function familyArgs(cfg) {
+  return cfg && cfg.ipv4 === true ? ["-o", "AddressFamily=inet"] : [];
+}
+
+/**
  * The SSH port for a cfg as a safe integer. Anything missing/garbage reads as 22 —
  * the only value that produces today's argv, so a malformed instance entry can
  * never turn into an `ssh -p NaN`. Pure.
@@ -54,6 +64,7 @@ function buildSshArgs(cfg, remoteCommand, hasKey) {
     "-o", "BatchMode=yes",
     "-o", "StrictHostKeyChecking=accept-new",
     "-o", `ConnectTimeout=${cfg.connectTimeout}`,
+    ...familyArgs(cfg),
   ];
   const port = normalizeSshPort(cfg.sshPort);
   if (port !== 22) common.push("-p", String(port));
@@ -125,6 +136,7 @@ function buildLocalForwardArgs(cfg, localPort, vmPort, hasKey, opts = {}) {
     "-o", "BatchMode=yes",
     "-o", "StrictHostKeyChecking=accept-new",
     "-o", `ConnectTimeout=${c.connectTimeout}`,
+    ...familyArgs(c),
     "-o", "ServerAliveInterval=15",
     "-o", "ServerAliveCountMax=3",
     "-o", "ExitOnForwardFailure=yes",
@@ -248,4 +260,4 @@ async function isReachable(opts = {}) {
   return r.code === 0;
 }
 
-module.exports = { DEFAULTS, keyPath, normalizeSshPort, normalizeForwardPort, normalizeBindHost, normalizeConnectAddress, FORWARD_BIND_LOOPBACK, FORWARD_BIND_ALL, buildSshArgs, buildLocalForwardArgs, wrapScriptCommand, runRemote, runRemoteScript, isReachable, resolveCfg };
+module.exports = { DEFAULTS, keyPath, familyArgs, normalizeSshPort, normalizeForwardPort, normalizeBindHost, normalizeConnectAddress, FORWARD_BIND_LOOPBACK, FORWARD_BIND_ALL, buildSshArgs, buildLocalForwardArgs, wrapScriptCommand, runRemote, runRemoteScript, isReachable, resolveCfg };

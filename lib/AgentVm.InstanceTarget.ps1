@@ -29,6 +29,7 @@
       Get-ConstructLocalVmIdentity -Name|-VmName   -> the whole derived identity of a local VM
       Resolve-ConstructVmTarget -Name [-Explicit]  -> the instance's identity, or a throw
       Register-ConstructLocalVm -Name              -> record a local VM in the registry
+      Get-ConstructSshFamilyOptions -Ipv4 -VmHost  -> the ssh options that dial a host service's endpoint over IPv4
 #>
 
 # Captured at DOT-SOURCE time: inside a dot-sourced file $PSScriptRoot is that file's own
@@ -67,6 +68,24 @@ function Resolve-ConstructVmTarget {
         . $modulePath
         Resolve-ConstructInstanceTarget -Name $n -Explicit $explicit
     } $module $Name $Explicit
+}
+
+function Get-ConstructSshFamilyOptions {
+    <#
+        The ssh options for dialling -VmHost: @('-o', 'AddressFamily=inet') when -Ipv4 is
+        set and -VmHost is not an IPv6 literal, @() otherwise. A host service's SSH
+        forwards (netsh v4tov4 on Hyper-V, the Proxmox relay) listen on IPv4 only, while
+        the name it advertises can resolve to IPv6 first -- on the service host itself, to
+        a link-local address -- and Windows OpenSSH does not fall back to the next
+        address. Callers pass -Ipv4 for a VM on a host service. Pure; call as @(...).
+    #>
+    param([bool]$Ipv4, [string]$VmHost)
+    if (-not $Ipv4) { return @() }
+    $bare = ("$VmHost".Trim().Trim('[', ']') -split '%')[0]
+    $ip = $null
+    if ([System.Net.IPAddress]::TryParse($bare, [ref]$ip) -and
+        $ip.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetworkV6) { return @() }
+    return @('-o', 'AddressFamily=inet')
 }
 
 function Get-ConstructInstanceNamePattern {
