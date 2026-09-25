@@ -318,11 +318,16 @@ public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDri
 
         if (result.TimedOut)
         {
+            ReportStderr(progress, result.StandardError);
             throw Fail(operation, vmName, $"timed out after {timeout.TotalMinutes:0} minutes");
         }
 
         if (result.ExitCode != 0)
         {
+            // The script's own error text goes to the job's PROGRESS, like the Proxmox driver's
+            // qm output: the job's owner sees why (a VHDX that exists, a missing switch) without it
+            // ever reaching the error, the audit trail or the log.
+            ReportStderr(progress, result.StandardError);
             throw Fail(operation, vmName, $"powershell.exe exited with {result.ExitCode}");
         }
 
@@ -353,6 +358,12 @@ public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDri
 
             if (ok.ValueKind != JsonValueKind.True)
             {
+                if (progress is not null && root.TryGetProperty("error", out var error) && error.ValueKind == JsonValueKind.String &&
+                    error.GetString() is { Length: > 0 } text)
+                {
+                    progress.Report("driver: " + text);
+                }
+
                 throw Fail(operation, vmName, "the driver reported the operation as failed");
             }
 
@@ -371,6 +382,35 @@ public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDri
     /// gets instead is the operation, the VM, and how it failed; what they get for detail is the
     /// driver's own progress output, which is streamed to the job as it happens.
     /// </summary>
+    /// <summary>
+    /// The first lines of a failed script's stderr, as progress. Progress is the job owner's
+    /// channel and is neither persisted as the error nor audited, so the text can be PowerShell's
+    /// own -- capped, because a stack of "At line:" frames says nothing more than the first one.
+    /// </summary>
+    private static void ReportStderr(IProgress<string>? progress, string standardError)
+    {
+        if (progress is null || string.IsNullOrWhiteSpace(standardError))
+        {
+            return;
+        }
+
+        var shown = 0;
+        foreach (var line in standardError.Split('\n'))
+        {
+            var text = line.Trim();
+            if (text.Length == 0)
+            {
+                continue;
+            }
+
+            progress.Report("powershell: " + text);
+            if (++shown == 6)
+            {
+                break;
+            }
+        }
+    }
+
     private HypervisorOperationException Fail(string operation, string vmName, string reason)
     {
         _logger.LogError(
