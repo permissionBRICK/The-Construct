@@ -124,9 +124,22 @@ function Show-ConstructHeader {
     Write-Host ""
 }
 
+# Warnings raised since the last TUI screen. A screen wipes the console, so a warning
+# printed just before one was never seen; the next screen re-shows these under its header.
+$script:ConstructTuiNotices = New-Object System.Collections.Generic.List[string]
+
+function Add-ConstructTuiNotice {
+    <# Queue a message for the top of the next TUI screen (see Show-TuiScreen). #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Message)
+    if ($null -eq $script:ConstructTuiNotices) { $script:ConstructTuiNotices = New-Object System.Collections.Generic.List[string] }
+    $script:ConstructTuiNotices.Add($Message)
+}
+
 function Show-TuiScreen {
     <#
         Start a new TUI screen: wipe the console and redraw the Construct header,
+        then the warnings queued since the previous screen (Add-ConstructTuiNotice),
         then the given step title and optional body lines. Subsequent output
         (menus, prompts, progress) belongs to this screen until the next call.
         With TUI off it degrades to the normal scrolling Write-Step output, so
@@ -138,12 +151,18 @@ function Show-TuiScreen {
         [string[]] $Body
     )
     if (-not (Test-ConstructTui)) {
+        if ($null -ne $script:ConstructTuiNotices) { $script:ConstructTuiNotices.Clear() }
         if ($Title) { Write-Host "`n==> $Title" -ForegroundColor Cyan }
         foreach ($b in @($Body)) { if ($null -ne $b) { Write-Host "    $b" -ForegroundColor White } }
         return
     }
     Clear-Host
     Show-ConstructHeader
+    if ($null -ne $script:ConstructTuiNotices -and $script:ConstructTuiNotices.Count -gt 0) {
+        foreach ($n in $script:ConstructTuiNotices) { Write-Host "  WARNING: $n" -ForegroundColor Yellow }
+        Write-Host ""
+        $script:ConstructTuiNotices.Clear()
+    }
     if ($Title) {
         Write-Host "  $Title" -ForegroundColor Cyan
         Write-Host ""

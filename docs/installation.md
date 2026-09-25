@@ -114,7 +114,8 @@ kept. The transcript is skipped when a credential was passed on the command line
 its header records the command line. A run that ends in an error pauses with "Press Enter
 to exit" and prints the log path, also when the Companion or the control panel launched it;
 a clean panel-launched run still closes by itself. The Companion's debug setting
-additionally keeps every console it launches open.
+additionally keeps every console it launches open. Warnings raised between two installer
+screens are shown again at the top of the next screen, since a screen clears the console.
 
 ## Option B — full bundle (repo + ISO together)
 
@@ -472,6 +473,13 @@ configuration, not client state.
     -ServiceUrl https://buildbox.example.local:7462 -ServiceAuth negotiate `
     -InstanceName work-vm -VmCpuCount 4 -VmMemoryGB 8 -VmDiskGB 60 -Projects default
 ```
+
+Typing the name of an instance this PC already registers for the same host service, whose
+VM the service no longer has (deleted from the admin panel, or a rebuild that never
+finished), rebuilds it under that name — same key file, SSH alias and config-sync branch —
+and offers the config last saved on this host. That includes `agent-vm` for a converted
+default instance. An instance whose VM still exists is rebuilt through **Reinstall** (or
+`-InstanceName <name>`), never by a second install under its name.
 
 The host service creates the VM from the autoinstall ISO its administrator built at install
 time (one generic ISO serves every VM: the guest takes its hostname from the Hyper-V VM name

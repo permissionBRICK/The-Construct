@@ -942,6 +942,15 @@ ok "auto-install: the transcript starts before anything else runs" (
     $aiScript.IndexOf('Start-Transcript') -lt $aiScript.IndexOf('function Wait-Exit'))
 ok "auto-install: the transcript is closed on both exit paths" (
     ([regex]::Matches($aiScript, 'Stop-InstallTranscript')).Count -ge 3)
+# A TUI screen wipes the console; warnings raised before it must reappear on it.
+ok "auto-install: warnings are queued for the next TUI screen" (
+    $aiScript -match '(?s)function Write-Warning \{.*?Add-ConstructTuiNotice -Message \$Message.*?Microsoft\.PowerShell\.Utility\\Write-Warning -Message \$Message')
+$libCommon = Get-Content -Raw (Join-Path $here "..\lib\AgentVm.Common.ps1")
+$tuiScreen = $libCommon.Substring($libCommon.IndexOf('function Show-TuiScreen'), 1800)
+ok "tui: Show-TuiScreen re-shows the queued warnings right after the clear" (
+    $tuiScreen.IndexOf('Clear-Host') -gt 0 -and
+    $tuiScreen.IndexOf('$script:ConstructTuiNotices.Count -gt 0') -gt $tuiScreen.IndexOf('Clear-Host') -and
+    $tuiScreen.IndexOf('$script:ConstructTuiNotices.Count -gt 0') -lt $tuiScreen.IndexOf('if ($Title) {', $tuiScreen.IndexOf('Clear-Host')))
 
 # ── T3CodeChannel ValidateSet (finding #5: injection safety) ─────────────────
 # Each entry point must enforce the exact ""|"stable"|"nightly" contract via

@@ -810,7 +810,8 @@ ok "rebuild: every config export passes that key" (
 ok "rebuild: the export hands -KeyName to the provisioner" (
     (Get-InstallerFunctionText 'Invoke-RemoteVmConfigExport') -match 'LocalKeyName = \$KeyName')
 ok "rebuild: the name rule is skipped for the instance being rebuilt" (
-    $autoRbText -match 'while \(-not \$script:RemoteRebuildName -and -not \(Test-ConstructRemoteInstanceName \$instName\)\)')
+    $autoRbText -match 'while \(-not \$script:RemoteRebuildName\)' -and
+    $autoRbText.IndexOf('Test-ConstructRemoteInstanceName $instName') -gt $autoRbText.IndexOf('while (-not $script:RemoteRebuildName)'))
 ok "rebuild: the record step merges into the existing entry" (
     $autoRbText -match 'New-ConstructRemoteVmRecord -Name \$instName[^\r\n]*`\s*\r?\n[^\r\n]*`\s*\r?\n\s*-RegistryPath[^\r\n]*`\s*\r?\n\s*-Rebuild:\(\[bool\]\$script:RemoteRebuildName\)')
 ok "rebuild: its provisioning uses the entry's key and branch" (
@@ -820,6 +821,33 @@ ok "rebuild: its provisioning uses the entry's key and branch" (
 # story: nothing is created before the pre-check, and nothing is provisioned before the
 # instance is recorded.
 Write-Host ""
+Write-Host "=== A registered name whose VM is gone is taken over by the install ===" -ForegroundColor Cyan
+$nameLoop = $aiTxt.IndexOf('$script:RemoteTakeover = $false')
+$createAt = $aiTxt.IndexOf('$preEntry = New-ConstructRemoteInstanceEntry -Name $instName')
+$nameBlock = $aiTxt.Substring($nameLoop, $createAt - $nameLoop)
+ok "takeover: the typed name is looked up on the service before anything is created" (
+    $nameLoop -gt 0 -and $createAt -gt $nameLoop -and $nameBlock -match 'Test-ConstructVmPresent -Name \$instName')
+ok "takeover: only a VM the service POSITIVELY lacks is taken over" ($nameBlock -match 'if \(\$present -eq \$false\)')
+ok "takeover: ...as a rebuild under that name" ($nameBlock -match '\$script:RemoteRebuildName = \$instName')
+ok "takeover: ...with the entry's key and config branch" (
+    $nameBlock -match '\$instKey\s+= \[string\]\$known\.KeyName' -and $nameBlock -match '\$instBranch = \[string\]\$known\.ConfigBranch')
+ok "takeover: ...only for an entry on THIS service" ($nameBlock -match "\`$knownUrl -eq \`$svcUrl")
+ok "takeover: a VM that still exists is not taken over (Reinstall is the way)" ($nameBlock -match 'choose Reinstall for it')
+ok "takeover: the saved config is offered like a reinstall" (
+    $nameBlock -match 'if \(\$script:RemoteTakeover\)' -and $nameBlock -match 'backup-info\.json')
+ok "prompt: a refused name's reason is shown INSIDE the prompt screen" ($nameBlock -match '\$nameBody = @\(\$nameProblem, ""\) \+ \$nameBody')
+ok "prompt: the local default's name stays reserved" ($nameBlock -match "'agent-vm' is reserved for this PC's default")
+ok "rollback: the post-create refusal says how to clear a dead entry" ($aiTxt -match 'rebuild it under its own name \(install again and type that name\)')
+# A NEW name: every other entry this PC keeps for the same service is checked on the
+# service first, so a dead entry's reallocated port cannot fail the install after the build.
+$staleAt = $aiTxt.IndexOf('$stale = @()')
+$staleBlock = $aiTxt.Substring($staleAt, 1400)
+ok "stale: other entries on this service are probed BEFORE the create" ($staleAt -gt $nameLoop -and $staleAt -lt $createAt)
+ok "stale: ...only entries of THIS service" ($staleBlock -match '\$otherUrl -ne \$svcUrl\) \{ continue \}')
+ok "stale: ...only a VM the service positively lacks counts" ($staleBlock -match 'if \(\$present -eq \$false\) \{ \$stale \+= ')
+ok "stale: ...and the install stops with the two ways out" (
+    $staleBlock -match 'has no such VM anymore' -and $staleBlock -match '-Action remove-instance -InstanceName \$\(\$stale\[0\]\)')
+
 Write-Host "=== Reinstall keeps shared children ===" -ForegroundColor Cyan
 # The reinstall's delete confirms the cascade with keep=shared through the driver's
 # -KeepSharedChildren -- probed first, so an older driver still binds.
