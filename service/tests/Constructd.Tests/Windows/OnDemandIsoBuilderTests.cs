@@ -36,6 +36,28 @@ public sealed class OnDemandIsoBuilderTests
     }
 
     [Fact]
+    public async Task NewIsoToolRebuildsWithoutRedownloadingTheSource()
+    {
+        var files = new FakeIsoFileSystem();
+        var clock = new MutableClock();
+        var options = PlatformOptions.Create();
+        var catalog = new FileIsoCatalog(files, clock, options.Iso.CacheDir, NullLogger<FileIsoCatalog>.Instance);
+        var producer = new FakeIsoMediaBuilder(files);
+        using var builder = new OnDemandIsoBuilder(catalog, producer, files, clock, options);
+        Task<string> Build() => builder.BuildAsync("vm", "construct", "secret", "key", null, default);
+
+        var first = await Build();
+        Assert.Equal(first, await Build());
+        producer.ScriptSha256 = "new-tool-hash";
+        clock.Advance(TimeSpan.FromMinutes(1));
+        var rebuilt = await Build();
+        Assert.NotEqual(first, rebuilt);
+        Assert.Equal(2, producer.Requests.Count);
+        Assert.False(producer.Requests[1].Redownload);
+        Assert.Equal(rebuilt, await Build());
+    }
+
+    [Fact]
     public async Task RedownloadReplacesOnlyChecksumVerifiedSourceAndFailureKeepsTheOldOne()
     {
         var options = PlatformOptions.Create();

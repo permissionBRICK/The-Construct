@@ -333,6 +333,14 @@ function Invoke-ConstructHostUpdate([string]$HandoffPath, [bool]$IsResume, [bool
             Get-ChildItem -LiteralPath $h.publishDir -Filter 'install.json.*.tmp' -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
             Write-UpdateJson (Join-Path $h.publishDir 'install.json') @{source=$manifest.installedSource;commit=$h.commit;packageVersion=$manifest.packageVersion;installedAt=[DateTimeOffset]::UtcNow.ToString('o');previousCommit=$h.previousCommit;updateId=$h.updateId;files=$newFiles}
             $r.outcome='succeeded'; Write-UpdateJson $recordPath $r
+            # The ISO tool lives in preserved .construct-tools, so a new pin in config\iso-builder.json
+            # reaches it only here. Best effort: a failed download keeps the previous tool.
+            try {
+                . (Join-Path $h.scriptsDir 'lib\Construct.Iso.ps1')
+                [void](Resolve-ConstructIsoBuilder -ScriptsDir $h.scriptsDir)
+            } catch {
+                try { [IO.File]::AppendAllText((Join-Path $root 'updater.log'), ([DateTimeOffset]::UtcNow.ToString('o') + ' iso-tool refresh failed exception=' + $_.Exception.GetBaseException().GetType().FullName + [Environment]::NewLine), (New-Object Text.UTF8Encoding($false))) } catch { }
+            }
             & schtasks.exe /Delete /TN Construct-HostUpdate /F 2>$null | Out-Null
             # Pruning only after successful health and a durable terminal outcome.
             Get-ChildItem -LiteralPath $root -Directory -Filter 'backup-*' | Where-Object { Test-Path -LiteralPath (Join-Path $_.FullName 'backup-complete.json') } | Sort-Object LastWriteTimeUtc -Descending | Select-Object -Skip 2 | ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force }

@@ -20,6 +20,12 @@ public interface IIsoMediaBuilder
         IsoMediaRequest request,
         IProgress<string>? progress,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// SHA-256 of the script or executable a build would run now, or null when it is not known.
+    /// Published media whose sidecar records another hash was built by an older tool and is stale.
+    /// </summary>
+    string? CurrentBuilderSha256() => null;
 }
 
 /// <summary>What to build, and where to put it.</summary>
