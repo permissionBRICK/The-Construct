@@ -209,15 +209,34 @@ public sealed class PersistenceFoundationTests : IDisposable
         await jobs.UpsertAsync(job, Ct); Assert.True(await store.TryFenceAsync("child", "busy", false, Ct));
         var children = Constructd.Core.Logic.CascadeRules.Children(await store.ListChildrenAsync("parent", Ct));
         await store.SaveCascadePreviewAsync(new("parent", null, "preview", clock.UtcNow, clock.UtcNow.AddMinutes(1), children, CascadeState.Previewed, null, new Dictionary<string, string>()), Ct);
-        var rejected = await store.TryAcceptCascadeAsync("parent", "preview", "cascade", Ct);
+        var rejected = await store.TryAcceptCascadeAsync("parent", "preview", "cascade", false, Ct);
         Assert.False(rejected.Accepted); Assert.Equal("operation-in-progress", rejected.Reason);
         Assert.False((await vms.GetAsync("parent", Ct))!.Deleting); Assert.Equal("busy", (await vms.GetAsync("child", Ct))!.CurrentJobId);
         await jobs.UpsertAsync(job with { State = JobState.Failed }, Ct);
         Assert.True(await store.TryFenceAsync("child", "retry", false, Ct));
         // Missing/terminal jobs do not prevent a retry, and expiry uses the supplied clock.
-        clock.Advance(TimeSpan.FromMinutes(2)); Assert.False((await store.TryAcceptCascadeAsync("parent", "preview", "cascade", Ct)).Accepted);
+        clock.Advance(TimeSpan.FromMinutes(2)); Assert.False((await store.TryAcceptCascadeAsync("parent", "preview", "cascade", false, Ct)).Accepted);
         await store.SaveCascadePreviewAsync(new("parent", null, "fresh", clock.UtcNow, clock.UtcNow.AddMinutes(1), children, CascadeState.Previewed, null, new Dictionary<string, string>()), Ct);
-        Assert.True((await store.TryAcceptCascadeAsync("parent", "fresh", "cascade", Ct)).Accepted);
+        Assert.True((await store.TryAcceptCascadeAsync("parent", "fresh", "cascade", false, Ct)).Accepted);
+    }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CascadeKeepSharedFencesOnlyThePrivateChildren(bool sqlite)
+    {
+        var db = Database(); db.EnsureCreated(); var clock = new MutableClock();
+        IJobStore jobs = sqlite ? new SqliteJobStore(db) : new InMemoryJobStore();
+        IVmRepository vms = sqlite ? new SqliteVmRepository(db, clock) : new InMemoryVmRepository(jobs, clock);
+        var store = (IVmDelegationRepository)vms;
+        await vms.AddAsync(Primary(), 2, Ct); await store.AddAsync(Child(), Allowance, Ct);
+        await store.AddAsync(Child("shared") with { Sharing = SharingScope.Host }, Allowance, Ct);
+        var children = Constructd.Core.Logic.CascadeRules.Children(await store.ListChildrenAsync("parent", Ct));
+        await store.SaveCascadePreviewAsync(new("parent", null, "keep", clock.UtcNow, clock.UtcNow.AddMinutes(1), children, CascadeState.Previewed, null, new Dictionary<string, string>()), Ct);
+        Assert.True((await store.TryAcceptCascadeAsync("parent", "keep", "cascade", true, Ct)).Accepted);
+        Assert.True((await vms.GetAsync("parent", Ct))!.Deleting); Assert.True((await vms.GetAsync("child", Ct))!.Deleting);
+        var kept = (await vms.GetAsync("shared", Ct))!; Assert.False(kept.Deleting); Assert.Null(kept.CurrentJobId); Assert.Equal("parent", kept.Parent);
+        var accepted = (await store.GetCascadePreviewAsync("parent", Ct))!;
+        Assert.Equal(CascadeState.Accepted, accepted.State); Assert.Equal("kept", Assert.Single(accepted.Outcomes).Value); Assert.Equal("shared", Assert.Single(accepted.Outcomes).Key);
     }
     [Fact]
     public async Task IdleEngineSkipsChildren()

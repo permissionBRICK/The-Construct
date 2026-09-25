@@ -337,6 +337,38 @@ function New-ConstructVm {
     }
 }
 
+function ConvertFrom-ConstructCascadeProblem {
+    <#
+        The children and the preview token out of a 409 cascade problem document
+        (children / cascadeToken / expiresAt next to the RFC 7807 fields). $null when the
+        body carries no token. Sharing is lowercased; anything but 'private' is shared.
+        Pure.
+    #>
+    [CmdletBinding()]
+    param([string]$Body)
+    if (-not $Body) { return $null }
+    $doc = $null
+    try { $doc = $Body | ConvertFrom-Json } catch { return $null }
+    $token = ""
+    if ($doc.PSObject.Properties['cascadeToken']) { $token = [string]$doc.cascadeToken }
+    if (-not $token) { return $null }
+    $children = @()
+    if ($doc.PSObject.Properties['children'] -and $doc.children) {
+        $children = @($doc.children | ForEach-Object {
+            $sharing = ""
+            if ($_.PSObject.Properties['sharing']) { $sharing = ([string]$_.sharing).ToLowerInvariant() }
+            if (-not $sharing) { $sharing = 'private' }
+            [pscustomobject]@{
+                Name    = [string]$_.name
+                Sharing = $sharing
+                Shared  = ($sharing -ne 'private')
+                State   = $(if ($_.PSObject.Properties['state']) { ([string]$_.state).ToLowerInvariant() } else { '' })
+            }
+        })
+    }
+    return [pscustomobject]@{ Token = $token; Children = $children }
+}
+
 function Remove-ConstructVm {
     <#
         Delete the VM on the remote host, including its disks and its port forwards:
@@ -346,22 +378,57 @@ function Remove-ConstructVm {
 
         No-op when the VM does not exist, matching the local driver: a 404 here means
         the desired end state already holds.
+
+        A primary WITH CHILDREN needs the service's cascade confirmation: the first
+        DELETE answers 409 cascade-confirmation-required with the children and a preview
+        token, and the DELETE is repeated with that token. Without -KeepSharedChildren
+        nothing is confirmed here -- deleting somebody's shared child is never implied --
+        and the call stops naming the children. With it (a reinstall), the confirmation
+        keeps every shared child (it stays attached by name and follows the primary
+        re-created under this name) and lets the private ones go with the primary. A
+        scope that changes between preview and confirmation is re-read, a few times.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Name,
-        [int]$TimeoutSeconds = 1800
+        [int]$TimeoutSeconds = 1800,
+        [switch]$KeepSharedChildren
     )
     Assert-ConstructRemoteContext
 
     Write-Step "Asking the host service to remove '$Name'"
-    $accepted = Invoke-ConstructRemoteApi -Method DELETE -Path "/vms/$Name" -NoThrow
-    if ($null -eq $accepted) {
+    $body = $null
+    $accepted = $null
+    for ($round = 0; $round -lt 4; $round++) {
+        $accepted = Invoke-ConstructRemoteApi -Method DELETE -Path "/vms/$Name" -Body $body -NoThrow
+        if ($null -ne $accepted) { break }
         if ((Get-ConstructApiLastStatus) -eq 404) {
             Write-Note "No VM named '$Name' on the host service -- nothing to remove."
             return
         }
-        throw "Could not remove '$Name' on the host service: $(Get-ConstructApiLastError)"
+        $problem = Get-ConstructApiLastProblem
+        $code = [string]$problem.Code
+        if ($code -eq 'cascade-token-expired') { $body = $null; continue }
+        if ($code -notin @('cascade-confirmation-required', 'cascade-scope-changed')) {
+            throw "Could not remove '$Name' on the host service: $(Get-ConstructApiLastError)"
+        }
+        $scope = ConvertFrom-ConstructCascadeProblem -Body ([string]$problem.Body)
+        if ($null -eq $scope) {
+            throw "Could not remove '$Name' on the host service: it has child VMs, and the service's cascade preview could not be read ($(Get-ConstructApiLastError))."
+        }
+        $named = @($scope.Children | ForEach-Object { "$($_.Name) ($($_.Sharing))" }) -join ', '
+        if (-not $KeepSharedChildren) {
+            throw "'$Name' has child VM(s) on the host service -- $named -- and deleting it would delete them too. This run does not confirm that: delete or move the children first, or delete the primary from the host admin panel."
+        }
+        $wipe = @($scope.Children | Where-Object { -not $_.Shared })
+        $keep = @($scope.Children | Where-Object { $_.Shared })
+        if ($code -eq 'cascade-scope-changed') { Write-Note "The set of child VMs changed meanwhile; confirming the current one." }
+        if ($wipe.Count -gt 0) { Write-Note "Deleting $($wipe.Count) private child VM(s) with it: $(@($wipe | ForEach-Object { $_.Name }) -join ', ')" }
+        if ($keep.Count -gt 0) { Write-Note "Keeping $($keep.Count) shared child VM(s): $(@($keep | ForEach-Object { $_.Name }) -join ', ') -- attached again once '$Name' is rebuilt" }
+        $body = @{ cascade = @{ token = $scope.Token; keep = 'shared' } }
+    }
+    if ($null -eq $accepted) {
+        throw "The set of child VMs of '$Name' keeps changing; nothing was deleted. Try again when it is stable."
     }
     $jobId = Get-ConstructRemoteJobId -Response $accepted -What "remove $Name"
     Write-Note "job $jobId accepted"

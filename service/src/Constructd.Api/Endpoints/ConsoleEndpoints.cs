@@ -23,7 +23,9 @@ public static class ConsoleEndpoints
                 (string)http.Request.RouteValues["name"]!, Policies.ConsoleOperator, ct);
             if (!lookup.Ok) return lookup.Failure!;
             var vm = lookup.Vm!;
-            if (vm.Deleting || (vm.Parent is not null && await vms.GetAsync(vm.Parent, ct) is not { Deleting: false, ChildCreationClosed: false }))
+            // A parent that is being deleted blocks its children; a parent that is absent (kept child of a
+            // primary between its delete and its rebuild) does not.
+            if (vm.Deleting || (vm.Parent is not null && await vms.GetAsync(vm.Parent, ct) is { } parentVm && (parentVm.Deleting || parentVm.ChildCreationClosed)))
                 return CodedProblems.Create(409, "vm-deleting", "The VM or its parent is being deleted.");
             http.Items[VmKey] = vm;
             if (!HttpMethods.IsGet(http.Request.Method)) Audit(http, "console");

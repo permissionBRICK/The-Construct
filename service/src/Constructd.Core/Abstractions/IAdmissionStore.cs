@@ -22,7 +22,8 @@ public sealed record AdmissionPlan(
     bool CloseChildCreation,
     string? VmToAssignJob = null,
     int? OwnerChildrenLimit = null,
-    (string VmName, string Commit)? VmSourceCommit = null);
+    (string VmName, string Commit)? VmSourceCommit = null,
+    bool KeepSharedChildren = false);
 
 public enum AdmissionOutcome { Accepted, Replay, KeyConflict, VersionConflict, NameTaken, QuotaExceeded, ParentClosed, ParentMissing, MediaNotReady, CapacityRefused, CascadeMismatch }
 

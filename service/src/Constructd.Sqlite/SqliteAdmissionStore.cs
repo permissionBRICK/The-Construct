@@ -72,7 +72,7 @@ public sealed class SqliteAdmissionStore(SqliteCapacityLedger ledger, IClock clo
         if (plan.CascadeToAccept is { } preview)
         {
             cascade = await SqliteVmRepository.AcceptCascadeInTransaction(tx.Connection, tx.Sql, preview.Parent,
-                preview.Token, plan.FenceJobId ?? throw new ArgumentException("Cascade requires a job."), clock.UtcNow, ct);
+                preview.Token, plan.FenceJobId ?? throw new ArgumentException("Cascade requires a job."), plan.KeepSharedChildren, clock.UtcNow, ct);
             if (!cascade.Accepted) return Result(AdmissionOutcome.CascadeMismatch, cascade: cascade);
         }
         else if (plan.VmToFence is { } name)

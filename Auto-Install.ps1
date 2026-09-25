@@ -2659,9 +2659,14 @@ if ($RemoteInstall) {
         }
 
         Show-TuiScreen -Title "Removing the remote VM" -Body @(
-            "Asking $svcUrl to delete '$instName' and release its port forward..."
+            "Asking $svcUrl to delete '$instName' and release its port forward...",
+            "Its private child VMs go with it; shared child VMs are kept and are",
+            "attached to the rebuilt VM again."
         )
-        Remove-ConstructVm -Name $instName
+        # Probe before splat: an older driver has no -KeepSharedChildren and would fail to bind.
+        $removeArgs = @{ Name = $instName }
+        if ((Get-Command Remove-ConstructVm).Parameters.ContainsKey('KeepSharedChildren')) { $removeArgs['KeepSharedChildren'] = $true }
+        Remove-ConstructVm @removeArgs
         $script:RemoteRebuildName = $instName
     }
 

@@ -74,7 +74,7 @@ public sealed class InMemoryAdmissionStore(InMemoryVmRepository vms, InMemoryUse
         if (plan.CascadeToAccept is { } preview)
         {
             if (plan.FenceJobId is null) throw new ArgumentException("Cascade admission requires a fence job.");
-            cascade = Done(vms.TryAcceptCascadeAsync(preview.Parent, preview.Token, plan.FenceJobId, ct));
+            cascade = Done(vms.TryAcceptCascadeAsync(preview.Parent, preview.Token, plan.FenceJobId, plan.KeepSharedChildren, ct));
             if (!cascade.Accepted) return Result(AdmissionOutcome.CascadeMismatch, cascade: cascade);
         }
         else if (plan.VmToFence is { } name && (plan.FenceJobId is null || !Done(vms.TryFenceAsync(name, plan.FenceJobId, plan.CloseChildCreation, ct))))

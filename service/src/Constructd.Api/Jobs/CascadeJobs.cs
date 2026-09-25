@@ -14,6 +14,7 @@ public sealed class CascadeJobs(IVmRepository vms, IVmDelegationRepository deleg
         await using var gate = await gates.AcquireAsync(parent.Name, job.Id, ct);
         if (job.Kind == "remove-vm") return await RemovePrimaryAsync(job, parent, preview, progress, ct);
         var outcomes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var mark in preview.Outcomes) if (mark.Value == CascadeRules.KeptOutcome) outcomes[mark.Key] = mark.Value;
         var saved = preview with { State = CascadeState.Running, JobId = job.Id, Outcomes = outcomes };
         try
         {
@@ -23,6 +24,9 @@ public sealed class CascadeJobs(IVmRepository vms, IVmDelegationRepository deleg
             await Phase("children");
             foreach (var expected in preview.Children)
             {
+                // Kept by the confirmation (keep=shared): never fenced, never touched; it stays parented by
+                // name and a primary re-created under this name is its parent again.
+                if (outcomes.TryGetValue(expected.Name, out var mark) && mark == CascadeRules.KeptOutcome) continue;
                 await using var childGate = await gates.AcquireAsync(expected.Name, job.Id, ct);
                 var child = await vms.GetAsync(expected.Name, ct);
                 try
@@ -42,7 +46,8 @@ public sealed class CascadeJobs(IVmRepository vms, IVmDelegationRepository deleg
                 await delegation.SaveCascadePreviewAsync(saved with { Outcomes = new Dictionary<string,string>(outcomes) }, CancellationToken.None);
                 ct.ThrowIfCancellationRequested();
             }
-            if (outcomes.Values.Any(value => value != "removed") || (await delegation.ListChildrenAsync(parent.Name, ct)).Count != 0)
+            if (outcomes.Values.Any(value => value != "removed" && value != CascadeRules.KeptOutcome) ||
+                (await delegation.ListChildrenAsync(parent.Name, ct)).Any(child => !outcomes.TryGetValue(child.Name, out var o) || o != CascadeRules.KeptOutcome))
                 throw new LifecycleException("cascade-cleanup-incomplete");
             await Phase("primary");
             var id = await childDriver.GetVmIdAsync(parent.Name, ct);
@@ -72,11 +77,11 @@ public sealed class CascadeJobs(IVmRepository vms, IVmDelegationRepository deleg
             await delegation.SaveCascadePreviewAsync(saved with { State = CascadeState.Failed, Outcomes = outcomes }, CancellationToken.None);
             await Audit(false);
             throw new JobFailureException(SafeError.Describe(ex), new { name = parent.Name,
-                children = outcomes.Select(p => new { name = p.Key, outcome = p.Value == "removed" ? "removed" : "retained", error = p.Value == "removed" ? null : p.Value }) });
+                children = outcomes.Select(p => new { name = p.Key, outcome = p.Value is "removed" or CascadeRules.KeptOutcome ? p.Value : "retained", error = p.Value is "removed" or CascadeRules.KeptOutcome ? null : p.Value }) });
         }
         async Task Phase(string phase) { await runner.SetPhaseAsync(job.Id, phase, ct); progress.Report("Cascade deletion: " + phase + "."); }
         Task Audit(bool success) => audit.AppendAsync(new(clock.UtcNow, job.Initiator ?? job.Owner, "vm.delete.completed", parent.Name,
-            success ? AuditOutcome.Success : AuditOutcome.Failure, $"owner={parent.Owner}, parent={parent.Name}, job={job.Id}, cascade={preview.Children.Count}"), CancellationToken.None);
+            success ? AuditOutcome.Success : AuditOutcome.Failure, $"owner={parent.Owner}, parent={parent.Name}, job={job.Id}, cascade={preview.Children.Count(c => !CascadeRules.KeptOutcome.Equals(preview.Outcomes.GetValueOrDefault(c.Name)))}, kept={preview.Outcomes.Count(o => o.Value == CascadeRules.KeptOutcome)}"), CancellationToken.None);
     }
     private async Task<JobOutcome> RemovePrimaryAsync(Job job, Vm parent, CascadePreview preview, IProgress<string> progress, CancellationToken ct)
     {

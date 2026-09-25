@@ -88,7 +88,7 @@ future OIDC or Proxmox-token provider needs no driver change.
 | `Test-ConstructDriverPrereqs` | – | `$true`/`$false`; cheap, never throws, never elevates |
 | `Ensure-ConstructDriverPrereqs` | `-Scope Platform\|HostAccess\|All` | default `Platform`; assumes the caller is elevated |
 | `New-ConstructVm` | `-Descriptor <hashtable>` | creates **and configures**; leaves the VM off |
-| `Remove-ConstructVm` | `-Name` | includes the disk chain; no-op when absent |
+| `Remove-ConstructVm` | `-Name` | includes the disk chain; no-op when absent. The remote driver also takes `-KeepSharedChildren` (a reinstall): it confirms the service's cascade preview so private children go with the primary and shared ones stay attached by name; without it a primary with children is refused with their names |
 | `Start-ConstructVm` | `-Name` | also resumes `saved`/`paused` |
 | `Stop-ConstructVm` | `-Name [-TurnOff] [-Force]` | `-TurnOff` = hard power cut |
 | `Save-ConstructVm` | `-Name` | suspend to disk (capability `Suspend`) |

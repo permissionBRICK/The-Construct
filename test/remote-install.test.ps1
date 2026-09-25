@@ -820,6 +820,17 @@ ok "rebuild: its provisioning uses the entry's key and branch" (
 # story: nothing is created before the pre-check, and nothing is provisioned before the
 # instance is recorded.
 Write-Host ""
+Write-Host "=== Reinstall keeps shared children ===" -ForegroundColor Cyan
+# The reinstall's delete confirms the cascade with keep=shared through the driver's
+# -KeepSharedChildren -- probed first, so an older driver still binds.
+$riDelete = $aiTxt.IndexOf('Show-TuiScreen -Title "Removing the remote VM"')
+$riDeleteBlock = $aiTxt.Substring($riDelete, 900)
+ok "reinstall: the delete asks the driver to keep shared children" (
+    $riDeleteBlock -match "Parameters\.ContainsKey\('KeepSharedChildren'\)" -and
+    $riDeleteBlock -match "\`$removeArgs\['KeepSharedChildren'\] = \`$true" -and
+    $riDeleteBlock -match 'Remove-ConstructVm @removeArgs')
+ok "reinstall: ...and tells the user the rule first" ($riDeleteBlock -match 'shared child VMs are kept')
+
 Write-Host "=== Create-path ordering and rollback ===" -ForegroundColor Cyan
 $autoText  = $autoAst.Extent.Text
 $recordFn  = Get-InstallerFunctionText 'New-ConstructRemoteVmRecord'

@@ -15,7 +15,7 @@ public static class CascadeEndpoints
         var s = http.RequestServices; var delegation = s.GetRequiredService<IVmDelegationRepository>();
         var clock = s.GetRequiredService<IClock>(); var gate = s.GetRequiredService<IVmOperationGate>();
         if (await LifecycleEndpoints.LiveAsync(parent, s, ct)) return Results.Ok(new { jobId = parent.CurrentJobId, replayed = true });
-        string? token = null;
+        string? token = null; var keepShared = false;
         if (http.Request.ContentLength > 0 || http.Request.Headers.TransferEncoding.Count > 0)
         {
             try
@@ -24,6 +24,13 @@ public static class CascadeEndpoints
                 if (body.RootElement.TryGetProperty("cascade", out var cascade) && cascade.ValueKind == JsonValueKind.Object &&
                     cascade.TryGetProperty("token", out var value) && value.ValueKind == JsonValueKind.String) token = value.GetString();
                 else return CodedProblems.Validation("cascade", "Expected the preview token.");
+                // keep: "shared" -- a reinstall's confirmation: private children go with the primary, every
+                // other child stays, still parented by name, and follows the primary re-created under it.
+                if (cascade.TryGetProperty("keep", out var keep))
+                {
+                    if (keep.ValueKind == JsonValueKind.String && keep.GetString() == "shared") keepShared = true;
+                    else return CodedProblems.Validation("cascade", "Expected keep to be \"shared\".");
+                }
             }
             catch (JsonException) { return CodedProblems.Validation("cascade", "Invalid confirmation."); }
         }
@@ -43,6 +50,8 @@ public static class CascadeEndpoints
         var preview = token is null ? await Preview() : await delegation.GetCascadePreviewAsync(parent.Name, ct);
         if (preview is null || preview.Token != token && token is not null) return Confirmation(await Preview(), "cascade-scope-changed");
         if (preview.ExpiresAt <= clock.UtcNow) return LifecycleEndpoints.Problem("cascade-token-expired");
+        var kept = CascadeRules.KeptOutcomes(preview.Children, keepShared);
+        preview = preview with { Outcomes = kept };
         var id = Guid.NewGuid().ToString("n");
         var job = new Job(id, children.Count > 0 ? "parent-cascade-delete" : "remove-vm", parent.Name, parent.Owner, JobState.Queued,
             [], null, null, clock.UtcNow, null, http.User.Actor());
@@ -59,7 +68,7 @@ public static class CascadeEndpoints
                 childGates.Add(held);
             }
             var admission = s.GetRequiredService<IAdmissionStore>();
-            var accepted = await admission.AdmitAsync(new(null, null, null, [], [], [], null, preview, job, parent.Name, id, true), ct);
+            var accepted = await admission.AdmitAsync(new(null, null, null, [], [], [], null, preview, job, parent.Name, id, true, KeepSharedChildren: keepShared), ct);
             if (accepted.Outcome != AdmissionOutcome.Accepted)
             {
                 if (accepted.Cascade?.Reason == "operation-in-progress") return LifecycleEndpoints.Busy(null);
@@ -68,7 +77,7 @@ public static class CascadeEndpoints
             }
             var sessions = s.GetRequiredService<IConsoleSessionStore>();
             sessions.RemoveForPrincipal("vm:" + parent.Name); sessions.RemoveForVm(parent.Name);
-            foreach (var child in accepted.Cascade!.CurrentChildren) sessions.RemoveForVm(child.Name);
+            foreach (var child in accepted.Cascade!.CurrentChildren) if (!kept.ContainsKey(child.Name)) sessions.RemoveForVm(child.Name);
             var worker = s.GetRequiredService<CascadeJobs>();
             try
             {
@@ -81,7 +90,7 @@ public static class CascadeEndpoints
                 await admission.MarkStartFailedAsync(job.Id, "Cascade job could not start.", CancellationToken.None);
                 return LifecycleEndpoints.Problem("job-start-failed", 500);
             }
-            CodedProblems.Audit(http, "vm.delete", parent.Owner, parent.Name, parent.Name, "job=" + id + ", cascade=" + children.Count);
+            CodedProblems.Audit(http, "vm.delete", parent.Owner, parent.Name, parent.Name, "job=" + id + ", cascade=" + (children.Count - kept.Count) + (keepShared ? ", keep=shared" : ""));
             return Results.Accepted("/api/v1/jobs/" + id, new { jobId = id });
         }
         finally { foreach (var held in childGates.AsEnumerable().Reverse()) await held.DisposeAsync(); maintenance?.Dispose(); }
