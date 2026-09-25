@@ -11,9 +11,13 @@ the service's explicit `PerVm` strategy also retains its WSL adapter.
 1. If a sibling `construct-iso` checkout and a .NET 10 SDK exist, publish that checkout
    locally as a self-contained Windows x64 executable. `CONSTRUCT_ISO_SOURCE_DIR` can
    select another checkout. A local build failure stops the installer.
-2. Otherwise read the immutable release tag and SHA-256 hashes in
-   `config/iso-builder.json`. Reuse an executable whose hash matches; otherwise download
-   its release zip, verify the zip and executable hashes, and publish the executable.
+2. Otherwise read `config/iso-builder.json`. With `"tag": "latest"` (the default), ask the
+   GitHub API for the newest release and verify its zip against the SHA-256 digest GitHub
+   records for the asset. The installed release is noted in
+   `.construct-tools/iso/Construct.Iso.release.json`; a newer release replaces the tool,
+   and an unreachable API keeps the installed one. A `build-<commit>` tag with `zipSha256`
+   and `exeSha256` pins one release instead: an executable whose hash matches is reused,
+   otherwise the release zip is downloaded and both hashes are verified.
 
 The result lives at `<Construct checkout>/.construct-tools/iso/Construct.Iso.exe`.
 Failed downloads and checksum mismatches preserve the previous executable. The cache is
@@ -27,10 +31,10 @@ The Construct repository runs integration/resolver tests but does not rebuild th
 Release assets provide a public download without the login and expiry associated with
 [Actions artifacts](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts).
 
-To adopt a new tool version, wait for its release workflow, then update the tag, zip hash
-and executable hash in `config/iso-builder.json` from that release's `SHA256SUMS`.
-Commit that pin update in The Construct. A Construct update alone never silently selects
-a newer tool release.
+A new tool release is adopted by the next install, reinstall or host update without a
+Construct change. The host service rebuilds its published install media when the tool's
+hash differs from the one recorded with the media, reusing the cached Ubuntu ISO. To pin a
+release, set its tag, zip hash and executable hash from that release's `SHA256SUMS`.
 
 ## Try it
 

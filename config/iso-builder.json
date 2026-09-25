@@ -1,6 +1,4 @@
 {
   "repository": "permissionBRICK/construct-iso",
-  "tag": "build-e2a3050427c308eeb453ce4f9907cab3795515f9",
-  "zipSha256": "2cde42e7c66f64303c9a7483e7188a7e43e388cfd707d951695e8252a02cfd31",
-  "exeSha256": "7afa83966e7e51d30f9289c0f64a26171d70584f70c814e8d73d8cb58af20c4b"
+  "tag": "latest"
 }

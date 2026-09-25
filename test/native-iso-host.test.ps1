@@ -33,10 +33,11 @@ try {
     }
     $release | ConvertTo-Json | Set-Content (Join-Path $checkout 'config/iso-builder.json')
     $script:downloads = 0
+    $script:expectedTag = $release.tag
     function Invoke-WebRequest {
         param([switch]$UseBasicParsing, [string]$Uri, [string]$OutFile)
         $script:downloads++
-        Assert ($Uri -eq "https://github.com/permissionBRICK/construct-iso/releases/download/$($release.tag)/Construct.Iso-win-x64.zip") 'download uses pinned release'
+        Assert ($Uri -eq "https://github.com/permissionBRICK/construct-iso/releases/download/$($script:expectedTag)/Construct.Iso-win-x64.zip") 'download uses the resolved release'
         [IO.File]::Copy($script:archive, $OutFile)
     }
     $noSource = Join-Path $work 'no source'
@@ -53,6 +54,43 @@ try {
     Assert-Throws { Resolve-ConstructIsoBuilder -ScriptsDir $checkout -SourceDir $noSource } 'archive checksum mismatch'
     Assert ((Get-Content -Raw $exe) -eq 'retain existing executable') 'failed download preserves old executable'
     Assert (@(Get-ChildItem (Split-Path $exe) -Directory).Count -eq 0) 'failed download scratch is removed'
+
+    # "latest": the newest release, verified by GitHub's recorded asset digest.
+    @{ repository = 'permissionBRICK/construct-iso'; tag = 'latest' } | ConvertTo-Json | Set-Content (Join-Path $checkout 'config/iso-builder.json')
+    Compress-Archive -Path $artifactExe -DestinationPath $script:archive -Force
+    $script:latestTag = 'build-' + ('b' * 40)
+    $script:latestDigest = 'sha256:' + (Get-FileHash $script:archive).Hash.ToLowerInvariant()
+    $script:apiDown = $false
+    $script:apiCalls = 0
+    function Invoke-RestMethod {
+        param([switch]$UseBasicParsing, [int]$TimeoutSec, [string]$Uri, [hashtable]$Headers)
+        $script:apiCalls++
+        if ($script:apiDown) { throw 'offline' }
+        Assert ($Uri -eq 'https://api.github.com/repos/permissionBRICK/construct-iso/releases/latest') 'latest release is asked from the API'
+        [pscustomobject]@{ tag_name = $script:latestTag; assets = @([pscustomobject]@{ name = 'Construct.Iso-win-x64.zip'; digest = $script:latestDigest }) }
+    }
+    $script:expectedTag = $script:latestTag
+    $script:downloads = 0
+    Resolve-ConstructIsoBuilder -ScriptsDir $checkout -SourceDir $noSource | Out-Null
+    Assert ((Get-Content -Raw $exe) -eq 'verified executable' -and $script:downloads -eq 1) 'latest release is downloaded and published'
+    Resolve-ConstructIsoBuilder -ScriptsDir $checkout -SourceDir $noSource | Out-Null
+    Assert ($script:downloads -eq 1) 'the installed latest release is reused'
+    $script:latestTag = 'build-' + ('c' * 40); $script:expectedTag = $script:latestTag
+    Resolve-ConstructIsoBuilder -ScriptsDir $checkout -SourceDir $noSource | Out-Null
+    Assert ($script:downloads -eq 2) 'a newer release replaces the tool'
+    $script:apiDown = $true
+    Assert ((Resolve-ConstructIsoBuilder -ScriptsDir $checkout -SourceDir $noSource -WarningAction SilentlyContinue) -eq $exe -and $script:downloads -eq 2) 'an unreachable API keeps the installed tool'
+    Remove-Item -LiteralPath (Join-Path (Split-Path $exe) 'Construct.Iso.release.json')
+    Assert-Throws { Resolve-ConstructIsoBuilder -ScriptsDir $checkout -SourceDir $noSource } 'Could not resolve the latest ISO tool release'
+    $script:apiDown = $false
+    $script:latestTag = 'build-' + ('d' * 40); $script:expectedTag = $script:latestTag
+    $script:latestDigest = 'sha256:' + ('0' * 64)
+    [IO.File]::WriteAllText($exe, 'retain existing executable')
+    Assert-Throws { Resolve-ConstructIsoBuilder -ScriptsDir $checkout -SourceDir $noSource } 'archive checksum mismatch'
+    Assert ((Get-Content -Raw $exe) -eq 'retain existing executable') 'a digest mismatch keeps the old executable'
+    $script:latestDigest = ''
+    Assert-Throws { Resolve-ConstructIsoBuilder -ScriptsDir $checkout -SourceDir $noSource } 'no verifiable Windows archive'
+    Remove-Item Function:Invoke-RestMethod
 
     $source = Join-Path $work 'source with spaces'
     $project = Join-Path $source 'src/Construct.Iso/Construct.Iso.csproj'

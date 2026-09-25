@@ -333,8 +333,8 @@ function Invoke-ConstructHostUpdate([string]$HandoffPath, [bool]$IsResume, [bool
             Get-ChildItem -LiteralPath $h.publishDir -Filter 'install.json.*.tmp' -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
             Write-UpdateJson (Join-Path $h.publishDir 'install.json') @{source=$manifest.installedSource;commit=$h.commit;packageVersion=$manifest.packageVersion;installedAt=[DateTimeOffset]::UtcNow.ToString('o');previousCommit=$h.previousCommit;updateId=$h.updateId;files=$newFiles}
             $r.outcome='succeeded'; Write-UpdateJson $recordPath $r
-            # The ISO tool lives in preserved .construct-tools, so a new pin in config\iso-builder.json
-            # reaches it only here. Best effort: a failed download keeps the previous tool.
+            # The ISO tool lives in preserved .construct-tools, so a newer release (or a changed
+            # config\iso-builder.json pin) reaches it only here. Best effort: failure keeps the old tool.
             try {
                 . (Join-Path $h.scriptsDir 'lib\Construct.Iso.ps1')
                 [void](Resolve-ConstructIsoBuilder -ScriptsDir $h.scriptsDir)
