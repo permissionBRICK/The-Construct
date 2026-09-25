@@ -88,6 +88,7 @@ hist="${tmp}/history-home"
 slug="${hist}/.claude/projects/-root-repos-demo"
 old_sid='11111111-1111-4111-8111-111111111111'
 new_sid='22222222-2222-4222-8222-222222222222'
+resumed_sid='33333333-3333-4333-8333-333333333333'
 mkdir -p "${slug}/memory" "${slug}/${old_sid}/subagents" "${slug}/${new_sid}/subagents" \
   "${hist}/.codex/sessions/2020/01/01" "${hist}/.codex/sessions/2026/01/01" \
   "${hist}/.codex/archived_sessions"
@@ -95,6 +96,11 @@ printf '{}\n' >"${slug}/${old_sid}.jsonl"
 printf '{}\n' >"${slug}/${new_sid}.jsonl"
 printf '{}\n' >"${slug}/${old_sid}/subagents/agent-a.jsonl"
 printf '{}\n' >"${slug}/${new_sid}/subagents/agent-b.jsonl"
+# A resumed session: recent transcript, subagent files from long ago.
+mkdir -p "${slug}/${resumed_sid}/subagents"
+printf '{}\n' >"${slug}/${resumed_sid}.jsonl"
+printf '{}\n' >"${slug}/${resumed_sid}/subagents/agent-c.jsonl"
+touch -d '100 days ago' "${slug}/${resumed_sid}/subagents/agent-c.jsonl"
 printf 'note\n' >"${slug}/memory/note.md"
 printf '# memory\n' >"${slug}/MEMORY.md"
 printf '{}\n' >"${hist}/.claude/history.jsonl"
@@ -131,6 +137,8 @@ ok 'retention default: old Claude session dir dropped' lacks retain-default "${c
 ok 'retention default: recent Claude transcript kept' has retain-default "${cslug}/${new_sid}.jsonl"
 ok 'retention default: session dir with a recent file kept' \
   has retain-default "${cslug}/${new_sid}/subagents/agent-b.jsonl"
+ok 'retention default: old session dir of a kept transcript kept' \
+  has retain-default "${cslug}/${resumed_sid}/subagents/agent-c.jsonl"
 ok 'retention default: old memory kept' has retain-default "${cslug}/memory/note.md"
 ok 'retention default: old MEMORY.md kept' has retain-default "${cslug}/MEMORY.md"
 ok 'retention default: Claude prompt history kept' has retain-default '.claude/history.jsonl'

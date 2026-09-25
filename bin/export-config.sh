@@ -397,11 +397,12 @@ if [[ "${INCLUDE_HISTORY}" == "true" && "${HISTORY_RETENTION_DAYS}" -gt 0 ]]; th
         rm -f "${f}"
       done
       # Per-session dirs (subagents/, tool results), named by session UUID:
-      # dropped only once their newest file is past the window. memory/ never
-      # matches the UUID name.
+      # dropped only once their newest file is past the window and their session's
+      # transcript was dropped too. memory/ never matches the UUID name.
       for d in "${slug}"*/; do
         d="${d%/}"
         [[ "$(basename "${d}")" =~ ${_uuid} ]] || continue
+        [[ ! -e "${d}.jsonl" ]] || continue
         [[ -z "$(find "${d}" -type f ! -mmin +"${_age_min}" -print -quit)" ]] || continue
         prune_tally "${d}"
         rm -rf "${d}"
