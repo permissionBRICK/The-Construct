@@ -34,8 +34,20 @@ function Invoke-Scp {
 }
 function Invoke-SshStream {
     param([switch]$Sudo, [switch]$PassThru, [switch]$NoThrow, [string]$Command)
+    $script:streamed += $Command
+    if ($Command -like '*PROVISION_PHASE=project-commands*') {
+        return @{ ExitCode = 3; Lines = @('noise', '===CONSTRUCT-PROVISION-RESULT===', 'errors=1',
+            'error=Running project provisioning commands|3|/var/log/construct/provision/step-0-x.log', '===END-CONSTRUCT-PROVISION-RESULT===') }
+    }
     @{ ExitCode = $script:restoreExit }
 }
+$commonAst = [System.Management.Automation.Language.Parser]::ParseFile(
+    (Join-Path $repoRoot 'lib/AgentVm.Common.ps1'), [ref]$null, [ref]$null)
+$parser = $commonAst.Find({ param($n)
+    $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'ConvertFrom-ConstructProvisionResult' }, $true)
+. ([scriptblock]::Create($parser.Extent.Text))
+$script:streamed = @()
+$deferProjectCommands = $false
 function Write-Step($message) { }
 function Write-Ok($message) { }
 $constructVersion = 'fixture'
@@ -61,6 +73,26 @@ try {
     if (Test-Path -LiteralPath $retained) { throw 'A successful restore left the retained archive behind.' }
     if (Test-Path -LiteralPath (Join-Path $vmRoot 'tmp/construct-config-restore.tar.gz')) { throw 'A successful restore left the upload behind.' }
     Write-Host 'PASS: the next successful restore removes the retained archive'
+    if (@($script:streamed | Where-Object { $_ -like '*PROVISION_PHASE*' }).Count -ne 0) { throw 'Project commands ran without a deferral.' }
+
+    # A reinstall defers the project commands: they run after the restore, and their
+    # failures join the main run's in the one result block the host reports.
+    $deferProjectCommands = $true
+    $script:streamed = @()
+    $script:ProvisionResult = ConvertFrom-ConstructProvisionResult -Lines @('===CONSTRUCT-PROVISION-RESULT===', 'errors=1',
+        'error=Installing tools|1|/var/log/construct/provision/step-0-y.log', '===END-CONSTRUCT-PROVISION-RESULT===')
+    $global:ConstructProvisionHadErrors = $false
+    . $block
+    if ($script:streamed.Count -ne 2 -or $script:streamed[0] -notlike '*restore-config.sh*' -or $script:streamed[1] -notlike '*PROVISION_PHASE=project-commands*') {
+        throw "Project commands did not run after the restore: $($script:streamed -join ' || ')"
+    }
+    $titles = @($script:ProvisionResult.Errors | ForEach-Object { $_.Title })
+    if (-not $script:ProvisionResult.IsValid -or $script:ProvisionResult.ErrorCount -ne 2 -or ($titles -join ',') -ne 'Installing tools,Running project provisioning commands') {
+        throw "Merged result is wrong: $($titles -join ',')"
+    }
+    if (-not $global:ConstructProvisionHadErrors -or @($global:ConstructProvisionErrors).Count -ne 2) { throw 'Project command failures were not reported.' }
+    if (-not (ConvertFrom-ConstructProvisionResult -Lines $script:ProvisionRawLines).IsValid) { throw 'Raw result block for the parent is invalid.' }
+    Write-Host 'PASS: deferred project commands run after the restore and their failures are reported'
 } finally {
     Remove-Item -LiteralPath $fixture -Recurse -Force
 }

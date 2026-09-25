@@ -2546,6 +2546,11 @@ if ($VmTokenB64) {
     $tokenCleanup = "; __rc=`$?; rm -f '$vmTokenRemotePath'; exit `$__rc"
 }
 $envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' GIT_CLONE_SKIP_HOSTS_B64='$cloneSkipHostsB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit' CONSTRUCT_VERSION='$constructVersion' SMB_SHARE='$SmbShare' CLAUDE_PARTIAL_STREAMING='$ClaudePartialStreaming' MIC_PASSTHROUGH='$MicPassthrough' OPENCODE_BACKGROUND_WATCHER='$OpenCodeBackgroundWatcher' T3CODE='$T3Code' T3CODE_CHANNEL='$T3CodeChannel' T3CODE_BUILD_SOURCE='$T3CodeBuildSource' T3CODE_LIMIT_RESUME='$T3CodeLimitResume' T3CODE_HTTPS='$T3CodeHttps'" + $externalEnv + $serviceEnv + " T3CODE_BUILD_MODE='server'"
+# A reinstall that restores a saved config runs the project provisioning commands only
+# after the restore (see below): commands that read ~/.secrets, tokens or the machine
+# identity found none on the fresh VM and silently skipped their setup.
+$deferProjectCommands = [bool]($RestoreDir -and (Test-Path -LiteralPath (Join-Path $RestoreDir "backup.tar.gz")))
+if ($deferProjectCommands) { $envPrefix += " DEFER_PROJECT_COMMANDS='true'" }
 Write-Host "  --- live provisioning output ---" -ForegroundColor DarkGray
 $provisionStream = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "$tokenExport$envPrefix bash /opt/construct/repo/bin/provision.sh$tokenCleanup"
 Write-Host "  --- end provisioning output ---" -ForegroundColor DarkGray
@@ -2587,7 +2592,8 @@ if ($provisionStream.ExitCode -eq 3) {
 # auto-restore). Done AFTER provision.sh so the user's saved instruction/config
 # files overwrite the freshly generated ones and auth/memory/skills come back;
 # the project checkout inside provision.sh already used the restored git
-# credentials (passed via the env above), so private repos cloned.
+# credentials (passed via the env above), so private repos cloned. The project
+# provisioning commands provision.sh deferred run after the restore.
 if ($RestoreDir) {
     $restoreTgz = Join-Path $RestoreDir "backup.tar.gz"
     if (Test-Path -LiteralPath $restoreTgz) {
@@ -2613,6 +2619,32 @@ if ($RestoreDir) {
             }
         }
         Write-Ok "Saved config restored"
+
+        if ($deferProjectCommands) {
+            Write-Step "Running project provisioning commands (after the restore)"
+            Write-Host "  --- live provisioning output ---" -ForegroundColor DarkGray
+            $projectStream = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "env PROVISION_PHASE=project-commands bash /opt/construct/repo/bin/provision.sh"
+            Write-Host "  --- end provisioning output ---" -ForegroundColor DarkGray
+            $projectResult = ConvertFrom-ConstructProvisionResult -Lines $projectStream.Lines
+            $projectErrors = @($projectResult.Errors)
+            if (-not $projectResult.IsValid -or $projectStream.ExitCode -notin @(0, 3)) {
+                $projectErrors = @([pscustomobject]@{ Title = 'Running project provisioning commands'; ExitCode = [int]$projectStream.ExitCode; LogPath = '' })
+            }
+            # One result block for both runs: the de-elevated parent and the result
+            # screen read only $script:ProvisionRawLines / $script:ProvisionResult.
+            $allErrors = @($script:ProvisionResult.Errors) + $projectErrors
+            $script:ProvisionRawLines = @('===CONSTRUCT-PROVISION-RESULT===', "errors=$($allErrors.Count)") +
+                @($allErrors | ForEach-Object { "error=$($_.Title)|$($_.ExitCode)|$($_.LogPath)" }) +
+                @('===END-CONSTRUCT-PROVISION-RESULT===')
+            $script:ProvisionResult = ConvertFrom-ConstructProvisionResult -Lines $script:ProvisionRawLines
+            $global:ConstructProvisionErrors = @($script:ProvisionResult.Errors)
+            if ($projectErrors.Count -gt 0) {
+                $global:ConstructProvisionHadErrors = $true
+                Write-Host "    Project provisioning commands reported errors; host setup will continue." -ForegroundColor Yellow
+            } else {
+                Write-Ok "Project provisioning commands finished"
+            }
+        }
     } else {
         Write-Host "    -RestoreDir set but no backup.tar.gz in $RestoreDir -- skipping restore." -ForegroundColor DarkGray
     }
