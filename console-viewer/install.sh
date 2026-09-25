@@ -17,18 +17,12 @@ copy_changed() {
 for file in server.py open.py; do copy_changed "$src/$file" "/opt/construct/console-viewer/$file"; done
 for file in "$src"/static/*; do copy_changed "$file" "/opt/construct/console-viewer/static/$(basename "$file")"; done
 image='guacamole/guacd@sha256:8974eaa9ba32f713daf311e7cc8cd7e4cdfba1edea39eed75524e78ef4b08f4f'
-# Docker Hub answers with transient TLS-handshake and manifest timeouts; one failed pull
-# would fail the whole provisioning step (critical on a service-managed primary) and leave
-# the VM half-provisioned. Bounded retries with backoff.
+# ONE pull attempt. The step is optional (bin/provision.sh): on a network that blocks Docker
+# Hub, retries with backoff only stretched a provisioning that cannot succeed here into minutes
+# of waiting, and a transient timeout is recovered by re-running this script.
 pull_image() {
-  local attempt
-  for attempt in 1 2 3 4 5; do
-    if docker pull "$image"; then return 0; fi
-    [[ $attempt -lt 5 ]] || break
-    echo "docker pull failed (attempt $attempt of 5); retrying in $((attempt * 10))s..." >&2
-    sleep $((attempt * 10))
-  done
-  echo "Could not pull $image after 5 attempts: Docker Hub (registry-1.docker.io) is not reachable from this VM's network." >&2
+  if docker pull "$image"; then return 0; fi
+  echo "Could not pull $image: Docker Hub (registry-1.docker.io) did not answer from this VM's network." >&2
   echo "The browser console gateway stays uninstalled. Once the registry is reachable -- or a mirror is configured in /etc/docker/daemon.json (registry-mirrors) -- re-run: sudo bash /opt/construct/repo/console-viewer/install.sh" >&2
   return 1
 }

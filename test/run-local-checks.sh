@@ -40,7 +40,7 @@ if [[ "$group" == service || "$group" == all ]]; then
   bash test/worktree-clone.test.sh
   pwsh -NoProfile -File test/browser-console-install.test.ps1
   bash test/browser-console-provision.test.sh
-  bash test/browser-console-pull-retry.test.sh
+  bash test/browser-console-pull.test.sh
   node extension/test/drivers.test.js
   node extension/test/hostadmin.test.js
   bash test/construct-vm.test.sh
