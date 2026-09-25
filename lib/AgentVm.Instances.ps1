@@ -1245,6 +1245,55 @@ function Add-ConstructInstance {
     return $next
 }
 
+function Merge-ConstructInstanceEntry {
+    <#
+        The on-disk entry an EXISTING instance becomes once -Patch is merged into it: the
+        patch's keys win, a $null value removes the key, and every field the patch does not
+        name (keyName, hostAlias, configBranch, scriptsDir, ...) is kept exactly as the
+        registry holds it. Throws on an unknown name. Pure.
+    #>
+    param(
+        [Parameter(Mandatory)]$Registry,
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Patch
+    )
+    if (-not $Registry.Instances.ContainsKey($Name)) { throw "Unknown instance '$Name'." }
+    $merged = ConvertTo-ConstructInstanceEntry -Instance $Registry.Instances[$Name]
+    foreach ($k in @($Patch.Keys)) {
+        if ($null -eq $Patch[$k]) { $merged.Remove($k) } else { $merged[$k] = $Patch[$k] }
+    }
+    return $merged
+}
+
+function Update-ConstructInstance {
+    <#
+        Merge -Patch into an EXISTING instance (Merge-ConstructInstanceEntry) and return
+        the UPDATED COPY, under the same entry and collision rules as Add-ConstructInstance.
+        Unlike Add, the default instance's name is allowed: this rewrites the instance that
+        is already there instead of adding one. Mirrors updateInstance() in
+        extension/src/instances.js.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Registry,
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Patch
+    )
+    $merged = Merge-ConstructInstanceEntry -Registry $Registry -Name $Name -Patch $Patch
+    $problems = @(Get-ConstructInstanceEntryProblem -Name $Name -Entry $merged)
+    if ($problems.Count -gt 0) {
+        throw "Instance '$Name': $($problems -join '; ')"
+    }
+    $next = Copy-ConstructInstanceRegistry -Registry $Registry
+    $next.Instances[$Name] = Resolve-ConstructInstanceDefaults -Name $Name `
+                                 -Entry (ConvertTo-ConstructInstanceEntryObject -Entry $merged)
+    $collisionProblems = @((Get-ConstructInstanceCollision -Instances $next.Instances).Problems)
+    if ($collisionProblems.Count -gt 0) {
+        throw "Instance '$Name' cannot be updated: $($collisionProblems[0])"
+    }
+    return $next
+}
+
 function Remove-ConstructInstance {
     <#
         Remove one instance from a registry object and return the UPDATED COPY (the input

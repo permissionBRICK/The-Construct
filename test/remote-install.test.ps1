@@ -94,7 +94,8 @@ foreach ($fname in @('Test-ConstructPriorLocalInstall', 'Resolve-ConstructInstal
                      'Test-ConstructRemoteInstanceName', 'New-ConstructRemoteInstanceEntry',
                      'Get-ConstructRemoteInstanceConflict', 'New-ConstructRemoteVmRecord',
                      'Save-ConstructInstanceEntry', 'New-ConstructRemoteProvisionArgs',
-                     'Get-ConstructEndpointPublicHost')) {
+                     'Get-ConstructEndpointPublicHost', 'ConvertTo-ConstructRemoteRebuildPatch',
+                     'Read-ConstructInstanceRegistrySnapshot')) {
     $fnText = Get-InstallerFunctionText $fname
     ok "extract: Auto-Install.ps1 defines $fname" ($fnText -ne "")
     if ($fnText) { Invoke-Expression $fnText }
@@ -510,12 +511,16 @@ $script:RemoteProvCmd = [pscustomobject]@{ Parameters = $fullParams }
 
 $ep = @{ SshHost = 'buildbox.example.local'; SshPort = 2201 }
 $args1 = New-ConstructRemoteProvisionArgs -Name 'work-vm' -Endpoint $ep -ServiceUrl 'https://buildbox.example.local:7462' `
-            -ConfigBranch 'vm-work-vm' -Projects 'default' -GitName 'A B' -GitEmail 'a@b.c'
+            -KeyName 'construct_work-vm_ed25519' -ConfigBranch 'vm-work-vm' -Projects 'default' -GitName 'A B' -GitEmail 'a@b.c'
 ok "args: -VmHost is the SERVICE's address, not a mshome name" ($args1['VmHost'] -eq 'buildbox.example.local')
 ok "args: -SshPort is the ALLOCATED forward" ($args1['SshPort'] -eq 2201)
 ok "args: -HostAlias is the instance name (its own ssh_config block)" ($args1['HostAlias'] -eq 'work-vm')
 ok "args: -LocalKeyName is instance-scoped (never overwrites the default VM's key)" ($args1['LocalKeyName'] -eq 'construct_work-vm_ed25519')
 ok "args: -ConfigBranch is this VM's own ref" ($args1['ConfigBranch'] -eq 'vm-work-vm')
+$argsConv = New-ConstructRemoteProvisionArgs -Name 'agent-vm' -Endpoint $ep -ServiceUrl 'https://b:7462' `
+               -KeyName 'agent_vm_ed25519' -ConfigBranch 'vm'
+ok "args: -LocalKeyName is the key the entry names, not one derived from the name" (
+    $argsConv['LocalKeyName'] -ceq 'agent_vm_ed25519' -and $argsConv['ConfigBranch'] -ceq 'vm')
 ok "args: -ServiceUrl reaches the guest" ($args1['ServiceUrl'] -eq 'https://buildbox.example.local:7462')
 ok "args: -InstanceName reaches the guest" ($args1['InstanceName'] -eq 'work-vm')
 ok "args: it runs unattended" ($args1['Auto'] -eq $true)
@@ -524,13 +529,13 @@ ok "args: nothing local leaks in (-VmName would name a Hyper-V VM here)" (-not $
 ok "args: -Repo/-Ref only when the caller bound them" (-not $args1.ContainsKey('Repo'))
 $script:RemoteBound = @{ Repo = $true }
 ok "args: the pre-built media's seed user ('construct', the service default) is passed" ($args1['SeedUser'] -eq 'construct')
-$args2 = New-ConstructRemoteProvisionArgs -Name 'work-vm' -Endpoint $ep -ServiceUrl 'https://b:7462' -ConfigBranch 'vm-work-vm'
+$args2 = New-ConstructRemoteProvisionArgs -Name 'work-vm' -Endpoint $ep -ServiceUrl 'https://b:7462' -KeyName 'construct_work-vm_ed25519' -ConfigBranch 'vm-work-vm'
 ok "args: ...and then BOTH are passed as a pair" ($args2['Repo'] -eq 'owner/repo' -and $args2['Ref'] -eq 'main')
 $script:RemoteBound = @{}
 
 # The one-time VM token: base64 of the raw secret, and the RAW value never appears.
 $args3 = New-ConstructRemoteProvisionArgs -Name 'work-vm' -Endpoint $ep -ServiceUrl 'https://b:7462' `
-            -ConfigBranch 'vm-work-vm' -VmToken 's3cr3t-vm-token'
+            -KeyName 'construct_work-vm_ed25519' -ConfigBranch 'vm-work-vm' -VmToken 's3cr3t-vm-token'
 ok "args: -VmTokenB64 is base64 of the issued token" `
     ($args3['VmTokenB64'] -eq [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes('s3cr3t-vm-token')))
 ok "args: the RAW token appears in no argument value" `
@@ -542,7 +547,7 @@ ok "args: the RAW token appears in no argument value" `
 $oldParams = @{}
 foreach ($p in $fullParams.Keys) { if ($p -notin @('T3CodeChannel', 'T3CodeLimitResume', 'OpenCodeBackgroundWatcher')) { $oldParams[$p] = $true } }
 $script:RemoteProvCmd = [pscustomobject]@{ Parameters = $oldParams }
-$args4 = New-ConstructRemoteProvisionArgs -Name 'work-vm' -Endpoint $ep -ServiceUrl 'https://b:7462' -ConfigBranch 'vm-work-vm'
+$args4 = New-ConstructRemoteProvisionArgs -Name 'work-vm' -Endpoint $ep -ServiceUrl 'https://b:7462' -KeyName 'construct_work-vm_ed25519' -ConfigBranch 'vm-work-vm'
 foreach ($p in @('T3CodeChannel', 'T3CodeLimitResume', 'OpenCodeBackgroundWatcher')) {
     ok "args: -$p is dropped when the installed provisioner does not declare it" (-not $args4.ContainsKey($p))
 }
@@ -573,11 +578,11 @@ ok "endpoint: an endpoint that states none answers empty (not an error)" (
 ok "endpoint: `$null answers empty" ((Get-ConstructEndpointPublicHost -Endpoint $null) -eq "")
 
 $argsPub = New-ConstructRemoteProvisionArgs -Name 'work-vm' -Endpoint $ep -ServiceUrl 'https://b:7462' `
-              -ConfigBranch 'vm-work-vm' -PublicHost 'work-vm.vpn.example'
+              -KeyName 'construct_work-vm_ed25519' -ConfigBranch 'vm-work-vm' -PublicHost 'work-vm.vpn.example'
 ok "args: -PublicHost is passed to the provisioner" ($argsPub['PublicHost'] -eq 'work-vm.vpn.example')
 ok "args: ...while -VmHost stays the SSH endpoint" ($argsPub['VmHost'] -eq 'buildbox.example.local')
 
-$argsNoPub = New-ConstructRemoteProvisionArgs -Name 'work-vm' -Endpoint $ep -ServiceUrl 'https://b:7462' -ConfigBranch 'vm-work-vm'
+$argsNoPub = New-ConstructRemoteProvisionArgs -Name 'work-vm' -Endpoint $ep -ServiceUrl 'https://b:7462' -KeyName 'construct_work-vm_ed25519' -ConfigBranch 'vm-work-vm'
 ok "args: NO -PublicHost when the service stated none (the default path is untouched)" (
     -not $argsNoPub.ContainsKey('PublicHost'))
 
@@ -587,7 +592,7 @@ $noPubParams = @{}
 foreach ($p in $fullParams.Keys) { if ($p -ne 'PublicHost') { $noPubParams[$p] = $true } }
 $script:RemoteProvCmd = [pscustomobject]@{ Parameters = $noPubParams }
 $argsSkew = New-ConstructRemoteProvisionArgs -Name 'work-vm' -Endpoint $ep -ServiceUrl 'https://b:7462' `
-               -ConfigBranch 'vm-work-vm' -PublicHost 'work-vm.vpn.example'
+               -KeyName 'construct_work-vm_ed25519' -ConfigBranch 'vm-work-vm' -PublicHost 'work-vm.vpn.example'
 ok "args: -PublicHost is dropped when the installed provisioner does not declare it" (
     -not $argsSkew.ContainsKey('PublicHost'))
 ok "args: ...and the install still proceeds with its identity arguments" (
@@ -723,6 +728,94 @@ try {
     }
 }
 
+# ── (f2b) A rebuild keeps the identity its registry entry records ───────────
+# A default instance converted to a host service is registered as 'agent-vm' with the
+# key file and branch it had as a local VM (agent_vm_ed25519, vm). Reinstalling it must
+# address the VM with that key, keep that entry and record only the new endpoint.
+Write-Host ""
+Write-Host "=== Rebuild of a converted default instance ===" -ForegroundColor Cyan
+$rbRoot = Join-Path $tmpRoot "rebuild"
+New-Item -ItemType Directory -Path (Join-Path $rbRoot "The-Construct") -Force | Out-Null
+$savedLocalAppData3 = $env:LOCALAPPDATA
+$env:LOCALAPPDATA = $rbRoot
+try {
+    Set-Content -LiteralPath (Join-Path $rbRoot "The-Construct/instances.json") -Encoding UTF8 -Value @'
+{ "version": 1, "defaultInstance": "agent-vm",
+  "instances": {
+    "agent-vm": { "backend": "hyperv-remote", "vmName": "agent-vm", "sshHost": "buildbox.example.local",
+                  "sshPort": 2210, "hostAlias": "agent-vm", "keyName": "agent_vm_ed25519",
+                  "configBranch": "vm", "scriptsDir": "C:\\Construct", "publicHost": "agent-vm.vpn.example",
+                  "service": { "url": "https://buildbox.example.local:7462", "auth": "token" } }
+  } }
+'@
+    $snap = Read-ConstructInstanceRegistrySnapshot -ScriptsDir $repoRoot
+    ok "rebuild: the snapshot states the entry's own key file" ($snap.Entries['agent-vm'].KeyName -ceq 'agent_vm_ed25519')
+
+    $fresh = New-ConstructRemoteInstanceEntry -Name 'agent-vm' -SshHost 'buildbox.example.local' -SshPort 2211 `
+                 -ServiceUrl 'https://buildbox.example.local:7462' -ServiceAuth 'token'
+    $patch = ConvertTo-ConstructRemoteRebuildPatch -Entry $fresh
+    ok "rebuild: the patch leaves the addressing identity to the registry" (
+        -not $patch.ContainsKey('keyName') -and -not $patch.ContainsKey('configBranch') -and -not $patch.ContainsKey('hostAlias'))
+    ok "rebuild: ...carries the new endpoint" ($patch['sshPort'] -eq 2211)
+    ok "rebuild: ...and drops a publicHost the new endpoint no longer states" (
+        $patch.ContainsKey('publicHost') -and $null -eq $patch['publicHost'])
+    ok "rebuild: the pre-create check accepts the registered 'agent-vm'" (
+        @(Get-ConstructRemoteInstanceConflict -Name 'agent-vm' -IgnoreEndpoint -Update -Entry $patch -ScriptsDir $repoRoot).Count -eq 0)
+
+    $script:svcRemoved = New-Object System.Collections.Generic.List[string]
+    function New-ConstructVm {
+        param($Descriptor)
+        return [pscustomobject]@{
+            Endpoint = [pscustomobject]@{ SshHost = 'buildbox.example.local'; SshPort = 2211 }
+            VmToken  = "token-for-$($Descriptor.Name)"
+        }
+    }
+    function Remove-ConstructVm { param([string]$Name) $script:svcRemoved.Add($Name) }
+    function Write-Ok   { param($m) }
+    function Write-Note { param($m) }
+    $rb = New-ConstructRemoteVmRecord -Name 'agent-vm' -Rebuild `
+              -Descriptor @{ Name = 'agent-vm'; ProcessorCount = 4; MemoryGB = 8; DiskGB = 50 } `
+              -ServiceUrl 'https://buildbox.example.local:7462' -ServiceAuth 'token' `
+              -RegistryPath (Join-Path $rbRoot "The-Construct/instances.json") -ScriptsDir $repoRoot
+    ok "rebuild: the rebuilt 'agent-vm' is recorded" ($rb.Recorded -eq $true)
+    ok "rebuild: ...without a rollback" ($script:svcRemoved.Count -eq 0)
+    & {
+        . (Join-Path $repoRoot "lib/AgentVm.Instances.ps1")
+        $back = Read-ConstructInstances
+        $a = $back.Instances['agent-vm']
+        ok "rebuild: the entry records the new endpoint" ($a.SshPort -eq 2211)
+        ok "rebuild: ...and keeps agent_vm_ed25519, branch 'vm', its alias and scriptsDir" (
+            $a.KeyName -ceq 'agent_vm_ed25519' -and $a.ConfigBranch -ceq 'vm' -and
+            $a.HostAlias -ceq 'agent-vm' -and $a.ScriptsDir -ceq 'C:\Construct')
+        ok "rebuild: ...drops the stale publicHost" ([string]::IsNullOrEmpty([string]$a.PublicHost))
+        ok "rebuild: ...and the reader accepts the file" (@($back.Problems).Count -eq 0)
+    }
+} finally {
+    $env:LOCALAPPDATA = $savedLocalAppData3
+    foreach ($fn in @('New-ConstructVm', 'Remove-ConstructVm', 'Write-Ok', 'Write-Note')) {
+        if (Test-Path "function:$fn") { Remove-Item "function:$fn" -Force }
+    }
+}
+
+# The flow around it: the key file comes from the entry on every remote path, and the
+# name rule for NEW remote VMs does not stop a rebuild of the registered one.
+$autoRbText = $autoAst.Extent.Text
+ok "rebuild: no remote path derives construct_<name>_ed25519 outside the new-entry builder" (
+    ([regex]::Matches($autoRbText, 'construct_\$\{')).Count -eq 1 -and
+    (Get-InstallerFunctionText 'New-ConstructRemoteInstanceEntry') -match 'construct_\$\{Name\}_ed25519')
+ok "rebuild: the existing-instance key comes from the registry entry" (
+    $autoRbText -match '\$instKey\s+=\s+\[string\]\$existingEntry\.KeyName')
+ok "rebuild: every config export passes that key" (
+    ([regex]::Matches($autoRbText, 'Invoke-RemoteVmConfigExport -Name \$instName -Endpoint \$endpoint -KeyName \$instKey')).Count -eq 3)
+ok "rebuild: the export hands -KeyName to the provisioner" (
+    (Get-InstallerFunctionText 'Invoke-RemoteVmConfigExport') -match 'LocalKeyName = \$KeyName')
+ok "rebuild: the name rule is skipped for the instance being rebuilt" (
+    $autoRbText -match 'while \(-not \$script:RemoteRebuildName -and -not \(Test-ConstructRemoteInstanceName \$instName\)\)')
+ok "rebuild: the record step merges into the existing entry" (
+    $autoRbText -match 'New-ConstructRemoteVmRecord -Name \$instName[^\r\n]*`\s*\r?\n[^\r\n]*`\s*\r?\n\s*-RegistryPath[^\r\n]*`\s*\r?\n\s*-Rebuild:\(\[bool\]\$script:RemoteRebuildName\)')
+ok "rebuild: its provisioning uses the entry's key and branch" (
+    $autoRbText -match 'if \(\$script:RemoteRebuildName\) \{ \$newKey = \$instKey; \$newBranch = \$instBranch \}')
+
 # ...and the ORDER of the steps around that function, which is the rest of the safety
 # story: nothing is created before the pre-check, and nothing is provisioned before the
 # instance is recorded.
@@ -750,7 +843,7 @@ ok "order: ...and before the reachability wait, which can take ten minutes" ($iR
 $fCreate = $recordFn.IndexOf('New-ConstructVm -Descriptor $Descriptor')
 $fEntry  = $recordFn.IndexOf('$entry = New-ConstructRemoteInstanceEntry -Name $Name')
 $fCheck  = $recordFn.IndexOf('Get-ConstructRemoteInstanceConflict -Name $Name -Entry $entry')
-$fSave   = $recordFn.IndexOf('Save-ConstructInstanceEntry -Name $Name -Replace -MakeDefault:$MakeDefault -Entry $entry')
+$fSave   = $recordFn.IndexOf('Save-ConstructInstanceEntry -Name $Name -Replace -Update:$Rebuild -MakeDefault:$MakeDefault -Entry $entry')
 ok "order: the endpoint is checked against the registry after the create" (
     $fCreate -ge 0 -and $fEntry -gt $fCreate -and $fCheck -gt $fEntry)
 ok "order: the checked entry is the one that gets WRITTEN (built once)" ($fSave -gt $fCheck)
