@@ -86,6 +86,7 @@ if ($InstanceName) {
     if (-not $PSBoundParameters.ContainsKey('HostAlias'))    { $HostAlias    = [string]$instanceTarget.HostAlias }
     if (-not $PSBoundParameters.ContainsKey('SshPort'))      { $SshPort      = [int]$instanceTarget.SshPort }
     if (-not $PSBoundParameters.ContainsKey('LocalKeyName')) { $LocalKeyName = [string]$instanceTarget.KeyName }
+    $script:SshFamilyOpts = @(Get-ConstructSshFamilyOptions -Ipv4 ([string]$instanceTarget.Backend -eq 'hyperv-remote') -VmHost $VmHost)
 }
 
 # Decode native-command output (ssh stdout) as UTF-8 so the remote's JSON and any
@@ -98,6 +99,8 @@ try {
 
 function Write-Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)   { Write-Host "    $msg" -ForegroundColor Green }
+
+if (-not (Test-Path variable:script:SshFamilyOpts)) { $script:SshFamilyOpts = @() }
 
 # --- Connection -------------------------------------------------------------
 
@@ -115,7 +118,7 @@ if (Test-Path -LiteralPath $keyPath) {
         "-o", "UserKnownHostsFile=$HOME\.ssh\known_hosts",
         "-o", "BatchMode=yes",
         "-o", "ConnectTimeout=15"
-    )
+    ) + $script:SshFamilyOpts
 } else {
     # No saved key: lean on the ~\.ssh\config Host entry (IdentityFile + User set
     # there by the provisioner).
@@ -124,7 +127,7 @@ if (Test-Path -LiteralPath $keyPath) {
         "-o", "StrictHostKeyChecking=accept-new",
         "-o", "BatchMode=yes",
         "-o", "ConnectTimeout=15"
-    )
+    ) + $script:SshFamilyOpts
 }
 
 function Test-Connection {

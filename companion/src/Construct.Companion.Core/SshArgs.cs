@@ -4,11 +4,25 @@ using System.Text.RegularExpressions;
 
 namespace Construct.Companion.Core;
 
+// Ipv4 adds `-o AddressFamily=inet`: a host service's SSH forwards listen on IPv4 only, while
+// its advertised name can resolve to IPv6 first. With ConnectTimeout set (this argv always
+// sets it), Windows OpenSSH connects non-blocking and misreads the unreachable first address
+// as established -- the refusal only surfaces on the first write -- so it never tries the next.
 public sealed record SshConfiguration(string VmHost = "agent-vm.mshome.net", string HostAlias = "agent-vm",
-    string User = "root", string KeyName = "agent_vm_ed25519", int SshPort = 22, int ConnectTimeout = 12);
+    string User = "root", string KeyName = "agent_vm_ed25519", int SshPort = 22, int ConnectTimeout = 12, bool Ipv4 = false);
 
 public static partial class SshArgs
 {
+    // The connection for a normalized registry instance (instances.js toSshCfg): a VM on a
+    // host service is dialled over IPv4 unless its endpoint is an IPv6 literal.
+    public static SshConfiguration ForInstance(System.Text.Json.Nodes.JsonObject instance, int connectTimeout)
+    {
+        var vmHost = State.StateJson.String(instance["vmHost"]);
+        return new SshConfiguration(vmHost, State.StateJson.String(instance["hostAlias"]),
+            KeyName: State.StateJson.String(instance["keyName"]), SshPort: State.Instances.CoercePort(instance["sshPort"]) ?? 22,
+            ConnectTimeout: connectTimeout,
+            Ipv4: State.Instances.IsRemoteBackend(State.StateJson.Text(instance["backend"])) && !State.Instances.IsIpv6Literal(vmHost));
+    }
     public static string[] Build(SshConfiguration cfg, string command, string? keyPath = null)
     {
         var args = Common(cfg);
@@ -69,7 +83,7 @@ public static partial class SshArgs
     }
     private static bool ValidPort(int port) => port is > 0 and <= 65535;
     private static List<string> Common(SshConfiguration cfg) => ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new",
-        "-o", "ConnectTimeout=" + cfg.ConnectTimeout.ToString(CultureInfo.InvariantCulture)];
+        "-o", "ConnectTimeout=" + cfg.ConnectTimeout.ToString(CultureInfo.InvariantCulture), .. (cfg.Ipv4 ? ["-o", "AddressFamily=inet"] : Array.Empty<string>())];
     private static void AddPort(List<string> args, int port)
     {
         port = NormalizeSshPort(port);

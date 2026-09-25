@@ -21,8 +21,7 @@ public sealed class DesktopSelfTestPlatform(IStateFileSystem files, IProcessRunn
     }
     private ProcessInvocation ProbeInvocation(JsonObject instance, string ssh)
     {
-        var configuration = new SshConfiguration(StateJson.String(instance["vmHost"]), StateJson.String(instance["hostAlias"]),
-            KeyName: StateJson.String(instance["keyName"]), SshPort: Instances.CoercePort(instance["sshPort"]) ?? 22, ConnectTimeout: 8);
+        var configuration = SshArgs.ForInstance(instance, 8);
         var path = Path.Combine(files.GetRoot(FileSystemRoot.UserProfile) ?? "", ".ssh", configuration.KeyName);
         var args = SshArgs.Build(configuration, SshArgs.WrapScriptCommand(GuestScripts.Render("probe")), files.FileExists(path) ? path : null);
         // A diagnostic must not add new host keys to the user's known_hosts file.

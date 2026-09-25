@@ -2217,6 +2217,10 @@ function Invoke-RemoteVmConfigExport {
         HostAlias    = $Name
         LocalKeyName = $KeyName
     }
+    # The export is not told the service URL, which is what makes provisioning dial a
+    # service endpoint over IPv4 -- so it is asked for directly.
+    $exportCmd = Get-Command -Name $ps -CommandType ExternalScript -ErrorAction SilentlyContinue
+    if ($exportCmd -and $exportCmd.Parameters.ContainsKey('SshIpv4')) { $a['SshIpv4'] = $true }
     if ($ScanReposOnly) { $a['ScanReposOnly'] = $true } else { Add-HistoryRetentionArg -Script $ps -Splat $a }
     & $ps @a
 }

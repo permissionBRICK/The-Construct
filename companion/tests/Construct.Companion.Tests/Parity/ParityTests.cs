@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Construct.Companion.Core;
 using Construct.Companion.Core.Abstractions;
 using Construct.Companion.Core.Ipc;
@@ -46,6 +47,17 @@ public sealed class ParityTests
             if (kind == "port") Assert.Equal(row.GetProperty("output").GetInt32(), SshArgs.NormalizeSshPort(row.GetProperty("input").GetInt32()));
             else Assert.Equal(row.GetProperty("output").GetString(), kind == "address"
                 ? SshArgs.NormalizeConnectAddress(row.GetProperty("input").GetString()) : SshArgs.NormalizeBindHost(row.GetProperty("input").GetString()));
+            return;
+        }
+        if (kind == "instance")
+        {
+            var cfg = SshArgs.ForInstance(JsonNode.Parse(row.GetProperty("input").GetRawText())!.AsObject(), 12);
+            var expected = row.GetProperty("output");
+            Assert.Equal(expected.GetProperty("vmHost").GetString(), cfg.VmHost);
+            Assert.Equal(expected.GetProperty("hostAlias").GetString(), cfg.HostAlias);
+            Assert.Equal(expected.GetProperty("keyName").GetString(), cfg.KeyName);
+            Assert.Equal(expected.GetProperty("sshPort").GetInt32(), cfg.SshPort);
+            Assert.Equal(expected.TryGetProperty("ipv4", out var ipv4) && ipv4.GetBoolean(), cfg.Ipv4);
             return;
         }
         var config = row.GetProperty("cfg").Deserialize<SshConfiguration>(IpcJson.Options)!;

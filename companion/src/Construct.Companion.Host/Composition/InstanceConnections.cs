@@ -12,7 +12,7 @@ public sealed class InstanceConnections(IProcessRunner runner, IPortProbe ports,
 {
     public ISshTransport Ssh(JsonObject instance)
     {
-        var cfg = new SshConfiguration(StateJson.String(instance["vmHost"]), StateJson.String(instance["hostAlias"]), KeyName: StateJson.String(instance["keyName"]), SshPort: Instances.CoercePort(instance["sshPort"]) ?? 22, ConnectTimeout: 8);
+        var cfg = SshArgs.ForInstance(instance, 8);
         var keyPath = files.GetRoot(FileSystemRoot.UserProfile) is { Length: > 0 } root ? Path.Combine(root, ".ssh", cfg.KeyName) : null;
         return new ProcessSshTransport(runner, ports, cfg, HostProcesses.SshExecutable(files), keyPath);
     }

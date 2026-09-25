@@ -17,6 +17,11 @@ public static class Instances
     public static bool IsHostEndpoint(string? s)
     {
         if (Match(s, @"^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$")) return true;
+        return IsIpv6Literal(s);
+    }
+    // Mirrors isIpv6Literal() in extension/src/instances.js: a bare literal, no brackets or zone.
+    public static bool IsIpv6Literal(string? s)
+    {
         if (!Match(s, "^[0-9A-Fa-f:.]{2,45}$") || !s!.Contains(':')) return false;
         if (s.Contains('.') && !Match(s[(s.LastIndexOf(':') + 1)..], @"^(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])){3}$")) return false;
         return IPAddress.TryParse(s, out var ip) && ip.AddressFamily == AddressFamily.InterNetworkV6;
