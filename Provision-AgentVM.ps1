@@ -157,6 +157,12 @@ param(
     # -Action export only: scan the project repos for uncommitted/unpushed work
     # and write repo-scan.json, without exporting the (much larger) config.
     [switch]$ScanReposOnly,
+    # -Action export only: how many days of Claude/Codex chat transcripts the backup
+    # keeps (bin/export-config.sh HISTORY_RETENTION_DAYS; 0 keeps all history).
+    # Empty = the export script's default (30 days). Digits only: it is spliced
+    # into the remote command line.
+    [ValidatePattern('\A[0-9]*\z')]
+    [string]$HistoryRetentionDays = "",
     # Restore a previously exported backup (a -BackupDir from a prior export run)
     # onto the VM at the end of provisioning. Used by the reinstall auto-restore.
     [string]$RestoreDir = "",
@@ -1998,9 +2004,12 @@ if ($Action -eq 'export') {
         # VM-side copy -- even if the export, download, or extract throws. The
         # `&& chmod` keeps a failed export from being reported as success.
         $tgz = Join-Path $BackupDir "backup.tar.gz"
+        # Only when given (digits only, re-checked because it lands in a shell
+        # command); otherwise the export script's own default applies.
+        $retentionEnv = if ($HistoryRetentionDays -match '\A[0-9]+\z') { "HISTORY_RETENTION_DAYS=$HistoryRetentionDays " } else { "" }
         try {
             Write-Host "  --- live export output ---" -ForegroundColor DarkGray
-            Invoke-SshStream -Sudo -Command "EXPORT_HOME=/root INCLUDE_AUTH=true INCLUDE_HISTORY=true OUT=/tmp/construct-config-backup.tar.gz CONFIG_FILE=/etc/construct/config.env REPO_DIR=/opt/construct/repo PROJECTS_STORE=/opt/construct/projects bash $ExportConfigScript && chmod 644 /tmp/construct-config-backup.tar.gz"
+            Invoke-SshStream -Sudo -Command "EXPORT_HOME=/root INCLUDE_AUTH=true INCLUDE_HISTORY=true ${retentionEnv}OUT=/tmp/construct-config-backup.tar.gz CONFIG_FILE=/etc/construct/config.env REPO_DIR=/opt/construct/repo PROJECTS_STORE=/opt/construct/projects bash $ExportConfigScript && chmod 644 /tmp/construct-config-backup.tar.gz"
             Write-Host "  --- end export output ---" -ForegroundColor DarkGray
             Invoke-ScpFrom -RemotePath "/tmp/construct-config-backup.tar.gz" -LocalPath $tgz
         } finally {

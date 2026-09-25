@@ -17,6 +17,7 @@
       "gitCredentialStore": false,
       "gitEmail": "a@b",
       "gitUserName": " ü ",
+      "historyRetentionDays": 30,
       "micPassthrough": false,
       "opencodeBackgroundWatcher": true,
       "smbShare": true,
@@ -39,6 +40,7 @@
       "gitCred": false,
       "gitEmail": "a@b",
       "gitName": " ü ",
+      "historyRetentionDays": "30",
       "mic": false,
       "opencodeBackgroundWatcher": true,
       "partialStreaming": true,
@@ -51,7 +53,7 @@
       "tunnel": false,
       "ubuntu": "24.04"
     },
-    "outputJson": "{\"gitName\":\" ü \",\"gitEmail\":\"a@b\",\"gitCred\":false,\"ram\":\"8\",\"disk\":\"80\",\"cpu\":\"4\",\"ubuntu\":\"24.04\",\"serveWeb\":true,\"tunnel\":false,\"smb\":true,\"mic\":false,\"partialStreaming\":true,\"opencodeBackgroundWatcher\":true,\"t3code\":true,\"t3codeChannel\":\"nightly\",\"t3codeLimitResume\":true,\"autoCheckpoints\":false}"
+    "outputJson": "{\"gitName\":\" ü \",\"gitEmail\":\"a@b\",\"gitCred\":false,\"ram\":\"8\",\"disk\":\"80\",\"cpu\":\"4\",\"ubuntu\":\"24.04\",\"serveWeb\":true,\"tunnel\":false,\"smb\":true,\"mic\":false,\"partialStreaming\":true,\"opencodeBackgroundWatcher\":true,\"t3code\":true,\"t3codeChannel\":\"nightly\",\"t3codeLimitResume\":true,\"autoCheckpoints\":false,\"historyRetentionDays\":\"30\"}"
   },
   {
     "input": {
@@ -59,6 +61,7 @@
       "gitCredentialStore": null,
       "gitEmail": null,
       "gitUserName": null,
+      "historyRetentionDays": null,
       "micPassthrough": null,
       "opencodeBackgroundWatcher": null,
       "smbShare": null,
@@ -79,10 +82,11 @@
       "disk": "null",
       "gitEmail": "null",
       "gitName": "null",
+      "historyRetentionDays": "null",
       "ram": "null",
       "ubuntu": "null"
     },
-    "outputJson": "{\"gitName\":\"null\",\"gitEmail\":\"null\",\"ram\":\"null\",\"disk\":\"null\",\"cpu\":\"null\",\"ubuntu\":\"null\"}"
+    "outputJson": "{\"gitName\":\"null\",\"gitEmail\":\"null\",\"ram\":\"null\",\"disk\":\"null\",\"cpu\":\"null\",\"ubuntu\":\"null\",\"historyRetentionDays\":\"null\"}"
   },
   {
     "input": {
@@ -90,6 +94,7 @@
       "gitCredentialStore": "wrong",
       "gitEmail": "wrong",
       "gitUserName": "wrong",
+      "historyRetentionDays": "wrong",
       "micPassthrough": "wrong",
       "opencodeBackgroundWatcher": "wrong",
       "smbShare": "wrong",
@@ -110,10 +115,11 @@
       "disk": "wrong",
       "gitEmail": "wrong",
       "gitName": "wrong",
+      "historyRetentionDays": "wrong",
       "ram": "wrong",
       "ubuntu": "wrong"
     },
-    "outputJson": "{\"gitName\":\"wrong\",\"gitEmail\":\"wrong\",\"ram\":\"wrong\",\"disk\":\"wrong\",\"cpu\":\"wrong\",\"ubuntu\":\"wrong\"}"
+    "outputJson": "{\"gitName\":\"wrong\",\"gitEmail\":\"wrong\",\"ram\":\"wrong\",\"disk\":\"wrong\",\"cpu\":\"wrong\",\"ubuntu\":\"wrong\",\"historyRetentionDays\":\"wrong\"}"
   },
   {
     "input": {
@@ -150,6 +156,7 @@
       "gitCred": false,
       "gitEmail": "a@b",
       "gitName": " ü ",
+      "historyRetentionDays": "30",
       "mic": false,
       "opencodeBackgroundWatcher": true,
       "partialStreaming": true,
@@ -168,6 +175,7 @@
       "gitCredentialStore": false,
       "gitEmail": "a@b",
       "gitUserName": "ü",
+      "historyRetentionDays": 30,
       "micPassthrough": false,
       "opencodeBackgroundWatcher": true,
       "smbShare": true,

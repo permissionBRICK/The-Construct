@@ -194,6 +194,11 @@ param(
     #   wipe     no save and no restore -- reinstall completely blank
     [ValidateSet("save", "existing", "wipe")]
     [string]$BackupMode,
+    # Days of Claude/Codex chat history the config backup keeps (0 = all), forwarded
+    # to every Provision-AgentVM.ps1 -Action export this run takes (the pre-delete
+    # save and the export menu choice). Empty = the export script's default (30).
+    [ValidatePattern('\A[0-9]*\z')]
+    [string]$HistoryRetentionDays = "",
     # ── Config-sync v2 params (spec sections 10-12) ────────────────────────────
     # Import project configs from a remote git repo (cloned to a staging cache).
     # Requires git on the host; if absent, the pre-elevation block prompts/installs it.
@@ -1621,8 +1626,23 @@ function Invoke-VmConfigExport {
         $a['HostAlias']    = [string]$exportIdentity.HostAlias
         $a['LocalKeyName'] = [string]$exportIdentity.KeyName
     }
-    if ($ScanReposOnly) { $a['ScanReposOnly'] = $true }
+    if ($ScanReposOnly) { $a['ScanReposOnly'] = $true } else { Add-HistoryRetentionArg -Script $ps -Splat $a }
     & $ps @a
+}
+
+# The config save (not the repo scan) carries -HistoryRetentionDays when this run was
+# given one -- and only when the installed Provision-AgentVM.ps1 declares it, so a
+# partially-updated scripts dir still exports (with its default) instead of failing
+# to bind.
+function Add-HistoryRetentionArg {
+    param([Parameter(Mandatory)][string]$Script, [Parameter(Mandatory)][hashtable]$Splat)
+    if (-not $HistoryRetentionDays) { return }
+    $cmd = Get-Command -Name $Script -CommandType ExternalScript -ErrorAction SilentlyContinue
+    if ($cmd -and $cmd.Parameters.ContainsKey('HistoryRetentionDays')) {
+        $Splat['HistoryRetentionDays'] = $HistoryRetentionDays
+    } else {
+        Write-Warning "This install's Provision-AgentVM.ps1 does not accept -HistoryRetentionDays; the backup keeps its default chat history."
+    }
 }
 
 # Read the project profile names recorded in a saved backup's
@@ -2159,7 +2179,7 @@ function Invoke-RemoteVmConfigExport {
         HostAlias    = $Name
         LocalKeyName = "construct_${Name}_ed25519"
     }
-    if ($ScanReposOnly) { $a['ScanReposOnly'] = $true }
+    if ($ScanReposOnly) { $a['ScanReposOnly'] = $true } else { Add-HistoryRetentionArg -Script $ps -Splat $a }
     & $ps @a
 }
 

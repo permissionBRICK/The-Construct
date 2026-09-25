@@ -637,6 +637,14 @@ It defaults to `-VmName Agent-VM -Backend hyperv-local`, takes `-InstanceName` l
 other host scripts, and refuses to run when the backend reports no `Resources`
 capability rather than resizing some *local* VM that happens to share the name.
 
+### Chat history kept in backups
+
+**Settings → VM resources → Chat history kept in backups** (days, default 30; `0` keeps
+all history) limits the Claude and Codex chat transcripts carried by the config backup
+that a Reinstall / Redownload takes before deleting the VM and by **Export config**. Older
+sessions are left out of the backup only; memory is always kept. See
+[Backup & restore](backup-restore.md).
+
 ### Automatic checkpoints
 
 Hyper-V's **automatic checkpoints** snapshot a VM every time it starts. That's a sensible

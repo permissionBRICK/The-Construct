@@ -345,6 +345,7 @@ function mapToForm(raw) {
   }
   if (typeof raw.t3codeLimitResume === "boolean") form.t3codeLimitResume = raw.t3codeLimitResume;
   if (typeof raw.vmAutoCheckpoints === "boolean") form.autoCheckpoints = raw.vmAutoCheckpoints;
+  if (has("historyRetentionDays")) form.historyRetentionDays = String(raw.historyRetentionDays);
   return form;
 }
 
@@ -398,6 +399,9 @@ function mapFromForm(form) {
   if (form.t3codeChannel === "stable" || form.t3codeChannel === "nightly") out.t3codeChannel = form.t3codeChannel;
   setBool("t3codeLimitResume", form.t3codeLimitResume);
   setBool("vmAutoCheckpoints", form.autoCheckpoints);
+  // Days of agent chat history the config backup keeps (bin/export-config.sh
+  // HISTORY_RETENTION_DAYS); passed on reinstall / redownload / Export config.
+  setNum("historyRetentionDays", form.historyRetentionDays);
   return out;
 }
 
