@@ -17,7 +17,21 @@ copy_changed() {
 for file in server.py open.py; do copy_changed "$src/$file" "/opt/construct/console-viewer/$file"; done
 for file in "$src"/static/*; do copy_changed "$file" "/opt/construct/console-viewer/static/$(basename "$file")"; done
 image='guacamole/guacd@sha256:8974eaa9ba32f713daf311e7cc8cd7e4cdfba1edea39eed75524e78ef4b08f4f'
-if ! docker image inspect "$image" >/dev/null 2>&1; then docker pull "$image"; fi
+# Docker Hub answers with transient TLS-handshake and manifest timeouts; one failed pull
+# would fail the whole provisioning step (critical on a service-managed primary) and leave
+# the VM half-provisioned. Bounded retries with backoff.
+pull_image() {
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    if docker pull "$image"; then return 0; fi
+    [[ $attempt -lt 5 ]] || break
+    echo "docker pull failed (attempt $attempt of 5); retrying in $((attempt * 10))s..." >&2
+    sleep $((attempt * 10))
+  done
+  echo "Could not pull $image after 5 attempts." >&2
+  return 1
+}
+if ! docker image inspect "$image" >/dev/null 2>&1; then pull_image; fi
 if docker container inspect construct-guacd >/dev/null 2>&1; then
   [[ "$(docker inspect --format '{{.Config.Image}}' construct-guacd)" == "$image" ]] || { echo 'construct-guacd uses another image; replace it explicitly.' >&2; exit 1; }
   [[ "$(docker inspect --format '{{index .Config.Entrypoint 0}}' construct-guacd)" == /opt/guacamole/sbin/guacd ]] || { echo 'Existing guacd entrypoint differs; replace it explicitly.' >&2; exit 1; }
