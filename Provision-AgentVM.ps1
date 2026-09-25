@@ -493,6 +493,37 @@ function Remove-TreeRobust {
     }
 }
 
+function Expand-ConfigBackup {
+    # Extract a VM config backup on the host, skipping its symlinks. The home tree
+    # holds links with absolute Linux targets (skills linked from a repo checkout,
+    # keys and gh hosts.yml linked into ~/.secrets); Windows tar.exe cannot create
+    # them ("Can't create ...: Invalid argument") and fails the whole extract. The
+    # host only reads regular files from the copy, and the restore uploads the
+    # original archive, where the links survive.
+    param(
+        [Parameter(Mandatory)][string]$Archive,
+        [Parameter(Mandatory)][string]$Destination
+    )
+    # `-t` and `-tv` print one line per entry in the same order; the mode column of
+    # the verbose listing marks symlinks with a leading "l".
+    $names = @(& tar.exe -tzf $Archive)
+    if ($LASTEXITCODE -ne 0) { throw "Failed to list the backup ($Archive)." }
+    $long = @(& tar.exe -tvzf $Archive)
+    if ($LASTEXITCODE -ne 0 -or $long.Count -ne $names.Count) { throw "Failed to list the backup ($Archive)." }
+    # Exclusions are patterns; turn glob characters into single-character wildcards.
+    $links = @(for ($i = 0; $i -lt $names.Count; $i++) {
+        if ($long[$i].StartsWith('l')) { $names[$i] -replace '[\[\]*?\\]', '?' }
+    })
+    $excludeFile = Join-Path ([System.IO.Path]::GetTempPath()) ("construct-backup-links-" + [Guid]::NewGuid().ToString("N") + ".txt")
+    [System.IO.File]::WriteAllLines($excludeFile, [string[]]$links, (New-Object System.Text.UTF8Encoding $false))
+    try {
+        & tar.exe -xzf $Archive -C $Destination -X $excludeFile
+        if ($LASTEXITCODE -ne 0) { throw "Failed to extract the backup ($Archive)." }
+    } finally {
+        Remove-Item -LiteralPath $excludeFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Ensure-OpenSSH {
     if (Get-Command ssh.exe -ErrorAction SilentlyContinue) { return }
     Write-Step "OpenSSH client not found. Installing via winget..."
@@ -1975,8 +2006,7 @@ if ($Action -eq 'export') {
         # back to a robocopy mirror-empty that handles long paths.
         Remove-TreeRobust -Path $extract
         New-Item -ItemType Directory -Force -Path $extract | Out-Null
-        & tar.exe -xzf $tgz -C $extract
-        if ($LASTEXITCODE -ne 0) { throw "Failed to extract the backup ($tgz)." }
+        Expand-ConfigBackup -Archive $tgz -Destination $extract
 
         # Merge generated project profiles into the config projects dir (config-sync
         # v2: shared %LOCALAPPDATA%\The-Construct\config\projects), never overwriting
