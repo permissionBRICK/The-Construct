@@ -359,6 +359,51 @@ public sealed class HyperVDriverTests
         Assert.Equal("the last output line was not the expected JSON envelope", ex.Detail);
     }
 
+    private sealed class ListProgress : IProgress<string>
+    {
+        public List<string> Lines { get; } = [];
+        public void Report(string value) => Lines.Add(value);
+    }
+
+    [Fact]
+    public async Task A_failed_script_reports_its_stderr_as_progress_but_not_in_the_error_or_the_log()
+    {
+        using var logs = new LogSink();
+        var runner = new RecordingProcessRunner().Respond(new ProcessResult(
+            1,
+            string.Empty,
+            "New-VHD : The file 'agent-vm.vhdx' already exists.\nAt C:\\Construct\\drivers\\HyperVLocal.Driver.ps1:12 char:5\n",
+            TimedOut: false));
+        var (driver, _) = Driver(runner, logs: logs);
+        var progress = new ListProgress();
+
+        var ex = await Assert.ThrowsAsync<HypervisorOperationException>(
+            () => driver.CreateVmAsync(Descriptor, progress, CancellationToken.None));
+
+        // The job's owner sees WHY, in the job's progress -- the one channel that is not persisted
+        // as the error, not audited and not logged.
+        Assert.Contains("powershell: New-VHD : The file 'agent-vm.vhdx' already exists.", progress.Lines);
+        Assert.Equal("powershell.exe exited with 1", ex.Detail);
+        Assert.DoesNotContain("already exists", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("already exists", ex.Detail);
+        Assert.DoesNotContain("already exists", logs.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_failure_the_driver_reports_shows_its_text_as_progress()
+    {
+        var runner = new RecordingProcessRunner()
+            .RespondStdout("""{"ok":false,"error":"Hyper-V was unable to find a virtual machine"}""");
+        var (driver, _) = Driver(runner);
+        var progress = new ListProgress();
+
+        var ex = await Assert.ThrowsAsync<HypervisorOperationException>(
+            () => driver.CreateVmAsync(Descriptor, progress, CancellationToken.None));
+
+        Assert.Contains("driver: Hyper-V was unable to find a virtual machine", progress.Lines);
+        Assert.DoesNotContain("unable to find", ex.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task An_error_reported_by_the_driver_fails_the_operation()
     {
