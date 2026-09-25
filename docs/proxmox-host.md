@@ -76,7 +76,7 @@ the installer builds the service on the node and fetches a .NET SDK once.
 |---|---|---|
 | `constructd` (systemd unit `constructd.service`, root) | `/opt/construct/host` | The host service on `https://<node>:7462`: users, tokens, VM registry, jobs, idle policy, audit — the API in [service/README.md](../service/README.md) |
 | The Construct checkout | `/opt/construct/scripts` | `bin/`, `keys/`, `config/` … what guests are provisioned from and served through the source cache |
-| Data | `/var/lib/constructd` | `constructd.db` (SQLite), `iso/`, `media/`, `source/` |
+| Data | `/var/lib/constructd` | `constructd.db` (SQLite), `iso/`, `media/`, `source/`, `logs/` (the service's own log, `constructd-yyyyMMdd.log`, 14 days; a failed `qm` command's error text lands here) |
 | TLS | `/etc/constructd/tls.pfx` (+ `tls.pass`) | A self-signed certificate for the public host; clients pin its fingerprint at enrolment |
 | The VM image | `<image-storage>:import/construct-ubuntu-<release>-xfs-amd64.qcow2` | The Ubuntu cloud image, its root file system converted to XFS; every VM is cloned from it |
 | Per-VM seeds | `<image-storage>:snippets/construct-<vm>-user.yaml` | cloud-init user data the service writes per VM and deletes with it |

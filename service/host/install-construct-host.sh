@@ -527,6 +527,7 @@ settings = {
     "Backend": "proxmox",
     "Persistence": "Sqlite",
     "DatabasePath": "${DATA_DIR}/constructd.db",
+    "FileLog": {"Directory": "${DATA_DIR}/logs"},
     "ListenUrl": "https://0.0.0.0:${LISTEN_PORT}",
     "CertPath": "${PFX}",
     "CertPassword": "${PFX_PASS}",

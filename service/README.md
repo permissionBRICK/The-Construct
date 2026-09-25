@@ -592,6 +592,7 @@ Bound from the `Constructd` section of `appsettings.json`, from environment vari
 | `BrowserConsoleEnabled` | `true` | Enable the trusted browser gateway's per-session Hyper-V VMConnect credentials or Proxmox VNC proxies. Explicit `false` disables connection issuance. |
 | `Persistence` | `Sqlite` (`Memory` in fake mode) | Where users, tokens, VMs, jobs and the audit trail live. |
 | `DatabasePath` | `constructd.db` | SQLite file; on a real host under `C:\ProgramData\Construct\service\`. |
+| `FileLog:Directory` / `:RetentionDays` / `:Enabled` | `logs` next to the database / `14` / `true` | The service's own log file, `constructd-yyyyMMdd.log`, one per UTC day. The Windows event log and journald keep what they had; this file also carries what they only categorise: a failed driver script's error text (`powershell: …`, `qm: …`) and a driver-reported error. Off in fake mode unless a directory is given. |
 | `ListenUrl` | `https://0.0.0.0:7462` | What the service listens on. |
 | `CertPath` / `CertPassword` | – | PFX for TLS. |
 | `CertThumbprint` | – | Certificate from `LocalMachine\My` (what the client pins at enrollment). |

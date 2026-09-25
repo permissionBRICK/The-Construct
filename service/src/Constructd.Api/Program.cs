@@ -32,6 +32,14 @@ var options = new ConstructdOptions();
 builder.Configuration.GetSection(ConstructdOptions.SectionName).Bind(options);
 builder.Services.AddSingleton(options);
 
+// The service's own log file (Constructd:FileLog), next to the database by default. The event
+// log / journald keep what they had; the file is where a driver script's error text goes.
+var logDirectory = FileLoggerProvider.Resolve(options);
+if (logDirectory is not null)
+{
+    builder.Logging.AddProvider(new FileLoggerProvider(logDirectory, options.FileLog.RetentionDays));
+}
+
 // ---- Windows service hosting hook ---------------------------------------------------------
 // Under the SCM this switches the lifetime to Windows-service mode; started from a console it is a
 // no-op. Off Windows it is not called at all.
@@ -79,6 +87,10 @@ if (options.ForwardReconcileSeconds > 0)
 }
 
 var app = builder.Build();
+if (logDirectory is not null)
+{
+    app.Logger.LogInformation("Service log: {Directory} ({Retention} days kept)", logDirectory, Math.Max(1, options.FileLog.RetentionDays));
+}
 
 if (options.Fake)
 {
