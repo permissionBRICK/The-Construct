@@ -58,7 +58,7 @@ From a checkout of this repo on Windows:
     -AiTools "opencode,claude-code" -Projects "default"
 ```
 
-Requires the Windows 10/11 OpenSSH client (`ssh`, `scp`, `ssh-keyscan`, `ssh-keygen`) and
+Requires the Windows 10/11 OpenSSH client (`ssh`, `scp`, `ssh-keygen`) and
 `tar.exe` — all bundled with current Windows; no Posh-SSH dependency. After it finishes,
 connect with `ssh agent-vm` (or `ssh <-HostAlias>`) or via the VS Code Remote Explorer.
 
@@ -70,7 +70,7 @@ install, so a plain `.\Provision-AgentVM.ps1` is byte-for-byte the run it always
 | Param | Default | Meaning |
 |---|---|---|
 | `-VmHost` | `agent-vm.mshome.net` | The address this PC dials. On a remote install it's the host service's address, not a `.mshome.net` name. |
-| `-SshPort` | `22` | Threaded into every `ssh`/`scp`/`ssh-keyscan` call. A non-22 port also adds the `Port` line to the `~\.ssh\config` block and switches `known_hosts` to the bracketed `[host]:port` form. |
+| `-SshPort` | `22` | Threaded into every `ssh`/`scp` call. A non-22 port also adds the `Port` line to the `~\.ssh\config` block and switches `known_hosts` to the bracketed `[host]:port` form. |
 | `-HostAlias` | `agent-vm` | The `Host` block written to `~\.ssh\config`, and the name VS Code Remote-SSH connects by. |
 | `-LocalKeyName` | `agent_vm_ed25519` | The file name under `~\.ssh\` the VM's root key is saved as. Named instances use `construct_<name>_ed25519`. |
 | `-ConfigBranch` | *(empty → derived)* | The [config-sync](config-sync.md) branch this VM's host-side store lives on. Empty derives it from `-HostAlias`: `agent-vm` → `vm`, anything else → `vm-<alias>`. Pass it explicitly only when a registry entry names a branch that differs from that derivation. |

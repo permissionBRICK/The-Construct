@@ -3513,7 +3513,8 @@ function Get-ConstructKnownHostsFileName {
         The name of the throw-away known_hosts file a provision keeps in $env:TEMP.
         Pure.
 
-        It is written with `ssh-keyscan` at the start of a run and deleted at the end,
+        It is emptied at the start of a run (the first connection then records the
+        host key via accept-new) and deleted at the end,
         so two provisions running at the same time (two VMs, two consoles) used to
         overwrite and then delete each other's file -- the second VM's SSH calls then
         ran against the first VM's host key. Keying it by the ssh ALIAS gives each

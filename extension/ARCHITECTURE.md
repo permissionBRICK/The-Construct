@@ -2529,7 +2529,7 @@ says what will actually happen.
   - `Provision-AgentVM.ps1` — params incl. `-Action provision|export`, `-BackupDir`,
     `-RestoreDir`, `-ScanReposOnly`, `-Projects`, `-AiTools`, `-GitUserName`, `-GitEmail`.
     The reprovision entrypoint. **Targeting:** `-VmHost` (default
-    `agent-vm.mshome.net`), `-SshPort` (default 22 — threaded into every ssh/scp/keyscan
+    `agent-vm.mshome.net`), `-SshPort` (default 22 — threaded into every ssh/scp
     call, adds the `Port` line to the ssh_config block and switches `known_hosts` to
     `[host]:port`), `-HostAlias` (default `agent-vm`), `-LocalKeyName` (default
     `agent_vm_ed25519`), `-ConfigBranch` (empty ⇒ derived from `-HostAlias`).
