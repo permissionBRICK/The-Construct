@@ -292,6 +292,18 @@ if (-not ($PSBoundParameters.ContainsKey('AgentPassword') -or $PSBoundParameters
 }
 function Stop-InstallTranscript { if ($script:InstallLogPath) { try { Stop-Transcript | Out-Null } catch { } } }
 
+# Shadowed for this script and everything it calls: every warning is ALSO queued for the
+# top of the next TUI screen (Show-TuiScreen), because a screen clears the console and a
+# warning printed just before it was never seen -- only the transcript had it.
+function Write-Warning {
+    [CmdletBinding()]
+    param([Parameter(Mandatory, Position = 0, ValueFromPipeline)][string]$Message)
+    process {
+        if (Get-Command Add-ConstructTuiNotice -ErrorAction SilentlyContinue) { Add-ConstructTuiNotice -Message $Message }
+        Microsoft.PowerShell.Utility\Write-Warning -Message $Message
+    }
+}
+
 if ($T3CodeChannel) { $T3CodeChannel = $T3CodeChannel.ToLower() }
 
 # End-of-run pause. A clean control-panel run closes by itself; any provisioning
@@ -2198,7 +2210,8 @@ function New-ConstructRemoteVmRecord {
             Write-Warning "The rollback failed as well: $($_.Exception.Message)"
             throw "$why`nThe VM '$Name' still EXISTS on $ServiceUrl and could not be removed automatically -- delete it there before trying again."
         }
-        throw "$why`nThe VM '$Name' was removed from $ServiceUrl again, so nothing was left behind."
+        throw ("$why`nThe VM '$Name' was removed from $ServiceUrl again, so nothing was left behind.`n" +
+               "If the conflicting instance's VM no longer exists on the host service, rebuild it under its own name (install again and type that name), or forget it: Auto-Install.ps1 -Action remove-instance -InstanceName <name>")
     }
 
     # Written through lib\AgentVm.Instances.ps1 (never hand-rolled JSON) so the PS and JS
@@ -2674,24 +2687,111 @@ if ($RemoteInstall) {
     $instName = $InstanceName
     if ($script:RemoteRebuildName) { $instName = $script:RemoteRebuildName }
     # A rebuild keeps the name it is registered under. That includes 'agent-vm' when the
-    # default instance was converted to a host service; the rule below is for NEW names.
-    while (-not $script:RemoteRebuildName -and -not (Test-ConstructRemoteInstanceName $instName)) {
-        if ($instName -ceq 'agent-vm') {
-            Write-Warning "'agent-vm' is reserved for this PC's default (local) instance and cannot name a remote VM. Pick another name, e.g. work-vm."
+    # default instance was converted to a host service; the name rule below is for NEW
+    # names. A typed name this PC already registers for THIS service, whose VM the service
+    # no longer has (deleted from the admin panel, a rebuild that never finished), is taken
+    # over the same way: rebuilt under its name with its key, alias and config-sync
+    # branch. Reinstall is shut for a VM that cannot be reached, and a dead entry would
+    # otherwise block its name for good -- and its old SSH port, which the service hands
+    # to the next VM, would make the registry refuse that VM after it was built.
+    $nameProblem = ""
+    $script:RemoteTakeover = $false
+    while (-not $script:RemoteRebuildName) {
+        if ($instName -and $registry -and $registry.Entries.ContainsKey($instName)) {
+            $known = $registry.Entries[$instName]
+            $knownUrl = ""
+            if ($known.ServiceUrl) {
+                try { $knownUrl = ConvertTo-ConstructServiceUrl -Value ([string]$known.ServiceUrl) } catch { $knownUrl = [string]$known.ServiceUrl }
+            }
+            if ([string]$known.Backend -eq 'hyperv-remote' -and $knownUrl -eq $svcUrl) {
+                $present = $null
+                try { $present = Test-ConstructVmPresent -Name $instName } catch { $present = $null }
+                if ($present -eq $false) {
+                    Write-Note "'$instName' is registered on this PC but no longer exists on $svcUrl -- rebuilding it under that name, with its key, alias and config branch."
+                    $existingEntry = $known
+                    $instKey    = [string]$known.KeyName
+                    $instBranch = [string]$known.ConfigBranch
+                    if (-not $instBranch) { $instBranch = if ($instName -ceq 'agent-vm') { 'vm' } else { "vm-$instName" } }
+                    Restore-ConstructInstallFeatures -Name $instName
+                    $script:RemoteTakeover = $true
+                    $script:RemoteRebuildName = $instName
+                    break
+                }
+                $nameProblem = if ($present) {
+                    "'$instName' is already a VM on $svcUrl. To rebuild it, choose Reinstall for it in the Companion or run this script with -InstanceName $instName; pick another name for a second VM."
+                } else {
+                    "'$instName' is registered on this PC for $svcUrl, and the service could not say whether that VM still exists. Check the host service, or pick another name."
+                }
+            } elseif ($instName -ceq 'agent-vm' -and [string]$known.Backend -ne 'hyperv-remote') {
+                $nameProblem = "'agent-vm' is reserved for this PC's default (local) instance and cannot name a remote VM. Pick another name, e.g. work-vm."
+            } else {
+                $where = if ($knownUrl) { "a VM on $knownUrl" } else { "a local VM" }
+                $nameProblem = "This PC already has a Construct instance named '$instName' ($where). Pick another name, or forget it first: Auto-Install.ps1 -Action remove-instance -InstanceName $instName"
+            }
+        } elseif (Test-ConstructRemoteInstanceName $instName) {
+            break
+        } elseif ($instName -ceq 'agent-vm') {
+            $nameProblem = "'agent-vm' is reserved for this PC's default (local) instance and cannot name a remote VM. Pick another name, e.g. work-vm."
         } elseif ($instName) {
-            Write-Warning "'$instName' is not a usable instance name: $($script:ConstructVmNameRule) (e.g. work-vm)"
+            $nameProblem = "'$instName' is not a usable instance name: $($script:ConstructVmNameRule) (e.g. work-vm)"
         }
         if ([Console]::IsInputRedirected) {
-            throw "A remote install needs a valid -InstanceName ($($script:ConstructVmNameRule) 'agent-vm' is reserved too)."
+            throw "A remote install needs a valid -InstanceName ($($script:ConstructVmNameRule) 'agent-vm' is reserved too).$(if ($nameProblem) { " $nameProblem" })"
         }
-        $instName = (Invoke-TuiInput -ScreenTitle "Name this VM" -Body @(
+        # The refusal goes INTO the prompt screen: the screen clears the console, so a
+        # warning printed before it was never seen.
+        $nameBody = @(
             "The name identifies the VM on the host service AND on this PC: it becomes the",
             "SSH alias you connect with, the name of its key file, and its config-sync",
             "branch. Lowercase letters, digits and hyphens, e.g. work-vm."
-        ) -Prompt "Instance name").ToLowerInvariant()
+        )
+        if ($nameProblem) { $nameBody = @($nameProblem, "") + $nameBody }
+        $instName = (Invoke-TuiInput -ScreenTitle "Name this VM" -Body $nameBody -Prompt "Instance name").ToLowerInvariant()
     }
     if (-not $script:RemoteRebuildName -and $registry.Entries.ContainsKey($instName)) {
         throw "This PC already has a Construct instance named '$instName'. Pick another name, or pass -InstanceName $instName to manage the existing one."
+    }
+    # A taken-over name gets the same offer a reinstall makes: the config saved on this
+    # host from an earlier run, restored onto the rebuilt VM.
+    if ($script:RemoteTakeover) {
+        $bk = Get-ConstructBackupDir -Dir $PSScriptRoot
+        if (Test-Path -LiteralPath (Join-Path $bk "extracted\backup-info.json")) {
+            $useBackup = if ($BackupMode) { ($BackupMode -ne 'wipe') } else {
+                Invoke-TuiConfirm -ScreenTitle "Restore a previously saved config?" -Body @(
+                    "A config backup from an earlier run exists on this host. It can restore",
+                    "the agent config automatically after the rebuild."
+                ) -Question "Auto-restore the saved config?" `
+                  -YesLabel "Yes  restore it onto the fresh VM (recommended)" `
+                  -NoLabel  "No   rebuild completely blank"
+            }
+            if ($useBackup) {
+                $restoreDir = $bk
+                $restoredProjectNames = Get-BackupProjectNames -BackupDir $bk
+                Write-Ok "Saved config loaded; it will be restored automatically after the rebuild."
+            }
+        }
+    }
+    # Other entries this PC keeps for THIS service whose VM the service no longer has: the
+    # service hands their old SSH port to the next VM, and the registry would then refuse
+    # to record it -- after a ten-minute build and a rollback. Caught here, while nothing
+    # exists yet. Only a VM the service POSITIVELY lacks counts; a service that cannot
+    # say (401/403, unreachable) does not block the install.
+    if (-not $script:RemoteRebuildName -and $registry) {
+        $stale = @()
+        foreach ($other in @($registry.Entries.Values)) {
+            if ([string]$other.Name -eq $instName -or [string]$other.Backend -ne 'hyperv-remote' -or -not $other.ServiceUrl) { continue }
+            $otherUrl = ""
+            try { $otherUrl = ConvertTo-ConstructServiceUrl -Value ([string]$other.ServiceUrl) } catch { $otherUrl = [string]$other.ServiceUrl }
+            if ($otherUrl -ne $svcUrl) { continue }
+            $present = $null
+            try { $present = Test-ConstructVmPresent -Name ([string]$other.Name) } catch { $present = $null }
+            if ($present -eq $false) { $stale += [string]$other.Name }
+        }
+        if ($stale.Count -gt 0) {
+            throw ("This PC still registers '$($stale -join "', '")' as a VM on $svcUrl, but the host service has no such VM anymore. " +
+                   "The service can hand its SSH port to '$instName', and this PC would then refuse to record the new VM once it was built. " +
+                   "Rebuild it under its own name first (install again and type that name), or forget it: Auto-Install.ps1 -Action remove-instance -InstanceName $($stale[0])")
+        }
     }
     # DnsSafeHost, not Host: .NET keeps an IPv6 literal's URL brackets, and the registry
     # records the bare address the service reports.
