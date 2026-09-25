@@ -273,35 +273,79 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "lib/AgentVm.FeatureSet.ps1")
 
 # Every run leaves its console output behind: a failure that closes the window, or that
-# nobody was watching, is otherwise gone. Skipped when a credential was passed on the
-# command line, because the transcript header records the host's command line.
+# nobody was watching, is otherwise gone. NOT Start-Transcript: on Windows PowerShell 5.1 a
+# transcript sits in the path of every console write (the file is appended per call), which
+# turned the TUI's banner into a line-by-line crawl. A StreamWriter kept open costs nothing
+# per line; the Write-Host / Write-Warning / Read-Host shadows below feed it. Prompts are
+# logged, what was typed at them is not.
 $global:ConstructInstallFailed = $false
 $script:InstallLogPath = ""
-if (-not ($PSBoundParameters.ContainsKey('AgentPassword') -or $PSBoundParameters.ContainsKey('GitCloneCredentialsB64'))) {
-    try {
-        $logRoot = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:TEMP }
-        $logDir = Join-Path $logRoot "The-Construct\logs"
-        New-Item -ItemType Directory -Force -Path $logDir | Out-Null
-        # The ten newest runs are kept.
-        Get-ChildItem -LiteralPath $logDir -Filter 'install-*.log' -ErrorAction SilentlyContinue |
-            Sort-Object LastWriteTime -Descending | Select-Object -Skip 9 |
-            Remove-Item -Force -ErrorAction SilentlyContinue
-        $script:InstallLogPath = Join-Path $logDir ("install-{0}.log" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
-        Start-Transcript -LiteralPath $script:InstallLogPath -Force | Out-Null
-    } catch { $script:InstallLogPath = "" }
+$script:InstallLog = $null
+try {
+    $logRoot = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:TEMP }
+    $logDir = Join-Path $logRoot "The-Construct\logs"
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    # The ten newest runs are kept.
+    Get-ChildItem -LiteralPath $logDir -Filter 'install-*.log' -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -Skip 9 |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+    $script:InstallLogPath = Join-Path $logDir ("install-{0}.log" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    $script:InstallLog = New-Object System.IO.StreamWriter($script:InstallLogPath, $false, (New-Object System.Text.UTF8Encoding($false)))
+    $script:InstallLog.AutoFlush = $true
+    $script:InstallLog.WriteLine("Construct installer log -- $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') -- $($MyInvocation.MyCommand.Path) -- PowerShell $($PSVersionTable.PSVersion)")
+} catch { $script:InstallLogPath = ""; $script:InstallLog = $null }
+function Write-InstallLog {
+    param([string]$Text, [switch]$NoNewline)
+    if ($null -eq $script:InstallLog) { return }
+    try { if ($NoNewline) { $script:InstallLog.Write($Text) } else { $script:InstallLog.WriteLine($Text) } }
+    catch { $script:InstallLog = $null }
 }
-function Stop-InstallTranscript { if ($script:InstallLogPath) { try { Stop-Transcript | Out-Null } catch { } } }
+function Stop-InstallLog {
+    if ($null -ne $script:InstallLog) { try { $script:InstallLog.Dispose() } catch { } ; $script:InstallLog = $null }
+}
+
+# Shadowed for this script and everything it calls (the provisioner included): every line the
+# console shows also goes to the log. Same parameters as the cmdlet, forwarded as given.
+function Write-Host {
+    [CmdletBinding()]
+    param(
+        [Parameter(Position = 0, ValueFromPipeline, ValueFromRemainingArguments)][System.Object]$Object,
+        [switch]$NoNewline,
+        [System.Object]$Separator,
+        [System.ConsoleColor]$ForegroundColor,
+        [System.ConsoleColor]$BackgroundColor
+    )
+    process {
+        Microsoft.PowerShell.Utility\Write-Host @PSBoundParameters
+        if ($null -ne $script:InstallLog) {
+            $sep = if ($PSBoundParameters.ContainsKey('Separator')) { "$Separator" } else { ' ' }
+            $text = if ($null -eq $Object) { '' }
+                    elseif ($Object -is [System.Collections.IEnumerable] -and $Object -isnot [string]) { @(foreach ($o in $Object) { "$o" }) -join $sep }
+                    else { "$Object" }
+            Write-InstallLog -Text $text -NoNewline:$NoNewline
+        }
+    }
+}
 
 # Shadowed for this script and everything it calls: every warning is ALSO queued for the
 # top of the next TUI screen (Show-TuiScreen), because a screen clears the console and a
-# warning printed just before it was never seen -- only the transcript had it.
+# warning printed just before it was never seen -- and logged.
 function Write-Warning {
     [CmdletBinding()]
     param([Parameter(Mandatory, Position = 0, ValueFromPipeline)][string]$Message)
     process {
         if (Get-Command Add-ConstructTuiNotice -ErrorAction SilentlyContinue) { Add-ConstructTuiNotice -Message $Message }
+        Write-InstallLog -Text "WARNING: $Message"
         Microsoft.PowerShell.Utility\Write-Warning -Message $Message
     }
+}
+
+# The prompt is logged; the answer never is (it can be a name, a "yes" -- or a secret).
+function Read-Host {
+    [CmdletBinding()]
+    param([Parameter(Position = 0)][System.Object]$Prompt, [switch]$AsSecureString)
+    if ($null -ne $Prompt) { Write-InstallLog -Text "PROMPT: $Prompt" }
+    return (Microsoft.PowerShell.Utility\Read-Host @PSBoundParameters)
 }
 
 if ($T3CodeChannel) { $T3CodeChannel = $T3CodeChannel.ToLower() }
@@ -380,7 +424,7 @@ trap {
     Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
     Write-Host ""
     Wait-Exit
-    Stop-InstallTranscript
+    Stop-InstallLog
     exit 1
 }
 
@@ -4198,5 +4242,5 @@ try {
 } finally {
     Write-Host ""
     Wait-Exit
-    Stop-InstallTranscript
+    Stop-InstallLog
 }
