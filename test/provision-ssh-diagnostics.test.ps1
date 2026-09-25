@@ -185,7 +185,6 @@ ok "family: a service URL or a remote registry entry implies IPv4" (
     $provSrc -match "if \(\[string\]\`$instanceTarget\.Backend -eq 'hyperv-remote'\) \{ \`$SshIpv4 = \`$true \}")
 ok "family: the bootstrap and base option lists carry it" (
     ([regex]::Matches($provSrc, '\) \+ \$script:SshFamilyOpts')).Count -ge 5)
-ok "family: ssh-keyscan is told -4" ($provSrc -match '\$keyscanFamily = if \(\$script:SshFamilyOpts\.Count -gt 0\) \{ @\("-4"\) \}')
 ok "family: the ssh_config Host block (VS Code) gets AddressFamily inet" ($provSrc -match '"`n    AddressFamily inet"')
 foreach ($script in @('Get-AgentUsage.ps1', 'Get-ConstructT3PairingLink.ps1')) {
     $src = Get-Content -Raw (Join-Path $repoRoot $script)
@@ -198,10 +197,20 @@ ok "family: the remote config export asks for IPv4" ($autoSrc -match "ContainsKe
 
 Write-Host ""
 Write-Host "=== Host-key step ===" -ForegroundColor Cyan
+# No ssh-keyscan pass: it trusts the first key seen exactly like accept-new does, and the
+# Windows OpenSSH 9.5 build cannot negotiate with an OpenSSH 9.x guest at all (choose_kex:
+# unsupported KEX method), so it never returned a key and only cost time. The run-private
+# known_hosts is emptied BEFORE the first connection instead, so a stale key from a
+# previous VM on the same name is gone before any probe runs.
 $provText = $ast.Extent.Text
-ok "host key: 'Host key stored' is printed only when ssh-keyscan returned a key" (
-    $provText -match '(?s)if \(\$hostKeys\.Count -gt 0\) \{\s*Write-Ok "Host key stored"')
-ok "host key: an empty scan warns instead" ($provText -match 'ssh-keyscan returned no host key')
+ok "host key: the provisioner runs no ssh-keyscan" (
+    ($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] -and
+        $n.GetCommandName() -match '^ssh-keyscan(\.exe)?$' }, $true)).Count -eq 0)
+$resetAt = $provText.IndexOf('[System.IO.File]::WriteAllText($script:KnownHostsFile, "")')
+$probeAt = $provText.IndexOf("`nEnsure-VmReachable`n")
+ok "host key: the run's known_hosts is emptied before the reachability probe" ($resetAt -ge 0 -and $probeAt -gt $resetAt)
+ok "host key: every connection records the key on first use (accept-new / no)" (
+    ($provText -split "`n" | Where-Object { $_ -match 'StrictHostKeyChecking=' } | Where-Object { $_ -notmatch 'StrictHostKeyChecking=(accept-new|no)' }).Count -eq 0)
 
 Write-Host ""
 Write-Host "provision ssh diagnostics -- $script:pass passed, $script:fail failed" -ForegroundColor $(if ($script:fail) { 'Red' } else { 'Green' })
