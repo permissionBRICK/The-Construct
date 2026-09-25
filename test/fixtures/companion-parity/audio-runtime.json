@@ -612,6 +612,73 @@
       "cfg": {
         "connectTimeout": 12,
         "hostAlias": "vm-alias",
+        "ipv4": true,
+        "keyName": "test key",
+        "sshPort": 22,
+        "user": "root",
+        "vmHost": "vm.example"
+      },
+      "keyPath": null
+    },
+    "kind": "tunnel",
+    "output": [
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "AddressFamily=inet",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-R",
+      "8767:127.0.0.1:30000",
+      "vm-alias"
+    ]
+  },
+  {
+    "input": {
+      "cfg": {
+        "connectTimeout": 12,
+        "hostAlias": "vm-alias",
+        "ipv4": true,
+        "keyName": "test key",
+        "sshPort": 22,
+        "user": "root",
+        "vmHost": "vm.example"
+      },
+      "keyPath": null
+    },
+    "kind": "watchArgs",
+    "output": [
+      "-T",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "AddressFamily=inet",
+      "-o",
+      "ServerAliveInterval=20",
+      "-o",
+      "ServerAliveCountMax=3",
+      "vm-alias",
+      "f=$(mktemp) && printf %s 'ZWNobyB0ZXN0' | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+    ]
+  },
+  {
+    "input": {
+      "cfg": {
+        "connectTimeout": 12,
+        "hostAlias": "vm-alias",
         "keyName": "test key",
         "sshPort": 2222,
         "user": "root",
@@ -662,6 +729,77 @@
       "StrictHostKeyChecking=accept-new",
       "-o",
       "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=20",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-p",
+      "2222",
+      "vm-alias",
+      "f=$(mktemp) && printf %s 'ZWNobyB0ZXN0' | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+    ]
+  },
+  {
+    "input": {
+      "cfg": {
+        "connectTimeout": 12,
+        "hostAlias": "vm-alias",
+        "ipv4": true,
+        "keyName": "test key",
+        "sshPort": 2222,
+        "user": "root",
+        "vmHost": "vm.example"
+      },
+      "keyPath": null
+    },
+    "kind": "tunnel",
+    "output": [
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "AddressFamily=inet",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-R",
+      "8767:127.0.0.1:30000",
+      "-p",
+      "2222",
+      "vm-alias"
+    ]
+  },
+  {
+    "input": {
+      "cfg": {
+        "connectTimeout": 12,
+        "hostAlias": "vm-alias",
+        "ipv4": true,
+        "keyName": "test key",
+        "sshPort": 2222,
+        "user": "root",
+        "vmHost": "vm.example"
+      },
+      "keyPath": null
+    },
+    "kind": "watchArgs",
+    "output": [
+      "-T",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "AddressFamily=inet",
       "-o",
       "ServerAliveInterval=20",
       "-o",
@@ -746,6 +884,81 @@
       "cfg": {
         "connectTimeout": 12,
         "hostAlias": "vm-alias",
+        "ipv4": true,
+        "keyName": "test key",
+        "sshPort": 22,
+        "user": "root",
+        "vmHost": "vm.example"
+      },
+      "keyPath": "/fixture/home/.ssh/test key"
+    },
+    "kind": "tunnel",
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "AddressFamily=inet",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-R",
+      "8767:127.0.0.1:30000",
+      "root@vm.example"
+    ]
+  },
+  {
+    "input": {
+      "cfg": {
+        "connectTimeout": 12,
+        "hostAlias": "vm-alias",
+        "ipv4": true,
+        "keyName": "test key",
+        "sshPort": 22,
+        "user": "root",
+        "vmHost": "vm.example"
+      },
+      "keyPath": "/fixture/home/.ssh/test key"
+    },
+    "kind": "watchArgs",
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-T",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "AddressFamily=inet",
+      "-o",
+      "ServerAliveInterval=20",
+      "-o",
+      "ServerAliveCountMax=3",
+      "root@vm.example",
+      "f=$(mktemp) && printf %s 'ZWNobyB0ZXN0' | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+    ]
+  },
+  {
+    "input": {
+      "cfg": {
+        "connectTimeout": 12,
+        "hostAlias": "vm-alias",
         "keyName": "test key",
         "sshPort": 2222,
         "user": "root",
@@ -804,6 +1017,85 @@
       "StrictHostKeyChecking=accept-new",
       "-o",
       "ConnectTimeout=12",
+      "-o",
+      "ServerAliveInterval=20",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-p",
+      "2222",
+      "root@vm.example",
+      "f=$(mktemp) && printf %s 'ZWNobyB0ZXN0' | base64 -d > \"$f\" && bash \"$f\"; rc=$?; rm -f \"$f\"; exit $rc"
+    ]
+  },
+  {
+    "input": {
+      "cfg": {
+        "connectTimeout": 12,
+        "hostAlias": "vm-alias",
+        "ipv4": true,
+        "keyName": "test key",
+        "sshPort": 2222,
+        "user": "root",
+        "vmHost": "vm.example"
+      },
+      "keyPath": "/fixture/home/.ssh/test key"
+    },
+    "kind": "tunnel",
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "AddressFamily=inet",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-R",
+      "8767:127.0.0.1:30000",
+      "-p",
+      "2222",
+      "root@vm.example"
+    ]
+  },
+  {
+    "input": {
+      "cfg": {
+        "connectTimeout": 12,
+        "hostAlias": "vm-alias",
+        "ipv4": true,
+        "keyName": "test key",
+        "sshPort": 2222,
+        "user": "root",
+        "vmHost": "vm.example"
+      },
+      "keyPath": "/fixture/home/.ssh/test key"
+    },
+    "kind": "watchArgs",
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-T",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "AddressFamily=inet",
       "-o",
       "ServerAliveInterval=20",
       "-o",

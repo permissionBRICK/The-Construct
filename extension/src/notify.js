@@ -441,6 +441,7 @@ function buildWatchArgs(ssh, cfg, hasKey, script) {
     "-o", "BatchMode=yes",
     "-o", "StrictHostKeyChecking=accept-new",
     "-o", `ConnectTimeout=${c.connectTimeout}`,
+    ...(ssh.familyArgs ? ssh.familyArgs(c) : []),
     "-o", "ServerAliveInterval=20",         // notice a dead link…
     "-o", "ServerAliveCountMax=3",          // …within ~60s, then exit so we reconnect
   ];

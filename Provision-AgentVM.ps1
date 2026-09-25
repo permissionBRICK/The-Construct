@@ -73,6 +73,9 @@ param(
     [string]$Projects     = "default",
     [string]$AgentName    = "",
     [string]$LocalKeyName = "agent_vm_ed25519",
+    # Dial the VM over IPv4 (ssh -o AddressFamily=inet, ssh-keyscan -4). Implied for a VM on
+    # a host service; see $script:SshFamilyOpts below.
+    [switch]$SshIpv4,
     [int]$OpencodePort    = 4096,
     # Always install the VS Code CLI ("VS Code Server") on the VM so VS Code
     # Remote-SSH works out of the box. "true"/"false".
@@ -347,11 +350,24 @@ if ($InstanceName) {
     if (-not $PSBoundParameters.ContainsKey('SeedUser') -and [string]$instanceTarget.Backend -eq 'hyperv-remote') {
         $SeedUser = 'construct'
     }
+    if ([string]$instanceTarget.Backend -eq 'hyperv-remote') { $SshIpv4 = $true }
     # A NON-DEFAULT ENDPOINT WAS STATED -- by name rather than by argument, but stated.
     # $explicitEndpoint below asks "did the caller say where this VM answers", because
     # that is what the guest has to record as its external identity; resolving the same
     # address out of the registry is the same statement.
     if ($VmHost -ne "agent-vm.mshome.net" -or $SshPort -ne 22) { $script:InstanceEndpointStated = $true }
+}
+
+# A VM on a host service is dialled over IPv4 (Get-ConstructSshFamilyOptions says why):
+# stated by -SshIpv4 (the remote installer's export), by -ServiceUrl, or by the registry.
+if ($ServiceUrl) { $SshIpv4 = $true }
+$script:SshFamilyOpts = @()
+if ($SshIpv4) {
+    $familyLib = Join-Path $PSScriptRoot "lib\AgentVm.InstanceTarget.ps1"
+    if (Test-Path -LiteralPath $familyLib) {
+        . $familyLib
+        $script:SshFamilyOpts = @(Get-ConstructSshFamilyOptions -Ipv4 $true -VmHost $VmHost)
+    }
 }
 
 # Decode native-command output (ssh/scp stdout) as UTF-8. Windows PowerShell 5.1
@@ -576,7 +592,7 @@ function Ensure-BootstrapKey {
         "-o", "UserKnownHostsFile=$script:KnownHostsFile",
         "-o", "BatchMode=yes",
         "-o", "ConnectTimeout=15"
-    )
+    ) + $script:SshFamilyOpts
 }
 
 # The transport failures ssh reports before sshd has said anything: no DNS, refused, timed
@@ -590,7 +606,34 @@ function Get-SshFailureLine {
     $lines = @(($Output -split '\r?\n') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     $hit = @($lines | Where-Object { $_ -match $script:SshTransportFailureRe }) | Select-Object -Last 1
     if ($hit) { return $hit }
-    return ($lines | Select-Object -Last 1)
+    $last = ($lines | Select-Object -Last 1)
+    if ($last) { return $last }
+    # Nothing captured at all: name that, instead of a message ending in a bare colon.
+    return "ssh printed no error output"
+}
+
+function Invoke-SshCapture {
+    <# Run a native command and return its merged stdout+stderr text plus exit code.
+       Windows PowerShell 5.1 routes a native command's stderr through
+       $ErrorActionPreference even when it is redirected: under SilentlyContinue,
+       `2>&1 | Out-String` comes back EMPTY (confirmed live: exit 255, length 0), so
+       a probe whose whole diagnosis is on stderr reads as silence. EAP is pinned to
+       Continue for the call -- the records then do reach the pipeline, and 2>&1
+       keeps them off the console -- and every item is stringified, so 5.1's
+       ErrorRecord wrappers come out as the ssh lines they carry. pwsh passes the
+       plain strings through unchanged. #>
+    param(
+        [Parameter(Mandatory)][string]$Exe,
+        [string[]]$Arguments = @()
+    )
+    $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+    try {
+        $lines = @(& $Exe @Arguments 2>&1 | ForEach-Object { "$_" })
+        $exit = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevEAP
+    }
+    return [pscustomobject]@{ Output = ($lines -join "`n"); ExitCode = $exit }
 }
 
 function Test-SshServerAnswered {
@@ -620,12 +663,11 @@ function Ensure-VmReachable {
             "-o", "UserKnownHostsFile=$script:KnownHostsFile",
             "-o", "ConnectTimeout=5",
             "-o", "PreferredAuthentications=none"
-        )
+        ) + $script:SshFamilyOpts
         if ($SshPort -ne 22) { $probeOpts += @("-p", "$SshPort") }
-        $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-        $probe = (& ssh.exe @probeOpts "$SeedUser@$($script:VmHost)" "true" 2>&1 | Out-String)
-        $probeExit = $LASTEXITCODE
-        $ErrorActionPreference = $prevEAP
+        $res = Invoke-SshCapture -Exe ssh.exe -Arguments ($probeOpts + @("$SeedUser@$($script:VmHost)", "true"))
+        $probe = $res.Output
+        $probeExit = $res.ExitCode
         if (Test-SshServerAnswered -Output $probe -ExitCode $probeExit) {
             Write-Ok "VM is reachable at $($script:VmHost)"
             return
@@ -669,7 +711,7 @@ $script:SshOpts = @(
     # otherwise ssh.exe can hang indefinitely on a severed session.
     "-o", "ServerAliveInterval=15",
     "-o", "ServerAliveCountMax=4"
-)
+) + $script:SshFamilyOpts
 # Port args: ssh uses -p, scp uses -P; build both once so every invocation is consistent.
 $script:SshPortArgs = if ($SshPort -ne 22) { @("-p", "$SshPort") } else { @() }
 $script:ScpPortArgs = if ($SshPort -ne 22) { @("-P", "$SshPort") } else { @() }
@@ -939,7 +981,11 @@ function Invoke-SshStream {
     $esc    = [char]27
     $ansiRe = [regex]([regex]::Escape($esc) + '\[[0-9;?]*[ -/]*[@-ln-~]')
     $lines = New-Object System.Collections.Generic.List[string]
-    $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
+    # EAP Continue, not SilentlyContinue: Windows PowerShell 5.1 discards a native
+    # command's stderr under SilentlyContinue even when 2>&1-redirected, which would
+    # silently drop the remote stderr from the console AND from -PassThru. Continue
+    # lets the records reach the pipeline; 2>&1 keeps them off the console.
+    $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "Continue"
     & ssh.exe -n @script:SshPortArgs @script:SshOpts "$($script:ConnectUser)@$VmHost" $toRun 2>&1 | ForEach-Object {
         $displayLine = ((([string]$_) -replace "`r", "") -replace $ansiRe, "")
         $lines.Add($displayLine)
@@ -1120,7 +1166,7 @@ function Install-BootstrapKeyViaPassword {
         "-o", "StrictHostKeyChecking=accept-new",
         "-o", "UserKnownHostsFile=$script:KnownHostsFile",
         "-o", "ConnectTimeout=15"
-    )
+    ) + $script:SshFamilyOpts
     if ($SshPort -ne 22) { $pwOpts += @("-p", "$SshPort") }
 
     # Make sure ssh prompts on the console rather than using an askpass helper.
@@ -1184,14 +1230,13 @@ function Enter-RootKeyFastPath {
         "-o", "ConnectTimeout=15",
         "-o", "ServerAliveInterval=15",
         "-o", "ServerAliveCountMax=4"
-    )
+    ) + $script:SshFamilyOpts
 
-    # Probe as the remote (root) user. Lower ErrorActionPreference so ssh's benign
-    # stderr isn't promoted to a terminating error by the script-wide 'Stop'.
-    $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-    $probe = (& ssh.exe -n @script:SshPortArgs @opts "$RemoteUser@$VmHost" "true" 2>&1 | Out-String)
-    $ok = ($LASTEXITCODE -eq 0)
-    $ErrorActionPreference = $prevEAP
+    # Probe as the remote (root) user, through Invoke-SshCapture so the stderr that
+    # carries the diagnosis actually arrives on Windows PowerShell 5.1 too.
+    $res = Invoke-SshCapture -Exe ssh.exe -Arguments (@("-n") + $script:SshPortArgs + $opts + @("$RemoteUser@$VmHost", "true"))
+    $probe = $res.Output
+    $ok = ($res.ExitCode -eq 0)
 
     if (-not $ok) {
         Remove-Item -LiteralPath $secureKey -Force -ErrorAction SilentlyContinue
@@ -1276,7 +1321,7 @@ function Set-HostSshConfig {
     # -n + a connect timeout: this runs right after the reboot was kicked off, so
     # the VM may be on its way down -- don't attach to console stdin and don't sit
     # on a long TCP timeout if it's already gone (a stale/missing key just warns below).
-    & ssh -n @script:SshPortArgs -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=10 -i $keyPath "$RemoteUser@$VmHost" "exit" 2>$null
+    & ssh -n @script:SshPortArgs @script:SshFamilyOpts -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=10 -i $keyPath "$RemoteUser@$VmHost" "exit" 2>$null
     $ErrorActionPreference = $prevEAP
     $kh = Join-Path $sshDir "known_hosts"
     # Non-standard ports store as "[host]:port"; standard ports store bare.
@@ -1294,6 +1339,8 @@ function Set-HostSshConfig {
     # byte-identical to the pre-change behaviour.
     $cfg = Join-Path $sshDir "config"
     $portLine = if ($SshPort -ne 22) { "`n    Port $SshPort" } else { "" }
+    # VS Code Remote-SSH dials through this block, so it needs the IPv4 choice too.
+    if ($script:SshFamilyOpts.Count -gt 0) { $portLine += "`n    AddressFamily inet" }
     $block = @"
 Host $HostAlias
     HostName $VmHost
@@ -1843,7 +1890,8 @@ if ($ServiceUrl) {
 # Accept the VM's host key before any SSH operations (overwrite to clear stale keys from previous VMs).
 Write-Step "Accepting VM host key"
 $prevEAP = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
-$hostKeys = @(& ssh-keyscan -T 5 @script:SshPortArgs $VmHost 2>$null | Where-Object { $_ -and $_ -notmatch '^\s*#' })
+$keyscanFamily = if ($script:SshFamilyOpts.Count -gt 0) { @("-4") } else { @() }
+$hostKeys = @(& ssh-keyscan -T 5 @keyscanFamily @script:SshPortArgs $VmHost 2>$null | Where-Object { $_ -and $_ -notmatch '^\s*#' })
 $ErrorActionPreference = $prevEAP
 # Written even when empty, so a stale key from a previous VM never survives.
 $hostKeys | Out-File -Encoding ascii $script:KnownHostsFile

@@ -1616,6 +1616,376 @@
     "vmPort": 5173
   },
   {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "ipv4": true,
+      "keyName": "test key",
+      "sshPort": 22,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "command": "true",
+    "keyPath": null,
+    "kind": "run",
+    "output": [
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "AddressFamily=inet",
+      "vm-alias",
+      "true"
+    ]
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "ipv4": true,
+      "keyName": "test key",
+      "sshPort": 22,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": null,
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {},
+    "output": [
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "AddressFamily=inet",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "127.0.0.1:18801:127.0.0.1:5173",
+      "vm-alias"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "ipv4": true,
+      "keyName": "test key",
+      "sshPort": 2222,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "command": "true",
+    "keyPath": null,
+    "kind": "run",
+    "output": [
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "AddressFamily=inet",
+      "-p",
+      "2222",
+      "vm-alias",
+      "true"
+    ]
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "ipv4": true,
+      "keyName": "test key",
+      "sshPort": 2222,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": null,
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {},
+    "output": [
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "AddressFamily=inet",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "127.0.0.1:18801:127.0.0.1:5173",
+      "-p",
+      "2222",
+      "vm-alias"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "ipv4": true,
+      "keyName": "test key",
+      "sshPort": 22,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "command": "true",
+    "keyPath": "/fixture/home/.ssh/test key",
+    "kind": "run",
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "AddressFamily=inet",
+      "root@vm.example",
+      "true"
+    ]
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "ipv4": true,
+      "keyName": "test key",
+      "sshPort": 22,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": "/fixture/home/.ssh/test key",
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {},
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "AddressFamily=inet",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "127.0.0.1:18801:127.0.0.1:5173",
+      "root@vm.example"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "ipv4": true,
+      "keyName": "test key",
+      "sshPort": 2222,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "command": "true",
+    "keyPath": "/fixture/home/.ssh/test key",
+    "kind": "run",
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "AddressFamily=inet",
+      "-p",
+      "2222",
+      "root@vm.example",
+      "true"
+    ]
+  },
+  {
+    "cfg": {
+      "connectTimeout": 12,
+      "hostAlias": "vm-alias",
+      "ipv4": true,
+      "keyName": "test key",
+      "sshPort": 2222,
+      "user": "root",
+      "vmHost": "vm.example"
+    },
+    "keyPath": "/fixture/home/.ssh/test key",
+    "kind": "forward",
+    "localPort": 18801,
+    "opts": {},
+    "output": [
+      "-i",
+      "/fixture/home/.ssh/test key",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-N",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=accept-new",
+      "-o",
+      "ConnectTimeout=12",
+      "-o",
+      "AddressFamily=inet",
+      "-o",
+      "ServerAliveInterval=15",
+      "-o",
+      "ServerAliveCountMax=3",
+      "-o",
+      "ExitOnForwardFailure=yes",
+      "-L",
+      "127.0.0.1:18801:127.0.0.1:5173",
+      "-p",
+      "2222",
+      "root@vm.example"
+    ],
+    "vmPort": 5173
+  },
+  {
+    "input": {
+      "backend": "hyperv-remote",
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 2201,
+      "vmHost": "buildbox.example"
+    },
+    "kind": "instance",
+    "output": {
+      "hostAlias": "vm-alias",
+      "ipv4": true,
+      "keyName": "test key",
+      "sshPort": 2201,
+      "vmHost": "buildbox.example"
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-remote",
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 2201,
+      "vmHost": "10.0.0.5"
+    },
+    "kind": "instance",
+    "output": {
+      "hostAlias": "vm-alias",
+      "ipv4": true,
+      "keyName": "test key",
+      "sshPort": 2201,
+      "vmHost": "10.0.0.5"
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-remote",
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 2201,
+      "vmHost": "2001:db8::5"
+    },
+    "kind": "instance",
+    "output": {
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 2201,
+      "vmHost": "2001:db8::5"
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-remote",
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 2201,
+      "vmHost": "fe80::5"
+    },
+    "kind": "instance",
+    "output": {
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 2201,
+      "vmHost": "fe80::5"
+    }
+  },
+  {
+    "input": {
+      "backend": "hyperv-local",
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 2201,
+      "vmHost": "agent-vm.mshome.net"
+    },
+    "kind": "instance",
+    "output": {
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 2201,
+      "vmHost": "agent-vm.mshome.net"
+    }
+  },
+  {
+    "input": {
+      "backend": "",
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 2201,
+      "vmHost": "vm.example"
+    },
+    "kind": "instance",
+    "output": {
+      "hostAlias": "vm-alias",
+      "keyName": "test key",
+      "sshPort": 2201,
+      "vmHost": "vm.example"
+    }
+  },
+  {
     "input": null,
     "kind": "address",
     "output": "127.0.0.1"
