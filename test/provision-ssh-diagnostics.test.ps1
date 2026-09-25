@@ -45,7 +45,9 @@ ok "failure line: falls back to the last line" ((Get-SshFailureLine -Output "a`n
 
 # ssh.exe shadowed: a function wins over an application of the same name.
 $script:sshOutput = ""; $script:sshExit = 0; $script:sshCalls = 0
-function ssh.exe { $script:sshCalls++; $global:LASTEXITCODE = $script:sshExit; return $script:sshOutput }
+$script:sshArgs = @()
+$script:SshFamilyOpts = @()
+function ssh.exe { $script:sshCalls++; $script:sshArgs = @($args); $global:LASTEXITCODE = $script:sshExit; return $script:sshOutput }
 function icacls { }
 function Write-Step { param($m) }
 function Write-Ok { param($m) $script:lastOk = $m }
@@ -98,6 +100,56 @@ try {
     $env:TEMP = $savedTemp
     Remove-Item -LiteralPath $fakeHome -Recurse -Force -ErrorAction SilentlyContinue
 }
+
+Write-Host ""
+Write-Host "=== IPv4 for a host service's endpoint ===" -ForegroundColor Cyan
+. (Join-Path $repoRoot 'lib/AgentVm.InstanceTarget.ps1')
+$inet = 'AddressFamily=inet'
+ok "family: a service endpoint name is dialled over IPv4" ((@(Get-ConstructSshFamilyOptions -Ipv4 $true -VmHost 'buildbox.example.local') -join ' ') -eq "-o $inet")
+ok "family: ...and so is an IPv4 literal"                 ((@(Get-ConstructSshFamilyOptions -Ipv4 $true -VmHost '10.0.0.5') -join ' ') -eq "-o $inet")
+ok "family: an IPv6 literal is dialled as written"        (@(Get-ConstructSshFamilyOptions -Ipv4 $true -VmHost '2001:db8::5').Count -eq 0)
+ok "family: ...bracketed and scoped too"                  (@(Get-ConstructSshFamilyOptions -Ipv4 $true -VmHost '[fe80::1%20]').Count -eq 0)
+ok "family: a local VM is untouched"                      (@(Get-ConstructSshFamilyOptions -Ipv4 $false -VmHost 'agent-vm.mshome.net').Count -eq 0)
+
+# The real probes carry the options the script computed.
+$script:SshFamilyOpts = @('-o', $inet)
+$script:sshOutput = $denied; $script:sshExit = 255
+Ensure-VmReachable
+ok "family: the reachability probe dials over IPv4" ($script:sshArgs -contains $inet)
+$fakeHome2 = Join-Path ([IO.Path]::GetTempPath()) ("fastpath-" + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path (Join-Path $fakeHome2 '.ssh') -Force | Out-Null
+$savedHome = $HOME; $savedTemp = $env:TEMP
+try {
+    Set-Variable -Name HOME -Value $fakeHome2 -Force -Scope Global
+    $env:TEMP = $fakeHome2
+    Set-Content -LiteralPath (Join-Path $fakeHome2 ".ssh/$LocalKeyName") -Value 'key'
+    $script:sshOutput = ""; $script:sshExit = 0
+    [void](Enter-RootKeyFastPath)
+    ok "family: the saved-root-key probe dials over IPv4" ($script:sshArgs -contains $inet)
+    ok "family: ...and the whole run keeps it" ($script:SshOpts -contains $inet)
+} finally {
+    Set-Variable -Name HOME -Value $savedHome -Force -Scope Global
+    $env:TEMP = $savedTemp
+    Remove-Item -LiteralPath $fakeHome2 -Recurse -Force -ErrorAction SilentlyContinue
+}
+$script:SshFamilyOpts = @()
+
+$provSrc = $ast.Extent.Text
+ok "family: a service URL or a remote registry entry implies IPv4" (
+    $provSrc -match 'if \(\$ServiceUrl\) \{ \$SshIpv4 = \$true \}' -and
+    $provSrc -match "if \(\[string\]\`$instanceTarget\.Backend -eq 'hyperv-remote'\) \{ \`$SshIpv4 = \`$true \}")
+ok "family: the bootstrap and base option lists carry it" (
+    ([regex]::Matches($provSrc, '\) \+ \$script:SshFamilyOpts')).Count -ge 5)
+ok "family: ssh-keyscan is told -4" ($provSrc -match '\$keyscanFamily = if \(\$script:SshFamilyOpts\.Count -gt 0\) \{ @\("-4"\) \}')
+ok "family: the ssh_config Host block (VS Code) gets AddressFamily inet" ($provSrc -match '"`n    AddressFamily inet"')
+foreach ($script in @('Get-AgentUsage.ps1', 'Get-ConstructT3PairingLink.ps1')) {
+    $src = Get-Content -Raw (Join-Path $repoRoot $script)
+    ok "family: $script dials a remote instance over IPv4" (
+        $src -match "Get-ConstructSshFamilyOptions -Ipv4 \(\[string\]\`$instanceTarget\.Backend -eq 'hyperv-remote'\)" -and
+        ([regex]::Matches($src, '\) \+ \$script:SshFamilyOpts')).Count -eq 2)
+}
+$autoSrc = Get-Content -Raw (Join-Path $repoRoot 'Auto-Install.ps1')
+ok "family: the remote config export asks for IPv4" ($autoSrc -match "ContainsKey\('SshIpv4'\)\) \{ \`$a\['SshIpv4'\] = \`$true \}")
 
 Write-Host ""
 Write-Host "=== Host-key step ===" -ForegroundColor Cyan

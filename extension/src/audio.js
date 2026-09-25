@@ -321,6 +321,7 @@ function buildTunnelArgs(ssh, cfg, vmPort, hostPort, hasKey) {
     "-o", "BatchMode=yes",
     "-o", "StrictHostKeyChecking=accept-new",
     "-o", `ConnectTimeout=${c.connectTimeout}`,
+    ...(ssh.familyArgs ? ssh.familyArgs(c) : []),
     "-o", "ServerAliveInterval=15",         // notice a dead link…
     "-o", "ServerAliveCountMax=3",          // …and let the child exit so we can mark it down
     "-o", "ExitOnForwardFailure=yes",       // if the -R bind fails (port in use), fail fast
