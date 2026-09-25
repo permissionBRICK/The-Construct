@@ -326,6 +326,35 @@ public sealed class NetshPortForwardManagerTests
     }
 
     [Fact]
+    public async Task A_vm_without_an_address_is_logged_once_per_outage_not_on_every_pass()
+    {
+        using var logs = new LogSink();
+        var world = new World(logs: logs);
+        await world.AddVmAsync("work-vm", sshForwardPort: 2201);
+        int Count(string needle) => logs.Captured.Entries.Count(entry => entry.Rendered.Contains(needle, StringComparison.Ordinal));
+
+        world.Resolver.Addresses.Clear();
+        for (var pass = 0; pass < 3; pass++)
+        {
+            world.Runner.RespondStdout("0.0.0.0 2201 172.20.144.5 22");
+            await world.Manager.ReconcileAsync(CancellationToken.None);
+        }
+        Assert.Equal(1, Count("No IPv4 address for work-vm"));
+
+        world.Resolver.With("work-vm.fake.local", "172.20.144.5");
+        world.Runner.RespondStdout("0.0.0.0 2201 172.20.144.5 22");
+        await world.Manager.ReconcileAsync(CancellationToken.None);
+        world.Runner.RespondStdout("0.0.0.0 2201 172.20.144.5 22");
+        await world.Manager.ReconcileAsync(CancellationToken.None);
+        Assert.Equal(1, Count("work-vm has an IPv4 address again"));
+
+        world.Resolver.Addresses.Clear();
+        world.Runner.RespondStdout("0.0.0.0 2201 172.20.144.5 22");
+        await world.Manager.ReconcileAsync(CancellationToken.None);
+        Assert.Equal(2, Count("No IPv4 address for work-vm"));
+    }
+
+    [Fact]
     public async Task Removing_a_forward_during_reconciliation_cannot_leave_a_resurrected_rule()
     {
         var resolver = new BlockingResolver();
