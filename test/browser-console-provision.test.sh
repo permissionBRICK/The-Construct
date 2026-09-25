@@ -16,10 +16,12 @@ export -f curl run_step note
 for backend in proxmox hyperv; do
   export HEALTH_JSON="{\"backend\":\"$backend\",\"apiFeatures\":[\"children\",\"console\"]}"
   output="$(bash -c "$gate")"
-  [[ "$output" == "critical Installing browser console gateway bash $root/console-viewer/install.sh" ]]
+  # OPTIONAL: the image comes from Docker Hub, which a company network can block; a VM without its
+  # browser console is usable, a VM whose provisioning stopped here was not.
+  [[ "$output" == "optional Installing browser console gateway bash $root/console-viewer/install.sh" ]]
 done
 export HEALTH_JSON='{"apiFeatures":["children"]}'
 [[ "$(bash -c "$gate")" == *'Skipping the browser console gateway'* ]]
 export HEALTH_JSON='{}'
-[[ "$(bash -c "$gate")" == critical* ]]
+[[ "$(bash -c "$gate")" == optional* ]]
 printf 'PASS: Proxmox and Hyper-V gateway provisioning, unavailable console, legacy host\n'
