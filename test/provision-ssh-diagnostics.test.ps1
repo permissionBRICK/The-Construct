@@ -3,6 +3,9 @@
 # replays real ssh output. A port forward that accepts TCP but reaches no sshd must
 # fail at the reachability check or as a connection error -- never read as "reachable"
 # or as a key that "did not authenticate" (which led to a pointless password prompt).
+# The capture path itself is exercised with a REAL native child process, because
+# Windows PowerShell 5.1 discards native stderr under EAP SilentlyContinue and a
+# shadow function cannot reproduce that.
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $ast = [System.Management.Automation.Language.Parser]::ParseFile(
@@ -18,7 +21,7 @@ $re = $ast.Find({ param($n)
     $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
     $n.Left.Extent.Text -eq '$script:SshTransportFailureRe' }, $true)
 Invoke-Expression $re.Extent.Text
-foreach ($fname in @('Get-SshFailureLine', 'Test-SshServerAnswered', 'Ensure-VmReachable', 'Enter-RootKeyFastPath')) {
+foreach ($fname in @('Get-SshFailureLine', 'Test-SshServerAnswered', 'Invoke-SshCapture', 'Ensure-VmReachable', 'Enter-RootKeyFastPath')) {
     $fn = $ast.Find({ param($n)
         $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $fname }, $true)
     ok "extract: Provision-AgentVM.ps1 defines $fname" ($null -ne $fn)
@@ -42,6 +45,48 @@ ok "answered: a refused connect does not"                    (-not (Test-SshServ
 ok "answered: output no pattern knows is not proof"          (-not (Test-SshServerAnswered -Output $unknown -ExitCode 255))
 ok "failure line: names the transport error" ((Get-SshFailureLine -Output $deadForward) -match 'banner exchange')
 ok "failure line: falls back to the last line" ((Get-SshFailureLine -Output "a`nb") -eq 'b')
+ok "failure line: empty output is named, not a bare colon" ((Get-SshFailureLine -Output "") -eq 'ssh printed no error output')
+
+Write-Host ""
+Write-Host "=== Invoke-SshCapture (Windows PowerShell 5.1 stderr) ===" -ForegroundColor Cyan
+# A REAL native child process, not a shadow function: Windows PowerShell 5.1 routes a
+# native command's stderr through `$ErrorActionPreference` even when 2>&1-redirected,
+# and under SilentlyContinue it DISCARDS the records -- a live probe on a 5.1 host
+# returned exit 255 with EMPTY output, so every probe below was blind there. A
+# PowerShell function standing in for ssh.exe can never reproduce that, because its
+# output is not native stderr. Run under Windows PowerShell 5.1 (the suite supports
+# it, see the #Requires) this exercises exactly the semantics that blinded the field
+# run; under pwsh it still proves capture, merging and the exit code for a real child.
+$isWinHost = ($PSVersionTable.PSEdition -eq 'Desktop') -or ("$env:OS" -eq 'Windows_NT')
+if ($isWinHost) {
+    $capExe  = 'cmd.exe'
+    $capArgs = @('/d', '/c', 'echo out_marker& echo err_marker 1>&2& exit 23')
+} else {
+    $capExe  = '/bin/sh'
+    $capArgs = @('-c', 'echo out_marker; echo err_marker >&2; exit 23')
+}
+foreach ($eap in @('SilentlyContinue', 'Stop', 'Continue')) {
+    $prevCapEap = $ErrorActionPreference; $ErrorActionPreference = $eap
+    try { $cap = Invoke-SshCapture -Exe $capExe -Arguments $capArgs } finally { $ErrorActionPreference = $prevCapEap }
+    ok "capture: a real native child's stderr arrives under caller EAP $eap" ($cap.Output -match 'err_marker')
+    ok "capture: ...stdout too (EAP $eap)" ($cap.Output -match 'out_marker')
+    ok "capture: ...and the exit code (EAP $eap)" ($cap.ExitCode -eq 23)
+}
+# The probes must route through the helper -- a raw `2>&1 | Out-String` under a
+# lowered EAP is exactly the 5.1-blind pattern this fixes.
+$capFn = @{}
+foreach ($fname in @('Ensure-VmReachable', 'Enter-RootKeyFastPath', 'Invoke-SshStream')) {
+    $fn = $ast.Find({ param($n)
+        $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $fname }, $true)
+    $capFn[$fname] = if ($fn) { $fn.Extent.Text } else { "" }
+}
+ok "capture: the reachability probe goes through Invoke-SshCapture" ($capFn['Ensure-VmReachable'] -match 'Invoke-SshCapture')
+ok "capture: the saved-root-key probe does too" ($capFn['Enter-RootKeyFastPath'] -match 'Invoke-SshCapture')
+ok "capture: neither probe lowers EAP to SilentlyContinue" (
+    ($capFn['Ensure-VmReachable'] + $capFn['Enter-RootKeyFastPath']) -notmatch '\$ErrorActionPreference = "SilentlyContinue"')
+ok "capture: the streaming path pins EAP Continue for its 2>&1" (
+    $capFn['Invoke-SshStream'] -match '\$ErrorActionPreference = "Continue"' -and
+    $capFn['Invoke-SshStream'] -notmatch '\$ErrorActionPreference = "SilentlyContinue"')
 
 # ssh.exe shadowed: a function wins over an application of the same name.
 $script:sshOutput = ""; $script:sshExit = 0; $script:sshCalls = 0

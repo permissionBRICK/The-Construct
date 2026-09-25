@@ -11,6 +11,9 @@ try {
         'test/native-iso-host.test.ps1',
         'test/iso-download-compile.test.ps1',
         'test/hyperv-prereqs.test.ps1',
+        # Under real Windows PowerShell 5.1 this exercises the native-stderr capture
+        # semantics (EAP vs 2>&1) that pwsh cannot reproduce.
+        'test/provision-ssh-diagnostics.test.ps1',
         'service/tests/host-installer.test.ps1',
         'service/tests/Constructd.Tests/Network/network-script.test.ps1',
         'service/tests/Constructd.Tests/Windows/windows-guest-report.test.ps1',
