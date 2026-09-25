@@ -1308,6 +1308,43 @@ $pubTxt = [System.IO.File]::ReadAllText($pubOut)
 ok "publicHost: the default instance's entry does not gain the key" (
     ($pubTxt -split '"agent-vm"')[1] -notmatch 'publicHost')
 
+# ── Update-ConstructInstance: an existing entry, patched in place ──────────
+# A remote rebuild of a CONVERTED default instance: the entry keeps the key file and
+# branch it had as a local VM, which a freshly derived remote entry would not.
+Write-Host ""
+Write-Host "=== Update-ConstructInstance ===" -ForegroundColor Cyan
+function Test-Throws([scriptblock]$Script) { try { & $Script | Out-Null; return $false } catch { return $true } }
+$convPath = New-RegistryFile @'
+{ "version": 1, "defaultInstance": "agent-vm", "instances": {
+  "agent-vm": { "backend": "hyperv-remote", "vmName": "agent-vm", "sshHost": "buildbox.local",
+                "sshPort": 2210, "hostAlias": "agent-vm", "keyName": "agent_vm_ed25519",
+                "configBranch": "vm", "scriptsDir": "C:\\Construct", "publicHost": "agent-vm.vpn.example",
+                "service": { "url": "https://buildbox.local:7462", "auth": "token" } },
+  "work-vm":  { "backend": "hyperv-remote", "vmName": "work-vm", "sshHost": "buildbox.local", "sshPort": 2201 }
+} }
+'@
+$convReg = Read-ConstructInstances -Path $convPath
+$convNext = Update-ConstructInstance -Registry $convReg -Name 'agent-vm' -Patch @{ sshPort = 2211; publicHost = $null }
+$conv = $convNext.Instances['agent-vm']
+ok "update: the default instance's name is accepted (it already exists)" ($null -ne $conv)
+ok "update: the patched field changes" ($conv.SshPort -eq 2211)
+ok "update: keyName, configBranch, hostAlias and scriptsDir are kept" (
+    $conv.KeyName -ceq 'agent_vm_ed25519' -and $conv.ConfigBranch -ceq 'vm' -and
+    $conv.HostAlias -ceq 'agent-vm' -and $conv.ScriptsDir -ceq 'C:\Construct')
+ok "update: a `$null value removes the field" ([string]::IsNullOrEmpty([string]$conv.PublicHost))
+ok "update: the input registry is not modified" ($convReg.Instances['agent-vm'].SshPort -eq 2210)
+ok "update: Add -Replace still refuses the default name" (
+    Test-Throws { Add-ConstructInstance -Registry $convReg -Name 'agent-vm' -Replace -Entry @{ backend = 'hyperv-remote'; vmName = 'agent-vm'; sshHost = 'b.local'; sshPort = 2212 } })
+ok "update: an unknown name throws" (Test-Throws { Update-ConstructInstance -Registry $convReg -Name 'nope-vm' -Patch @{ sshPort = 1 } })
+ok "update: a collision with another entry throws" (
+    Test-Throws { Update-ConstructInstance -Registry $convReg -Name 'agent-vm' -Patch @{ sshPort = 2201 } })
+$convOut = Join-Path $tmpRoot "conv/instances.json"
+Save-ConstructInstances -Registry $convNext -Path $convOut | Out-Null
+$convBack = Read-ConstructInstances -Path $convOut
+ok "update: the result round-trips with no problems" (
+    @($convBack.Problems).Count -eq 0 -and $convBack.Instances['agent-vm'].KeyName -ceq 'agent_vm_ed25519' -and
+    $convBack.Instances['agent-vm'].SshPort -eq 2211)
+
 } finally {
     Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

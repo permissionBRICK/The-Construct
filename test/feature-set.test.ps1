@@ -168,7 +168,7 @@ try {
     $script:ConstructFeatureParameters=(Resolve-ConstructFeatureSet -FeatureSet full).Parameters
     $script:RemoteProvCmd=Get-Command (Join-Path $repo 'Provision-AgentVM.ps1')
     $script:RemoteBound=@{}
-    $remoteArgs=New-ConstructRemoteProvisionArgs -Name 'work-vm' -Endpoint @{SshHost='example';SshPort=2222} -ServiceUrl 'https://example:7462' -ConfigBranch 'vm-work-vm'
+    $remoteArgs=New-ConstructRemoteProvisionArgs -Name 'work-vm' -Endpoint @{SshHost='example';SshPort=2222} -ServiceUrl 'https://example:7462' -KeyName 'construct_work-vm_ed25519' -ConfigBranch 'vm-work-vm'
     foreach ($p in $expectedParams | Where-Object { $_ -ne 'AutomaticCheckpoints' }) {
         Assert ($remoteArgs[$p] -eq $script:ConstructFeatureParameters[$p]) "Remote forwards resolved $p"
     }

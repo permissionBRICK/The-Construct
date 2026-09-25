@@ -513,12 +513,16 @@ function Save-ConstructInstanceEntry {
         never disagree about what was written, and an entry the reader would refuse is
         rejected here instead of vanishing on the next load.
 
+        -Update merges -Entry into the existing entry (Update-ConstructInstance) instead of
+        writing it whole; it is how a rebuild keeps the identity the registry records.
+
         Same child-scope discipline as the snapshot reader above. Throws on refusal.
     #>
     param(
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)][hashtable]$Entry,
         [switch]$Replace,
+        [switch]$Update,
         [switch]$MakeDefault,
         [string]$ScriptsDir = $PSScriptRoot
     )
@@ -527,13 +531,14 @@ function Save-ConstructInstanceEntry {
         throw "Cannot record the instance '$Name': lib/AgentVm.Instances.ps1 is missing from this install. Update The Construct."
     }
     return & {
-        param($libPath, $n, $e, $replace, $makeDefault)
+        param($libPath, $n, $e, $replace, $update, $makeDefault)
         . $libPath
         $reg  = Read-ConstructInstances
-        $next = Add-ConstructInstance -Registry $reg -Name $n -Entry $e -Replace:$replace
+        $next = if ($update) { Update-ConstructInstance -Registry $reg -Name $n -Patch $e }
+                else { Add-ConstructInstance -Registry $reg -Name $n -Entry $e -Replace:$replace }
         if ($makeDefault) { $next.Default = $n }
         Save-ConstructInstances -Registry $next
-    } $lib $Name $Entry ([bool]$Replace) ([bool]$MakeDefault)
+    } $lib $Name $Entry ([bool]$Replace) ([bool]$Update) ([bool]$MakeDefault)
 }
 
 function Get-ConstructDerivedVmIdentity {
@@ -2017,6 +2022,24 @@ function New-ConstructRemoteInstanceEntry {
     return $entry
 }
 
+function ConvertTo-ConstructRemoteRebuildPatch {
+    <#
+        The part of a New-ConstructRemoteInstanceEntry entry a REBUILD owns: the endpoint,
+        the service and the owner. The identity this PC addresses the VM by (hostAlias,
+        keyName, configBranch) stays as the registry records it -- a converted instance
+        keeps the key and branch it had as a local VM (agent_vm_ed25519 / vm for the
+        default one), not the construct_<name>_ed25519 / vm-<name> a new VM derives. A
+        publicHost the new endpoint no longer states is removed ($null).
+    #>
+    param([Parameter(Mandatory)][hashtable]$Entry)
+    $patch = @{}
+    foreach ($k in @($Entry.Keys)) {
+        if ($k -notin @('hostAlias', 'keyName', 'configBranch')) { $patch[$k] = $Entry[$k] }
+    }
+    if (-not $patch.ContainsKey('publicHost')) { $patch['publicHost'] = $null }
+    return $patch
+}
+
 function Get-ConstructRemoteInstanceConflict {
     <#
         Every reason the instance registry would REFUSE this entry, as strings (@() = it
@@ -2024,6 +2047,9 @@ function Get-ConstructRemoteInstanceConflict {
         (the per-entry rules) plus Get-ConstructInstanceCollision (the cross-entry identity
         rules) -- so the installer never re-states a rule the two readers own. Anything
         this returns is something Save-ConstructInstanceEntry would throw on later.
+
+        -Update judges -Entry as a patch merged into the instance's existing entry, which is
+        what Save-ConstructInstanceEntry -Update will write for a rebuild.
 
         -IgnoreEndpoint drops the COMPOSITE ENDPOINT rule ('sshHost/sshPort'), and only
         that one, for the PRE-CREATE call: the service has not allocated this VM's SSH
@@ -2040,19 +2066,24 @@ function Get-ConstructRemoteInstanceConflict {
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)][hashtable]$Entry,
         [switch]$IgnoreEndpoint,
+        [switch]$Update,
         [string]$ScriptsDir = $PSScriptRoot
     )
     $lib = Join-Path (Join-Path $ScriptsDir "lib") "AgentVm.Instances.ps1"
     if (-not (Test-Path -LiteralPath $lib)) { return @() }
     return @(& {
-        param($libPath, $n, $e, $ignoreEndpoint)
+        param($libPath, $n, $e, $ignoreEndpoint, $update)
         . $libPath
         $out = New-Object System.Collections.Generic.List[string]
+        $reg = Read-ConstructInstances
+        if ($update) {
+            if (-not $reg.Instances.ContainsKey($n)) { return @("the instance '$n' is no longer in the registry") }
+            $e = Merge-ConstructInstanceEntry -Registry $reg -Name $n -Patch $e
+        }
         foreach ($p in @(Get-ConstructInstanceEntryProblem -Name $n -Entry $e)) { $out.Add($p) }
         # The cross-entry half: put the candidate into a COPY of the live registry (which
         # replaces an entry of the same name -- a rebuild never collides with itself) and
         # ask the shared collision rules about it.
-        $reg  = Read-ConstructInstances
         $next = Copy-ConstructInstanceRegistry -Registry $reg
         $next.Instances[$n] = Resolve-ConstructInstanceDefaults -Name $n `
                                   -Entry (ConvertTo-ConstructInstanceEntryObject -Entry $e)
@@ -2061,7 +2092,7 @@ function Get-ConstructRemoteInstanceConflict {
             $out.Add($p)
         }
         return @($out)
-    } $lib $Name $Entry ([bool]$IgnoreEndpoint))
+    } $lib $Name $Entry ([bool]$IgnoreEndpoint) ([bool]$Update))
 }
 
 function New-ConstructRemoteVmRecord {
@@ -2089,6 +2120,10 @@ function New-ConstructRemoteVmRecord {
         to clean up instead of aborting. A registry CONFLICT is the opposite -- the VM
         could never be reached or rebuilt from this PC -- so it throws, after the rollback.
 
+        -Rebuild records a VM that REPLACES the registered instance of the same name: only
+        the rebuild's own fields are merged into its entry (ConvertTo-ConstructRemoteRebuildPatch),
+        so the key file and config branch it is addressed by survive the rebuild.
+
         Returns @{ Endpoint; VmToken; Entry; Recorded }.
     #>
     param(
@@ -2099,6 +2134,7 @@ function New-ConstructRemoteVmRecord {
         [string]$Owner = "",
         [string]$RegistryPath = "",
         [switch]$MakeDefault,
+        [switch]$Rebuild,
         [string]$ScriptsDir = $PSScriptRoot
     )
     $created  = New-ConstructVm -Descriptor $Descriptor
@@ -2113,6 +2149,7 @@ function New-ConstructRemoteVmRecord {
                  -SshHost ([string]$endpoint.SshHost) -SshPort ([int]$endpoint.SshPort) `
                  -ServiceUrl $ServiceUrl -ServiceAuth $ServiceAuth -Owner $Owner `
                  -PublicHost $endpointPublicHost
+    if ($Rebuild) { $entry = ConvertTo-ConstructRemoteRebuildPatch -Entry $entry }
     # NOW the FULL registry check, endpoint included: this is the first moment the true
     # address is known (nothing exposes the service's allocated forward -- or its own
     # advertised PublicHost, which can differ from the URL's -- before a VM exists).
@@ -2125,7 +2162,7 @@ function New-ConstructRemoteVmRecord {
     # disk and the host's RAM), the create is ROLLED BACK: the same DELETE the reinstall
     # path uses, and only then the failure. The one-time VM token dies with the VM, which
     # is exactly what should happen to a credential for a machine that no longer exists.
-    $conflicts = @(Get-ConstructRemoteInstanceConflict -Name $Name -Entry $entry -ScriptsDir $ScriptsDir)
+    $conflicts = @(Get-ConstructRemoteInstanceConflict -Name $Name -Entry $entry -Update:$Rebuild -ScriptsDir $ScriptsDir)
     if ($conflicts.Count -gt 0) {
         $why = "This PC's instance registry would refuse '$Name': $($conflicts -join '; ')"
         Write-Warning "The VM was created, but this PC cannot record it: $why"
@@ -2141,7 +2178,7 @@ function New-ConstructRemoteVmRecord {
     # readers can never disagree about what is in the file.
     $recorded = $false
     try {
-        [void](Save-ConstructInstanceEntry -Name $Name -Replace -MakeDefault:$MakeDefault -Entry $entry -ScriptsDir $ScriptsDir)
+        [void](Save-ConstructInstanceEntry -Name $Name -Replace -Update:$Rebuild -MakeDefault:$MakeDefault -Entry $entry -ScriptsDir $ScriptsDir)
         $recorded = $true
         Write-Ok "Recorded the instance '$Name' in $RegistryPath"
     } catch {
@@ -2161,10 +2198,11 @@ function Invoke-RemoteVmConfigExport {
     <# Provision-AgentVM.ps1 -Action export against a REMOTE instance's endpoint. The
        local Invoke-VmConfigExport derives "<name>.mshome.net" from the VM name, which
        is exactly the name convention a remote endpoint does not follow -- so this one
-       is handed the endpoint instead. #>
+       is handed the endpoint instead, and the key file the registry entry names. #>
     param(
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)]$Endpoint,
+        [Parameter(Mandatory)][string]$KeyName,
         [Parameter(Mandatory)][string]$BackupDir,
         [switch]$ScanReposOnly
     )
@@ -2177,7 +2215,7 @@ function Invoke-RemoteVmConfigExport {
         VmHost       = [string]$Endpoint.SshHost
         SshPort      = [int]$Endpoint.SshPort
         HostAlias    = $Name
-        LocalKeyName = "construct_${Name}_ed25519"
+        LocalKeyName = $KeyName
     }
     if ($ScanReposOnly) { $a['ScanReposOnly'] = $true } else { Add-HistoryRetentionArg -Script $ps -Splat $a }
     & $ps @a
@@ -2191,9 +2229,11 @@ function New-ConstructRemoteProvisionArgs {
 
             -VmHost/-SshPort   the endpoint the SERVICE allocated (never a name convention)
             -HostAlias         the instance name = the ssh_config Host block it writes
-            -LocalKeyName      construct_<name>_ed25519, so a second VM never overwrites
-                               the first VM's ~\.ssh key
-            -ConfigBranch      vm-<name>, so this VM's config store is its own ref
+            -LocalKeyName      the registry entry's key file (construct_<name>_ed25519 for a
+                               new VM), so a second VM never overwrites the first VM's
+                               ~\.ssh key
+            -ConfigBranch      the entry's branch (vm-<name> for a new VM), so this VM's
+                               config store is its own ref
             -ServiceUrl/-InstanceName/-VmTokenB64  the guest's link back to the service
             -PublicHost        the name the VM's WEB endpoints live under (plan 4.12),
                                when the host service renders one; SSH still goes to the
@@ -2213,6 +2253,7 @@ function New-ConstructRemoteProvisionArgs {
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)]$Endpoint,
         [Parameter(Mandatory)][string]$ServiceUrl,
+        [Parameter(Mandatory)][string]$KeyName,
         [Parameter(Mandatory)][string]$ConfigBranch,
         [string]$Projects = "",
         [string]$GitName = "",
@@ -2225,7 +2266,7 @@ function New-ConstructRemoteProvisionArgs {
         VmHost       = [string]$Endpoint.SshHost
         SshPort      = [int]$Endpoint.SshPort
         HostAlias    = $Name
-        LocalKeyName = "construct_${Name}_ed25519"
+        LocalKeyName = $KeyName
         ConfigBranch = $ConfigBranch
         ServiceUrl   = $ServiceUrl
         InstanceName = $Name
@@ -2363,7 +2404,10 @@ if ($RemoteInstall) {
     if ($existingEntry) {
         $instName = [string]$existingEntry.Name
         Restore-ConstructInstallFeatures -Name $instName
-        $instKey  = "construct_${instName}_ed25519"
+        # The key file the registry entry names (the snapshot fills in the derived default).
+        # A converted default instance keeps agent_vm_ed25519, so it is never re-derived
+        # from the name here.
+        $instKey  = [string]$existingEntry.KeyName
         $instBranch = [string]$existingEntry.ConfigBranch
         if (-not $instBranch) { $instBranch = "vm-$instName" }
 
@@ -2415,7 +2459,7 @@ if ($RemoteInstall) {
                 Show-TuiScreen -Title "Exporting the VM's agent config" -Body @(
                     "Saving auth, memory, skills, instruction files, and project setup to this host..."
                 )
-                Invoke-RemoteVmConfigExport -Name $instName -Endpoint $endpoint -BackupDir (Get-ConstructBackupDir -Dir $PSScriptRoot)
+                Invoke-RemoteVmConfigExport -Name $instName -Endpoint $endpoint -KeyName $instKey -BackupDir (Get-ConstructBackupDir -Dir $PSScriptRoot)
                 Write-Host ""
                 Write-Ok "Saved the VM's current agent config to:"
                 Write-Host "      $(Get-ConstructBackupDir -Dir $PSScriptRoot)" -ForegroundColor White
@@ -2471,7 +2515,7 @@ if ($RemoteInstall) {
                 "It usually only takes a few seconds; no further input needed."
             )
             $provArgs = New-ConstructRemoteProvisionArgs -Name $instName -Endpoint $endpoint `
-                            -ServiceUrl $svcUrl -ConfigBranch $instBranch `
+                            -ServiceUrl $svcUrl -KeyName $instKey -ConfigBranch $instBranch `
                             -Projects $reprovProjects -GitName $reprovGit.Name -GitEmail $reprovGit.Email `
                             -CloneCredB64 $reprovCloneCredB64 `
                             -PublicHost (Get-ConstructEndpointPublicHost -Endpoint $endpoint)
@@ -2499,7 +2543,7 @@ if ($RemoteInstall) {
                 Show-TuiScreen -Title "Checking the VM's repos for unsaved work" -Body @(
                     "Scanning $instName for uncommitted or unpushed changes the reinstall would destroy..."
                 )
-                Invoke-RemoteVmConfigExport -Name $instName -Endpoint $endpoint -BackupDir $bk -ScanReposOnly
+                Invoke-RemoteVmConfigExport -Name $instName -Endpoint $endpoint -KeyName $instKey -BackupDir $bk -ScanReposOnly
                 $scanFile = Join-Path $bk "repo-scan.json"
                 $repos = $null
                 if (Test-Path -LiteralPath $scanFile) {
@@ -2530,7 +2574,7 @@ if ($RemoteInstall) {
                     Show-TuiScreen -Title "Saving the VM's agent config" -Body @(
                         "Exporting auth, memory, skills, instruction files, and project setup to this host..."
                     )
-                    Invoke-RemoteVmConfigExport -Name $instName -Endpoint $endpoint -BackupDir $bk
+                    Invoke-RemoteVmConfigExport -Name $instName -Endpoint $endpoint -KeyName $instKey -BackupDir $bk
                     $restoreDir = $bk
                     $restoredProjectNames = Get-BackupProjectNames -BackupDir $bk
                     Write-Ok "Config saved; it will be restored automatically after the reinstall."
@@ -2593,7 +2637,9 @@ if ($RemoteInstall) {
     # ═══ Create a VM on the host service ═════════════════════════════════════
     $instName = $InstanceName
     if ($script:RemoteRebuildName) { $instName = $script:RemoteRebuildName }
-    while (-not (Test-ConstructRemoteInstanceName $instName)) {
+    # A rebuild keeps the name it is registered under. That includes 'agent-vm' when the
+    # default instance was converted to a host service; the rule below is for NEW names.
+    while (-not $script:RemoteRebuildName -and -not (Test-ConstructRemoteInstanceName $instName)) {
         if ($instName -ceq 'agent-vm') {
             Write-Warning "'agent-vm' is reserved for this PC's default (local) instance and cannot name a remote VM. Pick another name, e.g. work-vm."
         } elseif ($instName) {
@@ -2624,9 +2670,11 @@ if ($RemoteInstall) {
     # -- several VMs on ONE host service, each on the port the service gave it, are
     # exactly the intended flow. It is checked for real below, against the endpoint the
     # service actually returned.
-    $preConflicts = @(Get-ConstructRemoteInstanceConflict -Name $instName -IgnoreEndpoint -Entry (
-        New-ConstructRemoteInstanceEntry -Name $instName -SshHost $publicHost `
-            -ServiceUrl $svcUrl -ServiceAuth $remoteAuthMode -Owner $remoteOwner))
+    $preEntry = New-ConstructRemoteInstanceEntry -Name $instName -SshHost $publicHost `
+                    -ServiceUrl $svcUrl -ServiceAuth $remoteAuthMode -Owner $remoteOwner
+    if ($script:RemoteRebuildName) { $preEntry = ConvertTo-ConstructRemoteRebuildPatch -Entry $preEntry }
+    $preConflicts = @(Get-ConstructRemoteInstanceConflict -Name $instName -IgnoreEndpoint `
+                          -Update:([bool]$script:RemoteRebuildName) -Entry $preEntry)
     if ($preConflicts.Count -gt 0) {
         throw ("This PC's instance registry would refuse '$instName': $($preConflicts -join '; ')`n" +
                "Nothing was created on $svcUrl. Fix the registry ($($registry.Path)) or pick another name.")
@@ -2751,7 +2799,7 @@ if ($RemoteInstall) {
     $record   = New-ConstructRemoteVmRecord -Name $instName -ServiceUrl $svcUrl `
                     -ServiceAuth $remoteAuthMode -Owner $remoteOwner `
                     -RegistryPath ([string]$registry.Path) -MakeDefault:(-not $registry.Exists) `
-                    -Descriptor $remoteDescriptor
+                    -Rebuild:([bool]$script:RemoteRebuildName) -Descriptor $remoteDescriptor
     # The size this VM was created with, recorded as the control panel's settings for
     # THIS instance (vmMemoryGB / vmDiskGB / vmCpuCount): the panel shows them and a
     # rebuild launched from there passes them back, instead of falling back to its own
@@ -2765,8 +2813,12 @@ if ($RemoteInstall) {
     [void](Wait-ConstructVmReachable -Name $instName -TimeoutSeconds 600)
 
     Write-Step "Provisioning '$instName' over SSH from this PC"
+    # A rebuild provisions with the key and branch its entry keeps; a new VM with the ones
+    # its new entry derived.
+    $newKey = [string]$record.Entry['keyName']; $newBranch = [string]$record.Entry['configBranch']
+    if ($script:RemoteRebuildName) { $newKey = $instKey; $newBranch = $instBranch }
     $provArgs = New-ConstructRemoteProvisionArgs -Name $instName -Endpoint $endpoint `
-                    -ServiceUrl $svcUrl -ConfigBranch "vm-$instName" `
+                    -ServiceUrl $svcUrl -KeyName $newKey -ConfigBranch $newBranch `
                     -Projects $chosenProjects -GitName $gitId.Name -GitEmail $gitId.Email `
                     -CloneCredB64 $chosenCloneCredB64 -VmToken $vmToken `
                     -PublicHost (Get-ConstructEndpointPublicHost -Endpoint $endpoint)
