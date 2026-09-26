@@ -366,6 +366,16 @@ if [[ -f "${CONFIG_FILE}" ]]; then
   _vscode_tunnel_saved="$(sed -n 's/^VSCODE_TUNNEL=//p' "${CONFIG_FILE}" | head -1 || true)"
 fi
 VSCODE_TUNNEL="${VSCODE_TUNNEL:-${_vscode_tunnel_saved:-false}}"
+# Docker registry mirrors, merged into /etc/docker/daemon.json by bootstrap.sh (Docker
+# Hub can be blocked by a company network; a mirror is tried first, the Hub stays the
+# fallback). Precedence: explicit env/param > saved config value > the bootstrap default
+# (mirror.gcr.io). "none" leaves Docker alone.
+_docker_mirrors_saved=""
+if [[ -f "${CONFIG_FILE}" ]]; then
+  _docker_mirrors_saved="$(sed -n 's/^DOCKER_REGISTRY_MIRRORS=//p' "${CONFIG_FILE}" | head -1 || true)"
+  _docker_mirrors_saved="${_docker_mirrors_saved#\'}"; _docker_mirrors_saved="${_docker_mirrors_saved%\'}"
+fi
+DOCKER_REGISTRY_MIRRORS="${DOCKER_REGISTRY_MIRRORS:-${_docker_mirrors_saved:-}}"
 # Patch the Claude Code VS Code extension so it streams partial assistant messages
 # over Remote-SSH (the stock build disables that on remote, so the chat panel looks
 # frozen until each turn finishes generating). On by default; CLAUDE_PARTIAL_STREAMING=false
@@ -585,6 +595,7 @@ note "    CLAUDE_USER=${CLAUDE_USER}"
 note "    VSCODE_SERVER=${VSCODE_SERVER}"
 note "    VSCODE_SERVE_WEB=${VSCODE_SERVE_WEB}"
 note "    VSCODE_TUNNEL=${VSCODE_TUNNEL}"
+note "    DOCKER_REGISTRY_MIRRORS=${DOCKER_REGISTRY_MIRRORS:-(default: https://mirror.gcr.io)}"
 note "    CLAUDE_PARTIAL_STREAMING=${CLAUDE_PARTIAL_STREAMING}"
 note "    MIC_PASSTHROUGH=${MIC_PASSTHROUGH}"
 note "    T3CODE=${T3CODE}"
@@ -672,6 +683,7 @@ fi
 #    where SUDO_USER is unset and would otherwise flip TARGET_USER to root.
 run_step critical "Running core host bootstrap" \
   env SSH_USER="${SSH_USER}" CONSTRUCT_NONINTERACTIVE=true CONSTRUCT_SKIP_RUNTIME_GENERATION=true \
+  DOCKER_REGISTRY_MIRRORS="${DOCKER_REGISTRY_MIRRORS}" \
   bash "${REPO_DIR}/bootstrap.sh"
 
 # 2. Apply configuration to /etc/construct/config.env (idempotent merge that
@@ -687,6 +699,7 @@ write_configuration() {
   cfg VSCODE_SERVER "${VSCODE_SERVER}" || return
   cfg VSCODE_SERVE_WEB "${VSCODE_SERVE_WEB}" || return
   cfg VSCODE_TUNNEL "${VSCODE_TUNNEL}" || return
+  cfg DOCKER_REGISTRY_MIRRORS "${DOCKER_REGISTRY_MIRRORS}" || return
   cfg CLAUDE_PARTIAL_STREAMING "${CLAUDE_PARTIAL_STREAMING}" || return
   cfg MIC_PASSTHROUGH "${MIC_PASSTHROUGH}" || return
   cfg T3CODE "${T3CODE}" || return

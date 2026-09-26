@@ -85,6 +85,49 @@ if id "${TARGET_USER}" >/dev/null 2>&1; then
   usermod -aG docker "${TARGET_USER}"
 fi
 
+# Docker Hub can be blocked outright by a company network. Docker tries `registry-mirrors`
+# in order and falls back to Docker Hub when a mirror lacks an image or is unreachable, so
+# a public mirror as the DEFAULT costs nothing on an open network and keeps every Docker
+# Hub pull working on a blocked one: the browser console gateway's guacd, project builds,
+# construct-local's own base image. DOCKER_REGISTRY_MIRRORS (config.env / provision env):
+# URLs separated by spaces or commas, default mirror.gcr.io (Google's public Docker Hub
+# cache; it only holds frequently pulled images, the Hub stays the fallback for the rest);
+# "none" leaves Docker alone. Merged into daemon.json -- every other setting and any mirror
+# already listed are kept -- and Docker is reloaded only when the file changed.
+DOCKER_DAEMON_JSON="${DOCKER_DAEMON_JSON:-/etc/docker/daemon.json}"
+configure_docker_registry_mirrors() {
+  local mirrors="${DOCKER_REGISTRY_MIRRORS:-https://mirror.gcr.io}"
+  if [[ "${mirrors}" == "none" ]]; then note "Docker registry mirrors: none (DOCKER_REGISTRY_MIRRORS=none)"; return 0; fi
+  if ! command -v jq >/dev/null 2>&1; then warn "jq is missing; Docker registry mirrors not configured"; return 0; fi
+  local current='{}'
+  if [[ -s "${DOCKER_DAEMON_JSON}" ]]; then current="$(cat "${DOCKER_DAEMON_JSON}")"; fi
+  if ! printf '%s' "${current}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    warn "${DOCKER_DAEMON_JSON} is not a JSON object; leaving it alone (Docker registry mirrors not configured)"
+    return 0
+  fi
+  local wanted merged
+  wanted="$(printf '%s' "${mirrors}" | tr ', ' '\n\n' | sed '/^$/d' | jq -R . | jq -s .)" || { warn "Docker registry mirror list unreadable: ${mirrors}"; return 0; }
+  merged="$(printf '%s' "${current}" | jq --argjson add "${wanted}" \
+    '."registry-mirrors" = (reduce ((."registry-mirrors" // []) + $add)[] as $m ([]; if index($m) then . else . + [$m] end))')" \
+    || { warn "Could not merge the Docker registry mirrors into ${DOCKER_DAEMON_JSON}"; return 0; }
+  if [[ "$(printf '%s' "${current}" | jq -cS .)" == "$(printf '%s' "${merged}" | jq -cS .)" ]]; then
+    note "Docker registry mirrors already configured: $(printf '%s' "${merged}" | jq -r '."registry-mirrors" | join(", ")')"
+    return 0
+  fi
+  mkdir -p "$(dirname "${DOCKER_DAEMON_JSON}")"
+  local tmp
+  tmp="$(mktemp)"
+  printf '%s\n' "${merged}" | jq . >"${tmp}" && install -m 644 "${tmp}" "${DOCKER_DAEMON_JSON}"
+  rm -f "${tmp}"
+  # The setting is reloadable: running containers are not touched.
+  if systemctl is-active --quiet docker 2>/dev/null; then
+    systemctl reload docker 2>/dev/null || systemctl restart docker || warn "Docker did not reload; the mirrors apply at its next start"
+  fi
+  ok "Docker registry mirrors: $(printf '%s' "${merged}" | jq -r '."registry-mirrors" | join(", ")')"
+}
+step "Configuring Docker registry mirrors"
+configure_docker_registry_mirrors
+
 step "Creating directories"
 mkdir -p "${AGENT_HOME}" "${WORKSPACE_ROOT}" "${CONFIG_DIR}" "${RUNTIME_DIR}"
 chown -R "${TARGET_USER}:${TARGET_USER}" "${AGENT_HOME}" || true
