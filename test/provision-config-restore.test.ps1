@@ -78,6 +78,7 @@ try {
     # A reinstall defers the project commands: they run after the restore, and their
     # failures join the main run's in the one result block the host reports.
     $deferProjectCommands = $true
+    $checkoutArg = 'true'; $cloneCredB64 = 'aGFuZGVk'; $cloneSkipHostsB64 = 'c2tpcHBlZA=='
     $script:streamed = @()
     $script:ProvisionResult = ConvertFrom-ConstructProvisionResult -Lines @('===CONSTRUCT-PROVISION-RESULT===', 'errors=1',
         'error=Installing tools|1|/var/log/construct/provision/step-0-y.log', '===END-CONSTRUCT-PROVISION-RESULT===')
@@ -86,6 +87,10 @@ try {
     if ($script:streamed.Count -ne 2 -or $script:streamed[0] -notlike '*restore-config.sh*' -or $script:streamed[1] -notlike '*PROVISION_PHASE=project-commands*') {
         throw "Project commands did not run after the restore: $($script:streamed -join ' || ')"
     }
+    if ($script:streamed[1] -notlike "*CHECKOUT_PROJECTS='true'*" -or $script:streamed[1] -notlike "*GIT_CLONE_CREDENTIALS_B64='aGFuZGVk'*" -or $script:streamed[1] -notlike "*GIT_CLONE_SKIP_HOSTS_B64='c2tpcHBlZA=='*") {
+        throw "The deferred phase did not receive the checkout handoff: $($script:streamed[1])"
+    }
+    Write-Host 'PASS: the deferred phase clones with the checkout flag, the handed credentials and the skipped hosts'
     $titles = @($script:ProvisionResult.Errors | ForEach-Object { $_.Title })
     if (-not $script:ProvisionResult.IsValid -or $script:ProvisionResult.ErrorCount -ne 2 -or ($titles -join ',') -ne 'Installing tools,Running project provisioning commands') {
         throw "Merged result is wrong: $($titles -join ',')"

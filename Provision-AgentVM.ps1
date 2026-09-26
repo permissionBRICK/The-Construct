@@ -2463,14 +2463,11 @@ if ($GitCloneCredentialsB64) {
     $credentialProjectsDir = Get-ConstructConfigProjectsDir -ScriptsDir $PSScriptRoot
     $cloneCredB64 = Resolve-GitCloneCredential -ProjectsDir $credentialProjectsDir -Names $Projects -Session $credentialSession
 }
-# On a restore, the saved store fills in every host the installer did not hand a
-# (PC-verified) credential for and did not skip: the checkout runs BEFORE the restore
-# puts that store back on the VM, and a host this PC could not verify may well be one
-# the VM reaches. Handing only the PC-verified hosts used to leave the others without
-# any credential at checkout time, so their clones failed until a reprovision.
-if ($RestoreDir -and (Get-Command Merge-BackupGitCredentials -ErrorAction SilentlyContinue)) {
-    $cloneCredB64 = Merge-BackupGitCredentials -CredentialsB64 $cloneCredB64 -BackupDir $RestoreDir -SkipHostsB64 $cloneSkipHostsB64
-} elseif (-not $cloneCredB64 -and $RestoreDir) {
+# On a restore that carries a backup archive the checkout itself waits for the restore
+# (DEFER_PROJECT_COMMANDS below), so the VM clones with its own restored store AND git
+# config -- per-path credential matching, project-scoped tokens -- exactly as a
+# reprovision does. This fallback stays for a restore directory without an archive.
+if (-not $cloneCredB64 -and $RestoreDir) {
     $restoredCreds = Join-Path $RestoreDir "extracted\home\.git-credentials"
     if (Test-Path -LiteralPath $restoredCreds) {
         $credLines = @(Get-Content -LiteralPath $restoredCreds | Where-Object { $_.Trim() })
@@ -2641,8 +2638,10 @@ if ($VmTokenB64) {
     $tokenCleanup = "; __rc=`$?; rm -f '$vmTokenRemotePath'; exit `$__rc"
 }
 $envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' GIT_CLONE_SKIP_HOSTS_B64='$cloneSkipHostsB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit' CONSTRUCT_VERSION='$constructVersion' SMB_SHARE='$SmbShare' CLAUDE_PARTIAL_STREAMING='$ClaudePartialStreaming' MIC_PASSTHROUGH='$MicPassthrough' OPENCODE_BACKGROUND_WATCHER='$OpenCodeBackgroundWatcher' T3CODE='$T3Code' T3CODE_CHANNEL='$T3CodeChannel' T3CODE_BUILD_SOURCE='$T3CodeBuildSource' T3CODE_LIMIT_RESUME='$T3CodeLimitResume' T3CODE_HTTPS='$T3CodeHttps'" + $externalEnv + $serviceEnv + " T3CODE_BUILD_MODE='server'"
-# A reinstall that restores a saved config runs the project provisioning commands only
-# after the restore (see below): commands that read ~/.secrets, tokens or the machine
+# A reinstall that restores a saved config runs the project CHECKOUT and the project
+# provisioning commands only after the restore (see below): the checkout needs the VM's
+# restored credential store and git config (a credential this PC could not verify, a
+# host matched per repo path), and commands that read ~/.secrets, tokens or the machine
 # identity found none on the fresh VM and silently skipped their setup.
 $deferProjectCommands = [bool]($RestoreDir -and (Test-Path -LiteralPath (Join-Path $RestoreDir "backup.tar.gz")))
 if ($deferProjectCommands) { $envPrefix += " DEFER_PROJECT_COMMANDS='true'" }
@@ -2705,7 +2704,7 @@ if ($RestoreDir) {
             $restoreStream = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "install -d -m 700 /var/log/construct; set -o pipefail; EXPORT_HOME=/root BACKUP_TGZ=/tmp/construct-config-restore.tar.gz CONSTRUCT_VERSION='$constructVersion' bash /opt/construct/repo/bin/restore-config.sh 2>&1 | tee /var/log/construct/restore-config.log"
             if ($restoreStream.ExitCode -ne 0) {
                 try { Invoke-Ssh -Sudo -Command "chmod 600 /tmp/construct-config-restore.tar.gz; mkdir -p /var/lib/construct; mv -f /tmp/construct-config-restore.tar.gz /var/lib/construct/construct-config-restore.failed.tar.gz" } catch { }
-                throw "Agent config restore failed (exit $($restoreStream.ExitCode)); remote log: /var/log/construct/restore-config.log; retained archive: /var/lib/construct/construct-config-restore.failed.tar.gz"
+                throw "Agent config restore failed (exit $($restoreStream.ExitCode)); remote log: /var/log/construct/restore-config.log; retained archive: /var/lib/construct/construct-config-restore.failed.tar.gz. The project repos were not cloned either (their checkout waits for the restore): fix the restore, then reprovision."
             }
             $restoreSucceeded = $true
         } finally {
@@ -2716,9 +2715,11 @@ if ($RestoreDir) {
         Write-Ok "Saved config restored"
 
         if ($deferProjectCommands) {
-            Write-Step "Running project provisioning commands (after the restore)"
+            Write-Step "Cloning project repos and running project provisioning commands (after the restore)"
             Write-Host "  --- live provisioning output ---" -ForegroundColor DarkGray
-            $projectStream = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "env PROVISION_PHASE=project-commands bash /opt/construct/repo/bin/provision.sh"
+            # The checkout gets what this PC verified (one-shot file, consulted first) and the VM's
+            # restored store after it; a host skipped at the prompt stays skipped.
+            $projectStream = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "env PROVISION_PHASE=project-commands CHECKOUT_PROJECTS='$checkoutArg' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' GIT_CLONE_SKIP_HOSTS_B64='$cloneSkipHostsB64' bash /opt/construct/repo/bin/provision.sh"
             Write-Host "  --- end provisioning output ---" -ForegroundColor DarkGray
             $projectResult = ConvertFrom-ConstructProvisionResult -Lines $projectStream.Lines
             $projectErrors = @($projectResult.Errors)

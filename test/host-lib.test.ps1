@@ -353,17 +353,6 @@ try {
     ok "session-seed: two valid entries added, junk skipped" ($n -eq 2 -and $seeded.Supplied.ContainsKey('https://github.com') -and $seeded.Supplied['https://git.example.net'].User -eq 'alice')
     ok "session-seed: seeding does not make the session unattended" (-not $seeded.Unattended -and -not $seeded.NoPrompt)
     ok "session-seed: seeded hosts are marked as coming from a saved store" ($seeded.Stored.ContainsKey('https://github.com') -and $seeded.Stored.ContainsKey('https://git.example.net'))
-    # Merge-BackupGitCredentials: the checkout's credential blob on a restore.
-    $b64 = { param($s) [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($s)) }
-    $dec = { param($s) if ($s) { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($s)) } else { "" } }
-    ok "merge: the saved store fills in hosts the installer did not hand" (
-        (& $dec (Merge-BackupGitCredentials -CredentialsB64 (& $b64 'https://a:b@git.corp') -BackupDir $bkTest)) -eq "https://a:b@git.corp`nhttps://user:token@github.com")
-    ok "merge: a host the installer handed is not duplicated from the store" (
-        (& $dec (Merge-BackupGitCredentials -CredentialsB64 (& $b64 'https://me:fresh@github.com') -BackupDir $bkTest)) -eq 'https://me:fresh@github.com')
-    ok "merge: a host skipped at the prompt gets nothing" (
-        (Merge-BackupGitCredentials -CredentialsB64 "" -BackupDir $bkTest -SkipHostsB64 (& $b64 'https://github.com')) -eq "")
-    ok "merge: nothing handed -> the store alone" ((& $dec (Merge-BackupGitCredentials -CredentialsB64 "" -BackupDir $bkTest)) -eq 'https://user:token@github.com')
-    ok "merge: nothing anywhere -> empty" ((Merge-BackupGitCredentials -CredentialsB64 "" -BackupDir "") -eq "")
 } finally { Remove-Item -LiteralPath $bkTest -Recurse -Force -ErrorAction SilentlyContinue }
 
 # ── Set-ConstructInstalledMarker: a failed SHA fetch must NOT clobber the marker ──

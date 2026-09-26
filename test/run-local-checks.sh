@@ -41,6 +41,7 @@ if [[ "$group" == service || "$group" == all ]]; then
   pwsh -NoProfile -File test/browser-console-install.test.ps1
   bash test/browser-console-provision.test.sh
   bash test/browser-console-pull.test.sh
+  bash test/provision-deferred-checkout.test.sh
   node extension/test/drivers.test.js
   node extension/test/hostadmin.test.js
   bash test/construct-vm.test.sh
