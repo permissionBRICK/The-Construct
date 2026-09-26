@@ -209,7 +209,7 @@ try {
     Reset-Fixture
     $provisioner = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '../Provision-AgentVM.ps1'))
     $blockStart = $provisioner.IndexOf('$cloneSkipHostsB64 =')
-    $blockEnd = $provisioner.IndexOf('if (-not $cloneCredB64 -and $RestoreDir)', $blockStart)
+    $blockEnd = $provisioner.IndexOf('# On a restore, the saved store fills in', $blockStart)
     $block = [scriptblock]::Create($provisioner.Substring($blockStart, $blockEnd - $blockStart))
     $originalNewSession = ${function:New-ConstructGitCredentialSession}
     $originalProjectsDir = ${function:Get-ConstructConfigProjectsDir}
@@ -240,6 +240,23 @@ try {
     # Check actual installer mode wiring (the installer itself needs Windows).
     $installer = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '../Auto-Install.ps1'))
     Assert ($installer -notmatch 'if \(\$GitCloneCredentialsB64\) \{ \$GitCloneCredentialsB64 \}') 'no unverified unattended bypass in installer'
+    # A credential seeded from the VM's SAVED store that this PC cannot verify is left to the
+    # VM -- no prompt, no skip -- while a host with no saved entry still prompts.
+    Reset-Fixture
+    [IO.File]::WriteAllText((Join-Path $tmp 'other.json'), '{"repos":[{"url":"https://git.other/private.git"}]}')
+    $script:answers.Enqueue($null)
+    $session = New-ConstructGitCredentialSession -GitRunner $script:verifyRunner -ReadCredential $reader
+    $null = Add-ConstructGitSessionCredentials -Session $session -CredentialsB64 ([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('https://vm-user:stale-on-this-pc@git.example')))
+    $b64 = Resolve-GitCloneCredential -ProjectsDir $tmp -Names 'private,other' -Session $session
+    Assert ($session.Stored.ContainsKey('https://git.example')) 'a seeded entry is marked as coming from the saved store'
+    Assert ($session.Skipped['https://git.example'] -eq 'deferred') 'an unverifiable saved credential is deferred to the VM'
+    Assert (($script:notes -join ' ') -like '*saved credential for https://git.example could not be verified from this PC; the VM will use it*') 'and says so'
+    Assert ($script:reads -eq 1) 'only the host with no saved entry was asked for'
+    Assert ($session.Skipped['https://git.other'] -eq 'skip') 'an empty answer still skips a host that has no saved entry'
+    Assert ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:CONSTRUCT_GIT_SKIP_HOSTS_B64)) -eq 'https://git.other') 'only the skipped host is handed to the guest as skipped'
+    Assert (-not $b64) 'nothing PC-verified is handed'
+    Remove-Item -LiteralPath (Join-Path $tmp 'other.json') -Force
+
     Assert ($installer -match 'Test-ConstructGitCredentialPromptAllowed -ExistingInstall:') 'installer uses the tested initial-install policy'
     Assert ($installer -match '(?s)Start-ConstructGitPreflight\s+\$chosenProjects = \$Projects\s+if .*Select-Projects') 'remote config import precedes project selection'
     Assert ($installer -match '(?s)# Project profiles to provision.\s+Start-ConstructGitPreflight\s+if .*?Select-Projects') 'local config import precedes project selection'

@@ -2463,7 +2463,14 @@ if ($GitCloneCredentialsB64) {
     $credentialProjectsDir = Get-ConstructConfigProjectsDir -ScriptsDir $PSScriptRoot
     $cloneCredB64 = Resolve-GitCloneCredential -ProjectsDir $credentialProjectsDir -Names $Projects -Session $credentialSession
 }
-if (-not $cloneCredB64 -and $RestoreDir) {
+# On a restore, the saved store fills in every host the installer did not hand a
+# (PC-verified) credential for and did not skip: the checkout runs BEFORE the restore
+# puts that store back on the VM, and a host this PC could not verify may well be one
+# the VM reaches. Handing only the PC-verified hosts used to leave the others without
+# any credential at checkout time, so their clones failed until a reprovision.
+if ($RestoreDir -and (Get-Command Merge-BackupGitCredentials -ErrorAction SilentlyContinue)) {
+    $cloneCredB64 = Merge-BackupGitCredentials -CredentialsB64 $cloneCredB64 -BackupDir $RestoreDir -SkipHostsB64 $cloneSkipHostsB64
+} elseif (-not $cloneCredB64 -and $RestoreDir) {
     $restoredCreds = Join-Path $RestoreDir "extracted\home\.git-credentials"
     if (Test-Path -LiteralPath $restoredCreds) {
         $credLines = @(Get-Content -LiteralPath $restoredCreds | Where-Object { $_.Trim() })
