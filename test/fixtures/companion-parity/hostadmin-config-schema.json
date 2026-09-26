@@ -475,7 +475,7 @@
   {
     "fields": [
       {
-        "default": false,
+        "default": true,
         "help": "Expose virtualization extensions to new VMs by default.",
         "key": "nestedDefault",
         "label": "Enable nesting by default",

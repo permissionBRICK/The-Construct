@@ -44,13 +44,18 @@ public sealed class NestedPolicyTests
         using var app = new TestApp();
         using var client = await app.CreateUserClientAsync("admin", Role.Admin);
         app.Driver.NestedAvailable = false;
+        var caps = (await client.GetFromJsonAsync<JsonElement>("/api/v1/host/capabilities")).GetProperty("nested");
+        Assert.False(caps.GetProperty("available").GetBoolean());
+        Assert.True(caps.GetProperty("default").GetBoolean());
+        Assert.True(caps.GetProperty("selectable").GetBoolean());
+        // The built-in default is on; saving it unchanged must not lock the section on a host unable to nest.
+        (await client.PutAsJsonAsync("/api/v1/host/config", new { virtualization = new { nestedDefault = true, nestedSelectable = false } })).EnsureSuccessStatusCode();
+        (await client.PutAsJsonAsync("/api/v1/host/config", new { virtualization = new { nestedDefault = false, nestedSelectable = true } })).EnsureSuccessStatusCode();
         var response = await client.PutAsJsonAsync("/api/v1/host/config", new { virtualization = new { nestedDefault = true, nestedSelectable = true } });
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         Assert.Contains("unsupported-on-host", await response.Content.ReadAsStringAsync());
-        var caps = (await client.GetFromJsonAsync<JsonElement>("/api/v1/host/capabilities")).GetProperty("nested");
-        Assert.False(caps.GetProperty("available").GetBoolean());
+        caps = (await client.GetFromJsonAsync<JsonElement>("/api/v1/host/capabilities")).GetProperty("nested");
         Assert.False(caps.GetProperty("default").GetBoolean());
-        Assert.True(caps.GetProperty("selectable").GetBoolean());
         app.Driver.NestedAvailable = true;
         (await client.PutAsJsonAsync("/api/v1/host/config", new { virtualization = new { nestedDefault = true, nestedSelectable = false } })).EnsureSuccessStatusCode();
         caps = (await client.GetFromJsonAsync<JsonElement>("/api/v1/host/capabilities")).GetProperty("nested");
