@@ -29,7 +29,7 @@ ok "a reachable registry: one pull, success" "$([[ $rc -eq 0 && "$(cat "$tmp/cou
 
 run 1 && rc=0 || rc=$?
 ok "an unreachable registry: exactly one attempt, no sleeping, failure" "$([[ $rc -eq 1 && "$(cat "$tmp/count")" == 1 ]] && echo true || echo false)"
-ok "...and it says the registry did not answer" "$(grep -q 'did not answer from this VM' "$tmp/err" && echo true || echo false)"
+ok "...and it says neither the mirrors nor Docker Hub answered" "$(grep -q 'neither the configured Docker registry mirrors (default mirror.gcr.io) nor Docker Hub answered' "$tmp/err" && echo true || echo false)"
 ok "...and how to install the gateway later" "$(grep -q 're-run: sudo bash /opt/construct/repo/console-viewer/install.sh' "$tmp/err" && echo true || echo false)"
 
 echo "browser-console pull -- $pass passed, $fail failed"

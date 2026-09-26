@@ -22,8 +22,8 @@ image='guacamole/guacd@sha256:8974eaa9ba32f713daf311e7cc8cd7e4cdfba1edea39eed755
 # of waiting, and a transient timeout is recovered by re-running this script.
 pull_image() {
   if docker pull "$image"; then return 0; fi
-  echo "Could not pull $image: Docker Hub (registry-1.docker.io) did not answer from this VM's network." >&2
-  echo "The browser console gateway stays uninstalled. Once the registry is reachable -- or a mirror is configured in /etc/docker/daemon.json (registry-mirrors) -- re-run: sudo bash /opt/construct/repo/console-viewer/install.sh" >&2
+  echo "Could not pull $image: neither the configured Docker registry mirrors (default mirror.gcr.io) nor Docker Hub answered from this VM's network." >&2
+  echo "The browser console gateway stays uninstalled. Point DOCKER_REGISTRY_MIRRORS in /etc/construct/config.env at a reachable mirror (a company Nexus, for instance), reprovision or re-run: sudo bash /opt/construct/repo/console-viewer/install.sh" >&2
   return 1
 }
 if ! docker image inspect "$image" >/dev/null 2>&1; then pull_image; fi

@@ -42,6 +42,7 @@ if [[ "$group" == service || "$group" == all ]]; then
   bash test/browser-console-provision.test.sh
   bash test/browser-console-pull.test.sh
   bash test/provision-deferred-checkout.test.sh
+  bash test/docker-registry-mirrors.test.sh
   node extension/test/drivers.test.js
   node extension/test/hostadmin.test.js
   bash test/construct-vm.test.sh
