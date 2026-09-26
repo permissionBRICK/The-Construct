@@ -1161,9 +1161,61 @@ function Add-ConstructGitSessionCredentials {
         $key = $u.GetLeftPart([UriPartial]::Authority) -replace '://[^/]+@', '://'
         if ($Session.Supplied.ContainsKey($key)) { continue }
         $Session.Supplied[$key] = @{ User = [uri]::UnescapeDataString($matches[1]); Token = [uri]::UnescapeDataString($matches[2]) }
+        if ($Session.ContainsKey('Stored')) { $Session.Stored[$key] = $true }
         $added++
     }
     return $added
+}
+
+function Get-ConstructGitOrigin {
+    <# The scheme://authority of a credential-store line or repo URL, userinfo dropped; $null when it is not an http(s) URL. Pure. #>
+    param([AllowEmptyString()][AllowNull()][string]$Line)
+    if ([string]::IsNullOrWhiteSpace($Line)) { return $null }
+    $u = $null
+    if (-not [uri]::TryCreate($Line.Trim(), [UriKind]::Absolute, [ref]$u) -or $u.Scheme -notin @('http', 'https')) { return $null }
+    return ($u.GetLeftPart([UriPartial]::Authority) -replace '://[^/]+@', '://')
+}
+
+function Merge-BackupGitCredentials {
+    <#
+        The clone-credential blob for a checkout on a RESTORE: what the installer handed
+        (verified on this PC), plus the saved store's entry for every host it did not hand
+        and did not skip. The checkout runs BEFORE the restore puts that store back on the
+        VM, and a host this PC could not verify may well be one the VM reaches -- so its
+        saved credential goes along, and the clone is tried. "" when there is nothing. Pure.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowEmptyString()][AllowNull()][string]$CredentialsB64,
+        [AllowEmptyString()][AllowNull()][string]$BackupDir,
+        [AllowEmptyString()][AllowNull()][string]$SkipHostsB64
+    )
+    $lines = New-Object System.Collections.Generic.List[string]
+    $have = @{}
+    if ($CredentialsB64) {
+        try {
+            foreach ($l in ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($CredentialsB64)) -split '\r?\n')) {
+                if (-not $l.Trim()) { continue }
+                $lines.Add($l.Trim())
+                $k = Get-ConstructGitOrigin $l
+                if ($k) { $have[$k.ToLowerInvariant()] = $true }
+            }
+        } catch { }
+    }
+    $skip = @{}
+    if ($SkipHostsB64) {
+        try { foreach ($s in ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($SkipHostsB64)) -split '\r?\n')) { if ($s.Trim()) { $skip[$s.Trim().ToLowerInvariant()] = $true } } } catch { }
+    }
+    foreach ($l in @(Get-BackupGitCredentialLines -BackupDir $BackupDir)) {
+        $k = Get-ConstructGitOrigin $l
+        if (-not $k) { continue }
+        $lk = $k.ToLowerInvariant()
+        if ($have.ContainsKey($lk) -or $skip.ContainsKey($lk)) { continue }
+        $lines.Add($l.Trim())
+        $have[$lk] = $true
+    }
+    if ($lines.Count -eq 0) { return "" }
+    return [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($lines -join "`n")))
 }
 
 function Get-ProjectRepoUrls {
@@ -1333,7 +1385,9 @@ function Test-ConstructGitCredentialPromptAllowed {
 
 function New-ConstructGitCredentialSession {
     param([switch]$NoPrompt, [string]$CredentialsB64, [scriptblock]$GitRunner, [scriptblock]$ReadCredential, [switch]$ExistingInstall)
-    $session = @{ ExistingInstall = [bool]$ExistingInstall; NoPrompt = [bool]$NoPrompt; Unattended = [bool]$CredentialsB64; Supplied = @{}; Verified = [ordered]@{}; Skipped = @{}; Checked = @{}; Required = @{}; ScreenShown = $false; GitRunner = $GitRunner; ReadCredential = $ReadCredential }
+    # Stored: the Supplied hosts whose entry came from a SAVED store (a restore backup) rather
+    # than from an argument -- see Resolve-ConstructGitUrls for why that matters.
+    $session = @{ ExistingInstall = [bool]$ExistingInstall; NoPrompt = [bool]$NoPrompt; Unattended = [bool]$CredentialsB64; Supplied = @{}; Stored = @{}; Verified = [ordered]@{}; Skipped = @{}; Checked = @{}; Required = @{}; ScreenShown = $false; GitRunner = $GitRunner; ReadCredential = $ReadCredential }
     if ($CredentialsB64) {
         try {
             $lines = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($CredentialsB64)) -split '\r?\n'
@@ -1412,18 +1466,28 @@ function Resolve-ConstructGitUrls {
         elseif (-not $Session.Unattended) { $credential = $Session.LastCredential }
         if ($credential -and (Test-ConstructGitHostCredential -Key $key -Credential $credential -Session $Session -Reuse:(-not $Session.Unattended))) { $pending.Remove($key) }
     }
+    # A host whose credential came from the VM's SAVED store (a restore backup) and did not
+    # verify from THIS PC is left to the VM: the PC may not reach the host the way the VM
+    # does (a VPN or a DNS the VM has), and the VM gets that very store back with the
+    # restore -- the checkout tries it there. Never a prompt for it, never a skip.
+    foreach ($key in @($pending.Keys)) {
+        if (-not ($Session.ContainsKey('Stored') -and $Session.Stored.ContainsKey($key))) { continue }
+        Write-Note "The saved credential for $key could not be verified from this PC; the VM will use it for the checkout."
+        $Session.Skipped[$key] = 'deferred'
+        $pending.Remove($key)
+    }
     while ($pending.Count -gt 0) {
         $key = @($pending.Keys)[0]
         if ($Session.Unattended) { throw "No supplied git credential for $key (-GitCloneCredentialsB64)." }
         if (-not $Session.ScreenShown) {
-            Show-TuiScreen -Title 'Git credentials for cloning project repos' -Body @('Private config and project repos are verified before provisioning.', 'Use a personal access token for two-factor or SSO accounts. Enter an empty username to skip this host.')
+            Show-TuiScreen -Title 'Git credentials for cloning project repos' -Body @('Private config and project repos are verified before provisioning.', 'Use a personal access token for two-factor or SSO accounts.', 'An empty username skips a host: its repos are then NOT cloned in this run (a later reprovision clones them with the credentials stored on the VM).')
             $Session.ScreenShown = $true
         }
         Write-Note "Hosts still needing a credential: $(@($pending.Keys) -join ', ')"
         $credential = $null
         if ($Session.ReadCredential) { $credential = & $Session.ReadCredential $key @($pending.Keys) }
         else {
-            $user = Read-Host "    Git username for remaining hosts (Enter to skip this host: $key)"
+            $user = Read-Host "    Git username for remaining hosts (Enter to skip $key -- its repos are then not cloned this run)"
             if ($user.Trim()) {
                 $secure = Read-Host '    Git token / password' -AsSecureString
                 $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
