@@ -935,14 +935,41 @@ ok "auto-install: the trap marks the run failed before the pause" (
     $trapBlock -match 'ConstructInstallFailed = \$true' -and
     $trapBlock.IndexOf('ConstructInstallFailed') -lt $trapBlock.IndexOf('Wait-Exit'))
 ok "auto-install: a failed run names its log" ($aiScript -match 'ConstructInstallFailed -and \$script:InstallLogPath')
-ok "auto-install: every run starts a transcript under The-Construct\logs" (
-    $aiScript -match 'Start-Transcript -LiteralPath \$script:InstallLogPath' -and $aiScript -match 'The-Construct\\logs')
-ok "auto-install: no transcript when a credential was passed on the command line" (
-    $aiScript -match "ContainsKey\('AgentPassword'\) -or \`$PSBoundParameters\.ContainsKey\('GitCloneCredentialsB64'\)")
-ok "auto-install: the transcript starts before anything else runs" (
-    $aiScript.IndexOf('Start-Transcript') -lt $aiScript.IndexOf('function Wait-Exit'))
-ok "auto-install: the transcript is closed on both exit paths" (
-    ([regex]::Matches($aiScript, 'Stop-InstallTranscript')).Count -ge 3)
+ok "auto-install: every run opens an install log under The-Construct\logs" (
+    $aiScript -match 'New-Object System\.IO\.StreamWriter\(\$script:InstallLogPath' -and $aiScript -match 'The-Construct\\logs')
+# Start-Transcript sits in the path of every console write on Windows PowerShell 5.1 and
+# turned the TUI banner into a line-by-line crawl.
+ok "auto-install: the console is not transcribed" ($aiScript -notmatch '(?m)^\s*Start-Transcript\b')
+ok "auto-install: Write-Host is shadowed to feed the log and forwards its parameters as given" (
+    $aiScript -match '(?s)function Write-Host \{.*?Microsoft\.PowerShell\.Utility\\Write-Host @PSBoundParameters.*?Write-InstallLog')
+ok "auto-install: prompts are logged, answers are not" (
+    $aiScript -match '(?s)function Read-Host \{.*?Write-InstallLog -Text "PROMPT: \$Prompt".*?return \(Microsoft\.PowerShell\.Utility\\Read-Host @PSBoundParameters\)')
+ok "auto-install: the log opens before anything else runs" (
+    $aiScript.IndexOf('System.IO.StreamWriter') -lt $aiScript.IndexOf('function Wait-Exit'))
+ok "auto-install: the log is closed on both exit paths" (
+    ([regex]::Matches($aiScript, 'Stop-InstallLog')).Count -ge 3)
+# Behaviour: the shadows, extracted and run against a real file.
+$aiAst = [System.Management.Automation.Language.Parser]::ParseInput($aiScript, [ref]$null, [ref]$null)
+$shadowText = ($aiAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+    $n.Name -in @('Write-InstallLog', 'Write-Host', 'Write-Warning', 'Read-Host') }, $true) | ForEach-Object { $_.Extent.Text }) -join "`n"
+$logFile = Join-Path ([IO.Path]::GetTempPath()) ("install-log-" + [Guid]::NewGuid().ToString('N') + ".log")
+$logged = & {
+    Invoke-Expression $shadowText
+    function Add-ConstructTuiNotice { param($Message) }
+    $script:InstallLog = New-Object System.IO.StreamWriter($logFile, $false, (New-Object System.Text.UTF8Encoding($false)))
+    $script:InstallLog.AutoFlush = $true
+    Write-Host "plain line" -ForegroundColor Cyan 6>$null
+    Write-Host "a" "b" 6>$null
+    Write-Host "no newline " -NoNewline 6>$null
+    Write-Host "then more" 6>$null
+    Write-Warning "careful" 3>$null
+    $script:InstallLog.Dispose()
+    Get-Content -LiteralPath $logFile -Raw
+}
+Remove-Item -LiteralPath $logFile -Force -ErrorAction SilentlyContinue
+ok "install log: console lines land in the file as shown" ($logged -match "(?m)^plain line$" -and $logged -match "(?m)^a b$")
+ok "install log: -NoNewline joins" ($logged -match "(?m)^no newline then more$")
+ok "install log: warnings are marked" ($logged -match "(?m)^WARNING: careful$")
 # A TUI screen wipes the console; warnings raised before it must reappear on it.
 ok "auto-install: warnings are queued for the next TUI screen" (
     $aiScript -match '(?s)function Write-Warning \{.*?Add-ConstructTuiNotice -Message \$Message.*?Microsoft\.PowerShell\.Utility\\Write-Warning -Message \$Message')
