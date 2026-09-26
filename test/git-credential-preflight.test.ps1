@@ -209,7 +209,7 @@ try {
     Reset-Fixture
     $provisioner = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '../Provision-AgentVM.ps1'))
     $blockStart = $provisioner.IndexOf('$cloneSkipHostsB64 =')
-    $blockEnd = $provisioner.IndexOf('# On a restore, the saved store fills in', $blockStart)
+    $blockEnd = $provisioner.IndexOf('# On a restore that carries a backup archive', $blockStart)
     $block = [scriptblock]::Create($provisioner.Substring($blockStart, $blockEnd - $blockStart))
     $originalNewSession = ${function:New-ConstructGitCredentialSession}
     $originalProjectsDir = ${function:Get-ConstructConfigProjectsDir}

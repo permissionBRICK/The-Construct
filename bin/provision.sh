@@ -279,16 +279,39 @@ require_root() {
 }
 run_step critical "Checking root privileges" require_root
 
-# PROVISION_PHASE=project-commands runs ONLY the project provisioning commands. A
-# reinstall that restores a saved config defers them (DEFER_PROJECT_COMMANDS) and
-# runs them this way after the restore, so commands that read restored files
-# (~/.secrets, tokens, machine identity) see them. The main run's failure logs are
-# kept; the result block is the same one the host already parses.
+# PROVISION_PHASE=project-commands runs ONLY the project checkout and the project
+# provisioning commands. A reinstall that restores a saved config defers both
+# (DEFER_PROJECT_COMMANDS) and runs them this way after the restore: the checkout then
+# clones with the VM's restored credential store and git config (per-path credential
+# matching, project-scoped tokens -- what the host PC cannot verify for it), and the
+# commands see the restored ~/.secrets, tokens and machine identity. The main run's
+# failure logs are kept; the result block is the same one the host already parses.
 if [[ "${PROVISION_PHASE:-}" == "project-commands" ]]; then
   mkdir -p "${_PERSISTENT_LOG_DIR}"
   _PROVISION_MARKER="${_PROVISION_MARKER:-/run/construct/provisioning}"
   mkdir -p "$(dirname "${_PROVISION_MARKER}")" 2>/dev/null || true
   printf '%s\n' "$$" >"${_PROVISION_MARKER}" 2>/dev/null || true
+  if [[ "${CHECKOUT_PROJECTS:-false}" == "true" ]]; then
+    # A credential the host verified for this run is consulted FIRST through a one-shot
+    # file; the VM's own (restored) store comes after it. Hosts skipped at the prompt stay
+    # skipped (GIT_CLONE_SKIP_HOSTS_B64 reaches checkout-projects.sh through the environment).
+    _deferred_creds=""
+    if [[ -n "${GIT_CLONE_CREDENTIALS_B64:-}" ]]; then
+      _deferred_creds="${_PROVISION_LOG_DIR}/clone-credentials"
+      ( umask 077; printf '%s' "${GIT_CLONE_CREDENTIALS_B64}" | base64 -d >"${_deferred_creds}" 2>/dev/null ) || _deferred_creds=""
+    fi
+    if [[ -n "${_deferred_creds}" && -s "${_deferred_creds}" ]]; then
+      run_step optional "Checking out project repos" \
+        env GIT_CONFIG_COUNT=3 \
+        GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0= \
+        GIT_CONFIG_KEY_1=credential.helper GIT_CONFIG_VALUE_1="store --file=${_deferred_creds}" \
+        GIT_CONFIG_KEY_2=credential.helper GIT_CONFIG_VALUE_2=store \
+        bash "${REPO_DIR}/bin/checkout-projects.sh"
+      rm -f "${_deferred_creds}" || true
+    else
+      run_step optional "Checking out project repos" bash "${REPO_DIR}/bin/checkout-projects.sh"
+    fi
+  fi
   run_step optional "Running project provisioning commands" \
     env AGENT_HOME="${AGENT_HOME:-/opt/construct}" bash "${REPO_DIR}/bin/run-provision-commands.sh"
   _finish_provision 0
@@ -1286,7 +1309,9 @@ fi
 #    credentials were seeded, point a one-shot credential.helper at the temp file
 #    via GIT_CONFIG_* so the clone authenticates without an interactive prompt
 #    and without depending on a persisted store.
-if [[ "${CHECKOUT_PROJECTS}" == "true" ]]; then
+if [[ "${CHECKOUT_PROJECTS}" == "true" && "${DEFER_PROJECT_COMMANDS:-false}" == "true" ]]; then
+  note "Project checkout deferred until the saved config is restored (its git credentials and config apply then)"
+elif [[ "${CHECKOUT_PROJECTS}" == "true" ]]; then
   if [[ -n "${_clone_creds_file}" && -s "${_clone_creds_file}" ]]; then
     run_step optional "Checking out project repos" \
       env GIT_CONFIG_COUNT=2 \

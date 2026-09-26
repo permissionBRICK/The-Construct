@@ -264,10 +264,12 @@ skip if the repos are public). The credentials are written to a temporary file u
 one-shot `store --file=` credential helper for the checkout, so all repos clone without
 re-prompting. They are persisted into `~/.git-credentials` only if you also opted into
 "store git credentials" — otherwise they are used for the checkout and discarded. On a
-**reinstall that restores a saved config**, the VM's saved `~/.git-credentials` is used
-for the checkout as well: hosts it covers are never asked for, and an entry this PC cannot
-verify (a host the VM reaches but the PC does not) is handed to the VM untried rather than
-prompted for. Pressing Enter at the prompt skips that host: its repos are not cloned in that
-run, and a later reprovision clones them with whatever the VM has stored. (SSH
+**reinstall that restores a saved config**, the checkout itself runs *after* the restore,
+with the VM's saved `~/.git-credentials` and `.gitconfig` in place — so per-path credential
+matching and project-scoped tokens work exactly as on a reprovision. Hosts the saved store
+covers are never asked for; an entry this PC cannot verify (a project-scoped token, a host
+the VM reaches differently) is left to the VM rather than prompted for. Pressing Enter at
+the prompt skips a host: its repos are not cloned in that run, and a later reprovision
+clones them with whatever the VM has stored. (SSH
 `git@…` URLs don't trigger the prompt — a username/token can't authenticate them; they
 rely on whatever SSH auth is already configured on the VM.)

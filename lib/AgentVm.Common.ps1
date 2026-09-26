@@ -1167,57 +1167,6 @@ function Add-ConstructGitSessionCredentials {
     return $added
 }
 
-function Get-ConstructGitOrigin {
-    <# The scheme://authority of a credential-store line or repo URL, userinfo dropped; $null when it is not an http(s) URL. Pure. #>
-    param([AllowEmptyString()][AllowNull()][string]$Line)
-    if ([string]::IsNullOrWhiteSpace($Line)) { return $null }
-    $u = $null
-    if (-not [uri]::TryCreate($Line.Trim(), [UriKind]::Absolute, [ref]$u) -or $u.Scheme -notin @('http', 'https')) { return $null }
-    return ($u.GetLeftPart([UriPartial]::Authority) -replace '://[^/]+@', '://')
-}
-
-function Merge-BackupGitCredentials {
-    <#
-        The clone-credential blob for a checkout on a RESTORE: what the installer handed
-        (verified on this PC), plus the saved store's entry for every host it did not hand
-        and did not skip. The checkout runs BEFORE the restore puts that store back on the
-        VM, and a host this PC could not verify may well be one the VM reaches -- so its
-        saved credential goes along, and the clone is tried. "" when there is nothing. Pure.
-    #>
-    [CmdletBinding()]
-    param(
-        [AllowEmptyString()][AllowNull()][string]$CredentialsB64,
-        [AllowEmptyString()][AllowNull()][string]$BackupDir,
-        [AllowEmptyString()][AllowNull()][string]$SkipHostsB64
-    )
-    $lines = New-Object System.Collections.Generic.List[string]
-    $have = @{}
-    if ($CredentialsB64) {
-        try {
-            foreach ($l in ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($CredentialsB64)) -split '\r?\n')) {
-                if (-not $l.Trim()) { continue }
-                $lines.Add($l.Trim())
-                $k = Get-ConstructGitOrigin $l
-                if ($k) { $have[$k.ToLowerInvariant()] = $true }
-            }
-        } catch { }
-    }
-    $skip = @{}
-    if ($SkipHostsB64) {
-        try { foreach ($s in ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($SkipHostsB64)) -split '\r?\n')) { if ($s.Trim()) { $skip[$s.Trim().ToLowerInvariant()] = $true } } } catch { }
-    }
-    foreach ($l in @(Get-BackupGitCredentialLines -BackupDir $BackupDir)) {
-        $k = Get-ConstructGitOrigin $l
-        if (-not $k) { continue }
-        $lk = $k.ToLowerInvariant()
-        if ($have.ContainsKey($lk) -or $skip.ContainsKey($lk)) { continue }
-        $lines.Add($l.Trim())
-        $have[$lk] = $true
-    }
-    if ($lines.Count -eq 0) { return "" }
-    return [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(($lines -join "`n")))
-}
-
 function Get-ProjectRepoUrls {
     # Every repo URL declared by the named project profiles (a comma-separated
     # string or an array of names), read from <ProjectsDir>\<name>.json. Missing
