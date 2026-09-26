@@ -659,7 +659,7 @@ exists; a timestamp requires an exact match. A conflict returns `409 config-conf
 | `lifecycle` | `gracefulShutdownTimeoutSeconds`, `leaseTickSeconds`, `leaseRetrySeconds` | `300, 30, 600` seconds |
 | `media` | `maxBytes`, `maxItemsPerUser`, `uploadChunkBytes`, `uploadTtlHours`, `acquireTimeoutMinutes`, `allowHttp`, `unreferencedTtlHours` | 16 GiB, 20 items, 8 MiB chunks, 24 h, 180 min, HTTP allowed, no automatic unreferenced cleanup |
 | `network` | `hostForwardsEnabled`, `directAddressReporting`, `defaultMode`, `ownerMaySwitchMode` | `true`, `true`, `"relayed"`, `false` |
-| `virtualization` | `nestedDefault`, `nestedSelectable` | `false`, `true` |
+| `virtualization` | `nestedDefault`, `nestedSelectable` | `true`, `true` |
 | `updates` | `repository`, `channel`, `drainTimeoutMinutes`, `healthTimeoutSeconds` | `permissionBRICK/The-Construct`, `main`, 60 min, 120 s |
 
 When `capacity.ramHeadroomBytes` is null, RAM headroom is `max(1 GiB, total RAM / 8)`
@@ -703,10 +703,12 @@ See [Proxmox networking](../docs/proxmox-host.md#5-relayed-or-direct) for guest 
 
 `GET /host/capabilities` includes `nested: {available, default, selectable}`. On Proxmox,
 availability reads the live `/sys/module/kvm_intel/parameters/nested` or `kvm_amd` parameter
-(`Y` or `1`); Hyper-V assumes a host capable of nesting. A host configuration update enabling
-`nestedDefault` while unavailable returns `409 unsupported-on-host`.
+(`Y` or `1`); Hyper-V assumes a host capable of nesting. A host configuration update turning
+`nestedDefault` on while unavailable returns `409 unsupported-on-host`; a default already on,
+including the built-in one, can be saved again unchanged.
 
-An omitted `opts.nested` uses `virtualization.nestedDefault`. Explicit true requires the
+An omitted `opts.nested` uses `virtualization.nestedDefault`, on unless the host config turns it
+off; a host unable to nest still creates the VM without it. Explicit true requires the
 user's nullable `allowNested` override, or `nestedSelectable` when null; admins always may
 select it. A denied request returns `403 policy-denied`. Explicit false remains allowed.
 Updating a user with `allowNested: null` restores inheritance; omitting the field preserves

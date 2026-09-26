@@ -502,12 +502,13 @@ Remaining limitations:
 Everything else (`PublicHost`, port ranges, idle policy, `Iso:SeedUser`, `Iso:BootstrapPublicKeyPath`,
 persistence) is the common configuration documented in [service/README.md](../service/README.md).
 
-The stored host configuration section `virtualization` has `nestedDefault: false` and
+The stored host configuration section `virtualization` has `nestedDefault: true` and
 `nestedSelectable: true`. An omitted create option uses the host default. Per-user
 `allowNested` is nullable: null inherits `nestedSelectable`, while true or false overrides
 it. A user who cannot select nesting gets `403 policy-denied` for an explicit request to
-enable it; admins may always select it. Disabling remains allowed. Setting the host default
-to true is refused with `409 unsupported-on-host` while the live KVM parameter is off.
+enable it; admins may always select it. Disabling remains allowed. Turning the host default
+on is refused with `409 unsupported-on-host` while the live KVM parameter is off; VMs created
+while it is off get no nesting even with the default on.
 
 The host administration Overview shows availability, default and selectability. The VM
 settings modal saves a desired nested setting: it applies immediately when Off, otherwise

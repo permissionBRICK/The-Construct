@@ -168,6 +168,13 @@ public static class HostAdminEndpoints
         }
         return Results.Ok(result);
     }
+    // Turning the default on needs a host able to nest. A default already on, the built-in
+    // one included, stays saveable so the section's other fields can still change there;
+    // create never enables nesting on such a host.
+    private static async Task<bool> NestedDefaultOnAsync(IHostConfigMetadata metadata, CancellationToken ct) =>
+        (await metadata.ListSectionsAsync(ct)).FirstOrDefault(s => s.Section == "virtualization") is { } row
+            ? JsonSerializer.Deserialize<VirtualizationConfig>(row.ValueJson, ApiJson.Options)!.NestedDefault
+            : HostAdminDefaults.Virtualization.NestedDefault;
     private static async Task<IResult> UpdateConfigAsync(JsonElement request, HttpContext http, IHostConfigMetadata metadata, IClock clock, ConstructdOptions options, IHypervisorDriver driver, CancellationToken ct)
     {
         if (request.ValueKind != JsonValueKind.Object) return CodedProblems.Validation("config", "Expected an object of sections.");
@@ -196,7 +203,7 @@ public static class HostAdminEndpoints
             if (HostConfigValidation.Validate(value) is { } error) return CodedProblems.Validation(property.Name, error);
             if (HostConfigValidation.UnsupportedOnPlatform(value, options.IsProxmox))
                 return CodedProblems.Create(400, "unsupported-on-platform", "Direct network mode requires Proxmox.");
-            if (value is VirtualizationConfig { NestedDefault: true } && !driver.NestedAvailable)
+            if (value is VirtualizationConfig { NestedDefault: true } && !driver.NestedAvailable && !await NestedDefaultOnAsync(metadata, ct))
                 return CodedProblems.Create(409, "unsupported-on-host", "Nested virtualization is unavailable on this host.");
             if (value is UpdatesConfig updates && HostUpdateTrust.Apply(updates, options) != updates)
                 return CodedProblems.Validation("updates", "The update repository is pinned by the host-local installation.");

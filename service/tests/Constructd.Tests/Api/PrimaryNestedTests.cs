@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Constructd.Api.Jobs;
+using Constructd.Core.Abstractions;
 using Constructd.Core.Domain;
 using Constructd.Tests.Support;
 
@@ -14,6 +15,8 @@ public sealed class PrimaryNestedTests
     {
         using var app = new TestApp();
         using var owner = await app.CreateUserClientAsync("owner");
+        // Created without nesting, so enabling it is a real change.
+        await app.Service<IHostConfigStore>().SetAsync("virtualization", new VirtualizationConfig(false, true), "test", default);
         await owner.CreateVmAsync("parent");
         (await owner.PutAsJsonAsync("/api/v1/vms/parent/nested", new { enabled = true })).EnsureSuccessStatusCode();
         var read = await owner.GetFromJsonAsync<JsonElement>("/api/v1/vms/parent/nested");
@@ -57,6 +60,8 @@ public sealed class PrimaryNestedTests
     {
         using var app = new TestApp();
         using var owner = await app.CreateUserClientAsync("owner");
+        // Created without nesting, so enabling it is a real change.
+        await app.Service<IHostConfigStore>().SetAsync("virtualization", new VirtualizationConfig(false, true), "test", default);
         await owner.CreateVmAsync("parent");
         app.Driver.SetState("parent", VmState.Off);
         app.Driver.PowerFailure = new IOException("test");

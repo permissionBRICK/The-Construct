@@ -59,7 +59,7 @@ module.exports = [
     {"key":"ownerMaySwitchMode","label":"Owners may switch VM mode","type":"bool","default":false,"help":"Allow owners to select relayed or direct mode for their VMs.","platform":"proxmox","optional":true}
   ] },
   { key: "virtualization", label: "Virtualization", rawOnly: [], fields: [
-    {"key":"nestedDefault","label":"Enable nesting by default","type":"bool","default":false,"help":"Expose virtualization extensions to new VMs by default.","requires":"nested"},
+    {"key":"nestedDefault","label":"Enable nesting by default","type":"bool","default":true,"help":"Expose virtualization extensions to new VMs by default.","requires":"nested"},
     {"key":"nestedSelectable","label":"Allow users to select nesting","type":"bool","default":true,"help":"Users may choose nesting unless their user policy overrides this."}
   ] },
   { key: "updates", label: "Updates", rawOnly: [], fields: [
