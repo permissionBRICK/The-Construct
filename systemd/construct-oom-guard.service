@@ -1,0 +1,14 @@
+[Unit]
+Description=Construct OOM guard: the OOM killer takes builds and browsers before the coding agents
+Documentation=file:///opt/construct/repo/bin/construct-oom-guard.sh
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/construct-oom-guard.sh
+Restart=always
+RestartSec=5
+# The guard itself is tiny and must outlive the processes it ranks.
+OOMScoreAdjust=-900
+
+[Install]
+WantedBy=multi-user.target

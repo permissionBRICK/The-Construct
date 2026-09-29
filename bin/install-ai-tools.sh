@@ -969,6 +969,18 @@ install_t3code() {
     || warn "WARNING: T3 Code HTTPS setup failed; the web GUI stays on plain HTTP (:${T3CODE_PORT})"
   _t3_pub_after="$(sed -n 's/^T3CODE_PUBLIC_BASE_URL=//p' "${CONFIG_FILE}" 2>/dev/null | head -1 || true)"
 
+  # The unit is refreshed before the unchanged-build early return: a changed unit
+  # setting (OOMPolicy, say) must reach a VM whose T3 build did not change, and
+  # daemon-reload applies it to the running server without a restart.
+  install -d -m 0755 "${WORKSPACE_ROOT}"
+  local _t3_unit=/etc/systemd/system/t3code-serve.service _t3_unit_new
+  _t3_unit_new="$(sed "s|^WorkingDirectory=.*|WorkingDirectory=${WORKSPACE_ROOT}|" "${REPO_DIR}/systemd/t3code-serve.service")"
+  if [[ "$(cat "${_t3_unit}" 2>/dev/null)" != "${_t3_unit_new}" ]]; then
+    printf '%s\n' "${_t3_unit_new}" >"${_t3_unit}"
+    chmod 0644 "${_t3_unit}"
+    systemctl daemon-reload
+  fi
+
   # On an unchanged upstream T3 + Construct revision, the source builder has
   # already restored the exact server symlink and Desktop status. If that same
   # build is active, avoid re-patching, rewriting the unit, restarting T3, and
@@ -999,10 +1011,8 @@ install_t3code() {
   fi
 
   # Source and prebuilt builds already contain their runtime patches. Stock
-  # mode installs a pristine npm package before reaching this point.
-  install -d -m 0755 "${WORKSPACE_ROOT}"
-  install -m 0644 "${REPO_DIR}/systemd/t3code-serve.service" /etc/systemd/system/t3code-serve.service
-  sed -i "s|^WorkingDirectory=.*|WorkingDirectory=${WORKSPACE_ROOT}|" /etc/systemd/system/t3code-serve.service
+  # mode installs a pristine npm package before reaching this point. The unit
+  # itself was written above.
   systemctl daemon-reload
   systemctl enable t3code-serve
   systemctl restart t3code-serve

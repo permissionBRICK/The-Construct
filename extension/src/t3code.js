@@ -159,6 +159,7 @@ WorkingDirectory=$WORKSPACE_ROOT
 ExecStart=/usr/local/bin/t3 serve --host \\\${T3CODE_HOST} --port \\\${T3CODE_PORT}
 Restart=always
 RestartSec=5
+OOMPolicy=continue
 TimeoutStopSec=5s
 
 [Install]
