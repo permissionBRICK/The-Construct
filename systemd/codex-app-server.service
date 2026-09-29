@@ -11,6 +11,10 @@ WorkingDirectory=/root/repos
 ExecStart=/usr/local/bin/codex app-server --listen ws://${CODEX_HOST}:${CODEX_PORT} --ws-auth capability-token --ws-token-file ${CODEX_TOKEN_FILE}
 Restart=always
 RestartSec=5
+# One OOM-killed child (a build, a browser) must not take the whole unit and every
+# agent session in it down; systemd's default OOMPolicy=stop does exactly that.
+# Which process the kernel picks first is construct-oom-guard's job.
+OOMPolicy=continue
 
 [Install]
 WantedBy=multi-user.target

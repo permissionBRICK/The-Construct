@@ -229,6 +229,21 @@ into existing checkouts under `WORKSPACE_ROOT`. On the XFS root of new VMs it se
 `git worktree add` with reflink copies of the main worktree's build outputs and dependencies;
 on ext4 it does nothing. See [worktrees.md](worktrees.md).
 
+### Out-of-memory ranking
+
+Every agent session and everything it starts (builds, tests, headless browsers) runs in the
+cgroup of the unit that hosts it: `t3code-serve`, `codex-app-server` or `opencode-serve`. Those
+units set `OOMPolicy=continue`, so when the kernel OOM-kills one process in them, only that
+process dies. systemd's default (`stop`) would stop the whole unit and every session with it.
+
+`construct-oom-guard.service` sets which process the kernel picks. Every 2 seconds it sets
+`oom_score_adj` in those units to -200 for the T3 server and -100 for `claude`, `codex` and
+`opencode` processes. Everything else in the units is lifted to at least 0, because children
+inherit their parent's lowered value on fork. So the kernel takes a build or a browser first, and
+the agent can start it again. The values are moderate on purpose: a leaking T3 server that
+grows past about a fifth of RAM still outranks an ordinary build, gets killed and is restarted.
+Processes outside the agent units are not touched.
+
 ### Free-disk preflight
 
 The first step of every (re)provision reports free space on each filesystem it writes to and

@@ -1186,6 +1186,22 @@ setup_notify_spool() {
 }
 run_step optional "Setting up the notification spool" setup_notify_spool
 
+# 4c. OOM ranking: under memory pressure the kernel takes builds and browsers
+#     before the T3 server and the agent CLIs (see bin/construct-oom-guard.sh).
+setup_oom_guard() {
+  local unit_dir="${CONSTRUCT_SYSTEMD_DIR:-/etc/systemd/system}"
+  local bin_dir="${CONSTRUCT_BIN_DIR:-/usr/local/bin}"
+  local systemctl_bin="${CONSTRUCT_SYSTEMCTL:-systemctl}"
+  install -m 0755 "${REPO_DIR}/bin/construct-oom-guard.sh" "${bin_dir}/construct-oom-guard.sh" || return 1
+  install -m 0644 "${REPO_DIR}/systemd/construct-oom-guard.service" "${unit_dir}/construct-oom-guard.service" || return 1
+  "${systemctl_bin}" daemon-reload || return 1
+  "${systemctl_bin}" enable construct-oom-guard.service || return 1
+  # restart, not start: a reprovision must pick up a changed script.
+  "${systemctl_bin}" restart construct-oom-guard.service || return 1
+  ok "  OOM guard: coding agents are ranked last for the OOM killer"
+}
+run_step optional "Setting up the OOM guard" setup_oom_guard
+
 # 4d. Guest activity heartbeat (plan §4.7). ONLY for a service-managed VM: the
 #     host service is what enforces idle policy, and a local install must gain no
 #     new units at all. Both branches are silent on the default path -- the enable

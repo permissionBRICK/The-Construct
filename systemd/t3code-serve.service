@@ -11,6 +11,10 @@ WorkingDirectory=/root/repos
 ExecStart=/usr/local/bin/t3 serve --host ${T3CODE_HOST} --port ${T3CODE_PORT}
 Restart=always
 RestartSec=5
+# One OOM-killed child (a build, a browser) must not take the whole unit and every
+# agent session in it down; systemd's default OOMPolicy=stop does exactly that.
+# Which process the kernel picks first is construct-oom-guard's job.
+OOMPolicy=continue
 TimeoutStopSec=5s
 
 [Install]
