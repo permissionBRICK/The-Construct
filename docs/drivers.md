@@ -385,10 +385,10 @@ The existing `HyperVLocal.Driver.ps1` functions are unchanged. Opt in with
 
 | Function | Inputs / behavior |
 |---|---|
-| `Get-ConstructDriverExtendedCapabilities` | Backend hardware levels; Gen 2, fixed RAM, both Secure Boot templates, local TPM, two optical slots. Console is supplied by the separate console adapter. |
+| `Get-ConstructDriverExtendedCapabilities` | Backend hardware levels; Gen 2, OS-driven RAM (below), both Secure Boot templates, local TPM, two optical slots. Console is supplied by the separate console adapter. |
 | `Get-ConstructChildStorage` | `Name`, optional `VhdPath`; resolves disk and configuration volumes without allocation. |
 | `New-ConstructChildVm` | `Descriptor` with `ChildVmDescriptor` fields (name, hardware, optional VHD and ISO paths, switch name) plus an internal creation operation id. Creates a dynamic VHDX with an explicit maximum and leaves the VM Off. |
-| `Set-ConstructChildHardware` | `Name`, `Hardware`, `ResendTemplate`; VM must be Off. Template is set before TPM initialization; false never resends it. |
+| `Set-ConstructChildHardware` | `Name`, `Hardware`, `ResendTemplate`; VM must be Off. Template is set before TPM initialization; false never resends it. Memory goes through `Set-ConstructChildMemory`. |
 | `Set-ConstructChildMedia` | `Name`, nullable install/auxiliary paths, `BootOrder`; Off only, DVDs at SCSI 0:1 and 0:2, disk at 0:0. Null ejects media. Boot order uses device objects. |
 | `Get-ConstructChildAttachedMedia` | Actual paths by slot and completeness, used to reconcile references. |
 | `Dismount-ConstructChildMedia` | `Name`, `Incarnation`, `InstallOnly`; live eject for any guest OS, running or off. Empties SCSI 0:1 (and 0:2 unless install-only), keeps the drives and boot order, then verifies with `Get-ConstructChildAttachedMedia`. |
@@ -400,7 +400,11 @@ The existing `HyperVLocal.Driver.ps1` functions are unchanged. Opt in with
 
 `hardware` carries `cpus`, `ramMb`, `diskGb`, `generation`, `secureBoot`,
 `secureBootTemplate`, `tpm`, `bootOrder`, `networkAttached`, and reserved
-`dynamicMemory` (rejected). No OS installation, credentials, SSH wait or ISO patching
+`dynamicMemory` (rejected), and `os`. `os = windows` enables Hyper-V dynamic memory with
+512 MB minimum and `ramMb` as both startup and maximum; any other `os` gets fixed RAM.
+Capping the maximum at `ramMb` keeps admission and capacity accounting unchanged, so this
+returns idle guest RAM to the host without overcommit. Restoring a parked Windows license
+machine reapplies the same policy. No OS installation, credentials, SSH wait or ISO patching
 is part of this contract. Automatic checkpoints are off; automatic stop is Save and
 automatic start is StartIfRunning.
 

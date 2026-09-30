@@ -34,7 +34,7 @@
     function Add-VMHardDiskDrive { param($VMName,$ControllerType,$ControllerNumber,$ControllerLocation,$Path) $script:probeDrives+= [pscustomobject]@{Path=$Path} }
     function Get-VMNetworkAdapter { param($VMName) [pscustomobject]@{Name='nic'} }
     function Set-VMProcessor { param($VMName,$Count) }
-    function Set-VMMemory { param($VMName,$DynamicMemoryEnabled,$StartupBytes) }
+    function Set-VMMemory { param($VMName,$DynamicMemoryEnabled,$MinimumBytes,$StartupBytes,$MaximumBytes) }
     function Set-VMFirmware { param($VMName,$EnableSecureBoot,$SecureBootTemplate,$BootOrder) if($BootOrder){$script:probeOrder=$BootOrder} }
     function Get-VMDvdDrive { param($VMName) $script:probeDvds }
     function Add-VMDvdDrive { param($VMName,$ControllerNumber,$ControllerLocation,$Path) $script:probeDvds += [pscustomobject]@{ControllerNumber=$ControllerNumber;ControllerLocation=$ControllerLocation;Path=$Path} }
