@@ -553,8 +553,10 @@ the child. There is no abandon/supersede configuration API.
 
 ## Current Hyper-V limits
 
-- Generation 2 and fixed RAM are supported; Generation 1, dynamic memory and memory
-  overcommit are not. Disk growth through `hardware --disk-gb` currently returns
+- Generation 2 is supported; Generation 1 is not. Windows children get dynamic memory
+  automatically (512 MB minimum, the requested RAM as startup and maximum); Linux and
+  other children keep fixed RAM. A caller-supplied dynamic memory policy and memory
+  overcommit are not supported. Disk growth through `hardware --disk-gb` currently returns
   `unsupported-capability`.
 - Interactive video uses the trusted [browser gateway](../console-viewer/README.md). Screenshot and keyboard are
   supported by the bounded WMI transport; mouse is conditional and may return

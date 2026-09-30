@@ -595,7 +595,7 @@ ok "child functions are absent on default loader path" (-not (Get-Command New-Co
 ok "optional child driver loaded" ([bool](Get-Command New-ConstructChildVm -ErrorAction SilentlyContinue))
 $caps = Get-ConstructDriverExtendedCapabilities
 ok "child supports generation 2 only" ($caps.generations.Count -eq 1 -and $caps.generations[0] -eq 2)
-ok "child fixed memory only" ($caps.dynamicMemory -eq 'unsupported' -and $caps.memoryOvercommit -eq 'unsupported')
+ok "child refuses caller memory policy and overcommit" ($caps.dynamicMemory -eq 'unsupported' -and $caps.memoryOvercommit -eq 'unsupported')
 ok "child dual DVD and TPM" ($caps.maxOpticalDrives -eq 2 -and $caps.tpm -eq 'supported')
 $hardware = @{ cpus=1;ramMb=512;diskGb=1;generation=2;secureBoot=$true;secureBootTemplate='microsoftWindows';tpm=$true;bootOrder=@('installMedia','disk');networkAttached=$true;dynamicMemory=$null }
 Assert-ConstructChildHardware $hardware
@@ -615,7 +615,12 @@ $removeText = ChildFunctionText 'Remove-ConstructChildVm'
 ok "child creates dynamic disk with explicit maximum" ($createText -match 'New-VHD -Path \$disk -Dynamic -SizeBytes')
 ok "child sets template before TPM key protector" ($hardwareText.IndexOf('Set-VMFirmware @firmware') -lt $hardwareText.IndexOf('Set-VMKeyProtector'))
 ok "child disables automatic checkpoints" ($createText -match '-AutomaticCheckpointsEnabled \$false')
-ok "child fixed RAM cmdlet shape" ($hardwareText -match 'Set-VMMemory -VMName \$Name -DynamicMemoryEnabled \$false -StartupBytes')
+$memoryText = ChildFunctionText 'Set-ConstructChildMemory'
+ok "child hardware applies memory through the OS policy" ($hardwareText -match 'Set-ConstructChildMemory -Name \$Name -Hardware \$Hardware' -and $hardwareText -notmatch 'Set-VMMemory')
+ok "child fixed RAM cmdlet shape" ($memoryText -match 'Set-VMMemory -VMName \$Name -DynamicMemoryEnabled \$false -StartupBytes \$bytes')
+ok "Windows child dynamic RAM capped at request" ($memoryText -match "os -eq 'windows'" -and $memoryText -match 'Set-VMMemory -VMName \$Name -DynamicMemoryEnabled \$true -MinimumBytes 512MB -StartupBytes \$bytes -MaximumBytes \$bytes')
+$restoreText = ([System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'drivers/hyperv-local/HyperVLocal.WindowsLicense.ps1'), [ref]$null, [ref]$null).FindAll({param($a) $a -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $a.Name -eq 'Restore-ConstructLicenseMachine'},$true))[0].Extent.Text
+ok "reused Windows machine reapplies memory policy" ($restoreText -match 'Set-ConstructChildMemory -Name \$name -Hardware \$Descriptor\.hardware')
 ok "graceful uses non-forced WMI shutdown" ($shutdownText -match 'InitiateShutdown\(\$false,')
 ok "graceful never falls back to power cut or save" ($shutdownText -notmatch 'Stop-VM|Save-VM|Remove-VM|-Force|-TurnOff')
 ok "delete explicitly permits hard power-off" ($removeText -match 'Stop-VM -VM \$vm -TurnOff -Confirm:\$false')
@@ -637,13 +642,13 @@ foreach ($bytes in @(@(0), @(0,0,0,0), @(1,0,0,4), @(0,0,0,4,1))) {
     function Get-VMHardDiskDrive { param($VMName) }
     function Get-VMNetworkAdapter { param($VMName) [pscustomobject]@{Name='nic'} }
     function Set-VMProcessor { param($VMName,$Count) $script:childCalls.Add('cpu:'+ $Count) }
-    function Set-VMMemory { param($VMName,$DynamicMemoryEnabled,$StartupBytes) $script:childCalls.Add('memory:'+ $DynamicMemoryEnabled + ':' + $StartupBytes) }
+    function Set-VMMemory { param($VMName,$DynamicMemoryEnabled,$MinimumBytes,$StartupBytes,$MaximumBytes) $script:childCalls.Add('memory:'+ $DynamicMemoryEnabled + ':' + $MinimumBytes + ':' + $StartupBytes + ':' + $MaximumBytes) }
     function Set-VMFirmware { param($VMName,$EnableSecureBoot,$SecureBootTemplate,$BootOrder) $script:childCalls.Add('firmware:'+ $SecureBootTemplate) }
     function Set-VMKeyProtector { param($VMName,[switch]$NewLocalKeyProtector) $script:childProtector=$true; $script:childCalls.Add('protector') }
     function Enable-VMTPM { param($VMName) $script:childTpm=$true; $script:childCalls.Add('tpm') }
     function Disable-VMTPM { param($VMName) $script:childTpm=$false; $script:childCalls.Add('disable-tpm') }
     Set-ConstructChildHardware -Name 'child' -Hardware $hardware -ResendTemplate $true
-    ok "recorded child firmware precedes key protector and TPM" (($script:childCalls -join ',') -eq 'cpu:1,memory:False:536870912,firmware:microsoftWindows,protector,tpm')
+    ok "recorded child firmware precedes key protector and TPM" (($script:childCalls -join ',') -eq 'cpu:1,memory:False::536870912:,firmware:microsoftWindows,protector,tpm')
     $hardware.tpm=$false
     Set-ConstructChildHardware -Name 'child' -Hardware $hardware -ResendTemplate $false
     $before=$script:childCalls.Count
@@ -652,6 +657,14 @@ foreach ($bytes in @(@(0), @(0,0,0,0), @(1,0,0,4), @(0,0,0,4,1))) {
     $hardware.tpm=$true
     Set-ConstructChildHardware -Name 'child' -Hardware $hardware -ResendTemplate $false
     ok "re-enabling TPM preserves its existing key protector" (@($script:childCalls | Where-Object { $_ -eq 'protector' }).Count -eq 1)
+    $windows = $hardware.Clone(); $windows.os = 'windows'; $windows.ramMb = 4096
+    $script:childCalls.Clear()
+    Set-ConstructChildHardware -Name 'child' -Hardware $windows -ResendTemplate $false
+    ok "Windows child gets dynamic memory capped at its RAM" ($script:childCalls -contains 'memory:True:536870912:4294967296:4294967296')
+    $linux = $windows.Clone(); $linux.os = 'linux'
+    $script:childCalls.Clear()
+    Set-ConstructChildHardware -Name 'child' -Hardware $linux -ResendTemplate $false
+    ok "Linux child keeps fixed memory" ($script:childCalls -contains 'memory:False::4294967296:')
 }
 
 . (Join-Path $repoRoot 'test/childvm-driver-doubles.ps1')

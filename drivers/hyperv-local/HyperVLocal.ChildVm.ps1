@@ -269,6 +269,19 @@ function Test-ConstructChildKeyProtectorPresent {
         $Protector[1] -eq 0 -and $Protector[2] -eq 0 -and $Protector[3] -eq 4)
 }
 
+function Set-ConstructChildMemory {
+    param([string]$Name, $Hardware)
+    $bytes = [long]$Hardware.ramMb * 1MB
+    # Windows guests balloon reliably; Linux guests have failed to boot with
+    # dynamic memory, so they keep fixed RAM. The maximum stays at the requested
+    # size, so the reservation and capacity accounting are unchanged.
+    if ($Hardware.os -eq 'windows') {
+        Set-VMMemory -VMName $Name -DynamicMemoryEnabled $true -MinimumBytes 512MB -StartupBytes $bytes -MaximumBytes $bytes -ErrorAction Stop
+    } else {
+        Set-VMMemory -VMName $Name -DynamicMemoryEnabled $false -StartupBytes $bytes -ErrorAction Stop
+    }
+}
+
 function Set-ConstructChildHardware {
     param([string]$Name, $Hardware, [bool]$ResendTemplate = $false)
     Assert-ConstructChildVmName $Name
@@ -287,7 +300,7 @@ function Set-ConstructChildHardware {
     $adapters = @(Get-VMNetworkAdapter -VMName $Name -ErrorAction Stop)
     if ([bool]$Hardware.networkAttached -ne ($adapters.Count -gt 0)) { throw 'unsupported-capability' }
     Set-VMProcessor -VMName $Name -Count $Hardware.cpus -ErrorAction Stop
-    Set-VMMemory -VMName $Name -DynamicMemoryEnabled $false -StartupBytes ([long]$Hardware.ramMb * 1MB) -ErrorAction Stop
+    Set-ConstructChildMemory -Name $Name -Hardware $Hardware
     $firmware = @{ VMName = $Name; EnableSecureBoot = 'Off'; ErrorAction = 'Stop' }
     if ($Hardware.secureBoot) { $firmware.EnableSecureBoot = 'On' }
     if ($ResendTemplate -and $Hardware.secureBootTemplate) { $firmware.SecureBootTemplate = 'MicrosoftWindows'; if ($Hardware.secureBootTemplate -eq 'microsoftUefiCertificateAuthority') { $firmware.SecureBootTemplate = 'MicrosoftUEFICertificateAuthority' } }

@@ -136,6 +136,8 @@ function Restore-ConstructLicenseMachine {
     }
     Rename-VM -VM $vm -NewName $name -ErrorAction Stop
     $vm = Get-VM -Id ([guid]$Incarnation) -ErrorAction Stop
+    # Parked machines keep the memory settings of their first tenant.
+    Set-ConstructChildMemory -Name $name -Hardware $Descriptor.hardware
     if (@(Get-VMHardDiskDrive -VM $vm).Count -eq 0) {
         if (-not (Test-Path -LiteralPath $disk)) { $null = New-VHD -Path $disk -Dynamic -SizeBytes ([long]$Descriptor.hardware.diskGb * 1GB) -ErrorAction Stop }
         Add-VMHardDiskDrive -VM $vm -ControllerType SCSI -ControllerNumber 0 -ControllerLocation 0 -Path $disk -ErrorAction Stop
