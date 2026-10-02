@@ -234,7 +234,7 @@ public static class VaultEndpoints
         }
     }
 
-    private static Task<IResult> SubmitAsync(string name, HttpContext http, IVmRepository vms, VaultHostService vault, CancellationToken ct) => Run(http, async () =>
+    private static Task<IResult> SubmitAsync(string name, HttpContext http, IVmRepository vms, VaultHostService vault, ConstructdOptions options, CancellationToken ct) => Run(http, async () =>
     {
         var (vm, failure) = await GuestVmAsync(name, http, vms, ct).ConfigureAwait(false);
         if (failure is not null) return failure;
@@ -245,7 +245,8 @@ public static class VaultEndpoints
         http.SetAuditDetail($"op={VaultProtocol.Sanitize(body.Str("op"), 20)}, names={names}, " +
             (result.PendingId is { } pending ? $"pending={pending}" : $"status={result.Response!.Str("status")}"));
         return result.PendingId is { } id
-            ? Results.Accepted($"/api/v1/vms/{vm!.Name}/vault/requests/{id}", new { id })
+            // approveUrl: the guest's "waiting for approval" note, which T3 Code turns into a banner, links here.
+            ? Results.Accepted($"/api/v1/vms/{vm!.Name}/vault/requests/{id}", new { id, approveUrl = options.VaultWebBase() + "/vault/#request=" + Uri.EscapeDataString(id) })
             : Results.Ok(result.Response);
     });
 

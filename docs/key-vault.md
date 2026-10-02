@@ -171,6 +171,13 @@ the phone in to T3 Code and pairs it for approvals. The T3 Code part of the code
 address in the host setting `Constructd:VaultWebUrl`) to see pending requests and file decisions.
 The Companion shows the same requests at the same time; the first answer counts.
 
+**Noticing a request in T3 Code.** While `construct secret` waits for an answer, T3 Code shows a
+banner on every open client (phone or PC): "Key vault: github-token waiting for your approval". On
+a hosted VM it has an **Approve** button that opens the host's approval page with that request
+highlighted. On a local VM it points you to the Companion dialog on your PC. The banner only
+links; approving still happens on the host's page or in the Companion. It disappears when the
+request is answered or times out. Nothing alerts you while no T3 Code page is open.
+
 The device token lives only on the host service's web address, never in T3 Code. T3 Code is
 served from inside the VM, where an agent could read anything stored for its page. The host's
 certificate is self-signed unless you put a proxy with a public certificate in front of it
@@ -207,6 +214,14 @@ Companion has unlocked that VM. Paired phones can approve requests and decide ab
 they cannot read values, leases or the vault itself.
 
 ## Wire contract
+
+While the user is being asked, the CLI also keeps a note for T3 Code's banner:
+`/run/construct/vault-pending/<id>.json` (directory 0755, file 0644, published atomically, removed
+when the request is answered, times out or the CLI exits). It contains no secret:
+`{"v":1,"id","vm","op","names":[…],"reason","deadline":<ms>,"approveUrl":"https://<host>/vault/#request=<id>"|null}`.
+On hosted VMs the link comes from the host's `202` reply (`approveUrl`); on local VMs it is `null`.
+T3 Code treats the files as untrusted input and only ever renders a link from them.
+
 
 `construct secret` writes one request per file into the VM's spool `/run/construct/vault`
 (tmpfs, mode 0700). The Companion holds one SSH watch per online VM that claims requests (atomic
