@@ -283,6 +283,89 @@ public sealed class VaultTests
         Assert.Equal("ok", (await b)["status"]!.GetValue<string>());
     }
 
+    // A dialog that stays open until it is closed from outside; Closed counts the closings.
+    private sealed class OpenDialogs
+    {
+        public int Shown, Closed;
+        public Func<ApprovalPrompt, CancellationToken, Task<bool>> Handler => async (_, token) =>
+        {
+            Interlocked.Increment(ref Shown);
+            try { await Task.Delay(Timeout.Infinite, token); return false; }
+            finally { Interlocked.Increment(ref Closed); }
+        };
+    }
+
+    [Fact]
+    public async Task APendingRequestIsListedAndAnotherAppsAnswerClosesItsDialog()
+    {
+        var h = new Harness(v => Seed(v, username: "ci-bot")); var dialogs = new OpenDialogs(); h.Prompts.ApprovalHandler = dialogs.Handler;
+        var request = Req("get", "github-token"); request["reason"] = "deploy"; request["deadline"] = (h.Clock.UtcNow + TimeSpan.FromMinutes(5)).ToUnixTimeMilliseconds();
+        var get = h.Ask("dev", request);
+        await Eventually(() => dialogs.Shown == 1);
+        var listed = Assert.Single(h.Vault.PendingApprovals());
+        var prompt = Assert.IsType<ApprovalPrompt>(Assert.Single(h.Prompts.Shown));
+        Assert.Equal(("dev", "dev", "local", null, request["id"]!.GetValue<string>(), null, "get"), (listed.Instance, listed.Vm, listed.Kind, listed.Host, listed.RequestId, listed.HostRequestId, listed.Op));
+        Assert.Equal((prompt.Title, prompt.Message, prompt.Action, prompt.Deny), (listed.Title, listed.Message, listed.Action, listed.Deny));
+        Assert.Equal(["github-token"], listed.Names); Assert.Equal(h.Clock.UtcNow, listed.CreatedAt); Assert.Equal(h.Clock.UtcNow + TimeSpan.FromMinutes(5), listed.Deadline);
+        Assert.Matches("^[A-Za-z0-9._~-]{1,128}$", listed.Id);
+        Assert.DoesNotContain("ghp_s3cret", listed.ToString()); Assert.DoesNotContain("ci-bot", listed.ToString());
+
+        Assert.Equal(VaultDecision.Decided, await h.Vault.DecideAsync(listed.Id, true));
+        var answer = await get;
+        Assert.Equal("ok", answer["status"]!.GetValue<string>()); Assert.Equal("ghp_s3cretTokenValue", Decode(answer["secret"]));
+        Assert.Equal(1, dialogs.Closed); Assert.Empty(h.Vault.PendingApprovals());
+        Assert.Contains(h.Vault.Activity(), a => a.Text == "Approved access to github-token from another app on this PC.");
+        // The first answer counts; an unknown id was never pending.
+        Assert.Equal(VaultDecision.AlreadyDecided, await h.Vault.DecideAsync(listed.Id, false));
+        Assert.Equal(VaultDecision.NotFound, await h.Vault.DecideAsync("no-such-approval", true));
+
+        // A denial ends the request the same way.
+        var delete = h.Ask("dev", Req("delete", "github-token"));
+        await Eventually(() => dialogs.Shown == 2);
+        Assert.Equal(VaultDecision.Decided, await h.Vault.DecideAsync(Assert.Single(h.Vault.PendingApprovals()).Id, false));
+        Assert.Equal("denied", (await delete)["status"]!.GetValue<string>());
+        Assert.NotNull(h.Vault.Reveal("github-token"));
+    }
+
+    [Fact]
+    public async Task QueuedRequestsAreListedAndDecidableBeforeTheirDialogOpens()
+    {
+        var h = new Harness(v => Seed(v)); var dialogs = new OpenDialogs(); h.Prompts.ApprovalHandler = dialogs.Handler;
+        var first = h.Ask("dev", Req("get", "github-token")); var second = h.Ask("other", Req("request", "github-token"));
+        await Eventually(() => dialogs.Shown == 1 && h.Vault.PendingApprovals().Count == 2);
+        var queued = h.Vault.PendingApprovals().Single(a => a.Instance == "other");
+        Assert.Equal(VaultDecision.Decided, await h.Vault.DecideAsync(queued.Id, false));
+        Assert.Equal("denied", (await second)["status"]!.GetValue<string>());
+        await Task.Delay(20);
+        Assert.Equal(1, dialogs.Shown); Assert.Equal(0, dialogs.Closed); // never shown, and the open dialog stays
+        Assert.Equal(VaultDecision.Decided, await h.Vault.DecideAsync(Assert.Single(h.Vault.PendingApprovals()).Id, true));
+        Assert.Equal("ok", (await first)["status"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task ADialogAnswerOrTheDeadlineWinsOverALateDecision()
+    {
+        var h = new Harness(v => Seed(v));
+        var answer = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.Prompts.ApprovalHandler = (_, _) => answer.Task;
+        var get = h.Ask("dev", Req("get", "github-token"));
+        await Eventually(() => h.Vault.PendingApprovals().Count == 1);
+        var id = h.Vault.PendingApprovals()[0].Id;
+        answer.SetResult(false);
+        Assert.Equal("denied", (await get)["status"]!.GetValue<string>());
+        Assert.Equal(VaultDecision.AlreadyDecided, await h.Vault.DecideAsync(id, true));
+        Assert.Empty(h.Vault.Leases());
+
+        var dialogs = new OpenDialogs(); h.Prompts.ApprovalHandler = dialogs.Handler;
+        var late = Req("get", "github-token"); late["deadline"] = (h.Clock.UtcNow + TimeSpan.FromMinutes(1)).ToUnixTimeMilliseconds();
+        var expiring = h.Ask("dev", late);
+        await Eventually(() => dialogs.Shown == 1 && h.Clock.PendingDelays > 0);
+        id = h.Vault.PendingApprovals()[0].Id;
+        h.Clock.Advance(TimeSpan.FromMinutes(1));
+        Assert.Contains("timed out", (await expiring)["message"]!.GetValue<string>());
+        Assert.Equal(VaultDecision.NotFound, await h.Vault.DecideAsync(id, true));
+    }
+
     [Fact]
     public async Task WindowEditsValidateAndANewValueEndsLeasesOnTheOldOne()
     {

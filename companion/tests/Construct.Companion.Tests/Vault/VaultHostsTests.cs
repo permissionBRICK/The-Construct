@@ -448,6 +448,58 @@ public sealed class VaultHostsTests
     }
 
     [Fact]
+    public async Task AnotherAppsAnswerToAHostApprovalGoesToTheHostOnce()
+    {
+        await using var h = new Harness();
+        h.Hosts.Online(new("dev", Slug, "dev"), true);
+        var closed = 0;
+        h.Prompts.ApprovalHandler = async (_, token) => { try { await Task.Delay(Timeout.Infinite, token); return true; } finally { Interlocked.Increment(ref closed); } };
+        var deadline = h.Clock.UtcNow + TimeSpan.FromMinutes(10);
+        h.Host.Edit(x => x.Approvals.Add(Approval("a1", deadline)));
+        await h.Hosts.PollAsync(false, default);
+        await Eventually(() => h.Prompts.Shown.Count == 1);
+        var listed = Assert.Single(h.Vault.PendingApprovals());
+        Assert.Equal(("dev", "dev", "host", Slug, null, "a1", "request"), (listed.Instance, listed.Vm, listed.Kind, listed.Host, listed.RequestId, listed.HostRequestId, listed.Op));
+        Assert.Equal(["github-token"], listed.Names); Assert.Equal(deadline - TimeSpan.FromMinutes(10), listed.CreatedAt); Assert.Equal(deadline, listed.Deadline);
+        Assert.Equal(("Key vault — access request", "Approve", "Deny"), (listed.Title, listed.Action, listed.Deny));
+        Assert.Equal(VaultDecision.Decided, await h.Vault.DecideAsync(listed.Id, false));
+        await h.Hosts.DrainAsync();
+        Assert.Equal("deny", h.Host.Decisions["a1"]); Assert.Single(h.Host.Calls("POST", "/vault/approvals/a1"));
+        Assert.Equal(1, closed); Assert.Empty(h.Vault.PendingApprovals());
+        Assert.Contains(h.Vault.Activity(), a => a.Host == "host.example" && a.Text == "Denied access to github-token from another app on this PC.");
+        await h.Poll(); Assert.Single(h.Prompts.Shown); // answered: never asked again
+
+        // The phone was faster: the host's 409 is the answer, the dialog still closes, no warning.
+        h.Host.Edit(x => x.Approvals.Add(Approval("a2", deadline)));
+        await h.Hosts.PollAsync(false, default);
+        await Eventually(() => h.Prompts.Shown.Count == 2);
+        h.Host.Edit(x => x.Decisions["a2"] = "approve");
+        Assert.Equal(VaultDecision.AlreadyDecided, await h.Vault.DecideAsync(h.Vault.PendingApprovals()[0].Id, true));
+        await h.Hosts.DrainAsync();
+        Assert.Equal(2, closed); Assert.DoesNotContain(h.Vault.Activity(), a => a.Warning);
+        // Expired on the host: 404. Any other failure is a warning and Failed.
+        foreach (var (id, status, expected) in new[] { ("a3", 404, VaultDecision.NotFound), ("a4", 500, VaultDecision.Failed) })
+        {
+            h.Host.Edit(x => x.Approvals.Add(Approval(id, deadline)));
+            h.Host.Forced["POST /vault/approvals/" + id] = (status, null);
+            await h.Hosts.PollAsync(false, default);
+            await Eventually(() => h.Vault.PendingApprovals().Any(a => a.HostRequestId == id));
+            Assert.Equal(expected, await h.Vault.DecideAsync(h.Vault.PendingApprovals().Single(a => a.HostRequestId == id).Id, true));
+            await h.Hosts.DrainAsync();
+        }
+        Assert.Contains(h.Vault.Activity(), a => a.Warning && a.Text.StartsWith("Could not send your answer", StringComparison.Ordinal));
+
+        // A dialog answer goes to the host as before, and a later decision is too late.
+        string? id5 = null;
+        h.Prompts.ApprovalHandler = (_, _) => { id5 = h.Vault.PendingApprovals().Single(a => a.HostRequestId == "a5").Id; return Task.FromResult(true); };
+        h.Host.Edit(x => x.Approvals.Add(Approval("a5", deadline)));
+        await h.Poll();
+        Assert.Equal("approve", h.Host.Decisions["a5"]);
+        Assert.Equal(VaultDecision.AlreadyDecided, await h.Vault.DecideAsync(id5!, false));
+        Assert.Single(h.Host.Calls("POST", "/vault/approvals/a5"));
+    }
+
+    [Fact]
     public async Task HostFileDecisionsOpenOneGridPerHostAndPostEveryChoice()
     {
         await using var h = new Harness();

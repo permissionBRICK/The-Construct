@@ -289,12 +289,13 @@ public sealed class VaultHosts : IAsyncDisposable
     {
         try
         {
-            var answer = await vault.ApproveExternalAsync(new(approval.Title, approval.Message, approval.Action), approval.Deadline, dialog.Token).ConfigureAwait(false);
+            string instance; lock (gate) instance = Of(host.Slug).Online.Values.FirstOrDefault(i => i.VmName == approval.Vm)?.Name ?? approval.Vm;
+            var source = new VaultApprovalSource(instance, approval.Vm, approval.Op, approval.Names, null, host.Slug, host.Host, approval.Id, approval.CreatedAt);
+            var answer = await vault.ApproveHostAsync(source, new(approval.Title, approval.Message, approval.Action), approval.Deadline,
+                approved => SendAsync(host, approval, approved), dialog.Token).ConfigureAwait(false);
             lock (gate) Of(host.Slug).Answered.Add(approval.Id);
-            if (answer is not { } approved) return; // its deadline passed: the host expires it as well
-            try { await host.Client.AnswerVaultApprovalAsync(approval.Id, approved ? "approve" : "deny", stop.Token).ConfigureAwait(false); }
-            catch (RemoteApiException e) when (e.Status is 404 or 409) { } // another device answered first, or it expired
-            catch (RemoteApiException e) { vault.Record(approval.Vm, $"Could not send your answer to the host: {e.Message}", true, host.Host); }
+            // Null: its deadline passed (the host expires it as well), or another app's answer went to the host already.
+            if (answer is { } approved) await SendAsync(host, approval, approved).ConfigureAwait(false);
         }
         catch (OperationCanceledException) { }
         finally
@@ -302,6 +303,14 @@ public sealed class VaultHosts : IAsyncDisposable
             lock (gate) { var l = Of(host.Slug); if (l.Open.TryGetValue(approval.Id, out var open) && ReferenceEquals(open, dialog)) l.Open.Remove(approval.Id); }
             dialog.Dispose();
         }
+    }
+    // 404 and 409 mean another device answered first, or the approval expired: not an error.
+    private async Task<VaultDecision> SendAsync(VaultHostRef host, VaultHostApproval approval, bool approved)
+    {
+        try { await host.Client.AnswerVaultApprovalAsync(approval.Id, approved ? "approve" : "deny", stop.Token).ConfigureAwait(false); return VaultDecision.Decided; }
+        catch (RemoteApiException e) when (e.Status == 404) { return VaultDecision.NotFound; }
+        catch (RemoteApiException e) when (e.Status == 409) { return VaultDecision.AlreadyDecided; }
+        catch (RemoteApiException e) { vault.Record(approval.Vm, $"Could not send your answer to the host: {e.Message}", true, host.Host); return VaultDecision.Failed; }
     }
     private async Task PollFilesAsync(VaultHostRef host, CancellationToken token)
     {

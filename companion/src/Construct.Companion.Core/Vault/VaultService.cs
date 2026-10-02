@@ -9,7 +9,8 @@ namespace Construct.Companion.Core.Vault;
 // The key vault's single owner: answers VM requests, asks the user, counts lease uses, expires
 // leases and scrubs every VM a lease ended on. All document changes run under gate and are saved
 // before the lock is released; dialogs and SSH never run under it. VaultService.Hosts.cs holds the
-// document side of the host sync (VaultHosts does the network side).
+// document side of the host sync (VaultHosts does the network side), VaultService.Approvals.cs the
+// pending approvals and their one-dialog-at-a-time gate.
 public sealed partial class VaultService : IAsyncDisposable
 {
     public static readonly TimeSpan DefaultTtl = TimeSpan.FromHours(1), OnceTtl = TimeSpan.FromMinutes(10),
@@ -20,7 +21,7 @@ public sealed partial class VaultService : IAsyncDisposable
     private readonly IToastRaiser toasts;
     private readonly IClock clock;
     private readonly object gate = new();
-    private readonly SemaphoreSlim approvals = new(1), decisions = new(1);
+    private readonly SemaphoreSlim decisions = new(1);
     private readonly Dictionary<string, ISshTransport> attached = new(StringComparer.Ordinal);
     private readonly HashSet<string> cleaning = new(StringComparer.Ordinal);
     private readonly List<Task> running = [];
@@ -96,7 +97,7 @@ public sealed partial class VaultService : IAsyncDisposable
         var ttl = TimeSpan.FromSeconds(request.Ttl ?? (request.Uses is null ? DefaultTtl.TotalSeconds : VaultProtocol.MaxTtl));
         var message = $"The VM “{instance}” asks for access to:\n{string.Join('\n', described)}\n\nAccess: {Access(request.Uses, clock.UtcNow + ttl, clock.UtcNow)}"
             + Footer(request);
-        var answer = await ApproveAsync(new("Key vault — access request", message), request.Deadline, token).ConfigureAwait(false);
+        var answer = await AskAsync(instance, request, new("Key vault — access request", message), token).ConfigureAwait(false);
         if (answer != Approval.Approved) return Refused(request, answer);
         // The lease runs from the approval, not from the request: a slow answer must not shorten it.
         var now = clock.UtcNow; var expires = now + ttl;
@@ -126,8 +127,8 @@ public sealed partial class VaultService : IAsyncDisposable
         }
         if (lease is null)
         {
-            var answer = await ApproveAsync(new("Key vault — one-time access", $"The VM “{instance}” asks to read this secret once:\n{bullet}" + Footer(request), "Allow once"),
-                request.Deadline, token).ConfigureAwait(false);
+            var answer = await AskAsync(instance, request, new("Key vault — one-time access", $"The VM “{instance}” asks to read this secret once:\n{bullet}" + Footer(request), "Allow once"),
+                token).ConfigureAwait(false);
             if (answer != Approval.Approved) return Refused(request, answer);
             var once = new VaultLease(NewId(), instance, name, 1, clock.UtcNow + OnceTtl, clock.UtcNow, request.Reason, "once");
             Mutate(d => { d.Leases.RemoveAll(l => l.Instance == instance && l.Name == name); d.Leases.Add(once); });
@@ -173,8 +174,8 @@ public sealed partial class VaultService : IAsyncDisposable
         if (bullet is not null)
         {
             if (!request.Replace) return VaultProtocol.Response(request.Id, "exists", $"A secret named {name} already exists. Pick another name, or pass --replace (needs the user's approval).");
-            var answer = await ApproveAsync(new("Key vault — replace secret", $"The VM “{instance}” wants to replace the value of:\n{bullet}\n\nNew description: {request.Description}" + Footer(request), "Replace"),
-                request.Deadline, token).ConfigureAwait(false);
+            var answer = await AskAsync(instance, request, new("Key vault — replace secret", $"The VM “{instance}” wants to replace the value of:\n{bullet}\n\nNew description: {request.Description}" + Footer(request), "Replace"),
+                token).ConfigureAwait(false);
             if (answer != Approval.Approved) return Refused(request, answer);
         }
         var now = clock.UtcNow; var expires = now + TimeSpan.FromSeconds(request.Ttl ?? DefaultTtl.TotalSeconds);
@@ -207,8 +208,8 @@ public sealed partial class VaultService : IAsyncDisposable
     {
         var name = request.Names[0]; string bullet;
         lock (gate) { if (Find(name) is not { } entry) return NotFound(request, name); bullet = Bullet(entry); }
-        var answer = await ApproveAsync(new("Key vault — delete secret", $"The VM “{instance}” asks to delete this secret from the key vault:\n{bullet}" + Footer(request), "Delete"),
-            request.Deadline, token).ConfigureAwait(false);
+        var answer = await AskAsync(instance, request, new("Key vault — delete secret", $"The VM “{instance}” asks to delete this secret from the key vault:\n{bullet}" + Footer(request), "Delete"),
+            token).ConfigureAwait(false);
         if (answer != Approval.Approved) return Refused(request, answer);
         var deleted = false;
         Mutate(d => deleted = RemoveSecret(d, name));
@@ -223,38 +224,6 @@ public sealed partial class VaultService : IAsyncDisposable
         answer == Approval.TimedOut ? "No answer from the user before the request timed out." : "The user denied the request.");
     private static string Bullet(VaultEntry entry) => $"  • {entry.Name}{(entry.Description.Length > 0 ? " — " + entry.Description : "")}{(entry.Username.Length > 0 ? " (with username)" : "")}";
     private static string Footer(VaultRequest request) => (request.Reason.Length > 0 ? $"\nReason given: “{request.Reason}”" : "") + (request.Source.Length > 0 ? $"\nRequested by {request.Source}" : "");
-
-    // A host's pending approval goes through the same one-dialog-at-a-time gate as a local VM's request.
-    // True = approved, false = denied, null = its deadline passed; cancelling the token closes the dialog
-    // unanswered (answered on another device, or expired on the host) and throws.
-    public async Task<bool?> ApproveExternalAsync(ApprovalPrompt prompt, DateTimeOffset? deadline, CancellationToken cancellationToken) =>
-        await ApproveAsync(prompt, deadline, cancellationToken).ConfigureAwait(false) switch { Approval.Approved => true, Approval.Denied => false, _ => null };
-
-    private enum Approval { Approved, Denied, TimedOut }
-    // One dialog at a time; the agent's deadline closes a dialog nobody answered.
-    private async Task<Approval> ApproveAsync(ApprovalPrompt prompt, DateTimeOffset? deadline, CancellationToken token)
-    {
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, stop.Token);
-        var timer = deadline is { } due ? CancelAtAsync(due, linked) : Task.CompletedTask;
-        try
-        {
-            await approvals.WaitAsync(linked.Token).ConfigureAwait(false);
-            try { return await prompts.ApproveAsync(prompt, linked.Token).ConfigureAwait(false) ? Approval.Approved : Approval.Denied; }
-            finally { approvals.Release(); }
-        }
-        catch (OperationCanceledException) when (!token.IsCancellationRequested && !stop.IsCancellationRequested) { return Approval.TimedOut; }
-        finally { await linked.CancelAsync().ConfigureAwait(false); await timer.ConfigureAwait(false); }
-    }
-    private async Task CancelAtAsync(DateTimeOffset due, CancellationTokenSource source)
-    {
-        try
-        {
-            var wait = due - clock.UtcNow;
-            if (wait > TimeSpan.Zero) await clock.DelayAsync(wait, source.Token).ConfigureAwait(false);
-            await source.CancelAsync().ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) { }
-    }
 
     // ── the PC side: the Key Vault window ──────────────────────────────────────
     public IReadOnlyList<VaultSecretView> Secrets()
