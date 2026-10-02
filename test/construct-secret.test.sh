@@ -59,6 +59,12 @@ log="${tmp}/log"
 mkdir -p "${ctl}" "${log}"
 export CONSTRUCT_VAULT_SPOOL="${spool}"
 export CONSTRUCT_VAULT_PICKUP_SEC=2
+# Local mode = no host service. A VM managed by one has the URL in its real
+# config.env (and maybe the environment): neither may leak into these tests.
+empty_cfg="${tmp}/config.env"
+: >"${empty_cfg}"
+export CONFIG_FILE="${empty_cfg}"
+unset CONSTRUCT_SERVICE_URL CONSTRUCT_INSTANCE_NAME CONSTRUCT_SERVICE_CA_FILE CONSTRUCT_SERVICE_AUTH_SCHEME
 
 # ctl/off      present = nothing claims requests (no Companion connected)
 # ctl/answer   a jq program turning the request into the response;
@@ -535,6 +541,494 @@ PATH="${nojq}" "$(command -v bash)" "${IMPL}" list >"${out}" 2>"${err}"
 rc=$?
 ok "without jq: exits 1" test "${rc}" = 1
 ok "without jq: says why" grep -q 'jq is required' "${err}"
+
+# ── hosted mode: the host service ────────────────────────────────────────────
+# With CONSTRUCT_SERVICE_URL set, every command goes to the host service
+# (docs/plans/key-vault-hosted.md). A curl stub records each call -- argv, the
+# header and body files it was handed and their modes, a `ps` snapshot -- and
+# answers call <n> from ${hs}/<n>.code and ${hs}/<n>.body.
+
+hs="${tmp}/hosted"
+curl_stub="${tmp}/curl-stub"
+cat >"${curl_stub}" <<'STUB'
+#!/usr/bin/env bash
+d="${HS}"
+n="$(cat "${d}/next" 2>/dev/null || echo 1)"
+printf '%s\n' "$((n + 1))" >"${d}/next"
+printf '%s\n' "$*" >>"${d}/argv"
+out="" hdr="" body="" method="GET" url="" maxtime=""
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  case "${args[i]}" in
+    -o) out="${args[i+1]}" ;;
+    -X) method="${args[i+1]}" ;;
+    -H) case "${args[i+1]}" in @*) hdr="${args[i+1]#@}" ;; esac ;;
+    --data-binary) body="${args[i+1]#@}" ;;
+    --max-time) maxtime="${args[i+1]}" ;;
+    http://* | https://*) url="${args[i]}" ;;
+  esac
+done
+printf '%s %s\n' "${method}" "${url}" >>"${d}/requests"
+printf '%s' "${maxtime}" >"${d}/${n}.maxtime"
+if [[ -n "${hdr}" ]]; then cat "${hdr}" >"${d}/${n}.headers"; stat -c %a "${hdr}" >"${d}/${n}.headers.mode"; fi
+if [[ -n "${body}" ]]; then
+  cp "${body}" "${d}/${n}.request"
+  stat -c %a "${body}" >"${d}/${n}.request.mode"
+  dirname "${body}" >"${d}/${n}.dir"
+fi
+if [[ -n "${out}" ]]; then stat -c %a "$(dirname "${out}")" >"${d}/${n}.outdir.mode"; dirname "${out}" >"${d}/${n}.outdir"; fi
+ps -ww -eo args >>"${d}/ps.txt" 2>/dev/null
+if [[ -f "${d}/${n}.sleep" ]]; then
+  printf '%s' "$$" >"${d}/${n}.pid"
+  sleep "$(cat "${d}/${n}.sleep")" &
+  s=$!
+  trap 'kill "${s}" 2>/dev/null; exit 143' TERM
+  wait "${s}"
+fi
+code="$(cat "${d}/${n}.code" 2>/dev/null || echo 200)"
+if [[ "${code}" == 000 ]]; then
+  printf 'curl: (7) Failed to connect to buildbox.example.local port 7462: Connection refused\n' >&2
+  printf '000'
+  exit 7
+fi
+if [[ -n "${out}" && -f "${d}/${n}.body" ]]; then cp "${d}/${n}.body" "${out}"; fi
+printf '%s' "${code}"
+if (( code >= 400 )); then exit 22; fi
+exit 0
+STUB
+chmod +x "${curl_stub}"
+
+token_file="${tmp}/vm-token"
+vm_token="vm-token-$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+printf '%s\n' "${vm_token}" >"${token_file}"
+chmod 0600 "${token_file}"
+base_url="https://buildbox.example.local:7462/api/v1/vms/work-vm/vault"
+
+hs_reset() { rm -rf "${hs}"; mkdir -p "${hs}"; }
+# hs_answer <call number> <HTTP code> [body]
+hs_answer() {
+  printf '%s' "$2" >"${hs}/$1.code"
+  if [[ $# -ge 3 ]]; then printf '%s' "$3" >"${hs}/$1.body"; fi
+}
+calls() { if [[ -f "${hs}/requests" ]]; then wc -l <"${hs}/requests"; else echo 0; fi; }
+call() { sed -n "$1p" "${hs}/requests"; }
+hreq() { local n="$1"; shift; jq -r "$@" "${hs}/${n}.request" 2>/dev/null; }
+work_dirs() { find "${spool}" -mindepth 1 -maxdepth 1 -type d -name 'http.*' 2>/dev/null | wc -l; }
+# Run the CLI against the stub host service (stdin passes through).
+hosted() {
+  CONSTRUCT_SERVICE_URL="https://buildbox.example.local:7462/" CONSTRUCT_INSTANCE_NAME=work-vm \
+  CONSTRUCT_VM_TOKEN_FILE="${token_file}" CONSTRUCT_CURL="${curl_stub}" HS="${hs}" \
+    bash "${CLI}" secret "$@" >"${out}" 2>"${err}"
+  rc=$?
+}
+
+# A local request document, to hold the hosted one against.
+answer_ok
+run list
+cp "${log}/last.json" "${tmp}/local-list.json"
+
+# list: an immediate 200.
+hs_reset
+rm -rf "${spool}"
+hs_answer 1 200 "{\"v\":1,\"status\":\"ok\",\"items\":${items}}"
+hosted list
+ok "hosted list: exits 0" test "${rc}" = 0
+ok "hosted list: ONE call, a POST to the instance's vault requests" \
+  test "$(calls):$(call 1)" = "1:POST ${base_url}/requests"
+ok "hosted list: the same request document as the spool's (same fields)" \
+  test "$(jq -c 'keys' "${hs}/1.request")" = "$(jq -c 'keys' "${tmp}/local-list.json")"
+ok "hosted list: op list, v 1, the default 60 s deadline" \
+  test "$(hreq 1 -c '[.v, .op, .deadline - .ts]')" = '[1,"list",60000]'
+ok "hosted list: the request body is ONE line of JSON" test "$(wc -l <"${hs}/1.request")" = 1
+ok "hosted list: prints the same table as local mode" grep -Eqx 'beta +3 uses left +second' "${out}"
+ok "hosted list: nothing on stderr" test ! -s "${err}"
+ok "hosted list: the VM token travels in the VmToken Authorization header" \
+  test "$(cat "${hs}/1.headers")" = "Authorization: VmToken ${vm_token}"
+ok "hosted list: the header file is 0600" test "$(cat "${hs}/1.headers.mode")" = 600
+ok "hosted list: the token is in no argv" sh -c "! grep -qF '${vm_token}' '${hs}/argv' '${hs}/ps.txt'"
+ok "hosted list: curl reads the body from a file" grep -q -- '--data-binary @' "${hs}/argv"
+ok "hosted list: ... sent as JSON" grep -q -- '-H Content-Type: application/json' "${hs}/argv"
+ok "hosted list: the body file is 0600" test "$(cat "${hs}/1.request.mode")" = 600
+ok "hosted list: ... in a private 0700 directory" test "$(cat "${hs}/1.outdir.mode")" = 700
+ok "hosted list: ... directly under the spool (tmpfs)" test "$(dirname "$(cat "${hs}/1.dir")")" = "${spool}"
+ok "hosted list: the spool is created 0700" test "$(stat -c %a "${spool}")" = 700
+ok "hosted list: the answer is written to a file in that directory" \
+  test "$(cat "${hs}/1.outdir")" = "$(cat "${hs}/1.dir")"
+ok "hosted list: the work directory is removed" test "$(work_dirs)" = 0
+ok "hosted list: no files left in the spool" test "$(leftovers)" = 0
+ok "hosted list: no spool requests/ responses/ (nothing for a Companion to drain)" \
+  test ! -e "${spool}/requests" -a ! -e "${spool}/responses"
+ok "hosted list: no --cacert without a pinned CA" sh -c "! grep -q -- '--cacert' '${hs}/argv'"
+
+hs_reset
+hs_answer 1 200 "{\"v\":1,\"status\":\"ok\",\"items\":${items}}"
+CONSTRUCT_SERVICE_CA_FILE="${tmp}/service-ca.pem" hosted list --json
+ok "hosted list --json: the raw items array" test "$(jq -cS . "${out}")" = "$(jq -cS . "${tmp}/items.json")"
+ok "hosted: a pinned CA is passed to curl" grep -q -- "--cacert ${tmp}/service-ca.pem" "${hs}/argv"
+
+# The service URL and instance come from config.env like construct expose's.
+hs_reset
+hosted_cfg="${tmp}/config-hosted.env"
+printf "CONSTRUCT_SERVICE_URL='https://cfg.example.local:7462'\nCONSTRUCT_INSTANCE_NAME=cfg-vm\n" >"${hosted_cfg}"
+hs_answer 1 200 '{"v":1,"status":"ok","items":[]}'
+CONFIG_FILE="${hosted_cfg}" CONSTRUCT_VM_TOKEN_FILE="${token_file}" CONSTRUCT_CURL="${curl_stub}" HS="${hs}" \
+  bash "${CLI}" secret status >"${out}" 2>"${err}"
+rc=$?
+ok "hosted: URL and instance are read from config.env" \
+  test "${rc}:$(call 1)" = "0:POST https://cfg.example.local:7462/api/v1/vms/cfg-vm/vault/requests"
+
+# request: 202, then the long poll: 204 (still pending), then 200.
+hs_reset
+hs_answer 1 202 '{"id":"h-42"}'
+hs_answer 2 204
+hs_answer 3 200 '{"v":1,"id":"h-42","status":"ok","names":["a","b"],"lease":{"usesLeft":null,"expiresAt":'"${exp_ms}"'}}'
+hosted request a b --for 2h --reason "ship it"
+ok "hosted request: exits 0 after 202 + 204 + 200" test "${rc}" = 0
+ok "hosted request: three calls" test "$(calls)" = 3
+ok "hosted request: the request document" \
+  test "$(hreq 1 -c '[.op, .names, .ttl, .reason, .deadline - .ts]')" = '["request",["a","b"],7200,"ship it",600000]'
+ok "hosted request: long-polls the host's id with wait=25" \
+  test "$(call 2)" = "GET ${base_url}/requests/h-42?wait=25"
+ok "hosted request: ... until the answer" test "$(call 3)" = "GET ${base_url}/requests/h-42?wait=25"
+ok "hosted request: a long poll may take longer than the plain timeout" \
+  test "$(cat "${hs}/2.maxtime")" -gt 25
+ok "hosted request: the confirmation, as in local mode" grep -qx "Approved: a, b — until ${exp_hm}" "${out}"
+ok "hosted request: no work directory left" test "$(work_dirs)" = 0
+
+# get: the value byte-exact, the answer file gone.
+hs_reset
+hs_answer 1 202 '{"id":"h-43"}'
+hs_answer 2 200 "{\"v\":1,\"status\":\"ok\",\"secret\":\"$(base64 -w0 <"${tmp}/v3")\",\"username\":\"deploy-bot\",\"lease\":{\"usesLeft\":0,\"expiresAt\":null}}"
+hosted get x
+ok "hosted get: exits 0" test "${rc}" = 0
+ok "hosted get: prints the value byte-exact" cmp -s "${out}" "${tmp}/v3"
+ok "hosted get: the last use is pointed out" grep -q 'last approved use of x' "${err}"
+ok "hosted get: no files left (the answer held the value)" test "$(leftovers)" = 0
+hs_reset
+hs_answer 1 200 "{\"v\":1,\"status\":\"ok\",\"secret\":\"$(base64 -w0 <"${tmp}/v1")\",\"username\":\"deploy-bot\"}"
+hosted get x --json
+ok "hosted get --json: name/username/secret" \
+  test "$(jq -cS . "${out}")" = '{"name":"x","secret":"hunter2\n","username":"deploy-bot"}'
+
+# Status → exit code, as in local mode, plus `locked`.
+for pair in denied:7 notFound:9 exists:10 error:8 invalid:8 weird:8 locked:11; do
+  hs_reset
+  hs_answer 1 200 "{\"v\":1,\"status\":\"${pair%%:*}\",\"message\":\"msg for ${pair%%:*}\"}"
+  hosted get x
+  ok "hosted status ${pair%%:*} exits ${pair##*:}" test "${rc}" = "${pair##*:}"
+  if [[ "${pair}" == weird:* ]]; then
+    ok "hosted status weird: named as unknown" grep -qx "construct secret: the host service sent an unknown status 'weird'" "${err}"
+  else
+    ok "hosted status ${pair%%:*}: the host's message on stderr" \
+      test "$(cat "${err}")" = "construct secret: msg for ${pair%%:*}"
+  fi
+done
+hs_reset
+hs_answer 1 200 '{"v":1,"status":"locked"}'
+hosted get x
+ok "hosted locked without a message: exit 11 and says what to do" \
+  sh -c "test ${rc} = 11 && grep -q 'locked for this VM: start or connect it from the user' '${err}'"
+hs_reset
+hs_answer 1 202 '{"id":"h-44"}'
+hs_answer 2 200 '{"v":1,"id":"h-44","status":"locked","message":"The key vault is locked for this VM."}'
+hosted request a
+ok "hosted locked after a long poll exits 11" test "${rc}" = 11
+hs_reset
+hs_answer 1 200 '{"v":1,"id":"someone-else","status":"ok","items":[]}'
+hosted list
+ok "hosted: an answer for another id exits 8" test "${rc}" = 8
+hs_reset
+hs_answer 1 200 'this is not json'
+hosted list
+ok "hosted: an unreadable answer exits 8" sh -c "test ${rc} = 8 && grep -q 'host service sent an unreadable answer' '${err}'"
+hs_reset
+hs_answer 1 202 '{"nope":true}'
+hosted request a
+ok "hosted: a 202 without an id exits 8" test "${rc}" = 8
+
+# Expired, unreachable, refused.
+hs_reset
+hs_answer 1 202 '{"id":"h-45"}'
+hs_answer 2 404 '{"title":"Not Found","status":404,"code":"request-not-found"}'
+hosted request a
+ok "hosted: 404 on the long poll (expired) exits 7" test "${rc}" = 7
+ok "hosted: ... and says the request expired" grep -q 'expired on the host service' "${err}"
+
+hs_reset
+hs_answer 1 000
+hosted list
+ok "hosted: an unreachable host service exits 6" test "${rc}" = 6
+ok "hosted: ... says so, with curl's reason" \
+  grep -q 'the host service could not be reached at https://buildbox.example.local:7462 (curl: (7) Failed to connect' "${err}"
+ok "hosted: ... and leaves nothing behind" test "$(leftovers):$(work_dirs)" = "0:0"
+hs_reset
+hs_answer 1 503 '{"title":"Service Unavailable","status":503}'
+hosted list
+ok "hosted: HTTP 503 exits 6" sh -c "test ${rc} = 6 && grep -q 'could not be reached.*HTTP 503' '${err}'"
+hs_reset
+hs_answer 1 401 '{"type":"about:blank","title":"Invalid VM token","status":401,"code":"invalid-token"}'
+hosted list
+ok "hosted: 401 exits 8" test "${rc}" = 8
+ok "hosted: ... with the problem title" grep -q 'HTTP 401: Invalid VM token' "${err}"
+hs_reset
+hs_answer 1 403 '{"title":"Child VMs have no key vault","status":403,"code":"vault-forbidden"}'
+hosted list
+ok "hosted: 403 exits 8 with the problem title" \
+  sh -c "test ${rc} = 8 && grep -q 'HTTP 403: Child VMs have no key vault' '${err}'"
+hs_reset
+hs_answer 1 400 '{"title":"Bad request","detail":"Name between 1 and 20 secrets.","status":400}'
+hosted list
+ok "hosted: another 4xx exits 8 with title and detail" \
+  sh -c "test ${rc} = 8 && grep -q 'HTTP 400: Bad request: Name between 1 and 20 secrets.' '${err}'"
+
+# A blip during the long poll is retried; three failures in a row are not.
+hs_reset
+hs_answer 1 202 '{"id":"h-46"}'
+hs_answer 2 000
+hs_answer 3 200 '{"v":1,"status":"ok","names":["a"]}'
+hosted request a
+ok "hosted: one failed poll is retried" test "${rc}:$(calls)" = "0:3"
+hs_reset
+hs_answer 1 202 '{"id":"h-47"}'
+hs_answer 2 000
+hs_answer 3 502
+hs_answer 4 000
+hosted request a
+ok "hosted: three failed polls in a row exit 6" test "${rc}:$(calls)" = "6:4"
+
+# No answer before --wait: the long poll never holds past the deadline.
+hs_reset
+hs_answer 1 202 '{"id":"h-48"}'
+for n in 2 3 4 5 6; do hs_answer "${n}" 204; done
+start="$(now_ms)"
+hosted request a --wait 2
+elapsed=$(( $(now_ms) - start ))
+ok "hosted: no answer within --wait exits 7" test "${rc}" = 7
+ok "hosted: ... after --wait (${elapsed} ms)" test "${elapsed}" -ge 1900 -a "${elapsed}" -lt 5000
+ok "hosted: ... says so" grep -q 'no answer from the user within 2 s' "${err}"
+ok "hosted: the poll asks the host to hold no longer than the time left" \
+  test "$(call 2)" = "GET ${base_url}/requests/h-48?wait=2"
+
+hs_reset
+CONSTRUCT_VM_TOKEN_FILE="${tmp}/no-such-token" CONSTRUCT_SERVICE_URL="https://buildbox.example.local:7462" \
+  CONSTRUCT_CURL="${curl_stub}" HS="${hs}" bash "${CLI}" secret list >"${out}" 2>"${err}"
+rc=$?
+ok "hosted: no VM token exits 8" sh -c "test ${rc} = 8 && grep -q 'no VM token at' '${err}'"
+ok "hosted: ... without calling the host" test "$(calls)" = 0
+
+# TERM during a long poll: the curl in flight is killed, nothing is left.
+hs_reset
+hs_answer 1 202 '{"id":"h-49"}'
+printf '30' >"${hs}/2.sleep"
+CONSTRUCT_SERVICE_URL="https://buildbox.example.local:7462" CONSTRUCT_INSTANCE_NAME=work-vm \
+  CONSTRUCT_VM_TOKEN_FILE="${token_file}" CONSTRUCT_CURL="${curl_stub}" HS="${hs}" \
+  bash "${CLI}" secret request a >/dev/null 2>&1 &
+waiter=$!
+for _ in $(seq 1 100); do [[ -s "${hs}/2.pid" ]] && break; sleep 0.05; done
+ok "hosted TERM: the long poll is in flight" test -s "${hs}/2.pid"
+start="$(now_ms)"
+kill -TERM "${waiter}"
+wait "${waiter}"
+rc=$?
+elapsed=$(( $(now_ms) - start ))
+ok "hosted TERM: exits 143" test "${rc}" = 143
+ok "hosted TERM: at once, not after the poll (${elapsed} ms)" test "${elapsed}" -lt 2000
+sleep 0.2
+ok "hosted TERM: the curl in flight is gone" sh -c "! kill -0 \$(cat '${hs}/2.pid') 2>/dev/null"
+ok "hosted TERM: the work directory is removed" test "$(work_dirs):$(leftovers)" = "0:0"
+
+# add: the secret is only ever base64 in the 0600 body file, never in argv.
+hs_reset
+hs_answer 1 200 '{"v":1,"status":"ok","lease":{"usesLeft":null,"expiresAt":null}}'
+printf 'value\n' | hosted add api-key --description "The API key" --username "ci bot"
+ok "hosted add: exits 0" test "${rc}" = 0
+ok "hosted add: the same document, the secret as base64, one newline dropped" \
+  test "$(hreq 1 -c '[.op, .names, .description, .username, .secret]')" = "[\"add\",[\"api-key\"],\"The API key\",\"ci bot\",\"$(printf 'value' | base64 -w0)\"]"
+ok "hosted add: the confirmation" \
+  grep -qx "Stored api-key in the key vault. Run 'construct secret release api-key' when done." "${out}"
+: >"${tmp}/argv.log"
+hs_reset
+hs_answer 1 200 '{"v":1,"status":"ok"}'
+PATH="${shims}:${PATH}" hosted add sentinel-test --description d <"${tmp}/sentinel"
+ok "hosted argv: the shimmed add exits 0" test "${rc}" = 0
+ok "hosted argv: the shims saw the jq --rawfile call (the check is live)" grep -q -- 'jq -cn --rawfile s /dev/stdin' "${tmp}/argv.log"
+ok "hosted argv: the secret is in no command's argv" \
+  sh -c "! grep -qF -f '${tmp}/sentinel' '${tmp}/argv.log' '${hs}/argv' '${hs}/ps.txt'"
+ok "hosted argv: nor its base64" \
+  sh -c "! grep -qF -f '${tmp}/sentinel.b64' '${tmp}/argv.log' '${hs}/argv' '${hs}/ps.txt'"
+ok "hosted argv: the body carries it as base64" sh -c "jq -j .secret '${hs}/1.request' | base64 -d | cmp -s - '${tmp}/sentinel'"
+ok "hosted argv: the body file was 0600" test "$(cat "${hs}/1.request.mode")" = 600
+ok "hosted argv: nothing left in the spool" test "$(leftovers):$(work_dirs)" = "0:0"
+
+hs_reset
+hs_answer 1 200 '{"v":1,"status":"ok","names":["a","b"]}'
+hosted release a b
+ok "hosted release: the host service scrubs" \
+  sh -c "test ${rc} = 0 && grep -q 'the host service now scrubs a, b from this VM' '${err}'"
+ok "--help: documents exit code 11" sh -c "bash '${CLI}' secret --help | grep -q '^  11 the vault is locked for this VM'"
+ok "--help: says where hosted requests go" sh -c "bash '${CLI}' secret --help | grep -q 'requests go to the host service'"
+ok "--help: _scrub stays internal" sh -c "! bash '${CLI}' secret --help | grep -q '_scrub'"
+
+# ── _scrub: the host service's scrub jobs ────────────────────────────────────
+# The real vault-scan.sh / vault-clean.sh from this checkout, against a scratch
+# tree. The jobs come from the stub's GET .../vault/scrubs; the results are the
+# POST bodies it records.
+
+sr="${tmp}/scrub-root"
+mkdir -p "${sr}/proj"
+k1="kv-scrub-one-$(head -c 9 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+k2="kv-scrub-two-$(head -c 9 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+printf 'TOKEN=%s\n' "${k1}" >"${sr}/proj/.env"
+printf 'first %s then %s\n' "${k1}" "${k2}" >"${sr}/proj/notes.txt"
+printf 'nothing to see\n' >"${sr}/clean.txt"
+pb() { printf '%s' "$1" | base64 -w0; }
+scrub() {
+  CONSTRUCT_SERVICE_URL="https://buildbox.example.local:7462" CONSTRUCT_INSTANCE_NAME=work-vm \
+  CONSTRUCT_VM_TOKEN_FILE="${token_file}" CONSTRUCT_CURL="${curl_stub}" HS="${hs}" \
+  CONSTRUCT_REPO_DIR="${CONSTRUCT_REPO_DIR:-${ROOT}}" CONSTRUCT_VAULT_SCAN_ROOTS="${CONSTRUCT_VAULT_SCAN_ROOTS-${sr}}" \
+    bash "${CLI}" secret _scrub >"${out}" 2>"${err}"
+  rc=$?
+}
+
+hs_reset
+hs_answer 1 200 "{\"jobs\":[{\"id\":\"job-scan\",\"step\":\"scan\",\"names\":[\"one\",\"two\"],
+  \"patterns\":[{\"index\":0,\"pattern\":\"$(pb "${k1}")\"},{\"index\":1,\"pattern\":\"$(pb "${k2}")\"}]}]}"
+hs_answer 2 204
+scrub_shims="${tmp}/scrub-shims"
+mkdir -p "${scrub_shims}"
+for cmd in bash jq base64 grep find xargs sort cat head stat tr wc mktemp rm install sed python3 flock; do
+  real="$(command -v "${cmd}")" || continue
+  printf '#!%s\nprintf "%%s\\n" "%s $*" >>"%s"\nexec "%s" "$@"\n' \
+    "$(command -v bash)" "${cmd}" "${tmp}/scrub-argv.log" "${real}" >"${scrub_shims}/${cmd}"
+  chmod +x "${scrub_shims}/${cmd}"
+done
+: >"${tmp}/scrub-argv.log"
+PATH="${scrub_shims}:${PATH}" scrub
+ok "_scrub scan: exits 0" test "${rc}" = 0
+ok "_scrub scan: fetches the jobs, then posts to the job" \
+  test "$(calls):$(call 1):$(call 2)" = "2:GET ${base_url}/scrubs:POST ${base_url}/scrubs/job-scan"
+ok "_scrub scan: step scan, complete" test "$(hreq 2 -c '[.step, .complete]')" = '["scan",true]'
+ok "_scrub scan: the two files that hold a secret, no other" test "$(hreq 2 '.hits | length')" = 2
+# shellcheck disable=SC2016 # $p is a jq variable
+ok "_scrub scan: .env holds secret 0 (path base64, size, type)" \
+  test "$(hreq 2 -c --arg p "$(pb "${sr}/proj/.env")" '.hits[] | select(.path == $p) | [.indexes, .size, .type]')" \
+    = "[[0],$(stat -c %s "${sr}/proj/.env"),\"text\"]"
+# shellcheck disable=SC2016 # $p is a jq variable
+ok "_scrub scan: notes.txt holds both" \
+  test "$(hreq 2 -c --arg p "$(pb "${sr}/proj/notes.txt")" '.hits[] | select(.path == $p) | .indexes')" = "[0,1]"
+ok "_scrub scan: the shims saw the scan run (the check is live)" grep -q '^grep -lZF' "${tmp}/scrub-argv.log"
+ok "_scrub scan: no pattern in any argv" \
+  sh -c "! grep -qF -e '${k1}' -e '${k2}' -e '$(pb "${k1}")' -e '$(pb "${k2}")' '${tmp}/scrub-argv.log' '${hs}/argv' '${hs}/ps.txt'"
+ok "_scrub scan: the jobs document went to a private 0700 directory" test "$(cat "${hs}/1.outdir.mode")" = 700
+ok "_scrub scan: the files are untouched" grep -qF "${k1}" "${sr}/proj/.env"
+ok "_scrub scan: nothing left behind but the lock" \
+  test "$(find "${spool}" -mindepth 1 | sed "s|^${spool}/||" | tr '\n' ' ')" = "scrub.lock "
+ok "_scrub: the lock file is 0600" test "$(stat -c %a "${spool}/scrub.lock")" = 600
+
+hs_reset
+hs_answer 1 200 "{\"jobs\":[{\"id\":\"job-apply\",\"step\":\"apply\",\"files\":[
+  {\"path\":\"$(pb "${sr}/proj/.env")\",\"action\":\"redact\",\"patterns\":[\"$(pb "${k1}")\"]},
+  {\"path\":\"$(pb "${sr}/proj/notes.txt")\",\"action\":\"delete\",\"patterns\":[\"$(pb "${k1}")\",\"$(pb "${k2}")\"]},
+  {\"path\":\"$(pb "${sr}/proj/gone.txt")\",\"action\":\"delete\"}]}]}"
+hs_answer 2 204
+size_before="$(stat -c %s "${sr}/proj/.env")"
+scrub
+ok "_scrub apply: exits 0" test "${rc}" = 0
+ok "_scrub apply: posts to the job" test "$(call 2)" = "POST ${base_url}/scrubs/job-apply"
+ok "_scrub apply: .env is redacted in place, same length" \
+  test "$(cat "${sr}/proj/.env"):$(stat -c %s "${sr}/proj/.env")" = "TOKEN=$(printf '%*s' "${#k1}" '' | tr ' ' '*'):${size_before}"
+ok "_scrub apply: notes.txt is deleted" test ! -e "${sr}/proj/notes.txt"
+ok "_scrub apply: the results, one per file" \
+  test "$(hreq 2 -c '[.step, [.results[] | [.status, .count, .detail]]]')" = '["apply",[["ok",1,""],["ok",0,""],["missing",0,""]]]'
+ok "_scrub apply: each result names its file (base64)" \
+  test "$(hreq 2 -c '[.results[].path]')" = "[\"$(pb "${sr}/proj/.env")\",\"$(pb "${sr}/proj/notes.txt")\",\"$(pb "${sr}/proj/gone.txt")\"]"
+
+# Rendering: placeholders filled and quoted like ShellQuote.Single; a scan
+# without DONE is incomplete; a file the clean-up never reported still gets a result.
+fake="${tmp}/fake-repo"
+fake_scripts="${fake}/companion/src/Construct.Companion.Core/Vault/GuestScripts"
+mkdir -p "${fake_scripts}"
+cat >"${fake_scripts}/vault-scan.sh" <<'FAKE'
+d={{dir}}
+max={{maxSize}}
+roots=({{roots}})
+printf '%s\n' "$d" "$max" "${roots[@]}" >"${SCRUB_CAPTURE}/vars"
+cp "$0" "${SCRUB_CAPTURE}/rendered.sh"
+cat >"${SCRUB_CAPTURE}/stdin"
+printf 'F\t0\t5\ttext\t%s\n' "$(printf '/x/y' | base64 -w0)"
+exit 1
+FAKE
+printf 'x={{nope}}\n' >"${fake_scripts}/vault-clean.sh"
+capture="${tmp}/capture"
+mkdir -p "${capture}"
+hs_reset
+hs_answer 1 200 "{\"jobs\":[{\"id\":\"job-fake\",\"step\":\"scan\",\"patterns\":[{\"index\":3,\"pattern\":\"$(pb "${k1}")\"},{\"index\":4,\"pattern\":\"$(pb "${k2}")\"}]}]}"
+hs_answer 2 204
+CONSTRUCT_REPO_DIR="${fake}" CONSTRUCT_VAULT_SCAN_ROOTS="" SCRUB_CAPTURE="${capture}" scrub
+ok "_scrub render: {{dir}} is the spool" test "$(sed -n 1p "${capture}/vars")" = "${spool}"
+ok "_scrub render: {{maxSize}} is 256 MiB" test "$(sed -n 2p "${capture}/vars")" = 268435456
+ok "_scrub render: {{roots}} defaults to VaultProtocol.ScanRoots" \
+  test "$(sed -n '3,$p' "${capture}/vars" | tr '\n' ' ')" = "/root /home /tmp /var/tmp /var/log /etc /opt /srv "
+ok "_scrub render: values are single-quoted" grep -qx "max='268435456'" "${capture}/rendered.sh"
+ok "_scrub render: the patterns arrive on stdin as <index>TAB<base64>" \
+  test "$(cat "${capture}/stdin")" = "$(printf '3\t%s\n4\t%s' "$(pb "${k1}")" "$(pb "${k2}")")"
+ok "_scrub render: a scan without DONE is posted incomplete" \
+  test "$(hreq 2 -c '[.complete, .hits]')" = "[false,[{\"path\":\"$(pb /x/y)\",\"indexes\":[0],\"size\":5,\"type\":\"text\"}]]"
+
+hs_reset
+hs_answer 1 200 '{"jobs":[{"id":"job-q","step":"scan","patterns":[]}]}'
+hs_answer 2 204
+CONSTRUCT_REPO_DIR="${fake}" CONSTRUCT_VAULT_SCAN_ROOTS="/tmp/it's /srv" SCRUB_CAPTURE="${capture}" scrub
+ok "_scrub render: an apostrophe is quoted as '\\''" \
+  grep -qxF "roots=('/tmp/it'\\''s' '/srv')" "${capture}/rendered.sh"
+ok "_scrub render: ... and reaches the script intact" \
+  test "$(sed -n '3,$p' "${capture}/vars" | tr '\n' '|')" = "/tmp/it's|/srv|"
+
+hs_reset
+hs_answer 1 200 "{\"jobs\":[{\"id\":\"job-broken\",\"step\":\"apply\",\"files\":[{\"path\":\"$(pb /x/y)\",\"action\":\"redact\",\"patterns\":[\"$(pb "${k1}")\"]}]}]}"
+hs_answer 2 204
+CONSTRUCT_REPO_DIR="${fake}" scrub
+ok "_scrub: a template with an unknown placeholder is refused" grep -q 'no value for the placeholder {{nope}}' "${err}"
+ok "_scrub: a file the clean-up never reported is posted as failed" \
+  test "$(hreq 2 -c '.results')" = "[{\"path\":\"$(pb /x/y)\",\"status\":\"failed\",\"count\":0,\"detail\":\"not processed\"}]"
+ok "_scrub: ... which the host took, so the run itself succeeds" test "${rc}" = 0
+
+# Jobs come and go: none due, a POST the host refuses, an unknown step.
+hs_reset
+hs_answer 1 200 '{"jobs":[]}'
+scrub
+ok "_scrub: no jobs, one call, exits 0" test "${rc}:$(calls)" = "0:1"
+hs_reset
+hs_answer 1 200 '{"jobs":[{"id":"job-x","step":"frobnicate"},{"id":"bad id/..","step":"scan"},{"id":"job-y","step":"scan","patterns":[]}]}'
+hs_answer 2 409 '{"title":"Already done","status":409}'
+scrub
+ok "_scrub: unknown steps and unusable ids are skipped" test "$(calls):$(call 2)" = "2:POST ${base_url}/scrubs/job-y"
+ok "_scrub: a refused POST makes the run exit 8" test "${rc}" = 8
+hs_reset
+hs_answer 1 000
+scrub
+ok "_scrub: an unreachable host exits 6" test "${rc}" = 6
+CONSTRUCT_SERVICE_URL="" bash "${CLI}" secret _scrub >/dev/null 2>"${err}"
+rc=$?
+ok "_scrub: refuses to run without a host service" sh -c "test ${rc} = 1 && grep -q 'only on a VM of a host service' '${err}'"
+
+# One scrub at a time: a second run while the first holds the lock exits 0 at once.
+hs_reset
+hs_answer 1 200 '{"jobs":[]}'
+printf '3' >"${hs}/1.sleep"
+( scrub; exit "${rc}" ) &
+first=$!
+for _ in $(seq 1 100); do [[ -s "${hs}/1.pid" ]] && break; sleep 0.05; done
+start="$(now_ms)"
+CONSTRUCT_SERVICE_URL="https://buildbox.example.local:7462" CONSTRUCT_VM_TOKEN_FILE="${token_file}" \
+  CONSTRUCT_CURL="${curl_stub}" HS="${hs}" bash "${CLI}" secret _scrub >/dev/null 2>&1
+rc=$?
+elapsed=$(( $(now_ms) - start ))
+ok "_scrub lock: a second run exits 0" test "${rc}" = 0
+ok "_scrub lock: ... at once (${elapsed} ms)" test "${elapsed}" -lt 1500
+ok "_scrub lock: ... without calling the host" test "$(calls)" = 1
+wait "${first}"
+ok "_scrub lock: the first run finishes normally" test "$?" = 0
 
 printf '\n%s passed, %s failed\n' "${pass}" "${fail}"
 [[ "${fail}" -eq 0 ]]
