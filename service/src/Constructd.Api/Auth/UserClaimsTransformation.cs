@@ -26,8 +26,8 @@ public sealed class UserClaimsTransformation(IUserStore users, ConstructdOptions
             return principal;
         }
 
-        // VM-scoped tokens are not users and must never gain a role.
-        if (principal.IsVmToken() || principal.IsKnownUser())
+        // VM-scoped tokens and vault devices are not users and must never gain a role.
+        if (principal.IsVmToken() || principal.IsVaultDevice() || principal.IsKnownUser())
         {
             return principal;
         }

@@ -258,6 +258,7 @@ public static class VmEndpoints
         }
         else
         {
+            services.GetRequiredService<IVaultUnlocks>().Drop(vm.Name);
             if (action == "stop") await driver.StopAsync(vm.Name, cancellationToken);
             else await driver.SaveAsync(vm.Name, cancellationToken);
             state = await driver.GetStateAsync(vm.Name, cancellationToken);
