@@ -48,26 +48,20 @@
   })();
 
   // ── Switches ────────────────────────────────────────────────────────────────
-  // The mic switches (#voiceSwitch / #setMic) request a real backend change and
-  // wait for an 'audio' message to flip; everything else toggles locally and is
-  // gathered on Save.
-  // Only the main-console switch is the LIVE audio control (posts setAudio and
-  // waits for confirmation). The settings #setMic is a saved auto-enable
-  // preference and toggles locally like every other settings switch.
-  function isMicSwitch(el) { return el.id === "voiceSwitch"; }
+  // Every switch toggles locally and is gathered on Save. Microphone passthrough
+  // (#setMic) also applies at once: it posts setAudio, which the host stores as the
+  // preference as well. The host answers with the whole settings file; that answer
+  // must not undo unsaved edits elsewhere in the form, so it only drives #setMic
+  // (micEchoes, see applySettings).
+  let micEchoes = 0;
   function setSwitch(el, on) { if (el) el.setAttribute("aria-checked", on ? "true" : "false"); }
   function swOn(el) { return !!el && el.getAttribute("aria-checked") === "true"; }
 
   document.querySelectorAll(".switch").forEach((sw) => {
     function toggle() {
-      if (sw.classList.contains("busy")) return;
       const next = !swOn(sw);
-      if (isMicSwitch(sw)) {
-        sw.classList.add("busy");
-        post({ type: "setAudio", enabled: next });
-        return; // confirmed via 'audio' message
-      }
       setSwitch(sw, next);
+      if (sw.id === "setMic") { micEchoes++; post({ type: "setAudio", enabled: next }); }
     }
     sw.addEventListener("click", toggle);
     sw.addEventListener("keydown", (e) => {
@@ -413,7 +407,8 @@
       t3codeLimitResume: swOn($("setT3Park")),
     };
   }
-  $("saveBtn") && $("saveBtn").addEventListener("click", () => post({ type: "saveSettings", settings: gatherSettings() }));
+  // A save answers with the whole form, so its settings echo applies in full.
+  $("saveBtn") && $("saveBtn").addEventListener("click", () => { micEchoes = 0; post({ type: "saveSettings", settings: gatherSettings() }); });
 
   // ── "Restart to apply" for RAM + vCPUs ──────────────────────────────────────
   // The extension applies what the settings FILE says, so the button saves first (the
@@ -453,6 +448,7 @@
   $("resApplyBtn") && $("resApplyBtn").addEventListener("click", () => {
     const s = gatherSettings();
     if (resourceNumber(s.ram, false) === null && resourceNumber(s.cpu, true) === null) { renderResourcePending(); return; }
+    micEchoes = 0;
     post({ type: "saveSettings", settings: s });
     post({ type: "applyVmResources" });
   });
@@ -961,7 +957,6 @@
     if (Array.isArray(s.agents)) renderAgents(s.agents);
     if (Array.isArray(s.projects)) renderProjects(s.projects);
     if (s.usage) { renderUsage(s.usage); shownUsagePeriod = s.usagePeriod || shownUsagePeriod; }
-    if (s.audio) renderAudio(s.audio);
   }
 
   function renderAgents(agents) {
@@ -1076,32 +1071,6 @@
     text("usageTotalCost", u.totalCostText || "—");
   }
 
-  function renderAudio(a) {
-    const on = !!a.enabled;
-    // Drive only the live console switch; the settings #setMic is an independent
-    // saved preference, not a mirror of live audio state.
-    const sw = $("voiceSwitch");
-    if (sw) { setSwitch(sw, on); sw.classList.remove("busy"); }
-    const state = $("voiceState");
-    if (state) {
-      state.textContent = on ? (a.capturing ? "live · capturing" : "armed · idle") : "disabled";
-      state.style.color = on ? "var(--rain)" : "var(--dim)";
-    }
-    const sub = $("voiceSub"); if (sub) sub.hidden = !on;
-    if (a.tunnel) text("voiceTunnel", a.tunnel);
-    // Honesty: the guard patch is best-effort — the VM's Claude build may not carry the
-    // known speech gate, in which case the chat mic button stays hidden. Reflect the
-    // real result (gatePatched) rather than always claiming the button is unlocked; when
-    // gatePatched is absent (unknown), keep neutral copy that doesn't assert a patch.
-    const gate = $("voiceGate"), gnote = $("voiceGateNote"), grow = $("voiceGateRow");
-    if (gate && gnote) {
-      if (a.gatePatched === true) { gate.textContent = "chat mic button enabled"; gnote.textContent = "(remote-gate patched)"; }
-      else if (a.gatePatched === false) { gate.textContent = "chat mic gate not patched"; gnote.textContent = "(unrecognised Claude build)"; }
-      else { gate.textContent = "chat mic button"; gnote.textContent = "(gate patched if a known build)"; }
-      if (grow) grow.classList.toggle("warn", a.gatePatched === false);
-    }
-  }
-
   /** Render the config-sync strip from state.configSync (D9). Host-derived — NOT
    *  cleared by clearLiveVmData. The strip is hidden when configSync is absent
    *  (extension hasn't pushed it yet) or when no cfgDir was resolved. */
@@ -1197,19 +1166,18 @@
     if (m.type === "state") { render(m.state); return; }
     // SCOPE CHECK for the narrow live updates below. A per-instance message that names an
     // instance this panel is not showing describes another VM: a slow idle-policy PUT for
-    // A answered after the window switched to B, A's trailing "mic tunnel down", A's last
-    // forwards snapshot, A's settings file. Extension-side session gating cannot help any
+    // A answered after the window switched to B, A's last forwards snapshot, A's settings file. Extension-side session gating cannot help any
     // of them — it decides whether to POST, and these are already posted and queued behind
     // B's state push. Generic on purpose: every per-instance producer stamps `instance`
-    // (forwards, audio, settings, idlePolicy) and is covered by this one line. A message
+    // (forwards, settings, idlePolicy) and is covered by this one line. A message
     // with no `instance` (today: only `editProject`, a direct reply about the ONE host
     // config repo every instance shares) is deliberately unaffected.
     if (m.instance && shownInstance && m.instance !== shownInstance) return;
-    if (m.type === "audio") renderAudio(m);
-    // Narrow live updates, like {type:'audio'}: a tunnel coming up or an applied idle
-    // policy repaints one card without going through render(), which would read every
-    // absent field of a partial state as "no reading" and blank the rest of the panel.
-    else if (m.type === "hostAdminOffer") renderHostAdminOffer(m.offer);
+    // Narrow live updates: a forward opening or an applied idle policy repaints one card
+    // without going through render(), which would read every absent field of a partial
+    // state as "no reading" and blank the rest of the panel. Audio status messages are
+    // not shown here: microphone passthrough is a setting, and the tray shows it live.
+    if (m.type === "hostAdminOffer") renderHostAdminOffer(m.offer);
     else if (m.type === "forwards") renderForwards(m.forwards);
     else if (m.type === "children") renderChildren(m.children);
     else if (m.type === "idlePolicy") renderIdlePolicy(m.idlePolicy);
@@ -1224,6 +1192,8 @@
     // that omits a key (e.g. one the installer wrote with just the git fields)
     // must leave that toggle's HTML default alone, not force it off.
     const setSw = (id, v) => { if (typeof v === "boolean") setSwitch($(id), v); };
+    // The answer to a live mic switch: confirm the mic, keep every unsaved edit.
+    if (micEchoes > 0) { micEchoes--; setSw("setMic", s.mic); return; }
     setVal("setGitName", s.gitName); setVal("setGitEmail", s.gitEmail);
     setVal("setRam", s.ram); setVal("setDisk", s.disk); setVal("setCpu", s.cpu);
     setVal("setUbuntu", s.ubuntu);

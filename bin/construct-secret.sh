@@ -249,12 +249,44 @@ REQ_ID=""
 RESP=""
 WORK=""        # hosted mode: the private work directory under the spool
 CURL_PID=""    # hosted mode: the curl call in flight
+PENDING_FILE=""  # this request's "waiting for approval" note, while there is one
+
+# T3 Code (its server runs on this VM) shows a banner on every open client while a
+# note sits here, linking to the approval page. Notes hold no secret: names, the
+# VM, the reason, the deadline and that link. A directory of their own, readable
+# by every user, because the vault spool itself is root-only.
+PENDING_DIR="${CONSTRUCT_VAULT_PENDING_DIR:-/run/construct/vault-pending}"
+
+# Best effort: a request must never fail because the banner could not be shown.
+#   $1 op   $2 approval link ("" = approve in the Companion on the PC)
+pending_note() {
+  local op="$1" url="$2" vm tmp
+  [[ -z "${PENDING_FILE}" && -n "${REQ_ID}" ]] || return 0
+  [[ "${url}" =~ ^https?://[^[:space:]]+$ ]] || url=""
+  vm="${INSTANCE_NAME:-$(hostname -s 2>/dev/null || echo vm)}"
+  ( umask 022; install -d -m 0755 "${PENDING_DIR}" ) 2>/dev/null || return 0
+  tmp="${PENDING_DIR}/.tmp.${REQ_ID}"
+  # shellcheck disable=SC2016 # jq variables
+  ( umask 022; jq -cn --arg id "${REQ_ID}" --arg vm "$(clean_text "${vm}" 100)" --arg op "${op}" \
+      --arg reason "${R_REASON}" --argjson deadline "${REQ_DEADLINE}" --arg url "${url}" \
+      '{v: 1, id: $id, vm: $vm, op: $op, names: $ARGS.positional, reason: $reason,
+        deadline: $deadline, approveUrl: (if $url == "" then null else $url end)}' \
+      --args "${R_NAMES[@]}" >"${tmp}" ) 2>/dev/null || { rm -f -- "${tmp}"; return 0; }
+  mv -f -- "${tmp}" "${PENDING_DIR}/${REQ_ID}.json" 2>/dev/null || { rm -f -- "${tmp}"; return 0; }
+  PENDING_FILE="${PENDING_DIR}/${REQ_ID}.json"
+}
+pending_clear() {
+  [[ -n "${PENDING_FILE}" ]] || return 0
+  rm -f -- "${PENDING_FILE}" 2>/dev/null || true
+  PENDING_FILE=""
+}
 
 # Remove what this run left behind: its unpublished temp file, its request if
 # nobody claimed it, and the answer (which, for `get`, holds the secret). In
 # hosted mode: the curl in flight and the work directory (token header, request
 # body, answer).
 cleanup() {
+  pending_clear
   if [[ -n "${CURL_PID}" ]]; then kill "${CURL_PID}" 2>/dev/null || true; fi
   if [[ -n "${WORK}" ]]; then rm -rf -- "${WORK}" 2>/dev/null || true; fi
   [[ -n "${REQ_ID}" ]] || return 0
@@ -361,6 +393,7 @@ round_trip() {
     spool_round_trip "$@"
   fi
 
+  pending_clear
   # Hosted: the answer may carry the host's id for the request instead of ours.
   rc=0
   jq -e --arg id "${REQ_ID}" --arg alt "${HOST_ID:-${REQ_ID}}" \
@@ -411,8 +444,14 @@ spool_round_trip() {
   done
 
   # The answer, until the deadline (the Companion closes its popup then, too).
+  # An answer that takes more than a second means the user is being asked: put
+  # up the note (the Companion approves local VMs, so there is no link).
+  local asked_by
+  now_ms
+  asked_by=$(( NOW_MS + 1000 ))
   while [[ ! -f "${RESP}" ]]; do
     now_ms
+    if (( NOW_MS >= asked_by )); then pending_note "${op}" ""; fi
     if (( NOW_MS >= REQ_DEADLINE )); then
       [[ -f "${RESP}" ]] && break
       fail "${EXIT_DENIED}" "no answer from the user within ${wait_sec} s (the request was shown in the Construct Companion; retry, or raise --wait)"
@@ -558,6 +597,8 @@ hosted_round_trip() {
   HOST_ID="$(jq -r 'if type == "object" then (.id // "") else "" end | tostring' "${RESP}" 2>/dev/null || true)"
   [[ "${HOST_ID}" =~ ^[A-Za-z0-9._~-]{1,128}$ ]] \
     || fail "${EXIT_COMPANION}" "the host service accepted the request without a usable id"
+  # 202 = the user is being asked: the note links to the host's approval page.
+  pending_note "${op}" "$(jq -r 'if type == "object" then (.approveUrl // "") else "" end | tostring' "${RESP}" 2>/dev/null || true)"
   long_poll "${wait_sec}"
 }
 

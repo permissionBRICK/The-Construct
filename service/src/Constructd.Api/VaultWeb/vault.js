@@ -7,6 +7,8 @@
   var KEY = 'constructVaultDevice';
   var REFRESH_MS = 3000;
   var APPROVE_DELAY_MS = 1000;
+  // #request=<id>: opened from T3 Code's "waiting for approval" banner; that card is highlighted.
+  var focusId = null;
 
   function $(id) { return document.getElementById(id); }
 
@@ -163,6 +165,11 @@
   function approvalCard(item) {
     var card = el('li', 'card');
     card.setAttribute('data-id', item.id);
+    if (item.id === focusId) {
+      card.classList.add('focus');
+      focusId = null;
+      setTimeout(function () { card.scrollIntoView({ block: 'center' }); }, 0);
+    }
     card.appendChild(el('h3', null, item.title));
     var meta = 'VM ' + item.vm + (item.source ? ' · ' + item.source : '') + ' · answer by ' + time(item.deadline);
     card.appendChild(el('p', 'meta', meta));
@@ -237,6 +244,8 @@
   }
 
   function index() {
+    focusId = new URLSearchParams(location.hash.replace(/^#/, '')).get('request');
+    if (location.hash) history.replaceState(null, '', location.pathname + location.search);
     if (!readToken()) { unpaired(); return; }
     api('vault/device').then(function (response) {
       if (response.status === 401) { unpaired(); return null; }

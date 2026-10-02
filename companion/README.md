@@ -106,10 +106,19 @@ hidden. Enrolled hosts are available even before a VM is registered.
 The key vault (`Core/Vault`, [docs](../docs/key-vault.md)) is one `VaultService` shared by all
 instances. Each online local instance (no host service) runs a `VaultBroker`, an SSH watch on the
 guest spool `/run/construct/vault`. `VaultRuntimeService` expires leases and starts scrubs. The document is
-DPAPI-protected through `IDataProtection` and lives outside the watched state root. Values never
-reach the dispatcher, IPC routes or webviews: the native `VaultWindow` and the `IPrompts`
-approval and file-decision dialogs are the only UI. The guest scripts in
+DPAPI-protected through `IDataProtection` and lives outside the watched state root. The guest scripts in
 `Core/Vault/GuestScripts` are Companion-only and are not part of the parity fixtures.
+
+The Key Vault window (`VaultWindow`) shows the shared page `media/vault.html` in the control panel's
+design. `VaultView` (Core) decides everything: it builds the page state (names, descriptions,
+usernames, counts, lease, host and activity metadata) and validates and runs the page's
+`vault.<action>` requests. Those requests are handled in process only: the window holds no
+`IMessageSink`, and `MessageDispatcher` refuses them like any unknown message, so nothing reachable
+over the local HTTP API can list or change the vault. The panel's **Key vault** card posts the
+`openVault` command, which only opens the window. Values, usernames on copy, the vault key, device
+tokens and pairing links never enter a webview: `IVaultWindow` (add/edit dialog, clipboard cleared
+after 30 seconds, the pairing QR code) and the `IPrompts` key, approval and file-decision dialogs are
+the only places they appear.
 
 Hosted VMs use their host's vault ([contract](../docs/plans/key-vault-hosted.md)). The document also
 holds the vault key K, per-entry `updatedAt`/`updatedBy`, 30-day tombstones and per-host sync state.
@@ -119,7 +128,7 @@ holds the vault key K, per-entry `updatedAt`/`updatedBy`, 30-day tombstones and 
 starts it, and polls host approvals (3 s) and scrub file decisions (15 s) while an instance of that host
 is online, through the same one-dialog gate as local requests. `VaultHostDirectory` supplies hosts,
 instances, host administration's cached whoami detection and T3 pairing. The window's **Hosts** tab
-(mode, devices, phone pairing with a QR code from `QrCode`, key export/import) only forwards to `VaultHosts`.
+(mode, devices, phone pairing with a QR code from `QrCode`, key export/import) goes through `VaultView` to `VaultHosts`.
 
 On tray quit, session end or `/v1/quit`, the app stops the Host, closes tunnels,
 releases owned claims and removes the endpoint. A secondary process forwards validated
@@ -215,6 +224,7 @@ views and runtime messages use IPC). The limitations of the implemented rows are
 | command | `openHostAdmin` | implemented |
 | command | `openProject` | implemented |
 | command | `openProjectFolder` | implemented |
+| command | `openVault` | implemented |
 | command | `publishConfigProfiles` | implemented |
 | command | `pushConfigUpstream` | implemented |
 | command | `redownload` | implemented |

@@ -2351,14 +2351,13 @@ says what will actually happen.
   newest-wins drops the older stream — one physical mic anyway), and a second
   physical client machine attached to the same VM would reach the first machine's
   mic (Construct is a per-user, per-host VM).
-- **Mic passthrough = ONE persistent setting.** Both switches — the console
-  `#voiceSwitch` and the settings `#setMic` — drive the SAME `micPassthrough` key in
-  the ACTIVE INSTANCE's own state (see "Per-instance state"). Toggling the console switch
-  persists it (`persistMicPreference` → `instancestate.saveSettings(activeStore(), {mic})`,
-  merge-only) and `broadcastSettings` keeps `#setMic` in
-  sync; saving the settings form reconciles live audio immediately (arm if newly on,
-  disarm if newly off) and `broadcastAudio` keeps `#voiceSwitch` in sync. So "enable on
-  the main page" sticks. `activate()` → `maybeAutoEnableAudio` reads `micPassthrough` and,
+- **Mic passthrough = ONE persistent setting.** The settings switch `#setMic` drives the
+  `micPassthrough` key in the ACTIVE INSTANCE's own state (see "Per-instance state"). Toggling
+  it posts `setAudio` at once, which persists it (`persistMicPreference` →
+  `instancestate.saveSettings(activeStore(), {mic})`, merge-only) and arms or disarms live
+  audio; `broadcastSettings` keeps every open panel's `#setMic` in sync (the panel applies that
+  echo to `#setMic` only, so unsaved edits elsewhere in the form survive). Saving the settings
+  form reconciles live audio the same way. So "switch it on" sticks. `activate()` → `maybeAutoEnableAudio` reads `micPassthrough` and,
   if on AND the VM is reachable, arms at startup via `enableAudio(..., {auto:true})` —
   FULLY SILENT (no notification progress, no toasts; the switch reflects the result, and a
   down VM shouldn't nag on every launch — each window arms its own range port, see the

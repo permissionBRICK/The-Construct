@@ -36,6 +36,8 @@ public sealed class VaultGuestScriptTests
             EnvironmentOverrides = new Dictionary<string, string?>
             {
                 ["CONSTRUCT_VAULT_SPOOL"] = spool, ["CONSTRUCT_VAULT_PICKUP_SEC"] = "15",
+                // The "waiting for approval" notes stay in the test's tree, never this VM's /run.
+                ["CONSTRUCT_VAULT_PENDING_DIR"] = Path.Combine(Path.GetDirectoryName(spool)!, "pending"),
                 ["CONSTRUCT_SERVICE_URL"] = null, ["CONFIG_FILE"] = Path.Combine(spool, "no-config.env")
             }
         };

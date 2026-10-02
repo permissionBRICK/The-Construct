@@ -204,4 +204,7 @@ accept the device scheme; the pages themselves are anonymous static files.
 1. Host vault and guest hosted mode: store, crypto, unlock, requests, leases, approvals through
    the Companion, sync, guest scrubs.
 2. Phone: device tokens, pages, QR code in the Companion.
-3. Optional: a T3 Code banner that links to the approval page.
+3. A T3 Code banner (in the T3 builds repository) that links to the approval page. The CLI writes
+   `/run/construct/vault-pending/<id>.json` while the user is being asked (see the user guide's wire
+   contract), the host's `202` reply carries `approveUrl` (`<vault web base>/vault/#request=<id>`),
+   and the approval page highlights that request.

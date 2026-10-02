@@ -1,115 +1,153 @@
-using System.Globalization;
+using System.Text.Json;
 using Construct.Companion.Core.Abstractions;
-using Construct.Companion.Core.Remote;
+using Construct.Companion.Core.Desktop;
+using Construct.Companion.Core.Ipc;
 using Construct.Companion.Core.Vault;
+using Construct.Companion.Host.Ipc;
+using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.WinForms;
 namespace Construct.Companion;
 
-// The Key Vault: secrets (values stay hidden unless copied or edited), which VM holds what until when
-// (here and on hosts), scrubs still waiting for their VM, what the vault did, and the hosts it syncs
-// with. Every decision lives in VaultService and VaultHosts; this window only renders them and forwards
-// clicks. Closing hides it.
-internal sealed class VaultWindow : Form
+// The Key Vault: media/vault.html in the control panel's design. Every decision lives in VaultView;
+// this window only forwards. Its page talks to VaultView in process and to nothing else: the window
+// holds no message sink, so no request of the page reaches the dispatcher, IPC or HTTP. Values stay
+// native: the add/edit dialog, the clipboard (cleared again after 30 seconds) and the pairing code
+// below are the only places a value, username copy or pairing link exists. Closing hides it.
+internal sealed class VaultWindow : Form, IVaultWindow
 {
+    private const string View = "vault";
+    private readonly WebView2 web = new() { Dock = DockStyle.Fill };
+    private readonly Platform platform;
+    private readonly IpcSettings settings;
     private readonly VaultService vault;
     private readonly VaultHosts hosts;
-    private readonly ListView secrets = List(("Name", 170), ("Username", 140), ("Description", 330), ("Held by VMs", 90), ("Updated", 130));
-    private readonly ListView leases = List(("VM", 140), ("Host", 130), ("Secret", 170), ("Uses left", 80), ("Until", 130), ("Reason", 260), ("Granted", 80));
-    private readonly ListView hostList = List(("Host", 170), ("Vault", 130), ("Last sync", 130), ("VMs online", 80), ("Status", 420));
-    private readonly ListView devices = List(("Paired device", 220), ("Paired", 130), ("Last used", 130));
-    private readonly ListView pending = List(("VM", 140), ("Secret", 170), ("Scrub due", 130));
-    private readonly ListView activity = List(("Time", 130), ("VM", 140), ("Event", 600));
-    private readonly Label problem = new() { AutoSize = true, ForeColor = Color.Firebrick, Visible = false, Padding = new(0, 0, 0, 6) };
-    private readonly Button reset = new() { Text = "Start a new vault…", AutoSize = true, Visible = false };
-    private readonly System.Windows.Forms.Timer clock = new() { Interval = 30000 };
-    private readonly System.Windows.Forms.Timer clipboardClear = new() { Interval = 30000 };
+    private readonly VaultView view;
+    private readonly System.Windows.Forms.Timer clock = new() { Interval = (int)VaultView.RefreshInterval.TotalMilliseconds };
+    private readonly System.Windows.Forms.Timer clipboardClear = new() { Interval = (int)VaultView.ClipboardLifetime.TotalMilliseconds };
     private readonly CancellationTokenSource lifetime = new();
     private string? copied;
-    private bool exiting;
+    private string? paletteScriptId;
+    private bool darkPalette, initialized, ready, exiting;
 
-    public VaultWindow(VaultService vault, VaultHosts hosts)
+    public VaultWindow(Platform platform, IpcSettings settings, IPrompts prompts, VaultService vault, VaultHosts hosts)
     {
-        this.vault = vault; this.hosts = hosts;
-        Text = "Construct Key Vault"; AutoScaleMode = AutoScaleMode.Dpi; Size = new(1000, 640); MinimumSize = new(640, 420); StartPosition = FormStartPosition.CenterScreen;
-        var tabs = new TabControl { Dock = DockStyle.Fill };
-        tabs.TabPages.Add(Page("Secrets", secrets, problem, reset,
-            Action("Add…", Add), Action("Edit…", Edit), Action("Delete", Delete), Action("Copy secret", () => Copy(false)), Action("Copy username", () => Copy(true))));
-        tabs.TabPages.Add(Page("Access", Split(leases, pending), null, null,
-            Action("Revoke access", Revoke), Action("Discard pending scrubs for VM", Discard)));
-        tabs.TabPages.Add(Page("Activity", activity, null, null));
-        tabs.TabPages.Add(Page("Hosts", Split(hostList, devices, "Paired devices of the selected host (phones that approve requests)"), null, null,
-            Action("Sync now", () => Run(async ct => { await hosts.SyncAsync(ct); return null; })),
-            Action("Always available", () => SetMode(VaultSync.Available)), Action("Locked to my PC", () => SetMode(VaultSync.Locked)),
-            Action("Pair a phone…", Pair), Action("Revoke device", RevokeDevice),
-            Action("Show vault key…", () => Run(hosts.ShowKeyAsync)), Action("Import vault key…", () => Run(hosts.ImportKeyAsync))));
-        Controls.Add(tabs);
-        secrets.DoubleClick += (_, _) => Edit();
-        hostList.MultiSelect = devices.MultiSelect = false;
-        hostList.SelectedIndexChanged += (_, _) => FillDevices(hosts.Views());
-        reset.Click += (_, _) => Reset();
+        this.platform = platform; this.settings = settings; this.vault = vault; this.hosts = hosts;
+        view = new(vault, hosts, prompts, this, platform.Clock);
+        Text = WebViewDocument.Title(View); AutoScaleMode = AutoScaleMode.Dpi; MinimumSize = new(560, 420); StartPosition = FormStartPosition.Manual;
+        var saved = settings.Bounds(View) ?? new WindowBounds(120, 100, 1000, 760);
+        var work = Screen.FromRectangle(new(saved.X, saved.Y, saved.Width, saved.Height)).WorkingArea;
+        var bounds = WindowPlacement.Clamp(saved, new(work.X, work.Y, work.Width, work.Height)); Bounds = new(bounds.X, bounds.Y, bounds.Width, bounds.Height);
+        Controls.Add(web);
         vault.Changed += OnChanged; hosts.Changed += OnChanged;
-        clock.Tick += (_, _) => Reload(); clock.Start();
+        clock.Tick += (_, _) => PushState(); clock.Start();
         clipboardClear.Tick += (_, _) => ClearClipboard();
-        FormClosing += (_, e) => { if (!exiting && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Hide(); } };
-        Reload();
+        Shown += async (_, _) => { if (!initialized) { initialized = true; await InitializeAsync(); } };
+        FormClosing += (_, e) => { if (!exiting && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; SaveBounds(); Hide(); } };
+        ResizeEnd += (_, _) => SaveBounds();
     }
     public void Present()
     {
-        if (!Visible) Show(); if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal; Reload(); Activate();
-        Run(async ct => { await hosts.RefreshAsync(ct); return null; });
+        if (!Visible) Show(); if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal; Activate();
+        PushState();
+        _ = RunAsync(new("refresh")); // the hosts' devices and leases, read fresh whenever the window opens
     }
-    public void Shutdown() { exiting = true; lifetime.Cancel(); Close(); }
+    public void Shutdown() { exiting = true; SaveBounds(); lifetime.Cancel(); Close(); }
 
-    private void OnChanged() { if (IsHandleCreated && !IsDisposed) BeginInvoke(Reload); }
-    private void Reload()
+    private async Task InitializeAsync()
     {
-        var unavailable = vault.Unavailable;
-        problem.Text = unavailable is null ? "" : unavailable + " VMs get an error until you start a new vault; the unreadable file is kept next to it.";
-        problem.Visible = reset.Visible = unavailable is not null;
-        Fill(secrets, vault.Secrets().Select(s => Row(s.Name, s.Name, s.Username, s.Description, s.ActiveLeases == 0 ? "" : s.ActiveLeases.ToString(CultureInfo.CurrentCulture), Time(s.UpdatedAt))));
-        Fill(leases, vault.Leases().Select(l => Row("local\n" + l.Id, l.Instance, "this PC", l.Name, Uses(l.UsesLeft), Time(l.ExpiresAt), l.Reason, l.Origin))
-            .Concat(hosts.Leases().Select(h => Row($"host\n{h.Slug}\n{h.Lease.Id}", h.Lease.Vm, h.Host, h.Lease.Name, Uses(h.Lease.UsesLeft), Time(h.Lease.ExpiresAt), h.Lease.Reason, h.Lease.Origin))));
-        Fill(pending, vault.PendingCleanups().Select(c => Row(c.Instance, c.Instance, c.Name, Time(c.DueAt))));
-        Fill(activity, vault.Activity().Reverse().Select(a =>
-        { var row = Row("", Time(a.At), a.Host.Length > 0 ? (a.Instance.Length > 0 ? $"{a.Instance} ({a.Host})" : a.Host) : a.Instance, a.Text); if (a.Warning) row.ForeColor = Color.DarkOrange; return row; }));
-        var views = hosts.Views();
-        Fill(hostList, views.Select(h =>
+        try
         {
-            var row = Row(h.Slug, h.Host, h.State.Mode switch { VaultSync.Available => "Always available", VaultSync.Locked => "Locked to my PC", _ => "—" },
-                h.State.LastSyncAt is { } at ? Time(at) : "never", h.Online.ToString(CultureInfo.CurrentCulture),
-                h.State.NeedsKey ? "Needs the vault key: Import vault key…" : h.State.LastError.Length > 0 ? h.State.LastError : h.State.LastSyncAt is null ? "Not synced yet" : "In sync");
-            if (h.State.NeedsKey || h.State.LastError.Length > 0) row.ForeColor = Color.DarkOrange;
-            return row;
-        }));
-        FillDevices(views);
+            await WebViewSurface.InitializeAsync(web, platform, View, () => this);
+            await ApplyPaletteAsync();
+            Microsoft.Win32.SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
+            web.CoreWebView2.WebMessageReceived += OnMessage;
+            web.CoreWebView2.NavigationCompleted += (_, e) => { ready = e.IsSuccess; PushState(); };
+            ReloadTheme();
+        }
+        catch (Exception e)
+        {
+            // Without the WebView2 runtime the window cannot work at all; say so in place of the control.
+            platform.Log.Write(DesktopLogEvent.WindowFailed, e);
+            Controls.Clear(); Controls.Add(new Label { Dock = DockStyle.Fill, Text = "The Key Vault window could not start. Check that Microsoft Edge WebView2 Runtime is installed.", Padding = new Padding(20) });
+            web.Dispose();
+        }
     }
-    private void FillDevices(IReadOnlyList<VaultHostView> views) => Fill(devices, (views.FirstOrDefault(h => h.Slug == Selected(hostList))?.Devices ?? [])
-        .Select(d => Row(d.Id, d.Label, d.CreatedAt is { } c ? Time(c) : "", d.LastUsedAt is { } u ? Time(u) : "never")));
-    private static string Uses(int? left) => left?.ToString(CultureInfo.CurrentCulture) ?? "unlimited";
+    public void ReloadTheme()
+    {
+        if (web.CoreWebView2 is null || web.IsDisposed) return;
+        var document = WebViewDocument.Render(WebViewSurface.ReadMedia(platform, "vault.html"), "vault.js", settings.Read().UiTheme, WebViewSurface.NewNonce());
+        ready = false; WebViewSurface.Load(web.CoreWebView2, platform, View, document);
+    }
+    private async Task ApplyPaletteAsync()
+    {
+        darkPalette = platform.IsDarkAppTheme;
+        paletteScriptId = await WebViewSurface.ApplyPaletteAsync(web.CoreWebView2, darkPalette, paletteScriptId);
+    }
+    private async void OnUserPreferenceChanged(object sender, Microsoft.Win32.UserPreferenceChangedEventArgs e)
+    {
+        if (e.Category != Microsoft.Win32.UserPreferenceCategory.General || IsDisposed || web.CoreWebView2 is null || darkPalette == platform.IsDarkAppTheme) return;
+        try { await ApplyPaletteAsync(); ReloadTheme(); }
+        catch (Exception ex) { platform.Log.Write(DesktopLogEvent.WindowFailed, ex); }
+    }
 
-    private void Add() => OpenEditor(null);
-    private void Edit() { if (Selected(secrets) is { } name) OpenEditor(name); }
-    private void OpenEditor(string? original)
+    // ── page ↔ VaultView ───────────────────────────────────────────────────────
+    private async void OnMessage(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
     {
-        var current = original is null ? null : vault.Secrets().FirstOrDefault(s => s.Name == original);
-        if (original is not null && current is null) return;
-        using var editor = new SecretEditor(current, input => { try { vault.Save(input, original); return null; } catch (ArgumentException e) { return e.Message; } });
+        if (e.Source != WebViewDocument.DocumentUrl(View)) return;
+        VaultCommand command;
+        try { using var message = JsonDocument.Parse(e.WebMessageAsJson); command = VaultView.Parse(message.RootElement); }
+        catch (Exception ex) when (ex is JsonException or ArgumentException)
+        {
+            platform.Log.Write(DesktopLogEvent.BridgeFailed, ex);
+            Post(VaultView.DoneMessage("", new("The key vault did not understand this request.", true)));
+            return;
+        }
+        await RunAsync(command);
+    }
+    private async Task RunAsync(VaultCommand command)
+    {
+        try
+        {
+            var notice = await view.ExecuteAsync(command, lifetime.Token);
+            if (IsDisposed) return;
+            PushState(); Post(VaultView.DoneMessage(command.Action, notice));
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { platform.Log.Write(DesktopLogEvent.BridgeFailed, ex); } // the window must outlive a failed request
+    }
+    private void OnChanged() { if (IsHandleCreated && !IsDisposed) BeginInvoke(PushState); }
+    // A hidden window is brought up to date by Present.
+    private void PushState() { if (Visible) Post(view.StateMessage()); }
+    private void Post(System.Text.Json.Nodes.JsonObject message)
+    {
+        if (!ready || IsDisposed || web.IsDisposed || web.CoreWebView2 is null) return;
+        web.CoreWebView2.PostWebMessageAsJson(message.ToJsonString(IpcJson.Options));
+    }
+    private void SaveBounds()
+    {
+        if (WindowState != FormWindowState.Normal) return;
+        if (settings.TrySaveBounds(View, new(Left, Top, Width, Height)) is { } failure) platform.Log.Write(DesktopLogEvent.SettingsFailed, failure);
+    }
+
+    // ── IVaultWindow: the native side ──────────────────────────────────────────
+    public Task EditSecretAsync(VaultSecretView? existing, Func<VaultSecretInput, string?> save, CancellationToken cancellationToken) => this.InvokeAsync(() =>
+    {
+        using var editor = new SecretEditor(existing, save);
         editor.ShowDialog(this);
-    }
-    private void Delete()
+    }, cancellationToken);
+    public Task<bool> CopyAsync(Secret text, bool sensitive, CancellationToken cancellationToken) => this.InvokeAsync(() =>
     {
-        if (Selected(secrets) is not { } name) return;
-        if (MessageBox.Show(this, $"Delete “{name}” from the key vault? VMs that hold it lose access and are scrubbed of it.", Text, MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) == DialogResult.OK)
-            vault.Delete(name);
-    }
-    private void Copy(bool username)
+        var value = text.Reveal();
+        try { Clipboard.SetText(value); } catch (System.Runtime.InteropServices.ExternalException) { return false; }
+        // A copied value leaves the clipboard again after 30 seconds unless something replaced it.
+        if (sensitive) { copied = value; clipboardClear.Stop(); clipboardClear.Start(); }
+        return true;
+    }, cancellationToken);
+    public Task ShowPairingAsync(VaultPairing pairing, CancellationToken cancellationToken) => this.InvokeAsync(() =>
     {
-        if (Selected(secrets) is not { } name) return;
-        var text = username ? vault.Username(name) : vault.Reveal(name)?.Reveal();
-        if (string.IsNullOrEmpty(text)) return;
-        try { Clipboard.SetText(text); } catch (System.Runtime.InteropServices.ExternalException) { MessageBox.Show(this, "The clipboard is unavailable.", Text); return; }
-        // A copied secret leaves the clipboard again after 30 seconds unless something replaced it.
-        if (!username) { copied = text; clipboardClear.Stop(); clipboardClear.Start(); }
-    }
+        using var dialog = new PairingDialog(pairing);
+        dialog.ShowDialog(this);
+    }, cancellationToken);
     private void ClearClipboard()
     {
         clipboardClear.Stop();
@@ -117,105 +155,14 @@ internal sealed class VaultWindow : Form
         catch (System.Runtime.InteropServices.ExternalException) { }
         copied = null;
     }
-    private void Revoke()
-    {
-        foreach (var tag in leases.SelectedItems.Cast<ListViewItem>().Select(i => ((string)i.Tag!).Split('\n')).ToArray())
-            if (tag[0] == "local") vault.Revoke(tag[1]);
-            else Run(ct => hosts.RevokeLeaseAsync(tag[1], tag[2], ct));
-    }
-    // Hosts tab: every action runs in Core; this only asks for confirmation and shows the outcome.
-    private void SetMode(string mode)
-    {
-        if (Selected(hostList) is not { } slug) { MessageBox.Show(this, "Select a host first.", Text); return; }
-        var question = mode == VaultSync.Locked
-            ? "Lock the vault on this host to your PC? It then opens only for VMs this PC starts or connects to, and stays open until that VM stops. VMs started without this PC cannot read secrets."
-            : "Make the vault on this host always available? The host keeps the vault key, so your VMs can use secrets (with your approval) while this PC is off.";
-        if (MessageBox.Show(this, question, Text, MessageBoxButtons.OKCancel, MessageBoxIcon.Question) == DialogResult.OK) Run(ct => hosts.SetModeAsync(slug, mode, ct));
-    }
-    private void RevokeDevice()
-    {
-        if (Selected(hostList) is not { } slug || Selected(devices) is not { } id) { MessageBox.Show(this, "Select a host and one of its paired devices.", Text); return; }
-        if (MessageBox.Show(this, "Revoke this device? It can no longer approve requests; pair it again to restore it.", Text, MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) == DialogResult.OK)
-            Run(ct => hosts.RevokeDeviceAsync(slug, id, ct));
-    }
-    private void Pair()
-    {
-        if (Selected(hostList) is not { } slug) { MessageBox.Show(this, "Select the host whose approvals the phone should answer.", Text); return; }
-        Run(async ct =>
-        {
-            if (await hosts.PairPhoneAsync(slug, ct) is not { } pairing) return null;
-            using var dialog = new PairingDialog(pairing);
-            dialog.ShowDialog(this);
-            return null;
-        });
-    }
-    private async void Run(Func<CancellationToken, Task<string?>> action)
-    {
-        try { if (await action(lifetime.Token) is { } problem && !IsDisposed) MessageBox.Show(this, problem, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning); }
-        catch (OperationCanceledException) { }
-        catch (Exception e)
-        {
-            // Host and pairing errors are written for the user and never carry a secret; anything else stays generic.
-            if (!IsDisposed) MessageBox.Show(this, e is RemoteApiException or InvalidOperationException ? e.Message : "The key vault could not complete this.", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
-        }
-        if (!IsDisposed) Reload();
-    }
-    private void Discard()
-    {
-        if (Selected(pending) is not { } instance) return;
-        if (MessageBox.Show(this, $"Forget the pending scrubs for “{instance}”? Copies of those secrets may stay on that VM.", Text, MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) == DialogResult.OK)
-            vault.DiscardCleanups(instance);
-    }
-    private void Reset()
-    {
-        if (MessageBox.Show(this, "Start a new, empty key vault? The unreadable file is renamed and kept, so it can still be restored on the PC and account that created it.", Text,
-            MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) return;
-        var moved = vault.ResetUnreadable();
-        MessageBox.Show(this, "The old vault file was kept as:\n" + moved, Text);
-    }
-
-    private static string Time(DateTimeOffset at) => TimeZoneInfo.ConvertTime(at, TimeZoneInfo.Local).ToString("g", CultureInfo.CurrentCulture);
-    private static string? Selected(ListView list) => list.SelectedItems.Count == 0 ? null : list.SelectedItems[0].Tag as string;
-    private static ListViewItem Row(string tag, params string[] cells)
-    { var row = new ListViewItem(cells[0]) { Tag = tag }; foreach (var cell in cells.Skip(1)) row.SubItems.Add(cell); return row; }
-    private static void Fill(ListView list, IEnumerable<ListViewItem> rows)
-    {
-        var selected = list.SelectedItems.Cast<ListViewItem>().Select(i => i.Tag as string).ToHashSet();
-        list.BeginUpdate(); list.Items.Clear();
-        foreach (var row in rows) { list.Items.Add(row); if (selected.Contains(row.Tag as string)) row.Selected = true; }
-        list.EndUpdate();
-    }
-    private static ListView List(params (string Title, int Width)[] columns)
-    {
-        var list = new ListView { Dock = DockStyle.Fill, View = View.Details, FullRowSelect = true, HideSelection = false, MultiSelect = true };
-        foreach (var (title, width) in columns) list.Columns.Add(title, width);
-        return list;
-    }
-    private static Button Action(string text, Action click) { var button = new Button { Text = text, AutoSize = true }; button.Click += (_, _) => click(); return button; }
-    private static Control Split(ListView top, ListView bottom, string caption = "Scrubs waiting for their VM to come online")
-    {
-        var split = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, SplitterDistance = 260 };
-        split.Panel1.Controls.Add(top); split.Panel2.Controls.Add(bottom);
-        split.Panel2.Controls.Add(new Label { Text = caption, Dock = DockStyle.Top, AutoSize = true, Padding = new(0, 6, 0, 4) });
-        return split;
-    }
-    private static TabPage Page(string title, Control content, Label? note, Button? fix, params Button[] actions)
-    {
-        var page = new TabPage(title) { Padding = new(8) };
-        var bar = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = true, Padding = new(0, 6, 0, 0) };
-        bar.Controls.AddRange(actions);
-        page.Controls.Add(content); page.Controls.Add(bar);
-        if (note is not null)
-        {
-            var top = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, FlowDirection = FlowDirection.TopDown };
-            top.Controls.Add(note); if (fix is not null) top.Controls.Add(fix);
-            page.Controls.Add(top);
-        }
-        return page;
-    }
     protected override void Dispose(bool disposing)
     {
-        if (disposing) { vault.Changed -= OnChanged; hosts.Changed -= OnChanged; lifetime.Cancel(); lifetime.Dispose(); clock.Dispose(); clipboardClear.Dispose(); }
+        if (disposing)
+        {
+            Microsoft.Win32.SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
+            vault.Changed -= OnChanged; hosts.Changed -= OnChanged;
+            lifetime.Cancel(); lifetime.Dispose(); clock.Dispose(); clipboardClear.Dispose(); web.Dispose();
+        }
         base.Dispose(disposing);
     }
 
@@ -281,7 +228,7 @@ internal sealed class VaultWindow : Form
         {
             editing = existing is not null;
             Text = editing ? "Edit secret" : "Add secret"; AutoScaleMode = AutoScaleMode.Dpi; FormBorderStyle = FormBorderStyle.FixedDialog; MinimizeBox = MaximizeBox = false;
-            StartPosition = FormStartPosition.CenterParent; AutoSize = true; AutoSizeMode = AutoSizeMode.GrowAndShrink; Padding = new(12);
+            StartPosition = FormStartPosition.CenterParent; AutoSize = true; AutoSizeMode = AutoSizeMode.GrowAndShrink; Padding = new(12); ShowInTaskbar = false;
             var grid = new TableLayoutPanel { AutoSize = true, ColumnCount = 2, Dock = DockStyle.Fill };
             void Field(string label, Control control) { grid.Controls.Add(new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left, Margin = new(0, 6, 8, 0) }); grid.Controls.Add(control); }
             Field("Name", name); Field("Description", description); Field("Username", username);
@@ -310,6 +257,7 @@ internal sealed class VaultWindow : Form
                 var error = save(new(name.Text.Trim(), description.Text, username.Text.Trim(), changed && current.Length > 0 ? new Secret(current) : null));
                 if (error is null) { DialogResult = DialogResult.OK; Close(); } else MessageBox.Show(this, error, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             };
+            FormClosed += (_, _) => { syncing = true; value.Clear(); current = ""; };
             Render();
         }
         // Multi-line values (keys, certificates) are only editable while shown: a masked single-line box would drop the line breaks.

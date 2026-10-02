@@ -1,0 +1,103 @@
+/* Key Vault page (Construct Companion) — layered AFTER panel.css and the design theme, like
+   hostadmin.css: every token and component (.module, .mhead, .seclabel, .row, .btn, .tag, .pill,
+   .switch, .utab, .cost-note) is the panel's own, so the page follows the chosen design. This file
+   only lays out the lists, the tab strip and the banners, in theme tokens. */
+.vault-shell { max-width: 1080px; }
+/* The `hidden` attribute must win over every display rule below. */
+.vault-shell [hidden] { display: none !important; }
+
+/* Unreadable vault: the one state that blocks everything else. */
+.v-banner {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px 18px;
+  margin: 0 0 14px; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--crit) 55%, transparent);
+  border-radius: 7px; background: color-mix(in srgb, var(--crit) 8%, transparent);
+}
+.v-banner-text { flex: 1 1 420px; font-family: var(--sans); font-size: 12.5px; line-height: 1.55; color: var(--text); }
+.v-banner-text b { color: var(--crit); }
+
+/* The outcome of the last request: a confirmation fades, an error stays. */
+.v-notice {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin: 0 0 14px;
+  padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: 6px;
+  font-family: var(--sans); font-size: 12.5px; color: var(--text); background: color-mix(in srgb, var(--rain) 5%, transparent);
+}
+.v-notice.error { border-color: color-mix(in srgb, var(--crit) 55%, transparent); color: var(--crit); background: color-mix(in srgb, var(--crit) 7%, transparent); }
+.v-notice-x { flex: none; background: transparent; border: 0; color: var(--dim); font-size: 16px; line-height: 1; cursor: pointer; padding: 0 2px; }
+.v-notice-x:hover { color: var(--text); }
+
+/* Summary strip and tabs */
+.v-strip { margin-bottom: 14px; }
+.pill.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+#vPillAccess .dot { background: var(--faint); box-shadow: none; }
+#vPillAccess.v-live .dot { background: var(--rain); box-shadow: 0 0 7px var(--rain); }
+.v-tabs { display: flex; width: max-content; max-width: 100%; margin: 0 0 14px; }
+.v-tabs .utab { font-size: 12px; padding: 6px 14px; }
+.v-count { margin-left: 6px; font-variant-numeric: tabular-nums; opacity: 0.7; }
+.v-count:empty { display: none; }
+.v-tab > .module + .module { margin-top: 14px; }
+
+.v-lead { margin: -2px 0 12px; max-width: 78ch; font-family: var(--sans); font-size: 12px; line-height: 1.55; color: var(--dim); }
+.v-code { font-family: var(--mono); color: var(--text); }
+.v-empty { margin: 4px 0 2px; }
+.v-filter { width: 230px; padding: 5px 9px; font-size: 12px; }
+
+/* Lists: what it is on the left, what you can do on the right; actions wrap below on narrow windows. */
+.v-list { display: flex; flex-direction: column; }
+.v-item { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 18px; padding: 12px 0; border-top: 1px solid var(--line); }
+.v-item:first-child { border-top: 0; padding-top: 4px; }
+.v-main { flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.v-line { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; }
+.v-name { font-family: var(--mono); font-weight: 600; color: var(--title); overflow-wrap: anywhere; }
+.v-chipname { font-weight: 400; font-size: 12px; padding: 0 7px; border: 1px solid var(--line); border-radius: 4px; }
+.v-vm { font-family: var(--mono); color: var(--rain); overflow-wrap: anywhere; }
+.v-holds { font-size: 11px; color: var(--faint); }
+.v-user { font-family: var(--mono); font-size: 11.5px; color: var(--text); }
+.v-user .v-k { margin-right: 5px; color: var(--faint); }
+.v-desc { font-family: var(--sans); font-size: 12.5px; line-height: 1.5; color: var(--text); overflow-wrap: anywhere; }
+.v-desc.none { color: var(--warn); }
+.v-meta { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.v-reason { font-family: var(--sans); font-size: 12px; color: var(--dim); overflow-wrap: anywhere; }
+.v-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.v-actions.v-start { justify-content: flex-start; }
+.v-actions .btn { padding: 4px 10px; font-size: 11.5px; }
+.btn.v-danger:hover { color: var(--crit); }
+.btn.v-busy { cursor: wait; }
+
+/* Activity: a timeline grouped by day. */
+.v-timeline { list-style: none; margin: 0; padding: 0; }
+.v-day { margin: 16px 0 2px; font-size: 10.5px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--dim); }
+.v-day:first-child { margin-top: 0; }
+.v-event { display: grid; grid-template-columns: 54px minmax(90px, 180px) 1fr; gap: 14px; align-items: baseline; padding: 7px 0; border-top: 1px solid var(--line); font-size: 12px; }
+.v-day + .v-event { border-top: 0; }
+.v-when { font-family: var(--mono); font-size: 11.5px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.v-where { font-family: var(--mono); font-size: 11.5px; color: var(--text); overflow-wrap: anywhere; }
+.v-what { font-family: var(--sans); line-height: 1.5; color: var(--text); overflow-wrap: anywhere; }
+.v-event.warn .v-what { color: var(--warn); }
+.v-event.warn .v-when { color: var(--warn); }
+
+/* Hosts: one card per host, then the vault key. */
+.v-hostbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin: 0 0 14px; }
+.v-hostbar .v-lead { margin: 0; }
+.v-hosts { display: grid; grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); gap: 14px; margin-bottom: 14px; }
+.v-hosts:empty { display: none; }
+.v-host .mhead .seclabel { overflow-wrap: anywhere; }
+.v-problem { margin: 8px 0 0; padding: 7px 10px; border-left: 2px solid var(--warn); font-family: var(--sans); font-size: 12px; line-height: 1.5; color: var(--warn); background: color-mix(in srgb, var(--warn) 7%, transparent); }
+.v-mode { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.v-mode .label { font-size: 13px; }
+.v-mode-note { margin: 6px 0 0; font-family: var(--sans); font-size: 11.5px; line-height: 1.5; color: var(--dim); }
+.v-sub { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); }
+.v-subhead { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 4px; font-size: 10.5px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--dim); }
+.v-subhead .btn { letter-spacing: 0.3px; text-transform: none; padding: 3px 9px; font-size: 11.5px; }
+.v-device { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; padding: 7px 0; border-top: 1px solid var(--line); font-size: 12px; }
+.v-subhead + .v-device { border-top: 0; }
+.v-device .v-label { flex: 1 1 120px; color: var(--title); overflow-wrap: anywhere; }
+.v-device .btn { padding: 3px 9px; font-size: 11.5px; }
+
+@media (max-width: 620px) {
+  .v-event { grid-template-columns: 54px 1fr; }
+  .v-event .v-what { grid-column: 1 / -1; }
+  .v-hosts { grid-template-columns: 1fr; }
+  .v-hostbar { flex-direction: column; }
+  .v-filter { width: 100%; max-width: none; }
+  .v-actions { justify-content: flex-start; }
+}

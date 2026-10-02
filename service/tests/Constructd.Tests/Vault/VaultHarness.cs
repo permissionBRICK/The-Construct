@@ -86,7 +86,10 @@ internal sealed class VaultHarness : IDisposable
     {
         var (status, body) = await AskAsync(request);
         Assert.True(status == HttpStatusCode.Accepted, $"{status}: {body.ToJsonString()}");
-        return body["id"]!.GetValue<string>();
+        var id = body["id"]!.GetValue<string>();
+        // The guest's pending note (T3 Code's banner) links straight to this request on the approval page.
+        Assert.Matches(@"^https?://[^/]+/vault/#request=" + id + "$", body["approveUrl"]!.GetValue<string>());
+        return id;
     }
 
     public async Task<(HttpStatusCode Status, JsonObject? Body)> PollAsync(string id, int wait = 0)

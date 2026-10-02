@@ -58,6 +58,9 @@ ctl="${tmp}/ctl"
 log="${tmp}/log"
 mkdir -p "${ctl}" "${log}"
 export CONSTRUCT_VAULT_SPOOL="${spool}"
+# The "waiting for approval" notes T3 Code turns into a banner: never this VM's real ones.
+pending="${tmp}/pending"
+export CONSTRUCT_VAULT_PENDING_DIR="${pending}"
 export CONSTRUCT_VAULT_PICKUP_SEC=2
 # Local mode = no host service. A VM managed by one has the URL in its real
 # config.env (and maybe the environment): neither may leak into these tests.
@@ -1041,6 +1044,83 @@ ok "_scrub lock: ... at once (${elapsed} ms)" test "${elapsed}" -lt 1500
 ok "_scrub lock: ... without calling the host" test "$(calls)" = 1
 wait "${first}"
 ok "_scrub lock: the first run finishes normally" test "$?" = 0
+
+# ── the "waiting for approval" note (T3 Code's banner) ───────────────────────
+# While the user is being asked, the CLI keeps <id>.json in the pending directory
+# (0755 dir, 0644 file, no secret in it) and removes it on every way out.
+notes() { find "${pending}" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l; }
+first_note() { find "${pending}" -maxdepth 1 -name '*.json' 2>/dev/null | head -1; }
+# wait_note <seconds>: until a note shows up
+wait_note() { local i; for ((i = 0; i < $1 * 20; i++)); do [[ "$(notes)" -gt 0 ]] && return 0; sleep 0.05; done; return 1; }
+
+rm -rf "${pending}"
+answer NOANSWER
+R_NOTE_SECRET="note-secret-$(head -c 6 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+bash "${CLI}" secret request github-token npm-token --uses 2 --reason "publish $R_NOTE_SECRET" --wait 8 >"${out}" 2>"${err}" &
+cli=$!
+ok "local: a note appears while the Companion is asking" wait_note 4
+note="$(first_note)"
+ok "local: one note" test "$(notes)" = 1
+ok "local: the note directory is 0755 and the note 0644 (T3 Code may run as another user)" \
+  test "$(stat -c %a "${pending}"):$(stat -c %a "${note}")" = "755:644"
+ok "local: names, op, vm, reason and deadline, no link (approve in the Companion)" \
+  test "$(jq -c '[.v, .op, .names, (.vm | length > 0), (.reason | startswith("publish ")), (.deadline > 0), .approveUrl]' "${note}")" \
+  = '[1,"request",["github-token","npm-token"],true,true,true,null]'
+ok "local: the note is named after the request id it carries" test "$(basename "${note}" .json)" = "$(jq -r .id "${note}")"
+id="$(jq -r .id "${note}")"
+printf '%s\n' "{\"v\":1,\"id\":\"${id}\",\"status\":\"ok\",\"names\":[\"github-token\",\"npm-token\"],\"lease\":{\"usesLeft\":2,\"expiresAt\":$(( $(now_ms) + 3600000 ))}}" \
+  >"${spool}/responses/.tmp.${id}" && mv "${spool}/responses/.tmp.${id}" "${spool}/responses/${id}.json"
+wait "${cli}"; rc=$?
+ok "local: the answered request exits 0" test "${rc}" = 0
+ok "local: the note is gone once the answer is in" test "$(notes)" = 0
+
+answer_ok
+run request github-token --for 1h
+ok "local: an answer within a second leaves no note behind" test "${rc}:$(notes)" = "0:0"
+
+answer NOANSWER
+run get github-token --wait 2
+ok "local: a request that times out exits 7 ..." test "${rc}" = 7
+ok "... and removes its note" test "$(notes)" = 0
+
+answer NOANSWER
+bash "${CLI}" secret get github-token --wait 20 >"${out}" 2>"${err}" &
+cli=$!
+wait_note 4
+kill -TERM "${cli}" 2>/dev/null; wait "${cli}" 2>/dev/null
+ok "local: a CLI killed while waiting removes its note" test "$(notes)" = 0
+
+# hosted: the host's 202 carries the approval link, the note keeps it
+hs_reset
+rm -rf "${pending}"
+hs_answer 1 202 '{"id":"h-1","approveUrl":"https://buildbox.example.local:7462/vault/#request=h-1"}'
+printf '2' >"${hs}/2.sleep"
+hs_answer 2 200 '{"v":1,"id":"h-1","status":"ok","names":["github-token"],"lease":{"usesLeft":1,"expiresAt":1}}'
+CONSTRUCT_SERVICE_URL="https://buildbox.example.local:7462/" CONSTRUCT_INSTANCE_NAME=work-vm \
+  CONSTRUCT_VM_TOKEN_FILE="${token_file}" CONSTRUCT_CURL="${curl_stub}" HS="${hs}" \
+  bash "${CLI}" secret request github-token --uses 1 --wait 30 >"${out}" 2>"${err}" &
+cli=$!
+ok "hosted: a note appears once the host answers 202" wait_note 4
+ok "hosted: the note links to the host's approval page and names the VM" \
+  test "$(jq -c '[.vm, .op, .names, .approveUrl]' "$(first_note)")" \
+  = '["work-vm","request",["github-token"],"https://buildbox.example.local:7462/vault/#request=h-1"]'
+wait "${cli}"; rc=$?
+ok "hosted: the approved request exits 0 and its note is gone" test "${rc}:$(notes)" = "0:0"
+
+hs_reset
+rm -rf "${pending}"
+hs_answer 1 202 '{"id":"h-2","approveUrl":"javascript:alert(1)"}'
+printf '2' >"${hs}/2.sleep"
+hs_answer 2 200 '{"v":1,"id":"h-2","status":"denied","message":"The user denied the request."}'
+CONSTRUCT_SERVICE_URL="https://buildbox.example.local:7462/" CONSTRUCT_INSTANCE_NAME=work-vm \
+  CONSTRUCT_VM_TOKEN_FILE="${token_file}" CONSTRUCT_CURL="${curl_stub}" HS="${hs}" \
+  bash "${CLI}" secret get github-token --wait 30 >"${out}" 2>"${err}" &
+cli=$!
+wait_note 4
+ok "hosted: a link that is not http(s) is dropped from the note" test "$(jq -c .approveUrl "$(first_note)")" = null
+wait "${cli}"; rc=$?
+ok "hosted: a denied request exits 7 and its note is gone" test "${rc}:$(notes)" = "7:0"
+ok "no note ever carried a secret value or token" sh -c "! grep -rqs -e '${vm_token}' '${pending}'"
 
 printf '\n%s passed, %s failed\n' "${pass}" "${fail}"
 [[ "${fail}" -eq 0 ]]
