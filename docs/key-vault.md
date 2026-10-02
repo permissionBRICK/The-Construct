@@ -6,10 +6,15 @@ read a value only after you approve it in a Companion dialog: for a number of us
 or both. When the access ends, the Companion searches that VM for every copy of the value. Agent
 logs are redacted automatically. Any other file is listed for you, and you decide per file.
 
+VMs on a host service (remote Hyper-V or Proxmox) use a copy of the same vault kept on that host,
+so they work while your PC is off, and you can approve from a paired phone. See
+[Hosted VMs](#hosted-vms).
+
 - [Managing secrets](#managing-secrets)
 - [What agents do](#what-agents-do)
 - [Approvals and leases](#approvals-and-leases)
 - [Scrubbing a VM](#scrubbing-a-vm)
+- [Hosted VMs](#hosted-vms)
 - [Security model](#security-model)
 - [Wire contract](#wire-contract)
 
@@ -22,7 +27,8 @@ Open **Key Vault** from the Companion tray menu (or run `ConstructCompanion.exe 
 |---|---|
 | **Secrets** | Name, username, description and how many VMs hold access. **Add…**, **Edit…**, **Delete**, **Copy secret** (cleared from the clipboard after 30 seconds unless something replaced it) and **Copy username**. |
 | **Access** | Every active lease: VM, secret, uses left, end time, the agent's reason. **Revoke access** ends a lease at once. Below it, scrubs that wait for their VM to come online; **Discard pending scrubs for VM** forgets them (for a VM you removed). |
-| **Activity** | What the vault did: approvals, expiries, scrubs and their results, warnings. |
+| **Activity** | What the vault did: approvals, expiries, scrubs and their results, warnings, including those reported by your hosts. |
+| **Hosts** | One section per enrolled host: sync state, the vault mode, paired phones (**Pair a phone…**, revoke), and **Show vault key…** / **Import vault key…** for a second PC. |
 
 A name uses letters, digits, `.`, `_` and `-` (up to 64 characters). Descriptions are what an
 agent sees in `construct secret list`, so say what the secret is for. Values may span several
@@ -33,8 +39,8 @@ Editing the description or username keeps existing access. A new value or a rena
 lease on the old value, and those VMs are scrubbed of it.
 
 The vault is stored in `%LOCALAPPDATA%\The-Construct-Vault\vault.dat`, encrypted with Windows
-DPAPI for your Windows account. It is not synced to other PCs and is not part of the config
-sync. If that file cannot be decrypted, for example after copying a profile to another PC,
+DPAPI for your Windows account. It is not part of the config sync; hosts get their copy through
+the vault's own sync (below). If that file cannot be decrypted, for example after copying a profile to another PC,
 VMs get an error and the window offers **Start a new vault…**. That renames the unreadable file
 and keeps it, so it can still be restored on the PC and account that created it.
 
@@ -133,6 +139,50 @@ write-ahead log until the app checkpoints. The activity list warns when that hap
 history is not rewritten: a value committed to a repository is found in the working tree,
 but its copies in `.git/objects` and on any remote are yours to handle.
 
+## Hosted VMs
+
+On a VM of a host service, `construct secret` talks to the host service instead of the
+Companion, and the host keeps the leases, approvals and scrubs. Everything else works as above.
+
+**One vault for all your hosts.** The Companion syncs your vault with every host you are
+enrolled on: every five minutes, shortly after each change, and on **Sync now**. Each entry is
+merged on its own; the newer edit wins, and a deletion counts as an edit. Secrets an agent adds on
+a hosted VM appear on your PC after the next sync. Every one of your VMs sees every secret's name
+and description; child VMs see nothing.
+
+Values (and usernames) are encrypted with a vault key that the Companion creates and keeps in
+your PC's vault. Names and descriptions are stored readable on the host, so agents can list them
+and approval prompts can describe them while the vault is locked. To use the same vault from a
+second PC, copy the key with **Show vault key…** on the first PC and **Import vault key…** on the
+second.
+
+**Two modes per host** (Hosts tab):
+
+| Mode | What the host can do | When to use it |
+|---|---|---|
+| **Always available** (default) | The host keeps the vault key, wrapped with its own master key (Windows DPAPI on Hyper-V hosts, a root-only key file on Proxmox). Requests, approvals from a phone and scrubs work while your PC is off. | You trust the host's administrators with the values. |
+| **Locked to my PC** | The host never stores the key. Your Companion sends it when it starts the VM or connects to it while the VM runs. The host keeps it only in memory, and only for that VM, until the VM stops, is saved, idles out or the service restarts. A VM someone else starts without your PC stays locked: agents can list secrets, but `get` and `add` fail with exit code 11. | The host is shared, or you only work with your PC at hand anyway. |
+
+**Approving from a phone.** **Pair a phone…** asks which VM's T3 Code the phone should open, and
+shows a QR code. Scanning it opens a short pairing page on the host service. That page stores a
+device token in the browser and forwards to T3 Code's own pairing link, so one scan both signs
+the phone in to T3 Code and pairs it for approvals. The T3 Code part of the code is valid for about
+10 minutes and works once. Later, open `https://<host>:7462/vault/` on the phone (or the
+address in the host setting `Constructd:VaultWebUrl`) to see pending requests and file decisions.
+The Companion shows the same requests at the same time; the first answer counts.
+
+The device token lives only on the host service's web address, never in T3 Code. T3 Code is
+served from inside the VM, where an agent could read anything stored for its page. The host's
+certificate is self-signed unless you put a proxy with a public certificate in front of it
+(`Constructd:VaultWebUrl`), so the phone warns about it once. Revoke a lost phone on the
+Hosts tab.
+
+**Scrubs on hosted VMs** run inside the VM, so they need neither your PC nor SSH. When a lease ends,
+the host queues a scan. The VM's minute heartbeat picks it up and runs the same scan, and agent
+logs are redacted at once. Other files wait for your decision in the Companion or on the phone,
+and are handled on a later heartbeat. Only one scan per VM runs at a time. A scan that never
+reports back is handed out again after 30 minutes. A locked VM's scrub waits until it is unlocked.
+
 ## Security model
 
 The vault keeps secrets off a VM until you approve, limits how long and how often a VM may read
@@ -143,16 +193,18 @@ and few uses, and revoke anything you did not expect.
 
 - Requests come from inside the VM and are treated as untrusted. Names, sizes and every field
   are validated, and reasons and descriptions are shown as quoted text.
-- Approval happens only on your PC. Nothing inside the VM can approve a request.
+- Approval happens only on your PC or a phone you paired. Nothing inside the VM can approve a
+  request, and the phone's device token never touches a page the VM serves.
 - Values cross the VM boundary only on SSH stdin streams and never appear in command lines or
   environment variables. On the VM they touch only the spool on tmpfs (a request from `add`, a
   response the CLI deletes as soon as it reads it, the scan's pattern files), never the disk.
   Unclaimed responses are deleted after two minutes.
 - The Companion never logs values, and they never reach the webview panels or the local HTTP API.
 
-Hosted VMs (a remote Hyper-V or Proxmox host) work the same way while the Companion runs on your
-PC, because it reaches them over SSH. Approvals from another device, such as a phone, are not
-available yet.
+On hosted VMs, the host service holds the vault copy and answers the VM, so the host is trusted
+with the values in **always available** mode. In **locked** mode it can read them only while your
+Companion has unlocked that VM. Paired phones can approve requests and decide about files, but
+they cannot read values, leases or the vault itself.
 
 ## Wire contract
 

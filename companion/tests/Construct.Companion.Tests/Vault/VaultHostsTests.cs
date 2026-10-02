@@ -92,7 +92,7 @@ public sealed class VaultHostsTests
         public List<VaultHostRef> List { get; } = [new(Slug, "host.example", client)];
         public List<VaultHostInstance> Vms { get; } = [new("dev", Slug, "dev"), new("build", Slug, "build-vm")];
         public string? Problem { get; set; }
-        public ProcessResult Pairing { get; set; } = new(0, """{"pairUrl":"http://10.0.0.5:5177/pair#token=direct","links":[{"kind":"direct","pairUrl":"http://10.0.0.5:5177/pair#token=direct"},{"kind":"forwarded","pairUrl":"https://host.example:40001/pair#token=t3-once"}]}""");
+        public ProcessResult Pairing { get; set; } = new(0, """{"pairUrl":"http://192.0.2.5:5177/pair#token=direct","links":[{"kind":"direct","pairUrl":"http://192.0.2.5:5177/pair#token=direct"},{"kind":"forwarded","pairUrl":"https://host.example:40001/pair#token=t3-once"}]}""");
         public List<string> PairingRuns { get; } = [];
         public IReadOnlyList<VaultHostRef> Hosts() => List;
         public IReadOnlyList<VaultHostInstance> Instances(string slug) => Vms.Where(v => v.Slug == slug).ToArray();
@@ -555,7 +555,7 @@ public sealed class VaultHostsTests
         h.Directory.Pairing = new(7);
         h.Prompts.Picks.Enqueue(["dev"]); h.Prompts.Inputs.Enqueue("Phone");
         Assert.Contains("port forward", (await Assert.ThrowsAsync<InvalidOperationException>(() => h.Hosts.PairPhoneAsync(Slug, default))).Message);
-        h.Directory.Pairing = new(0, """{"links":[{"kind":"direct","pairUrl":"http://10.0.0.5:5177/pair#token=x"}]}""");
+        h.Directory.Pairing = new(0, """{"links":[{"kind":"direct","pairUrl":"http://192.0.2.5:5177/pair#token=x"}]}""");
         h.Prompts.Picks.Enqueue(["dev"]); h.Prompts.Inputs.Enqueue("Phone");
         await Assert.ThrowsAsync<InvalidOperationException>(() => h.Hosts.PairPhoneAsync(Slug, default));
         Assert.Equal(2, h.Host.Calls("POST", "/vault/devices").Length);
