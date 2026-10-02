@@ -85,6 +85,53 @@ internal sealed class DesktopPrompts(Control dispatcher) : IPrompts
         try { Show(form,cancellationToken); } finally { field.Clear(); }
         return true;
     },cancellationToken);
+    // Raised by a VM while the user works elsewhere: on top and in the taskbar, Deny focused, Approve
+    // enabled only after a second so a keystroke meant for another window cannot approve it.
+    public Task<bool> ApproveAsync(ApprovalPrompt prompt,CancellationToken cancellationToken=default) => OnUi(()=>
+    {
+        var (form,body)=Dialog(prompt.Title); using var _=form; form.TopMost=true; form.ShowInTaskbar=true;
+        body.Controls.Add(Text(prompt.Message));
+        var approve=new Button { Text=prompt.Action,DialogResult=DialogResult.OK,AutoSize=true,Enabled=false };
+        var deny=new Button { Text=prompt.Deny,DialogResult=DialogResult.Cancel,AutoSize=true };
+        Buttons(body,approve,deny); form.AcceptButton=null;
+        using var arm=new System.Windows.Forms.Timer { Interval=1000 };
+        arm.Tick+=(_,_)=> { arm.Stop(); approve.Enabled=true; };
+        form.Shown+=(_,_)=> { form.Activate(); deny.Focus(); arm.Start(); System.Media.SystemSounds.Asterisk.Play(); };
+        var result=Show(form,cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested(); // closed by the agent's deadline, not by the user
+        return result==DialogResult.OK;
+    },cancellationToken);
+    public Task<IReadOnlyDictionary<string,string>?> DecideFilesAsync(FileDecisionPrompt prompt,CancellationToken cancellationToken=default) => OnUi<IReadOnlyDictionary<string,string>?>(()=>
+    {
+        var (form,body)=Dialog(prompt.Title); using var _=form; form.TopMost=true; form.ShowInTaskbar=true;
+        body.Controls.Add(Text(prompt.Message));
+        var labels=new Dictionary<string,string> { [FileDecisionPrompt.Keep]="Keep", [FileDecisionPrompt.Redact]="Redact", [FileDecisionPrompt.Delete]="Delete file" };
+        var grid=new DataGridView { Width=ContentWidth+300,Height=Math.Clamp(prompt.Files.Count,3,14)*26+30,AllowUserToAddRows=false,AllowUserToDeleteRows=false,
+            AllowUserToResizeRows=false,RowHeadersVisible=false,SelectionMode=DataGridViewSelectionMode.FullRowSelect,AutoSizeColumnsMode=DataGridViewAutoSizeColumnsMode.Fill,Margin=new Padding(0,0,0,4) };
+        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText="File",ReadOnly=true,FillWeight=55 });
+        grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText="Contains",ReadOnly=true,FillWeight=30 });
+        var action=new DataGridViewComboBoxColumn { HeaderText="Action",FillWeight=15,DisplayStyle=DataGridViewComboBoxDisplayStyle.DropDownButton };
+        foreach (var id in FileDecisionPrompt.Actions) action.Items.Add(labels[id]);
+        grid.Columns.Add(action);
+        foreach (var file in prompt.Files) { var row=grid.Rows[grid.Rows.Add(file.Path,file.Detail,labels[FileDecisionPrompt.Keep])]; row.Tag=file.Id; row.Cells[0].ToolTipText=file.Path; }
+        grid.CurrentCellDirtyStateChanged+=(_,_)=> { if (grid.IsCurrentCellDirty) grid.CommitEdit(DataGridViewDataErrorContexts.Commit); };
+        body.Controls.Add(grid);
+        body.Controls.Add(Text("Redact overwrites the secret inside the file and keeps everything else. Keep leaves the file untouched."));
+        var all=new FlowLayoutPanel { AutoSize=true,FlowDirection=FlowDirection.LeftToRight,Margin=new Padding(0) };
+        foreach (var id in FileDecisionPrompt.Actions)
+        {
+            var set=new Button { Text=labels[id]+" all",AutoSize=true };
+            set.Click+=(_,_)=> { foreach (DataGridViewRow row in grid.Rows) row.Cells[2].Value=labels[id]; };
+            all.Controls.Add(set);
+        }
+        body.Controls.Add(all);
+        var apply=new Button { Text="Apply",DialogResult=DialogResult.OK,AutoSize=true };
+        Buttons(body,apply,new Button { Text="Keep all",DialogResult=DialogResult.Cancel,AutoSize=true }); form.AcceptButton=null;
+        form.Shown+=(_,_)=>form.Activate();
+        if (Show(form,cancellationToken)!=DialogResult.OK) return null;
+        var byLabel=labels.ToDictionary(p=>p.Value,p=>p.Key);
+        return grid.Rows.Cast<DataGridViewRow>().ToDictionary(r=>(string)r.Tag!,r=>byLabel.GetValueOrDefault(r.Cells[2].Value as string ?? "",FileDecisionPrompt.Keep));
+    },cancellationToken);
     public Task<string?> SaveFileAsync(SaveFilePrompt prompt,CancellationToken cancellationToken=default) => OnUi(()=>
     {
         using var dialog=new SaveFileDialog { Title=prompt.Title,FileName=prompt.DefaultPath ?? "",Filter=prompt.Filter ?? "All files|*.*",OverwritePrompt=true };

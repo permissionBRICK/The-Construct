@@ -10,6 +10,7 @@ using Construct.Companion.Core.Drivers;
 using Construct.Companion.Core.Repatch;
 using Construct.Companion.Core.Remote;
 using Construct.Companion.Core.State;
+using Construct.Companion.Core.Vault;
 using Construct.Companion.Host.ConfigSync;
 using Construct.Companion.Host.Ipc;
 using Construct.Companion.Host.Runtime;
@@ -20,7 +21,7 @@ namespace Construct.Companion.Host.Composition;
 public sealed class CompanionInstances(IStateFileSystem files, IpcSettings settings, IInstanceConnections connections,
     IClock clock, IHypervisorState hypervisor, IProcessRunner processes, IRemoteApi remote, ITokenStore tokens,
     IRuntimeProcesses runtimeProcesses, IPortReservations ports, IToastRaiser toasts, IAudioServerFactory audioServers,
-    SharedAudioCapture capture, RuntimeMessageBus bus, ConfigSyncFactory config) : IRuntimeRegistry, IAsyncDisposable
+    SharedAudioCapture capture, RuntimeMessageBus bus, ConfigSyncFactory config, VaultService vault) : IRuntimeRegistry, IAsyncDisposable
 {
     private readonly ConcurrentDictionary<string, CompanionInstance> entries = new(StringComparer.Ordinal);
     public HostState Host { get; } = new(files);
@@ -80,7 +81,8 @@ public sealed class CompanionInstances(IStateFileSystem files, IpcSettings setti
         var runtime = new InstanceRuntime(definition, probe, clock,
             changed => new Forwarder(definition.Name, new DeferredForwardTransport(ct => connections.ForwardsAsync(current, entry.Ssh, ct)), runtimeProcesses, ports, clock, changed),
             () => new(definition.Name, entry.Ssh, runtimeProcesses, toasts, clock),
-            changed => new(entry.Ssh, runtimeProcesses, audioServers, capture, changed), new RepatchJob(entry.Ssh), bus);
+            changed => new(entry.Ssh, runtimeProcesses, audioServers, capture, changed), new RepatchJob(entry.Ssh), bus,
+            () => new VaultBroker(definition.Name, entry.Ssh, runtimeProcesses, vault));
         entry.ConfigSync?.Runtime.StartWatching();
         entry.Runtime = runtime; return runtime;
     }

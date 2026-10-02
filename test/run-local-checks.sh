@@ -33,10 +33,11 @@ if [[ "$group" == service || "$group" == all ]]; then
   bash test/usage-report.test.sh
   bash test/endpoint-refresh.test.sh
   bash test/construct-expose.test.sh
+  bash test/construct-secret.test.sh
   bash test/proxmox-nested-installer.test.sh
   /usr/bin/python3 -m unittest discover -s console-viewer -p 'test_*.py' -v
   node --check console-viewer/static/viewer.js
-  bash -n console-viewer/install.sh bin/construct-vm.sh bin/construct-oom-guard.sh bin/provision.sh bin/fetch-construct-source.sh bin/construct-worktree-clone.sh service/host/xfs-cloud-image.sh service/host/install-construct-host.sh
+  bash -n console-viewer/install.sh bin/construct-vm.sh bin/construct-secret.sh bin/construct-oom-guard.sh bin/provision.sh bin/fetch-construct-source.sh bin/construct-worktree-clone.sh service/host/xfs-cloud-image.sh service/host/install-construct-host.sh
   bash test/worktree-clone.test.sh
   pwsh -NoProfile -File test/browser-console-install.test.ps1
   bash test/browser-console-provision.test.sh
@@ -61,6 +62,7 @@ if [[ "$group" == companion || "$group" == all ]]; then
   dotnet build companion/Construct.Companion.sln -warnaserror
   dotnet test companion/Construct.Companion.sln --no-build
   node extension/test/parity.test.js
+  bash test/vault-guest-scripts.test.sh
   for suite in extension/test/companion*.test.js; do node "$suite"; done
   pwsh -NoProfile -File test/companion-install.test.ps1
   # First-install feature selection and installer forwarding (Linux PowerShell).

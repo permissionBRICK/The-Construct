@@ -2,7 +2,7 @@ namespace Construct.Companion.Core;
 
 public sealed record CommandLine(bool Background = false, bool Panel = false, bool Settings = false,
     bool HostAdmin = false, bool Popup = false, string? Instance = null, string? Host = null,
-    string? Uri = null, bool Quit = false, bool SelfTest = false, bool Json = false, bool Version = false)
+    string? Uri = null, bool Quit = false, bool SelfTest = false, bool Json = false, bool Version = false, bool Vault = false)
 {
     public static CommandLine Parse(IReadOnlyList<string> args)
     {
@@ -22,6 +22,7 @@ public sealed record CommandLine(bool Background = false, bool Panel = false, bo
                 "--settings" => result with { Settings = true },
                 "--hostadmin" => result with { HostAdmin = true },
                 "--popup" => result with { Popup = true },
+                "--vault" => result with { Vault = true },
                 "--instance" => result with { Instance = Value() },
                 "--host" => result with { Host = Value() },
                 "--uri" => result with { Uri = Value() },

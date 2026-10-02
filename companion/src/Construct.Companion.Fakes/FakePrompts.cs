@@ -22,6 +22,13 @@ public sealed class FakePrompts : IPrompts
     { cancellationToken.ThrowIfCancellationRequested(); Shown.Add((title, message)); return ConfirmationHandler is null ? Task.FromResult(Confirmations.Dequeue()) : ConfirmationHandler(cancellationToken); }
     public Task<bool> ConfirmAsync(ConfirmationPrompt prompt, CancellationToken cancellationToken = default)
     { cancellationToken.ThrowIfCancellationRequested(); Shown.Add(prompt); return ConfirmationHandler is null ? Task.FromResult(Confirmations.Dequeue()) : ConfirmationHandler(cancellationToken); }
+    public Func<ApprovalPrompt, CancellationToken, Task<bool>>? ApprovalHandler { get; set; }
+    public Queue<bool> Approvals { get; } = new();
+    public Task<bool> ApproveAsync(ApprovalPrompt prompt, CancellationToken cancellationToken = default)
+    { cancellationToken.ThrowIfCancellationRequested(); Shown.Add(prompt); return ApprovalHandler is null ? Task.FromResult(Approvals.Dequeue()) : ApprovalHandler(prompt, cancellationToken); }
+    public Queue<IReadOnlyDictionary<string, string>?> FileDecisions { get; } = new();
+    public Task<IReadOnlyDictionary<string, string>?> DecideFilesAsync(FileDecisionPrompt prompt, CancellationToken cancellationToken = default)
+    { cancellationToken.ThrowIfCancellationRequested(); Shown.Add(prompt); return Task.FromResult(FileDecisions.TryDequeue(out var choice) ? choice : null); }
     public Task<string?> SaveFileAsync(SaveFilePrompt prompt, CancellationToken cancellationToken = default)
     { cancellationToken.ThrowIfCancellationRequested(); Shown.Add(prompt); return Task.FromResult(SaveFiles.Dequeue()); }
 }

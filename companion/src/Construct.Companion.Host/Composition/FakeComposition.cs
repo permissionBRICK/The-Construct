@@ -31,7 +31,7 @@ public static class FakeComposition
         services.AddSingleton<IProcessRunner>(new FakeProcessRunner { Handler = invocation => new ProcessResult(invocation.FileName == "git" ? 1 : 0) }); services.AddSingleton<IPrompts, FakePrompts>();
         services.AddSingleton<ILauncher, FakeLauncher>(); services.AddSingleton<ICompanionDesktop, FakeCompanionDesktop>();
         services.AddSingleton<IHostConversionCrypto, FakeHostConversionCrypto>();
-        services.AddSingleton<ITokenStore, FakeTokenStore>(); services.AddSingleton<IRemoteApi, FakeRemoteApi>();
+        services.AddSingleton<ITokenStore, FakeTokenStore>(); services.AddSingleton<IDataProtection, FakeDataProtection>(); services.AddSingleton<IRemoteApi, FakeRemoteApi>();
         services.AddSingleton<IHypervisorState, FakeHypervisorState>(); services.AddSingleton<IAudioCapture, FakeAudioCapture>();
         services.AddSingleton<IToastRaiser, FakeToastRaiser>(); services.AddSingleton<IAudioServerFactory, FakeAudioServerFactory>();
         services.AddSingleton<IPortProbe, FakePortProbe>(); services.AddSingleton<IInstanceConnections, FakeInstanceConnections>();

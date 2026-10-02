@@ -51,7 +51,7 @@ public static class TrayModel
             new("connect", "Open VS Code", usable), new("openT3", "Open T3 Code", usable),
             new("forwards", "Forwards", Children: forwards.Count == 0 ? [new("none", "none", false)] : forwards.Select(f => new MenuEntry("forward:" + f.Id, f.Label, Children: [new("openForward:" + f.Id, "Open link"), new("closeForward:" + f.Id, "Close")])).ToArray()),
             new("mic", "Microphone passthrough", usable, state.Mic), new("notifications", "Notifications", Checked: notifications),
-            new("panel", "Control Panel"), new("settings", "Settings")
+            new("panel", "Control Panel"), new("settings", "Settings"), new("vault", "Key Vault")
         };
         if (state.HostAdmin) entries.Add(new("hostadmin", "Host Administration"));
         entries.AddRange([new("autostart", "Start with Windows", Checked: autostart), new("logs", "Logs"), new("about", "About"), new("quit", "Quit")]);
