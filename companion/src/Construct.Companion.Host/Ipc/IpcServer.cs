@@ -36,6 +36,7 @@ public static class IpcServer
         var logs = app.Services.GetRequiredService<IpcLogs>();
         var desktop = app.Services.GetRequiredService<ICompanionDesktop>();
         var vault = app.Services.GetRequiredService<VaultService>();
+        var approvals = app.Services.GetRequiredService<VaultApprovals>();
         var secret = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
         var startedAt = clock.UtcNow; var version = options.Version; var pid = Environment.ProcessId;
         var endpointPath = Path.Combine(settings.Directory, "endpoint.json");
@@ -104,6 +105,12 @@ public static class IpcServer
         });
         // Pending key vault approvals only (T3 Code Desktop approves inline): no value, secret list or vault change is reachable here.
         app.MapGet("/v1/vault/approvals", () => Json(new VaultApprovalList(vault.PendingApprovals().Select(VaultApprovalItem.From).ToArray())));
+        // T3 Code Desktop, while its window is visible, reports the approvals it shows inline; the tray pop-out steps back for those.
+        app.MapPost("/v1/vault/approvals/displayed", async (HttpContext c) =>
+        {
+            approvals.Displayed(VaultApprovals.DisplayedIds(await Body(c)) ?? throw new IpcFailure(400, "invalidIds", "ids must list at most 50 approval ids."));
+            return Results.NoContent();
+        });
         app.MapPost("/v1/vault/approvals/{id}", async (string id, HttpContext c) =>
         {
             var decision = (await Body(c))["decision"] is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;

@@ -9,10 +9,11 @@ namespace Construct.Companion;
 
 // The key vault's tray pop-out: media/approvals.html where the launcher popup appears, in the same design.
 // Every decision lives in VaultApprovals; this window only renders and forwards. It appears by itself when
-// an approval arrives, without taking the focus, so keystrokes meant for another window cannot reach it;
-// it stays until no approval is left, and its × hides it until the next one arrives or the tray brings it
-// back. Its page talks to VaultApprovals in process and to nothing else: the window holds no message sink,
-// so no request of the page reaches the dispatcher, IPC or HTTP.
+// an approval becomes eligible (at once, or later while T3 Code Desktop shows it), without taking the focus,
+// so keystrokes meant for another window cannot reach it; it stays while one is eligible, and its × hides it
+// until the next one or the tray brings it back. It re-evaluates on every change and once a second while
+// approvals wait. Its page talks to VaultApprovals in process and to nothing else: the window holds no
+// message sink, so no request of the page reaches the dispatcher, IPC or HTTP.
 internal sealed class VaultApprovalsWindow : Form
 {
     private const string View = "approvals";
@@ -39,35 +40,38 @@ internal sealed class VaultApprovalsWindow : Form
         Controls.Add(web);
         _ = Handle; // approvals arrive on other threads before the window was ever shown
         vault.ApprovalsChanged += OnApprovalsChanged;
-        clock.Tick += (_, _) => PushState();
-        VisibleChanged += (_, _) => { if (Visible) clock.Start(); else clock.Stop(); };
+        clock.Tick += (_, _) => Apply();
         Shown += async (_, _) => { if (!initialized) { initialized = true; await InitializeAsync(); } };
-        FormClosing += (_, e) => { if (!exiting && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Hide(); } };
+        FormClosing += (_, e) => { if (!exiting && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Dismiss(); } };
         Apply();
     }
-    // Shown by an arriving approval: on top, but the window the user works in keeps the focus.
+    // Shown by an eligible approval: on top, but the window the user works in keeps the focus.
     protected override bool ShowWithoutActivation => true;
     public int Count => model.Count;
-    // Brought back by the user (tray menu or left click): activated.
+    // Brought back by the user (tray menu or left click): activated, and kept even while another app shows the approvals.
     public void Present()
     {
-        if (model.Count == 0) return;
-        Place(); if (!Visible) Show(); Activate(); PushState();
+        if (!model.Open()) return;
+        Place(); if (!Visible) Show(); Activate(); PushState(); clock.Start();
     }
-    public void Shutdown() { exiting = true; lifetime.Cancel(); Close(); }
+    public void Shutdown() { exiting = true; clock.Stop(); lifetime.Cancel(); Close(); }
 
     private void OnApprovalsChanged()
     {
         try { if (!IsDisposed) BeginInvoke(Apply); }
         catch (InvalidOperationException) { /* the window is closing with the app */ }
     }
+    // The timer runs only while approvals wait.
     private void Apply()
     {
-        var change = model.Sync();
-        if (change.Hide) { Hide(); return; }
-        if (change.Show) { Place(); if (!Visible) Show(); }
+        if (exiting || IsDisposed) return;
+        var view = model.Sync();
+        if (view.Count > 0) clock.Start(); else clock.Stop();
+        if (!view.Visible) { if (Visible) Hide(); return; }
+        if (!Visible) { Place(); Show(); }
         PushState();
     }
+    private void Dismiss() { model.Dismiss(); Hide(); }
     private void Place() => Bounds = place(pageHeight);
 
     private async Task InitializeAsync()
@@ -120,7 +124,7 @@ internal sealed class VaultApprovalsWindow : Form
             switch (command.Action)
             {
                 case "ready": PushState(); break;
-                case "hide": Hide(); break;
+                case "hide": Dismiss(); break;
                 case "openVault": openVault(); break;
                 case "size": pageHeight = command.Height; if (Visible) Place(); break;
                 case "decide":

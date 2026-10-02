@@ -46,7 +46,7 @@ public sealed record UiActivation(string View,
 public sealed record QuitRequest(string Reason);
 // GET /v1/vault/approvals: what T3 Code Desktop shows to approve key vault requests inline. The native
 // dialog's texts and where a request came from (times in ms), never a value. POST /v1/vault/approvals/{id}
-// takes {"decision":"approve"|"deny"}.
+// takes {"decision":"approve"|"deny"}; POST /v1/vault/approvals/displayed takes {"ids":[…]} (VaultApprovals.Displayed).
 public sealed record VaultApprovalList(IReadOnlyList<VaultApprovalItem> Approvals);
 public sealed record VaultApprovalItem(string Id, string Instance, string Vm, string Kind, string? Host, string? RequestId, string? HostRequestId, string Op,
     string Title, string Message, string Action, string Deny, IReadOnlyList<string> Names, long CreatedAt, long? Deadline)

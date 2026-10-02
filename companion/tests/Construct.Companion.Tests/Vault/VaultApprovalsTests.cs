@@ -41,23 +41,156 @@ public sealed class VaultApprovalsTests
     }
 
     [Fact]
-    public async Task ThePopOutShowsWhenAnApprovalArrivesAndHidesWhenNoneIsLeft()
+    public async Task ThePopOutShowsWhileApprovalsWaitAndStaysClosedUntilANewOne()
     {
         var h = new Harness();
-        Assert.Equal(new VaultApprovalsChange(false, true, 0), h.Model.Sync());
+        Assert.Equal(new VaultApprovalsVisibility(false, 0), h.Model.Sync());
         var first = h.Ask("dev", "get", TimeSpan.FromMinutes(5)); await h.Pending(1);
-        Assert.Equal(new VaultApprovalsChange(true, false, 1), h.Model.Sync());
-        Assert.Equal(new VaultApprovalsChange(false, false, 1), h.Model.Sync()); // hidden by the user: stays hidden
+        Assert.Equal(new VaultApprovalsVisibility(true, 1), h.Model.Sync()); // no other app reported: at once
+        Assert.Equal(new VaultApprovalsVisibility(true, 1), h.Model.Sync());
+        h.Model.Dismiss(); // its ×
+        Assert.Equal(new VaultApprovalsVisibility(false, 1), h.Model.Sync()); // closed by the user: stays hidden
         var second = h.Ask("build", "request"); await h.Pending(2);
-        Assert.Equal(new VaultApprovalsChange(true, false, 2), h.Model.Sync()); // a new one shows it again
+        Assert.Equal(new VaultApprovalsVisibility(true, 2), h.Model.Sync()); // a new one shows it again
+        Assert.Equal(2, h.Items().Count); // listing both
         Assert.Equal(VaultDecision.Decided, await h.Vault.DecideAsync(h.Vault.PendingApprovals()[1].Id, false));
         Assert.Equal("denied", (await second)["status"]!.GetValue<string>());
-        Assert.Equal(new VaultApprovalsChange(false, false, 1), h.Model.Sync());
+        Assert.Equal(new VaultApprovalsVisibility(false, 1), h.Model.Sync()); // only the closed one is left
         await Eventually(() => h.Clock.PendingDelays > 0);
         h.Clock.Advance(TimeSpan.FromMinutes(5)); // the agent stopped waiting
         await first;
-        Assert.Equal(new VaultApprovalsChange(false, true, 0), h.Model.Sync());
+        Assert.Equal(new VaultApprovalsVisibility(false, 0), h.Model.Sync());
         Assert.Equal(0, h.Model.Count);
+        Assert.False(h.Model.Open()); // nothing to bring up
+    }
+
+    // ── T3 Code Desktop shows them (POST /v1/vault/approvals/displayed) ────────
+    [Fact]
+    public async Task WithoutARecentReportAnApprovalShowsAtOnce()
+    {
+        var h = new Harness();
+        h.Model.Displayed([]); // T3 Code Desktop was visible…
+        h.Clock.Advance(VaultApprovals.ReporterWindow); // …ten seconds ago
+        _ = h.Ask("dev", "get"); await h.Pending(1);
+        Assert.Equal(new VaultApprovalsVisibility(true, 1), h.Model.Sync());
+    }
+
+    [Fact]
+    public async Task AnApprovalShownInT3StaysOutOfThePopOutUntilItsMarkExpires()
+    {
+        var h = new Harness();
+        h.Model.Displayed([]); // visible, nothing to show yet
+        _ = h.Ask("dev", "get"); await h.Pending(1);
+        var id = h.Vault.PendingApprovals()[0].Id;
+        Assert.Equal(new VaultApprovalsVisibility(false, 1), h.Model.Sync()); // its grace
+        h.Clock.Advance(TimeSpan.FromSeconds(2));
+        h.Model.Displayed([id]); // T3's next poll shows it inline
+        Assert.True(h.Model.ShownElsewhere(id));
+        for (var second = 1; second <= 60; second++) // renewed every two seconds: never shows
+        {
+            h.Clock.Advance(TimeSpan.FromSeconds(1));
+            if (second % 2 == 0) h.Model.Displayed([id]);
+            Assert.Equal(new VaultApprovalsVisibility(false, 1), h.Model.Sync());
+        }
+        // T3 Code Desktop was minimized: no more reports. Its mark ends eight seconds after the last one.
+        h.Clock.Advance(VaultApprovals.DisplayedFor - TimeSpan.FromMilliseconds(1));
+        Assert.False(h.Model.Sync().Visible);
+        h.Clock.Advance(TimeSpan.FromMilliseconds(1));
+        Assert.False(h.Model.ShownElsewhere(id));
+        Assert.Equal(new VaultApprovalsVisibility(true, 1), h.Model.Sync());
+        // Visible again and showing it: the pop-out steps back.
+        h.Model.Displayed([id]);
+        Assert.Equal(new VaultApprovalsVisibility(false, 1), h.Model.Sync());
+    }
+
+    [Fact]
+    public async Task AnApprovalT3LeavesOutShowsAfterItsGraceListingAll()
+    {
+        var h = new Harness();
+        var get = h.Ask("dev", "get"); await h.Pending(1);
+        var shown = h.Vault.PendingApprovals()[0].Id;
+        h.Model.Displayed([shown]);
+        Assert.Equal(new VaultApprovalsVisibility(false, 1), h.Model.Sync());
+        _ = h.Ask("build", "delete"); await h.Pending(2);
+        var left = h.Vault.PendingApprovals()[1].Id;
+        for (var at = TimeSpan.Zero; at < VaultApprovals.DisplayGrace; at += TimeSpan.FromSeconds(1))
+        {
+            h.Model.Displayed([shown]); // alive, but without the new one
+            Assert.Equal(new VaultApprovalsVisibility(false, 2), h.Model.Sync());
+            h.Clock.Advance(TimeSpan.FromSeconds(1));
+        }
+        h.Model.Displayed([shown]);
+        Assert.Equal(new VaultApprovalsVisibility(true, 2), h.Model.Sync());
+        Assert.Equal([shown, left], h.Items().Select(i => i!["id"]!.GetValue<string>())); // every pending approval, the one T3 shows too
+        // Answered in the pop-out: it vanishes, and the one T3 shows is no reason to stay.
+        h.Clock.Advance(VaultApprovals.ArmDelay);
+        Assert.Null(await h.Model.DecideAsync(Harness.Decide(left, "deny"), default));
+        h.Model.Displayed([shown]);
+        Assert.Equal(new VaultApprovalsVisibility(false, 1), h.Model.Sync());
+        Assert.Equal([shown], h.Items().Select(i => i!["id"]!.GetValue<string>()));
+        // Answered in T3: none is left.
+        Assert.Equal(VaultDecision.Decided, await h.Vault.DecideAsync(shown, true, otherApp: true));
+        Assert.Equal("ok", (await get)["status"]!.GetValue<string>());
+        Assert.Equal(new VaultApprovalsVisibility(false, 0), h.Model.Sync());
+        Assert.Empty(h.Items());
+    }
+
+    [Fact]
+    public async Task TheTrayBringsThePopOutUpWhileT3ShowsTheApprovals()
+    {
+        var h = new Harness();
+        h.Model.Displayed([]);
+        _ = h.Ask("dev", "get"); await h.Pending(1);
+        var id = h.Vault.PendingApprovals()[0].Id;
+        h.Model.Displayed([id]);
+        Assert.False(h.Model.Sync().Visible);
+        Assert.True(h.Model.Open()); // Key vault request (1)… or a left click
+        for (var second = 0; second < 20; second++)
+        {
+            h.Model.Displayed([id]);
+            Assert.Equal(new VaultApprovalsVisibility(true, 1), h.Model.Sync()); // stays, although T3 shows it
+            h.Clock.Advance(TimeSpan.FromSeconds(1));
+        }
+        Assert.Equal(id, Assert.Single(h.Items())!["id"]!.GetValue<string>());
+        h.Model.Dismiss();
+        Assert.False(h.Model.Sync().Visible);
+        h.Clock.Advance(VaultApprovals.ReporterWindow); // T3 went away, but the user closed the pop-out for this one
+        Assert.Equal(new VaultApprovalsVisibility(false, 1), h.Model.Sync());
+        Assert.True(h.Model.Open());
+        Assert.True(h.Model.Sync().Visible);
+    }
+
+    [Fact]
+    public async Task ReportsIgnoreUnknownAndDecidedApprovals()
+    {
+        var h = new Harness();
+        var get = h.Ask("dev", "get"); await h.Pending(1);
+        var id = h.Vault.PendingApprovals()[0].Id;
+        Assert.Null(h.Model.ReportedAt);
+        h.Model.Displayed(["0123456789abcdef0123456789abcdef"]);
+        Assert.Equal(h.Clock.UtcNow, h.Model.ReportedAt); // any report counts as a visible T3
+        Assert.False(h.Model.ShownElsewhere("0123456789abcdef0123456789abcdef"));
+        Assert.Equal(VaultDecision.Decided, await h.Vault.DecideAsync(id, false));
+        Assert.Equal("denied", (await get)["status"]!.GetValue<string>());
+        h.Model.Displayed([id]); // a moment behind
+        Assert.False(h.Model.ShownElsewhere(id));
+        Assert.Equal(new VaultApprovalsVisibility(false, 0), h.Model.Sync());
+    }
+
+    [Fact]
+    public void DisplayedReportsAreValidated()
+    {
+        static IReadOnlyList<string>? Ids(JsonNode? ids) => VaultApprovals.DisplayedIds(new JsonObject { ["ids"] = ids });
+        static JsonArray List(int count) => new(Enumerable.Range(0, count).Select(i => (JsonNode)JsonValue.Create($"id-{i}")).ToArray());
+        Assert.Empty(Ids(new JsonArray())!);
+        Assert.Equal(["a.b~c-d_E9", new string('f', 128)], Ids(new JsonArray("a.b~c-d_E9", new string('f', 128))));
+        Assert.Equal(VaultApprovals.MaxDisplayed, Ids(List(VaultApprovals.MaxDisplayed))!.Count);
+        Assert.Null(VaultApprovals.DisplayedIds(new JsonObject()));
+        foreach (var bad in new JsonNode?[] { null, "abc", new JsonObject(), List(VaultApprovals.MaxDisplayed + 1), new JsonArray(1), new JsonArray((JsonNode?)null), new JsonArray(""),
+            new JsonArray("a/b"), new JsonArray("a b"), new JsonArray(new string('f', 129)), new JsonArray(new JsonArray("x")) })
+            Assert.Null(Ids(bad));
+        Assert.Null(VaultApprovals.DisplayedIds(JsonNode.Parse("""{"ids":["ok",2]}""")!.AsObject())); // parsed like the route's body
+        Assert.Equal(["ok"], VaultApprovals.DisplayedIds(JsonNode.Parse("""{"ids":["ok"],"other":true}""")!.AsObject()));
     }
 
     [Fact]

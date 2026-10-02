@@ -74,7 +74,7 @@ public sealed partial class VaultService
         Func<bool, Task<VaultDecision>>? forward = null)
     {
         var view = new VaultPendingApproval(NewId(), source.Instance, source.Vm, source.Host is null ? "local" : "host", source.Host, source.RequestId, source.HostRequestId,
-            source.Op, prompt.Title, prompt.Message, prompt.Action, prompt.Deny, source.Names.ToArray(), source.CreatedAt ?? clock.UtcNow, deadline, source.HostName);
+            source.Op, prompt.Title, prompt.Message, prompt.Action, prompt.Deny, source.Names.ToArray(), source.CreatedAt ?? clock.UtcNow, deadline, clock.UtcNow, source.HostName);
         PendingApproval entry;
         lock (gate) pending[view.Id] = entry = new(++arrivals, source, view, forward);
         ApprovalsChanged?.Invoke();

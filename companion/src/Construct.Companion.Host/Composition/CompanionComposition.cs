@@ -25,6 +25,7 @@ public static class CompanionComposition
         services.TryAddSingleton(p => new VaultStore(p.GetRequiredService<IStateFileSystem>(), p.GetRequiredService<IDataProtection>(),
             VaultStore.DefaultPath(new HostState(p.GetRequiredService<IStateFileSystem>()).LocalAppData ?? throw new InvalidOperationException("No local application data path."))));
         services.TryAddSingleton<VaultService>();
+        services.TryAddSingleton<VaultApprovals>(); // the tray pop-out's model, told by the IPC route what another app shows
         services.TryAddSingleton<IVaultHostDirectory>(p => new VaultHostDirectory(() => p.GetRequiredService<HostAdministration>(), () => p.GetRequiredService<CompanionInstances>(),
             p.GetRequiredService<IRemoteApi>(), p.GetRequiredService<IStateFileSystem>(), p.GetRequiredService<ITokenStore>()));
         services.TryAddSingleton<VaultHosts>();
