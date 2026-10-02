@@ -4,6 +4,7 @@ set -uo pipefail
 # or empty to remove it); `construct config` checks it again and writes
 # config.env. A VM whose CLI predates `construct config` gets the same write
 # through its checkout's config-set.sh.
+# shellcheck disable=SC1083  # the host fills in the value, single-quoted
 url={{url}}
 CONFIG_FILE=/etc/construct/config.env
 if construct config --help >/dev/null 2>&1; then

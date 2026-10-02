@@ -251,7 +251,8 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
             }
             else events.Companion(new { type = "notification", level = "info", text = url.Length > 0 ? $"T3 Code proxy address set to {url}. New pairing links and phone QR codes use it." : "T3 Code proxy address removed." });
         }
-        finally { events.Message(entry.Name, error is null ? new { type = "lifecyclePrepared", id = "setT3ProxyUrl" } : new { type = "lifecyclePrepared", id = "setT3ProxyUrl", error }); }
+        catch (Exception e) when (e is not OperationCanceledException) { logs.Failure("t3 proxy address", e); error = "The VM did not store the address. Check the connection, then apply it again."; }
+        events.Message(entry.Name, error is null ? new { type = "lifecyclePrepared", id = "setT3ProxyUrl" } : new { type = "lifecyclePrepared", id = "setT3ProxyUrl", error });
         await RefreshAsync(entry, ct);
     }
     private static string RequireProxyUrl(JsonObject message) =>
