@@ -11,6 +11,7 @@ using Construct.Companion.Core.Ipc;
 using Construct.Companion.Core.Lifecycle;
 using RemoteHost = Construct.Companion.Core.Remote.RemoteHost;
 using Construct.Companion.Core.State;
+using Construct.Companion.Core.Vault;
 using Construct.Companion.Host.Composition;
 using Construct.Companion.Host.Ipc;
 using Construct.Companion.Host.Runtime;
@@ -21,7 +22,8 @@ namespace Construct.Companion.Host.Dispatch;
 // come from the desktop prompts, whichever client sent the message.
 public sealed partial class MessageDispatcher(CompanionInstances instances, StateAggregation state, IpcSettings settings,
     IpcEvents events, IpcLogs logs, IStateFileSystem files, IPrompts prompts, ILauncher launcher,
-    ICompanionDesktop desktop, IClock clock, HostAdministration hosts, CachedUpdateSource updates, IAudioCapture capture, HostConversionWorkflow conversion, InstanceConsole consoles)
+    ICompanionDesktop desktop, IClock clock, HostAdministration hosts, CachedUpdateSource updates, IAudioCapture capture, HostConversionWorkflow conversion, InstanceConsole consoles,
+    VaultHosts vaultHosts)
 {
     public async Task DispatchAsync(string name, JsonObject message, CancellationToken ct)
     {
@@ -81,7 +83,12 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
             case "showLogs": await launcher.OpenAsync(logs.PathName, ct); break;
             case "connect": await Connect(entry, "/root/repos", ct); break;
             case "startConnect":
-                if (instances.Remote(entry) is { } remote) await remote.PowerAsync(Text(entry.Definition, "vmName"), "start", ct);
+                if (instances.Remote(entry) is { } remote)
+                {
+                    await remote.PowerAsync(Text(entry.Definition, "vmName"), "start", ct);
+                    // A VM this PC starts opens its host's vault even in locked mode (failures only reach the vault's activity list).
+                    if (VaultHosts.Instance(entry.Definition) is { } hosted) await vaultHosts.AfterStartAsync(hosted, ct);
+                }
                 else await launcher.StartDetachedAsync(VmPower.BuildElevatedCommandLaunch(VmPower.BuildStartCommand(Text(entry.Definition, "vmName"))).Invocation(), ct);
                 entry.Runtime?.BeginFastRefresh();
                 for (var attempt = 0; attempt < 90; attempt++)

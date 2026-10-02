@@ -21,7 +21,7 @@ namespace Construct.Companion.Host.Composition;
 public sealed class CompanionInstances(IStateFileSystem files, IpcSettings settings, IInstanceConnections connections,
     IClock clock, IHypervisorState hypervisor, IProcessRunner processes, IRemoteApi remote, ITokenStore tokens,
     IRuntimeProcesses runtimeProcesses, IPortReservations ports, IToastRaiser toasts, IAudioServerFactory audioServers,
-    SharedAudioCapture capture, RuntimeMessageBus bus, ConfigSyncFactory config, VaultService vault) : IRuntimeRegistry, IAsyncDisposable
+    SharedAudioCapture capture, RuntimeMessageBus bus, ConfigSyncFactory config, VaultService vault, VaultHosts vaultHosts) : IRuntimeRegistry, IAsyncDisposable
 {
     private readonly ConcurrentDictionary<string, CompanionInstance> entries = new(StringComparer.Ordinal);
     public HostState Host { get; } = new(files);
@@ -77,12 +77,15 @@ public sealed class CompanionInstances(IStateFileSystem files, IpcSettings setti
         var current = Registry.Resolve(definition.Name);
         var entry = Bind(Get(definition.Name), current);
         var probe = new InstanceProbe(entry, this, hypervisor, processes);
+        // A hosted VM uses its host's vault (VaultHosts follows it online); only a local VM gets the SSH spool broker.
+        var hosted = VaultHosts.Instance(current);
         // Connection construction is asynchronous (remote user credential); lazy transport defers it until start.
         var runtime = new InstanceRuntime(definition, probe, clock,
             changed => new Forwarder(definition.Name, new DeferredForwardTransport(ct => connections.ForwardsAsync(current, entry.Ssh, ct)), runtimeProcesses, ports, clock, changed),
             () => new(definition.Name, entry.Ssh, runtimeProcesses, toasts, clock),
             changed => new(entry.Ssh, runtimeProcesses, audioServers, capture, changed), new RepatchJob(entry.Ssh), bus,
-            () => new VaultBroker(definition.Name, entry.Ssh, runtimeProcesses, vault));
+            hosted is null ? () => new VaultBroker(definition.Name, entry.Ssh, runtimeProcesses, vault) : null,
+            hosted is null ? null : online => vaultHosts.Online(hosted, online));
         entry.ConfigSync?.Runtime.StartWatching();
         entry.Runtime = runtime; return runtime;
     }

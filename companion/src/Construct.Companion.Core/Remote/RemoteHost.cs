@@ -137,7 +137,7 @@ public sealed partial class RemoteHostClient
         {
             if (node is JsonObject obj) foreach (var (key, value) in obj)
             {
-                if (Regex.IsMatch(key, "password|token|secret", RegexOptions.IgnoreCase) && StateJson.Text(value) is { Length: > 0 } secret) secrets.Add(secret);
+                if (Regex.IsMatch(key, "password|token|secret|^key$", RegexOptions.IgnoreCase) && StateJson.Text(value) is { Length: > 0 } secret) secrets.Add(secret);
                 else Collect(value);
             }
             else if (node is JsonArray array) foreach (var value in array) Collect(value);

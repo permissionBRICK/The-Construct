@@ -68,4 +68,19 @@ public sealed partial class RemoteHostClient
     public Task<JsonNode?> UpdatesCancelAsync(JsonNode? body, CancellationToken cancellationToken = default) => RequestAsync("POST", "/host/updates/cancel", body, cancellationToken);
     public Task<JsonNode?> UpdatesResolveAsync(JsonNode? body, CancellationToken cancellationToken = default) => RequestAsync("POST", "/host/updates/resolve", body, cancellationToken);
     public async Task<JsonObject?> GetEndpointAsync(string name, CancellationToken cancellationToken = default) => RemoteHost.ReadEndpoint(await RequestAsync("GET", $"/vms/{RemoteHost.Encode(name)}/endpoint", cancellationToken: cancellationToken));
+    // Key vault (docs/plans/key-vault-hosted.md): the user credential's own vault on this host.
+    public Task<JsonNode?> VaultEntriesAsync(CancellationToken cancellationToken = default) => RequestAsync("GET", "/vault/entries", null, cancellationToken);
+    public Task<JsonNode?> PutVaultEntriesAsync(JsonNode body, CancellationToken cancellationToken = default) => RequestAsync("PUT", "/vault/entries", body, cancellationToken);
+    public Task<JsonNode?> PutVaultSettingsAsync(JsonNode body, CancellationToken cancellationToken = default) => RequestAsync("PUT", "/vault/settings", body, cancellationToken);
+    public Task<JsonNode?> UnlockVaultAsync(string name, string key, CancellationToken cancellationToken = default) => RequestAsync("POST", $"/vms/{RemoteHost.Encode(name)}/vault/unlock", new JsonObject { ["key"] = key }, cancellationToken);
+    public Task<JsonNode?> VaultApprovalsAsync(CancellationToken cancellationToken = default) => RequestAsync("GET", "/vault/approvals", null, cancellationToken);
+    public Task<JsonNode?> AnswerVaultApprovalAsync(string id, string decision, CancellationToken cancellationToken = default) => RequestAsync("POST", $"/vault/approvals/{RemoteHost.Encode(id)}", new JsonObject { ["decision"] = decision }, cancellationToken);
+    public Task<JsonNode?> VaultLeasesAsync(CancellationToken cancellationToken = default) => RequestAsync("GET", "/vault/leases", null, cancellationToken);
+    public Task<JsonNode?> RevokeVaultLeaseAsync(string id, CancellationToken cancellationToken = default) => RequestAsync("DELETE", $"/vault/leases/{RemoteHost.Encode(id)}", null, cancellationToken);
+    public Task<JsonNode?> VaultFilesAsync(CancellationToken cancellationToken = default) => RequestAsync("GET", "/vault/files", null, cancellationToken);
+    public Task<JsonNode?> DecideVaultFileAsync(string id, string action, CancellationToken cancellationToken = default) => RequestAsync("POST", $"/vault/files/{RemoteHost.Encode(id)}", new JsonObject { ["action"] = action }, cancellationToken);
+    public Task<JsonNode?> VaultDevicesAsync(CancellationToken cancellationToken = default) => RequestAsync("GET", "/vault/devices", null, cancellationToken);
+    public Task<JsonNode?> PairVaultDeviceAsync(string label, CancellationToken cancellationToken = default) => RequestAsync("POST", "/vault/devices", new JsonObject { ["label"] = label }, cancellationToken);
+    public Task<JsonNode?> RevokeVaultDeviceAsync(string id, CancellationToken cancellationToken = default) => RequestAsync("DELETE", $"/vault/devices/{RemoteHost.Encode(id)}", null, cancellationToken);
+    public Task<JsonNode?> VaultActivityAsync(CancellationToken cancellationToken = default) => RequestAsync("GET", "/vault/activity", null, cancellationToken);
 }

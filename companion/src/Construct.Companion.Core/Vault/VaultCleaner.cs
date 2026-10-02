@@ -109,11 +109,14 @@ public static class VaultCleaner
         return done;
     }
 
-    private static string Describe(Target target, IReadOnlyList<VaultCleanup> batch)
+    private static string Describe(Target target, IReadOnlyList<VaultCleanup> batch) =>
+        Describe(target.Indexes.Order().Select(i => batch[i].Name).Distinct(StringComparer.Ordinal), target.Type, target.Size);
+    // The "Contains" cell of the file-decision grid, for local scrubs and host scrubs alike.
+    internal static string Describe(IEnumerable<string> names, string type, long size)
     {
-        var secrets = string.Join(", ", target.Indexes.Order().Select(i => batch[i].Name).Distinct(StringComparer.Ordinal));
-        var kind = target.Type switch { "sqlite" => "SQLite database", "binary" => "binary file", _ => "text file" };
-        return target.Size > 0 ? $"{secrets} · {kind} · {Size(target.Size)}" : $"{secrets} · {kind}";
+        var secrets = string.Join(", ", names);
+        var kind = type switch { "sqlite" => "SQLite database", "binary" => "binary file", _ => "text file" };
+        return size > 0 ? $"{secrets} · {kind} · {Size(size)}" : $"{secrets} · {kind}";
     }
     private static string Size(long bytes) => bytes switch
     {

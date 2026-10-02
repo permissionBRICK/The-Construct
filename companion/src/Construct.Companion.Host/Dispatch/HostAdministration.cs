@@ -156,17 +156,7 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
             {
                 var slug = HostIdentity.HostSlug(client.BaseUrl); var model = Get(slug);
                 await model.Serial.WaitAsync(ct);
-                try
-                {
-                    if (clock.UtcNow - model.LastDetection >= TimeSpan.FromSeconds(60))
-                    {
-                        await Detect(model, client, ct);
-                        // The panel's Host button lights up when the host has a newer release (owner, 2026-09-12);
-                        // the check itself runs at most every 15 minutes per host.
-                        if (Text(model.State["mode"]) == "admin") { try { await RefreshUpdates(model, client, ct); } catch (RemoteApiException) { } }
-                        model.View = model.State.DeepClone().AsObject(); model.LastDetection = clock.UtcNow;
-                    }
-                }
+                try { await DetectIfStale(model, client, ct); }
                 finally { model.Serial.Release(); }
                 if (Text(model.View["mode"]) == "admin" || OwnerReadView(model))
                 {
@@ -192,6 +182,29 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
         if (instances.Remote(entry) is null) { childCache.TryRemove(entry.Name, out _); bus.Publish(entry.Name, new { type = "children", instance = entry.Name, children }); }
         bus.Publish(entry.Name, new { type = "hostAdminOffer", instance = entry.Name, offer });
         bus.Publish(entry.Name, new { type = "idlePolicy", instance = entry.Name, idlePolicy = idle });
+    }
+    // Detection is shared by the instance panel and the key vault: at most once a minute per host.
+    private async Task DetectIfStale(Model model, RemoteHostClient client, CancellationToken ct)
+    {
+        if (clock.UtcNow - model.LastDetection < TimeSpan.FromSeconds(60)) return;
+        await Detect(model, client, ct);
+        // The panel's Host button lights up when the host has a newer release (owner, 2026-09-12);
+        // the check itself runs at most every 15 minutes per host.
+        if (Text(model.State["mode"]) == "admin") { try { await RefreshUpdates(model, client, ct); } catch (RemoteApiException) { } }
+        model.View = model.State.DeepClone().AsObject(); model.LastDetection = clock.UtcNow;
+    }
+    // The key vault syncs only with hosts whose whoami is a known, enabled user: null, or why not.
+    public async Task<string?> VaultUserProblemAsync(string slug, CancellationToken ct)
+    {
+        Model model; RemoteHostClient client;
+        try { model = Get(slug); client = Client(model.Host); }
+        catch (Exception e) when (e is IpcFailure or ArgumentException or InvalidOperationException) { return "That host is no longer enrolled or has no usable address."; }
+        await model.Serial.WaitAsync(ct);
+        try { await DetectIfStale(model, client, ct); }
+        catch (RemoteApiException) { }
+        finally { model.Serial.Release(); }
+        var view = model.View;
+        return Text(view["mode"]) is "admin" or "user" ? null : Text(view["message"]) is { Length: > 0 } message ? message : "This host does not know your credential as a user.";
     }
     public async Task ChildActionAsync(CompanionInstance entry, string action, string child, CancellationToken ct)
     {
