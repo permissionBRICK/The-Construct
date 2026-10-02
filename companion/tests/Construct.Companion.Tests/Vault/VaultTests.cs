@@ -114,7 +114,7 @@ public sealed class VaultTests
     }
 
     [Fact]
-    public void PatternsCoverEscapedFormsAndSkipShortValuesAndPemArmor()
+    public void PatternsCoverEscapedFormsAndSkipShortValuesAndMatchKeysOnlyWhole()
     {
         var patterns = VaultProtocol.Patterns("p@ss\"wörd\\x", "deploy");
         Assert.Contains("p@ss\"wörd\\x", patterns);
@@ -123,11 +123,16 @@ public sealed class VaultTests
         Assert.Contains(Uri.EscapeDataString("p@ss\"wörd\\x"), patterns);
         Assert.Contains(B64("deploy:p@ss\"wörd\\x"), patterns);
         Assert.Empty(VaultProtocol.Patterns("12345"));
-        var pem = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\nshort\n-----END OPENSSH PRIVATE KEY-----\n";
-        var lines = VaultProtocol.Patterns(pem, "root");
-        Assert.Contains("b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW", lines);
-        Assert.DoesNotContain(lines, l => l.Contains("BEGIN", StringComparison.Ordinal) || l == "short" || l.Contains('\n', StringComparison.Ordinal));
-        Assert.DoesNotContain(lines, l => l == B64("root:" + pem));
+        // Every unencrypted ed25519 key starts with the same base64 line; only the whole key is searched.
+        const string header = "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW";
+        var key = $"-----BEGIN OPENSSH PRIVATE KEY-----\n{header}\nQyNTUxOQAAACDx1Z3k8Gm8QwV9qY2n0aP5sT7uJ1wR6vB4cD8eF3gH2A\n-----END OPENSSH PRIVATE KEY-----";
+        var whole = VaultProtocol.Patterns(key + "\n", "root");
+        Assert.Contains(key, whole);
+        Assert.Contains(key.Replace("\n", "\r\n", StringComparison.Ordinal), whole);
+        Assert.Contains(key.Replace("\n", "\\n", StringComparison.Ordinal), whole);
+        Assert.All(whole, p => Assert.Contains("-----END", p, StringComparison.Ordinal));
+        Assert.DoesNotContain(whole, p => p == header || p == B64("root:" + key));
+        Assert.Equal(whole, VaultProtocol.Patterns(key.Replace("\n", "\r\n", StringComparison.Ordinal) + "\r\n", "root"));
     }
 
     [Theory]

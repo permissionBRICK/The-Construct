@@ -123,8 +123,10 @@ dependency and build caches (`node_modules`, `.git/objects`, `.cache`, package c
 `target` directories marked with `CACHEDIR.TAG`) and ordinary files over 256 MiB. Agent data
 directories are always searched, whatever their size. It looks for the value as written, its
 JSON-escaped and URL-encoded forms, and, with a username, the HTTP Basic credential. A
-multi-line value is searched line by line, without the shared PEM header lines. Values shorter
-than six characters are not searched; the activity list says so.
+multi-line value (a private key, a certificate) only counts when a file holds all of it, with LF
+or CRLF line ends and without the whitespace around it. A single line of it is not enough: every
+private key of one type starts with the same lines, so line matches would flag all keys on the
+VM. Values shorter than six characters are not searched; the activity list says so.
 
 **Agent logs are redacted without asking.** Every occurrence is overwritten in place with `*`
 characters of the same length, so files that are still being appended to stay intact. SQLite

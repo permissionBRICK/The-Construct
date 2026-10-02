@@ -21,7 +21,12 @@ ionice -c3 -p "$$" >/dev/null 2>&1 || true
 
 # stdin: "<index>\t<base64 pattern>" lines; several lines may share an index (variants of
 # one secret: raw, JSON-escaped, ...). Decoded straight into the pattern files.
+# A multi-line pattern (a private key) must match whole, and grep only matches within a line.
+# So it is kept apart as <index>.ml.<n>, and pass 1 searches for one of its lines (the anchor)
+# to find candidates. The last of its longest lines: the first lines of a key are the same in
+# every key of its type, the later ones hold key material.
 idxs=()
+ml=0
 : >"$w/all.pat"
 while IFS=$'\t' read -r idx b64 || [ -n "${idx:-}" ]; do
   b64=${b64%$'\r'}
@@ -29,13 +34,21 @@ while IFS=$'\t' read -r idx b64 || [ -n "${idx:-}" ]; do
   [ "${#idx}" -le 9 ] || continue
   idx=$((10#$idx))
   printf '%s' "$b64" | base64 -d >"$w/one" 2>/dev/null || continue
-  # An empty line in a grep -f file matches everything, and a newline would split one
-  # secret into shorter, noisier patterns; the host never sends either.
+  # An empty line in a grep -f file matches everything; the host never sends one.
   [ -s "$w/one" ] || continue
-  [ "$(wc -l <"$w/one")" -eq 0 ] || continue
-  [ -e "$w/$idx.pat" ] || idxs+=("$idx")
-  { cat "$w/one"; printf '\n'; } >>"$w/$idx.pat"
-  { cat "$w/one"; printf '\n'; } >>"$w/all.pat"
+  [ -e "$w/$idx.pat" ] || [ -e "$w/$idx.ml.0" ] || idxs+=("$idx")
+  if [ "$(wc -l <"$w/one")" -eq 0 ]; then
+    { cat "$w/one"; printf '\n'; } >>"$w/$idx.pat"
+    { cat "$w/one"; printf '\n'; } >>"$w/all.pat"
+    continue
+  fi
+  anchor=$(awk '{ sub(/\r$/, "") } length($0) >= length(a) { a = $0 } END { printf "%s", a }' "$w/one")
+  [ -n "$anchor" ] || continue
+  n=0
+  while [ -e "$w/$idx.ml.$n" ]; do n=$((n + 1)); done
+  mv -- "$w/one" "$w/$idx.ml.$n"
+  printf '%s\n' "$anchor" >>"$w/all.pat"
+  ml=1
 done
 rm -f -- "$w/one"
 
@@ -64,8 +77,38 @@ find -H "${existing[@]}" -xdev \
   xargs -0 -r grep -lZF --binary-files=text -f "$w/all.pat" -- 2>/dev/null |
   sort -z -u >"$w/cand"
 
+# Whether file $2 holds the multi-line pattern in file $1 as one unbroken run: the pattern's
+# first line ends a line of the file, its middle lines are whole lines, its last line starts
+# the line after them. The same test as a byte search for the whole pattern, but streamed line
+# by line, so a large log is never read into memory. at[] holds how many pattern lines each
+# run that is still possible has matched so far.
+whole() {
+  awk 'NR == FNR { p[++n] = $0; next }
+    {
+      m = 0
+      for (j = 1; j <= k; j++) {
+        s = at[j] + 1
+        if (s < n) { if ($0 == p[s]) nx[++m] = s }
+        else if (substr($0, 1, length(p[n])) == p[n]) { found = 1; exit }
+      }
+      if (length($0) >= length(p[1]) && substr($0, length($0) - length(p[1]) + 1) == p[1]) nx[++m] = 1
+      k = m
+      for (j = 1; j <= k; j++) at[j] = nx[j]
+    }
+    END { exit !found }' "$1" "$2"
+}
+holds() {
+  local i=$1 f=$2 m
+  if [ -s "$w/$i.pat" ] && grep -qF --binary-files=text -f "$w/$i.pat" -- "$f" 2>/dev/null; then return 0; fi
+  for m in "$w/$i".ml.*; do
+    [ -e "$m" ] && whole "$m" "$f" 2>/dev/null && return 0
+  done
+  return 1
+}
+
 # Pass 2: which secrets each candidate holds, so the host can tell the user which keys a
-# file exposes. One secret means pass 1 already answered that.
+# file exposes. One secret without multi-line patterns means pass 1 already answered that;
+# an anchor alone proves nothing.
 kind() {
   # Side files first, matching vault-clean: the host scrubs the database they belong to.
   case "$1" in *-wal | *-shm | *-journal) printf 'sqlite-aux'; return ;; esac
@@ -75,12 +118,12 @@ kind() {
 }
 n=0
 while IFS= read -r -d '' f; do
-  if [ "${#idxs[@]}" -eq 1 ]; then
+  if [ "${#idxs[@]}" -eq 1 ] && [ "$ml" -eq 0 ]; then
     hits=${idxs[0]}
   else
     hits=""
     for i in "${idxs[@]}"; do
-      grep -qF --binary-files=text -f "$w/$i.pat" -- "$f" 2>/dev/null && hits="${hits:+$hits,}$i"
+      holds "$i" "$f" && hits="${hits:+$hits,}$i"
     done
     [ -n "$hits" ] || continue
   fi

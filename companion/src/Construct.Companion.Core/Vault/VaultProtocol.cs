@@ -83,17 +83,16 @@ public static partial class VaultProtocol
 
     // Variants a secret takes in logs: raw, JSON-escaped (transcripts), ASCII-escaped JSON (Python's
     // default), URL-encoded (credentials in URLs) and the exact Basic-auth payload. A multi-line value
-    // (a private key) is searched line by line, skipping PEM armor lines that every key shares.
+    // (a private key) only ever matches whole, with LF or CRLF line ends: keys of one type share their
+    // first lines, so a single line of one would flag every other key on the VM.
     public static IReadOnlyList<string> Patterns(string value, string username = "")
     {
-        var normalized = value.Replace("\r\n", "\n", StringComparison.Ordinal);
-        var parts = normalized.Contains('\n', StringComparison.Ordinal)
-            ? normalized.Split('\n').Select(l => l.TrimEnd()).Where(l => l.Trim().Length >= 16 && !Armor().IsMatch(l.Trim())).ToArray()
-            : [value];
+        var text = value.Contains('\n', StringComparison.Ordinal) ? value.Replace("\r\n", "\n", StringComparison.Ordinal).Trim() : value;
+        string[] parts = text.Contains('\n', StringComparison.Ordinal) ? [text, text.Replace("\n", "\r\n", StringComparison.Ordinal)] : [text];
         var patterns = new List<string>();
         foreach (var part in parts) patterns.AddRange([part, JsonEscape(part, false), JsonEscape(part, true), Uri.EscapeDataString(part)]);
-        if (username.Length > 0 && parts.Length == 1 && parts[0] == value) patterns.Add(Convert.ToBase64String(Encoding.UTF8.GetBytes(username + ":" + value)));
-        return patterns.Where(p => Encoding.UTF8.GetByteCount(p) >= MinPatternLength && !p.Contains('\n', StringComparison.Ordinal)).Distinct(StringComparer.Ordinal).ToArray();
+        if (username.Length > 0 && parts.Length == 1) patterns.Add(Convert.ToBase64String(Encoding.UTF8.GetBytes(username + ":" + text)));
+        return patterns.Where(p => Encoding.UTF8.GetByteCount(p) >= MinPatternLength).Distinct(StringComparer.Ordinal).ToArray();
     }
     private static string JsonEscape(string text, bool ascii)
     {
@@ -168,8 +167,6 @@ public static partial class VaultProtocol
     private static partial Regex ApprovalIdPattern();
     [GeneratedRegex("^[A-Za-z0-9-]{8,64}$")]
     private static partial Regex IdPattern();
-    [GeneratedRegex("^-----[A-Z0-9 ]+-----$")]
-    private static partial Regex Armor();
     [GeneratedRegex("-(wal|shm|journal)$")]
     private static partial Regex SqliteSide();
     [GeneratedRegex(@"^(?:(?:/root|/home/[^/]+)/(?:\.claude/(?:projects|todos|shell-snapshots|debug|file-history|paste-cache|session-env|sessions)/|\.claude/history\.jsonl$|\.codex/(?:sessions|archived_sessions|log)/|\.codex/history\.jsonl$|\.codex/logs_[^/]*$|\.local/share/opencode/(?:storage|log)/|\.local/share/opencode/opencode\.db[^/]*$|\.t3/userdata/logs/|\.t3/userdata/state\.sqlite[^/]*$)|/tmp/claude-)")]
