@@ -4,7 +4,9 @@ using System.Security.Principal;
 using System.Text;
 namespace Constructd.Windows.Media;
 
-public sealed class WindowsKeyCipher(string directory)
+// The host master-key pattern: 32 random bytes in a protected directory, DPAPI LocalMachine on Windows
+// and a root-only file elsewhere. Each use gets its own key file (windows-master.key, vault-master.key).
+public sealed class WindowsKeyCipher(string directory, string fileName = "windows-master.key")
 {
     private byte[]? master;
     private readonly object sync = new();
@@ -26,7 +28,7 @@ public sealed class WindowsKeyCipher(string directory)
                 new DirectoryInfo(directory).SetAccessControl(acl);
             }
             else File.SetUnixFileMode(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-            var path = Path.Combine(directory, "windows-master.key");
+            var path = Path.Combine(directory, fileName);
             if (!File.Exists(path))
             {
                 var generated = RandomNumberGenerator.GetBytes(32);
@@ -45,15 +47,39 @@ public sealed class WindowsKeyCipher(string directory)
     }
     public string Encrypt(string value)
     {
-        var nonce = RandomNumberGenerator.GetBytes(12); var plain = Encoding.UTF8.GetBytes(value); var cipher = new byte[plain.Length]; var tag = new byte[16];
-        try { using var aes = new AesGcm(Master(), 16); aes.Encrypt(nonce, plain, cipher, tag); return Convert.ToBase64String(nonce.Concat(tag).Concat(cipher).ToArray()); }
+        var plain = Encoding.UTF8.GetBytes(value);
+        try { return EncryptBytes(plain); }
         finally { CryptographicOperations.ZeroMemory(plain); }
     }
     public string Decrypt(string value)
     {
+        var plain = DecryptBytes(value);
+        try { return Encoding.UTF8.GetString(plain); }
+        finally { CryptographicOperations.ZeroMemory(plain); }
+    }
+    public string EncryptBytes(ReadOnlySpan<byte> plain)
+    {
+        var nonce = RandomNumberGenerator.GetBytes(12); var cipher = new byte[plain.Length]; var tag = new byte[16];
+        using var aes = new AesGcm(Master(), 16); aes.Encrypt(nonce, plain, cipher, tag); return Convert.ToBase64String(nonce.Concat(tag).Concat(cipher).ToArray());
+    }
+    // The caller owns (and zeroes) the returned plaintext.
+    public byte[] DecryptBytes(string value)
+    {
         var bytes = Convert.FromBase64String(value); if (bytes.Length < 28) throw new CryptographicException();
         var plain = new byte[bytes.Length - 28];
-        try { using var aes = new AesGcm(Master(), 16); aes.Decrypt(bytes.AsSpan(0, 12), bytes.AsSpan(28), bytes.AsSpan(12, 16), plain); return Encoding.UTF8.GetString(plain); }
-        finally { CryptographicOperations.ZeroMemory(plain); }
+        try { using var aes = new AesGcm(Master(), 16); aes.Decrypt(bytes.AsSpan(0, 12), bytes.AsSpan(28), bytes.AsSpan(12, 16), plain); return plain; }
+        catch { CryptographicOperations.ZeroMemory(plain); throw; }
+    }
+}
+
+/// <summary>Wraps a user's vault key with the host's own vault master key (vault-master.key).</summary>
+public sealed class HostVaultKeyProtector(WindowsKeyCipher cipher) : Constructd.Core.Abstractions.IVaultKeyProtector
+{
+    public const string FileName = "vault-master.key";
+    public string Wrap(ReadOnlySpan<byte> key) => cipher.EncryptBytes(key);
+    public byte[] Unwrap(string wrapped)
+    {
+        try { return cipher.DecryptBytes(wrapped); }
+        catch (FormatException) { throw new CryptographicException("The wrapped vault key is not base64."); }
     }
 }
