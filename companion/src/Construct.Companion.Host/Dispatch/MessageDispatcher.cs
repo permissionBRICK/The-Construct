@@ -163,6 +163,8 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
                 var slug = RemoteHost.HostSlug(client.BaseUrl);
                 await hosts.DispatchAsync(slug, new() { ["type"] = "hostadmin.ready" }, ct);
                 await desktop.ActivateAsync(new("hostadmin", Host: slug), ct); break;
+            // The key vault lives in its own native window; this only opens it. Nothing of the vault passes the dispatcher.
+            case "openVault": await desktop.ActivateAsync(new("vault"), ct); break;
             case "childConsole": case "childShutdown": case "childDelete": await hosts.ChildActionAsync(entry, id, Text(m, "child"), ct); break;
             case "syncConfigNow": case "addConfigRemote": case "removeConfigRemote": case "importRemoteConfigs": case "shareConfigs": case "pushConfigUpstream": case "publishConfigProfiles": case "addRemoteAndPublish": case "openConfigRepo":
                 await ConfigCommand(entry, id, m, ct); break;

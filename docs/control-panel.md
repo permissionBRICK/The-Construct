@@ -17,7 +17,7 @@ step — it's plain JavaScript; to hack on it, open `extension/` and press F5.)
   Panel** button.
 - **Full panel** — that button (or the `The Construct: Open Control Panel` command) opens
   the wide **editor tab** with everything: system status, agents, projects, usage, voice,
-  and settings. It's restored across window reloads.
+  the key vault entry, and settings. It's restored across window reloads.
 
 Both read the same live state, pushed from the extension as the VM is probed over SSH.
 
@@ -474,6 +474,13 @@ double counting but means a partial daily history can leave that month's total
 incomplete. Host windows use UTC calendar dates; guests use their own clock for
 collector date windows. All-time means retained history, with a default of 400 days.
 Cost is an estimate from the collector's price table.
+
+## Key vault
+
+The **Key vault** card opens Construct Companion's Key Vault window: the secrets agents may use
+only with your approval, who holds which one until when, what the vault did, and your hosts. See
+[Key vault](key-vault.md). The vault never enters the panel. In VS Code without a running
+Companion, the card says where the vault lives (and offers the install when the Companion is missing).
 
 ## Microphone passthrough (voice input)
 

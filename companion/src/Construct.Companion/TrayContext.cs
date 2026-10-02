@@ -260,6 +260,7 @@ internal sealed class TrayContext : ApplicationContext
                 if (id == "chooseTheme") { Open("theme", scope); return true; }
                 if (id == "showLogs") { await platform.Launcher.OpenAsync(platform.Log.PathName); return true; }
                 if (id == "openHostAdmin") { Open("hostadmin", HostForScope(scope)); return true; }
+                if (id == "openVault") { Open("vault", null); return true; }
                 break;
         }
         return false;

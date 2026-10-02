@@ -204,6 +204,10 @@ h1.title {
 .sub.warn .dot { background: var(--warn); box-shadow: 0 0 7px var(--warn); }
 .sub.warn .muted { color: var(--warn); opacity: 0.85; }
 
+/* Key vault card: one line, one button; the vault itself is Construct Companion's own window. */
+.vault-card > .mhead { margin-bottom: 8px; }
+.vault-card .desc { margin: 0; color: var(--text); font-family: var(--sans); font-size: 12px; line-height: 1.55; }
+
 .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
 .chip { font-size: 12px; padding: 5px 11px; border-radius: 5px; border: 1px solid var(--line); color: var(--dim); background: rgba(0,0,0,0.2); display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
 .chip.on { color: var(--title); border-color: var(--line-strong); background: rgba(0,255,102,0.08); }

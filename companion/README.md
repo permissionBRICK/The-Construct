@@ -114,7 +114,8 @@ design. `VaultView` (Core) decides everything: it builds the page state (names, 
 usernames, counts, lease, host and activity metadata) and validates and runs the page's
 `vault.<action>` requests. Those requests are handled in process only: the window holds no
 `IMessageSink`, and `MessageDispatcher` refuses them like any unknown message, so nothing reachable
-over the local HTTP API can list or change the vault. Values, usernames on copy, the vault key, device
+over the local HTTP API can list or change the vault. The panel's **Key vault** card posts the
+`openVault` command, which only opens the window. Values, usernames on copy, the vault key, device
 tokens and pairing links never enter a webview: `IVaultWindow` (add/edit dialog, clipboard cleared
 after 30 seconds, the pairing QR code) and the `IPrompts` key, approval and file-decision dialogs are
 the only places they appear.
@@ -223,6 +224,7 @@ views and runtime messages use IPC). The limitations of the implemented rows are
 | command | `openHostAdmin` | implemented |
 | command | `openProject` | implemented |
 | command | `openProjectFolder` | implemented |
+| command | `openVault` | implemented |
 | command | `publishConfigProfiles` | implemented |
 | command | `pushConfigUpstream` | implemented |
 | command | `redownload` | implemented |

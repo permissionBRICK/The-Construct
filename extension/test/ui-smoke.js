@@ -167,6 +167,14 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   let posted = await page.evaluate(() => window.__posted);
   check("voice switch posts setAudio:true", posted.some((m) => m.type === "setAudio" && m.enabled === true));
   check("voice switch becomes busy", (await page.getAttribute("#voiceSwitch", "class")).includes("busy"));
+  // The key vault entry only asks the host to open the vault.
+  check("key vault: card in the console with one line and one button",
+    await page.locator("#mainView .vault-card").isVisible() && (await page.locator(".vault-card .desc").count()) === 1
+    && (await page.locator(".vault-card button").count()) === 1 && /Open key vault/.test(await page.locator(".vault-card button").innerText()));
+  await page.click('.vault-card [data-cmd="openVault"]');
+  posted = await page.evaluate(() => window.__posted);
+  check("key vault: the button posts the openVault command and nothing else", posted.filter((m) => m.type === "command" && m.id === "openVault").length === 1
+    && JSON.stringify(posted.find((m) => m.id === "openVault")) === JSON.stringify({ type: "command", id: "openVault" }));
 
   await page.click('[data-cmd="reprovision"]');
   posted = await page.evaluate(() => window.__posted);

@@ -217,6 +217,7 @@ h1.title {
 /* ── 10. Voice module (armed mic = a genuinely live state: keeps its glow) ── */
 .voice { border-color: var(--line-strong); box-shadow: none; }
 .voice .desc { color: var(--dim); }
+.vault-card .desc { color: var(--dim); }
 .switch { background: var(--ground); border-color: var(--line-strong); }
 .switch .knob { background: var(--faint); }
 .switch[aria-checked="true"] {

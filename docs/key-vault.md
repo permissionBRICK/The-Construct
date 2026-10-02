@@ -20,10 +20,11 @@ so they work while your PC is off, and you can approve from a paired phone. See
 
 ## Managing secrets
 
-Open **Key Vault** from the Companion tray menu (or run `ConstructCompanion.exe --vault`, or open
-`construct://vault`). Toasts from the vault open it too. The window follows the design you chose for
-the control panel. It shows names, descriptions, usernames and who holds what; values are only typed,
-copied and shown in native dialogs.
+Open **Key Vault** from the Companion tray menu or the control panel's **Key vault** card (or run
+`ConstructCompanion.exe --vault`, or open `construct://vault`). Toasts from the vault open it too. The
+window follows the design you chose for the control panel. It shows names, descriptions, usernames and
+who holds what; values are only typed, copied and shown in native dialogs. In VS Code without the
+Companion, the card only says where the vault is.
 
 | Tab | What it shows |
 |---|---|

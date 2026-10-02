@@ -124,6 +124,20 @@ async function migrateCompanion() {
       secrets: extensionContext.secrets, fs, env: process.env, libPath: remoteLibPath(), run: runCompanionMigration });
   } catch (_) { logLine("companion: migration incomplete; will retry on the next connection."); }
 }
+/** The panel's Key vault card. The vault lives in Construct Companion (values never reach a
+ *  webview); with the Companion running the message is proxied there and opens its window.
+ *  Without it there is no launch helper here, so say where the vault is. */
+async function runOpenVault() {
+  const manifest = companion.installManifestPath(process.env);
+  const installed = process.platform === "win32" && !!manifest && fs.existsSync(manifest);
+  const INSTALL = "Install Construct Companion";
+  const choice = await vscode.window.showInformationMessage(
+    installed
+      ? "The key vault lives in Construct Companion. Start it, then open Key Vault from its tray menu."
+      : "The key vault lives in Construct Companion, the tray app on your PC: it keeps secrets that agents read only after you approve.",
+    ...(installed || process.platform !== "win32" ? [] : [INSTALL]));
+  if (choice === INSTALL) installCompanion();
+}
 let companionInstallOffered = false;
 function installCompanion() {
   const scriptsDir = resolveScriptsDir();
@@ -4822,6 +4836,7 @@ function handleMessage(message, webview, context) {
       if (id === "openForward") { void openForward(String(message.forward || "")); return; }
       if (id === "closeForward") { void closeForward(String(message.forward || "")); return; }
       if (id === "registerThisVm") { void runRegisterThisVm(); return; }
+      if (id === "openVault") { void runOpenVault(); return; }
       if (id === "removeInstance") { void runRemoveInstance(); return; }
       // Host administration (§10.2): the Child VMs card's two actions, the Host button
       // and the first-VM offer. The child name is validated against what THIS window

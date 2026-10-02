@@ -124,6 +124,13 @@
             <div class="sub" id="voiceGateRow"><span class="dot"></span> <span id="voiceGate">chat mic button</span> <span class="muted" id="voiceGateNote">(gate patched if a known build)</span></div>
           </div>
         </section>
+
+        <!-- Key vault: secrets agents use only with your approval. The vault lives in Construct
+             Companion and never enters this webview; the card only opens it (openVault). -->
+        <section class="module vault-card">
+          <div class="mhead"><h2 class="seclabel">Key vault</h2><button class="btn" data-cmd="openVault">Open key vault</button></div>
+          <p class="desc">Tokens, passwords and keys agents read only after you approve, scrubbed from the VM when the access ends.</p>
+        </section>
       </div>
 
       <div class="col">
