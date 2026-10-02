@@ -312,6 +312,96 @@ ok "a missing token never makes the run fail" test "$?" = 0
 ok "a missing token is logged" grep -q 'no usable VM token' "${tmp}/notoken.err"
 ok "a missing token makes no request" test ! -f "${stub_dir}/requests"
 
+# ── "vaultScrub": true starts the key vault scrub ────────────────────────────
+# docs/plans/key-vault-hosted.md: the reply flags a due scrub; the reporter starts
+# `construct secret _scrub` detached and never waits for it. Outside systemd it
+# forks it off with setsid; under systemd (INVOCATION_ID set) it hands it to
+# systemd-run, because the oneshot unit's cgroup is killed when the report ends.
+
+scrub_log="${tmp}/scrub.log"
+systemd_run_log="${tmp}/systemd-run.log"
+cat >"${stubs}/scrub" <<'STUB'
+#!/usr/bin/env bash
+printf 'start %s\n' "$*" >>"${SCRUB_LOG}"
+sleep "${SCRUB_SLEEP:-0}"
+printf 'done\n' >>"${SCRUB_LOG}"
+STUB
+cat >"${stubs}/systemd-run" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${SYSTEMD_RUN_LOG}"
+STUB
+chmod +x "${stubs}/scrub" "${stubs}/systemd-run"
+
+# post with the scrub hooks stubbed; outside systemd unless INVOCATION_ID is given.
+post_scrub() {
+  rm -f "${scrub_log}" "${systemd_run_log}"
+  (
+    if [[ -z "${SCRUB_INVOCATION:-}" ]]; then unset INVOCATION_ID; else export INVOCATION_ID="${SCRUB_INVOCATION}"; fi
+    SCRUB_LOG="${scrub_log}" SYSTEMD_RUN_LOG="${systemd_run_log}" SCRUB_SLEEP="${SCRUB_SLEEP:-0}" \
+    CONSTRUCT_IDLE_SYSTEMD_RUN="${stubs}/systemd-run" \
+      post
+  )
+}
+wait_for_line() { # <file> <line>
+  local _
+  for _ in $(seq 1 100); do grep -qx -- "$2" "$1" 2>/dev/null && return 0; sleep 0.05; done
+  return 1
+}
+
+reset_scene
+printf '200' >"${stub_dir}/code"
+printf '{"ok":true,"vaultScrub":true}' >"${stub_dir}/response"
+start_ms="$(date +%s%3N)"
+SCRUB_SLEEP=3 CONSTRUCT_IDLE_SCRUB_CMD="${stubs}/scrub" post_scrub >"${tmp}/scrub.out" 2>"${tmp}/scrub.err"
+scrub_rc=$?
+elapsed=$(( $(date +%s%3N) - start_ms ))
+ok "vaultScrub: the report still exits 0" test "${scrub_rc}" = 0
+ok "vaultScrub: the report does not wait for the scrub (${elapsed} ms)" test "${elapsed}" -lt 2000
+ok "vaultScrub: the report still says nothing" sh -c "test ! -s '${tmp}/scrub.out' -a ! -s '${tmp}/scrub.err'"
+ok "vaultScrub: 'construct secret _scrub' is started" wait_for_line "${scrub_log}" "start secret _scrub"
+ok "vaultScrub: ... detached: it outlives the report and finishes" \
+  sh -c "for i in \$(seq 1 100); do grep -qx done '${scrub_log}' && exit 0; sleep 0.05; done; exit 1"
+ok "vaultScrub: ... exactly once" test "$(grep -c '^start' "${scrub_log}")" = 1
+
+for reply in '{"vaultScrub":false}' '{"ok":true}' '' '"vaultScrub": true'; do
+  reset_scene
+  printf '200' >"${stub_dir}/code"
+  printf '%s' "${reply}" >"${stub_dir}/response"
+  CONSTRUCT_IDLE_SCRUB_CMD="${stubs}/scrub" post_scrub >/dev/null 2>&1
+  sleep 0.3
+  ok "no scrub for the reply '${reply}'" test ! -e "${scrub_log}"
+done
+
+reset_scene
+printf '500' >"${stub_dir}/code"
+printf '{"vaultScrub":true}' >"${stub_dir}/response"
+CONSTRUCT_IDLE_SCRUB_CMD="${stubs}/scrub" post_scrub >/dev/null 2>&1
+sleep 0.3
+ok "no scrub when the report itself failed" test ! -e "${scrub_log}"
+
+# Under systemd: a transient unit of its own, logging as construct-vault.
+reset_scene
+printf '200' >"${stub_dir}/code"
+printf '{"vaultScrub":true}' >"${stub_dir}/response"
+SCRUB_INVOCATION=test-invocation CONSTRUCT_IDLE_SCRUB_CMD="${stubs}/scrub" post_scrub >"${tmp}/scrub.out" 2>"${tmp}/scrub.err"
+scrub_rc=$?
+ok "vaultScrub under systemd: exits 0, says nothing" \
+  sh -c "test ${scrub_rc} = 0 && test ! -s '${tmp}/scrub.out' -a ! -s '${tmp}/scrub.err'"
+ok "vaultScrub under systemd: systemd-run starts the scrub, without waiting" \
+  grep -q -- "--no-block .*-- ${stubs}/scrub secret _scrub\$" "${systemd_run_log}"
+ok "vaultScrub under systemd: ... as a transient unit that is collected" grep -q -- '--collect' "${systemd_run_log}"
+ok "vaultScrub under systemd: ... logging as construct-vault" \
+  grep -q -- '--property=SyslogIdentifier=construct-vault' "${systemd_run_log}"
+sleep 0.3
+ok "vaultScrub under systemd: not also forked off directly" test ! -e "${scrub_log}"
+
+reset_scene
+printf '200' >"${stub_dir}/code"
+printf '{"vaultScrub":true}' >"${stub_dir}/response"
+SCRUB_INVOCATION=test-invocation post_scrub >/dev/null 2>&1
+ok "vaultScrub: the default command is the construct CLI next to the reporter" \
+  grep -q -- "-- ${ROOT}/bin/construct secret _scrub\$" "${systemd_run_log}"
+
 # ── the systemd units ────────────────────────────────────────────────────────
 
 service_unit="${ROOT}/systemd/construct-idle-report.service"
