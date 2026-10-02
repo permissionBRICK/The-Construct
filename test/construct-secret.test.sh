@@ -993,6 +993,18 @@ ok "_scrub: a file the clean-up never reported is posted as failed" \
   test "$(hreq 2 -c '.results')" = "[{\"path\":\"$(pb /x/y)\",\"status\":\"failed\",\"count\":0,\"detail\":\"not processed\"}]"
 ok "_scrub: ... which the host took, so the run itself succeeds" test "${rc}" = 0
 
+# A VM gets its checkout from the release archive (git archive), which leaves the
+# .NET sources out: the two scripts _scrub renders have to be in it all the same.
+if git -C "${ROOT}" rev-parse --git-dir >/dev/null 2>&1; then
+  git -C "${ROOT}" archive --worktree-attributes --format=tar HEAD 2>/dev/null | tar -t >"${tmp}/archive.txt" 2>/dev/null
+  for f in vault-scan.sh vault-clean.sh; do
+    ok "the release archive ships GuestScripts/${f}" \
+      grep -qx "companion/src/Construct.Companion.Core/Vault/GuestScripts/${f}" "${tmp}/archive.txt"
+  done
+  ok "the release archive still leaves the rest of companion/src out" \
+    sh -c "! grep '^companion/src/.*[^/]\$' '${tmp}/archive.txt' | grep -qv '^companion/src/Construct.Companion.Core/Vault/GuestScripts/vault-\(scan\|clean\)\.sh\$'"
+fi
+
 # Jobs come and go: none due, a POST the host refuses, an unknown step.
 hs_reset
 hs_answer 1 200 '{"jobs":[]}'

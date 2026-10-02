@@ -163,8 +163,8 @@ Exit codes:
   7 denied, or no answer within --wait · 8 the Companion reported an error
   9 no such secret · 10 the name is taken (add --replace overwrites)
   11 the vault is locked for this VM: start or connect it from the user's PC
-On a host service, 6 means the host service could not be reached and 8 that it
-reported an error.
+On a VM of a host service, 6 means the host service could not be reached and 8
+that it reported an error.
 USAGE
 }
 
