@@ -343,6 +343,59 @@ ok "with no existing root the scan still finishes" \
 ok "with no patterns the scan reports nothing" \
   test "$(bash "${scan}" </dev/null)" = "DONE${tab}0"
 
+# A multi-line secret (a private key) only counts whole: with LF or CRLF line ends, or
+# JSON-escaped. Every unencrypted ed25519 key starts with the same lines, so another key, a
+# fragment of the key or its lines with something in between must not be reported.
+keys="${tmp}/keys"
+mkdir -p "${keys}"
+kh='b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW'
+key_of() { printf '%s\n' '-----BEGIN OPENSSH PRIVATE KEY-----' "${kh}" "QyNTUxOQAAACA$1" "$2" '-----END OPENSSH PRIVATE KEY-----'; }
+# $(...) drops the final newline, as Patterns trims the value. K5 shares K4's header, armor
+# and last line; only the key material differs.
+K4="$(key_of "${r1}material" "tail${r3}")"
+K5="$(key_of "${r2}material" "tail${r3}")"
+K4C="${K4//$'\n'/$'\r\n'}"
+J4="${K4//$'\n'/\\n}"
+printf '%s\n' "${K4}" >"${keys}/id_four"
+printf '%s\r\n' "${K4C}" >"${keys}/id_four_crlf"
+printf '%s\n' "${K5}" >"${keys}/id_other"
+printf 'key: %s # end\n' "${K4}" >"${keys}/embedded.txt"
+printf '%s\n%s\n' "${K5}" "${K4}" >"${keys}/both.txt"
+printf '%s\n' '-----BEGIN OPENSSH PRIVATE KEY-----' "${kh}" "${K4}" >"${keys}/restart.txt"
+printf '%s\n' "${K4}" | sed '3a inserted' >"${keys}/broken.txt"
+printf '%s\n' "${K4}" | head -n 4 >"${keys}/partial.txt"
+printf '%s\n' "${kh}" >"${keys}/header-only.log"
+printf '{"text":"%s"}\n' "${J4}" >"${keys}/t.jsonl"
+printf 'token %s\n' "${S1}" >"${keys}/token.txt"
+{
+  printf '4\t%s\n' "$(b64 "${K4}")"
+  printf '4\t%s\n' "$(b64 "${K4C}")"
+  printf '4\t%s\n' "$(b64 "${J4}")"
+} >"${tmp}/keys-only.in"
+{ printf '1\t%s\n' "$(b64 "${S1}")"; cat "${tmp}/keys-only.in"; } >"${tmp}/keys.in"
+render "${SCRIPTS}/vault-scan.sh" "${tmp}/scan-keys.sh" "dir=$(q "${vd}")" "roots=$(q "${keys}")" "maxSize=$(q 16384)"
+bash "${tmp}/scan-keys.sh" <"${tmp}/keys.in" >"${tmp}/keys.out" 2>"${tmp}/keys.err"
+expected_keys="$(sort <<EOF
+~/keys/both.txt|4|text|size
+~/keys/embedded.txt|4|text|size
+~/keys/id_four_crlf|4|text|size
+~/keys/id_four|4|text|size
+~/keys/restart.txt|4|text|size
+~/keys/t.jsonl|4|text|size
+~/keys/token.txt|1|text|size
+EOF
+)"
+actual="$(scan_view "${tmp}/keys.out")"
+ok "a key is reported only where it is whole (not another key, a fragment, or lines apart)" test "${actual}" = "${expected_keys}"
+if [[ "${actual}" != "${expected_keys}" ]]; then
+  diff <(printf '%s\n' "${expected_keys}") <(printf '%s\n' "${actual}") | sed 's/^/        /'
+fi
+ok "the key scan prints no errors" test ! -s "${tmp}/keys.err"
+bash "${tmp}/scan-keys.sh" <"${tmp}/keys-only.in" >"${tmp}/keys-only.out" 2>/dev/null
+ok "with the key as the only secret, its anchor line alone still proves nothing" \
+  test "$(scan_view "${tmp}/keys-only.out")" = "$(grep -v token.txt <<<"${expected_keys}")"
+ok "the key scan's work dir is gone" test -z "$(find "${vd}" -maxdepth 1 -name 'scan.*')"
+
 # The patterns must never be visible to other processes: sample ps while a scan of a
 # bigger tree runs through both passes.
 big="${tmp}/bigtree"
@@ -656,6 +709,14 @@ ok "crash: the file it died on is reported failed" \
 ok "crash: the files behind it are still scrubbed" grep -qx "R${tab}ok${tab}$(b64 "${cd_}/after.txt")${tab}1" "${tmp}/crash.out"
 ok "crash: the run still ends with DONE" test "$(tail -n 1 "${tmp}/crash.out")" = DONE
 ok "crash: the work dir is gone" test -z "$(find "${cvd}" -maxdepth 1 -name 'clean.*')"
+
+# A key is redacted whole; the key next to it keeps the lines the two share.
+cp "${keys}/both.txt" "${cd_}/both.txt"
+printf 'redact\t%s\t%s\t%s\t%s\n' "$(b64 "${cd_}/both.txt")" "$(b64 "${K4}")" "$(b64 "${K4C}")" "$(b64 "${J4}")" >"${tmp}/keys-clean.in"
+bash "${clean}" <"${tmp}/keys-clean.in" >"${tmp}/keys-clean.out" 2>/dev/null
+{ printf '%s\n' "${K5}"; printf '%*s\n' "${#K4}" '' | tr ' ' '*'; } >"${tmp}/both.expected"
+ok "key: masked whole, the other key untouched" cmp -s "${tmp}/both.expected" "${cd_}/both.txt"
+ok "key: reported ok with 1 replacement" grep -qx "R${tab}ok${tab}$(b64 "${cd_}/both.txt")${tab}1" "${tmp}/keys-clean.out"
 
 # Without python3: deletes still happen, every redaction says why it could not.
 nopython="${tmp}/path-nopython"
