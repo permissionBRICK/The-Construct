@@ -230,8 +230,10 @@ exit 0
  * Both instances prefer CONSTRUCT_EXTERNAL_HOST, falling back to the VM's
  * hostname.mshome.net. config.env already controls SSH and other client routes;
  * using its address for the default instance is intentional.
- * Named instances retain their own pairing label. links lists the forwarded
- * route and an optional direct route when CONSTRUCT_DIRECT_HOST is known.
+ * Named instances retain their own pairing label. links lists, in this order,
+ * the user's own proxy address when config.env records one (T3CODE_PROXY_URL),
+ * the forwarded route, and a direct route when CONSTRUCT_DIRECT_HOST is known.
+ * pairUrl stays the forwarded route for clients that predate links.
  *
  * BOTH variants pick the SCHEME from the VM: Construct now serves T3 over HTTPS
  * (bin/setup-t3-https.sh), and a browser only exposes getUserMedia() — T3's
@@ -275,7 +277,7 @@ function extractPairLinks(stdout) {
   try {
     const value = JSON.parse(String(stdout));
     return (Array.isArray(value.links) ? value.links : []).filter(link => {
-      if (!["forwarded", "direct"].includes(link?.kind) || typeof link.pairUrl !== "string") return false;
+      if (!["proxy", "forwarded", "direct"].includes(link?.kind) || typeof link.pairUrl !== "string") return false;
       try { return ["http:", "https:"].includes(new URL(link.pairUrl).protocol); } catch (_) { return false; }
     });
   } catch (_) { return []; }
@@ -413,6 +415,49 @@ async function _setChannelNow(channel, opts = {}) {
   );
 }
 
+/**
+ * The address the user reaches this VM's T3 Code at through their own reverse proxy
+ * (config.env T3CODE_PROXY_URL; Settings → Access & services). The same rule as
+ * `construct config set t3-proxy-url`: an http(s) origin — host name, IPv4 or bracketed
+ * IPv6, optional port 1–65535 — with one trailing slash dropped and no path, query,
+ * fragment or user name. Empty means "remove it". Returns { url, error }. Pure; mirrored
+ * by T3Code.NormalizeProxyUrl in the Companion.
+ */
+const PROXY_URL_ERROR = "Enter an http(s) address without a path, query or fragment, e.g. https://t3.example.net:8443, or leave it empty.";
+function normalizeProxyUrl(value) {
+  if (value != null && typeof value !== "string") return { url: null, error: PROXY_URL_ERROR };
+  let v = String(value == null ? "" : value).replace(/^[ \t\n\r\f\v]+|[ \t\n\r\f\v]+$/g, "");
+  if (v.endsWith("/")) v = v.slice(0, -1);
+  if (v === "") return { url: "", error: null };
+  const m = /^https?:\/\/(?:[A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])(?::(\d{1,5}))?$/.exec(v);
+  if (!m || (m[1] !== undefined && (Number(m[1]) < 1 || Number(m[1]) > 65535))) return { url: null, error: PROXY_URL_ERROR };
+  return { url: v, error: null };
+}
+
+/** Bash: store (or, for "", remove) the VM's T3CODE_PROXY_URL. `url` must come from
+ *  normalizeProxyUrl, whose alphabet has no quote, so single quotes make it shell-ready. */
+function buildProxyUrlScript(url) {
+  const checked = normalizeProxyUrl(url);
+  if (checked.error) throw new Error(checked.error);
+  return guestScripts.render("t3-proxy-url", { url: "'" + checked.url + "'" });
+}
+
+/** Write the proxy address to the VM now. Resolves { url } or { error } (the text the panel
+ *  shows under the field); never rejects for an expected failure. */
+async function setProxyUrlOnVm(value, opts = {}) {
+  const vscode = opts._vscode || vsc();
+  const _ssh = opts._ssh || ssh;
+  const checked = normalizeProxyUrl(value);
+  if (checked.error) return { error: checked.error };
+  if (!(await _ssh.isReachable(opts))) return { error: "The VM is offline. Start it, then apply the address again." };
+  const r = await _ssh.runRemoteScript(buildProxyUrlScript(checked.url), { ...opts, timeoutMs: opts.timeoutMs || 30000 });
+  if (r.code !== 0) return { error: ("The VM did not store the address (exit " + r.code + "). " + (r.stderr || "").trim().slice(-200)).trim() };
+  vscode.window.showInformationMessage(checked.url
+    ? "T3 Code proxy address set to " + checked.url + ". New pairing links and phone QR codes use it."
+    : "T3 Code proxy address removed.");
+  return { url: checked.url };
+}
+
 function planT3LiveAction(wantT3, hadT3, newCh, oldCh) {
   if (wantT3 && !hadT3) return { action: "enable", channel: newCh };
   if (!wantT3 && hadT3) return { action: "disable" };
@@ -425,5 +470,6 @@ module.exports = {
   buildInstallScript, buildDisableScript, buildPairingScript,
   extractPairUrl, extractPairLinks, baseUrl,
   openWebUi, enableOnVm, disableOnVm, setChannelOnVm,
+  normalizeProxyUrl, buildProxyUrlScript, setProxyUrlOnVm,
   planT3LiveAction, _resetQueue,
 };

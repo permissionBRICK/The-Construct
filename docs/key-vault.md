@@ -170,9 +170,10 @@ second.
 shows a QR code. Scanning it opens a short pairing page on the host service. That page stores a
 device token in the browser and forwards to T3 Code's own pairing link, so one scan both signs
 the phone in to T3 Code and pairs it for approvals. The T3 Code part of the code is valid for about
-10 minutes and works once. Later, open `https://<host>:7462/vault/` on the phone (or the
-address in the host setting `Constructd:VaultWebUrl`) to see pending requests and file decisions.
-The Companion shows the same requests at the same time; the first answer counts.
+10 minutes and works once. Later, open the approval page on the phone, `https://<host>:7462/vault/`
+or the [approval page address](#your-own-proxy-for-t3-code-and-the-approval-page) of the host, to
+see pending requests and file decisions. The Companion shows the same requests at the same time;
+the first answer counts.
 
 **Noticing a request in T3 Code.** While `construct secret` waits for an answer, T3 Code shows a
 banner on every open client (phone or PC): "Key vault: github-token waiting for your approval". On
@@ -181,11 +182,80 @@ highlighted. On a local VM it points you to the Companion dialog on your PC. The
 links; approving still happens on the host's page or in the Companion. It disappears when the
 request is answered or times out. Nothing alerts you while no T3 Code page is open.
 
-The device token lives only on the host service's web address, never in T3 Code. T3 Code is
+The device token lives only on the approval page's address, never in T3 Code. T3 Code is
 served from inside the VM, where an agent could read anything stored for its page. The host's
-certificate is self-signed unless you put a proxy with a public certificate in front of it
-(`Constructd:VaultWebUrl`), so the phone warns about it once. Revoke a lost phone on the
-Hosts tab.
+certificate is self-signed unless a proxy with a trusted certificate stands in front of it (next
+section), so the phone warns about it once; the pairing dialog says so while that is the case.
+Revoke a lost phone on the Hosts tab.
+
+### Your own proxy for T3 Code and the approval page
+
+A phone uses two addresses: T3 Code's, which the QR code logs it in to, and the approval page's.
+Out of the box both are addresses of the host (a forward such as `https://<host>:2301` and
+`https://<host>:7462`) with certificates the phone does not trust. If you reach them through your
+own reverse proxy with a trusted certificate, record both addresses:
+
+- **T3 Code, per VM.** In the control panel: Settings → Access & services → **T3 Code address via
+  your own proxy**, then **apply**. Agents on the VM can record it too, which is handy when you
+  ask one to set up the proxy:
+
+  ```bash
+  construct config set t3-proxy-url https://t3.example.net:8443
+  construct config get t3-proxy-url
+  construct config unset t3-proxy-url
+  ```
+
+  The value lives only in the VM's `/etc/construct/config.env` (`T3CODE_PROXY_URL`). The panel
+  shows what is stored there, including a value an agent set, and **apply** writes it there over
+  SSH at once. Provisioning never writes it, and a reinstall carries it over. T3 Code binds a
+  pairing link to the address it was minted for, so the pairing script mints one more link for
+  this address: the phone QR code uses it instead of the host forward, and **Open T3 Code**
+  offers it first.
+- **The approval page, per host.** A host administrator sets it in Host Administration →
+  Configuration → **Key vault** (`vault`), key `webUrl` (approval page address), for example
+  `{"webUrl": "https://vault.example.net"}`. It is used for QR codes, for the **Approve** link of
+  the T3 Code banner, and for the address phones open later. It takes precedence over the
+  service option `Constructd:VaultWebUrl`, which in turn replaces `https://<host>:7462`. Only an
+  `https` origin without a path is accepted. Agents and VM tokens cannot change it.
+
+**Keep the two origins apart.** The approval page keeps the phone's device token in the
+browser's storage for its origin (scheme, host and port). A T3 Code page on the same origin
+could read it, and T3 Code is served from inside the VM. Use separate host names, such as
+`t3.example.net` and `vault.example.net`, or at least separate ports. The Companion refuses to
+show a QR code whose two addresses share an origin, and the pairing page does not follow a T3
+Code link on its own origin.
+
+**What the approval page's proxy should pass.** Phones need only the pages under `/vault/` and
+three device routes: `/api/v1/vault/approvals` and `/api/v1/vault/files` (each also with `/<id>`
+for an answer) and `/api/v1/vault/device`. Keep the rest of the host service's API (sign-in, admin and VM
+routes) off the proxy. The host service presents its own self-signed certificate. Pin it upstream
+instead of turning verification off: every VM of that host has a copy in
+`/etc/construct/service-ca.pem`. An nginx example:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name vault.example.net;
+    ssl_certificate     /etc/ssl/vault.example.net/fullchain.pem;
+    ssl_certificate_key /etc/ssl/vault.example.net/privkey.pem;
+
+    # The host service, verified against its own certificate.
+    proxy_ssl_verify              on;
+    proxy_ssl_trusted_certificate /etc/nginx/construct-host.pem;  # copy of service-ca.pem
+    proxy_ssl_name                host.example;                   # a name in that certificate
+    proxy_ssl_server_name         on;
+
+    location = /vault { return 301 /vault/; }
+    location /vault/ { proxy_pass https://host.example:7462; }
+    location = /api/v1/vault/device { proxy_pass https://host.example:7462; }
+    location ~ ^/api/v1/vault/(approvals|files)(/[^/]+)?$ { proxy_pass https://host.example:7462; }
+    location / { return 404; }
+}
+```
+
+The T3 Code proxy forwards everything, WebSocket upgrades included, to the VM's T3 Code address
+(the forward **Open T3 Code** shows, or the VM's own port on a directly reachable VM). Its
+upstream certificate comes from the VM's local CA, `/etc/construct/tls/ca.crt` on the VM.
 
 **Scrubs on hosted VMs** run inside the VM, so they need neither your PC nor SSH. When a lease ends,
 the host queues a scan. The VM's minute heartbeat picks it up and runs the same scan, and agent

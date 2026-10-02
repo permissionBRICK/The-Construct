@@ -186,7 +186,9 @@ internal sealed class VaultWindow : Form, IVaultWindow
             var field = new TextBox { Text = url, ReadOnly = true, Multiline = true, Width = 440, Height = 64, ScrollBars = ScrollBars.Vertical };
             body.Controls.Add(field);
             body.Controls.Add(new Label { AutoSize = true, MaximumSize = new(440, 0), ForeColor = SystemColors.GrayText, Margin = new(0, 6, 0, 0),
-                Text = "Valid for about 10 minutes and only once. If the host uses its own certificate, the phone warns about it once." });
+                Text = "Valid for about 10 minutes and only once." });
+            // The host service's own (self-signed) address: say so, and where a host admin sets a proxy instead.
+            if (pairing.Note.Length > 0) body.Controls.Add(new Label { AutoSize = true, MaximumSize = new(440, 0), Margin = new(0, 6, 0, 0), Text = pairing.Note });
             var copy = new Button { Text = "Copy link", AutoSize = true }; var close = new Button { Text = "Close", AutoSize = true, DialogResult = DialogResult.OK };
             copy.Click += (_, _) => { try { Clipboard.SetText(url); copied = url; } catch (System.Runtime.InteropServices.ExternalException) { MessageBox.Show(this, "The clipboard is unavailable.", Text); } };
             var bar = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.RightToLeft, Dock = DockStyle.Bottom };

@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Constructd.Core.Configuration;
 using Constructd.Core.Domain;
+using Constructd.Core.Logic;
 namespace Constructd.Api.Infrastructure;
 
 public static partial class HostConfigValidation
@@ -18,6 +19,7 @@ public static partial class HostConfigValidation
         ["network"] = HostAdminDefaults.Network,
         ["virtualization"] = HostAdminDefaults.Virtualization,
         ["updates"] = HostAdminDefaults.Updates,
+        ["vault"] = HostAdminDefaults.Vault,
     };
     public static string? Allowance(UserAllowance a) => a.MaxRetainedChildren < 0 || a.CpuBudget < 0 || a.RamBudgetBytes < 0 || a.StorageBudgetBytes < 0
         ? "Budgets and counts must be non-negative." : a.MaxChildLifetimeSeconds is < 300 ? "A finite lifetime limit must be at least 300 seconds." : null;
@@ -35,6 +37,7 @@ public static partial class HostConfigValidation
         UserCapsConfig c => Allowance(new(null, c.MaxRetainedChildren, c.CpuBudget, c.RamBudgetBytes, c.StorageBudgetBytes, c.MaxChildLifetimeSeconds, c.AllowNeverLifetime, c.AllowSharing)),
         LifecycleConfig l when l.GracefulShutdownTimeoutSeconds < 30 || l.LeaseTickSeconds < 30 || l.LeaseRetrySeconds < 30 => "Lifecycle timeouts must be at least 30 seconds.",
         MediaConfig m when m.MaxBytes < 1 || m.MaxItemsPerUser < 1 || m.UploadChunkBytes < 1048576 || m.UploadChunkBytes > 67108864 || m.UploadTtlHours < 1 || m.AcquireTimeoutMinutes < 1 || m.UnreferencedTtlHours < 1 => "Media sizes/counts must be positive; chunks must be 1–64 MiB.",
+        VaultConfig v when VaultWebAddress.Problem(v.WebUrl) is { } problem => problem,
         UpdatesConfig u when string.IsNullOrEmpty(u.Repository) || !RepositoryPattern().IsMatch(u.Repository) || u.Channel != "main" || u.DrainTimeoutMinutes < 1 || u.HealthTimeoutSeconds < 30 => "Updates require owner/repository, main channel and positive timeouts (health at least 30 seconds).",
         _ => null,
     };

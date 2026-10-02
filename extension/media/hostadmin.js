@@ -623,7 +623,8 @@
       wrap.dataset.key = sec.key;
       wrap.dataset.expectedUpdatedAt = sec.expectedUpdatedAt || "";
       const head = el("div", "ha-section-head");
-      head.appendChild(el("span", "seclabel", sec.key));
+      head.appendChild(el("span", "seclabel", sec.label || sec.key));
+      head.appendChild(el("span", "ha-key", sec.key));
       head.appendChild(el("span", "ha-badge", sec.source + (sec.updatedAt ? " · " + sec.updatedAt : "")));
       wrap.appendChild(head);
       const ta = el("textarea");
@@ -635,6 +636,13 @@
         wrap.classList.toggle("dirty", cfgEdits.has(sec.key));
       });
       wrap.appendChild(ta);
+      // What each key of the JSON means (the form schema's labels and help).
+      (sec.help || []).forEach((f) => {
+        const line = el("p", "ha-help");
+        line.appendChild(el("span", "ha-key", f.key));
+        line.appendChild(document.createTextNode(" — " + f.label + ". " + f.help));
+        wrap.appendChild(line);
+      });
       const mine = problems.filter((p) => p.field === sec.key || String(p.field || "").indexOf(sec.key + ".") === 0);
       if (mine.length) wrap.appendChild(el("p", "problem", mine.map((p) => (p.field ? p.field + ": " : "") + p.reason).join("\n")));
       host.appendChild(wrap);

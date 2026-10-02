@@ -299,7 +299,7 @@ try {
     }
     if (-not $ready) { throw 'Host service did not become healthy.' }
     $files = @{}
-    foreach ($file in @('construct','construct-vm.sh','construct-expose.sh','construct-secret.sh','construct-idle-report.sh')) { $files[$file] = [IO.File]::ReadAllText((Join-Path $scripts ('bin\' + $file))) }
+    foreach ($file in @('construct','construct-vm.sh','construct-expose.sh','construct-secret.sh','construct-config.sh','construct-idle-report.sh')) { $files[$file] = [IO.File]::ReadAllText((Join-Path $scripts ('bin\' + $file))) }
     $payload = @{name=$plan.name;owner=$plan.adminUser;machineId=$plan.machineId;serviceUrl=('https://' + $plan.publicHost + ':7462');
         publicHost=$plan.publicHost;sshPort=$adopt.sshPort;vmToken=$adopt.vmToken;certificate=$pem;files=$files}
     $guestCode = [Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $PSScriptRoot '..\..\bin\adopt-host.py')))

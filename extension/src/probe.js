@@ -259,6 +259,13 @@ function toState(map, opts = {}) {
   if (vmSpec) out.vmSpec = vmSpec;
   const vmConfig = parseVmConfig(map);
   if (vmConfig) out.vmConfig = vmConfig;
+  // The address the user reaches T3 Code at through their own proxy (Settings → Access &
+  // services; agents set it with `construct config set t3-proxy-url`). The VM's config.env is
+  // the source of truth, so the panel shows exactly this; "" = not set (or not an origin).
+  if (Object.prototype.hasOwnProperty.call(map, "T3CODE_PROXY_URL")) {
+    const proxy = cfgUnquote(map.T3CODE_PROXY_URL.trim());
+    out.t3codeProxyUrl = isSafeOrigin(proxy) ? proxy : "";
+  }
   return out;
 }
 

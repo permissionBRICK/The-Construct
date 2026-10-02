@@ -7,7 +7,9 @@ namespace Construct.Companion.Core.HostAdmin;
 public static partial class HostAdminProtocol
 {
     public static readonly string[] Tabs = ["overview", "vms", "users", "usage", "media", "operations", "config", "maintenance"];
-    public static readonly string[] ConfigSections = ["capacity", "memoryPressure", "userDefaults", "userCaps", "lifecycle", "media", "network", "virtualization", "updates", "usage"];
+    public static readonly string[] ConfigSections = ["capacity", "memoryPressure", "userDefaults", "userCaps", "lifecycle", "media", "network", "virtualization", "updates", "usage", "vault"];
+    // Sections an older host does not have: shown only when the host's configuration carries them.
+    public static readonly string[] NewerConfigSections = ["memoryPressure", "usage", "vault"];
     public static string Text(JsonNode? node) => StateJson.Trim(node is null ? "" : StateJson.String(node));
     public static JsonObject Features(JsonNode? health)
     {

@@ -27,6 +27,35 @@ public sealed class DispatcherHttpTests
         Assert.Equal(TimeSpan.FromSeconds(90), ssh.ScriptTimeouts[ssh.Scripts.IndexOf(T3Code.BuildPairingScript(entry.Definition))]);
         Assert.Empty(h.Get<FakeLauncher, ILauncher>().Opened);
     }
+    [Fact]
+    public async Task T3ProxyAddressIsWrittenToTheVmAtOnceAndBadValuesNeverReachIt()
+    {
+        await using var h = await Harness.Start();
+        var entry = h.App.Services.GetRequiredService<CompanionInstances>().Get("agent-vm"); var ssh = (FakeSshTransport)entry.Ssh;
+        var reply = new ProcessResult(0, "t3-proxy-url=https://t3.example.net:8443\n");
+        ssh.ScriptHandler = (script, _) => Task.FromResult(script.Contains("t3-proxy-url", StringComparison.Ordinal) ? reply : new ProcessResult(0));
+        using var stream = await h.Client.GetAsync("/v1/events", HttpCompletionOption.ResponseHeadersRead);
+        using var reader = new StreamReader(await stream.Content.ReadAsStreamAsync()); await reader.ReadLineAsync(); await reader.ReadLineAsync();
+        foreach (var bad in new object[] { new { type = "setT3ProxyUrl", url = "https://t3.example.net/app" }, new { type = "setT3ProxyUrl", url = "https://t3.example.net:8443'; reboot; '" }, new { type = "setT3ProxyUrl" }, new { type = "setT3ProxyUrl", url = 8443 } })
+        {
+            using var refused = await h.Post("/v1/instances/agent-vm/messages", bad);
+            Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+        }
+        Assert.DoesNotContain(ssh.Scripts, s => s.Contains("t3-proxy-url", StringComparison.Ordinal));
+
+        using var response = await h.Post("/v1/instances/agent-vm/messages", new { type = "setT3ProxyUrl", url = " https://t3.example.net:8443/ " });
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        var done = await Until(reader, d => d["message"]?["type"]?.GetValue<string>() == "lifecyclePrepared" && d["message"]?["id"]?.GetValue<string>() == "setT3ProxyUrl");
+        Assert.Null(done["message"]!["error"]);
+        Assert.Contains(T3Code.BuildProxyUrlScript("https://t3.example.net:8443"), ssh.Scripts);
+        Assert.Contains("url='https://t3.example.net:8443'\n", T3Code.BuildProxyUrlScript("https://t3.example.net:8443"), StringComparison.Ordinal);
+
+        reply = new ProcessResult(255, "", "ssh: connect to host agent-vm port 22: Connection refused");
+        using var offline = await h.Post("/v1/instances/agent-vm/messages", new { type = "setT3ProxyUrl", url = "" });
+        var refusal = await Until(reader, d => d["message"]?["id"]?.GetValue<string>() == "setT3ProxyUrl" && d["message"]?["error"] is not null);
+        Assert.Equal("The VM is not reachable. Start it, then apply the address again.", refusal["message"]!["error"]!.GetValue<string>());
+        Assert.Contains(T3Code.BuildProxyUrlScript(""), ssh.Scripts);
+    }
     [Theory]
     [InlineData(7, "https://host/#ticket-fixture", "Could not create a console link. Check that the primary VM and Construct client are connected.")]
     [InlineData(0, "https://host/#one\nhttps://host/#two", "The console gateway did not return one browser link")]

@@ -454,6 +454,62 @@
   });
   renderResourcePending();
 
+  // ── T3 Code address via your own proxy ──────────────────────────────────────
+  // Not a saved setting: the VM's config.env (T3CODE_PROXY_URL) is the source of truth.
+  // The probe reports it — also when an agent set it with `construct config set
+  // t3-proxy-url` — and apply writes it there at once (setT3ProxyUrl); the host answers
+  // with a lifecyclePrepared for "setT3ProxyUrl" and a fresh state. An edit in progress
+  // is never overwritten by a refresh. The rule mirrors t3code.normalizeProxyUrl, the
+  // canonical, unit-tested definition this copy cannot require().
+  let t3ProxyVm = null, t3ProxyEdited = false, t3ProxyBusy = false, t3ProxyOnline = true, t3ProxyFor = null;
+  function t3ProxyCheck(value) {
+    let v = String(value || "").replace(/^[ \t\n\r\f\v]+|[ \t\n\r\f\v]+$/g, "");
+    if (v.endsWith("/")) v = v.slice(0, -1);
+    if (v === "") return { url: "" };
+    const m = /^https?:\/\/(?:[A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])(?::(\d{1,5}))?$/.exec(v);
+    if (!m || (m[1] !== undefined && (Number(m[1]) < 1 || Number(m[1]) > 65535)))
+      return { error: "Enter an http(s) address without a path, e.g. https://t3.example.net:8443, or leave it empty." };
+    return { url: v };
+  }
+  function renderT3Proxy(note) {
+    const input = $("setT3ProxyUrl"), btn = $("t3ProxyApply"), out = $("t3ProxyNote");
+    if (!input || !btn || !out) return;
+    if (!t3ProxyEdited && t3ProxyVm !== null) input.value = t3ProxyVm;
+    const checked = t3ProxyCheck(input.value);
+    const changed = t3ProxyVm === null ? input.value.trim() !== "" : checked.url !== t3ProxyVm;
+    btn.disabled = t3ProxyBusy || !t3ProxyOnline || !!checked.error || !changed;
+    btn.setAttribute("aria-disabled", String(btn.disabled));
+    input.setAttribute("aria-invalid", checked.error ? "true" : "false");
+    out.textContent = note != null ? note
+      : checked.error ? checked.error
+      : t3ProxyBusy ? "saving on the VM…"
+      : !t3ProxyOnline ? "the VM is offline"
+      : changed ? "not applied yet"
+      : t3ProxyVm ? "set on the VM" : "";
+  }
+  if ($("setT3ProxyUrl")) $("setT3ProxyUrl").addEventListener("input", () => { t3ProxyEdited = true; renderT3Proxy(); });
+  if ($("setT3ProxyUrl")) $("setT3ProxyUrl").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("t3ProxyApply").click(); } });
+  if ($("t3ProxyApply")) $("t3ProxyApply").addEventListener("click", () => {
+    const checked = t3ProxyCheck(val("setT3ProxyUrl"));
+    if (checked.error || t3ProxyBusy || !t3ProxyOnline) { renderT3Proxy(); return; }
+    t3ProxyBusy = true; renderT3Proxy();
+    post({ type: "setT3ProxyUrl", url: checked.url });
+  });
+  // The host's answer to apply. Success: drop the edit, the state that follows shows what the VM stored.
+  function t3ProxyApplied(error) {
+    t3ProxyBusy = false;
+    if (!error) t3ProxyEdited = false;
+    renderT3Proxy(error ? String(error) : undefined);
+  }
+  function renderT3ProxyState(s) {
+    // Another VM: its value, not the edit made for the previous one.
+    if (s.instance && s.instance !== t3ProxyFor) { t3ProxyFor = s.instance; t3ProxyEdited = false; t3ProxyVm = null; }
+    t3ProxyOnline = s.online !== false && !s.probeError;
+    if (typeof s.t3codeProxyUrl === "string") t3ProxyVm = s.t3codeProxyUrl;
+    renderT3Proxy();
+  }
+  renderT3Proxy();
+
   // ── Render state pushed from the extension ──────────────────────────────────
   function text(id, v) { const e = $(id); if (e && v != null) e.textContent = v; }
 
@@ -859,6 +915,7 @@
 
     const online = s.online !== false;
     setOnline(online);
+    renderT3ProxyState(s);
 
     // Stable power slot: it is present from first paint, then changes label/command
     // as state arrives so the rest of the strip never jumps under the pointer.
@@ -1160,6 +1217,7 @@
   }
 
   window.addEventListener("message", (ev) => {
+    if (ev.data && ev.data.type === "lifecyclePrepared" && ev.data.id === "setT3ProxyUrl") { t3ProxyApplied(ev.data.error); return; }
     if (ev.data && ev.data.type === "lifecyclePrepared") { setPreparing(ev.data.id, false); if (ev.data.id === "openConsole") { $("consoleNote").textContent = String(ev.data.error || ""); $("consoleNote").hidden = !ev.data.error; } else if (ev.data.error) window.alert(String(ev.data.error)); return; }
     const m = ev.data;
     if (!m) return;

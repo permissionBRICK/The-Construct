@@ -235,6 +235,39 @@ ok "diagnostics: failure includes the restore-script line" sh -c \
 ok "diagnostics: output identifies the Construct revision" sh -c \
   "printf '%s' \"\$1\" | grep -Fq 'Construct restore revision: abc1234'" _ "${diagnostic_output}"
 
+# ── T3 Code proxy address: restored through `construct config`, never overwritten ──
+proxy_fixture() {
+  local d
+  d="$(setup_fixture "$1" "false" "stable")"
+  cp "${ROOT}/bin/construct-config.sh" "${d}/repo/bin/construct-config.sh"
+  printf '{"t3code":false,"t3codeChannel":"stable","t3codeProxyUrl":%s}\n' "$2" >"${d}/backup/backup-info.json"
+  make_systemctl_stub "${d}"
+  printf '%s' "${d}"
+}
+d="$(proxy_fixture proxy-restored '"https://[2001:db8::7]:8443"')"
+if run_restore "${d}" >"${d}/out" 2>&1; then proxy_rc=0; else proxy_rc=1; fi
+ok "proxy address: restore succeeds" test "${proxy_rc}" = 0
+ok "proxy address: restored into config.env (rendered quoted)" \
+  test "$(read_config_key "${d}/config/config.env" T3CODE_PROXY_URL)" = "'https://[2001:db8::7]:8443'"
+ok "proxy address: logged" grep -q 'restored T3 Code proxy address' "${d}/out"
+
+d="$(proxy_fixture proxy-kept '"https://t3.example.net"')"
+printf '%s\n' 'T3CODE_PROXY_URL=https://t3.example.org:8443' >"${d}/config/config.env"
+run_restore "${d}" >/dev/null 2>&1
+ok "proxy address: a value already on the VM is kept" \
+  test "$(read_config_key "${d}/config/config.env" T3CODE_PROXY_URL)" = "https://t3.example.org:8443"
+
+d="$(proxy_fixture proxy-invalid '"https://t3.example.net/app\nT3CODE=true"')"
+if run_restore "${d}" >"${d}/out" 2>&1; then proxy_rc=0; else proxy_rc=1; fi
+ok "proxy address: an invalid value does not fail the restore" test "${proxy_rc}" = 0
+ok "proxy address: an invalid value is not written" \
+  sh -c "! grep -Eq '^(T3CODE_PROXY_URL|T3CODE)=' '${d}/config/config.env'"
+ok "proxy address: an invalid value is reported" grep -q 'not a valid address' "${d}/out"
+
+d="$(proxy_fixture proxy-wrong-type '42')"
+run_restore "${d}" >/dev/null 2>&1
+ok "proxy address: a non-string value is ignored" test -z "$(read_config_key "${d}/config/config.env" T3CODE_PROXY_URL)"
+
 printf '\n  restore-config fixture tests — %d/%d passed\n\n' "${pass}" "$((pass + fail))"
 [ "${fail}" -eq 0 ] || exit 1
 exit 0

@@ -5950,7 +5950,45 @@
     "output": [
       {
         "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Observe reports capacity; Enforce refuses requests exceeding available capacity.",
+            "key": "mode",
+            "label": "Admission mode"
+          },
+          {
+            "help": "Automatic reserves the greater of one eighth of RAM and 1 GiB on Proxmox or 4 GiB on Hyper-V.",
+            "key": "ramHeadroomBytes",
+            "label": "RAM headroom"
+          },
+          {
+            "help": "Storage kept free for the host.",
+            "key": "storageHeadroomBytes",
+            "label": "Storage headroom"
+          },
+          {
+            "help": "Maximum total active vCPUs.",
+            "key": "cpuBudget",
+            "label": "Host CPU budget"
+          },
+          {
+            "help": "Host ceiling for each VM's CPU count.",
+            "key": "maxVcpusPerVm",
+            "label": "Maximum vCPUs per VM"
+          },
+          {
+            "help": "How often capacity is reconciled with the hypervisor.",
+            "key": "reconcileSeconds",
+            "label": "Reconcile interval"
+          },
+          {
+            "help": "How long an orphan reservation is retained before cleanup.",
+            "key": "orphanReservationTimeoutSeconds",
+            "label": "Orphan reservation timeout"
+          }
+        ],
         "key": "capacity",
+        "label": "Capacity",
         "present": false,
         "source": "default",
         "text": "{}",
@@ -5958,7 +5996,40 @@
       },
       {
         "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Save eligible VMs when measured memory pressure is too high.",
+            "key": "enabled",
+            "label": "Enable memory pressure handling"
+          },
+          {
+            "help": "Start handling pressure above this RAM usage.",
+            "key": "highWaterPercent",
+            "label": "High water"
+          },
+          {
+            "help": "Stop handling pressure below this RAM usage; must be below high water.",
+            "key": "lowWaterPercent",
+            "label": "Low water"
+          },
+          {
+            "help": "Swap usage threshold. Zero ignores swap.",
+            "key": "swapHighWaterPercent",
+            "label": "Swap high water"
+          },
+          {
+            "help": "Minimum time between pressure-triggered saves.",
+            "key": "minSecondsBetweenSaves",
+            "label": "Minimum save interval"
+          },
+          {
+            "help": "Wait before handling pressure again after saving.",
+            "key": "cooldownMinutesAfterSave",
+            "label": "Cooldown after save"
+          }
+        ],
         "key": "memoryPressure",
+        "label": "Memory pressure",
         "present": true,
         "source": "default",
         "text": "{\n  \"cooldownMinutesAfterSave\": 10,\n  \"enabled\": true,\n  \"highWaterPercent\": 90,\n  \"lowWaterPercent\": 80,\n  \"minSecondsBetweenSaves\": 60,\n  \"swapHighWaterPercent\": 50\n}",
@@ -5966,7 +6037,55 @@
       },
       {
         "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Default primary VM limit for a user.",
+            "key": "maxPrimaries",
+            "label": "Maximum primary VMs"
+          },
+          {
+            "help": "Allow users to create child VMs.",
+            "key": "allowChildCreation",
+            "label": "Allow child creation"
+          },
+          {
+            "help": "Default maximum retained children per user.",
+            "key": "maxRetainedChildren",
+            "label": "Retained children"
+          },
+          {
+            "help": "Total vCPUs allowed across the user's VMs.",
+            "key": "cpuBudget",
+            "label": "CPU budget"
+          },
+          {
+            "help": "Total reserved RAM allowed across the user's VMs.",
+            "key": "ramBudgetBytes",
+            "label": "RAM budget"
+          },
+          {
+            "help": "Total reserved storage allowed across the user's VMs.",
+            "key": "storageBudgetBytes",
+            "label": "Storage budget"
+          },
+          {
+            "help": "Maximum finite child lifetime. The minimum is five minutes.",
+            "key": "maxChildLifetimeSeconds",
+            "label": "Maximum child lifetime"
+          },
+          {
+            "help": "Allow children with a never-expiring lifetime.",
+            "key": "allowNeverLifetime",
+            "label": "Allow no expiry"
+          },
+          {
+            "help": "Allow children to be shared host-wide.",
+            "key": "allowSharing",
+            "label": "Allow sharing"
+          }
+        ],
         "key": "userDefaults",
+        "label": "User defaults",
         "present": false,
         "source": "default",
         "text": "{}",
@@ -5974,7 +6093,45 @@
       },
       {
         "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Hard ceiling on retained children per user.",
+            "key": "maxRetainedChildren",
+            "label": "Retained children"
+          },
+          {
+            "help": "Total vCPUs allowed across the user's VMs. This host cap applies after user defaults and overrides.",
+            "key": "cpuBudget",
+            "label": "CPU budget"
+          },
+          {
+            "help": "Total reserved RAM allowed across the user's VMs. This host cap applies after user defaults and overrides.",
+            "key": "ramBudgetBytes",
+            "label": "RAM budget"
+          },
+          {
+            "help": "Total reserved storage allowed across the user's VMs. This host cap applies after user defaults and overrides.",
+            "key": "storageBudgetBytes",
+            "label": "Storage budget"
+          },
+          {
+            "help": "Maximum finite child lifetime. The minimum is five minutes. This host cap applies after user defaults and overrides.",
+            "key": "maxChildLifetimeSeconds",
+            "label": "Maximum child lifetime"
+          },
+          {
+            "help": "Allow children with a never-expiring lifetime. This host cap applies after user defaults and overrides.",
+            "key": "allowNeverLifetime",
+            "label": "Allow no expiry"
+          },
+          {
+            "help": "Allow children to be shared host-wide. This host cap applies after user defaults and overrides.",
+            "key": "allowSharing",
+            "label": "Allow sharing"
+          }
+        ],
         "key": "userCaps",
+        "label": "Host caps on users",
         "present": false,
         "source": "default",
         "text": "{}",
@@ -5982,7 +6139,25 @@
       },
       {
         "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Time allowed for a guest to shut down gracefully.",
+            "key": "gracefulShutdownTimeoutSeconds",
+            "label": "Graceful shutdown timeout"
+          },
+          {
+            "help": "How often child leases are checked.",
+            "key": "leaseTickSeconds",
+            "label": "Lease check interval"
+          },
+          {
+            "help": "Time before retrying an overdue child's shutdown.",
+            "key": "leaseRetrySeconds",
+            "label": "Lease retry interval"
+          }
+        ],
         "key": "lifecycle",
+        "label": "Lifecycle",
         "present": false,
         "source": "default",
         "text": "{}",
@@ -5990,7 +6165,45 @@
       },
       {
         "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Maximum total media storage per user.",
+            "key": "maxBytes",
+            "label": "Maximum media bytes per user"
+          },
+          {
+            "help": "Maximum media items retained per user.",
+            "key": "maxItemsPerUser",
+            "label": "Media items per user"
+          },
+          {
+            "help": "Upload chunk size, from 1 to 64 MiB.",
+            "key": "uploadChunkBytes",
+            "label": "Upload chunk size"
+          },
+          {
+            "help": "Time allowed to finish an upload.",
+            "key": "uploadTtlHours",
+            "label": "Upload TTL"
+          },
+          {
+            "help": "Time allowed to acquire media.",
+            "key": "acquireTimeoutMinutes",
+            "label": "Acquire timeout"
+          },
+          {
+            "help": "Allow media downloads from HTTP URLs.",
+            "key": "allowHttp",
+            "label": "Allow HTTP downloads"
+          },
+          {
+            "help": "Delete unreferenced media after this interval. Disabled retains it.",
+            "key": "unreferencedTtlHours",
+            "label": "Unreferenced media TTL"
+          }
+        ],
         "key": "media",
+        "label": "Media",
         "present": false,
         "source": "default",
         "text": "{}",
@@ -5998,7 +6211,30 @@
       },
       {
         "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Disabling refuses new primary host forwards immediately.",
+            "key": "hostForwardsEnabled",
+            "label": "Enable host forwards"
+          },
+          {
+            "help": "Report guest direct addresses.",
+            "key": "directAddressReporting",
+            "label": "Report direct addresses"
+          },
+          {
+            "help": "Applies to VMs following the host default on their next full stop/start. Mode changes remove existing forwards.",
+            "key": "defaultMode",
+            "label": "Default VM mode"
+          },
+          {
+            "help": "Allow owners to select relayed or direct mode for their VMs.",
+            "key": "ownerMaySwitchMode",
+            "label": "Owners may switch VM mode"
+          }
+        ],
         "key": "network",
+        "label": "Network",
         "present": false,
         "source": "default",
         "text": "{}",
@@ -6006,7 +6242,20 @@
       },
       {
         "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Expose virtualization extensions to new VMs by default.",
+            "key": "nestedDefault",
+            "label": "Enable nesting by default"
+          },
+          {
+            "help": "Users may choose nesting unless their user policy overrides this.",
+            "key": "nestedSelectable",
+            "label": "Allow users to select nesting"
+          }
+        ],
         "key": "virtualization",
+        "label": "Virtualization",
         "present": false,
         "source": "default",
         "text": "{}",
@@ -6014,11 +6263,798 @@
       },
       {
         "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "GitHub owner/repository. The host-local installation may pin this value.",
+            "key": "repository",
+            "label": "Update repository"
+          },
+          {
+            "help": "Only the main channel is supported.",
+            "key": "channel",
+            "label": "Update channel"
+          },
+          {
+            "help": "Time allowed to drain host jobs before updating.",
+            "key": "drainTimeoutMinutes",
+            "label": "Drain timeout"
+          },
+          {
+            "help": "Time allowed for the updated service to become healthy.",
+            "key": "healthTimeoutSeconds",
+            "label": "Health timeout"
+          }
+        ],
         "key": "updates",
+        "label": "Updates",
         "present": false,
         "source": "default",
         "text": "{}",
         "updatedAt": ""
+      }
+    ]
+  },
+  {
+    "input": {
+      "memoryPressure": {
+        "cooldownMinutesAfterSave": 10,
+        "enabled": true,
+        "highWaterPercent": 90,
+        "lowWaterPercent": 80,
+        "minSecondsBetweenSaves": 60,
+        "source": "default",
+        "swapHighWaterPercent": 50
+      },
+      "vault": {
+        "source": "default",
+        "updatedAt": null,
+        "webUrl": null
+      }
+    },
+    "kind": "config",
+    "now": 1789128000000,
+    "output": [
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Observe reports capacity; Enforce refuses requests exceeding available capacity.",
+            "key": "mode",
+            "label": "Admission mode"
+          },
+          {
+            "help": "Automatic reserves the greater of one eighth of RAM and 1 GiB on Proxmox or 4 GiB on Hyper-V.",
+            "key": "ramHeadroomBytes",
+            "label": "RAM headroom"
+          },
+          {
+            "help": "Storage kept free for the host.",
+            "key": "storageHeadroomBytes",
+            "label": "Storage headroom"
+          },
+          {
+            "help": "Maximum total active vCPUs.",
+            "key": "cpuBudget",
+            "label": "Host CPU budget"
+          },
+          {
+            "help": "Host ceiling for each VM's CPU count.",
+            "key": "maxVcpusPerVm",
+            "label": "Maximum vCPUs per VM"
+          },
+          {
+            "help": "How often capacity is reconciled with the hypervisor.",
+            "key": "reconcileSeconds",
+            "label": "Reconcile interval"
+          },
+          {
+            "help": "How long an orphan reservation is retained before cleanup.",
+            "key": "orphanReservationTimeoutSeconds",
+            "label": "Orphan reservation timeout"
+          }
+        ],
+        "key": "capacity",
+        "label": "Capacity",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Save eligible VMs when measured memory pressure is too high.",
+            "key": "enabled",
+            "label": "Enable memory pressure handling"
+          },
+          {
+            "help": "Start handling pressure above this RAM usage.",
+            "key": "highWaterPercent",
+            "label": "High water"
+          },
+          {
+            "help": "Stop handling pressure below this RAM usage; must be below high water.",
+            "key": "lowWaterPercent",
+            "label": "Low water"
+          },
+          {
+            "help": "Swap usage threshold. Zero ignores swap.",
+            "key": "swapHighWaterPercent",
+            "label": "Swap high water"
+          },
+          {
+            "help": "Minimum time between pressure-triggered saves.",
+            "key": "minSecondsBetweenSaves",
+            "label": "Minimum save interval"
+          },
+          {
+            "help": "Wait before handling pressure again after saving.",
+            "key": "cooldownMinutesAfterSave",
+            "label": "Cooldown after save"
+          }
+        ],
+        "key": "memoryPressure",
+        "label": "Memory pressure",
+        "present": true,
+        "source": "default",
+        "text": "{\n  \"cooldownMinutesAfterSave\": 10,\n  \"enabled\": true,\n  \"highWaterPercent\": 90,\n  \"lowWaterPercent\": 80,\n  \"minSecondsBetweenSaves\": 60,\n  \"swapHighWaterPercent\": 50\n}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Default primary VM limit for a user.",
+            "key": "maxPrimaries",
+            "label": "Maximum primary VMs"
+          },
+          {
+            "help": "Allow users to create child VMs.",
+            "key": "allowChildCreation",
+            "label": "Allow child creation"
+          },
+          {
+            "help": "Default maximum retained children per user.",
+            "key": "maxRetainedChildren",
+            "label": "Retained children"
+          },
+          {
+            "help": "Total vCPUs allowed across the user's VMs.",
+            "key": "cpuBudget",
+            "label": "CPU budget"
+          },
+          {
+            "help": "Total reserved RAM allowed across the user's VMs.",
+            "key": "ramBudgetBytes",
+            "label": "RAM budget"
+          },
+          {
+            "help": "Total reserved storage allowed across the user's VMs.",
+            "key": "storageBudgetBytes",
+            "label": "Storage budget"
+          },
+          {
+            "help": "Maximum finite child lifetime. The minimum is five minutes.",
+            "key": "maxChildLifetimeSeconds",
+            "label": "Maximum child lifetime"
+          },
+          {
+            "help": "Allow children with a never-expiring lifetime.",
+            "key": "allowNeverLifetime",
+            "label": "Allow no expiry"
+          },
+          {
+            "help": "Allow children to be shared host-wide.",
+            "key": "allowSharing",
+            "label": "Allow sharing"
+          }
+        ],
+        "key": "userDefaults",
+        "label": "User defaults",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Hard ceiling on retained children per user.",
+            "key": "maxRetainedChildren",
+            "label": "Retained children"
+          },
+          {
+            "help": "Total vCPUs allowed across the user's VMs. This host cap applies after user defaults and overrides.",
+            "key": "cpuBudget",
+            "label": "CPU budget"
+          },
+          {
+            "help": "Total reserved RAM allowed across the user's VMs. This host cap applies after user defaults and overrides.",
+            "key": "ramBudgetBytes",
+            "label": "RAM budget"
+          },
+          {
+            "help": "Total reserved storage allowed across the user's VMs. This host cap applies after user defaults and overrides.",
+            "key": "storageBudgetBytes",
+            "label": "Storage budget"
+          },
+          {
+            "help": "Maximum finite child lifetime. The minimum is five minutes. This host cap applies after user defaults and overrides.",
+            "key": "maxChildLifetimeSeconds",
+            "label": "Maximum child lifetime"
+          },
+          {
+            "help": "Allow children with a never-expiring lifetime. This host cap applies after user defaults and overrides.",
+            "key": "allowNeverLifetime",
+            "label": "Allow no expiry"
+          },
+          {
+            "help": "Allow children to be shared host-wide. This host cap applies after user defaults and overrides.",
+            "key": "allowSharing",
+            "label": "Allow sharing"
+          }
+        ],
+        "key": "userCaps",
+        "label": "Host caps on users",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Time allowed for a guest to shut down gracefully.",
+            "key": "gracefulShutdownTimeoutSeconds",
+            "label": "Graceful shutdown timeout"
+          },
+          {
+            "help": "How often child leases are checked.",
+            "key": "leaseTickSeconds",
+            "label": "Lease check interval"
+          },
+          {
+            "help": "Time before retrying an overdue child's shutdown.",
+            "key": "leaseRetrySeconds",
+            "label": "Lease retry interval"
+          }
+        ],
+        "key": "lifecycle",
+        "label": "Lifecycle",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Maximum total media storage per user.",
+            "key": "maxBytes",
+            "label": "Maximum media bytes per user"
+          },
+          {
+            "help": "Maximum media items retained per user.",
+            "key": "maxItemsPerUser",
+            "label": "Media items per user"
+          },
+          {
+            "help": "Upload chunk size, from 1 to 64 MiB.",
+            "key": "uploadChunkBytes",
+            "label": "Upload chunk size"
+          },
+          {
+            "help": "Time allowed to finish an upload.",
+            "key": "uploadTtlHours",
+            "label": "Upload TTL"
+          },
+          {
+            "help": "Time allowed to acquire media.",
+            "key": "acquireTimeoutMinutes",
+            "label": "Acquire timeout"
+          },
+          {
+            "help": "Allow media downloads from HTTP URLs.",
+            "key": "allowHttp",
+            "label": "Allow HTTP downloads"
+          },
+          {
+            "help": "Delete unreferenced media after this interval. Disabled retains it.",
+            "key": "unreferencedTtlHours",
+            "label": "Unreferenced media TTL"
+          }
+        ],
+        "key": "media",
+        "label": "Media",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Disabling refuses new primary host forwards immediately.",
+            "key": "hostForwardsEnabled",
+            "label": "Enable host forwards"
+          },
+          {
+            "help": "Report guest direct addresses.",
+            "key": "directAddressReporting",
+            "label": "Report direct addresses"
+          },
+          {
+            "help": "Applies to VMs following the host default on their next full stop/start. Mode changes remove existing forwards.",
+            "key": "defaultMode",
+            "label": "Default VM mode"
+          },
+          {
+            "help": "Allow owners to select relayed or direct mode for their VMs.",
+            "key": "ownerMaySwitchMode",
+            "label": "Owners may switch VM mode"
+          }
+        ],
+        "key": "network",
+        "label": "Network",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Expose virtualization extensions to new VMs by default.",
+            "key": "nestedDefault",
+            "label": "Enable nesting by default"
+          },
+          {
+            "help": "Users may choose nesting unless their user policy overrides this.",
+            "key": "nestedSelectable",
+            "label": "Allow users to select nesting"
+          }
+        ],
+        "key": "virtualization",
+        "label": "Virtualization",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "GitHub owner/repository. The host-local installation may pin this value.",
+            "key": "repository",
+            "label": "Update repository"
+          },
+          {
+            "help": "Only the main channel is supported.",
+            "key": "channel",
+            "label": "Update channel"
+          },
+          {
+            "help": "Time allowed to drain host jobs before updating.",
+            "key": "drainTimeoutMinutes",
+            "label": "Drain timeout"
+          },
+          {
+            "help": "Time allowed for the updated service to become healthy.",
+            "key": "healthTimeoutSeconds",
+            "label": "Health timeout"
+          }
+        ],
+        "key": "updates",
+        "label": "Updates",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "The https address phones use for the key vault's approval page, e.g. https://vault.example.net: a reverse proxy with a trusted certificate that forwards /vault/ and /api/v1/vault/ to the host service. It must not be the same origin (scheme, host and port) as any T3 Code address. Null uses the host service's own address, whose self-signed certificate phones warn about.",
+            "key": "webUrl",
+            "label": "Approval page address"
+          }
+        ],
+        "key": "vault",
+        "label": "Key vault",
+        "present": true,
+        "source": "default",
+        "text": "{\n  \"webUrl\": null\n}",
+        "updatedAt": ""
+      }
+    ]
+  },
+  {
+    "input": {
+      "memoryPressure": {
+        "cooldownMinutesAfterSave": 10,
+        "enabled": true,
+        "highWaterPercent": 90,
+        "lowWaterPercent": 80,
+        "minSecondsBetweenSaves": 60,
+        "source": "default",
+        "swapHighWaterPercent": 50
+      },
+      "vault": {
+        "source": "stored",
+        "updatedAt": "2026-10-02T08:00:00Z",
+        "webUrl": "https://vault.example.net"
+      }
+    },
+    "kind": "config",
+    "now": 1789128000000,
+    "output": [
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Observe reports capacity; Enforce refuses requests exceeding available capacity.",
+            "key": "mode",
+            "label": "Admission mode"
+          },
+          {
+            "help": "Automatic reserves the greater of one eighth of RAM and 1 GiB on Proxmox or 4 GiB on Hyper-V.",
+            "key": "ramHeadroomBytes",
+            "label": "RAM headroom"
+          },
+          {
+            "help": "Storage kept free for the host.",
+            "key": "storageHeadroomBytes",
+            "label": "Storage headroom"
+          },
+          {
+            "help": "Maximum total active vCPUs.",
+            "key": "cpuBudget",
+            "label": "Host CPU budget"
+          },
+          {
+            "help": "Host ceiling for each VM's CPU count.",
+            "key": "maxVcpusPerVm",
+            "label": "Maximum vCPUs per VM"
+          },
+          {
+            "help": "How often capacity is reconciled with the hypervisor.",
+            "key": "reconcileSeconds",
+            "label": "Reconcile interval"
+          },
+          {
+            "help": "How long an orphan reservation is retained before cleanup.",
+            "key": "orphanReservationTimeoutSeconds",
+            "label": "Orphan reservation timeout"
+          }
+        ],
+        "key": "capacity",
+        "label": "Capacity",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Save eligible VMs when measured memory pressure is too high.",
+            "key": "enabled",
+            "label": "Enable memory pressure handling"
+          },
+          {
+            "help": "Start handling pressure above this RAM usage.",
+            "key": "highWaterPercent",
+            "label": "High water"
+          },
+          {
+            "help": "Stop handling pressure below this RAM usage; must be below high water.",
+            "key": "lowWaterPercent",
+            "label": "Low water"
+          },
+          {
+            "help": "Swap usage threshold. Zero ignores swap.",
+            "key": "swapHighWaterPercent",
+            "label": "Swap high water"
+          },
+          {
+            "help": "Minimum time between pressure-triggered saves.",
+            "key": "minSecondsBetweenSaves",
+            "label": "Minimum save interval"
+          },
+          {
+            "help": "Wait before handling pressure again after saving.",
+            "key": "cooldownMinutesAfterSave",
+            "label": "Cooldown after save"
+          }
+        ],
+        "key": "memoryPressure",
+        "label": "Memory pressure",
+        "present": true,
+        "source": "default",
+        "text": "{\n  \"cooldownMinutesAfterSave\": 10,\n  \"enabled\": true,\n  \"highWaterPercent\": 90,\n  \"lowWaterPercent\": 80,\n  \"minSecondsBetweenSaves\": 60,\n  \"swapHighWaterPercent\": 50\n}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Default primary VM limit for a user.",
+            "key": "maxPrimaries",
+            "label": "Maximum primary VMs"
+          },
+          {
+            "help": "Allow users to create child VMs.",
+            "key": "allowChildCreation",
+            "label": "Allow child creation"
+          },
+          {
+            "help": "Default maximum retained children per user.",
+            "key": "maxRetainedChildren",
+            "label": "Retained children"
+          },
+          {
+            "help": "Total vCPUs allowed across the user's VMs.",
+            "key": "cpuBudget",
+            "label": "CPU budget"
+          },
+          {
+            "help": "Total reserved RAM allowed across the user's VMs.",
+            "key": "ramBudgetBytes",
+            "label": "RAM budget"
+          },
+          {
+            "help": "Total reserved storage allowed across the user's VMs.",
+            "key": "storageBudgetBytes",
+            "label": "Storage budget"
+          },
+          {
+            "help": "Maximum finite child lifetime. The minimum is five minutes.",
+            "key": "maxChildLifetimeSeconds",
+            "label": "Maximum child lifetime"
+          },
+          {
+            "help": "Allow children with a never-expiring lifetime.",
+            "key": "allowNeverLifetime",
+            "label": "Allow no expiry"
+          },
+          {
+            "help": "Allow children to be shared host-wide.",
+            "key": "allowSharing",
+            "label": "Allow sharing"
+          }
+        ],
+        "key": "userDefaults",
+        "label": "User defaults",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Hard ceiling on retained children per user.",
+            "key": "maxRetainedChildren",
+            "label": "Retained children"
+          },
+          {
+            "help": "Total vCPUs allowed across the user's VMs. This host cap applies after user defaults and overrides.",
+            "key": "cpuBudget",
+            "label": "CPU budget"
+          },
+          {
+            "help": "Total reserved RAM allowed across the user's VMs. This host cap applies after user defaults and overrides.",
+            "key": "ramBudgetBytes",
+            "label": "RAM budget"
+          },
+          {
+            "help": "Total reserved storage allowed across the user's VMs. This host cap applies after user defaults and overrides.",
+            "key": "storageBudgetBytes",
+            "label": "Storage budget"
+          },
+          {
+            "help": "Maximum finite child lifetime. The minimum is five minutes. This host cap applies after user defaults and overrides.",
+            "key": "maxChildLifetimeSeconds",
+            "label": "Maximum child lifetime"
+          },
+          {
+            "help": "Allow children with a never-expiring lifetime. This host cap applies after user defaults and overrides.",
+            "key": "allowNeverLifetime",
+            "label": "Allow no expiry"
+          },
+          {
+            "help": "Allow children to be shared host-wide. This host cap applies after user defaults and overrides.",
+            "key": "allowSharing",
+            "label": "Allow sharing"
+          }
+        ],
+        "key": "userCaps",
+        "label": "Host caps on users",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Time allowed for a guest to shut down gracefully.",
+            "key": "gracefulShutdownTimeoutSeconds",
+            "label": "Graceful shutdown timeout"
+          },
+          {
+            "help": "How often child leases are checked.",
+            "key": "leaseTickSeconds",
+            "label": "Lease check interval"
+          },
+          {
+            "help": "Time before retrying an overdue child's shutdown.",
+            "key": "leaseRetrySeconds",
+            "label": "Lease retry interval"
+          }
+        ],
+        "key": "lifecycle",
+        "label": "Lifecycle",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Maximum total media storage per user.",
+            "key": "maxBytes",
+            "label": "Maximum media bytes per user"
+          },
+          {
+            "help": "Maximum media items retained per user.",
+            "key": "maxItemsPerUser",
+            "label": "Media items per user"
+          },
+          {
+            "help": "Upload chunk size, from 1 to 64 MiB.",
+            "key": "uploadChunkBytes",
+            "label": "Upload chunk size"
+          },
+          {
+            "help": "Time allowed to finish an upload.",
+            "key": "uploadTtlHours",
+            "label": "Upload TTL"
+          },
+          {
+            "help": "Time allowed to acquire media.",
+            "key": "acquireTimeoutMinutes",
+            "label": "Acquire timeout"
+          },
+          {
+            "help": "Allow media downloads from HTTP URLs.",
+            "key": "allowHttp",
+            "label": "Allow HTTP downloads"
+          },
+          {
+            "help": "Delete unreferenced media after this interval. Disabled retains it.",
+            "key": "unreferencedTtlHours",
+            "label": "Unreferenced media TTL"
+          }
+        ],
+        "key": "media",
+        "label": "Media",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Disabling refuses new primary host forwards immediately.",
+            "key": "hostForwardsEnabled",
+            "label": "Enable host forwards"
+          },
+          {
+            "help": "Report guest direct addresses.",
+            "key": "directAddressReporting",
+            "label": "Report direct addresses"
+          },
+          {
+            "help": "Applies to VMs following the host default on their next full stop/start. Mode changes remove existing forwards.",
+            "key": "defaultMode",
+            "label": "Default VM mode"
+          },
+          {
+            "help": "Allow owners to select relayed or direct mode for their VMs.",
+            "key": "ownerMaySwitchMode",
+            "label": "Owners may switch VM mode"
+          }
+        ],
+        "key": "network",
+        "label": "Network",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Expose virtualization extensions to new VMs by default.",
+            "key": "nestedDefault",
+            "label": "Enable nesting by default"
+          },
+          {
+            "help": "Users may choose nesting unless their user policy overrides this.",
+            "key": "nestedSelectable",
+            "label": "Allow users to select nesting"
+          }
+        ],
+        "key": "virtualization",
+        "label": "Virtualization",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "GitHub owner/repository. The host-local installation may pin this value.",
+            "key": "repository",
+            "label": "Update repository"
+          },
+          {
+            "help": "Only the main channel is supported.",
+            "key": "channel",
+            "label": "Update channel"
+          },
+          {
+            "help": "Time allowed to drain host jobs before updating.",
+            "key": "drainTimeoutMinutes",
+            "label": "Drain timeout"
+          },
+          {
+            "help": "Time allowed for the updated service to become healthy.",
+            "key": "healthTimeoutSeconds",
+            "label": "Health timeout"
+          }
+        ],
+        "key": "updates",
+        "label": "Updates",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": "2026-10-02T08:00:00Z",
+        "help": [
+          {
+            "help": "The https address phones use for the key vault's approval page, e.g. https://vault.example.net: a reverse proxy with a trusted certificate that forwards /vault/ and /api/v1/vault/ to the host service. It must not be the same origin (scheme, host and port) as any T3 Code address. Null uses the host service's own address, whose self-signed certificate phones warn about.",
+            "key": "webUrl",
+            "label": "Approval page address"
+          }
+        ],
+        "key": "vault",
+        "label": "Key vault",
+        "present": true,
+        "source": "stored",
+        "text": "{\n  \"webUrl\": \"https://vault.example.net\"\n}",
+        "updatedAt": "2026-10-02 08:00 UTC"
       }
     ]
   },
@@ -6221,7 +7257,45 @@
     "output": [
       {
         "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Observe reports capacity; Enforce refuses requests exceeding available capacity.",
+            "key": "mode",
+            "label": "Admission mode"
+          },
+          {
+            "help": "Automatic reserves the greater of one eighth of RAM and 1 GiB on Proxmox or 4 GiB on Hyper-V.",
+            "key": "ramHeadroomBytes",
+            "label": "RAM headroom"
+          },
+          {
+            "help": "Storage kept free for the host.",
+            "key": "storageHeadroomBytes",
+            "label": "Storage headroom"
+          },
+          {
+            "help": "Maximum total active vCPUs.",
+            "key": "cpuBudget",
+            "label": "Host CPU budget"
+          },
+          {
+            "help": "Host ceiling for each VM's CPU count.",
+            "key": "maxVcpusPerVm",
+            "label": "Maximum vCPUs per VM"
+          },
+          {
+            "help": "How often capacity is reconciled with the hypervisor.",
+            "key": "reconcileSeconds",
+            "label": "Reconcile interval"
+          },
+          {
+            "help": "How long an orphan reservation is retained before cleanup.",
+            "key": "orphanReservationTimeoutSeconds",
+            "label": "Orphan reservation timeout"
+          }
+        ],
         "key": "capacity",
+        "label": "Capacity",
         "present": false,
         "source": "default",
         "text": "{}",
@@ -6229,7 +7303,55 @@
       },
       {
         "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Default primary VM limit for a user.",
+            "key": "maxPrimaries",
+            "label": "Maximum primary VMs"
+          },
+          {
+            "help": "Allow users to create child VMs.",
+            "key": "allowChildCreation",
+            "label": "Allow child creation"
+          },
+          {
+            "help": "Default maximum retained children per user.",
+            "key": "maxRetainedChildren",
+            "label": "Retained children"
+          },
+          {
+            "help": "Total vCPUs allowed across the user's VMs.",
+            "key": "cpuBudget",
+            "label": "CPU budget"
+          },
+          {
+            "help": "Total reserved RAM allowed across the user's VMs.",
+            "key": "ramBudgetBytes",
+            "label": "RAM budget"
+          },
+          {
+            "help": "Total reserved storage allowed across the user's VMs.",
+            "key": "storageBudgetBytes",
+            "label": "Storage budget"
+          },
+          {
+            "help": "Maximum finite child lifetime. The minimum is five minutes.",
+            "key": "maxChildLifetimeSeconds",
+            "label": "Maximum child lifetime"
+          },
+          {
+            "help": "Allow children with a never-expiring lifetime.",
+            "key": "allowNeverLifetime",
+            "label": "Allow no expiry"
+          },
+          {
+            "help": "Allow children to be shared host-wide.",
+            "key": "allowSharing",
+            "label": "Allow sharing"
+          }
+        ],
         "key": "userDefaults",
+        "label": "User defaults",
         "present": false,
         "source": "default",
         "text": "{}",
@@ -6237,7 +7359,45 @@
       },
       {
         "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Hard ceiling on retained children per user.",
+            "key": "maxRetainedChildren",
+            "label": "Retained children"
+          },
+          {
+            "help": "Total vCPUs allowed across the user's VMs. This host cap applies after user defaults and overrides.",
+            "key": "cpuBudget",
+            "label": "CPU budget"
+          },
+          {
+            "help": "Total reserved RAM allowed across the user's VMs. This host cap applies after user defaults and overrides.",
+            "key": "ramBudgetBytes",
+            "label": "RAM budget"
+          },
+          {
+            "help": "Total reserved storage allowed across the user's VMs. This host cap applies after user defaults and overrides.",
+            "key": "storageBudgetBytes",
+            "label": "Storage budget"
+          },
+          {
+            "help": "Maximum finite child lifetime. The minimum is five minutes. This host cap applies after user defaults and overrides.",
+            "key": "maxChildLifetimeSeconds",
+            "label": "Maximum child lifetime"
+          },
+          {
+            "help": "Allow children with a never-expiring lifetime. This host cap applies after user defaults and overrides.",
+            "key": "allowNeverLifetime",
+            "label": "Allow no expiry"
+          },
+          {
+            "help": "Allow children to be shared host-wide. This host cap applies after user defaults and overrides.",
+            "key": "allowSharing",
+            "label": "Allow sharing"
+          }
+        ],
         "key": "userCaps",
+        "label": "Host caps on users",
         "present": false,
         "source": "default",
         "text": "{}",
@@ -6245,7 +7405,25 @@
       },
       {
         "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Time allowed for a guest to shut down gracefully.",
+            "key": "gracefulShutdownTimeoutSeconds",
+            "label": "Graceful shutdown timeout"
+          },
+          {
+            "help": "How often child leases are checked.",
+            "key": "leaseTickSeconds",
+            "label": "Lease check interval"
+          },
+          {
+            "help": "Time before retrying an overdue child's shutdown.",
+            "key": "leaseRetrySeconds",
+            "label": "Lease retry interval"
+          }
+        ],
         "key": "lifecycle",
+        "label": "Lifecycle",
         "present": false,
         "source": "default",
         "text": "{}",
@@ -6253,7 +7431,45 @@
       },
       {
         "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Maximum total media storage per user.",
+            "key": "maxBytes",
+            "label": "Maximum media bytes per user"
+          },
+          {
+            "help": "Maximum media items retained per user.",
+            "key": "maxItemsPerUser",
+            "label": "Media items per user"
+          },
+          {
+            "help": "Upload chunk size, from 1 to 64 MiB.",
+            "key": "uploadChunkBytes",
+            "label": "Upload chunk size"
+          },
+          {
+            "help": "Time allowed to finish an upload.",
+            "key": "uploadTtlHours",
+            "label": "Upload TTL"
+          },
+          {
+            "help": "Time allowed to acquire media.",
+            "key": "acquireTimeoutMinutes",
+            "label": "Acquire timeout"
+          },
+          {
+            "help": "Allow media downloads from HTTP URLs.",
+            "key": "allowHttp",
+            "label": "Allow HTTP downloads"
+          },
+          {
+            "help": "Delete unreferenced media after this interval. Disabled retains it.",
+            "key": "unreferencedTtlHours",
+            "label": "Unreferenced media TTL"
+          }
+        ],
         "key": "media",
+        "label": "Media",
         "present": false,
         "source": "default",
         "text": "{}",
@@ -6261,7 +7477,30 @@
       },
       {
         "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Disabling refuses new primary host forwards immediately.",
+            "key": "hostForwardsEnabled",
+            "label": "Enable host forwards"
+          },
+          {
+            "help": "Report guest direct addresses.",
+            "key": "directAddressReporting",
+            "label": "Report direct addresses"
+          },
+          {
+            "help": "Applies to VMs following the host default on their next full stop/start. Mode changes remove existing forwards.",
+            "key": "defaultMode",
+            "label": "Default VM mode"
+          },
+          {
+            "help": "Allow owners to select relayed or direct mode for their VMs.",
+            "key": "ownerMaySwitchMode",
+            "label": "Owners may switch VM mode"
+          }
+        ],
         "key": "network",
+        "label": "Network",
         "present": false,
         "source": "default",
         "text": "{}",
@@ -6269,7 +7508,20 @@
       },
       {
         "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Expose virtualization extensions to new VMs by default.",
+            "key": "nestedDefault",
+            "label": "Enable nesting by default"
+          },
+          {
+            "help": "Users may choose nesting unless their user policy overrides this.",
+            "key": "nestedSelectable",
+            "label": "Allow users to select nesting"
+          }
+        ],
         "key": "virtualization",
+        "label": "Virtualization",
         "present": false,
         "source": "default",
         "text": "{}",
@@ -6277,7 +7529,30 @@
       },
       {
         "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "GitHub owner/repository. The host-local installation may pin this value.",
+            "key": "repository",
+            "label": "Update repository"
+          },
+          {
+            "help": "Only the main channel is supported.",
+            "key": "channel",
+            "label": "Update channel"
+          },
+          {
+            "help": "Time allowed to drain host jobs before updating.",
+            "key": "drainTimeoutMinutes",
+            "label": "Drain timeout"
+          },
+          {
+            "help": "Time allowed for the updated service to become healthy.",
+            "key": "healthTimeoutSeconds",
+            "label": "Health timeout"
+          }
+        ],
         "key": "updates",
+        "label": "Updates",
         "present": false,
         "source": "default",
         "text": "{}",

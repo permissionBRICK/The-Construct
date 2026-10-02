@@ -501,6 +501,8 @@ fi
 # restore-config.sh can reinstall it on a fresh VM whose provision didn't know
 # the preference (a console reinstall passes an empty T3CODE, and the new
 # config.env has no saved value to fall back on).
+# t3codeProxyUrl (only when set) carries the address the user reaches T3 Code at
+# through their own proxy, which lives nowhere but this VM's config.env.
 jq -n \
   --arg created "$(date -Iseconds 2>/dev/null || true)" \
   --arg host "$(hostname 2>/dev/null || true)" \
@@ -511,13 +513,15 @@ jq -n \
   --argjson t3code "$([[ "${T3CODE:-false}" == "true" ]] && echo true || echo false)" \
   --arg t3codeChannel "${T3CODE_CHANNEL:-stable}" \
   --argjson opencodeBackgroundWatcher "$([[ "${OPENCODE_BACKGROUND_WATCHER:-false}" == "true" ]] && echo true || echo false)" \
+  --arg t3codeProxyUrl "${T3CODE_PROXY_URL:-}" \
   --argjson addedProjects "${gen_json}" '
   { created: $created, host: $host, agents: ($agents | split(",")),
     includeAuth: $includeAuth, includeHistory: $includeHistory,
     historyRetentionDays: $historyRetentionDays,
     t3code: $t3code, t3codeChannel: $t3codeChannel,
     opencodeBackgroundWatcher: $opencodeBackgroundWatcher,
-    addedProjects: $addedProjects }' \
+    addedProjects: $addedProjects }
+  + (if $t3codeProxyUrl == "" then {} else { t3codeProxyUrl: $t3codeProxyUrl } end)' \
   >"${STAGE}/backup-info.json"
 
 # ── Pack ─────────────────────────────────────────────────────────────────────

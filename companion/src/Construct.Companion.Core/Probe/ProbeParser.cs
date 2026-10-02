@@ -72,6 +72,8 @@ public static class ProbeParser
         if (ParseDiskPercent(Get("DISK_PCT")) is {} pct) result["diskPct"] = pct;
         var commit = ParseCommit(Get("CONSTRUCT_COMMIT")); if (commit.Length > 0) result["provisionedCommit"] = commit;
         if (ParseVmSpec(map) is {} spec) result["vmSpec"] = spec; if (ParseVmConfig(map) is {} config) result["vmConfig"] = config;
+        // The address the user reaches T3 Code at through their own proxy; the VM's config.env is the source of truth.
+        if (map.TryGetValue("T3CODE_PROXY_URL", out var proxy)) { proxy = ConfigUnquote(StateJson.Trim(proxy)); result["t3codeProxyUrl"] = IsSafeOrigin(proxy) ? proxy : ""; }
         return result;
     }
     private static JsonObject Agent(string id, string name, string detail, string version) => new() { ["id"] = id, ["name"] = name, ["detail"] = detail, ["version"] = ExtractVersion(version) is { Length: > 0 } v ? v : "—", ["updateAvailable"] = false };

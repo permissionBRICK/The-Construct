@@ -20,6 +20,7 @@ if [ -r "$cfg" ]; then
   emit T3CODE_HTTPS_PORT "$(sed -n 's/^T3CODE_HTTPS_PORT=//p' "$cfg" | head -1)"
   emit T3CODE_PUBLIC_BASE_URL "$(sed -n 's/^T3CODE_PUBLIC_BASE_URL=//p' "$cfg" | head -1)"
   emit T3CODE_LIMIT_RESUME "$(sed -n 's/^T3CODE_LIMIT_RESUME=//p' "$cfg" | head -1)"
+  emit T3CODE_PROXY_URL "$(sed -n 's/^T3CODE_PROXY_URL=//p' "$cfg" | head -1)"
   emit OPENCODE_BACKGROUND_WATCHER "$(sed -n 's/^OPENCODE_BACKGROUND_WATCHER=//p' "$cfg" | head -1)"
 fi
 mark=/etc/construct/provisioned.env

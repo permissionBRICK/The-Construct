@@ -15,6 +15,7 @@ const names = [
   "project-clone", "project-scan", "probe", "audio-enable", "audio-disable", "t3-pairing", "t3-pairing-instance", "construct-t3-pairing-base", "usage",
   "construct-rec-shim", "construct-audio-enable", "construct-audio-disable",
   "construct-patch-status", "construct-partial-streaming-enable", "construct-partial-streaming-disable", "usage-collect",
+  "t3-proxy-url",
 ];
 const templates = Object.fromEntries(names.map(name => [name,
   fs.readFileSync(path.join(__dirname, "..", "vm", name + ".sh"), "utf8")]));

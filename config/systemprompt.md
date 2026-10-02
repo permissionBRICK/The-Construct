@@ -77,6 +77,9 @@ Use values inline (`$(construct secret get github-token)`), never write them int
 files, and run `construct secret release --all` when done. Store credentials you
 create with `construct secret add` (no approval needed).
 
+If the user reaches T3 Code through their own proxy, record its address with
+`construct config set t3-proxy-url <url>` so pairing links and QR codes use it.
+
 ## Recording project requirements
 
 This VM is reinstalled from scratch when the user rebuilds it. To preserve a

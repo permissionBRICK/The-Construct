@@ -9,6 +9,7 @@
 #   construct expose <port> [--label …]            port forward + the link to open
 #   construct vm <command> [args]                    manage delegated child VMs
 #   construct secret <command> [args]              key vault: lease secrets the user approves
+#   construct config get|set|unset|list [args]     per-VM settings agents may change
 #   construct systemprompt                         regenerate every agent's instruction
 #                                                  file (template + ~/construct-custom-system-prompt.md)
 #
@@ -34,6 +35,7 @@
 #  10  secret: a secret with that name already exists
 #  11  secret: the vault is locked for this VM (start or connect it from the
 #      user's PC)
+#   2  config: unknown key or invalid value
 set -euo pipefail
 
 PROJECTS_STORE="${PROJECTS_STORE:-/opt/construct/projects}"
@@ -218,6 +220,12 @@ case "$1" in
     secret_impl="$(find_helper construct-secret.sh)" \
       || die "construct-secret.sh not found (looked next to $0 and in ${CONSTRUCT_REPO_DIR}/bin)"
     exec bash "${secret_impl}" "$@"
+    ;;
+  config)
+    shift
+    config_impl="$(find_helper construct-config.sh)" \
+      || die "construct-config.sh not found (looked next to $0 and in ${CONSTRUCT_REPO_DIR}/bin)"
+    exec bash "${config_impl}" "$@"
     ;;
   systemprompt|system-prompt)
     # The renderer lives with the agent installers; source it function-only so

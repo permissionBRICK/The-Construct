@@ -142,15 +142,25 @@ public static class VaultEndpoints
         id = d.Id, label = d.Label, createdAt = d.CreatedAt.ToUnixTimeMilliseconds(), lastUsedAt = d.LastUsedAt?.ToUnixTimeMilliseconds(),
     };
 
-    private static async Task<IResult> GetDevicesAsync(HttpContext http, VaultHostService vault, ConstructdOptions options, CancellationToken ct) =>
-        Results.Ok(new { webUrl = options.VaultWebBase(), devices = (await vault.DevicesAsync(Owner(http), ct).ConfigureAwait(false)).Select(Device) });
+    // The approval page's address (Logic.VaultWebAddress): the host setting vault.webUrl, the service option,
+    // or the service's own address. webUrlSource tells the Companion which, so it can point at the setting
+    // while phones still get the self-signed default.
+    private static async Task<(string Url, string Source)> WebAddressAsync(IHostConfigStore config, ConstructdOptions options, CancellationToken ct) =>
+        VaultWebAddress.Resolve((await config.GetAsync<VaultConfig>("vault", ct).ConfigureAwait(false))?.WebUrl, options);
 
-    private static Task<IResult> PairDeviceAsync(DeviceRequest? request, HttpContext http, VaultHostService vault, ConstructdOptions options, CancellationToken ct) => Run(http, async () =>
+    private static async Task<IResult> GetDevicesAsync(HttpContext http, VaultHostService vault, IHostConfigStore config, ConstructdOptions options, CancellationToken ct)
+    {
+        var (webUrl, webUrlSource) = await WebAddressAsync(config, options, ct).ConfigureAwait(false);
+        return Results.Ok(new { webUrl, webUrlSource, devices = (await vault.DevicesAsync(Owner(http), ct).ConfigureAwait(false)).Select(Device) });
+    }
+
+    private static Task<IResult> PairDeviceAsync(DeviceRequest? request, HttpContext http, VaultHostService vault, IHostConfigStore config, ConstructdOptions options, CancellationToken ct) => Run(http, async () =>
     {
         http.SetAuditTarget(Owner(http));
         var (device, token) = await vault.PairDeviceAsync(Owner(http), request?.Label, ct).ConfigureAwait(false);
         http.SetAuditDetail($"device={device.Id}");
-        return Results.Ok(new { id = device.Id, token, webUrl = options.VaultWebBase() });
+        var (webUrl, webUrlSource) = await WebAddressAsync(config, options, ct).ConfigureAwait(false);
+        return Results.Ok(new { id = device.Id, token, webUrl, webUrlSource });
     });
 
     private static Task<IResult> RevokeDeviceAsync(string id, HttpContext http, VaultHostService vault, CancellationToken ct) => Run(http, async () =>
@@ -234,7 +244,7 @@ public static class VaultEndpoints
         }
     }
 
-    private static Task<IResult> SubmitAsync(string name, HttpContext http, IVmRepository vms, VaultHostService vault, ConstructdOptions options, CancellationToken ct) => Run(http, async () =>
+    private static Task<IResult> SubmitAsync(string name, HttpContext http, IVmRepository vms, VaultHostService vault, IHostConfigStore config, ConstructdOptions options, CancellationToken ct) => Run(http, async () =>
     {
         var (vm, failure) = await GuestVmAsync(name, http, vms, ct).ConfigureAwait(false);
         if (failure is not null) return failure;
@@ -244,10 +254,10 @@ public static class VaultEndpoints
         var names = string.Join(" ", (body!["names"] as JsonArray ?? []).Take(20).Select(n => VaultProtocol.IsValidName(VaultProtocol.Text(n)) ? VaultProtocol.Text(n) : "?"));
         http.SetAuditDetail($"op={VaultProtocol.Sanitize(body.Str("op"), 20)}, names={names}, " +
             (result.PendingId is { } pending ? $"pending={pending}" : $"status={result.Response!.Str("status")}"));
-        return result.PendingId is { } id
-            // approveUrl: the guest's "waiting for approval" note, which T3 Code turns into a banner, links here.
-            ? Results.Accepted($"/api/v1/vms/{vm!.Name}/vault/requests/{id}", new { id, approveUrl = options.VaultWebBase() + "/vault/#request=" + Uri.EscapeDataString(id) })
-            : Results.Ok(result.Response);
+        if (result.PendingId is not { } id) return Results.Ok(result.Response);
+        // approveUrl: the guest's "waiting for approval" note, which T3 Code turns into a banner, links here.
+        var (webUrl, _) = await WebAddressAsync(config, options, ct).ConfigureAwait(false);
+        return Results.Accepted($"/api/v1/vms/{vm!.Name}/vault/requests/{id}", new { id, approveUrl = webUrl + "/vault/#request=" + Uri.EscapeDataString(id) });
     });
 
     private static Task<IResult> PollAsync(string name, string id, HttpContext http, IVmRepository vms, VaultHostService vault, CancellationToken ct) => Run(http, async () =>

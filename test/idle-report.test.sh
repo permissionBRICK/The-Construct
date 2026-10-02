@@ -467,11 +467,14 @@ ok "the construct CLI is installed executable" test -x "${prov_bin}/construct"
 ok "the expose implementation lands next to it" test -x "${prov_bin}/construct-expose.sh"
 ok "the child-VM implementation lands next to it" test -x "${prov_bin}/construct-vm.sh"
 ok "the key vault implementation lands next to it" test -x "${prov_bin}/construct-secret.sh"
+ok "the per-VM settings implementation lands next to it" test -x "${prov_bin}/construct-config.sh"
 ok "the heartbeat reporter is installed too" test -x "${prov_bin}/construct-idle-report.sh"
 ok "the installed CLI finds its expose helper" \
   sh -c "CONFIG_FILE='${empty_cfg}' bash '${prov_bin}/construct' expose --help | grep -q 'construct expose'"
 ok "the installed CLI finds its child-VM helper" \
   sh -c "CONFIG_FILE='${empty_cfg}' bash '${prov_bin}/construct' vm --help | grep -q 'construct vm'"
+ok "the installed CLI finds its settings helper" \
+  sh -c "CONFIG_FILE='${empty_cfg}' bash '${prov_bin}/construct' config --help | grep -q 't3-proxy-url'"
 ok "the forward spool is created" \
   sh -c "test -d '${prov_forwards}/requests' -a -d '${prov_forwards}/acks' -a -d '${prov_forwards}/close'"
 ok "the forward spool is 0755, not world-writable" \

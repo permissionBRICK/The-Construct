@@ -223,11 +223,12 @@
   },
   {
     "host": null,
-    "input": "T3CODE\ttrue\nV_T3\t0.0.12-nightly.1.2\nT3CODE_CHANNEL\tnightly\nT3CODE_PUBLIC_BASE_URL\t'https://[::1]:5178'\nT3_INSTALLATION_MODE\tprebuilt\nT3_BUILD_HASH\tabc\nT3_ACTIVE\tactive\nT3CODE_LIMIT_RESUME\t'TRUE'",
+    "input": "T3CODE\ttrue\nV_T3\t0.0.12-nightly.1.2\nT3CODE_CHANNEL\tnightly\nT3CODE_PUBLIC_BASE_URL\t'https://[::1]:5178'\nT3_INSTALLATION_MODE\tprebuilt\nT3_BUILD_HASH\tabc\nT3_ACTIVE\tactive\nT3CODE_LIMIT_RESUME\t'TRUE'\nT3CODE_PROXY_URL\t'https://[2001:db8::7]:8443'",
     "map": {
       "T3CODE": "true",
       "T3CODE_CHANNEL": "nightly",
       "T3CODE_LIMIT_RESUME": "'TRUE'",
+      "T3CODE_PROXY_URL": "'https://[2001:db8::7]:8443'",
       "T3CODE_PUBLIC_BASE_URL": "'https://[::1]:5178'",
       "T3_ACTIVE": "active",
       "T3_BUILD_HASH": "abc",
@@ -251,6 +252,7 @@
       ],
       "projects": [],
       "resources": "",
+      "t3codeProxyUrl": "https://[2001:db8::7]:8443",
       "ubuntu": "",
       "vmConfig": {
         "t3code": true,
@@ -262,11 +264,12 @@
   },
   {
     "host": "vm.example",
-    "input": "T3CODE\ttrue\nV_T3\t0.0.12-nightly.1.2\nT3CODE_CHANNEL\tnightly\nT3CODE_PUBLIC_BASE_URL\t'https://[::1]:5178'\nT3_INSTALLATION_MODE\tprebuilt\nT3_BUILD_HASH\tabc\nT3_ACTIVE\tactive\nT3CODE_LIMIT_RESUME\t'TRUE'",
+    "input": "T3CODE\ttrue\nV_T3\t0.0.12-nightly.1.2\nT3CODE_CHANNEL\tnightly\nT3CODE_PUBLIC_BASE_URL\t'https://[::1]:5178'\nT3_INSTALLATION_MODE\tprebuilt\nT3_BUILD_HASH\tabc\nT3_ACTIVE\tactive\nT3CODE_LIMIT_RESUME\t'TRUE'\nT3CODE_PROXY_URL\t'https://[2001:db8::7]:8443'",
     "map": {
       "T3CODE": "true",
       "T3CODE_CHANNEL": "nightly",
       "T3CODE_LIMIT_RESUME": "'TRUE'",
+      "T3CODE_PROXY_URL": "'https://[2001:db8::7]:8443'",
       "T3CODE_PUBLIC_BASE_URL": "'https://[::1]:5178'",
       "T3_ACTIVE": "active",
       "T3_BUILD_HASH": "abc",
@@ -290,6 +293,7 @@
       ],
       "projects": [],
       "resources": "",
+      "t3codeProxyUrl": "https://[2001:db8::7]:8443",
       "ubuntu": "",
       "vmConfig": {
         "t3code": true,
@@ -301,11 +305,12 @@
   },
   {
     "host": "::1",
-    "input": "T3CODE\ttrue\nV_T3\t0.0.12-nightly.1.2\nT3CODE_CHANNEL\tnightly\nT3CODE_PUBLIC_BASE_URL\t'https://[::1]:5178'\nT3_INSTALLATION_MODE\tprebuilt\nT3_BUILD_HASH\tabc\nT3_ACTIVE\tactive\nT3CODE_LIMIT_RESUME\t'TRUE'",
+    "input": "T3CODE\ttrue\nV_T3\t0.0.12-nightly.1.2\nT3CODE_CHANNEL\tnightly\nT3CODE_PUBLIC_BASE_URL\t'https://[::1]:5178'\nT3_INSTALLATION_MODE\tprebuilt\nT3_BUILD_HASH\tabc\nT3_ACTIVE\tactive\nT3CODE_LIMIT_RESUME\t'TRUE'\nT3CODE_PROXY_URL\t'https://[2001:db8::7]:8443'",
     "map": {
       "T3CODE": "true",
       "T3CODE_CHANNEL": "nightly",
       "T3CODE_LIMIT_RESUME": "'TRUE'",
+      "T3CODE_PROXY_URL": "'https://[2001:db8::7]:8443'",
       "T3CODE_PUBLIC_BASE_URL": "'https://[::1]:5178'",
       "T3_ACTIVE": "active",
       "T3_BUILD_HASH": "abc",
@@ -329,6 +334,7 @@
       ],
       "projects": [],
       "resources": "",
+      "t3codeProxyUrl": "https://[2001:db8::7]:8443",
       "ubuntu": "",
       "vmConfig": {
         "t3code": true,
@@ -340,12 +346,13 @@
   },
   {
     "host": null,
-    "input": "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://bad/path\nMEM_GB\t-1\nVM_CPUS\twrong\nDISK_PCT\t101%\nOPENCODE_BACKGROUND_WATCHER\tfalse",
+    "input": "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://bad/path\nMEM_GB\t-1\nVM_CPUS\twrong\nDISK_PCT\t101%\nOPENCODE_BACKGROUND_WATCHER\tfalse\nT3CODE_PROXY_URL\thttps://t3.example.net/app",
     "map": {
       "DISK_PCT": "101%",
       "MEM_GB": "-1",
       "OPENCODE_BACKGROUND_WATCHER": "false",
       "T3CODE": "true",
+      "T3CODE_PROXY_URL": "https://t3.example.net/app",
       "T3CODE_PUBLIC_BASE_URL": "https://bad/path",
       "VM_CPUS": "wrong"
     },
@@ -363,6 +370,7 @@
       ],
       "projects": [],
       "resources": "-1 GB RAM",
+      "t3codeProxyUrl": "",
       "ubuntu": "",
       "vmConfig": {
         "opencodeBackgroundWatcher": false,
@@ -373,12 +381,13 @@
   },
   {
     "host": "vm.example",
-    "input": "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://bad/path\nMEM_GB\t-1\nVM_CPUS\twrong\nDISK_PCT\t101%\nOPENCODE_BACKGROUND_WATCHER\tfalse",
+    "input": "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://bad/path\nMEM_GB\t-1\nVM_CPUS\twrong\nDISK_PCT\t101%\nOPENCODE_BACKGROUND_WATCHER\tfalse\nT3CODE_PROXY_URL\thttps://t3.example.net/app",
     "map": {
       "DISK_PCT": "101%",
       "MEM_GB": "-1",
       "OPENCODE_BACKGROUND_WATCHER": "false",
       "T3CODE": "true",
+      "T3CODE_PROXY_URL": "https://t3.example.net/app",
       "T3CODE_PUBLIC_BASE_URL": "https://bad/path",
       "VM_CPUS": "wrong"
     },
@@ -397,6 +406,7 @@
       ],
       "projects": [],
       "resources": "-1 GB RAM",
+      "t3codeProxyUrl": "",
       "ubuntu": "",
       "vmConfig": {
         "opencodeBackgroundWatcher": false,
@@ -407,12 +417,13 @@
   },
   {
     "host": "::1",
-    "input": "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://bad/path\nMEM_GB\t-1\nVM_CPUS\twrong\nDISK_PCT\t101%\nOPENCODE_BACKGROUND_WATCHER\tfalse",
+    "input": "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://bad/path\nMEM_GB\t-1\nVM_CPUS\twrong\nDISK_PCT\t101%\nOPENCODE_BACKGROUND_WATCHER\tfalse\nT3CODE_PROXY_URL\thttps://t3.example.net/app",
     "map": {
       "DISK_PCT": "101%",
       "MEM_GB": "-1",
       "OPENCODE_BACKGROUND_WATCHER": "false",
       "T3CODE": "true",
+      "T3CODE_PROXY_URL": "https://t3.example.net/app",
       "T3CODE_PUBLIC_BASE_URL": "https://bad/path",
       "VM_CPUS": "wrong"
     },
@@ -431,6 +442,7 @@
       ],
       "projects": [],
       "resources": "-1 GB RAM",
+      "t3codeProxyUrl": "",
       "ubuntu": "",
       "vmConfig": {
         "opencodeBackgroundWatcher": false,
@@ -441,12 +453,13 @@
   },
   {
     "host": null,
-    "input": "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://host\nT3CODE_HTTPS_PORT\t\nMEM_GB\t0x10\nPROJECTS\ta,a\nUBUNTU\told\nUBUNTU\t24.04",
+    "input": "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://host\nT3CODE_HTTPS_PORT\t\nMEM_GB\t0x10\nPROJECTS\ta,a\nUBUNTU\told\nUBUNTU\t24.04\nT3CODE_PROXY_URL\t",
     "map": {
       "MEM_GB": "0x10",
       "PROJECTS": "a,a",
       "T3CODE": "true",
       "T3CODE_HTTPS_PORT": "",
+      "T3CODE_PROXY_URL": "",
       "T3CODE_PUBLIC_BASE_URL": "https://host",
       "UBUNTU": "24.04"
     },
@@ -474,6 +487,7 @@
         }
       ],
       "resources": "0x10 GB RAM",
+      "t3codeProxyUrl": "",
       "ubuntu": "24.04",
       "vmConfig": {
         "t3code": true
@@ -486,12 +500,13 @@
   },
   {
     "host": "vm.example",
-    "input": "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://host\nT3CODE_HTTPS_PORT\t\nMEM_GB\t0x10\nPROJECTS\ta,a\nUBUNTU\told\nUBUNTU\t24.04",
+    "input": "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://host\nT3CODE_HTTPS_PORT\t\nMEM_GB\t0x10\nPROJECTS\ta,a\nUBUNTU\told\nUBUNTU\t24.04\nT3CODE_PROXY_URL\t",
     "map": {
       "MEM_GB": "0x10",
       "PROJECTS": "a,a",
       "T3CODE": "true",
       "T3CODE_HTTPS_PORT": "",
+      "T3CODE_PROXY_URL": "",
       "T3CODE_PUBLIC_BASE_URL": "https://host",
       "UBUNTU": "24.04"
     },
@@ -519,6 +534,7 @@
         }
       ],
       "resources": "0x10 GB RAM",
+      "t3codeProxyUrl": "",
       "ubuntu": "24.04",
       "vmConfig": {
         "t3code": true
@@ -531,12 +547,13 @@
   },
   {
     "host": "::1",
-    "input": "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://host\nT3CODE_HTTPS_PORT\t\nMEM_GB\t0x10\nPROJECTS\ta,a\nUBUNTU\told\nUBUNTU\t24.04",
+    "input": "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://host\nT3CODE_HTTPS_PORT\t\nMEM_GB\t0x10\nPROJECTS\ta,a\nUBUNTU\told\nUBUNTU\t24.04\nT3CODE_PROXY_URL\t",
     "map": {
       "MEM_GB": "0x10",
       "PROJECTS": "a,a",
       "T3CODE": "true",
       "T3CODE_HTTPS_PORT": "",
+      "T3CODE_PROXY_URL": "",
       "T3CODE_PUBLIC_BASE_URL": "https://host",
       "UBUNTU": "24.04"
     },
@@ -564,6 +581,7 @@
         }
       ],
       "resources": "0x10 GB RAM",
+      "t3codeProxyUrl": "",
       "ubuntu": "24.04",
       "vmConfig": {
         "t3code": true
@@ -572,6 +590,63 @@
       "vmSpec": {
         "ramGb": 16
       }
+    }
+  },
+  {
+    "host": null,
+    "input": "T3CODE\tfalse\nT3CODE_PROXY_URL\t https://t3.example.net:8443 ",
+    "map": {
+      "T3CODE": "false",
+      "T3CODE_PROXY_URL": "https://t3.example.net:8443"
+    },
+    "output": {
+      "agents": [],
+      "projects": [],
+      "resources": "",
+      "t3codeProxyUrl": "https://t3.example.net:8443",
+      "ubuntu": "",
+      "vmConfig": {
+        "t3code": false
+      },
+      "vmName": ""
+    }
+  },
+  {
+    "host": "vm.example",
+    "input": "T3CODE\tfalse\nT3CODE_PROXY_URL\t https://t3.example.net:8443 ",
+    "map": {
+      "T3CODE": "false",
+      "T3CODE_PROXY_URL": "https://t3.example.net:8443"
+    },
+    "output": {
+      "agents": [],
+      "projects": [],
+      "resources": "",
+      "t3codeProxyUrl": "https://t3.example.net:8443",
+      "ubuntu": "",
+      "vmConfig": {
+        "t3code": false
+      },
+      "vmName": ""
+    }
+  },
+  {
+    "host": "::1",
+    "input": "T3CODE\tfalse\nT3CODE_PROXY_URL\t https://t3.example.net:8443 ",
+    "map": {
+      "T3CODE": "false",
+      "T3CODE_PROXY_URL": "https://t3.example.net:8443"
+    },
+    "output": {
+      "agents": [],
+      "projects": [],
+      "resources": "",
+      "t3codeProxyUrl": "https://t3.example.net:8443",
+      "ubuntu": "",
+      "vmConfig": {
+        "t3code": false
+      },
+      "vmName": ""
     }
   }
 ]

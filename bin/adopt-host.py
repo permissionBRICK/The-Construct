@@ -110,7 +110,7 @@ def enroll(payload, root=Path("/"), verify=None, run=subprocess.run):
         config: (update_config(original.decode(), values).encode(), 0o600),
     }
     for filename, contents in payload.get("files", {}).items():
-        if filename not in ("construct", "construct-vm.sh", "construct-expose.sh", "construct-secret.sh", "construct-idle-report.sh"):
+        if filename not in ("construct", "construct-vm.sh", "construct-expose.sh", "construct-secret.sh", "construct-config.sh", "construct-idle-report.sh"):
             raise EnrollmentError("unexpected guest helper")
         changes[root / "usr/local/bin" / filename] = (contents.encode(), 0o755)
     units = root / "etc/systemd/system"

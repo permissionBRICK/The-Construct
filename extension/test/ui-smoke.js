@@ -325,6 +325,46 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   // the settings view must not present ignored interactive agent/project chips.
   check("save omits unwired agents/projects", savedMsg && !("agents" in savedMsg.settings) && !("projects" in savedMsg.settings));
   check("settings: no ignored agent/project chip controls", (await page.locator("#setAgents, #setProjects").count()) === 0);
+  check("save does not carry the T3 proxy address (the VM keeps it)", savedMsg && !("t3codeProxyUrl" in savedMsg.settings));
+
+  // T3 Code address via your own proxy: shown from the VM's probe, written live with apply.
+  check("t3 proxy: the field sits under Access & services", /T3 Code address via your own proxy/.test(
+    await page.locator("#t3ProxyRow").locator("xpath=ancestor::section[1]").innerText()) &&
+    /Access &? ?services/i.test(await page.locator("#t3ProxyRow").locator("xpath=ancestor::section[1]//h2").innerText()));
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, t3codeProxyUrl: "https://t3.example.net:8443" } }, "*"));
+  await page.waitForTimeout(60);
+  check("t3 proxy: shows the VM's value (an agent may have set it)", (await page.inputValue("#setT3ProxyUrl")) === "https://t3.example.net:8443");
+  check("t3 proxy: apply is off while nothing changed", await page.isDisabled("#t3ProxyApply"));
+  await page.fill("#setT3ProxyUrl", "https://t3.example.net/app");
+  check("t3 proxy: a path is refused before anything is sent", await page.isDisabled("#t3ProxyApply") &&
+    /without a path/.test(await page.locator("#t3ProxyNote").innerText()) && (await page.getAttribute("#setT3ProxyUrl", "aria-invalid")) === "true");
+  await page.fill("#setT3ProxyUrl", "https://t3.example.org:9443/");
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, t3codeProxyUrl: "https://t3.example.net:8443" } }, "*"));
+  await page.waitForTimeout(60);
+  check("t3 proxy: a refresh does not overwrite an edit", (await page.inputValue("#setT3ProxyUrl")) === "https://t3.example.org:9443/");
+  await page.click("#t3ProxyApply");
+  posted = await page.evaluate(() => window.__posted);
+  check("t3 proxy: apply posts the normalized address at once", JSON.stringify(posted.filter((m) => m.type === "setT3ProxyUrl")) ===
+    JSON.stringify([{ type: "setT3ProxyUrl", url: "https://t3.example.org:9443" }]));
+  check("t3 proxy: apply is off while the VM stores it", await page.isDisabled("#t3ProxyApply"));
+  await page.evaluate(() => window.postMessage({ type: "lifecyclePrepared", id: "setT3ProxyUrl", error: "The VM is not reachable. Start it, then apply the address again." }, "*"));
+  await page.waitForTimeout(60);
+  check("t3 proxy: a refusal shows under the field and keeps the edit", /not reachable/.test(await page.locator("#t3ProxyNote").innerText()) &&
+    (await page.inputValue("#setT3ProxyUrl")) === "https://t3.example.org:9443/" && !(await page.isDisabled("#t3ProxyApply")));
+  check("t3 proxy: a refusal does not block the lifecycle buttons", !(await page.isDisabled('.action-grid [data-cmd="reprovision"]')));
+  await page.click("#t3ProxyApply");
+  await page.evaluate(() => window.postMessage({ type: "lifecyclePrepared", id: "setT3ProxyUrl" }, "*"));
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, t3codeProxyUrl: "https://t3.example.org:9443" } }, "*"));
+  await page.waitForTimeout(60);
+  check("t3 proxy: after a success the field shows what the VM stored", (await page.inputValue("#setT3ProxyUrl")) === "https://t3.example.org:9443" &&
+    await page.isDisabled("#t3ProxyApply") && /set on the VM/.test(await page.locator("#t3ProxyNote").innerText()));
+  await page.fill("#setT3ProxyUrl", "");
+  check("t3 proxy: clearing the field offers to remove it", !(await page.isDisabled("#t3ProxyApply")));
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: false } }, "*"));
+  await page.waitForTimeout(60);
+  check("t3 proxy: an offline VM cannot be written", await page.isDisabled("#t3ProxyApply") && /offline/.test(await page.locator("#t3ProxyNote").innerText()));
+  await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, t3codeProxyUrl: "https://t3.example.org:9443" } }, "*"));
+  await page.fill("#setT3ProxyUrl", "https://t3.example.org:9443");
 
   await page.click("#backBtn");
 

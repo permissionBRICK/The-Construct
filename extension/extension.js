@@ -4756,6 +4756,22 @@ function handleMessage(message, webview, context) {
       return;
     }
 
+    case "setT3ProxyUrl": {
+      // Settings → Access & services: the VM's T3CODE_PROXY_URL, written live over SSH. The VM's
+      // config.env is the source of truth (agents set it with `construct config set t3-proxy-url`),
+      // so it is not a saved setting and provisioning never writes it. The webview is untrusted
+      // input: setProxyUrlOnVm validates the value before it reaches a script.
+      const proxyTarget = actionTarget();
+      t3code.setProxyUrlOnVm(message.url, { cfg: proxyTarget.cfg, instance: proxyTarget.instance })
+        .catch((e) => ({ error: "Could not store the address: " + (e && e.message ? e.message : e) }))
+        .then((r) => {
+          safePost(webview, { type: "lifecyclePrepared", id: "setT3ProxyUrl", ...(r && r.error ? { error: r.error } : {}) });
+          return refreshState(webview);
+        })
+        .catch((err) => logLine(`t3 proxy address: ${err && err.message ? err.message : err}`));
+      return;
+    }
+
     case "applyVmResources":
       // The panel's "Save & restart to apply" posts saveSettings first (handled above,
       // synchronously up to the write), so the file already holds what to apply.

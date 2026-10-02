@@ -81,12 +81,34 @@ public static partial class VaultSync
         return string.IsNullOrEmpty(next) ? url : url + "&next=" + Uri.EscapeDataString(next);
     }
     public static bool IsDeviceToken(string? token) => token is not null && DeviceToken().IsMatch(token);
-    // The link a phone can reach: the gateway-forwarded one, never the VM-internal address.
-    public static (string? Url, string? Error) ForwardedT3Link(int code, string stdout)
+    // The approval page's base for the QR code from the pairing reply, and whether it is the host service's own
+    // address (self-signed, so phones warn): the host says so in webUrlSource; an older host does not, and then
+    // its own address is what the Companion talks to. A non-https answer falls back to that address too.
+    public static (string Web, bool ServiceDefault) PairingWebBase(JsonNode? reply, string serviceUrl)
+    {
+        var body = reply as JsonObject;
+        var w = body.Str("webUrl");
+        if (w.Length == 0 || !Uri.TryCreate(w, UriKind.Absolute, out var uri) || uri.Scheme != "https") return (serviceUrl, true);
+        var source = body.Str("webUrlSource");
+        return (w, source == "default" || source.Length == 0 && SameOrigin(w, serviceUrl));
+    }
+    // Scheme, host and port: what a browser keeps apart.
+    public static bool SameOrigin(string a, string b) =>
+        Uri.TryCreate(a, UriKind.Absolute, out var x) && Uri.TryCreate(b, UriKind.Absolute, out var y) &&
+        string.Equals(x.GetLeftPart(UriPartial.Authority), y.GetLeftPart(UriPartial.Authority), StringComparison.OrdinalIgnoreCase);
+    public static string Origin(string url) => Uri.TryCreate(url, UriKind.Absolute, out var uri) ? uri.GetLeftPart(UriPartial.Authority) : url;
+    public static string SelfSignedNote(string web) =>
+        $"Phones open the approval page at the host service's own address, {Origin(web)}, whose certificate is self-signed, so the phone warns about it. " +
+        "A host administrator can set Host Administration → Configuration → Key vault → Approval page address (vault.webUrl) to a reverse proxy with a trusted certificate.";
+    public const string SameOriginError = "T3 Code and the key vault's approval page use the same address. T3 Code is served from inside the VM, so it must not share an origin (scheme, host and port) with the page that keeps the phone's approval token: give the T3 Code proxy address or the approval page address its own host name or port.";
+    // The link a phone can reach: the address the user reaches T3 Code at through their own proxy when the VM
+    // records one (T3CODE_PROXY_URL), else the gateway-forwarded one; never the VM-internal address.
+    public static (string? Url, string? Error) PhoneT3Link(int code, string stdout)
     {
         if (code == 7) return (null, "T3 Code's port forward is not ready. Keep the Construct client connected and retry.");
-        var link = code == 0 ? State.T3Code.ExtractPairLinks(stdout).FirstOrDefault(l => l.Kind == "forwarded") : null;
-        return link is null ? (null, "T3 Code did not return a pairing link the phone can reach (no forwarded link).") : (link.PairUrl, null);
+        var links = code == 0 ? State.T3Code.ExtractPairLinks(stdout) : [];
+        var link = links.FirstOrDefault(l => l.Kind == "proxy") ?? links.FirstOrDefault(l => l.Kind == "forwarded");
+        return link is null ? (null, "T3 Code did not return a pairing link the phone can reach (no proxy or forwarded link).") : (link.PairUrl, null);
     }
 
     private static bool IsId(string id) => id.Length is > 0 and <= 128 && !id.Any(char.IsControl) && !id.Contains('/', StringComparison.Ordinal);

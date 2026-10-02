@@ -273,7 +273,11 @@ redacted without asking and every other hit waits in `GET /vault/files`. The hea
 `200 {"vaultScrub": true}` while a scrub job can be delivered to that VM, `204` otherwise.
 
 The phone pages are served anonymously at `/vault/` and `/vault/pair` (strict CSP, no inline code).
-`Constructd:VaultWebUrl` overrides their base URL (default `https://<PublicHost>:<listen port>`);
+Their base URL, used for the pairing QR code and a pending request's `approveUrl`, is the host config
+value `vault.webUrl` (Host Administration, admins only), else `Constructd:VaultWebUrl`, else
+`https://<PublicHost>:<listen port>`. `GET` and `POST /vault/devices` return it as `webUrl` with
+`webUrlSource` (`hostConfig`, `option` or `default`), so the Companion can tell a self-signed default
+apart. The pairing page never follows a T3 Code link on its own origin;
 `Constructd:Vault:SchedulerEnabled=false` stops the 10 s lease/approval/scrub tick (tests).
 Discovery advertises `key-vault`.
 
@@ -628,7 +632,7 @@ Bound from the `Constructd` section of `appsettings.json`, from environment vari
 | `WslDistro` | `Ubuntu` | WSL distro used for the ISO build. Empty uses WSL's default distro (no `-d`). |
 | `PublicHost` | `localhost` | LAN name/IP that endpoints and forwards are advertised on, and what the API certificate is bound to. |
 | `PublicHostPattern` | – (empty) | Per-VM host name template, e.g. `{name}.vpn.example`. With a wildcard DNS record pointing at this host, every VM gets its OWN name, so two VMs' web UIs are separate origins (browsers scope cookies by host, not by port). `{name}` must appear exactly once and the pattern must render to a valid DNS name for every VM name — checked at startup. Empty = every VM is advertised on `PublicHost`. The certificate is unaffected. |
-| `VaultWebUrl` | – (empty) | Base URL of the key vault's phone pages (`/vault/`, `/vault/pair`) for a reverse proxy with a public certificate. Empty = `https://<PublicHost>:<ListenUrl port>`. |
+| `VaultWebUrl` | – (empty) | Base URL of the key vault's phone pages (`/vault/`, `/vault/pair`) for a reverse proxy with a public certificate. Empty = `https://<PublicHost>:<ListenUrl port>`. The host config value `vault.webUrl` (Host Administration) takes precedence. |
 | `SwitchName` | `Default Switch` | Hyper-V virtual switch new VMs are attached to. |
 | `VmStorageRoot` | – (empty) | Folder the per-VM VHDX is created in. Empty leaves the path to the driver, i.e. Hyper-V's own default folder — the same location a local install uses. |
 | `ListenAddress` | `0.0.0.0` | `listenaddress=` of the host's portproxy rules. Narrow it to one LAN address on a multi-homed host. |
@@ -690,6 +694,7 @@ exists; a timestamp requires an exact match. A conflict returns `409 config-conf
 | `network` | `hostForwardsEnabled`, `directAddressReporting`, `defaultMode`, `ownerMaySwitchMode` | `true`, `true`, `"relayed"`, `false` |
 | `virtualization` | `nestedDefault`, `nestedSelectable` | `true`, `true` |
 | `updates` | `repository`, `channel`, `drainTimeoutMinutes`, `healthTimeoutSeconds` | `permissionBRICK/The-Construct`, `main`, 60 min, 120 s |
+| `vault` | `webUrl`: the https address phones use for the key vault's approval page, e.g. a reverse proxy with a trusted certificate that forwards `/vault/` and `/api/v1/vault/` here. An https origin with an optional port and no path, query or fragment (`http` only for a loopback host); it must not share an origin with any T3 Code address. Overrides `Constructd:VaultWebUrl` | null: `Constructd:VaultWebUrl`, else the service's own address |
 
 When `capacity.ramHeadroomBytes` is null, RAM headroom is `max(1 GiB, total RAM / 8)`
 on Proxmox and `max(4 GiB, total RAM / 8)` on Hyper-V. A configured byte value,

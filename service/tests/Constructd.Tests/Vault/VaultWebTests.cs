@@ -65,6 +65,8 @@ public sealed partial class VaultWebTests
         Assert.Contains("history.replaceState", script, StringComparison.Ordinal);
         Assert.Contains("'VaultDevice '", script, StringComparison.Ordinal);
         Assert.Contains("location.replace", script, StringComparison.Ordinal);
+        // A T3 Code link on the page's own origin would put VM-served scripts next to the device token.
+        Assert.Contains("url.origin === location.origin", script, StringComparison.Ordinal);
     }
 
     [Fact]

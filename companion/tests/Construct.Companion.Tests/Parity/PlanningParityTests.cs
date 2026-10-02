@@ -84,7 +84,10 @@ public sealed class PlanningParityTests
                 if (S("kind") == "endpoint") Equal("output", RemoteHost.ReadEndpoint(row["input"]));
                 else if (S("kind") == "fingerprint") Value("output", RemoteHost.FormatFingerprint(StateJson.Text(row["input"])));
                 else { Value("normalized", RemoteHost.NormalizeServiceUrl(S("input"))); Value("slug", RemoteHost.HostSlug(S("input"))); var fs = new FakeFileSystem(); fs.Roots[FileSystemRoot.LocalAppData] = "/local"; Value("pin", RemoteHost.PinPath(fs, S("input"))); } break;
-            case "t3-pure": Value("output", S("kind") switch { "install" => T3Code.BuildInstallScript(S("channel")), "disable" => T3Code.BuildDisableScript(), _ => T3Code.ExtractPairUrl(StateJson.Text(row["input"])) }); break;
+            case "t3-pure":
+                if (S("kind") == "proxy") { var (url, error) = T3Code.NormalizeProxyUrl(StateJson.Text(row["input"])); Equal("output", new JsonObject { ["url"] = url, ["error"] = error }); }
+                else Value("output", S("kind") switch { "install" => T3Code.BuildInstallScript(S("channel")), "disable" => T3Code.BuildDisableScript(), "proxy-script" => T3Code.BuildProxyUrlScript(S("input")), _ => T3Code.ExtractPairUrl(StateJson.Text(row["input"])) });
+                break;
         }
     }
 }

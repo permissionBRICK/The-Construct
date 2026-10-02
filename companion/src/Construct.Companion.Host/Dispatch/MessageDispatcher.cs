@@ -49,6 +49,7 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
                     if (entry.Runtime is { } audioRuntime) await audioRuntime.SetAudioAsync(enabled, ct);
                     state.Publish(name, new { type = "settings", instance = name, settings = entry.Store.ReadSettings() }); return;
                 case "saveSettings": await SaveSettings(entry, message["settings"] as JsonObject ?? throw new IpcFailure(400, "invalidSettings", "A settings object is required."), ct); return;
+                case "setT3ProxyUrl": await SetT3ProxyUrl(entry, RequireProxyUrl(message), ct); return;
                 case "customRebuild": RequireRebuild(message); await Lifecycle(entry, Text(message, "mode"), message, ct); return;
                 case "applyVmResources": await ApplyVmResources(entry, ct); return;
                 case "setUsagePeriod": entry.UsagePeriod = UsageParser.NormalizeReport(Text(message, "period")); await RefreshAsync(entry, ct); return;
@@ -233,6 +234,30 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
             await CheckedScript(entry, Text(t3, "action") == "disable" ? T3Code.BuildDisableScript() : T3Code.BuildInstallScript(Text(t3, "channel")), ct, TimeSpan.FromMinutes(10));
         if (changes.Length > 0 && await prompts.ConfirmAsync("Reprovision required", "Saved settings need reprovisioning to take effect: " + string.Join(", ", changes) + ". Reprovision now?", ct)) await Lifecycle(entry, "reprovision", [], ct);
     }
+    // Settings → Access & services: the VM's T3CODE_PROXY_URL is written live; the VM's config.env stays the
+    // source of truth (agents set it with `construct config set t3-proxy-url`), so it is not a saved setting and
+    // provisioning never writes it. The answer is a lifecyclePrepared for the field, with the error to show.
+    private async Task SetT3ProxyUrl(CompanionInstance entry, string url, CancellationToken ct)
+    {
+        string? error = null;
+        try
+        {
+            var result = await entry.Ssh.RunRemoteScriptAsync(T3Code.BuildProxyUrlScript(url), TimeSpan.FromSeconds(30), ct);
+            if (result.Code != 0)
+            {
+                var detail = StateJson.Trim(result.Stderr);
+                error = result.Code == 255 ? "The VM is not reachable. Start it, then apply the address again."
+                    : ("The VM did not store the address (exit " + result.Code + "). " + (detail.Length > 200 ? detail[^200..] : detail)).Trim();
+            }
+            else events.Companion(new { type = "notification", level = "info", text = url.Length > 0 ? $"T3 Code proxy address set to {url}. New pairing links and phone QR codes use it." : "T3 Code proxy address removed." });
+        }
+        catch (Exception e) when (e is not OperationCanceledException) { logs.Failure("t3 proxy address", e); error = "The VM did not store the address. Check the connection, then apply it again."; }
+        events.Message(entry.Name, error is null ? new { type = "lifecyclePrepared", id = "setT3ProxyUrl" } : new { type = "lifecyclePrepared", id = "setT3ProxyUrl", error });
+        await RefreshAsync(entry, ct);
+    }
+    private static string RequireProxyUrl(JsonObject message) =>
+        message["url"] is JsonValue value && value.TryGetValue<string>(out var text) && T3Code.NormalizeProxyUrl(text) is ({ } url, null) ? url
+            : throw new IpcFailure(400, "invalidProxyUrl", T3Code.ProxyUrlError);
     private async Task Lifecycle(CompanionInstance entry, string action, JsonObject message, CancellationToken ct)
     {
         try
@@ -359,6 +384,7 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
         if (type.Length == 0 || type == "command" && id.Length == 0) throw new IpcFailure(400, "invalidMessage", "A message type and command id are required.");
         if (type == "setAudio" && StateJson.Boolean(message["enabled"]) is null) throw new IpcFailure(400, "invalidMessage", "enabled must be a boolean.");
         if (type == "saveSettings" && message["settings"] is not JsonObject) throw new IpcFailure(400, "invalidSettings", "A settings object is required.");
+        if (type == "setT3ProxyUrl") RequireProxyUrl(message);
         if (type == "setInstance") instances.Get(Text(message, "name"));
         if (type == "customRebuild") RequireRebuild(message);
         if (type == "saveProject") RequireProject(Text(message, "name"), message["profile"]);
