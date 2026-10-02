@@ -163,16 +163,14 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("register banner offers registration only", (await page.locator("#registerBanner button").count()) === 1);
   await page.evaluate(() => window.postMessage({type:"state",state:{registerOffer:null}},"*"));
   await page.locator("#registerBanner").waitFor({state:"hidden"});
-  await page.click("#voiceSwitch");
-  let posted = await page.evaluate(() => window.__posted);
-  check("voice switch posts setAudio:true", posted.some((m) => m.type === "setAudio" && m.enabled === true));
-  check("voice switch becomes busy", (await page.getAttribute("#voiceSwitch", "class")).includes("busy"));
-  // The key vault entry only asks the host to open the vault.
+  // The console has no microphone switch any more (Settings and the tray keep it); its card
+  // slot holds the key vault entry, which only asks the host to open the vault.
+  check("console: no microphone module", (await page.locator("#voiceSwitch, #voiceState, .module.voice").count()) === 0);
   check("key vault: card in the console with one line and one button",
     await page.locator("#mainView .vault-card").isVisible() && (await page.locator(".vault-card .desc").count()) === 1
     && (await page.locator(".vault-card button").count()) === 1 && /Open key vault/.test(await page.locator(".vault-card button").innerText()));
   await page.click('.vault-card [data-cmd="openVault"]');
-  posted = await page.evaluate(() => window.__posted);
+  let posted = await page.evaluate(() => window.__posted);
   check("key vault: the button posts the openVault command and nothing else", posted.filter((m) => m.type === "command" && m.id === "openVault").length === 1
     && JSON.stringify(posted.find((m) => m.id === "openVault")) === JSON.stringify({ type: "command", id: "openVault" }));
 
@@ -208,7 +206,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   const after = await page.getAttribute("#setServeWeb", "aria-checked");
   check("settings switch toggles locally", before !== after);
   const setAudioCount = await page.evaluate(() => window.__posted.filter((m) => m.type === "setAudio").length);
-  check("settings serve-web does NOT post setAudio", setAudioCount === 1, `setAudio count=${setAudioCount}`);
+  check("settings serve-web does NOT post setAudio", setAudioCount === 0, `setAudio count=${setAudioCount}`);
 
   // settings <- extension: a full payload populates the form...
   await page.evaluate(() => window.postMessage({ type: "settings", settings: {
@@ -291,6 +289,28 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await page.waitForTimeout(60);
   check("settings partial: omitted switch keeps its value", (await page.getAttribute("#setMic", "aria-checked")) === "true");
   check("settings partial: present field updates", (await page.inputValue("#setGitName")) === "Neo");
+
+  // Microphone passthrough applies at once from Settings: the switch posts setAudio (what the
+  // console switch used to post) and flips; the host's settings echo confirms the mic without
+  // undoing an unsaved edit elsewhere in the form. Save still carries it.
+  check("settings: the mic hint no longer points at a console switch", !/console/.test(await page.locator("#setMic").locator("xpath=../..").innerText()));
+  await page.fill("#setGitName", "Neo (unsaved)");
+  await page.click("#setMic");
+  posted = await page.evaluate(() => window.__posted);
+  check("settings mic: posts setAudio enabled:false at once", posted.filter((m) => m.type === "setAudio").length === 1 && posted.some((m) => m.type === "setAudio" && m.enabled === false));
+  check("settings mic: switch flips without waiting", (await page.getAttribute("#setMic", "aria-checked")) === "false");
+  await page.evaluate(() => window.postMessage({ type: "settings", settings: { gitName: "Neo", mic: false, smb: true } }, "*"));
+  await page.waitForTimeout(60);
+  check("settings mic: the echo keeps unsaved edits", (await page.inputValue("#setGitName")) === "Neo (unsaved)" && (await page.getAttribute("#setSmb", "aria-checked")) === "false");
+  check("settings mic: ...and confirms the mic", (await page.getAttribute("#setMic", "aria-checked")) === "false");
+  await page.evaluate(() => window.postMessage({ type: "settings", settings: { gitName: "Neo" } }, "*"));
+  await page.waitForTimeout(60);
+  check("settings mic: later settings apply in full again", (await page.inputValue("#setGitName")) === "Neo");
+  await page.click("#setMic");
+  await page.evaluate(() => window.postMessage({ type: "settings", settings: { mic: true } }, "*"));
+  await page.waitForTimeout(60);
+  check("settings mic: switching back posts enabled:true", (await page.evaluate(() => window.__posted)).some((m) => m.type === "setAudio" && m.enabled === true)
+    && (await page.getAttribute("#setMic", "aria-checked")) === "true");
 
   // save -> extension: gather the form and post saveSettings.
   await page.click("#saveBtn");
@@ -534,35 +554,14 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   posted = await page.evaluate(() => window.__posted);
   check("panel: add-project posts command", posted.some((m) => m.type === "command" && m.id === "addProject"));
 
-  await page.evaluate(() => window.postMessage({ type: "audio", enabled: true, capturing: false, tunnel: "vm:8767" }, "*"));
-  await page.waitForTimeout(80);
-  check("audio render: voice switch on", (await page.getAttribute("#voiceSwitch", "aria-checked")) === "true");
-  check("audio render: substatus shown", await page.locator("#voiceSub").isVisible());
-  check("audio render: not busy anymore", !(await page.getAttribute("#voiceSwitch", "class")).includes("busy"));
-  // textContent (not innerText) — the label is CSS-uppercased, so read raw case.
-  check("audio render: enabled+idle reads 'armed · idle'", /armed/.test(await page.locator("#voiceState").textContent()));
-  // honesty: with no gatePatched signal the gate line stays NEUTRAL (doesn't assert a patch).
-  check("audio render: unknown gate stays neutral", (await page.locator("#voiceGateNote").textContent()).includes("if a known build"));
-  // gate patched -> asserts the mic button is unlocked; not patched -> says so (warns).
-  await page.evaluate(() => window.postMessage({ type: "audio", enabled: true, capturing: false, tunnel: "vm:8767", gatePatched: true }, "*"));
+  // Live audio status (both hosts still post it) is no panel content: it neither errors nor
+  // drives the saved Settings preference.
+  const micBefore = await page.getAttribute("#setMic", "aria-checked");
+  const audioErrors = errors.length;
+  await page.evaluate((on) => window.postMessage({ type: "audio", enabled: !on, capturing: true, tunnel: "vm:8767", gatePatched: false }, "*"), micBefore === "true");
   await page.waitForTimeout(60);
-  check("audio render: gatePatched=true reads 'enabled'", (await page.locator("#voiceGate").textContent()).includes("enabled")
-    && (await page.locator("#voiceGateNote").textContent()).includes("patched"));
-  await page.evaluate(() => window.postMessage({ type: "audio", enabled: true, capturing: false, tunnel: "vm:8767", gatePatched: false }, "*"));
-  await page.waitForTimeout(60);
-  check("audio render: gatePatched=false says 'not patched'", (await page.locator("#voiceGate").textContent()).includes("not patched"));
-  check("audio render: gatePatched=false warns", (await page.getAttribute("#voiceGateRow", "class")).includes("warn"));
-  // on-demand capture: while the VM shim is connected (Claude recording), state goes live.
-  await page.evaluate(() => window.postMessage({ type: "audio", enabled: true, capturing: true, tunnel: "vm:8767", gatePatched: true }, "*"));
-  await page.waitForTimeout(60);
-  check("audio render: capturing reads 'live · capturing'", /capturing/.test(await page.locator("#voiceState").textContent()));
-  check("audio render: still on while capturing", (await page.getAttribute("#voiceSwitch", "aria-checked")) === "true");
-  // disable: switch goes off, substatus hidden, state 'disabled'.
-  await page.evaluate(() => window.postMessage({ type: "audio", enabled: false, capturing: false }, "*"));
-  await page.waitForTimeout(60);
-  check("audio render: disabled turns the switch off", (await page.getAttribute("#voiceSwitch", "aria-checked")) === "false");
-  check("audio render: disabled hides substatus", !(await page.locator("#voiceSub").isVisible()));
-  check("audio render: disabled reads 'disabled'", /disabled/.test(await page.locator("#voiceState").textContent()));
+  check("audio messages: ignored without errors", errors.length === audioErrors, errors.slice(audioErrors).join(" | "));
+  check("audio messages: the Settings preference is not a mirror of live audio", (await page.getAttribute("#setMic", "aria-checked")) === micBefore);
 
   // disk-pressure warning: the triangle next to "RAM / disk" appears only above
   // 90% full, and never claims a healthy disk when there is no reading.

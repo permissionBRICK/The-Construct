@@ -16,8 +16,8 @@ step — it's plain JavaScript; to hack on it, open `extension/` and press F5.)
   live status, the three quick lifecycle actions, the power buttons, and an **Open Control
   Panel** button.
 - **Full panel** — that button (or the `The Construct: Open Control Panel` command) opens
-  the wide **editor tab** with everything: system status, agents, projects, usage, voice,
-  the key vault entry, and settings. It's restored across window reloads.
+  the wide **editor tab** with everything: system status, agents, projects, usage, the key
+  vault entry, and settings. It's restored across window reloads.
 
 Both read the same live state, pushed from the extension as the VM is probed over SSH.
 
@@ -484,8 +484,9 @@ Companion, the card says where the vault lives (and offers the install when the 
 
 ## Microphone passthrough (voice input)
 
-Claude Code's speech-to-text is disabled over Remote-SSH by default. The **Voice input**
-toggle re-enables it by streaming your **local** microphone to the VM on demand:
+Claude Code's speech-to-text is disabled over Remote-SSH by default. **Settings → Microphone
+passthrough** (or the Companion's tray menu) re-enables it by streaming your **local** microphone to
+the VM on demand:
 
 - Enabling installs a small `rec`/`arecord` shim on the VM, applies a **reversible** patch
   that lifts only the remote speech gate in the installed Claude Code extension, and opens
@@ -502,11 +503,11 @@ toggle re-enables it by streaming your **local** microphone to the VM on demand:
   port (8767–8774), so voice input works in every window attached to the VM — not just the
   first one. The shared VM-side pieces (shim + patch) are only removed when the **last**
   window's passthrough turns off.
-- **One persistent toggle + auto-arm.** The main **Voice input** switch and the **Settings →
-  Microphone passthrough** toggle are the *same* setting. Turning it on **persists** it, so
-  passthrough arms itself **automatically on startup** (as soon as the VM is reachable) — you
-  don't have to flip it each session. Startup arming is silent: if the VM is down it just
-  stays off; flip the console switch to see any error.
+- **One persistent toggle + auto-arm.** The **Settings → Microphone passthrough** switch applies
+  at once (no Save needed) and **persists** the choice, so passthrough arms itself
+  **automatically on startup** (as soon as the VM is reachable) — you don't have to flip it each
+  session. Startup arming is silent: if the VM is down it just stays off; flip the switch to see
+  any error.
 - **Switching instances re-arms it.** The tunnel terminates on one VM, so switching the
   window to another instance tears it down and evaluates *that* VM's own saved preference —
   you don't have to flip the switch again on the VM you moved to, and the VM you left is not
@@ -524,11 +525,11 @@ Passthrough remains what powers voice input in the **Claude Code VS Code extensi
 `/voice` in a terminal, and it stays available to T3 Code as the **Construct host bridge**
 source.
 
-The panel is honest about the patch and the recorder: the "chat mic button" line reflects
-whether the guard patch actually applied, and if no recorder or no capture device is found
-you get a one-time warning (never silent-but-broken). On a Claude Code build the patch
-doesn't recognise, it says so rather than claiming the button is unlocked. `/voice` in the
-terminal works regardless of the button.
+The extension is honest about the patch and the recorder: the message after enabling says
+whether the guard patch applied, and if no recorder or no capture device is found you get a
+one-time warning (never silent-but-broken). On a Claude Code build the patch doesn't
+recognise, it says so rather than claiming the button is unlocked. `/voice` in the terminal
+works regardless of the button.
 
 **Windows: picking the right microphone.** ffmpeg's DirectShow capture needs an exact
 device name — the panel auto-detects the first one, but if that's the wrong input, list your

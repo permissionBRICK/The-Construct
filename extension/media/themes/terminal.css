@@ -214,9 +214,7 @@ h1.title {
 /* "up to date" is a resting state, not a live one — calm tier, no accent. */
 .tag.ok { color: var(--text); border-color: var(--line-strong); }
 
-/* ── 10. Voice module (armed mic = a genuinely live state: keeps its glow) ── */
-.voice { border-color: var(--line-strong); box-shadow: none; }
-.voice .desc { color: var(--dim); }
+/* ── 10. Switches (switched on = a genuinely live state: keeps its glow) ──── */
 .vault-card .desc { color: var(--dim); }
 .switch { background: var(--ground); border-color: var(--line-strong); }
 .switch .knob { background: var(--faint); }
@@ -226,8 +224,6 @@ h1.title {
   box-shadow: 0 0 12px rgba(55, 255, 139, 0.35);
 }
 .switch[aria-checked="true"] .knob { background: var(--rain); box-shadow: 0 0 9px var(--rain); }
-.substatus { border-top-color: rgba(31, 59, 44, 0.45); }
-/* .sub .dot keeps its small live glow (tunnel/shim rows report live plumbing). */
 
 /* ── 11. Projects: chips + config-sync strip ──────────────────────────────── */
 .chip {

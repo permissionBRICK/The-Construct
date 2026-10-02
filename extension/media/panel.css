@@ -178,7 +178,7 @@ h1.title {
 .tag.upd[data-agent] { cursor: pointer; }
 .tag.upd[data-agent]:hover, .tag.upd[data-agent]:focus-visible { background: rgba(255,194,77,0.18); border-color: rgba(255,194,77,0.6); }
 
-.voice { border-color: var(--line-strong); box-shadow: inset 0 0 40px rgba(0,255,102,0.04); }
+/* A labelled switch row (the Key Vault page's host mode) and the switch itself (settings too). */
 .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .toggle-row .label { font-size: 14px; color: var(--title); font-weight: 600; }
 .toggle-row .state { font-size: 10.5px; letter-spacing: 1px; text-transform: uppercase; color: var(--dim); }
@@ -192,17 +192,6 @@ h1.title {
 .switch:focus-visible { outline: 2px solid var(--rain); outline-offset: 3px; }
 .switch.sm { --w: 46px; --h: 23px; }
 .switch.busy { opacity: 0.6; pointer-events: none; }
-.voice .desc { margin: 11px 0 0; color: var(--text); font-family: var(--sans); font-size: 12px; line-height: 1.55; }
-.voice .desc .sans-dim { color: var(--dim); }
-.substatus { margin-top: 12px; padding-top: 11px; border-top: 1px solid rgba(0,255,102,0.08); display: grid; gap: 7px; }
-.substatus[hidden] { display: none; }
-.sub { display: flex; align-items: center; gap: 9px; font-size: 11.5px; color: var(--text); }
-.sub .dot { width: 6px; height: 6px; }
-.sub .muted { color: var(--dim); }
-/* Best-effort guard patch didn't apply (unrecognised Claude build): warn, don't claim success. */
-.sub.warn { color: var(--warn); }
-.sub.warn .dot { background: var(--warn); box-shadow: 0 0 7px var(--warn); }
-.sub.warn .muted { color: var(--warn); opacity: 0.85; }
 
 /* Key vault card: one line, one button; the vault itself is Construct Companion's own window. */
 .vault-card > .mhead { margin-bottom: 8px; }

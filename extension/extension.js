@@ -2294,8 +2294,8 @@ function pushSettings(webview) {
   safePost(webview, { type: "settings", instance: inst.name, settings });
 }
 
-/** Push the on-disk settings to EVERY live surface (so both mic switches — the
- *  console #voiceSwitch and the settings #setMic — reflect the same persisted value). */
+/** Push the on-disk settings to EVERY live surface (so the settings #setMic of every
+ *  open panel reflects the persisted microphone preference). */
 function broadcastSettings() {
   const inst = activeInstance();                 // read and stamp together (see pushSettings)
   const scriptsDir = resolveScriptsDirFor(inst);
@@ -2306,7 +2306,7 @@ function broadcastSettings() {
 }
 
 /** Persist the mic-passthrough preference (micPassthrough in .construct-settings.json).
- *  The live console toggle IS this persistent setting — enabling on the main page makes
+ *  The live settings switch IS this persistent setting — enabling it makes
  *  it auto-arm next session (see maybeAutoEnableAudio). Merges (touches only that key).
  *  Best-effort: a missing scripts dir just means no persistence (the live toggle still
  *  works this session). Re-broadcasts settings so the settings-form switch stays in sync. */
@@ -3301,11 +3301,11 @@ function enableAudio(context, webview, opts = {}) {
       // still has the pre-patch code in memory — its MICROPHONE ICON won't appear until
       // the window reloads / VS Code restarts. Notify the user (with a one-click Reload).
       // Skip the hint only when we KNOW the gate wasn't patched (gatePatched === false):
-      // then the icon won't appear regardless (unrecognised Claude build — the panel's
-      // audio substatus already says so). passthrough is the persisted preference, so
-      // auto-arm re-establishes it after the reload.
+      // then the icon won't appear regardless (unrecognised Claude build), so say that
+      // instead. passthrough is the persisted preference, so auto-arm re-establishes it
+      // after the reload.
       if (hostAudio && hostAudio.gatePatched === false) {
-        vscode.window.showInformationMessage("Microphone passthrough enabled — the mic opens only while you're recording.");
+        vscode.window.showInformationMessage("Microphone passthrough enabled — the mic opens only while you're recording. This Claude Code build is not recognised, so its chat mic button stays hidden; /voice in a terminal works.");
       } else {
         const RELOAD = "Reload window";
         vscode.window.showInformationMessage(
@@ -4675,7 +4675,7 @@ function handleMessage(message, webview, context) {
       return;
 
     case "setAudio":
-      // The console toggle IS the persistent preference: persist it so passthrough
+      // The settings switch IS the persistent preference: persist it so passthrough
       // auto-arms next session (unifies the two mic switches into one setting).
       persistMicPreference(message.enabled);
       // Both directions ride the single-session chain (requestAudioEnable /
