@@ -37,5 +37,159 @@
     "input": "noise {\"pairUrl\":\"https://host\"}",
     "kind": "pair",
     "output": "https://host"
+  },
+  {
+    "input": null,
+    "kind": "proxy",
+    "output": {
+      "error": null,
+      "url": ""
+    }
+  },
+  {
+    "input": "",
+    "kind": "proxy",
+    "output": {
+      "error": null,
+      "url": ""
+    }
+  },
+  {
+    "input": " ",
+    "kind": "proxy",
+    "output": {
+      "error": null,
+      "url": ""
+    }
+  },
+  {
+    "input": "https://t3.example.net:8443",
+    "kind": "proxy",
+    "output": {
+      "error": null,
+      "url": "https://t3.example.net:8443"
+    }
+  },
+  {
+    "input": "https://t3.example.net:8443/",
+    "kind": "proxy",
+    "output": {
+      "error": null,
+      "url": "https://t3.example.net:8443"
+    }
+  },
+  {
+    "input": " http://t3.example.net\n",
+    "kind": "proxy",
+    "output": {
+      "error": null,
+      "url": "http://t3.example.net"
+    }
+  },
+  {
+    "input": "https://[2001:db8::7]:8443",
+    "kind": "proxy",
+    "output": {
+      "error": null,
+      "url": "https://[2001:db8::7]:8443"
+    }
+  },
+  {
+    "input": "https://t3.example.net:0",
+    "kind": "proxy",
+    "output": {
+      "error": "Enter an http(s) address without a path, query or fragment, e.g. https://t3.example.net:8443, or leave it empty.",
+      "url": null
+    }
+  },
+  {
+    "input": "https://t3.example.net:65536",
+    "kind": "proxy",
+    "output": {
+      "error": "Enter an http(s) address without a path, query or fragment, e.g. https://t3.example.net:8443, or leave it empty.",
+      "url": null
+    }
+  },
+  {
+    "input": "https://t3.example.net/app",
+    "kind": "proxy",
+    "output": {
+      "error": "Enter an http(s) address without a path, query or fragment, e.g. https://t3.example.net:8443, or leave it empty.",
+      "url": null
+    }
+  },
+  {
+    "input": "https://t3.example.net?x",
+    "kind": "proxy",
+    "output": {
+      "error": "Enter an http(s) address without a path, query or fragment, e.g. https://t3.example.net:8443, or leave it empty.",
+      "url": null
+    }
+  },
+  {
+    "input": "https://t3.example.net#x",
+    "kind": "proxy",
+    "output": {
+      "error": "Enter an http(s) address without a path, query or fragment, e.g. https://t3.example.net:8443, or leave it empty.",
+      "url": null
+    }
+  },
+  {
+    "input": "https://user@t3.example.net",
+    "kind": "proxy",
+    "output": {
+      "error": "Enter an http(s) address without a path, query or fragment, e.g. https://t3.example.net:8443, or leave it empty.",
+      "url": null
+    }
+  },
+  {
+    "input": "ftp://t3.example.net",
+    "kind": "proxy",
+    "output": {
+      "error": "Enter an http(s) address without a path, query or fragment, e.g. https://t3.example.net:8443, or leave it empty.",
+      "url": null
+    }
+  },
+  {
+    "input": "t3.example.net",
+    "kind": "proxy",
+    "output": {
+      "error": "Enter an http(s) address without a path, query or fragment, e.g. https://t3.example.net:8443, or leave it empty.",
+      "url": null
+    }
+  },
+  {
+    "input": "https://t3.example.net//",
+    "kind": "proxy",
+    "output": {
+      "error": "Enter an http(s) address without a path, query or fragment, e.g. https://t3.example.net:8443, or leave it empty.",
+      "url": null
+    }
+  },
+  {
+    "input": "https://t3.example.net'",
+    "kind": "proxy",
+    "output": {
+      "error": "Enter an http(s) address without a path, query or fragment, e.g. https://t3.example.net:8443, or leave it empty.",
+      "url": null
+    }
+  },
+  {
+    "input": "HTTPS://t3.example.net",
+    "kind": "proxy",
+    "output": {
+      "error": "Enter an http(s) address without a path, query or fragment, e.g. https://t3.example.net:8443, or leave it empty.",
+      "url": null
+    }
+  },
+  {
+    "input": "https://t3.example.net:8443",
+    "kind": "proxy-script",
+    "output": "set -uo pipefail\n# Settings → Access & services → \"T3 Code address via your own proxy\": write the\n# VM's T3CODE_PROXY_URL now. The host has checked the value (an http(s) origin,\n# or empty to remove it); `construct config` checks it again and writes\n# config.env. A VM whose CLI predates `construct config` gets the same write\n# through its checkout's config-set.sh.\nurl='https://t3.example.net:8443'\nCONFIG_FILE=/etc/construct/config.env\nif construct config --help >/dev/null 2>&1; then\n  if [ -n \"$url\" ]; then construct config set t3-proxy-url \"$url\"; else construct config unset t3-proxy-url; fi\n  exit $?\nfi\nif [ -z \"$url\" ]; then\n  [ -f \"$CONFIG_FILE\" ] && sed -i '/^T3CODE_PROXY_URL=/d' \"$CONFIG_FILE\"\n  exit 0\nfi\nrenderer=/opt/construct/repo/bin/config-set.sh\n[ -f \"$renderer\" ] || { echo \"This VM's Construct copy is too old to store the address; reprovision it first.\" >&2; exit 1; }\nbash \"$renderer\" \"$CONFIG_FILE\" T3CODE_PROXY_URL \"$url\" && printf 't3-proxy-url=%s\\n' \"$url\"\n"
+  },
+  {
+    "input": "",
+    "kind": "proxy-script",
+    "output": "set -uo pipefail\n# Settings → Access & services → \"T3 Code address via your own proxy\": write the\n# VM's T3CODE_PROXY_URL now. The host has checked the value (an http(s) origin,\n# or empty to remove it); `construct config` checks it again and writes\n# config.env. A VM whose CLI predates `construct config` gets the same write\n# through its checkout's config-set.sh.\nurl=''\nCONFIG_FILE=/etc/construct/config.env\nif construct config --help >/dev/null 2>&1; then\n  if [ -n \"$url\" ]; then construct config set t3-proxy-url \"$url\"; else construct config unset t3-proxy-url; fi\n  exit $?\nfi\nif [ -z \"$url\" ]; then\n  [ -f \"$CONFIG_FILE\" ] && sed -i '/^T3CODE_PROXY_URL=/d' \"$CONFIG_FILE\"\n  exit 0\nfi\nrenderer=/opt/construct/repo/bin/config-set.sh\n[ -f \"$renderer\" ] || { echo \"This VM's Construct copy is too old to store the address; reprovision it first.\" >&2; exit 1; }\nbash \"$renderer\" \"$CONFIG_FILE\" T3CODE_PROXY_URL \"$url\" && printf 't3-proxy-url=%s\\n' \"$url\"\n"
   }
 ]

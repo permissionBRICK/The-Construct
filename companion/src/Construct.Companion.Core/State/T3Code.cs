@@ -188,5 +188,23 @@ exit 0
             Uri.TryCreate(StateJson.Text(link["pairUrl"]), UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https")
             .Select(link => new PairLink(StateJson.Text(link["kind"])!, StateJson.Text(link["pairUrl"])!)).ToArray();
     }
+    // The address the user reaches this VM's T3 Code at through their own reverse proxy (config.env
+    // T3CODE_PROXY_URL). The rule of `construct config set t3-proxy-url` and t3code.js normalizeProxyUrl: an
+    // http(s) origin with an optional port 1-65535, one trailing slash dropped, no path, query, fragment or
+    // user name. "" means remove it.
+    public const string ProxyUrlError = "Enter an http(s) address without a path, query or fragment, e.g. https://t3.example.net:8443, or leave it empty.";
+    public static (string? Url, string? Error) NormalizeProxyUrl(string? value)
+    {
+        var v = Regex.Replace(value ?? "", "^[ \\t\\n\\r\\f\\v]+|[ \\t\\n\\r\\f\\v]+$", "");
+        if (v.EndsWith('/')) v = v[..^1];
+        if (v.Length == 0) return ("", null);
+        var m = Regex.Match(v, @"^https?://(?:[A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])(?::(\d{1,5}))?$", RegexOptions.ECMAScript);
+        if (!m.Success || m.Groups[1].Success && int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture) is < 1 or > 65535) return (null, ProxyUrlError);
+        return (v, null);
+    }
+    // Stores (or, for "", removes) the VM's T3CODE_PROXY_URL. The checked alphabet has no quote, so single quotes make it shell-ready.
+    public static string BuildProxyUrlScript(string url) => NormalizeProxyUrl(url) is ({ } checkedUrl, null)
+        ? GuestScripts.Render("t3-proxy-url", new Dictionary<string, string> { ["url"] = "'" + checkedUrl + "'" })
+        : throw new ArgumentException(ProxyUrlError, nameof(url));
     public static JsonObject? PlanLiveAction(bool want, bool had, string newChannel, string oldChannel) => want && !had ? new JsonObject { ["action"] = "enable", ["channel"] = newChannel } : !want && had ? new JsonObject { ["action"] = "disable" } : want && had && newChannel != oldChannel ? new JsonObject { ["action"] = "setChannel", ["channel"] = newChannel } : null;
 }

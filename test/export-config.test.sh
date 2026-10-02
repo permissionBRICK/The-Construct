@@ -175,6 +175,14 @@ ok 'retention invalid: recent transcript kept' has retain-invalid "${cslug}/${ne
 ok 'retention invalid: 30 recorded in backup-info.json' \
   test "$(jq -r .historyRetentionDays "${tmp}/retain-invalid.info")" = 30
 
+# The T3 Code proxy address lives only in config.env; the backup carries it, only when set.
+ok 'proxy address: absent from backup-info.json when not set' \
+  test "$(jq -r 'has("t3codeProxyUrl")' "${tmp}/retain-default.info")" = false
+printf "T3CODE_PROXY_URL='https://[2001:db8::7]:8443'\n" >>"${tmp}/config.env"
+export_history proxy-set
+ok 'proxy address: recorded in backup-info.json' \
+  test "$(jq -r .t3codeProxyUrl "${tmp}/proxy-set.info")" = 'https://[2001:db8::7]:8443'
+
 ok 'fixtures: no service operations requested' test ! -e "${tmp}/service-calls"
 
 printf '\n  export-config fixture tests — %d/%d passed\n\n' "${pass}" "$((pass + fail))"

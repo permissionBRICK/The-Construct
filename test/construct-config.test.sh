@@ -127,6 +127,33 @@ ok "concurrent sets keep the other lines" test "$(grep -v '^T3CODE_PROXY_URL=' "
 ok "concurrent sets leave no temp file" no_leftovers
 ok "the helper is found next to the dispatcher" sh -c "cd / && CONFIG_FILE='${cfg}' CONSTRUCT_REPO_DIR=/nonexistent bash '${CLI}' config get t3-proxy-url >/dev/null"
 
+# ── the panel's live write (extension/vm/t3-proxy-url.sh) ─────────────────────
+# The host renders the guest script with a checked value; run it against this
+# sandbox: through `construct config` when the VM's CLI has it, and through the
+# checkout's config-set.sh when the CLI predates the verb.
+if command -v node >/dev/null 2>&1; then
+  guest() { # <url> <script file>
+    node -e 'process.stdout.write(require(process.argv[1]).buildProxyUrlScript(process.argv[2]))' "${ROOT}/extension/src/t3code.js" "$1" \
+      | sed -e "s|^CONFIG_FILE=/etc/construct/config.env$|CONFIG_FILE='${cfg}'; export CONFIG_FILE|" \
+            -e "s|^renderer=/opt/construct/repo/bin/config-set.sh$|renderer='${ROOT}/bin/config-set.sh'|" >"$2"
+  }
+  seed
+  guest https://t3.example.net:8443 "${tmp}/guest-set.sh"
+  ok "the panel's script stores the address through construct config" \
+    sh -c "PATH='${ROOT}/bin:${PATH}' bash '${tmp}/guest-set.sh' >/dev/null && grep -qx 'T3CODE_PROXY_URL=https://t3.example.net:8443' '${cfg}'"
+  guest "" "${tmp}/guest-unset.sh"
+  ok "the panel's script removes it" \
+    sh -c "PATH='${ROOT}/bin:${PATH}' bash '${tmp}/guest-unset.sh' >/dev/null && ! grep -q '^T3CODE_PROXY_URL=' '${cfg}'"
+  mkdir -p "${tmp}/oldcli"
+  printf '#!/bin/sh\necho "Unknown command" >&2\nexit 1\n' >"${tmp}/oldcli/construct"
+  chmod +x "${tmp}/oldcli/construct"
+  ok "on a VM whose CLI predates the verb it falls back to config-set.sh" \
+    sh -c "PATH='${tmp}/oldcli:${PATH}' bash '${tmp}/guest-set.sh' >/dev/null && grep -qx 'T3CODE_PROXY_URL=https://t3.example.net:8443' '${cfg}'"
+  ok "  ...and removes it there too" \
+    sh -c "PATH='${tmp}/oldcli:${PATH}' bash '${tmp}/guest-unset.sh' >/dev/null && ! grep -q '^T3CODE_PROXY_URL=' '${cfg}'"
+  ok "  ...keeping the other lines" test "$(cat "${cfg}")" = "$(printf 'AGENT_NAME=dev\nGIT_USER_NAME='"'"'Jane Doe'"'"'\nT3CODE=true\nCONSTRUCT_SERVICE_URL=https://host.example:7462')"
+fi
+
 # ── lint ─────────────────────────────────────────────────────────────────────
 ok "bash -n" bash -n "${ROOT}/bin/construct-config.sh"
 if command -v shellcheck >/dev/null 2>&1; then

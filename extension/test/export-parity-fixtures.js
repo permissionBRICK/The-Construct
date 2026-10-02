@@ -57,6 +57,7 @@ function guestScripts() {
   }
   add("t3-pairing", { pairingBase: scripts.render("construct-t3-pairing-base") }, t3.buildPairingScript());
   for (const name of ["dev", "build-2"]) add("t3-pairing-instance", { instance: name, pairingBase: scripts.render("construct-t3-pairing-base") }, t3.buildPairingScript({ name }));
+  for (const url of ["https://t3.example.net:8443", "https://[2001:db8::7]:8443", ""]) add("t3-proxy-url", { url: "'" + url + "'" }, t3.buildProxyUrlScript(url));
   for (const report of ["daily", "monthly", "total"]) add("usage", { report }, usage.buildUsageScript(report));
   add("usage-collect", {}, require("../src/guest-scripts").render("usage-collect"));
   for (const name of scripts.names.filter(name => name.startsWith("construct-"))) add(name, {});
@@ -169,7 +170,7 @@ function vmPower() {
 }
 function probeParsing() {
   const m=probe;
-  const texts=["", "AGENT_NAME\tdev\nAI_TOOLS\tclaude-code,codex,opencode\nV_CLAUDE\tClaude 2.1.3\nMEM_GB\t7.6\nDISK_DEV_BYTES\t85899345920\nVM_CPUS\t6\nDISK_PCT\t41%\nPROJECTS\tapi, ui\nCONSTRUCT_COMMIT\t'ABCDEF1234'\nINSTALLED_AT\t2026-09-11T00:00:00Z", "T3CODE\ttrue\nV_T3\t0.0.12-nightly.1.2\nT3CODE_CHANNEL\tnightly\nT3CODE_PUBLIC_BASE_URL\t'https://[::1]:5178'\nT3_INSTALLATION_MODE\tprebuilt\nT3_BUILD_HASH\tabc\nT3_ACTIVE\tactive\nT3CODE_LIMIT_RESUME\t'TRUE'", "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://bad/path\nMEM_GB\t-1\nVM_CPUS\twrong\nDISK_PCT\t101%\nOPENCODE_BACKGROUND_WATCHER\tfalse", "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://host\nT3CODE_HTTPS_PORT\t\nMEM_GB\t0x10\nPROJECTS\ta,a\nUBUNTU\told\nUBUNTU\t24.04"];
+  const texts=["", "AGENT_NAME\tdev\nAI_TOOLS\tclaude-code,codex,opencode\nV_CLAUDE\tClaude 2.1.3\nMEM_GB\t7.6\nDISK_DEV_BYTES\t85899345920\nVM_CPUS\t6\nDISK_PCT\t41%\nPROJECTS\tapi, ui\nCONSTRUCT_COMMIT\t'ABCDEF1234'\nINSTALLED_AT\t2026-09-11T00:00:00Z", "T3CODE\ttrue\nV_T3\t0.0.12-nightly.1.2\nT3CODE_CHANNEL\tnightly\nT3CODE_PUBLIC_BASE_URL\t'https://[::1]:5178'\nT3_INSTALLATION_MODE\tprebuilt\nT3_BUILD_HASH\tabc\nT3_ACTIVE\tactive\nT3CODE_LIMIT_RESUME\t'TRUE'\nT3CODE_PROXY_URL\t'https://[2001:db8::7]:8443'", "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://bad/path\nMEM_GB\t-1\nVM_CPUS\twrong\nDISK_PCT\t101%\nOPENCODE_BACKGROUND_WATCHER\tfalse\nT3CODE_PROXY_URL\thttps://t3.example.net/app", "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://host\nT3CODE_HTTPS_PORT\t\nMEM_GB\t0x10\nPROJECTS\ta,a\nUBUNTU\told\nUBUNTU\t24.04\nT3CODE_PROXY_URL\t", "T3CODE\tfalse\nT3CODE_PROXY_URL\t https://t3.example.net:8443 "];
   return texts.flatMap(input=>[null,"vm.example","::1"].map(host=>{const map=m.parseProbe(input);return{input,host,map,output:m.toState(map,{host})};}));
 }
 function usageParsing() {
@@ -203,6 +204,8 @@ function t3Pure() {
  for(const channel of ["stable","nightly","bad"])rows.push({kind:"install",channel,output:m.buildInstallScript(channel)});
  rows.push({kind:"disable",output:m.buildDisableScript()});
  for(const input of [null,"",'{"pairUrl":"https://host/pair?token=example"}','noise {"pairUrl":"https://host"}'])rows.push({kind:"pair",input,output:m.extractPairUrl(input)});
+ for(const input of [null,""," ","https://t3.example.net:8443","https://t3.example.net:8443/"," http://t3.example.net\n","https://[2001:db8::7]:8443","https://t3.example.net:0","https://t3.example.net:65536","https://t3.example.net/app","https://t3.example.net?x","https://t3.example.net#x","https://user@t3.example.net","ftp://t3.example.net","t3.example.net","https://t3.example.net//","https://t3.example.net'","HTTPS://t3.example.net"])rows.push({kind:"proxy",input,output:m.normalizeProxyUrl(input)});
+ for(const input of ["https://t3.example.net:8443",""])rows.push({kind:"proxy-script",input,output:m.buildProxyUrlScript(input)});
  return rows;
 }
 function remoteRoutes() {

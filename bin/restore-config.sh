@@ -380,6 +380,24 @@ if [[ -f "${BACKUP_DIR}/backup-info.json" ]]; then
   fi
 fi
 
+# ── T3 Code proxy address from backup metadata ──────────────────────────────
+# T3CODE_PROXY_URL lives only in config.env (the panel writes it there, agents set
+# it with `construct config set t3-proxy-url`), so a reinstall would lose it. The
+# export records it; bring it back unless this VM already has one. The CLI checks
+# the value again, so a hand-edited backup cannot plant anything else.
+if [[ -f "${BACKUP_DIR}/backup-info.json" ]]; then
+  _restore_t3proxy="$(jq -r '.t3codeProxyUrl // "" | if type == "string" then . else "" end' "${BACKUP_DIR}/backup-info.json" 2>/dev/null)"
+  if [[ -n "${_restore_t3proxy}" && -f "${REPO_DIR}/bin/construct-config.sh" ]] \
+     && ! grep -q '^T3CODE_PROXY_URL=' "${CONFIG_FILE}" 2>/dev/null; then
+    if CONFIG_FILE="${CONFIG_FILE}" CONSTRUCT_REPO_DIR="${REPO_DIR}" \
+        bash "${REPO_DIR}/bin/construct-config.sh" set t3-proxy-url "${_restore_t3proxy}" >/dev/null 2>&1; then
+      log "restored T3 Code proxy address: ${_restore_t3proxy}"
+    else
+      err "the backup's T3 Code proxy address is not a valid address and was not restored; set it again in the panel"
+    fi
+  fi
+fi
+
 # ── T3 Code reinstall from backup metadata ───────────────────────────────────
 # A console reinstall provisions the fresh VM with an EMPTY T3CODE (keep-saved
 # semantics), and the new config.env has nothing saved -- so T3 Code doesn't get

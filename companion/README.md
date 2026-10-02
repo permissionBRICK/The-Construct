@@ -198,6 +198,7 @@ views and runtime messages use IPC). The limitations of the implemented rows are
 | message | `saveSettings` | implemented |
 | message | `setAudio` | implemented |
 | message | `setInstance` | implemented |
+| message | `setT3ProxyUrl` | implemented |
 | message | `setUsagePeriod` | implemented |
 | command | `addConfigRemote` | implemented |
 | command | `addProject` | implemented |

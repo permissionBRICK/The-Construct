@@ -329,6 +329,28 @@ try {
       shown[0].description === "https://t3.example.net:8443" && opened === proxied[0].pairUrl);
     ok("pairing parser: keeps an unknown kind out", t3.extractPairLinks(JSON.stringify({ links: [{ kind: "lan", pairUrl: "https://x.example/pair" }] })).length === 0);
   }
+  {
+    // The panel's "T3 Code address via your own proxy": checked here, written live over SSH.
+    ok("proxy address: an origin is kept, one trailing slash dropped", t3.normalizeProxyUrl(" https://t3.example.net:8443/ ").url === "https://t3.example.net:8443");
+    ok("proxy address: empty removes it", t3.normalizeProxyUrl("").url === "" && t3.normalizeProxyUrl(null).url === "");
+    ok("proxy address: paths, quotes, users and bad ports are refused", ["https://t3.example.net/app", "https://t3.example.net'", "https://u@t3.example.net", "https://t3.example.net:0", "ftp://t3.example.net", 8443]
+      .every(v => t3.normalizeProxyUrl(v).error && t3.normalizeProxyUrl(v).url === null));
+    ok("proxy address: the script carries the value single-quoted", t3.buildProxyUrlScript("https://t3.example.net").includes("\nurl='https://t3.example.net'\n"));
+    let threw = false; try { t3.buildProxyUrlScript("https://t3.example.net'; reboot; '"); } catch (_) { threw = true; }
+    ok("proxy address: the script builder refuses an unchecked value", threw);
+    const ran = [], infos = [];
+    const proxyVscode = { window: { showInformationMessage: m => infos.push(m) } };
+    const sshOk = { isReachable: async () => true, runRemoteScript: async (script) => { ran.push(script); return { code: 0, stdout: "", stderr: "" }; } };
+    const set = await t3.setProxyUrlOnVm("https://t3.example.net:8443/", { _vscode: proxyVscode, _ssh: sshOk });
+    ok("proxy address: apply runs the script once and confirms", set.url === "https://t3.example.net:8443" && ran.length === 1 &&
+      ran[0] === t3.buildProxyUrlScript("https://t3.example.net:8443") && /New pairing links/.test(infos[0]));
+    const bad = await t3.setProxyUrlOnVm("https://t3.example.net/app", { _vscode: proxyVscode, _ssh: sshOk });
+    ok("proxy address: an invalid value never reaches the VM", bad.error && ran.length === 1);
+    const offline = await t3.setProxyUrlOnVm("", { _vscode: proxyVscode, _ssh: { isReachable: async () => false, runRemoteScript: async () => { throw new Error("unreachable"); } } });
+    ok("proxy address: an offline VM is reported, not queued", /offline/.test(offline.error));
+    const failed = await t3.setProxyUrlOnVm("", { _vscode: proxyVscode, _ssh: { isReachable: async () => true, runRemoteScript: async () => ({ code: 2, stdout: "", stderr: "construct config: bad" }) } });
+    ok("proxy address: a guest failure carries its exit code and message", /exit 2/.test(failed.error) && /construct config: bad/.test(failed.error));
+  }
   let active = 0, maxActive = 0, vmChannel = "stable";
   const log = [];
   const resolvers = [];
