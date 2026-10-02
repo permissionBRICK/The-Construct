@@ -1082,8 +1082,9 @@ run_step optional "Installing AI tool console integration" \
 
 # 4b. Install the construct CLI so agents and users can manage project profiles,
 #     raise host desktop notifications, expose ports, manage delegated child
-#     VMs and use the key vault from the VM shell (`construct project`,
-#     `construct notify`, `construct expose`, `construct vm`, `construct secret`).
+#     VMs, use the key vault and change per-VM settings from the VM shell
+#     (`construct project`, `construct notify`, `construct expose`, `construct vm`,
+#     `construct secret`, `construct config`).
 #     Runs every provision so an updated script always gets redeployed on
 #     reprovision. Silent (install prints nothing), including the forward spool:
 #     the default path's output must stay byte-identical.
@@ -1096,6 +1097,7 @@ install_construct_cli() {
   install -m 0755 "${REPO_DIR}/bin/construct-expose.sh" "${bin_dir}/construct-expose.sh" || return 1
   install -m 0755 "${REPO_DIR}/bin/construct-vm.sh" "${bin_dir}/construct-vm.sh" || return 1
   install -m 0755 "${REPO_DIR}/bin/construct-secret.sh" "${bin_dir}/construct-secret.sh" || return 1
+  install -m 0755 "${REPO_DIR}/bin/construct-config.sh" "${bin_dir}/construct-config.sh" || return 1
   install -m 0755 "${REPO_DIR}/bin/construct-idle-report.sh" "${bin_dir}/construct-idle-report.sh" || return 1
   # Forward spool (docs/expose.md): root-owned 0755, deliberately NOT 1777 like
   # the notification spool -- a request opens a port on the user's PC.

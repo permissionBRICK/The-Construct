@@ -34,10 +34,11 @@ if [[ "$group" == service || "$group" == all ]]; then
   bash test/endpoint-refresh.test.sh
   bash test/construct-expose.test.sh
   bash test/construct-secret.test.sh
+  bash test/construct-config.test.sh
   bash test/proxmox-nested-installer.test.sh
   /usr/bin/python3 -m unittest discover -s console-viewer -p 'test_*.py' -v
   node --check console-viewer/static/viewer.js
-  bash -n console-viewer/install.sh bin/construct-vm.sh bin/construct-secret.sh bin/construct-oom-guard.sh bin/provision.sh bin/fetch-construct-source.sh bin/construct-worktree-clone.sh service/host/xfs-cloud-image.sh service/host/install-construct-host.sh
+  bash -n console-viewer/install.sh bin/construct-vm.sh bin/construct-secret.sh bin/construct-config.sh bin/construct-oom-guard.sh bin/provision.sh bin/fetch-construct-source.sh bin/construct-worktree-clone.sh service/host/xfs-cloud-image.sh service/host/install-construct-host.sh
   bash test/worktree-clone.test.sh
   pwsh -NoProfile -File test/browser-console-install.test.ps1
   bash test/browser-console-provision.test.sh
