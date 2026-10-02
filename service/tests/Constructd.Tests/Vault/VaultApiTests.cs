@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text.Json.Nodes;
 using Constructd.Api.Contracts;
+using Constructd.Api.Infrastructure;
 using Constructd.Core.Abstractions;
 using Constructd.Core.Domain;
 using Constructd.Core.Logic;
@@ -349,8 +350,94 @@ public sealed class VaultApiTests
         using var app = new TestApp(new Dictionary<string, string?> { ["Constructd:VaultWebUrl"] = "https://vault.example.test/base/" });
         using var h = await VaultHarness.CreateAsync(app: app);
         using var pair = await h.Bob.PostAsJsonAsync("/api/v1/vault/devices", new { label = "Phone" });
-        Assert.Equal("https://vault.example.test/base", (await pair.Content.ReadFromJsonAsync<JsonObject>())!["webUrl"]!.GetValue<string>());
+        var paired = (await pair.Content.ReadFromJsonAsync<JsonObject>())!;
+        Assert.Equal("https://vault.example.test/base", paired["webUrl"]!.GetValue<string>());
+        Assert.Equal("option", paired["webUrlSource"]!.GetValue<string>());
     }
+
+    [Fact]
+    public async Task The_host_setting_wins_over_the_option_and_the_default_for_pairing_and_the_banner()
+    {
+        using var app = new TestApp(new Dictionary<string, string?> { ["Constructd:VaultWebUrl"] = "https://vault.example.test/base/" });
+        using var h = await VaultHarness.CreateAsync(app: app);
+        await h.PutEntriesAsync(h.Entry("db", "pw-123456"));
+        using var admin = await app.CreateUserClientAsync("root-admin", Role.Admin);
+        var config = (await admin.GetFromJsonAsync<JsonObject>("/api/v1/host/config"))!;
+        Assert.Equal("default", config["vault"]!["source"]!.GetValue<string>());
+        Assert.Null(config["vault"]!["webUrl"]);
+        using (var put = await admin.PutAsJsonAsync("/api/v1/host/config", new { vault = new { webUrl = "https://vault.example.net:8443/" } }))
+            Assert.Equal(HttpStatusCode.OK, put.StatusCode);
+
+        using var pair = await h.Bob.PostAsJsonAsync("/api/v1/vault/devices", new { label = "Phone" });
+        var paired = (await pair.Content.ReadFromJsonAsync<JsonObject>())!;
+        Assert.Equal(("https://vault.example.net:8443", "hostConfig"), (paired["webUrl"]!.GetValue<string>(), paired["webUrlSource"]!.GetValue<string>()));
+        var devices = (await h.Bob.GetFromJsonAsync<JsonObject>("/api/v1/vault/devices"))!;
+        Assert.Equal(("https://vault.example.net:8443", "hostConfig"), (devices["webUrl"]!.GetValue<string>(), devices["webUrlSource"]!.GetValue<string>()));
+        var (status, body) = await h.AskAsync(h.Request("request", ["db"], new { reason = "deploy" }));
+        Assert.Equal(HttpStatusCode.Accepted, status);
+        Assert.Equal("https://vault.example.net:8443/vault/#request=" + body["id"]!.GetValue<string>(), body["approveUrl"]!.GetValue<string>());
+
+        // Back to null: the service option applies again.
+        using (var put = await admin.PutAsJsonAsync("/api/v1/host/config", new { vault = new { webUrl = (string?)null } }))
+            Assert.Equal(HttpStatusCode.OK, put.StatusCode);
+        devices = (await h.Bob.GetFromJsonAsync<JsonObject>("/api/v1/vault/devices"))!;
+        Assert.Equal(("https://vault.example.test/base", "option"), (devices["webUrl"]!.GetValue<string>(), devices["webUrlSource"]!.GetValue<string>()));
+    }
+
+    [Fact]
+    public async Task Without_any_setting_phones_get_the_service_address_and_the_reply_says_so()
+    {
+        using var h = await VaultHarness.CreateAsync();
+        var devices = (await h.Bob.GetFromJsonAsync<JsonObject>("/api/v1/vault/devices"))!;
+        Assert.Equal(("https://buildbox.test:7462", "default"), (devices["webUrl"]!.GetValue<string>(), devices["webUrlSource"]!.GetValue<string>()));
+    }
+
+    [Fact]
+    public async Task Only_host_admins_change_the_approval_page_address()
+    {
+        using var h = await VaultHarness.CreateAsync();
+        foreach (var client in new[] { h.Bob, h.Guest })
+        {
+            using var put = await client.PutAsJsonAsync("/api/v1/host/config", new { vault = new { webUrl = "https://evil.example.net" } });
+            Assert.Equal(HttpStatusCode.Forbidden, put.StatusCode);
+        }
+        var devices = (await h.Bob.GetFromJsonAsync<JsonObject>("/api/v1/vault/devices"))!;
+        Assert.Equal("default", devices["webUrlSource"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("http://vault.example.net")]
+    [InlineData("https://vault.example.net/vault")]
+    [InlineData("https://vault.example.net/?a=1")]
+    [InlineData("https://vault.example.net#x")]
+    [InlineData("https://user@vault.example.net")]
+    [InlineData("https://vault.example.net:0")]
+    [InlineData("https://vault.example.net:65536")]
+    [InlineData("vault.example.net")]
+    [InlineData("ftp://vault.example.net")]
+    [InlineData("https://vault example.net")]
+    [InlineData("https://vault.example.net//")]
+    public async Task An_approval_page_address_with_a_path_or_without_https_is_refused(string webUrl)
+    {
+        Assert.Equal(VaultWebAddress.Rule, HostConfigValidation.Validate(new VaultConfig(webUrl)));
+        using var app = new TestApp();
+        using var admin = await app.CreateUserClientAsync("root-admin", Role.Admin);
+        using var put = await admin.PutAsJsonAsync("/api/v1/host/config", new { vault = new { webUrl } });
+        Assert.Equal(HttpStatusCode.BadRequest, put.StatusCode);
+        Assert.Equal("vault", (await put.Content.ReadFromJsonAsync<JsonObject>())!["field"]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("https://vault.example.net")]
+    [InlineData("https://vault.example.net:8443/")]
+    [InlineData("https://[2001:db8::5]:8443")]
+    [InlineData("http://localhost:7000")]
+    [InlineData("http://127.0.0.1:7000")]
+    [InlineData("http://[::1]:7000")]
+    public void A_bare_https_origin_or_loopback_http_is_accepted(string? webUrl) =>
+        Assert.Null(HostConfigValidation.Validate(new VaultConfig(webUrl)));
 
     [Fact]
     public async Task Audit_and_logs_never_carry_values_keys_or_tokens()

@@ -94,10 +94,14 @@ public static partial class HostAdminViews
         return new() { ["primary"] = Text(input["primary"]), ["visible"] = true, ["items"] = Children(items, now),
             ["problem"] = Text(input["problem"]) is { Length: > 0 } problem ? problem : items is null ? "could not read the child VMs" : "" };
     }
-    public static JsonArray Config(JsonNode? config) => new(ConfigSections.Where(key => key is not ("memoryPressure" or "usage") || config?[key] is not null).Select(key =>
+    public static JsonArray Config(JsonNode? config) => new(ConfigSections.Where(key => !NewerConfigSections.Contains(key) || config?[key] is not null).Select(key =>
     {
         var section = config?[key] as JsonObject; var value = section?["value"] as JsonObject ?? section; var clean = value?.DeepClone().AsObject() ?? []; clean.Remove("source"); clean.Remove("updatedAt");
-        return (JsonNode)new JsonObject { ["key"] = key, ["source"] = Default(section?["source"], section is null ? "default" : "stored"), ["updatedAt"] = section?["updatedAt"] is null ? "" : FormatWhen(section["updatedAt"]), ["expectedUpdatedAt"] = Text(section?["updatedAt"]).Length > 0 ? Text(section?["updatedAt"]) : null, ["text"] = StateJson.Stringify(clean, true), ["present"] = section is not null };
+        // Titled and explained by the form schema (hostadmin-config-schema.json).
+        var schema = HostConfigSchema.Sections.OfType<JsonObject>().FirstOrDefault(s => Text(s["key"]) == key);
+        var help = new JsonArray((schema?["fields"] as JsonArray ?? []).OfType<JsonObject>().Select(f => (JsonNode)new JsonObject { ["key"] = Text(f["key"]), ["label"] = Text(f["label"]), ["help"] = Text(f["help"]) }).ToArray());
+        return (JsonNode)new JsonObject { ["key"] = key, ["source"] = Default(section?["source"], section is null ? "default" : "stored"), ["updatedAt"] = section?["updatedAt"] is null ? "" : FormatWhen(section["updatedAt"]), ["expectedUpdatedAt"] = Text(section?["updatedAt"]).Length > 0 ? Text(section?["updatedAt"]) : null, ["text"] = StateJson.Stringify(clean, true), ["present"] = section is not null,
+            ["label"] = schema is null ? key : Text(schema["label"]), ["help"] = help };
     }).ToArray());
     public static JsonObject Capabilities(JsonNode? body)
     {

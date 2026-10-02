@@ -14,4 +14,6 @@ public sealed record NetworkConfig(bool HostForwardsEnabled, bool DirectAddressR
     string DefaultMode = "relayed", bool OwnerMaySwitchMode = false);
 public sealed record VirtualizationConfig(bool NestedDefault, bool NestedSelectable);
 public sealed record UpdatesConfig(string Repository, string Channel, int DrainTimeoutMinutes, int HealthTimeoutSeconds);
+/// <summary>The key vault's host settings. <c>WebUrl</c>: the address phones use for the approval page (null = the service's own).</summary>
+public sealed record VaultConfig(string? WebUrl = null);
 public sealed record MaintenanceMarker(MaintenanceState State, string? UpdateId, DateTimeOffset Since);

@@ -42,8 +42,11 @@ const CHILD_ACTIONS = [
   "hardware", "media", "console", "forwardClient", "forwardHost", "addresses", "overrides", "rotateToken",
 ];
 
+const CONFIG_SCHEMA = require("./hostadmin-config-schema");
 /** The host-config sections of §1.5, in display order. */
-const CONFIG_SECTIONS = ["capacity", "memoryPressure", "userDefaults", "userCaps", "lifecycle", "media", "network", "virtualization", "updates", "usage"];
+const CONFIG_SECTIONS = ["capacity", "memoryPressure", "userDefaults", "userCaps", "lifecycle", "media", "network", "virtualization", "updates", "usage", "vault"];
+// Sections an older host does not have: shown only when the host's configuration carries them.
+const NEWER_CONFIG_SECTIONS = ["memoryPressure", "usage", "vault"];
 
 /** The tabs of §10.2 and the feature each one needs. `host-admin` gates the module. */
 const TABS = [
@@ -661,10 +664,12 @@ function toAuditRow(entry) {
   return { at: formatWhen(a.at || a.timestamp || a.created), actor: str(a.actor), action: str(a.action), target: str(a.target), detail: str(a.detail) };
 }
 
-/** The Configuration tab: one editable JSON text per §1.5 section. Pure. */
+/** The Configuration tab: one editable JSON text per §1.5 section, titled and explained by the
+ *  form schema (hostadmin-config-schema.js). Pure. */
 function toConfigView(config) {
   const c = config && typeof config === "object" ? config : {};
-  return CONFIG_SECTIONS.filter((key) => !["memoryPressure", "usage"].includes(key) || c[key]).map((key) => {
+  return CONFIG_SECTIONS.filter((key) => !NEWER_CONFIG_SECTIONS.includes(key) || c[key]).map((key) => {
+    const schema = CONFIG_SCHEMA.find((s) => s.key === key);
     const section = c[key] && typeof c[key] === "object" ? c[key] : null;
     const value = section && section.value && typeof section.value === "object" ? section.value : section;
     const meta = section && typeof section === "object" ? section : {};
@@ -677,6 +682,8 @@ function toConfigView(config) {
       expectedUpdatedAt: str(meta.updatedAt) || null,
       text: JSON.stringify(clean, null, 2),
       present: !!section,
+      label: schema ? schema.label : key,
+      help: schema ? schema.fields.map((f) => ({ key: f.key, label: f.label, help: f.help })) : [],
     };
   });
 }

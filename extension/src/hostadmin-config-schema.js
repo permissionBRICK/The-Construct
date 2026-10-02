@@ -70,5 +70,8 @@ module.exports = [
   ] },
   { key: "usage", label: "Usage", rawOnly: [], fields: [
     {"key":"retentionDays","label":"Usage retention","type":"int","default":400,"help":"Daily usage retention. Cleanup runs every 24 hours.","min":1,"max":36500,"unit":"days"}
+  ] },
+  { key: "vault", label: "Key vault", rawOnly: [], fields: [
+    {"key":"webUrl","label":"Approval page address","type":"string","default":null,"help":"The https address phones use for the key vault's approval page, e.g. https://vault.example.net: a reverse proxy with a trusted certificate that forwards /vault/ and /api/v1/vault/ to the host service. It must not be the same origin (scheme, host and port) as any T3 Code address. Null uses the host service's own address, whose self-signed certificate phones warn about.","nullable":true,"nullLabel":"The host service's own address"}
   ] }
 ];

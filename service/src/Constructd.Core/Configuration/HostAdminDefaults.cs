@@ -13,6 +13,7 @@ public static class HostAdminDefaults
     public static NetworkConfig Network { get; } = new(true, true);
     public static VirtualizationConfig Virtualization { get; } = new(true, true);
     public static UpdatesConfig Updates { get; } = new("permissionBRICK/The-Construct", "main", 60, 120);
+    public static VaultConfig Vault { get; } = new();
 }
 
 public sealed class HostAdminOptions

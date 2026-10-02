@@ -97,11 +97,12 @@ public sealed class ConstructdOptions
 
     /// <summary>
     /// Base URL of the key vault's phone pages (<c>/vault/</c>, <c>/vault/pair</c>), for a reverse proxy
-    /// with a public certificate. Empty: <c>https://&lt;PublicHost&gt;:&lt;listen port&gt;</c>.
+    /// with a public certificate. Empty: <c>https://&lt;PublicHost&gt;:&lt;listen port&gt;</c>. The host setting
+    /// <c>vault.webUrl</c> (Host Administration) takes precedence; see <c>Logic.VaultWebAddress</c>.
     /// </summary>
     public string? VaultWebUrl { get; set; }
 
-    /// <summary>The vault web base: <see cref="VaultWebUrl"/>, else the service's own HTTPS origin.</summary>
+    /// <summary>The vault web base without the host setting: <see cref="VaultWebUrl"/>, else the service's own HTTPS origin.</summary>
     public string VaultWebBase()
     {
         if (!string.IsNullOrWhiteSpace(VaultWebUrl)) return VaultWebUrl.Trim().TrimEnd('/');

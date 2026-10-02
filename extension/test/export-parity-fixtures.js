@@ -457,6 +457,10 @@ function hostAdminIpc() {
  const pressureConfig = { memoryPressure: { cooldownMinutesAfterSave: 10, enabled: true, highWaterPercent: 90,
   lowWaterPercent: 80, minSecondsBetweenSaves: 60, source: "default", swapHighWaterPercent: 50 } };
  add("config", pressureConfig, m.toConfigView(pressureConfig));
+ for (const vault of [{ webUrl: null, source: "default", updatedAt: null }, { webUrl: "https://vault.example.net", source: "stored", updatedAt: "2026-10-02T08:00:00Z" }]) {
+  const input = { ...pressureConfig, vault };
+  add("config", input, m.toConfigView(input));
+ }
  const pressureCapabilities = { backend: "proxmox", policy: pressureConfig };
  add("capabilities", pressureCapabilities, m.toCapabilityRows(pressureCapabilities));
  for(const [kind,fn] of [["overview","toOverview"],["capacity","toCapacityBars"],["media","toMediaRow"],["iso","toIsoCatalogView"],["job","toJobRow"],["audit","toAuditRow"],["config","toConfigView"],["capabilities","toCapabilityRows"],["updates","toUpdateView"],["updateActions","updateActionsFor"],["user","toUserRow"],["allowanceForm","allowanceForm"],["allowanceText","allowanceText"]]) {

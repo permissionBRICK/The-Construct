@@ -65,10 +65,13 @@
 
   // ── pair.html ──────────────────────────────────────────────────────────────
 
+  // T3 Code is served from inside the VM: on this page's own origin its scripts could read the
+  // device token, so a link there is never followed (the Companion refuses such a code as well).
   function safeNext(next) {
     if (!next) return null;
     try {
       var url = new URL(next);
+      if (url.origin === location.origin) return null;
       return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : null;
     } catch (e) {
       return null;
@@ -111,7 +114,7 @@
         location.replace(target);
         return;
       }
-      status('Paired as ' + label + '.');
+      status(next ? 'Paired as ' + label + '. The T3 Code link was not opened: it must use a different address than this page.' : 'Paired as ' + label + '.', !!next);
       $('done').hidden = false;
     }).catch(function () {
       status('Cannot reach the host. Check the connection and open the pairing link again.', true);
