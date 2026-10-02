@@ -34,6 +34,9 @@ public sealed class VaultHostsTests
         public List<JsonObject> Leases { get; } = [];
         public List<JsonObject> Devices { get; } = [];
         public List<JsonObject> Events { get; } = [];
+        // The approval page address the pairing reply names; WebUrlSource null = a host that predates the field.
+        public string WebUrl { get; set; } = "https://vault.example.org/";
+        public string? WebUrlSource { get; set; }
         public Dictionary<string, (int Status, JsonObject? Body)> Forced { get; } = new(StringComparer.Ordinal);
         public List<(string Method, string Path, JsonObject? Body)> Log { get; } = [];
         public (string Method, string Path, JsonObject? Body)[] Calls(string method, string path) { lock (gate) return Log.Where(l => l.Method == method && l.Path == path).ToArray(); }
@@ -71,7 +74,9 @@ public sealed class VaultHostsTests
                     case ("GET", "/vault/activity"): return Ok(new JsonObject { ["events"] = new JsonArray(Events.Select(a => a.DeepClone()).ToArray()) });
                     case ("POST", "/vault/devices"):
                         Devices.Add(new JsonObject { ["id"] = "d" + Devices.Count, ["label"] = body!["label"]!.GetValue<string>(), ["createdAt"] = 1730000000000, ["lastUsedAt"] = null });
-                        return Ok(new JsonObject { ["id"] = "d" + (Devices.Count - 1), ["token"] = new string('T', 43), ["webUrl"] = "https://vault.example.org/" });
+                        var paired = new JsonObject { ["id"] = "d" + (Devices.Count - 1), ["token"] = new string('T', 43), ["webUrl"] = WebUrl };
+                        if (WebUrlSource is not null) paired["webUrlSource"] = WebUrlSource;
+                        return Ok(paired);
                 }
                 if (request.Method == "POST" && path.StartsWith("/vault/approvals/", StringComparison.Ordinal))
                 {
@@ -567,6 +572,58 @@ public sealed class VaultHostsTests
         Assert.Equal(3, h.Host.Calls("POST", "/vault/devices").Length);
         h.Prompts.Picks.Enqueue(null);
         Assert.Null(await h.Hosts.PairPhoneAsync(Slug, default));
+    }
+
+    [Fact]
+    public async Task ThePairingDialogPointsAtTheHostSettingOnlyWhilePhonesGetTheSelfSignedAddress()
+    {
+        await using var h = new Harness();
+        async Task<VaultPairing> Pair()
+        {
+            h.Prompts.Picks.Enqueue(["dev"]); h.Prompts.Inputs.Enqueue("Phone");
+            return (await h.Hosts.PairPhoneAsync(Slug, default))!;
+        }
+        // A configured proxy (or an older host whose address differs from the service's): no note.
+        Assert.Equal("", (await Pair()).Note);
+        h.Host.WebUrlSource = "hostConfig"; h.Host.WebUrl = "https://vault.example.net";
+        Assert.Equal("", (await Pair()).Note);
+        h.Host.WebUrlSource = "option";
+        Assert.Equal("", (await Pair()).Note);
+
+        // The host service's own address: the dialog says so and where a host admin changes it.
+        h.Host.WebUrlSource = "default"; h.Host.WebUrl = "https://host.example:7462";
+        var own = await Pair();
+        Assert.StartsWith("https://host.example:7462/vault/pair#token=", own.Url.Reveal());
+        Assert.Contains("https://host.example:7462", own.Note);
+        Assert.Contains("self-signed", own.Note);
+        Assert.Contains("Host Administration → Configuration → Key vault → Approval page address", own.Note);
+        // An older host that does not say: its own address is the one the Companion talks to.
+        h.Host.WebUrlSource = null;
+        Assert.Contains("Approval page address", (await Pair()).Note);
+        // A non-https answer falls back to the service address, which is self-signed as well.
+        h.Host.WebUrl = "http://vault.example.net"; h.Host.WebUrlSource = "hostConfig";
+        var fallback = await Pair();
+        Assert.StartsWith("https://host.example:7462/vault/pair#", fallback.Url.Reveal());
+        Assert.NotEqual("", fallback.Note);
+    }
+
+    [Fact]
+    public async Task AT3LinkOnTheApprovalPagesOriginIsNeverHandedOut()
+    {
+        await using var h = new Harness();
+        h.Host.WebUrl = "https://shared.example.net"; h.Host.WebUrlSource = "hostConfig";
+        h.Directory.Pairing = new(0, """{"pairUrl":"https://host.example:40001/pair#token=fwd","links":[{"kind":"proxy","pairUrl":"https://SHARED.example.net:443/pair#token=t3"},{"kind":"forwarded","pairUrl":"https://host.example:40001/pair#token=fwd"}]}""");
+        h.Prompts.Picks.Enqueue(["dev"]); h.Prompts.Inputs.Enqueue("Phone");
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => h.Hosts.PairPhoneAsync(Slug, default));
+        Assert.Equal(VaultSync.SameOriginError, error.Message);
+        // The device it had to pair first is revoked again.
+        Assert.Single(h.Host.Calls("POST", "/vault/devices"));
+        Assert.Single(h.Host.Calls("DELETE", "/vault/devices/d0"));
+        Assert.Empty(h.Host.Devices);
+        // Another port is another origin.
+        h.Directory.Pairing = new(0, """{"links":[{"kind":"proxy","pairUrl":"https://shared.example.net:8443/pair#token=t3"}]}""");
+        h.Prompts.Picks.Enqueue(["dev"]); h.Prompts.Inputs.Enqueue("Phone");
+        Assert.EndsWith(Uri.EscapeDataString("https://shared.example.net:8443/pair#token=t3"), (await h.Hosts.PairPhoneAsync(Slug, default))!.Url.Reveal());
     }
 
     [Fact]

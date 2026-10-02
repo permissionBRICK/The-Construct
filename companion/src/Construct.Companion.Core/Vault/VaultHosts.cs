@@ -13,7 +13,8 @@ public sealed record VaultHostInstance(string Name, string Slug, string VmName);
 public sealed record VaultHostView(string Slug, string Host, VaultHostState State, IReadOnlyList<VaultDevice> Devices, IReadOnlyList<string> Instances, int Online);
 public sealed record VaultHostLeaseView(string Slug, string Host, VaultHostLease Lease);
 // Url holds the device token and the T3 pairing token: show it once, never log it. Vm is empty for approvals only.
-public sealed record VaultPairing(string Host, string Label, string Vm, Secret Url);
+// Note is set when phones get the host service's self-signed address and says where to change that.
+public sealed record VaultPairing(string Host, string Label, string Vm, Secret Url, string Note = "");
 
 // The enrolled hosts and the hosted instances of this user, supplied by the Host layer.
 public interface IVaultHostDirectory
@@ -462,9 +463,15 @@ public sealed class VaultHosts : IAsyncDisposable
         var reply = await host.Client.PairVaultDeviceAsync(label, cancellationToken).ConfigureAwait(false);
         var token = reply.Str("token");
         if (!VaultSync.IsDeviceToken(token)) throw new InvalidOperationException("The host did not return a device token.");
-        var web = reply.Str("webUrl") is { Length: > 0 } w && Uri.TryCreate(w, UriKind.Absolute, out var uri) && uri.Scheme == "https" ? w : host.Client.BaseUrl;
+        var (web, serviceDefault) = VaultSync.PairingWebBase(reply, host.Client.BaseUrl);
+        // A T3 Code page on the approval page's origin could read the device token: never hand out such a code.
+        if (next is not null && VaultSync.SameOrigin(next, web))
+        {
+            if (reply.Str("id") is { Length: > 0 } id) await Quietly(host.Client.RevokeVaultDeviceAsync(id, cancellationToken)).ConfigureAwait(false);
+            throw new InvalidOperationException(VaultSync.SameOriginError);
+        }
         await Quietly(RefreshDevicesAsync(host, cancellationToken)).ConfigureAwait(false);
-        return new(host.Host, label, vm, new Secret(VaultSync.PairingUrl(web, token, next)));
+        return new(host.Host, label, vm, new Secret(VaultSync.PairingUrl(web, token, next)), serviceDefault ? VaultSync.SelfSignedNote(web) : "");
     }
     public async Task<string?> ShowKeyAsync(CancellationToken cancellationToken)
     {
