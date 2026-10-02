@@ -11,7 +11,8 @@ namespace Construct.Companion.Host.Runtime;
 
 public sealed class InstanceRuntime(RuntimeInstance instance, IRuntimeProbe probe, IClock clock,
     Func<Action<JsonObject>, Forwarder> createForwarder, Func<Notifier> createNotifier,
-    Func<Action<AudioStatus>, AudioSession> createAudio, RepatchJob repatch, RuntimeMessageBus bus, Func<VaultBroker>? createVault = null) : IAsyncDisposable
+    Func<Action<AudioStatus>, AudioSession> createAudio, RepatchJob repatch, RuntimeMessageBus bus, Func<VaultBroker>? createVault = null,
+    Action<bool>? onlineChanged = null) : IAsyncDisposable
 {
     private readonly SemaphoreSlim serial = new(1);
     private readonly CancellationTokenSource stop = new();
@@ -67,7 +68,8 @@ public sealed class InstanceRuntime(RuntimeInstance instance, IRuntimeProbe prob
             var reachable = state.True("online");
             if (!reachable)
             {
-                online = false; await StopJobsAsync().ConfigureAwait(false); return;
+                if (online) { online = false; onlineChanged?.Invoke(false); }
+                await StopJobsAsync().ConfigureAwait(false); return;
             }
             if (current.ForwardsEnabled && forwarder is null)
             {
@@ -80,7 +82,7 @@ public sealed class InstanceRuntime(RuntimeInstance instance, IRuntimeProbe prob
             if (createVault is not null && vault is null) { vault = createVault(); vault.Start(); }
             if (!online)
             {
-                online = true; armWanted = current.MicPassthrough && !manualAudioOff;
+                online = true; onlineChanged?.Invoke(true); armWanted = current.MicPassthrough && !manualAudioOff;
                 await ArmAudioAsync(linked.Token).ConfigureAwait(false);
                 if (current.RepatchDelaySeconds > 0)
                 {
@@ -157,7 +159,7 @@ public sealed class InstanceRuntime(RuntimeInstance instance, IRuntimeProbe prob
     {
         await stop.CancelAsync().ConfigureAwait(false); await loop.ConfigureAwait(false);
         await serial.WaitAsync().ConfigureAwait(false);
-        try { online = false; await StopJobsAsync().ConfigureAwait(false); }
+        try { if (online) onlineChanged?.Invoke(false); online = false; await StopJobsAsync().ConfigureAwait(false); }
         finally { serial.Release(); }
         await repatchTask.ConfigureAwait(false); repatchStop?.Dispose();
     }

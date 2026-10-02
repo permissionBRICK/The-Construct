@@ -59,9 +59,11 @@ public sealed class IntegrationTests
         await h.App.Services.GetRequiredService<RuntimeSupervisor>().RefreshAsync();
         Assert.False(entry.Runtime!.Instance.ForwardsEnabled); Assert.False(entry.Runtime.Instance.NotificationsEnabled);
         Assert.Equal(12, entry.Runtime.Instance.RepatchDelaySeconds);
-        // The key vault watch does not depend on the notification/forward settings.
-        Assert.True(ssh.Watches.Where(w => w.Script != VaultProtocol.WatchScript()).All(w => w.Process.Stopped));
-        Assert.False(ssh.Watches.Last(w => w.Script == VaultProtocol.WatchScript()).Process.Stopped);
+        // A hosted VM uses its host's key vault: no spool broker. A local VM keeps its broker whatever the
+        // notification/forward settings.
+        Assert.DoesNotContain(ssh.Watches, w => w.Script == VaultProtocol.WatchScript());
+        Assert.True(ssh.Watches.All(w => w.Process.Stopped));
+        if (!remoteOnly) await Eventually(() => connections.Transports["agent-vm"].Watches.Any(w => w.Script == VaultProtocol.WatchScript() && !w.Process.Stopped));
         await h.App.StopAsync();
         Assert.True(ssh.Watches.All(w => w.Process.Stopped));
         Assert.False(h.Files.FileExists(h.EndpointPath));

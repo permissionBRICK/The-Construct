@@ -13,7 +13,7 @@ public sealed class FakeRemoteApi : IRemoteApi
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!request.VerifyPin(Fingerprint)) throw new InvalidOperationException("Certificate pin rejected.");
-        Requests.Add(request);
+        lock (Requests) Requests.Add(request); // background vault work sends concurrently
         if (Failure is not null) throw Failure;
         return Task.FromResult(Handler is null ? Responses.Dequeue() : Handler(request));
     }
