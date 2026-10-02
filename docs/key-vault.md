@@ -93,9 +93,10 @@ after the request appears. Requests from several VMs are listed together, oldest
 
 The pop-out stays until no request is left. Its **×** hides it until the next request arrives;
 while requests wait, **Key vault requests (N)…** at the top of the tray menu, or a left click on
-the tray icon, brings it back. The agent waits up to ten minutes by default (`--wait`). When it
-gives up, the request leaves the list and counts as denied. A request answered elsewhere (T3 Code
-Desktop, a paired phone, the host's approval page) leaves the list too.
+the tray icon, brings it back. While T3 Code Desktop is visible and shows a request in its banner
+(below), the pop-out steps back for that request. The agent waits up to ten minutes by default
+(`--wait`). When it gives up, the request leaves the list and counts as denied. A request answered
+elsewhere (T3 Code Desktop, a paired phone, the host's approval page) leaves the list too.
 
 A lease belongs to one VM and one secret:
 
@@ -194,6 +195,13 @@ Companion for its pending approvals, local and hosted alike, and shows each one 
 the Companion's own text and **Deny** / **Approve** buttons. An answer there counts like one in the
 Companion's pop-out: the request leaves the pop-out, and a hosted VM's answer goes to the host.
 Whichever answer comes first counts; a later one is refused as already answered.
+
+While its window is visible and the banner is not closed, T3 Code Desktop tells the Companion on
+every poll which requests it shows. The pop-out then gives a new request five seconds to appear in
+T3 Code Desktop. It shows the request if T3 Code Desktop does not list it by then, or eight seconds
+after T3 Code Desktop last listed it (minimized, closed, or the banner closed). With no such report
+in the last ten seconds, the pop-out shows a request at once. The tray menu and a left click on the
+tray icon bring the pop-out up at any time.
 
 The device token lives only on the approval page's address, never in T3 Code. T3 Code is
 served from inside the VM, where an agent could read anything stored for its page. The host's
@@ -302,8 +310,10 @@ and few uses, and revoke anything you did not expect.
   program running as your Windows account can approve a pending request, just as it could click
   **Approve** in the pop-out. Such answers appear in the **Activity** tab as given "from another app
   on this PC". T3 Code Desktop uses this to approve inline; it keeps the token in its main process and
-  gives its window only the list and the two answers. Values, usernames, the vault key, device
-  tokens and pairing links are never part of it, and nothing else of the vault is reachable there.
+  gives its window only the list and the two answers. Reporting requests as shown in another app
+  only keeps them out of the pop-out, which is less than such a program could do by answering them.
+  Values, usernames, the vault key, device tokens and pairing links are never part of it, and
+  nothing else of the vault is reachable there.
 
 On hosted VMs, the host service holds the vault copy and answers the VM, so the host is trusted
 with the values in **always available** mode. In **locked** mode it can read them only while your
@@ -331,7 +341,7 @@ responses/<id>.json   {"v":1,"id","status":"ok|denied|notFound|exists|invalid|er
                        "secret":<base64>,"username","lease":{"usesLeft","expiresAt"},"names":[…],"items":[…]}
 ```
 
-The Companion's local API (`http://127.0.0.1:<port>`, bearer token from `endpoint.json`) has two
+The Companion's local API (`http://127.0.0.1:<port>`, bearer token from `endpoint.json`) has three
 routes for pending approvals:
 
 ```
@@ -340,11 +350,19 @@ GET  /v1/vault/approvals       200 {"approvals":[{"id","instance","vm","kind":"l
                                     "op","title","message","action","deny","names":[…],"createdAt":<ms>,"deadline":<ms>|null}]}
 POST /v1/vault/approvals/{id}  {"decision":"approve"|"deny"} -> 204 | 400 | 404 {"code":"not-found"}
                                | 409 {"code":"already-decided"} | 502 {"code":"host-failed"}
+POST /v1/vault/approvals/displayed  {"ids":[<id>,…]} -> 204 | 400 {"code":"invalidIds"} | 401
 ```
 
 `requestId` is the id of the pending note above, and `hostRequestId` the `request=` id of its
 `approveUrl`. Errors are RFC 7807 problems. `502` means the host did not take a hosted VM's answer;
 the activity list has the reason.
+
+`displayed` takes 0 to 50 ids, each up to 128 characters of `A-Za-z0-9._~-`. T3 Code Desktop posts
+it on every poll while its window is visible, with the ids it shows (an empty list when it shows
+none). The Companion marks each listed pending id as shown elsewhere for eight seconds and ignores
+unknown or answered ids. Every accepted call also counts as a report from a visible app. While the
+last report is younger than ten seconds, the pop-out gives a new request five seconds from its
+arrival and then shows it unless its mark is current; otherwise it shows the request at once.
 
 The CLI waits 15 seconds (`CONSTRUCT_VAULT_PICKUP_SEC`) for the request to be claimed, then until
 its deadline for the answer. The host-run guest scripts live in
