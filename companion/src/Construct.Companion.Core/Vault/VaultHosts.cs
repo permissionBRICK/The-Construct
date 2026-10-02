@@ -28,8 +28,8 @@ public interface IVaultHostDirectory
 }
 
 // The network side of the key vault on hosted VMs (docs/plans/key-vault-hosted.md): syncs this PC's vault
-// with every enrolled host, unlocks locked hosts for the user's VMs, and brings host approvals and scrub
-// file decisions into the same dialogs as local ones. Values only travel inside K-encrypted payloads;
+// with every enrolled host, unlocks locked hosts for the user's VMs, lists host approvals with the local ones
+// (VaultService's pending records) and brings scrub file decisions into the same grid as local ones. Values only travel inside K-encrypted payloads;
 // K itself only in the unlock/settings bodies.
 public sealed class VaultHosts : IAsyncDisposable
 {
@@ -276,32 +276,40 @@ public sealed class VaultHosts : IAsyncDisposable
         lock (gate)
         {
             var l = Of(host.Slug);
-            foreach (var (id, dialog) in l.Open.Where(o => !current.Contains(o.Key)).ToArray()) { l.Open.Remove(id); vanished.Add(dialog); }
+            foreach (var (id, wait) in l.Open.Where(o => !current.Contains(o.Key)).ToArray()) { l.Open.Remove(id); vanished.Add(wait); }
             l.Answered.IntersectWith(current);
             foreach (var approval in approvals.Where(a => !l.Open.ContainsKey(a.Id) && !l.Answered.Contains(a.Id)))
-            { var dialog = CancellationTokenSource.CreateLinkedTokenSource(stop.Token); l.Open[approval.Id] = dialog; fresh.Add((approval, dialog)); }
+            { var wait = CancellationTokenSource.CreateLinkedTokenSource(stop.Token); l.Open[approval.Id] = wait; fresh.Add((approval, wait)); }
         }
-        // Answered on a phone, or expired on the host: its dialog closes (or never opens) unanswered.
-        foreach (var dialog in vanished) try { await dialog.CancelAsync().ConfigureAwait(false); } catch (ObjectDisposedException) { }
-        foreach (var (approval, dialog) in fresh) Track(AnswerAsync(host, approval, dialog));
+        // Answered on a phone, or expired on the host: its pending record ends unanswered.
+        foreach (var wait in vanished) try { await wait.CancelAsync().ConfigureAwait(false); } catch (ObjectDisposedException) { }
+        foreach (var (approval, wait) in fresh) Track(AnswerAsync(host, approval, wait));
     }
-    private async Task AnswerAsync(VaultHostRef host, VaultHostApproval approval, CancellationTokenSource dialog)
+    private async Task AnswerAsync(VaultHostRef host, VaultHostApproval approval, CancellationTokenSource wait)
     {
         try
         {
-            var answer = await vault.ApproveExternalAsync(new(approval.Title, approval.Message, approval.Action), approval.Deadline, dialog.Token).ConfigureAwait(false);
+            string instance; lock (gate) instance = Of(host.Slug).Online.Values.FirstOrDefault(i => i.VmName == approval.Vm)?.Name ?? approval.Vm;
+            var source = new VaultApprovalSource(instance, approval.Vm, approval.Op, approval.Names, null, host.Slug, host.Host, approval.Id, approval.CreatedAt);
+            // Answered here (SendAsync has told the host), or its deadline passed (the host expires it as well).
+            await vault.ApproveHostAsync(source, new(approval.Title, approval.Message, approval.Action), approval.Deadline,
+                approved => SendAsync(host, approval, approved), wait.Token).ConfigureAwait(false);
             lock (gate) Of(host.Slug).Answered.Add(approval.Id);
-            if (answer is not { } approved) return; // its deadline passed: the host expires it as well
-            try { await host.Client.AnswerVaultApprovalAsync(approval.Id, approved ? "approve" : "deny", stop.Token).ConfigureAwait(false); }
-            catch (RemoteApiException e) when (e.Status is 404 or 409) { } // another device answered first, or it expired
-            catch (RemoteApiException e) { vault.Record(approval.Vm, $"Could not send your answer to the host: {e.Message}", true, host.Host); }
         }
         catch (OperationCanceledException) { }
         finally
         {
-            lock (gate) { var l = Of(host.Slug); if (l.Open.TryGetValue(approval.Id, out var open) && ReferenceEquals(open, dialog)) l.Open.Remove(approval.Id); }
-            dialog.Dispose();
+            lock (gate) { var l = Of(host.Slug); if (l.Open.TryGetValue(approval.Id, out var open) && ReferenceEquals(open, wait)) l.Open.Remove(approval.Id); }
+            wait.Dispose();
         }
+    }
+    // 404 and 409 mean another device answered first, or the approval expired: not an error.
+    private async Task<VaultDecision> SendAsync(VaultHostRef host, VaultHostApproval approval, bool approved)
+    {
+        try { await host.Client.AnswerVaultApprovalAsync(approval.Id, approved ? "approve" : "deny", stop.Token).ConfigureAwait(false); return VaultDecision.Decided; }
+        catch (RemoteApiException e) when (e.Status == 404) { return VaultDecision.NotFound; }
+        catch (RemoteApiException e) when (e.Status == 409) { return VaultDecision.AlreadyDecided; }
+        catch (RemoteApiException e) { vault.Record(approval.Vm, $"Could not send your answer to the host: {e.Message}", true, host.Host); return VaultDecision.Failed; }
     }
     private async Task PollFilesAsync(VaultHostRef host, CancellationToken token)
     {
@@ -530,7 +538,7 @@ public sealed class VaultHosts : IAsyncDisposable
 
     // ── lifetime ───────────────────────────────────────────────────────────────
     private void Track(Task task) { lock (gate) { running.RemoveAll(t => t.IsCompleted); running.Add(task); } }
-    // Waits for the dialogs and unlocks already started (tests and shutdown).
+    // Waits for the pending approvals, grids and unlocks already started (tests and shutdown).
     public async Task DrainAsync()
     {
         while (true)

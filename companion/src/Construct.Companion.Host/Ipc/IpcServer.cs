@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Construct.Companion.Core.Abstractions;
 using Construct.Companion.Core.Ipc;
+using Construct.Companion.Core.Vault;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -34,6 +35,7 @@ public static class IpcServer
         var events = app.Services.GetRequiredService<IpcEvents>();
         var logs = app.Services.GetRequiredService<IpcLogs>();
         var desktop = app.Services.GetRequiredService<ICompanionDesktop>();
+        var vault = app.Services.GetRequiredService<VaultService>();
         var secret = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
         var startedAt = clock.UtcNow; var version = options.Version; var pid = Environment.ProcessId;
         var endpointPath = Path.Combine(settings.Directory, "endpoint.json");
@@ -99,6 +101,21 @@ public static class IpcServer
             await desktop.ActivateAsync(activation with { RefreshScheduled = activation.View != "hostadmin" }, c.RequestAborted);
             if (activation.View != "hostadmin") await backend.RefreshOpenedSurfaceAsync(activation.Instance, c.RequestAborted);
             return Accepted();
+        });
+        // Pending key vault approvals only (T3 Code Desktop approves inline): no value, secret list or vault change is reachable here.
+        app.MapGet("/v1/vault/approvals", () => Json(new VaultApprovalList(vault.PendingApprovals().Select(VaultApprovalItem.From).ToArray())));
+        app.MapPost("/v1/vault/approvals/{id}", async (string id, HttpContext c) =>
+        {
+            var decision = (await Body(c))["decision"] is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
+            if (decision is not ("approve" or "deny")) throw new IpcFailure(400, "invalidDecision", "decision must be approve or deny.");
+            if (!VaultProtocol.IsApprovalId(id)) throw new IpcFailure(404, "not-found", "No pending approval has this id.");
+            return await vault.DecideAsync(id, decision == "approve", otherApp: true, c.RequestAborted) switch
+            {
+                VaultDecision.Decided => Results.NoContent(),
+                VaultDecision.NotFound => throw new IpcFailure(404, "not-found", "No pending approval has this id."),
+                VaultDecision.AlreadyDecided => throw new IpcFailure(409, "already-decided", "The approval was answered elsewhere."),
+                _ => throw new IpcFailure(502, "host-failed", "The host did not take the answer. See the Key Vault activity.")
+            };
         });
         app.MapPost("/v1/quit", async (HttpContext c) =>
         {

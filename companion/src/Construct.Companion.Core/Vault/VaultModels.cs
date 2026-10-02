@@ -44,4 +44,15 @@ public sealed record VaultLeaseView(string Id, string Instance, string Name, int
 public sealed record VaultActivity(DateTimeOffset At, string Instance, string Text, bool Warning = false, string Host = "");
 public sealed record VaultSecretInput(string Name, string Description, string Username, Secret? Value);
 
+// Who asks for an approval: a local VM's `construct secret` call (RequestId is its request id) or a host's
+// pending approval (Host is the host's slug, HostName its address, HostRequestId the host's approval id).
+public sealed record VaultApprovalSource(string Instance, string Vm, string Op, IReadOnlyList<string> Names, string? RequestId = null,
+    string? Host = null, string HostName = "", string? HostRequestId = null, DateTimeOffset? CreatedAt = null);
+// A pending approval as the tray pop-out and other apps on this PC see it (GET /v1/vault/approvals): its texts
+// and where the request came from, never a value. Kind is "local" or "host"; HostName is the host's address.
+public sealed record VaultPendingApproval(string Id, string Instance, string Vm, string Kind, string? Host, string? RequestId, string? HostRequestId,
+    string Op, string Title, string Message, string Action, string Deny, IReadOnlyList<string> Names, DateTimeOffset CreatedAt, DateTimeOffset? Deadline, string HostName = "");
+// The outcome of an answer from another app: Failed = the host could not be told (the activity list says why).
+public enum VaultDecision { Decided, NotFound, AlreadyDecided, Failed }
+
 public sealed class VaultUnavailableException(string message) : Exception(message);

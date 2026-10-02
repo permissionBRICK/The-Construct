@@ -10,9 +10,6 @@ public interface IPrompts
     Task<bool> ConfirmAsync(ConfirmationPrompt prompt, CancellationToken cancellationToken = default) => ConfirmAsync(prompt.Title, prompt.Message, cancellationToken);
     Task ShowSecretOnceAsync(string title, Secret value, string note, CancellationToken cancellationToken = default);
     Task<string?> SaveFileAsync(SaveFilePrompt prompt, CancellationToken cancellationToken = default);
-    // Key vault: raised by a VM, not by a click, so the desktop brings it to the front. Cancellation
-    // closes it unanswered (the agent stopped waiting).
-    Task<bool> ApproveAsync(ApprovalPrompt prompt, CancellationToken cancellationToken = default) => ConfirmAsync(new ConfirmationPrompt(prompt.Title, prompt.Message, prompt.Action), cancellationToken);
     // Per-file choice of FileDecisionPrompt.Actions keyed by item id; null = dismissed (keep everything).
     Task<IReadOnlyDictionary<string, string>?> DecideFilesAsync(FileDecisionPrompt prompt, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyDictionary<string, string>?>(null);
 }
@@ -23,6 +20,7 @@ public sealed record InputPrompt(string Title, string Prompt, string? Value = nu
 }
 public sealed record PickItem(string Id, string Label, string? Description = null, bool Picked = false, bool Disabled = false, bool Separator = false);
 public sealed record PickPrompt(string Title, IReadOnlyList<PickItem> Items, bool Multiple = false, string? Placeholder = null);
+// A key vault approval's texts (VaultPendingApproval); the tray pop-out shows them, never in a modal dialog.
 public sealed record ApprovalPrompt(string Title, string Message, string Action = "Approve", string Deny = "Deny");
 public sealed record FileDecisionItem(string Id, string Path, string Detail);
 public sealed record FileDecisionPrompt(string Title, string Message, IReadOnlyList<FileDecisionItem> Files)

@@ -36,13 +36,18 @@ public static class TrayModel
         var line = $"{state.Instance ?? "Construct"} · {status}";
         return line.Length <= 63 ? line : line[..62] + "…";
     }
+    // A left click shows the key vault pop-out while approvals wait and it is hidden, else the launcher popup.
+    public static string LeftClickView(int approvals, bool approvalsVisible) => approvals > 0 && !approvalsVisible ? "approvals" : "popup";
     public static int IconSize(int dpi) => dpi <= 96 ? 16 : dpi <= 120 ? 20 : dpi <= 144 ? 24 : 32;
+    // Pending key vault approvals come first: the entry brings back the pop-out the user hid.
     public static IReadOnlyList<MenuEntry> Menu(TrayState state, IEnumerable<string> instances,
-        IReadOnlyList<TrayForward> forwards, bool notifications, bool autostart)
+        IReadOnlyList<TrayForward> forwards, bool notifications, bool autostart, int approvals = 0)
     {
         var usable = state.Instance is not null;
         var power = state.Online ? "shutdown" : "startVm";
-        var entries = new List<MenuEntry>
+        var entries = new List<MenuEntry>();
+        if (approvals > 0) entries.Add(new("approvals", approvals == 1 ? "Key vault request (1)…" : $"Key vault requests ({approvals})…"));
+        entries.AddRange(new List<MenuEntry>
         {
             new("instances", "Instance", Children: instances.Select(n => new MenuEntry(InstancePrefix + n, n, Checked: n == state.Instance)).ToArray()),
             new("status", StatusLine(state), false),
@@ -52,7 +57,7 @@ public static class TrayModel
             new("forwards", "Forwards", Children: forwards.Count == 0 ? [new("none", "none", false)] : forwards.Select(f => new MenuEntry("forward:" + f.Id, f.Label, Children: [new("openForward:" + f.Id, "Open link"), new("closeForward:" + f.Id, "Close")])).ToArray()),
             new("mic", "Microphone passthrough", usable, state.Mic), new("notifications", "Notifications", Checked: notifications),
             new("panel", "Control Panel"), new("settings", "Settings"), new("vault", "Key Vault")
-        };
+        });
         if (state.HostAdmin) entries.Add(new("hostadmin", "Host Administration"));
         entries.AddRange([new("autostart", "Start with Windows", Checked: autostart), new("logs", "Logs"), new("about", "About"), new("quit", "Quit")]);
         return entries;

@@ -10,7 +10,8 @@ public sealed record VaultWireEntry(string Name, string Description, bool HasUse
     public override string ToString() => $"VaultWireEntry {{ Name = {Name}, UpdatedAt = {UpdatedAt} }}";
 }
 public sealed record VaultHostSnapshot(long Revision, string Mode, string? KeyCheck, IReadOnlyList<string> UnlockedVms, IReadOnlyList<VaultWireEntry> Entries);
-public sealed record VaultHostApproval(string Id, string Vm, string Op, string Title, string Message, string Action, DateTimeOffset? Deadline);
+public sealed record VaultHostApproval(string Id, string Vm, string Op, string Title, string Message, string Action, DateTimeOffset? Deadline,
+    IReadOnlyList<string> Names, DateTimeOffset? CreatedAt);
 public sealed record VaultHostFile(string Id, string Vm, string Path, IReadOnlyList<string> Names, string Type, long Size);
 public sealed record VaultHostLease(string Id, string Vm, string Name, int? UsesLeft, DateTimeOffset ExpiresAt, string Reason, string Origin);
 public sealed record VaultDevice(string Id, string Label, DateTimeOffset? CreatedAt, DateTimeOffset? LastUsedAt);
@@ -58,7 +59,8 @@ public static partial class VaultSync
     public static IReadOnlyList<VaultHostApproval> ParseApprovals(JsonNode? body) => (body as JsonObject).Array("approvals").OfType<JsonObject>()
         .Where(a => IsId(a.Str("id")))
         .Select(a => new VaultHostApproval(a.Str("id"), Sanitize(a.Str("vm"), 64), Sanitize(a.Str("op"), 20), Sanitize(a.Str("title"), 120) is { Length: > 0 } t ? t : "Key vault — access request",
-            Paragraphs(a.Str("message"), 4000), Sanitize(a.Str("action"), 40) is { Length: > 0 } act ? act : "Approve", Long(a["deadline"]) is { } d ? Time(d) : null)).ToArray();
+            Paragraphs(a.Str("message"), 4000), Sanitize(a.Str("action"), 40) is { Length: > 0 } act ? act : "Approve", Long(a["deadline"]) is { } d ? Time(d) : null,
+            a.Array("names").Select(Text).Where(VaultProtocol.IsValidName).Distinct(StringComparer.Ordinal).Take(20).ToArray(), Long(a["createdAt"]) is { } c ? Time(c) : null)).ToArray();
     public static IReadOnlyList<VaultHostFile> ParseFiles(JsonNode? body) => (body as JsonObject).Array("files").OfType<JsonObject>()
         .Where(f => IsId(f.Str("id")) && f.Str("path").StartsWith('/'))
         .Select(f => new VaultHostFile(f.Str("id"), Sanitize(f.Str("vm"), 64), Sanitize(f.Str("path"), 1024), f.Array("names").Select(Text).Where(VaultProtocol.IsValidName).ToArray(),

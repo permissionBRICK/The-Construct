@@ -114,11 +114,24 @@ design. `VaultView` (Core) decides everything: it builds the page state (names, 
 usernames, counts, lease, host and activity metadata) and validates and runs the page's
 `vault.<action>` requests. Those requests are handled in process only: the window holds no
 `IMessageSink`, and `MessageDispatcher` refuses them like any unknown message, so nothing reachable
-over the local HTTP API can list or change the vault. The panel's **Key vault** card posts the
+over the local HTTP API can list or change the vault (pending approvals, below, are the one exception).
+The panel's **Key vault** card posts the
 `openVault` command, which only opens the window. Values, usernames on copy, the vault key, device
 tokens and pairing links never enter a webview: `IVaultWindow` (add/edit dialog, clipboard cleared
-after 30 seconds, the pairing QR code) and the `IPrompts` key, approval and file-decision dialogs are
-the only places they appear.
+after 30 seconds, the pairing QR code) and the `IPrompts` key and file-decision dialogs are the only
+places they appear.
+
+Approvals are pending records, not dialogs. `VaultService` keeps one per approval while it waits (local
+requests and host approvals alike, `PendingApprovals`, `ApprovalsChanged`) and `DecideAsync` answers it:
+the first answer wins, the agent's deadline ends an unanswered one, and a host approval's answer goes to
+the host. Two places answer them. The tray pop-out (`VaultApprovalsWindow`, page `media/approvals.html`)
+appears without activation where the launcher popup appears when a record arrives, hides when none is
+left, and comes back through the tray menu's **Key vault requests (N)…** or a left click; `VaultApprovals`
+(Core) decides its items, order, arming (Approve one second after an item is first shown) and checks the
+page's `approvals.<action>` requests, in process only like the Key Vault window. And
+`GET /v1/vault/approvals` lists the records while `POST /v1/vault/approvals/{id}`
+(`{"decision":"approve"|"deny"}` → 204, 404 `not-found`, 409 `already-decided`, 502 `host-failed`)
+answers one, so T3 Code Desktop approves inline ([contract](../docs/key-vault.md#wire-contract)).
 
 Hosted VMs use their host's vault ([contract](../docs/plans/key-vault-hosted.md)). The document also
 holds the vault key K, per-entry `updatedAt`/`updatedBy`, 30-day tombstones and per-host sync state.
@@ -126,7 +139,7 @@ holds the vault key K, per-entry `updatedAt`/`updatedBy`, 30-day tombstones and 
 (every five minutes, two seconds after a local change, on demand; payloads are AES-GCM under K,
 `VaultCrypto`/`VaultSync`), unlocks locked hosts when a hosted instance comes online or the Companion
 starts it, and polls host approvals (3 s) and scrub file decisions (15 s) while an instance of that host
-is online, through the same one-dialog gate as local requests. `VaultHostDirectory` supplies hosts,
+is online; host approvals become pending records like local requests. `VaultHostDirectory` supplies hosts,
 instances, host administration's cached whoami detection and T3 pairing. The window's **Hosts** tab
 (mode, devices, phone pairing with a QR code from `QrCode`, key export/import) goes through `VaultView` to `VaultHosts`.
 

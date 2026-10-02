@@ -38,6 +38,7 @@ function serve() {
     "/launcher": buildPage("launcher.html", "launcher.js"),
     "/hostadmin": buildPage("hostadmin.html", "hostadmin.js"),
     "/vault": buildPage("vault.html", "vault.js"),
+    "/approvals": buildPage("approvals.html", "approvals.js"),
   };
   const types = { ".css": "text/css", ".js": "text/javascript" };
   const server = http.createServer((req, res) => {
@@ -1738,6 +1739,80 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     && (await vault.locator("#vPillAccessText").textContent()) === "no VM holds a secret");
   check("vault: no console/page errors after every state", vaultErrors.length === 0, vaultErrors.join(" | "));
   await vault.close();
+
+  // ── Key vault pop-out (Construct Companion's VaultApprovals) ─────────────────
+  // Renders pending approvals as plain text with Deny / Approve; Approve arms when the Companion says so.
+  const pop = await browser.newPage({ viewport: { width: 420, height: 650 }, timezoneId: "UTC", locale: "en-US" });
+  const popErrors = [];
+  pop.on("console", (m) => { if (m.type() === "error") popErrors.push(m.text()); });
+  pop.on("pageerror", (e) => popErrors.push(String(e)));
+  await pop.goto(`http://127.0.0.1:${port}/approvals`, { waitUntil: "networkidle" });
+  await pop.waitForTimeout(100);
+  const pposted = () => pop.evaluate(() => window.__posted.splice(0));
+  check("approvals: asks for its state once loaded", (await pposted()).some((m) => m.type === "approvals.ready"));
+  const ITEM = (id, vm, where, extra) => Object.assign({ id, vm, where, title: "Key vault — access request", action: "Approve", deny: "Deny", names: ["github-token"],
+    message: `The VM “${vm}” asks for access to:\n  • github-token — GitHub token for the release repo\n\nAccess: 3 uses, until 15:30 (1 h)\nReason given: “release 4.2”\nRequested by root@${vm}`,
+    left: "9 min left", armIn: 0 }, extra || {});
+  const pushPop = async (items) => { await pop.evaluate((x) => window.postMessage({ type: "approvals.state", items: x }, "*"), items); await pop.waitForTimeout(60); };
+  const popShots = /^[\w./-]+$/.test(process.env.UI_SMOKE_SHOTS || "") ? process.env.UI_SMOKE_SHOTS : "";
+  // The window is 420 px wide and as tall as the list, up to 650 px (then it scrolls); the shot shows the whole list.
+  const shoot = async (name, items) => {
+    if (!popShots) return;
+    const saved = await pop.evaluate(() => window.__posted.length);
+    await pushPop([]); await pushPop(items); await pop.waitForTimeout(1100);
+    const height = await pop.evaluate(() => Math.ceil(document.querySelector(".lshell").getBoundingClientRect().height));
+    await pop.setViewportSize({ width: 420, height: Math.max(160, height) });
+    await pop.screenshot({ path: `${popShots}/companion-approvals-${name}-${THEME}.png` });
+    await pop.setViewportSize({ width: 420, height: 650 });
+    await pop.evaluate((n) => window.__posted.splice(n), saved);
+  };
+  const REQUEST = (vm) => `The VM “${vm}” asks for access to:\n  • github-token — GitHub token for the release repo\n\nAccess: 3 uses, until 15:30 (1 h)\nReason given: “release 4.2”\nRequested by root@${vm}`;
+  const SHOTS = [ITEM("s1", "agent-vm", "this PC", { message: REQUEST("agent-vm") }),
+    ITEM("s2", "build-vm", "on host.example", { left: "3 min left", title: "Key vault — one-time access", action: "Allow once",
+      message: "The VM “build-vm” asks to read this secret once:\n  • npm-publish — npm automation token\nRequested by root@build-vm", names: ["npm-publish"] }),
+    ITEM("s3", "gpu-vm", "this PC", { left: "", title: "Key vault — delete secret", action: "Delete", names: ["old-deploy-key"],
+      message: "The VM “gpu-vm” asks to delete this secret from the key vault:\n  • old-deploy-key — Deploy key for staging" })];
+  await pushPop([ITEM("a1", "agent-vm", "this PC", { armIn: 400, message: "<img src=x onerror=window.__xss=1> asks for:\n  • github-token" })]);
+  const firstHeights = await pop.evaluate(() => window.__posted.filter((m) => m.type === "approvals.size").map((m) => m.height));
+  check("approvals: the page reports its height to size the window", firstHeights.length === 1 && firstHeights[0] > 100, JSON.stringify(firstHeights));
+  check("approvals: one item with its texts as plain text", (await pop.locator(".ap-item").count()) === 1
+    && (await pop.locator(".ap-item .ap-message").textContent()).startsWith("<img src=x") && (await pop.evaluate(() => window.__xss)) === undefined
+    && (await pop.locator(".ap-item .ap-vm").textContent()) === "agent-vm · this PC" && (await pop.locator(".ap-item .ap-left").textContent()) === "9 min left"
+    && JSON.stringify(await pop.locator(".ap-item .ap-name").allTextContents()) === JSON.stringify(["github-token"]));
+  check("approvals: Approve waits for its arming, Deny does not", await pop.locator('[data-decision="approve"]').isDisabled() && !(await pop.locator('[data-decision="deny"]').isDisabled()));
+  await pop.locator('[data-decision="approve"]').dispatchEvent("click");
+  check("approvals: ...and an unarmed Approve posts nothing", !(await pposted()).some((m) => m.type === "approvals.decide"));
+  await pop.waitForTimeout(450);
+  check("approvals: Approve arms after the delay the Companion gave", !(await pop.locator('[data-decision="approve"]').isDisabled()));
+  await pop.locator('[data-decision="approve"]').click();
+  check("approvals: Approve posts the decision by id", JSON.stringify((await pposted()).filter((m) => m.type === "approvals.decide")) === JSON.stringify([{ type: "approvals.decide", id: "a1", decision: "approve" }]));
+  check("approvals: ...and both buttons wait for the answer", await pop.locator('[data-decision="approve"]').isDisabled() && await pop.locator('[data-decision="deny"]').isDisabled());
+  await pop.evaluate(() => window.postMessage({ type: "approvals.done", id: "a1", notice: "This request was answered elsewhere first." }, "*")); await pop.waitForTimeout(40);
+  check("approvals: a refusal is shown on the item and releases it", (await pop.locator(".ap-item .ap-error").textContent()) === "This request was answered elsewhere first."
+    && !(await pop.locator('[data-decision="deny"]').isDisabled()));
+  const marker = await pop.locator(".ap-item").evaluate((el) => { el.__marker = 1; return 1; });
+  await pushPop([ITEM("a1", "agent-vm", "this PC", { left: "8 min left" }), ITEM("h1", "build-vm", "on host.example", { left: "3 min left", title: "Key vault — one-time access", action: "Allow once" }),
+    ITEM("a2", "gpu-vm", "this PC", { left: "", title: "Key vault — delete secret", action: "Delete", names: ["old-deploy-key"], armIn: 1000,
+      message: "The VM “gpu-vm” asks to delete this secret from the key vault:\n  • old-deploy-key — Deploy key for staging" })]);
+  check("approvals: three items in the Companion's order, the first one updated in place", marker === 1 && (await pop.locator(".ap-item").first().evaluate((el) => el.__marker)) === 1
+    && JSON.stringify(await pop.locator(".ap-item").evaluateAll((els) => els.map((e) => e.dataset.id))) === JSON.stringify(["a1", "h1", "a2"])
+    && (await pop.locator(".ap-item").first().locator(".ap-left").textContent()) === "8 min left" && (await pop.locator("#aStatus").textContent()) === "3 requests wait for your approval");
+  const tallHeights = await pop.evaluate(() => window.__posted.filter((m) => m.type === "approvals.size").map((m) => m.height));
+  check("approvals: ...and reports the taller list", tallHeights.length > 0 && tallHeights[tallHeights.length - 1] > firstHeights[0], JSON.stringify(tallHeights));
+  check("approvals: each item has its own action label", JSON.stringify(await pop.locator('[data-decision="approve"]').allTextContents()) === JSON.stringify(["Approve", "Allow once", "Delete"]));
+  await pop.locator('.ap-item[data-id="h1"] [data-decision="deny"]').click();
+  await pop.click("#aHide"); await pop.click("#aVault");
+  const tail = (await pposted()).filter((m) => m.type !== "approvals.size");
+  check("approvals: deny, hide and open key vault post their requests", JSON.stringify(tail) === JSON.stringify([
+    { type: "approvals.decide", id: "h1", decision: "deny" }, { type: "approvals.hide" }, { type: "approvals.openVault" }]));
+  await pushPop([ITEM("a2", "gpu-vm", "this PC")]);
+  check("approvals: answered items leave the list", JSON.stringify(await pop.locator(".ap-item").evaluateAll((els) => els.map((e) => e.dataset.id))) === JSON.stringify(["a2"]));
+  await pushPop([]);
+  check("approvals: an empty list says so", await pop.locator("#aEmpty").isVisible() && (await pop.locator(".ap-item").count()) === 0);
+  await shoot("1", SHOTS.slice(0, 1)); await shoot("3", SHOTS);
+  check("approvals: there is nowhere to type or show a value", (await pop.locator('input, textarea, [contenteditable]').count()) === 0);
+  check("approvals: no console/page errors", popErrors.length === 0, popErrors.join(" | "));
+  await pop.close();
 
   await browser.close();
   server.close();

@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src {{cspSource}} data:; style-src {{cspSource}} 'unsafe-inline'; font-src {{cspSource}}; script-src 'nonce-{{nonce}}'; base-uri 'none'; form-action 'none'; object-src 'none';" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="{{styleUri}}" />
+  <link rel="stylesheet" href="{{themeUri}}" />
+  <title>The Construct — Key Vault Requests</title>
+  <style>
+    /* The launcher's look (body.launcher, .lshell, .lcard) with a few rules of its own, built from the
+       shared tokens so every design restyles it. */
+    html, body.approvals { min-height: 0; }
+    body.approvals { box-shadow: inset 0 0 0 1px var(--line-strong); overflow-x: hidden; }
+    .approvals .lshell { gap: 10px; }
+    .approvals .lbrand { justify-content: space-between; }
+    .ap-brand { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .approvals .lbrand .ldot { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
+    .ap-hide { font: inherit; font-size: 15px; line-height: 1; color: var(--dim); background: transparent; border: 0; padding: 2px 6px; cursor: pointer; border-radius: 3px; }
+    .ap-hide:hover { color: var(--title); }
+    .ap-hide:focus-visible { outline: 2px solid var(--rain); outline-offset: 1px; }
+    .ap-list { display: flex; flex-direction: column; gap: 10px; }
+    .ap-item { display: flex; flex-direction: column; gap: 6px; }
+    .ap-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; min-width: 0; }
+    .ap-head .lcard-h { margin-bottom: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+    .ap-left { color: var(--dim); font-weight: 400; letter-spacing: 0.5px; text-transform: none; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .ap-title { color: var(--title); font-weight: 700; }
+    .ap-names { display: flex; flex-wrap: wrap; gap: 5px; }
+    .ap-name { font-family: var(--mono); font-size: 11px; color: var(--title); border: 1px solid var(--line-strong); border-radius: 3px; padding: 0 5px; }
+    .ap-message { color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 9.5em; overflow-y: auto; }
+    .ap-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
+    .ap-actions .btn { min-width: 84px; }
+    .ap-error { color: var(--crit); }
+    .ap-error:empty { display: none; }
+  </style>
+</head>
+<body class="launcher approvals">
+<!-- Construct Companion's key vault pop-out (Core/Vault/VaultApprovals.cs). It lists pending approvals with
+     their texts, never a value, and its requests are handled in the Companion process only. -->
+  <div class="lshell">
+    <div class="lbrand">
+      <span class="ap-brand"><span class="ldot" aria-hidden="true"></span> KEY&nbsp;VAULT</span>
+      <button class="ap-hide" id="aHide" type="button" title="Hide until the next request (the tray menu brings it back)" aria-label="Hide">&times;</button>
+    </div>
+    <div class="lstatus" id="aStatus">waiting for your approval</div>
+    <div class="ap-list" id="aList"></div>
+    <p class="lmeta" id="aEmpty" hidden>No request is waiting.</p>
+    <div class="lfoot"><button class="lrefresh" id="aVault" type="button">open key vault</button></div>
+  </div>
+  <script nonce="{{nonce}}" src="{{paletteUri}}"></script>
+  <script nonce="{{nonce}}" src="{{scriptUri}}"></script>
+</body>
+</html>

@@ -85,22 +85,6 @@ internal sealed class DesktopPrompts(Control dispatcher) : IPrompts
         try { Show(form,cancellationToken); } finally { field.Clear(); }
         return true;
     },cancellationToken);
-    // Raised by a VM while the user works elsewhere: on top and in the taskbar, Deny focused, Approve
-    // enabled only after a second so a keystroke meant for another window cannot approve it.
-    public Task<bool> ApproveAsync(ApprovalPrompt prompt,CancellationToken cancellationToken=default) => OnUi(()=>
-    {
-        var (form,body)=Dialog(prompt.Title); using var _=form; form.TopMost=true; form.ShowInTaskbar=true;
-        body.Controls.Add(Text(prompt.Message));
-        var approve=new Button { Text=prompt.Action,DialogResult=DialogResult.OK,AutoSize=true,Enabled=false };
-        var deny=new Button { Text=prompt.Deny,DialogResult=DialogResult.Cancel,AutoSize=true };
-        Buttons(body,approve,deny); form.AcceptButton=null;
-        using var arm=new System.Windows.Forms.Timer { Interval=1000 };
-        arm.Tick+=(_,_)=> { arm.Stop(); approve.Enabled=true; };
-        form.Shown+=(_,_)=> { form.Activate(); deny.Focus(); arm.Start(); System.Media.SystemSounds.Asterisk.Play(); };
-        var result=Show(form,cancellationToken);
-        cancellationToken.ThrowIfCancellationRequested(); // closed by the agent's deadline, not by the user
-        return result==DialogResult.OK;
-    },cancellationToken);
     public Task<IReadOnlyDictionary<string,string>?> DecideFilesAsync(FileDecisionPrompt prompt,CancellationToken cancellationToken=default) => OnUi<IReadOnlyDictionary<string,string>?>(()=>
     {
         var (form,body)=Dialog(prompt.Title); using var _=form; form.TopMost=true; form.ShowInTaskbar=true;

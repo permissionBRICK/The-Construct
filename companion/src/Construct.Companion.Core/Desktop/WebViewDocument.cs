@@ -23,16 +23,16 @@ public static class WebViewDocument
     public const string OpenSettingsScript = "document.getElementById('gearBtn')?.click();";
     public static bool IsKnownTheme(string? theme) => theme is "classic" or "terminal" or "native";
     public static string ThemeCss(string? theme) => "themes/" + (IsKnownTheme(theme?.Trim().ToLowerInvariant()) ? theme!.Trim().ToLowerInvariant() : "native") + ".css";
-    public static string Title(string view) => view switch { "settings" => "Construct Settings", "hostadmin" => "Host Administration", "theme" => "Choose Construct Design", "vault" => "Construct Key Vault", _ => "Construct Companion" };
+    public static string Title(string view) => view switch { "settings" => "Construct Settings", "hostadmin" => "Host Administration", "theme" => "Choose Construct Design", "vault" => "Construct Key Vault", "approvals" => "Construct Key Vault Requests", _ => "Construct Companion" };
     // Which media surface a window shows: the popup is the sidebar launcher, settings live inside the panel.
-    public static string Surface(string view) => view switch { "popup" => "launcher", "hostadmin" => "hostadmin", "vault" => "vault", _ => "panel" };
+    public static string Surface(string view) => view switch { "popup" => "launcher", "hostadmin" => "hostadmin", "vault" => "vault", "approvals" => "approvals", _ => "panel" };
     // The native theme reads VS Code CSS variables; the app supplies the system colours for them.
     public static string PaletteScript(IReadOnlyDictionary<string, string> variables) =>
         "window.addEventListener('DOMContentLoaded',()=>{for(const [k,v] of Object.entries(" + System.Text.Json.JsonSerializer.Serialize(variables) + ")) document.documentElement.style.setProperty(k,v);});";
     public static string Render(string template, string script, string? theme, string nonce)
     {
         if (!Regex.IsMatch(nonce, @"\A[A-Za-z0-9+/=]{16,128}\z")) throw new ArgumentException("Invalid document nonce.");
-        if (script is not ("panel.js" or "launcher.js" or "hostadmin.js" or "vault.js")) throw new ArgumentException("Unknown media script.");
+        if (script is not ("panel.js" or "launcher.js" or "hostadmin.js" or "vault.js" or "approvals.js")) throw new ArgumentException("Unknown media script.");
         var substitutions = new Dictionary<string, string>
         {
             ["cspSource"] = Origin, ["nonce"] = nonce, ["styleUri"] = Origin + "/panel.css",
