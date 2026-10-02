@@ -71,7 +71,7 @@ $ construct secret release --all
 `add` reads stdin, and every value travels between the VM and the Companion only on stdin
 streams. Exit codes: `0` ok, `1` usage error, `6` no Companion is connected to this VM, `7`
 denied or not answered in time, `8` Companion error, `9` no such secret, `10` name already
-taken.
+taken, `11` the vault is locked for this VM (hosted VMs: start or connect the VM from your PC).
 
 ## Approvals and leases
 

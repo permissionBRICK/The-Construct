@@ -26,11 +26,14 @@
 #   6  expose: no Construct client attached (the request stays queued)
 #   7  expose: refused by the host service (host forwards disabled, cap reached)
 #   8  expose: the host service could not be reached
-#   6  secret: no Construct Companion picked the request up
+#   6  secret: no Construct Companion picked the request up (on a host
+#      service: the host service could not be reached)
 #   7  secret: denied by the user, or no answer in time
-#   8  secret: the Companion reported an error
+#   8  secret: the Companion (or the host service) reported an error
 #   9  secret: no such secret
 #  10  secret: a secret with that name already exists
+#  11  secret: the vault is locked for this VM (start or connect it from the
+#      user's PC)
 set -euo pipefail
 
 PROJECTS_STORE="${PROJECTS_STORE:-/opt/construct/projects}"

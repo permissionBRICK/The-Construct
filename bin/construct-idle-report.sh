@@ -37,6 +37,9 @@ CURL="${CONSTRUCT_IDLE_CURL:-${CONSTRUCT_CURL:-curl}}"
 SSH_PORT="${CONSTRUCT_IDLE_SSH_PORT:-22}"
 DRY_RUN="${CONSTRUCT_IDLE_DRY_RUN:-false}"
 API_TIMEOUT="${CONSTRUCT_SERVICE_TIMEOUT_SEC:-20}"
+# What a "vaultScrub": true reply starts (as `<cmd> secret _scrub`), and how.
+SCRUB_CMD="${CONSTRUCT_IDLE_SCRUB_CMD:-}"
+SYSTEMD_RUN="${CONSTRUCT_IDLE_SYSTEMD_RUN:-systemd-run}"
 
 log() { printf 'construct-idle-report: %s\n' "$*" >&2; }
 
@@ -265,8 +268,54 @@ post_activity() {
     http_body="$(head -c 200 "${work}/body" 2>/dev/null || true)"
     log "activity report failed (HTTP ${status:-000})${http_body:+: ${http_body}}"
     log "$(head -n 1 "${work}/stderr" 2>/dev/null || true)"
+  elif vault_scrub_due "${work}/body"; then
+    start_vault_scrub
   fi
   rm -rf "${work}"
+}
+
+# ── key vault scrubs ─────────────────────────────────────────────────────────
+# The reply carries "vaultScrub": true while the host service has a scrub job
+# for this VM (docs/plans/key-vault-hosted.md). `construct secret _scrub` runs
+# it; a full scan can take minutes, so it is started detached and this report
+# neither waits for it nor fails with it. `_scrub` holds a lock, so a start
+# while the previous scrub still runs ends at once.
+
+vault_scrub_due() {
+  [[ -s "$1" ]] || return 1
+  if command -v jq >/dev/null 2>&1; then
+    jq -e 'type == "object" and .vaultScrub == true' "$1" >/dev/null 2>&1
+  else
+    grep -Eq '"vaultScrub"[[:space:]]*:[[:space:]]*true' "$1" 2>/dev/null
+  fi
+}
+
+start_vault_scrub() {
+  local cmd="${SCRUB_CMD}"
+  if [[ -z "${cmd}" ]]; then
+    # Installed next to this script (provision.sh's install_construct_cli).
+    cmd="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/construct"
+    [[ -x "${cmd}" ]] || cmd="construct"
+  fi
+  # Under systemd this report is a oneshot unit, and systemd kills whatever is
+  # left in a unit's cgroup when it ends: the scrub gets a transient unit of its
+  # own, which also sends its output to the journal as construct-vault.
+  if [[ -n "${INVOCATION_ID:-}" ]] && command -v "${SYSTEMD_RUN}" >/dev/null 2>&1; then
+    "${SYSTEMD_RUN}" --quiet --no-block --collect --description="Construct key vault scrub" \
+      --property=SyslogIdentifier=construct-vault -- "${cmd}" secret _scrub </dev/null >/dev/null 2>&1 \
+      || log "could not start the key vault scrub (systemd-run failed)"
+    return 0
+  fi
+  if command -v setsid >/dev/null 2>&1 && command -v logger >/dev/null 2>&1; then
+    # shellcheck disable=SC2016 # $0 belongs to the inner shell
+    setsid -f bash -c '"$0" secret _scrub 2>&1 | logger -t construct-vault' "${cmd}" \
+      </dev/null >/dev/null 2>&1 || log "could not start the key vault scrub"
+  elif command -v setsid >/dev/null 2>&1; then
+    setsid -f "${cmd}" secret _scrub </dev/null >/dev/null 2>&1 || log "could not start the key vault scrub"
+  else
+    nohup "${cmd}" secret _scrub </dev/null >/dev/null 2>&1 &
+  fi
+  return 0
 }
 
 main() {

@@ -23,7 +23,15 @@ bootstrap.sh   text eol=lf
 /service/src       export-ignore
 /service/tests     export-ignore
 /service/Constructd.sln export-ignore
-/companion/src     export-ignore
+/companion/src/**  export-ignore
+# ...except the key vault's scan and clean-up scripts: on a VM of a host service,
+# `construct secret _scrub` renders them from the VM's own checkout. Every directory
+# on the way has to stay in, or git archive never descends to them.
+/companion/src/Construct.Companion.Core -export-ignore
+/companion/src/Construct.Companion.Core/Vault -export-ignore
+/companion/src/Construct.Companion.Core/Vault/GuestScripts -export-ignore
+/companion/src/Construct.Companion.Core/Vault/GuestScripts/vault-scan.sh -export-ignore
+/companion/src/Construct.Companion.Core/Vault/GuestScripts/vault-clean.sh -export-ignore
 /companion/tests   export-ignore
 /companion/Construct.Companion.sln export-ignore
 /docs/plans        export-ignore
