@@ -230,8 +230,10 @@ exit 0
  * Both instances prefer CONSTRUCT_EXTERNAL_HOST, falling back to the VM's
  * hostname.mshome.net. config.env already controls SSH and other client routes;
  * using its address for the default instance is intentional.
- * Named instances retain their own pairing label. links lists the forwarded
- * route and an optional direct route when CONSTRUCT_DIRECT_HOST is known.
+ * Named instances retain their own pairing label. links lists, in this order,
+ * the user's own proxy address when config.env records one (T3CODE_PROXY_URL),
+ * the forwarded route, and a direct route when CONSTRUCT_DIRECT_HOST is known.
+ * pairUrl stays the forwarded route for clients that predate links.
  *
  * BOTH variants pick the SCHEME from the VM: Construct now serves T3 over HTTPS
  * (bin/setup-t3-https.sh), and a browser only exposes getUserMedia() — T3's
@@ -275,7 +277,7 @@ function extractPairLinks(stdout) {
   try {
     const value = JSON.parse(String(stdout));
     return (Array.isArray(value.links) ? value.links : []).filter(link => {
-      if (!["forwarded", "direct"].includes(link?.kind) || typeof link.pairUrl !== "string") return false;
+      if (!["proxy", "forwarded", "direct"].includes(link?.kind) || typeof link.pairUrl !== "string") return false;
       try { return ["http:", "https:"].includes(new URL(link.pairUrl).protocol); } catch (_) { return false; }
     });
   } catch (_) { return []; }

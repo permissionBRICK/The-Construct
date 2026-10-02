@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class PairingForwardTests(unittest.TestCase):
     def run_pairing(self, client, *, host_exit=0, client_exit=0, tls=True,
                     managed=True, client_url='http://user-pc:18807/', host_url='http://host.example:29991/',
-                    external=None, direct=None):
+                    external=None, direct=None, proxy=None):
         with tempfile.TemporaryDirectory() as directory:
             tmp = Path(directory)
             config = tmp / 'config.env'
@@ -26,7 +26,8 @@ class PairingForwardTests(unittest.TestCase):
                               ('CONSTRUCT_SERVICE_URL=https://host.example:7462\n' if managed else '') +
                               ('T3CODE_PUBLIC_BASE_URL=https://host.example:5443\n' if tls else '') +
                               (f'CONSTRUCT_EXTERNAL_HOST={external}\n' if external else '') +
-                              (f'CONSTRUCT_DIRECT_HOST={direct}\n' if direct else ''))
+                              (f'CONSTRUCT_DIRECT_HOST={direct}\n' if direct else '') +
+                              (f'T3CODE_PROXY_URL={proxy}\n' if proxy else ''))
             log = tmp / 'calls.jsonl'
             bindir = tmp / 'bin'
             bindir.mkdir()
@@ -146,6 +147,30 @@ class PairingForwardTests(unittest.TestCase):
                         host = f'[{direct}]' if ':' in direct else direct
                         expected = f'{"https" if tls else "http"}://{host}:{5443 if tls else 5177}/pair#token=TEST-PAIRING'
                         self.assertEqual(data['links'][1], {'kind': 'direct', 'pairUrl': expected})
+
+    def test_proxy_link_is_listed_first_and_pair_url_stays_forwarded(self):
+        for client in ('desktop', 'extension', 'named-extension'):
+            for proxy, origin in (('https://t3.example.net:8443', 'https://t3.example.net:8443'),
+                                  ("'https://[2001:db8::7]:8443'", 'https://[2001:db8::7]:8443')):
+                with self.subTest(client=client, proxy=proxy):
+                    result, calls = self.run_pairing(client, direct='guest.example', proxy=proxy)
+                    self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+                    data = json.loads(result.stdout)
+                    self.assertEqual([link['kind'] for link in data['links']], ['proxy', 'forwarded', 'direct'])
+                    self.assertEqual(data['links'][0]['pairUrl'], origin + '/pair#token=TEST-PAIRING')
+                    self.assertEqual(data['pairUrl'], 'https://host.example:29991/pair#token=TEST-PAIRING')
+                    self.assertEqual(data['links'][1]['pairUrl'], data['pairUrl'])
+                    self.assertEqual(len(calls), 1)
+
+    def test_invalid_proxy_address_is_ignored(self):
+        for client in ('desktop', 'extension'):
+            for proxy in ('https://t3.example.net/app', 'ftp://t3.example.net', 'https://t3.example.net:70000', "'https://t3.example.net/?a=1'"):
+                with self.subTest(client=client, proxy=proxy):
+                    result, _ = self.run_pairing(client, proxy=proxy)
+                    self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+                    data = json.loads(result.stdout)
+                    self.assertEqual([link['kind'] for link in data['links']], ['forwarded'])
+                    if client != 'desktop': self.assertIn('T3CODE_PROXY_URL', result.stderr)
 
 
 if __name__ == '__main__':

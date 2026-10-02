@@ -177,12 +177,14 @@ exit 0
         return Regex.Match(stdout ?? "", "\"pairUrl\"\\s*:\\s*\"([^\"]+)\"").Groups[1].Value;
     }
     public static string BaseUrl(string? host, string? probedUrl) => ProbeParser.IsSafeOrigin(probedUrl) ? probedUrl! : "http://" + (string.IsNullOrEmpty(host) ? "agent-vm.mshome.net" : host) + ":5177";
+    // Kinds, in the order the pairing script lists them: "proxy" (the address the user reaches T3 Code at
+    // through their own proxy, T3CODE_PROXY_URL), "forwarded" (the host or client forward) and "direct".
     public sealed record PairLink(string Kind, string PairUrl);
     public static IReadOnlyList<PairLink> ExtractPairLinks(string? stdout)
     {
         var links = StateJson.ParseObject(stdout)?["links"] as JsonArray;
         return (links ?? []).OfType<JsonObject>().Where(link =>
-            StateJson.Text(link["kind"]) is "forwarded" or "direct" &&
+            StateJson.Text(link["kind"]) is "proxy" or "forwarded" or "direct" &&
             Uri.TryCreate(StateJson.Text(link["pairUrl"]), UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https")
             .Select(link => new PairLink(StateJson.Text(link["kind"])!, StateJson.Text(link["pairUrl"])!)).ToArray();
     }

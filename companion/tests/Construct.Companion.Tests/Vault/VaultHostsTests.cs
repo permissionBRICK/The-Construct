@@ -532,7 +532,7 @@ public sealed class VaultHostsTests
     }
 
     [Fact]
-    public async Task PairingAPhoneMintsTheForwardedT3LinkAndPutsBothTokensInTheFragment()
+    public async Task PairingAPhoneMintsTheProxyOrForwardedT3LinkAndPutsBothTokensInTheFragment()
     {
         await using var h = new Harness();
         h.Prompts.Picks.Enqueue(["build"]); h.Prompts.Inputs.Enqueue("  Pixel\n");
@@ -551,6 +551,12 @@ public sealed class VaultHostsTests
         Assert.Equal("https://vault.example.org/vault/pair#token=" + new string('T', 43), approvalsOnly.Url.Reveal());
         Assert.Equal(("Phone", ""), (approvalsOnly.Label, approvalsOnly.Vm)); Assert.Single(h.Directory.PairingRuns);
 
+        // The address the user reaches T3 Code at through their own proxy wins over the forward.
+        h.Directory.Pairing = new(0, """{"pairUrl":"https://host.example:40001/pair#token=t3-fwd","links":[{"kind":"proxy","pairUrl":"https://t3.example.net:8443/pair#token=t3-proxy"},{"kind":"forwarded","pairUrl":"https://host.example:40001/pair#token=t3-fwd"}]}""");
+        h.Prompts.Picks.Enqueue(["dev"]); h.Prompts.Inputs.Enqueue("Tablet");
+        var proxied = (await h.Hosts.PairPhoneAsync(Slug, default))!;
+        Assert.EndsWith("&next=" + Uri.EscapeDataString("https://t3.example.net:8443/pair#token=t3-proxy"), proxied.Url.Reveal());
+
         // No forwarded link (or no forward yet): nothing is paired.
         h.Directory.Pairing = new(7);
         h.Prompts.Picks.Enqueue(["dev"]); h.Prompts.Inputs.Enqueue("Phone");
@@ -558,7 +564,7 @@ public sealed class VaultHostsTests
         h.Directory.Pairing = new(0, """{"links":[{"kind":"direct","pairUrl":"http://192.0.2.5:5177/pair#token=x"}]}""");
         h.Prompts.Picks.Enqueue(["dev"]); h.Prompts.Inputs.Enqueue("Phone");
         await Assert.ThrowsAsync<InvalidOperationException>(() => h.Hosts.PairPhoneAsync(Slug, default));
-        Assert.Equal(2, h.Host.Calls("POST", "/vault/devices").Length);
+        Assert.Equal(3, h.Host.Calls("POST", "/vault/devices").Length);
         h.Prompts.Picks.Enqueue(null);
         Assert.Null(await h.Hosts.PairPhoneAsync(Slug, default));
     }

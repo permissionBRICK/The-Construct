@@ -455,7 +455,7 @@ public sealed class VaultHosts : IAsyncDisposable
         {
             var instance = instances.FirstOrDefault(i => i.Name == choice) ?? throw new InvalidOperationException("That VM is no longer registered.");
             var run = await directory.RunT3PairingAsync(instance.Name, cancellationToken).ConfigureAwait(false);
-            var (link, error) = VaultSync.ForwardedT3Link(run.Code, run.Stdout);
+            var (link, error) = VaultSync.PhoneT3Link(run.Code, run.Stdout);
             next = link ?? throw new InvalidOperationException(error);
             vm = instance.VmName;
         }

@@ -318,6 +318,17 @@ try {
   ok("pairing picker: offers both kinds and opens the chosen route", offered.map(x => x.label).join(",") === "forwarded,direct" && opened === links[1].pairUrl);
   ok("pairing picker: does not display secret tokens", offered.every(x => !x.description.includes("token=")));
   ok("pairing parser: rejects non-web links", t3.extractPairLinks(JSON.stringify({ links: [{ kind: "direct", pairUrl: "file:///tmp/x" }] })).length === 0);
+  {
+    const proxied = [{ kind: "proxy", pairUrl: "https://t3.example.net:8443/pair#token=three" }, ...links];
+    let shown;
+    const proxyVscode = { window: { showQuickPick: async items => { shown = items; return items[0]; } },
+      env: { openExternal: async url => { opened = url; } }, Uri: { parse: url => url } };
+    const proxySsh = { runRemoteScript: async () => ({ code: 0, stdout: JSON.stringify({ pairUrl: links[0].pairUrl, links: proxied }) }) };
+    await t3.openWebUi({ _vscode: proxyVscode, _ssh: proxySsh });
+    ok("pairing picker: offers the proxy address first", shown.map(x => x.label).join(",") === "proxy,forwarded,direct" &&
+      shown[0].description === "https://t3.example.net:8443" && opened === proxied[0].pairUrl);
+    ok("pairing parser: keeps an unknown kind out", t3.extractPairLinks(JSON.stringify({ links: [{ kind: "lan", pairUrl: "https://x.example/pair" }] })).length === 0);
+  }
   let active = 0, maxActive = 0, vmChannel = "stable";
   const log = [];
   const resolvers = [];

@@ -81,12 +81,14 @@ public static partial class VaultSync
         return string.IsNullOrEmpty(next) ? url : url + "&next=" + Uri.EscapeDataString(next);
     }
     public static bool IsDeviceToken(string? token) => token is not null && DeviceToken().IsMatch(token);
-    // The link a phone can reach: the gateway-forwarded one, never the VM-internal address.
-    public static (string? Url, string? Error) ForwardedT3Link(int code, string stdout)
+    // The link a phone can reach: the address the user reaches T3 Code at through their own proxy when the VM
+    // records one (T3CODE_PROXY_URL), else the gateway-forwarded one; never the VM-internal address.
+    public static (string? Url, string? Error) PhoneT3Link(int code, string stdout)
     {
         if (code == 7) return (null, "T3 Code's port forward is not ready. Keep the Construct client connected and retry.");
-        var link = code == 0 ? State.T3Code.ExtractPairLinks(stdout).FirstOrDefault(l => l.Kind == "forwarded") : null;
-        return link is null ? (null, "T3 Code did not return a pairing link the phone can reach (no forwarded link).") : (link.PairUrl, null);
+        var links = code == 0 ? State.T3Code.ExtractPairLinks(stdout) : [];
+        var link = links.FirstOrDefault(l => l.Kind == "proxy") ?? links.FirstOrDefault(l => l.Kind == "forwarded");
+        return link is null ? (null, "T3 Code did not return a pairing link the phone can reach (no proxy or forwarded link).") : (link.PairUrl, null);
     }
 
     private static bool IsId(string id) => id.Length is > 0 and <= 128 && !id.Any(char.IsControl) && !id.Contains('/', StringComparison.Ordinal);
