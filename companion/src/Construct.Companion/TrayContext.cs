@@ -25,6 +25,7 @@ internal sealed class TrayContext : ApplicationContext
     private readonly IpcSettings settings;
     private readonly IPrompts prompts;
     private readonly VaultService vault;
+    private readonly VaultHosts vaultHosts;
     private VaultWindow? vaultWindow;
     private readonly DesktopSnapshot snapshot;
     private readonly IDisposable registryWatch;
@@ -39,9 +40,9 @@ internal sealed class TrayContext : ApplicationContext
     private bool disposed;
     private Rectangle? trayHitArea;
     private bool showOnClick;
-    public TrayContext(Platform platform, IMessageSink sink, IpcSettings settings, IPrompts prompts, VaultService vault, ActivationPlan initial)
+    public TrayContext(Platform platform, IMessageSink sink, IpcSettings settings, IPrompts prompts, VaultService vault, VaultHosts vaultHosts, ActivationPlan initial)
     {
-        this.platform = platform; this.sink = sink; this.settings = settings; this.prompts = prompts; this.vault = vault;
+        this.platform = platform; this.sink = sink; this.settings = settings; this.prompts = prompts; this.vault = vault; this.vaultHosts = vaultHosts;
         snapshot = new(platform.Clock);
         _ = dispatcher.Handle;
         registry = LoadRegistry();
@@ -182,7 +183,7 @@ internal sealed class TrayContext : ApplicationContext
     }
     private void Open(string view, string? scope, bool refreshScheduled = false)
     {
-        if (view == "vault") { (vaultWindow ??= new VaultWindow(vault)).Present(); return; }
+        if (view == "vault") { (vaultWindow ??= new VaultWindow(vault, vaultHosts)).Present(); return; }
         scope ??= view == "hostadmin" ? Hosts().FirstOrDefault() : Active;
         if (view == "hostadmin" && scope is null) { MessageBox.Show("No remote host is registered.", "Host Administration"); return; }
         var sinkScope = view == "hostadmin" ? "host:" + scope : scope ?? "";

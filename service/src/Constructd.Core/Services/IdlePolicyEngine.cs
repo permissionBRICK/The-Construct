@@ -21,7 +21,8 @@ public sealed partial class IdlePolicyEngine(
     IAuditLog audit,
     IdleOptions options,
     IVmOperationGate vmGate,
-    MemoryPressureServices? pressure = null) : IIdlePolicyEngine
+    MemoryPressureServices? pressure = null,
+    IVaultUnlocks? vault = null) : IIdlePolicyEngine
 {
     /// <summary>
     /// Per-VM "last seen active" watermark, so the timeout measures a continuous idle window.
@@ -82,6 +83,9 @@ public sealed partial class IdlePolicyEngine(
             {
                 await vms.UpdateAsync(vm with { State = state }, ct).ConfigureAwait(false);
             }
+
+            // A VM seen in any other state than running loses its unlocked vault key.
+            if (state != VmState.Running) vault?.Drop(vm.Name);
 
             var connections = await forwards.CountActiveConnectionsAsync(vm.Name, ct).ConfigureAwait(false);
             var report = await vms.GetLatestActivityAsync(vm.Name, ct).ConfigureAwait(false);
@@ -148,6 +152,7 @@ public sealed partial class IdlePolicyEngine(
                 await driver.SaveAsync(vm.Name, ct).ConfigureAwait(false);
             }
 
+            vault?.Drop(vm.Name);
             var state = await driver.GetStateAsync(vm.Name, ct).ConfigureAwait(false);
             await vms.UpdateAsync(vm with { State = state }, ct).ConfigureAwait(false);
 

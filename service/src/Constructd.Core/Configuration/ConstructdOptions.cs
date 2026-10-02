@@ -96,6 +96,23 @@ public sealed class ConstructdOptions
         Logic.PublicHostPatternRules.Resolve(PublicHostPattern, PublicHost, vmName);
 
     /// <summary>
+    /// Base URL of the key vault's phone pages (<c>/vault/</c>, <c>/vault/pair</c>), for a reverse proxy
+    /// with a public certificate. Empty: <c>https://&lt;PublicHost&gt;:&lt;listen port&gt;</c>.
+    /// </summary>
+    public string? VaultWebUrl { get; set; }
+
+    /// <summary>The vault web base: <see cref="VaultWebUrl"/>, else the service's own HTTPS origin.</summary>
+    public string VaultWebBase()
+    {
+        if (!string.IsNullOrWhiteSpace(VaultWebUrl)) return VaultWebUrl.Trim().TrimEnd('/');
+        var port = 7462;
+        var first = (ListenUrl ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault();
+        if (first is not null && Uri.TryCreate(first.Replace("://*", "://localhost", StringComparison.Ordinal).Replace("://+", "://localhost", StringComparison.Ordinal),
+                UriKind.Absolute, out var listen)) port = listen.Port;
+        return $"https://{PublicHost}:{port}";
+    }
+
+    /// <summary>
     /// Hyper-V virtual switch new VMs are attached to. The service host's own switch (plan §4.4
     /// creates an internal NAT switch at install); the default is Hyper-V's <c>Default Switch</c>, so
     /// a host that has nothing else configured still works.

@@ -104,12 +104,22 @@ Host-admin windows subscribe by host slug and release their polling subscription
 hidden. Enrolled hosts are available even before a VM is registered.
 
 The key vault (`Core/Vault`, [docs](../docs/key-vault.md)) is one `VaultService` shared by all
-instances. Each online instance runs a `VaultBroker`, an SSH watch on the guest spool
-`/run/construct/vault`. `VaultRuntimeService` expires leases and starts scrubs. The document is
+instances. Each online local instance (no host service) runs a `VaultBroker`, an SSH watch on the
+guest spool `/run/construct/vault`. `VaultRuntimeService` expires leases and starts scrubs. The document is
 DPAPI-protected through `IDataProtection` and lives outside the watched state root. Values never
 reach the dispatcher, IPC routes or webviews: the native `VaultWindow` and the `IPrompts`
 approval and file-decision dialogs are the only UI. The guest scripts in
 `Core/Vault/GuestScripts` are Companion-only and are not part of the parity fixtures.
+
+Hosted VMs use their host's vault ([contract](../docs/plans/key-vault-hosted.md)). The document also
+holds the vault key K, per-entry `updatedAt`/`updatedBy`, 30-day tombstones and per-host sync state.
+`VaultHosts` (run by `VaultRuntimeService`) syncs with every enrolled host whose whoami is a known user
+(every five minutes, two seconds after a local change, on demand; payloads are AES-GCM under K,
+`VaultCrypto`/`VaultSync`), unlocks locked hosts when a hosted instance comes online or the Companion
+starts it, and polls host approvals (3 s) and scrub file decisions (15 s) while an instance of that host
+is online, through the same one-dialog gate as local requests. `VaultHostDirectory` supplies hosts,
+instances, host administration's cached whoami detection and T3 pairing. The window's **Hosts** tab
+(mode, devices, phone pairing with a QR code from `QrCode`, key export/import) only forwards to `VaultHosts`.
 
 On tray quit, session end or `/v1/quit`, the app stops the Host, closes tunnels,
 releases owned claims and removes the endpoint. A secondary process forwards validated

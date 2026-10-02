@@ -1,0 +1,232 @@
+{
+  "comment": "Shared by the Companion's VaultProtocol (companion/tests/Construct.Companion.Tests/Vault/VaultPatternFixtureTests.cs) and the host service's copy (service/tests/Constructd.Tests/Vault/VaultPatternFixtureTests.cs): Patterns(value, username) in order, IsAgentLog(path) and DatabaseFor(path).",
+  "patterns": [
+    {
+      "name": "plain token",
+      "value": "ghp_Abc123XyZ789tokenValue",
+      "username": "",
+      "patterns": [
+        "ghp_Abc123XyZ789tokenValue"
+      ]
+    },
+    {
+      "name": "quotes and backslashes",
+      "value": "pa\"ss\\word\\with\"quotes",
+      "username": "",
+      "patterns": [
+        "pa\"ss\\word\\with\"quotes",
+        "pa\\\"ss\\\\word\\\\with\\\"quotes",
+        "pa%22ss%5Cword%5Cwith%22quotes"
+      ]
+    },
+    {
+      "name": "control characters",
+      "value": "tab\there-and-bell\u0007-value",
+      "username": "",
+      "patterns": [
+        "tab\there-and-bell\u0007-value",
+        "tab\\there-and-bell\\u0007-value",
+        "tab%09here-and-bell%07-value"
+      ]
+    },
+    {
+      "name": "non-ASCII",
+      "value": "pässwörd-Ünïcødé-€-日本",
+      "username": "",
+      "patterns": [
+        "pässwörd-Ünïcødé-€-日本",
+        "p\\u00e4ssw\\u00f6rd-\\u00dcn\\u00efc\\u00f8d\\u00e9-\\u20ac-\\u65e5\\u672c",
+        "p%C3%A4ssw%C3%B6rd-%C3%9Cn%C3%AFc%C3%B8d%C3%A9-%E2%82%AC-%E6%97%A5%E6%9C%AC"
+      ]
+    },
+    {
+      "name": "URL-unsafe characters",
+      "value": "a b&c=d/e?f#g%h+i:j@k",
+      "username": "",
+      "patterns": [
+        "a b&c=d/e?f#g%h+i:j@k",
+        "a%20b%26c%3Dd%2Fe%3Ff%23g%25h%2Bi%3Aj%40k"
+      ]
+    },
+    {
+      "name": "short value is not searched",
+      "value": "abcde",
+      "username": "",
+      "patterns": []
+    },
+    {
+      "name": "short value with a username keeps only its basic-auth variant",
+      "value": "ab",
+      "username": "x",
+      "patterns": [
+        "eDphYg=="
+      ]
+    },
+    {
+      "name": "multi-line PEM-like value",
+      "value": "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\nQyNTUxOQAAACDx1Z3k8Gm8QwV9qY2n0aP5sT7uJ1wR6vB4cD8eF3gH2AAAAJg+/AAAAA==\nshort-line\n-----END OPENSSH PRIVATE KEY-----\n",
+      "username": "ignored-for-multi-line",
+      "patterns": [
+        "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW",
+        "QyNTUxOQAAACDx1Z3k8Gm8QwV9qY2n0aP5sT7uJ1wR6vB4cD8eF3gH2AAAAJg+/AAAAA==",
+        "QyNTUxOQAAACDx1Z3k8Gm8QwV9qY2n0aP5sT7uJ1wR6vB4cD8eF3gH2AAAAJg%2B%2FAAAAA%3D%3D"
+      ]
+    },
+    {
+      "name": "multi-line value with CRLF",
+      "value": "-----BEGIN OPENSSH PRIVATE KEY-----\r\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\r\nQyNTUxOQAAACDx1Z3k8Gm8QwV9qY2n0aP5sT7uJ1wR6vB4cD8eF3gH2AAAAJg+/AAAAA==\r\nshort-line\r\n-----END OPENSSH PRIVATE KEY-----\r\n",
+      "username": "",
+      "patterns": [
+        "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW",
+        "QyNTUxOQAAACDx1Z3k8Gm8QwV9qY2n0aP5sT7uJ1wR6vB4cD8eF3gH2AAAAJg+/AAAAA==",
+        "QyNTUxOQAAACDx1Z3k8Gm8QwV9qY2n0aP5sT7uJ1wR6vB4cD8eF3gH2AAAAJg%2B%2FAAAAA%3D%3D"
+      ]
+    },
+    {
+      "name": "username adds the basic-auth variant",
+      "value": "s3cr3t-value/with+chars",
+      "username": "deploy-bot",
+      "patterns": [
+        "s3cr3t-value/with+chars",
+        "s3cr3t-value%2Fwith%2Bchars",
+        "ZGVwbG95LWJvdDpzM2NyM3QtdmFsdWUvd2l0aCtjaGFycw=="
+      ]
+    }
+  ],
+  "agentLogs": [
+    {
+      "path": "/root/.claude/projects/-root-repo/0b1c.jsonl",
+      "agentLog": true
+    },
+    {
+      "path": "/home/alice/.claude/history.jsonl",
+      "agentLog": true
+    },
+    {
+      "path": "/home/alice/.claude/history.jsonl.bak",
+      "agentLog": false
+    },
+    {
+      "path": "/root/.claude/todos/x.json",
+      "agentLog": true
+    },
+    {
+      "path": "/root/.claude/settings.json",
+      "agentLog": false
+    },
+    {
+      "path": "/root/.codex/sessions/2026/10/02/rollout.jsonl",
+      "agentLog": true
+    },
+    {
+      "path": "/root/.codex/archived_sessions/a.jsonl",
+      "agentLog": true
+    },
+    {
+      "path": "/root/.codex/history.jsonl",
+      "agentLog": true
+    },
+    {
+      "path": "/root/.codex/log/codex-tui.log",
+      "agentLog": true
+    },
+    {
+      "path": "/root/.codex/logs_1.sqlite",
+      "agentLog": true
+    },
+    {
+      "path": "/root/.codex/logs_1.sqlite-wal",
+      "agentLog": true
+    },
+    {
+      "path": "/root/.codex/config.toml",
+      "agentLog": false
+    },
+    {
+      "path": "/root/.local/share/opencode/storage/session/x.json",
+      "agentLog": true
+    },
+    {
+      "path": "/root/.local/share/opencode/log/2026.log",
+      "agentLog": true
+    },
+    {
+      "path": "/root/.local/share/opencode/opencode.db",
+      "agentLog": true
+    },
+    {
+      "path": "/root/.local/share/opencode/opencode.db-wal",
+      "agentLog": true
+    },
+    {
+      "path": "/root/.local/share/opencode/snapshot/x",
+      "agentLog": false
+    },
+    {
+      "path": "/root/.t3/userdata/logs/server.log",
+      "agentLog": true
+    },
+    {
+      "path": "/root/.t3/userdata/state.sqlite",
+      "agentLog": true
+    },
+    {
+      "path": "/root/.t3/userdata/state.sqlite-shm",
+      "agentLog": true
+    },
+    {
+      "path": "/root/.t3/userdata/settings.json",
+      "agentLog": false
+    },
+    {
+      "path": "/tmp/claude-1234/cwd",
+      "agentLog": true
+    },
+    {
+      "path": "/tmp/other/claude-1234",
+      "agentLog": false
+    },
+    {
+      "path": "/home/a/b/.claude/projects/x.jsonl",
+      "agentLog": false
+    },
+    {
+      "path": "/root/repo/.env",
+      "agentLog": false
+    },
+    {
+      "path": "/var/log/syslog",
+      "agentLog": false
+    },
+    {
+      "path": "/etc/environment",
+      "agentLog": false
+    },
+    {
+      "path": "/opt/claude-tools/x",
+      "agentLog": false
+    }
+  ],
+  "databases": [
+    {
+      "path": "/root/.t3/userdata/state.sqlite-wal",
+      "database": "/root/.t3/userdata/state.sqlite"
+    },
+    {
+      "path": "/root/.local/share/opencode/opencode.db-shm",
+      "database": "/root/.local/share/opencode/opencode.db"
+    },
+    {
+      "path": "/root/app/data.db-journal",
+      "database": "/root/app/data.db"
+    },
+    {
+      "path": "/root/app/data.db",
+      "database": "/root/app/data.db"
+    },
+    {
+      "path": "/root/app/journal",
+      "database": "/root/app/journal"
+    }
+  ]
+}

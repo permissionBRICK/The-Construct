@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="color-scheme" content="light dark">
+  <title>Key vault — The Construct</title>
+  <link rel="stylesheet" href="vault.css">
+  <script src="vault.js" defer></script>
+</head>
+<body data-page="index">
+  <header>
+    <h1>Key vault</h1>
+    <p id="who" class="muted"></p>
+  </header>
+  <main>
+    <p id="status" class="status" role="status" aria-live="polite"></p>
+    <section aria-labelledby="approvals-title">
+      <h2 id="approvals-title">Requests</h2>
+      <p id="approvals-empty" class="muted">Nothing is waiting for your answer.</p>
+      <ul id="approvals" class="cards"></ul>
+    </section>
+    <section aria-labelledby="files-title">
+      <h2 id="files-title">Files left on a VM</h2>
+      <p id="files-empty" class="muted">No files are waiting for a decision.</p>
+      <ul id="files" class="cards"></ul>
+    </section>
+  </main>
+</body>
+</html>

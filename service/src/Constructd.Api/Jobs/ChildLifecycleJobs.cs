@@ -8,7 +8,7 @@ namespace Constructd.Api.Jobs;
 
 public sealed class ChildLifecycleJobs(IVmRepository vms, IHypervisorDriver hypervisor, IChildVmDriver driver,
     IVmOperationGate gates, IAdmissionStore admission, ICapacityLedger capacity, IHostConfigStore config,
-    IPersistedJobRunner runner, IOperationKeyStore keys, LifecycleStart starts, IAuditLog audit, IClock clock)
+    IPersistedJobRunner runner, IOperationKeyStore keys, LifecycleStart starts, IAuditLog audit, IClock clock, IVaultUnlocks vault)
 {
     public async Task<JobOutcome> RunAsync(Job job, bool restart, long? expectedLeaseVersion, IProgress<string> progress, CancellationToken ct)
     {
@@ -91,6 +91,8 @@ public sealed class ChildLifecycleJobs(IVmRepository vms, IHypervisorDriver hype
 
     public async Task PersistState(Vm vm, VmState state, Lease? lease, bool release, CancellationToken ct)
     {
+        // Shut down, saved or restarted: the key vault locks again for this VM (docs/plans/key-vault-hosted.md).
+        if (state != VmState.Running) vault.Drop(vm.Name);
         var rows = (await capacity.SnapshotAsync(false, ct)).Reservations.Where(r => Ownership.SameName(r.VmName, vm.Name) &&
             (r.Resource != ReservationResource.Storage || ReservationRules.SavedState(r))).Select(r => r.Id).ToArray();
         var result = await admission.MutateAsync(null, async scope =>

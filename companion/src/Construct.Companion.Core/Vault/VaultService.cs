@@ -8,12 +8,13 @@ namespace Construct.Companion.Core.Vault;
 
 // The key vault's single owner: answers VM requests, asks the user, counts lease uses, expires
 // leases and scrubs every VM a lease ended on. All document changes run under gate and are saved
-// before the lock is released; dialogs and SSH never run under it.
-public sealed class VaultService : IAsyncDisposable
+// before the lock is released; dialogs and SSH never run under it. VaultService.Hosts.cs holds the
+// document side of the host sync (VaultHosts does the network side).
+public sealed partial class VaultService : IAsyncDisposable
 {
     public static readonly TimeSpan DefaultTtl = TimeSpan.FromHours(1), OnceTtl = TimeSpan.FromMinutes(10),
         ReleaseDelay = TimeSpan.FromSeconds(5), ExhaustedGrace = TimeSpan.FromMinutes(1), RetryDelay = TimeSpan.FromMinutes(5), Tick = TimeSpan.FromSeconds(10);
-    private const int ActivityLimit = 100;
+    private const int ActivityLimit = 200;
     private readonly VaultStore store;
     private readonly IPrompts prompts;
     private readonly IToastRaiser toasts;
@@ -29,12 +30,17 @@ public sealed class VaultService : IAsyncDisposable
     private VaultDocument? document;
     private string? unavailable;
     public event Action? Changed;
+    // Secrets or tombstones changed on this PC (window, local VM request): the hosts need a sync.
+    public event Action? EntriesChanged;
 
     public VaultService(VaultStore store, IPrompts prompts, IToastRaiser toasts, IClock clock)
     {
         this.store = store; this.prompts = prompts; this.toasts = toasts; this.clock = clock;
         try { document = store.Load(); }
         catch (VaultUnavailableException e) { unavailable = e.Message; }
+        // A phase-1 vault gains an install id; its entries become this PC's writes at their old time.
+        if (document is not null && Migrate(document) && document.Secrets.Count > 0)
+            try { store.Save(document); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { /* saved with the next change */ }
     }
     public string? Unavailable { get { lock (gate) return unavailable; } }
     public string StorePath => store.PathName;
@@ -185,10 +191,12 @@ public sealed class VaultService : IAsyncDisposable
                 foreach (var held in d.Leases.Where(l => l.Name == name).ToArray()) End(d, held, now + ReleaseDelay);
                 d.Secrets.Remove(old); replaced = true;
             }
-            d.Secrets.Add(new(name, request.Description, request.Username, request.Value!, old?.CreatedAt ?? now, now, "agent:" + instance));
+            d.Secrets.Add(new(name, request.Description, request.Username, request.Value!, old?.CreatedAt ?? now, Stamp(old?.UpdatedAt, Buried(d, name)), "agent:" + instance, Writer));
+            d.Tombstones.RemoveAll(t => t.Name == name);
             d.Leases.RemoveAll(l => l.Instance == instance && l.Name == name); d.Leases.Add(lease);
         });
         if (taken) return VaultProtocol.Response(request.Id, "exists", $"A secret named {name} already exists. Pick another name, or pass --replace (needs the user's approval).");
+        EntriesChanged?.Invoke();
         Record(instance, $"{(replaced ? "Replaced" : "Stored")} {name} from the VM; it holds it {Access(null, expires, now)}.");
         await ToastAsync(replaced ? "Secret replaced" : "Secret stored", $"The VM “{instance}” {(replaced ? "replaced" : "stored")} “{name}” in the key vault.", token).ConfigureAwait(false);
         var response = VaultProtocol.Response(request.Id, "ok", "Stored."); response["names"] = new JsonArray(name); response["lease"] = VaultProtocol.Lease(lease);
@@ -205,6 +213,7 @@ public sealed class VaultService : IAsyncDisposable
         var deleted = false;
         Mutate(d => deleted = RemoveSecret(d, name));
         if (!deleted) return NotFound(request, name);
+        EntriesChanged?.Invoke();
         Record(instance, $"Deleted {name} at the VM's request.");
         var response = VaultProtocol.Response(request.Id, "ok", "Deleted."); response["names"] = new JsonArray(name); return response;
     }
@@ -214,6 +223,12 @@ public sealed class VaultService : IAsyncDisposable
         answer == Approval.TimedOut ? "No answer from the user before the request timed out." : "The user denied the request.");
     private static string Bullet(VaultEntry entry) => $"  • {entry.Name}{(entry.Description.Length > 0 ? " — " + entry.Description : "")}{(entry.Username.Length > 0 ? " (with username)" : "")}";
     private static string Footer(VaultRequest request) => (request.Reason.Length > 0 ? $"\nReason given: “{request.Reason}”" : "") + (request.Source.Length > 0 ? $"\nRequested by {request.Source}" : "");
+
+    // A host's pending approval goes through the same one-dialog-at-a-time gate as a local VM's request.
+    // True = approved, false = denied, null = its deadline passed; cancelling the token closes the dialog
+    // unanswered (answered on another device, or expired on the host) and throws.
+    public async Task<bool?> ApproveExternalAsync(ApprovalPrompt prompt, DateTimeOffset? deadline, CancellationToken cancellationToken) =>
+        await ApproveAsync(prompt, deadline, cancellationToken).ConfigureAwait(false) switch { Approval.Approved => true, Approval.Denied => false, _ => null };
 
     private enum Approval { Approved, Denied, TimedOut }
     // One dialog at a time; the agent's deadline closes a dialog nobody answered.
@@ -273,20 +288,24 @@ public sealed class VaultService : IAsyncDisposable
             var old = original is null ? null : Find(original) ?? throw new ArgumentException("That secret no longer exists.");
             if (!string.Equals(input.Name, original, StringComparison.Ordinal) && Find(input.Name) is not null) throw new ArgumentException($"A secret named {input.Name} already exists.");
             if (old is null && input.Value is null) throw new ArgumentException("Enter the secret value.");
-            var now = clock.UtcNow;
+            var now = clock.UtcNow; var stamp = Stamp(old?.UpdatedAt, Buried(d, input.Name));
             if (old is not null)
             {
                 if (old.Name != input.Name || input.Value is not null && input.Value.Reveal() != old.Value.Reveal())
                     foreach (var held in d.Leases.Where(l => l.Name == old.Name).ToArray()) End(d, held, now + ReleaseDelay);
                 d.Secrets.Remove(old);
+                // A rename deletes the old name everywhere: hosts must not keep (or bring back) it.
+                if (old.Name != input.Name) Bury(d, old.Name, Stamp(old.UpdatedAt));
             }
-            d.Secrets.Add(new(input.Name, description, username, input.Value ?? old!.Value, old?.CreatedAt ?? now, now, old?.Origin ?? "user"));
+            d.Tombstones.RemoveAll(t => t.Name == input.Name);
+            d.Secrets.Add(new(input.Name, description, username, input.Value ?? old!.Value, old?.CreatedAt ?? now, stamp, old?.Origin ?? "user", Writer));
         });
+        EntriesChanged?.Invoke();
     }
     public void Delete(string name)
     {
         var deleted = false; Mutate(d => deleted = RemoveSecret(d, name));
-        if (deleted) Record("", $"Deleted {name}.");
+        if (deleted) { EntriesChanged?.Invoke(); Record("", $"Deleted {name}."); }
     }
     public void Revoke(string leaseId)
     {
@@ -306,7 +325,7 @@ public sealed class VaultService : IAsyncDisposable
         lock (gate)
         {
             if (unavailable is null) throw new InvalidOperationException("The key vault is readable.");
-            moved = store.QuarantineUnreadable(clock.UtcNow); document = new(); store.Save(document); unavailable = null;
+            moved = store.QuarantineUnreadable(clock.UtcNow); document = new() { InstallId = NewId() }; store.Save(document); unavailable = null;
         }
         Changed?.Invoke(); return moved;
     }
@@ -342,10 +361,12 @@ public sealed class VaultService : IAsyncDisposable
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
     }
-    // Expires leases, then starts at most one scrub per attached VM for its due cleanups.
+    // Expires leases and old tombstones, then starts at most one scrub per attached VM for its due cleanups.
     public void Sweep()
     {
         var now = clock.UtcNow;
+        bool buried; lock (gate) buried = document is not null && document.Tombstones.Any(t => t.UpdatedAt <= now - VaultSync.TombstoneLifetime);
+        if (buried) Mutate(d => d.Tombstones.RemoveAll(t => t.UpdatedAt <= now - VaultSync.TombstoneLifetime));
         bool expired; lock (gate) expired = document is not null && document.Leases.Any(l => l.ExpiresAt <= now);
         if (expired)
         {
@@ -376,7 +397,7 @@ public sealed class VaultService : IAsyncDisposable
     {
         try
         {
-            var report = await VaultCleaner.RunAsync(instance, ssh, batch, DecideAsync, token).ConfigureAwait(false);
+            var report = await VaultCleaner.RunAsync(instance, ssh, batch, DecideFilesAsync, token).ConfigureAwait(false);
             Mutate(d => d.Cleanups.RemoveAll(c => batch.Any(b => ReferenceEquals(b, c))));
             await ReportAsync(instance, report, token).ConfigureAwait(false);
         }
@@ -390,7 +411,8 @@ public sealed class VaultService : IAsyncDisposable
         }
         finally { lock (gate) cleaning.Remove(instance); wake.Writer.TryWrite(true); }
     }
-    private async Task<IReadOnlyDictionary<string, string>?> DecideAsync(FileDecisionPrompt prompt, CancellationToken token)
+    // File decisions, local scrubs and host scrubs alike, open one grid at a time.
+    public async Task<IReadOnlyDictionary<string, string>?> DecideFilesAsync(FileDecisionPrompt prompt, CancellationToken token)
     {
         await decisions.WaitAsync(token).ConfigureAwait(false);
         try { return await prompts.DecideFilesAsync(prompt, token).ConfigureAwait(false); }
@@ -433,23 +455,44 @@ public sealed class VaultService : IAsyncDisposable
         d.Cleanups.Add(new(lease.Instance, lease.Name, entry.Value, entry.Username, due));
         wake.Writer.TryWrite(true);
     }
-    private bool RemoveSecret(VaultDocument d, string name)
+    private bool RemoveSecret(VaultDocument d, string name, VaultTombstone? tombstone = null)
     {
-        if (d.Secrets.FirstOrDefault(s => s.Name == name) is null) return false;
+        if (d.Secrets.FirstOrDefault(s => s.Name == name) is not { } entry) return false;
         foreach (var held in d.Leases.Where(l => l.Name == name).ToArray()) End(d, held, clock.UtcNow + ReleaseDelay);
-        d.Secrets.RemoveAll(s => s.Name == name); return true;
+        d.Secrets.RemoveAll(s => s.Name == name);
+        Bury(d, name, tombstone?.UpdatedAt ?? Stamp(entry.UpdatedAt), tombstone?.UpdatedBy);
+        return true;
+    }
+    private string Writer => "pc:" + Document.InstallId;
+    // Millisecond time of a local write, always after the version it replaces (a host clock may run ahead).
+    private DateTimeOffset Stamp(params DateTimeOffset?[] after)
+    {
+        var ms = VaultSync.Ms(clock.UtcNow);
+        foreach (var at in after) if (at is { } t) ms = Math.Max(ms, VaultSync.Ms(t) + 1);
+        return VaultSync.Time(ms);
+    }
+    private static DateTimeOffset? Buried(VaultDocument d, string name) => d.Tombstones.FirstOrDefault(t => t.Name == name)?.UpdatedAt;
+    private void Bury(VaultDocument d, string name, DateTimeOffset at, string? by = null)
+    { d.Tombstones.RemoveAll(t => t.Name == name); d.Tombstones.Add(new(name, at, by ?? Writer)); }
+    private static bool Migrate(VaultDocument d)
+    {
+        var changed = false;
+        if (d.InstallId.Length == 0) { d.InstallId = NewId(); changed = true; }
+        for (var i = 0; i < d.Secrets.Count; i++)
+            if (d.Secrets[i].UpdatedBy.Length == 0) { d.Secrets[i] = d.Secrets[i] with { UpdatedBy = "pc:" + d.InstallId }; changed = true; }
+        return changed;
     }
     private void Mutate(Action<VaultDocument> change)
     {
         lock (gate) { change(Document); store.Save(Document); }
         Changed?.Invoke();
     }
-    private void Record(string instance, string text, bool warning = false)
+    internal void Record(string instance, string text, bool warning = false, string host = "")
     {
-        lock (gate) { activity.Add(new(clock.UtcNow, instance, text, warning)); if (activity.Count > ActivityLimit) activity.RemoveAt(0); }
+        lock (gate) { activity.Add(new(clock.UtcNow, instance, text, warning, host)); if (activity.Count > ActivityLimit) activity.RemoveAt(0); }
         Changed?.Invoke();
     }
-    private async Task ToastAsync(string title, string body, CancellationToken token, string level = "info")
+    internal async Task ToastAsync(string title, string body, CancellationToken token, string level = "info")
     {
         try
         {

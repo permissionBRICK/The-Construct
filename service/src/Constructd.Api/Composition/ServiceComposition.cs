@@ -45,6 +45,7 @@ public static class ServiceComposition
 
         services.AddConstructdStores(options);
         services.AddHostAdminCore(options);
+        services.AddVaultPlatform(options);
 
         if (options.Fake)
         {
@@ -85,7 +86,8 @@ public static class ServiceComposition
             sp.GetRequiredService<IAuditLog>(),
             options.Idle,
             sp.GetRequiredService<IVmOperationGate>(),
-            sp.GetRequiredService<MemoryPressureServices>()));
+            sp.GetRequiredService<MemoryPressureServices>(),
+            sp.GetRequiredService<IVaultUnlocks>()));
 
         // Keeping the host awake is platform-agnostic policy over the VM registry (plan §4.13); only
         // the guard under it is a platform call, and off Windows that guard does nothing.

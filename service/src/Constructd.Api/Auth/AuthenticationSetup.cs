@@ -43,6 +43,11 @@ public static class AuthenticationSetup
                     return ConstructdSchemes.Bearer;
                 }
 
+                if (string.Equals(authScheme, ConstructdSchemes.VaultDevice, StringComparison.OrdinalIgnoreCase))
+                {
+                    return ConstructdSchemes.VaultDevice;
+                }
+
                 if (testIdentityEnabled && context.Request.Headers.ContainsKey(ConstructdHeaders.TestIdentity))
                 {
                     return ConstructdSchemes.TestIdentity;
@@ -65,6 +70,9 @@ public static class AuthenticationSetup
 
         builder.AddScheme<AuthenticationSchemeOptions, VmTokenAuthenticationHandler>(
             ConstructdSchemes.VmToken, displayName: "VM-scoped token", configureOptions: null);
+
+        builder.AddScheme<AuthenticationSchemeOptions, VaultDeviceAuthenticationHandler>(
+            ConstructdSchemes.VaultDevice, displayName: "Key vault device", configureOptions: null);
 
         if (testIdentityEnabled)
         {

@@ -142,6 +142,7 @@ public sealed partial class IdlePolicyEngine
                 try
                 {
                     await driver.SaveAsync(vm.Name, ct);
+                    vault?.Drop(vm.Name);
                     if (await driver.GetStateAsync(vm.Name, ct) != VmState.Saved)
                         throw new InvalidOperationException("Save did not reach Saved state.");
                     var savedAt = services.Clock.UtcNow;

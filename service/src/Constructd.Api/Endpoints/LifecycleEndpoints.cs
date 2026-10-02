@@ -87,6 +87,7 @@ public static class LifecycleEndpoints
                 if (!driver.Capabilities.Suspend) return Problem("unsupported-capability");
                 if (await driver.GetStateAsync(vm.Name, ct) is var savedFrom && savedFrom is not (VmState.Running or VmState.Paused))
                     return Problem("vm-state-unknown", extra: new() { ["state"] = savedFrom, ["reason"] = "save-requires-running-or-paused" });
+                s.GetRequiredService<IVaultUnlocks>().Drop(vm.Name);
                 await driver.SaveAsync(vm.Name, ct);
                 var state = await driver.GetStateAsync(vm.Name, ct);
                 if (state != VmState.Saved) return Problem("vm-state-unknown");

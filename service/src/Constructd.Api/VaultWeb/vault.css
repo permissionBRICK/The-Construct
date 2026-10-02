@@ -1,0 +1,86 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f6f7f9;
+  --card: #ffffff;
+  --text: #1b1f24;
+  --muted: #5d6670;
+  --line: #d7dce1;
+  --accent: #1f6feb;
+  --accent-text: #ffffff;
+  --danger: #c62828;
+  --warn-bg: #fff4e5;
+  --warn-text: #7a4100;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111418;
+    --card: #1b2026;
+    --text: #e6e9ed;
+    --muted: #9aa4ae;
+    --line: #2c333b;
+    --accent: #4b8ff7;
+    --accent-text: #0b0d10;
+    --danger: #ef5350;
+    --warn-bg: #3a2a12;
+    --warn-text: #ffcf8a;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 17px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+header, main { max-width: 40rem; margin: 0 auto; padding: 0 1rem; }
+header { padding-top: 1.25rem; }
+h1 { font-size: 1.5rem; margin: 0 0 0.25rem; }
+h2 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; }
+.muted { color: var(--muted); margin: 0.25rem 0; }
+
+.status { min-height: 1.5em; margin: 0.75rem 0; }
+.status.error { background: var(--warn-bg); color: var(--warn-text); padding: 0.75rem; border-radius: 0.5rem; }
+
+.cards { list-style: none; margin: 0; padding: 0; }
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  padding: 1rem;
+  margin: 0 0 0.75rem;
+}
+.card h3 { font-size: 1rem; margin: 0 0 0.25rem; }
+.card .meta { color: var(--muted); font-size: 0.9rem; margin: 0 0 0.5rem; overflow-wrap: anywhere; }
+.card .message { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0 0 0.75rem; }
+.card .path { font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 0.95rem; overflow-wrap: anywhere; margin: 0 0 0.25rem; }
+.card .note { color: var(--muted); font-size: 0.9rem; margin: 0.5rem 0 0; }
+
+.actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+
+button, .button {
+  min-height: 48px;
+  min-width: 6.5rem;
+  padding: 0.6rem 1.1rem;
+  border-radius: 0.6rem;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex: 1 1 auto;
+}
+button.primary, .button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+button.danger { color: var(--danger); border-color: var(--danger); }
+button:disabled { opacity: 0.5; cursor: default; }
+button:focus-visible, .button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+[hidden] { display: none !important; }

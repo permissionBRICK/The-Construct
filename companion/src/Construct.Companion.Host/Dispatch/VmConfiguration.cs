@@ -6,6 +6,7 @@ using Construct.Companion.Core.Drivers;
 using Construct.Companion.Core.Lifecycle;
 using Construct.Companion.Core.Remote;
 using Construct.Companion.Core.State;
+using Construct.Companion.Core.Vault;
 using Construct.Companion.Host.Composition;
 namespace Construct.Companion.Host.Dispatch;
 
@@ -136,6 +137,7 @@ public sealed partial class MessageDispatcher
         else throw new InvalidOperationException($"the VM's state is {(vmState.Length == 0 ? "unknown" : vmState)}; the count is recorded and applies on its next start");
         Notify($"“{entry.Name}” restarted with {cpu} vCPU{plural}.{ramNote}");
         await WaitForVmOnline(entry, ct);
+        if (VaultHosts.Instance(entry.Definition) is { } hosted) await vaultHosts.AfterStartAsync(hosted, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception error)

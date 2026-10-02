@@ -139,7 +139,11 @@ app.MapGroup("/api/v1")
     .MapLifecycleEndpoints()
     .MapChildConfigurationEndpoints()
     .MapUpdateEndpoints()
-    .MapNetworkEndpoints();
+    .MapNetworkEndpoints()
+    .MapVaultEndpoints();
+
+// The key vault's phone pages: anonymous static files outside /api/v1.
+app.MapVaultWebEndpoints();
 
 await app.Services.GetRequiredService<UpdateRecoveryService>().ReconcileAsync(CancellationToken.None);
 

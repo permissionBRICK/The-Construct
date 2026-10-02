@@ -20,10 +20,14 @@ public static class CompanionComposition
         services.TryAddSingleton<IInstanceConnections, InstanceConnections>();
         services.TryAddSingleton<CompanionInstances>();
         services.TryAddSingleton<CachedUpdateSource>();
-        // key vault: DPAPI file outside the watched state root, one service shared by all VMs
+        // key vault: DPAPI file outside the watched state root, one service shared by all VMs; VaultHosts
+        // syncs it with every enrolled host and serves the hosted VMs' approvals
         services.TryAddSingleton(p => new VaultStore(p.GetRequiredService<IStateFileSystem>(), p.GetRequiredService<IDataProtection>(),
             VaultStore.DefaultPath(new HostState(p.GetRequiredService<IStateFileSystem>()).LocalAppData ?? throw new InvalidOperationException("No local application data path."))));
         services.TryAddSingleton<VaultService>();
+        services.TryAddSingleton<IVaultHostDirectory>(p => new VaultHostDirectory(() => p.GetRequiredService<HostAdministration>(), () => p.GetRequiredService<CompanionInstances>(),
+            p.GetRequiredService<IRemoteApi>(), p.GetRequiredService<IStateFileSystem>(), p.GetRequiredService<ITokenStore>()));
+        services.TryAddSingleton<VaultHosts>();
         services.TryAddSingleton(p => new RuntimeSupervisor(p.GetRequiredService<CompanionInstances>(), p.GetRequiredService<CompanionInstances>().CreateRuntime,
             p.GetRequiredService<RuntimeMessageBus>(), p.GetRequiredService<IClock>(), p.GetRequiredService<CompanionInstances>().AcquireRetargetAsync));
         // dispatch and state

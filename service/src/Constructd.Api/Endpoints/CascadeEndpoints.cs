@@ -84,6 +84,7 @@ public static class CascadeEndpoints
                 await s.GetRequiredService<IPersistedJobRunner>().StartPersistedAsync(job, maintenance,
                     (progress, token) => worker.RunAsync(job, parent, preview, progress, token), CancellationToken.None);
                 maintenance = null;
+                await s.GetRequiredService<Constructd.Core.Services.VaultHostService>().PurgeVmAsync(parent.Name, CancellationToken.None);
             }
             catch
             {
