@@ -7,6 +7,7 @@ public sealed record ActivationPlan(IReadOnlyList<UiActivation> Views, string? F
 public static class Activation
 {
     // In-process activations (tray, panel messages) reuse the command-line rules; "theme" exists only here.
+    // "vault" is the native Key Vault window: it has no instance or host scope.
     public static ActivationPlan ResolveView(UiActivation activation, IReadOnlyCollection<string> instances, IReadOnlyCollection<string> hosts)
     {
         if (activation.View == "theme")
@@ -14,6 +15,7 @@ public static class Activation
             if (activation.Instance is not null && !instances.Contains(activation.Instance, StringComparer.Ordinal)) throw new ArgumentException("Instance is not registered.");
             return new([activation]);
         }
+        if (activation.View == "vault") return new([new("vault")]);
         return Resolve(new CommandLine(Panel: activation.View == "panel", Settings: activation.View == "settings", HostAdmin: activation.View == "hostadmin",
             Popup: activation.View == "popup", Instance: activation.Instance, Host: activation.Host), instances, hosts);
     }
@@ -28,6 +30,7 @@ public static class Activation
         if (command.Settings) views.Add(new("settings", command.Instance));
         if (command.HostAdmin) views.Add(new("hostadmin", Host: command.Host));
         if (command.Popup) views.Add(new("popup", command.Instance));
+        if (command.Vault) views.Add(new("vault"));
         string? forwardInstance = null, forwardId = null;
         if (command.Uri is not null)
         {
@@ -50,6 +53,7 @@ public static class Activation
                 case "open": views.Add(new("panel", instance)); break;
                 case "settings": views.Add(new("settings", instance)); break;
                 case "hostadmin": views.Add(new("hostadmin", Host: host)); break;
+                case "vault": views.Add(new("vault")); break;
                 case "forward":
                     if (instance is null || !query.TryGetValue("id", out var id) || !ForwardProtocol.IsSafeId(id))
                         throw new ArgumentException("Invalid forward activation.");

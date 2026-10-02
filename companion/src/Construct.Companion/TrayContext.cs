@@ -4,6 +4,7 @@ using Construct.Companion.Core.Abstractions;
 using Construct.Companion.Core.Desktop;
 using Construct.Companion.Core.Ipc;
 using Construct.Companion.Core.State;
+using Construct.Companion.Core.Vault;
 using Construct.Companion.Host.Ipc;
 using Construct.Companion.Windows;
 using RemoteHost = Construct.Companion.Core.Remote.RemoteHost;
@@ -23,6 +24,8 @@ internal sealed class TrayContext : ApplicationContext
     private readonly IMessageSink sink;
     private readonly IpcSettings settings;
     private readonly IPrompts prompts;
+    private readonly VaultService vault;
+    private VaultWindow? vaultWindow;
     private readonly DesktopSnapshot snapshot;
     private readonly IDisposable registryWatch;
     private readonly CancellationTokenSource lifetime = new();
@@ -36,9 +39,9 @@ internal sealed class TrayContext : ApplicationContext
     private bool disposed;
     private Rectangle? trayHitArea;
     private bool showOnClick;
-    public TrayContext(Platform platform, IMessageSink sink, IpcSettings settings, IPrompts prompts, ActivationPlan initial)
+    public TrayContext(Platform platform, IMessageSink sink, IpcSettings settings, IPrompts prompts, VaultService vault, ActivationPlan initial)
     {
-        this.platform = platform; this.sink = sink; this.settings = settings; this.prompts = prompts;
+        this.platform = platform; this.sink = sink; this.settings = settings; this.prompts = prompts; this.vault = vault;
         snapshot = new(platform.Clock);
         _ = dispatcher.Handle;
         registry = LoadRegistry();
@@ -179,6 +182,7 @@ internal sealed class TrayContext : ApplicationContext
     }
     private void Open(string view, string? scope, bool refreshScheduled = false)
     {
+        if (view == "vault") { (vaultWindow ??= new VaultWindow(vault)).Present(); return; }
         scope ??= view == "hostadmin" ? Hosts().FirstOrDefault() : Active;
         if (view == "hostadmin" && scope is null) { MessageBox.Show("No remote host is registered.", "Host Administration"); return; }
         var sinkScope = view == "hostadmin" ? "host:" + scope : scope ?? "";
@@ -208,6 +212,7 @@ internal sealed class TrayContext : ApplicationContext
         switch (id)
         {
             case "panel": case "settings": Open(id, Active); return;
+            case "vault": Open("vault", null); return;
             case "hostadmin": Open(id, snapshot.AdminHost); return;
             case "quit": ExitThread(); return;
             case "notifications": settings.Merge(new JsonObject { ["notifications"] = !settings.Read().Notifications }); return;
@@ -270,7 +275,7 @@ internal sealed class TrayContext : ApplicationContext
     public Task QuitAsync(CancellationToken cancellationToken = default) => dispatcher.InvokeAsync(ExitThread, cancellationToken);
     protected override void ExitThreadCore()
     {
-        if (!disposed) { subscription.Cancel(); foreach (var window in windows.Values) window.Shutdown(); tray.Visible = false; }
+        if (!disposed) { subscription.Cancel(); foreach (var window in windows.Values) window.Shutdown(); vaultWindow?.Shutdown(); tray.Visible = false; }
         base.ExitThreadCore();
     }
     protected override void Dispose(bool disposing)
@@ -278,7 +283,7 @@ internal sealed class TrayContext : ApplicationContext
         if (disposing && !disposed)
         {
             disposed = true; settings.Changed -= SettingsChanged; lifetime.Cancel(); lifetime.Dispose(); registryWatch.Dispose(); subscription.Cancel(); subscription.Dispose(); refreshTimer.Dispose(); clickTimer.Dispose();
-            foreach (var window in windows.Values) window.Dispose(); menu.Dispose(); tray.Dispose(); icon?.Dispose(); dispatcher.Dispose();
+            foreach (var window in windows.Values) window.Dispose(); vaultWindow?.Dispose(); menu.Dispose(); tray.Dispose(); icon?.Dispose(); dispatcher.Dispose();
         }
         base.Dispose(disposing);
     }

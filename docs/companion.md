@@ -14,6 +14,9 @@ successful Linux build is not a Windows runtime test.
 
 The popup can switch instances, register a VM, run lifecycle actions, and open the full panel. The panel also clones and opens projects, removes instances with an option to keep remote VMs, applies CPU/RAM and automatic checkpoint settings, preserves configuration before reprovisioning, creates remote VMs, and starts or explicitly finishes host conversion. Host administration issues and rotates tokens in a native one-time dialog with a copy button. Opening a control surface manually refreshes the Construct update check immediately; successful checks are cached for five minutes and failures for one minute. A host conversion started in VS Code must be finished in its original VS Code profile.
 
+The tray menu's **Key Vault** keeps secrets that agents may read only after you approve,
+and scrubs a VM once its access ends. See [Key vault](key-vault.md).
+
 While Companion is running, it scans `/root/repos` on each VM every five minutes.
 Repos with a Git remote that are not covered by an existing profile get a minimal
 profile and are selected for that VM's next reprovision or reinstall. New profiles
@@ -105,6 +108,7 @@ stop or uninstall an existing app. `-Force` does not override the opt-out.
   release tag, installation time and IPC API version).
 - State: `%LOCALAPPDATA%\The-Construct\companion\settings.json` and `endpoint.json`.
   The latter contains a bearer credential: do not paste it into reports or logs.
+- Key vault: `%LOCALAPPDATA%\The-Construct-Vault\vault.dat`, DPAPI-encrypted for your Windows account.
 - Logs: `%LOCALAPPDATA%\The-Construct\companion\logs\companion.log`, five rotating
   files of up to 1 MiB. `%TEMP%` is the path fallback when LOCALAPPDATA is unavailable.
 - Per-user registrations: HKCU Run value `ConstructCompanion`, the `construct://`
@@ -133,9 +137,9 @@ grace period. T3 Code's Settings button launches the installed Companion.
 
 A small dot indicates a Construct update. Left click opens the popup, double click
 opens the panel, and right click opens instance selection, power, forwards, mic,
-notifications, settings, logs and Quit. Closing a panel leaves the tray running.
+notifications, settings, Key Vault, logs and Quit. Closing a panel leaves the tray running.
 
-Useful flags: `--background`, `--panel`, `--settings`, `--popup`, `--hostadmin`,
+Useful flags: `--background`, `--panel`, `--settings`, `--popup`, `--hostadmin`, `--vault`,
 `--instance <name>`, `--host <slug>`, `--version`, and `--quit`.
 
 ```powershell

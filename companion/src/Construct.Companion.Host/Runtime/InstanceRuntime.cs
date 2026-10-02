@@ -6,17 +6,19 @@ using Construct.Companion.Core.Forwards;
 using Construct.Companion.Core.Notifications;
 using Construct.Companion.Core.Repatch;
 using Construct.Companion.Core.Runtime;
+using Construct.Companion.Core.Vault;
 namespace Construct.Companion.Host.Runtime;
 
 public sealed class InstanceRuntime(RuntimeInstance instance, IRuntimeProbe probe, IClock clock,
     Func<Action<JsonObject>, Forwarder> createForwarder, Func<Notifier> createNotifier,
-    Func<Action<AudioStatus>, AudioSession> createAudio, RepatchJob repatch, RuntimeMessageBus bus) : IAsyncDisposable
+    Func<Action<AudioStatus>, AudioSession> createAudio, RepatchJob repatch, RuntimeMessageBus bus, Func<VaultBroker>? createVault = null) : IAsyncDisposable
 {
     private readonly SemaphoreSlim serial = new(1);
     private readonly CancellationTokenSource stop = new();
     private readonly Channel<bool> refresh = Channel.CreateBounded<bool>(new BoundedChannelOptions(1) { FullMode = BoundedChannelFullMode.DropWrite });
     private Forwarder? forwarder;
     private Notifier? notifier;
+    private VaultBroker? vault;
     private AudioSession? audio;
     private bool online, armWanted, manualAudioOff;
     private RuntimeInstance current = instance;
@@ -75,6 +77,7 @@ public sealed class InstanceRuntime(RuntimeInstance instance, IRuntimeProbe prob
                 if (outcome is "unanswered" or "stood-down") { await forwarder.DisposeAsync().ConfigureAwait(false); forwarder = null; }
             }
             if (current.NotificationsEnabled && notifier is null) { notifier = createNotifier(); notifier.Start(); }
+            if (createVault is not null && vault is null) { vault = createVault(); vault.Start(); }
             if (!online)
             {
                 online = true; armWanted = current.MicPassthrough && !manualAudioOff;
@@ -147,6 +150,7 @@ public sealed class InstanceRuntime(RuntimeInstance instance, IRuntimeProbe prob
         await repatchTask.ConfigureAwait(false); repatchStop?.Dispose(); repatchStop = null;
         if (forwarder is not null) await forwarder.DisposeAsync().ConfigureAwait(false); forwarder = null;
         if (notifier is not null) await notifier.DisposeAsync().ConfigureAwait(false); notifier = null;
+        if (vault is not null) await vault.DisposeAsync().ConfigureAwait(false); vault = null;
         if (audio is not null) await audio.DisposeAsync().ConfigureAwait(false); audio = null;
     }
     public async ValueTask DisposeAsync()

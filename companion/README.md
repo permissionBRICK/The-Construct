@@ -103,6 +103,14 @@ State aggregation supplies the existing nested panel state and snapshot messages
 Host-admin windows subscribe by host slug and release their polling subscription when
 hidden. Enrolled hosts are available even before a VM is registered.
 
+The key vault (`Core/Vault`, [docs](../docs/key-vault.md)) is one `VaultService` shared by all
+instances. Each online instance runs a `VaultBroker`, an SSH watch on the guest spool
+`/run/construct/vault`. `VaultRuntimeService` expires leases and starts scrubs. The document is
+DPAPI-protected through `IDataProtection` and lives outside the watched state root. Values never
+reach the dispatcher, IPC routes or webviews: the native `VaultWindow` and the `IPrompts`
+approval and file-decision dialogs are the only UI. The guest scripts in
+`Core/Vault/GuestScripts` are Companion-only and are not part of the parity fixtures.
+
 On tray quit, session end or `/v1/quit`, the app stops the Host, closes tunnels,
 releases owned claims and removes the endpoint. A secondary process forwards validated
 activation/URI arguments to the primary. Selftest runs the real IPC health path with

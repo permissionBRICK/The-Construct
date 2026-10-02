@@ -93,7 +93,7 @@ public static class IpcServer
         app.MapPost("/v1/ui/activate", async (HttpContext c) =>
         {
             var activation = (await Body(c)).Deserialize<UiActivation>(IpcJson.Options);
-            if (activation?.View is not ("panel" or "settings" or "hostadmin" or "popup")) throw new IpcFailure(400, "invalidView", "Unknown Companion view.");
+            if (activation?.View is not ("panel" or "settings" or "hostadmin" or "popup" or "vault")) throw new IpcFailure(400, "invalidView", "Unknown Companion view.");
             if (activation.Instance is not null) await backend.SnapshotAsync(activation.Instance, c.RequestAborted);
             if (activation.Host is not null) await backend.HostSnapshotAsync(activation.Host, c.RequestAborted);
             await desktop.ActivateAsync(activation with { RefreshScheduled = activation.View != "hostadmin" }, c.RequestAborted);

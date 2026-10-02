@@ -6,6 +6,7 @@ using Construct.Companion.Core.Abstractions;
 using Construct.Companion.Core.Desktop;
 using Construct.Companion.Core.Ipc;
 using Construct.Companion.Core.Notifications;
+using Construct.Companion.Core.Vault;
 using Construct.Companion.Fakes;
 using Construct.Companion.Host.Composition;
 using Construct.Companion.Host.Desktop;
@@ -58,8 +59,11 @@ public sealed class IntegrationTests
         await h.App.Services.GetRequiredService<RuntimeSupervisor>().RefreshAsync();
         Assert.False(entry.Runtime!.Instance.ForwardsEnabled); Assert.False(entry.Runtime.Instance.NotificationsEnabled);
         Assert.Equal(12, entry.Runtime.Instance.RepatchDelaySeconds);
-        Assert.True(ssh.Watches.All(w => w.Process.Stopped));
+        // The key vault watch does not depend on the notification/forward settings.
+        Assert.True(ssh.Watches.Where(w => w.Script != VaultProtocol.WatchScript()).All(w => w.Process.Stopped));
+        Assert.False(ssh.Watches.Last(w => w.Script == VaultProtocol.WatchScript()).Process.Stopped);
         await h.App.StopAsync();
+        Assert.True(ssh.Watches.All(w => w.Process.Stopped));
         Assert.False(h.Files.FileExists(h.EndpointPath));
         Assert.True(transport.Ssh.Tunnels.All(t => t.Process.Stopped));
     }

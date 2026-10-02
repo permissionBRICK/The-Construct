@@ -7,6 +7,7 @@ using Construct.Companion.Core.Desktop;
 using Construct.Companion.Core.Drivers;
 using Construct.Companion.Core.Ipc;
 using Construct.Companion.Core.State;
+using Construct.Companion.Core.Vault;
 using Construct.Companion.Host.Composition;
 using Construct.Companion.Host.Desktop;
 using Construct.Companion.Host.Ipc;
@@ -92,7 +93,8 @@ internal static class Program
             ApplicationConfiguration.Initialize();
             using var bridge = new DesktopHostBridge();
             var server = BuildHost(platform, bridge);
-            using var tray = new TrayContext(platform, server.Services.GetRequiredService<IMessageSink>(), server.Services.GetRequiredService<IpcSettings>(), bridge.Prompts, plan);
+            using var tray = new TrayContext(platform, server.Services.GetRequiredService<IMessageSink>(), server.Services.GetRequiredService<IpcSettings>(), bridge.Prompts,
+                server.Services.GetRequiredService<VaultService>(), plan);
             bridge.Tray = tray;
             server.Lifetime.ApplicationStopping.Register(() => { _ = tray.QuitAsync(); });
             // The STA thread must not block on a context-capturing await: hop to the pool for the async host calls.
@@ -120,7 +122,7 @@ internal static class Program
         services.AddSingleton<IAudioCapture>(platform.Capture).AddSingleton<IToastRaiser>(platform.Toast);
         services.AddSingleton(p => new SharedAudioCapture(platform.Capture, selectDevice: () => p.GetRequiredService<IpcSettings>().Read().MicDevice));
         services.AddSingleton<IHostConversionCrypto, HostConversionCrypto>();
-        services.AddSingleton<ITokenStore>(platform.Tokens);
+        services.AddSingleton<ITokenStore>(platform.Tokens).AddSingleton<IDataProtection, DpapiProtection>();
         services.AddSingleton<IRemoteApi, HttpRemoteApi>().AddSingleton<IUpdateSource, HttpUpdateSource>();
         services.AddSingleton<IPrompts>(bridge.Prompts).AddSingleton<IClipboard>(bridge).AddSingleton<ICompanionDesktop>(bridge);
         services.AddCompanionHost(runtimeJobs);

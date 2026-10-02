@@ -40,7 +40,9 @@ public sealed class FakeSshTransport : ISshTransport
     public HashSet<(int Port, string BindHost)> BusyPorts { get; } = [];
     public Task<ProcessResult> RunRemoteScriptAsync(string script, TimeSpan? timeout = null, CancellationToken cancellationToken = default, Secret? standardInput = null)
     {
-        cancellationToken.ThrowIfCancellationRequested(); StandardInputs.Add(standardInput); Scripts.Add(script); ScriptTimeouts.Add(timeout); return ScriptHandler is null ? Task.FromResult(Spool.Run(script)) : ScriptHandler(script, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (Scripts) { StandardInputs.Add(standardInput); Scripts.Add(script); ScriptTimeouts.Add(timeout); } // the vault broker answers concurrently
+        return ScriptHandler is null ? Task.FromResult(Spool.Run(script)) : ScriptHandler(script, cancellationToken);
     }
     public Queue<bool> ListeningResults { get; } = new();
     public Task<bool> ProbeListeningPortAsync(int port, CancellationToken cancellationToken = default) => Task.FromResult(ListeningResults.TryDequeue(out var value) ? value : true);

@@ -107,6 +107,7 @@ The host can also be a **Proxmox VE node**: one script installs the same service
 | [Host-admin field test](docs/field-test-host-admin.md) | Hyper-V validation of host administration and child VMs |
 | [`construct expose`](docs/expose.md) | Port forwards from the VM to your PC or the host |
 | [Child VMs](docs/child-vms.md) | `construct vm`: create, run, share and remove test VMs |
+| [Key vault](docs/key-vault.md) | Secrets agents use only with your approval, and the clean-up afterwards |
 | [Hypervisor drivers](docs/drivers.md) | The backend contract and how to add one |
 | [Construct Companion](docs/companion.md) | The Windows tray app: install, settings, troubleshooting |
 | [Control panel](docs/control-panel.md) | The VS Code operator console |

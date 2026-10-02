@@ -63,6 +63,20 @@ routine progress.
 This channel is **one-way**: it cannot ask anything and gives you no answer back.
 When you need a decision from the user, ask in this chat as usual.
 
+## Credentials from the user's key vault
+
+Tokens, passwords and keys the user keeps on their PC are available through
+`construct secret` (`list`, `request`, `get`, `release`, `add`, `delete`; see
+`construct secret --help`). Never ask for them in chat or search for them on disk.
+Each grant needs the user's approval, so request everything a task needs **at the
+start, in one call**. The user can then approve once and leave the task running:
+
+    construct secret request github-token npm-token --for 2h --reason "publish the release"
+
+Use values inline (`$(construct secret get github-token)`), never write them into
+files, and run `construct secret release --all` when done. Store credentials you
+create with `construct secret add` (no approval needed).
+
 ## Recording project requirements
 
 This VM is reinstalled from scratch when the user rebuilds it. To preserve a

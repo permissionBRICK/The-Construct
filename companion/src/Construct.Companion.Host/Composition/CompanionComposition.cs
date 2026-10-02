@@ -1,5 +1,6 @@
 using Construct.Companion.Core.Abstractions;
 using Construct.Companion.Core.State;
+using Construct.Companion.Core.Vault;
 using Construct.Companion.Host.ConfigSync;
 using Construct.Companion.Host.Dispatch;
 using Construct.Companion.Host.Ipc;
@@ -19,6 +20,10 @@ public static class CompanionComposition
         services.TryAddSingleton<IInstanceConnections, InstanceConnections>();
         services.TryAddSingleton<CompanionInstances>();
         services.TryAddSingleton<CachedUpdateSource>();
+        // key vault: DPAPI file outside the watched state root, one service shared by all VMs
+        services.TryAddSingleton(p => new VaultStore(p.GetRequiredService<IStateFileSystem>(), p.GetRequiredService<IDataProtection>(),
+            VaultStore.DefaultPath(new HostState(p.GetRequiredService<IStateFileSystem>()).LocalAppData ?? throw new InvalidOperationException("No local application data path."))));
+        services.TryAddSingleton<VaultService>();
         services.TryAddSingleton(p => new RuntimeSupervisor(p.GetRequiredService<CompanionInstances>(), p.GetRequiredService<CompanionInstances>().CreateRuntime,
             p.GetRequiredService<RuntimeMessageBus>(), p.GetRequiredService<IClock>(), p.GetRequiredService<CompanionInstances>().AcquireRetargetAsync));
         // dispatch and state
@@ -40,6 +45,7 @@ public static class CompanionComposition
         {
             services.AddHostedService<CompanionRuntimeService>();
             services.AddHostedService<CompanionEnrichmentService>();
+            services.AddHostedService<VaultRuntimeService>();
         }
         return services;
     }
