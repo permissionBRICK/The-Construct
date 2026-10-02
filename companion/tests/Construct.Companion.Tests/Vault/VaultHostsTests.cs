@@ -14,11 +14,11 @@ namespace Construct.Companion.Tests.Vault;
 // decisions, the Hosts tab's actions. The host is an in-memory service behind FakeRemoteApi.
 public sealed class VaultHostsTests
 {
-    private const string VaultPath = "/fake/local/The-Construct-Vault/vault.dat", Slug = "host.example_7462";
+    internal const string VaultPath = "/fake/local/The-Construct-Vault/vault.dat", Slug = "host.example_7462";
     private static readonly string Pin = new('a', 64);
 
     // The vault routes of one host, with the contract's merge rule on PUT /vault/entries.
-    private sealed class FakeHost
+    internal sealed class FakeHost
     {
         private readonly object gate = new();
         public Dictionary<string, JsonObject> Entries { get; } = new(StringComparer.Ordinal);
@@ -87,7 +87,7 @@ public sealed class VaultHostsTests
         }
         private static RemoteResponse Ok(JsonNode body) => new(200, JsonSerializer.SerializeToElement(body));
     }
-    private sealed class TestDirectory(RemoteHostClient client) : IVaultHostDirectory
+    internal sealed class TestDirectory(RemoteHostClient client) : IVaultHostDirectory
     {
         public List<VaultHostRef> List { get; } = [new(Slug, "host.example", client)];
         public List<VaultHostInstance> Vms { get; } = [new("dev", Slug, "dev"), new("build", Slug, "build-vm")];
@@ -99,7 +99,7 @@ public sealed class VaultHostsTests
         public Task<string?> CheckUserAsync(string slug, CancellationToken cancellationToken) => Task.FromResult(Problem);
         public Task<ProcessResult> RunT3PairingAsync(string instance, CancellationToken cancellationToken) { PairingRuns.Add(instance); return Task.FromResult(Pairing); }
     }
-    private sealed class Harness : IAsyncDisposable
+    internal sealed class Harness : IAsyncDisposable
     {
         public FakeClock Clock { get; } = new();
         public FakeFileSystem Files { get; }

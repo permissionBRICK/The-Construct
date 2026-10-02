@@ -20,8 +20,11 @@ so they work while your PC is off, and you can approve from a paired phone. See
 
 ## Managing secrets
 
-Open **Key Vault** from the Companion tray menu (or run `ConstructCompanion.exe --vault`, or open
-`construct://vault`). Toasts from the vault open it too.
+Open **Key Vault** from the Companion tray menu or the control panel's **Key vault** card (or run
+`ConstructCompanion.exe --vault`, or open `construct://vault`). Toasts from the vault open it too. The
+window follows the design you chose for the control panel. It shows names, descriptions, usernames and
+who holds what; values are only typed, copied and shown in native dialogs. In VS Code without the
+Companion, the card only says where the vault is.
 
 | Tab | What it shows |
 |---|---|
@@ -206,7 +209,9 @@ and few uses, and revoke anything you did not expect.
   environment variables. On the VM they touch only the spool on tmpfs (a request from `add`, a
   response the CLI deletes as soon as it reads it, the scan's pattern files), never the disk.
   Unclaimed responses are deleted after two minutes.
-- The Companion never logs values, and they never reach the webview panels or the local HTTP API.
+- The Companion never logs values, and they never reach a webview or the local HTTP API. The Key
+  Vault window's page gets names, descriptions, usernames and access details; it is handled inside
+  the Companion process, so nothing on the local HTTP API can list or change the vault.
 
 On hosted VMs, the host service holds the vault copy and answers the VM, so the host is trusted
 with the values in **always available** mode. In **locked** mode it can read them only while your

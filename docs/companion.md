@@ -14,8 +14,8 @@ successful Linux build is not a Windows runtime test.
 
 The popup can switch instances, register a VM, run lifecycle actions, and open the full panel. The panel also clones and opens projects, removes instances with an option to keep remote VMs, applies CPU/RAM and automatic checkpoint settings, preserves configuration before reprovisioning, creates remote VMs, and starts or explicitly finishes host conversion. Host administration issues and rotates tokens in a native one-time dialog with a copy button. Opening a control surface manually refreshes the Construct update check immediately; successful checks are cached for five minutes and failures for one minute. A host conversion started in VS Code must be finished in its original VS Code profile.
 
-The tray menu's **Key Vault** keeps secrets that agents may read only after you approve,
-and scrubs a VM once its access ends. See [Key vault](key-vault.md).
+The **Key Vault** (tray menu, or the control panel's **Key vault** card) keeps secrets that agents
+may read only after you approve, and scrubs a VM once its access ends. See [Key vault](key-vault.md).
 
 While Companion is running, it scans `/root/repos` on each VM every five minutes.
 Repos with a Git remote that are not covered by an existing profile get a minimal

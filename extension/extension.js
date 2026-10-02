@@ -124,6 +124,20 @@ async function migrateCompanion() {
       secrets: extensionContext.secrets, fs, env: process.env, libPath: remoteLibPath(), run: runCompanionMigration });
   } catch (_) { logLine("companion: migration incomplete; will retry on the next connection."); }
 }
+/** The panel's Key vault card. The vault lives in Construct Companion (values never reach a
+ *  webview); with the Companion running the message is proxied there and opens its window.
+ *  Without it there is no launch helper here, so say where the vault is. */
+async function runOpenVault() {
+  const manifest = companion.installManifestPath(process.env);
+  const installed = process.platform === "win32" && !!manifest && fs.existsSync(manifest);
+  const INSTALL = "Install Construct Companion";
+  const choice = await vscode.window.showInformationMessage(
+    installed
+      ? "The key vault lives in Construct Companion. Start it, then open Key Vault from its tray menu."
+      : "The key vault lives in Construct Companion, the tray app on your PC: it keeps secrets that agents read only after you approve.",
+    ...(installed || process.platform !== "win32" ? [] : [INSTALL]));
+  if (choice === INSTALL) installCompanion();
+}
 let companionInstallOffered = false;
 function installCompanion() {
   const scriptsDir = resolveScriptsDir();
@@ -2280,8 +2294,8 @@ function pushSettings(webview) {
   safePost(webview, { type: "settings", instance: inst.name, settings });
 }
 
-/** Push the on-disk settings to EVERY live surface (so both mic switches — the
- *  console #voiceSwitch and the settings #setMic — reflect the same persisted value). */
+/** Push the on-disk settings to EVERY live surface (so the settings #setMic of every
+ *  open panel reflects the persisted microphone preference). */
 function broadcastSettings() {
   const inst = activeInstance();                 // read and stamp together (see pushSettings)
   const scriptsDir = resolveScriptsDirFor(inst);
@@ -2292,7 +2306,7 @@ function broadcastSettings() {
 }
 
 /** Persist the mic-passthrough preference (micPassthrough in .construct-settings.json).
- *  The live console toggle IS this persistent setting — enabling on the main page makes
+ *  The live settings switch IS this persistent setting — enabling it makes
  *  it auto-arm next session (see maybeAutoEnableAudio). Merges (touches only that key).
  *  Best-effort: a missing scripts dir just means no persistence (the live toggle still
  *  works this session). Re-broadcasts settings so the settings-form switch stays in sync. */
@@ -3287,11 +3301,11 @@ function enableAudio(context, webview, opts = {}) {
       // still has the pre-patch code in memory — its MICROPHONE ICON won't appear until
       // the window reloads / VS Code restarts. Notify the user (with a one-click Reload).
       // Skip the hint only when we KNOW the gate wasn't patched (gatePatched === false):
-      // then the icon won't appear regardless (unrecognised Claude build — the panel's
-      // audio substatus already says so). passthrough is the persisted preference, so
-      // auto-arm re-establishes it after the reload.
+      // then the icon won't appear regardless (unrecognised Claude build), so say that
+      // instead. passthrough is the persisted preference, so auto-arm re-establishes it
+      // after the reload.
       if (hostAudio && hostAudio.gatePatched === false) {
-        vscode.window.showInformationMessage("Microphone passthrough enabled — the mic opens only while you're recording.");
+        vscode.window.showInformationMessage("Microphone passthrough enabled — the mic opens only while you're recording. This Claude Code build is not recognised, so its chat mic button stays hidden; /voice in a terminal works.");
       } else {
         const RELOAD = "Reload window";
         vscode.window.showInformationMessage(
@@ -4661,7 +4675,7 @@ function handleMessage(message, webview, context) {
       return;
 
     case "setAudio":
-      // The console toggle IS the persistent preference: persist it so passthrough
+      // The settings switch IS the persistent preference: persist it so passthrough
       // auto-arms next session (unifies the two mic switches into one setting).
       persistMicPreference(message.enabled);
       // Both directions ride the single-session chain (requestAudioEnable /
@@ -4822,6 +4836,7 @@ function handleMessage(message, webview, context) {
       if (id === "openForward") { void openForward(String(message.forward || "")); return; }
       if (id === "closeForward") { void closeForward(String(message.forward || "")); return; }
       if (id === "registerThisVm") { void runRegisterThisVm(); return; }
+      if (id === "openVault") { void runOpenVault(); return; }
       if (id === "removeInstance") { void runRemoveInstance(); return; }
       // Host administration (§10.2): the Child VMs card's two actions, the Host button
       // and the first-VM offer. The child name is validated against what THIS window

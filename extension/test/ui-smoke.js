@@ -23,7 +23,7 @@ function buildPage(htmlFile, scriptFile) {
   html = html.replace(/<meta http-equiv="Content-Security-Policy"[\s\S]*?\/>/, "");
   html = html.replace(/{{cspSource}}/g, "").replace(/{{styleUri}}/g, "panel.css")
              .replace(/{{themeUri}}/g, "themes/" + THEME + ".css")
-             .replace(/{{adminStyleUri}}/g, "hostadmin.css")
+             .replace(/{{adminStyleUri}}/g, "hostadmin.css").replace(/{{vaultStyleUri}}/g, "vault.css")
              .replace(/{{paletteUri}}/g, "palette.js").replace(/{{scriptUri}}/g, scriptFile).replace(/{{nonce}}/g, "test");
   const mock =
     '<script>window.__posted=[];window.acquireVsCodeApi=function(){return{' +
@@ -37,6 +37,7 @@ function serve() {
     "/": buildPage("panel.html", "panel.js"),
     "/launcher": buildPage("launcher.html", "launcher.js"),
     "/hostadmin": buildPage("hostadmin.html", "hostadmin.js"),
+    "/vault": buildPage("vault.html", "vault.js"),
   };
   const types = { ".css": "text/css", ".js": "text/javascript" };
   const server = http.createServer((req, res) => {
@@ -162,10 +163,16 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("register banner offers registration only", (await page.locator("#registerBanner button").count()) === 1);
   await page.evaluate(() => window.postMessage({type:"state",state:{registerOffer:null}},"*"));
   await page.locator("#registerBanner").waitFor({state:"hidden"});
-  await page.click("#voiceSwitch");
+  // The console has no microphone switch any more (Settings and the tray keep it); its card
+  // slot holds the key vault entry, which only asks the host to open the vault.
+  check("console: no microphone module", (await page.locator("#voiceSwitch, #voiceState, .module.voice").count()) === 0);
+  check("key vault: card in the console with one line and one button",
+    await page.locator("#mainView .vault-card").isVisible() && (await page.locator(".vault-card .desc").count()) === 1
+    && (await page.locator(".vault-card button").count()) === 1 && /Open key vault/.test(await page.locator(".vault-card button").innerText()));
+  await page.click('.vault-card [data-cmd="openVault"]');
   let posted = await page.evaluate(() => window.__posted);
-  check("voice switch posts setAudio:true", posted.some((m) => m.type === "setAudio" && m.enabled === true));
-  check("voice switch becomes busy", (await page.getAttribute("#voiceSwitch", "class")).includes("busy"));
+  check("key vault: the button posts the openVault command and nothing else", posted.filter((m) => m.type === "command" && m.id === "openVault").length === 1
+    && JSON.stringify(posted.find((m) => m.id === "openVault")) === JSON.stringify({ type: "command", id: "openVault" }));
 
   await page.click('[data-cmd="reprovision"]');
   posted = await page.evaluate(() => window.__posted);
@@ -199,7 +206,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   const after = await page.getAttribute("#setServeWeb", "aria-checked");
   check("settings switch toggles locally", before !== after);
   const setAudioCount = await page.evaluate(() => window.__posted.filter((m) => m.type === "setAudio").length);
-  check("settings serve-web does NOT post setAudio", setAudioCount === 1, `setAudio count=${setAudioCount}`);
+  check("settings serve-web does NOT post setAudio", setAudioCount === 0, `setAudio count=${setAudioCount}`);
 
   // settings <- extension: a full payload populates the form...
   await page.evaluate(() => window.postMessage({ type: "settings", settings: {
@@ -282,6 +289,28 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await page.waitForTimeout(60);
   check("settings partial: omitted switch keeps its value", (await page.getAttribute("#setMic", "aria-checked")) === "true");
   check("settings partial: present field updates", (await page.inputValue("#setGitName")) === "Neo");
+
+  // Microphone passthrough applies at once from Settings: the switch posts setAudio (what the
+  // console switch used to post) and flips; the host's settings echo confirms the mic without
+  // undoing an unsaved edit elsewhere in the form. Save still carries it.
+  check("settings: the mic hint no longer points at a console switch", !/console/.test(await page.locator("#setMic").locator("xpath=../..").innerText()));
+  await page.fill("#setGitName", "Neo (unsaved)");
+  await page.click("#setMic");
+  posted = await page.evaluate(() => window.__posted);
+  check("settings mic: posts setAudio enabled:false at once", posted.filter((m) => m.type === "setAudio").length === 1 && posted.some((m) => m.type === "setAudio" && m.enabled === false));
+  check("settings mic: switch flips without waiting", (await page.getAttribute("#setMic", "aria-checked")) === "false");
+  await page.evaluate(() => window.postMessage({ type: "settings", settings: { gitName: "Neo", mic: false, smb: true } }, "*"));
+  await page.waitForTimeout(60);
+  check("settings mic: the echo keeps unsaved edits", (await page.inputValue("#setGitName")) === "Neo (unsaved)" && (await page.getAttribute("#setSmb", "aria-checked")) === "false");
+  check("settings mic: ...and confirms the mic", (await page.getAttribute("#setMic", "aria-checked")) === "false");
+  await page.evaluate(() => window.postMessage({ type: "settings", settings: { gitName: "Neo" } }, "*"));
+  await page.waitForTimeout(60);
+  check("settings mic: later settings apply in full again", (await page.inputValue("#setGitName")) === "Neo");
+  await page.click("#setMic");
+  await page.evaluate(() => window.postMessage({ type: "settings", settings: { mic: true } }, "*"));
+  await page.waitForTimeout(60);
+  check("settings mic: switching back posts enabled:true", (await page.evaluate(() => window.__posted)).some((m) => m.type === "setAudio" && m.enabled === true)
+    && (await page.getAttribute("#setMic", "aria-checked")) === "true");
 
   // save -> extension: gather the form and post saveSettings.
   await page.click("#saveBtn");
@@ -525,35 +554,14 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   posted = await page.evaluate(() => window.__posted);
   check("panel: add-project posts command", posted.some((m) => m.type === "command" && m.id === "addProject"));
 
-  await page.evaluate(() => window.postMessage({ type: "audio", enabled: true, capturing: false, tunnel: "vm:8767" }, "*"));
-  await page.waitForTimeout(80);
-  check("audio render: voice switch on", (await page.getAttribute("#voiceSwitch", "aria-checked")) === "true");
-  check("audio render: substatus shown", await page.locator("#voiceSub").isVisible());
-  check("audio render: not busy anymore", !(await page.getAttribute("#voiceSwitch", "class")).includes("busy"));
-  // textContent (not innerText) — the label is CSS-uppercased, so read raw case.
-  check("audio render: enabled+idle reads 'armed · idle'", /armed/.test(await page.locator("#voiceState").textContent()));
-  // honesty: with no gatePatched signal the gate line stays NEUTRAL (doesn't assert a patch).
-  check("audio render: unknown gate stays neutral", (await page.locator("#voiceGateNote").textContent()).includes("if a known build"));
-  // gate patched -> asserts the mic button is unlocked; not patched -> says so (warns).
-  await page.evaluate(() => window.postMessage({ type: "audio", enabled: true, capturing: false, tunnel: "vm:8767", gatePatched: true }, "*"));
+  // Live audio status (both hosts still post it) is no panel content: it neither errors nor
+  // drives the saved Settings preference.
+  const micBefore = await page.getAttribute("#setMic", "aria-checked");
+  const audioErrors = errors.length;
+  await page.evaluate((on) => window.postMessage({ type: "audio", enabled: !on, capturing: true, tunnel: "vm:8767", gatePatched: false }, "*"), micBefore === "true");
   await page.waitForTimeout(60);
-  check("audio render: gatePatched=true reads 'enabled'", (await page.locator("#voiceGate").textContent()).includes("enabled")
-    && (await page.locator("#voiceGateNote").textContent()).includes("patched"));
-  await page.evaluate(() => window.postMessage({ type: "audio", enabled: true, capturing: false, tunnel: "vm:8767", gatePatched: false }, "*"));
-  await page.waitForTimeout(60);
-  check("audio render: gatePatched=false says 'not patched'", (await page.locator("#voiceGate").textContent()).includes("not patched"));
-  check("audio render: gatePatched=false warns", (await page.getAttribute("#voiceGateRow", "class")).includes("warn"));
-  // on-demand capture: while the VM shim is connected (Claude recording), state goes live.
-  await page.evaluate(() => window.postMessage({ type: "audio", enabled: true, capturing: true, tunnel: "vm:8767", gatePatched: true }, "*"));
-  await page.waitForTimeout(60);
-  check("audio render: capturing reads 'live · capturing'", /capturing/.test(await page.locator("#voiceState").textContent()));
-  check("audio render: still on while capturing", (await page.getAttribute("#voiceSwitch", "aria-checked")) === "true");
-  // disable: switch goes off, substatus hidden, state 'disabled'.
-  await page.evaluate(() => window.postMessage({ type: "audio", enabled: false, capturing: false }, "*"));
-  await page.waitForTimeout(60);
-  check("audio render: disabled turns the switch off", (await page.getAttribute("#voiceSwitch", "aria-checked")) === "false");
-  check("audio render: disabled hides substatus", !(await page.locator("#voiceSub").isVisible()));
-  check("audio render: disabled reads 'disabled'", /disabled/.test(await page.locator("#voiceState").textContent()));
+  check("audio messages: ignored without errors", errors.length === audioErrors, errors.slice(audioErrors).join(" | "));
+  check("audio messages: the Settings preference is not a mirror of live audio", (await page.getAttribute("#setMic", "aria-checked")) === micBefore);
 
   // disk-pressure warning: the triangle next to "RAM / disk" appears only above
   // 90% full, and never claims a healthy disk when there is no reading.
@@ -1553,6 +1561,143 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("admin: ...and closes the card", !(await admin.locator("#vmOverridesCard").isVisible()));
   check("admin: no console/page errors after every state", adminErrors.length === 0, adminErrors.join(" | "));
   await admin.close();
+
+  // ── Key Vault page (Construct Companion's VaultView) ────────────────────────
+  // The page shows names, descriptions, usernames and access metadata and posts vault.<action>
+  // requests; values never reach it, so there must be nothing to type a value into.
+  const vault = await browser.newPage({ viewport: { width: 1000, height: 900 }, timezoneId: "UTC", locale: "en-US" });
+  const vaultErrors = [];
+  vault.on("console", (m) => { if (m.type() === "error") vaultErrors.push(m.text()); });
+  vault.on("pageerror", (e) => vaultErrors.push(String(e)));
+  await vault.goto(`http://127.0.0.1:${port}/vault`, { waitUntil: "networkidle" });
+  await vault.waitForTimeout(100);
+  check("vault: no console/page errors on load", vaultErrors.length === 0, vaultErrors.join(" | "));
+  check("vault: asks for its state once loaded", JSON.stringify(await vault.evaluate(() => window.__posted)) === JSON.stringify([{ type: "vault.ready" }]));
+  await checkPaletteControls(vault, "vault");
+  const NOW = Date.parse("2026-10-02T14:20:00Z");
+  const VAULT_STATE = { now: NOW, unavailable: null, hasKey: true,
+    secrets: [
+      { name: "github-token", description: "GitHub token for the release repo", username: "", addedBy: "", updatedAt: NOW - 3 * 86400000, holders: 2 },
+      { name: "staging-db", description: "Staging database admin login", username: "admin", addedBy: "", updatedAt: NOW - 40 * 86400000, holders: 0 },
+      { name: "npm-publish", description: "npm automation token", username: "", addedBy: "build-vm", updatedAt: NOW - 7200000, holders: 1 },
+      { name: "deploy-key", description: "", username: "deployer", addedBy: "", updatedAt: NOW - 600000, holders: 0 } ],
+    leases: [
+      { id: "l1", host: "host.example_7462", hostName: "host.example", vm: "build-vm", name: "npm-publish", usesLeft: null, expiresAt: NOW + 3000000, reason: "", origin: "added" },
+      { id: "a1", host: "", hostName: "", vm: "agent-vm", name: "github-token", usesLeft: 3, expiresAt: NOW + 2520000, reason: "release 4.2", origin: "approved" },
+      { id: "l2", host: "host.example_7462", hostName: "host.example", vm: "build-vm", name: "github-token", usesLeft: 1, expiresAt: NOW + 480000, reason: "tag the release", origin: "once" } ],
+    scrubs: [{ vm: "old-vm", names: ["github-token", "staging-db"], dueAt: NOW - 10800000 }],
+    activity: [
+      { at: NOW - 120000, vm: "agent-vm", host: "", text: "Access to github-token approved (3 uses).", warning: false },
+      { at: NOW - 900000, vm: "build-vm", host: "host.example", text: "Scrubbed 2 files; 1 file waits for your decision.", warning: false },
+      { at: NOW - 3600000, vm: "old-vm", host: "", text: "Scrub failed: the VM is offline. Retrying in 5 minutes.", warning: true },
+      { at: NOW - 93600000, vm: "", host: "", text: "Deleted old-token.", warning: false } ],
+    hosts: [
+      { slug: "host.example_7462", host: "host.example", mode: "available", lastSyncAt: NOW - 180000, status: "In sync", level: "ok", needsKey: false, online: 1, instances: ["build-vm", "gpu-vm"],
+        devices: [{ id: "d1", label: "Pixel 8", createdAt: NOW - 12 * 86400000, lastUsedAt: NOW - 3600000 }] },
+      { slug: "lab.example_7462", host: "lab.example", mode: "locked", lastSyncAt: NOW - 5 * 86400000, status: "Needs the vault key: Import vault key…", level: "warn", needsKey: true, online: 0, instances: ["lab-vm"], devices: [] } ] };
+  const pushVault = async (st) => { await vault.evaluate((x) => window.postMessage({ type: "vault.state", state: x }, "*"), st); await vault.waitForTimeout(60); };
+  const vaultDone = async (action, notice) => { await vault.evaluate(([a, n]) => window.postMessage({ type: "vault.done", action: a, notice: n }, "*"), [action, notice || null]); await vault.waitForTimeout(40); };
+  const vposted = () => vault.evaluate(() => window.__posted.splice(0));
+  const shots = /^[\w./-]+$/.test(process.env.UI_SMOKE_SHOTS || "") ? process.env.UI_SMOKE_SHOTS : "";
+  await vposted();
+  await pushVault(VAULT_STATE);
+  check("vault: every secret is listed with its name", JSON.stringify(await vault.locator(".v-secret .v-name").allTextContents()) === JSON.stringify(["github-token", "staging-db", "npm-publish", "deploy-key"]));
+  check("vault: usernames, descriptions and holders are shown", (await vault.locator('.v-secret[data-name="staging-db"] .v-user').textContent()).includes("admin")
+    && (await vault.locator('.v-secret[data-name="github-token"] .tag').textContent()) === "held by 2 VMs" && (await vault.locator('.v-secret[data-name="staging-db"] .tag').count()) === 0
+    && (await vault.locator('.v-secret[data-name="npm-publish"] .v-meta').textContent()).includes("added by an agent on build-vm")
+    && (await vault.locator('.v-secret[data-name="deploy-key"] .v-desc').getAttribute("class")).includes("none"));
+  check("vault: the summary strip counts secrets, VMs with access, scrubs and hosts",
+    (await vault.locator("#vPillSecrets").textContent()) === "4 secrets" && (await vault.locator("#vPillAccessText").textContent()) === "2 VMs hold access"
+    && await vault.locator("#vPillScrubs").isVisible() && (await vault.locator("#vPillHosts").textContent()) === "1 host needs attention");
+  check("vault: there is nowhere to type or show a value", (await vault.locator('input[type="password"], textarea, [contenteditable]').count()) === 0);
+  if (shots) await vault.screenshot({ path: `${shots}/vault-${THEME}.png`, fullPage: true });
+  await vault.locator('.v-secret[data-name="github-token"] button', { hasText: "Copy secret" }).click();
+  check("vault: Copy secret asks the Companion by name only", JSON.stringify(await vposted()) === JSON.stringify([{ type: "vault.copySecret", name: "github-token" }]));
+  check("vault: ...and that button waits for the answer", await vault.locator('.v-secret[data-name="github-token"] button', { hasText: "Copy secret" }).isDisabled());
+  await vaultDone("copySecret", { text: "Copied the secret of github-token. It leaves the clipboard again in 30 seconds.", error: false });
+  check("vault: the answer releases the button and confirms", !(await vault.locator('.v-secret[data-name="github-token"] button', { hasText: "Copy secret" }).isDisabled())
+    && await vault.locator("#vNotice").isVisible() && !(await vault.getAttribute("#vNotice", "class")).includes("error"));
+  check("vault: Copy username only where there is a username", (await vault.locator('.v-secret[data-name="github-token"] button', { hasText: "Copy username" }).count()) === 0);
+  await vault.locator('.v-secret[data-name="staging-db"] button', { hasText: "Copy username" }).click();
+  await vault.locator('.v-secret[data-name="staging-db"] button', { hasText: "Edit" }).click();
+  await vault.locator('.v-secret[data-name="deploy-key"] button', { hasText: "Delete" }).click();
+  await vault.click("#vAdd");
+  check("vault: copy username, edit, delete and add post their requests", JSON.stringify(await vposted()) === JSON.stringify([
+    { type: "vault.copyUsername", name: "staging-db" }, { type: "vault.edit", name: "staging-db" }, { type: "vault.delete", name: "deploy-key" }, { type: "vault.add" }]));
+  for (const action of ["copyUsername", "edit", "delete", "add"]) await vaultDone(action);
+  await vault.fill("#vFilter", "STAGING");
+  check("vault: the filter narrows the list", JSON.stringify(await vault.locator(".v-secret .v-name").allTextContents()) === JSON.stringify(["staging-db"]));
+  await vault.fill("#vFilter", "nothing like it");
+  check("vault: ...and says when nothing matches", await vault.locator("#vSecretsNoMatch").isVisible());
+  await vault.fill("#vFilter", "");
+
+  await vault.click('.utab[data-tab="access"]');
+  check("vault: the Access tab replaces the Secrets tab", await vault.locator("#tab-access").isVisible() && !(await vault.locator("#tab-secrets").isVisible())
+    && (await vault.getAttribute('.utab[data-tab="access"]', "aria-selected")) === "true");
+  check("vault: access is listed soonest end first, with where the VM runs",
+    JSON.stringify(await vault.locator(".v-lease .v-vm").allTextContents()) === JSON.stringify(["build-vm", "agent-vm", "build-vm"])
+    && (await vault.locator(".v-lease").nth(1).locator(".tag").textContent()) === "this PC" && (await vault.locator(".v-lease").nth(0).locator(".tag").textContent()) === "on host.example"
+    && (await vault.locator(".v-lease").nth(1).textContent()).includes("3 uses left") && (await vault.locator(".v-lease").nth(1).textContent()).includes("“release 4.2”"));
+  await vault.locator(".v-lease").nth(1).locator("button", { hasText: "Revoke" }).click();
+  await vault.locator(".v-lease").nth(0).locator("button", { hasText: "Revoke" }).click();
+  await vault.locator(".v-scrub button", { hasText: "Forget" }).click();
+  check("vault: revoke names the lease (and its host), forget names the VM", JSON.stringify(await vposted()) === JSON.stringify([
+    { type: "vault.revokeLease", id: "a1" }, { type: "vault.revokeLease", id: "l2", host: "host.example_7462" }, { type: "vault.discardScrubs", vm: "old-vm" }]));
+  check("vault: each revoke waits on its own row", await vault.locator(".v-lease").nth(0).locator("button").isDisabled() && !(await vault.locator(".v-lease").nth(2).locator("button").isDisabled()));
+  if (shots) await vault.screenshot({ path: `${shots}/vault-${THEME}-access.png`, fullPage: true });
+  await vaultDone("revokeLease"); await vaultDone("discardScrubs");
+
+  await vault.click('.utab[data-tab="activity"]');
+  check("vault: activity is grouped by day, warnings marked", (await vault.locator(".v-day").count()) === 2 && (await vault.locator(".v-event").count()) === 4
+    && (await vault.locator(".v-event.warn").count()) === 1 && (await vault.locator(".v-event").nth(3).locator(".v-where").textContent()) === "this PC");
+  if (shots) await vault.screenshot({ path: `${shots}/vault-${THEME}-activity.png`, fullPage: true });
+
+  await vault.click('.utab[data-tab="hosts"]');
+  check("vault: one card per host with its sync state", (await vault.locator(".v-host").count()) === 2
+    && await vault.locator('.v-host[data-host="lab.example_7462"] .v-problem').isVisible() && (await vault.locator('.v-host[data-host="host.example_7462"] .v-problem').count()) === 0);
+  check("vault: the mode switch shows the host's mode", (await vault.getAttribute('.v-host[data-host="host.example_7462"] .switch', "aria-checked")) === "false"
+    && (await vault.getAttribute('.v-host[data-host="lab.example_7462"] .switch', "aria-checked")) === "true");
+  await vault.click('.v-host[data-host="host.example_7462"] .switch');
+  check("vault: flipping the switch asks to lock that host", JSON.stringify(await vposted()) === JSON.stringify([{ type: "vault.setMode", host: "host.example_7462", mode: "locked" }])
+    && (await vault.getAttribute('.v-host[data-host="host.example_7462"] .switch', "class")).includes("busy"));
+  await vault.locator('.v-host[data-host="host.example_7462"] .switch').dispatchEvent("click"); // a busy switch takes no pointer events
+  check("vault: ...once, until the Companion answers", (await vposted()).length === 0);
+  await vaultDone("setMode");
+  await vault.click('.v-host[data-host="lab.example_7462"] .switch');
+  await vault.locator('.v-host[data-host="host.example_7462"] button', { hasText: "Pair a phone" }).click();
+  await vault.locator('.v-host[data-host="host.example_7462"] .v-device button', { hasText: "Revoke" }).click();
+  await vault.click("#vSync");
+  await vault.locator("button", { hasText: "Show vault key" }).click();
+  await vault.locator("button", { hasText: "Import vault key" }).click();
+  await vault.click("#vRefresh");
+  check("vault: host requests post by host slug", JSON.stringify(await vposted()) === JSON.stringify([
+    { type: "vault.setMode", host: "lab.example_7462", mode: "available" }, { type: "vault.pairPhone", host: "host.example_7462" },
+    { type: "vault.revokeDevice", host: "host.example_7462", id: "d1" }, { type: "vault.sync" }, { type: "vault.showKey" }, { type: "vault.importKey" }, { type: "vault.refresh" }]));
+  check("vault: Sync now waits for its answer", await vault.locator("#vSync").isDisabled());
+  for (const action of ["setMode", "pairPhone", "revokeDevice", "sync", "showKey", "importKey", "refresh"]) await vaultDone(action);
+  check("vault: ...and is released by it", !(await vault.locator("#vSync").isDisabled()));
+  if (shots) await vault.screenshot({ path: `${shots}/vault-${THEME}-hosts.png`, fullPage: true });
+  await pushVault({ ...VAULT_STATE, hosts: [], hasKey: false });
+  check("vault: without hosts it says so and still offers the key", await vault.locator("#vNoHosts").isVisible() && (await vault.locator("#vKeyState").textContent()) === "none yet");
+
+  await vaultDone("sync", { text: "This host's service has no key vault yet; update it on the host.", error: true });
+  check("vault: an error notice stays visible as an error", await vault.locator("#vNotice").isVisible() && (await vault.getAttribute("#vNotice", "class")).includes("error"));
+  await vault.click("#vNoticeClose");
+  check("vault: ...until dismissed", !(await vault.locator("#vNotice").isVisible()));
+
+  await vault.click('.utab[data-tab="secrets"]');
+  await pushVault({ ...VAULT_STATE, unavailable: "The key vault file could not be decrypted.", secrets: [], leases: [], scrubs: [] });
+  check("vault: an unreadable vault shows the banner and blocks everything else", await vault.locator("#vUnavailable").isVisible()
+    && (await vault.locator("#vUnavailableText").textContent()).includes("could not be decrypted") && await vault.locator("#vAdd").isDisabled()
+    && !(await vault.locator("#vSecretsEmpty").isVisible()));
+  if (shots) await vault.screenshot({ path: `${shots}/vault-${THEME}-unreadable.png`, fullPage: true });
+  await vault.locator("#vUnavailable button").click();
+  check("vault: Start a new vault posts the reset request", JSON.stringify(await vposted()) === JSON.stringify([{ type: "vault.reset" }]));
+  await pushVault({ ...VAULT_STATE, secrets: [], leases: [], scrubs: [], activity: [] });
+  check("vault: an empty vault explains how secrets arrive", await vault.locator("#vSecretsEmpty").isVisible() && !(await vault.locator("#vUnavailable").isVisible())
+    && (await vault.locator("#vPillAccessText").textContent()) === "no VM holds a secret");
+  check("vault: no console/page errors after every state", vaultErrors.length === 0, vaultErrors.join(" | "));
+  await vault.close();
 
   await browser.close();
   server.close();

@@ -82,6 +82,27 @@ public sealed class HttpTests
         await host.Problem("GET", "/v1/logs?lines=-1", 400, "invalidLines");
     }
     [Fact]
+    public async Task TheKeyVaultCanBeOpenedButNeitherListedNorChangedOverIpc()
+    {
+        await using var host = await Harness.Start();
+        var vault = host.App.Services.GetRequiredService<Core.Vault.VaultService>();
+        vault.Save(new("github-token", "GitHub token for CI", "ci-bot", new Secret("SENTINEL-ipc-value")));
+        using var open = await host.Post("/v1/instances/agent-vm/messages", new { type = "command", id = "openVault" });
+        Assert.Equal(HttpStatusCode.Accepted, open.StatusCode);
+        Assert.Equal(new UiActivation("vault"), Assert.Single(host.Get<FakeCompanionDesktop, ICompanionDesktop>().Activations));
+        // The Key Vault page's own requests are no dispatcher messages: refused, nothing copied or deleted.
+        foreach (var request in new object[] { new { type = "vault.copySecret", name = "github-token" }, new { type = "vault.delete", name = "github-token" }, new { type = "vault.ready" } })
+        {
+            using var refused = await host.Post("/v1/instances/agent-vm/messages", request);
+            Assert.Equal(HttpStatusCode.Accepted, refused.StatusCode);
+        }
+        Assert.Null(host.Get<FakeClipboard, IClipboard>().Text); Assert.Empty(host.Get<FakePrompts, IPrompts>().Shown);
+        Assert.Equal("SENTINEL-ipc-value", vault.Reveal("github-token")!.Reveal());
+        var snapshot = await host.Client.GetStringAsync("/v1/instances/agent-vm/snapshot");
+        Assert.DoesNotContain("github-token", snapshot);
+        await host.Problem("GET", "/v1/vault", 404, "routeNotFound");
+    }
+    [Fact]
     public async Task SseFilteringAndReadySnapshotAndVisibleRefusal()
     {
         await using var host = await Harness.Start();

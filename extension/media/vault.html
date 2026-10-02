@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src {{cspSource}} data:; style-src {{cspSource}} 'unsafe-inline'; font-src {{cspSource}}; script-src 'nonce-{{nonce}}'; base-uri 'none'; form-action 'none'; object-src 'none';" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="{{styleUri}}" />
+  <link rel="stylesheet" href="{{themeUri}}" />
+  <link rel="stylesheet" href="{{vaultStyleUri}}" />
+  <title>The Construct — Key Vault</title>
+</head>
+<body>
+<!-- Construct Companion's Key Vault window (VaultView). The page receives names, descriptions,
+     usernames and access metadata only: values, the vault key, device tokens and pairing links stay in
+     the Companion's native dialogs and the clipboard. Its requests are handled in the Companion process
+     and never reach the message dispatcher, IPC or HTTP. -->
+<div class="shell vault-shell">
+  <header>
+    <div class="header-inner">
+      <div class="brand">
+        <p class="eyebrow">construct companion</p>
+        <h1 class="title">KEY&nbsp;VAULT</h1>
+        <p class="subtitle">secrets agents use only with your approval</p>
+      </div>
+      <div class="header-right">
+        <div class="header-tools">
+          <button class="gear" id="vRefresh" type="button" data-vault="refresh" title="Read your hosts' access lists and paired phones again">&#x27F3; Refresh</button>
+        </div>
+        <span class="promptline">
+          <span class="usr">you@this-pc</span><span>:~$</span>
+          <span class="cmd">construct secret list</span>
+          <span class="cursor" aria-hidden="true"></span>
+        </span>
+      </div>
+    </div>
+  </header>
+
+  <!-- The vault file cannot be decrypted (copied from another PC or account). -->
+  <section class="v-banner" id="vUnavailable" role="alert" hidden>
+    <div class="v-banner-text"><b>The key vault cannot be read.</b> <span id="vUnavailableText"></span> VMs get an error until you start a new vault. The unreadable file is kept, so it can still be restored on the PC and account that created it.</div>
+    <button class="btn danger" type="button" data-vault="reset">Start a new vault…</button>
+  </section>
+
+  <div class="v-notice" id="vNotice" role="status" aria-live="polite" hidden><span id="vNoticeText"></span><button class="v-notice-x" id="vNoticeClose" type="button" aria-label="Dismiss">&times;</button></div>
+
+  <div class="strip v-strip" id="vStrip">
+    <span class="pill" id="vPillSecrets">— secrets</span>
+    <span class="pill" id="vPillAccess"><span class="dot"></span> <span id="vPillAccessText">no VM holds a secret</span></span>
+    <span class="pill warn" id="vPillScrubs" hidden></span>
+    <span class="pill" id="vPillHosts">no hosts</span>
+  </div>
+
+  <nav class="usage-tabs v-tabs" id="vTabs" role="tablist" aria-label="Key vault">
+    <button type="button" class="utab sel" role="tab" data-tab="secrets" aria-selected="true" aria-controls="tab-secrets">Secrets<span class="v-count" id="vCountSecrets"></span></button>
+    <button type="button" class="utab" role="tab" data-tab="access" aria-selected="false" aria-controls="tab-access">Access<span class="v-count" id="vCountAccess"></span></button>
+    <button type="button" class="utab" role="tab" data-tab="activity" aria-selected="false" aria-controls="tab-activity">Activity</button>
+    <button type="button" class="utab" role="tab" data-tab="hosts" aria-selected="false" aria-controls="tab-hosts">Hosts<span class="v-count" id="vCountHosts"></span></button>
+  </nav>
+
+  <!-- SECRETS -->
+  <section class="v-tab" id="tab-secrets" role="tabpanel">
+    <section class="module">
+      <div class="mhead">
+        <h2 class="seclabel">Secrets</h2>
+        <div class="mhead-right">
+          <input type="text" class="v-filter" id="vFilter" placeholder="Filter secrets" aria-label="Filter secrets" spellcheck="false" autocomplete="off" />
+          <button class="btn" type="button" id="vAdd" data-vault="add">+ Add secret…</button>
+        </div>
+      </div>
+      <p class="v-lead">Agents see each name and description. A value leaves this PC only after you approve a request, and the VM is scrubbed of it when the access ends. Values are entered and copied in native dialogs, never on this page.</p>
+      <div class="v-list" id="vSecrets"></div>
+      <p class="cost-note v-empty" id="vSecretsEmpty" hidden>No secrets yet. Add one here, or let an agent store one with <span class="v-code">construct secret add</span>.</p>
+      <p class="cost-note v-empty" id="vSecretsNoMatch" hidden>No secret matches the filter.</p>
+    </section>
+  </section>
+
+  <!-- ACCESS -->
+  <section class="v-tab" id="tab-access" role="tabpanel" hidden>
+    <section class="module">
+      <div class="mhead"><h2 class="seclabel">Active access</h2><span class="meta" id="vAccessMeta"></span></div>
+      <p class="v-lead">These VMs may read a secret until their access ends: when its time is up, its last use is taken or the agent releases it. Revoking ends it at once, and the VM is scrubbed a few seconds later.</p>
+      <div class="v-list" id="vLeases"></div>
+      <p class="cost-note v-empty" id="vLeasesEmpty" hidden>No VM holds a secret right now.</p>
+    </section>
+    <section class="module">
+      <div class="mhead"><h2 class="seclabel">Scrubs waiting for their VM</h2><span class="meta" id="vScrubsMeta"></span></div>
+      <p class="v-lead">A scrub runs once its VM is online with the Companion connected. Forget them only for a VM you removed: copies of the secrets may stay on it.</p>
+      <div class="v-list" id="vScrubs"></div>
+      <p class="cost-note v-empty" id="vScrubsEmpty" hidden>Nothing is waiting.</p>
+    </section>
+  </section>
+
+  <!-- ACTIVITY -->
+  <section class="v-tab" id="tab-activity" role="tabpanel" hidden>
+    <section class="module">
+      <div class="mhead"><h2 class="seclabel">Activity</h2><span class="meta" id="vActivityMeta"></span></div>
+      <p class="v-lead">Approvals, expiries, scrubs and their results, and warnings, including those your hosts report. Newest first.</p>
+      <ol class="v-timeline" id="vActivity"></ol>
+      <p class="cost-note v-empty" id="vActivityEmpty" hidden>Nothing has happened yet.</p>
+    </section>
+  </section>
+
+  <!-- HOSTS -->
+  <section class="v-tab" id="tab-hosts" role="tabpanel" hidden>
+    <div class="v-hostbar">
+      <p class="v-lead">VMs on a host service use a copy of this vault kept on that host, so they work while this PC is off. It syncs with every host you are enrolled on every five minutes, shortly after each change, and on request.</p>
+      <button class="btn" type="button" id="vSync" data-vault="sync">&#x27F3; Sync now</button>
+    </div>
+    <div class="v-hosts" id="vHosts"></div>
+    <section class="module" id="vNoHosts" hidden>
+      <div class="mhead"><h2 class="seclabel">No hosts</h2></div>
+      <p class="v-lead">You are not enrolled on a host service. VMs on a remote Hyper-V or Proxmox host appear here once you add their host in the control panel.</p>
+    </section>
+    <section class="module v-keycard">
+      <div class="mhead"><h2 class="seclabel">Vault key</h2><span class="tag" id="vKeyState">—</span></div>
+      <p class="v-lead">Values on your hosts are encrypted with this PC's vault key. To use the same vault from a second PC, show the key here and import it there. Keep it as private as the secrets themselves.</p>
+      <div class="v-actions v-start">
+        <button class="btn" type="button" data-vault="showKey">Show vault key…</button>
+        <button class="btn ghost" type="button" data-vault="importKey">Import vault key…</button>
+      </div>
+    </section>
+  </section>
+
+  <footer>THE CONSTRUCT &middot; key vault &nbsp;&middot;&nbsp; <a href="https://github.com/permissionBRICK/The-Construct/blob/main/docs/key-vault.md">how the key vault works</a></footer>
+</div>
+<script nonce="{{nonce}}" src="{{paletteUri}}"></script>
+  <script nonce="{{nonce}}" src="{{scriptUri}}"></script>
+</body>
+</html>

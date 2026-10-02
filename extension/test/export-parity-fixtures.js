@@ -518,11 +518,11 @@ function desktopWebviews() {
   const nonce = '0123456789abcdef0123456789abcdef', cspSource = 'https://construct.media';
   for (const cards of [[], themes.THEMES.map(c=>({...c, previewUri:cspSource+'/'+themes.previewFileFor(c.id)})), [{id:'"<&',label:"A's & B",blurb:'<description>',previewUri:'https://construct.media/x?a=1&b=2'}]])
     rows.push({kind:'picker',cards,nonce,output:themes.buildPickerHtml({cspSource,nonce,cards})});
-  for (const surface of ['panel','launcher','hostadmin']) for (const theme of ['classic','native','terminal']) {
+  for (const surface of ['panel','launcher','hostadmin','vault']) for (const theme of ['classic','native','terminal']) {
     const template = fs.readFileSync(path.join(__dirname,'../media',surface+'.html'),'utf8');
     const output = template.replace(/{{cspSource}}/g,cspSource).replace(/{{nonce}}/g,nonce)
       .replace(/{{styleUri}}/g,cspSource+'/panel.css').replace(/{{themeUri}}/g,cspSource+'/'+themes.cssFileFor(theme))
-      .replace(/{{paletteUri}}/g,cspSource+'/palette.js').replace(/{{scriptUri}}/g,cspSource+'/'+surface+'.js').replace(/{{adminStyleUri}}/g,cspSource+'/hostadmin.css');
+      .replace(/{{paletteUri}}/g,cspSource+'/palette.js').replace(/{{scriptUri}}/g,cspSource+'/'+surface+'.js').replace(/{{adminStyleUri}}/g,cspSource+'/hostadmin.css').replace(/{{vaultStyleUri}}/g,cspSource+'/vault.css');
     rows.push({kind:'document',surface,template,theme,nonce,output});
   }
   return rows;
