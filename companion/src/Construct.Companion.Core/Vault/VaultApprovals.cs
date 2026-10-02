@@ -7,43 +7,112 @@ namespace Construct.Companion.Core.Vault;
 
 // One request of the tray pop-out's page ({type:"approvals.<action>", …}), validated by VaultApprovals.Parse.
 public sealed record VaultApprovalsCommand(string Action, string Id = "", bool Approve = false, int Height = 0);
-// What the window does after the records changed: Show = an approval arrived that was not listed before,
-// Hide = none is left. Count feeds the tray menu.
-public sealed record VaultApprovalsChange(bool Show, bool Hide, int Count);
+// What the window does after Sync: Visible = the pop-out belongs on screen. Count feeds the tray menu and keeps
+// the window's one-second re-evaluation running while it is above zero.
+public sealed record VaultApprovalsVisibility(bool Visible, int Count);
 
 // The tray pop-out's decisions (media/approvals.html): which approvals it lists and in what order, when it
 // shows and hides itself, when an item's Approve is armed, and what the page may ask. The window only renders
-// and forwards: it calls Sync on every VaultService.ApprovalsChanged, pushes StateMessage on every change and
-// once a second while visible (the time left), and hands the page's requests to Parse and DecideAsync, in
-// process. The page gets each approval's texts, the VM and the time left, never a value, and none of its
-// requests reaches the message dispatcher, IPC or HTTP.
+// and forwards: it calls Sync on every VaultService.ApprovalsChanged and once a second while approvals wait,
+// pushes StateMessage on every change and once a second while visible (the time left), and hands the page's
+// requests to Parse and DecideAsync, in process. The page gets each approval's texts, the VM and the time left,
+// never a value, and none of its requests reaches the message dispatcher, IPC or HTTP.
+//
+// The pop-out steps back for another app on this PC that shows the approvals itself: T3 Code Desktop reports
+// on every poll while its window is visible which pending approvals it shows inline (Displayed, from
+// POST /v1/vault/approvals/displayed; an empty list is a heartbeat). While no app reported for ReporterWindow,
+// an approval is eligible at once. Otherwise it waits DisplayGrace from its arrival, then is eligible unless an
+// app's mark on it is younger than DisplayedFor, so it shows once the reporter stops or leaves it out. The
+// pop-out is visible while an eligible approval exists that the user did not close it for, and whenever the
+// user brought it up (Open); it lists every pending approval.
 public sealed class VaultApprovals(VaultService vault, IClock clock)
 {
     // Approve becomes clickable one second after the page first shows an item, so a click or key meant for
     // something else cannot approve a request that just appeared.
     public static readonly TimeSpan ArmDelay = TimeSpan.FromSeconds(1), RefreshInterval = TimeSpan.FromSeconds(1);
+    public static readonly TimeSpan ReporterWindow = TimeSpan.FromSeconds(10), DisplayGrace = TimeSpan.FromSeconds(5), DisplayedFor = TimeSpan.FromSeconds(8);
+    public const int MaxDisplayed = 50;
     // The page's own height in CSS pixels at 96 dpi: at least a header and one short item, at most the launcher popup.
     public const int MinHeight = 160;
     private const string Prefix = "approvals.";
     public static IReadOnlySet<string> Actions { get; } = new HashSet<string>(StringComparer.Ordinal) { "ready", "decide", "hide", "size", "openVault" };
     private readonly object gate = new();
-    private readonly HashSet<string> known = new(StringComparer.Ordinal);
     private readonly Dictionary<string, DateTimeOffset> shownAt = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, DateTimeOffset> displayedAt = new(StringComparer.Ordinal); // the last mark of each
+    private readonly HashSet<string> dismissed = new(StringComparer.Ordinal);
+    private DateTimeOffset? reportedAt;
+    private bool opened;
 
     public int Count => vault.PendingApprovals().Count;
 
-    public VaultApprovalsChange Sync()
+    public VaultApprovalsVisibility Sync()
     {
-        var current = vault.PendingApprovals();
+        var current = vault.PendingApprovals(); var now = clock.UtcNow;
         var ids = current.Select(a => a.Id).ToHashSet(StringComparer.Ordinal);
         lock (gate)
         {
-            var arrived = !ids.IsSubsetOf(known);
-            known.Clear(); known.UnionWith(ids);
             foreach (var gone in shownAt.Keys.Where(id => !ids.Contains(id)).ToArray()) shownAt.Remove(gone);
-            return new(arrived, ids.Count == 0, ids.Count);
+            foreach (var gone in displayedAt.Where(m => !ids.Contains(m.Key) || !Recent(m.Value, now, DisplayedFor)).Select(m => m.Key).ToArray()) displayedAt.Remove(gone);
+            dismissed.IntersectWith(ids);
+            if (ids.Count == 0) opened = false;
+            return new(opened || current.Any(a => !dismissed.Contains(a.Id) && Eligible(a, now)), ids.Count);
         }
     }
+    // The user brought the pop-out up (tray menu or left click): it stays, whatever another app shows, until the
+    // user closes it or none is left. False when none waits.
+    public bool Open()
+    {
+        if (Count == 0) return false;
+        lock (gate) opened = true;
+        return true;
+    }
+    // The user closed it (its ×): hidden until an approval that is not pending now becomes eligible.
+    public void Dismiss()
+    {
+        var ids = vault.PendingApprovals().Select(a => a.Id);
+        lock (gate) { opened = false; dismissed.Clear(); dismissed.UnionWith(ids); }
+    }
+
+    // ── another app shows them ─────────────────────────────────────────────────
+    // The ids the reporting app shows now, possibly none. Ids that are not pending (unknown or already decided)
+    // are ignored. Any report counts as "an app that shows approvals is visible".
+    public void Displayed(IEnumerable<string> ids)
+    {
+        var pending = vault.PendingApprovals().Select(a => a.Id).ToHashSet(StringComparer.Ordinal);
+        var now = clock.UtcNow;
+        lock (gate)
+        {
+            reportedAt = now;
+            foreach (var id in ids) if (pending.Contains(id)) displayedAt[id] = now;
+        }
+    }
+    public DateTimeOffset? ReportedAt { get { lock (gate) return reportedAt; } }
+    public bool ShownElsewhere(string id)
+    {
+        var now = clock.UtcNow;
+        lock (gate) return displayedAt.TryGetValue(id, out var at) && Recent(at, now, DisplayedFor);
+    }
+    // The body of POST /v1/vault/approvals/displayed, {"ids":[…]}: null unless it lists 0–50 approval ids.
+    public static IReadOnlyList<string>? DisplayedIds(JsonObject body)
+    {
+        if (body["ids"] is not JsonArray list || list.Count > MaxDisplayed) return null;
+        var ids = new List<string>(list.Count);
+        foreach (var item in list)
+        {
+            if (item is not JsonValue value || !value.TryGetValue<string>(out var id) || !VaultProtocol.IsApprovalId(id)) return null;
+            ids.Add(id);
+        }
+        return ids;
+    }
+    // Under the gate.
+    private bool Eligible(VaultPendingApproval approval, DateTimeOffset now)
+    {
+        if (reportedAt is not { } reported || !Recent(reported, now, ReporterWindow)) return true; // no app reported lately: at once
+        if (Recent(approval.ArrivedAt, now, DisplayGrace)) return false; // its grace
+        return !(displayedAt.TryGetValue(approval.Id, out var marked) && Recent(marked, now, DisplayedFor)); // unless the app shows it
+    }
+    // [at, at + span): a wall clock set back keeps nothing alive for longer.
+    private static bool Recent(DateTimeOffset at, DateTimeOffset now, TimeSpan span) => now >= at && now - at < span;
 
     // ── the page's state ───────────────────────────────────────────────────────
     // Oldest first. An item handed to the page for the first time starts its arming delay now.

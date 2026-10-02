@@ -41,13 +41,13 @@ internal sealed class TrayContext : ApplicationContext
     private bool disposed;
     private Rectangle? trayHitArea;
     private bool showOnClick;
-    public TrayContext(Platform platform, IMessageSink sink, IpcSettings settings, IPrompts prompts, VaultService vault, VaultHosts vaultHosts, ActivationPlan initial)
+    public TrayContext(Platform platform, IMessageSink sink, IpcSettings settings, IPrompts prompts, VaultService vault, VaultHosts vaultHosts, VaultApprovals vaultApprovals, ActivationPlan initial)
     {
         this.platform = platform; this.sink = sink; this.settings = settings; this.prompts = prompts; this.vault = vault; this.vaultHosts = vaultHosts;
         snapshot = new(platform.Clock);
         _ = dispatcher.Handle;
         // Key vault approvals appear in their own pop-out at the tray, whatever else is open.
-        approvals = new(platform, settings, vault, new VaultApprovals(vault, platform.Clock),
+        approvals = new(platform, settings, vault, vaultApprovals,
             pageHeight => PopupBounds(dpi => (TrayModel.PopupSize(dpi).Width, VaultApprovals.WindowHeight(pageHeight, dpi))),
             () => Open("vault", null), text => tray.ShowBalloonTip(10000, "Construct Key Vault", text, ToolTipIcon.Warning));
         registry = LoadRegistry();

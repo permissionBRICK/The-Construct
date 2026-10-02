@@ -17,7 +17,8 @@ The popup can switch instances, register a VM, run lifecycle actions, and open t
 The **Key Vault** (tray menu, or the control panel's **Key vault** card) keeps secrets that agents
 may read only after you approve, and scrubs a VM once its access ends. Requests to approve appear in
 a pop-out next to the tray icon without taking the keyboard focus, and stay there until each is
-answered or ends. See [Key vault](key-vault.md).
+answered or ends. While T3 Code Desktop is visible and shows a request inline, the pop-out steps back
+for it and shows it once T3 Code Desktop stops. See [Key vault](key-vault.md).
 
 While Companion is running, it scans `/root/repos` on each VM every five minutes.
 Repos with a Git remote that are not covered by an existing profile get a minimal

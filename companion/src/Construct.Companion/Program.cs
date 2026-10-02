@@ -94,7 +94,7 @@ internal static class Program
             using var bridge = new DesktopHostBridge();
             var server = BuildHost(platform, bridge);
             using var tray = new TrayContext(platform, server.Services.GetRequiredService<IMessageSink>(), server.Services.GetRequiredService<IpcSettings>(), bridge.Prompts,
-                server.Services.GetRequiredService<VaultService>(), server.Services.GetRequiredService<VaultHosts>(), plan);
+                server.Services.GetRequiredService<VaultService>(), server.Services.GetRequiredService<VaultHosts>(), server.Services.GetRequiredService<VaultApprovals>(), plan);
             bridge.Tray = tray;
             server.Lifetime.ApplicationStopping.Register(() => { _ = tray.QuitAsync(); });
             // The STA thread must not block on a context-capturing await: hop to the pool for the async host calls.

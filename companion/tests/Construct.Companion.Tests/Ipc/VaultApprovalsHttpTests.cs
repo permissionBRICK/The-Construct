@@ -12,7 +12,8 @@ using VaultHostsTests = Construct.Companion.Tests.Vault.VaultHostsTests;
 namespace Construct.Companion.Tests.Ipc;
 
 // GET/POST /v1/vault/approvals: T3 Code Desktop lists and answers pending key vault approvals through the
-// Companion's authenticated local API. Nothing else of the vault is reachable there (HttpTests).
+// Companion's authenticated local API, and reports which it shows (POST /v1/vault/approvals/displayed).
+// Nothing else of the vault is reachable there (HttpTests).
 public sealed class VaultApprovalsHttpTests
 {
     private const string Value = "SENTINEL-value-8d2f", Username = "SENTINEL-user-41c7";
@@ -106,6 +107,47 @@ public sealed class VaultApprovalsHttpTests
         await host.Problem("DELETE", "/v1/vault/approvals/" + id, 405, "routeNotFound");
         using (var answered = await Decide(host, id, new { decision = "deny" })) Assert.Equal(HttpStatusCode.NoContent, answered.StatusCode);
         Assert.Equal("denied", (await get)["status"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task ADisplayingAppReportsWhatItShowsWithTheBearer()
+    {
+        await using var host = await Harness.Start(runtimeJobs: false);
+        var vault = host.App.Services.GetRequiredService<VaultService>();
+        var approvals = host.App.Services.GetRequiredService<VaultApprovals>(); // the tray pop-out's model
+        vault.Save(new("github-token", "GitHub token for CI", "", new Secret(Value)));
+        var request = VaultProtocol.ParseRequest("""{"v":1,"id":"1700000000000-4-71","op":"get","names":["github-token"]}""").Request!;
+        var get = vault.HandleAsync("agent-vm", request);
+        await Eventually(() => vault.PendingApprovals().Count == 1);
+        var id = vault.PendingApprovals()[0].Id;
+        Task<HttpResponseMessage> Report(object body) => host.Client.PostAsJsonAsync("/v1/vault/approvals/displayed", body);
+
+        Assert.Null(approvals.ReportedAt);
+        using (var heartbeat = await Report(new { ids = Array.Empty<string>() })) Assert.Equal(HttpStatusCode.NoContent, heartbeat.StatusCode);
+        Assert.NotNull(approvals.ReportedAt); Assert.False(approvals.ShownElsewhere(id));
+        using (var shown = await Report(new { ids = new[] { id, "no-such-approval" } })) Assert.Equal(HttpStatusCode.NoContent, shown.StatusCode);
+        Assert.True(approvals.ShownElsewhere(id)); Assert.False(approvals.ShownElsewhere("no-such-approval"));
+        using (var fifty = await Report(new { ids = Enumerable.Repeat(id, 50).ToArray() })) Assert.Equal(HttpStatusCode.NoContent, fifty.StatusCode);
+
+        foreach (var body in new object[] { new { }, new { ids = "x" }, new { ids = new[] { 1 } }, new { ids = new[] { "a/b" } }, new { ids = new[] { new string('a', 129) } },
+            new { ids = Enumerable.Repeat(id, 51).ToArray() } })
+            using (var bad = await Report(body)) await Problem(bad, 400, "invalidIds");
+        using (var array = await Report(new[] { id })) await Problem(array, 400, "invalidRequest");
+        using (var broken = await host.Client.PostAsync("/v1/vault/approvals/displayed", new StringContent("{", Encoding.UTF8, "application/json"))) await Problem(broken, 400, "invalidRequest");
+        host.Client.DefaultRequestHeaders.Authorization = null;
+        var reported = approvals.ReportedAt;
+        using (var anonymous = await Report(new { ids = new[] { id } })) await Problem(anonymous, 401, "unauthorized");
+        Assert.Equal(reported, approvals.ReportedAt); // refused before it counted
+        host.Authenticate();
+        await host.Problem("GET", "/v1/vault/approvals/displayed", 405, "routeNotFound");
+        Assert.False(get.IsCompleted); // a report answers nothing
+        Assert.Equal(id, (await List(host))[0]!["id"]!.GetValue<string>());
+
+        using (var answered = await Decide(host, id, new { decision = "deny" })) Assert.Equal(HttpStatusCode.NoContent, answered.StatusCode);
+        Assert.Equal("denied", (await get)["status"]!.GetValue<string>());
+        Assert.Equal(new VaultApprovalsVisibility(false, 0), approvals.Sync());
+        using (var late = await Report(new { ids = new[] { id } })) Assert.Equal(HttpStatusCode.NoContent, late.StatusCode); // already decided: ignored
+        Assert.False(approvals.ShownElsewhere(id));
     }
 
     [Fact]

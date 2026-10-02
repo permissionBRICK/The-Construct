@@ -125,13 +125,16 @@ Approvals are pending records, not dialogs. `VaultService` keeps one per approva
 requests and host approvals alike, `PendingApprovals`, `ApprovalsChanged`) and `DecideAsync` answers it:
 the first answer wins, the agent's deadline ends an unanswered one, and a host approval's answer goes to
 the host. Two places answer them. The tray pop-out (`VaultApprovalsWindow`, page `media/approvals.html`)
-appears without activation where the launcher popup appears when a record arrives, hides when none is
-left, and comes back through the tray menu's **Key vault requests (N)…** or a left click; `VaultApprovals`
-(Core) decides its items, order, arming (Approve one second after an item is first shown) and checks the
-page's `approvals.<action>` requests, in process only like the Key Vault window. And
+appears without activation where the launcher popup appears while a record is eligible, hides otherwise
+or when none is left, and comes back through the tray menu's **Key vault requests (N)…** or a left
+click; `VaultApprovals` (Core, shared with the IPC host) decides its items, order, visibility (re-evaluated on every change and
+once a second while records wait), arming (Approve one second after an item is first shown) and checks
+the page's `approvals.<action>` requests, in process only like the Key Vault window. And
 `GET /v1/vault/approvals` lists the records while `POST /v1/vault/approvals/{id}`
 (`{"decision":"approve"|"deny"}` → 204, 404 `not-found`, 409 `already-decided`, 502 `host-failed`)
-answers one, so T3 Code Desktop approves inline ([contract](../docs/key-vault.md#wire-contract)).
+answers one, so T3 Code Desktop approves inline. While its window is visible, T3 Code Desktop posts the
+ids it shows to `POST /v1/vault/approvals/displayed` (`{"ids":[…]}` → 204, 400 `invalidIds`), and the
+pop-out does not show for those until their marks expire ([contract](../docs/key-vault.md#wire-contract)).
 
 Hosted VMs use their host's vault ([contract](../docs/plans/key-vault-hosted.md)). The document also
 holds the vault key K, per-entry `updatedAt`/`updatedBy`, 30-day tombstones and per-host sync state.
