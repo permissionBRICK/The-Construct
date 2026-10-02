@@ -101,6 +101,9 @@ public sealed class HttpTests
         var snapshot = await host.Client.GetStringAsync("/v1/instances/agent-vm/snapshot");
         Assert.DoesNotContain("github-token", snapshot);
         await host.Problem("GET", "/v1/vault", 404, "routeNotFound");
+        // Only pending approvals are listed (none here); no route reads or changes secrets.
+        Assert.Equal("""{"approvals":[]}""", await host.Client.GetStringAsync("/v1/vault/approvals"));
+        foreach (var route in new[] { "/v1/vault/secrets", "/v1/vault/approvals/x/value" }) await host.Problem("GET", route, 404, "routeNotFound");
     }
     [Fact]
     public async Task SseFilteringAndReadySnapshotAndVisibleRefusal()

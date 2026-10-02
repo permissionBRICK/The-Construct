@@ -178,9 +178,15 @@ the first answer counts.
 **Noticing a request in T3 Code.** While `construct secret` waits for an answer, T3 Code shows a
 banner on every open client (phone or PC): "Key vault: github-token waiting for your approval". On
 a hosted VM it has an **Approve** button that opens the host's approval page with that request
-highlighted. On a local VM it points you to the Companion dialog on your PC. The banner only
-links; approving still happens on the host's page or in the Companion. It disappears when the
+highlighted. On a local VM it points you to the Companion dialog on your PC. In a browser the banner
+only links; approving still happens on the host's page or in the Companion. It disappears when the
 request is answered or times out. Nothing alerts you while no T3 Code page is open.
+
+**Approving inside T3 Code Desktop.** T3 Code Desktop on the PC where the Companion runs asks the
+Companion for its pending approvals, local and hosted alike, and shows each one in the banner with
+the Companion's own text and **Deny** / **Approve** buttons. An answer there counts like one in the
+Companion dialog: the dialog closes, and a hosted VM's answer goes to the host. Whichever answer
+comes first counts; a later one is refused as already answered.
 
 The device token lives only on the approval page's address, never in T3 Code. T3 Code is
 served from inside the VM, where an agent could read anything stored for its page. The host's
@@ -282,6 +288,13 @@ and few uses, and revoke anything you did not expect.
 - The Companion never logs values, and they never reach a webview or the local HTTP API. The Key
   Vault window's page gets names, descriptions, usernames and access details; it is handled inside
   the Companion process, so nothing on the local HTTP API can list or change the vault.
+- Pending approvals are the exception: the local HTTP API lists them (the dialog's text, the VM, the
+  secret names, the deadline) and accepts an approve or deny for each. It answers only on
+  `127.0.0.1` and only with the bearer token in `endpoint.json` in your Windows profile, so any
+  program running as your Windows account can approve a pending request, just as it could click the
+  dialog. T3 Code Desktop uses this to approve inline; it keeps the token in its main process and
+  gives its window only the list and the two answers. Values, usernames, the vault key, device
+  tokens and pairing links are never part of it, and nothing else of the vault is reachable there.
 
 On hosted VMs, the host service holds the vault copy and answers the VM, so the host is trusted
 with the values in **always available** mode. In **locked** mode it can read them only while your
@@ -308,6 +321,21 @@ requests/<id>.json    {"v":1,"id","ts","op","names":[…],"uses","ttl","all","re
 responses/<id>.json   {"v":1,"id","status":"ok|denied|notFound|exists|invalid|error","message",
                        "secret":<base64>,"username","lease":{"usesLeft","expiresAt"},"names":[…],"items":[…]}
 ```
+
+The Companion's local API (`http://127.0.0.1:<port>`, bearer token from `endpoint.json`) has two
+routes for pending approvals:
+
+```
+GET  /v1/vault/approvals       200 {"approvals":[{"id","instance","vm","kind":"local"|"host","host":<slug>|null,
+                                    "requestId":<the CLI's id>|null,"hostRequestId":<the host's id>|null,
+                                    "op","title","message","action","deny","names":[…],"createdAt":<ms>,"deadline":<ms>|null}]}
+POST /v1/vault/approvals/{id}  {"decision":"approve"|"deny"} -> 204 | 400 | 404 {"code":"not-found"}
+                               | 409 {"code":"already-decided"} | 502 {"code":"host-failed"}
+```
+
+`requestId` is the id of the pending note above, and `hostRequestId` the `request=` id of its
+`approveUrl`. Errors are RFC 7807 problems. `502` means the host did not take a hosted VM's answer;
+the activity list has the reason.
 
 The CLI waits 15 seconds (`CONSTRUCT_VAULT_PICKUP_SEC`) for the request to be claimed, then until
 its deadline for the answer. The host-run guest scripts live in

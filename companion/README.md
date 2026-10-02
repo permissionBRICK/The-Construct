@@ -114,7 +114,14 @@ design. `VaultView` (Core) decides everything: it builds the page state (names, 
 usernames, counts, lease, host and activity metadata) and validates and runs the page's
 `vault.<action>` requests. Those requests are handled in process only: the window holds no
 `IMessageSink`, and `MessageDispatcher` refuses them like any unknown message, so nothing reachable
-over the local HTTP API can list or change the vault. The panel's **Key vault** card posts the
+over the local HTTP API can list or change the vault. The one exception is pending approvals:
+`VaultService` keeps a record of each approval while it waits (local requests and host approvals,
+also while they queue for the dialog), and `GET /v1/vault/approvals` lists them while
+`POST /v1/vault/approvals/{id}` (`{"decision":"approve"|"deny"}` → 204, 404 `not-found`,
+409 `already-decided`, 502 `host-failed`) answers one through `VaultService.DecideAsync`, so T3 Code
+Desktop approves inline ([contract](../docs/key-vault.md#wire-contract)). The first answer wins; an
+outside answer closes the dialog or removes it from the queue, and a host approval's answer goes to
+the host. The panel's **Key vault** card posts the
 `openVault` command, which only opens the window. Values, usernames on copy, the vault key, device
 tokens and pairing links never enter a webview: `IVaultWindow` (add/edit dialog, clipboard cleared
 after 30 seconds, the pairing QR code) and the `IPrompts` key, approval and file-decision dialogs are
