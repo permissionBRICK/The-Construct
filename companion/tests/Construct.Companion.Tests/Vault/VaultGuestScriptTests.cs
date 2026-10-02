@@ -31,7 +31,14 @@ public sealed class VaultGuestScriptTests
     {
         var invocation = new ProcessInvocation("bash", [Path.Combine(Repository(), "bin", "construct-secret.sh"), .. args],
             StandardInput: new Secret(stdin ?? ""), Timeout: TimeSpan.FromSeconds(60))
-        { EnvironmentOverrides = new Dictionary<string, string?> { ["CONSTRUCT_VAULT_SPOOL"] = spool, ["CONSTRUCT_VAULT_PICKUP_SEC"] = "15" } };
+        {
+            // The spool mode: a VM on a host service would otherwise send these requests to it.
+            EnvironmentOverrides = new Dictionary<string, string?>
+            {
+                ["CONSTRUCT_VAULT_SPOOL"] = spool, ["CONSTRUCT_VAULT_PICKUP_SEC"] = "15",
+                ["CONSTRUCT_SERVICE_URL"] = null, ["CONFIG_FILE"] = Path.Combine(spool, "no-config.env")
+            }
+        };
         return await new RuntimeProcessRunner().RunAsync(invocation);
     }
     private static VaultService Vault(FakePrompts prompts, IClock clock)
