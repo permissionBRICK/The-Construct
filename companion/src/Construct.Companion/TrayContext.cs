@@ -82,7 +82,7 @@ internal sealed class TrayContext : ApplicationContext
         if (!disposed) dispatcher.BeginInvoke(() =>
         {
             if (value.ActiveInstance != Active) Select(value.ActiveInstance);
-            if (theme != value.UiTheme) { theme = value.UiTheme; foreach (var window in windows.Values) window.ReloadTheme(); }
+            if (theme != value.UiTheme) { theme = value.UiTheme; foreach (var window in windows.Values) window.ReloadTheme(); vaultWindow?.ReloadTheme(); }
         });
     }
     private async Task ListenCompanionAsync(CancellationToken token)
@@ -183,7 +183,8 @@ internal sealed class TrayContext : ApplicationContext
     }
     private void Open(string view, string? scope, bool refreshScheduled = false)
     {
-        if (view == "vault") { (vaultWindow ??= new VaultWindow(vault, vaultHosts)).Present(); return; }
+        // The Key Vault window gets no message sink: its page talks to VaultView in process only.
+        if (view == "vault") { (vaultWindow ??= new VaultWindow(platform, settings, prompts, vault, vaultHosts)).Present(); return; }
         scope ??= view == "hostadmin" ? Hosts().FirstOrDefault() : Active;
         if (view == "hostadmin" && scope is null) { MessageBox.Show("No remote host is registered.", "Host Administration"); return; }
         var sinkScope = view == "hostadmin" ? "host:" + scope : scope ?? "";
@@ -246,7 +247,7 @@ internal sealed class TrayContext : ApplicationContext
                 Select(name); await source.ChangeScopeAsync(name); return true;
             case "pickTheme":
                 var picked = message.GetProperty("id").GetString(); if (!WebViewDocument.IsKnownTheme(picked)) throw new ArgumentException("Unknown design.");
-                settings.Merge(new JsonObject { ["uiTheme"] = picked }); foreach (var window in windows.Values) window.ReloadTheme(); return true;
+                settings.Merge(new JsonObject { ["uiTheme"] = picked }); foreach (var window in windows.Values) window.ReloadTheme(); vaultWindow?.ReloadTheme(); return true;
             case "command":
                 var id = message.GetProperty("id").GetString();
                 if (id == "chooseMicDevice")
