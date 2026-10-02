@@ -30,6 +30,8 @@ public static partial class VaultProtocol
 
     public static bool IsValidName(string? name) => name is not null && NamePattern().IsMatch(name);
     public static bool IsValidId(string? id) => id is not null && IdPattern().IsMatch(id);
+    // A pending approval's id as the tray pop-out and the local API name it (VaultService makes 32 hex digits).
+    public static bool IsApprovalId(string? id) => id is not null && ApprovalIdPattern().IsMatch(id);
 
     // (null, null, _) = not answerable (no usable id); (null, id, error) = answer "invalid".
     public static (VaultRequest? Request, string? Id, string? Error) ParseRequest(string line)
@@ -162,6 +164,8 @@ public static partial class VaultProtocol
 
     [GeneratedRegex("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")]
     private static partial Regex NamePattern();
+    [GeneratedRegex(@"\A[A-Za-z0-9._~-]{1,128}\z")]
+    private static partial Regex ApprovalIdPattern();
     [GeneratedRegex("^[A-Za-z0-9-]{8,64}$")]
     private static partial Regex IdPattern();
     [GeneratedRegex("^-----[A-Z0-9 ]+-----$")]

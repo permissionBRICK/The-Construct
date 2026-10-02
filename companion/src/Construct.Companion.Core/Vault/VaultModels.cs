@@ -48,10 +48,10 @@ public sealed record VaultSecretInput(string Name, string Description, string Us
 // pending approval (Host is the host's slug, HostName its address, HostRequestId the host's approval id).
 public sealed record VaultApprovalSource(string Instance, string Vm, string Op, IReadOnlyList<string> Names, string? RequestId = null,
     string? Host = null, string HostName = "", string? HostRequestId = null, DateTimeOffset? CreatedAt = null);
-// A pending approval as other apps on this PC see it (GET /v1/vault/approvals): the native dialog's texts and
-// where the request came from, never a value. Kind is "local" or "host".
+// A pending approval as the tray pop-out and other apps on this PC see it (GET /v1/vault/approvals): its texts
+// and where the request came from, never a value. Kind is "local" or "host"; HostName is the host's address.
 public sealed record VaultPendingApproval(string Id, string Instance, string Vm, string Kind, string? Host, string? RequestId, string? HostRequestId,
-    string Op, string Title, string Message, string Action, string Deny, IReadOnlyList<string> Names, DateTimeOffset CreatedAt, DateTimeOffset? Deadline);
+    string Op, string Title, string Message, string Action, string Deny, IReadOnlyList<string> Names, DateTimeOffset CreatedAt, DateTimeOffset? Deadline, string HostName = "");
 // The outcome of an answer from another app: Failed = the host could not be told (the activity list says why).
 public enum VaultDecision { Decided, NotFound, AlreadyDecided, Failed }
 

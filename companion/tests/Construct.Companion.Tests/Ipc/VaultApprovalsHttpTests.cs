@@ -7,7 +7,6 @@ using Construct.Companion.Core.Remote;
 using Construct.Companion.Core.Vault;
 using Construct.Companion.Fakes;
 using Microsoft.Extensions.DependencyInjection;
-using static Construct.Companion.Tests.Runtime.ProcessSupervisorTests;
 using Harness = Construct.Companion.Tests.Ipc.HttpTests.Harness;
 using VaultHostsTests = Construct.Companion.Tests.Vault.VaultHostsTests;
 namespace Construct.Companion.Tests.Ipc;
@@ -19,9 +18,9 @@ public sealed class VaultApprovalsHttpTests
     private const string Value = "SENTINEL-value-8d2f", Username = "SENTINEL-user-41c7";
     private static readonly string[] Fields = ["id", "instance", "vm", "kind", "host", "requestId", "hostRequestId", "op", "title", "message", "action", "deny", "names", "createdAt", "deadline"];
 
-    // A dialog that stays open until it is closed from outside.
-    private static void OpenUntilClosed(FakePrompts prompts, Action closed) =>
-        prompts.ApprovalHandler = async (_, token) => { try { await Task.Delay(Timeout.Infinite, token); return false; } finally { closed(); } };
+    // The whole Host starts here: allow it more time than the runtime's own Eventually.
+    private static async Task Eventually(Func<bool> condition)
+    { for (var i = 0; i < 500 && !condition(); i++) await Task.Delay(20); Assert.True(condition(), "Condition did not become true."); }
     private static async Task<JsonArray> List(Harness host) => (await host.Client.GetFromJsonAsync<JsonObject>("/v1/vault/approvals"))!["approvals"]!.AsArray();
     private static Task<HttpResponseMessage> Decide(Harness host, string id, object body) => host.Client.PostAsJsonAsync("/v1/vault/approvals/" + id, body);
     private static async Task Problem(HttpResponseMessage response, int status, string code)
@@ -37,10 +36,9 @@ public sealed class VaultApprovalsHttpTests
         var vault = host.App.Services.GetRequiredService<VaultService>();
         vault.Save(new("github-token", "GitHub token for CI", Username, new Secret(Value))); vault.EnsureKey();
         var key = vault.ExportKey()!.Reveal();
-        var closed = 0; OpenUntilClosed(host.Get<FakePrompts, IPrompts>(), () => Interlocked.Increment(ref closed));
-        var transport = host.Get<FakeInstanceConnections, IInstanceConnections>().Transports["agent-vm"];
-        await Eventually(() => transport.Watches.Any(w => w.Script == VaultProtocol.WatchScript() && !w.Process.Stopped));
-        var watch = transport.Watches.Last(w => w.Script == VaultProtocol.WatchScript()).Process;
+        var transports = host.Get<FakeInstanceConnections, IInstanceConnections>().Transports; FakeSshTransport? transport = null;
+        await Eventually(() => transports.TryGetValue("agent-vm", out transport) && transport.Watches.Any(w => w.Script == VaultProtocol.WatchScript() && !w.Process.Stopped));
+        var watch = transport!.Watches.Last(w => w.Script == VaultProtocol.WatchScript()).Process;
         string Ask(string op, string id)
         {
             watch.Emit(new JsonObject { ["v"] = 1, ["id"] = id, ["op"] = op, ["names"] = new JsonArray("github-token"), ["reason"] = "release", ["source"] = "root@agent-vm",
@@ -67,7 +65,7 @@ public sealed class VaultApprovalsHttpTests
         using (var approved = await Decide(host, id, new { decision = "approve" })) Assert.Equal(HttpStatusCode.NoContent, approved.StatusCode);
         await Eventually(() => Response(requestId) is not null);
         Assert.Equal("ok", Response(requestId)!["status"]!.GetValue<string>());
-        Assert.Equal(1, closed); Assert.Empty(await List(host));
+        Assert.Empty(await List(host));
         using (var again = await Decide(host, id, new { decision = "deny" })) await Problem(again, 409, "already-decided");
 
         // A denial: the agent hears "denied", the secret stays.
@@ -77,7 +75,8 @@ public sealed class VaultApprovalsHttpTests
         using (var denied = await Decide(host, pending, new { decision = "deny" })) Assert.Equal(HttpStatusCode.NoContent, denied.StatusCode);
         await Eventually(() => Response(deleteId) is not null);
         Assert.Equal("denied", Response(deleteId)!["status"]!.GetValue<string>()); Assert.Equal(Value, vault.Reveal("github-token")!.Reveal());
-        Assert.Equal(2, closed);
+        Assert.Contains(vault.Activity(), a => a.Text == "Denied deleting github-token from another app on this PC.");
+        Assert.Empty(host.Get<FakePrompts, IPrompts>().Shown); // no dialog: the tray pop-out lists the records in the app
     }
 
     [Fact]
@@ -86,7 +85,6 @@ public sealed class VaultApprovalsHttpTests
         await using var host = await Harness.Start(runtimeJobs: false);
         var vault = host.App.Services.GetRequiredService<VaultService>();
         vault.Save(new("github-token", "GitHub token for CI", "", new Secret(Value)));
-        OpenUntilClosed(host.Get<FakePrompts, IPrompts>(), () => { });
         var request = VaultProtocol.ParseRequest("""{"v":1,"id":"1700000000000-3-71","op":"get","names":["github-token"]}""").Request!;
         var get = vault.HandleAsync("agent-vm", request);
         await Eventually(() => vault.PendingApprovals().Count == 1);
@@ -119,7 +117,6 @@ public sealed class VaultApprovalsHttpTests
         await using var host = await Harness.Start(s => s.AddSingleton<IVaultHostDirectory>(new VaultHostsTests.TestDirectory(client)), runtimeJobs: false);
         var vault = host.App.Services.GetRequiredService<VaultService>(); vault.EnsureKey();
         var hosts = host.App.Services.GetRequiredService<VaultHosts>();
-        var closed = 0; OpenUntilClosed(host.Get<FakePrompts, IPrompts>(), () => Interlocked.Increment(ref closed));
         hosts.Online(new("dev", VaultHostsTests.Slug, "dev"), true);
         var deadline = DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeMilliseconds();
         JsonObject Approval(string id) => new()
@@ -139,7 +136,7 @@ public sealed class VaultApprovalsHttpTests
 
         using (var denied = await Decide(host, item["id"]!.GetValue<string>(), new { decision = "deny" })) Assert.Equal(HttpStatusCode.NoContent, denied.StatusCode);
         await hosts.DrainAsync();
-        Assert.Equal("deny", fake.Decisions["h1"]); Assert.Single(fake.Calls("POST", "/vault/approvals/h1")); Assert.Equal(1, closed);
+        Assert.Equal("deny", fake.Decisions["h1"]); Assert.Single(fake.Calls("POST", "/vault/approvals/h1")); Assert.Empty(vault.PendingApprovals());
 
         // Answered on the phone a moment earlier: the host's 409 is the reply.
         fake.Edit(x => x.Approvals.Add(Approval("h2")));
@@ -148,6 +145,6 @@ public sealed class VaultApprovalsHttpTests
         fake.Edit(x => x.Decisions["h2"] = "approve");
         using (var late = await Decide(host, vault.PendingApprovals()[0].Id, new { decision = "deny" })) await Problem(late, 409, "already-decided");
         await hosts.DrainAsync();
-        Assert.Equal("approve", fake.Decisions["h2"]); Assert.Equal(2, closed);
+        Assert.Equal("approve", fake.Decisions["h2"]); Assert.Empty(vault.PendingApprovals());
     }
 }

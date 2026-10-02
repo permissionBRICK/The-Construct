@@ -47,6 +47,7 @@ public sealed class VaultGuestScriptTests
     {
         var vault = new VaultService(new VaultStore(new FakeFileSystem(), new FakeDataProtection(), "/vault.dat"), prompts, new FakeToastRaiser(), clock);
         vault.Save(new("api-token", "Token for the test API", "svc", new Secret(Value)));
+        _ = new PromptApprover(vault, prompts); // answers each approval from prompts.Approvals
         return vault;
     }
 

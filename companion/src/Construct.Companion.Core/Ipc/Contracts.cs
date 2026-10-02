@@ -1,6 +1,5 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Text.RegularExpressions;
 using Construct.Companion.Core.Vault;
 
 namespace Construct.Companion.Core.Ipc;
@@ -49,14 +48,11 @@ public sealed record QuitRequest(string Reason);
 // dialog's texts and where a request came from (times in ms), never a value. POST /v1/vault/approvals/{id}
 // takes {"decision":"approve"|"deny"}.
 public sealed record VaultApprovalList(IReadOnlyList<VaultApprovalItem> Approvals);
-public sealed partial record VaultApprovalItem(string Id, string Instance, string Vm, string Kind, string? Host, string? RequestId, string? HostRequestId, string Op,
+public sealed record VaultApprovalItem(string Id, string Instance, string Vm, string Kind, string? Host, string? RequestId, string? HostRequestId, string Op,
     string Title, string Message, string Action, string Deny, IReadOnlyList<string> Names, long CreatedAt, long? Deadline)
 {
     public static VaultApprovalItem From(VaultPendingApproval a) => new(a.Id, a.Instance, a.Vm, a.Kind, a.Host, a.RequestId, a.HostRequestId, a.Op,
         a.Title, a.Message, a.Action, a.Deny, a.Names, a.CreatedAt.ToUnixTimeMilliseconds(), a.Deadline?.ToUnixTimeMilliseconds());
-    public static bool IsId(string? id) => id is not null && IdPattern().IsMatch(id);
-    [GeneratedRegex(@"\A[A-Za-z0-9._~-]{1,128}\z")]
-    private static partial Regex IdPattern();
 }
 public sealed record Problem(string Type, string Title, int Status, string Code, string? Detail = null);
 public sealed record ForwardSettings(bool Enabled = true, string HostLabel = "");

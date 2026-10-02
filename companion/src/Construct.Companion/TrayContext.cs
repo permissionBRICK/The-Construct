@@ -27,6 +27,7 @@ internal sealed class TrayContext : ApplicationContext
     private readonly VaultService vault;
     private readonly VaultHosts vaultHosts;
     private VaultWindow? vaultWindow;
+    private readonly VaultApprovalsWindow approvals;
     private readonly DesktopSnapshot snapshot;
     private readonly IDisposable registryWatch;
     private readonly CancellationTokenSource lifetime = new();
@@ -45,6 +46,10 @@ internal sealed class TrayContext : ApplicationContext
         this.platform = platform; this.sink = sink; this.settings = settings; this.prompts = prompts; this.vault = vault; this.vaultHosts = vaultHosts;
         snapshot = new(platform.Clock);
         _ = dispatcher.Handle;
+        // Key vault approvals appear in their own pop-out at the tray, whatever else is open.
+        approvals = new(platform, settings, vault, new VaultApprovals(vault, platform.Clock),
+            pageHeight => PopupBounds(dpi => (TrayModel.PopupSize(dpi).Width, VaultApprovals.WindowHeight(pageHeight, dpi))),
+            () => Open("vault", null), text => tray.ShowBalloonTip(10000, "Construct Key Vault", text, ToolTipIcon.Warning));
         registry = LoadRegistry();
         theme = settings.Read().UiTheme;
         tray.ContextMenuStrip = menu; menu.Renderer = new RadioMenuRenderer();
@@ -57,7 +62,13 @@ internal sealed class TrayContext : ApplicationContext
         };
         tray.MouseClick += (_, e) => { if (e.Button == MouseButtons.Left) { showOnClick = popupGesture.Click(); clickTimer.Stop(); clickTimer.Start(); } };
         tray.MouseDoubleClick += (_, e) => { if (e.Button == MouseButtons.Left) { clickTimer.Stop(); popupGesture.Reset(); HidePopup(); Open("panel", Active); } };
-        clickTimer.Tick += (_, _) => { clickTimer.Stop(); if (showOnClick) Open("popup", Active); else HidePopup(); };
+        clickTimer.Tick += (_, _) =>
+        {
+            clickTimer.Stop();
+            if (!showOnClick) HidePopup();
+            else if (TrayModel.LeftClickView(approvals.Count, approvals.Visible) == "approvals") approvals.Present();
+            else Open("popup", Active);
+        };
         menu.Opening += (_, _) => BuildMenu();
         refreshTimer.Tick += (_, _) => RefreshIcon(); refreshTimer.Start();
         platform.Files.CreateDirectory(platform.StateRoot);
@@ -82,7 +93,7 @@ internal sealed class TrayContext : ApplicationContext
         if (!disposed) dispatcher.BeginInvoke(() =>
         {
             if (value.ActiveInstance != Active) Select(value.ActiveInstance);
-            if (theme != value.UiTheme) { theme = value.UiTheme; foreach (var window in windows.Values) window.ReloadTheme(); vaultWindow?.ReloadTheme(); }
+            if (theme != value.UiTheme) { theme = value.UiTheme; foreach (var window in windows.Values) window.ReloadTheme(); vaultWindow?.ReloadTheme(); approvals.ReloadTheme(); }
         });
     }
     private async Task ListenCompanionAsync(CancellationToken token)
@@ -173,7 +184,7 @@ internal sealed class TrayContext : ApplicationContext
             else item.Click += async (_, _) => { try { await CommandAsync(model.Id); } catch (Exception e) { ShowFailure(e); } };
             return item;
         }
-        foreach (var entry in TrayModel.Menu(snapshot.Current, registry.List().Select(i => StateJson.String(i["name"])), snapshot.Forwards, settings.Read().Notifications, platform.Registration.Autostart))
+        foreach (var entry in TrayModel.Menu(snapshot.Current, registry.List().Select(i => StateJson.String(i["name"])), snapshot.Forwards, settings.Read().Notifications, platform.Registration.Autostart, approvals.Count))
             menu.Items.Add(Build(entry));
     }
     private void ShowFailure(Exception e)
@@ -195,17 +206,20 @@ internal sealed class TrayContext : ApplicationContext
                 (Control.MouseButtons & MouseButtons.Left) != 0 && trayHitArea is { } area && area.Contains(Cursor.Position));
             windows.Add(view, window);
         }
-        if (view == "popup")
-        {
-            var screen = trayHitArea is { } hit ? Screen.FromRectangle(hit) : Screen.PrimaryScreen!;
-            var work = screen.WorkingArea;
-            var point = trayHitArea is { } anchor ? new Point(anchor.X + anchor.Width / 2, anchor.Y + anchor.Height / 2) : new Point(work.Right - 16, work.Bottom + 16);
-            var dpi = iconDpi > 0 ? iconDpi : dispatcher.DeviceDpi;
-            var size = TrayModel.IconSize(dpi); var (width, height) = TrayModel.PopupSize(dpi);
-            var bounds = WindowPlacement.Popup(new(point.X - size / 2, point.Y - size / 2, size, size), new(work.X, work.Y, work.Width, work.Height), width, height);
-            window.Bounds = new(bounds.X, bounds.Y, bounds.Width, bounds.Height);
-        }
+        if (view == "popup") window.Bounds = PopupBounds(TrayModel.PopupSize);
         _ = window.ChangeScopeAsync(sinkScope, notify: false); window.Present(refreshScheduled);
+    }
+    // Where the launcher popup and the key vault pop-out appear: at the tray icon last clicked, else the
+    // bottom-right corner of the primary screen. size: the window's size for a dpi.
+    private Rectangle PopupBounds(Func<int, (int Width, int Height)> size)
+    {
+        var screen = trayHitArea is { } hit ? Screen.FromRectangle(hit) : Screen.PrimaryScreen!;
+        var work = screen.WorkingArea;
+        var point = trayHitArea is { } anchor ? new Point(anchor.X + anchor.Width / 2, anchor.Y + anchor.Height / 2) : new Point(work.Right - 16, work.Bottom + 16);
+        var dpi = iconDpi > 0 ? iconDpi : dispatcher.DeviceDpi;
+        var icon = TrayModel.IconSize(dpi); var (width, height) = size(dpi);
+        var bounds = WindowPlacement.Popup(new(point.X - icon / 2, point.Y - icon / 2, icon, icon), new(work.X, work.Y, work.Width, work.Height), width, height);
+        return new(bounds.X, bounds.Y, bounds.Width, bounds.Height);
     }
     private void HidePopup() { if (windows.TryGetValue("popup", out var popup)) popup.Hide(); }
     private async Task CommandAsync(string id)
@@ -215,6 +229,7 @@ internal sealed class TrayContext : ApplicationContext
         {
             case "panel": case "settings": Open(id, Active); return;
             case "vault": Open("vault", null); return;
+            case "approvals": approvals.Present(); return;
             case "hostadmin": Open(id, snapshot.AdminHost); return;
             case "quit": ExitThread(); return;
             case "notifications": settings.Merge(new JsonObject { ["notifications"] = !settings.Read().Notifications }); return;
@@ -247,7 +262,7 @@ internal sealed class TrayContext : ApplicationContext
                 Select(name); await source.ChangeScopeAsync(name); return true;
             case "pickTheme":
                 var picked = message.GetProperty("id").GetString(); if (!WebViewDocument.IsKnownTheme(picked)) throw new ArgumentException("Unknown design.");
-                settings.Merge(new JsonObject { ["uiTheme"] = picked }); foreach (var window in windows.Values) window.ReloadTheme(); vaultWindow?.ReloadTheme(); return true;
+                settings.Merge(new JsonObject { ["uiTheme"] = picked }); foreach (var window in windows.Values) window.ReloadTheme(); vaultWindow?.ReloadTheme(); approvals.ReloadTheme(); return true;
             case "command":
                 var id = message.GetProperty("id").GetString();
                 if (id == "chooseMicDevice")
@@ -278,7 +293,7 @@ internal sealed class TrayContext : ApplicationContext
     public Task QuitAsync(CancellationToken cancellationToken = default) => dispatcher.InvokeAsync(ExitThread, cancellationToken);
     protected override void ExitThreadCore()
     {
-        if (!disposed) { subscription.Cancel(); foreach (var window in windows.Values) window.Shutdown(); vaultWindow?.Shutdown(); tray.Visible = false; }
+        if (!disposed) { subscription.Cancel(); foreach (var window in windows.Values) window.Shutdown(); vaultWindow?.Shutdown(); approvals.Shutdown(); tray.Visible = false; }
         base.ExitThreadCore();
     }
     protected override void Dispose(bool disposing)
@@ -286,7 +301,7 @@ internal sealed class TrayContext : ApplicationContext
         if (disposing && !disposed)
         {
             disposed = true; settings.Changed -= SettingsChanged; lifetime.Cancel(); lifetime.Dispose(); registryWatch.Dispose(); subscription.Cancel(); subscription.Dispose(); refreshTimer.Dispose(); clickTimer.Dispose();
-            foreach (var window in windows.Values) window.Dispose(); vaultWindow?.Dispose(); menu.Dispose(); tray.Dispose(); icon?.Dispose(); dispatcher.Dispose();
+            foreach (var window in windows.Values) window.Dispose(); vaultWindow?.Dispose(); approvals.Dispose(); menu.Dispose(); tray.Dispose(); icon?.Dispose(); dispatcher.Dispose();
         }
         base.Dispose(disposing);
     }

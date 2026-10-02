@@ -123,7 +123,10 @@ public sealed class VaultHostsTests
             Vault = new(new VaultStore(Files, Protection, VaultPath), Prompts, Toasts, Clock);
             Directory = new(new RemoteHostClient(Api, Files, new FakeTokenStore(), "https://host.example:7462", RemoteAuthentication.Negotiate, Pin));
             Hosts = new(Vault, Directory, Prompts, Clock);
+            Approver = new(Vault, Prompts);
         }
+        // Answers pending approvals from Prompts.Approvals / ApprovalHandler, one at a time.
+        public PromptApprover Approver { get; }
         public byte[] Key => Vault.KeyCopy()!;
         public VaultHostState State => Vault.HostState(Slug);
         public Task Sync() => Hosts.SyncAsync(CancellationToken.None);
@@ -134,7 +137,7 @@ public sealed class VaultHostsTests
         public void HostWriteWith(byte[] key, string name, string value, long at, string by = "vm:dev", string username = "") => Host.Edit(h => h.Entries[name] = VaultSync.ToJson(
             new VaultWireEntry(name, "from a VM", username.Length > 0, VaultCrypto.SealEntry(key, name, at, username, new Secret(value)), at, by, false)));
         public void HostDelete(string name, long at, string by = "vm:dev") => Host.Edit(h => h.Entries[name] = VaultSync.ToJson(new VaultWireEntry(name, "", false, null, at, by, true)));
-        public async ValueTask DisposeAsync() { await Hosts.DisposeAsync(); await Vault.DisposeAsync(); }
+        public async ValueTask DisposeAsync() { Approver.Dispose(); await Hosts.DisposeAsync(); await Vault.DisposeAsync(); }
     }
     private static string Open(byte[] key, JsonObject entry) =>
         VaultCrypto.OpenEntry(key, entry["name"]!.GetValue<string>(), entry["updatedAt"]!.GetValue<long>(), entry["payload"]!.GetValue<string>())!.Value.Value.Reveal();
@@ -380,7 +383,7 @@ public sealed class VaultHostsTests
     }
 
     [Fact]
-    public async Task HostApprovalsShareTheDialogQueueAndPostTheAnswer()
+    public async Task HostApprovalsAreListedWithLocalOnesAndPostTheAnswer()
     {
         await using var h = new Harness();
         h.Host.Edit(x => x.Approvals.Add(Approval("a1", h.Clock.UtcNow + TimeSpan.FromMinutes(10))));
@@ -398,21 +401,22 @@ public sealed class VaultHostsTests
         await h.Poll(); await h.Poll();
         Assert.Equal("deny", h.Host.Decisions["a2"]); Assert.Equal(2, h.Prompts.Shown.Count);
 
-        // A host approval waits behind a local VM's dialog: one dialog at a time.
+        // A host approval is listed next to a local VM's request (the test's prompts answer one at a time).
         var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously); var shown = 0;
         h.Prompts.ApprovalHandler = (_, _) => { Interlocked.Increment(ref shown); return gate.Task; };
         h.Vault.Save(new("github-token", "CI", "", new Secret("ghp_local_value_1")));
         var local = h.Vault.HandleAsync("local-vm", VaultProtocol.ParseRequest("""{"v":1,"id":"1700000000000-1-2","op":"get","names":["github-token"]}""").Request!);
         await Eventually(() => shown == 1);
         h.Host.Edit(x => x.Approvals.Add(Approval("a3", h.Clock.UtcNow + TimeSpan.FromMinutes(10))));
-        await h.Hosts.PollAsync(false, default); await Task.Delay(30);
+        await h.Hosts.PollAsync(false, default);
+        await Eventually(() => h.Vault.PendingApprovals().Select(a => a.Kind).SequenceEqual(["local", "host"]));
         Assert.Equal(1, shown);
         gate.SetResult(true); await local; await h.Hosts.DrainAsync();
         Assert.Equal(2, shown); Assert.Equal("approve", h.Host.Decisions["a3"]);
     }
 
     [Fact]
-    public async Task AnApprovalAnsweredElsewhereClosesItsDialogAndLateAnswersAreSilent()
+    public async Task AnApprovalAnsweredElsewhereLeavesTheListAndLateAnswersAreSilent()
     {
         await using var h = new Harness();
         h.Hosts.Online(new("dev", Slug, "dev"), true);
@@ -423,7 +427,7 @@ public sealed class VaultHostsTests
         await Eventually(() => h.Prompts.Shown.Count == 1);
         h.Host.Edit(x => x.Approvals.Clear()); // the phone answered
         await h.Poll();
-        await closed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await closed.Task.WaitAsync(TimeSpan.FromSeconds(5)); Assert.Empty(h.Vault.PendingApprovals());
         Assert.Empty(h.Host.Calls("POST", "/vault/approvals/a1"));
 
         // The phone was faster while the dialog was open: 409 is not an error.
@@ -462,10 +466,10 @@ public sealed class VaultHostsTests
         Assert.Equal(("dev", "dev", "host", Slug, null, "a1", "request"), (listed.Instance, listed.Vm, listed.Kind, listed.Host, listed.RequestId, listed.HostRequestId, listed.Op));
         Assert.Equal(["github-token"], listed.Names); Assert.Equal(deadline - TimeSpan.FromMinutes(10), listed.CreatedAt); Assert.Equal(deadline, listed.Deadline);
         Assert.Equal(("Key vault — access request", "Approve", "Deny"), (listed.Title, listed.Action, listed.Deny));
-        Assert.Equal(VaultDecision.Decided, await h.Vault.DecideAsync(listed.Id, false));
+        Assert.Equal(VaultDecision.Decided, await h.Vault.DecideAsync(listed.Id, false, otherApp: true));
         await h.Hosts.DrainAsync();
         Assert.Equal("deny", h.Host.Decisions["a1"]); Assert.Single(h.Host.Calls("POST", "/vault/approvals/a1"));
-        Assert.Equal(1, closed); Assert.Empty(h.Vault.PendingApprovals());
+        await Eventually(() => closed == 1); Assert.Empty(h.Vault.PendingApprovals());
         Assert.Contains(h.Vault.Activity(), a => a.Host == "host.example" && a.Text == "Denied access to github-token from another app on this PC.");
         await h.Poll(); Assert.Single(h.Prompts.Shown); // answered: never asked again
 
@@ -476,7 +480,7 @@ public sealed class VaultHostsTests
         h.Host.Edit(x => x.Decisions["a2"] = "approve");
         Assert.Equal(VaultDecision.AlreadyDecided, await h.Vault.DecideAsync(h.Vault.PendingApprovals()[0].Id, true));
         await h.Hosts.DrainAsync();
-        Assert.Equal(2, closed); Assert.DoesNotContain(h.Vault.Activity(), a => a.Warning);
+        await Eventually(() => closed == 2); Assert.DoesNotContain(h.Vault.Activity(), a => a.Warning);
         // Expired on the host: 404. Any other failure is a warning and Failed.
         foreach (var (id, status, expected) in new[] { ("a3", 404, VaultDecision.NotFound), ("a4", 500, VaultDecision.Failed) })
         {
@@ -489,7 +493,7 @@ public sealed class VaultHostsTests
         }
         Assert.Contains(h.Vault.Activity(), a => a.Warning && a.Text.StartsWith("Could not send your answer", StringComparison.Ordinal));
 
-        // A dialog answer goes to the host as before, and a later decision is too late.
+        // The tray pop-out's answer (the test's prompts) goes to the host too, and a later decision is too late.
         string? id5 = null;
         h.Prompts.ApprovalHandler = (_, _) => { id5 = h.Vault.PendingApprovals().Single(a => a.HostRequestId == "a5").Id; return Task.FromResult(true); };
         h.Host.Edit(x => x.Approvals.Add(Approval("a5", deadline)));

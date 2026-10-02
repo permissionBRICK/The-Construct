@@ -2,7 +2,7 @@
 
 The key vault keeps tokens, passwords, keys and username/password pairs on **your PC**, inside
 Construct Companion. Agents in a VM can see which secrets exist and what they are for, but they
-read a value only after you approve it in a Companion dialog: for a number of uses, for a time,
+read a value only after you approve it in the Companion: for a number of uses, for a time,
 or both. When the access ends, the Companion searches that VM for every copy of the value. Agent
 logs are redacted automatically. Any other file is listed for you, and you decide per file.
 
@@ -84,11 +84,18 @@ taken, `11` the vault is locked for this VM (hosted VMs: start or connect the VM
 
 ## Approvals and leases
 
-A request opens a dialog on top of your other windows. It names the VM, each secret and its
-description, the access asked for, the agent's reason and the requesting user. **Deny** has the
-focus, and **Approve** becomes clickable after a second, so a keystroke meant for another window
-cannot approve it. The agent waits up to ten minutes by default (`--wait`). When it gives up,
-the dialog closes and counts as denied. Dialogs from several VMs queue one at a time.
+A request appears in the Companion's key vault pop-out, next to the tray icon and on top of your
+other windows, in the design you chose for the control panel. The pop-out does not take the
+keyboard focus, so typing meant for another window cannot reach it. Each request names the VM
+(and its host), each secret and its description, the access asked for, the agent's reason, the
+requesting user and the time left. **Deny** works at once; **Approve** becomes clickable a second
+after the request appears. Requests from several VMs are listed together, oldest first.
+
+The pop-out stays until no request is left. Its **×** hides it until the next request arrives;
+while requests wait, **Key vault requests (N)…** at the top of the tray menu, or a left click on
+the tray icon, brings it back. The agent waits up to ten minutes by default (`--wait`). When it
+gives up, the request leaves the list and counts as denied. A request answered elsewhere (T3 Code
+Desktop, a paired phone, the host's approval page) leaves the list too.
 
 A lease belongs to one VM and one secret:
 
@@ -178,15 +185,15 @@ the first answer counts.
 **Noticing a request in T3 Code.** While `construct secret` waits for an answer, T3 Code shows a
 banner on every open client (phone or PC): "Key vault: github-token waiting for your approval". On
 a hosted VM it has an **Approve** button that opens the host's approval page with that request
-highlighted. On a local VM it points you to the Companion dialog on your PC. In a browser the banner
+highlighted. On a local VM it points you to the Companion's pop-out on your PC. In a browser the banner
 only links; approving still happens on the host's page or in the Companion. It disappears when the
 request is answered or times out. Nothing alerts you while no T3 Code page is open.
 
 **Approving inside T3 Code Desktop.** T3 Code Desktop on the PC where the Companion runs asks the
 Companion for its pending approvals, local and hosted alike, and shows each one in the banner with
 the Companion's own text and **Deny** / **Approve** buttons. An answer there counts like one in the
-Companion dialog: the dialog closes, and a hosted VM's answer goes to the host. Whichever answer
-comes first counts; a later one is refused as already answered.
+Companion's pop-out: the request leaves the pop-out, and a hosted VM's answer goes to the host.
+Whichever answer comes first counts; a later one is refused as already answered.
 
 The device token lives only on the approval page's address, never in T3 Code. T3 Code is
 served from inside the VM, where an agent could read anything stored for its page. The host's
@@ -286,13 +293,15 @@ and few uses, and revoke anything you did not expect.
   response the CLI deletes as soon as it reads it, the scan's pattern files), never the disk.
   Unclaimed responses are deleted after two minutes.
 - The Companion never logs values, and they never reach a webview or the local HTTP API. The Key
-  Vault window's page gets names, descriptions, usernames and access details; it is handled inside
-  the Companion process, so nothing on the local HTTP API can list or change the vault.
-- Pending approvals are the exception: the local HTTP API lists them (the dialog's text, the VM, the
-  secret names, the deadline) and accepts an approve or deny for each. It answers only on
+  Vault window's page gets names, descriptions, usernames and access details, and the pop-out's page
+  the pending requests' texts; both are handled inside the Companion process, so nothing on the local
+  HTTP API can list or change the vault.
+- Pending approvals are the exception: the local HTTP API lists them (the request's text, the VM,
+  the secret names, the deadline) and accepts an approve or deny for each. It answers only on
   `127.0.0.1` and only with the bearer token in `endpoint.json` in your Windows profile, so any
-  program running as your Windows account can approve a pending request, just as it could click the
-  dialog. T3 Code Desktop uses this to approve inline; it keeps the token in its main process and
+  program running as your Windows account can approve a pending request, just as it could click
+  **Approve** in the pop-out. Such answers appear in the **Activity** tab as given "from another app
+  on this PC". T3 Code Desktop uses this to approve inline; it keeps the token in its main process and
   gives its window only the list and the two answers. Values, usernames, the vault key, device
   tokens and pairing links are never part of it, and nothing else of the vault is reachable there.
 

@@ -10,7 +10,7 @@ namespace Construct.Companion.Core.Vault;
 // leases and scrubs every VM a lease ended on. All document changes run under gate and are saved
 // before the lock is released; dialogs and SSH never run under it. VaultService.Hosts.cs holds the
 // document side of the host sync (VaultHosts does the network side), VaultService.Approvals.cs the
-// pending approvals and their one-dialog-at-a-time gate.
+// pending approvals that the tray pop-out and other apps answer.
 public sealed partial class VaultService : IAsyncDisposable
 {
     public static readonly TimeSpan DefaultTtl = TimeSpan.FromHours(1), OnceTtl = TimeSpan.FromMinutes(10),

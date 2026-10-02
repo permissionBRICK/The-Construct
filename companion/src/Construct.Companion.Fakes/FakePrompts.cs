@@ -22,6 +22,8 @@ public sealed class FakePrompts : IPrompts
     { cancellationToken.ThrowIfCancellationRequested(); Shown.Add((title, message)); return ConfirmationHandler is null ? Task.FromResult(Confirmations.Dequeue()) : ConfirmationHandler(cancellationToken); }
     public Task<bool> ConfirmAsync(ConfirmationPrompt prompt, CancellationToken cancellationToken = default)
     { cancellationToken.ThrowIfCancellationRequested(); Shown.Add(prompt); return ConfirmationHandler is null ? Task.FromResult(Confirmations.Dequeue()) : ConfirmationHandler(cancellationToken); }
+    // Not an IPrompts member: key vault approvals are pending records (VaultService.PendingApprovals). Tests
+    // answer them through this fake "dialog" with a PromptApprover, as the tray pop-out does in the app.
     public Func<ApprovalPrompt, CancellationToken, Task<bool>>? ApprovalHandler { get; set; }
     public Queue<bool> Approvals { get; } = new();
     public Task<bool> ApproveAsync(ApprovalPrompt prompt, CancellationToken cancellationToken = default)

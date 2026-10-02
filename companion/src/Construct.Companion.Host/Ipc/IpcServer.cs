@@ -108,8 +108,8 @@ public static class IpcServer
         {
             var decision = (await Body(c))["decision"] is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
             if (decision is not ("approve" or "deny")) throw new IpcFailure(400, "invalidDecision", "decision must be approve or deny.");
-            if (!VaultApprovalItem.IsId(id)) throw new IpcFailure(404, "not-found", "No pending approval has this id.");
-            return await vault.DecideAsync(id, decision == "approve", c.RequestAborted) switch
+            if (!VaultProtocol.IsApprovalId(id)) throw new IpcFailure(404, "not-found", "No pending approval has this id.");
+            return await vault.DecideAsync(id, decision == "approve", otherApp: true, c.RequestAborted) switch
             {
                 VaultDecision.Decided => Results.NoContent(),
                 VaultDecision.NotFound => throw new IpcFailure(404, "not-found", "No pending approval has this id."),
