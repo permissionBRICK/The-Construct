@@ -146,6 +146,14 @@ public static class IdleEndpoints
             cancellationToken).ConfigureAwait(false);
 
         http.SetAuditDetail($"busy={busy}, reasons={reasons.Count}");
+
+        // The guest runs `construct secret _scrub` once when a key-vault scrub is due for it.
+        if (await http.RequestServices.GetRequiredService<Constructd.Core.Services.VaultHostService>()
+                .ScrubDueAsync(lookup.Vm!, cancellationToken).ConfigureAwait(false))
+        {
+            return TypedResults.Ok(new { vaultScrub = true });
+        }
+
         return TypedResults.NoContent();
     }
 }

@@ -246,9 +246,36 @@ gate: the resource policy is evaluated again inside every handler.
 | Media | `GET /media`; `POST /media/acquire`; `POST /media/uploads`; `GET /media/uploads/{id}`; `PUT /media/uploads/{id}/chunks/{index}`; `POST /media/uploads/{id}/complete`; `DELETE /media/uploads/{id}`; `GET /media/{id}`; `GET /media/{id}/references`; `DELETE /media/{id}`; `POST /media/cleanup` | Owner primary/user or Admin; a shared operator gets only reduced metadata for attached media. Cleanup is Admin-only. |
 | Console | `GET /vms/{name}/console/capabilities`; `POST /vms/{name}/console/sessions`; `POST /vms/{name}/console/sessions/{sid}/renew`; `DELETE /vms/{name}/console/sessions/{sid}`; `GET /vms/{name}/console/sessions/{sid}/screenshot`; `POST .../{sid}/keyboard`; `POST .../{sid}/mouse` | Current VM operator; session remains bound to its creating principal and is re-authorized on every call. |
 | Host updates | `GET /host/updates/status`; `POST /host/updates/check`; `POST /host/updates/stage`; `POST /host/updates/apply`; `POST /host/updates/cancel`; `POST /host/updates/resolve` | Admin. Apply (including resume) and resolve are the only narrowly maintenance-exempt mutations. |
+| Key vault | `GET`, `PUT /vault/entries`; `PUT /vault/settings`; `POST /vms/{name}/vault/unlock`; `GET /vault/leases`; `DELETE /vault/leases/{id}`; `GET`, `POST /vault/devices`; `DELETE /vault/devices/{id}`; `GET /vault/activity` | The caller's own vault only (an admin gets no access to other users' vaults); unlock: owner of a running primary. |
+| Key vault approvals | `GET /vault/approvals`; `POST /vault/approvals/{id}`; `GET /vault/files`; `POST /vault/files/{id}`; `GET /vault/device` | The owner or one of their paired devices (`VaultDevice`); `/vault/device` is device-only. |
+| Key vault guest | `POST /vms/{name}/vault/requests`; `GET /vms/{name}/vault/requests/{id}?wait=`; `GET /vms/{name}/vault/scrubs`; `POST /vms/{name}/vault/scrubs/{id}` | That primary VM's own token; a child answers `403 vault-child`. |
 
 There is deliberately no child-media content download route and no interactive-video
 console route.
+
+### Key vault on hosted VMs
+
+The contract is [docs/plans/key-vault-hosted.md](../docs/plans/key-vault-hosted.md); the user guide
+is [docs/key-vault.md](../docs/key-vault.md). One vault per user, synchronized from the Companion
+(`GET`/`PUT /vault/entries`, merge rule: larger `updatedAt` wins, ties go to the larger `updatedBy`,
+tombstones kept 30 days). Payloads are AES-256-GCM under the user's key `K` and never decrypted for
+sync. In `available` mode `K` is wrapped with the host's own `vault-master.key` (DPAPI LocalMachine on
+Windows, root-only `/etc/constructd/keys` on Proxmox); in `locked` mode it lives in RAM per VM after
+`POST /vms/{name}/vault/unlock` and is dropped on stop, save, idle stop/save, any observed non-running
+state (checked every 30 s), the deletion fence and restart. Before the Companion's first
+`PUT /vault/settings`, guest operations other than `list`/`status` answer `locked`.
+
+Guests post the spool contract's request document; answers that need no user come back at once
+(`200`), the rest as `202 {id}` to long-poll (`?wait=` up to 25 s: `200` answer, `204` pending, `404`
+unknown or already picked up). Pending approvals live in memory; the first answer wins (`409
+already-decided`). Leases, pending scrubs, scrub jobs and file decisions are durable; agent logs are
+redacted without asking and every other hit waits in `GET /vault/files`. The heartbeat reply is
+`200 {"vaultScrub": true}` while a scrub job can be delivered to that VM, `204` otherwise.
+
+The phone pages are served anonymously at `/vault/` and `/vault/pair` (strict CSP, no inline code).
+`Constructd:VaultWebUrl` overrides their base URL (default `https://<PublicHost>:<listen port>`);
+`Constructd:Vault:SchedulerEnabled=false` stops the 10 s lease/approval/scrub tick (tests).
+Discovery advertises `key-vault`.
 
 ### Jobs, the event stream and the one-time secret
 
@@ -344,6 +371,7 @@ usage, including deleted VMs, rather than an unbounded lifetime total.
 | `VmToken` | `Authorization: VmToken <secret>` | The scoped token injected into a VM at provision time. |
 | `Negotiate` | Kerberos/NTLM | **Registered only when `OperatingSystem.IsWindows()`** (`Auth/AuthenticationSetup.cs`). |
 | `TestIdentity` | `X-Constructd-Test-Identity: <name>` | Negotiate stand-in, **fake mode only**. |
+| `VaultDevice` | `Authorization: VaultDevice <secret>` | A phone paired for key-vault approvals; honoured only on `/vault/approvals*`, `/vault/files*` and `/vault/device`. |
 
 The scheme is chosen per request from the `Authorization` header. Whatever the scheme, the resulting
 identity is mapped onto a `User` record by `UserClaimsTransformation`, which is where the role comes
@@ -600,6 +628,7 @@ Bound from the `Constructd` section of `appsettings.json`, from environment vari
 | `WslDistro` | `Ubuntu` | WSL distro used for the ISO build. Empty uses WSL's default distro (no `-d`). |
 | `PublicHost` | `localhost` | LAN name/IP that endpoints and forwards are advertised on, and what the API certificate is bound to. |
 | `PublicHostPattern` | – (empty) | Per-VM host name template, e.g. `{name}.vpn.example`. With a wildcard DNS record pointing at this host, every VM gets its OWN name, so two VMs' web UIs are separate origins (browsers scope cookies by host, not by port). `{name}` must appear exactly once and the pattern must render to a valid DNS name for every VM name — checked at startup. Empty = every VM is advertised on `PublicHost`. The certificate is unaffected. |
+| `VaultWebUrl` | – (empty) | Base URL of the key vault's phone pages (`/vault/`, `/vault/pair`) for a reverse proxy with a public certificate. Empty = `https://<PublicHost>:<ListenUrl port>`. |
 | `SwitchName` | `Default Switch` | Hyper-V virtual switch new VMs are attached to. |
 | `VmStorageRoot` | – (empty) | Folder the per-VM VHDX is created in. Empty leaves the path to the driver, i.e. Hyper-V's own default folder — the same location a local install uses. |
 | `ListenAddress` | `0.0.0.0` | `listenaddress=` of the host's portproxy rules. Narrow it to one LAN address on a multi-homed host. |

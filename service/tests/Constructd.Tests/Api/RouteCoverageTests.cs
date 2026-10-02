@@ -118,7 +118,33 @@ public class RouteCoverageTests
         "POST /api/v1/vms/{name}/media/release",
         "GET /api/v1/jobs/{id}",
         "GET /api/v1/jobs/{id}/events",
+        "GET /api/v1/vault/entries",
+        "PUT /api/v1/vault/entries",
+        "PUT /api/v1/vault/settings",
+        "POST /api/v1/vms/{name}/vault/unlock",
+        "GET /api/v1/vault/leases",
+        "DELETE /api/v1/vault/leases/{id}",
+        "GET /api/v1/vault/devices",
+        "POST /api/v1/vault/devices",
+        "DELETE /api/v1/vault/devices/{id}",
+        "GET /api/v1/vault/activity",
+        "GET /api/v1/vault/approvals",
+        "POST /api/v1/vault/approvals/{id}",
+        "GET /api/v1/vault/files",
+        "POST /api/v1/vault/files/{id}",
+        "GET /api/v1/vault/device",
+        "POST /api/v1/vms/{name}/vault/requests",
+        "GET /api/v1/vms/{name}/vault/requests/{id}",
+        "GET /api/v1/vms/{name}/vault/scrubs",
+        "POST /api/v1/vms/{name}/vault/scrubs/{id}",
+        "GET /vault/",
+        "GET /vault/pair",
+        "GET /vault/vault.js",
+        "GET /vault/vault.css",
     ];
+
+    // The key vault's phone pages: anonymous static files, outside /api/v1.
+    private static readonly string[] AnonymousRoutes = ["GET /api/v1/health", "GET /vault/", "GET /vault/pair", "GET /vault/vault.js", "GET /vault/vault.css"];
 
     private static List<(string Route, RouteEndpoint Endpoint)> Routes(TestApp app) =>
         app.Services.GetRequiredService<EndpointDataSource>().Endpoints
@@ -133,7 +159,7 @@ public class RouteCoverageTests
     public async Task EveryProtectedRouteChallengesAnonymousRequests()
     {
         using var app = new TestApp(); using var anonymous = app.CreateAnonymousClient();
-        foreach (var route in Routes(app).Where(r => r.Route != "GET /api/v1/health"))
+        foreach (var route in Routes(app).Where(r => !AnonymousRoutes.Contains(r.Route)))
         {
             var parts = route.Route.Split(' ', 2);
             var path = System.Text.RegularExpressions.Regex.Replace(parts[1], @"\{[^}]+\}", "1");
@@ -162,7 +188,7 @@ public class RouteCoverageTests
             .Select(r => r.Route)
             .ToList();
 
-        Assert.Equal(["GET /api/v1/health"], unprotected);
-        Assert.NotNull(Routes(app).Single(r => r.Route == "GET /api/v1/health").Endpoint.Metadata.GetMetadata<IAllowAnonymous>());
+        Assert.Equal(AnonymousRoutes.Order(StringComparer.Ordinal), unprotected.Order(StringComparer.Ordinal));
+        Assert.All(AnonymousRoutes, route => Assert.NotNull(Routes(app).Single(r => r.Route == route).Endpoint.Metadata.GetMetadata<IAllowAnonymous>()));
     }
 }

@@ -23,6 +23,12 @@ public static class PrincipalExtensions
     public static bool IsPrimaryToken(this ClaimsPrincipal principal) => principal.IsVmToken() &&
         principal.FindFirst("constructd:vm-token-kind")?.Value == "primary";
 
+    /// <summary>The vault owner a paired approval device acts for, or null for every other principal.</summary>
+    public static string? VaultDeviceOwner(this ClaimsPrincipal principal) =>
+        principal.FindFirst(ConstructdClaims.VaultDevice) is null ? null : principal.FindFirst(ConstructdClaims.VaultOwner)?.Value;
+
+    public static bool IsVaultDevice(this ClaimsPrincipal principal) => principal.VaultDeviceOwner() is not null;
+
     public static Role RoleOrDefault(this ClaimsPrincipal principal) =>
         principal.IsInRole(nameof(Role.Admin)) ? Role.Admin : Role.User;
 

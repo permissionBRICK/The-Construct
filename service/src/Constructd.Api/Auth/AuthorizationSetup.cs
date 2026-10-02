@@ -36,6 +36,15 @@ public static class Policies
 
     /// <summary>Resource policy over a <see cref="Vm"/>: owner, admin, or that VM's own token.</summary>
     public const string VmSelfOrOwnerOrAdmin = "vm-self-or-owner-or-admin";
+
+    /// <summary>The vault's approval routes: an enrolled user (their own vault) or a paired vault device.</summary>
+    public const string VaultApprover = "vault-approver";
+
+    /// <summary>A paired vault device only (<c>GET /vault/device</c>).</summary>
+    public const string VaultDevice = "vault-device";
+
+    /// <summary>A VM-scoped token only (the guest's vault routes).</summary>
+    public const string VmToken = "vm-token";
 }
 
 /// <summary>Resource-based requirement evaluated against a <see cref="Vm"/>.</summary>
@@ -94,7 +103,16 @@ public static class AuthorizationSetup
         services.AddAuthorizationBuilder()
             .AddPolicy(Policies.AnyUserIdentity, policy => policy
                 .RequireAuthenticatedUser()
-                .RequireAssertion(context => !context.User.IsVmToken()))
+                .RequireAssertion(context => !context.User.IsVmToken() && !context.User.IsVaultDevice()))
+            .AddPolicy(Policies.VaultApprover, policy => policy
+                .RequireAuthenticatedUser()
+                .RequireAssertion(context => context.User.IsKnownUser() || context.User.IsVaultDevice()))
+            .AddPolicy(Policies.VaultDevice, policy => policy
+                .RequireAuthenticatedUser()
+                .RequireAssertion(context => context.User.IsVaultDevice()))
+            .AddPolicy(Policies.VmToken, policy => policy
+                .RequireAuthenticatedUser()
+                .RequireAssertion(context => context.User.IsVmToken()))
             .AddPolicy(Policies.User, policy => policy
                 .RequireAuthenticatedUser()
                 .RequireClaim(ConstructdClaims.KnownUser))
