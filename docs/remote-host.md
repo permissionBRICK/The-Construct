@@ -634,7 +634,8 @@ empty = inherit the host default —, per-VM overrides, and token issue/revoke; 
 token is shown once with a Copy button and never stored), Media (the primary ISO catalog,
 read-only; the child media inventory with delete and cleanup), Operations (jobs with
 cancel, retry buttons for failed deletes and cleanups, the audit log), Configuration
-(the host-config sections as JSON, validation problems shown next to the section) and
+(the host-config sections as JSON, each titled and with its keys explained, validation
+problems shown next to the section; **Key vault** holds the approval page address phones use) and
 Maintenance (the host service's own update: check, stage, apply, resume, cancel,
 resolve — see §11 of the contract).
 

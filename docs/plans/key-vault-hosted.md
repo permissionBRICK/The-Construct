@@ -180,8 +180,12 @@ pages embedded in the service. They make same-origin `fetch` calls with the devi
 3. The page at `/vault/` lists pending approvals with Approve / Deny and pending file decisions,
    and refreshes every 3 s.
 
-`<vault web base>` defaults to `https://<PublicHost>:<service port>` and can be overridden with
-the host setting `Constructd:VaultWebUrl` (for a reverse proxy with a public certificate). Both
+`<vault web base>` defaults to `https://<PublicHost>:<service port>`. The service option
+`Constructd:VaultWebUrl` overrides it, and the host config value `vault.webUrl` (Host
+Administration, admins only) overrides both, for a reverse proxy with a public certificate. The
+device routes report which one applies (`webUrlSource`). The T3 Code link in the QR code is the
+VM's proxy link when the VM records one (`T3CODE_PROXY_URL`), else the forwarded one; it must not
+share an origin with the vault web base, which the Companion and the pairing page enforce. Both
 host installers create a self-signed certificate, so a phone shows a warning once for that origin,
 as it already does for T3 Code's VM-local CA. The pages and `/vault/device` are the only routes that
 accept the device scheme; the pages themselves are anonymous static files.

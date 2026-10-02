@@ -164,6 +164,13 @@ same patched build for both clients, and silently installs or updates Desktop on
 provisioning. Routine reprovisions skip the build and installation when neither T3 Code nor
 Construct has changed.
 
+If you reach T3 Code through your own reverse proxy, record its address in the control panel
+(Settings → Access & services → **T3 Code address via your own proxy**) or let an agent run
+`construct config set t3-proxy-url https://t3.example.net:8443` on the VM. Pairing links are bound
+to the address they were minted for, so Construct then mints one for the proxy as well and offers
+it first. [Key vault: your own proxy](key-vault.md#your-own-proxy-for-t3-code-and-the-approval-page)
+has the details, including the approval page's own proxy address.
+
 The patched clients add a mic button beside Send and a **Ctrl+T** shortcut. Speech appears live
 at the cursor without replacing existing input, and the recording ring responds to microphone
 level. This reuses Construct's microphone tunnel, so **Microphone passthrough** must also be

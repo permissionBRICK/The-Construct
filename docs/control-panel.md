@@ -764,6 +764,16 @@ or an nginx that refuses to start — the panel, the pairing links and the conso
 stay on the plain-HTTP URL that *does* work (and say so) rather than advertising a dead
 HTTPS origin; the preference is kept, so the next reprovision retries.
 
+**Your own proxy.** If you reach the VM's T3 Code through your own reverse proxy (a trusted
+certificate, your own host name), enter that address in **T3 Code address via your own proxy**,
+for example `https://t3.example.net:8443`, and press **apply**. Unlike the settings around it, this
+field is not saved with **Save settings**: it is read from the VM's `config.env`
+(`T3CODE_PROXY_URL`) on every refresh and written there at once over SSH, so it also shows a value
+an agent set with `construct config set t3-proxy-url`. An offline VM cannot be changed. T3 Code
+binds pairing links to an address, so with the field set the **▷** button offers a `proxy` link
+first (next to `forwarded`, and `direct` where the VM reports one), and the key vault's phone
+pairing QR code uses it. See [Key vault: your own proxy](key-vault.md#your-own-proxy-for-t3-code-and-the-approval-page).
+
 The **channel** dropdown next to the toggle selects between **stable** (npm `@latest` —
 the released version) and **nightly** (npm `@nightly` — the latest CI build, which may
 include newer features but can break). Switching the channel on an already-enabled T3 Code
