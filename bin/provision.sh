@@ -136,6 +136,19 @@ _print_human_result() {
 
 _finish_provision() {
   local critical_rc="${1:-0}" final_rc
+  # Hand the busy T3 Code threads recorded at the start of the run to the resume service
+  # (bin/construct-t3-resume.py). On every exit, so a failed run does not leave a record
+  # behind that fires much later; `arm` drops it when T3 kept running. The host says when
+  # it reboots the VM right after this run, and the resume then waits for that boot.
+  if [[ "${_T3_RESUME_ARM:-false}" == "true" ]]; then
+    _T3_RESUME_ARM=false
+    if [[ -s "${CONSTRUCT_T3_RESUME_FILE:-/var/lib/construct/t3-resume.json}" ]]; then
+      local _t3_arm=(arm)
+      if [[ "${REBOOT_AFTER_PROVISION:-false}" == "true" ]]; then _t3_arm+=(--reboot-follows); fi
+      run_step optional "Scheduling the resume of interrupted T3 Code threads" \
+        python3 -I "${REPO_DIR}/bin/construct-t3-resume.py" "${_t3_arm[@]}"
+    fi
+  fi
   # Drop the "provisioning is running" marker the guest activity heartbeat reads
   # (plan §4.7). Only set on the real provisioning path, so the step-runner unit
   # test never touches it.
@@ -287,6 +300,8 @@ run_step critical "Checking root privileges" require_root
 # commands see the restored ~/.secrets, tokens and machine identity. The main run's
 # failure logs are kept; the result block is the same one the host already parses.
 if [[ "${PROVISION_PHASE:-}" == "project-commands" ]]; then
+  # The restore brought the old VM's busy T3 threads along; _finish_provision schedules them.
+  _T3_RESUME_ARM=true
   mkdir -p "${_PERSISTENT_LOG_DIR}"
   _PROVISION_MARKER="${_PROVISION_MARKER:-/run/construct/provisioning}"
   mkdir -p "$(dirname "${_PROVISION_MARKER}")" 2>/dev/null || true
@@ -315,6 +330,12 @@ if [[ "${PROVISION_PHASE:-}" == "project-commands" ]]; then
   run_step optional "Running project provisioning commands" \
     env AGENT_HOME="${AGENT_HOME:-/opt/construct}" bash "${REPO_DIR}/bin/run-provision-commands.sh"
   _finish_provision 0
+fi
+
+# From here on every exit schedules the resume of recorded T3 threads (_finish_provision).
+# A reinstall that restores a saved config does that in its project-commands phase instead.
+if [[ "${DEFER_PROJECT_COMMANDS:-false}" != "true" ]]; then
+  _T3_RESUME_ARM=true
 fi
 
 # Create the persistent log directory and clean any logs from a previous run.
@@ -635,6 +656,16 @@ fi
 # of unrelated-looking errors. Critical, with ALLOW_LOW_DISK=true as the escape
 # hatch for "I know, provision anyway".
 run_step critical "Checking free disk space" check_disk_space
+
+# Record the T3 Code threads that are busy (a turn running, or background agents or
+# watchers alive) before any step below restarts the T3 server, which would end
+# their turns and kill what they run in the background. _finish_provision hands the
+# record to construct-t3-resume.service, which tells each interrupted thread what
+# happened. Only when T3 is running, so other provisions print nothing new.
+if systemctl is-active --quiet t3code-serve 2>/dev/null; then
+  run_step optional "Recording busy T3 Code threads" \
+    python3 -I "${REPO_DIR}/bin/construct-t3-resume.py" snapshot --reason reprovision
+fi
 
 # A zip upload does not preserve Unix exec bits, so make the repo scripts
 # executable before anything tries to run them.

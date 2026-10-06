@@ -408,6 +408,8 @@ $RemoteKeyPath   = "/root/.ssh/codex_app_ed25519"        # produced by setup-roo
 $RemoteArchive   = "/tmp/construct-repo.tar.gz"
 $ExportScanScript   = "/tmp/construct-scan-repos.sh"
 $ExportConfigScript = "/tmp/construct-export-config.sh"
+# export-config.sh calls this helper from its own directory to record the busy T3 threads.
+$ExportT3ResumeScript = "/tmp/construct-t3-resume.py"
 $BootstrapKey    = Join-Path $PSScriptRoot "keys\bootstrap_ed25519"
 $BootstrapPubKey = Join-Path $PSScriptRoot "keys\bootstrap_ed25519.pub"
 
@@ -2045,9 +2047,10 @@ Write-Ok "Repo in place at /opt/construct/repo"
     }
 } elseif ($Action -eq 'export') {
 Write-Step "Uploading the export scripts"
-Invoke-Ssh -Sudo -Command "rm -f $ExportScanScript $ExportConfigScript"
+Invoke-Ssh -Sudo -Command "rm -f $ExportScanScript $ExportConfigScript $ExportT3ResumeScript"
 Invoke-Scp -LocalPath (Join-Path $PSScriptRoot 'bin\scan-repos.sh') -RemotePath $ExportScanScript
 Invoke-Scp -LocalPath (Join-Path $PSScriptRoot 'bin\export-config.sh') -RemotePath $ExportConfigScript
+Invoke-Scp -LocalPath (Join-Path $PSScriptRoot 'bin\construct-t3-resume.py') -RemotePath $ExportT3ResumeScript
 Write-Ok "Export scripts in place (guest repository left unchanged)"
 } else {
 # Upload the archive via SCP (remove any stale copy owned by root from a previous run).
@@ -2081,7 +2084,7 @@ if ($Action -eq 'export') {
             Invoke-Ssh -Sudo -Command "bash $ExportScanScript > /tmp/construct-repo-scan.json 2>/dev/null && chmod 644 /tmp/construct-repo-scan.json"
             Invoke-ScpFrom -RemotePath "/tmp/construct-repo-scan.json" -LocalPath (Join-Path $BackupDir "repo-scan.json")
         } finally {
-            try { Invoke-Ssh -Sudo -Command "rm -f /tmp/construct-repo-scan.json $ExportScanScript $ExportConfigScript" } catch { }
+            try { Invoke-Ssh -Sudo -Command "rm -f /tmp/construct-repo-scan.json $ExportScanScript $ExportConfigScript $ExportT3ResumeScript" } catch { }
         }
         Write-Ok "Repo scan saved to $(Join-Path $BackupDir 'repo-scan.json')"
     } else {
@@ -2099,7 +2102,7 @@ if ($Action -eq 'export') {
             Write-Host "  --- end export output ---" -ForegroundColor DarkGray
             Invoke-ScpFrom -RemotePath "/tmp/construct-config-backup.tar.gz" -LocalPath $tgz
         } finally {
-            try { Invoke-Ssh -Sudo -Command "rm -f /tmp/construct-config-backup.tar.gz $ExportScanScript $ExportConfigScript" } catch { }
+            try { Invoke-Ssh -Sudo -Command "rm -f /tmp/construct-config-backup.tar.gz $ExportScanScript $ExportConfigScript $ExportT3ResumeScript" } catch { }
         }
         Write-Ok "Backup saved to $tgz"
 
@@ -2652,6 +2655,10 @@ $envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' 
 # identity found none on the fresh VM and silently skipped their setup.
 $deferProjectCommands = [bool]($RestoreDir -and (Test-Path -LiteralPath (Join-Path $RestoreDir "backup.tar.gz")))
 if ($deferProjectCommands) { $envPrefix += " DEFER_PROJECT_COMMANDS='true'" }
+# The bootstrap path always ends with a reboot ($doReboot below). The guest then holds the
+# resume of the T3 threads this run interrupts for that boot instead of starting it now.
+$rebootAfterArg = if ($script:UseRootKey) { "false" } else { "true" }
+$envPrefix += " REBOOT_AFTER_PROVISION='$rebootAfterArg'"
 Write-Host "  --- live provisioning output ---" -ForegroundColor DarkGray
 $provisionStream = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "$tokenExport$envPrefix bash /opt/construct/repo/bin/provision.sh$tokenCleanup"
 Write-Host "  --- end provisioning output ---" -ForegroundColor DarkGray
@@ -2726,7 +2733,7 @@ if ($RestoreDir) {
             Write-Host "  --- live provisioning output ---" -ForegroundColor DarkGray
             # The checkout gets what this PC verified (one-shot file, consulted first) and the VM's
             # restored store after it; a host skipped at the prompt stays skipped.
-            $projectStream = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "env PROVISION_PHASE=project-commands CHECKOUT_PROJECTS='$checkoutArg' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' GIT_CLONE_SKIP_HOSTS_B64='$cloneSkipHostsB64' bash /opt/construct/repo/bin/provision.sh"
+            $projectStream = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "env PROVISION_PHASE=project-commands REBOOT_AFTER_PROVISION='$rebootAfterArg' CHECKOUT_PROJECTS='$checkoutArg' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' GIT_CLONE_SKIP_HOSTS_B64='$cloneSkipHostsB64' bash /opt/construct/repo/bin/provision.sh"
             Write-Host "  --- end provisioning output ---" -ForegroundColor DarkGray
             $projectResult = ConvertFrom-ConstructProvisionResult -Lines $projectStream.Lines
             $projectErrors = @($projectResult.Errors)

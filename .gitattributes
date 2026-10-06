@@ -4,6 +4,8 @@
 # renormalization/diff), it just pins checkout on Windows.
 *.sh        text eol=lf
 /bin/construct text eol=lf
+# Installed as /usr/local/bin/construct-t3-resume and run through its shebang.
+/bin/construct-t3-resume.py text eol=lf
 bootstrap.sh   text eol=lf
 # These bytes form T3's cross-VM build identity; Windows checkouts must agree.
 /bin/apply-t3code-source.mjs text eol=lf
