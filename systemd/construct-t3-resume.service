@@ -1,0 +1,17 @@
+[Unit]
+Description=Resume T3 Code threads interrupted by a Construct reprovision or reinstall
+# Runs at boot only when a snapshot is waiting, and when a provisioning run ends
+# (construct-t3-resume arm starts it).
+ConditionPathExists=/var/lib/construct/t3-resume.json
+Wants=network-online.target
+After=network-online.target t3code-serve.service
+
+[Service]
+# Not oneshot: the run waits for the T3 API and must not hold up multi-user.target.
+Type=exec
+User=root
+RuntimeMaxSec=90min
+ExecStart=/usr/bin/python3 -I /usr/local/bin/construct-t3-resume resume
+
+[Install]
+WantedBy=multi-user.target

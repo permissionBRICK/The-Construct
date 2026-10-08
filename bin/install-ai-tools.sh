@@ -981,6 +981,16 @@ install_t3code() {
     systemctl daemon-reload
   fi
 
+  # Tells the threads a reprovision or reinstall interrupted what happened, once the
+  # run is done (docs/provisioning.md, "Resuming interrupted T3 Code threads").
+  # Refreshed with the T3 unit, before the early return, for the same reason.
+  install -m 0755 "${REPO_DIR}/bin/construct-t3-resume.py" /usr/local/bin/construct-t3-resume
+  if ! cmp -s "${REPO_DIR}/systemd/construct-t3-resume.service" /etc/systemd/system/construct-t3-resume.service; then
+    install -m 0644 "${REPO_DIR}/systemd/construct-t3-resume.service" /etc/systemd/system/construct-t3-resume.service
+    systemctl daemon-reload
+  fi
+  systemctl enable --quiet construct-t3-resume.service
+
   # On an unchanged upstream T3 + Construct revision, the source builder has
   # already restored the exact server symlink and Desktop status. If that same
   # build is active, avoid re-patching, rewriting the unit, restarting T3, and

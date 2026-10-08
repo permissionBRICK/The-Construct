@@ -67,7 +67,11 @@ For the installed agents, from `root`'s home — never from inside the project r
   captured. On restore, `restore-config.sh` stops `t3code-serve` across the
   copy (it holds the DB open), drops the freshly-minted empty DB, and restarts
   the service on the restored store — paired browsers and history come straight
-  back. The backup also records that T3 Code was enabled
+  back. Before it stops T3, the export also writes the busy threads to
+  `t3-resume.json` at the top of the backup. After its final reboot, the reinstalled
+  VM tells those threads what happened. See
+  [Resuming interrupted T3 Code threads](provisioning.md#resuming-interrupted-t3-code-threads).
+  The backup also records that T3 Code was enabled
   (`backup-info.json`), and the restore reinstalls + starts it when the fresh
   provision didn't (e.g. a console-run reinstall that couldn't know the
   preference).

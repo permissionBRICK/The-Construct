@@ -28,6 +28,7 @@ if [[ "$group" == t3 || "$group" == all ]]; then
   node extension/test/updates.test.js
   node extension/test/t3code.test.js
   python3 test/t3-pairing-forward.test.py
+  python3 test/t3-resume.test.py
 fi
 if [[ "$group" == service || "$group" == all ]]; then
   bash test/usage-report.test.sh

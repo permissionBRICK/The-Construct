@@ -424,6 +424,31 @@ if [[ -f "${BACKUP_DIR}/backup-info.json" ]] \
   fi
 fi
 
+# ── T3 Code threads that were busy at export time ───────────────────────────
+# export-config.sh records them before it stops T3. They live in the event store
+# restored above, so they are resumed only together with it. The provision that
+# follows a reinstall's restore schedules them, for after the reboot that ends it.
+if [[ -n "${t3_state_restore}" ]]; then
+  _t3_resume_snapshot=""
+  if [[ -n "${archive_restore}" ]]; then
+    _t3_resume_member="$(grep -Em1 '^(\./)?t3-resume\.json$' "${archive_list}" || true)"
+    if [[ -n "${_t3_resume_member}" ]]; then
+      _t3_resume_snapshot="${cleanup_tmp}/t3-resume.json"
+      if ! tar -xOf "${BACKUP_TGZ}" "${_t3_resume_member}" >"${_t3_resume_snapshot}"; then
+        err "could not read the busy T3 Code threads from the backup; they will not be resumed"
+        _t3_resume_snapshot=""
+      fi
+    fi
+  elif [[ -s "${BACKUP_DIR}/t3-resume.json" ]]; then
+    _t3_resume_snapshot="${BACKUP_DIR}/t3-resume.json"
+  fi
+  if [[ -n "${_t3_resume_snapshot}" ]]; then
+    if ! python3 -I "${REPO_DIR}/bin/construct-t3-resume.py" import "${_t3_resume_snapshot}"; then
+      err "could not schedule the resume of the T3 Code threads that were busy before the reinstall"
+    fi
+  fi
+fi
+
 if [[ -f "${BACKUP_DIR}/backup-info.json" ]]; then
   log "backup metadata: $(tr -d '\n' <"${BACKUP_DIR}/backup-info.json")"
 fi

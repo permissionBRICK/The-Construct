@@ -351,6 +351,17 @@ if [[ "${T3CODE:-false}" == "true" || -d "${EXPORT_HOME}/.t3/userdata" ]]; then
     # this store is the ONLY copy of the t3 threads.
     _t3_stopped=""
     if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet t3code-serve 2>/dev/null; then
+      # Record the busy threads first: the stop below ends their turns, and a
+      # reinstalled VM tells them what happened (bin/construct-t3-resume.py). The
+      # helper sits next to this script, in the repo and in the host's /tmp upload.
+      _t3_resume_helper="${T3_RESUME_HELPER:-$(dirname "${BASH_SOURCE[0]}")/construct-t3-resume.py}"
+      if [[ -f "${_t3_resume_helper}" ]]; then
+        if python3 -I "${_t3_resume_helper}" snapshot --reason reinstall --out "${STAGE}/t3-resume.json"; then
+          if [[ -s "${STAGE}/t3-resume.json" ]]; then log "+ t3-resume.json (busy T3 Code threads)"; fi
+        else
+          note "warning: could not record the busy T3 Code threads; a reinstall will not resume them"
+        fi
+      fi
       systemctl stop t3code-serve 2>/dev/null && _t3_stopped=1
     fi
     add_glob ".t3/userdata/state.sqlite*"

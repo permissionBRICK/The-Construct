@@ -146,6 +146,7 @@ Recognized variables:
 | `CHECKOUT_JOBS` | `0` | Simultaneous project checkouts: `0` = all independent repos; positive number = concurrency limit |
 | `PROVISION_JOBS` | `0` | Simultaneous project command groups after checkout: `0` = all independent profiles; `1` = sequential; commands within each profile stay ordered |
 | `START_SERVICE` | `true` | Start the `construct` service |
+| `REBOOT_AFTER_PROVISION` | `false` | Set by the host when it reboots the VM right after this run (the bootstrap path). The resume of interrupted T3 Code threads then waits for that boot, see [Resuming interrupted T3 Code threads](#resuming-interrupted-t3-code-threads) |
 | `VSCODE_SERVER` | `true` | Install the VS Code CLI / server for Remote-SSH |
 | `VSCODE_SERVE_WEB` | `true` | Autostart browser-based `code serve-web` |
 | `VSCODE_TUNNEL` | `false` | Opt in to also set up + register a `code tunnel` |
@@ -244,6 +245,62 @@ inherit their parent's lowered value on fork. So the kernel takes a build or a b
 the agent can start it again. The values are moderate on purpose: a leaking T3 server that
 grows past about a fifth of RAM still outranks an ordinary build, gets killed and is restarted.
 Processes outside the agent units are not touched.
+
+### Resuming interrupted T3 Code threads
+
+A reprovision usually restarts the T3 Code server, and a reinstall replaces the VM. Both end
+the turn of every busy thread and kill what it was running in the background, such as Monitor
+watchers, background shells, waiters and dev servers. T3 keeps that background state only in
+memory, so after the restart nothing shows that a thread was still working.
+
+So provisioning records the busy threads before anything restarts and tells them afterwards:
+
+1. When T3 is running, the step after the disk check, `Recording busy T3 Code threads`, writes
+   every thread with a running turn, or with background agents or watchers alive, to
+   `/var/lib/construct/t3-resume.json`. Threads that wait for an approval or an answer, and
+   threads that are done, are left out. If T3 does not answer within a minute, the step prints
+   a warning and provisioning goes on.
+2. When the run ends, successfully or not, `Scheduling the resume of interrupted T3 Code
+   threads` starts `construct-t3-resume.service`. The service waits until the run is over and
+   T3 answers. Then it sends each recorded thread a message that says the VM was reprovisioned
+   and its processes and watchers are gone, and asks it to restart the ones it still needs and
+   continue.
+3. When the host reboots the VM after the run, the resume waits for the next boot instead. The
+   host passes `REBOOT_AFTER_PROVISION=true` on the bootstrap path, which always ends with a
+   reboot, and the guest also holds the resume when `/var/run/reboot-required` exists. The
+   service is enabled and runs at boot whenever the file exists.
+
+A recorded thread gets no message when the T3 server kept running through the provision, since
+its turn and background work survived. It also gets none when someone sent it a message after
+the snapshot, when it now waits for an approval or an answer, when it was archived or deleted,
+or when the snapshot is more than 24 hours old. T3's own setting to continue threads after a
+server update may already have restarted a thread that was mid-turn. That thread still gets the
+message, queued behind its current turn, because the setting does not restart watchers. A
+message that T3 refuses three times stays in the file, and the service tries again when the
+next provision ends or the VM boots.
+
+A reinstall works the same way across the two VMs. When the export saves T3's event store, which
+needs `INCLUDE_AUTH=true`, `export-config.sh` records the busy threads before it stops T3 and
+puts the list into the backup as `t3-resume.json`. `restore-config.sh` adds the list to the new
+VM's file. The project-commands phase that follows the restore schedules the resume, and the
+host's reboot at the end of the reinstall releases it. If a thread's git worktree is gone, the
+service recreates it from the thread's branch with `git worktree add`. When that fails, or the
+project folder is missing, the service skips the thread and reports it. The message also says
+that local changes that were not pushed before the reinstall are lost.
+
+The helper uses T3's HTTP orchestration API on `127.0.0.1`. It mints its API session once with
+`t3 auth session issue --label construct-t3-resume` and keeps it in
+`/etc/construct/t3-resume-token`. T3 servers built on orchestration v2, which the nightly
+channel ships since 0.0.46, no longer have that API. On them the record step prints a note and
+threads are not resumed.
+
+To inspect or start it by hand:
+
+```bash
+construct-t3-resume status              # threads waiting to be resumed
+journalctl -u construct-t3-resume       # what the last resume did
+construct-t3-resume resume --now        # resume now, even when held for the next boot
+```
 
 ### Free-disk preflight
 
