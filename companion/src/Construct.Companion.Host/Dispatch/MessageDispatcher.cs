@@ -135,8 +135,7 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
                 if (pairing.Code != 0 || !Uri.TryCreate(pairUrl, UriKind.Absolute, out var pairUri) || pairUri.Scheme is not ("http" or "https")) Refuse(name, id, "T3 Code did not return a pairing link.");
                 else await launcher.OpenAsync(pairUrl, ct); break;
             case "updateAgents": case "updateAgent":
-                var agent = id == "updateAgent" ? RequireAgent(Text(m, "agent")) : null;
-                await CheckedScript(entry, AgentUpdateScript.Build(agent is null ? null : [agent]), ct, TimeSpan.FromMinutes(10)); await RefreshAsync(entry, ct); break;
+                await UpdateAgents(entry, id == "updateAgent" ? RequireAgent(Text(m, "agent")) : null, ct); break;
             case "openProjectFolder": await launcher.OpenAsync(Path.Combine(ProjectRoot(entry), "projects"), ct); break;
             case "openProject":
                 var projectName = Text(m, "project");
@@ -258,6 +257,18 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
     private static string RequireProxyUrl(JsonObject message) =>
         message["url"] is JsonValue value && value.TryGetValue<string>(out var text) && T3Code.NormalizeProxyUrl(text) is ({ } url, null) ? url
             : throw new IpcFailure(400, "invalidProxyUrl", T3Code.ProxyUrlError);
+    // Construct's patched T3 (T3 Code and its patch setting both on) is a prebuilt or local build that only
+    // provisioning installs. The npm update would put stock T3 beside it and restart the service on the old
+    // build, so T3 is updated by a reprovision after the other agents, as the extension's runUpdateAgents does.
+    private async Task UpdateAgents(CompanionInstance entry, string? agent, CancellationToken ct)
+    {
+        IReadOnlyList<string> requested = agent is null ? AgentUpdateScript.Ids : [agent];
+        var saved = entry.Store.ReadSettings();
+        var patchedT3 = requested.Contains("t3code") && StateJson.Boolean(saved["t3code"]) == true && StateJson.Boolean(saved["t3codeLimitResume"]) == true;
+        var remote = requested.Where(id => !(patchedT3 && id == "t3code")).ToArray();
+        try { if (remote.Length > 0) { await CheckedScript(entry, AgentUpdateScript.Build(remote), ct, TimeSpan.FromMinutes(10)); await RefreshAsync(entry, ct); } }
+        finally { if (patchedT3) await Lifecycle(entry, "reprovision", [], ct); }
+    }
     private async Task Lifecycle(CompanionInstance entry, string action, JsonObject message, CancellationToken ct)
     {
         try

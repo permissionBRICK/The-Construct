@@ -166,6 +166,28 @@ public sealed class VmConfigurationTests
         Assert.Contains("-Projects", command);
         Assert.Contains("live", command);
     }
+    [Theory]
+    [InlineData("updateAgent", true, false, true)] [InlineData("updateAgents", true, true, true)]
+    [InlineData("updateAgent", false, true, false)] [InlineData("updateAgents", false, true, false)]
+    public async Task PatchedT3UpdatesThroughReprovisionLikeTheExtension(string id, bool patched, bool scriptRuns, bool reprovisions)
+    {
+        await using var h = await HttpTests.Harness.Start(runtimeJobs: false);
+        h.Files.WriteFileAtomic("/fake/scripts/Provision-AgentVM.ps1", "param($Action)"u8);
+        var entry = h.App.Services.GetRequiredService<CompanionInstances>().Get("agent-vm");
+        entry.Store.SaveSettings(new() { ["t3code"] = true, ["t3codeLimitResume"] = patched });
+        var ssh = (FakeSshTransport)entry.Ssh;
+        ssh.ScriptHandler = (script, _) => Task.FromResult(new ProcessResult(0, script == ProjectImport.ScanScript() ? "END\n" : ""));
+        var message = new JsonObject { ["type"] = "command", ["id"] = id };
+        if (id == "updateAgent") message["agent"] = "t3code";
+        await h.App.Services.GetRequiredService<MessageDispatcher>().DispatchAsync(entry.Name, message, CancellationToken.None);
+        var updates = ssh.Scripts.Where(s => s.StartsWith("set -uo pipefail\nrc=0\n", StringComparison.Ordinal)).ToArray();
+        Assert.Equal(scriptRuns, updates.Length == 1);
+        Assert.DoesNotContain(updates, s => patched && s.Contains("== updating T3 Code ==", StringComparison.Ordinal));
+        if (id == "updateAgents" && scriptRuns) Assert.Contains("== updating Codex ==", updates[0]);
+        var launches = h.Get<FakeLauncher, ILauncher>().Detached;
+        Assert.Equal(reprovisions ? 1 : 0, launches.Count);
+        if (reprovisions) Assert.Contains("Provision-AgentVM.ps1", Encoding.Unicode.GetString(Convert.FromBase64String(launches[0].Arguments[^1])));
+    }
     private static async Task Until(Func<bool> predicate)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
