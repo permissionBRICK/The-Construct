@@ -184,6 +184,9 @@ machine, logged in via a freshly minted one-time pairing link. Update checks are
 itself is behind its git ref (**Update Construct** re-downloads the extension + scripts in
 place and records the new version, so the banner clears once it's done), and a per-agent
 badge marks an available update (**update all** force-updates them over SSH, then re-probes).
+With **Build patched T3 Code + Desktop** on, T3 Code's badge and **update all** start a
+reprovision for T3 instead, because only provisioning installs the patched build. The npm
+update would install stock T3 beside it and leave the service on the old build.
 
 Construct tracks two versions separately: the **installed** Construct (extension + scripts,
 bumped by install / Update Construct) and the version the **VM was last provisioned with**.
@@ -801,6 +804,12 @@ after a Construct update -- reuse the running VM server and Desktop artifact wit
 rebuilding, reinstalling, or restarting T3; only a T3 release or a recipe change rebuilds. A
 stock install (patch toggle off) follows the same rule: when the channel still resolves to
 the installed release, the npm install and the service restart are skipped too.
+
+Prebuilt runtimes take about 340 MB each and local source builds about 3 GB. Once a T3
+install has its server running, it deletes every build in either cache that the T3 launcher
+doesn't point into and no running process uses. Switching between prebuilt and local builds
+therefore leaves nothing behind. A patched install also deletes the npm package of an earlier
+stock install.
 
 **One Desktop install per PC.** `%LOCALAPPDATA%\The-Construct\artifacts\t3code\installed.json`
 records which patched release this PC holds — the upstream `t3Version`, the `channel`, the

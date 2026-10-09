@@ -840,6 +840,46 @@ t3_node_ok() {
   esac
 }
 
+# Construct's patched T3 keeps every build it installs beside the others: prebuilt
+# runtimes in T3CODE_PREBUILT_CACHE (about 340 MB each) and local source builds in
+# T3CODE_CACHE_ROOT (about 3 GB each). The prebuilt installer never removes one, and a
+# local build only prunes its own cache, so a VM collected gigabytes of old builds.
+# Called once the installed build is the one serving: deletes every build the launcher
+# does not resolve into and no running process maps a file from (the old server keeps
+# its build until it restarts). A patched install also removes the stock npm package
+# an earlier stock install left behind. By hand, because `npm uninstall -g t3` deletes
+# <prefix>/bin/t3 whatever it points at, and with apt's npm (prefix /usr/local) that
+# path is the launcher.
+prune_t3_installs() {
+  local launcher="${T3CODE_LAUNCHER:-/usr/local/bin/t3}" installed busy dir real npm_prefix package link
+  installed="$(readlink -f "${launcher}" 2>/dev/null || true)"
+  [[ -n "${installed}" && -e "${installed}" ]] || return 0
+  busy="$(cat /proc/[0-9]*/maps 2>/dev/null | awk '$6 ~ /^\// {print $6}' | sort -u || true)"
+  for dir in "${T3CODE_PREBUILT_CACHE:-/var/cache/construct/t3code-prebuilt}"/*/ \
+             "${T3CODE_CACHE_ROOT:-/var/cache/construct/t3code-source}"/*/; do
+    dir="${dir%/}"
+    [[ -d "${dir}" && ! -L "${dir}" ]] || continue
+    real="$(readlink -f "${dir}")"
+    [[ "${installed}" == "${real}/"* ]] && continue
+    grep -qF "${real}/" <<<"${busy}" && continue
+    note "Removing superseded T3 build ${real##*/}"
+    rm -rf "${real}"
+  done
+
+  [[ "${T3CODE_LIMIT_RESUME:-false}" == "true" ]] && command -v npm >/dev/null 2>&1 || return 0
+  npm_prefix="$(npm prefix -g 2>/dev/null || true)"
+  package="$(npm root -g 2>/dev/null || true)"
+  [[ -n "${npm_prefix}" && -n "${package}" && -d "${package}/t3" ]] || return 0
+  package="$(readlink -f "${package}/t3")"
+  [[ "${installed}" != "${package}/"* ]] || return 0
+  link="${npm_prefix}/bin/t3"
+  if [[ -L "${link}" && "$(readlink -f "${link}")" == "${package}/"* ]]; then
+    rm -f "${link}"
+  fi
+  note "Removing the stock T3 npm package an earlier install left behind"
+  rm -rf "${package}"
+}
+
 install_t3code() {
   local _t3_prebuilt=false t3_bin resolved t3_bundle _wanted_t3_build _active_t3_build _t3_stock_key _t3_stock_unchanged=false
   step "Installing T3 Code (t3 CLI + web GUI server)"
@@ -1001,6 +1041,7 @@ install_t3code() {
     if t3_can_skip_restart "${_wanted_t3_build}" "${_active_t3_build}" "${_t3_pub_before}" "${_t3_pub_after}" && \
        systemctl is-active --quiet t3code-serve; then
       note "T3 Code build is unchanged and already running; skipping its reinstall/restart."
+      prune_t3_installs || warn "Could not remove superseded T3 builds; continuing"
       return 0
     fi
     if [[ "${_t3_pub_before}" != "${_t3_pub_after}" ]]; then
@@ -1013,6 +1054,7 @@ install_t3code() {
     if t3_can_skip_restart "${_t3_stock_key}" "${_active_t3_build}" "${_t3_pub_before}" "${_t3_pub_after}" && \
        systemctl is-active --quiet t3code-serve; then
       note "T3 Code ${_wanted_ver} (stock) is unchanged and already running; skipping its reinstall/restart."
+      prune_t3_installs || warn "Could not remove superseded T3 builds; continuing"
       return 0
     fi
     if [[ "${_t3_pub_before}" != "${_t3_pub_after}" ]]; then
@@ -1046,6 +1088,7 @@ install_t3code() {
       printf '%s\n' "${_t3_stock_key}" > /etc/construct/t3code-installed-build
     fi
     echo "t3code-serve is running on ${T3CODE_HOST}:${T3CODE_PORT}"
+    prune_t3_installs || warn "Could not remove superseded T3 builds; continuing"
     # Only claim HTTPS when the proxy actually came up (the setup script writes
     # this file last, and removes it whenever it had to fall back to plain HTTP).
     if [[ -s /etc/construct/t3code-https-status ]]; then
