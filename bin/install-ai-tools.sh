@@ -652,16 +652,54 @@ configure_codex_settings() {
   chown -R "${owner}:${owner}" "${config_dir}" 2>/dev/null || true
 }
 
+# Run OpenAI's official Codex installer unattended. It ends with an interactive
+# "start codex now? [y/n]" prompt, which hangs unattended provisioning (no
+# terminal to answer it), so it gets 'n' on stdin -- we don't want the installer
+# to launch codex; the codex-app-server systemd unit manages it. CI=1 is an extra
+# hint. The installer's own entry ($HOME/.local/bin) goes first on PATH: the
+# installer treats the first `codex` on PATH as a second, npm-managed install
+# when that file contains "#!/usr/bin/env node" anywhere, and the native binary
+# does. Our /usr/local/bin/codex link to that binary comes first on systemd's
+# PATH, so every reprovision warned about "Multiple managed Codex installs".
+codex_official_installer() {
+  local installer rc=0
+  installer="$(mktemp)"
+  { curl -fsSL https://chatgpt.com/codex/install.sh -o "${installer}" \
+    && printf 'n\n' | PATH="${HOME:-/root}/.local/bin:${PATH}" CI=1 sh "${installer}"; } || rc=$?
+  rm -f "${installer}"
+  return "${rc}"
+}
+
+# The official installer unpacks every version into its own releases/<version>
+# dir (~430 MB each) and only moves the `current` link; nothing ever deletes the
+# old ones. Keep the current release and any release a running process executes
+# from (a long-lived codex session spawns rg and its code-mode host from its own
+# release dir), and delete the rest. Holds the installer's own lock, so a Codex
+# self-update can't have its freshly unpacked release removed before it becomes
+# current. No-op for npm installs, which have no standalone dir.
+prune_codex_releases() {
+  local root="$1"
+  local current busy dir real
+  current="$(readlink -f "${root}/current" 2>/dev/null || true)"
+  [[ -n "${current}" && -d "${current}" && -d "${root}/releases" ]] || return 0
+  (
+    flock 9
+    busy="$(find /proc -maxdepth 2 -name exe -path '/proc/[0-9]*' -exec readlink {} + 2>/dev/null || true)"
+    for dir in "${root}/releases"/*/; do
+      [[ -d "${dir}" ]] || continue
+      real="$(readlink -f "${dir}")"
+      [[ "${real}" == "${current}" ]] && continue
+      grep -qF "${real}/" <<<"${busy}" && continue
+      note "Removing old Codex release ${real##*/}"
+      rm -rf "${real}"
+    done
+  ) 9>"${root}/install.lock"
+}
+
 install_codex() {
   step "Installing Codex CLI"
   if ! command -v codex >/dev/null 2>&1; then
-    # The installer ends with an interactive "start codex now? [y/n]" prompt,
-    # which hangs unattended provisioning (no terminal to answer it). Download it
-    # and run with 'n' on stdin -- we don't want the installer to launch codex;
-    # the codex-app-server systemd unit below manages it. CI=1 is an extra hint.
-    codex_installer="$(mktemp)"
-    if ! { curl -fsSL https://chatgpt.com/codex/install.sh -o "${codex_installer}" \
-        && printf 'n\n' | CI=1 sh "${codex_installer}"; }; then
+    if ! codex_official_installer; then
       # The official installer parses GitHub's release JSON with a line-based awk
       # script that misses every asset now that api.github.com serves minified
       # single-line responses ("Could not find Codex package or platform npm
@@ -676,7 +714,6 @@ install_codex() {
       fi
       npm install -g @openai/codex
     fi
-    rm -f "${codex_installer}"
   else
     # Already installed: update in place, matching HOW it is installed. An npm
     # global install (the shim resolves into node_modules -- how the fallback
@@ -692,19 +729,18 @@ install_codex() {
         ;;
       *)
         note "Codex already installed; updating via the official installer"
-        codex_installer="$(mktemp)"
-        if ! { curl -fsSL https://chatgpt.com/codex/install.sh -o "${codex_installer}" \
-            && printf 'n\n' | CI=1 sh "${codex_installer}"; }; then
+        if ! codex_official_installer; then
           if command -v npm >/dev/null 2>&1 && npm install -g @openai/codex@latest; then
             warn "Official Codex installer failed; updated via npm instead"
           else
             warn "codex update failed; keeping the installed version"
           fi
         fi
-        rm -f "${codex_installer}"
         ;;
     esac
   fi
+  prune_codex_releases "${HOME:-/root}/.codex/packages/standalone" \
+    || warn "Could not prune old Codex releases; continuing"
 
   # Resolve the binary /usr/local/bin/codex should point at, then link it there
   # as the stable PATH location (the codex-app-server unit execs it). command -v
