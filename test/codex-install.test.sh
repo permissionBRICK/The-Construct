@@ -118,5 +118,37 @@ ok "without a current link nothing is removed" test -d "${standalone}/releases/0
 run_case prune_npm "prune_codex_releases '${tmp}/missing'"
 ok "an npm install without a standalone dir is a no-op" test "$(cat "${tmp}/prune_npm.rc")" = 0
 
+# ── configure_codex_settings: the dead commit_attribution key goes ────────────
+# Codex no longer reads commit_attribution and warns about it on every start.
+codex_home="${tmp}/codex-home"
+config="${codex_home}/.codex/config.toml"
+mkdir -p "${codex_home}/.codex"
+cat >"${config}" <<'TOML'
+commit_attribution = ""
+approval_policy = "never"
+model = "gpt-test"
+
+[projects."/root/repos"]
+trust_level = "trusted"
+
+[profiles.example]
+commit_attribution = "kept"
+TOML
+run_case settings "configure_codex_settings '${codex_home}' root" WORKSPACE_ROOT=/root/repos
+ok "settings seeding succeeds" test "$(cat "${tmp}/settings.rc")" = 0
+ok "the top-level commit_attribution key is removed" sh -c "! grep -qx 'commit_attribution = \"\"' '${config}'"
+ok "a same-named key inside a table is kept" grep -qx 'commit_attribution = "kept"' "${config}"
+ok "the permission keys are set" grep -qx 'sandbox_mode = "danger-full-access"' "${config}"
+ok "unrelated user keys are kept" grep -qx 'model = "gpt-test"' "${config}"
+ok "the trusted project table is not duplicated" test "$(grep -cF '[projects."/root/repos"]' "${config}")" = 1
+cp "${config}" "${tmp}/settings-first.toml"
+run_case settings_again "configure_codex_settings '${codex_home}' root" WORKSPACE_ROOT=/root/repos
+ok "seeding twice changes nothing" cmp -s "${config}" "${tmp}/settings-first.toml"
+
+rm -r "${codex_home}"
+run_case settings_fresh "configure_codex_settings '${codex_home}' root" WORKSPACE_ROOT=/root/repos
+ok "a fresh config is seeded" grep -qx 'approval_policy = "never"' "${config}"
+ok "a fresh config never gets commit_attribution" sh -c "! grep -q commit_attribution '${config}'"
+
 printf '\n%s passed, %s failed\n' "${pass}" "${fail}"
 [[ "${fail}" -eq 0 ]]
