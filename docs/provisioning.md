@@ -450,14 +450,18 @@ Both are merged with `jq`, preserving existing settings, and re-applied on every
 
 ### No AI attribution
 
-Provisioning also turns off AI attribution by default so commits and PRs read as authored
+Provisioning turns off Claude Code's AI attribution so its commits and PRs read as authored
 solely by you:
 
 - Claude Code (`~/.claude/settings.json`): `attribution.commit=""` and `attribution.pr=""` — empty
   strings suppress the `Co-Authored-By: Claude …` commit trailer and the "Generated with Claude
   Code" PR footer. (`attribution` is the current key; the older `includeCoAuthoredBy` is deprecated.)
-- Codex (`~/.codex/config.toml`): `commit_attribution = ""` — suppresses the
-  `Co-authored-by: Codex <noreply@openai.com>` commit trailer.
+- Codex has no local setting for this anymore. Current releases ignore the
+  `commit_attribution = ""` key that earlier provisions wrote to `~/.codex/config.toml` and
+  warn about it on every start, so provisioning removes it. Codex now asks ChatGPT whether the
+  signed-in account has commit attribution turned on. If it does, Codex adds
+  `Co-authored-by: Codex <noreply@openai.com>` to commits and a "Generated with Codex" line to
+  pull request bodies. With an API key login it adds neither.
 
 ### Source fetch environment (remote only)
 
