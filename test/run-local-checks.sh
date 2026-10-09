@@ -41,6 +41,7 @@ if [[ "$group" == service || "$group" == all ]]; then
   node --check console-viewer/static/viewer.js
   bash -n console-viewer/install.sh bin/construct-vm.sh bin/construct-secret.sh bin/construct-config.sh bin/construct-oom-guard.sh bin/provision.sh bin/fetch-construct-source.sh bin/construct-worktree-clone.sh service/host/xfs-cloud-image.sh service/host/install-construct-host.sh
   bash test/worktree-clone.test.sh
+  bash test/codex-install.test.sh
   pwsh -NoProfile -File test/browser-console-install.test.ps1
   bash test/browser-console-provision.test.sh
   bash test/browser-console-pull.test.sh

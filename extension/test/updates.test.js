@@ -533,6 +533,8 @@ function ok(name, cond, detail) {
     /\*\/node_modules\/\*\) npm install -g @openai\/codex@latest/.test(all));
   ok("agentScript: codex official layout falls back to npm on installer failure",
     /elif command -v npm >\/dev\/null 2>&1 && npm install -g @openai\/codex@latest/.test(all));
+  ok("agentScript: codex installer sees its own entry first on PATH",
+    /PATH="\$HOME\/\.local\/bin:\$PATH" CI=1 sh "\$t"/.test(all));
   // The installer only moves its `current` link; a /usr/local/bin/codex pinned
   // to a versioned releases/<v> dir must be relinked or updates land invisibly.
   ok("agentScript: codex relinks a version-pinned /usr/local/bin/codex after update",

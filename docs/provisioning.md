@@ -358,7 +358,11 @@ Currently supported selections:
   network](#opencode-installs-behind-a-company-network) if this step fails.
 - `claude-code`: installs the Claude Code CLI and prints the SSH connection target.
 - `codex`: installs the Codex CLI, supports Codex App SSH remote connections, and can start the
-  experimental Codex app-server on `0.0.0.0:4500` via `codex-app-server.service`.
+  experimental Codex app-server on `0.0.0.0:4500` via `codex-app-server.service`. The official
+  installer puts Codex in `~/.local/bin` and keeps every version it downloads under
+  `~/.codex/packages/standalone/releases`, about 430 MB each. Construct links
+  `/usr/local/bin/codex` to the `~/.local/bin` entry so services find it on their PATH, and each
+  provision deletes the releases that are neither current nor used by a running process.
 - `pi`: records the selection only; installer/runtime not implemented yet.
 
 Selections are stored in `/etc/construct/config.env`:

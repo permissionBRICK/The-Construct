@@ -419,13 +419,15 @@ function buildAgentUpdateScript(ids) {
     // npm; re-running the official installer there fights the npm layout, and that
     // installer has also been broken upstream (GitHub's minified release JSON).
     // For official-installer layouts, still try the installer first and fall back
-    // to npm when it fails and npm is available.
+    // to npm when it fails and npm is available. The installer's own entry goes
+    // first on PATH so it doesn't mistake our /usr/local/bin/codex link for an
+    // npm install (see codex_official_installer in bin/install-ai-tools.sh).
     lines.push('if command -v codex >/dev/null 2>&1; then echo "== updating Codex =="; ' +
       'target=$(readlink -f "$(command -v codex)" 2>/dev/null || true); ' +
       'case "$target" in ' +
       '*/node_modules/*) npm install -g @openai/codex@latest || rc=1 ;; ' +
       '*) t=$(mktemp); ' +
-      'if curl -fsSL https://chatgpt.com/codex/install.sh -o "$t" && printf "n\\n" | CI=1 sh "$t"; then :; ' +
+      'if curl -fsSL https://chatgpt.com/codex/install.sh -o "$t" && printf "n\\n" | PATH="$HOME/.local/bin:$PATH" CI=1 sh "$t"; then :; ' +
       'elif command -v npm >/dev/null 2>&1 && npm install -g @openai/codex@latest; then ' +
       'echo "official installer failed; updated via npm instead"; else rc=1; fi; rm -f "$t"; ' +
       // The official installer only moves its `current` symlink. If a previous
