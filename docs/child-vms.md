@@ -74,8 +74,13 @@ the serial driver and QEMU guest agent.
 autologon. These are also the SSH credentials. Setup installs and starts OpenSSH, adds
 its firewall rule, selects PowerShell as its shell, enables RDP/WinRM and applies the
 reference rig's disposable-lab settings. Client and server keep separate provisioning
-scripts. The supplied password exists in the generated answer-file ISO on the host;
-that dedicated media is deleted with the child. The service does not use guest passwords
+scripts. Both put Delivery Optimization into HTTP-only mode (policy `DODownloadMode=0`).
+In its default LAN peering mode, `DoSvc` and `Dnscache` have leaked several GB in guests
+whose RAM dynamic memory had reclaimed, until the guest ran out of memory. Guests created
+before this setting can apply it over SSH:
+`reg add HKLM\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization /v DODownloadMode /t REG_DWORD /d 0 /f`.
+The supplied password exists in the generated answer-file ISO on the host; that dedicated
+media is deleted with the child. The service does not use guest passwords
 for monitoring or activation. Keep these guests and credentials within your lab network.
 
 Optional settings are `--unattend-hostname`, `--unattend-locale`, and

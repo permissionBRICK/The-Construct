@@ -19,6 +19,7 @@ public class WindowsUnattendTests
         Assert.Contains(xml.Descendants(n + "Type"), e => e.Value == "EFI");
         Assert.DoesNotContain(xml.Descendants(n + "component"), e => ((string?)e.Attribute("name"))!.Contains("TerminalServices"));
         Assert.Contains("sshd", files["firstlogon.ps1"]);
+        Assert.Contains("DODownloadMode /t REG_DWORD /d 0", files["firstlogon.ps1"]);
         Assert.Equal(selector.StartsWith("win11"), files["firstlogon.ps1"].Contains("Get-AppxPackage"));
     }
     [Theory]
