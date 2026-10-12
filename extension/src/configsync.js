@@ -509,9 +509,11 @@ async function completePendingMerge(runGit, configDir, vmBranch) {
 
 /**
  * Build the bash script that reads every .json file under the VM store and emits
- * name<TAB>base64 lines, followed by an END sentinel. The sentinel proves
+ * name<TAB>base64 and DELETED<TAB>name lines, followed by an END sentinel. The sentinel proves
  * completeness (same idiom as buildScanScript). `root` overrides the store path
  * for tests.
+ * Space-prefix the live profile name DELETED to distinguish it from the marker
+ * token; parsers already trim profile names. Clear stale markers beside live files.
  */
 function buildReadStoreScript(root) {
   const r = root || "/opt/construct/projects";
@@ -522,14 +524,19 @@ function buildReadStoreScript(root) {
     '  for f in "$store"/*.json; do',
     '    [ -f "$f" ] || continue',
     '    name=$(basename "$f" .json)',
+    '    [ "$name" != DELETED ] || name=" $name"',
     '    data=$(base64 < "$f" | tr -d "\\n")',
     "    printf '%s\\t%s\\n' \"$name\" \"$data\"",
     "  done",
+    '  for f in "$store"/.deleted/*; do',
+    '    [ -f "$f" ] || continue',
+    '    name=$(basename "$f")',
+    '    if [ -f "$store/$name.json" ]; then rm -f "$f"; continue; fi',
+    "    printf 'DELETED\\t%s\\n' \"$name\"",
+    "  done",
     "else",
     // Emit an explicit marker so the parser can distinguish "store dir absent"
-    // (wiped/fresh VM) from "store dir exists but is empty". D13 requires seeding
-    // when the store dir does not exist, but treating an existing-but-empty store
-    // as a real deletion when the last sync had files.
+    // (wiped/fresh VM) from "store dir exists but is empty" for seeding.
     "  printf 'STORE_ABSENT\\n'",
     "fi",
     "printf 'END\\n'",
@@ -538,22 +545,23 @@ function buildReadStoreScript(root) {
 
 /**
  * Parse the read-store script's stdout. Returns an object
- * `{ entries: [{name, content}], storeAbsent: bool }` or null when the END
+ * `{ entries: [{name, content}], storeAbsent: bool, deleted: [name] }` or null when the END
  * sentinel is missing (partial/failed capture — must not treat as authoritative).
  *
  * `storeAbsent` is true when the script emitted the STORE_ABSENT marker,
  * meaning the store directory itself does not exist on the VM (as opposed to
- * existing but being empty). D13 uses this to distinguish a fresh/wiped VM
- * from a deliberate delete-all.
+ * existing but being empty).
  */
 function parseReadStore(stdout) {
   const lines = String(stdout == null ? "" : stdout).split("\n");
   let sawEnd = false;
   let storeAbsent = false;
   const results = [];
+  const deleted = [];
   for (const line of lines) {
     if (line === "END") { sawEnd = true; continue; }
     if (line === "STORE_ABSENT") { storeAbsent = true; continue; }
+    if (line.startsWith("DELETED\t")) { deleted.push(line.slice(8)); continue; }
     const tab = line.indexOf("\t");
     if (tab < 0) continue;
     const name = line.slice(0, tab).trim();
@@ -564,7 +572,7 @@ function parseReadStore(stdout) {
     catch (_) { continue; }
     results.push({ name, content });
   }
-  return sawEnd ? { entries: results, storeAbsent } : null;
+  return sawEnd ? { entries: results, storeAbsent, deleted } : null;
 }
 
 /**
@@ -577,20 +585,28 @@ function parseReadStore(stdout) {
  * vmFiles:   {name -> content string}  (the raw content read this tick; a name
  *            absent here means the file was not on the VM)
  *
- * Returns an array of ops: [{name, action:'write'|'delete', content?, expect}].
+ * deleted: validated tombstoned names read this tick.
+ * Returns ops with name, action, content (writes) and expect.
  * - write: write content to the VM, guarded by expect (the raw VM content we
  *   read, or null if the file was absent).
  * - delete: remove from the VM, guarded by expect (the raw content at read time).
+ * - clear-delete: clear the marker while the profile remains absent.
+ * A write with clearDeleted restores main's content and clears its marker.
  */
-function planWriteBack({ mainFiles, vmFiles }) {
+function planWriteBack({ mainFiles, vmFiles, deleted = [] }) {
   const main = mainFiles || {};
   const vm = vmFiles || {};
   const ops = [];
-  const allNames = new Set([...Object.keys(main), ...Object.keys(vm)]);
+  const tombstones = new Set(deleted);
+  const allNames = new Set([...Object.keys(main), ...Object.keys(vm), ...deleted]);
   for (const name of allNames) {
     const onMain = name in main;
     const onVm = name in vm;
-    if (onMain && !onVm) {
+    if (tombstones.has(name) && !onVm) {
+      ops.push(onMain
+        ? { name, action: "write", content: main[name], expect: null, clearDeleted: true }
+        : { name, action: "clear-delete", expect: null });
+    } else if (onMain && !onVm) {
       // New on main, absent on VM: write with expect=null (absent guard).
       ops.push({ name, action: "write", content: main[name], expect: null });
     } else if (onMain && onVm) {
@@ -624,12 +640,14 @@ function buildWriteStoreScript(ops, root) {
   for (const op of (ops || [])) {
     const safeName = String(op.name).replace(/'/g, "'\\''");
     const file = '"$store"' + "/'" + safeName + ".json'";
+    const tombstone = '"$store"' + "/.deleted/'" + safeName + "'";
     if (op.action === "write") {
       const dataB64 = Buffer.from(op.content || "", "utf8").toString("base64");
       if (op.expect === null) {
-        // Guard: file must be absent.
-        lines.push("if [ ! -f " + file + " ]; then");
+        // A delete issued after the read must not be overwritten.
+        lines.push("if [ ! -f " + file + " ] && [ " + (op.clearDeleted ? "-f " : "! -f ") + tombstone + " ]; then");
         lines.push("  printf '%s' '" + dataB64.replace(/'/g, "'\\''") + "' | base64 -d > " + file);
+        if (op.clearDeleted) lines.push("  rm -f " + tombstone);
         lines.push("  printf '%s\\t%s\\n' '" + safeName + "' 'done'");
         lines.push("else");
         lines.push("  printf '%s\\t%s\\n' '" + safeName + "' 'skipped'");
@@ -645,6 +663,13 @@ function buildWriteStoreScript(ops, root) {
         lines.push("  printf '%s\\t%s\\n' '" + safeName + "' 'skipped'");
         lines.push("fi");
       }
+    } else if (op.action === "clear-delete") {
+      lines.push("if [ ! -f " + file + " ]; then");
+      lines.push("  rm -f " + tombstone);
+      lines.push("  printf '%s\\t%s\\n' '" + safeName + "' 'done'");
+      lines.push("else");
+      lines.push("  printf '%s\\t%s\\n' '" + safeName + "' 'skipped'");
+      lines.push("fi");
     } else if (op.action === "delete") {
       // Guard: file content must match expected before deletion.
       const expectB64 = Buffer.from(op.expect, "utf8").toString("base64");
@@ -825,26 +850,23 @@ async function syncTickLocked({ runGit, configDir, readStore, writeStore, log, s
     // Canonicalize for the vm branch commit.
     vmValid[entry.name] = projects.canonicalProfileJson(entry.name, obj);
   }
+  const deleted = vmParsed.deleted.filter((name) => {
+    if (!isSafeProfileName(name) || projects.isReservedProfileName(name)) {
+      addWarning(`invalid or reserved tombstone name "${name}"; ignored`);
+      return false;
+    }
+    return !vmParsed.entries.some((entry) => entry.name === name);
+  });
 
-  // D13: fresh-VM seed path. Implements the spec literally:
-  //   - Store dir absent (wiped/fresh VM): ALWAYS seed from main.
-  //   - vm branch tip has 0 profiles: seed (first-ever sync).
-  //   - Store dir EXISTS but is empty: only seed when the vm tip also has 0
-  //     profiles (first sync). Otherwise treat as a real deletion — the user
-  //     deleted all profiles on the VM intentionally (the store dir still exists
-  //     and the last sync had files on the vm branch).
-  //
-  // The previous heuristic (vmRef === mainRef) was wrong: after any host-only
-  // commit (e.g. the P2 add-remote flow calling writeRemotes + commitAll) main
-  // advances past vm, making the predicate false, and the next tick with an
-  // absent store would commit a mass-deletion vm commit and merge it into main.
+  // Seed absent stores or a first sync from main. Pending deletions go through
+  // normal reconciliation so their markers can be acknowledged.
   const vmTipProfiles = await countVmBranchProfiles(runGit, configDir, branch);
   const noValidVmFiles = Object.keys(vmValid).length === 0;
   const freshVm = vmStoreAbsent
     ? noValidVmFiles    // store dir absent: seed unless valid files were somehow read (shouldn't happen)
     : (noValidVmFiles && vmTipProfiles === 0); // store dir exists but empty: seed only on first-ever sync
 
-  if (freshVm) {
+  if (freshVm && deleted.length === 0) {
     info("fresh VM detected; seeding from main");
     result.seeded = true;
     // Build main file map.
@@ -875,16 +897,9 @@ async function syncTickLocked({ runGit, configDir, readStore, writeStore, log, s
     return result;
   }
 
-  // Mass-deletion guard: the store EXISTS but yielded zero valid profiles while
-  // the vm branch has some. The spec read this as "the user deleted every
-  // profile on the VM intentionally" — but in practice it is far more likely a
-  // half-provisioned store (dir created before seeding finished) or a store
-  // whose files all failed validation, and propagating it would wipe main
-  // (observed in the field: a reinstall-morning tick mass-deleted profiles that
-  // then kept resurrecting). Deleting ALL profiles via sync is never worth that
-  // risk: skip the VM side with a warning; individual deletions still propagate
-  // normally, and a real delete-all can be done per profile or from the panel.
-  if (noValidVmFiles && vmTipProfiles > 0) {
+  // Keep the empty-store guard and reseed behavior unless explicit deletions
+  // were read. A tombstone can delete the last profile too.
+  if (noValidVmFiles && vmTipProfiles > 0 && deleted.length === 0) {
     addWarning(`VM store has no valid profiles but the ${branch} branch has ${vmTipProfiles}; refusing to propagate a mass deletion (delete profiles individually if intended)`);
     // ...but do NOT stall: a store dir that exists yet holds zero valid profiles
     // is, in the field, a rebuilt/wiped VM (provisioning recreates the dir before
@@ -914,18 +929,8 @@ async function syncTickLocked({ runGit, configDir, readStore, writeStore, log, s
   }
 
   // Step 5: commit VM snapshot onto the vm branch via a temp index.
-  // Names that were read from the VM but skipped as INVALID must NOT be treated
-  // as deletions: an invalid file (e.g. a half-written agent edit) is skipped and
-  // "never enters the repo" (spec §6.2) — the vm branch keeps its last agreed-valid
-  // copy for that name, so the merge doesn't propagate a spurious deletion to main
-  // and wipe a previously-synced profile. Only names genuinely ABSENT from the VM
-  // read are deletions. (A reserved name in the store is also preserved rather than
-  // deleted, matching the "ignored, not deleted" rule for a stale default.json.)
-  const preserveNames = new Set([
-    ...result.skippedInvalid.map((s) => s.name),
-    ...vmParsed.entries.filter((e) => projects.isReservedProfileName(e.name)).map((e) => e.name),
-  ]);
-  const vmChanged = await commitVmBranch(runGit, configDir, vmValid, preserveNames, branch);
+  // Keep missing, invalid and reserved entries; only tombstones delete blobs.
+  const vmChanged = await commitVmBranch(runGit, configDir, vmValid, deleted, branch);
 
   // Step 6: merge vm into main.
   // First check if merge is needed.
@@ -934,7 +939,7 @@ async function syncTickLocked({ runGit, configDir, readStore, writeStore, log, s
     // vm is already an ancestor of main and nothing changed — nothing to merge.
     // Still do write-back for any drifted files.
     const mainFiles = readMainProfiles(configDir);
-    const ops = planWriteBack({ mainFiles, vmFiles: vmRaw });
+    const ops = planWriteBack({ mainFiles, vmFiles: vmRaw, deleted });
     if (ops.length > 0) {
       const script = buildWriteStoreScript(ops, storeRoot);
       const wbStdout = await writeStore(script);
@@ -963,7 +968,7 @@ async function syncTickLocked({ runGit, configDir, readStore, writeStore, log, s
   if (mainTree.stdout.trim() === vmTree.stdout.trim()) {
     // Trees are identical — nothing to merge.
     const mainFiles = readMainProfiles(configDir);
-    const ops = planWriteBack({ mainFiles, vmFiles: vmRaw });
+    const ops = planWriteBack({ mainFiles, vmFiles: vmRaw, deleted });
     if (ops.length > 0) {
       const script = buildWriteStoreScript(ops, storeRoot);
       const wbStdout = await writeStore(script);
@@ -1030,7 +1035,7 @@ async function syncTickLocked({ runGit, configDir, readStore, writeStore, log, s
   // Step 7: guarded write-back.
   let writeBackRan = true;
   const mainFiles = readMainProfiles(configDir);
-  const ops = planWriteBack({ mainFiles, vmFiles: vmRaw });
+  const ops = planWriteBack({ mainFiles, vmFiles: vmRaw, deleted });
   if (ops.length > 0) {
     const script = buildWriteStoreScript(ops, storeRoot);
     const wbStdout = await writeStore(script);
@@ -1121,9 +1126,8 @@ async function countVmBranchProfiles(runGit, configDir, vmBranch) {
  * working tree (checked out on main) is never disturbed. Returns true if a new
  * commit was created (the tree differs from the branch-tip tree).
  */
-async function commitVmBranch(runGit, configDir, vmValid, preserveNames, vmBranch) {
+async function commitVmBranch(runGit, configDir, vmValid, deleted, vmBranch) {
   const branch = resolveVmBranch(vmBranch);
-  const preserve = preserveNames instanceof Set ? preserveNames : new Set(preserveNames || []);
   const tmpIndex = path.join(configDir, ".git", "tmp-vm-index");
   try { fs.unlinkSync(tmpIndex); } catch (_) { /* ok */ }
 
@@ -1132,25 +1136,9 @@ async function commitVmBranch(runGit, configDir, vmValid, preserveNames, vmBranc
   // Read the current vm tree into the temp index.
   await runGit(["read-tree", branch], { cwd: configDir, env: envOverride });
 
-  // Remove projects/* entries from the temp index so the tree is rebuilt from the
-  // fresh VM read — EXCEPT names in `preserve` (skipped-invalid or reserved), whose
-  // last agreed-valid vm-branch blob is kept as-is so they aren't misread as
-  // deletions. We use `git update-index --force-remove` per entry instead of
-  // `git rm --cached -r` because git-rm's staged-content safety check can refuse
-  // when a blob differs from both HEAD and the working tree (e.g. after conflict
-  // resolution), silently dropping VM-side deletions and resurrecting deleted profiles.
-  const lsIdx = await runGit(["ls-files", "--cached", "--", "projects/"], { cwd: configDir, env: envOverride });
-  const existingEntries = lsIdx.stdout.trim().split("\n").filter(Boolean);
-  for (const entry of existingEntries) {
-    // entry looks like "projects/<name>.json"; map back to the profile name.
-    const base = entry.slice("projects/".length);
-    const entryName = base.endsWith(".json") ? base.slice(0, -".json".length) : base;
-    if (preserve.has(entryName)) continue; // keep the last valid copy; not a deletion
-    const rmRes = await runGit(["update-index", "--force-remove", "--", entry], { cwd: configDir, env: envOverride });
-    if (rmRes.code !== 0) {
-      // Should not happen — force-remove unconditionally drops the entry — but
-      // if it does, the tree will be wrong and the commit comparison will catch it.
-    }
+  // Remove only explicit guest CLI deletions from the previous snapshot.
+  for (const name of deleted) {
+    await runGit(["update-index", "--force-remove", "--", "projects/" + name + ".json"], { cwd: configDir, env: envOverride });
   }
 
   // Add each valid VM file.

@@ -67,6 +67,12 @@ function writeStoreProfile(storeDir, name, obj) {
   fs.writeFileSync(path.join(storeDir, name + ".json"), content, "utf8");
 }
 
+function deleteStoreProfile(storeDir, name) {
+  fs.mkdirSync(path.join(storeDir, ".deleted"), { recursive: true });
+  fs.writeFileSync(path.join(storeDir, ".deleted", name), "");
+  fs.rmSync(path.join(storeDir, name + ".json"), { force: true });
+}
+
 /** Read a profile from the fake VM store. */
 function readStoreProfile(storeDir, name) {
   try {
@@ -524,7 +530,7 @@ async function runTests() {
     ok("reserved: not committed to config repo", !fs.existsSync(path.join(configDir, "projects", "default.json")));
   } finally { fs.rmSync(reservedRoot, { recursive: true, force: true }); }
 
-  // ── VM deletion propagates to main ─────────────────────────────────────────
+  // ── Missing VM files restore; explicit deletions propagate ─────────────────
   const vmDelRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cs-vmdel-"));
   try {
     const configDir = mk(vmDelRoot, "config");
@@ -542,8 +548,17 @@ async function runTests() {
       storeRoot: storeDir,
     });
 
-    // Delete 'api' from the store.
+    const mainBefore = (await runGit(["rev-parse", "main"], { cwd: configDir })).stdout;
+    // An accidental removal must not change main.
     fs.unlinkSync(path.join(storeDir, "api.json"));
+    const restored = await cs.syncTick({ runGit, configDir, readStore: makeReadStore(storeDir), writeStore: makeWriteStore(), storeRoot: storeDir });
+    ok("vm-missing: tick restores profile", restored.ok && readStoreProfile(storeDir, "api") !== null);
+    ok("vm-missing: main untouched", (await runGit(["rev-parse", "main"], { cwd: configDir })).stdout === mainBefore);
+
+    const otherStore = path.join(vmDelRoot, "other-store");
+    const otherTick = () => cs.syncTick({ runGit, configDir, vmBranch: "vm-other", readStore: makeReadStore(otherStore), writeStore: makeWriteStore(), storeRoot: otherStore });
+    await otherTick();
+    deleteStoreProfile(storeDir, "api");
 
     const result = await cs.syncTick({
       runGit, configDir,
@@ -557,6 +572,9 @@ async function runTests() {
     ok("vm-del: api deleted from host", readProfile(configDir, "api") === null);
     // web should still be there.
     ok("vm-del: web still on host", readProfile(configDir, "web") !== null);
+    ok("vm-del: tombstone cleared", !fs.existsSync(path.join(storeDir, ".deleted", "api")));
+    ok("vm-del: second instance sync succeeds", (await otherTick()).ok);
+    ok("vm-del: second instance removes profile", readStoreProfile(otherStore, "api") === null);
     const deleted = await cs.deletedProfileIdentities(runGit, configDir, ["web"]);
     ok("vm-del: deletion history suppresses repo auto-import by name and URL",
       deleted.names.has("api") && deleted.urls.has("https://h/a.git"));
@@ -1128,6 +1146,81 @@ async function runTests() {
     ok("ancestor: toplevel is configDir", path.resolve(tl.stdout.trim()) === path.resolve(configDir));
   } finally { fs.rmSync(ancestorRoot, { recursive: true, force: true }); }
 
+  const tombstoneRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cs-tombstone-"));
+  try {
+    const configDir = mk(tombstoneRoot, "config");
+    const storeDir = path.join(tombstoneRoot, "store");
+    cs.ensureConfigTree(configDir);
+    writeProfile(configDir, "only", { name: "only" });
+    const tick = (extra = {}) => cs.syncTick({ runGit, configDir, readStore: makeReadStore(storeDir), writeStore: makeWriteStore(), storeRoot: storeDir, ...extra });
+    await tick();
+    const marker = path.join(storeDir, ".deleted", "only");
+    fs.mkdirSync(path.dirname(marker));
+    fs.writeFileSync(marker, "");
+    ok("tombstone: live file suppresses stale marker", eq(cs.parseReadStore(await makeReadStore(storeDir)()).deleted, []));
+    fs.writeFileSync(marker, "");
+    ok("tombstone: stale marker does not delete host", (await tick()).ok && readProfile(configDir, "only") !== null);
+    ok("tombstone: stale marker cleared by tick", !fs.existsSync(marker));
+    const staleMain = (await runGit(["rev-parse", "main"], { cwd: configDir })).stdout;
+    fs.unlinkSync(path.join(storeDir, "only.json"));
+    ok("tombstone: later accidental removal restores profile", (await tick()).ok && readStoreProfile(storeDir, "only") !== null);
+    ok("tombstone: later accidental removal leaves main untouched", (await runGit(["rev-parse", "main"], { cwd: configDir })).stdout === staleMain);
+
+    deleteStoreProfile(storeDir, "only");
+    writeProfile(configDir, "only", { name: "only", provisionCommands: ["echo host"] });
+    const conflict = await tick();
+    ok("tombstone: host edit conflicts", conflict.conflict);
+    ok("tombstone: conflict keeps marker", fs.existsSync(marker));
+    await runGit(["add", "projects/only.json"], { cwd: configDir });
+    const resolved = await tick();
+    ok("tombstone: host resolution restores VM", resolved.ok && readStoreProfile(storeDir, "only").provisionCommands[0] === "echo host");
+    ok("tombstone: host resolution clears marker", !fs.existsSync(marker));
+
+    deleteStoreProfile(storeDir, "only");
+    const last = await tick();
+    ok("tombstone: last profile deletion bypasses guard", last.ok && !last.warnings.some(w => w.includes("mass deletion")));
+    ok("tombstone: last profile deleted and marker cleared", readProfile(configDir, "only") === null && !fs.existsSync(marker));
+
+    // A profile added on main after this VM's base was recorded wins over a marker.
+    writeProfile(configDir, "new", { name: "new" });
+    deleteStoreProfile(storeDir, "new");
+    ok("tombstone: host-only profile restored", (await tick()).ok && readStoreProfile(storeDir, "new") !== null);
+    ok("tombstone: host-only marker cleared", !fs.existsSync(path.join(storeDir, ".deleted", "new")));
+    fs.writeFileSync(path.join(storeDir, ".deleted", "default"), "");
+    fs.writeFileSync(path.join(storeDir, ".deleted", "bad..name"), "");
+    const invalid = await tick();
+    ok("tombstone: invalid and reserved names warn", invalid.warnings.filter(w => w.includes("tombstone")).length === 2);
+
+    fs.unlinkSync(path.join(storeDir, "new.json"));
+    const raced = await tick({ writeStore: async script => {
+      deleteStoreProfile(storeDir, "new");
+      return runBash(script);
+    } });
+    ok("tombstone: absent write skips concurrent delete", raced.writeBack.skipped.includes("new") && readStoreProfile(storeDir, "new") === null);
+    ok("tombstone: concurrent delete keeps marker", fs.existsSync(path.join(storeDir, ".deleted", "new")));
+
+    const seedStore = path.join(tombstoneRoot, "seed-store");
+    const seeded = await cs.syncTick({ runGit, configDir, vmBranch: "vm-seed", storeRoot: seedStore, readStore: makeReadStore(seedStore), writeStore: async script => {
+      deleteStoreProfile(seedStore, "new");
+      return runBash(script);
+    } });
+    ok("tombstone: fresh seed skips concurrent delete", seeded.writeBack.skipped.includes("new") && readStoreProfile(seedStore, "new") === null);
+  } finally { fs.rmSync(tombstoneRoot, { recursive: true, force: true }); }
+
+  const tokenRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cs-token-"));
+  try {
+    const configDir = mk(tokenRoot, "config");
+    const storeDir = mk(tokenRoot, "store");
+    cs.ensureConfigTree(configDir);
+    writeStoreProfile(storeDir, "DELETED", { name: "DELETED" });
+    const parsed = cs.parseReadStore(await makeReadStore(storeDir)());
+    ok("wire token: DELETED profile parsed as a live entry", parsed.entries.length === 1 && parsed.entries[0].name === "DELETED" && parsed.deleted.length === 0);
+    const tick = () => cs.syncTick({ runGit, configDir, readStore: makeReadStore(storeDir), writeStore: makeWriteStore(), storeRoot: storeDir });
+    ok("wire token: DELETED profile syncs to host", (await tick()).ok && readProfile(configDir, "DELETED") !== null);
+    deleteStoreProfile(storeDir, "DELETED");
+    ok("wire token: DELETED profile can be explicitly deleted", (await tick()).ok && readProfile(configDir, "DELETED") === null);
+  } finally { fs.rmSync(tokenRoot, { recursive: true, force: true }); }
+
   // ── VM deletion after conflict resolution (Fix 3) ─────────────────────────
   // After resolving a conflict, a VM-side deletion must propagate through the
   // temp-index vm commit correctly (git update-index --force-remove works where
@@ -1176,8 +1269,8 @@ async function runTests() {
       storeRoot: storeDir,
     });
 
-    // Now delete api from the store (VM-side deletion after a conflict resolution).
-    fs.unlinkSync(path.join(storeDir, "api.json"));
+    // Explicit deletion after a conflict resolution still removes the index entry.
+    deleteStoreProfile(storeDir, "api");
 
     const result = await cs.syncTick({
       runGit, configDir,

@@ -3,6 +3,7 @@
 #
 # Usage:
 #   construct project set <name> [--file <path>]   write/update a profile
+#   construct project delete <name>               delete a profile on the next sync
 #   construct project get <name>                   print a stored profile
 #   construct project list                         list stored profile names
 #   construct notify <message> [--title …]         desktop notification on the host
@@ -16,12 +17,13 @@
 # The canonical store is /opt/construct/projects (overridable via PROJECTS_STORE).
 # Changes sync to the host and survive VM reinstall; anything NOT recorded in a
 # profile here is lost on reinstall.
+# Missing files are restored from the host; use project delete to remove a profile.
 #
 # Exit codes:
 #   0  success
 #   1  not found (get) / general error
 #   2  validation error (set)
-#   3  reserved name (set)
+#   3  reserved name (set/delete)
 #   4  node not available (set requires node for schema validation)
 #   5  notification queue full (notify)
 #   6  expose: no Construct client attached (the request stays queued)
@@ -56,6 +58,7 @@ Project commands:
   set  <name> [--file <path>]   Create or update a project profile.
                                 Reads JSON from --file or stdin.
   get  <name>                   Print the stored profile to stdout.
+  delete <name>                 Remove a profile from the VM and host on next sync.
   list                          List stored profile names.
 
 notify — raise a desktop notification on the Windows host:
@@ -238,7 +241,7 @@ case "$1" in
     exit $?
     ;;
   help|--help|-h) usage; exit 0 ;;
-  *) die "Unknown command: $1 (try: construct project set|get|list, construct notify, construct systemprompt)" ;;
+  *) die "Unknown command: $1 (try: construct project set|get|delete|list, construct notify, construct systemprompt)" ;;
 esac
 
 if [[ $# -lt 1 ]]; then usage >&2; exit 1; fi
@@ -286,6 +289,25 @@ case "${subcmd}" in
     PROJECTS_STORE="${PROJECTS_STORE}" exec node "${project_set}" "${args[@]}"
     ;;
 
+  # ---------- delete ----------------------------------------------------------
+  delete)
+    if [[ $# -ne 1 ]]; then die "Usage: construct project delete <name>"; fi
+    name="$1"
+    is_safe_name "${name}" || die "Invalid profile name: ${name} (must be a single filename, no path separators or '..')"
+    case "$name" in
+      [[:space:]]*|*[[:space:]]) die "Invalid profile name: leading or trailing whitespace" ;;
+    esac
+    case "${name,,}" in
+      default|project.schema) printf '"%s" is a reserved name\n' "$name" >&2; exit 3 ;;
+    esac
+    file="${PROJECTS_STORE}/${name}.json"
+    if [[ ! -f "$file" ]]; then printf 'Profile file was already absent: %s\n' "$name"; fi
+    mkdir -p "${PROJECTS_STORE}/.deleted"
+    touch "${PROJECTS_STORE}/.deleted/${name}"
+    rm -f "$file"
+    printf 'Deleted %s; the host removes its copy on its next sync.\n' "$name"
+    ;;
+
   # ---------- get -------------------------------------------------------------
   get)
     if [[ $# -lt 1 ]]; then die "Usage: construct project get <name>"; fi
@@ -309,6 +331,6 @@ case "${subcmd}" in
     ;;
 
   *)
-    die "Unknown subcommand: ${subcmd} (try: set, get, list)"
+    die "Unknown subcommand: ${subcmd} (try: set, get, delete, list)"
     ;;
 esac

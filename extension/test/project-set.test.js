@@ -56,6 +56,31 @@ function runCli(store, args, opts) {
   return spawnSync("bash", [CONSTRUCT_CLI, ...args], spawnOpts);
 }
 
+// Explicit deletion uses a marker even when the profile was already missing.
+{
+  const store = mkTmpDir();
+  try {
+    runCli(store, ["project", "set", "sample"], { input: '{"name":"sample"}' });
+    const file = path.join(store, "sample.json");
+    const marker = path.join(store, ".deleted", "sample");
+    const removed = runCli(store, ["project", "delete", "sample"]);
+    ok("delete: succeeds and explains host sync", removed.status === 0 && removed.stdout.includes("next sync"));
+    ok("delete: removes file and creates empty tombstone", !fs.existsSync(file) && fs.readFileSync(marker, "utf8") === "");
+    ok("list: ignores tombstones", runCli(store, ["project", "list"]).stdout === "");
+    fs.unlinkSync(marker);
+    const missing = runCli(store, ["project", "delete", "sample"]);
+    ok("delete: missing profile still creates tombstone", missing.status === 0 && missing.stdout.includes("already absent") && fs.existsSync(marker));
+    ok("set: succeeds after delete", runCli(store, ["project", "set", "sample"], { input: '{"name":"sample"}' }).status === 0);
+    ok("set: clears tombstone", fs.existsSync(file) && !fs.existsSync(marker));
+    for (const name of ["default", "DEFAULT", "project.schema"]) {
+      ok("delete: refuses reserved " + name, runCli(store, ["project", "delete", name]).status === 3);
+    }
+    for (const name of ["../escape", "a/b", "", "a\nb", " ", " default ", "sample "]) {
+      ok("delete: refuses unsafe " + JSON.stringify(name), runCli(store, ["project", "delete", name]).status !== 0);
+    }
+  } finally { cleanup(store); }
+}
+
 // ── project-set.js: set from stdin ──────────────────────────────────────────
 console.log("\n── project-set.js ──────────────────────────────────────────");
 

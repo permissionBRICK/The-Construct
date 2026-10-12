@@ -489,12 +489,13 @@ ok "--help documents the client target" grep -q "USER'S PC" "${help_out}"
 ok "--help documents the host target" grep -qE '^  host ' "${help_out}"
 ok "--help documents the exit codes" grep -q 'no client attached' "${help_out}"
 ok "--help documents the config keys" grep -q 'CONSTRUCT_SERVICE_URL' "${help_out}"
-# ── the existing verbs stay byte-identical ───────────────────────────────────
-# Adding a verb must not change a single character of what the CLI printed
-# before it existed: `construct help` (which `notify --help` also prints) and the
-# diagnostics for existing invocations are part of the zero-change contract.
-# `construct expose --help` and the system-prompt paragraph are where the new
-# verb is documented.
+# Shared help includes project deletion; unrelated diagnostics stay unchanged.
+project_help="$(bash "${CLI}" help)"
+ok "construct help documents explicit project deletion" grep -q 'delete <name>.*next sync' <<<"${project_help}"
+ok "construct --help uses shared help" test "$(bash "${CLI}" --help)" = "${project_help}"
+ok "construct notify --help uses shared help" test "$(bash "${CLI}" notify --help)" = "${project_help}"
+ok "unknown command lists project delete" grep -q 'set|get|delete|list' <<<"$(bash "${CLI}" teleport 2>&1)"
+ok "construct with no arguments uses shared help" test "$(bash "${CLI}" 2>&1)" = "${project_help}"
 
 head_cli="${tmp}/head-construct"
 if git -C "${ROOT}" show HEAD:bin/construct >"${head_cli}" 2>/dev/null; then
@@ -508,11 +509,6 @@ if git -C "${ROOT}" show HEAD:bin/construct >"${head_cli}" 2>/dev/null; then
       bash "${CLI}" "$@" 2>&1; printf 'rc=%s' "$?")"
     ok "${name}" test "${before}" = "${after}"
   }
-  same_output "construct help is byte-identical to HEAD" help
-  same_output "construct --help is byte-identical to HEAD" --help
-  same_output "construct notify --help is byte-identical to HEAD" notify --help
-  same_output "an unknown command still says exactly what it said before" teleport
-  same_output "construct with no arguments is unchanged"
   same_output "an unknown notify option is unchanged" notify msg --shout
   same_output "project list on an empty store is unchanged" project list
   same_output "an invalid profile name is unchanged" project get ../secret

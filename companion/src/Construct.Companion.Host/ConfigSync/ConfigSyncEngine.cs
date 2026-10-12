@@ -43,41 +43,46 @@ public sealed class ConfigSyncEngine(ConfigRepository repo, SyncLock syncLock, I
         var parsed = StoreScripts.ParseReadStore(await RunStore(StoreScripts.BuildReadStoreScript(storeRoot), ct));
         if (parsed == null) { result.VmReadOk = false; result.Warnings.Add("could not read VM store (SSH unreachable or truncated)"); result.Ok = true; return; }
         result.VmReadOk = true;
-        var raw = new Dictionary<string, string>(); var valid = new Dictionary<string, string>(); var preserve = new HashSet<string>();
+        var raw = new Dictionary<string, string>(); var valid = new Dictionary<string, string>(); var deleted = new HashSet<string>();
         foreach (var entry in parsed.Entries)
         {
-            if (ConfigSyncRules.IsReserved(entry.Name)) { preserve.Add(entry.Name); continue; }
+            if (ConfigSyncRules.IsReserved(entry.Name)) continue;
             var gate = ProfileCodec.CanonicalizeProfileText(entry.Name, entry.Content);
             if (!gate.Ok || !ConfigSyncRules.IsSafeProfileName(entry.Name))
             {
                 var reason = gate.Reason ?? "is not a safe profile file name";
-                result.SkippedInvalid.Add(new(entry.Name, reason)); result.Warnings.Add(ConfigSyncRules.RedactGitOutput($"invalid VM profile \"{entry.Name}\": {reason}; skipped")); preserve.Add(entry.Name); continue;
+                result.SkippedInvalid.Add(new(entry.Name, reason)); result.Warnings.Add(ConfigSyncRules.RedactGitOutput($"invalid VM profile \"{entry.Name}\": {reason}; skipped")); continue;
             }
             raw[entry.Name] = entry.Content; valid[entry.Name] = gate.Content!;
         }
+        foreach (var name in parsed.Deleted)
+        {
+            if (!ConfigSyncRules.IsSafeProfileName(name) || ConfigSyncRules.IsReserved(name)) { result.Warnings.Add($"invalid or reserved tombstone name \"{name}\"; ignored"); continue; }
+            if (!parsed.Entries.Any(entry => entry.Name == name)) deleted.Add(name);
+        }
         var count = await repo.CountVmBranchProfilesAsync(branch, ct);
         var fresh = valid.Count == 0 && (parsed.StoreAbsent || count == 0);
-        if (fresh)
+        if (fresh && deleted.Count == 0)
         {
             result.Seeded = true;
             if (await WriteBack(repo.ReadMainProfiles().Select(p => new WriteOperation(p.Key, "write", null, p.Value)), result, true, ct)) await Advance(branch, ct);
             result.Ok = true; return;
         }
-        if (valid.Count == 0 && count > 0)
+        if (valid.Count == 0 && count > 0 && deleted.Count == 0)
         {
             result.Warnings.Add($"VM store has no valid profiles but the {branch} branch has {count}; refusing to propagate a mass deletion (delete profiles individually if intended)");
             await WriteBack(repo.ReadMainProfiles().Select(p => new WriteOperation(p.Key, "write", null, p.Value)), result, true, ct, "reseed"); result.Seeded = result.WriteBack.Done.Count > 0; result.Ok = true; return;
         }
-        var changed = await repo.CommitVmBranchAsync(valid, preserve, branch, ct);
+        var changed = await repo.CommitVmBranchAsync(valid, deleted, branch, ct);
         var ancestor = await repo.Git.RunAsync(repo.Directory, ["merge-base", "--is-ancestor", branch, "main"], cancellationToken: ct);
         if (ancestor.Code == 0 && !changed)
         {
-            if (await WriteBack(ConfigSyncRules.PlanWriteBack(repo.ReadMainProfiles(), raw), result, false, ct)) await Advance(branch, ct);
+            if (await WriteBack(ConfigSyncRules.PlanWriteBack(repo.ReadMainProfiles(), raw, deleted), result, false, ct)) await Advance(branch, ct);
             result.Ok = true; return;
         }
         var mainTree = await repo.Git.RequireAsync(repo.Directory, ["rev-parse", "main^{tree}"], cancellationToken: ct);
         var vmTree = await repo.Git.RequireAsync(repo.Directory, ["rev-parse", branch + "^{tree}"], cancellationToken: ct);
-        if (mainTree == vmTree) { await WriteBack(ConfigSyncRules.PlanWriteBack(repo.ReadMainProfiles(), raw), result, false, ct, "quiet"); result.Ok = true; return; }
+        if (mainTree == vmTree) { await WriteBack(ConfigSyncRules.PlanWriteBack(repo.ReadMainProfiles(), raw, deleted), result, false, ct, "quiet"); result.Ok = true; return; }
         var merge = await repo.Git.RunAsync(repo.Directory, ["merge", "--no-ff", "--no-commit", branch], true, cancellationToken: ct);
         if (merge.Code != 0)
         {
@@ -93,7 +98,7 @@ public sealed class ConfigSyncEngine(ConfigRepository repo, SyncLock syncLock, I
         var commit = await repo.Git.RunAsync(repo.Directory, ["commit", "-m", "sync merge " + branch], true, cancellationToken: ct);
         if (commit.Code != 0) { result.Blocked = true; result.BlockedReason = "merge commit failed: " + ConfigSyncRules.RedactGitOutput((string.IsNullOrEmpty(commit.Stderr) ? commit.Stdout : commit.Stderr).Trim()); result.Warnings.Add(result.BlockedReason); return; }
         result.Merged = true;
-        if (await WriteBack(ConfigSyncRules.PlanWriteBack(repo.ReadMainProfiles(), raw), result, false, ct)) await Advance(branch, ct);
+        if (await WriteBack(ConfigSyncRules.PlanWriteBack(repo.ReadMainProfiles(), raw, deleted), result, false, ct)) await Advance(branch, ct);
         result.Ok = true;
     }
     private Task<string> Advance(string branch, CancellationToken ct) => repo.Git.RequireAsync(repo.Directory, ["update-ref", "refs/heads/" + branch, "refs/heads/main"], cancellationToken: ct);

@@ -103,6 +103,12 @@ construct project list
 `project.schema`. It does **not** version anything itself — there's no git on the VM — the
 host's sync tick picks up the change on its next pass.
 
+Use `construct project delete <name>` to delete a profile from the VM. It removes
+the file and records a deletion marker for the next host sync, even if the file
+was already missing. Simply removing the JSON file leaves the host copy intact;
+sync restores the missing file. `construct project set` clears any pending
+deletion marker after writing the profile.
+
 Profiles can also be deleted from the Construct panel: open a profile chip and use
 **Delete profile**. The action unselects and removes the profile on both sides but
 leaves the repository checkout intact. Automatic discovery remembers the deletion,

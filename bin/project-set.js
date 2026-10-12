@@ -122,6 +122,8 @@ const tmp = target + ".tmp-" + process.pid;
 try {
   fs.writeFileSync(tmp, canonical, "utf8");
   fs.renameSync(tmp, target);
+  try { fs.unlinkSync(path.join(STORE, ".deleted", name)); }
+  catch (e) { if (e.code !== "ENOENT") throw e; }
 } catch (e) {
   // Clean up the temp file on failure.
   try { fs.unlinkSync(tmp); } catch (_) { /* ignore */ }

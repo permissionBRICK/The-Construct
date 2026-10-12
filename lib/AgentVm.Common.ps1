@@ -4442,7 +4442,7 @@ function Get-ConstructVmProjects {
 }
 
 # ── VM store read/write ──────────────────────────────────────────────────────
-# The same wire format as the JS engine: name<TAB>base64 lines + END sentinel
+# The same profile/DELETED lines as the JS engine, followed by END
 # for reading; a guarded bash script for writing.
 
 function Read-ConstructVmStore {
@@ -4458,8 +4458,9 @@ function Read-ConstructVmStore {
     )
 
     # The read script emits a NOSTORE marker when /opt/construct/projects does
-    # not exist, so the caller can disambiguate "empty store" (all files deleted)
-    # from "fresh VM where the store dir was never created" (D13).
+    # not exist, so the caller can disambiguate "empty store" (all files missing)
+    # from "fresh VM where the store dir was never created" (D13). Space-prefix
+    # the live name DELETED to distinguish it from the marker token; parsing trims it.
     $readScript = @'
 set -u
 store='/opt/construct/projects'
@@ -4470,8 +4471,15 @@ if [ -d "$store" ]; then
   for f in "$store"/*.json; do
     [ -f "$f" ] || continue
     name="$(basename "$f" .json)"
+    [ "$name" != DELETED ] || name=" $name"
     b64="$(base64 < "$f" | tr -d '\n')"
     printf '%s\t%s\n' "$name" "$b64"
+  done
+  for f in "$store"/.deleted/*; do
+    [ -f "$f" ] || continue
+    name="$(basename "$f")"
+    if [ -f "$store/$name.json" ]; then rm -f "$f"; continue; fi
+    printf 'DELETED\t%s\n' "$name"
   done
 fi
 printf 'END\n'
@@ -4490,9 +4498,11 @@ printf 'END\n'
     $sawEnd = $false
     $sawNoStore = $false
     $store = @{}
+    $deleted = @()
     foreach ($line in $lines) {
         if ($line -eq "END") { $sawEnd = $true; continue }
         if ($line -eq "NOSTORE") { $sawNoStore = $true; continue }
+        if ($line.StartsWith("DELETED`t")) { $deleted += $line.Substring(8); continue }
         $parts = $line -split "`t", 2
         if ($parts.Count -lt 2) { continue }
         $name = $parts[0].Trim()
@@ -4505,7 +4515,7 @@ printf 'END\n'
     }
     if (-not $sawEnd) { return $null }
     # Return a PSObject with the store hashtable and whether the store dir existed.
-    return [pscustomobject]@{ Files = $store; StoreDirExists = (-not $sawNoStore) }
+    return [pscustomobject]@{ Files = $store; StoreDirExists = (-not $sawNoStore); Deleted = $deleted }
 }
 
 function Write-ConstructVmStore {
@@ -4540,7 +4550,10 @@ function Write-ConstructVmStore {
         # expansion ($, backtick, double-quote). $store is still expanded via
         # double quotes. Matches JS: const file = '"$store"' + "/'" + safeName + ".json'"
         $file = "`"`$store`"/'$q.json'"
-        if ($op.Action -eq "delete") {
+        $tombstone = "`"`$store`"/.deleted/'$q'"
+        if ($op.Action -eq "clear-delete") {
+            $null = $sb.AppendLine("if [ ! -f $file ]; then rm -f $tombstone; printf '%s\tdone\n' '$q'; else printf '%s\tskipped\n' '$q'; fi")
+        } elseif ($op.Action -eq "delete") {
             if ($null -ne $op.Expect -and $op.Expect -ne "") {
                 $null = $sb.AppendLine("cur=`$(base64 < $file 2>/dev/null | tr -d '\n' || true)")
                 $null = $sb.AppendLine("if [ ""`$cur"" = '$($op.Expect)' ]; then rm -f $file; printf '%s\tdone\n' '$q'; else printf '%s\tskipped\n' '$q'; fi")
@@ -4553,7 +4566,10 @@ function Write-ConstructVmStore {
                 $null = $sb.AppendLine("cur=`$(base64 < $file 2>/dev/null | tr -d '\n' || true)")
                 $null = $sb.AppendLine("if [ ""`$cur"" = '$($op.Expect)' ]; then printf '%s' '$contentB64' | base64 -d > $file; printf '%s\tdone\n' '$q'; else printf '%s\tskipped\n' '$q'; fi")
             } elseif ($op.ExpectAbsent) {
-                $null = $sb.AppendLine("if [ ! -f $file ]; then printf '%s' '$contentB64' | base64 -d > $file; printf '%s\tdone\n' '$q'; else printf '%s\tskipped\n' '$q'; fi")
+                $markerGuard = "! -f $tombstone"
+                $cleanup = ""
+                if ($op.ClearDeleted) { $markerGuard = "-f $tombstone"; $cleanup = "rm -f $tombstone; " }
+                $null = $sb.AppendLine("if [ ! -f $file ] && [ $markerGuard ]; then printf '%s' '$contentB64' | base64 -d > $file; ${cleanup}printf '%s\tdone\n' '$q'; else printf '%s\tskipped\n' '$q'; fi")
             } else {
                 $null = $sb.AppendLine("printf '%s' '$contentB64' | base64 -d > $file; printf '%s\tdone\n' '$q'")
             }
@@ -4991,12 +5007,18 @@ function Invoke-ConstructConfigSyncLocked {
     }
     $vmStore = $vmStoreResult.Files
     $vmStoreDirExists = $vmStoreResult.StoreDirExists
+    $deleted = @()
+    foreach ($name in $vmStoreResult.Deleted) {
+        if (-not (Test-ConstructSafeProfileName $name) -or $script:RESERVED_PROFILE_NAMES -contains $name.ToLowerInvariant()) {
+            $warnings.Add("Invalid or reserved tombstone name '$name'; ignored.")
+            continue
+        }
+        if (-not $vmStore.ContainsKey($name)) { $deleted += $name }
+    }
 
     # ── SeedOnly / fresh-VM path (D13) ────────────────────────────────────────
-    # D13 disambiguation: take the fresh-VM seed path when the VM store is empty
-    # AND (the store dir does not exist OR vm branch has 0 profiles OR -SeedOnly).
-    # Without the NOSTORE marker, a plain tick after a VM wipe would commit an
-    # empty vm snapshot and the merge would DELETE every host profile from main.
+    # Seed an empty store when absent, on first sync, or for -SeedOnly.
+    # Pending deletions use normal reconciliation to acknowledge their markers.
     $vmStoreEmpty = $vmStore.Count -eq 0
     if ($SeedOnly -or $vmStoreEmpty) {
         $vmTreeEmpty = $true
@@ -5018,7 +5040,7 @@ function Invoke-ConstructConfigSyncLocked {
             $freshVm = $true
         }
 
-        if ($freshVm) {
+        if ($freshVm -and $deleted.Count -eq 0) {
             $seedOps = @()
             foreach ($f in @(Get-ChildItem -LiteralPath $projDir -Filter *.json -File -ErrorAction SilentlyContinue)) {
                 $bname = $f.BaseName
@@ -5089,12 +5111,9 @@ function Invoke-ConstructConfigSyncLocked {
         }
     }
 
-    # Mass-deletion guard (mirrors syncTickLocked in configsync.js): the store
-    # EXISTS but yielded zero valid profiles while the vm branch has some. Far
-    # more likely a half-provisioned store or all-invalid files than a genuine
-    # delete-everything -- propagating it would wipe main. Skip the VM side with
-    # a warning; individual deletions still propagate normally.
-    if ($validVm.Count -eq 0) {
+    # Keep the empty-store guard and reseed behavior unless explicit deletions
+    # were read. A tombstone can delete the last profile too.
+    if ($validVm.Count -eq 0 -and $deleted.Count -eq 0) {
         $vmTipCount = 0
         $prevMd = $ErrorActionPreference; $ErrorActionPreference = "SilentlyContinue"
         try {
@@ -5155,28 +5174,9 @@ function Invoke-ConstructConfigSyncLocked {
             $env:GIT_INDEX_FILE = $tmpIndex
             & git -C $ConfigDir read-tree $VmBranch 2>$null | Out-Null
 
-            # Names read from the VM but SKIPPED (invalid) or RESERVED must NOT be
-            # read as deletions: an invalid file is skipped and 'never enters the
-            # repo' (spec section 6.2), so the vm branch keeps its last agreed-valid
-            # copy for that name rather than committing a spurious deletion that the
-            # merge would propagate to main and wipe a previously-synced profile.
-            # Only names genuinely absent from the VM read are deletions.
-            $preserveNames = @{}
-            foreach ($si in $skippedInvalid) { $preserveNames[$si.Name] = $true }
-            foreach ($name in @($vmStore.Keys)) {
-                if ($script:RESERVED_PROFILE_NAMES -contains ("$name".ToLowerInvariant())) { $preserveNames[$name] = $true }
-            }
-
-            # Remove projects/* entries from the temp index EXCEPT the preserved ones,
-            # so the tree is rebuilt from the fresh VM read without losing skipped names.
-            $existingEntries = & git -C $ConfigDir ls-files --cached -- "projects/" 2>$null
-            if ($existingEntries) {
-                foreach ($entry in @($existingEntries)) {
-                    $base = "$entry".Substring("projects/".Length)
-                    if ($base.EndsWith(".json")) { $entryName = $base.Substring(0, $base.Length - 5) } else { $entryName = $base }
-                    if ($preserveNames.ContainsKey($entryName)) { continue }
-                    & git -C $ConfigDir update-index --force-remove -- "$entry" 2>$null | Out-Null
-                }
+            # Keep missing, invalid and reserved entries; only tombstones delete blobs.
+            foreach ($name in $deleted) {
+                & git -C $ConfigDir update-index --force-remove -- "projects/$name.json" 2>$null | Out-Null
             }
 
             # Add valid VM files. Each file is canonicalized (D3 'canonical JSON
@@ -5373,6 +5373,7 @@ function Invoke-ConstructConfigSyncLocked {
                 $writeOps += @{
                     Name = $name; Action = "write"; Content = $mainContent
                     Expect = $null; ExpectAbsent = $true
+                    ClearDeleted = ($deleted -contains $name)
                 }
             }
         }
@@ -5384,6 +5385,12 @@ function Invoke-ConstructConfigSyncLocked {
             $writeOps += @{
                 Name = $name; Action = "delete"; Expect = $expectB64; ExpectAbsent = $false
             }
+        }
+    }
+
+    foreach ($name in $deleted) {
+        if (-not $mainFiles.ContainsKey($name)) {
+            $writeOps += @{ Name = $name; Action = "clear-delete"; Expect = $null; ExpectAbsent = $true }
         }
     }
 

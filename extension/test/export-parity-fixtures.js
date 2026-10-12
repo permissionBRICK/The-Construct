@@ -339,12 +339,16 @@ function configSync() {
     add('credentials', url, c.urlHasCredentials(url)); add('url', url, c.validateConfigRemoteUrl(url, require('../src/remote').isLikelyGitUrl)); add('redact', url, c.redactGitOutput(url)); add('slug', url, c.remoteSlug(url));
   }
   for (const input of [ {mainFiles:{a:'new',b:'new'},vmFiles:{a:'old',c:'old'}}, {mainFiles:{a:'same'},vmFiles:{a:'same'}}, {mainFiles:{},vmFiles:{}} ]) add('writeBack', input, c.planWriteBack(input));
+  for (const input of [ {mainFiles:{kept:'host'},vmFiles:{},deleted:['gone','kept']}, {mainFiles:{live:'same'},vmFiles:{live:'same'},deleted:['live']} ]) add('writeBack', input, c.planWriteBack(input));
   for (const root of ['/opt/construct/projects', "/tmp/store 'quoted'"]) {
     add('readScript', root, c.buildReadStoreScript(root));
-    const ops = c.planWriteBack({mainFiles:{a:'new',b:'ü\n'},vmFiles:{a:'old',c:'old'}});
+    const ops = c.planWriteBack({mainFiles:{a:'new',b:'ü\n',kept:'host'},vmFiles:{a:'old',c:'old'},deleted:['gone','kept']});
     add('writeScript', {root,ops}, c.buildWriteStoreScript(ops,root));
   }
   for (const raw of ['END\n','STORE_ABSENT\nEND\n','a\te30K\nEND\n','a\te30K!!\nEND\n','a\te30\nEND\n','a\t!\nEND\n','a\te30K\n']) add('readResult', raw, c.parseReadStore(raw));
+  for (const raw of ['DELETED\tremoved\nEND\n','a\te30K\nDELETED\tb\nDELETED\tdefault\nDELETED\t../bad\nEND\n','DELETED\tmissing-end\n']) add('readResult', raw, c.parseReadStore(raw));
+  const tokenProfile = ' DELETED\t' + Buffer.from('{"name":"DELETED"}\n').toString('base64') + '\nDELETED\tother\nEND\n';
+  add('readResult', tokenProfile, c.parseReadStore(tokenProfile));
   for (const raw of ['a\tdone\nb\tskipped\nEND\n','a\tdone\n']) add('writeResult', raw, c.parseWriteResult(raw));
   const objects = [{name:'a'}, {name:'a',repos:[{directory:'dir',url:'https://host/x'}],sdks:{node:['22'],empty:[]},mcp:[{name:'m',command:'npx',args:[],env:{},agents:['codex'],enabled:false}],hostPackages:['git'],provisionCommands:['echo ü'],tests:{z:true}}, {name:'b'}, {name:'a',extra:1}, {name:'a',repos:[{url:' '}]}, {name:'a',mcp:[{name:'m',type:'http',url:'https://host',headers:{Z:'z',A:'a'},bearerTokenEnvVar:'TOKEN'}]}, {name:'a',mcp:[{name:'m',type:'bad'}]}, {name:'a',sdks:4,tests:[]}, null];
   for(const obj of objects) { const input={name:'a',raw:JSON.stringify(obj)}; add('canonical',input,c.canonicalizeProfileText(input.name,input.raw)); }
