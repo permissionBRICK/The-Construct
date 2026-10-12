@@ -16,7 +16,7 @@ public sealed class ConfigSyncParityTests
         {
             "vmBranch" => ConfigSyncRules.IsValidVmBranch(text), "publishBranch" => ConfigSyncRules.IsValidPublishBranch(text), "safeName" => ConfigSyncRules.IsSafeProfileName(text),
             "credentials" => ConfigSyncRules.UrlHasCredentials(text), "url" => ConfigSyncRules.ValidateConfigRemoteUrl(text), "redact" => ConfigSyncRules.RedactGitOutput(text), "slug" => ConfigSyncRules.RemoteSlug(text),
-            "writeBack" => ConfigSyncRules.PlanWriteBack(Read<Dictionary<string,string>>(input!["mainFiles"]), Read<Dictionary<string,string>>(input["vmFiles"])),
+            "writeBack" => ConfigSyncRules.PlanWriteBack(Read<Dictionary<string,string>>(input!["mainFiles"]), Read<Dictionary<string,string>>(input["vmFiles"]), input["deleted"] == null ? null : Read<string[]>(input["deleted"])),
             "readScript" => StoreScripts.BuildReadStoreScript(text), "writeScript" => StoreScripts.BuildWriteStoreScript(Read<WriteOperation[]>(input!["ops"]), input["root"]!.GetValue<string>()),
             "readResult" => StoreScripts.ParseReadStore(text), "writeResult" => StoreScripts.ParseWriteResult(text),
             "canonical" => ProfileCodec.CanonicalizeProfileText(input!["name"]!.GetValue<string>(), input["raw"]!.GetValue<string>()),

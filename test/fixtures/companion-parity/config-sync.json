@@ -502,9 +502,51 @@
     "output": []
   },
   {
+    "input": {
+      "deleted": [
+        "gone",
+        "kept"
+      ],
+      "mainFiles": {
+        "kept": "host"
+      },
+      "vmFiles": {}
+    },
+    "kind": "writeBack",
+    "output": [
+      {
+        "action": "write",
+        "clearDeleted": true,
+        "content": "host",
+        "expect": null,
+        "name": "kept"
+      },
+      {
+        "action": "clear-delete",
+        "expect": null,
+        "name": "gone"
+      }
+    ]
+  },
+  {
+    "input": {
+      "deleted": [
+        "live"
+      ],
+      "mainFiles": {
+        "live": "same"
+      },
+      "vmFiles": {
+        "live": "same"
+      }
+    },
+    "kind": "writeBack",
+    "output": []
+  },
+  {
     "input": "/opt/construct/projects",
     "kind": "readScript",
-    "output": "set -u\nstore='/opt/construct/projects'\nif [ -d \"$store\" ]; then\n  for f in \"$store\"/*.json; do\n    [ -f \"$f\" ] || continue\n    name=$(basename \"$f\" .json)\n    data=$(base64 < \"$f\" | tr -d \"\\n\")\n    printf '%s\\t%s\\n' \"$name\" \"$data\"\n  done\nelse\n  printf 'STORE_ABSENT\\n'\nfi\nprintf 'END\\n'"
+    "output": "set -u\nstore='/opt/construct/projects'\nif [ -d \"$store\" ]; then\n  for f in \"$store\"/*.json; do\n    [ -f \"$f\" ] || continue\n    name=$(basename \"$f\" .json)\n    [ \"$name\" != DELETED ] || name=\" $name\"\n    data=$(base64 < \"$f\" | tr -d \"\\n\")\n    printf '%s\\t%s\\n' \"$name\" \"$data\"\n  done\n  for f in \"$store\"/.deleted/*; do\n    [ -f \"$f\" ] || continue\n    name=$(basename \"$f\")\n    if [ -f \"$store/$name.json\" ]; then rm -f \"$f\"; continue; fi\n    printf 'DELETED\\t%s\\n' \"$name\"\n  done\nelse\n  printf 'STORE_ABSENT\\n'\nfi\nprintf 'END\\n'"
   },
   {
     "input": {
@@ -522,20 +564,32 @@
           "name": "b"
         },
         {
+          "action": "write",
+          "clearDeleted": true,
+          "content": "host",
+          "expect": null,
+          "name": "kept"
+        },
+        {
           "action": "delete",
           "expect": "old",
           "name": "c"
+        },
+        {
+          "action": "clear-delete",
+          "expect": null,
+          "name": "gone"
         }
       ],
       "root": "/opt/construct/projects"
     },
     "kind": "writeScript",
-    "output": "set -u\nstore='/opt/construct/projects'\nmkdir -p \"$store\"\ncur=$(base64 < \"$store\"/'a.json' 2>/dev/null | tr -d '\\n')\nif [ \"$cur\" = 'b2xk' ]; then\n  printf '%s' 'bmV3' | base64 -d > \"$store\"/'a.json'\n  printf '%s\\t%s\\n' 'a' 'done'\nelse\n  printf '%s\\t%s\\n' 'a' 'skipped'\nfi\nif [ ! -f \"$store\"/'b.json' ]; then\n  printf '%s' 'w7wK' | base64 -d > \"$store\"/'b.json'\n  printf '%s\\t%s\\n' 'b' 'done'\nelse\n  printf '%s\\t%s\\n' 'b' 'skipped'\nfi\ncur=$(base64 < \"$store\"/'c.json' 2>/dev/null | tr -d '\\n')\nif [ \"$cur\" = 'b2xk' ]; then\n  rm -f \"$store\"/'c.json'\n  printf '%s\\t%s\\n' 'c' 'done'\nelse\n  printf '%s\\t%s\\n' 'c' 'skipped'\nfi\nprintf 'END\\n'"
+    "output": "set -u\nstore='/opt/construct/projects'\nmkdir -p \"$store\"\ncur=$(base64 < \"$store\"/'a.json' 2>/dev/null | tr -d '\\n')\nif [ \"$cur\" = 'b2xk' ]; then\n  printf '%s' 'bmV3' | base64 -d > \"$store\"/'a.json'\n  printf '%s\\t%s\\n' 'a' 'done'\nelse\n  printf '%s\\t%s\\n' 'a' 'skipped'\nfi\nif [ ! -f \"$store\"/'b.json' ] && [ ! -f \"$store\"/.deleted/'b' ]; then\n  printf '%s' 'w7wK' | base64 -d > \"$store\"/'b.json'\n  printf '%s\\t%s\\n' 'b' 'done'\nelse\n  printf '%s\\t%s\\n' 'b' 'skipped'\nfi\nif [ ! -f \"$store\"/'kept.json' ] && [ -f \"$store\"/.deleted/'kept' ]; then\n  printf '%s' 'aG9zdA==' | base64 -d > \"$store\"/'kept.json'\n  rm -f \"$store\"/.deleted/'kept'\n  printf '%s\\t%s\\n' 'kept' 'done'\nelse\n  printf '%s\\t%s\\n' 'kept' 'skipped'\nfi\ncur=$(base64 < \"$store\"/'c.json' 2>/dev/null | tr -d '\\n')\nif [ \"$cur\" = 'b2xk' ]; then\n  rm -f \"$store\"/'c.json'\n  printf '%s\\t%s\\n' 'c' 'done'\nelse\n  printf '%s\\t%s\\n' 'c' 'skipped'\nfi\nif [ ! -f \"$store\"/'gone.json' ]; then\n  rm -f \"$store\"/.deleted/'gone'\n  printf '%s\\t%s\\n' 'gone' 'done'\nelse\n  printf '%s\\t%s\\n' 'gone' 'skipped'\nfi\nprintf 'END\\n'"
   },
   {
     "input": "/tmp/store 'quoted'",
     "kind": "readScript",
-    "output": "set -u\nstore='/tmp/store '\\''quoted'\\'''\nif [ -d \"$store\" ]; then\n  for f in \"$store\"/*.json; do\n    [ -f \"$f\" ] || continue\n    name=$(basename \"$f\" .json)\n    data=$(base64 < \"$f\" | tr -d \"\\n\")\n    printf '%s\\t%s\\n' \"$name\" \"$data\"\n  done\nelse\n  printf 'STORE_ABSENT\\n'\nfi\nprintf 'END\\n'"
+    "output": "set -u\nstore='/tmp/store '\\''quoted'\\'''\nif [ -d \"$store\" ]; then\n  for f in \"$store\"/*.json; do\n    [ -f \"$f\" ] || continue\n    name=$(basename \"$f\" .json)\n    [ \"$name\" != DELETED ] || name=\" $name\"\n    data=$(base64 < \"$f\" | tr -d \"\\n\")\n    printf '%s\\t%s\\n' \"$name\" \"$data\"\n  done\n  for f in \"$store\"/.deleted/*; do\n    [ -f \"$f\" ] || continue\n    name=$(basename \"$f\")\n    if [ -f \"$store/$name.json\" ]; then rm -f \"$f\"; continue; fi\n    printf 'DELETED\\t%s\\n' \"$name\"\n  done\nelse\n  printf 'STORE_ABSENT\\n'\nfi\nprintf 'END\\n'"
   },
   {
     "input": {
@@ -553,20 +607,33 @@
           "name": "b"
         },
         {
+          "action": "write",
+          "clearDeleted": true,
+          "content": "host",
+          "expect": null,
+          "name": "kept"
+        },
+        {
           "action": "delete",
           "expect": "old",
           "name": "c"
+        },
+        {
+          "action": "clear-delete",
+          "expect": null,
+          "name": "gone"
         }
       ],
       "root": "/tmp/store 'quoted'"
     },
     "kind": "writeScript",
-    "output": "set -u\nstore='/tmp/store '\\''quoted'\\'''\nmkdir -p \"$store\"\ncur=$(base64 < \"$store\"/'a.json' 2>/dev/null | tr -d '\\n')\nif [ \"$cur\" = 'b2xk' ]; then\n  printf '%s' 'bmV3' | base64 -d > \"$store\"/'a.json'\n  printf '%s\\t%s\\n' 'a' 'done'\nelse\n  printf '%s\\t%s\\n' 'a' 'skipped'\nfi\nif [ ! -f \"$store\"/'b.json' ]; then\n  printf '%s' 'w7wK' | base64 -d > \"$store\"/'b.json'\n  printf '%s\\t%s\\n' 'b' 'done'\nelse\n  printf '%s\\t%s\\n' 'b' 'skipped'\nfi\ncur=$(base64 < \"$store\"/'c.json' 2>/dev/null | tr -d '\\n')\nif [ \"$cur\" = 'b2xk' ]; then\n  rm -f \"$store\"/'c.json'\n  printf '%s\\t%s\\n' 'c' 'done'\nelse\n  printf '%s\\t%s\\n' 'c' 'skipped'\nfi\nprintf 'END\\n'"
+    "output": "set -u\nstore='/tmp/store '\\''quoted'\\'''\nmkdir -p \"$store\"\ncur=$(base64 < \"$store\"/'a.json' 2>/dev/null | tr -d '\\n')\nif [ \"$cur\" = 'b2xk' ]; then\n  printf '%s' 'bmV3' | base64 -d > \"$store\"/'a.json'\n  printf '%s\\t%s\\n' 'a' 'done'\nelse\n  printf '%s\\t%s\\n' 'a' 'skipped'\nfi\nif [ ! -f \"$store\"/'b.json' ] && [ ! -f \"$store\"/.deleted/'b' ]; then\n  printf '%s' 'w7wK' | base64 -d > \"$store\"/'b.json'\n  printf '%s\\t%s\\n' 'b' 'done'\nelse\n  printf '%s\\t%s\\n' 'b' 'skipped'\nfi\nif [ ! -f \"$store\"/'kept.json' ] && [ -f \"$store\"/.deleted/'kept' ]; then\n  printf '%s' 'aG9zdA==' | base64 -d > \"$store\"/'kept.json'\n  rm -f \"$store\"/.deleted/'kept'\n  printf '%s\\t%s\\n' 'kept' 'done'\nelse\n  printf '%s\\t%s\\n' 'kept' 'skipped'\nfi\ncur=$(base64 < \"$store\"/'c.json' 2>/dev/null | tr -d '\\n')\nif [ \"$cur\" = 'b2xk' ]; then\n  rm -f \"$store\"/'c.json'\n  printf '%s\\t%s\\n' 'c' 'done'\nelse\n  printf '%s\\t%s\\n' 'c' 'skipped'\nfi\nif [ ! -f \"$store\"/'gone.json' ]; then\n  rm -f \"$store\"/.deleted/'gone'\n  printf '%s\\t%s\\n' 'gone' 'done'\nelse\n  printf '%s\\t%s\\n' 'gone' 'skipped'\nfi\nprintf 'END\\n'"
   },
   {
     "input": "END\n",
     "kind": "readResult",
     "output": {
+      "deleted": [],
       "entries": [],
       "storeAbsent": false
     }
@@ -575,6 +642,7 @@
     "input": "STORE_ABSENT\nEND\n",
     "kind": "readResult",
     "output": {
+      "deleted": [],
       "entries": [],
       "storeAbsent": true
     }
@@ -583,6 +651,7 @@
     "input": "a\te30K\nEND\n",
     "kind": "readResult",
     "output": {
+      "deleted": [],
       "entries": [
         {
           "content": "{}\n",
@@ -596,6 +665,7 @@
     "input": "a\te30K!!\nEND\n",
     "kind": "readResult",
     "output": {
+      "deleted": [],
       "entries": [
         {
           "content": "{}\n",
@@ -609,6 +679,7 @@
     "input": "a\te30\nEND\n",
     "kind": "readResult",
     "output": {
+      "deleted": [],
       "entries": [
         {
           "content": "{}",
@@ -622,6 +693,7 @@
     "input": "a\t!\nEND\n",
     "kind": "readResult",
     "output": {
+      "deleted": [],
       "entries": [
         {
           "content": "",
@@ -635,6 +707,56 @@
     "input": "a\te30K\n",
     "kind": "readResult",
     "output": null
+  },
+  {
+    "input": "DELETED\tremoved\nEND\n",
+    "kind": "readResult",
+    "output": {
+      "deleted": [
+        "removed"
+      ],
+      "entries": [],
+      "storeAbsent": false
+    }
+  },
+  {
+    "input": "a\te30K\nDELETED\tb\nDELETED\tdefault\nDELETED\t../bad\nEND\n",
+    "kind": "readResult",
+    "output": {
+      "deleted": [
+        "b",
+        "default",
+        "../bad"
+      ],
+      "entries": [
+        {
+          "content": "{}\n",
+          "name": "a"
+        }
+      ],
+      "storeAbsent": false
+    }
+  },
+  {
+    "input": "DELETED\tmissing-end\n",
+    "kind": "readResult",
+    "output": null
+  },
+  {
+    "input": " DELETED\teyJuYW1lIjoiREVMRVRFRCJ9Cg==\nDELETED\tother\nEND\n",
+    "kind": "readResult",
+    "output": {
+      "deleted": [
+        "other"
+      ],
+      "entries": [
+        {
+          "content": "{\"name\":\"DELETED\"}\n",
+          "name": "DELETED"
+        }
+      ],
+      "storeAbsent": false
+    }
   },
   {
     "input": "a\tdone\nb\tskipped\nEND\n",

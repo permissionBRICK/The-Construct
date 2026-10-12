@@ -108,14 +108,13 @@ public sealed class ConfigRepository(GitRunner git, IStateFileSystem files, stri
     {
         var ls = await git.RunAsync(Directory, ["ls-tree", "--name-only", branch, "projects/"], cancellationToken: ct); return ls.Code == 0 ? ls.Stdout.Split('\n').Count(p => p.EndsWith(".json", StringComparison.Ordinal)) : 0;
     }
-    public async Task<bool> CommitVmBranchAsync(IReadOnlyDictionary<string, string> valid, ISet<string> preserve, string branch, CancellationToken ct = default)
+    public async Task<bool> CommitVmBranchAsync(IReadOnlyDictionary<string, string> valid, ISet<string> deleted, string branch, CancellationToken ct = default)
     {
         var index = Path.Combine(Directory, ".git", "tmp-vm-index"); files.DeleteFile(index);
         try
         {
             await git.RequireAsync(Directory, ["read-tree", branch], index: index, cancellationToken: ct);
-            var entries = await git.RequireAsync(Directory, ["ls-files", "--cached", "--", "projects/"], index: index, cancellationToken: ct);
-            foreach (var entry in entries.Split('\n').Where(s => s.Length > 0)) if (!preserve.Contains(Path.GetFileNameWithoutExtension(entry))) await git.RequireAsync(Directory, ["update-index", "--force-remove", "--", entry], index: index, cancellationToken: ct);
+            foreach (var name in deleted) await git.RequireAsync(Directory, ["update-index", "--force-remove", "--", "projects/" + name + ".json"], index: index, cancellationToken: ct);
             foreach (var (name, content) in valid)
             {
                 if (!ConfigSyncRules.IsSafeProfileName(name)) continue;

@@ -322,8 +322,8 @@ extension/
                       launch builders + injected-spawn queryVmState + the automatic-checkpoint
                       policy probe (parse/injection/spawn) and shouldOfferCheckpointApply's
                       truth table, incl. the upgrade path (VM on, preference unchanged) (68 checks)
-    project-set.test.js plain-node VM-side project set/get/list CLI units — validation, reserved
-                      names, atomic writes, PROJECTS_STORE override (54 checks)
+    project-set.test.js plain-node VM-side project set/get/delete/list CLI units — validation, reserved
+                      names, atomic writes, PROJECTS_STORE override (79 checks)
     projects.test.js  plain-node scan builder/parser + planImport merge + reconcileSelection +
                       sanitizeProfile (injection + prototype-pollution) + config-sync helpers:
                       isReservedProfileName, validateProfile, canonicalProfileJson, case-insensitive planImport collision, additiveMergeSelection, share builders (166 checks)
@@ -737,8 +737,8 @@ change them together):
   one, on another port, is a different endpoint and loads. `configBranch`
   is in that list because the branch *is* the instance's store inside the one host config
   repo (docs/config-sync.md, "Multiple instances"): two entries on one branch share their
-  VM snapshots, deletion history, merge base and write-backs, so one VM's tick merges —
-  or deletes — the other VM's configuration. The derived branches (`vm-<name>`) are
+  VM snapshots, explicit deletion history, merge base and write-backs, so one VM's
+  edits or explicit deletions would use the other VM's base. The derived branches (`vm-<name>`) are
   unique by construction, so only a hand-written override can trip it. A clash with the default skips the
   claimant; a clash between two entries skips **both**, because nothing in the file says
   which is the impostor — and dropping both is also what keeps the two readers'
@@ -2407,6 +2407,17 @@ says what will actually happen.
   (no LOCALAPPDATA / TEMP), profile operations fall back to the old scriptsDir path.
   D11: the "default" profile chip is rendered with a lock icon and does NOT open the
   edit modal on click; reserved names are refused by runSaveProject/runEditProject.
+  Missing guest files keep their VM-branch blobs and are restored from main.
+  `construct project delete <name>` removes the file and creates `.deleted/<name>`;
+  the read script emits `DELETED<TAB><name>` only when its JSON file is absent.
+  It clears stale markers beside live files. A profile literally named `DELETED`
+  is emitted as ` DELETED<TAB><base64>`; parsers trim the leading space after
+  checking the marker token, so the two record types remain distinct.
+  All three engines remove only these names from their temporary index. Write-back
+  clears completed markers, or restores main's content and clears the marker when
+  the host kept the profile. Conflicts retain markers. Absent-file writes also
+  check for markers created after the read. Explicit deletions bypass the empty-store
+  guard, including deletion of the last profile. Host-side deletion is unchanged.
 - **Automatic checkpoints: off by default, and the setting is applied BOTH ways.**
   Hyper-V snapshots a VM at every start unless told otherwise; on a disposable agent
   VM that only pins a growing `.avhdx` differencing disk, slows I/O, and costs a merge

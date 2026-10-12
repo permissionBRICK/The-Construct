@@ -36,10 +36,65 @@ public sealed class SyncEngineTests
         using var w = new GitTestWorkspace(); w.Host("a"); await w.Engine.SyncTickAsync(); var tip = await w.G("rev-parse","vm"); File.Delete(Path.Combine(w.Store,"a.json"));
         var result = await w.Engine.SyncTickAsync(); Assert.True(result.Ok); Assert.True(result.Seeded); Assert.Contains(result.Warnings,s=>s.Contains("mass deletion",StringComparison.Ordinal)); Assert.Equal(tip,await w.G("rev-parse","vm")); Assert.True(File.Exists(Path.Combine(w.Store,"a.json")));
     }
-    [Fact] public async Task IndividualDeletionPropagates()
+    [Fact] public async Task MissingFileIsRestoredWithoutChangingMain()
     {
         using var w = new GitTestWorkspace(); w.Host("a"); w.Host("b"); await w.Engine.SyncTickAsync(); File.Delete(Path.Combine(w.Store,"a.json"));
-        Assert.True((await w.Engine.SyncTickAsync()).Ok); Assert.False(w.Repo.ReadMainProfiles().ContainsKey("a")); Assert.True(w.Repo.ReadMainProfiles().ContainsKey("b"));
+        var main = await w.G("rev-parse","main");
+        Assert.True((await w.Engine.SyncTickAsync()).Ok); Assert.True(w.Repo.ReadMainProfiles().ContainsKey("a")); Assert.True(File.Exists(Path.Combine(w.Store,"a.json"))); Assert.Equal(main,await w.G("rev-parse","main"));
+    }
+    private static string Delete(GitTestWorkspace w, string name)
+    {
+        Directory.CreateDirectory(Path.Combine(w.Store,".deleted")); var marker = Path.Combine(w.Store,".deleted",name);
+        File.WriteAllText(marker,""); File.Delete(Path.Combine(w.Store,name+".json")); return marker;
+    }
+    [Fact] public async Task ExplicitDeletionPropagatesToAnotherInstanceAndClearsMarker()
+    {
+        using var w = new GitTestWorkspace(); w.Host("a"); w.Host("b"); await w.Engine.SyncTickAsync();
+        var otherStore = Path.Combine(w.Root,"other-store"); var other = new ConfigSyncEngine(w.Repo,w.Lock,w.Ssh,"vm-other",otherStore); await other.SyncTickAsync();
+        var marker = Delete(w,"a"); var result = await w.Engine.SyncTickAsync();
+        Assert.True(result.Ok); Assert.False(w.Repo.ReadMainProfiles().ContainsKey("a")); Assert.False(File.Exists(marker)); Assert.True(w.Repo.ReadMainProfiles().ContainsKey("b"));
+        Assert.True((await other.SyncTickAsync()).Ok); Assert.False(File.Exists(Path.Combine(otherStore,"a.json")));
+    }
+    [Fact] public async Task LastProfileCanBeExplicitlyDeleted()
+    {
+        using var w = new GitTestWorkspace(); w.Host("a"); await w.Engine.SyncTickAsync(); var marker = Delete(w,"a");
+        var result = await w.Engine.SyncTickAsync(); Assert.True(result.Ok); Assert.Empty(result.Warnings); Assert.Empty(w.Repo.ReadMainProfiles()); Assert.False(File.Exists(marker));
+    }
+    [Fact] public async Task TombstoneConflictsWithHostEditAndHostResolutionClearsIt()
+    {
+        using var w = new GitTestWorkspace(); w.Host("a"); await w.Engine.SyncTickAsync(); var marker = Delete(w,"a"); w.Host("a",GitTestWorkspace.Profile("a","host"));
+        var result = await w.Engine.SyncTickAsync(); Assert.True(result.Conflict); Assert.True(File.Exists(marker));
+        await w.G("add","projects/a.json"); result = await w.Engine.SyncTickAsync();
+        Assert.True(result.Ok); Assert.Contains("host",File.ReadAllText(Path.Combine(w.Store,"a.json"))); Assert.False(File.Exists(marker));
+    }
+    [Fact] public async Task HostProfileUnknownToVmWinsOverTombstone()
+    {
+        using var w = new GitTestWorkspace(); await w.Engine.SyncTickAsync(); w.Host("a"); var marker = Delete(w,"a");
+        Assert.True((await w.Engine.SyncTickAsync()).Ok); Assert.True(File.Exists(Path.Combine(w.Store,"a.json"))); Assert.False(File.Exists(marker));
+    }
+    [Fact] public async Task StaleAndInvalidTombstonesDoNotDeleteProfiles()
+    {
+        using var w = new GitTestWorkspace(); w.Host("a"); await w.Engine.SyncTickAsync(); Delete(w,"a"); w.Vm("a");
+        File.WriteAllText(Path.Combine(w.Store,".deleted","default"),""); File.WriteAllText(Path.Combine(w.Store,".deleted","bad..name"),"");
+        var result = await w.Engine.SyncTickAsync(); Assert.True(result.Ok); Assert.True(w.Repo.ReadMainProfiles().ContainsKey("a")); Assert.Equal(2,result.Warnings.Count);
+        Assert.False(File.Exists(Path.Combine(w.Store,".deleted","a"))); var main = await w.G("rev-parse","main");
+        File.Delete(Path.Combine(w.Store,"a.json")); result = await w.Engine.SyncTickAsync();
+        Assert.True(result.Ok); Assert.True(File.Exists(Path.Combine(w.Store,"a.json"))); Assert.Equal(main,await w.G("rev-parse","main"));
+    }
+    [Fact] public async Task ProfileNamedDeletedDoesNotCollideWithWireToken()
+    {
+        using var w = new GitTestWorkspace(); w.Vm("DELETED");
+        var parsed = StoreScripts.ParseReadStore((await w.Ssh.RunRemoteScriptAsync(StoreScripts.BuildReadStoreScript(w.Store))).Stdout)!;
+        Assert.Empty(parsed.Deleted); Assert.Equal("DELETED",Assert.Single(parsed.Entries).Name);
+        Assert.True((await w.Engine.SyncTickAsync()).Ok); Assert.True(w.Repo.ReadMainProfiles().ContainsKey("DELETED"));
+        Delete(w,"DELETED"); Assert.True((await w.Engine.SyncTickAsync()).Ok); Assert.False(w.Repo.ReadMainProfiles().ContainsKey("DELETED"));
+    }
+    [Theory] [InlineData(false)] [InlineData(true)] public async Task AbsentWriteSkipsConcurrentDelete(bool fresh)
+    {
+        using var w = new GitTestWorkspace(); w.Host("a"); w.Host("b");
+        if (!fresh) { await w.Engine.SyncTickAsync(); File.Delete(Path.Combine(w.Store,"a.json")); }
+        w.Ssh.BeforeRun = script => { if (script.Contains("mkdir -p",StringComparison.Ordinal)) Delete(w,"a"); return Task.CompletedTask; };
+        var result = await w.Engine.SyncTickAsync(); Assert.True(result.Ok); Assert.Contains("a",result.WriteBack.Skipped); Assert.False(File.Exists(Path.Combine(w.Store,"a.json"))); Assert.True(File.Exists(Path.Combine(w.Store,".deleted","a")));
     }
     [Fact] public async Task ConcurrentVmEditPreventsCommonBaseAdvance()
     {

@@ -92,8 +92,11 @@ reinstalls, record them in a project profile under
 
 The CLI validates each profile's JSON and writes the canonical form. It does
 not check for conflicting repository directories across profiles. You can also
-edit the file directly; changes sync to the host on the next cycle. Anything
-NOT recorded in a profile is lost on reinstall.
+edit the file directly; changes sync to the host on the next cycle. Deleting a
+profile file does not delete the profile: the host restores it. Use
+`construct project delete <name>` to delete a profile from the VM; this is the
+only VM-side deletion that removes the host copy. Anything NOT recorded in a
+profile is lost on reinstall.
 
 `default` is a reserved name — create a named profile instead.
 

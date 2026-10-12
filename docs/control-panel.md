@@ -332,6 +332,11 @@ and kept in sync with the VM's live store (`/opt/construct/projects`) by the
 [config-sync](config-sync.md) engine. The panel's open-folder button opens the `projects/`
 subdirectory of that config directory.
 
+**Delete profile** removes the host profile and syncs that deletion to every VM.
+From a VM, use `construct project delete <name>` to request the same deletion on
+the next sync. Removing a JSON file directly does not delete the host profile;
+the next sync restores the file.
+
 - **export config** — save auth, credentials, and profiles (launches a host console window).
 - **+ add project** — paste a git URL; it's cloned into `/root/repos` on the VM (safely,
   never through the shell) and opened in a new Remote-SSH window.

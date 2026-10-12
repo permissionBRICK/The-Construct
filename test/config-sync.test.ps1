@@ -1859,6 +1859,88 @@ function Write-BranchTestFile {
 
 $bTmp = Join-Path ([System.IO.Path]::GetTempPath()) ("cs-branch-" + [guid]::NewGuid().ToString("N"))
 try {
+    # Missing files restore; only explicit tombstones remove host profiles.
+    $delCfg = Join-Path $bTmp "deletion/config"
+    $delStore = Join-Path $bTmp "deletion/store"
+    $delOther = Join-Path $bTmp "deletion/other"
+    Write-BranchTestFile (Join-Path $delCfg "projects") "a" (New-BranchTestProfile -Name "a")
+    Write-BranchTestFile (Join-Path $delCfg "projects") "b" (New-BranchTestProfile -Name "b")
+    $delInv = New-BranchStoreInvoker -StoreDir $delStore
+    $delOtherInv = New-BranchStoreInvoker -StoreDir $delOther
+    $delArgs = @{ ConfigDir = $delCfg; VmHost = "dummy"; SshReadInvoker = $delInv; SshWriteInvoker = $delInv }
+    $null = Invoke-ConstructConfigSync @delArgs
+    $null = Invoke-ConstructConfigSync -ConfigDir $delCfg -VmHost "dummy" -VmBranch "vm-other" -SshReadInvoker $delOtherInv -SshWriteInvoker $delOtherInv
+    $delMain = Get-BranchRev $delCfg "main"
+    Remove-Item -LiteralPath (Join-Path $delStore "a.json")
+    $delResult = Invoke-ConstructConfigSync @delArgs
+    ok "explicit-delete: missing file restored" ($delResult.Ok -and (Test-Path (Join-Path $delStore "a.json")))
+    ok "explicit-delete: missing file leaves main untouched" ((Get-BranchRev $delCfg "main") -eq $delMain)
+    $delMarkers = Join-Path $delStore ".deleted"
+    New-Item -ItemType Directory -Path $delMarkers | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $delMarkers "a"), "")
+    $delRead = Read-ConstructVmStore -VmHost "dummy" -SshInvoker $delInv
+    ok "explicit-delete: live file suppresses stale marker" ($delRead.Deleted.Count -eq 0)
+    [System.IO.File]::WriteAllText((Join-Path $delMarkers "a"), "")
+    $null = Invoke-ConstructConfigSync @delArgs
+    ok "explicit-delete: stale marker preserves host" (Test-Path (Join-Path $delCfg "projects/a.json"))
+    ok "explicit-delete: stale marker cleared by tick" (-not (Test-Path (Join-Path $delMarkers "a")))
+    Remove-Item -LiteralPath (Join-Path $delStore "a.json")
+    $delResult = Invoke-ConstructConfigSync @delArgs
+    ok "explicit-delete: later accidental removal restores profile" ($delResult.Ok -and (Test-Path (Join-Path $delStore "a.json")))
+    ok "explicit-delete: later accidental removal leaves main untouched" ((Get-BranchRev $delCfg "main") -eq $delMain)
+    [System.IO.File]::WriteAllText((Join-Path $delMarkers "a"), "")
+    Remove-Item -LiteralPath (Join-Path $delStore "a.json")
+    $delResult = Invoke-ConstructConfigSync @delArgs
+    ok "explicit-delete: tombstone removes host profile" ($delResult.Ok -and -not (Test-Path (Join-Path $delCfg "projects/a.json")))
+    ok "explicit-delete: successful deletion clears marker" (-not (Test-Path (Join-Path $delMarkers "a")))
+    $null = Invoke-ConstructConfigSync -ConfigDir $delCfg -VmHost "dummy" -VmBranch "vm-other" -SshReadInvoker $delOtherInv -SshWriteInvoker $delOtherInv
+    ok "explicit-delete: deletion reaches second instance" (-not (Test-Path (Join-Path $delOther "a.json")))
+
+    [System.IO.File]::WriteAllText((Join-Path $delMarkers "b"), "")
+    Remove-Item -LiteralPath (Join-Path $delStore "b.json")
+    Write-BranchTestFile (Join-Path $delCfg "projects") "b" (New-BranchTestProfile -Name "b" -NodeSdk "22")
+    $delResult = Invoke-ConstructConfigSync @delArgs
+    ok "explicit-delete: host edit conflicts and keeps marker" ($delResult.Conflict -and (Test-Path (Join-Path $delMarkers "b")))
+    & git -C $delCfg add -- projects/b.json
+    $delResult = Invoke-ConstructConfigSync @delArgs
+    ok "explicit-delete: host resolution restores profile" ($delResult.Ok -and (Test-Path (Join-Path $delStore "b.json")))
+    ok "explicit-delete: host resolution clears marker" (-not (Test-Path (Join-Path $delMarkers "b")))
+    [System.IO.File]::WriteAllText((Join-Path $delMarkers "b"), "")
+    Remove-Item -LiteralPath (Join-Path $delStore "b.json")
+    $delResult = Invoke-ConstructConfigSync @delArgs
+    ok "explicit-delete: last profile bypasses mass guard" ($delResult.Ok -and -not ($delResult.Warnings -match "mass deletion"))
+    ok "explicit-delete: last profile and marker removed" (-not (Test-Path (Join-Path $delCfg "projects/b.json")) -and -not (Test-Path (Join-Path $delMarkers "b")))
+
+    Write-BranchTestFile (Join-Path $delCfg "projects") "new" (New-BranchTestProfile -Name "new")
+    [System.IO.File]::WriteAllText((Join-Path $delMarkers "new"), "")
+    $delResult = Invoke-ConstructConfigSync @delArgs
+    ok "explicit-delete: host-only profile wins and clears marker" ($delResult.Ok -and (Test-Path (Join-Path $delStore "new.json")) -and -not (Test-Path (Join-Path $delMarkers "new")))
+    [System.IO.File]::WriteAllText((Join-Path $delMarkers "default"), "")
+    [System.IO.File]::WriteAllText((Join-Path $delMarkers "bad..name"), "")
+    $delResult = Invoke-ConstructConfigSync @delArgs
+    ok "explicit-delete: invalid and reserved tombstones warn" (@($delResult.Warnings | Where-Object { $_ -match "tombstone" }).Count -eq 2)
+    Remove-Item -LiteralPath (Join-Path $delStore "new.json")
+    [System.IO.File]::WriteAllText((Join-Path $delMarkers "new"), "")
+    $delWrite = Write-ConstructVmStore -VmHost "dummy" -SshInvoker $delInv -Ops @(@{
+        Name = "new"; Action = "write"; Content = (New-BranchTestProfile -Name "new"); Expect = $null; ExpectAbsent = $true
+    })
+    ok "explicit-delete: absent write skips new tombstone" ($delWrite.Skipped -contains "new" -and -not (Test-Path (Join-Path $delStore "new.json")))
+
+    $tokenCfg = Join-Path $bTmp "token/config"
+    $tokenStore = Join-Path $bTmp "token/store"
+    Write-BranchTestFile $tokenStore "DELETED" (New-BranchTestProfile -Name "DELETED")
+    $tokenInv = New-BranchStoreInvoker -StoreDir $tokenStore
+    $tokenRead = Read-ConstructVmStore -VmHost "dummy" -SshInvoker $tokenInv
+    ok "wire token: DELETED profile is a live entry" ($tokenRead.Files.ContainsKey("DELETED") -and $tokenRead.Deleted.Count -eq 0)
+    $tokenArgs = @{ ConfigDir = $tokenCfg; VmHost = "dummy"; SshReadInvoker = $tokenInv; SshWriteInvoker = $tokenInv }
+    $tokenResult = Invoke-ConstructConfigSync @tokenArgs
+    ok "wire token: DELETED profile syncs to host" ($tokenResult.Ok -and (Test-Path (Join-Path $tokenCfg "projects/DELETED.json")))
+    New-Item -ItemType Directory -Path (Join-Path $tokenStore ".deleted") | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $tokenStore ".deleted/DELETED"), "")
+    Remove-Item -LiteralPath (Join-Path $tokenStore "DELETED.json")
+    $tokenResult = Invoke-ConstructConfigSync @tokenArgs
+    ok "wire token: DELETED profile can be explicitly deleted" ($tokenResult.Ok -and -not (Test-Path (Join-Path $tokenCfg "projects/DELETED.json")))
+
     # (a) Default path: no -VmBranch anywhere -> exactly main + vm, as today.
     $bdCfg = Join-Path $bTmp "def/config"
     $bdStore = Join-Path $bTmp "def/store"

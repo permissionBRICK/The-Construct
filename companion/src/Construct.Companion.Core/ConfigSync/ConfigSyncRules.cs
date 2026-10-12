@@ -56,13 +56,15 @@ public static class ConfigSyncRules
     public static string RemoteSlug(string url) => Regex.Replace(url, "[^A-Za-z0-9._-]", "-");
     public static string ResolveRemoteUrl(IEnumerable<ConfigRemote> remotes, string wanted) => remotes.FirstOrDefault(r => r.Url == wanted)?.Url ?? remotes.FirstOrDefault(r => DisplayRemoteUrl(r.Url) == wanted)?.Url ?? "";
     public static ManifestEntry PublishManifestEntry(string remoteUrl, string @ref, string name, string baseCommit, string baseBlobSha) => new(remoteUrl, @ref, "projects/" + name + ".json", name, baseCommit, baseBlobSha);
-    public static IReadOnlyList<WriteOperation> PlanWriteBack(IReadOnlyDictionary<string, string> main, IReadOnlyDictionary<string, string> vm)
+    public static IReadOnlyList<WriteOperation> PlanWriteBack(IReadOnlyDictionary<string, string> main, IReadOnlyDictionary<string, string> vm, IEnumerable<string>? deleted = null)
     {
         var result = new List<WriteOperation>();
-        foreach (var name in JsKeys(main.Keys).Concat(JsKeys(vm.Keys)).Distinct())
+        var tombstones = (deleted ?? []).ToHashSet();
+        foreach (var name in JsKeys(main.Keys).Concat(JsKeys(vm.Keys)).Concat(tombstones).Distinct())
         {
             var onMain = main.TryGetValue(name, out var content); var onVm = vm.TryGetValue(name, out var expect);
-            if (onMain && (!onVm || content != expect)) result.Add(new(name, "write", expect, content));
+            if (tombstones.Contains(name) && !onVm) result.Add(onMain ? new(name, "write", null, content, true) : new(name, "clear-delete", null));
+            else if (onMain && (!onVm || content != expect)) result.Add(new(name, "write", expect, content));
             else if (!onMain && onVm) result.Add(new(name, "delete", expect));
         }
         return result;
@@ -120,7 +122,7 @@ public sealed record ManifestEntry(string RemoteUrl, string Ref, string PathInRe
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? BaseCommit = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? BaseBlobSha = null)
 { public override string ToString() => "ManifestEntry"; }
-public sealed record WriteOperation(string Name, string Action, string? Expect, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Content = null) { public override string ToString() => "WriteOperation"; }
+public sealed record WriteOperation(string Name, string Action, string? Expect, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Content = null, [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool ClearDeleted = false) { public override string ToString() => "WriteOperation"; }
 public sealed record ImportSelection(string RemoteUrl, string Ref, string RelPath, string Name, string Content) { public override string ToString() => "ImportSelection"; }
 public sealed record ImportCreate(string Name, string Content, ManifestEntry ManifestEntry) { public override string ToString() => "ImportCreate"; }
 public sealed record ImportUpdate(string Name, string? BaseContent, string TheirsContent, ManifestEntry ManifestEntry) { public override string ToString() => "ImportUpdate"; }

@@ -179,15 +179,19 @@ No git, jq, or other tooling is needed on the VM beyond what exists.
 
 Each **sync tick**:
 
-1. **Read** the VM store's profiles over the existing SSH runner (the same
+1. **Read** the VM store's profiles and explicit deletion markers over the existing SSH runner (the same
    no-dependency pattern as `probe.js` / the scan script).
 2. **Validate** each file against `project.schema.json`. An invalid file (e.g.
    a half-written agent edit) is **skipped with a panel warning** and never
    enters the repo — the branch stays always-valid.
-3. **Commit** changes (including deletions) onto the **`vm` branch** (with
+3. **Commit** valid edits and explicit deletions onto the **`vm` branch** (with
    several VM instances, that instance's own branch — see "Multiple instances"
    below), which always forks from the last agreed sync point — so 3-way
-   ancestry is guaranteed by construction.
+   ancestry is guaranteed by construction. Missing files keep their previous
+   branch content. Only `construct project delete <name>` records a deletion,
+   using an empty `.deleted/<name>` marker beside the profiles. A marker next to
+   a live JSON file is stale and cleared; invalid or reserved marker names warn
+   and are ignored.
 4. **Merge** `vm` into `main`. Non-overlapping edits merge silently; a true
    clash produces a real git conflict handled by the shared resolver (§8).
 5. **Post-merge validation gate:** every touched profile must re-validate
@@ -195,7 +199,10 @@ Each **sync tick**:
    *treated as a conflict* and sent to the same resolver. Provisioning never
    proceeds from an invalid profile.
 6. **Write back** the merged state to the VM store, then fast-forward `vm` to
-   `main` — both sides identical, the new common base.
+   `main` — both sides identical, the new common base. Restore missing files from
+   main. Clear deletion markers once their deletion lands; if main kept or
+   re-created the profile, write its content and clear the marker together.
+   A modify/delete conflict keeps the marker until a later successful tick.
 
 **Write-back guard (the race window):** a host→VM write only overwrites a VM
 file whose current content still equals the `vm`-branch tip (unchanged since it
@@ -204,14 +211,16 @@ on the next tick. Same guard for deletions. If any guarded operation is skipped,
 the engines do **not** advance the common-base ref: the next tick therefore sees
 both edits from their real ancestor and either merges them or exposes a conflict,
 instead of silently treating one side as the new baseline.
+Writes to an absent file also check that no deletion marker appeared after the
+read, including fresh-VM seed writes. Marker cleanup requires the profile file
+to remain absent, so a concurrent profile write is preserved.
 
 **Mass-deletion guard:** when a read of an *existing* store yields **zero valid
-profiles** while the `vm` branch still has some, the tick refuses to treat that
-as "the user deleted everything" — it skips the VM side with a warning instead.
-That state is indistinguishable from a half-provisioned store or one whose
-files all failed validation, and propagating it would wipe `main` (observed in
-the field). Individual deletions (down to one remaining profile) still
-propagate; deleting the *last* profile is a host-side/panel action.
+profiles** while the `vm` branch still has some and no valid deletion markers
+were read, the tick warns and re-seeds missing files from main without advancing
+the VM branch. Explicit deletion markers bypass this guard, so
+`construct project delete <name>` can delete the last profile too. A fresh VM
+without pending deletions still seeds from main as before.
 
 **Canonical JSON everywhere.** Every writer — the VM helper, the extension's
 profile editor, the import path, the merge write-back — serialises profiles in
@@ -732,11 +741,16 @@ for steady state.
     [`extension/src/projects.js`](../extension/src/projects.js); the repo,
     including `extension/`, is uploaded to `/opt/construct/repo`, and node is
     installed) and **writes canonical JSON**. It does *not* commit — there is no
-    repo on the VM.
+    repo on the VM. Writing a profile clears its pending deletion marker.
   - **Direct file edits.** First-class by design: the sync tick picks up any
     change, validates it, and journals it on the host (§6). An invalid file is
     skipped with a warning, never propagated.
   - The helper refuses the reserved names `default` and `project.schema` (§4).
+- **Deleting profiles:** use `construct project delete <name>`. It removes the
+  JSON file and creates `.deleted/<name>`, even when the file was already absent.
+  The host processes that marker on its next sync. Removing a file directly
+  leaves the profile on the host and sync restores it. Host-side **Delete profile**
+  continues to remove the profile from every VM.
 - **How agents learn this:** add guidance to
   [`config/systemprompt.md`](../config/systemprompt.md), which seeds all three
   agents' instruction files on every fresh VM (`install_agent_system_prompt` in
@@ -766,6 +780,7 @@ for steady state.
 | Where git runs | **Host only.** The VM store is a plain folder; its state is a `vm` branch inside the host repo. No VM-side repo, bootstrap, or dirty-tree semantics |
 | Authority when the same profile diverges on host and VM | `git merge vm` on the host; auto when possible, real git conflict surfaced otherwise |
 | How VM edits reach the host | Host-driven sync tick (extension poll, pre-reinstall, PowerShell) — read → validate → commit on `vm` → merge → write back |
+| VM-side profile deletion | Only `construct project delete <name>` propagates deletion through a marker. Missing files are restored from the host |
 | Host repo location | `%LOCALAPPDATA%\The-Construct\config` — **outside** the zip checkout; shipped `projects/` is seed-only everywhere |
 | Config-in-code-repo? | **No** — would ship to customers and lose multi-repo. Config lives outside the code, git-versioned separately |
 | `default.json` | **Reserved, read-only seed** — not tracked in the config repo; editing refused; baseline customization = a named profile |
