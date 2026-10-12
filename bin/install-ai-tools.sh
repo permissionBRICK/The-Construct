@@ -617,19 +617,29 @@ set_toml_top_key() {
   fi
 }
 
+# Delete a top-level TOML key: its assignment above the first [section] header.
+# Keys of the same name inside tables are left alone.
+delete_toml_top_key() {
+  local file="$1" key="$2" tmp
+  grep -Eq "^[[:space:]]*${key}[[:space:]]*=" "${file}" || return 0
+  tmp="$(mktemp)"
+  awk -v key="${key}" '/^[[:space:]]*\[/ { table = 1 }
+    !table && $0 ~ "^[[:space:]]*" key "[[:space:]]*=" { next }
+    { print }' "${file}" >"${tmp}"
+  cat "${tmp}" >"${file}"
+  rm -f "${tmp}"
+}
+
 # Seed Codex's permission-skip settings into the user's config.toml so it runs
 # unattended -- no approval prompts and full filesystem access -- matching the
-# host configuration. Also disables AI attribution: an empty commit_attribution
-# suppresses the "Co-authored-by: Codex <noreply@openai.com>" commit trailer
-# (the dedicated, forward-compatible key whether or not the codex_git_commit
-# feature is active). Any other existing keys in the file are preserved.
+# host configuration. Any other existing keys in the file are preserved.
 configure_codex_settings() {
   local home_dir="$1"
   local owner="$2"
   local config_dir="${home_dir}/.codex"
   local config_file="${config_dir}/config.toml"
 
-  step "Seeding Codex permission, attribution, and trusted-project settings in ${config_file}"
+  step "Seeding Codex permission and trusted-project settings in ${config_file}"
   install -d -m 0700 "${config_dir}"
   [[ -f "${config_file}" ]] || : >"${config_file}"
 
@@ -637,8 +647,11 @@ configure_codex_settings() {
   set_toml_top_key "${config_file}" "default_permissions" '":danger-full-access"'
   set_toml_top_key "${config_file}" "sandbox_mode"        '"danger-full-access"'
   set_toml_top_key "${config_file}" "approval_policy"     '"never"'
-  # Empty string disables the AI commit co-author trailer.
-  set_toml_top_key "${config_file}" "commit_attribution"  '""'
+  # Codex no longer reads commit_attribution, which earlier provisions set to ""
+  # to drop its co-author trailer; 0.162 logs it as an unrecognized setting on
+  # every start. Attribution now follows the signed-in ChatGPT account's own
+  # setting, and nothing in config.toml overrides it.
+  delete_toml_top_key "${config_file}" "commit_attribution"
 
   # Mark the workspace repos directory as a trusted project so Codex doesn't
   # prompt for trust on first use. Appended as its own TOML table after the
