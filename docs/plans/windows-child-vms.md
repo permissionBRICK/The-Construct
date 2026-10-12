@@ -35,8 +35,8 @@ generalises it. What it established, and what the host-side implementation must 
 - **First logon** installs OpenSSH server (and its firewall rule, which the 25H2 capability
   install omits), sets PowerShell as the SSH shell, enables RDP and WinRM, strips consumer
   Appx (keeping frameworks, Get Help, the Defender UI, App Installer), turns off consumer
-  content, Copilot, widgets, telemetry, Windows Update, search indexing, and keeps the desktop
-  awake for UI automation. It ends by writing `C:\provision\firstlogon.done`.
+  content, Copilot, widgets, telemetry, Windows Update, Delivery Optimization peering, search
+  indexing, and keeps the desktop awake for UI automation. It ends by writing `C:\provision\firstlogon.done`.
 - **Completion and hygiene.** The controller polls `firstlogon.done` over SSH, stops the VM,
   detaches **both** media slots so the answer file can never be applied again, starts it, and
   writes `install-complete.done`. Re-running resumes; `--force` recreates.

@@ -75,6 +75,9 @@ Runs once from the answer-file CD after the unattended install:
 - **Turns off**: consumer feature/suggested-app delivery, Copilot and AI data
   analysis, widgets, taskbar chat and search box, telemetry + DiagTrack,
   second-chance OOBE nags, Windows Update, `WSearch`, `SysMain`, `MapsBroker`.
+- **Delivery Optimization**: HTTP only (`DODownloadMode=0`), no LAN peering.
+  In peering mode `DoSvc` and `Dnscache` have leaked several GB in guests whose
+  RAM dynamic memory had reclaimed.
 - **Defender**: realtime monitoring off and path exclusions (`C:\provision`,
   `C:\work`). Tamper Protection blocks outright removal on client SKUs.
 - **Keeps the desktop alive**: no sleep, no monitor blanking, no hibernate, no

@@ -35,6 +35,10 @@ Uninstall-WindowsFeature Windows-Defender -ErrorAction SilentlyContinue
 Stop-Service wuauserv -Force -ErrorAction SilentlyContinue
 Set-Service wuauserv -StartupType Disabled
 reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /t REG_DWORD /d 1 /f
+# Delivery Optimization: HTTP only. In its default LAN peering mode DoSvc
+# re-registers a DNS-SD record every two minutes; under dynamic memory DoSvc and
+# Dnscache have leaked several GB per guest until it ran out of memory.
+reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization" /v DODownloadMode /t REG_DWORD /d 0 /f
 
 # Search indexing / SysMain
 Set-Service WSearch -StartupType Disabled -ErrorAction SilentlyContinue
