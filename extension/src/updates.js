@@ -400,6 +400,8 @@ async function augmentAgents(agents, opts = {}) {
  * A remote bash script that force-updates the installed coding agents. Mirrors
  * install-ai-tools.sh: claude self-updates; codex/opencode re-run their official
  * installers (which fetch the newest release). Only touches agents present on PATH.
+ * T3 Code is not in it: Update-T3Code.ps1 -Mode quick updates it together with the
+ * T3 Code Desktop on this PC (extension.js runUpdateAgents).
  *
  * Exit code is AGGREGATED: `set -o pipefail` makes the `curl | bash` / `curl | sh`
  * pipelines report a real failure, and each agent's failure is OR'd into `rc`, so
@@ -408,7 +410,7 @@ async function augmentAgents(agents, opts = {}) {
  * one agent's failure doesn't skip the others.
  */
 function buildAgentUpdateScript(ids) {
-  const want = (Array.isArray(ids) && ids.length) ? ids : ["claude-code", "codex", "opencode", "t3code"];
+  const want = (Array.isArray(ids) && ids.length) ? ids : ["claude-code", "codex", "opencode"];
   const lines = ["set -uo pipefail", "rc=0"];
   if (want.includes("claude-code")) {
     lines.push('if command -v claude >/dev/null 2>&1; then echo "== updating Claude Code =="; claude update || rc=1; fi');
@@ -452,18 +454,6 @@ function buildAgentUpdateScript(ids) {
       'echo "opencode installer failed (attempt $oc_i/3)"; ' +
       'if [ "$oc_i" -lt 3 ]; then sleep $((oc_i * 5)); fi; ' +
       'done; [ "$oc_ok" -eq 0 ] || rc=1; fi');
-  }
-  if (want.includes("t3code")) {
-    // npm-only (how install-ai-tools.sh installs it); restart the serve unit so
-    // the running web GUI actually picks up the new version. try-restart is a
-    // no-op when the service isn't deployed/running. The channel is read from
-    // the VM's config.env (source of truth), mapped to the npm tag the same way
-    // install-ai-tools.sh does — so a host/VM channel disagreement can't happen.
-    lines.push('if command -v t3 >/dev/null 2>&1; then echo "== updating T3 Code =="; ' +
-      '_t3ch="$(sed -n \'s/^T3CODE_CHANNEL=//p\' /etc/construct/config.env 2>/dev/null | head -1)"; ' +
-      'case "$_t3ch" in nightly) _t3tag=nightly ;; *) _t3tag=latest ;; esac; ' +
-      'if npm install -g "t3@${_t3tag}" --allow-scripts=node-pty,msgpackr-extract; then ' +
-      'systemctl try-restart t3code-serve 2>/dev/null || true; else rc=1; fi; fi');
   }
   lines.push("exit $rc");
   return lines.join("\n") + "\n";

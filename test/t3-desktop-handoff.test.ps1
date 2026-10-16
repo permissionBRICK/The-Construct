@@ -3,9 +3,14 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '../lib/AgentVm.Common.ps1')
 $source = Get-Content (Join-Path $PSScriptRoot '../Provision-AgentVM.ps1') -Raw
-$start = $source.IndexOf("if (`$Action -eq 'provision') {", $source.IndexOf('# The guest prepares the shared T3 sources'))
-$end = $source.IndexOf('# Get the root private key', $start)
-$handoff = [scriptblock]::Create($source.Substring($start, $end - $start))
+# The function ends at the first closing brace in column 0.
+$start = $source.IndexOf('function Invoke-T3DesktopHandoff {')
+$end = $source.IndexOf("`n}`n", $start) + 3
+. ([scriptblock]::Create($source.Substring($start, $end - $start)))
+# -Action t3update's own block, which runs the VM update and then this handoff.
+$start = $source.IndexOf("if (`$Action -eq 't3update') {", $source.IndexOf('# ── -Action t3update'))
+$end = $source.IndexOf("`n}`n", $start) + 3
+$t3UpdateBlock = [scriptblock]::Create($source.Substring($start, $end - $start))
 $root = Join-Path ([IO.Path]::GetTempPath()) ('t3-handoff-' + [guid]::NewGuid().ToString('N'))
 $previousLocalAppData = $env:LOCALAPPDATA
 function Assert($condition, $message) { if (-not $condition) { throw $message } }
@@ -58,7 +63,8 @@ function Start-Process {
 }
 function Run-Handoff {
     $script:calls.Clear(); $script:warnings.Clear()
-    & $handoff
+    Invoke-T3DesktopHandoff
+    Assert ($script:T3DesktopHandoffFailed -eq ($script:warnings.Count -gt 0)) 'A failed handoff must be reported to the run'
 }
 try {
     $env:LOCALAPPDATA = $root
@@ -138,6 +144,42 @@ try {
     Run-Handoff
     Assert ($script:warnings.Count -eq 1 -and -not $script:calls.Contains('https-download')) 'Non-release download URL must be rejected'
     Write-Host 'PASS: shared host tracking, deferred packaging/download, missing app, and failure handling'
+
+    # -Action t3update: the VM update decides whether the Desktop is installed at all.
+    $script:KnownHostsFile = Join-Path $root 'known_hosts'
+    function Invoke-Ssh { param([switch]$Sudo, $Command) if ($script:guestHasUpdate) { 'present' } }
+    function Invoke-SshStream {
+        param([switch]$Sudo, [switch]$PassThru, [switch]$NoThrow, $Command)
+        Assert ($Command -eq 'bash /opt/construct/repo/bin/construct-t3-update.sh') "Unexpected VM command $Command"
+        $script:steps.Add('vm-update')
+        [pscustomobject]@{ExitCode=$script:vmUpdateExit}
+    }
+    function Invoke-T3DesktopHandoff { $script:steps.Add('desktop'); $script:T3DesktopHandoffFailed = $script:desktopFails }
+    function Run-T3Update {
+        $script:steps = [Collections.Generic.List[string]]::new()
+        $global:ConstructProvisionHadErrors = $false
+        $global:ConstructT3UpdateNeedsReprovision = $false
+        Set-Content $script:KnownHostsFile 'run-private'
+        $Action = 't3update'
+        & $t3UpdateBlock
+        Assert (-not (Test-Path $script:KnownHostsFile)) 'The run-private known_hosts file must be removed'
+    }
+    $script:guestHasUpdate = $false; $script:vmUpdateExit = 0; $script:desktopFails = $false
+    Run-T3Update
+    Assert ($global:ConstructT3UpdateNeedsReprovision -and $script:steps.Count -eq 0) 'A VM without the update script must ask for a reprovision and change nothing'
+    $script:guestHasUpdate = $true
+    Run-T3Update
+    Assert (($script:steps -join ',') -eq 'vm-update,desktop') 'The VM is updated first, then its Desktop'
+    Assert (-not $global:ConstructProvisionHadErrors -and -not $global:ConstructT3UpdateNeedsReprovision) 'A clean update reports no errors'
+    $script:desktopFails = $true
+    Run-T3Update
+    Assert $global:ConstructProvisionHadErrors 'A Desktop that could not be installed is an error of the update'
+    $script:desktopFails = $false; $script:vmUpdateExit = 1
+    $failed = $false
+    try { Run-T3Update } catch { $failed = $_.Exception.Message -like 'Updating T3 Code on the VM failed (exit 1)*' }
+    Assert $failed 'A failed VM update must fail the run'
+    Assert (($script:steps -join ',') -eq 'vm-update') 'A failed VM update must leave the Desktop alone'
+    Write-Host 'PASS: t3update updates the VM, then the Desktop, and needs a reprovision on an older VM'
 } finally {
     $env:LOCALAPPDATA = $previousLocalAppData
     Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue

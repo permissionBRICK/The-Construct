@@ -279,6 +279,12 @@ message, queued behind its current turn, because the setting does not restart wa
 message that T3 refuses three times stays in the file, and the service tries again when the
 next provision ends or the VM boots.
 
+A [T3 Code update without a reprovision](control-panel.md#updating-t3-code-without-a-reprovision)
+works the same way. `bin/construct-t3-update.sh` records the busy threads with
+`snapshot --reason t3-update` before it restarts T3, and their message says that T3 Code was
+updated. Nothing reboots the VM after that run, so it schedules the resume with
+`arm --no-reboot`, which ignores a pending `/var/run/reboot-required`.
+
 A reinstall works the same way across the two VMs. When the export saves T3's event store, which
 needs `INCLUDE_AUTH=true`, `export-config.sh` records the busy threads before it stops T3 and
 puts the list into the backup as `t3-resume.json`. `restore-config.sh` adds the list to the new

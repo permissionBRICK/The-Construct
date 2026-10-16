@@ -8,13 +8,13 @@ namespace Construct.Companion.Core.Lifecycle;
 
 public static class LifecycleBuilder
 {
-    public static string? ScriptForAction(string action) => action switch { "reprovision" or "exportConfig" => "Provision-AgentVM.ps1", "reinstall" or "redownload" => "Auto-Install.ps1", "setCheckpoints" => "Set-AgentVmCheckpoints.ps1", "setResources" => "Set-AgentVmResources.ps1", _ => null };
-    private static string Label(string action) => action switch { "reprovision" => "Reprovision", "exportConfig" => "Export config", "reinstall" => "Reinstall", "redownload" => "Redownload", "setCheckpoints" => "Automatic checkpoints", "setResources" => "Apply VM resources", "removeInstance" => "Remove instance", _ => action };
+    public static string? ScriptForAction(string action) => action switch { "reprovision" or "exportConfig" => "Provision-AgentVM.ps1", "reinstall" or "redownload" => "Auto-Install.ps1", "setCheckpoints" => "Set-AgentVmCheckpoints.ps1", "setResources" => "Set-AgentVmResources.ps1", "updateT3" => "Update-T3Code.ps1", _ => null };
+    private static string Label(string action) => action switch { "reprovision" => "Reprovision", "exportConfig" => "Export config", "reinstall" => "Reinstall", "redownload" => "Redownload", "setCheckpoints" => "Automatic checkpoints", "setResources" => "Apply VM resources", "removeInstance" => "Remove instance", "updateT3" => "Update T3 Code", _ => action };
     public static string[] ParamsForAction(string action, JsonObject? instance, string[]? declared = null)
     {
         if (Instances.IsRemoteBackend(StateJson.Text(instance?["backend"])) && action is "reinstall" or "redownload") return ["Backend", "ServiceUrl", "InstanceName", "ConfigBranch"];
-        if (declared?.Contains("InstanceName", StringComparer.Ordinal) == true) return action switch { "reprovision" or "reinstall" or "redownload" => ["InstanceName", "ConfigBranch"], "exportConfig" or "setCheckpoints" or "setResources" => ["InstanceName"], _ => [] };
-        return action switch { "reprovision" => ["VmHost", "HostAlias", "SshPort", "LocalKeyName", "ConfigBranch"], "exportConfig" => ["VmHost", "HostAlias", "SshPort", "LocalKeyName"], "reinstall" or "redownload" => ["VmName", "ConfigBranch"], "setCheckpoints" or "setResources" => ["VmName"], _ => [] };
+        if (declared?.Contains("InstanceName", StringComparer.Ordinal) == true) return action switch { "reprovision" or "reinstall" or "redownload" => ["InstanceName", "ConfigBranch"], "exportConfig" or "setCheckpoints" or "setResources" or "updateT3" => ["InstanceName"], _ => [] };
+        return action switch { "reprovision" => ["VmHost", "HostAlias", "SshPort", "LocalKeyName", "ConfigBranch"], "exportConfig" or "updateT3" => ["VmHost", "HostAlias", "SshPort", "LocalKeyName"], "reinstall" or "redownload" => ["VmName", "ConfigBranch"], "setCheckpoints" or "setResources" => ["VmName"], _ => [] };
     }
     public static string DerivedConfigBranch(string? alias)
     {
@@ -77,6 +77,8 @@ public static class LifecycleBuilder
         {
             case "reprovision":
                 Pair("-Action", JsonValue.Create("provision")); Projects(); Text("-GitUserName", "gitName"); Text("-GitEmail", "gitEmail"); Bool("-VsCodeServeWeb", "serveWeb"); Bool("-VsCodeTunnel", "tunnel"); Bool("-SmbShare", "smb"); Patches(); pairs.Add(new JsonObject { ["flag"] = "-NonInteractive" }); return Done("Provision-AgentVM.ps1", false, false, "Reprovision");
+            // T3 Code alone, without a reprovision: the VM's own config.env decides the channel and the build.
+            case "updateT3": Pair("-Mode", JsonValue.Create("quick")); return Done("Update-T3Code.ps1", false, false, "Update T3 Code");
             case "exportConfig": Pair("-Action", JsonValue.Create("export")); Pair("-BackupDir", options["backupDir"]); if (Supports("supportsHistoryRetentionDays")) Text("-HistoryRetentionDays", "historyRetentionDays"); return Done("Provision-AgentVM.ps1", false, false, "Export config");
             case "reinstall": case "redownload":
                 Pair("-Action", JsonValue.Create(action)); Pair("-BackupMode", JsonValue.Create(StateJson.Text(options["backupMode"]) is "existing" or "wipe" ? StateJson.Text(options["backupMode"]) : "save")); Projects(); Text("-VmMemoryGB", "ram"); Text("-VmDiskGB", "disk"); if (Supports("supportsVmCpuCount")) Text("-VmCpuCount", "cpu"); if (Supports("supportsCheckpoints")) Bool("-AutomaticCheckpoints", "autoCheckpoints"); if (action == "redownload") Text("-UbuntuRelease", "ubuntu"); Text("-GitUserName", "gitName"); Text("-GitEmail", "gitEmail"); Patches(); if (Supports("supportsHistoryRetentionDays")) Text("-HistoryRetentionDays", "historyRetentionDays"); return Done("Auto-Install.ps1", true, !Instances.IsRemoteBackend(StateJson.Text(instance?["backend"])), Label(action));

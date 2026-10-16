@@ -166,15 +166,19 @@ public sealed class VmConfigurationTests
         Assert.Contains("-Projects", command);
         Assert.Contains("live", command);
     }
+    // T3 Code, stock or Construct build, is updated by Update-T3Code.ps1 -Mode quick (the VM's T3 step plus the
+    // matching Desktop), never by the agent script and never by a reprovision. "update all" includes it when T3 is on.
     [Theory]
-    [InlineData("updateAgent", true, false, true)] [InlineData("updateAgents", true, true, true)]
-    [InlineData("updateAgent", false, true, false)] [InlineData("updateAgents", false, true, false)]
-    public async Task PatchedT3UpdatesThroughReprovisionLikeTheExtension(string id, bool patched, bool scriptRuns, bool reprovisions)
+    [InlineData("updateAgent", true, true, false, true)] [InlineData("updateAgent", true, false, false, true)]
+    [InlineData("updateAgents", true, true, true, true)] [InlineData("updateAgents", true, false, true, true)]
+    [InlineData("updateAgents", false, false, true, false)]
+    public async Task T3UpdatesWithoutReprovisionLikeTheExtension(string id, bool t3, bool patched, bool scriptRuns, bool updatesT3)
     {
         await using var h = await HttpTests.Harness.Start(runtimeJobs: false);
         h.Files.WriteFileAtomic("/fake/scripts/Provision-AgentVM.ps1", "param($Action)"u8);
+        h.Files.WriteFileAtomic("/fake/scripts/Update-T3Code.ps1", "param($Mode, [switch]$FromPanel)"u8);
         var entry = h.App.Services.GetRequiredService<CompanionInstances>().Get("agent-vm");
-        entry.Store.SaveSettings(new() { ["t3code"] = true, ["t3codeLimitResume"] = patched });
+        entry.Store.SaveSettings(new() { ["t3code"] = t3, ["t3codeLimitResume"] = patched });
         var ssh = (FakeSshTransport)entry.Ssh;
         ssh.ScriptHandler = (script, _) => Task.FromResult(new ProcessResult(0, script == ProjectImport.ScanScript() ? "END\n" : ""));
         var message = new JsonObject { ["type"] = "command", ["id"] = id };
@@ -182,11 +186,15 @@ public sealed class VmConfigurationTests
         await h.App.Services.GetRequiredService<MessageDispatcher>().DispatchAsync(entry.Name, message, CancellationToken.None);
         var updates = ssh.Scripts.Where(s => s.StartsWith("set -uo pipefail\nrc=0\n", StringComparison.Ordinal)).ToArray();
         Assert.Equal(scriptRuns, updates.Length == 1);
-        Assert.DoesNotContain(updates, s => patched && s.Contains("== updating T3 Code ==", StringComparison.Ordinal));
-        if (id == "updateAgents" && scriptRuns) Assert.Contains("== updating Codex ==", updates[0]);
+        Assert.DoesNotContain(updates, s => s.Contains("t3", StringComparison.Ordinal));
+        if (id == "updateAgents") Assert.Contains("== updating Codex ==", updates[0]);
         var launches = h.Get<FakeLauncher, ILauncher>().Detached;
-        Assert.Equal(reprovisions ? 1 : 0, launches.Count);
-        if (reprovisions) Assert.Contains("Provision-AgentVM.ps1", Encoding.Unicode.GetString(Convert.FromBase64String(launches[0].Arguments[^1])));
+        Assert.Equal(updatesT3 ? 1 : 0, launches.Count);
+        if (!updatesT3) return;
+        var command = Encoding.Unicode.GetString(Convert.FromBase64String(launches[0].Arguments[^1]));
+        Assert.Contains("Update-T3Code.ps1", command);
+        Assert.Matches(@"-Mode '?quick'?", command);
+        Assert.DoesNotContain("Provision-AgentVM.ps1", command);
     }
     private static async Task Until(Func<bool> predicate)
     {

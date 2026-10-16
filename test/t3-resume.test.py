@@ -294,6 +294,18 @@ class HelperTests(unittest.TestCase):
         self.assertEqual(0, self.fx.run('resume').returncode)
         self.assertEqual(['a'], [c['threadId'] for c in self.fx.state['dispatched']])
 
+    def test_a_t3_update_resumes_despite_a_pending_reboot(self):
+        # bin/construct-t3-update.sh restarts T3 and nothing reboots the VM after it.
+        self.fx.state['shell']['threads'] = [thread('a', session='running', turn='running')]
+        self.fx.run('snapshot', '--reason', 't3-update')
+        self.fx.invocation.write_text('inv-2\n')
+        self.fx.reboot_required.write_text('*** System restart required ***\n')
+        result = self.fx.run('arm', '--no-reboot')
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIsNone(self.fx.pending_data()['resumeAfterBoot'])
+        self.assertIn('systemctl start --no-block construct-t3-resume.service', self.fx.calls_text())
+        self.assertNotEqual(0, self.fx.run('arm', '--no-reboot', '--reboot-follows').returncode)
+
     def test_a_switched_off_t3_drops_the_snapshot(self):
         self.fx.state['shell']['threads'] = [thread('a', session='running', turn='running')]
         self.fx.run('snapshot')
@@ -350,6 +362,16 @@ class HelperTests(unittest.TestCase):
         text = self.fx.state['dispatched'][0]['message']['text']
         self.assertIn('reprovisioned and rebooted', text)
         self.assertIn('The reboot ended that work', text)
+
+    def test_resume_after_a_t3_update_says_so(self):
+        self.fx.state['shell']['threads'] = [thread('a', session='running', turn='running')]
+        self.assertEqual(0, self.fx.run('snapshot', '--reason', 't3-update').returncode)
+        self.fx.invocation.write_text('inv-2\n')
+        self.fx.state['shell']['threads'] = [thread('a', session='error', turn='interrupted')]
+        self.assertEqual(0, self.fx.run('resume').returncode)
+        text = self.fx.state['dispatched'][0]['message']['text']
+        self.assertTrue(text.startswith('[Construct T3 Code update] T3 Code was updated while'), text)
+        self.assertIn('Restarting the T3 Code server ended that work', text)
 
     def test_resume_skips_threads_the_user_took_over(self):
         self.snapshot_then_restart([thread(t, session='running', turn='running') for t in 'abcde'])

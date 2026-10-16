@@ -52,6 +52,14 @@ ok("export: uses Provision script", exp.script === life.PROVISION);
 ok("export: -Action export -BackupDir", has(exp.args, "-Action", "export", "-BackupDir", "C:\\T\\.construct-backup"));
 ok("export: not destructive", exp.destructive === false && exp.elevate === false);
 
+// ── updateT3 ─────────────────────────────────────────────────────────────────
+// T3 Code alone, without a reprovision: none of the saved settings ride along, the
+// VM's own config.env decides the channel and the build.
+const upd = life.buildInvocation("updateT3", { settings: { t3code: true, t3codeChannel: "nightly", gitName: "Neo" }, projects: ["web"] });
+ok("updateT3: uses Update-T3Code.ps1", upd.script === life.UPDATE_T3 && life.scriptForAction("updateT3") === "Update-T3Code.ps1");
+ok("updateT3: -FromPanel -Mode quick and nothing else", upd.args.join(" ") === "-FromPanel -Mode quick");
+ok("updateT3: not destructive, no admin", upd.destructive === false && upd.elevate === false && upd.label === "Update T3 Code");
+
 // ── reinstall ────────────────────────────────────────────────────────────────
 const rei = life.buildInvocation("reinstall", { settings: { ram: "16", disk: "80", gitName: "Neo", partialStreaming: false, mic: true, opencodeBackgroundWatcher: false, t3code: false } });
 ok("reinstall: uses Auto-Install script", rei.script === life.AUTO_INSTALL);
@@ -560,7 +568,7 @@ deepEq("remote: reprovision keeps the endpoint identity, unchanged",
 deepEq("local: the rebuild set is unchanged by B7",
   life.instanceArgs("reinstall", LOCAL_INST, LEGACY_PARAM), ["-VmName", "work-vm"]);
 // THE ZERO-CHANGE BAR: the default instance emits nothing at all, on every action.
-for (const action of ["reprovision", "exportConfig", "reinstall", "redownload", "setCheckpoints", "setResources"]) {
+for (const action of ["reprovision", "exportConfig", "reinstall", "redownload", "setCheckpoints", "setResources", "updateT3"]) {
   deepEq(`zero-change: the default instance emits no target args (${action})`,
     life.instanceArgs(action, DEFAULT_INST, EVERY_PARAM), []);
   deepEq(`zero-change: no instance at all emits none either (${action})`,
@@ -604,6 +612,13 @@ deepEq("name-only: redownload emits the name too",
   life.instanceArgs("redownload", LOCAL_INST, NAME_PARAM), ["-InstanceName", "work-vm"]);
 deepEq("name-only: setCheckpoints emits the name instead of -VmName",
   life.instanceArgs("setCheckpoints", LOCAL_INST, ["InstanceName"]), ["-InstanceName", "work-vm"]);
+deepEq("name-only: updateT3 emits the name (and no branch — it syncs no config)",
+  life.instanceArgs("updateT3", LOCAL_INST, ["InstanceName"]), ["-InstanceName", "work-vm"]);
+deepEq("legacy: updateT3 emits the four identity args Update-T3Code.ps1 forwards",
+  life.instanceArgs("updateT3", LOCAL_INST, LEGACY_PARAM),
+  ["-VmHost", "work-vm.mshome.net", "-HostAlias", "work-vm", "-SshPort", "22", "-LocalKeyName", "construct_work-vm_ed25519"]);
+ok("updateT3: a remote instance is updated over SSH like a reprovision",
+  life.checkInstanceSupport("updateT3", REMOTE_INST, ["InstanceName"]) === null);
 deepEq("name-only: setResources emits the name instead of -VmName",
   life.instanceArgs("setResources", LOCAL_INST, ["InstanceName"]), ["-InstanceName", "work-vm"]);
 deepEq("legacy: setResources emits -VmName for a non-default local instance",
@@ -623,7 +638,7 @@ deepEq("name-only: a remote REBUILD keeps -Backend/-ServiceUrl beside the name",
   ["-Backend", "hyperv-remote", "-ServiceUrl", "https://buildbox.example.local:7462",
    "-InstanceName", "work-vm"]);
 // THE ZERO-CHANGE BAR is unchanged by any of this.
-for (const action of ["reprovision", "exportConfig", "reinstall", "redownload", "setCheckpoints", "setResources"]) {
+for (const action of ["reprovision", "exportConfig", "reinstall", "redownload", "setCheckpoints", "setResources", "updateT3"]) {
   deepEq(`name-only: the default instance still emits nothing (${action})`,
     life.instanceArgs(action, DEFAULT_INST, NAME_PARAM), []);
 }

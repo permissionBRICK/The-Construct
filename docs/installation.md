@@ -410,7 +410,7 @@ VM on a host service, that service's URL — out of the registry entry:
 
 ```powershell
 .\Provision-AgentVM.ps1 -InstanceName build-vm      # reprovision it
-.\Update-T3Code.ps1     -InstanceName build-vm      # rebuild its patched T3 Code
+.\Update-T3Code.ps1     -InstanceName build-vm      # update its T3 Code and this PC's T3 Code Desktop
 .\Set-AgentVmCheckpoints.ps1 -InstanceName build-vm -Enabled false
 .\Get-AgentUsage.ps1    -InstanceName build-vm
 ```

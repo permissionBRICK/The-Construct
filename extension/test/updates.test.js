@@ -539,13 +539,9 @@ function ok(name, cond, detail) {
   // to a versioned releases/<v> dir must be relinked or updates land invisibly.
   ok("agentScript: codex relinks a version-pinned /usr/local/bin/codex after update",
     /releases\/\*\) for s in/.test(all) && /ln -sf "\$s" \/usr\/local\/bin\/codex/.test(all));
-  // T3 Code: npm-managed like its install; reads the channel from config.env on
-  // the VM (source of truth) and maps it to the npm tag. The serve unit restarts
-  // so the running web GUI actually serves the new version.
-  ok("agentScript: t3code reads channel from config.env + maps to npm tag",
-    /T3CODE_CHANNEL/.test(all) && /nightly\) _t3tag=nightly/.test(all) && /\*\) _t3tag=latest/.test(all));
-  ok("agentScript: t3code updates via npm (channel-driven) + restarts",
-    /command -v t3 >\/dev\/null/.test(all) && /npm install -g "t3@\$\{_t3tag\}"/.test(all) && /try-restart t3code-serve/.test(all));
+  // T3 Code is updated by Update-T3Code.ps1 -Mode quick, never by this script: an npm
+  // install would put stock T3 beside a Construct build and skip the Desktop.
+  ok("agentScript: never updates T3 Code", !/t3/.test(all) && !/t3/.test(updates.buildAgentUpdateScript(["t3code"])));
   // opencode's installer downloads without curl --fail; one transient error page
   // used to fail the whole update, so the script must retry before setting rc.
   ok("agentScript: opencode retries the installer before failing the update",
