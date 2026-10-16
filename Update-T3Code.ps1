@@ -14,7 +14,22 @@ param(
     # a remote's base URL to four derived values. Empty (and the default instance) means
     # exactly what it always did: no identity is forwarded and the provisioner uses its
     # own defaults. An identity override that DISAGREES with the named entry is an error.
-    [string]$InstanceName = ""
+    [string]$InstanceName = "",
+    # What runs (docs/control-panel.md, "Updating T3 Code without a reprovision"):
+    #   auto        -- a reprovision when the VM was provisioned with a different Construct
+    #                  than the one installed on this PC (one is due anyway, and it updates
+    #                  T3 Code as well); otherwise the quick update. The default, and what
+    #                  an older T3 Code Desktop's "Reprovision VM" runs.
+    #   quick       -- update T3 Code on the VM and the matching T3 Code Desktop here,
+    #                  without a reprovision (Provision-AgentVM.ps1 -Action t3update). A VM
+    #                  provisioned before that existed is reprovisioned instead, once.
+    #   reprovision -- the full reprovision with the saved settings.
+    [ValidateSet('auto', 'quick', 'reprovision')]
+    [string]$Mode = 'auto',
+    # Passed by the control panel's launcher, as to every script it starts. Nothing to
+    # change here: this script always runs the provisioner -FromPanel, which keeps its
+    # console open only when something went wrong.
+    [switch]$FromPanel
 )
 
 $ErrorActionPreference = 'Stop'
@@ -98,6 +113,25 @@ function As-BoolString($value, [bool]$fallback) {
 $provision = Join-Path $PSScriptRoot 'Provision-AgentVM.ps1'
 if (-not (Test-Path -LiteralPath $provision)) { throw "Provision-AgentVM.ps1 not found beside $PSCommandPath" }
 
+function Test-ConstructVmBehind {
+    <#
+        Was this VM provisioned with a different Construct than the one installed here?
+        The control panel's rule (UpdatePlanner.IsProvisionStale): both commits are known
+        and differ. The installed commit is install-wide (.construct-settings.json); the
+        provisioned one belongs to the VM, in the settings read above.
+    #>
+    $installed = ''
+    try {
+        $installed = [string](Get-Content -LiteralPath (Join-Path $PSScriptRoot '.construct-settings.json') -Raw | ConvertFrom-Json).installedCommit
+    } catch { }
+    $installed = $installed.Trim()
+    $provisioned = ([string]$settings.provisionedCommit).Trim()
+    return [bool]($installed -and $provisioned -and $installed -ne $provisioned)
+}
+if ($Mode -eq 'auto') {
+    $Mode = if (Test-ConstructVmBehind) { 'reprovision' } else { 'quick' }
+}
+
 $params = @{
     Action                    = 'provision'
     FromPanel                 = $true
@@ -165,12 +199,28 @@ foreach ($k in @($identity.Keys)) {
     $params[$k] = $identity[$k]
 }
 
-Write-Host 'Starting Construct reprovision to rebuild/update patched T3 Code...' -ForegroundColor Cyan
 # Provision-AgentVM.ps1 owns the error display: without -Auto it catches its own failure,
 # shows the result screen and RETURNS normally, recording the outcome in these globals.
-# The launcher (the Construct-built T3 Desktop app's update control waits on this
-# process) can only see an exit code, so translate: 1 = provisioning failed,
-# 3 = reached the end with optional errors (the provisioner's own result-file codes).
+# The launchers (the Construct-built T3 Desktop app's update control and the Companion)
+# can only see an exit code, so translate: 1 = it failed, 3 = it reached the end with
+# optional errors (the provisioner's own result-file codes).
+if ($Mode -eq 'quick') {
+    Write-Host 'Updating T3 Code on the VM and T3 Code Desktop on this PC (no reprovision)...' -ForegroundColor Cyan
+    $quick = @{ Action = 't3update'; FromPanel = $true; NonInteractive = $true }
+    foreach ($k in @($identity.Keys)) { $quick[$k] = $identity[$k] }
+    $global:ConstructProvisionHadErrors = $false
+    $global:ConstructProvisionFailureMessage = $null
+    $global:ConstructT3UpdateNeedsReprovision = $false
+    & $provision @quick
+    if (-not $global:ConstructT3UpdateNeedsReprovision) {
+        if ($global:ConstructProvisionFailureMessage) { exit 1 }
+        if ($global:ConstructProvisionHadErrors) { exit 3 }
+        exit 0
+    }
+    Write-Host 'Reprovisioning instead; that installs the current T3 Code as well.' -ForegroundColor Cyan
+}
+
+Write-Host 'Starting Construct reprovision to rebuild/update patched T3 Code...' -ForegroundColor Cyan
 $global:ConstructProvisionHadErrors = $false
 $global:ConstructProvisionFailureMessage = $null
 & $provision @params

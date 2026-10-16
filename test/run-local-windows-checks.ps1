@@ -8,6 +8,7 @@ try {
     # Separate processes preserve each test script's exit-code contract.
     foreach ($test in @(
         'test/t3-desktop-handoff.test.ps1',
+        'test/t3-update-mode.test.ps1',
         'test/native-iso-host.test.ps1',
         'test/iso-download-compile.test.ps1',
         'test/hyperv-prereqs.test.ps1',

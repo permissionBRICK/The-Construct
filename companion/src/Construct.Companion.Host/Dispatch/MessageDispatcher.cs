@@ -257,17 +257,17 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
     private static string RequireProxyUrl(JsonObject message) =>
         message["url"] is JsonValue value && value.TryGetValue<string>(out var text) && T3Code.NormalizeProxyUrl(text) is ({ } url, null) ? url
             : throw new IpcFailure(400, "invalidProxyUrl", T3Code.ProxyUrlError);
-    // Construct's patched T3 (T3 Code and its patch setting both on) is a prebuilt or local build that only
-    // provisioning installs. The npm update would put stock T3 beside it and restart the service on the old
-    // build, so T3 is updated by a reprovision after the other agents, as the extension's runUpdateAgents does.
+    // T3 Code is never updated over the agent script: Update-T3Code.ps1 -Mode quick runs provisioning's T3 step
+    // on the VM (stock or Construct build) and installs the matching T3 Code Desktop on this PC, without a
+    // reprovision, in its own console after the other agents. "update all" includes it when T3 Code is switched
+    // on for this VM. The extension's runUpdateAgents does the same.
     private async Task UpdateAgents(CompanionInstance entry, string? agent, CancellationToken ct)
     {
-        IReadOnlyList<string> requested = agent is null ? AgentUpdateScript.Ids : [agent];
-        var saved = entry.Store.ReadSettings();
-        var patchedT3 = requested.Contains("t3code") && StateJson.Boolean(saved["t3code"]) == true && StateJson.Boolean(saved["t3codeLimitResume"]) == true;
-        var remote = requested.Where(id => !(patchedT3 && id == "t3code")).ToArray();
+        IReadOnlyList<string> requested = agent is null ? [.. AgentUpdateScript.Ids, "t3code"] : [agent];
+        var t3 = requested.Contains("t3code") && (agent is not null || StateJson.Boolean(entry.Store.ReadSettings()["t3code"]) == true);
+        var remote = requested.Where(id => id != "t3code").ToArray();
         try { if (remote.Length > 0) { await CheckedScript(entry, AgentUpdateScript.Build(remote), ct, TimeSpan.FromMinutes(10)); await RefreshAsync(entry, ct); } }
-        finally { if (patchedT3) await Lifecycle(entry, "reprovision", [], ct); }
+        finally { if (t3) await Lifecycle(entry, "updateT3", [], ct); }
     }
     private async Task Lifecycle(CompanionInstance entry, string action, JsonObject message, CancellationToken ct)
     {

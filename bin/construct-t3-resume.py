@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Resume the T3 Code threads that a reprovision or reinstall interrupted.
+"""Resume the T3 Code threads that a reprovision, a T3 Code update or a reinstall interrupted.
 
-A reprovision restarts the T3 Code server, and a reinstall replaces the whole VM.
-Either one ends the turn a thread was running and kills the background work it had
-started (Monitor watchers, background shells, waiters, dev servers). T3 forgets that
-background work on restart, so the busy threads are recorded before anything stops
-and told what happened once provisioning is done.
+A reprovision or a T3 Code update (bin/construct-t3-update.sh) restarts the T3 Code
+server, and a reinstall replaces the whole VM. Each one ends the turn a thread was
+running and kills the background work it had started (Monitor watchers, background
+shells, waiters, dev servers). T3 forgets that background work on restart, so the busy
+threads are recorded before anything stops and told what happened once the run is done.
 
-  snapshot [--reason reprovision|reinstall] [--out FILE]
+  snapshot [--reason reprovision|t3-update|reinstall] [--out FILE]
       Record the threads that are busy right now: a turn is running, or background
       agents or watchers are alive (T3's backgroundLiveness). Threads that wait for
       an approval or an answer are left out. Merges into FILE (default: the pending
@@ -16,10 +16,12 @@ and told what happened once provisioning is done.
   import FILE
       Merge a snapshot taken on another VM (the reinstall backup) into the pending
       file. Its threads count as interrupted.
-  arm [--reboot-follows]
+  arm [--reboot-follows | --no-reboot]
       Run when a provisioning run ends. Starts the resume service, or holds the
       resume for the next boot when the host reboots the VM after this run
       (--reboot-follows) or the VM needs a reboot (/var/run/reboot-required).
+      --no-reboot says nothing reboots the VM after this run (a T3 Code update), so
+      a pending /var/run/reboot-required does not hold the resume.
   resume [--now]
       What construct-t3-resume.service runs. Waits until no provisioning run is
       active and the T3 API answers, then sends each interrupted thread a message.
@@ -434,7 +436,7 @@ def cmd_arm(args):
             save(PENDING_FILE, empty_snapshot())
             log(f"T3 Code is switched off; {count} recorded thread(s) are not resumed")
             return 0
-        if args.reboot_follows or os.path.exists(REBOOT_REQUIRED_FILE):
+        if args.reboot_follows or (not args.no_reboot and os.path.exists(REBOOT_REQUIRED_FILE)):
             data["resumeAfterBoot"] = boot
             save(PENDING_FILE, data)
             log(f"{count} T3 Code thread(s) will be resumed after the reboot that ends this provision")
@@ -472,6 +474,12 @@ def compose_message(entry, rebooted, worktree_note):
                 "The Construct rebuilt the VM, restored its saved configuration and cloned the "
                 "repositories again. Every process and watcher this thread had running is gone, and "
                 "local changes that were not pushed before the reinstall are lost.")
+    elif entry.get("reason") == "t3-update":
+        cause = "The reboot" if rebooted else "Restarting the T3 Code server"
+        text = (f"[Construct T3 Code update] T3 Code was updated{' and the VM rebooted' if rebooted else ''} "
+                f"while this thread was {doing}. {cause} ended that work and stopped every process "
+                "this thread had started: Monitor watchers, background shells, waiters, dev servers "
+                "and other child processes.")
     else:
         cause = "The reboot" if rebooted else "Restarting the T3 Code server"
         text = (f"[Construct reprovision] This VM was reprovisioned{' and rebooted' if rebooted else ''} "
@@ -677,12 +685,14 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="construct-t3-resume", description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
     snapshot = sub.add_parser("snapshot")
-    snapshot.add_argument("--reason", choices=["reprovision", "reinstall"], default="reprovision")
+    snapshot.add_argument("--reason", choices=["reprovision", "t3-update", "reinstall"], default="reprovision")
     snapshot.add_argument("--out")
     importer = sub.add_parser("import")
     importer.add_argument("file")
     arm = sub.add_parser("arm")
-    arm.add_argument("--reboot-follows", action="store_true")
+    reboot = arm.add_mutually_exclusive_group()
+    reboot.add_argument("--reboot-follows", action="store_true")
+    reboot.add_argument("--no-reboot", action="store_true")
     resume = sub.add_parser("resume")
     resume.add_argument("--now", action="store_true")
     sub.add_parser("status")

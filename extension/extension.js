@@ -2321,27 +2321,30 @@ function persistMicPreference(enabled) {
 
 /** Force-update coding agents on the VM over SSH, with a progress notification,
  *  then re-probe so the new versions + cleared badges show. `ids` narrows the
- *  update to specific agents (the panel's per-agent ↑ tag); omitted = all. */
+ *  update to specific agents (the panel's per-agent ↑ tag); omitted = all.
+ *  T3 Code is not updated over this SSH script: Update-T3Code.ps1 -Mode quick runs
+ *  provisioning's T3 step on the VM and installs the matching T3 Code Desktop on this
+ *  PC, in its own console, without a reprovision. "update all" includes it when T3
+ *  Code is switched on for this VM. */
 function runUpdateAgents(ids) {
   const subset = Array.isArray(ids) && ids.length ? ids : null;
   const requested = subset || ["claude-code", "codex", "opencode", "t3code"];
-  // Multi-minute npm work followed (sometimes) by a reprovision: ONE target for the
-  // settings read, the SSH run and the rebuild, captured before any of them.
+  // ONE target for the settings read, the SSH run and the T3 update, captured before
+  // any of them.
   const t = actionTarget();
   const scriptsDir = resolveScriptsDirFor(t.instance);
-  let sourceManagedT3 = false;
-  try {
-    const settings = scriptsDir ? instancestate.readSettings(stateStore(t.instance, scriptsDir)) : {};
-    sourceManagedT3 =
-      requested.includes("t3code") &&
-      settings.t3code === true &&
-      settings.t3codeLimitResume === true;
-  } catch (_) { /* fall back to the normal updater */ }
-  const remotelyUpdated = sourceManagedT3
-    ? requested.filter((id) => id !== "t3code")
-    : requested;
-  if (sourceManagedT3 && remotelyUpdated.length === 0) {
-    void startConstructReprovision(scriptsDir, t);
+  let updateT3 = false;
+  if (requested.includes("t3code")) {
+    updateT3 = !!subset;
+    if (!updateT3) {
+      try {
+        updateT3 = !!scriptsDir && instancestate.readSettings(stateStore(t.instance, scriptsDir)).t3code === true;
+      } catch (_) { /* no saved settings: leave T3 Code alone */ }
+    }
+  }
+  const remotelyUpdated = requested.filter((id) => id !== "t3code");
+  if (remotelyUpdated.length === 0) {
+    if (updateT3) startT3Update(scriptsDir, t);
     return;
   }
   const what = subset ? subset.join(", ") : "coding agents";
@@ -2358,9 +2361,20 @@ function runUpdateAgents(ids) {
         );
       }
       refreshAll(); // re-probe versions + clear the update badges
-      if (sourceManagedT3) await startConstructReprovision(scriptsDir, t);
+      if (updateT3) startT3Update(scriptsDir, t);
     }
   );
+}
+
+/** Update T3 Code on the target VM and the matching Desktop on this PC
+ *  (Update-T3Code.ps1 -Mode quick, in a console). A VM provisioned before that was
+ *  possible is reprovisioned instead, by the script itself. */
+function startT3Update(scriptsDir, target) {
+  if (!scriptsDir) { warnNoScriptsDir(); return false; }
+  return lifecycle.run("updateT3", {
+    scriptsDir, instance: target.instance,
+    stillCurrent: () => !targetSuperseded(target, "Update T3 Code"),
+  }) !== false;
 }
 
 /** Launch the host "Update Construct" self-update, then AUTO-RELOAD this window when it

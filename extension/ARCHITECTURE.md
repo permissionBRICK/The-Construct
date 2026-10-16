@@ -2599,10 +2599,15 @@ says what will actually happen.
     (key `~/.ssh/<-LocalKeyName>` else the `-HostAlias` alias, on `-SshPort`) mirrored in
     `src/ssh.js`. Defaults are the single-VM literals.
   - `Update-T3Code.ps1` — launched by the Construct-built T3 Desktop app's update control
-    (its "Reprovision VM" offer: the VM is behind the installed Construct, or a newer
-    upstream T3 Code exists on the build's channel); reruns provisioning with the saved
-    settings; exits 1 when provisioning failed and 3 when it finished with optional errors,
-    so the launcher can tell. Takes `-VmHost` / `-HostAlias` / `-SshPort` / `-LocalKeyName`
+    ("Reprovision VM" when the VM is behind the installed Construct, "Update T3 Code" when
+    a newer Construct T3 build is published for the app's channel) and by the panel's T3
+    update (`updateT3`). `-Mode quick` runs `Provision-AgentVM.ps1 -Action t3update`: the
+    VM's `bin/construct-t3-update.sh` (provisioning's T3 step alone) and then the Desktop
+    handoff (`Invoke-T3DesktopHandoff`); a VM without that script is reprovisioned instead.
+    `-Mode reprovision` reruns provisioning with the saved settings, and `-Mode auto` (the
+    default, what older Desktop builds run) picks the reprovision when the VM is behind.
+    Exits 1 when the run failed and 3 when it finished with optional errors, so the
+    launcher can tell. Takes `-VmHost` / `-HostAlias` / `-SshPort` / `-LocalKeyName`
     and forwards them with param probing, so an older provisioner is never handed unknown
     args — the Desktop app passes them for the registry's default instance whenever that is
     not the built-in `agent-vm` (a small mirror of `instances.js` lives in the patch). The same

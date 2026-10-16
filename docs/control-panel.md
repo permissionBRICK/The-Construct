@@ -184,9 +184,10 @@ machine, logged in via a freshly minted one-time pairing link. Update checks are
 itself is behind its git ref (**Update Construct** re-downloads the extension + scripts in
 place and records the new version, so the banner clears once it's done), and a per-agent
 badge marks an available update (**update all** force-updates them over SSH, then re-probes).
-With **Build patched T3 Code + Desktop** on, T3 Code's badge and **update all** start a
-reprovision for T3 instead, because only provisioning installs the patched build. The npm
-update would install stock T3 beside it and leave the service on the old build.
+T3 Code is updated differently: its badge, and **update all** when T3 Code is on, run
+`Update-T3Code.ps1 -Mode quick` in a console after the other agents. That updates T3 Code on
+the VM and the matching T3 Code Desktop on this PC without a reprovision; see
+[Updating T3 Code without a reprovision](#updating-t3-code-without-a-reprovision).
 
 Construct tracks two versions separately: the **installed** Construct (extension + scripts,
 bumped by install / Update Construct) and the version the **VM was last provisioned with**.
@@ -790,6 +791,47 @@ The choice is persisted in `config.env` (`T3CODE_CHANNEL`), rides reprovision/re
 survives a backup/restore cycle. On the agent card, a nightly install is annotated so it's
 visually distinguishable from stable.
 
+### Updating T3 Code without a reprovision
+
+A new T3 Code release needs no reprovision. `Update-T3Code.ps1 -Mode quick` updates T3 Code
+alone:
+
+1. On the VM, `bin/construct-t3-update.sh` runs the T3 step of provisioning on its own, with
+   the settings the VM saved in `config.env`: the channel, the stock or Construct build, and
+   the prebuilt or local build source. The host runs it as root over SSH
+   (`Provision-AgentVM.ps1 -Action t3update`). The guest repository, the other agents and
+   every other setting stay as they are, and the VM is not rebooted.
+2. Like a provision, the update holds the "provisioning is running" marker, so the VM stays
+   awake. It also records the busy T3 threads before the server restarts. When the run ends,
+   they get a `[Construct T3 Code update]` message (see
+   [Resuming interrupted T3 Code threads](provisioning.md#resuming-interrupted-t3-code-threads)).
+3. The new server has to come up. If it does not, the script puts the launcher, the build
+   status and the server manifest back on the build that ran before and restarts T3 on it. The
+   update then fails, and the Desktop is not touched.
+4. On this PC, the T3 Code Desktop that matches the new server is installed silently, by the
+   same step a provision ends with. It follows the same rules: the installer is skipped when this
+   PC already has that build, and a Desktop that was running starts again afterwards. If the
+   Desktop cannot be installed, the update finishes with errors (exit code 3).
+
+You start it from the **Coding agents** module (T3 Code's badge, or **update all**), from T3 Code
+Desktop's **Update T3 Code** (see below), or by hand. The T3 web app has no button for it. On
+the VM, `construct-t3-update.sh` refuses to run from a T3 Code terminal, because restarting T3
+would stop the script halfway.
+
+`Update-T3Code.ps1 -Mode` picks what runs:
+
+- `auto` (the default): a reprovision when the VM was provisioned with a different Construct
+  than the one installed on this PC, because a reprovision is due anyway and it updates T3 Code
+  too. Otherwise the quick update. This is also what the "Reprovision VM" button of an older
+  T3 Code Desktop runs.
+- `quick`: the quick update. A VM provisioned before `construct-t3-update.sh` existed is
+  reprovisioned instead, once.
+- `reprovision`: the full reprovision with the saved settings.
+
+It exits 1 when the run failed and 3 when it finished with errors, which is how T3 Code Desktop
+and the Companion learn the outcome. Changing the channel of a Construct build, or turning the
+build on or off, still takes a reprovision.
+
 ### Patched T3 Code server + Desktop build
 
 The **Build patched T3 Code + Desktop** toggle (off by default) makes Construct resolve the
@@ -890,11 +932,20 @@ every ten minutes:
   `Update-Construct.ps1` in a console window: the same self-update as the panel's
   **Update Construct** button (scripts + panel on this PC; it does not touch the VM).
 - **The VM** — that instance's own `provisionedCommit` against `installedCommit` (the panel's
-  yellow **Reprovision** button), and **upstream T3 Code** — this build's T3 version against the
-  npm channel it was built from. Either offers **Reprovision VM**, which runs
-  `Update-T3Code.ps1`: Construct reprovisioning with the saved settings, which rebuilds the
-  patched T3 Code in the VM and silently installs the new Desktop app. It does not install an
-  upstream T3 binary over the patched build. The target is the instance registry's default
+  yellow **Reprovision** button). It offers **Reprovision VM**, which runs
+  `Update-T3Code.ps1 -Mode reprovision`: Construct reprovisioning with the saved settings,
+  which also updates T3 Code in the VM and silently installs the matching Desktop app.
+- **T3 Code** — this app's build against the newest Construct T3 build published for its
+  channel (the `construct-t3-builds` release manifest, which the Companion checks for the VM's
+  server too). The app compares the manifest's `desktopVersion` with its own version, so a new
+  upstream release counts only once its Construct build is published, and a rebuild of the same
+  release with changed patches counts as well. It offers **Update T3 Code**, which runs
+  `Update-T3Code.ps1 -Mode quick` ([Updating T3 Code without a reprovision](#updating-t3-code-without-a-reprovision)).
+  It is offered only while no reprovision is pending, because a reprovision updates T3 Code
+  anyway.
+
+  `-Mode` is passed when the installed `Update-T3Code.ps1` declares it. An older one
+  reprovisions, as it always did. The target is the instance registry's default
   VM (`instances.json`; `agent-vm` without one), which is passed along when it is not the
   built-in default — as `-InstanceName <name>` when the installed `Update-T3Code.ps1`
   declares it, and as the four SSH identity arguments otherwise; the confirmation names it. A registry this panel itself would
@@ -941,10 +992,12 @@ counterpart (it also re-adds a removed connection).
 - a host **and** port that two instances claim is ambiguous and matches neither.
 
 A row that matches carries **that instance's** provisioned commit, its own stale state and
-the upstream T3 release on **its own channel** (an instance on the other channel makes the
-app ask npm for that channel too), and its **Reprovision** targets it *by name*
-(`Update-T3Code.ps1 -InstanceName <name>`) — even for the registry's default instance, so a
-row can never mean "whichever VM is default right now". A remote that matches nothing gets a
+the newest Construct T3 build on **its own channel** (an instance on the other channel makes the
+app look up that channel's release too). Its button is **Update T3 Code** when only T3 Code is
+behind and **Reprovision** otherwise, and either one targets the instance *by name*
+(`Update-T3Code.ps1 -InstanceName <name>` with `-Mode quick` or `-Mode reprovision`), even
+for the registry's default instance. That way a row never means "whichever VM is default
+right now". A remote that matches nothing gets a
 read-only row saying it is not a Construct instance of this PC. **Update Construct** stays a
 single host-wide action on the Construct row: `Update-Construct.ps1` takes no target. The
 row's own **Reprovision** offer (the pill, the toast, the About button) still exists and
@@ -952,7 +1005,8 @@ targets the registry's **default** instance by name — a stale VM is offered a 
 even before any remote is linked or matched, which is the offline / not-yet-paired case
 this control exists for. Every other instance is reprovisioned from its own row.
 
-A Construct update is offered first, since reprovisioning afterwards applies both. Each new
+A Construct update is offered first, since reprovisioning afterwards applies both. A pending
+reprovision comes next, and a T3 Code update last. Each new
 offer raises one toast with the action as its button (closing it dismisses that offer), the
 sidebar update pill lights up, and **Settings → Providers** gains a **Construct** entry that,
 like the Codex/Claude rows, shows the installed version (`main@<commit>`), the update state and
@@ -961,9 +1015,9 @@ script runs, the app re-reads the markers every few seconds and re-checks when t
 closes. With `T3CODE_DISABLE_AUTO_UPDATE` set the entry stays informational (facts shown,
 nothing offered or launched). The About section's update track is read-only in these builds: the channel is the
 VM's **T3 Code channel** (this panel), not a Desktop preference. The Construct panel's T3
-update action and stable/nightly changes follow that same
-reprovision path while the shared source build is enabled, so neither end is replaced by a
-stock npm update.
+update action runs the same quick update. A stable/nightly change still goes through a
+reprovision while the shared source build is enabled, so neither end is replaced by a stock
+npm update.
 
 ## Troubleshooting
 

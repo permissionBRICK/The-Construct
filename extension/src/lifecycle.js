@@ -45,6 +45,7 @@ const PROVISION = "Provision-AgentVM.ps1";   // reprovision + export (no admin)
 const AUTO_INSTALL = "Auto-Install.ps1";     // reinstall + redownload (self/explicitly elevated)
 const CHECKPOINTS = "Set-AgentVmCheckpoints.ps1"; // apply the checkpoint policy to the LIVE VM (elevated)
 const RESOURCES = "Set-AgentVmResources.ps1";     // restart the LIVE VM with a new RAM size / vCPU count (elevated)
+const UPDATE_T3 = "Update-T3Code.ps1";       // T3 Code on the VM + the matching Desktop, no reprovision (no admin)
 const BACKUP_DIR_NAME = ".construct-backup"; // mirrors Get-ConstructBackupDir
 // The CAPABILITY MARKER for name-only targeting (B11): the adapter every host script
 // resolves -InstanceName through. See NAME_TARGET_PARAMS for why its PRESENCE, and not
@@ -82,6 +83,11 @@ function normalizeBackupMode(bm) {
 //   Set-AgentVmResources.ps1 (setResources)
 //       -VmName <name> — same shape as setCheckpoints: Hyper-V only.
 //
+//   Update-T3Code.ps1 (updateT3)
+//       -VmHost <fqdn> -HostAlias <alias> -SshPort <n> -LocalKeyName <file>, which it
+//       hands to Provision-AgentVM.ps1 -Action t3update. It never syncs config, so no
+//       -ConfigBranch.
+//
 // For the DEFAULT instance NOTHING is emitted at all, so argv is byte-identical to
 // what shipped before instances existed. That is the regression bar these lists exist
 // to keep provable.
@@ -96,6 +102,7 @@ const INSTANCE_PARAMS = {
   redownload: ["VmName", "ConfigBranch"],
   setCheckpoints: ["VmName"],
   setResources: ["VmName"],
+  updateT3: ["VmHost", "HostAlias", "SshPort", "LocalKeyName"],
 };
 
 // ── …and the REMOTE backend's rebuild arguments ──────────────────────────────
@@ -142,6 +149,7 @@ const NAME_TARGET_PARAMS = {
   redownload: ["InstanceName", "ConfigBranch"],
   setCheckpoints: ["InstanceName"],
   setResources: ["InstanceName"],
+  updateT3: ["InstanceName"],
 };
 
 /** Is `declared` (the probe result) the NAME-ONLY set? instanceParamSupport only ever
@@ -195,6 +203,7 @@ const REQUIRED_INSTANCE_PARAMS = {
   redownload: ["VmName"],
   setCheckpoints: ["VmName"],
   setResources: ["VmName"],
+  updateT3: ["VmHost", "HostAlias", "SshPort", "LocalKeyName"],
 };
 
 /** The same rule for a REMOTE instance's rebuild. An Auto-Install.ps1 that predates the
@@ -215,6 +224,7 @@ const REQUIRED_NAME_TARGET_PARAMS = {
   redownload: ["InstanceName"],
   setCheckpoints: ["InstanceName"],
   setResources: ["InstanceName"],
+  updateT3: ["InstanceName"],
 };
 
 /** What an action MUST be able to state for this instance. Pure. */
@@ -238,6 +248,7 @@ const ACTION_LABELS = {
   setCheckpoints: "Automatic checkpoints",
   setResources: "Apply VM resources",
   removeInstance: "Remove instance",
+  updateT3: "Update T3 Code",
 };
 
 /**
@@ -430,6 +441,7 @@ function flattenArgPairs(pairs) {
  *   exportConfig -> Provision-AgentVM.ps1 -Action export -BackupDir <dir>
  *   reinstall    -> Auto-Install.ps1 -Action reinstall  -BackupMode <mode>
  *   redownload   -> Auto-Install.ps1 -Action redownload -BackupMode <mode>
+ *   updateT3     -> Update-T3Code.ps1 -Mode quick  (T3 Code alone, no reprovision)
  * Returns { script, args, destructive, elevate, label } or null for an unknown action.
  *
  * `opts.instance` (optional) is the ACTIVE INSTANCE (the normalized object from
@@ -515,6 +527,12 @@ function buildInvocation(action, opts = {}) {
       addPair("-BackupDir", opts.backupDir);
       if (opts.supportsHistoryRetentionDays !== false) pushPair("-HistoryRetentionDays", s.historyRetentionDays);
       return done(PROVISION, { destructive: false, elevate: false, label: "Export config" });
+
+    case "updateT3":
+      // T3 Code on the VM and the matching T3 Code Desktop on this PC, without a
+      // reprovision. The VM's own config.env decides the channel and the build.
+      addPair("-Mode", "quick");
+      return done(UPDATE_T3, { destructive: false, elevate: false, label: "Update T3 Code" });
 
     case "reinstall":
     case "redownload": {
@@ -800,6 +818,7 @@ function scriptForAction(action) {
   if (action === "reinstall" || action === "redownload") return AUTO_INSTALL;
   if (action === "setCheckpoints") return CHECKPOINTS;
   if (action === "setResources") return RESOURCES;
+  if (action === "updateT3") return UPDATE_T3;
   return null;
 }
 
@@ -1205,7 +1224,7 @@ let runPending = Promise.resolve();
 function runSettled() { return runPending; }
 
 module.exports = {
-  PROVISION, AUTO_INSTALL, CHECKPOINTS, RESOURCES, BACKUP_DIR_NAME,
+  PROVISION, AUTO_INSTALL, CHECKPOINTS, RESOURCES, UPDATE_T3, BACKUP_DIR_NAME,
   INSTANCE_PARAMS, REQUIRED_INSTANCE_PARAMS, ACTION_LABELS,
   REMOTE_INSTANCE_PARAMS, REQUIRED_REMOTE_INSTANCE_PARAMS,
   NAME_TARGET_PARAMS, REQUIRED_NAME_TARGET_PARAMS, INSTANCE_TARGET_LIB,
