@@ -23,6 +23,7 @@ class Origin(http.server.BaseHTTPRequestHandler):
     active = 0
     peak = 0
     faults = set()
+    cuts = {}
 
     def log_message(self, *_): pass
 
@@ -40,9 +41,12 @@ class Origin(http.server.BaseHTTPRequestHandler):
         lo, hi = map(int, match.groups()) if ranged else (0, len(DATA)-1)
         probe = ranged and lo == hi == 0
         with self.lock:
-            self.requests.append((mode, lo, hi, self.headers.get('If-Range')))
+            self.requests.append((mode, lo, hi, self.headers.get('If-Range'), self.headers.get('Connection')))
             fault = mode in ('stall', 'short', 'always-stall') and not probe and (mode == 'always-stall' or mode not in self.faults)
             if fault: self.faults.add(mode)
+            # flaky: every range is cut three times, each time after delivering one more chunk.
+            if mode == 'flaky' and not probe and self.cuts.get(hi, 0) < 3:
+                self.cuts[hi] = self.cuts.get(hi, 0) + 1; fault = True
         self.send_response(206 if ranged else 200)
         if ranged:
             self.send_header('Content-Range', f'bytes {lo + (1 if mode == "bad-range" and not probe else 0)}-{hi}/{len(DATA)}')
@@ -54,6 +58,8 @@ class Origin(http.server.BaseHTTPRequestHandler):
             try: self.wfile.write(DATA[:1])
             except ConnectionError: pass
             return
+        if mode == 'dead': # headers, then nothing: retrying cannot get any further
+            time.sleep(2.5); self.close_connection = True; return
         with self.lock:
             type(self).active += 1
             type(self).peak = max(self.peak, self.active)
@@ -108,6 +114,10 @@ class DownloadTests(unittest.TestCase):
         self.assertRegex(output, r'\b[1-9]\d* retries') # busy Windows runners may recover another stream too
 
     def test_truncated_stream_resumes(self): self.download('short')
+    def test_retry_budget_counts_failures_in_a_row(self):
+        # Three cuts per range exceed one retry, but each resumed attempt gets further.
+        self.download('flaky', retries=1)
+        self.assertTrue(all(r[4] == 'close' for r in Origin.requests if r[0] == 'flaky'))
     def test_no_range_support(self):
         self.download('single')
         requests = [r for r in Origin.requests if r[0]=='single']
@@ -133,6 +143,6 @@ class DownloadTests(unittest.TestCase):
             self.assertEqual(dest.read_bytes(), b'previous complete ISO')
             self.assertEqual(list(Path(directory).glob('*.part')), [])
 
-    def test_retry_exhaustion_preserves_previous_iso(self): self.download('always-stall',succeeds=False,retries=1)
+    def test_retry_exhaustion_preserves_previous_iso(self): self.download('dead',succeeds=False,retries=1)
 
 if __name__ == '__main__': unittest.main(verbosity=2)

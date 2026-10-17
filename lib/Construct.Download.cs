@@ -47,11 +47,22 @@ namespace Construct.Download
         private sealed class InvalidDownload : Exception
         { public InvalidDownload(string message) : base(message) { } }
 
+        // A dropped connection surfaces as any of these; .NET Framework reports a socket that
+        // was closed under a pending read as ObjectDisposedException (SslStream).
+        private static bool Transient(Exception e)
+        {
+            return e is IOException || e is HttpRequestException || e is OperationCanceledException ||
+                e is ObjectDisposedException || e is WebException;
+        }
+
         private HttpRequestMessage Request(long? start, long? end)
         {
             var request = new HttpRequestMessage(HttpMethod.Get, url);
             request.Headers.UserAgent.ParseAdd("Construct-Downloader/1.0");
             request.Headers.AcceptEncoding.ParseAdd("identity");
+            // One connection per request: Windows PowerShell's HTTP stack may otherwise queue a
+            // retry on another stream's connection, and dropping a stalled stream closes both.
+            request.Headers.ConnectionClose = true;
             if (start.HasValue) request.Headers.Range = new RangeHeaderValue(start, end);
             if (start.HasValue && validator != null) request.Headers.TryAddWithoutValidation("If-Range", validator);
             return request;
@@ -116,7 +127,7 @@ namespace Construct.Download
                 catch (Exception e)
                 {
                     cancel.Token.ThrowIfCancellationRequested();
-                    if (!(e is IOException || e is HttpRequestException || e is OperationCanceledException) || attempt >= retries) throw;
+                    if (!Transient(e) || attempt >= retries) throw;
                     Interlocked.Increment(ref retryCount);
                 }
                 await Task.Delay(1000, cancel.Token).ConfigureAwait(false);
@@ -154,6 +165,7 @@ namespace Construct.Download
                     for (int attempt = 0; ; attempt++)
                     {
                         cancel.Token.ThrowIfCancellationRequested();
+                        long attemptStart = offset;
                         try
                         {
                             if (!ranged)
@@ -203,7 +215,10 @@ namespace Construct.Download
                         catch (Exception e)
                         {
                             cancel.Token.ThrowIfCancellationRequested();
-                            if (!(e is IOException || e is HttpRequestException || e is OperationCanceledException) || attempt >= retries) throw;
+                            // The budget is for failures in a row: a resumed range that got
+                            // further this time starts it again.
+                            if (ranged && offset > attemptStart) attempt = 0;
+                            if (!Transient(e) || attempt >= retries) throw;
                             Interlocked.Increment(ref retryCount);
                         }
                         await Task.Delay(1000, cancel.Token).ConfigureAwait(false);
