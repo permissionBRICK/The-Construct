@@ -875,6 +875,41 @@ t3_can_skip_restart() {
   return 0
 }
 
+# Workspace roots the running T3 server already has as projects, one per line,
+# read with Construct's own T3 API token (the one construct-t3-resume keeps).
+# Prints nothing when that is unknown (no token yet, server not answering); the
+# caller then offers every repo, as before.
+t3_registered_roots() {
+  local token
+  token="$(cat "${T3CODE_API_TOKEN_FILE:-/etc/construct/t3-resume-token}" 2>/dev/null)" || return 0
+  [[ -n "${token}" ]] || return 0
+  curl -fsS --retry 20 --retry-connrefused --retry-delay 1 --max-time 30 \
+    -H "Authorization: Bearer ${token}" -H "x-t3-orchestration-protocol: 2" \
+    "http://127.0.0.1:${T3CODE_PORT}/api/orchestration/shell" 2>/dev/null |
+    python3 -c 'import json, sys
+for p in json.load(sys.stdin).get("projects") or []:
+    if p.get("workspaceRoot") and not p.get("deletedAt"):
+        print(p["workspaceRoot"])' 2>/dev/null || true
+}
+
+# One t3 project per git repo in the workspace so the web UI starts useful.
+# (t3 serve's --auto-bootstrap-project-from-cwd flag is DEAD in the headless
+# serve path -- the handler hardcodes it off -- hence explicit adds.) Each
+# `t3 project add` starts the whole T3 CLI and fetches the server's full
+# snapshot (~1.4 s), so repos the server already has are skipped: 45 known repos
+# used to cost a minute per T3 restart. An add for a path that is registered
+# after all fails with ProjectAlreadyExistsError, which is swallowed.
+register_t3_projects() {
+  local known repo
+  known="$(t3_registered_roots)"
+  for repo in "${WORKSPACE_ROOT}"/*/; do
+    [[ -d "${repo}.git" ]] || continue
+    repo="${repo%/}"
+    grep -qxF -- "${repo}" <<<"${known}" && continue
+    t3 project add "${repo}" --log-level none >/dev/null 2>&1 || true
+  done
+}
+
 t3_node_ok() {
   local v major minor rest
   v="$(node -v 2>/dev/null | sed 's/^v//')" || return 1
@@ -1118,16 +1153,7 @@ install_t3code() {
   systemctl enable t3code-serve
   systemctl restart t3code-serve
 
-  # Bootstrap one t3 project per git repo in the workspace so the web UI starts
-  # useful. (t3 serve's --auto-bootstrap-project-from-cwd flag is DEAD in the
-  # headless serve path -- the handler hardcodes it off -- hence explicit adds.)
-  # Idempotent: an already-registered path fails with ProjectAlreadyExistsError,
-  # which is swallowed; no duplicates are created.
-  local _t3_repo
-  for _t3_repo in "${WORKSPACE_ROOT}"/*/; do
-    [[ -d "${_t3_repo}.git" ]] || continue
-    t3 project add "${_t3_repo%/}" --log-level none >/dev/null 2>&1 || true
-  done
+  register_t3_projects
 
   if systemctl is-active --quiet t3code-serve; then
     if [[ "${T3CODE_LIMIT_RESUME:-false}" == "true" ]]; then
