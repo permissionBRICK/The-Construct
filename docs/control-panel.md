@@ -873,8 +873,9 @@ session may ask you to send a new message afterward; unchanged reprovisions do n
 The patched install provides:
 
 - **Voice input:** a mic button immediately left of Send in both draft/new and existing chat
-  composers, plus **Alt+Q** tap/hold behavior. The button is yellow while voice input starts
-  and while the final transcript is pending, and red only once speech is being recorded. While
+  composers, plus **Alt+Q** tap/hold behavior. The button shows a spinning amber ring while voice
+  input starts and while the final transcript is pending, and turns red only once speech is
+  being recorded. While
   recording, a live ring around the button expands with the microphone signal level. Raw 16 kHz mono PCM goes into Claude's speech
   endpoint using the VM's own Claude sign-in. Partial transcripts replace only their own live
   span at the cursor captured when recording started; existing prefix/suffix text is never
