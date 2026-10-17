@@ -16,13 +16,14 @@ public sealed class HostConversionWorkflow(CompanionInstances instances, IStateF
 {
     private readonly SemaphoreSlim serial = new(1, 1);
     private void Notice(string text) => events.Companion(new { type = "notification", text });
-    public async Task RunAsync(CompanionInstance entry, CancellationToken ct)
+    // launched: called once the installer console is started (the panel's launch is over; the console holds the run).
+    public async Task RunAsync(CompanionInstance entry, CancellationToken ct, Action? launched = null)
     {
         await serial.WaitAsync(ct);
-        try { await Run(entry, ct); }
+        try { await Run(entry, ct, launched); }
         finally { serial.Release(); }
     }
-    private async Task Run(CompanionInstance entry, CancellationToken ct)
+    private async Task Run(CompanionInstance entry, CancellationToken ct, Action? launched)
     {
         var path = HostConversion.PendingPath(instances.Host.LocalAppData);
         var plan = StateJson.ReadObject(files, path);
@@ -85,6 +86,7 @@ public sealed class HostConversionWorkflow(CompanionInstances instances, IStateF
         state.PublishSnapshot(entry.Name);
         Notice("Installing Construct host and adopting your VM…");
         await launcher.LaunchElevatedAsync(HostConversionLaunch.Build(plan), ct);
+        launched?.Invoke();
         for (var waited = 0; waited < 3600; waited += 2)
         {
             var result = ReadResult(plan);

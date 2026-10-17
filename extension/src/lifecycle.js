@@ -1214,6 +1214,51 @@ function run(action, opts = {}) {
   return true;
 }
 
+// ── One lifecycle run per host ──────────────────────────────────────────────
+// Reprovision, reinstall/redownload, the T3 Code update, the Construct update and the host conversion share
+// this PC's installation and workspace, so only one runs at a time. The entry scripts hold
+// %LOCALAPPDATA%\The-Construct\lifecycle-running.json for their whole run (lib/AgentVm.LifecycleRun.ps1);
+// the panel locks its lifecycle buttons for every instance while a run is "preparing" (this window checks
+// and confirms a launch) or "running" (a script holds the marker). The Companion's LifecycleRun.cs applies
+// the same rules (parity fixture "lifecycle-runs").
+const RUN_LABELS = {
+  reprovision: "Reprovision", reinstall: "Reinstall", redownload: "Redownload",
+  updateT3: "T3 Code update", updateConstruct: "Construct update", convertToHost: "Host conversion",
+};
+function runMarkerPath(env) {
+  const base = host.localAppData(env);
+  return base ? path.join(base, host.CONTAINER, "lifecycle-running.json") : null;
+}
+function describeRun(instance, action, phase, startedAt) {
+  return { action: String(action || ""), instance: instance ? String(instance) : null, phase, startedAt: startedAt == null ? null : startedAt };
+}
+/** The run while its owner process is alive; null for no marker, an unreadable one or a dead owner. */
+function parseRunMarker(text, isDead) {
+  let m;
+  try { m = JSON.parse(String(text == null ? "" : text).replace(/^\uFEFF/, "")); } catch (_) { return null; }
+  if (!m || typeof m !== "object" || Array.isArray(m)) return null;
+  const pid = m.pid;
+  if (typeof pid !== "number" || !Number.isInteger(pid) || pid < 1 || pid > 2147483647 || isDead(pid)) return null;
+  return describeRun(typeof m.instance === "string" ? m.instance : null, typeof m.action === "string" ? m.action : "",
+    "running", typeof m.startedAt === "string" ? m.startedAt : null);
+}
+function pidIsDead(pid) {
+  try { process.kill(pid, 0); return false; } catch (e) { return !!e && e.code === "ESRCH"; }
+}
+/** The run holding this PC, from the marker; null when none (or no marker path resolves). */
+function readRunMarker(file = runMarkerPath(), isDead = pidIsDead) {
+  if (!file) return null;
+  let text;
+  try { text = fs.readFileSync(file, "utf8"); } catch (_) { return null; }
+  return parseRunMarker(text, isDead);
+}
+/** Why a second start is refused while `run` holds this PC. */
+function runBusyReason(run) {
+  const label = RUN_LABELS[run && run.action] || "A Construct run";
+  const of = run && run.instance ? ` of \u201c${run.instance}\u201d` : "";
+  return `${label}${of} is ${run && run.phase === "preparing" ? "starting" : "running"}. Wait until it finishes, then try again.`;
+}
+
 /**
  * The tail of the LAST run() — the promise that settles once its confirmation has been
  * answered and the launch (or the abort) has happened. Test-only observability: run()
@@ -1240,4 +1285,5 @@ module.exports = {
   scriptSupportsHistoryRetentionDays,
   psSingleQuote, winQuoteArg, buildChildCommandLine, buildOuterCommand, buildCallCommand, buildHostLaunch,
   hostLaunchSpawnOptions, launchHostScript, run, runSettled, confirmDestructive, configure,
+  runMarkerPath, describeRun, parseRunMarker, readRunMarker, runBusyReason,
 };

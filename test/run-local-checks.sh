@@ -17,6 +17,9 @@ if [[ "$group" == panel || "$group" == all ]]; then
   node extension/test/hostadmin-discovery.test.js
   node extension/test/vmpower.test.js
   node extension/test/lifecycle.test.js
+  node extension/test/lifecycle-preparation.test.js
+  node extension/test/lifecycle-run.test.js
+  pwsh -NoProfile -File test/lifecycle-run.test.ps1
   pwsh -NoProfile -File test/vm-resources.test.ps1
   pwsh -NoProfile -File test/console-local.test.ps1
   UI_SMOKE_THEME="${UI_SMOKE_THEME:-native}" node extension/test/ui-smoke.js

@@ -163,7 +163,10 @@ async function run(opts) {
     }
     if (fs.existsSync(plan.resultPath)) fs.unlinkSync(plan.resultPath);
     await opts.vscode.window.withProgress({ location: opts.vscode.ProgressLocation.Notification, title: "Installing Construct host and adopting your VM…", cancellable: false }, async () => {
-      try { await powershell(launchScript(plan)); }
+      // The panel's launch is over once the installer console starts (it holds the lifecycle run itself).
+      const waited = powershell(launchScript(plan));
+      if (typeof opts.launched === "function") opts.launched();
+      try { await waited; }
       catch (error) {
         if (!fs.existsSync(plan.resultPath)) throw error;
       }

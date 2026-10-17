@@ -199,6 +199,13 @@ foreach ($k in @($identity.Keys)) {
     $params[$k] = $identity[$k]
 }
 
+# One lifecycle run at a time on this PC (lib\AgentVm.LifecycleRun.ps1); the provisioner
+# below runs inside this one.
+. (Join-Path $PSScriptRoot 'lib\AgentVm.LifecycleRun.ps1')
+$lifecycleRunOwned = $false
+try {
+$lifecycleRunOwned = Enter-ConstructLifecycleRun -Action 'updateT3' -Instance $instanceName
+
 # Provision-AgentVM.ps1 owns the error display: without -Auto it catches its own failure,
 # shows the result screen and RETURNS normally, recording the outcome in these globals.
 # The launchers (the Construct-built T3 Desktop app's update control and the Companion)
@@ -227,3 +234,5 @@ $global:ConstructProvisionFailureMessage = $null
 if ($global:ConstructProvisionFailureMessage) { exit 1 }
 if ($global:ConstructProvisionHadErrors) { exit 3 }
 exit 0
+}
+finally { if ($lifecycleRunOwned) { Exit-ConstructLifecycleRun } }

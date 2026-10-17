@@ -178,10 +178,14 @@ function Expand-VerifiedPackage($Zip, $Destination, $Payload) {
         }
     } finally { $archive.Dispose() }
 }
+$lifecycleRunOwned = $false
 try {
     if ($plan.id -notmatch '^[a-f0-9]{32}$' -or $plan.name -notmatch '^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$' -or
         $plan.name.StartsWith('construct-') -or $plan.publicHost -notmatch '^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$' -or
         [string]::IsNullOrWhiteSpace($plan.adminUser) -or $plan.machineId -notmatch '^[a-f0-9]{32}$') { throw 'Invalid conversion plan.' }
+    # A lifecycle run: one at a time on this PC (lib\AgentVm.LifecycleRun.ps1).
+    . (Join-Path $PSScriptRoot '../../lib/AgentVm.LifecycleRun.ps1')
+    $lifecycleRunOwned = Enter-ConstructLifecycleRun -Action 'convertToHost' -Instance $plan.name
     Assert-NoLinks $root
     $service = Get-Service constructd -ErrorAction SilentlyContinue
     $journal = if (Test-Path -LiteralPath $journalPath) { Get-Content -Raw -LiteralPath $journalPath | ConvertFrom-Json } else { $null }
@@ -327,8 +331,10 @@ try {
     } catch { Write-Host ('Could not save the error for VS Code: ' + $_.Exception.Message) -ForegroundColor Red }
     Write-Host 'The existing VM and its disks have been preserved. Retry from Construct Settings after correcting the reported issue.'
     if ($conversionLock) { $conversionLock.Dispose(); $conversionLock = $null }
+    if ($lifecycleRunOwned) { Exit-ConstructLifecycleRun; $lifecycleRunOwned = $false }
     Wait-ConversionErrorClose
     exit 1
 } finally {
     if ($conversionLock) { $conversionLock.Dispose() }
+    if ($lifecycleRunOwned) { Exit-ConstructLifecycleRun }
 }

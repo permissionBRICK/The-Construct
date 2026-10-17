@@ -393,6 +393,26 @@ function usageExports() {
 function instanceFingerprints() {
  const m=instances;return ["1e3",0,"bad",true].map(port=>{const input={...m.deriveDefaults("dev",{}),sshPort:port,service:{url:42,auth:false}};return{input,output:m.targetFingerprint(input)};});
 }
+function lifecycleRuns() {
+  const lifecycle = require("../src/lifecycle"), rows = [];
+  // What lib/AgentVm.LifecycleRun.ps1 writes (ConvertTo-Json -Compress), and what a crash or a hand edit can leave.
+  const written = '{"pid":4242,"instance":"work-vm","action":"reprovision","startedAt":"2026-10-17T10:00:00.0000000Z","token":"9f2c4e0b7a514c4f8e0d2b6a1c3e5f70"}';
+  const markers = [written, "\uFEFF" + written, written.replace('"instance":"work-vm"', '"instance":""'),
+    '{"pid":4242,"instance":"","action":"updateConstruct","startedAt":"2026-10-17T10:00:00.0000000Z","token":"t"}',
+    '{"pid":4242,"instance":7,"action":["reinstall"],"startedAt":12}', '{"pid":4243,"action":"convertToHost","instance":"agent-vm"}',
+    '{"pid":"4242","action":"reinstall"}', '{"pid":0,"action":"reinstall"}', '{"pid":4242.5,"action":"reinstall"}', '{"pid":2147483648,"action":"reinstall"}',
+    '{"pid":1e3,"action":"redownload","instance":"agent-vm"}', '[4242]', "null", "", "{ not json", null];
+  for (const input of markers) {
+    const dead = [4243];
+    const run = lifecycle.parseRunMarker(input, (pid) => dead.includes(pid));
+    rows.push({ kind: "marker", input, dead, output: { run, reason: run ? lifecycle.runBusyReason(run) : null } });
+  }
+  for (const [instance, action, phase] of [["agent-vm", "reinstall", "preparing"], [null, "updateConstruct", "preparing"], ["work-vm", "updateT3", "running"], ["", "redownload", "running"], ["agent-vm", "somethingNew", "running"]]) {
+    const run = lifecycle.describeRun(instance, action, phase);
+    rows.push({ kind: "describe", instance, action, phase, output: { run, reason: lifecycle.runBusyReason(run) } });
+  }
+  return rows;
+}
 function stateJsonBytes() {
  return [{z:"🧱ü\u2028",a:"\u0001\n\t\\\""},{values:[1e-7,1e-6,1e20,1e21,-0,1.0,123.45]}, {"10":"ten","2":"two",version:1,instance:"dev"}].map(value=>{const input=sortKeys(value);return{input,output:JSON.stringify(input,null,2)+"\n"};});
 }
@@ -643,6 +663,7 @@ async function exportAll() {
     "agent-update-scripts": agentUpdateScripts(),
     "usage-exports": usageExports(),
     "instance-fingerprints": instanceFingerprints(),
+    "lifecycle-runs": lifecycleRuns(),
   };
 }
 if (require.main === module) (async () => {

@@ -12,7 +12,7 @@ namespace Construct.Companion.Tests.Parity;
 
 public sealed class PlanningParityTests
 {
-    public static IEnumerable<object[]> Rows => new[] { "remote-vm-launches", "host-conversion-launches", "instance-workflows", "registry-state", "lifecycle-invocations", "lifecycle-launches", "vm-power", "project-import", "probe-parsing", "usage-parsing", "updates-planning", "remote-identity", "t3-pure", "state-json-bytes", "agent-update-scripts", "usage-exports", "instance-fingerprints" }.SelectMany(area => ParityTests.Rows(area).Select(row => new object[] { area, row[0] }));
+    public static IEnumerable<object[]> Rows => new[] { "remote-vm-launches", "host-conversion-launches", "instance-workflows", "registry-state", "lifecycle-invocations", "lifecycle-launches", "vm-power", "project-import", "probe-parsing", "usage-parsing", "updates-planning", "remote-identity", "t3-pure", "state-json-bytes", "agent-update-scripts", "usage-exports", "instance-fingerprints", "lifecycle-runs" }.SelectMany(area => ParityTests.Rows(area).Select(row => new object[] { area, row[0] }));
     [Theory, MemberData(nameof(Rows))]
     public async Task MatchesJavaScript(string area, JsonElement element)
     {
@@ -26,6 +26,11 @@ public sealed class PlanningParityTests
             case "agent-update-scripts": Value("output", AgentUpdateScript.Build(row["input"] is JsonArray ids ? ids.Select(StateJson.String) : null)); break;
             case "usage-exports": Value("output", UsageParser.BuildExportPayload(StateJson.Text(row["input"]), S("savedAt"))); break;
             case "instance-fingerprints": Value("output", Instances.TargetFingerprint(O("input"))); break;
+            case "lifecycle-runs":
+                var dead = (row["dead"] as JsonArray ?? []).Select(n => (int)StateJson.Number(n)!).ToHashSet();
+                var lifecycleRun = S("kind") == "marker" ? LifecycleRun.Parse(StateJson.Text(row["input"]), dead.Contains)
+                    : LifecycleRun.Describe(StateJson.Text(row["instance"]), S("action"), S("phase"));
+                Equal("output", new JsonObject { ["run"] = lifecycleRun, ["reason"] = lifecycleRun is null ? null : LifecycleRun.BusyReason(lifecycleRun) }); break;
             case "state-json-bytes": Value("output", System.Text.Encoding.UTF8.GetString(StateJson.Bytes(row["input"]!))); break;
             case "remote-vm-launches":
                 var spec = RemoteVmLaunch.ArgSpec(S("url"), S("auth"), S("name"), (int)StateJson.Number(row["cpu"])!, (int)StateJson.Number(row["ram"])!, (int)StateJson.Number(row["disk"])!, StateJson.Boolean(row["supportsCpu"]) == true, (row["projects"] as JsonArray)?.Select(StateJson.String).ToArray());

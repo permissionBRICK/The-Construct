@@ -35,6 +35,7 @@ public static class CompanionComposition
         services.TryAddSingleton<IpcEvents>();
         services.TryAddSingleton<IpcSettings>();
         services.TryAddSingleton<IpcLogs>();
+        services.TryAddSingleton<LifecycleRuns>();
         services.TryAddSingleton<StateAggregation>();
         services.TryAddSingleton<RemoteVmWizard>();
         services.TryAddSingleton<HostConversionWorkflow>();
