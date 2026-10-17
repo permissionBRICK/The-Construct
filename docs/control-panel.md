@@ -834,7 +834,7 @@ build on or off, still takes a reprovision.
 
 ### Patched T3 Code server + Desktop build
 
-The **Build patched T3 Code + Desktop** toggle (off by default) makes Construct resolve the
+The **Patched T3 Code + Desktop** toggle (off by default) makes Construct resolve the
 selected npm channel to its exact upstream Git tag, apply guarded source transforms plus
 Construct-owned file overlays, and build
 both the VM server/web client and an unsigned Windows x64 Desktop installer from that same
@@ -870,7 +870,7 @@ install back and forth on a schedule nobody chose. If the app was running when t
 installer closed it, it is started again. Activating a genuinely new build restarts `t3code-serve`, so an open T3 provider
 session may ask you to send a new message afterward; unchanged reprovisions do not interrupt it.
 
-The shared patch adds:
+The patched install provides:
 
 - **Voice input:** a mic button immediately left of Send in both draft/new and existing chat
   composers, plus **Ctrl+T** tap/hold behavior. While recording, a live ring around the button
@@ -896,15 +896,11 @@ The shared patch adds:
   why, rather than quietly recording somewhere else. Every failure (denied permission, no
   microphone, no audio arriving at the server) surfaces as a toast with its reason.
 
-- **Claude usage-limit recovery:** when Claude rejects a turn for an account limit —
-  including SDK results wrapped as `subtype: success` with `is_error: true` — T3 **parks** the
-  thread and automatically dispatches a continuation once the limit resets, plus a
-  one-minute margin. The park is sent through T3's native snooze lifecycle, so existing
-  clients move it into the **Snoozed** shelf and show their normal wake countdown/banner;
-  the continuation wakes it without requiring a Windows client update. Parked threads are
-  persisted (`$T3CODE_HOME/userdata/t3park-pending.json`, default
-  `~/.t3/userdata/`), so they survive a service restart; the resume re-uses the thread's
-  own model/runtime settings and is skipped if you already continued the thread manually.
+- **Usage-limit auto-resume:** T3 Code's own **Auto-resume limited threads** and
+  **Snooze limited threads** settings cover Claude and Codex. Construct switches both
+  on once for patched installs, on the first provision after this change. Later
+  changes in T3's settings are preserved. Switching them on also resumes older
+  threads still stuck on a usage limit with a known reset time.
 
 - **OpenCode background monitoring:** a completed `background` tool call armed with
   `wait: true` is projected as a T3 `local_bash` task, so the thread pill stays
@@ -914,13 +910,12 @@ The shared patch adds:
 
 This is a **reprovision-only** toggle: saving a change persists it and shows a prompt with
 a **Reprovision now** action. The reprovision selects the patched-source or stock install and
-restarts `t3code-serve`. The preference also rides reinstall. For compatibility with existing machines,
-its internal config key remains `T3CODE_LIMIT_RESUME`; the UI and behavior now cover the whole
-source-build feature set. If a newer stable/nightly source tag changes a guarded transform anchor,
+restarts `t3code-serve`. The preference also rides reinstall. Its config key is
+`T3CODE_PATCHED`; existing `T3CODE_LIMIT_RESUME` values are still read. If a newer
+stable/nightly source tag changes a guarded transform anchor,
 the new build is refused and the prior working T3 installation is left in place. The established
-usage-limit/OpenCode bundle transforms are applied to the freshly built server before both the
-VM install and Desktop packaging. The auto-resume dispatch authenticates with its own long-lived
-T3 API token (`/etc/construct/t3park-token`, minted on enable).
+Construct integration, voice input and OpenCode monitoring patches are applied before
+the VM install and Desktop packaging.
 
 In the Construct-built Desktop app, the normal update control is driven by Construct instead of
 electron-updater. The app reads the same install markers as this panel

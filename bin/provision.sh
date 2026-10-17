@@ -443,16 +443,11 @@ if [[ -f "${CONFIG_FILE}" ]]; then
 fi
 T3CODE_HTTPS="${T3CODE_HTTPS:-${_t3code_https_saved:-true}}"
 [[ "${T3CODE_HTTPS}" == "false" ]] || T3CODE_HTTPS=true
-# Opt-in T3 Code extra-feature patch set: Claude usage-limit auto-resume plus
-# OpenCode background-watcher monitoring. The legacy variable name is retained
-# so existing host settings and config.env files migrate without changing their
-# effective preference. Disabled by default; same keep-saved semantics as T3CODE.
-_t3code_limit_resume_saved=""
-if [[ -f "${CONFIG_FILE}" ]]; then
-  _t3code_limit_resume_saved="$(sed -n 's/^T3CODE_LIMIT_RESUME=//p' "${CONFIG_FILE}" | head -1 || true)"
-fi
-T3CODE_LIMIT_RESUME="${T3CODE_LIMIT_RESUME:-${_t3code_limit_resume_saved:-false}}"
-[[ "${T3CODE_LIMIT_RESUME}" == "true" ]] || T3CODE_LIMIT_RESUME=false
+# Opt-in Construct integration, voice input and OpenCode monitoring.
+# shellcheck disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/t3code-patched.sh"
+T3CODE_PATCHED="$(resolve_t3code_patched "${CONFIG_FILE}")"
+[[ "${T3CODE_PATCHED}" == "true" ]] || T3CODE_PATCHED=false
 # Optional dependency-free OpenCode background watcher plugin. Separate from
 # the T3 patch set: this controls whether OpenCode itself exposes the
 # background/background_output/background_kill tools. Empty input keeps the
@@ -623,7 +618,7 @@ note "    T3CODE=${T3CODE}"
 note "    T3CODE_CHANNEL=${T3CODE_CHANNEL}"
 note "    T3CODE_BUILD_SOURCE=${T3CODE_BUILD_SOURCE}"
 note "    T3CODE_HTTPS=${T3CODE_HTTPS}"
-note "    T3CODE_LIMIT_RESUME=${T3CODE_LIMIT_RESUME}"
+note "    T3CODE_PATCHED=${T3CODE_PATCHED}"
 note "    OPENCODE_BACKGROUND_WATCHER=${OPENCODE_BACKGROUND_WATCHER}"
 note "    SMB_SHARE=${SMB_SHARE:-(saved/default)}"
 # Only mention the external identity when it carries information, so a default
@@ -741,7 +736,8 @@ write_configuration() {
   if [[ "${T3CODE}" == "true" || -n "${_t3code_https_saved:-}" ]]; then
     cfg T3CODE_HTTPS "${T3CODE_HTTPS}" || return
   fi
-  cfg T3CODE_LIMIT_RESUME "${T3CODE_LIMIT_RESUME}" || return
+  cfg T3CODE_PATCHED "${T3CODE_PATCHED}" || return
+  sed -i '/^T3CODE_LIMIT_RESUME=/d' "${CONFIG_FILE}" || return
   cfg OPENCODE_BACKGROUND_WATCHER "${OPENCODE_BACKGROUND_WATCHER}" || return
   # Persist the external identity only when it carries information (a non-empty
   # host; a non-default or previously saved port), so a default install's
@@ -1078,7 +1074,7 @@ if [[ "${T3CODE}" == "true" ]]; then
   fi
   run_step optional "Installing T3 Code web GUI" \
     env TARGET_USER="${CLAUDE_USER}" AI_TOOLS_OVERRIDE=t3code AI_CONSOLE_INTEGRATION=false \
-    T3CODE_BUILD_SOURCE="${T3CODE_BUILD_SOURCE}" T3CODE_CHANNEL="${T3CODE_CHANNEL}" T3CODE_LIMIT_RESUME="${T3CODE_LIMIT_RESUME}" \
+    T3CODE_BUILD_SOURCE="${T3CODE_BUILD_SOURCE}" T3CODE_CHANNEL="${T3CODE_CHANNEL}" T3CODE_PATCHED="${T3CODE_PATCHED}" \
     T3CODE_HTTPS="${T3CODE_HTTPS}" ${_t3_public_port_env[@]+"${_t3_public_port_env[@]}"} \
     bash "${REPO_DIR}/bin/install-ai-tools.sh"
 else

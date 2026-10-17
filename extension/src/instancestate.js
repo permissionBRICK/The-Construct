@@ -148,7 +148,7 @@ function readState(st) {
     if (META.has(k) || INSTALL_WIDE.has(k)) continue;
     out[k] = doc[k];
   }
-  return out;
+  return host.currentSettings(out);
 }
 
 /**
@@ -218,7 +218,7 @@ function saveState(st, patch) {
  * Backfill, ONCE, the facts about a VM that its instance's saved state never recorded,
  * from what the probe just read off the VM itself: its size (`vmMemoryGB` / `vmDiskGB` /
  * `vmCpuCount`, probe.parseVmSpec) and its keep-saved config (`t3code`, `t3codeChannel`,
- * `t3codeLimitResume`, `opencodeBackgroundWatcher`, probe.parseVmConfig).
+ * `t3codePatched`, `opencodeBackgroundWatcher`, probe.parseVmConfig).
  *
  * WHY: the installers used to size the VM and forget the numbers, and the provisioner
  * reads an EMPTY value for the keep-saved settings as "leave the VM as it is". An
@@ -234,7 +234,7 @@ function saveState(st, patch) {
  * Returns the patch written, or null. Throws only when the store cannot be written
  * (no scripts dir for the default instance) — callers treat it as best-effort.
  */
-const BACKFILL_CONFIG_KEYS = Object.freeze(["t3code", "t3codeChannel", "t3codeLimitResume", "opencodeBackgroundWatcher"]);
+const BACKFILL_CONFIG_KEYS = Object.freeze(["t3code", "t3codeChannel", "t3codePatched", "opencodeBackgroundWatcher"]);
 function backfillFromProbe(st, probed) {
   if (!probed || probed.online !== true || probed.probeError) return null;
   const spec = (probed.vmSpec && typeof probed.vmSpec === "object") ? probed.vmSpec : {};

@@ -23,7 +23,7 @@
       "smbShare": true,
       "t3code": true,
       "t3codeChannel": "nightly",
-      "t3codeLimitResume": true,
+      "t3codePatched": true,
       "ubuntuRelease": "24.04",
       "vmAutoCheckpoints": false,
       "vmCpuCount": 4,
@@ -49,11 +49,11 @@
       "smb": true,
       "t3code": true,
       "t3codeChannel": "nightly",
-      "t3codeLimitResume": true,
+      "t3codePatched": true,
       "tunnel": false,
       "ubuntu": "24.04"
     },
-    "outputJson": "{\"gitName\":\" ü \",\"gitEmail\":\"a@b\",\"gitCred\":false,\"ram\":\"8\",\"disk\":\"80\",\"cpu\":\"4\",\"ubuntu\":\"24.04\",\"serveWeb\":true,\"tunnel\":false,\"smb\":true,\"mic\":false,\"partialStreaming\":true,\"opencodeBackgroundWatcher\":true,\"t3code\":true,\"t3codeChannel\":\"nightly\",\"t3codeLimitResume\":true,\"autoCheckpoints\":false,\"historyRetentionDays\":\"30\"}"
+    "outputJson": "{\"gitName\":\" ü \",\"gitEmail\":\"a@b\",\"gitCred\":false,\"ram\":\"8\",\"disk\":\"80\",\"cpu\":\"4\",\"ubuntu\":\"24.04\",\"serveWeb\":true,\"tunnel\":false,\"smb\":true,\"mic\":false,\"partialStreaming\":true,\"opencodeBackgroundWatcher\":true,\"t3code\":true,\"t3codeChannel\":\"nightly\",\"t3codePatched\":true,\"autoCheckpoints\":false,\"historyRetentionDays\":\"30\"}"
   },
   {
     "input": {
@@ -67,7 +67,7 @@
       "smbShare": null,
       "t3code": null,
       "t3codeChannel": null,
-      "t3codeLimitResume": null,
+      "t3codePatched": null,
       "ubuntuRelease": null,
       "vmAutoCheckpoints": null,
       "vmCpuCount": null,
@@ -100,7 +100,7 @@
       "smbShare": "wrong",
       "t3code": "wrong",
       "t3codeChannel": "wrong",
-      "t3codeLimitResume": "wrong",
+      "t3codePatched": "wrong",
       "ubuntuRelease": "wrong",
       "vmAutoCheckpoints": "wrong",
       "vmCpuCount": "wrong",
@@ -165,7 +165,7 @@
       "smb": true,
       "t3code": true,
       "t3codeChannel": "nightly",
-      "t3codeLimitResume": true,
+      "t3codePatched": true,
       "tunnel": false,
       "ubuntu": "24.04"
     },
@@ -181,7 +181,7 @@
       "smbShare": true,
       "t3code": true,
       "t3codeChannel": "nightly",
-      "t3codeLimitResume": true,
+      "t3codePatched": true,
       "ubuntuRelease": "24.04",
       "vmAutoCheckpoints": false,
       "vmCpuCount": 4,
@@ -245,7 +245,7 @@
     "next": {
       "t3code": true,
       "t3codeChannel": "nightly",
-      "t3codeLimitResume": true
+      "t3codePatched": true
     },
     "output": [
       "patched T3 Code + Desktop build"
@@ -271,7 +271,7 @@
     "previous": {
       "t3code": true,
       "t3codeChannel": " ",
-      "t3codeLimitResume": true
+      "t3codePatched": true
     }
   },
   {
@@ -279,7 +279,7 @@
     "next": {
       "t3code": true,
       "t3codeChannel": "nightly",
-      "t3codeLimitResume": true
+      "t3codePatched": true
     },
     "output": [
       "patched T3 Code + Desktop build"
@@ -287,7 +287,7 @@
     "previous": {
       "t3code": true,
       "t3codeChannel": " ",
-      "t3codeLimitResume": true
+      "t3codePatched": true
     }
   },
   {
@@ -302,7 +302,7 @@
     "previous": {
       "t3code": true,
       "t3codeChannel": " ",
-      "t3codeLimitResume": true
+      "t3codePatched": true
     }
   },
   {
@@ -314,7 +314,7 @@
     "previous": {
       "t3code": true,
       "t3codeChannel": "stable",
-      "t3codeLimitResume": true
+      "t3codePatched": true
     }
   },
   {
@@ -322,7 +322,7 @@
     "next": {
       "t3code": true,
       "t3codeChannel": "nightly",
-      "t3codeLimitResume": true
+      "t3codePatched": true
     },
     "output": [
       "patched T3 Code + Desktop build"
@@ -330,7 +330,7 @@
     "previous": {
       "t3code": true,
       "t3codeChannel": "stable",
-      "t3codeLimitResume": true
+      "t3codePatched": true
     }
   },
   {
@@ -345,7 +345,7 @@
     "previous": {
       "t3code": true,
       "t3codeChannel": "stable",
-      "t3codeLimitResume": true
+      "t3codePatched": true
     }
   }
 ]

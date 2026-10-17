@@ -1292,7 +1292,7 @@ ok "pairing link: never prompts, pauses or draws a screen (the Desktop runs it h
 ok "pairing link: stdout is ONE JSON line, success and failure alike" (
     $plSrc -match '\[Console\]::Out\.WriteLine\(\(\[pscustomobject\]\$ordered \| ConvertTo-Json -Compress' -and
     $plSrc -match 'Write-Result @\{ ok = \$false; instance = \$script:ResolvedName; error = \$why \}' -and
-    $plSrc -match 'Write-Result @\{ ok = \$true; instance = \$script:ResolvedName; pairUrl = \$pairUrl; scopes = \$scopesUsed \}')
+    $plSrc -match 'Write-Result @\{ ok = \$true; instance = \$script:ResolvedName; pairUrl = \$pairUrl; links = @\(\$pairing.links\); scopes = \$scopesUsed \}')
 ok "pairing link: asks the VM's t3 for the ADMINISTRATIVE scopes when its build has the flag, standard otherwise" (
     $plSrc -match "grep -q -- '--scopes'" -and $plSrc -match 'extra="--scopes administrative"' -and $plSrc -match 'scopes=standard')
 ok "pairing link: the VM decides the origin (public base URL first), the label names the instance" (

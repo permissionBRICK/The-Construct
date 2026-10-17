@@ -22,6 +22,9 @@ err()  { printf '%s%s%s\n'     "${_C_ERR}"  "$*" "${_C_RESET}" >&2; }
 note() { printf '%s%s%s\n'     "${_C_DIM}"  "$*" "${_C_RESET}"; }
 
 CONFIG_FILE="${CONFIG_FILE:-/etc/construct/config.env}"
+# shellcheck disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/t3code-patched.sh"
+_t3_patched_override="$(resolve_t3code_patched "${CONFIG_FILE}")"
 REPO_DIR="${REPO_DIR:-/opt/construct/repo}"
 # provision.sh invokes this once per selected tool. Preserve that override across
 # sourcing config.env, whose saved AI_TOOLS value otherwise replaces the caller's.
@@ -71,6 +74,7 @@ if [[ "${_FUNCS_ONLY}" != "true" ]]; then
 fi
 
 CONSTRUCT_EXTERNAL_HOST="${_external_host_override:-${CONSTRUCT_EXTERNAL_HOST:-}}"
+T3CODE_PATCHED="${_t3_patched_override}"
 
 AI_TOOLS="${AI_TOOLS_OVERRIDE:-${AI_TOOLS:-}}"
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-/root/repos}"
@@ -950,7 +954,7 @@ prune_t3_installs() {
     rm -rf "${real}"
   done
 
-  [[ "${T3CODE_LIMIT_RESUME:-false}" == "true" ]] && command -v npm >/dev/null 2>&1 || return 0
+  [[ "${T3CODE_PATCHED:-false}" == "true" ]] && command -v npm >/dev/null 2>&1 || return 0
   npm_prefix="$(npm prefix -g 2>/dev/null || true)"
   package="$(npm root -g 2>/dev/null || true)"
   [[ -n "${npm_prefix}" && -n "${package}" && -d "${package}/t3" ]] || return 0
@@ -964,13 +968,48 @@ prune_t3_installs() {
   rm -rf "${package}"
 }
 
+migrate_t3_native_limit_resume() {
+  [[ "${T3CODE_PATCHED:-false}" == true ]] || return 0
+  local marker="${T3CODE_NATIVE_LIMIT_RESUME_MARKER:-/etc/construct/t3-native-limit-resume}"
+  [[ ! -e "${marker}" ]] || return 0
+  python3 - "${T3CODE_HOME:-/root/.t3}/userdata/settings.json" "${marker}" <<'PY'
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+
+settings, marker = map(Path, sys.argv[1:])
+settings.parent.mkdir(parents=True, exist_ok=True)
+try:
+    data = json.loads(settings.read_text()) if settings.exists() else {}
+    if not isinstance(data, dict):
+        raise ValueError("expected a JSON object")
+except (ValueError, UnicodeError) as error:
+    print(f"WARNING: leaving invalid T3 settings untouched: {settings}: {error}", file=sys.stderr)
+    sys.exit(0)
+data.update(autoResumeLimitedThreads=True, snoozeLimitedThreads=True)
+fd, temporary = tempfile.mkstemp(dir=settings.parent, prefix='.settings-')
+try:
+    with os.fdopen(fd, 'w') as output:
+        json.dump(data, output, indent=2)
+        output.write('\n')
+    os.replace(temporary, settings)
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
+marker.parent.mkdir(parents=True, exist_ok=True)
+marker.touch()
+PY
+}
+
 install_t3code() {
   local _t3_prebuilt=false t3_bin resolved t3_bundle _wanted_t3_build _active_t3_build _t3_stock_key _t3_stock_unchanged=false
   step "Installing T3 Code (t3 CLI + web GUI server)"
 
   # Both patched channels default to their published, validated server/Desktop pair.
   # Explicit local builds use the build repository at one commit for both ends.
-  if [[ "${T3CODE_LIMIT_RESUME:-false}" == "true" ]]; then
+  if [[ "${T3CODE_PATCHED:-false}" == "true" ]]; then
     case "${T3CODE_BUILD_SOURCE}" in prebuilt|local) ;; *) err "Invalid T3CODE_BUILD_SOURCE"; return 1 ;; esac
     if [[ "${T3CODE_BUILD_SOURCE}" == prebuilt ]]; then
       step "Installing Construct's prebuilt ${T3CODE_CHANNEL} T3 pair"
@@ -1070,7 +1109,7 @@ install_t3code() {
   bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" T3CODE_PORT "${T3CODE_PORT}"
   bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" T3CODE_CHANNEL "${T3CODE_CHANNEL}"
   bash "${REPO_DIR}/bin/config-set.sh" "${CONFIG_FILE}" CONSTRUCT_T3_VOICE_INPUT \
-    "$([[ "${T3CODE_LIMIT_RESUME:-false}" == "true" ]] && echo true || echo false)"
+    "$([[ "${T3CODE_PATCHED:-false}" == "true" ]] && echo true || echo false)"
 
   # HTTPS reverse proxy for the web GUI. Runs BEFORE the service restart below so
   # config.env already holds T3CODE_PUBLIC_BASE_URL when `t3 serve` starts (the
@@ -1115,11 +1154,13 @@ install_t3code() {
   fi
   systemctl enable --quiet construct-t3-resume.service
 
+  migrate_t3_native_limit_resume
+
   # On an unchanged upstream T3 + Construct revision, the source builder has
   # already restored the exact server symlink and Desktop status. If that same
   # build is active, avoid re-patching, rewriting the unit, restarting T3, and
   # re-registering every workspace repo during routine reprovisions.
-  if [[ "${T3CODE_LIMIT_RESUME:-false}" == "true" ]]; then
+  if [[ "${T3CODE_PATCHED:-false}" == "true" ]]; then
     _wanted_t3_build="$(sed -n 's/^T3CODE_BUILD_KEY=//p' /etc/construct/t3code-desktop-status 2>/dev/null | head -1)"
     _active_t3_build="$(cat /etc/construct/t3code-installed-build 2>/dev/null || true)"
     if t3_can_skip_restart "${_wanted_t3_build}" "${_active_t3_build}" "${_t3_pub_before}" "${_t3_pub_after}" && \
@@ -1156,7 +1197,7 @@ install_t3code() {
   register_t3_projects
 
   if systemctl is-active --quiet t3code-serve; then
-    if [[ "${T3CODE_LIMIT_RESUME:-false}" == "true" ]]; then
+    if [[ "${T3CODE_PATCHED:-false}" == "true" ]]; then
       sed -n 's/^T3CODE_BUILD_KEY=//p' /etc/construct/t3code-desktop-status | head -1 > /etc/construct/t3code-installed-build
     elif [[ -n "${_t3_stock_key}" ]]; then
       # Only once the stock server is up: a failed run must not let the next one skip.
@@ -1168,15 +1209,6 @@ install_t3code() {
     # this file last, and removes it whenever it had to fall back to plain HTTP).
     if [[ -s /etc/construct/t3code-https-status ]]; then
       echo "t3code HTTPS: $(sed -n 's/^T3CODE_PUBLIC_BASE_URL=//p' /etc/construct/t3code-https-status | head -1)"
-    fi
-    # Fresh VMs have no t3 DB when the patch step above runs, so the token mint
-    # there can fail; retry now that the server has started once.
-    if [[ "${T3CODE_LIMIT_RESUME:-false}" == "true" && ! -s /etc/construct/t3park-token ]]; then
-      local _t3_patch_root _t3_patch_node=node
-      _t3_patch_root="$(python3 "${REPO_DIR}/bin/t3code-build-source.py" --installed)" || return 1
-      [[ ! -x "${_t3_patch_root}/bin/node" ]] || _t3_patch_node="${_t3_patch_root}/bin/node"
-      "${_t3_patch_node}" "${_t3_patch_root}/extension/vm/construct-t3park-patch.mjs" mint-token --bundle "${t3_bundle}" \
-        || warn "WARNING: could not mint the auto-resume API token; parked threads can't restart until one exists"
     fi
   else
     warn "WARNING: t3code-serve failed to start; recent status and logs:"

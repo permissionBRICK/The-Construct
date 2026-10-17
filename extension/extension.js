@@ -4737,7 +4737,7 @@ function handleMessage(message, webview, context) {
         const oldCh = prev.t3codeChannel || "stable";
         const t3plan = t3code.planT3LiveAction(wantT3, hadT3, newCh, oldCh);
         if (t3plan) {
-          const sourceManagedT3 = merged.t3codeLimitResume === true;
+          const sourceManagedT3 = merged.t3codePatched === true;
           // The CAPTURED target the settings were written for — not "whatever is active
           // now": these are multi-minute npm runs on one VM, and `instance` is also what
           // keys t3code's per-VM serialization queue, so enabling on A cannot block B.

@@ -32,7 +32,7 @@ public sealed class HostState(IStateFileSystem files)
             if (candidate is not null && StateJson.Trim(candidate) is { Length: > 0 } dir && files.DirectoryExists(dir)) return dir;
         return FindScriptsDirectory(root ?? LocalAppData);
     }
-    public JsonObject ReadRawSettings(string? scriptsDirectory) => StateJson.ReadObject(files, scriptsDirectory is null ? null : Path.Combine(scriptsDirectory, SettingsFile)) ?? [];
+    public JsonObject ReadRawSettings(string? scriptsDirectory) => SettingsMapping.CurrentSettings(StateJson.ReadObject(files, scriptsDirectory is null ? null : Path.Combine(scriptsDirectory, SettingsFile)) ?? []);
     public void WriteRawSettings(string? scriptsDirectory, JsonObject value)
     {
         RequireDirectory(scriptsDirectory);

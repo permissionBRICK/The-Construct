@@ -7,13 +7,17 @@ $root = Join-Path ([IO.Path]::GetTempPath()) ('t3-update-mode-' + [guid]::NewGui
 New-Item -ItemType Directory $root | Out-Null
 try {
     Copy-Item (Join-Path $PSScriptRoot '../Update-T3Code.ps1') $root
+    New-Item -ItemType Directory (Join-Path $root 'lib') | Out-Null
+    Copy-Item (Join-Path $PSScriptRoot '../lib/AgentVm.SettingsMigration.ps1') (Join-Path $root 'lib')
+    Copy-Item (Join-Path $PSScriptRoot '../lib/AgentVm.InstanceState.ps1') (Join-Path $root 'lib')
     Set-Content (Join-Path $root 'Provision-AgentVM.ps1') @'
 param([string]$Action, [switch]$FromPanel, [switch]$NonInteractive, [string]$VsCodeServeWeb, [string]$VsCodeTunnel,
       [string]$SmbShare, [string]$ClaudePartialStreaming, [string]$MicPassthrough, [string]$T3Code, [string]$T3CodeChannel,
-      [string]$T3CodeLimitResume, [string]$Projects, [string]$InstanceName, [string]$VmHost, [string]$HostAlias,
+      [string]$T3CodePatched, [string]$Projects, [string]$InstanceName, [string]$VmHost, [string]$HostAlias,
       [int]$SshPort, [string]$LocalKeyName)
 Add-Content -LiteralPath $env:FAKE_LOG -Value $Action
 Add-Content -LiteralPath "$env:FAKE_LOG.target" -Value "$InstanceName|$HostAlias"
+Add-Content -LiteralPath "$env:FAKE_LOG.patched" -Value $T3CodePatched
 if ($Action -eq 't3update' -and $env:FAKE_OLD_GUEST -eq '1') { $global:ConstructT3UpdateNeedsReprovision = $true; return }
 if ($env:FAKE_OUTCOME -eq 'fail') { $global:ConstructProvisionFailureMessage = 'boom'; $global:ConstructProvisionHadErrors = $true }
 if ($env:FAKE_OUTCOME -eq 'errors') { $global:ConstructProvisionHadErrors = $true }
@@ -22,9 +26,11 @@ if ($env:FAKE_OUTCOME -eq 'errors') { $global:ConstructProvisionHadErrors = $tru
     $powershell = (Get-Process -Id $PID).Path
     $log = Join-Path $root 'calls.log'
     $settings = Join-Path $root '.construct-settings.json'
-    function Run([string]$Mode, [string]$Provisioned, [string]$OldGuest = '0', [string]$Outcome = '') {
-        Remove-Item $log, "$log.target" -ErrorAction SilentlyContinue
-        @{ installedCommit = 'a' * 40; provisionedCommit = $Provisioned; t3code = $true } | ConvertTo-Json | Set-Content $settings
+    function Run([string]$Mode, [string]$Provisioned, [string]$OldGuest = '0', [string]$Outcome = '', [hashtable]$Preference = @{}) {
+        Remove-Item $log, "$log.target", "$log.patched" -ErrorAction SilentlyContinue
+        $saved = @{ installedCommit = 'a' * 40; provisionedCommit = $Provisioned; t3code = $true }
+        foreach ($key in $Preference.Keys) { $saved[$key] = $Preference[$key] }
+        $saved | ConvertTo-Json | Set-Content $settings
         $env:FAKE_LOG = $log; $env:FAKE_OLD_GUEST = $OldGuest; $env:FAKE_OUTCOME = $Outcome
         $modeArgs = if ($Mode) { @('-Mode', $Mode) } else { @() }
         & $powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'Update-T3Code.ps1') @modeArgs | Out-Null
@@ -33,6 +39,11 @@ if ($env:FAKE_OUTCOME -eq 'errors') { $global:ConstructProvisionHadErrors = $tru
     }
     $current = 'A' * 40   # the same commit; the comparison ignores case like the panel's
     $behind = 'b' * 40
+
+    $r = Run 'reprovision' $current '0' '' @{ t3codeLimitResume = $true }
+    Assert ((Get-Content "$log.patched") -eq 'true') 'Legacy patched preference reaches the new provisioner parameter'
+    $r = Run 'reprovision' $current '0' '' @{ t3codeLimitResume = $true; t3codePatched = $false }
+    Assert ((Get-Content "$log.patched") -eq 'false') 'New patched preference overrides legacy state'
 
     $r = Run '' $current
     Assert ($r.Calls -eq 't3update' -and $r.Exit -eq 0) "auto on a current VM must update T3 Code alone: $($r.Calls)/$($r.Exit)"

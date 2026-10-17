@@ -129,10 +129,10 @@ param(
     # Hub outright, and Docker tries a mirror first with the Hub as the fallback.
     [string]$DockerRegistryMirrors = "",
     # Opt-in shared patched-source build for the T3 VM server and Windows Desktop
-    # app: voice input, Claude usage-limit recovery, and OpenCode monitoring. The
-    # parameter/key keeps its legacy name for saved-setting compatibility. Off by
+    # app: Construct integration, voice input and OpenCode monitoring. Off by
     # default; EMPTY keeps the VM's saved choice. "true"/"false"/"".
-    [string]$T3CodeLimitResume = "",
+    [Alias('T3CodeLimitResume')]
+    [string]$T3CodePatched = "",
     # Set up a Samba/SMB server on the VM that shares the workspace (the repos
     # folder) to this host. Credentials are generated once on the VM and persisted
     # in its config, so re-provisions keep the same login. "true"/"false".
@@ -2855,7 +2855,7 @@ if ($VmTokenB64) {
     $tokenExport  = "export CONSTRUCT_VM_TOKEN_B64=`"`$(cat '$vmTokenRemotePath')`"; "
     $tokenCleanup = "; __rc=`$?; rm -f '$vmTokenRemotePath'; exit `$__rc"
 }
-$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' GIT_CLONE_SKIP_HOSTS_B64='$cloneSkipHostsB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit' CONSTRUCT_VERSION='$constructVersion' SMB_SHARE='$SmbShare' CLAUDE_PARTIAL_STREAMING='$ClaudePartialStreaming' MIC_PASSTHROUGH='$MicPassthrough' OPENCODE_BACKGROUND_WATCHER='$OpenCodeBackgroundWatcher' T3CODE='$T3Code' T3CODE_CHANNEL='$T3CodeChannel' T3CODE_BUILD_SOURCE='$T3CodeBuildSource' T3CODE_LIMIT_RESUME='$T3CodeLimitResume' T3CODE_HTTPS='$T3CodeHttps' DOCKER_REGISTRY_MIRRORS='$DockerRegistryMirrors'" + $externalEnv + $serviceEnv + " T3CODE_BUILD_MODE='server'"
+$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' GIT_CLONE_SKIP_HOSTS_B64='$cloneSkipHostsB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit' CONSTRUCT_VERSION='$constructVersion' SMB_SHARE='$SmbShare' CLAUDE_PARTIAL_STREAMING='$ClaudePartialStreaming' MIC_PASSTHROUGH='$MicPassthrough' OPENCODE_BACKGROUND_WATCHER='$OpenCodeBackgroundWatcher' T3CODE='$T3Code' T3CODE_CHANNEL='$T3CodeChannel' T3CODE_BUILD_SOURCE='$T3CodeBuildSource' T3CODE_PATCHED='$T3CodePatched' T3CODE_HTTPS='$T3CodeHttps' DOCKER_REGISTRY_MIRRORS='$DockerRegistryMirrors'" + $externalEnv + $serviceEnv + " T3CODE_BUILD_MODE='server'"
 # A reinstall that restores a saved config runs the project CHECKOUT and the project
 # provisioning commands only after the restore (see below): the checkout needs the VM's
 # restored credential store and git config (a credential this PC could not verify, a

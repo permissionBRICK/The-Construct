@@ -82,7 +82,7 @@ for _ in $(seq 50); do
   [[ "$(readlink "/proc/${sleeper}/exe" 2>/dev/null)" == */c/bin/node ]] && break
   sleep 0.1
 done
-run_case prebuilt T3CODE_LIMIT_RESUME=true
+run_case prebuilt T3CODE_PATCHED=true
 kill "${sleeper}" 2>/dev/null
 wait "${sleeper}" 2>/dev/null
 sleeper=""
@@ -103,7 +103,7 @@ launcher="${tmp}/launcher/t3"
 mkdir -p "${tmp}/launcher"
 ln -sfn "${prebuilt}/b/bin/t3" "${launcher}"
 ln -sfn ../lib/node_modules/t3/dist/bin.mjs "${prefix}/bin/t3"
-run_case shim T3CODE_LIMIT_RESUME=true
+run_case shim T3CODE_PATCHED=true
 ok "the stock package's own shim is removed" test ! -e "${prefix}/bin/t3" -a ! -L "${prefix}/bin/t3"
 ok "the stock package is removed with it" test ! -e "${prefix}/lib/node_modules/t3"
 launcher="${prefix}/bin/t3"
@@ -111,26 +111,26 @@ launcher="${prefix}/bin/t3"
 # ── local build installed: it stays, every prebuilt build goes ───────────────
 reset
 ln -sfn "${source_root}/d/apps/server/dist/bin.mjs" "${launcher}"
-run_case local T3CODE_LIMIT_RESUME=true
+run_case local T3CODE_PATCHED=true
 ok "the installed local build is kept" test -d "${source_root}/d"
 ok "prebuilt builds are removed after a switch to local" test ! -e "${prebuilt}/a" -a ! -e "${prebuilt}/b" -a ! -e "${prebuilt}/c"
 
 # ── stock mode: the npm package is the install ───────────────────────────────
 reset
 ln -sfn "${prefix}/lib/node_modules/t3/dist/bin.mjs" "${launcher}"
-run_case stock T3CODE_LIMIT_RESUME=false
+run_case stock T3CODE_PATCHED=false
 ok "stock mode keeps its npm package" test -d "${prefix}/lib/node_modules/t3"
 ok "stock mode still drops patched builds" test ! -e "${prebuilt}/b" -a ! -e "${source_root}/d"
 
 reset
 ln -sfn "${prebuilt}/b/bin/t3" "${launcher}"
-run_case stock_flag T3CODE_LIMIT_RESUME=false
+run_case stock_flag T3CODE_PATCHED=false
 ok "the npm package is only removed for a patched install" test -d "${prefix}/lib/node_modules/t3"
 
 # ── no installed launcher: nothing to measure against ────────────────────────
 reset
 rm -f "${launcher}"
-run_case nolauncher T3CODE_LIMIT_RESUME=true
+run_case nolauncher T3CODE_PATCHED=true
 ok "without a launcher nothing is removed" \
   test -d "${prebuilt}/a" -a -d "${source_root}/d" -a -d "${prefix}/lib/node_modules/t3"
 

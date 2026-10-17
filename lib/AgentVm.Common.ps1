@@ -883,12 +883,14 @@ function Get-ConstructSettingsPath {
     return (Join-Path $Dir ".construct-settings.json")
 }
 
+. (Join-Path $PSScriptRoot 'AgentVm.SettingsMigration.ps1')
+
 function Read-ConstructSettings {
     # Saved settings as a PSCustomObject, or $null if none/unreadable.
     param([Parameter(Mandatory)][string]$Dir)
     $path = Get-ConstructSettingsPath -Dir $Dir
     if (-not (Test-Path -LiteralPath $path)) { return $null }
-    try { return (Get-Content -LiteralPath $path -Raw | ConvertFrom-Json) } catch { return $null }
+    try { return (ConvertTo-ConstructCurrentSettings (Get-Content -LiteralPath $path -Raw | ConvertFrom-Json)) } catch { return $null }
 }
 
 function Save-ConstructSettings {

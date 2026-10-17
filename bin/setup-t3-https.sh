@@ -7,7 +7,7 @@
 # capture is invisible in the browser until the same server is reachable over
 # https. Construct therefore terminates TLS in the VM with nginx and proxies to
 # the unchanged `t3 serve` on 127.0.0.1:${T3CODE_PORT}. Plain HTTP on that port
-# stays available for local tooling (the t3park token mint, `t3` CLI calls).
+# stays available for local tooling (`t3` CLI calls).
 #
 # T3 authenticates clients with DPoP proofs bound to the request URL, which the
 # server reconstructs from the Host header and x-forwarded-proto. The proxy

@@ -74,9 +74,9 @@ param(
     # VM's saved choice; "stable"/"nightly".
     [ValidateSet("", "stable", "nightly")]
     [string]$T3CodeChannel = "",
-    # Forwarded to Provision-AgentVM.ps1: opt-in T3 Code extra-feature patches
-    # (legacy parameter name retained). Empty = keep the VM's saved choice.
-    [string]$T3CodeLimitResume = "",
+    # Forwarded to Provision-AgentVM.ps1: patched T3 Code + Desktop.
+    [Alias('T3CodeLimitResume')]
+    [string]$T3CodePatched = "",
     # Hyper-V automatic checkpoints: snapshot the VM at every start. OFF by default
     # for Construct -- on a disposable agent VM the checkpoint only costs (a growing
     # .avhdx differencing disk, slower I/O, and a merge whenever it's deleted).
@@ -385,7 +385,7 @@ if ((Test-ConstructVmPresent -Name $VmName) -eq $true) {
         if ($PSBoundParameters.ContainsKey('OpenCodeBackgroundWatcher')) { $provArgs['OpenCodeBackgroundWatcher'] = $OpenCodeBackgroundWatcher }
         if ($PSBoundParameters.ContainsKey('T3Code'))                 { $provArgs['T3Code']                 = $T3Code }
         if ($PSBoundParameters.ContainsKey('T3CodeChannel'))          { $provArgs['T3CodeChannel']          = $T3CodeChannel }
-        if ($PSBoundParameters.ContainsKey('T3CodeLimitResume'))      { $provArgs['T3CodeLimitResume']      = $T3CodeLimitResume }
+        if ($PSBoundParameters.ContainsKey('T3CodePatched'))      { $provArgs['T3CodePatched']      = $T3CodePatched }
         if ($PSBoundParameters.ContainsKey('RestoreDir'))             { $provArgs['RestoreDir']             = $RestoreDir }
         if ($PSBoundParameters.ContainsKey('GitCloneCredentialsB64')) { $provArgs['GitCloneCredentialsB64'] = $GitCloneCredentialsB64 }
         if ($PSBoundParameters.ContainsKey('CheckoutProjects'))       { $provArgs['CheckoutProjects']       = $CheckoutProjects }
@@ -645,7 +645,7 @@ if ($isAutoinstall) {
             if ($PSBoundParameters.ContainsKey('OpenCodeBackgroundWatcher')) { $provArgs['OpenCodeBackgroundWatcher'] = $OpenCodeBackgroundWatcher }
         if ($PSBoundParameters.ContainsKey('T3Code'))                 { $provArgs['T3Code']                 = $T3Code }
             if ($PSBoundParameters.ContainsKey('T3CodeChannel'))          { $provArgs['T3CodeChannel']          = $T3CodeChannel }
-            if ($PSBoundParameters.ContainsKey('T3CodeLimitResume'))      { $provArgs['T3CodeLimitResume']      = $T3CodeLimitResume }
+            if ($PSBoundParameters.ContainsKey('T3CodePatched'))      { $provArgs['T3CodePatched']      = $T3CodePatched }
             if ($PSBoundParameters.ContainsKey('RestoreDir'))             { $provArgs['RestoreDir']             = $RestoreDir }
             if ($PSBoundParameters.ContainsKey('GitCloneCredentialsB64')) { $provArgs['GitCloneCredentialsB64'] = $GitCloneCredentialsB64 }
             if ($PSBoundParameters.ContainsKey('CheckoutProjects'))       { $provArgs['CheckoutProjects']       = $CheckoutProjects }

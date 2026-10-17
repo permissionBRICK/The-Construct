@@ -404,7 +404,7 @@
       opencodeBackgroundWatcher: swOn($("setOpenCodeBackgroundWatcher")),
       t3code: swOn($("setT3")),
       t3codeChannel: val("setT3Channel"),
-      t3codeLimitResume: swOn($("setT3Park")),
+      t3codePatched: swOn($("setT3Patched")),
     };
   }
   // A save answers with the whole form, so its settings echo applies in full.
@@ -1262,7 +1262,7 @@
     setSw("setOpenCodeBackgroundWatcher", s.opencodeBackgroundWatcher);
     setSw("setT3", s.t3code);
     if (s.t3codeChannel) setVal("setT3Channel", s.t3codeChannel);
-    setSw("setT3Park", s.t3codeLimitResume);
+    setSw("setT3Patched", s.t3codePatched);
     setSw("setAutoCheckpoints", s.autoCheckpoints);
     renderResourcePending();
   }

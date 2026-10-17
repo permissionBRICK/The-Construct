@@ -6,6 +6,14 @@ namespace Construct.Companion.Core.State;
 
 public static class SettingsMapping
 {
+    public static JsonObject CurrentSettings(JsonObject raw)
+    {
+        var current = (JsonObject)raw.DeepClone();
+        if (!current.ContainsKey("t3codePatched") && current.ContainsKey("t3codeLimitResume"))
+            current["t3codePatched"] = current["t3codeLimitResume"]?.DeepClone();
+        current.Remove("t3codeLimitResume");
+        return current;
+    }
     private static readonly (string Raw, string Form, char Kind)[] Fields =
     [
         ("gitUserName", "gitName", 's'), ("gitEmail", "gitEmail", 's'), ("gitCredentialStore", "gitCred", 'b'),
@@ -13,7 +21,7 @@ public static class SettingsMapping
         ("vsCodeServeWeb", "serveWeb", 'b'), ("vsCodeTunnel", "tunnel", 'b'), ("smbShare", "smb", 'b'),
         ("claudePartialStreaming", "partialStreaming", 'b'), ("opencodeBackgroundWatcher", "opencodeBackgroundWatcher", 'b'),
         ("micPassthrough", "mic", 'b'), ("t3code", "t3code", 'b'), ("t3codeChannel", "t3codeChannel", 'c'),
-        ("t3codeLimitResume", "t3codeLimitResume", 'b'), ("vmAutoCheckpoints", "autoCheckpoints", 'b'),
+        ("t3codePatched", "t3codePatched", 'b'), ("vmAutoCheckpoints", "autoCheckpoints", 'b'),
         ("historyRetentionDays", "historyRetentionDays", 'n')
     ];
     public static JsonObject MapToForm(JsonObject? raw)
@@ -57,8 +65,8 @@ public static class SettingsMapping
         previous ??= []; next ??= [];
         bool Is(JsonObject o, string k) => StateJson.Boolean(o[k]) == true;
         var result = new List<string>();
-        if (Is(previous, "t3codeLimitResume") != Is(next, "t3codeLimitResume") ||
-            (Is(next, "t3codeLimitResume") && Is(next, "t3code") && (!Is(previous, "t3code") ||
+        if (Is(previous, "t3codePatched") != Is(next, "t3codePatched") ||
+            (Is(next, "t3codePatched") && Is(next, "t3code") && (!Is(previous, "t3code") ||
             !StateJson.StrictEquals(StateJson.Truthy(previous["t3codeChannel"]) ? previous["t3codeChannel"] : JsonValue.Create("stable"), StateJson.Truthy(next["t3codeChannel"]) ? next["t3codeChannel"] : JsonValue.Create("stable")))))
             result.Add("patched T3 Code + Desktop build");
         if (Is(previous, "opencodeBackgroundWatcher") != Is(next, "opencodeBackgroundWatcher")) result.Add("OpenCode background watcher");

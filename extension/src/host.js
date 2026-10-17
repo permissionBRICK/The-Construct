@@ -117,13 +117,20 @@ function configDir(env) {
 
 /** Raw settings object from disk, or {} if absent/unreadable. Strips a UTF-8 BOM
  *  (Windows PowerShell 5.1's `Set-Content -Encoding UTF8` writes one). */
+function currentSettings(raw) {
+  const out = { ...raw };
+  if (!Object.hasOwn(out, "t3codePatched") && Object.hasOwn(out, "t3codeLimitResume")) out.t3codePatched = out.t3codeLimitResume;
+  delete out.t3codeLimitResume;
+  return out;
+}
+
 function readRawSettings(scriptsDir) {
   if (!scriptsDir) return {};
   let txt;
   try { txt = fs.readFileSync(settingsPath(scriptsDir), "utf8"); } catch (_) { return {}; }
   try {
     const o = JSON.parse(txt.replace(/^\uFEFF/, ""));
-    return (o && typeof o === "object" && !Array.isArray(o)) ? o : {};
+    return (o && typeof o === "object" && !Array.isArray(o)) ? currentSettings(o) : {};
   } catch (_) { return {}; }
 }
 
@@ -343,7 +350,7 @@ function mapToForm(raw) {
     const ch = String(raw.t3codeChannel);
     if (ch === "stable" || ch === "nightly") form.t3codeChannel = ch;
   }
-  if (typeof raw.t3codeLimitResume === "boolean") form.t3codeLimitResume = raw.t3codeLimitResume;
+  if (typeof raw.t3codePatched === "boolean") form.t3codePatched = raw.t3codePatched;
   if (typeof raw.vmAutoCheckpoints === "boolean") form.autoCheckpoints = raw.vmAutoCheckpoints;
   if (has("historyRetentionDays")) form.historyRetentionDays = String(raw.historyRetentionDays);
   return form;
@@ -397,7 +404,7 @@ function mapFromForm(form) {
   // stored one (e.g. the host settings written by an older extension that never
   // sent the key).
   if (form.t3codeChannel === "stable" || form.t3codeChannel === "nightly") out.t3codeChannel = form.t3codeChannel;
-  setBool("t3codeLimitResume", form.t3codeLimitResume);
+  setBool("t3codePatched", form.t3codePatched);
   setBool("vmAutoCheckpoints", form.autoCheckpoints);
   // Days of agent chat history the config backup keeps (bin/export-config.sh
   // HISTORY_RETENTION_DAYS); passed on reinstall / redownload / Export config.
@@ -413,9 +420,9 @@ function patchReprovisionChanges(previous, next) {
   next = next || {};
   const changes = [];
   const sourceBuildChanged =
-    (previous.t3codeLimitResume === true) !== (next.t3codeLimitResume === true);
+    (previous.t3codePatched === true) !== (next.t3codePatched === true);
   const sourceManagedT3Changed =
-    next.t3codeLimitResume === true &&
+    next.t3codePatched === true &&
     next.t3code === true &&
     (previous.t3code !== true ||
       (previous.t3codeChannel || "stable") !== (next.t3codeChannel || "stable"));
@@ -479,7 +486,7 @@ module.exports = {
   CONTAINER, MARKER, SETTINGS_FILE,
   localAppData, findScriptsDir, resolveScriptsDir,
   settingsPath, projectsDir, configDir,
-  readRawSettings, writeRawSettings, mapToForm, mapFromForm, patchReprovisionChanges,
+  currentSettings, readRawSettings, writeRawSettings, mapToForm, mapFromForm, patchReprovisionChanges,
   readSettings, saveSettings, readProjectProfile,
   safeProfileName, listProjectProfiles, writeProjectProfile, deleteProjectProfile, writeProjectProfileIfAbsent,
   readSelectedProjects, hasPersistedSelection, saveSelectedProjects,

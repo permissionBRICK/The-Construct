@@ -178,7 +178,7 @@ public sealed class VmConfigurationTests
         h.Files.WriteFileAtomic("/fake/scripts/Provision-AgentVM.ps1", "param($Action)"u8);
         h.Files.WriteFileAtomic("/fake/scripts/Update-T3Code.ps1", "param($Mode, [switch]$FromPanel)"u8);
         var entry = h.App.Services.GetRequiredService<CompanionInstances>().Get("agent-vm");
-        entry.Store.SaveSettings(new() { ["t3code"] = t3, ["t3codeLimitResume"] = patched });
+        entry.Store.SaveSettings(new() { ["t3code"] = t3, ["t3codePatched"] = patched });
         var ssh = (FakeSshTransport)entry.Ssh;
         ssh.ScriptHandler = (script, _) => Task.FromResult(new ProcessResult(0, script == ProjectImport.ScanScript() ? "END\n" : ""));
         var message = new JsonObject { ["type"] = "command", ["id"] = id };

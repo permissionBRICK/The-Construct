@@ -235,6 +235,16 @@ s.saveState(s.store('agent-vm', process.argv[1], { LOCALAPPDATA: process.argv[2]
     } else {
         ok "parity: node is unavailable -- cross-reader checks skipped" $true
     }
+    foreach ($name in @('agent-vm', 'legacy-vm')) {
+        $file = if ($name -eq 'agent-vm') { Get-ConstructSettingsPath -Dir $scriptsDir } else { Get-ConstructInstanceStatePath -Name $name }
+        '{"t3codeLimitResume":true,"unmanaged":7}' | Set-Content -LiteralPath $file
+        ok "legacy: $name reads patched preference" ((Read-ConstructInstanceState -Name $name -Dir $scriptsDir).t3codePatched -eq $true)
+        Save-ConstructInstanceState -Name $name -Dir $scriptsDir -Values @{ t3codePatched = $false }
+        $saved = Get-Content -LiteralPath $file -Raw | ConvertFrom-Json
+        ok "legacy: $name writes only the new key" ($saved.t3codePatched -eq $false -and $saved.unmanaged -eq 7 -and -not $saved.PSObject.Properties['t3codeLimitResume'])
+        '{"t3codeLimitResume":true,"t3codePatched":false}' | Set-Content -LiteralPath $file
+        ok "legacy: $name new preference wins" ((Read-ConstructInstanceState -Name $name -Dir $scriptsDir).t3codePatched -eq $false)
+    }
 } finally {
     $env:LOCALAPPDATA = $oldLocal
     Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue

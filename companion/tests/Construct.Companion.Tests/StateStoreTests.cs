@@ -8,6 +8,24 @@ namespace Construct.Companion.Tests;
 
 public sealed class StateStoreTests
 {
+    [Theory]
+    [InlineData("agent-vm")]
+    [InlineData("legacy-vm")]
+    public void LegacyPatchedPreferenceIsReadAndSavedUnderNewKey(string name)
+    {
+        var fs = Files(); var store = new InstanceStateStore(fs, name, "/scripts");
+        var path = store.StatePath ?? "/scripts/.construct-settings.json";
+        fs.CreateDirectory(Path.GetDirectoryName(path)!);
+        fs.WriteFileAtomic(path, Encoding.UTF8.GetBytes("{\"t3codeLimitResume\":true,\"unmanaged\":7}"));
+        Assert.True(StateJson.Boolean(store.ReadSettings()["t3codePatched"]));
+        store.SaveSettings(new() { ["t3codePatched"] = false });
+        var saved = JsonNode.Parse(fs.ReadFile(path)!)!.AsObject();
+        Assert.False(StateJson.Boolean(saved["t3codePatched"]));
+        Assert.False(saved.ContainsKey("t3codeLimitResume"));
+        Assert.Equal(7, saved["unmanaged"]!.GetValue<int>());
+        fs.WriteFileAtomic(path, Encoding.UTF8.GetBytes("{\"t3codeLimitResume\":true,\"t3codePatched\":false}"));
+        Assert.False(StateJson.Boolean(store.ReadSettings()["t3codePatched"]));
+    }
     private static FakeFileSystem Files()
     {
         var fs = new FakeFileSystem(); fs.Roots[FileSystemRoot.LocalAppData] = "/local"; fs.CreateDirectory("/scripts"); return fs;

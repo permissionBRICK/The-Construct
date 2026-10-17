@@ -158,7 +158,7 @@ defaults to `0.0.0.0` for NAT-only VM setups.
 
 T3 Code is an optional client for the coding agents already authenticated in the VM. Enable
 **T3 Code web GUI** in the Construct control panel to run its server in the VM and connect with
-either the paired browser UI or T3 Code's Windows Desktop app. The separate **Build patched T3
+either the paired browser UI or T3 Code's Windows Desktop app. The separate **Patched T3
 Code + Desktop** setting builds the selected stable/nightly source once inside the VM, uses that
 same patched build for both clients, and silently installs or updates Desktop on the host during
 provisioning. Routine reprovisions skip the build and installation when neither T3 Code nor
@@ -175,7 +175,8 @@ The patched clients add a mic button beside Send and a **Ctrl+T** shortcut. Spee
 at the cursor without replacing existing input, and the recording ring responds to microphone
 level. This reuses Construct's microphone tunnel, so **Microphone passthrough** must also be
 enabled and a VS Code window running the Construct extension must remain open while recording.
-The patch also adds Claude usage-limit recovery and OpenCode background-task monitoring. See
+The patch also adds Construct integration and OpenCode monitoring. Usage-limit auto-resume
+uses T3 Code's own settings. See
 [Control panel: Patched T3 Code server + Desktop build](control-panel.md#patched-t3-code-server--desktop-build)
 for setup, update, caching, and compatibility details.
 
