@@ -23,7 +23,7 @@ namespace Construct.Companion.Host.Dispatch;
 public sealed partial class MessageDispatcher(CompanionInstances instances, StateAggregation state, IpcSettings settings,
     IpcEvents events, IpcLogs logs, IStateFileSystem files, IPrompts prompts, ILauncher launcher,
     ICompanionDesktop desktop, IClock clock, HostAdministration hosts, CachedUpdateSource updates, IAudioCapture capture, HostConversionWorkflow conversion, InstanceConsole consoles,
-    VaultHosts vaultHosts)
+    VaultHosts vaultHosts, LifecycleRuns runs)
 {
     public async Task DispatchAsync(string name, JsonObject message, CancellationToken ct)
     {
@@ -172,7 +172,13 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
             case "registerThisVm": await RegisterThisVm(ct); break;
             case "addProject": await AddProject(entry, ct); break;
             case "removeInstance": await RemoveInstance(entry, ct); break;
-            case "convertToHost": try { await conversion.RunAsync(entry, ct); } finally { state.PublishSnapshot(name); events.Message(name, new { type = "lifecyclePrepared", id }); } break;
+            case "convertToHost":
+                using (var claim = runs.TryBegin(name, id, out var busy))
+                {
+                    if (claim is null) { Refuse(name, id, busy); break; }
+                    try { await conversion.RunAsync(entry, ct, launched: claim.Dispose); } finally { state.PublishSnapshot(name); events.Message(name, new { type = "lifecyclePrepared", id }); }
+                }
+                break;
             case "createFirstVm": await hosts.CreateFirstVmAsync(null, ct); break;
             case "updateConstruct": await UpdateConstruct(entry, ct); break;
             default: Refuse(name, id, "This command is not supported by Construct Companion."); break;
@@ -271,8 +277,15 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
     }
     private async Task Lifecycle(CompanionInstance entry, string action, JsonObject message, CancellationToken ct)
     {
+        // One lifecycle run at a time on this PC (an export is not one); the claim covers the checks and the launch.
+        IDisposable? claim = null;
         try
         {
+            if (action != "exportConfig")
+            {
+                claim = runs.TryBegin(entry.Name, action, out var busy);
+                if (claim is null) { Refuse(entry.Name, action, busy); return; }
+            }
             var directory = RequireDirectory(entry);
             if (action is "reprovision" or "reinstall" or "redownload" && !await LifecyclePreflight(entry, action, ct)) return;
             var invocation = LifecycleBuilder.BuildInvocation(action, new()
@@ -292,8 +305,12 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
             if (StateJson.Boolean(invocation["elevate"]) == true) await launcher.LaunchElevatedAsync(launch, ct); else await launcher.StartDetachedAsync(launch, ct);
             entry.Runtime?.BeginFastRefresh(); events.Companion(new { type = "lifecycle", instance = entry.Name, action, status = "launched" });
         }
-        // The panel keeps its spinner until lifecyclePrepared arrives, whatever happened above.
-        finally { events.Message(entry.Name, new { type = "lifecyclePrepared", id = Text(message, "type") == "customRebuild" ? action == "redownload" ? "customRedownload" : "customReinstall" : action }); }
+        // The panel keeps its spinner until lifecyclePrepared arrives (or the host-wide run ends), whatever happened above.
+        finally
+        {
+            claim?.Dispose();
+            events.Message(entry.Name, new { type = "lifecyclePrepared", id = Text(message, "type") == "customRebuild" ? action == "redownload" ? "customRedownload" : "customReinstall" : action });
+        }
     }
     // Update-Construct.ps1 is install-wide: it refreshes the scripts, the VS Code extension and this Companion
     // (its hook asks this process to quit and restarts it), so the console runs detached and the outcome is read
@@ -302,9 +319,11 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
     // refreshed right after a success so the update banner disappears with the console.
     private async Task UpdateConstruct(CompanionInstance entry, CancellationToken ct)
     {
-        var watching = false;
+        var watching = false; IDisposable? claim = null;
         try
         {
+            claim = runs.TryBegin(null, "updateConstruct", out var busy);
+            if (claim is null) { Refuse(entry.Name, "updateConstruct", busy); return; }
             var directory = RequireDirectory(entry);
             var script = Path.Combine(directory, "Update-Construct.ps1");
             if (!files.FileExists(script)) { Refuse(entry.Name, "updateConstruct", "Update-Construct.ps1 is missing from the installed scripts."); return; }
@@ -315,10 +334,11 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
             var launch = PowerShellLaunch.BuildHostLaunch(script, UpdatePlanner.ConstructRefreshArgs(markers), elevate: false, keepOpen: settings.Read().Debug, argSpec: argSpec).Invocation(directory)
                 with { EnvironmentOverrides = new Dictionary<string, string?> { [plan.EnvironmentKey] = plan.File } };
             await launcher.StartDetachedAsync(launch, ct);
+            claim.Dispose(); // launched: Update-Construct.ps1 holds the run marker until it ends
             events.Companion(new { type = "lifecycle", instance = entry.Name, action = "updateConstruct", status = "launched" });
             watching = true; _ = WatchUpdateResultAsync(entry, plan);
         }
-        finally { if (!watching) events.Message(entry.Name, new { type = "lifecyclePrepared", id = "updateConstruct" }); }
+        finally { claim?.Dispose(); if (!watching) events.Message(entry.Name, new { type = "lifecyclePrepared", id = "updateConstruct" }); }
     }
     private async Task WatchUpdateResultAsync(CompanionInstance entry, ResultPollingPlan plan)
     {

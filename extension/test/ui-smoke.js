@@ -186,6 +186,33 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("preparation completion restores buttons", await page.locator('[data-cmd="reprovision"]').isEnabled());
   check("preparation completion removes spinner", await page.locator('.prepare-spinner').count() === 0);
 
+  // One lifecycle run per host: state.lifecycleRun / lifecycleRun lock the run buttons on every instance.
+  const lifecycleRun = async (run) => { await page.evaluate((r) => window.postMessage({ type: "lifecycleRun", run: r }, "*"), run); await page.waitForTimeout(30); };
+  const showInstance = async (name, extra) => { await page.evaluate((s) => window.postMessage({ type: "state", state: s }, "*"), { instance: name, instances: ["agent-vm", "work-vm"], ...extra }); await page.waitForTimeout(30); };
+  await showInstance("agent-vm");
+  await page.click('[data-cmd="reprovision"]');
+  // The window switches to work-vm while agent-vm's launch prepares; agent-vm's lifecyclePrepared never reaches it.
+  await showInstance("work-vm", { lifecycleRun: { action: "reprovision", instance: "agent-vm", phase: "preparing", startedAt: null } });
+  check("run: a launch for another instance leaves no spinner here", await page.locator(".prepare-spinner").count() === 0);
+  check("run: the host-wide launch locks this instance's run buttons",
+    await page.locator('[data-cmd="reprovision"]').isDisabled() && await page.locator('[data-cmd="reinstall"]').isDisabled() && await page.locator('[data-cmd="redownload"]').isDisabled());
+  check("run: the panel names the instance and action", (await page.locator("#lifecycleRunNote").innerText()).includes("Reprovision of \u201cagent-vm\u201d is starting")
+    && (await page.getAttribute('[data-cmd="reinstall"]', "title")).includes("agent-vm"));
+  await lifecycleRun({ action: "reprovision", instance: "agent-vm", phase: "running", startedAt: "2026-10-17T10:00:00Z" });
+  check("run: the running script keeps them locked", await page.locator('[data-cmd="reprovision"]').isDisabled() && (await page.locator("#lifecycleRunNote").innerText()).includes("is running"));
+  await showInstance("work-vm", { provisionStale: false, lifecycleRun: { action: "reprovision", instance: "agent-vm", phase: "running", startedAt: "2026-10-17T10:00:00Z" } });
+  check("run: a state refresh keeps the run's hint on the button", (await page.getAttribute('[data-cmd="reprovision"]', "title")).includes("agent-vm"));
+  await lifecycleRun(null);
+  check("run: the end re-enables every run button while another instance is shown",
+    await page.locator('[data-cmd="reprovision"]').isEnabled() && await page.locator('[data-cmd="reinstall"]').isEnabled() && !(await page.locator("#lifecycleRunNote").isVisible()));
+  check("run: the button's own tooltip returns", await page.getAttribute('[data-cmd="reprovision"]', "title") === "Reprovision — re-run setup, keep all data");
+  // This page's own launch ends with the host-wide run even when its lifecyclePrepared is lost.
+  await page.click('[data-cmd="reinstall"]');
+  await lifecycleRun({ action: "reinstall", instance: "work-vm", phase: "preparing", startedAt: null });
+  check("run: own launch shows its spinner", await page.locator('[data-cmd="reinstall"] .prepare-spinner').count() === 1);
+  await lifecycleRun(null);
+  check("run: own launch ends with the host-wide run", await page.locator(".prepare-spinner").count() === 0 && await page.locator('[data-cmd="reinstall"]').isEnabled());
+
 
   await page.click("#openTabBtn");
   posted = await page.evaluate(() => window.__posted);
@@ -409,6 +436,42 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   const agentPost = await page.evaluate(() =>
     window.__posted.filter((m) => m && m.type === "command" && m.id === "updateAgent").pop());
   check("agent update tag: posts updateAgent with the agent id", !!agentPost && agentPost.agent === "claude-code");
+
+  // The T3 Code update runs Update-T3Code.ps1, a lifecycle run: while another instance's run holds the host its ↑ tag
+  // and "update all" (while that includes T3 Code) are held, by click and by keyboard; the other agents stay free.
+  const t3State = (run) => ({ online: true, host: "h", instance: "work-vm", lifecycleRun: run, agents: [
+    { id: "claude-code", name: "Claude Code", version: "2.1.196", latest: "2.1.200", updateAvailable: true },
+    { id: "t3code", name: "T3 Code", version: "0.1.0", latest: "0.1.1", updateAvailable: true }] });
+  const otherRun = { action: "reprovision", instance: "agent-vm", phase: "running", startedAt: null };
+  const t3Posts = () => page.evaluate(() => window.__posted.filter((m) => m && (m.id === "updateAgents" || (m.id === "updateAgent" && m.agent === "t3code"))).length);
+  await page.evaluate(() => window.postMessage({ type: "settings", settings: { t3code: true } }, "*"));
+  await page.evaluate((s) => window.postMessage({ type: "state", state: s }, "*"), t3State(otherRun));
+  await page.waitForTimeout(60);
+  const t3Before = await t3Posts();
+  await page.click('#agentList .tag[data-agent="t3code"]', { force: true });
+  await page.focus('#agentList .tag[data-agent="t3code"]'); await page.keyboard.press("Enter"); await page.keyboard.press(" ");
+  await page.click('[data-cmd="updateAgents"]', { force: true });
+  check("run: the T3 Code update is held by click and keyboard", await t3Posts() === t3Before
+    && await page.getAttribute('#agentList .tag[data-agent="t3code"]', "aria-disabled") === "true"
+    && await page.getAttribute('#agentList .tag[data-agent="t3code"]', "tabindex") === "-1"
+    && (await page.getAttribute('#agentList .tag[data-agent="t3code"]', "title")).includes("Reprovision of \u201cagent-vm\u201d"));
+  check("run: \"update all\" is held while it includes T3 Code", await page.locator('[data-cmd="updateAgents"]').isDisabled()
+    && (await page.getAttribute('[data-cmd="updateAgents"]', "title")).includes("agent-vm"));
+  check("run: the other agents' updates stay available", await page.getAttribute('#agentList .tag[data-agent="claude-code"]', "aria-disabled") !== "true");
+  await page.evaluate((s) => window.postMessage({ type: "state", state: s }, "*"), t3State(otherRun));
+  await page.waitForTimeout(40);
+  check("run: a re-render keeps the T3 Code update held", await page.getAttribute('#agentList .tag[data-agent="t3code"]', "aria-disabled") === "true");
+  await page.evaluate(() => window.postMessage({ type: "lifecycleRun", run: null }, "*"));
+  await page.waitForTimeout(40);
+  check("run: its end frees the T3 Code update", await page.getAttribute('#agentList .tag[data-agent="t3code"]', "tabindex") === "0"
+    && await page.getAttribute('#agentList .tag[data-agent="t3code"]', "title") === "Update T3 Code now" && await page.locator('[data-cmd="updateAgents"]').isEnabled());
+  await page.focus('#agentList .tag[data-agent="t3code"]'); await page.keyboard.press("Enter");
+  check("run: the freed tag updates T3 Code again", await t3Posts() === t3Before + 1);
+  await page.evaluate(() => window.postMessage({ type: "settings", settings: { t3code: false } }, "*"));
+  await page.evaluate((s) => window.postMessage({ type: "state", state: s }, "*"), t3State(otherRun));
+  await page.waitForTimeout(40);
+  check("run: \"update all\" without T3 Code is not a lifecycle run", await page.locator('[data-cmd="updateAgents"]').isEnabled());
+  await page.evaluate(() => window.postMessage({ type: "lifecycleRun", run: null }, "*"));
 
   // provision-stale: Reprovision goes yellow (class "stale") + subtext when the VM was
   // provisioned with an older Construct than the installed one; cleared when in sync.
@@ -735,6 +798,16 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await page.evaluate(() => window.postMessage({ type: "lifecyclePrepared", id: "reinstall" }, "*"));
   await page.waitForTimeout(30);
   check("launcher: preparation completion restores action", await page.locator('.laction[data-cmd="reinstall"]').isEnabled());
+  // The tray popup is re-scoped to another instance while its launch prepares: the host-wide run locks and then frees it.
+  await page.click('.laction[data-cmd="reprovision"]');
+  await page.evaluate(() => window.postMessage({ type: "state", state: { companion: true, instance: "b", instances: ["a", "b"], lifecycleRun: { action: "reprovision", instance: "a", phase: "preparing", startedAt: null } } }, "*"));
+  await page.waitForTimeout(30);
+  check("launcher: another instance's launch locks the actions without a spinner",
+    await page.locator('.laction[data-cmd="reinstall"]').isDisabled() && await page.locator(".prepare-spinner").count() === 0
+    && (await page.getAttribute('.laction[data-cmd="reinstall"]', "title")).includes("Reprovision of \u201ca\u201d is starting"));
+  await page.evaluate(() => window.postMessage({ type: "lifecycleRun", run: null }, "*"));
+  await page.waitForTimeout(30);
+  check("launcher: the run's end frees the actions", await page.locator('.laction[data-cmd="reprovision"]').isEnabled() && await page.locator('.laction[data-cmd="reinstall"]').isEnabled());
 
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: true, host: "h.example.net", agents: [{ name: "Claude Code", version: "2.1.196", updateAvailable: true }], installed: "2026-06-12", reprovisioned: "1d ago" } }, "*"));
   await page.waitForTimeout(80);

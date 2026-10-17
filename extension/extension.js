@@ -764,6 +764,8 @@ function postState(target, state) {
   // Attached to every push, `null` included, so it disappears the moment it stops
   // applying (a switch back to the default VM).
   extra.removeOffer = removeInstanceOffer();
+  // Host-wide, whichever instance this state describes: the panel locks its lifecycle buttons while it is set.
+  extra.lifecycleRun = currentLifecycleRun();
   safePost(target, { type: "state", state: { ...state, ...extra } });
 }
 
@@ -1090,10 +1092,12 @@ function syncAutoRefresh() {
     autoRefreshMs = wantMs;
     autoRefreshTimer = setInterval(refreshTick, wantMs);
   }
+  if (!lifecycleRunTimer) lifecycleRunTimer = setInterval(publishLifecycleRun, LIFECYCLE_RUN_POLL_MS);
 }
 /** Stop the auto-refresh timer unconditionally (extension deactivate). */
 function stopAutoRefresh() {
   if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; autoRefreshMs = 0; }
+  if (lifecycleRunTimer) { clearInterval(lifecycleRunTimer); lifecycleRunTimer = null; }
 }
 
 // ── Auto-reload after an EXTERNAL Construct update ───────────────────────────
@@ -1133,6 +1137,44 @@ function watchInstalledMarker(context) {
   fs.watchFile(file, { interval: INSTALLED_MARKER_POLL_MS, persistent: false }, onChange);
   context.subscriptions.push({ dispose: () => { fs.unwatchFile(file, onChange); installedMarkerWatch = null; } });
 }
+
+// ── One lifecycle run per host ───────────────────────────────────────────────
+// The host-wide run every surface shows, whichever instance it is on: the launch this window is preparing
+// (checks + confirmation) or the run whose script holds the marker (a console, another window, the
+// Companion). Rides every state push and is re-posted to every surface when it changes, so a surface that
+// switched instances while its own launch was preparing still sees it end. lifecycle.js has the rules.
+const LIFECYCLE_RUN_POLL_MS = 2000;
+let lifecyclePreparing = null;
+let lifecycleRunPosted = "null";
+
+function currentLifecycleRun() {
+  return lifecycle.readRunMarker() || lifecyclePreparing;
+}
+
+function publishLifecycleRun() {
+  const run = currentLifecycleRun();
+  const text = JSON.stringify(run);
+  if (text === lifecycleRunPosted) return;
+  lifecycleRunPosted = text;
+  for (const w of liveWebviews) safePost(w, { type: "lifecycleRun", run });
+}
+
+/** Claim the preparing phase of one launch (checks, confirmation, the launch itself): `{ refused }` while
+ *  another run holds the host, else `{ end }`. End it at launch: from then on the run's own marker shows it, so
+ *  a console closed without a result unlocks at once. `end` is idempotent and ends only this claim.
+ *  `instance` is null for the install-wide Construct update. */
+function beginLifecycleRun(action, instance = activeInstance().name) {
+  const busy = currentLifecycleRun();
+  if (busy) return { refused: lifecycle.runBusyReason(busy) };
+  const claim = lifecycle.describeRun(instance, action, "preparing");
+  lifecyclePreparing = claim;
+  publishLifecycleRun();
+  return { end: () => { if (lifecyclePreparing !== claim) return; lifecyclePreparing = null; publishLifecycleRun(); } };
+}
+
+// Polled alongside the auto-refresh (syncAutoRefresh / stopAutoRefresh): only while a dashboard is open and the
+// Companion is not serving it. A run that ends in its console, or whose console is closed, only shows in the marker.
+let lifecycleRunTimer = null;
 
 // ── VM → desktop notifications ───────────────────────────────────────────────
 // An agent on the VM runs `construct notify "…"`; entries arrive here over ONE
@@ -2371,6 +2413,8 @@ function runUpdateAgents(ids) {
  *  possible is reprovisioned instead, by the script itself. */
 function startT3Update(scriptsDir, target) {
   if (!scriptsDir) { warnNoScriptsDir(); return false; }
+  const busy = currentLifecycleRun();
+  if (busy) { vscode.window.showErrorMessage(lifecycle.runBusyReason(busy)); return false; }
   return lifecycle.run("updateT3", {
     scriptsDir, instance: target.instance,
     stillCurrent: () => !targetSuperseded(target, "Update T3 Code"),
@@ -2385,9 +2429,9 @@ function startT3Update(scriptsDir, target) {
  *  path is passed via an ENV VAR (not a -ResultFile arg): an OLDER installed script simply
  *  ignores it and runs normally (pausing on completion), instead of erroring on an unknown
  *  argument — which would trap the user, since it'd fail before downloading the fix. */
-function runUpdateConstruct() {
+function runUpdateConstruct(launched = () => {}) {
   const scriptsDir = resolveScriptsDir();
-  if (!scriptsDir) { warnNoScriptsDir(); return; }
+  if (!scriptsDir) { warnNoScriptsDir(); launched(); return; }
   // Update-Construct.ps1 is INSTALL-WIDE (it refreshes the scripts + the extension, not a
   // VM), so its -Repo/-Ref come from the install-wide settings — no instance is involved.
   const markers = updates.readMarkers(host.readRawSettings(scriptsDir));
@@ -2402,6 +2446,7 @@ function runUpdateConstruct() {
     env: { CONSTRUCT_UPDATE_RESULT: resultFile },
     elevate: false, label: "Update Construct",
   });
+  launched(); // Update-Construct.ps1 holds the run marker until it ends
   if (!ok) return;
   vscode.window.showInformationMessage("Updating Construct — this window reloads automatically when it's done.");
   const startedAt = Date.now();
@@ -4459,14 +4504,14 @@ async function runAddRemoteHost() {
 function hostConversionOptions() {
   return { vscode, context: extensionContext, saveRemoteHost, refresh: () => refreshAll(), review: () => runConvertToHost() };
 }
-async function runConvertToHost() {
+async function runConvertToHost(launched) {
   const target = actionTarget();
   const scriptsDir = resolveScriptsDir();
   if (!scriptsDir) { warnNoScriptsDir(); return; }
   try {
     await hostconversion.run({ ...hostConversionOptions(), instance: target.instance, scriptsDir,
       connected: remote.isConnectedToVm(safeRemoteAuthority(), target.cfg),
-      ubuntu: host.readRawSettings(scriptsDir).ubuntuRelease,
+      ubuntu: host.readRawSettings(scriptsDir).ubuntuRelease, launched,
       stillCurrent: () => !targetSuperseded(target, "Convert to host") });
   } catch (error) { vscode.window.showErrorMessage("Host conversion: " + error.message); }
 }
@@ -4655,11 +4700,17 @@ const webviewOptions = (extensionUri) => ({
  * land in the right place.
  */
 async function preparePanelLifecycle(webview, id, work) {
+  // One lifecycle run at a time on this PC; the claim covers the checks, the confirmation and the launch.
+  const action = PANEL_RUN_ACTIONS[id];
+  const claim = action ? beginLifecycleRun(action) : { end: () => {} };
+  if (claim.refused) { safePost(webview, { type: "lifecyclePrepared", id, error: claim.refused }); return; }
   let error;
-  try { await work(); }
+  try { await work(claim.end); if (action) await lifecycle.runSettled(); }
   catch (e) { error = e && e.message ? e.message : String(e); if (id === "openConsole") vscode.window.showWarningMessage(error); else vscode.window.showErrorMessage("Could not prepare " + id + ": " + error); }
-  finally { safePost(webview, { type: "lifecyclePrepared", id, ...(error ? { error } : {}) }); }
+  finally { claim.end(); safePost(webview, { type: "lifecyclePrepared", id, ...(error ? { error } : {}) }); }
 }
+// The panel buttons that start a lifecycle run, and the run each starts.
+const PANEL_RUN_ACTIONS = { reprovision: "reprovision", reinstall: "reinstall", redownload: "redownload", customReinstall: "reinstall", customRedownload: "redownload", convertToHost: "convertToHost" };
 
 function handleMessage(message, webview, context) {
   if (!message || typeof message.type !== "string" || companionDisposed) return;
@@ -4937,7 +4988,12 @@ function handleMessage(message, webview, context) {
           }
         });
       }
-      if (id === "updateConstruct") { runUpdateConstruct(); return; }
+      if (id === "updateConstruct") {
+        // Claimed until the console is launched (runUpdateConstruct ends it); the script's marker covers the rest.
+        const claim = beginLifecycleRun("updateConstruct", null);
+        if (claim.refused) { safePost(webview, { type: "lifecyclePrepared", id, error: claim.refused }); return; }
+        runUpdateConstruct(claim.end); return;
+      }
       // ── Config-sync commands (C6) ─────────────────────────────────────
       if (id === "syncConfigNow") {
         (async function () {

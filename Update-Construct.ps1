@@ -28,7 +28,12 @@ if (-not $ResultFile) { $ResultFile = $env:CONSTRUCT_UPDATE_RESULT }
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
 
 $ok = $false
+# One lifecycle run at a time on this PC (lib\AgentVm.LifecycleRun.ps1). Loaded from this install
+# before the download replaces it; released before the result is reported.
+$lifecycleRunOwned = $false
 try {
+    . (Join-Path $PSScriptRoot 'lib\AgentVm.LifecycleRun.ps1')
+    $lifecycleRunOwned = Enter-ConstructLifecycleRun -Action 'updateConstruct'
     $base = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:TEMP }
     $slug = ($Repo + "-" + $Ref) -replace '[^A-Za-z0-9._-]', '-'
     $work = Join-Path $base (Join-Path "The-Construct" $slug)
@@ -108,6 +113,8 @@ try {
     $ok = $true
 } catch {
     Write-Warning "Update failed: $($_.Exception.Message)"
+} finally {
+    if ($lifecycleRunOwned) { Exit-ConstructLifecycleRun }
 }
 
 # Signal the panel (if it launched us) so it can reload on success / warn on failure.

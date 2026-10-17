@@ -5,11 +5,15 @@ $ErrorActionPreference = 'Stop'
 function Assert($condition, $message) { if (-not $condition) { throw $message } }
 $root = Join-Path ([IO.Path]::GetTempPath()) ('t3-update-mode-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory $root | Out-Null
+# The lifecycle run marker the script holds goes under the test's own data directory.
+$savedLocalAppData = $env:LOCALAPPDATA
+$env:LOCALAPPDATA = $root
 try {
     Copy-Item (Join-Path $PSScriptRoot '../Update-T3Code.ps1') $root
     New-Item -ItemType Directory (Join-Path $root 'lib') | Out-Null
     Copy-Item (Join-Path $PSScriptRoot '../lib/AgentVm.SettingsMigration.ps1') (Join-Path $root 'lib')
     Copy-Item (Join-Path $PSScriptRoot '../lib/AgentVm.InstanceState.ps1') (Join-Path $root 'lib')
+    Copy-Item (Join-Path $PSScriptRoot '../lib/AgentVm.LifecycleRun.ps1') (Join-Path $root 'lib')
     Set-Content (Join-Path $root 'Provision-AgentVM.ps1') @'
 param([string]$Action, [switch]$FromPanel, [switch]$NonInteractive, [string]$VsCodeServeWeb, [string]$VsCodeTunnel,
       [string]$SmbShare, [string]$ClaudePartialStreaming, [string]$MicPassthrough, [string]$T3Code, [string]$T3CodeChannel,
@@ -66,5 +70,6 @@ if ($env:FAKE_OUTCOME -eq 'errors') { $global:ConstructProvisionHadErrors = $tru
     Assert ($r.Exit -eq 1) "a failed reprovision must exit 1: $($r.Exit)"
     Write-Host 'PASS: Update-T3Code.ps1 picks the quick update or a reprovision and reports the outcome'
 } finally {
+    $env:LOCALAPPDATA = $savedLocalAppData
     Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
 }

@@ -9,7 +9,7 @@ using Construct.Companion.Host.Ipc;
 using Construct.Companion.Host.Runtime;
 namespace Construct.Companion.Host.Dispatch;
 
-public sealed class StateAggregation(CompanionInstances instances, RuntimeMessageBus bus, IpcEvents events, IStateFileSystem files)
+public sealed class StateAggregation(CompanionInstances instances, RuntimeMessageBus bus, IpcEvents events, IStateFileSystem files, LifecycleRuns runs)
 {
     public JsonObject State(string name, JsonObject? probe = null)
     {
@@ -28,6 +28,8 @@ public sealed class StateAggregation(CompanionInstances instances, RuntimeMessag
         var resultPath = StateJson.Text(pending?["resultPath"]);
         if (StateJson.Text(pending?["name"]) == name) data["canConvertHost"] = true;
         data["hostConversionStatus"] = HostConversion.PendingStatus(name, pending, resultPath is null ? null : StateJson.ReadObject(files, resultPath));
+        // Host-wide, whichever instance this state describes: the panel locks its lifecycle buttons while it is set.
+        data["lifecycleRun"] = runs.Current();
         var names = instances.Names;
         if (names.Length > 1) data["instances"] = JsonSerializer.SerializeToNode(names); else data.Remove("instances");
         if (entry.Definition["service"]?["url"] is JsonValue url && Uri.TryCreate(StateJson.Text(url), UriKind.Absolute, out var uri)) data["serviceHost"] = uri.Host;

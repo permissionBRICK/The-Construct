@@ -82,15 +82,52 @@
   const backupId = () => { const e = $("backupPick"); return e ? e.value : ""; };
 
   // Give immediate feedback while the extension preserves configuration before its modal.
-  let consoleAllowed = false, lifecycleBusy = false;
+  // `preparing` is this page's own click ({ id, instance }) and belongs to the instance it was made for;
+  // `hostRun` is the host-wide lifecycle run (state.lifecycleRun / lifecycleRun), whichever instance it is
+  // on. Only one run at a time on a PC, so the run buttons stay disabled for every instance while it is set.
+  // `savedT3`: the saved T3 Code switch, which decides whether "update all" also runs the T3 Code update.
+  let consoleAllowed = false, preparing = null, hostRun = null, savedT3 = false;
   const preparingCommands = new Set(["openConsole", "reprovision", "reinstall", "redownload", "customReinstall", "customRedownload", "convertToHost", "updateConstruct"]);
+  const runCommands = new Set(["reprovision", "reinstall", "redownload", "customReinstall", "customRedownload", "convertToHost", "updateConstruct"]);
+  const RUN_LABELS = { reprovision: "Reprovision", reinstall: "Reinstall", redownload: "Redownload", updateT3: "T3 Code update", updateConstruct: "Construct update", convertToHost: "Host conversion" };
+  function runHint(run) {
+    const label = RUN_LABELS[run.action] || "A Construct run";
+    return label + (run.instance ? " of \u201c" + run.instance + "\u201d" : "") + " is " + (run.phase === "preparing" ? "starting" : "running") + ". Lifecycle actions are available again when it finishes.";
+  }
   function setPreparing(id, busy) {
-    lifecycleBusy = busy;
+    preparing = busy ? { id, instance: shownInstance } : null;
+    applyLifecycleButtons();
+  }
+  // A run that ends (for any instance) also ends this page's own launch: its lifecyclePrepared may have gone to
+  // the instance the page showed when the button was clicked.
+  function setHostRun(run) {
+    const ended = !!hostRun && !run;
+    hostRun = run || null;
+    if (ended && preparing && runCommands.has(preparing.id)) preparing = null;
+    applyLifecycleButtons();
+  }
+  // The run's hint replaces a held control's tooltip; a re-render may rewrite the tooltip meanwhile.
+  function holdTitle(el, locked, hint) {
+    if (locked) { if (el.title !== hint) el.dataset.idleTitle = el.title; el.title = hint; }
+    else if (el.dataset.idleTitle !== undefined) { el.title = el.dataset.idleTitle; delete el.dataset.idleTitle; }
+  }
+  function applyLifecycleButtons() {
+    const hint = hostRun ? runHint(hostRun) : "";
+    const note = $("lifecycleRunNote");
+    if (note) { note.hidden = !hostRun; note.textContent = hint; }
+    // The T3 Code update (Update-T3Code.ps1) is a lifecycle run too: its ↑ tag, and "update all" while that
+    // includes T3 Code. The other agents' updates are not.
+    const t3Tag = document.querySelector('#agentList .tag[data-agent="t3code"]');
+    if (t3Tag) { t3Tag.setAttribute("aria-disabled", String(!!hostRun)); t3Tag.tabIndex = hostRun ? -1 : 0; holdTitle(t3Tag, !!hostRun, hint); }
+    const updateAll = document.querySelector('[data-cmd="updateAgents"]');
+    if (updateAll) { updateAll.disabled = !!hostRun && savedT3; updateAll.setAttribute("aria-disabled", String(updateAll.disabled)); holdTitle(updateAll, updateAll.disabled, hint); }
     document.querySelectorAll("[data-cmd]").forEach((button) => {
       if (!preparingCommands.has(button.dataset.cmd)) return;
-      button.disabled = busy || (button.dataset.cmd === "openConsole" && !consoleAllowed);
+      const locked = !!hostRun && runCommands.has(button.dataset.cmd);
+      button.disabled = !!preparing || locked || (button.dataset.cmd === "openConsole" && !consoleAllowed);
       button.setAttribute("aria-disabled", String(button.disabled));
-      const active = busy && button.dataset.cmd === id;
+      holdTitle(button, locked, hint);
+      const active = !!preparing && button.dataset.cmd === preparing.id;
       button.classList.toggle("preparing", active);
       button.setAttribute("aria-busy", String(active));
       if (active && !button.querySelector(".prepare-spinner") && button.querySelector(".action-icon")) {
@@ -542,7 +579,7 @@
     const btn = $("consoleBtn");
     btn.hidden = !s.console;
     consoleAllowed = !!s.console && s.console.supported && s.online === true;
-    btn.disabled = !consoleAllowed || lifecycleBusy;
+    btn.disabled = !consoleAllowed || !!preparing;
     btn.setAttribute("aria-disabled", String(btn.disabled));
     btn.title = !s.console ? "Checking VM state" : !s.console.supported ? s.console.reason : s.online !== true ? "The VM must be running and reachable over SSH to open its browser console" : "Open this VM's screen in your browser (fresh link every time)";
     $("consoleNote").hidden = true; $("consoleNote").textContent = "";
@@ -944,6 +981,10 @@
       const sub = reprov.querySelector("small");
       if (sub) sub.textContent = stale ? "update pending · reprovision to apply" : "re-run setup · keep all data";
     }
+    // A launch started while another instance was shown is orphaned here (its lifecyclePrepared goes to that
+    // instance); the host-wide run keeps the buttons locked until it ends.
+    if (preparing && preparing.instance && s.instance && preparing.instance !== s.instance) preparing = null;
+    if (s.lifecycleRun !== undefined) setHostRun(s.lifecycleRun); else applyLifecycleButtons();
 
     // Config-sync state is host-derived (not VM-derived): render it regardless of
     // online status, and do NOT clear it in clearLiveVmData.
@@ -1058,12 +1099,13 @@
         tag.setAttribute("role", "button");
         tag.setAttribute("tabindex", "0");
         tag.title = "Update " + a.name + " now";
-        const fire = () => post({ type: "command", id: "updateAgent", agent: a.id });
+        const fire = () => { if (tag.getAttribute("aria-disabled") !== "true") post({ type: "command", id: "updateAgent", agent: a.id }); };
         tag.addEventListener("click", fire);
         tag.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fire(); } });
       }
       host.appendChild(div);
     });
+    applyLifecycleButtons();
   }
 
   function renderProjects(projects) {
@@ -1218,6 +1260,7 @@
 
   window.addEventListener("message", (ev) => {
     if (ev.data && ev.data.type === "lifecyclePrepared" && ev.data.id === "setT3ProxyUrl") { t3ProxyApplied(ev.data.error); return; }
+    if (ev.data && ev.data.type === "lifecycleRun") { setHostRun(ev.data.run); return; }
     if (ev.data && ev.data.type === "lifecyclePrepared") { setPreparing(ev.data.id, false); if (ev.data.id === "openConsole") { $("consoleNote").textContent = String(ev.data.error || ""); $("consoleNote").hidden = !ev.data.error; } else if (ev.data.error) window.alert(String(ev.data.error)); return; }
     const m = ev.data;
     if (!m) return;
@@ -1245,6 +1288,7 @@
 
   function applySettings(s) {
     if (!s) return;
+    if (typeof s.t3code === "boolean") { savedT3 = s.t3code; applyLifecycleButtons(); }
     const setVal = (id, v) => { const e = $(id); if (e && v != null) e.value = v; };
     // Only drive a switch when the field is an actual boolean: a settings payload
     // that omits a key (e.g. one the installer wrote with just the git fields)

@@ -177,6 +177,7 @@ h1.title {
 /* The ↑ tag is clickable (per-agent update) when it carries an agent id. */
 .tag.upd[data-agent] { cursor: pointer; }
 .tag.upd[data-agent]:hover, .tag.upd[data-agent]:focus-visible { background: rgba(255,194,77,0.18); border-color: rgba(255,194,77,0.6); }
+.tag.upd[data-agent][aria-disabled="true"] { cursor: not-allowed; opacity: 0.5; background: rgba(255,194,77,0.06); }
 
 /* A labelled switch row (the Key Vault page's host mode) and the switch itself (settings too). */
 .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }

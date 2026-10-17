@@ -434,6 +434,7 @@ if ($Action -in @('provision', 't3update') -and -not (Get-Command ConvertFrom-Co
 # legacy top-level keys, which is exactly today's single-VM behaviour.
 $stateLib = Join-Path $PSScriptRoot "lib\AgentVm.InstanceState.ps1"
 if (Test-Path -LiteralPath $stateLib) { . $stateLib }
+. (Join-Path $PSScriptRoot "lib\AgentVm.LifecycleRun.ps1")
 
 function Get-ConstructStateInstanceName {
     <#
@@ -1993,7 +1994,14 @@ function Show-ProvisionResultScreen {
 # -Auto), the window pauses at the end -- on success OR error -- instead of
 # closing before the output can be read. In -Auto mode the calling script owns
 # the pause, so we stay silent here.
+$script:LifecycleRunOwned = $false
 try {
+# Provisioning and the T3 Code update are lifecycle runs: one at a time on this PC. Inside
+# Auto-Install / Update-T3Code the outer script already holds the run; a de-elevated child
+# (-ResultFile) runs for its elevated parent, which holds it.
+if ($Action -in @('provision', 't3update') -and -not $ScanReposOnly -and -not $ResultFile) {
+    $script:LifecycleRunOwned = Enter-ConstructLifecycleRun -Action $(if ($Action -eq 'provision') { 'reprovision' } else { 'updateT3' }) -Instance (Get-ConstructStateInstanceName)
+}
 
 Write-Host ""
 Write-Host "The Construct VM provisioner" -ForegroundColor White
@@ -3654,6 +3662,7 @@ catch {
     Write-Host "ERROR: $($_.Exception.Message)" -ForegroundColor Red
 }
 finally {
+    if ($script:LifecycleRunOwned) { Exit-ConstructLifecycleRun }
     if ($Action -eq 'provision') {
         Show-ProvisionResultScreen -Result $script:ProvisionResult -FailureMessage $script:ProvisionFailureMessage
     }

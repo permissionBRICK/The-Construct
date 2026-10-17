@@ -266,7 +266,10 @@ param(
     #      scan still warns if the VM has uncommitted/unpushed work.
     # A direct PowerShell run leaves this off: it pauses and asks for each of these.
     # Forwarded across the self-elevation relaunch below.
-    [switch]$FromPanel
+    [switch]$FromPanel,
+    # Internal: set by this script's own elevated relaunch, so the elevated copy continues the
+    # lifecycle run the unelevated one claimed (lib\AgentVm.LifecycleRun.ps1).
+    [string]$LifecycleRunToken = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -279,6 +282,7 @@ $ErrorActionPreference = "Stop"
 # per line; the Write-Host / Write-Warning / Read-Host shadows below feed it. Prompts are
 # logged, what was typed at them is not.
 $global:ConstructInstallFailed = $false
+$script:LifecycleRunOwned = $false   # set while this script holds the lifecycle run (see below)
 $script:InstallLogPath = ""
 $script:InstallLog = $null
 try {
@@ -410,6 +414,8 @@ function Wait-Exit {
     if ($global:ConstructInstallFailed -and $script:InstallLogPath) {
         Write-Host "    Log: $script:InstallLogPath" -ForegroundColor DarkGray
     }
+    # The run is over once its result is on screen: a console left open at this prompt keeps nothing locked.
+    if ($script:LifecycleRunOwned) { Exit-ConstructLifecycleRun; $script:LifecycleRunOwned = $false }
     if ((-not $FromPanel) -or $global:ConstructProvisionHadErrors -or $global:ConstructInstallFailed) {
         Read-Host "Press Enter to exit" | Out-Null
     }
@@ -941,6 +947,21 @@ function Resolve-ConstructInstallMode {
     return $script:ConstructInstallMode
 }
 
+# ── One lifecycle run at a time on this PC ───────────────────────────────────
+# A reprovision, reinstall or redownload is a lifecycle run (lib\AgentVm.LifecycleRun.ps1). It is
+# claimed where the action becomes known: a bound -Action right here, before anything on this PC
+# changes (the relaunch below hands it to the elevated copy), or the choice in an existing-VM menu.
+# Create-AgentVM.ps1 and the provisioner run inside it. Released by Wait-Exit, the end-of-run pause
+# every path reaches, and by the finally at the bottom of this script.
+. (Join-Path $PSScriptRoot "lib\AgentVm.LifecycleRun.ps1")
+function Enter-AutoInstallLifecycleRun([string]$RunAction, [string]$Instance) {
+    if ($script:LifecycleRunOwned) { return }
+    $script:LifecycleRunOwned = Enter-ConstructLifecycleRun -Action $RunAction -Instance "$Instance".ToLowerInvariant() -AdoptToken $LifecycleRunToken
+}
+if (-not $SkipCreateVm -and $PSBoundParameters.ContainsKey('Action') -and $Action -in @('reprovision', 'reinstall', 'redownload')) {
+    Enter-AutoInstallLifecycleRun $Action $(if ($InstanceName) { $InstanceName } else { $VmName })
+}
+
 # ── Self-elevate to Administrator from the start ─────────────────────────────
 # The Hyper-V VM creation needs admin rights, so we elevate up front -- before
 # the long download/build. After Create-AgentVM.ps1 returns (VM created, SSH up),
@@ -1071,7 +1092,11 @@ if (-not $SkipCreateVm -and $Action -ne 'remove-instance') {
             if ($script:ConstructModePrompted -and -not $PSBoundParameters.ContainsKey('Backend')) {
                 $argList += "-Backend"; $argList += "`"hyperv-local`""
             }
+            # The elevated copy continues the lifecycle run claimed above: it adopts the marker by its
+            # token, which meanwhile names the elevated process so the run never looks abandoned.
+            if ($script:LifecycleRunOwned) { $argList += "-LifecycleRunToken"; $argList += "`"$env:CONSTRUCT_LIFECYCLE_RUN`"" }
             $elevated = Start-Process powershell.exe -Verb RunAs -ArgumentList $argList -PassThru
+            if ($script:LifecycleRunOwned) { Move-ConstructLifecycleRun -ProcessId $elevated.Id; $script:LifecycleRunOwned = $false }
             # Bring the new elevated console to the foreground (best-effort): after
             # the UAC prompt it can open behind this window. We wait briefly for its
             # main window handle to appear, then focus it. With Windows Terminal as
@@ -1374,6 +1399,10 @@ if ($Action -eq 'remove-instance') {
         -Interactive:(-not $FromPanel) -KeepVm:$KeepVm
     exit $script:ConstructRemoveInstanceRc
 }
+
+# A claimed lifecycle run (see "One lifecycle run at a time" above) is released by the finally at the
+# bottom of this script on any path that ends without Wait-Exit.
+try {
 
 # The "all set" banner marks the end of the interactive phase: draw it on a
 # fresh screen, then drop out of TUI mode so everything after it -- download,
@@ -2541,6 +2570,7 @@ if ($RemoteInstall) {
         }
 
         if ($choice -eq 5) { $remoteRedownload = $true; $choice = 1 }
+        if ($choice -in 0, 1) { Enter-AutoInstallLifecycleRun $(if ($choice -eq 0) { 'reprovision' } elseif ($remoteRedownload) { 'redownload' } else { 'reinstall' }) $instName }
 
         if ($choice -eq 2) {
             try {
@@ -3159,6 +3189,7 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
             "Quit             make no changes and exit"
         ) -Default 0
     }
+    if ($choice -in 0, 1, 2) { Enter-AutoInstallLifecycleRun @('reprovision', 'reinstall', 'redownload')[$choice] $VmGuestName }
 
     if ($choice -eq 0) {
         # Reprovision only: we just need the project selection, then run the
@@ -4244,3 +4275,5 @@ try {
     Wait-Exit
     Stop-InstallLog
 }
+}
+finally { if ($script:LifecycleRunOwned) { Exit-ConstructLifecycleRun } }

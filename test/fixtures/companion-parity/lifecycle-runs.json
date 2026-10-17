@@ -1,0 +1,283 @@
+[
+  {
+    "dead": [
+      4243
+    ],
+    "input": "{\"pid\":4242,\"instance\":\"work-vm\",\"action\":\"reprovision\",\"startedAt\":\"2026-10-17T10:00:00.0000000Z\",\"token\":\"9f2c4e0b7a514c4f8e0d2b6a1c3e5f70\"}",
+    "kind": "marker",
+    "output": {
+      "reason": "Reprovision of “work-vm” is running. Wait until it finishes, then try again.",
+      "run": {
+        "action": "reprovision",
+        "instance": "work-vm",
+        "phase": "running",
+        "startedAt": "2026-10-17T10:00:00.0000000Z"
+      }
+    }
+  },
+  {
+    "dead": [
+      4243
+    ],
+    "input": "﻿{\"pid\":4242,\"instance\":\"work-vm\",\"action\":\"reprovision\",\"startedAt\":\"2026-10-17T10:00:00.0000000Z\",\"token\":\"9f2c4e0b7a514c4f8e0d2b6a1c3e5f70\"}",
+    "kind": "marker",
+    "output": {
+      "reason": "Reprovision of “work-vm” is running. Wait until it finishes, then try again.",
+      "run": {
+        "action": "reprovision",
+        "instance": "work-vm",
+        "phase": "running",
+        "startedAt": "2026-10-17T10:00:00.0000000Z"
+      }
+    }
+  },
+  {
+    "dead": [
+      4243
+    ],
+    "input": "{\"pid\":4242,\"instance\":\"\",\"action\":\"reprovision\",\"startedAt\":\"2026-10-17T10:00:00.0000000Z\",\"token\":\"9f2c4e0b7a514c4f8e0d2b6a1c3e5f70\"}",
+    "kind": "marker",
+    "output": {
+      "reason": "Reprovision is running. Wait until it finishes, then try again.",
+      "run": {
+        "action": "reprovision",
+        "instance": null,
+        "phase": "running",
+        "startedAt": "2026-10-17T10:00:00.0000000Z"
+      }
+    }
+  },
+  {
+    "dead": [
+      4243
+    ],
+    "input": "{\"pid\":4242,\"instance\":\"\",\"action\":\"updateConstruct\",\"startedAt\":\"2026-10-17T10:00:00.0000000Z\",\"token\":\"t\"}",
+    "kind": "marker",
+    "output": {
+      "reason": "Construct update is running. Wait until it finishes, then try again.",
+      "run": {
+        "action": "updateConstruct",
+        "instance": null,
+        "phase": "running",
+        "startedAt": "2026-10-17T10:00:00.0000000Z"
+      }
+    }
+  },
+  {
+    "dead": [
+      4243
+    ],
+    "input": "{\"pid\":4242,\"instance\":7,\"action\":[\"reinstall\"],\"startedAt\":12}",
+    "kind": "marker",
+    "output": {
+      "reason": "A Construct run is running. Wait until it finishes, then try again.",
+      "run": {
+        "action": "",
+        "instance": null,
+        "phase": "running",
+        "startedAt": null
+      }
+    }
+  },
+  {
+    "dead": [
+      4243
+    ],
+    "input": "{\"pid\":4243,\"action\":\"convertToHost\",\"instance\":\"agent-vm\"}",
+    "kind": "marker",
+    "output": {
+      "reason": null,
+      "run": null
+    }
+  },
+  {
+    "dead": [
+      4243
+    ],
+    "input": "{\"pid\":\"4242\",\"action\":\"reinstall\"}",
+    "kind": "marker",
+    "output": {
+      "reason": null,
+      "run": null
+    }
+  },
+  {
+    "dead": [
+      4243
+    ],
+    "input": "{\"pid\":0,\"action\":\"reinstall\"}",
+    "kind": "marker",
+    "output": {
+      "reason": null,
+      "run": null
+    }
+  },
+  {
+    "dead": [
+      4243
+    ],
+    "input": "{\"pid\":4242.5,\"action\":\"reinstall\"}",
+    "kind": "marker",
+    "output": {
+      "reason": null,
+      "run": null
+    }
+  },
+  {
+    "dead": [
+      4243
+    ],
+    "input": "{\"pid\":2147483648,\"action\":\"reinstall\"}",
+    "kind": "marker",
+    "output": {
+      "reason": null,
+      "run": null
+    }
+  },
+  {
+    "dead": [
+      4243
+    ],
+    "input": "{\"pid\":1e3,\"action\":\"redownload\",\"instance\":\"agent-vm\"}",
+    "kind": "marker",
+    "output": {
+      "reason": "Redownload of “agent-vm” is running. Wait until it finishes, then try again.",
+      "run": {
+        "action": "redownload",
+        "instance": "agent-vm",
+        "phase": "running",
+        "startedAt": null
+      }
+    }
+  },
+  {
+    "dead": [
+      4243
+    ],
+    "input": "[4242]",
+    "kind": "marker",
+    "output": {
+      "reason": null,
+      "run": null
+    }
+  },
+  {
+    "dead": [
+      4243
+    ],
+    "input": "null",
+    "kind": "marker",
+    "output": {
+      "reason": null,
+      "run": null
+    }
+  },
+  {
+    "dead": [
+      4243
+    ],
+    "input": "",
+    "kind": "marker",
+    "output": {
+      "reason": null,
+      "run": null
+    }
+  },
+  {
+    "dead": [
+      4243
+    ],
+    "input": "{ not json",
+    "kind": "marker",
+    "output": {
+      "reason": null,
+      "run": null
+    }
+  },
+  {
+    "dead": [
+      4243
+    ],
+    "input": null,
+    "kind": "marker",
+    "output": {
+      "reason": null,
+      "run": null
+    }
+  },
+  {
+    "action": "reinstall",
+    "instance": "agent-vm",
+    "kind": "describe",
+    "output": {
+      "reason": "Reinstall of “agent-vm” is starting. Wait until it finishes, then try again.",
+      "run": {
+        "action": "reinstall",
+        "instance": "agent-vm",
+        "phase": "preparing",
+        "startedAt": null
+      }
+    },
+    "phase": "preparing"
+  },
+  {
+    "action": "updateConstruct",
+    "instance": null,
+    "kind": "describe",
+    "output": {
+      "reason": "Construct update is starting. Wait until it finishes, then try again.",
+      "run": {
+        "action": "updateConstruct",
+        "instance": null,
+        "phase": "preparing",
+        "startedAt": null
+      }
+    },
+    "phase": "preparing"
+  },
+  {
+    "action": "updateT3",
+    "instance": "work-vm",
+    "kind": "describe",
+    "output": {
+      "reason": "T3 Code update of “work-vm” is running. Wait until it finishes, then try again.",
+      "run": {
+        "action": "updateT3",
+        "instance": "work-vm",
+        "phase": "running",
+        "startedAt": null
+      }
+    },
+    "phase": "running"
+  },
+  {
+    "action": "redownload",
+    "instance": "",
+    "kind": "describe",
+    "output": {
+      "reason": "Redownload is running. Wait until it finishes, then try again.",
+      "run": {
+        "action": "redownload",
+        "instance": null,
+        "phase": "running",
+        "startedAt": null
+      }
+    },
+    "phase": "running"
+  },
+  {
+    "action": "somethingNew",
+    "instance": "agent-vm",
+    "kind": "describe",
+    "output": {
+      "reason": "A Construct run of “agent-vm” is running. Wait until it finishes, then try again.",
+      "run": {
+        "action": "somethingNew",
+        "instance": "agent-vm",
+        "phase": "running",
+        "startedAt": null
+      }
+    },
+    "phase": "running"
+  }
+]

@@ -9,13 +9,33 @@
   const $ = (id) => document.getElementById(id);
 
   // Give immediate feedback while the extension preserves configuration before its modal.
+  // `preparing` is this page's own click ({ id, instance }); `hostRun` the host-wide lifecycle run, whichever
+  // instance it is on (one at a time on a PC). Same rules as the panel (panel.js).
+  let preparing = null, hostRun = null;
   const preparingCommands = new Set(["reprovision", "reinstall", "redownload", "customReinstall", "customRedownload", "updateConstruct"]);
+  const RUN_LABELS = { reprovision: "Reprovision", reinstall: "Reinstall", redownload: "Redownload", updateT3: "T3 Code update", updateConstruct: "Construct update", convertToHost: "Host conversion" };
+  function runHint(run) {
+    const label = RUN_LABELS[run.action] || "A Construct run";
+    return label + (run.instance ? " of \u201c" + run.instance + "\u201d" : "") + " is " + (run.phase === "preparing" ? "starting" : "running") + ". Lifecycle actions are available again when it finishes.";
+  }
   function setPreparing(id, busy) {
+    preparing = busy ? { id, instance: shownInstance } : null;
+    applyLifecycleButtons();
+  }
+  function setHostRun(run) {
+    if (hostRun && !run) preparing = null;   // the run ended, whichever instance this page shows now
+    hostRun = run || null;
+    applyLifecycleButtons();
+  }
+  function applyLifecycleButtons() {
+    const hint = hostRun ? runHint(hostRun) : "";
     document.querySelectorAll("[data-cmd]").forEach((button) => {
       if (!preparingCommands.has(button.dataset.cmd)) return;
-      button.disabled = busy;
-      button.setAttribute("aria-disabled", String(busy));
-      const active = busy && button.dataset.cmd === id;
+      button.disabled = !!preparing || !!hostRun;
+      button.setAttribute("aria-disabled", String(button.disabled));
+      if (hostRun) { if (button.title !== hint) button.dataset.idleTitle = button.title; button.title = hint; }
+      else if (button.dataset.idleTitle !== undefined) { button.title = button.dataset.idleTitle; delete button.dataset.idleTitle; }
+      const active = !!preparing && button.dataset.cmd === preparing.id;
       button.classList.toggle("preparing", active);
       button.setAttribute("aria-busy", String(active));
       if (active && !button.querySelector(".prepare-spinner") && button.querySelector(".action-icon")) {
@@ -144,6 +164,9 @@
         ? "The VM was provisioned with an older Construct — reprovision to apply the update."
         : "Reprovision — re-run setup, keep all data";
     }
+    // A launch started for another instance is orphaned here; the host-wide run keeps the buttons locked.
+    if (preparing && preparing.instance && s.instance && preparing.instance !== s.instance) preparing = null;
+    if (s.lifecycleRun !== undefined) setHostRun(s.lifecycleRun); else applyLifecycleButtons();
 
     const agentsEl = $("lAgents");
     if (!online) { if (agentsEl) agentsEl.textContent = "unavailable"; $("lMeta").textContent = ""; return; }
@@ -166,6 +189,7 @@
   }
 
   window.addEventListener("message", (ev) => {
+    if (ev.data && ev.data.type === "lifecycleRun") { setHostRun(ev.data.run); return; }
     if (ev.data && ev.data.type === "lifecyclePrepared") { setPreparing(ev.data.id, false); if (ev.data.error) window.alert(String(ev.data.error)); return; }
     const m = ev.data;
     if (!m) return;
