@@ -171,7 +171,7 @@ to the address they were minted for, so Construct then mints one for the proxy a
 it first. [Key vault: your own proxy](key-vault.md#your-own-proxy-for-t3-code-and-the-approval-page)
 has the details, including the approval page's own proxy address.
 
-The patched clients add a mic button beside Send and a **Ctrl+T** shortcut. Speech appears live
+The patched clients add a mic button beside Send and an **Alt+Q** shortcut. Speech appears live
 at the cursor without replacing existing input, and the recording ring responds to microphone
 level. This reuses Construct's microphone tunnel, so **Microphone passthrough** must also be
 enabled and a VS Code window running the Construct extension must remain open while recording.
