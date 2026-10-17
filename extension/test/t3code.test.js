@@ -33,15 +33,15 @@ ok("stock install: an unchanged stock release skips the npm install AND the rest
   /printf '%s\\n' "\$\{_t3_stock_key\}" > \/etc\/construct\/t3code-installed-build/.test(installAiTools) &&
   installAiTools.indexOf("setup-t3-https.sh") < installAiTools.indexOf("(stock) is unchanged and already running"));
 ok("desktop update handoff: an instance that never saved the keep-saved T3/OpenCode toggles keeps the VM's own (no default TRUE patched build)",
-  /if \(\$null -ne \$settings\.t3codeLimitResume\) \{ \$params\.T3CodeLimitResume/.test(updateT3) &&
+  /if \(\$null -ne \$settings\.t3codePatched\) \{ \$params\.T3CodePatched/.test(updateT3) &&
   /if \(\$null -ne \$settings\.t3code\) \{ \$params\.T3Code /.test(updateT3) &&
   /if \(\$null -ne \$settings\.opencodeBackgroundWatcher\)/.test(updateT3) &&
-  !/^\s+T3CodeLimitResume\s*=\s*As-BoolString/m.test(updateT3));
+  !/^\s+T3CodePatched\s*=\s*As-BoolString/m.test(updateT3));
 const pairingScript = fs.readFileSync(path.join(repoRoot, "Get-ConstructT3PairingLink.ps1"), "utf8");
 ok("auto-link: the host script the Desktop runs is non-interactive and prints one JSON line",
   !/Read-Host|Invoke-Tui|Start-Sleep/.test(pairingScript) && /ConvertTo-Json -Compress/.test(pairingScript) && /-InstanceName/.test(pairingScript));
 ok("desktop update handoff: reprovisions with the saved T3 source-build setting",
-  /Provision-AgentVM\.ps1/.test(updateT3) && /Action\s+= 'provision'/.test(updateT3) && /T3CodeLimitResume/.test(updateT3));
+  /Provision-AgentVM\.ps1/.test(updateT3) && /Action\s+= 'provision'/.test(updateT3) && /T3CodePatched/.test(updateT3));
 ok("desktop provisioning: installs updates silently, waits, and never prompts or launches the app",
   /ArgumentList @\('--updated', '\/S'\) -Wait -PassThru -WindowStyle Hidden/.test(provisionT3) &&
   /installed\.json/.test(provisionT3) && !/System\.Windows\.Forms\.MessageBox/.test(provisionT3) &&

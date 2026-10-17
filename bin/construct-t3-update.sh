@@ -44,6 +44,10 @@ warn() { printf '%s%s%s\n' "${_C_WARN}" "$*" "${_C_RESET}" >&2; }
 err()  { printf '%s%s%s\n' "${_C_ERR}" "$*" "${_C_RESET}" >&2; }
 
 config_value() { sed -n "s/^$1=//p" "${CONFIG_FILE}" 2>/dev/null | head -1 | tr -d "\"'"; }
+# shellcheck disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/t3code-patched.sh"
+T3CODE_PATCHED="$(resolve_t3code_patched "${CONFIG_FILE}")"
+export T3CODE_PATCHED
 
 if [[ "${EUID}" -ne 0 ]]; then
   err "Run as root: sudo bash ${REPO_DIR}/bin/construct-t3-update.sh"
@@ -105,7 +109,7 @@ for _f in "${STATUS_FILE}" "${ARTIFACTS}/server-manifest.json" "${ARTIFACTS}/man
   [[ -f "${_f}" ]] && cp -p "${_f}" "${_backup}/$(basename "${_f}")"
 done
 
-step "Updating T3 Code ($(config_value T3CODE_CHANNEL || true), $([[ "$(config_value T3CODE_LIMIT_RESUME)" == "true" ]] && echo "Construct build: $(config_value T3CODE_BUILD_SOURCE)" || echo stock))"
+step "Updating T3 Code ($(config_value T3CODE_CHANNEL || true), $([[ "${T3CODE_PATCHED}" == "true" ]] && echo "Construct build: $(config_value T3CODE_BUILD_SOURCE)" || echo stock))"
 _install_rc=0
 env TARGET_USER=root AI_TOOLS_OVERRIDE=t3code AI_CONSOLE_INTEGRATION=false \
   REPO_DIR="${REPO_DIR}" CONFIG_FILE="${CONFIG_FILE}" \
@@ -116,7 +120,7 @@ _wanted="$(sed -n 's/^T3CODE_BUILD_KEY=//p' "${STATUS_FILE}" 2>/dev/null | head 
 _active="$(cat "${INSTALLED_FILE}" 2>/dev/null || true)"
 _ready=false
 if [[ "${_install_rc}" -eq 0 ]] && systemctl is-active --quiet t3code-serve; then
-  if [[ "$(config_value T3CODE_LIMIT_RESUME)" == "true" ]]; then
+  if [[ "${T3CODE_PATCHED}" == "true" ]]; then
     [[ -n "${_wanted}" && "${_active}" == "${_wanted}" ]] && _ready=true
   else
     [[ "${_active}" == stock:* ]] && _ready=true

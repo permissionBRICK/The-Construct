@@ -39,7 +39,7 @@ public static class ProbeParser
     public static JsonObject? ParseVmConfig(IReadOnlyDictionary<string, string> map)
     {
         var result = new JsonObject();
-        foreach (var (key, field) in new[] { ("T3CODE", "t3code"), ("T3CODE_LIMIT_RESUME", "t3codeLimitResume"), ("OPENCODE_BACKGROUND_WATCHER", "opencodeBackgroundWatcher") })
+        foreach (var (key, field) in new[] { ("T3CODE", "t3code"), ("T3CODE_PATCHED", "t3codePatched"), ("OPENCODE_BACKGROUND_WATCHER", "opencodeBackgroundWatcher") })
         {
             var s = StateJson.Trim(ConfigUnquote(map.GetValueOrDefault(key))).ToLowerInvariant(); if (s is "true" or "false") result[field] = s == "true";
         }

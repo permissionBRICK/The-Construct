@@ -63,7 +63,7 @@ Hard facts that shaped the design (verified in the tree, do not re-derive):
 | Item | Owner | Value |
 |---|---|---|
 | `T3CODE_PUBLIC_BASE_URL` in `/etc/construct/config.env` | written by Track B, honoured by Track A | e.g. `https://agent-vm.mshome.net:5178` (no path). Absent/empty = today's behaviour. The `t3code-serve` unit already loads `config.env` as `EnvironmentFile`, so `t3 serve` sees it as a process env var. |
-| `T3CODE_HTTPS` / `T3CODE_HTTPS_PORT` in `config.env` | Track B | `true`/`false`, default `true` when `T3CODE=true`; port default `5178`. Plain HTTP on `T3CODE_PORT` (5177) stays available for local tooling (t3park token mint etc.). |
+| `T3CODE_HTTPS` / `T3CODE_HTTPS_PORT` in `config.env` | Track B | `true`/`false`, default `true` when `T3CODE=true`; port default `5178`. Plain HTTP on `T3CODE_PORT` (5177) stays available for local tooling. |
 | `CONSTRUCT_T3_VOICE_INPUT` | unchanged | still gates the `voiceInput` capability. |
 | `patches/t3code-construct.patch` | **only Track A edits it** | Track B must not touch the patch file. |
 
@@ -174,7 +174,7 @@ Honour `process.env.T3CODE_PUBLIC_BASE_URL` (trimmed, must parse as http(s) URL,
 3. In `/root/repos/construct-voice`: update `docs/control-panel.md` (the "Voice input" bullet under
    "The shared patch adds", and the "Microphone passthrough" section: T3 no longer needs the
    extension; sources; browser needs HTTPS or the desktop app), `README.md` feature line if it
-   claims otherwise, and `docs/provisioning.md` row for `T3CODE_LIMIT_RESUME` wording. Commit there
+   claims otherwise, and `docs/provisioning.md` row for `T3CODE_PATCHED` wording. Commit there
    with a conventional message. Do NOT edit `bin/`, `systemd/`, `*.ps1`, or `extension/` in the
    construct repo; that is Track B.
 

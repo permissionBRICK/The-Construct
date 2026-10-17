@@ -202,6 +202,8 @@ function Test-ConstructInstanceStateMetaKey {
     return $false
 }
 
+. (Join-Path $PSScriptRoot 'AgentVm.SettingsMigration.ps1')
+
 function Read-ConstructInstanceStateFile {
     <#
         The raw parsed per-instance document, or $null.
@@ -220,7 +222,7 @@ function Read-ConstructInstanceStateFile {
     if ($null -eq $doc) { return $null }
     if ($doc -is [System.Array]) { return $null }
     if (-not ($doc -is [System.Management.Automation.PSCustomObject])) { return $null }
-    return $doc
+    return (ConvertTo-ConstructCurrentSettings $doc)
 }
 
 function Read-ConstructInstanceState {

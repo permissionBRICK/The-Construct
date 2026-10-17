@@ -11,7 +11,7 @@ function Assert($Condition, $Message) {
 }
 $table = @(Get-ConstructFeatureTable)
 Assert ($table.Count -eq 13) 'All thirteen components, in the specified order'
-$expectedParams = @('SkipCompanion','ClaudePartialStreaming','GitCredentialStore','VsCodeServeWeb','VsCodeTunnel','SmbShare','MountRepoShare','MicPassthrough','AutomaticCheckpoints','OpenCodeBackgroundWatcher','T3Code','T3CodeLimitResume','T3CodeHttps')
+$expectedParams = @('SkipCompanion','ClaudePartialStreaming','GitCredentialStore','VsCodeServeWeb','VsCodeTunnel','SmbShare','MountRepoShare','MicPassthrough','AutomaticCheckpoints','OpenCodeBackgroundWatcher','T3Code','T3CodePatched','T3CodeHttps')
 Assert (($table.Parameter -join ',') -eq ($expectedParams -join ',')) 'Prompt order matches the specification'
 $minimal = @($true,$true,$true,$false,$false,$false,$false,$false,$false,$false,$false,$false,$true)
 $full = @($true,$true,$true,$true,$false,$true,$false,$true,$false,$true,$true,$true,$true)
@@ -49,6 +49,7 @@ Assert $invalid 'Unknown tier is rejected'
 # expose only a subset, and must not receive an unknown parameter in their splat.
 foreach ($file in @('Auto-Install.ps1','Create-AgentVM.ps1','Provision-AgentVM.ps1')) {
     $command = Get-Command (Join-Path $repo $file)
+    Assert ($command.Parameters['T3CodePatched'].Aliases -contains 'T3CodeLimitResume') "$file accepts the legacy patched parameter"
     foreach ($p in $expectedParams + 'T3CodeChannel') {
         if ($file -eq 'Provision-AgentVM.ps1' -and $p -eq 'AutomaticCheckpoints') { continue }
         Assert ($command.Parameters.ContainsKey($p)) "$file declares $p"
@@ -134,7 +135,7 @@ try {
         Assert ($script:Questions.Count -eq $expectedQuestions) "$gate Custom question gate"
         if ($gate -in @('fresh','remote','custom','explicit','panel','auto','noninteractive','redirected','fresh-add-config')) {
             Assert ($script:Screens -eq (1 + $expectedMenus) -and $script:Summary.Count -eq 13) "$gate informational summary"
-            Assert ($bound.ContainsKey('T3CodeLimitResume') -and $bound.ContainsKey('T3CodeHttps')) "$gate elevation forwards all choices"
+            Assert ($bound.ContainsKey('T3CodePatched') -and $bound.ContainsKey('T3CodeHttps')) "$gate elevation forwards all choices"
             $saved=Read-ConstructSettings -Dir $dir
             Assert ($saved.companion -and $saved.gitCredentialStore) "$gate client preference persistence"
         }
@@ -151,7 +152,7 @@ try {
     foreach ($row in $table | Where-Object { $_.Parameter -ne 'SkipCompanion' }) {
         Assert ($saved.PSObject.Properties.Name -contains $row.Key) "Default store writes panel key $($row.Key)"
     }
-    Assert ($saved.t3code -and $saved.t3codeLimitResume -and $saved.t3codeChannel -eq 'stable') 'T3 panel keys use actual lowercase spellings'
+    Assert ($saved.t3code -and $saved.t3codePatched -and $saved.t3codeChannel -eq 'stable') 'T3 panel keys use actual lowercase spellings'
     # A rebuild must ignore a newly supplied tier and retain saved per-component choices.
     Reset-Scenario
     $script:Action='reinstall'; $script:FeatureSet='minimal'

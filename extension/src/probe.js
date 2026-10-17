@@ -51,8 +51,8 @@ function parseVmConfig(map) {
   if (t3 !== null) out.t3code = t3;
   const ch = cfgUnquote(map.T3CODE_CHANNEL).trim();
   if (ch === "stable" || ch === "nightly") out.t3codeChannel = ch;
-  const park = bool(map.T3CODE_LIMIT_RESUME);
-  if (park !== null) out.t3codeLimitResume = park;
+  const patched = bool(map.T3CODE_PATCHED);
+  if (patched !== null) out.t3codePatched = patched;
   const watcher = bool(map.OPENCODE_BACKGROUND_WATCHER);
   if (watcher !== null) out.opencodeBackgroundWatcher = watcher;
   return Object.keys(out).length ? out : null;

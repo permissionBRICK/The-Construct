@@ -78,7 +78,7 @@ reset() {
   rm -rf "${CACHE}" "${tmp}/run" "${tmp}/artifacts" "${CALLS}" "${CONSTRUCT_T3_RESUME_FILE}"
   mkdir -p "${CACHE}/old/bin" "${CACHE}/new/bin" "${tmp}/artifacts"
   touch "${CACHE}/old/bin/t3" "${CACHE}/new/bin/t3"
-  printf 'T3CODE=true\nT3CODE_CHANNEL=stable\nT3CODE_LIMIT_RESUME=true\nT3CODE_BUILD_SOURCE=prebuilt\n' >"${CONFIG_FILE}"
+  printf 'T3CODE=true\nT3CODE_CHANNEL=stable\nT3CODE_PATCHED=true\nT3CODE_BUILD_SOURCE=prebuilt\n' >"${CONFIG_FILE}"
   ln -sfn "${CACHE}/old/bin/t3" "${T3CODE_LAUNCHER}"
   printf 'T3CODE_SERVER_READY=yes\nT3CODE_BUILD_KEY=old\n' >"${T3CODE_STATUS_PATH}"
   echo '{"buildHash":"old"}' >"${T3CODE_ARTIFACT_ROOT}/server-manifest.json"
@@ -118,7 +118,7 @@ ok "  and leaves the running build alone" launcher_is old
 ok "  without a restart" bash -c "! grep -q 'systemctl restart' '${CALLS}'"
 ok "  and says what still runs" out_has "T3 Code still runs the build it ran before (old)"
 
-reset; sed -i 's/^T3CODE_LIMIT_RESUME=true/T3CODE_LIMIT_RESUME=false/' "${CONFIG_FILE}"; INSTALL=stock run
+reset; sed -i 's/^T3CODE_PATCHED=true/T3CODE_PATCHED=false/' "${CONFIG_FILE}"; INSTALL=stock run
 ok "a stock T3 update succeeds once its release is recorded" rc_is 0
 ok "  and reports it" out_has "old -> stock:1.2.3"
 

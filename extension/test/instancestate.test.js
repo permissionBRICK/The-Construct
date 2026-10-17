@@ -289,7 +289,7 @@ try {
   const probedVm = {
     online: true,
     vmSpec: { ramGb: 16, diskGb: 150, cpus: 8 },
-    vmConfig: { t3code: true, t3codeChannel: "stable", t3codeLimitResume: true, opencodeBackgroundWatcher: false },
+    vmConfig: { t3code: true, t3codeChannel: "stable", t3codePatched: true, opencodeBackgroundWatcher: false },
   };
   ok("backfill: an offline VM writes nothing", state.backfillFromProbe(bf, { online: false }) === null);
   ok("backfill: a failed probe writes nothing", state.backfillFromProbe(bf, { online: true, probeError: "x" }) === null);
@@ -297,21 +297,21 @@ try {
   const written = state.backfillFromProbe(bf, probedVm);
   ok("backfill: a console-installed VM (no keys saved) gets its size + keep-saved config recorded",
     written && written.vmMemoryGB === 16 && written.vmDiskGB === 150 && written.vmCpuCount === 8 &&
-    written.t3code === true && written.t3codeChannel === "stable" && written.t3codeLimitResume === true &&
+    written.t3code === true && written.t3codeChannel === "stable" && written.t3codePatched === true &&
     written.opencodeBackgroundWatcher === false, JSON.stringify(written));
   ok("backfill: ...into that instance's own file", fs.existsSync(path.join(instDir, "field-vm.json")));
   ok("backfill: ...which the settings form now reads (ram/disk/cpu + the unlit toggle lit)",
-    (() => { const f = state.readSettings(bf); return f.ram === "16" && f.disk === "150" && f.cpu === "8" && f.t3codeLimitResume === true; })());
+    (() => { const f = state.readSettings(bf); return f.ram === "16" && f.disk === "150" && f.cpu === "8" && f.t3codePatched === true; })());
   ok("backfill: a second probe has nothing left to add", state.backfillFromProbe(bf, probedVm) === null);
   // The user's saved choice wins over what the VM currently is: they may have turned
   // the patched build OFF and not reprovisioned yet.
-  state.saveSettings(bf, { t3codeLimitResume: false, ram: "" });
+  state.saveSettings(bf, { t3codePatched: false, ram: "" });
   const saved = state.store("saved-vm", scriptsDir, env);
-  state.saveSettings(saved, { ram: "12", t3codeLimitResume: false });
+  state.saveSettings(saved, { ram: "12", t3codePatched: false });
   const partial = state.backfillFromProbe(saved, probedVm);
   ok("backfill: saved keys are never overwritten (12 GB stays, the toggle stays off)",
-    partial && !("vmMemoryGB" in partial) && !("t3codeLimitResume" in partial) && partial.vmDiskGB === 150 &&
-    state.readSettings(saved).ram === "12" && state.readSettings(saved).t3codeLimitResume === false, JSON.stringify(partial));
+    partial && !("vmMemoryGB" in partial) && !("t3codePatched" in partial) && partial.vmDiskGB === 150 &&
+    state.readSettings(saved).ram === "12" && state.readSettings(saved).t3codePatched === false, JSON.stringify(partial));
   ok("backfill: a probe without the facts (older VM) writes nothing",
     state.backfillFromProbe(state.store("bare-vm", scriptsDir, env), { online: true, projects: [] }) === null);
   ok("backfill: an unknown channel / non-boolean is not recorded",
@@ -324,6 +324,18 @@ try {
     defPatch && defAfter.vmDiskGB === 300 && defAfter.vmCpuCount === 12 &&
     ("vmMemoryGB" in defBefore ? defAfter.vmMemoryGB === defBefore.vmMemoryGB : defAfter.vmMemoryGB === 20), JSON.stringify(defPatch));
   ok("backfill: ...without creating instances\\agent-vm.json", !fs.existsSync(path.join(instDir, "agent-vm.json")));
+  for (const name of ["agent-vm", "legacy-vm"]) {
+    const st = state.store(name, scriptsDir, env);
+    const file = name === "agent-vm" ? host.settingsPath(scriptsDir) : state.statePath(name, env);
+    fs.writeFileSync(file, JSON.stringify({ t3codeLimitResume: true, unmanaged: 7 }));
+    ok("legacy patched preference is read for " + name, state.readSettings(st).t3codePatched === true);
+    state.saveSettings(st, { t3codePatched: false });
+    const saved = JSON.parse(fs.readFileSync(file, "utf8"));
+    ok("only the new patched key is saved for " + name,
+      saved.t3codePatched === false && !("t3codeLimitResume" in saved) && saved.unmanaged === 7);
+    fs.writeFileSync(file, JSON.stringify({ t3codeLimitResume: true, t3codePatched: false }));
+    ok("new patched preference wins for " + name, state.readSettings(st).t3codePatched === false);
+  }
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }

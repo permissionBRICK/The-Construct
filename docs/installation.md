@@ -91,7 +91,7 @@ Feature parameters for `Auto-Install.ps1`:
 | `-AutomaticCheckpoints true\|false` | Hyper-V automatic checkpoints, local or remote. |
 | `-OpenCodeBackgroundWatcher true\|false` | OpenCode background watcher patch. |
 | `-T3Code true\|false` | T3 Code web GUI. `-T3CodeChannel stable\|nightly` overrides the preset's stable channel. |
-| `-T3CodeLimitResume true\|false` | Patched T3 Code + Desktop, using the legacy parameter name. |
+| `-T3CodePatched true\|false` | Patched T3 Code + Desktop. The old name `-T3CodeLimitResume` is also accepted. |
 | `-T3CodeHttps true\|false` | T3 Code HTTPS. |
 | `-Auto`, `-NonInteractive`, `-FromPanel` | Suppress feature questions. Unattended Custom uses Minimal defaults plus explicit overrides. |
 | `-SkipCreateVm` | Build only the ISO; skip feature selection. |

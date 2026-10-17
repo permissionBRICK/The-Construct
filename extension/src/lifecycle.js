@@ -516,7 +516,7 @@ function buildInvocation(action, opts = {}) {
       if (opts.supportsOpenCodeBackgroundWatcher !== false) pushBool("-OpenCodeBackgroundWatcher", s.opencodeBackgroundWatcher);
       pushBool("-T3Code", s.t3code);
       if (opts.supportsT3CodeChannel !== false) pushPair("-T3CodeChannel", s.t3codeChannel);
-      if (opts.supportsT3CodeLimitResume !== false) pushBool("-T3CodeLimitResume", s.t3codeLimitResume);
+      if (opts.supportsT3CodePatched !== false) pushBool("-T3CodePatched", s.t3codePatched);
       // Launched from the panel: don't prompt for the SMB drive letter etc. (still pauses
       // at the end so output is readable — -NonInteractive is NOT -Auto).
       addSwitch("-NonInteractive");
@@ -566,7 +566,7 @@ function buildInvocation(action, opts = {}) {
       if (opts.supportsOpenCodeBackgroundWatcher !== false) pushBool("-OpenCodeBackgroundWatcher", s.opencodeBackgroundWatcher);
       pushBool("-T3Code", s.t3code);
       if (opts.supportsT3CodeChannel !== false) pushPair("-T3CodeChannel", s.t3codeChannel);
-      if (opts.supportsT3CodeLimitResume !== false) pushBool("-T3CodeLimitResume", s.t3codeLimitResume);
+      if (opts.supportsT3CodePatched !== false) pushBool("-T3CodePatched", s.t3codePatched);
       // How much chat history the pre-delete config save keeps (Auto-Install forwards it
       // to the export). Capability-gated like the flags above.
       if (opts.supportsHistoryRetentionDays !== false) pushPair("-HistoryRetentionDays", s.historyRetentionDays);
@@ -736,11 +736,11 @@ function scriptSupportsRemoveInstance(scriptsDir) {
  * Auto-Install alone suffices. Without an action, require BOTH (conservative default
  * for callers that don't specify one).
  */
-/** Same gate as scriptSupportsT3CodeChannel but for `-T3CodeLimitResume` (the
- *  usage-limit auto-resume opt-in), which rides the same two paths. */
-function scriptSupportsT3CodeLimitResume(scriptsDir, action) {
+/** Same gate as scriptSupportsT3CodeChannel but for `-T3CodePatched`, which
+ *  rides the same two paths. */
+function scriptSupportsT3CodePatched(scriptsDir, action) {
   if (!scriptsDir) return false;
-  const re = /\$T3CodeLimitResume\s*(?:=|,|\)|$)/im;
+  const re = /\$T3CodePatched\s*(?:=|,|\)|$)/im;
   const check = (file) => {
     let txt;
     try { txt = fs.readFileSync(path.join(scriptsDir, file), "utf8"); } catch (_) { return false; }
@@ -1149,7 +1149,7 @@ function run(action, opts = {}) {
     supportsCheckpoints: scriptSupportsCheckpoints(scriptsDir),
     supportsVmCpuCount: scriptSupportsVmCpuCount(scriptsDir),
     supportsT3CodeChannel: scriptSupportsT3CodeChannel(scriptsDir, action),
-    supportsT3CodeLimitResume: scriptSupportsT3CodeLimitResume(scriptsDir, action),
+    supportsT3CodePatched: scriptSupportsT3CodePatched(scriptsDir, action),
     supportsOpenCodeBackgroundWatcher: scriptSupportsOpenCodeBackgroundWatcher(scriptsDir, action),
     supportsHistoryRetentionDays: scriptSupportsHistoryRetentionDays(scriptsDir, action),
   });
@@ -1235,7 +1235,7 @@ module.exports = {
   scriptSupportsParam, scriptForAction, instanceParamSupport,
   normalizeBackupMode, resourceNumber, buildInvocation, scriptSupportsCheckpoints, scriptSupportsVmCpuCount, scriptSupportsT3CodeChannel,
   scriptSupportsRemoveInstance,
-  scriptSupportsT3CodeLimitResume,
+  scriptSupportsT3CodePatched,
   scriptSupportsOpenCodeBackgroundWatcher,
   scriptSupportsHistoryRetentionDays,
   psSingleQuote, winQuoteArg, buildChildCommandLine, buildOuterCommand, buildCallCommand, buildHostLaunch,

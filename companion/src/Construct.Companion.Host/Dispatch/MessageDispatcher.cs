@@ -229,7 +229,7 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
         if (StateJson.Boolean(form["autoCheckpoints"]) is not null) await ApplyCheckpoints(entry, StateJson.Boolean(merged["autoCheckpoints"]) == true, ct);
         var changes = SettingsMapping.PatchReprovisionChanges(previous, merged);
         var t3 = T3Code.PlanLiveAction(StateJson.Boolean(merged["t3code"]) == true, StateJson.Boolean(previous["t3code"]) == true, Text(merged, "t3codeChannel"), Text(previous, "t3codeChannel"));
-        if (t3 is not null && (Text(t3, "action") == "disable" || StateJson.Boolean(merged["t3codeLimitResume"]) != true))
+        if (t3 is not null && (Text(t3, "action") == "disable" || StateJson.Boolean(merged["t3codePatched"]) != true))
             await CheckedScript(entry, Text(t3, "action") == "disable" ? T3Code.BuildDisableScript() : T3Code.BuildInstallScript(Text(t3, "channel")), ct, TimeSpan.FromMinutes(10));
         if (changes.Length > 0 && await prompts.ConfirmAsync("Reprovision required", "Saved settings need reprovisioning to take effect: " + string.Join(", ", changes) + ". Reprovision now?", ct)) await Lifecycle(entry, "reprovision", [], ct);
     }

@@ -147,12 +147,12 @@ $params = @{
 # the Desktop app must do for a VM whose state file does not hold the key -- a second
 # VM that was installed from the console has none of them. Filling in a default here
 # instead is how a stock T3 install turned into a patched source build on the next
-# update: T3CodeLimitResume was assumed TRUE for every VM that had never saved it.
+# update: T3CodePatched was assumed TRUE for every VM that had never saved it.
 # Only a value that IS saved is forwarded; absent stays absent.
 if ($null -ne $settings.opencodeBackgroundWatcher) { $params.OpenCodeBackgroundWatcher = As-BoolString $settings.opencodeBackgroundWatcher $false }
 if ($null -ne $settings.t3code) { $params.T3Code = As-BoolString $settings.t3code $true }
 if ($settings.t3codeChannel -eq 'nightly' -or $settings.t3codeChannel -eq 'stable') { $params.T3CodeChannel = [string]$settings.t3codeChannel }
-if ($null -ne $settings.t3codeLimitResume) { $params.T3CodeLimitResume = As-BoolString $settings.t3codeLimitResume $true }
+if ($null -ne $settings.t3codePatched) { $params.T3CodePatched = As-BoolString $settings.t3codePatched $true }
 if ($settings.projects -is [System.Array] -and $settings.projects.Count -gt 0) {
     $params.Projects = ($settings.projects -join ',')
 }

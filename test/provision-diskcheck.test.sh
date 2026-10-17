@@ -85,11 +85,12 @@ ok "enough space reports GiB free" grep -q 'GiB free' "${tmp}/fine.out"
 ok "each filesystem is reported once" test "$(grep -c 'GiB free' "${tmp}/fine.out")" = "$(df -P -k / /home /root/repos /var 2>/dev/null | awk 'NR>1 {print $1}' | sort -u | wc -l)"
 
 # ── _git_write_diag: turn git's cryptic lock error into the real reason ──────
-run_case diag_full '_git_write_diag agent /home/agent' _DISK_FULL_KB=999999999999 _DISK_LOW_KB=999999999999
+mkdir -p "${tmp}/agent-home"
+run_case diag_full "_git_write_diag agent '${tmp}/agent-home'" _DISK_FULL_KB=999999999999 _DISK_LOW_KB=999999999999
 ok "a failed git write on a full disk is explained" grep -q 'not a permissions problem' "${tmp}/diag_full.out"
 ok "the explanation names the user whose config failed" grep -q "git could not write agent's config" "${tmp}/diag_full.out"
 
-run_case diag_ok '_git_write_diag agent /home/agent' _DISK_FULL_KB=1 _DISK_LOW_KB=2
+run_case diag_ok "_git_write_diag agent '${tmp}/agent-home'" _DISK_FULL_KB=1 _DISK_LOW_KB=2
 ok "a failure with space left is not blamed on the disk" test ! -s "${tmp}/diag_ok.out"
 
 run_case diag_nopath '_git_write_diag agent /no/such/path' _DISK_FULL_KB=999999999999

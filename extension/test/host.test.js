@@ -153,25 +153,25 @@ try {
 
   // ── provisioning-only patch settings ─────────────────────────────────────
   ok("patch changes: untouched absent/off defaults need no reprovision",
-    host.patchReprovisionChanges({}, { t3codeLimitResume: false, opencodeBackgroundWatcher: false }).length === 0);
+    host.patchReprovisionChanges({}, { t3codePatched: false, opencodeBackgroundWatcher: false }).length === 0);
   ok("patch changes: T3 shared source-build transition is reported",
-    JSON.stringify(host.patchReprovisionChanges({ t3codeLimitResume: false }, { t3codeLimitResume: true })) === JSON.stringify(["patched T3 Code + Desktop build"]));
+    JSON.stringify(host.patchReprovisionChanges({ t3codePatched: false }, { t3codePatched: true })) === JSON.stringify(["patched T3 Code + Desktop build"]));
   ok("patch changes: enabling source-managed T3 requires the shared rebuild",
     JSON.stringify(host.patchReprovisionChanges(
-      { t3code: false, t3codeLimitResume: true, t3codeChannel: "stable" },
-      { t3code: true, t3codeLimitResume: true, t3codeChannel: "stable" },
+      { t3code: false, t3codePatched: true, t3codeChannel: "stable" },
+      { t3code: true, t3codePatched: true, t3codeChannel: "stable" },
     )) === JSON.stringify(["patched T3 Code + Desktop build"]));
   ok("patch changes: source-managed T3 channel switch requires the shared rebuild",
     JSON.stringify(host.patchReprovisionChanges(
-      { t3code: true, t3codeLimitResume: true, t3codeChannel: "stable" },
-      { t3code: true, t3codeLimitResume: true, t3codeChannel: "nightly" },
+      { t3code: true, t3codePatched: true, t3codeChannel: "stable" },
+      { t3code: true, t3codePatched: true, t3codeChannel: "nightly" },
     )) === JSON.stringify(["patched T3 Code + Desktop build"]));
   ok("patch changes: OpenCode watcher transition is reported",
     JSON.stringify(host.patchReprovisionChanges({ opencodeBackgroundWatcher: true }, { opencodeBackgroundWatcher: false })) === JSON.stringify(["OpenCode background watcher"]));
   ok("patch changes: simultaneous transitions produce one combined prompt list",
     host.patchReprovisionChanges(
-      { t3codeLimitResume: false, opencodeBackgroundWatcher: false },
-      { t3codeLimitResume: true, opencodeBackgroundWatcher: true },
+      { t3codePatched: false, opencodeBackgroundWatcher: false },
+      { t3codePatched: true, opencodeBackgroundWatcher: true },
     ).length === 2);
   const extensionSource = fs.readFileSync(path.join(__dirname, "..", "extension.js"), "utf8");
   ok("patch settings: save path has no live T3/OpenCode patch invocation",
@@ -181,10 +181,10 @@ try {
   ok("source-managed T3: live enable/channel update cannot replace it with stock npm",
     extensionSource.includes('t3plan.action === "enable" && !sourceManagedT3') &&
     extensionSource.includes('t3plan.action === "setChannel" && !sourceManagedT3'));
-  ok("source-managed T3: agent update action starts Construct reprovision for ITS target",
+  ok("source-managed T3: agent update action starts the T3 update for ITS target",
     extensionSource.includes('requested.includes("t3code")') &&
-    extensionSource.includes("startConstructReprovision(scriptsDir, t)") &&
-    !extensionSource.includes("startConstructReprovision(scriptsDir);"));
+    extensionSource.includes("startT3Update(scriptsDir, t)") &&
+    !extensionSource.includes("startT3Update(scriptsDir);"));
   // The follow-up is queued BY TARGET (instances.createTargetQueue): one global promise
   // let a "Sync Now" for A, queued behind A's tick, run against whatever the window had
   // switched to by the time it started -- syncing B's branch and B's store instead.

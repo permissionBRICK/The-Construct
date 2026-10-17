@@ -593,7 +593,8 @@ run_write_config() { # <provision-script> <config-file-to-write>
       AI_TOOLS=opencode,claude-code,codex; ALLOW_HOST_PACKAGES=false
       VSCODE_SERVER=true; VSCODE_SERVE_WEB=true; VSCODE_TUNNEL=false
       CLAUDE_PARTIAL_STREAMING=true; MIC_PASSTHROUGH=false
-      T3CODE=false; T3CODE_CHANNEL=stable; T3CODE_LIMIT_RESUME=false
+      T3CODE=false; T3CODE_CHANNEL=stable; T3CODE_PATCHED=false
+      T3CODE_LIMIT_RESUME=false
       OPENCODE_BACKGROUND_WATCHER=false
       CONSTRUCT_EXTERNAL_HOST=""; CONSTRUCT_EXTERNAL_SSH_PORT=22; _external_ssh_port_saved=""
       CONSTRUCT_SERVICE_URL="${SERVICE_URL}"; CONSTRUCT_INSTANCE_NAME=work-vm
@@ -609,12 +610,14 @@ if git -C "${ROOT}" show HEAD:bin/provision.sh >"${base_provision}" 2>/dev/null;
   cfg_base="${tmp}/cfg_base.env"
   run_write_config "${PROVISION}" "${cfg_new}"
   run_write_config "${base_provision}" "${cfg_base}"
+  # The renamed T3 preference is the only intentional schema change.
+  sed -i 's/^T3CODE_LIMIT_RESUME=/T3CODE_PATCHED=/' "${cfg_base}"
   ok "DEFAULT path: config.env is byte-identical to the base commit" diff -q "${cfg_base}" "${cfg_new}"
 
   cfg_service="${tmp}/cfg_service.env"
   run_write_config "${PROVISION}" "${cfg_service}" "https://buildbox.example.local:7462"
-  ok "a service-managed VM gains exactly the two service keys" \
-    sh -c "diff '${cfg_base}' '${cfg_service}' | grep '^>' | wc -l | grep -qx 2"
+  ok "a service-managed VM gains the service identity and usage-report keys" \
+    sh -c "diff '${cfg_base}' '${cfg_service}' | grep '^>' | wc -l | grep -qx 4"
   ok "…the service URL" grep -qx 'CONSTRUCT_SERVICE_URL=https://buildbox.example.local:7462' "${cfg_service}"
   ok "…and the instance name" grep -qx 'CONSTRUCT_INSTANCE_NAME=work-vm' "${cfg_service}"
 else

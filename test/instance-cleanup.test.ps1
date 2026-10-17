@@ -298,7 +298,7 @@ try {
         gitUserName = 'alice'; gitEmail = 'alice@example.com'; gitCredentialStore = $true
         provisionedCommit = 'b' * 40
         micPassthrough = $true; claudePartialStreaming = $true; opencodeBackgroundWatcher = $true
-        t3code = $true; t3codeChannel = 'nightly'; t3codeLimitResume = $true
+        t3code = $true; t3codeChannel = 'nightly'; t3codePatched = $true
         vsCodeServeWeb = $true; vsCodeTunnel = $false; smbShare = $true
         vmMemoryGB = '16'; vmDiskGB = '120'; ubuntuRelease = '24.04'
         vmAutoCheckpoints = $true; vmAutoCheckpointsApplied = $true

@@ -18,7 +18,7 @@ public sealed class InstanceStateStore(IStateFileSystem files, string? name, str
         if (IsDefault) return ReadInstallWide();
         var raw = StateJson.ReadObject(files, StatePath) ?? [];
         foreach (var key in InstallWideKeys.Concat(["version", "instance"])) raw.Remove(key);
-        return raw;
+        return SettingsMapping.CurrentSettings(raw);
     }
     public JsonObject ReadMerged()
     {
@@ -69,7 +69,7 @@ public sealed class InstanceStateStore(IStateFileSystem files, string? name, str
         var spec = probe["vmSpec"] as JsonObject ?? []; var config = probe["vmConfig"] as JsonObject ?? [];
         foreach (var (key, field) in new[] { ("vmMemoryGB", "ramGb"), ("vmDiskGB", "diskGb"), ("vmCpuCount", "cpus") })
             if (!current.ContainsKey(key) && StateJson.Number(spec[field]) is > 0 and var n && double.IsFinite(n)) patch[key] = n;
-        foreach (var key in new[] { "t3code", "t3codeChannel", "t3codeLimitResume", "opencodeBackgroundWatcher" })
+        foreach (var key in new[] { "t3code", "t3codeChannel", "t3codePatched", "opencodeBackgroundWatcher" })
             if (!current.ContainsKey(key) && (key == "t3codeChannel" ? StateJson.Text(config[key]) is "stable" or "nightly" : StateJson.Boolean(config[key]).HasValue)) patch[key] = config[key]?.DeepClone();
         if (patch.Count == 0) return null;
         SaveState(patch); return patch;

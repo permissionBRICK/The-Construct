@@ -498,7 +498,7 @@ Write-Host ""
 Write-Host "=== Remote provisioning arguments ===" -ForegroundColor Cyan
 $SkipCompanion = $false
 $ClaudePartialStreaming = "on"; $MicPassthrough = "off"; $OpenCodeBackgroundWatcher = "on"
-$T3Code = "on"; $T3CodeChannel = "stable"; $T3CodeLimitResume = "off"
+$T3Code = "on"; $T3CodeChannel = "stable"; $T3CodePatched = "off"
 $AutoResolve = $false; $Repo = "owner/repo"; $Ref = "main"
 $script:RemoteBound  = @{}
 # A provisioner that declares everything -- the current one.
@@ -506,7 +506,7 @@ $fullParams = @{}
 foreach ($p in @('VmHost','SshPort','HostAlias','LocalKeyName','ConfigBranch','ServiceUrl','InstanceName','VmTokenB64',
                  'Projects','GitUserName','GitEmail','GitCloneCredentialsB64','AgentPassword','RestoreDir','AutoResolve',
                  'Auto','Repo','Ref','ClaudePartialStreaming','MicPassthrough','OpenCodeBackgroundWatcher',
-                 'T3Code','T3CodeChannel','T3CodeLimitResume','PublicHost')) { $fullParams[$p] = $true }
+                 'T3Code','T3CodeChannel','T3CodePatched','PublicHost')) { $fullParams[$p] = $true }
 $script:RemoteProvCmd = [pscustomobject]@{ Parameters = $fullParams }
 
 $ep = @{ SshHost = 'buildbox.example.local'; SshPort = 2201 }
@@ -545,10 +545,10 @@ ok "args: the RAW token appears in no argument value" `
 # them -- an unknown parameter is a BINDING failure, and by then a rebuild has already
 # deleted the VM.
 $oldParams = @{}
-foreach ($p in $fullParams.Keys) { if ($p -notin @('T3CodeChannel', 'T3CodeLimitResume', 'OpenCodeBackgroundWatcher')) { $oldParams[$p] = $true } }
+foreach ($p in $fullParams.Keys) { if ($p -notin @('T3CodeChannel', 'T3CodePatched', 'OpenCodeBackgroundWatcher')) { $oldParams[$p] = $true } }
 $script:RemoteProvCmd = [pscustomobject]@{ Parameters = $oldParams }
 $args4 = New-ConstructRemoteProvisionArgs -Name 'work-vm' -Endpoint $ep -ServiceUrl 'https://b:7462' -KeyName 'construct_work-vm_ed25519' -ConfigBranch 'vm-work-vm'
-foreach ($p in @('T3CodeChannel', 'T3CodeLimitResume', 'OpenCodeBackgroundWatcher')) {
+foreach ($p in @('T3CodeChannel', 'T3CodePatched', 'OpenCodeBackgroundWatcher')) {
     ok "args: -$p is dropped when the installed provisioner does not declare it" (-not $args4.ContainsKey($p))
 }
 ok "args: ...while the identity arguments are still there (they are non-negotiable)" `

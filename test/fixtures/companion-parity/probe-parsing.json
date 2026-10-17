@@ -223,11 +223,11 @@
   },
   {
     "host": null,
-    "input": "T3CODE\ttrue\nV_T3\t0.0.12-nightly.1.2\nT3CODE_CHANNEL\tnightly\nT3CODE_PUBLIC_BASE_URL\t'https://[::1]:5178'\nT3_INSTALLATION_MODE\tprebuilt\nT3_BUILD_HASH\tabc\nT3_ACTIVE\tactive\nT3CODE_LIMIT_RESUME\t'TRUE'\nT3CODE_PROXY_URL\t'https://[2001:db8::7]:8443'",
+    "input": "T3CODE\ttrue\nV_T3\t0.0.12-nightly.1.2\nT3CODE_CHANNEL\tnightly\nT3CODE_PUBLIC_BASE_URL\t'https://[::1]:5178'\nT3_INSTALLATION_MODE\tprebuilt\nT3_BUILD_HASH\tabc\nT3_ACTIVE\tactive\nT3CODE_PATCHED\t'TRUE'\nT3CODE_PROXY_URL\t'https://[2001:db8::7]:8443'",
     "map": {
       "T3CODE": "true",
       "T3CODE_CHANNEL": "nightly",
-      "T3CODE_LIMIT_RESUME": "'TRUE'",
+      "T3CODE_PATCHED": "'TRUE'",
       "T3CODE_PROXY_URL": "'https://[2001:db8::7]:8443'",
       "T3CODE_PUBLIC_BASE_URL": "'https://[::1]:5178'",
       "T3_ACTIVE": "active",
@@ -257,18 +257,18 @@
       "vmConfig": {
         "t3code": true,
         "t3codeChannel": "nightly",
-        "t3codeLimitResume": true
+        "t3codePatched": true
       },
       "vmName": ""
     }
   },
   {
     "host": "vm.example",
-    "input": "T3CODE\ttrue\nV_T3\t0.0.12-nightly.1.2\nT3CODE_CHANNEL\tnightly\nT3CODE_PUBLIC_BASE_URL\t'https://[::1]:5178'\nT3_INSTALLATION_MODE\tprebuilt\nT3_BUILD_HASH\tabc\nT3_ACTIVE\tactive\nT3CODE_LIMIT_RESUME\t'TRUE'\nT3CODE_PROXY_URL\t'https://[2001:db8::7]:8443'",
+    "input": "T3CODE\ttrue\nV_T3\t0.0.12-nightly.1.2\nT3CODE_CHANNEL\tnightly\nT3CODE_PUBLIC_BASE_URL\t'https://[::1]:5178'\nT3_INSTALLATION_MODE\tprebuilt\nT3_BUILD_HASH\tabc\nT3_ACTIVE\tactive\nT3CODE_PATCHED\t'TRUE'\nT3CODE_PROXY_URL\t'https://[2001:db8::7]:8443'",
     "map": {
       "T3CODE": "true",
       "T3CODE_CHANNEL": "nightly",
-      "T3CODE_LIMIT_RESUME": "'TRUE'",
+      "T3CODE_PATCHED": "'TRUE'",
       "T3CODE_PROXY_URL": "'https://[2001:db8::7]:8443'",
       "T3CODE_PUBLIC_BASE_URL": "'https://[::1]:5178'",
       "T3_ACTIVE": "active",
@@ -298,18 +298,18 @@
       "vmConfig": {
         "t3code": true,
         "t3codeChannel": "nightly",
-        "t3codeLimitResume": true
+        "t3codePatched": true
       },
       "vmName": ""
     }
   },
   {
     "host": "::1",
-    "input": "T3CODE\ttrue\nV_T3\t0.0.12-nightly.1.2\nT3CODE_CHANNEL\tnightly\nT3CODE_PUBLIC_BASE_URL\t'https://[::1]:5178'\nT3_INSTALLATION_MODE\tprebuilt\nT3_BUILD_HASH\tabc\nT3_ACTIVE\tactive\nT3CODE_LIMIT_RESUME\t'TRUE'\nT3CODE_PROXY_URL\t'https://[2001:db8::7]:8443'",
+    "input": "T3CODE\ttrue\nV_T3\t0.0.12-nightly.1.2\nT3CODE_CHANNEL\tnightly\nT3CODE_PUBLIC_BASE_URL\t'https://[::1]:5178'\nT3_INSTALLATION_MODE\tprebuilt\nT3_BUILD_HASH\tabc\nT3_ACTIVE\tactive\nT3CODE_PATCHED\t'TRUE'\nT3CODE_PROXY_URL\t'https://[2001:db8::7]:8443'",
     "map": {
       "T3CODE": "true",
       "T3CODE_CHANNEL": "nightly",
-      "T3CODE_LIMIT_RESUME": "'TRUE'",
+      "T3CODE_PATCHED": "'TRUE'",
       "T3CODE_PROXY_URL": "'https://[2001:db8::7]:8443'",
       "T3CODE_PUBLIC_BASE_URL": "'https://[::1]:5178'",
       "T3_ACTIVE": "active",
@@ -339,7 +339,7 @@
       "vmConfig": {
         "t3code": true,
         "t3codeChannel": "nightly",
-        "t3codeLimitResume": true
+        "t3codePatched": true
       },
       "vmName": ""
     }
