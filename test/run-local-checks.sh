@@ -30,6 +30,7 @@ if [[ "$group" == t3 || "$group" == all ]]; then
   python3 test/t3-pairing-forward.test.py
   python3 test/t3-resume.test.py
   bash test/t3-prune.test.sh
+  bash test/t3-project-register.test.sh
   bash test/t3-update.test.sh
   pwsh -NoProfile -File test/t3-desktop-handoff.test.ps1
   pwsh -NoProfile -File test/t3-update-mode.test.ps1
