@@ -1,4 +1,4 @@
-# Streaming ISO downloads without BITS or Invoke-WebRequest's per-buffer progress overhead.
+# Streaming ISO and installer downloads without BITS or Invoke-WebRequest's per-buffer progress overhead.
 function Receive-ConstructIso {
     [CmdletBinding()]
     param(
@@ -19,7 +19,7 @@ function Receive-ConstructIso {
     $clock = [Diagnostics.Stopwatch]::StartNew()
     $previousBytes = 0L; $previousTime = 0.0; $lastLine = -10.0
     try {
-        Write-Host "Downloading ISO with up to $Streams streams (idle timeout ${IdleTimeoutSeconds}s)..."
+        Write-Host "Downloading with up to $Streams streams (idle timeout ${IdleTimeoutSeconds}s)..."
         $transfer = [Construct.Download.Transfer]::new($Uri.AbsoluteUri, $OutFile, $Streams, $IdleTimeoutSeconds, $Retries, $ExpectedSha256)
         while ($true) {
             $done = $transfer.Downloaded; $total = $transfer.Total; $elapsed = $clock.Elapsed.TotalSeconds

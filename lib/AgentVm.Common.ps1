@@ -3339,26 +3339,13 @@ function Get-T3CaCleanupPlan {
 }
 
 function Receive-ConstructBinary {
-    # Stream straight to disk. Windows PowerShell 5.1's Invoke-WebRequest progress
-    # rendering can dominate a large binary download even on a fast connection.
+    # Foreground downloads (T3 Desktop installer, Companion payload) use the ISO's
+    # parallel ranged transfer: one connection gets only a small share of the link
+    # while another application downloads over many, and it shows progress.
     [CmdletBinding()]
     param([Parameter(Mandatory)][uri]$Uri, [Parameter(Mandatory)][string]$OutFile)
-    Add-Type -AssemblyName System.Net.Http
-    $client = [System.Net.Http.HttpClient]::new()
-    $client.Timeout = [TimeSpan]::FromMinutes(30)
-    $response = $null; $inputStream = $null; $outputStream = $null
-    try {
-        $response = $client.GetAsync($Uri, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
-        $null = $response.EnsureSuccessStatusCode()
-        $inputStream = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
-        $outputStream = [System.IO.File]::Create($OutFile)
-        $null = $inputStream.CopyToAsync($outputStream).GetAwaiter().GetResult()
-    } finally {
-        if ($outputStream) { $outputStream.Dispose() }
-        if ($inputStream) { $inputStream.Dispose() }
-        if ($response) { $response.Dispose() }
-        $client.Dispose()
-    }
+    . (Join-Path $PSScriptRoot 'Construct.Download.ps1')
+    Receive-ConstructIso -Uri $Uri -OutFile $OutFile
 }
 
 function New-T3DesktopStartInfo {
