@@ -939,10 +939,13 @@ every ten minutes:
   release with changed patches counts as well. It offers **Update T3 Code**, which runs
   `Update-T3Code.ps1 -Mode quick` ([Updating T3 Code without a reprovision](#updating-t3-code-without-a-reprovision)).
   It is offered only while no reprovision is pending, because a reprovision updates T3 Code
-  anyway.
+  anyway. It updates every Construct VM the app is connected to, not the default VM: a
+  stopped VM is left alone, and with none connected nothing is launched. Several VMs run one
+  after another in one console window; the first installs the Desktop app, and the others
+  find that build installed.
 
   `-Mode` is passed when the installed `Update-T3Code.ps1` declares it. An older one
-  reprovisions, as it always did. The target is the instance registry's default
+  reprovisions, as it always did. The target of a reprovision is the instance registry's default
   VM (`instances.json`; `agent-vm` without one), which is passed along when it is not the
   built-in default — as `-InstanceName <name>` when the installed `Update-T3Code.ps1`
   declares it, and as the four SSH identity arguments otherwise; the confirmation names it. A registry this panel itself would
