@@ -76,30 +76,14 @@ start, in one call**. The user can then approve once and leave the task running:
 Use values inline (`$(construct secret get db-admin)`), never write them into
 files, and run `construct secret release --all` when done.
 
-**The vault is only for credentials agents must not use on their own**: those
-the user wants used only with explicit permission, such as admin logins or
-full-access deploy keys for critical systems. Everything else stays out of it:
-credentials you need for long-running autonomous work or scheduled tasks, and
-non-critical ones the VM needs regularly anyway (read-only tokens for
-non-sensitive systems, test environment access). Every vault use waits for an
-approval, and the scrub at the end of a lease strips the value from the files
-tools read it from. Keep such credentials in `~/.secrets/` (one file each, mode
-`600`) or in the tool's own store (`~/.git-credentials`, `~/.npmrc`, ...);
-Construct's VM backup includes `~/.secrets/` and both files.
-
-Git and package-registry tokens are the user's call, because it depends on how
-critical their projects are. A full-access token that reaches many repositories
-may live in the vault, with narrower per-project tokens in the git credential
-store for autonomous work; without critical projects, the full-access token can
-stay in the credential store. Follow whatever setup the VM already has. If there
-is none, or another credential's place is unclear, ask the user once and record
-the decision in `~/construct-custom-system-prompt.md` so later agents follow it.
-
-Add a credential you create with `construct secret add` (no approval needed)
-only if it belongs in the vault and future agent tasks will need it again. Keys
-and tokens you generate while setting up another system, so that system can
-reach something, stay where that system keeps them: when no agent on this VM
-needs them afterwards, store no copy in the vault or in `~/.secrets/`.
+Only credentials agents may use solely with the user's explicit permission
+(admin logins, full-access deploy keys to critical systems) belong in the vault.
+Anything needed for autonomous or scheduled work, or used regularly and
+non-critical, goes in `~/.secrets/` or the tool's own credential store. Store
+only what future agents will need again, not keys you generate just for another
+system. Git tokens, and anything unclear, are the user's call: follow the
+existing setup, or ask once and record the answer in
+`~/construct-custom-system-prompt.md`.
 
 If the user reaches T3 Code through their own proxy, record its address with
 `construct config set t3-proxy-url <url>` so pairing links and QR codes use it.
