@@ -185,5 +185,53 @@ ok 'proxy address: recorded in backup-info.json' \
 
 ok 'fixtures: no service operations requested' test ! -e "${tmp}/service-calls"
 
+# ── T3 Code event store: only the file the server opens ──────────────────────
+# T3 Code 0.1.0 seeds statev2.sqlite from state.sqlite once and leaves the old
+# file behind unused. Asking systemctl about t3code-serve is expected here.
+export_t3() { # <name> <home> [INCLUDE_AUTH]
+  "${fixture_env[@]}" SERVICE_CALLS="${tmp}/t3-service-calls" EXPORT_HOME="$2" \
+    INCLUDE_AUTH="${3:-true}" INCLUDE_HISTORY=false OUT="${tmp}/$1.tar.gz" \
+    bash "${ROOT}/bin/export-config.sh" >"${tmp}/$1.log" 2>&1
+  tar -tzf "${tmp}/$1.tar.gz" >"${tmp}/$1.members"
+}
+t3_files() { # <dir> <content> <file>...
+  local dir="$1" content="$2"
+  shift 2
+  mkdir -p "${dir}"
+  for f in "$@"; do printf '%s\n' "${content}" >"${dir}/${f}"; done
+}
+t3_files "${tmp}/t3-v2/.t3/userdata" saved \
+  state.sqlite state.sqlite-shm statev2.sqlite statev2.sqlite-wal statev2.sqlite-shm
+export_t3 t3-v2 "${tmp}/t3-v2"
+for f in statev2.sqlite statev2.sqlite-wal statev2.sqlite-shm; do
+  ok "T3 0.1.0: ${f} saved" has t3-v2 ".t3/userdata/${f}"
+done
+ok 'T3 0.1.0: the unused state.sqlite is left out' lacks t3-v2 '.t3/userdata/state.sqlite'
+t3_files "${tmp}/t3-v1/.t3/userdata" saved state.sqlite state.sqlite-wal
+export_t3 t3-v1 "${tmp}/t3-v1"
+ok 'T3 before 0.1.0: state.sqlite saved' has t3-v1 '.t3/userdata/state.sqlite'
+ok 'T3 before 0.1.0: state.sqlite-wal saved' has t3-v1 '.t3/userdata/state.sqlite-wal'
+export_t3 t3-v2-noauth "${tmp}/t3-v2" false
+ok 'T3 auth=false: no event store saved' lacks t3-v2-noauth '.t3/userdata/state'
+
+# Restore onto a freshly provisioned T3 Code 0.1.0, which already made its own
+# statev2.sqlite: the fresh files must go, or T3 would keep them and never
+# import a state.sqlite from an older backup.
+for v in v2 v1; do
+  t3_files "${tmp}/t3-fresh-${v}/.t3/userdata" fresh statev2.sqlite statev2.sqlite-wal statev2.sqlite-shm
+  "${fixture_env[@]}" SERVICE_CALLS="${tmp}/t3-service-calls" BACKUP_TGZ="${tmp}/t3-${v}.tar.gz" \
+    EXPORT_HOME="${tmp}/t3-fresh-${v}" \
+    bash "${ROOT}/bin/restore-config.sh" >"${tmp}/t3-restore-${v}.log" 2>&1
+done
+fresh_v2="${tmp}/t3-fresh-v2/.t3/userdata"
+ok 'T3 0.1.0 restore: saved statev2.sqlite replaces the fresh one' grep -qx saved "${fresh_v2}/statev2.sqlite"
+ok 'T3 0.1.0 restore: saved statev2.sqlite-wal replaces the fresh one' grep -qx saved "${fresh_v2}/statev2.sqlite-wal"
+ok 'T3 0.1.0 restore: logged as restored chat history' \
+  grep -qF 'restored chat history: .t3/userdata/statev2.sqlite' "${tmp}/t3-restore-v2.log"
+fresh_v1="${tmp}/t3-fresh-v1/.t3/userdata"
+ok 'T3 older backup: saved state.sqlite restored' grep -qx saved "${fresh_v1}/state.sqlite"
+ok 'T3 older backup: fresh statev2 files removed so T3 imports it' \
+  test ! -e "${fresh_v1}/statev2.sqlite" -a ! -e "${fresh_v1}/statev2.sqlite-wal" -a ! -e "${fresh_v1}/statev2.sqlite-shm"
+
 printf '\n  export-config fixture tests — %d/%d passed\n\n' "${pass}" "$((pass + fail))"
 [[ "${fail}" -eq 0 ]]

@@ -244,6 +244,56 @@ printf 'not a database' >"${t3db}"
 ok "an unreadable T3 database says nothing rather than crashing" test "$(report)" = '{"busy":false,"reasons":[]}'
 rm -f "${t3db}"
 
+# T3 Code 0.1.0 keeps its threads in statev2.sqlite, in orchestration_v2 tables.
+# A run that is starting, running or waiting on background work counts, unless
+# the thread waits on the user.
+t3v2="${home}/.t3/userdata/statev2.sqlite"
+seed_t3v2() { # <run status> [pending request kind] [waiting secret request: 1] [deleted_at]
+  rm -f "${t3v2}" "${t3v2}-wal" "${t3v2}-shm"
+  python3 - "${t3v2}" "$1" "${2:-}" "${3:-}" "${4:-}" <<'PY'
+import sqlite3, sys
+db, status, request, secret, deleted = sys.argv[1:6]
+c = sqlite3.connect(db)
+c.execute("create table orchestration_v2_projection_threads (thread_id text, deleted_at text)")
+c.execute("create table orchestration_v2_projection_runs (run_id text, thread_id text, status text)")
+c.execute("create table orchestration_v2_projection_runtime_requests (thread_id text, kind text, status text)")
+c.execute("create table orchestration_v2_projection_turn_items (thread_id text, run_id text, type text, status text)")
+c.execute("insert into orchestration_v2_projection_threads values ('t1', ?)", (deleted or None,))
+c.execute("insert into orchestration_v2_projection_runs values ('r0', 't1', 'completed')")
+c.execute("insert into orchestration_v2_projection_runs values ('r1', 't1', ?)", (status,))
+c.execute("insert into orchestration_v2_projection_runtime_requests values ('t1', 'user_input', 'resolved')")
+if request:
+    c.execute("insert into orchestration_v2_projection_runtime_requests values ('t1', ?, 'pending')", (request,))
+if secret:
+    c.execute("insert into orchestration_v2_projection_turn_items values ('t1', 'r1', 'secret_request', 'waiting')")
+c.commit()
+PY
+}
+seed_t3v2 running
+ok "T3 0.1.0: a running run with nothing pending is busy" test "$(report)" = '{"busy":true,"reasons":["t3-thread-running"]}'
+seed_t3v2 waiting
+ok "T3 0.1.0: a run waiting on its background work is busy" test "$(report)" = '{"busy":true,"reasons":["t3-thread-running"]}'
+seed_t3v2 starting
+ok "T3 0.1.0: a starting run is busy" test "$(report)" = '{"busy":true,"reasons":["t3-thread-running"]}'
+seed_t3v2 running dynamic_tool_call
+ok "T3 0.1.0: a dynamic tool call is the server's own work" test "$(report)" = '{"busy":true,"reasons":["t3-thread-running"]}'
+seed_t3v2 running user_input
+ok "T3 0.1.0: a thread waiting for the user's answer is idle" test "$(report)" = '{"busy":false,"reasons":[]}'
+seed_t3v2 running command
+ok "T3 0.1.0: a thread waiting for an approval is idle" test "$(report)" = '{"busy":false,"reasons":[]}'
+seed_t3v2 running "" 1
+ok "T3 0.1.0: a thread waiting for a secret is idle" test "$(report)" = '{"busy":false,"reasons":[]}'
+seed_t3v2 completed
+ok "T3 0.1.0: a finished run is idle" test "$(report)" = '{"busy":false,"reasons":[]}'
+seed_t3v2 running "" "" 2026-09-17T00:00:00Z
+ok "T3 0.1.0: a deleted thread is idle" test "$(report)" = '{"busy":false,"reasons":[]}'
+# The state.sqlite left behind by the upgrade stops changing; a session it froze
+# in "running" must not keep the VM busy.
+seed_t3 running 0 0
+seed_t3v2 completed
+ok "T3 0.1.0: the old state.sqlite is ignored next to statev2.sqlite" test "$(report)" = '{"busy":false,"reasons":[]}'
+rm -f "${t3db}" "${t3v2}"
+
 # Provisioning in progress: the marker plus a live PID.
 reset_scene
 mkdir -p "${proc}/9999"

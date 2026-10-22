@@ -175,30 +175,47 @@ probe_agent_transcripts() {
   return 0
 }
 
-# (c) T3 Code has a thread at work: a session in status "running" whose thread is
-# not waiting on the user (no pending input, no pending approval) -- the GUI's
-# "working" and "monitoring" states. A thread blocked on a question or stopped is
-# not work. Read from T3's SQLite projections, read-only, so the live server is
-# never disturbed. No python3, no database or an unreadable one means this probe
-# says nothing; the transcript probe still sees the agent such a thread drives.
+# (c) T3 Code has a thread at work: a run that is starting, running or waiting on
+# its own background work, in a thread not waiting on the user (no pending
+# question, approval or secret request) -- the GUI's "working" and "monitoring"
+# states. A thread blocked on the user or stopped is not work. Read from T3's
+# SQLite projections, read-only, so the live server is never disturbed. Since
+# T3 Code 0.1.0 they live in statev2.sqlite; the state.sqlite it was seeded from
+# (and the v1 tables copied along) stop changing then, so they are read only
+# while statev2.sqlite does not exist. No python3, no database or an unreadable
+# one means this probe says nothing; the transcript probe still sees the agent
+# such a thread drives.
 probe_t3_threads() {
   local home db count
   local -a homes
   command -v python3 >/dev/null 2>&1 || return 0
   IFS=':' read -r -a homes <<<"${AGENT_HOMES}"
   for home in "${homes[@]}"; do
-    db="${home}/.t3/userdata/state.sqlite"
+    db="${home}/.t3/userdata/statev2.sqlite"
+    [[ -f "${db}" ]] || db="${home}/.t3/userdata/state.sqlite"
     [[ -f "${db}" ]] || continue
     count="$(python3 - "${db}" 2>/dev/null <<'PY'
 import sqlite3, sys
+# A pending runtime request waits on the user, except a dynamic tool call, which
+# the server is still running.
+V2 = """select count(*) from orchestration_v2_projection_runs r
+        join orchestration_v2_projection_threads t on t.thread_id = r.thread_id
+        where r.status in ('preparing', 'starting', 'running', 'waiting')
+          and t.deleted_at is null
+          and not exists (select 1 from orchestration_v2_projection_runtime_requests q
+                          where q.thread_id = r.thread_id and q.status = 'pending'
+                            and q.kind <> 'dynamic_tool_call')
+          and not exists (select 1 from orchestration_v2_projection_turn_items i
+                          where i.thread_id = r.thread_id and i.run_id = r.run_id
+                            and i.type = 'secret_request' and i.status = 'waiting')"""
+V1 = """select count(*) from projection_thread_sessions s
+        join projection_threads t on t.thread_id = s.thread_id
+        where s.status = 'running' and t.deleted_at is null
+          and coalesce(t.pending_user_input_count, 0) = 0
+          and coalesce(t.pending_approval_count, 0) = 0"""
 try:
     c = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True, timeout=2)
-    n = c.execute("""select count(*) from projection_thread_sessions s
-                     join projection_threads t on t.thread_id = s.thread_id
-                     where s.status = 'running' and t.deleted_at is null
-                       and coalesce(t.pending_user_input_count, 0) = 0
-                       and coalesce(t.pending_approval_count, 0) = 0""").fetchone()[0]
-    print(n)
+    print(c.execute(V2 if sys.argv[1].endswith("/statev2.sqlite") else V1).fetchone()[0])
 except Exception:
     print("")
 PY

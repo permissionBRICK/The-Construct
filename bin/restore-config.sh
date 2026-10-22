@@ -147,17 +147,21 @@ if [[ -n "${codex_reindex}" ]]; then
 fi
 
 # ── T3 Code sqlite across the overlay ────────────────────────────────────────
-# When the backup carries T3 Code's state.sqlite (threads + auth sessions +
-# pairing state in one event-store), the freshly-provisioned t3code-serve is
-# already running and holds ITS OWN newly-minted DB open. Overlaying the files
-# under the live server risks a torn restore, and leaving the new -wal/-shm
-# siblings next to the restored .sqlite would corrupt it on next open. Stop the
-# service across the copy, drop the minutes-old empty DB (nothing of value in
-# it), and start the server again after -- it then opens the restored store.
+# When the backup carries T3 Code's event-store (threads + auth sessions +
+# pairing state in one database: statev2.sqlite since T3 Code 0.1.0,
+# state.sqlite before), the freshly-provisioned t3code-serve is already running
+# and holds ITS OWN newly-minted DB open. Overlaying the files under the live
+# server risks a torn restore, and leaving the new -wal/-shm siblings next to
+# the restored .sqlite would corrupt it on next open. Stop the service across
+# the copy, drop the minutes-old empty DBs of both generations (nothing of value
+# in them), and start the server again after -- it then opens the restored
+# store. T3 Code 0.1.0 seeds statev2.sqlite from state.sqlite only while
+# statev2.sqlite is missing, so a backup taken before 0.1.0 is imported too.
 t3_state_restore=""
 if [[ -n "${archive_restore}" ]]; then
-  grep -Eq '^(\./)?home/\.t3/userdata/state\.sqlite' "${archive_list}" && t3_state_restore=1 || true
-elif compgen -G "${BACKUP_DIR}/home/.t3/userdata/state.sqlite*" >/dev/null 2>&1; then
+  grep -Eq '^(\./)?home/\.t3/userdata/state(v2)?\.sqlite' "${archive_list}" && t3_state_restore=1 || true
+elif compgen -G "${BACKUP_DIR}/home/.t3/userdata/state.sqlite*" >/dev/null 2>&1 \
+    || compgen -G "${BACKUP_DIR}/home/.t3/userdata/statev2.sqlite*" >/dev/null 2>&1; then
   t3_state_restore=1
 fi
 if [[ -n "${t3_state_restore}" ]]; then
@@ -171,9 +175,11 @@ if [[ -n "${t3_state_restore}" ]]; then
       log "t3code-serve paused"
     fi
   fi
-  rm -f "${EXPORT_HOME}/.t3/userdata/state.sqlite" \
-        "${EXPORT_HOME}/.t3/userdata/state.sqlite-wal" \
-        "${EXPORT_HOME}/.t3/userdata/state.sqlite-shm"
+  for _t3_db in state statev2; do
+    rm -f "${EXPORT_HOME}/.t3/userdata/${_t3_db}.sqlite" \
+          "${EXPORT_HOME}/.t3/userdata/${_t3_db}.sqlite-wal" \
+          "${EXPORT_HOME}/.t3/userdata/${_t3_db}.sqlite-shm"
+  done
 fi
 
 # Overlay while preserving ownership/perms/timestamps. Tarball restores stream
@@ -284,9 +290,16 @@ fi
 
 # Report restored chat history (captured when the export ran with
 # INCLUDE_HISTORY=true), so the provisioning log shows it came back.
-for f in ".claude/history.jsonl" ".codex/sessions" ".local/share/opencode/storage" ".t3/userdata/state.sqlite"; do
+for f in ".claude/history.jsonl" ".codex/sessions" ".local/share/opencode/storage"; do
   [[ -e "${EXPORT_HOME}/${f}" ]] && log "restored chat history: ${f}"
 done
+# A freshly provisioned T3 Code server creates its own store; only one taken
+# from the backup counts.
+if [[ -n "${t3_state_restore}" ]]; then
+  for f in ".t3/userdata/statev2.sqlite" ".t3/userdata/state.sqlite"; do
+    [[ -e "${EXPORT_HOME}/${f}" ]] && log "restored chat history: ${f}"
+  done
+fi
 
 # ── T3 Code channel preference from backup metadata ─────────────────────────
 # The channel preference (stable/nightly) is persisted INDEPENDENTLY of whether

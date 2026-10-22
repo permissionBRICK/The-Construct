@@ -55,7 +55,8 @@ For the installed agents, from `root`'s home — never from inside the project r
 - **T3 Code** (when the web GUI is enabled or installed): everything it needs to
   keep working after a reinstall, from `~/.t3/userdata/` — `keybindings.json`
   always; `settings.json`, the secret key material (`secrets/`,
-  `environment-id`) and the `state.sqlite*` event-store under `INCLUDE_AUTH`;
+  `environment-id`) and the `statev2.sqlite*` event-store under `INCLUDE_AUTH`
+  (`state.sqlite*` on T3 Code before 0.1.0; 0.1.0 leaves that file behind unused);
   `attachments/` under `INCLUDE_HISTORY`. Everything credential-bearing rides
   the auth gate: `settings.json` can hold provider passwords in plaintext, and
   the sqlite store holds the chat threads **and** the auth sessions / pairing
@@ -65,9 +66,10 @@ For the installed agents, from `root`'s home — never from inside the project r
   files so the snapshot is consistent (db/-wal/-shm copied together). Logs,
   caches, worktrees and the pid-bearing `server-runtime.json` are never
   captured. On restore, `restore-config.sh` stops `t3code-serve` across the
-  copy (it holds the DB open), drops the freshly-minted empty DB, and restarts
-  the service on the restored store — paired browsers and history come straight
-  back. Before it stops T3, the export also writes the busy threads to
+  copy (it holds the DB open), drops the freshly-minted empty DB (both file
+  names), and restarts the service on the restored store — paired browsers and
+  history come straight back. A `state.sqlite` from a backup taken before T3
+  Code 0.1.0 is imported into a new `statev2.sqlite` on that start. Before it stops T3, the export also writes the busy threads to
   `t3-resume.json` at the top of the backup. After its final reboot, the reinstalled
   VM tells those threads what happened. See
   [Resuming interrupted T3 Code threads](provisioning.md#resuming-interrupted-t3-code-threads).
