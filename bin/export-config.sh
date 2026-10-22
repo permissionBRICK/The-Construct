@@ -40,7 +40,8 @@
 #   - Agent settings/config           : ~/.claude/settings.json, ~/.codex/config.toml,
 #                                       ~/.config/opencode/opencode.json
 #   - T3 Code (when enabled/installed): ~/.t3/userdata -- settings + keybindings
-#                                       always; secrets/ + the state.sqlite
+#                                       always; secrets/ + the statev2.sqlite
+#                                       (state.sqlite before T3 Code 0.1.0)
 #                                       event-store (threads AND auth sessions in
 #                                       one DB) under INCLUDE_AUTH; attachments/
 #                                       under INCLUDE_HISTORY. Never logs/caches.
@@ -327,11 +328,12 @@ fi
 
 # ── T3 Code (web GUI) ────────────────────────────────────────────────────────
 # T3 Code keeps everything under ~/.t3/userdata: settings.json/keybindings.json
-# (settings), the state.sqlite event-store, secrets/ (server signing + pairing
-# key material) and attachments/. NOT captured: logs/, ../caches/, ../worktrees/
-# and the pid-bearing server-runtime.json -- all runtime junk the server
-# recreates. The T3CODE flag comes from config.env (sourced above); also match
-# an existing data dir so a hand-installed t3 is captured too.
+# (settings), the statev2.sqlite event-store (state.sqlite before T3 Code
+# 0.1.0), secrets/ (server signing + pairing key material) and attachments/.
+# NOT captured: logs/, ../caches/, ../worktrees/ and the pid-bearing
+# server-runtime.json -- all runtime junk the server recreates. The T3CODE flag
+# comes from config.env (sourced above); also match an existing data dir so a
+# hand-installed t3 is captured too.
 if [[ "${T3CODE:-false}" == "true" || -d "${EXPORT_HOME}/.t3/userdata" ]]; then
   add ".t3/userdata/keybindings.json"
   if [[ "${INCLUDE_AUTH}" == "true" ]]; then
@@ -364,7 +366,14 @@ if [[ "${T3CODE:-false}" == "true" || -d "${EXPORT_HOME}/.t3/userdata" ]]; then
       fi
       systemctl stop t3code-serve 2>/dev/null && _t3_stopped=1
     fi
-    add_glob ".t3/userdata/state.sqlite*"
+    # T3 Code 0.1.0 moved the store to statev2.sqlite, seeded once from
+    # state.sqlite and self-contained from then on; the old file stays behind
+    # unused. Take only the store the server opens.
+    if [[ -f "${EXPORT_HOME}/.t3/userdata/statev2.sqlite" ]]; then
+      add_glob ".t3/userdata/statev2.sqlite*"
+    else
+      add_glob ".t3/userdata/state.sqlite*"
+    fi
     if [[ -n "${_t3_stopped}" ]]; then
       systemctl start t3code-serve 2>/dev/null || true
     fi
