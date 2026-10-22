@@ -49,8 +49,13 @@ and keeps it, so it can still be restored on the PC and account that created it.
 
 ## What agents do
 
-The agent instruction file tells agents to request everything a task needs at the start, so you
-can approve once and leave. The CLI documents itself (`construct secret --help`):
+The agent instruction file tells agents to request everything a task needs at the start, so you can
+approve once and leave. It also limits the vault to credentials you want used only with your
+explicit permission, such as admin logins or full-access deploy keys to critical systems. Anything
+needed for unattended work, or used regularly and non-critical, goes in `~/.secrets/` or the tool's
+own credential store. Git tokens and unclear cases are your call: agents follow the existing setup,
+or ask you once and record the answer in `~/construct-custom-system-prompt.md`. The CLI documents
+itself (`construct secret --help`):
 
 ```console
 $ construct secret list

@@ -71,11 +71,19 @@ Tokens, passwords and keys the user keeps on their PC are available through
 Each grant needs the user's approval, so request everything a task needs **at the
 start, in one call**. The user can then approve once and leave the task running:
 
-    construct secret request github-token npm-token --for 2h --reason "publish the release"
+    construct secret request prod-deploy-key db-admin --for 2h --reason "deploy the release"
 
-Use values inline (`$(construct secret get github-token)`), never write them into
-files, and run `construct secret release --all` when done. Store credentials you
-create with `construct secret add` (no approval needed).
+Use values inline (`$(construct secret get db-admin)`), never write them into
+files, and run `construct secret release --all` when done.
+
+Only credentials agents may use solely with the user's explicit permission
+(admin logins, full-access deploy keys to critical systems) belong in the vault.
+Anything needed for autonomous or scheduled work, or used regularly and
+non-critical, goes in `~/.secrets/` or the tool's own credential store. Store
+only what future agents will need again, not keys you generate just for another
+system. Git tokens, and anything unclear, are the user's call: follow the
+existing setup, or ask once and record the answer in
+`~/construct-custom-system-prompt.md`.
 
 If the user reaches T3 Code through their own proxy, record its address with
 `construct config set t3-proxy-url <url>` so pairing links and QR codes use it.
