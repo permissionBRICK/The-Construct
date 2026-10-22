@@ -140,7 +140,8 @@ These locations count as agent logs, under `/root` or any `/home/<user>`:
   `.codex/logs_*`
 - OpenCode: `.local/share/opencode/storage/`, `.local/share/opencode/log/`,
   `.local/share/opencode/opencode.db*`
-- T3 Code: `.t3/userdata/logs/`, `.t3/userdata/state.sqlite*`
+- T3 Code: `.t3/userdata/logs/`, `.t3/userdata/state.sqlite*`, and `.t3/userdata/statev2.sqlite*`
+  (the thread database since T3 Code 0.1.0; a later `statev<n>.sqlite` counts too)
 
 **Every other file needs your decision.** A dialog lists each file with the secrets it contains
 and its kind, and each file gets **Keep** (the default), **Redact** or **Delete file**. Deleting

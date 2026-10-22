@@ -152,6 +152,6 @@ public static partial class VaultProtocol
     private static partial Regex IdPattern();
     [GeneratedRegex("-(wal|shm|journal)$")]
     private static partial Regex SqliteSide();
-    [GeneratedRegex(@"^(?:(?:/root|/home/[^/]+)/(?:\.claude/(?:projects|todos|shell-snapshots|debug|file-history|paste-cache|session-env|sessions)/|\.claude/history\.jsonl$|\.codex/(?:sessions|archived_sessions|log)/|\.codex/history\.jsonl$|\.codex/logs_[^/]*$|\.local/share/opencode/(?:storage|log)/|\.local/share/opencode/opencode\.db[^/]*$|\.t3/userdata/logs/|\.t3/userdata/state\.sqlite[^/]*$)|/tmp/claude-)")]
+    [GeneratedRegex(@"^(?:(?:/root|/home/[^/]+)/(?:\.claude/(?:projects|todos|shell-snapshots|debug|file-history|paste-cache|session-env|sessions)/|\.claude/history\.jsonl$|\.codex/(?:sessions|archived_sessions|log)/|\.codex/history\.jsonl$|\.codex/logs_[^/]*$|\.local/share/opencode/(?:storage|log)/|\.local/share/opencode/opencode\.db[^/]*$|\.t3/userdata/logs/|\.t3/userdata/state(?:v[0-9]+)?\.sqlite[^/]*$)|/tmp/claude-)")]
     private static partial Regex AgentLog();
 }

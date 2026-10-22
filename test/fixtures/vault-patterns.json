@@ -190,6 +190,22 @@
       "agentLog": true
     },
     {
+      "path": "/root/.t3/userdata/statev2.sqlite",
+      "agentLog": true
+    },
+    {
+      "path": "/home/dev/.t3/userdata/statev2.sqlite-wal",
+      "agentLog": true
+    },
+    {
+      "path": "/root/.t3/userdata/statev2.json",
+      "agentLog": false
+    },
+    {
+      "path": "/root/.t3/userdata/server-owner.sqlite",
+      "agentLog": false
+    },
+    {
       "path": "/root/.t3/userdata/settings.json",
       "agentLog": false
     },
@@ -226,6 +242,10 @@
     {
       "path": "/root/.t3/userdata/state.sqlite-wal",
       "database": "/root/.t3/userdata/state.sqlite"
+    },
+    {
+      "path": "/root/.t3/userdata/statev2.sqlite-wal",
+      "database": "/root/.t3/userdata/statev2.sqlite"
     },
     {
       "path": "/root/.local/share/opencode/opencode.db-shm",

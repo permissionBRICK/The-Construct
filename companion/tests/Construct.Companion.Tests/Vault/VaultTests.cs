@@ -142,6 +142,8 @@ public sealed class VaultTests
     [InlineData("/root/.codex/logs_2.sqlite-wal", true)]
     [InlineData("/root/.local/share/opencode/opencode.db", true)]
     [InlineData("/root/.t3/userdata/state.sqlite", true)]
+    [InlineData("/root/.t3/userdata/statev2.sqlite", true)]
+    [InlineData("/root/.t3/userdata/statev2.sqlite-wal", true)]
     [InlineData("/root/.t3/userdata/logs/terminals/a.log", true)]
     [InlineData("/tmp/claude-1a2b-cwd", true)]
     [InlineData("/root/.claude/settings.json", false)]
