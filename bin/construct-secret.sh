@@ -147,9 +147,9 @@ Options:
 How to use it (agents):
   * Request everything a task needs up front, in one call, so the user approves
     once at the start instead of being interrupted halfway:
-      construct secret request github-token npm-token --for 2h --reason "publish v1.4"
+      construct secret request github-admin-token registry-pass --for 2h --reason "publish v1.4"
   * Use a value where it is consumed so it never lands in a transcript:
-      GH_TOKEN="$(construct secret get github-token)" gh release create v1.4
+      GH_TOKEN="$(construct secret get github-admin-token)" gh release create v1.4
       construct secret get registry-pass | docker login -u ci --password-stdin registry.example.com
     Never echo a secret, never write one into a file or a repository.
   * Need the username too? One `get --json` costs one use; --username plus a

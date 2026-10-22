@@ -71,11 +71,28 @@ Tokens, passwords and keys the user keeps on their PC are available through
 Each grant needs the user's approval, so request everything a task needs **at the
 start, in one call**. The user can then approve once and leave the task running:
 
-    construct secret request github-token npm-token --for 2h --reason "publish the release"
+    construct secret request prod-deploy-key db-admin --for 2h --reason "deploy the release"
 
-Use values inline (`$(construct secret get github-token)`), never write them into
-files, and run `construct secret release --all` when done. Store credentials you
-create with `construct secret add` (no approval needed).
+Use values inline (`$(construct secret get db-admin)`), never write them into
+files, and run `construct secret release --all` when done.
+
+**The vault is only for credentials agents must not use on their own**: those
+the user wants used only with explicit permission, such as admin logins or
+full-access deploy keys for critical systems. Everything else stays out of it:
+credentials you need for long-running autonomous work or scheduled tasks, and
+non-critical ones the VM needs regularly anyway (read-only tokens for
+non-sensitive systems, test environment access, git credentials). Every vault
+use waits for an approval, and the scrub at the end of a lease strips the value
+from the files tools read it from. Keep such credentials in `~/.secrets/` (one
+file each, mode `600`) or in the tool's own store (`~/.git-credentials`,
+`~/.npmrc`, ...); Construct's VM backup includes `~/.secrets/` and both files.
+
+Add a credential you create with `construct secret add` (no approval needed)
+only if it belongs in the vault and future agent tasks will need it again. Keys
+and tokens you generate while setting up another system, so that system can
+reach something, stay where that system keeps them: when no agent on this VM
+needs them afterwards, store no copy in the vault or in `~/.secrets/`. When it
+is unclear where a credential belongs, ask the user.
 
 If the user reaches T3 Code through their own proxy, record its address with
 `construct config set t3-proxy-url <url>` so pairing links and QR codes use it.

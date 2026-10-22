@@ -50,7 +50,14 @@ and keeps it, so it can still be restored on the PC and account that created it.
 ## What agents do
 
 The agent instruction file tells agents to request everything a task needs at the start, so you
-can approve once and leave. The CLI documents itself (`construct secret --help`):
+can approve once and leave. It also tells them what belongs in the vault: only credentials you want
+used with your explicit permission, such as admin logins or full-access deploy keys for critical
+systems. Credentials an agent needs for unattended or scheduled work, and non-critical ones the VM
+uses regularly (read-only tokens for non-sensitive systems, test environments, git credentials), go
+in `~/.secrets/` or the tool's own credential store instead, because every vault use waits for your
+approval. Agents add a credential they created only when later agent tasks will need it again;
+keys they generate so another system can reach something stay on that system. When it is unclear
+which applies, the agent asks you. The CLI documents itself (`construct secret --help`):
 
 ```console
 $ construct secret list
