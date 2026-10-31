@@ -509,6 +509,29 @@ configure_claude_sandbox_setting() {
   chown -R "${owner}:${owner}" "${settings_dir}" 2>/dev/null || true
 }
 
+# In bypass permissions mode Claude Code still asks before an rm or rmdir whose
+# target it cannot resolve statically (a glob after a cd, a command substitution, a
+# path outside the working directories). CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS=1
+# lifts that prompt, but Claude Code reads it only from the environment it starts
+# with: settings.json `env` cannot set it, and Claude Code removes it from the
+# environment of everything it starts. /etc/environment (pam_env) covers SSH
+# logins, so the terminal CLI and VS Code Remote-SSH; the t3code-serve and
+# code-serve-web units set it themselves. An existing entry is left as it is, so a
+# user who set another value keeps it. The optional argument names another file
+# (tests).
+configure_claude_rm_prompt_env() {
+  local env_file="${1:-/etc/environment}"
+  local key=CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS
+  if grep -q "^${key}=" "${env_file}" 2>/dev/null; then
+    return 0
+  fi
+  step "Setting ${key}=1 in ${env_file} (no rm prompts in bypass mode)"
+  if [[ -s "${env_file}" && -n "$(tail -c 1 "${env_file}")" ]]; then
+    printf '\n' >>"${env_file}"
+  fi
+  printf '%s=1\n' "${key}" >>"${env_file}"
+}
+
 # Merge the bypass-permissions defaults into a user's VS Code Remote-SSH
 # machine-scope settings, used by the Claude Code VS Code extension. This is the
 # file VS Code writes when you edit the "Remote [SSH]" settings scope; seeding it
@@ -602,6 +625,7 @@ install_claude_code() {
   if [[ "${VSCODE_SERVE_WEB}" == "true" ]]; then
     configure_claude_vscode_setting "${VSCODE_SERVE_WEB_DATA_DIR}/data/Machine" "root"
   fi
+  configure_claude_rm_prompt_env
   install_agent_system_prompt "${claude_home}/.claude/CLAUDE.md" "${claude_owner}"
 }
 

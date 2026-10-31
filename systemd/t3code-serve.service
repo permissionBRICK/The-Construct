@@ -7,6 +7,11 @@ Wants=network-online.target
 Type=simple
 User=root
 EnvironmentFile=/etc/construct/config.env
+# In bypass permissions mode Claude Code still asks before an rm or rmdir whose target
+# it cannot resolve statically; this VM is disposable, so lift that prompt too. Claude
+# Code reads the variable only from the environment it starts with (settings.json
+# cannot set it), so it is set here, on the server that starts the Claude sessions.
+Environment=CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS=1
 WorkingDirectory=/root/repos
 ExecStart=/usr/local/bin/t3 serve --host ${T3CODE_HOST} --port ${T3CODE_PORT}
 Restart=always

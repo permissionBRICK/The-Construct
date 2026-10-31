@@ -450,6 +450,21 @@ for the user that runs it — no manual config:
 
 Both are merged with `jq`, preserving existing settings, and re-applied on every run.
 
+Bypass mode alone still asks before an `rm` or `rmdir` whose target Claude Code cannot resolve
+statically (a glob after a `cd`, a command substitution, a path outside the working
+directories). `CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS=1` lifts that prompt too. Claude
+Code reads it only from the environment it starts with: `settings.json` cannot set it, and Claude
+Code removes it from the environment of the processes it starts. Setup therefore sets it in:
+
+- `t3code-serve.service` and `code-serve-web.service` (`Environment=`). A running T3 server picks
+  it up at its next restart.
+- `/etc/environment` for SSH logins (terminal `claude`, VS Code Remote-SSH). An existing entry is
+  kept, so `CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS=0` there turns the prompt back on for
+  those sessions.
+
+Claude Code ignores the variable in a nested session (`claude` started from another agent's shell,
+which carries `CLAUDE_CODE_CHILD_SESSION`).
+
 > Bypass mode runs agent tools without permission prompts. It's appropriate for a disposable,
 > isolated sandbox VM (which `IS_SANDBOX=1` flags) and risky anywhere holding real credentials
 > or data.
