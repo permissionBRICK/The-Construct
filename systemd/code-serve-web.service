@@ -7,6 +7,9 @@ Wants=network-online.target
 Type=simple
 User=root
 EnvironmentFile=/etc/construct/config.env
+# Lets the Claude Code extension run an rm or rmdir with an unresolvable target
+# without a prompt in bypass permissions mode (see t3code-serve.service).
+Environment=CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS=1
 # Browser-based VS Code served directly over HTTP (no Microsoft relay, no account
 # sign-in). Access is gated by a connection token (--connection-token-file); reach
 # it at http://<host>:<port>/?tkn=<token>. Data dir is pinned so the downloaded

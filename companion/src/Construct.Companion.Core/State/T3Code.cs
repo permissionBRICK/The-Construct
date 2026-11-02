@@ -83,6 +83,7 @@ Wants=network-online.target
 Type=simple
 User=root
 EnvironmentFile=/etc/construct/config.env
+Environment=CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS=1
 WorkingDirectory=$WORKSPACE_ROOT
 ExecStart=/usr/local/bin/t3 serve --host \${T3CODE_HOST} --port \${T3CODE_PORT}
 Restart=always
