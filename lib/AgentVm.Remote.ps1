@@ -213,9 +213,7 @@ function Test-ConstructDpapiAvailable {
         so the token store can say WHY it is unavailable instead of failing obscurely.
     #>
     try {
-        if (-not ('System.Security.Cryptography.ProtectedData' -as [type])) {
-            Add-Type -AssemblyName System.Security -ErrorAction Stop
-        }
+        Import-ConstructProtectedDataType
     } catch {
         return $false
     }
@@ -231,13 +229,29 @@ function Test-ConstructDpapiAvailable {
     }
 }
 
+function Import-ConstructProtectedDataType {
+    <#
+        Windows PowerShell 5.1 does not load the System.Security assembly into a fresh
+        process, so [System.Security.Cryptography.ProtectedData] is an unresolvable type
+        until something loads it. BOTH protection seams must do this themselves: a reader
+        process is typically not the process that saved the token, and without the load the
+        unprotect threw "Unable to find type", Get-ConstructRemoteToken swallowed it as ""
+        and token-mode remote runs silently fell back to Windows auth.
+    #>
+    if (-not ('System.Security.Cryptography.ProtectedData' -as [type])) {
+        Add-Type -AssemblyName System.Security -ErrorAction Stop
+    }
+}
+
 # Small protection seams keep the file-format round trip testable off Windows.
 function Protect-ConstructTokenBytes {
     param([byte[]]$Bytes)
+    Import-ConstructProtectedDataType
     return ,([System.Security.Cryptography.ProtectedData]::Protect($Bytes, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser))
 }
 function Unprotect-ConstructTokenBytes {
     param([byte[]]$Bytes)
+    Import-ConstructProtectedDataType
     return ,([System.Security.Cryptography.ProtectedData]::Unprotect($Bytes, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser))
 }
 

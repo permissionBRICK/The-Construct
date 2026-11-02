@@ -116,6 +116,21 @@ try {
         $onDisk = [System.IO.File]::ReadAllText($tokenFile)
         ok "token: the PLAINTEXT never appears on disk" (-not $onDisk.Contains($secret))
         ok "token: round-trips through DPAPI" ((Get-ConstructRemoteToken -BaseUrl $SVC -StoreDir $store) -eq $secret)
+        # A FRESH process must read the stored token back. Windows PowerShell 5.1 does not
+        # preload the System.Security assembly, and before the protection seams loaded it
+        # themselves a new powershell.exe hit "Unable to find type", read "" and token-mode
+        # remote runs silently fell back to Windows auth. Environment variables carry the
+        # paths so quoting survives spaces in temp directories.
+        $exe = (Get-Process -Id $PID).Path
+        $env:CONSTRUCT_TEST_LIB   = Join-Path $repoRoot "lib/AgentVm.Remote.ps1"
+        $env:CONSTRUCT_TEST_SVC   = $SVC
+        $env:CONSTRUCT_TEST_STORE = $store
+        try {
+            $fresh = & $exe -NoProfile -NonInteractive -Command '. $env:CONSTRUCT_TEST_LIB; Get-ConstructRemoteToken -BaseUrl $env:CONSTRUCT_TEST_SVC -StoreDir $env:CONSTRUCT_TEST_STORE'
+            ok "token: a FRESH process (no System.Security loaded yet) reads it back" ($fresh -eq $secret)
+        } finally {
+            Remove-Item Env:CONSTRUCT_TEST_LIB, Env:CONSTRUCT_TEST_SVC, Env:CONSTRUCT_TEST_STORE -ErrorAction SilentlyContinue
+        }
         ok "token: an unknown host reads back empty" ((Get-ConstructRemoteToken -BaseUrl "https://other:7462" -StoreDir $store) -eq "")
         [void](Remove-ConstructRemoteToken -BaseUrl $SVC -StoreDir $store)
         ok "token: removal clears it" ((Get-ConstructRemoteToken -BaseUrl $SVC -StoreDir $store) -eq "")
