@@ -177,6 +177,36 @@ record('end')
         self.assertEqual([(c['profile'], c['dir'], c['command']) for c in commands],
                          [(p, p, c) for p in ['z', 'a'] for c in ['echo first', 'echo second']])
 
+    def generate(self, sdks_by_profile):
+        store = self.agent / 'projects'
+        store.mkdir(exist_ok=True)
+        for name, sdks in sdks_by_profile.items():
+            (store / (name + '.json')).write_text(json.dumps(dict(name=name, sdks=sdks)))
+        result = subprocess.run(['bash', str(ROOT / 'bin/generate-runtime-config.sh')],
+                                env=dict(self.env, PROJECTS=','.join(sdks_by_profile)),
+                                check=True, capture_output=True, text=True)
+        return json.loads(self.generated.read_text())['sdks'], result.stderr
+
+    def test_sdk_merge_prefers_the_highest_version_numerically(self):
+        # "24" vs "26" and "8.0" vs "10.0" both sort wrong as strings; the installer
+        # takes the first element, so the highest requested version must come first.
+        sdks, stderr = self.generate(dict(
+            old={'node': '24', 'dotnet': ['8.0']},
+            new={'node': ['26'], 'dotnet': '10.0'}))
+        self.assertEqual(sdks['node'], ['26', '24'])
+        self.assertEqual(sdks['dotnet'], ['10.0', '8.0'])
+        self.assertIn('Conflicting SDK major versions', stderr)
+        self.assertIn('node: old wants 24, new wants 26', stderr)
+        self.assertIn('dotnet: old wants 8.0, new wants 10.0', stderr)
+
+    def test_sdk_merge_with_agreeing_majors_warns_about_nothing(self):
+        sdks, stderr = self.generate(dict(
+            one={'node': '26', 'python': '3.12'},
+            two={'node': ['26.1'], 'python': '3.11'}))
+        self.assertEqual(sdks['node'], ['26.1', '26'])
+        self.assertEqual(sdks['python'], ['3.12', '3.11'])
+        self.assertNotIn('Conflicting SDK major versions', stderr)
+
     def test_checkout_and_following_stage_barriers(self):
         # Exercise the actual checkout/command stage from provision.sh with only
         # run_step replaced; never invoke the full provision or service restarts.

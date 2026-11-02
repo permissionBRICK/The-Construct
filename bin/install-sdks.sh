@@ -54,11 +54,16 @@ fi
 # Does the merged config request runtime <key>?
 want() { jq -e --arg k "$1" '(.sdks // {}) | has($k)' "${GENERATED_JSON}" >/dev/null 2>&1; }
 
-# First requested version for <key> (handles string or array), else empty.
-first_ver() {
+# Highest requested version for <key> (handles string or array), else empty. The
+# generator already orders merged lists highest first, but a generated.json written
+# by an older generator sorts lexically ("24" before "26"), so pick the numeric
+# maximum here too rather than trusting element 0 — a runtime that satisfies the
+# highest request builds every profile, the lowest breaks the newer ones.
+pick_ver() {
   jq -r --arg k "$1" '
+    def version_rank: tostring | split(".") | map(tonumber? // 0);
     (.sdks // {})[$k] // empty
-    | if type == "array" then (.[0] // "") else tostring end
+    | if type == "array" then ((sort_by(version_rank) | last) // "") else tostring end
   ' "${GENERATED_JSON}"
 }
 
@@ -139,15 +144,15 @@ run_runtime() {
 
 if want node; then
   installed_any=true
-  run_runtime "Node.js runtime installation" install_node "$(first_ver node)"
+  run_runtime "Node.js runtime installation" install_node "$(pick_ver node)"
 fi
 if want python; then
   installed_any=true
-  run_runtime "Python runtime installation" install_python "$(first_ver python)"
+  run_runtime "Python runtime installation" install_python "$(pick_ver python)"
 fi
 if want dotnet; then
   installed_any=true
-  run_runtime ".NET runtime installation" install_dotnet "$(first_ver dotnet)"
+  run_runtime ".NET runtime installation" install_dotnet "$(pick_ver dotnet)"
 fi
 
 if [[ "${installed_any}" != "true" ]]; then
