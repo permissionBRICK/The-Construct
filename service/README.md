@@ -641,7 +641,7 @@ Bound from the `Constructd` section of `appsettings.json`, from environment vari
 | `NetshPath` | `netsh.exe` | netsh used for the port-proxy rules. |
 | `SshForwardPorts:Start` / `:End` | `2201` / `2299` | Per-VM SSH forward range. |
 | `AppForwardPorts:Start` / `:End` | `2300` / `2999` | Range for `construct expose --to host`. Must not overlap the SSH range. |
-| `MaxForwardsPerVm` | `16` | Cap on extra forwards per VM, enforced inside the forward manager. |
+| `MaxForwardsPerVm` | `0` (uncapped) | Optional cap on extra forwards per VM, enforced inside the forward manager; `0` or negative means no per-VM cap. The forward port ranges bound the total either way. |
 | `VmReachableTimeoutMinutes` | `30` | How long creation waits for SSH. |
 | `AuditQueryLimit` | `200` | Default page size of `GET /audit`. |
 | `Idle:SchedulerEnabled` | `true` | Run the background evaluator. |
