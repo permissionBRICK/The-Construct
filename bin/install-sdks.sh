@@ -5,9 +5,17 @@
 #
 # Reads the merged `.sdks` object from runtime/generated.json (produced by
 # generate-runtime-config.sh) and installs the runtimes it recognizes:
-#   - node    -> NodeSource apt repo for the requested major version
+#   - node    -> NodeSource apt repo for the HIGHEST requested major version. Only one
+#                nodejs deb can be installed at a time and every agent shell shares one
+#                PATH, so one version has to win; the highest builds the projects that
+#                pinned an older major, the reverse broke them (the generator warns when
+#                profiles disagree on the major).
 #   - python  -> python3 + venv + pip (version is best-effort)
-#   - dotnet  -> .NET SDK via Microsoft's dotnet-install.sh (channel = version)
+#   - dotnet  -> .NET SDKs via Microsoft's dotnet-install.sh, EVERY requested
+#                channel/version: SDKs are side-by-side by design in one install dir,
+#                and `dotnet` picks per project (global.json, else latest). A project
+#                pinning 8.0 in global.json fails on a VM that only has 10.0, so
+#                picking one version is not an option here.
 #
 # Idempotent; safe to re-run. Run as root.
 #
@@ -54,11 +62,26 @@ fi
 # Does the merged config request runtime <key>?
 want() { jq -e --arg k "$1" '(.sdks // {}) | has($k)' "${GENERATED_JSON}" >/dev/null 2>&1; }
 
-# First requested version for <key> (handles string or array), else empty.
-first_ver() {
+# Highest requested version for <key> (handles string or array), else empty. The
+# generator already orders merged lists highest first, but a generated.json written
+# by an older generator sorts lexically ("24" before "26"), so pick the numeric
+# maximum here too rather than trusting element 0 — a runtime that satisfies the
+# highest request builds every profile, the lowest breaks the newer ones.
+pick_ver() {
   jq -r --arg k "$1" '
+    def version_rank: tostring | split(".") | map(tonumber? // 0);
     (.sdks // {})[$k] // empty
-    | if type == "array" then (.[0] // "") else tostring end
+    | if type == "array" then ((sort_by(version_rank) | last) // "") else tostring end
+  ' "${GENERATED_JSON}"
+}
+
+# Every requested version for <key>, one per line, highest first (for runtimes that
+# install side by side).
+all_vers() {
+  jq -r --arg k "$1" '
+    def version_rank: tostring | split(".") | map(tonumber? // 0);
+    (.sdks // {})[$k] // empty
+    | if type == "array" then (sort_by(version_rank) | reverse | .[]) else tostring end
   ' "${GENERATED_JSON}"
 }
 
@@ -139,15 +162,25 @@ run_runtime() {
 
 if want node; then
   installed_any=true
-  run_runtime "Node.js runtime installation" install_node "$(first_ver node)"
+  run_runtime "Node.js runtime installation" install_node "$(pick_ver node)"
 fi
 if want python; then
   installed_any=true
-  run_runtime "Python runtime installation" install_python "$(first_ver python)"
+  run_runtime "Python runtime installation" install_python "$(pick_ver python)"
 fi
 if want dotnet; then
   installed_any=true
-  run_runtime ".NET runtime installation" install_dotnet "$(first_ver dotnet)"
+  # Side-by-side: every requested SDK, so a project whose global.json pins an older
+  # channel still builds next to one that needs the newest.
+  dotnet_requested="$(all_vers dotnet)"
+  if [[ -z "${dotnet_requested}" ]]; then
+    run_runtime ".NET runtime installation" install_dotnet ""
+  else
+    while IFS= read -r dotnet_ver; do
+      [[ -n "${dotnet_ver}" ]] || continue
+      run_runtime ".NET runtime installation (${dotnet_ver})" install_dotnet "${dotnet_ver}"
+    done <<<"${dotnet_requested}"
+  fi
 fi
 
 if [[ "${installed_any}" != "true" ]]; then

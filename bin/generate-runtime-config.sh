@@ -139,10 +139,16 @@ fi
 
 jq -s '
   def unique_strings: map(select(type == "string" and length > 0)) | unique;
+  # "24" < "26" < "3.12" as strings is meaningless for runtimes; compare numerically,
+  # segment by segment, and keep the HIGHEST requested version first — install-sdks.sh
+  # installs the first element, and a runtime that satisfies node 26 also builds the
+  # profile that asked for 24, while the reverse broke (unique sorted lexically, so the
+  # VM got the lowest and every profile needing a newer major failed).
+  def version_rank: tostring | split(".") | map(tonumber? // 0);
   def merge_sdks:
     reduce .[] as $project ({};
       reduce (($project.sdks // {}) | to_entries[]) as $sdk (.;
-        .[$sdk.key] = (((.[$sdk.key] // []) + (if ($sdk.value | type) == "array" then $sdk.value else [$sdk.value] end)) | unique_strings)
+        .[$sdk.key] = (((.[$sdk.key] // []) + (if ($sdk.value | type) == "array" then $sdk.value else [$sdk.value] end)) | unique_strings | sort_by(version_rank) | reverse)
       )
     );
   {
@@ -179,6 +185,30 @@ jq -s '
     tests: map({(.name): (.tests // {})}) | add
   }
 ' "${project_json_args[@]}" >"${RUNTIME_DIR}/generated.json"
+
+# For the SINGLE-SLOT runtimes (node from the NodeSource apt repo, the system python)
+# only one version can be installed, and profiles disagreeing on the MAJOR get the
+# highest (see merge_sdks) — but silently so is how a reinstall once built everything
+# against the wrong runtime for hours. Name the conflict and who causes it, so the
+# profile asking for the outdated major is found and fixed instead of rediscovered at
+# the next provision. .NET is exempt: install-sdks.sh installs every requested SDK
+# side by side, so disagreeing dotnet majors are not a conflict at all.
+sdk_conflicts="$(jq -rs '
+  [ .[] | .name as $profile
+    | ((.sdks // {}) | to_entries[])
+    | select(.key == "node" or .key == "python")
+    | { profile: $profile, key: .key,
+        versions: ((if (.value | type) == "array" then .value else [.value] end)
+                   | map(select(type == "string" and length > 0))) }
+    | select((.versions | length) > 0) ]
+  | group_by(.key) | map(select(([ .[].versions[] | split(".")[0] ] | unique | length) > 1))
+  | .[] | "\(.[0].key): " + ([ .[] | "\(.profile) wants \(.versions | join("/"))" ] | join(", "))
+' "${project_json_args[@]}")"
+if [[ -n "${sdk_conflicts}" ]]; then
+  while IFS= read -r conflict_line; do
+    warn "Conflicting SDK major versions — ${conflict_line}; installing the highest requested version"
+  done <<<"${sdk_conflicts}"
+fi
 
 repos_json="$(jq -c '.repos' "${RUNTIME_DIR}/generated.json")"
 sdks_json="$(jq -c '.sdks' "${RUNTIME_DIR}/generated.json")"
