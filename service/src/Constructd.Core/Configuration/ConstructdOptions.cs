@@ -148,8 +148,13 @@ public sealed class ConstructdOptions
     /// <summary>Port range for app forwards created through <c>construct expose --to host</c>.</summary>
     public PortRangeOptions AppForwardPorts { get; set; } = new(2300, 2999);
 
-    /// <summary>Cap on extra forwards per VM (the scoped VM token is "capped count/range", plan §4.6).</summary>
-    public int MaxForwardsPerVm { get; set; } = 16;
+    /// <summary>
+    /// Optional cap on extra forwards per VM; zero or negative means uncapped (the default). The real
+    /// bound is the forward port ranges themselves — allocation fails when a range is exhausted — so
+    /// the cap exists only for operators who want a tighter per-VM budget (plan §4.6's "capped
+    /// count/range" for scoped VM tokens).
+    /// </summary>
+    public int MaxForwardsPerVm { get; set; }
 
     /// <summary>Retry host forward reconciliation after boot and DHCP changes. Zero disables periodic passes.</summary>
     public int ForwardReconcileSeconds { get; set; } = 30;

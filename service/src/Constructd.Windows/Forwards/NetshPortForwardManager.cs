@@ -260,8 +260,9 @@ public sealed class NetshPortForwardManager : IPortForwardManager
                 return AddForwardResult.VmUnavailable;
             }
 
+            // A non-positive cap means uncapped; the port ranges bound the total either way.
             var existing = await _store.CountByVmAsync(name, cancellationToken).ConfigureAwait(false);
-            if (existing >= maxForwards)
+            if (maxForwards > 0 && existing >= maxForwards)
             {
                 return AddForwardResult.LimitReached;
             }

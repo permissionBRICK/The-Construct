@@ -225,6 +225,30 @@ public class ForwardTests
     }
 
     [Fact]
+    public async Task A_zero_cap_means_uncapped_and_only_the_port_range_bounds_forwards()
+    {
+        // The TestApp host pins the cap to 3 (the concurrency suite relies on it); 0 must
+        // lift it entirely — the production default since the cap became opt-in.
+        var (app, owner, _) = await SetupAsync(settings: new Dictionary<string, string?>
+        {
+            ["Constructd:MaxForwardsPerVm"] = "0",
+        });
+        using var _app = app;
+        using var _owner = owner;
+
+        for (var i = 0; i < 8; i++)
+        {
+            using var response = await owner.PostJsonAsync("/api/v1/vms/work-vm/forwards",
+                new { vmPort = 3000 + i, label = $"p{i}", target = "client" });
+            Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        }
+
+        var listed = await (await owner.GetAsync("/api/v1/vms/work-vm/forwards"))
+            .ReadAsync<List<ForwardResponse>>();
+        Assert.Equal(8, listed.Count);
+    }
+
+    [Fact]
     public async Task Exhausting_the_app_port_range_is_reported_as_a_conflict()
     {
         var settings = new Dictionary<string, string?>
