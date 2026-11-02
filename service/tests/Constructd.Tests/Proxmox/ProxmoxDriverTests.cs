@@ -124,7 +124,7 @@ public sealed class ProxmoxDriverTests
             "--memory", "8192", "--ostype", "l26", "--scsihw", "virtio-scsi-single",
             "--scsi0", "local-lvm:0,import-from=local:import/construct-ubuntu-noble-xfs-amd64.qcow2,discard=on",
             "--ide2", "local-lvm:cloudinit", "--net0", "virtio,bridge=vmbr0", "--boot", "order=scsi0",
-            "--agent", "enabled=1", "--serial0", "socket", "--ipconfig0", "ip=dhcp",
+            "--onboot", "1", "--agent", "enabled=1", "--serial0", "socket", "--ipconfig0", "ip=dhcp",
             "--cicustom", "user=local:snippets/construct-work-vm-user.yaml", "--tags", "construct",
         ], create.Arguments);
         Assert.Equal(["disk", "resize", "104", "scsi0", "60G"], runner[3].Arguments);
@@ -214,11 +214,13 @@ public sealed class ProxmoxDriverTests
     }
 
     [Fact]
-    public async Task Power_operations_map_onto_qm()
+    public async Task Power_operations_map_onto_qm_and_mirror_intent_into_onboot()
     {
         var (driver, runner, _) = Driver(new RecordingProcessRunner()
-            .RespondStdout(Resources).RespondStdout("")                                                  // start
-            .RespondStdout(Resources).RespondStdout("""{"status":"running"}""").RespondStdout("")      // stop
+            .RespondStdout(Resources).RespondStdout("""{"status":"stopped"}""")
+            .RespondStdout("").RespondStdout("")                                                         // start
+            .RespondStdout(Resources).RespondStdout("")
+            .RespondStdout("""{"status":"running"}""").RespondStdout("")                                 // stop
             .RespondStdout(Resources).RespondStdout("")                                                  // save
             .RespondStdout(Resources).RespondStdout("")                                                  // cpu
             .RespondStdout(Resources).RespondStdout(""));                                                // memory
@@ -229,26 +231,77 @@ public sealed class ProxmoxDriverTests
         await driver.SetCpuCountAsync("work-vm", 6, CancellationToken.None);
         await driver.SetMemoryAsync("work-vm", 12, CancellationToken.None);
 
-        Assert.Equal(["start", "104"], runner[1].Arguments);
-        Assert.Equal(["shutdown", "104", "--timeout", "120", "--forceStop", "1"], runner[4].Arguments);
-        Assert.Equal(["suspend", "104", "--todisk", "1"], runner[6].Arguments);
-        Assert.Equal(["set", "104", "--cores", "6"], runner[8].Arguments);
-        Assert.Equal(["set", "104", "--memory", "12288"], runner[10].Arguments);
+        Assert.Equal(["start", "104"], runner[2].Arguments);
+        // Hyper-V's StartIfRunning equivalent: a started VM comes back after a node reboot...
+        Assert.Equal(["set", "104", "--onboot", "1"], runner[3].Arguments);
+        // ...and a stopped VM stays down, so the flag is cleared before the shutdown.
+        Assert.Equal(["set", "104", "--onboot", "0"], runner[5].Arguments);
+        Assert.Equal(["shutdown", "104", "--timeout", "120", "--forceStop", "1"], runner[7].Arguments);
+        // A save keeps onboot set: the parked session resumes after a node reboot.
+        Assert.Equal(["suspend", "104", "--todisk", "1"], runner[9].Arguments);
+        Assert.Equal(["set", "104", "--cores", "6"], runner[11].Arguments);
+        Assert.Equal(["set", "104", "--memory", "12288"], runner[13].Arguments);
+        Assert.Equal(14, runner.Calls.Count);
         Assert.All(runner.Calls.Where(c => c.FileName == "qm"), c => Assert.DoesNotContain("--output-format", c.Arguments));
     }
 
     [Fact]
-    public async Task Stop_of_a_vm_that_is_off_or_saved_issues_no_shutdown()
+    public async Task Start_of_a_saved_vm_syncs_the_guest_clock_through_the_agent_socket()
+    {
+        var (driver, runner, _) = Driver(new RecordingProcessRunner()
+            .RespondStdout(Resources).RespondStdout("""{"status":"stopped","lock":"suspended"}""")
+            .RespondStdout("").RespondStdout("").RespondStdout("synced"));
+
+        await driver.StartAsync("work-vm", CancellationToken.None);
+
+        Assert.Equal(["start", "104"], runner[2].Arguments);
+        var sync = runner[4];
+        Assert.Equal("python3", sync.FileName);
+        Assert.Equal(["-c", ProxmoxGuestClock.Script, "/run/qemu-server/104.qga"], sync.Arguments);
+        Assert.Equal(5, runner.Calls.Count);
+    }
+
+    [Fact]
+    public async Task A_failed_clock_sync_does_not_fail_the_start()
+    {
+        var (driver, runner, _) = Driver(new RecordingProcessRunner()
+            .RespondStdout(Resources).RespondStdout("""{"status":"stopped","lock":"suspended"}""")
+            .RespondStdout("").RespondStdout("")
+            .Respond(new ProcessResult(1, string.Empty, string.Empty, TimedOut: false)));
+
+        await driver.StartAsync("work-vm", CancellationToken.None);
+
+        Assert.Equal(5, runner.Calls.Count);
+    }
+
+    [Fact]
+    public async Task Start_of_a_vm_that_was_off_does_not_touch_the_agent_socket()
     {
         var (driver, runner, _) = Driver(new RecordingProcessRunner()
             .RespondStdout(Resources).RespondStdout("""{"status":"stopped"}""")
-            .RespondStdout(Resources).RespondStdout("""{"status":"stopped","lock":"suspended"}"""));
+            .RespondStdout("").RespondStdout(""));
 
-        await driver.StopAsync("work-vm", CancellationToken.None);
-        await driver.StopAsync("work-vm", CancellationToken.None);
+        await driver.StartAsync("work-vm", CancellationToken.None);
 
         Assert.Equal(4, runner.Calls.Count);
-        Assert.All(runner.Calls, c => Assert.Equal("pvesh", c.FileName));
+        Assert.DoesNotContain(runner.Calls, c => c.FileName == "python3");
+    }
+
+    [Fact]
+    public async Task Stop_of_a_vm_that_is_off_or_saved_clears_onboot_but_issues_no_shutdown()
+    {
+        var (driver, runner, _) = Driver(new RecordingProcessRunner()
+            .RespondStdout(Resources).RespondStdout("").RespondStdout("""{"status":"stopped"}""")
+            .RespondStdout(Resources).RespondStdout("").RespondStdout("""{"status":"stopped","lock":"suspended"}"""));
+
+        await driver.StopAsync("work-vm", CancellationToken.None);
+        await driver.StopAsync("work-vm", CancellationToken.None);
+
+        Assert.Equal(6, runner.Calls.Count);
+        // A stop of a saved VM still means "stay down" across node reboots.
+        Assert.All(runner.Calls.Where(c => c.FileName == "qm"),
+            c => Assert.Equal(["set", "104", "--onboot", "0"], c.Arguments));
+        Assert.Equal(2, runner.Calls.Count(c => c.FileName == "qm"));
     }
 
     [Fact]

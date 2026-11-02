@@ -185,17 +185,34 @@ A create request (`POST /vms`) runs the same job as on Windows; only the platfor
 | Step | Windows host | Proxmox host |
 |---|---|---|
 | Install media | autoinstall ISO from the catalog (or per VM through WSL) | **one cloud-init snippet per VM**: hostname, seed user `construct` with passwordless sudo and a locked password, the bootstrap public key, `qemu-guest-agent` |
-| Create | `Create-AgentVM.ps1` → Gen-2 VM, fresh VHDX, ISO attached | `qm create` cloning the cached cloud image (`--scsi0 <storage>:0,import-from=<image>`), a cloud-init drive (`--ide2 <storage>:cloudinit`), `--cicustom user=<snippet>`, `--agent enabled=1`, CPU model selected by the nested setting, bridged DHCP; then `qm disk resize` to the requested size and `qm start` |
+| Create | `Create-AgentVM.ps1` → Gen-2 VM, fresh VHDX, ISO attached | `qm create` cloning the cached cloud image (`--scsi0 <storage>:0,import-from=<image>`), a cloud-init drive (`--ide2 <storage>:cloudinit`), `--cicustom user=<snippet>`, `--agent enabled=1`, `--onboot 1`, CPU model selected by the nested setting, bridged DHCP; then `qm disk resize` to the requested size and `qm start` |
 | Wait for SSH | the driver's socket poll on `<name>.mshome.net` | the guest agent reports the DHCP address (`network-get-interfaces`); SSH is probed on it |
 | Detach media | eject the ISO | keep the cloud-init drive attached for later network configuration changes |
 | Endpoint | `PublicHost:<forward>` via `netsh portproxy` | `PublicHost:<forward>` through the relay, or the guest's LAN address on port 22 in direct mode (section 5) |
-| Power | `Start-VM` / `Stop-VM` / `Save-VM` | `qm start` / `qm shutdown --forceStop 1` / `qm suspend --todisk 1` |
+| Power | `Start-VM` / `Stop-VM` / `Save-VM` | `qm start` / `qm shutdown --forceStop 1` / `qm suspend --todisk 1`; `onboot` mirrors the intent (set on start, cleared on stop, kept on save) |
 | Remove | `Remove-VM` + disk chain | `qm stop` (if running) + `qm destroy --purge 1 --destroy-unreferenced-disks 1` + the seed snippet |
 
 The whole thing takes about two and a half minutes on an old laptop: the image import is most of
 it, first boot plus `apt-get install qemu-guest-agent` the rest. The client then provisions the
 guest with `bin/provision.sh` exactly as it would any other Construct VM — the guest payload is
 identical.
+
+**After a node reboot**, Proxmox starts every VM whose `onboot` flag is set. The driver keeps
+that flag in step with the intended power state — Hyper-V's `AutomaticStartAction =
+StartIfRunning` semantics: set at create and on every start, cleared on a stop (even of an
+already-off or saved VM), kept on a save so a parked session resumes. A resume from a saved
+state also restores the clock the guest was saved with (Hyper-V's time-sync integration service
+has no QEMU counterpart in the guest), so after resuming one the driver sets the guest clock to
+the node's through the QEMU guest agent socket (`guest-set-time`; Proxmox's own API does not
+expose that command). The sync is best effort: a guest without a working agent still starts, its
+clock corrected only by its own NTP poll.
+
+The cloud image ships Ubuntu's `linux-image-virtual` kernel, which — unlike the `linux-generic`
+of an ISO install — carries no `linux-modules-extra` (no `videodev`/V4L2, exotic file systems,
+and similar). Nothing Construct provisions needs those modules, and they would add several
+hundred megabytes to the image and every clone, so the image intentionally stays lean. A project
+that needs them can declare `linux-generic` in its profile's `hostPackages`; the guest then
+installs the full module set (a reboot makes the running kernel pick them up).
 
 Nested virtualization defaults to off. Enabled guests use `Proxmox:CpuType` (`host`);
 disabled guests and child VMs use `Proxmox:CpuTypeWithoutNesting` (`x86-64-v2-AES`). Proxmox

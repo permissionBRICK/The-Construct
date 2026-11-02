@@ -59,6 +59,12 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
     /// <summary>A read-only <c>pvesh get</c>.</summary>
     private static readonly TimeSpan QueryTimeout = TimeSpan.FromSeconds(60);
 
+    /// <summary>
+    /// Outer budget for the guest clock sync after a resume; the script's own retry deadline
+    /// (90 s, in <see cref="ProxmoxGuestClock.Script"/>) expires first.
+    /// </summary>
+    private static readonly TimeSpan GuestClockTimeout = TimeSpan.FromSeconds(120);
+
     private static readonly TimeSpan ProbeInterval = TimeSpan.FromSeconds(5);
 
     private static readonly TimeSpan ProbeTimeout = TimeSpan.FromSeconds(3);
@@ -166,6 +172,10 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
             "--ide2", $"{storage}:cloudinit",
             "--net0", $"virtio,bridge={bridge}",
             "--boot", "order=scsi0",
+            // Hyper-V's AutomaticStartAction=StartIfRunning equivalent: `onboot` mirrors whether
+            // the VM is meant to be up, so a node reboot brings back what was running (or saved)
+            // and leaves alone what the user stopped. Set here and on every start, cleared on stop.
+            "--onboot", "1",
             "--agent", "enabled=1",
             "--serial0", "socket",
             "--ipconfig0", "ip=dhcp",
@@ -224,9 +234,17 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
 
     public async Task StartAsync(string name, CancellationToken cancellationToken)
     {
-        var (vmName, id) = await RequireVmAsync("start-vm", name, cancellationToken).ConfigureAwait(false);
+        var (vmName, id, vmId) = await RequireVmWithIdAsync("start-vm", name, cancellationToken).ConfigureAwait(false);
+        var resuming = await ReadStateAsync(vmName, vmId, cancellationToken).ConfigureAwait(false) == VmState.Saved;
         await RunQmAsync("start-vm", vmName, ["start", id], ShortTimeout, null, cancellationToken)
             .ConfigureAwait(false);
+        // Only after a successful start: `onboot` mirrors the intended power state (see CreateVmAsync).
+        await RunQmAsync("start-vm", vmName, ["set", id, "--onboot", "1"], ShortTimeout, null, cancellationToken)
+            .ConfigureAwait(false);
+        if (resuming)
+        {
+            await SyncGuestClockAsync(vmName, vmId, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <summary>
@@ -237,6 +255,10 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
     public async Task StopAsync(string name, CancellationToken cancellationToken)
     {
         var (vmName, id, vmId) = await RequireVmWithIdAsync("stop-vm", name, cancellationToken).ConfigureAwait(false);
+        // Even when the VM is already off or parked in a saved state: a stop expresses "stay down",
+        // so a node reboot must not start (or resume) this VM again.
+        await RunQmAsync("stop-vm", vmName, ["set", id, "--onboot", "0"], ShortTimeout, null, cancellationToken)
+            .ConfigureAwait(false);
         var state = await ReadStateAsync(vmName, vmId, cancellationToken).ConfigureAwait(false);
         if (state is VmState.Off or VmState.Saved)
         {
@@ -248,6 +270,10 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
             ShortTimeout, null, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// <c>onboot</c> deliberately stays set: a saved VM is a parked running one, so after a node
+    /// reboot it resumes — like Hyper-V's save-on-shutdown plus StartIfRunning.
+    /// </summary>
     public async Task SaveAsync(string name, CancellationToken cancellationToken)
     {
         var (vmName, id) = await RequireVmAsync("save-vm", name, cancellationToken).ConfigureAwait(false);
@@ -559,6 +585,38 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
     }
 
     private string VmPath(int vmId) => $"/nodes/{Node}/qemu/{ArgumentGuard.Invariant(vmId)}";
+
+    /// <summary>
+    /// After a resume from a saved state the guest clock still shows the save time (details on
+    /// <see cref="ProxmoxGuestClock"/>). Best effort by design: a start must not fail because a
+    /// guest has no working agent, so an expired or failed sync is logged and swallowed — the
+    /// guest's own NTP corrects the clock eventually, just not within seconds.
+    /// </summary>
+    private async Task SyncGuestClockAsync(string vmName, int vmId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await _processes.RunAsync(
+                _options.Proxmox.PythonPath,
+                ["-c", ProxmoxGuestClock.Script, "/run/qemu-server/" + ArgumentGuard.Invariant(vmId) + ".qga"],
+                standardInput: null, GuestClockTimeout, standardOutputLines: null, cancellationToken)
+                .ConfigureAwait(false);
+            if (!result.Succeeded)
+            {
+                _logger.LogWarning(
+                    "Proxmox driver could not sync the clock of VM {Vm} after its resume; the guest agent did not acknowledge guest-set-time",
+                    vmName);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(exception, "Proxmox driver could not sync the clock of VM {Vm} after its resume", vmName);
+        }
+    }
 
     /// <summary>The seed the ISO-builder slot carries: a snippet volume id, and nothing else.</summary>
     private string SeedVolume(string? isoPath, string name)
