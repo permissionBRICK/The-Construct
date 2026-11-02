@@ -60,8 +60,8 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
     private static readonly TimeSpan QueryTimeout = TimeSpan.FromSeconds(60);
 
     /// <summary>
-    /// Outer budget for the guest clock sync after a resume; the script's own retry deadline
-    /// (90 s, in <see cref="ProxmoxGuestClock.Script"/>) expires first.
+    /// How long the post-resume clock sync waits for the guest agent to answer a ping. The agent
+    /// is usually up seconds after the restore; the budget covers a slow spinning-disk restore.
     /// </summary>
     private static readonly TimeSpan GuestClockTimeout = TimeSpan.FromSeconds(120);
 
@@ -587,25 +587,61 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
     private string VmPath(int vmId) => $"/nodes/{Node}/qemu/{ArgumentGuard.Invariant(vmId)}";
 
     /// <summary>
-    /// After a resume from a saved state the guest clock still shows the save time (details on
-    /// <see cref="ProxmoxGuestClock"/>). Best effort by design: a start must not fail because a
-    /// guest has no working agent, so an expired or failed sync is logged and swallowed — the
-    /// guest's own NTP corrects the clock eventually, just not within seconds.
+    /// After a resume from a saved state the guest clock still shows the save time — the kernel
+    /// clock AND the restored RTC device state — and the guest's own NTP corrects it only at its
+    /// next poll, up to half an hour away. Hyper-V's time-sync integration service handled this
+    /// implicitly; here the clock is set from the node through Proxmox's own agent commands:
+    /// <c>qm guest cmd &lt;id&gt; ping</c> until the resumed agent answers, then
+    /// <c>qm guest exec &lt;id&gt; -- date -u -s @&lt;node-epoch&gt;</c>, whose JSON answer carries the
+    /// guest-side exit code (qm itself exits 0 either way).
+    ///
+    /// Through qm, not the QGA socket: Proxmox serializes all agent access per VM, and a direct
+    /// socket client raced it — QEMU's chardev serves one connection, so the concurrent agent
+    /// calls the relay makes while resolving endpoints starved the sync (first field test).
+    /// QGA's own <c>guest-set-time</c> is not exposed through qm or the API, so the guest's
+    /// <c>date</c> does the setting — Linux guests only, which every Construct-created Proxmox
+    /// VM is; elsewhere the exec fails into the warning.
+    ///
+    /// Best effort by design: a start must not fail because a guest has no working agent, so an
+    /// expired or failed sync is logged and swallowed.
     /// </summary>
     private async Task SyncGuestClockAsync(string vmName, int vmId, CancellationToken cancellationToken)
     {
+        var id = ArgumentGuard.Invariant(vmId);
         try
         {
-            var result = await _processes.RunAsync(
-                _options.Proxmox.PythonPath,
-                ["-c", ProxmoxGuestClock.Script, "/run/qemu-server/" + ArgumentGuard.Invariant(vmId) + ".qga"],
-                standardInput: null, GuestClockTimeout, standardOutputLines: null, cancellationToken)
-                .ConfigureAwait(false);
-            if (!result.Succeeded)
+            var deadline = DateTimeOffset.UtcNow + GuestClockTimeout;
+            while (true)
+            {
+                var ping = await _processes.RunAsync(_options.Proxmox.QmPath, ["guest", "cmd", id, "ping"],
+                    standardInput: null, QueryTimeout, standardOutputLines: null, cancellationToken).ConfigureAwait(false);
+                if (ping.Succeeded)
+                {
+                    break;
+                }
+
+                if (DateTimeOffset.UtcNow >= deadline)
+                {
+                    _logger.LogWarning(
+                        "Proxmox driver could not sync the clock of VM {Vm} after its resume; the guest agent did not answer within {Seconds:0} s",
+                        vmName, GuestClockTimeout.TotalSeconds);
+                    return;
+                }
+
+                await Task.Delay(ProbeInterval, cancellationToken).ConfigureAwait(false);
+            }
+
+            // The timestamp is read after the agent answered, so a long agent wait cannot make it stale.
+            var epoch = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture);
+            var exec = await _processes.RunAsync(_options.Proxmox.QmPath,
+                ["guest", "exec", id, "--timeout", "30", "--", "date", "-u", "-s", "@" + epoch],
+                standardInput: null, QueryTimeout, standardOutputLines: null, cancellationToken).ConfigureAwait(false);
+            var exitCode = exec.Succeeded ? GuestExitCode(exec.StandardOutput) : null;
+            if (exitCode != 0)
             {
                 _logger.LogWarning(
-                    "Proxmox driver could not sync the clock of VM {Vm} after its resume; the guest agent did not acknowledge guest-set-time",
-                    vmName);
+                    "Proxmox driver could not sync the clock of VM {Vm} after its resume; the guest's date command {Outcome}",
+                    vmName, exitCode is null ? "did not run" : "exited with " + exitCode.Value.ToString(CultureInfo.InvariantCulture));
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -615,6 +651,23 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
         catch (Exception exception)
         {
             _logger.LogWarning(exception, "Proxmox driver could not sync the clock of VM {Vm} after its resume", vmName);
+        }
+    }
+
+    /// <summary>The guest-side exit code from <c>qm guest exec</c>'s JSON, or null when it did not finish.</summary>
+    private static int? GuestExitCode(string standardOutput)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(standardOutput);
+            var root = document.RootElement;
+            var exited = root.ValueKind == JsonValueKind.Object && root.TryGetProperty("exited", out var flag) &&
+                (flag.ValueKind == JsonValueKind.True || (flag.ValueKind == JsonValueKind.Number && flag.TryGetInt32(out var n) && n != 0));
+            return exited && root.TryGetProperty("exitcode", out var code) && code.TryGetInt32(out var value) ? value : null;
+        }
+        catch (JsonException)
+        {
+            return null;
         }
     }
 

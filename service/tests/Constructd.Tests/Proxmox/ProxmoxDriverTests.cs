@@ -246,36 +246,65 @@ public sealed class ProxmoxDriverTests
     }
 
     [Fact]
-    public async Task Start_of_a_saved_vm_syncs_the_guest_clock_through_the_agent_socket()
+    public async Task Start_of_a_saved_vm_syncs_the_guest_clock_through_qm_guest_exec()
     {
         var (driver, runner, _) = Driver(new RecordingProcessRunner()
             .RespondStdout(Resources).RespondStdout("""{"status":"stopped","lock":"suspended"}""")
-            .RespondStdout("").RespondStdout("").RespondStdout("synced"));
+            .RespondStdout("").RespondStdout("")
+            // Agent not up yet once, then the ping answers; exec reports the guest's exit code.
+            .Respond(new ProcessResult(255, string.Empty, "QEMU guest agent is not running", TimedOut: false))
+            .RespondStdout("")
+            .RespondStdout("""{"exitcode":0,"exited":1}"""));
 
+        var before = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         await driver.StartAsync("work-vm", CancellationToken.None);
+        var after = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
         Assert.Equal(["start", "104"], runner[2].Arguments);
-        var sync = runner[4];
-        Assert.Equal("python3", sync.FileName);
-        Assert.Equal(["-c", ProxmoxGuestClock.Script, "/run/qemu-server/104.qga"], sync.Arguments);
-        Assert.Equal(5, runner.Calls.Count);
+        Assert.Equal(["guest", "cmd", "104", "ping"], runner[4].Arguments);
+        Assert.Equal(runner[4].Arguments, runner[5].Arguments);
+        var exec = runner[6].Arguments.ToArray();
+        Assert.Equal(["guest", "exec", "104", "--timeout", "30", "--", "date", "-u", "-s"], exec[..9]);
+        // The epoch is the node's clock at exec time, so pin its window rather than its value.
+        Assert.Equal(10, exec.Length);
+        Assert.StartsWith("@", exec[9], StringComparison.Ordinal);
+        Assert.InRange(long.Parse(exec[9][1..], System.Globalization.CultureInfo.InvariantCulture), before, after);
+        Assert.Equal(7, runner.Calls.Count);
+        Assert.All(runner.Calls.Skip(4), c => Assert.Equal("qm", c.FileName));
     }
 
     [Fact]
     public async Task A_failed_clock_sync_does_not_fail_the_start()
     {
+        // The agent answers, but exec is refused (a Windows guest, exec disabled, ...).
         var (driver, runner, _) = Driver(new RecordingProcessRunner()
             .RespondStdout(Resources).RespondStdout("""{"status":"stopped","lock":"suspended"}""")
             .RespondStdout("").RespondStdout("")
-            .Respond(new ProcessResult(1, string.Empty, string.Empty, TimedOut: false)));
+            .RespondStdout("")
+            .Respond(new ProcessResult(255, string.Empty, "guest-exec is disabled", TimedOut: false)));
 
         await driver.StartAsync("work-vm", CancellationToken.None);
 
-        Assert.Equal(5, runner.Calls.Count);
+        Assert.Equal(6, runner.Calls.Count);
     }
 
     [Fact]
-    public async Task Start_of_a_vm_that_was_off_does_not_touch_the_agent_socket()
+    public async Task A_date_command_that_fails_in_the_guest_is_non_fatal_too()
+    {
+        // qm exits 0 even when the guest command fails; the JSON carries the real outcome.
+        var (driver, runner, _) = Driver(new RecordingProcessRunner()
+            .RespondStdout(Resources).RespondStdout("""{"status":"stopped","lock":"suspended"}""")
+            .RespondStdout("").RespondStdout("")
+            .RespondStdout("")
+            .RespondStdout("""{"exitcode":1,"exited":1}"""));
+
+        await driver.StartAsync("work-vm", CancellationToken.None);
+
+        Assert.Equal(6, runner.Calls.Count);
+    }
+
+    [Fact]
+    public async Task Start_of_a_vm_that_was_off_does_not_touch_the_agent()
     {
         var (driver, runner, _) = Driver(new RecordingProcessRunner()
             .RespondStdout(Resources).RespondStdout("""{"status":"stopped"}""")
@@ -284,7 +313,7 @@ public sealed class ProxmoxDriverTests
         await driver.StartAsync("work-vm", CancellationToken.None);
 
         Assert.Equal(4, runner.Calls.Count);
-        Assert.DoesNotContain(runner.Calls, c => c.FileName == "python3");
+        Assert.DoesNotContain(runner.Calls, c => c.Arguments.Count > 0 && c.Arguments[0] == "guest");
     }
 
     [Fact]

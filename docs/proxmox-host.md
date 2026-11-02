@@ -203,9 +203,12 @@ StartIfRunning` semantics: set at create and on every start, cleared on a stop (
 already-off or saved VM), kept on a save so a parked session resumes. A resume from a saved
 state also restores the clock the guest was saved with (Hyper-V's time-sync integration service
 has no QEMU counterpart in the guest), so after resuming one the driver sets the guest clock to
-the node's through the QEMU guest agent socket (`guest-set-time`; Proxmox's own API does not
-expose that command). The sync is best effort: a guest without a working agent still starts, its
-clock corrected only by its own NTP poll.
+the node's through Proxmox's own agent commands: `qm guest cmd <id> ping` until the resumed
+agent answers, then `qm guest exec <id> -- date -u -s @<node-epoch>` (QGA's `guest-set-time` is
+not exposed through qm or the API, and talking to the QGA socket directly loses the channel to
+Proxmox's own agent calls). The sync is best effort: a guest without a working agent — or one
+that cannot run `date`, which no Construct-created Proxmox VM is — still starts, its clock
+corrected only by its own NTP poll.
 
 The cloud image ships Ubuntu's `linux-image-virtual` kernel, which — unlike the `linux-generic`
 of an ISO install — carries no `linux-modules-extra` (no `videodev`/V4L2, exotic file systems,
