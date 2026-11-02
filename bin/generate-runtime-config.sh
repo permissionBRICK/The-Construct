@@ -186,13 +186,17 @@ jq -s '
   }
 ' "${project_json_args[@]}" >"${RUNTIME_DIR}/generated.json"
 
-# Profiles disagreeing on a runtime's MAJOR version get the highest (see merge_sdks), but
-# silently so is how a reinstall once built everything against the wrong runtime for hours.
-# Name the conflict and who causes it, so the profile asking for the outdated major is found
-# and fixed instead of rediscovered at the next provision.
+# For the SINGLE-SLOT runtimes (node from the NodeSource apt repo, the system python)
+# only one version can be installed, and profiles disagreeing on the MAJOR get the
+# highest (see merge_sdks) — but silently so is how a reinstall once built everything
+# against the wrong runtime for hours. Name the conflict and who causes it, so the
+# profile asking for the outdated major is found and fixed instead of rediscovered at
+# the next provision. .NET is exempt: install-sdks.sh installs every requested SDK
+# side by side, so disagreeing dotnet majors are not a conflict at all.
 sdk_conflicts="$(jq -rs '
   [ .[] | .name as $profile
     | ((.sdks // {}) | to_entries[])
+    | select(.key == "node" or .key == "python")
     | { profile: $profile, key: .key,
         versions: ((if (.value | type) == "array" then .value else [.value] end)
                    | map(select(type == "string" and length > 0))) }

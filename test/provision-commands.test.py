@@ -189,7 +189,9 @@ record('end')
 
     def test_sdk_merge_prefers_the_highest_version_numerically(self):
         # "24" vs "26" and "8.0" vs "10.0" both sort wrong as strings; the installer
-        # takes the first element, so the highest requested version must come first.
+        # reads highest-first, so the order must be numeric. Node is single-slot and
+        # warns about disagreeing majors; .NET installs every requested SDK side by
+        # side, so its disagreement is not a conflict.
         sdks, stderr = self.generate(dict(
             old={'node': '24', 'dotnet': ['8.0']},
             new={'node': ['26'], 'dotnet': '10.0'}))
@@ -197,7 +199,7 @@ record('end')
         self.assertEqual(sdks['dotnet'], ['10.0', '8.0'])
         self.assertIn('Conflicting SDK major versions', stderr)
         self.assertIn('node: old wants 24, new wants 26', stderr)
-        self.assertIn('dotnet: old wants 8.0, new wants 10.0', stderr)
+        self.assertNotIn('dotnet', stderr)
 
     def test_sdk_merge_with_agreeing_majors_warns_about_nothing(self):
         sdks, stderr = self.generate(dict(
