@@ -609,6 +609,33 @@ ok "service: -ServiceUrl is conflict-checked with the rest" (
 ok "service: ...and is taken from the entry when the caller did not bind it" (
     $provTxt -match "if \(-not \`$PSBoundParameters\.ContainsKey\('ServiceUrl'\)\)\s*\{\s*\`$ServiceUrl\s*=\s*\[string\]\`$instanceTarget\.ServiceUrl \}")
 
+# ...AND ITS CREDENTIAL: a name-targeted run of a token-enrolled instance once called the
+# service with Windows auth, got 401 on the source-cache ensure, and packed and uploaded
+# the repository itself (the Companion's Reprovision, first Proxmox field use).
+ok "service: the entry's auth mode is kept with its URL" (
+    $provTxt -match "\`$script:InstanceServiceAuth = \[string\]\`$instanceTarget\.ServiceAuth")
+$authBlock = [regex]::Match($provTxt, "(?ms)^if \(\`$ServiceUrl -and -not \`$ServiceApiAuth -and \`$script:InstanceServiceAuth -eq 'token'\) \{.*?^\}")
+ok "service: a token entry builds -ServiceApiAuth before the first service call" (
+    $authBlock.Success -and $authBlock.Index -lt $provTxt.IndexOf('Test-ConstructApiFeature -BaseUrl $ServiceUrl -Auth $ServiceApiAuth'))
+if ($authBlock.Success) {
+    # Run the real block against a stubbed provider: stored token, no token, negotiate entry.
+    $runAuthBlock = {
+        param([string]$Mode, [string]$Stored)
+        function New-ConstructApiAuth { param($Mode, $BaseUrl)
+            if (-not $Stored) { throw "No API token available for this host." }
+            @{ Mode = $Mode; Token = $Stored; Url = $BaseUrl } }
+        $ServiceUrl = 'https://host-a.example.com:7462'; $ServiceApiAuth = $null; $InstanceName = 'vm-1'
+        $script:InstanceServiceAuth = $Mode; $PSScriptRoot = $repoRoot
+        . ([scriptblock]::Create($authBlock.Value)) 3>$null
+        $ServiceApiAuth
+    }
+    $tokenAuth = & $runAuthBlock 'token' 'tok-123'
+    ok "service: ...carrying the stored token for the entry's URL" (
+        $tokenAuth.Mode -eq 'token' -and $tokenAuth.Token -eq 'tok-123' -and $tokenAuth.Url -eq 'https://host-a.example.com:7462')
+    ok "service: ...without a stored token it warns and keeps the default instead of failing" ($null -eq (& $runAuthBlock 'token' ''))
+    ok "service: ...and a negotiate entry is left alone" ($null -eq (& $runAuthBlock 'negotiate' 'tok-123'))
+}
+
 # An endpoint resolved BY NAME is still an endpoint the caller stated, so the guest
 # records it exactly as it would from -VmHost.
 ok "endpoint: a resolved non-default endpoint counts as explicitly stated" (

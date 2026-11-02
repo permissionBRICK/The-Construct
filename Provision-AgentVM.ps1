@@ -324,6 +324,7 @@ if ($Action -eq 'provision' -and -not $ScanReposOnly -and -not $SkipCompanion) {
 # ones; the DEFAULT name with no registry file resolves to exactly today's literals,
 # which is why passing it changes nothing.
 $script:InstanceEndpointStated = $false
+$script:InstanceServiceAuth = ''
 if ($InstanceName) {
     $instanceTargetLib = Join-Path $PSScriptRoot "lib\AgentVm.InstanceTarget.ps1"
     if (-not (Test-Path -LiteralPath $instanceTargetLib)) {
@@ -347,6 +348,9 @@ if ($InstanceName) {
     # names no service, so this stays "" -- the same value a local run has always had,
     # which is what keeps its env prefix byte-identical.
     if (-not $PSBoundParameters.ContainsKey('ServiceUrl'))   { $ServiceUrl   = [string]$instanceTarget.ServiceUrl }
+    # ...and so does the credential the instance was enrolled with: without it a name-targeted
+    # run (the Companion's Reprovision) called a token-enrolled service with Windows auth.
+    $script:InstanceServiceAuth = [string]$instanceTarget.ServiceAuth
     # The per-VM web host name (plan section 4.12) is part of the entry too: a
     # name-targeted reprovision (Update-T3Code.ps1, the panel) must keep the guest's
     # CONSTRUCT_EXTERNAL_HOST, the T3 certificate's SAN and its public base URL on the
@@ -2047,6 +2051,18 @@ Ensure-OpenSSH
 # connection attempt, not just when the files are (re)written at the end.
 foreach ($f in @((Join-Path $HOME ".ssh\config"), (Join-Path $HOME ".ssh\$LocalKeyName"))) {
     if (Test-Path -LiteralPath $f) { Protect-SshFile $f }
+}
+
+# A caller that resolved a credential (Auto-Install.ps1) passes -ServiceApiAuth. A run
+# targeted by -InstanceName alone (the Companion's Reprovision, Update-T3Code.ps1) has
+# only the registry entry, so use the auth mode it was enrolled with: a token-enrolled
+# host refuses the Windows-auth default with 401, the host source cache was skipped and
+# the client packed and uploaded the repository itself, and the VM token rotation and
+# guest reports below failed the same way. No stored token: warn and keep the default.
+if ($ServiceUrl -and -not $ServiceApiAuth -and $script:InstanceServiceAuth -eq 'token') {
+    if (-not (Get-Command New-ConstructApiAuth -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'lib/AgentVm.Remote.ps1') }
+    try { $ServiceApiAuth = New-ConstructApiAuth -Mode token -BaseUrl $ServiceUrl }
+    catch { Write-Warning "Instance '$InstanceName' is enrolled with an API token, but none is stored for $ServiceUrl on this PC; host service calls fall back to Windows auth. Re-enrol with Auto-Install.ps1 to store the token." }
 }
 
 # -Action export only reads the VM, and only needs the two scripts it runs (uploaded
