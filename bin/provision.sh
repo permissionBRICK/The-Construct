@@ -1232,6 +1232,36 @@ setup_oom_guard() {
 }
 run_step optional "Setting up the OOM guard" setup_oom_guard
 
+# 4c. pkill, pgrep and pidwait that skip their caller's own process chain (see
+#     bin/construct-procps-guard.sh). Agents run each command as `bash -c '<command>'`,
+#     so a stock `pkill -f <pattern>` also kills the agent's own shell. A file in the
+#     way that is not ours stays; without --ignore-ancestors (procps-ng < 4.0.3) the
+#     stock tools are left in place.
+setup_procps_guard() {
+  local bin_dir="${CONSTRUCT_BIN_DIR:-/usr/local/bin}"
+  local procps_dir="${CONSTRUCT_PROCPS_DIR:-/usr/bin}"
+  local name target supported=false
+  "${procps_dir}/pgrep" --help 2>/dev/null | grep -q -- '--ignore-ancestors' && supported=true
+  for name in pkill pgrep pidwait; do
+    target="${bin_dir}/${name}"
+    if [[ -e "${target}" || -L "${target}" ]] && ! grep -qs "Installed by The Construct" "${target}"; then
+      note "  keeping ${target}: it was not installed by The Construct"
+      continue
+    fi
+    if [[ "${supported}" == true && -x "${procps_dir}/${name}" ]]; then
+      install -m 0755 "${REPO_DIR}/bin/construct-procps-guard.sh" "${target}" || return 1
+    else
+      rm -f "${target}" || return 1
+    fi
+  done
+  if [[ "${supported}" == true ]]; then
+    ok "  pkill/pgrep/pidwait: the calling shell and its parents are never matched"
+  else
+    note "  procps has no --ignore-ancestors; pkill/pgrep stay stock"
+  fi
+}
+run_step optional "Keeping pkill/pgrep off the calling shell" setup_procps_guard
+
 # 4d. Guest activity heartbeat (plan §4.7). ONLY for a service-managed VM: the
 #     host service is what enforces idle policy, and a local install must gain no
 #     new units at all. Both branches are silent on the default path -- the enable

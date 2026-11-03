@@ -57,6 +57,7 @@ if [[ "$group" == service || "$group" == all ]]; then
   bash test/provision-deferred-checkout.test.sh
   bash test/docker-registry-mirrors.test.sh
   bash test/oom-guard.test.sh
+  bash test/procps-guard.test.sh
   node extension/test/drivers.test.js
   node extension/test/hostadmin.test.js
   bash test/construct-vm.test.sh

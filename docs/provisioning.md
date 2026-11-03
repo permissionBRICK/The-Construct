@@ -246,6 +246,19 @@ the agent can start it again. The values are moderate on purpose: a leaking T3 s
 grows past about a fifth of RAM still outranks an ordinary build, gets killed and is restarted.
 Processes outside the agent units are not touched.
 
+### pkill and pgrep never match the calling shell
+
+Claude Code, Codex and OpenCode run each command as `bash -c '<the whole command>'`. With the
+stock tools, `pkill -f <pattern>` matches that shell as well and kills it: the target dies too,
+but the rest of the command never runs and the agent gets only an exit code (144 in Claude
+Code). Likewise `pgrep -f <pattern>` reports the shell as a match.
+
+So every (re)provision installs `/usr/local/bin/pkill`, `pgrep` and `pidwait`. They run the
+procps tools with `--ignore-ancestors`, which skips the calling process and every process
+above it: the shell, the agent CLI and the T3 server. Other processes match as before. A file
+already at one of those paths that The Construct did not install is left alone. With procps-ng
+older than 4.0.3, which lacks the option, the stock tools stay in place.
+
 ### Resuming interrupted T3 Code threads
 
 A reprovision usually restarts the T3 Code server, and a reinstall replaces the VM. Both end
