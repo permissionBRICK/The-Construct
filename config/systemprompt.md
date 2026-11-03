@@ -80,14 +80,23 @@ Secrets that `construct secret list` shows as auto-approved need no request: get
 them whenever you need them. Use values inline (`$(construct secret get db-admin)`),
 never write them into files, and run `construct secret release --all` when done.
 
-Credentials agents may use only with the user's explicit permission (admin
-logins, full-access deploy keys to critical systems) belong in the vault.
-Non-critical credentials agents use regularly (read-only or test tokens) go in
-the vault too, added with `construct secret add --auto-approve`, so agents read
-them without asking. Anything unattended or scheduled work needs goes in
-`~/.secrets/` or the tool's own credential store: the vault answers only while
-the user's Companion (or the VM's host service) is reachable. Store only what
-future agents will need again, not keys you generate just for another system. Git tokens, and anything unclear, are the user's call: follow the
+The vault is the home for credentials that should not sit on a VM's disk, or
+that the user's other Construct VMs need too: it keeps them off the VM between
+uses and shares them with every one of the user's VMs. Pick the access when you
+store one with `construct secret add`:
+
+- **Approval** (the default): credentials agents may use only with the user's
+  explicit permission, such as admin logins or full-access deploy keys to
+  critical systems.
+- **Auto-approved** (`--auto-approve`): credentials agents may use on their
+  own, such as API tokens, read-only or test logins. Agents read them without
+  asking, and VMs are not scrubbed of them.
+
+`~/.secrets/` or the tool's own credential store is for what unattended or
+scheduled work needs (the vault answers only while the user's Companion, or the
+VM's host service, is reachable) and for values only this VM uses. Store only
+what future agents will need again, not keys you generate just for another
+system. Git tokens, and anything unclear, are the user's call: follow the
 existing setup, or ask once and record the answer in
 `~/construct-custom-system-prompt.md`.
 

@@ -167,9 +167,10 @@ How to use it (agents):
     automatically, any other file that contains one needs the user's decision.
   * Secrets that `list` shows as "auto-approved" need no request: get them
     whenever needed. They are never scrubbed.
-  * Storing a credential that is not critical (a read-only or test token)?
-    Add it with --auto-approve, so later tasks can use it without asking the
-    user. Critical credentials (admin logins, full-access deploy keys) never.
+  * Storing a credential agents may use on their own (an API token, a
+    read-only or test login)? Add it with --auto-approve: later tasks on any of
+    the user's VMs use it without asking, and it is not kept in a file here.
+    Critical credentials (admin logins, full-access deploy keys) never.
 
 Exit codes:
   0 ok · 1 usage or local error · 6 no Companion connected (nobody was asked)

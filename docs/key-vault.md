@@ -53,13 +53,15 @@ and keeps it, so it can still be restored on the PC and account that created it.
 ## What agents do
 
 The agent instruction file tells agents to request everything a task needs at the start, so you can
-approve once and leave. Credentials you want used only with your explicit permission, such as admin
-logins or full-access deploy keys to critical systems, need your approval. Non-critical credentials
-that agents use regularly, such as read-only or test tokens, go into the vault auto-approved. Anything
-unattended work needs goes in `~/.secrets/` or the tool's own credential store, because the vault
-answers only while the Companion (or the VM's host service) is reachable. Git tokens and unclear
-cases are your call: agents follow the existing setup, or ask you once and record the answer in
-`~/construct-custom-system-prompt.md`. The CLI documents itself (`construct secret --help`):
+approve once and leave. It makes the vault the home for credentials that should not sit on a VM's
+disk, or that your other VMs need too: the vault keeps them off the VM between uses and shares them
+with all your VMs. Credentials you want used only with your explicit permission, such as admin logins
+or full-access deploy keys to critical systems, need your approval. Credentials agents may use on
+their own, such as API tokens or read-only and test logins, go in auto-approved. Anything unattended
+work needs, and values only one VM uses, go in `~/.secrets/` or the tool's own credential store,
+because the vault answers only while the Companion (or the VM's host service) is reachable. Git
+tokens and unclear cases are your call: agents follow the existing setup, or ask you once and record
+the answer in `~/construct-custom-system-prompt.md`. The CLI documents itself (`construct secret --help`):
 
 ```console
 $ construct secret list
