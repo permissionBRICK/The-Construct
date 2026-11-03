@@ -12,7 +12,9 @@ public sealed record LifecycleConfig(int GracefulShutdownTimeoutSeconds, int Lea
 public sealed record MediaConfig(long MaxBytes, int MaxItemsPerUser, int UploadChunkBytes, int UploadTtlHours, int AcquireTimeoutMinutes, bool AllowHttp, int? UnreferencedTtlHours);
 public sealed record NetworkConfig(bool HostForwardsEnabled, bool DirectAddressReporting,
     string DefaultMode = "relayed", bool OwnerMaySwitchMode = false);
-public sealed record VirtualizationConfig(bool NestedDefault, bool NestedSelectable);
+/// <summary>VM hardware defaults. <c>MinimumRamBytes</c> (Proxmox): the RAM auto-ballooning may shrink a running
+/// primary VM to under host memory pressure; null turns ballooning off. Each VM may override it.</summary>
+public sealed record VirtualizationConfig(bool NestedDefault, bool NestedSelectable, long? MinimumRamBytes = 6L << 30);
 public sealed record UpdatesConfig(string Repository, string Channel, int DrainTimeoutMinutes, int HealthTimeoutSeconds);
 /// <summary>The key vault's host settings. <c>WebUrl</c>: the address phones use for the approval page (null = the service's own).</summary>
 public sealed record VaultConfig(string? WebUrl = null);

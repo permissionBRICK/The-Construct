@@ -46,7 +46,7 @@ public sealed class ProxmoxOperationException(string operation, string vmName, s
 /// looked up in the cluster resource list on every call rather than cached, so a VM recreated behind
 /// the service's back is never driven under a stale id.
 /// </summary>
-public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver, IGuestNetworkConfigurator, IVmNestedDriver
+public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver, IGuestNetworkConfigurator, IVmNestedDriver, IVmMemoryFloorDriver
 {
     /// <summary>Cloning the image and starting the VM; well short of leaving a hung <c>qm</c> forever.</summary>
     private static readonly TimeSpan CreateTimeout = TimeSpan.FromMinutes(30);
@@ -486,9 +486,35 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
     public async Task SetMemoryAsync(string name, int ramGb, CancellationToken cancellationToken)
     {
         var gb = ArgumentGuard.Positive(ramGb, "ram", 1024);
-        var (vmName, id) = await RequireVmAsync("set-memory", name, cancellationToken).ConfigureAwait(false);
-        await RunQmAsync("set-memory", vmName, ["set", id, "--memory", ArgumentGuard.Invariant(gb * 1024)],
+        var (vmName, id, vmId) = await RequireVmWithIdAsync("set-memory", name, cancellationToken).ConfigureAwait(false);
+        var config = await PveshAsync("set-memory", vmName, ["get", VmPath(vmId) + "/config"], cancellationToken)
+            .ConfigureAwait(false);
+        // qm refuses a balloon minimum above the RAM; one that no longer fits goes with the resize and
+        // the memory floor is set again for the new size once the VM runs.
+        string[] floor = ReadMegabytes(config, "balloon") is int balloon && balloon > 0 && balloon >= gb * 1024
+            ? ["--delete", "balloon"] : [];
+        await RunQmAsync("set-memory", vmName, ["set", id, "--memory", ArgumentGuard.Invariant(gb * 1024), .. floor],
             ShortTimeout, null, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The balloon minimum pvestatd's auto-ballooning may shrink a running VM to. A change on a running VM
+    /// only updates the configuration (shares are never zero here), so nothing shrinks until the node is
+    /// under memory pressure. A minimum at or above the VM's RAM is removed: such a VM is never shrunk.
+    /// </summary>
+    public async Task SetMemoryFloorAsync(string name, int? minimumMb, CancellationToken ct)
+    {
+        if (minimumMb is < 1) throw new ArgumentOutOfRangeException(nameof(minimumMb), "The minimum RAM must be positive.");
+        var (vmName, id, vmId) = await RequireVmWithIdAsync("set-memory-floor", name, ct).ConfigureAwait(false);
+        var config = await PveshAsync("set-memory-floor", vmName, ["get", VmPath(vmId) + "/config"], ct).ConfigureAwait(false);
+        var memory = ReadMegabytes(config, "memory")
+            ?? throw Fail("set-memory-floor", vmName, "the VM configuration has no readable memory size");
+        int? desired = minimumMb is int floor && floor < memory ? floor : null;
+        var current = ReadMegabytes(config, "balloon");
+        // balloon: 0 removes the balloon device (set by hand, e.g. for PCI passthrough); leave it so.
+        if (current == desired || current == 0) return;
+        string[] change = desired is int value ? ["--balloon", ArgumentGuard.Invariant(value)] : ["--delete", "balloon"];
+        await RunQmAsync("set-memory-floor", vmName, ["set", id, .. change], ShortTimeout, null, ct).ConfigureAwait(false);
     }
 
     public async Task ConfigureNetworkAsync(string name, string? address, string? gateway, IReadOnlyList<string>? dns, CancellationToken ct)
@@ -808,6 +834,16 @@ public sealed class ProxmoxDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDr
             reason);
 
         return new ProxmoxOperationException(operation, vmName, reason);
+    }
+
+    /// <summary>A MiB size from the VM configuration: <c>memory</c> may be a property string (<c>current=16384</c>).</summary>
+    private static int? ReadMegabytes(JsonElement config, string property)
+    {
+        if (config.ValueKind != JsonValueKind.Object || !config.TryGetProperty(property, out var value)) return null;
+        var text = value.ValueKind == JsonValueKind.Number ? value.GetRawText() : value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+        if (text is null) return null;
+        text = ProxmoxCommands.Property(text, "current") ?? text.Split(',')[0];
+        return int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var mb) && mb >= 0 ? mb : null;
     }
 
     private static string? ReadString(JsonElement element, string property) =>

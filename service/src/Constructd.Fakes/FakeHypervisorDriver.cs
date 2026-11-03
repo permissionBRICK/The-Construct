@@ -9,7 +9,7 @@ namespace Constructd.Fakes;
 /// so the API, the creation job and the idle engine can be tested on Linux. The real driver (B7)
 /// implements the same interface by invoking PowerShell.
 /// </summary>
-public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver, IGuestNetworkConfigurator, IVmNestedDriver
+public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver, IGuestNetworkConfigurator, IVmNestedDriver, IVmMemoryFloorDriver
 {
     public Exception? NetworkFailure { get; set; }
     public Task ConfigureNetworkAsync(string name, string? address, string? gateway, IReadOnlyList<string>? dns, CancellationToken ct)
@@ -42,6 +42,19 @@ public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver, IVmM
         if ((MemoryFailure ?? PowerFailure) is { } failure) throw failure;
         Calls.Enqueue($"memory:{name}:{ramGb}");
         MemorySizes[name] = ramGb;
+        return Task.CompletedTask;
+    }
+    /// <summary>Applied balloon minimums in MiB; null = removed. A VM never configured has no entry.</summary>
+    public ConcurrentDictionary<string, int?> MemoryFloors { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public Exception? MemoryFloorFailure { get; set; }
+    public Task SetMemoryFloorAsync(string name, int? minimumMb, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (MemoryFloorFailure is { } failure) throw failure;
+        var ramMb = (MemorySizes.TryGetValue(name, out var gb) ? gb : Descriptors.TryGetValue(name, out var d) ? d.RamGb : 0) * 1024;
+        int? applied = minimumMb is int floor && floor < ramMb ? floor : null;
+        Calls.Enqueue($"memory-floor:{name}:{applied?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none"}");
+        MemoryFloors[name] = applied;
         return Task.CompletedTask;
     }
     public ConcurrentDictionary<string, int> CpuCounts { get; } = new(StringComparer.OrdinalIgnoreCase);

@@ -45,6 +45,8 @@ public static class HostAdminComposition
         services.AddSingleton<Constructd.Api.Jobs.LifecycleStart>();
         services.AddSingleton<Constructd.Api.Jobs.PrimaryCpuSettings>();
         services.AddSingleton<Constructd.Api.Jobs.PrimaryMemorySettings>();
+        services.AddSingleton<Constructd.Api.Jobs.PrimaryMemoryFloor>();
+        if (options.IsProxmox && !options.Fake) services.AddHostedService<Constructd.Api.Hosting.MemoryFloorStartupService>();
         services.AddSingleton<Constructd.Api.Jobs.VmNetworkSettings>();
         services.AddSingleton<IVmNestedDriver>(sp => (IVmNestedDriver)sp.GetRequiredService<IHypervisorDriver>());
         services.AddSingleton<Constructd.Api.Jobs.PrimaryNestedSettings>();

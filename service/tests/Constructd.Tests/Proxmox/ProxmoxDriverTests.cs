@@ -223,7 +223,7 @@ public sealed class ProxmoxDriverTests
             .RespondStdout("""{"status":"running"}""").RespondStdout("")                                 // stop
             .RespondStdout(Resources).RespondStdout("")                                                  // save
             .RespondStdout(Resources).RespondStdout("")                                                  // cpu
-            .RespondStdout(Resources).RespondStdout(""));                                                // memory
+            .RespondStdout(Resources).RespondStdout("""{"memory":"8192"}""").RespondStdout(""));      // memory
 
         await driver.StartAsync("work-vm", CancellationToken.None);
         await driver.StopAsync("work-vm", CancellationToken.None);
@@ -240,9 +240,48 @@ public sealed class ProxmoxDriverTests
         // A save keeps onboot set: the parked session resumes after a node reboot.
         Assert.Equal(["suspend", "104", "--todisk", "1"], runner[9].Arguments);
         Assert.Equal(["set", "104", "--cores", "6"], runner[11].Arguments);
-        Assert.Equal(["set", "104", "--memory", "12288"], runner[13].Arguments);
-        Assert.Equal(14, runner.Calls.Count);
+        Assert.Equal(["set", "104", "--memory", "12288"], runner[14].Arguments);
+        Assert.Equal(15, runner.Calls.Count);
         Assert.All(runner.Calls.Where(c => c.FileName == "qm"), c => Assert.DoesNotContain("--output-format", c.Arguments));
+    }
+
+    [Theory]
+    [InlineData("""{"memory":"16384"}""", 8192, new[] { "set", "104", "--balloon", "8192" })]
+    [InlineData("""{"memory":"current=16384","balloon":6144}""", 8192, new[] { "set", "104", "--balloon", "8192" })]
+    [InlineData("""{"memory":"16384","balloon":6144}""", null, new[] { "set", "104", "--delete", "balloon" })]
+    [InlineData("""{"memory":8192,"balloon":"6144"}""", 8192, new[] { "set", "104", "--delete", "balloon" })]
+    public async Task Memory_floor_sets_or_removes_the_balloon_minimum(string config, int? floor, string[] expected)
+    {
+        var (driver, runner, _) = Driver(new RecordingProcessRunner().RespondStdout(Resources).RespondStdout(config).RespondStdout(""));
+        await driver.SetMemoryFloorAsync("work-vm", floor, CancellationToken.None);
+        Assert.Equal(["get", "/nodes/pve1/qemu/104/config", "--output-format", "json"], runner[1].Arguments);
+        Assert.Equal(expected, runner[2].Arguments);
+        Assert.Equal(3, runner.Calls.Count);
+    }
+
+    [Theory]
+    [InlineData("""{"memory":"16384","balloon":"6144"}""", 6144)]
+    [InlineData("""{"memory":"16384"}""", null)]
+    [InlineData("""{"memory":"8192"}""", 8192)]
+    [InlineData("""{"memory":"16384","balloon":0}""", 6144)]
+    [InlineData("""{"memory":"16384","balloon":"0"}""", null)]
+    public async Task Memory_floor_already_in_place_runs_no_qm(string config, int? floor)
+    {
+        var (driver, runner, _) = Driver(new RecordingProcessRunner().RespondStdout(Resources).RespondStdout(config));
+        await driver.SetMemoryFloorAsync("work-vm", floor, CancellationToken.None);
+        Assert.Equal(2, runner.Calls.Count);
+    }
+
+    [Fact]
+    public async Task Memory_resize_drops_a_balloon_minimum_that_no_longer_fits()
+    {
+        var (driver, runner, _) = Driver(new RecordingProcessRunner()
+            .RespondStdout(Resources).RespondStdout("""{"memory":"16384","balloon":8192}""").RespondStdout("")
+            .RespondStdout(Resources).RespondStdout("""{"memory":"16384","balloon":4096}""").RespondStdout(""));
+        await driver.SetMemoryAsync("work-vm", 8, CancellationToken.None);
+        await driver.SetMemoryAsync("work-vm", 8, CancellationToken.None);
+        Assert.Equal(["set", "104", "--memory", "8192", "--delete", "balloon"], runner[2].Arguments);
+        Assert.Equal(["set", "104", "--memory", "8192"], runner[5].Arguments);
     }
 
     [Fact]

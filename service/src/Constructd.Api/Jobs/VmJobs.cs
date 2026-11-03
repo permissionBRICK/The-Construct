@@ -72,6 +72,9 @@ public static class VmJobs
             await driver.DetachInstallMediaAsync(name, cancellationToken).ConfigureAwait(false);
             progress.Report("install media detached");
 
+            // Set on the running VM, so the first boot and provisioning keep all of its RAM.
+            await services.GetRequiredService<PrimaryMemoryFloor>().TryApplyAsync(initial, cancellationToken).ConfigureAwait(false);
+
             int? port = null;
             if ((await network.CurrentAsync(initial, cancellationToken)).Mode != "direct")
             {

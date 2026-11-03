@@ -538,6 +538,24 @@ the remote host default. The client prints the effective setting and any explici
 options the backend ignored, such as automatic checkpoints on Proxmox or nesting on a host
 where it is unavailable. Ignoring an unsupported option does not fail creation.
 
+`virtualization.minimumRamBytes` (default 6 GiB) is the RAM a running primary VM may be
+shrunk to while the node is short of memory. Construct writes it as the VM's `balloon`
+minimum, and pvestatd's auto-ballooning does the rest: above the node's ballooning target
+(80% of RAM unless `ballooning-target` is set in the node config) it inflates guest balloons
+toward their minimum, preferring VMs with free memory, by at most 100 MB per VM every
+10 seconds, and deflates them again when the node has room. The guest gives up page cache
+first. Without a minimum, a long-running guest keeps all of its RAM resident on the node:
+Linux fills free memory with cache, and free page reporting returns only free blocks of 2 MB
+or more, which a busy guest rarely has. VMs with this much RAM or less are never shrunk;
+`null` turns ballooning off for every VM that follows the host. An admin can override it per
+VM in the VM settings modal (empty follows the host, 0 never shrinks the VM). Changes apply
+to running VMs at once, without shrinking them by themselves; turning the floor off gives a
+shrunk VM its full RAM back at once. Proxmox starts a VM at its minimum, so Construct removes
+the floor just before its own cold starts and sets it again once the VM runs. A VM the node
+starts by itself after a reboot (onboot) begins at the minimum and grows back while the node
+has room, about 10 minutes for every 6 GB it regains. Omitting `minimumRamBytes` when replacing the section
+keeps 6 GiB; `null` turns it off. Child VMs keep ballooning disabled.
+
 RAM headroom defaults to `max(1 GiB, total RAM / 8)` on Proxmox. Hyper-V uses
 `max(4 GiB, total RAM / 8)`. The stored host setting `capacity.ramHeadroomBytes`
 overrides either default, including when set to zero.
@@ -560,7 +578,8 @@ recently started or saved VMs get a 10-minute cooldown. Admins can adjust or dis
 policy in Host Administration's Configuration tab. The RAM card shows pressure and the
 last save, the VM list shows "saved (memory pressure)", and each attempt is audited as
 `vm.pressure-save`. If every VM is busy, the host stays under pressure and the panel says
-there are insufficient idle VMs. This policy does not change ballooning or KSM settings.
+there are insufficient idle VMs. Ballooning (above) acts earlier, at the node's ballooning
+target; this policy changes neither it nor KSM.
 
 ## 8. Troubleshooting
 

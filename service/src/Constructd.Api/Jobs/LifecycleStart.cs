@@ -7,7 +7,7 @@ namespace Constructd.Api.Jobs;
 
 /// <summary>Caller holds the VM gate. An accepted start keeps its original clock across retries.</summary>
 public sealed class LifecycleStart(IVmRepository vms, IHypervisorDriver driver, IChildVmStorage storage,
-    ICapacityLedger capacity, IAdmissionStore admission, IOperationKeyStore keys, IClock clock, ChildStartIntent childStarts, IJobStore jobs, IOperationRegistry operations, PrimaryCpuSettings cpuSettings, PrimaryMemorySettings memorySettings, VmNetworkSettings networkSettings, PrimaryNestedSettings nestedSettings)
+    ICapacityLedger capacity, IAdmissionStore admission, IOperationKeyStore keys, IClock clock, ChildStartIntent childStarts, IJobStore jobs, IOperationRegistry operations, PrimaryCpuSettings cpuSettings, PrimaryMemorySettings memorySettings, VmNetworkSettings networkSettings, PrimaryNestedSettings nestedSettings, PrimaryMemoryFloor memoryFloor)
 {
     public sealed record Intent(string? Lifetime, long? Seconds, long LeaseVersion, DateTimeOffset ActivationBase,
         IReadOnlyList<ReservationLine> Lines, string OperationId, bool Restart = false);
@@ -144,6 +144,7 @@ public sealed class LifecycleStart(IVmRepository vms, IHypervisorDriver driver, 
                 if (readmitted.Outcome != AdmissionOutcome.Accepted) throw new LifecycleException("operation-key-conflict");
                 if (!decision!.Allowed) return new(state, vm.Lease, decision.Reason == "inventory-incomplete" ? "capacity-unavailable" : "capacity-exhausted");
             }
+            if (state == VmState.Off) await memoryFloor.ClearForColdStartAsync(vm, ct);
             var failed = false;
             try { await driver.StartAsync(vm.Name, ct); }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -151,6 +152,8 @@ public sealed class LifecycleStart(IVmRepository vms, IHypervisorDriver driver, 
             try { state = await driver.GetStateAsync(vm.Name, ct); }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch { state = VmState.Unknown; }
+            // A resumed VM was locked while saved, and a resize may have dropped its floor: set it now that it runs.
+            if (!failed && state == VmState.Running && vm.Kind == VmKind.Primary) await memoryFloor.TryApplyAsync(vm, ct);
             // The primary API returns the driver's observed state, as before host administration.
             var waiting = System.Diagnostics.Stopwatch.StartNew();
             while (!failed && vm.Kind == VmKind.Child && state == VmState.Unknown && waiting.Elapsed < TimeSpan.FromSeconds(30))
