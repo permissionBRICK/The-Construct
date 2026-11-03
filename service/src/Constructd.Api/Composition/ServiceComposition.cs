@@ -177,6 +177,7 @@ public static class ServiceComposition
         services.AddSingleton<IHypervisorDriver>(sp => sp.GetRequiredService<FakeHypervisorDriver>());
         services.AddSingleton<IVmCpuDriver>(sp => sp.GetRequiredService<FakeHypervisorDriver>());
         services.AddSingleton<IVmMemoryDriver>(sp => sp.GetRequiredService<FakeHypervisorDriver>());
+        services.AddSingleton<IVmMemoryFloorDriver>(sp => sp.GetRequiredService<FakeHypervisorDriver>());
 
         services.AddSingleton<FakeIsoBuilder>();
         services.AddSingleton<IIsoBuilder>(sp => sp.GetRequiredService<FakeIsoBuilder>());

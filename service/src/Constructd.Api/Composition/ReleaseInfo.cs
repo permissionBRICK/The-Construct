@@ -35,10 +35,11 @@ public sealed class ReleaseInfo : IReleaseInfo
     public int SchemaMinReadableBy => SqliteMigrations.MinReadableBy;
     /// <summary>
     /// Implemented API groups. Individual capabilities describe platform limitations within them;
-    /// `network-mode` (relayed or direct guest networking) exists on Proxmox only.
+    /// `network-mode` (relayed or direct guest networking) and `primary-memory-floor` (the RAM
+    /// auto-ballooning may shrink a primary to) exist on Proxmox only.
     /// </summary>
     public IReadOnlyList<string> ApiFeatures => options?.IsProxmox == true
-        ? ["host-admin", "windows-guests", "usage", "updates", "primary-cpu", "primary-memory", "primary-nested", "network-mode", "children", "media", "console", "network", "key-vault", .. SourceCache]
+        ? ["host-admin", "windows-guests", "usage", "updates", "primary-cpu", "primary-memory", "primary-nested", "primary-memory-floor", "network-mode", "children", "media", "console", "network", "key-vault", .. SourceCache]
         : ["host-admin", "windows-guests", "usage", "children", "media", "console", "updates", "network", "primary-cpu", "primary-memory", "primary-nested", "key-vault", .. SourceCache];
     private string[] SourceCache => options?.HostAdmin.Source.Enabled != false ? ["source-cache"] : [];
     private readonly Constructd.Core.Configuration.ConstructdOptions? options;

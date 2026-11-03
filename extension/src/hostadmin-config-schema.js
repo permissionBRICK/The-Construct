@@ -60,7 +60,8 @@ module.exports = [
   ] },
   { key: "virtualization", label: "Virtualization", rawOnly: [], fields: [
     {"key":"nestedDefault","label":"Enable nesting by default","type":"bool","default":true,"help":"Expose virtualization extensions to new VMs by default.","requires":"nested"},
-    {"key":"nestedSelectable","label":"Allow users to select nesting","type":"bool","default":true,"help":"Users may choose nesting unless their user policy overrides this."}
+    {"key":"nestedSelectable","label":"Allow users to select nesting","type":"bool","default":true,"help":"Users may choose nesting unless their user policy overrides this."},
+    {"key":"minimumRamBytes","label":"Minimum RAM under host pressure","type":"bytes","default":6442450944,"help":"While host memory use is above the node's ballooning target (80% unless set on the node), Proxmox auto-ballooning shrinks running primary VMs toward this much RAM, and gives it back when there is room. VMs with this much RAM or less are never shrunk. Admins can override it per VM in VM settings. Changes apply to running VMs at once.","unit":"GiB","scale":1073741824,"min":1073741824,"max":9007199254740991,"nullable":true,"nullLabel":"Off: VMs keep their full RAM","platform":"proxmox","optional":true}
   ] },
   { key: "updates", label: "Updates", rawOnly: [], fields: [
     {"key":"repository","label":"Update repository","type":"string","default":"permissionBRICK/The-Construct","help":"GitHub owner/repository. The host-local installation may pin this value.","pattern":"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},

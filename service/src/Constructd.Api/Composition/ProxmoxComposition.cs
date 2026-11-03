@@ -36,6 +36,7 @@ public static class ProxmoxComposition
         services.AddSingleton<IHypervisorDriver>(sp => sp.GetRequiredService<ProxmoxDriver>());
         services.AddSingleton<IVmCpuDriver>(sp => sp.GetRequiredService<ProxmoxDriver>());
         services.AddSingleton<IVmMemoryDriver>(sp => sp.GetRequiredService<ProxmoxDriver>());
+        services.AddSingleton<IVmMemoryFloorDriver>(sp => sp.GetRequiredService<ProxmoxDriver>());
 
         services.AddSingleton<TcpRelayPortForwardManager>();
         services.AddSingleton<IPortForwardManager>(sp => sp.GetRequiredService<TcpRelayPortForwardManager>());

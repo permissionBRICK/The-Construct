@@ -488,6 +488,21 @@
         "key": "nestedSelectable",
         "label": "Allow users to select nesting",
         "type": "bool"
+      },
+      {
+        "default": 6442450944,
+        "help": "While host memory use is above the node's ballooning target (80% unless set on the node), Proxmox auto-ballooning shrinks running primary VMs toward this much RAM, and gives it back when there is room. VMs with this much RAM or less are never shrunk. Admins can override it per VM in VM settings. Changes apply to running VMs at once.",
+        "key": "minimumRamBytes",
+        "label": "Minimum RAM under host pressure",
+        "max": 9007199254740991,
+        "min": 1073741824,
+        "nullLabel": "Off: VMs keep their full RAM",
+        "nullable": true,
+        "optional": true,
+        "platform": "proxmox",
+        "scale": 1073741824,
+        "type": "bytes",
+        "unit": "GiB"
       }
     ],
     "key": "virtualization",

@@ -1571,6 +1571,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   settingsRequest = await admin.evaluate(() => window.__posted.filter(m => m.action === "loadVmSettings").at(-1));
   await settingsReply({ settings: { cpu: null, memory: null, idle: { timeoutMinutes: 60, action: "save", maxTimeoutMinutes: 60, forceEnabled: true } } });
   check("admin: older hosts disable unsupported hardware fields", await admin.locator("#haVmRam").isDisabled() && await admin.locator("#haVmCpus").isDisabled());
+  check("admin: hosts without a minimum RAM hide its field", await admin.locator("#haVmMemoryFloorRow").isHidden());
   check("admin: forced idle disables Off", await admin.locator('#haVmIdleAction option[value="off"]').evaluate(e => e.disabled), await admin.locator("#haVmSettingsForm").innerHTML());
   await admin.locator("#haVmSettingsCancel").click();
 
@@ -1587,6 +1588,29 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("admin: partial response disables only unavailable fields", !await admin.locator("#haVmCpus").isDisabled() && await admin.locator("#haVmRam").isDisabled() && await admin.locator("#haVmTimeout").isDisabled());
   await admin.locator("#haVmCpus").fill("7");
   check("admin: available CPU remains editable", !await admin.locator("#haVmSettingsApply").isDisabled());
+  await admin.locator("#haVmSettingsCancel").click();
+
+  await admin.getByRole("button", { name: "VM settings…", exact: true }).click();
+  settingsRequest = await admin.evaluate(() => window.__posted.filter(m => m.action === "loadVmSettings").at(-1));
+  const floor = { minimumRamGb: null, hostMinimumRamBytes: 6442450944, effectiveMinimumRamMb: 6144, ramGb: 12, source: "host", mayEdit: true };
+  await settingsReply({ settings: { ...settings, memoryFloor: floor } });
+  check("admin: minimum RAM shows the host default", await admin.locator("#haVmMemoryFloorRow").isVisible() && await admin.locator("#haVmMemoryFloor").inputValue() === ""
+    && await admin.locator("#haVmMemoryFloor").getAttribute("placeholder") === "Host default: 6 GB"
+    && /Minimum RAM under host pressure: 6 GB \(host default\)/.test(await admin.locator("#haVmSettingsCurrent").innerText()));
+  await admin.locator("#haVmMemoryFloor").fill("2.5");
+  check("admin: fractional minimum RAM blocks Apply", await admin.locator("#haVmSettingsApply").isDisabled());
+  await admin.locator("#haVmMemoryFloor").fill("8");
+  await admin.locator("#haVmSettingsApply").click();
+  appliedSettings = await admin.evaluate(() => window.__posted.filter(m => m.action === "setVmSettings").at(-1));
+  check("admin: Apply carries only the minimum RAM override", appliedSettings.args.minimumRamGb === 8 && !("ramGb" in appliedSettings.args) && !("cpus" in appliedSettings.args));
+  await settingsReply({ error: "Idle cap changed", settings: { ...settings, memoryFloor: { ...floor, minimumRamGb: 8, effectiveMinimumRamMb: 8192, source: "vm" } } });
+  check("admin: a VM override is shown as such", await admin.locator("#haVmMemoryFloor").inputValue() === "8" && /8 GB \(this VM\)/.test(await admin.locator("#haVmSettingsCurrent").innerText()));
+  await admin.locator("#haVmMemoryFloor").fill("");
+  await admin.locator("#haVmSettingsApply").click();
+  appliedSettings = await admin.evaluate(() => window.__posted.filter(m => m.action === "setVmSettings").at(-1));
+  check("admin: emptying the field returns to the host default", appliedSettings.args.minimumRamGb === null);
+  await settingsReply({ error: "Idle cap changed", settings: { ...settings, memoryFloor: { ...floor, mayEdit: false } } });
+  check("admin: a read-only minimum RAM is disabled", await admin.locator("#haVmMemoryFloor").isDisabled());
   await admin.locator("#haVmSettingsCancel").click();
 
   check("admin: Delete posts deleteVm with name and kind", aposted.some((m) => m.action === "deleteVm" && m.args.name === "work-vm" && m.args.kind === "primary"));

@@ -166,6 +166,26 @@ on the next Off-to-Start transition. Saved/Paused resumes and guest reboots leav
 Enabling requires the caller's nested allowance (admins bypass this policy) and an available
 host capability. A driver failure leaves the desired setting pending for retry.
 
+`GET /vms/{name}/memory-floor` (owner/admin) and `PUT` (admin only) exist on Proxmox, which
+advertises `primary-memory-floor`; elsewhere they answer `409 unsupported-on-host`. PUT accepts
+`{minimumRamGb: null | 0 | 1–1024}`: null follows `virtualization.minimumRamBytes`, 0 never
+shrinks the VM. Both return `minimumRamGb`, `hostMinimumRamBytes`, `effectiveMinimumRamMb`
+(null: never shrunk, because the floor is off or not below the VM's RAM), `ramGb`, `source`
+(`vm` or `host`) and `mayEdit`. The floor becomes the VM's Proxmox `balloon` minimum.
+Setting it on a running VM never shrinks the guest by itself; pvestatd's auto-ballooning
+shrinks VMs toward their minimum only while node memory use is above its ballooning target
+(80% by default) and grows them back when there is room. Turning it off (host null, or 0 for
+the VM) gives a shrunk VM its full RAM back at once. It is applied at once, after every start
+or resume, after creation and once at service start; a saved VM is locked on the node and
+gets it on resume. A host-default change is applied in the background, VM by VM under each
+VM's operation gate; a VM busy with an operation gets it from its own start. Because Proxmox
+starts a VM at its minimum, Construct removes the floor just before a cold start and sets it
+again once the VM runs, so the guest boots with all of its RAM; a start by the node itself
+(onboot after a node reboot) still begins at the minimum and grows back by up to 100 MB every
+10 seconds. A failed apply keeps the saved value (PUT answers `409 memory-floor-apply-failed`)
+and never fails a start. A RAM resize removes a minimum that no longer fits below the new size.
+A hand-set `balloon: 0` (balloon device removed) is left alone. Child VMs keep ballooning disabled.
+
 Admins obey the VM owner's allowance. RAM maxima credit that VM's existing reservation
 and assigned RAM using both model and physical-free bounds from one inventory epoch.
 They are advisory; allowance is rechecked on application and capacity is checked again
@@ -692,7 +712,7 @@ exists; a timestamp requires an exact match. A conflict returns `409 config-conf
 | `lifecycle` | `gracefulShutdownTimeoutSeconds`, `leaseTickSeconds`, `leaseRetrySeconds` | `300, 30, 600` seconds |
 | `media` | `maxBytes`, `maxItemsPerUser`, `uploadChunkBytes`, `uploadTtlHours`, `acquireTimeoutMinutes`, `allowHttp`, `unreferencedTtlHours` | 16 GiB, 20 items, 8 MiB chunks, 24 h, 180 min, HTTP allowed, no automatic unreferenced cleanup |
 | `network` | `hostForwardsEnabled`, `directAddressReporting`, `defaultMode`, `ownerMaySwitchMode` | `true`, `true`, `"relayed"`, `false` |
-| `virtualization` | `nestedDefault`, `nestedSelectable` | `true`, `true` |
+| `virtualization` | `nestedDefault`, `nestedSelectable`, `minimumRamBytes` (Proxmox: the RAM auto-ballooning may shrink a running primary to; null = off, otherwise at least 1 GiB; omitted in a replacement = 6 GiB; changes apply to running VMs at once) | `true`, `true`, 6 GiB |
 | `updates` | `repository`, `channel`, `drainTimeoutMinutes`, `healthTimeoutSeconds` | `permissionBRICK/The-Construct`, `main`, 60 min, 120 s |
 | `vault` | `webUrl`: the https address phones use for the key vault's approval page, e.g. a reverse proxy with a trusted certificate that forwards `/vault/` and `/api/v1/vault/` here. An https origin with an optional port and no path, query or fragment (`http` only for a loopback host); it must not share an origin with any T3 Code address. Overrides `Constructd:VaultWebUrl` | null: `Constructd:VaultWebUrl`, else the service's own address |
 

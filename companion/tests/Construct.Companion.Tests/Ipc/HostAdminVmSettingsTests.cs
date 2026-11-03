@@ -33,6 +33,37 @@ public sealed class HostAdminVmSettingsTests
         if (failWrite) Assert.Equal("direct", saved.GetProperty("settings").GetProperty("network").GetProperty("mode").GetString());
     }
 
+    [Fact]
+    public async Task MinimumRamLoadsSavesAndRejectsMalformedValuesBeforeWriting()
+    {
+        var remote = new RemoteSettings();
+        var original = remote.Api.Handle;
+        JsonElement? stored = null;
+        remote.Api.Handle = request => request.Url.AbsolutePath switch
+        {
+            "/api/v1/health" => new(200, JsonSerializer.SerializeToElement(new { apiFeatures = new[] { "host-admin", "primary-memory-floor" } })),
+            "/api/v1/vms/build/memory-floor" => Floor(request),
+            _ => original(request)
+        };
+        RemoteResponse Floor(RemoteRequest request)
+        {
+            if (request.Method == "PUT") stored = request.Body!.Value.GetProperty("minimumRamGb").Clone();
+            return new(200, JsonSerializer.SerializeToElement(new { minimumRamGb = stored is { ValueKind: JsonValueKind.Number } v ? v.GetInt32() : (int?)null,
+                hostMinimumRamBytes = 6L << 30, effectiveMinimumRamMb = 6144, ramGb = 16, source = "host", mayEdit = true }));
+        }
+        await using var h = await Enroll(remote.Api);
+        var loaded = await Send(h, "loadVmSettings", new { name = "build" });
+        Assert.Equal(6L << 30, loaded.GetProperty("settings").GetProperty("memoryFloor").GetProperty("hostMinimumRamBytes").GetInt64());
+        foreach (var invalid in new object[] { -1, 1025, 2.5, "8" })
+            Assert.False((await Send(h, "setVmSettings", new { name = "build", minimumRamGb = invalid })).GetProperty("saved").GetBoolean());
+        Assert.DoesNotContain(remote.Api.Requests, r => r.Method == "PUT");
+        Assert.True((await Send(h, "setVmSettings", new { name = "build", minimumRamGb = 8 })).GetProperty("saved").GetBoolean());
+        Assert.Equal(8, stored!.Value.GetInt32());
+        Assert.True((await Send(h, "setVmSettings", new { name = "build", minimumRamGb = (int?)null })).GetProperty("saved").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, stored!.Value.ValueKind);
+        Assert.Equal(2, remote.Api.Requests.Count(r => r.Method == "PUT" && r.Url.AbsolutePath == "/api/v1/vms/build/memory-floor"));
+    }
+
     private const string Route = "/v1/hosts/host.example_7462/messages";
     private static async Task<Harness> Enroll(RoutingRemoteApi api)
     {

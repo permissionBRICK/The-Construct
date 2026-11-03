@@ -133,6 +133,7 @@ function featureSet(health) {
     primaryCpu: list.indexOf("primary-cpu") >= 0,
     primaryMemory: list.indexOf("primary-memory") >= 0,
     primaryNested: list.indexOf("primary-nested") >= 0,
+    primaryMemoryFloor: list.includes("primary-memory-floor"),
   };
 }
 
@@ -1355,13 +1356,14 @@ function createHostAdminModel(deps = {}) {
       switch (a) {
         case "loadVmSettings": {
           const name = str(args.name);
-          const fields = ["cpu", "memory", "idle", "network", "nested"];
+          const fields = ["cpu", "memory", "idle", "network", "nested", "memoryFloor"];
           const results = await Promise.allSettled([
             state.features.primaryCpu ? client.vmCpu(name) : Promise.resolve(null),
             state.features.primaryMemory ? client.vmMemory(name) : Promise.resolve(null),
             client.vmIdlePolicy(name),
             state.features.networkMode ? client.vmNetwork(name) : Promise.resolve(null),
             state.features.primaryNested ? client.vmNested(name) : Promise.resolve(null),
+            state.features.primaryMemoryFloor ? client.vmMemoryFloor(name) : Promise.resolve(null),
           ]);
           const settings = { warnings: [] };
           results.forEach((result, i) => {
@@ -1383,10 +1385,14 @@ function createHostAdminModel(deps = {}) {
           const changeMemory = state.features.primaryMemory && Object.prototype.hasOwnProperty.call(args, "ramGb");
           const changeNested = state.features.primaryNested && Object.hasOwn(args, "nested");
           if (changeNested && typeof args.nested !== "boolean") throw new Error("Choose on or off for nested virtualization.");
+          // null follows the host default; 0 never shrinks the VM. Admins only: the service refuses owners.
+          const changeFloor = state.features.primaryMemoryFloor && Object.hasOwn(args, "minimumRamGb");
           const changeIdle = Object.prototype.hasOwnProperty.call(args, "timeoutMinutes") || Object.prototype.hasOwnProperty.call(args, "action");
           const whole = (value, min, max) => typeof value === "number" && Number.isInteger(value) && value >= min && value <= max;
           if (changeCpu && !whole(args.cpus, 1, 64)) throw new Error("Choose a whole CPU count from 1 to 64.");
           if (changeMemory && !whole(args.ramGb, 1, 1024)) throw new Error("Choose whole RAM (GB) from 1 to 1024.");
+          if (changeFloor && args.minimumRamGb !== null && !whole(args.minimumRamGb, 0, 1024))
+            throw new Error("Choose a whole minimum RAM (GB) from 0 to 1024, or leave it empty for the host default.");
           if (changeIdle && (!whole(args.timeoutMinutes, 0, 2147483647) || !["save", "shutdown", "off"].includes(args.action)))
             throw new Error("Choose an idle timeout and action within the host cap.");
           // Read only the resources being edited. Their PUT endpoints enforce current limits.
@@ -1398,6 +1404,7 @@ function createHostAdminModel(deps = {}) {
           if (cpu && args.cpus !== cpu.desiredCpus) await client.setVmCpu(name, { cpus: args.cpus });
           if (memory && args.ramGb !== memory.desiredRamGb) await client.setVmMemory(name, { ramGb: args.ramGb });
           if (changeNested) await client.setVmNested(name, { enabled: args.nested });
+          if (changeFloor) await client.setVmMemoryFloor(name, { minimumRamGb: args.minimumRamGb });
           if (idle && (args.timeoutMinutes !== idle.timeoutMinutes || args.action !== idle.action))
             await client.setVmIdlePolicy(name, { timeoutMinutes: args.timeoutMinutes, action: args.action });
           if (state.features.networkMode && args.network) await client.setVmNetwork(name, args.network);

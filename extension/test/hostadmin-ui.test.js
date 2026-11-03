@@ -31,7 +31,7 @@ function fakeClient(answers = {}) {
   const c = { host: "buildbox.example.local", calls };
   for (const m of ["health", "whoami", "hostStatus", "hostCapacity", "hostConfig", "putHostConfig", "hostCapabilities", "isoCatalog", "users", "createUser", "updateUser", "deleteUser",
     "putUserAllowance", "userTokens", "issueUserToken", "revokeUserToken", "vms", "children", "lifecycle", "setVmSharing", "renewVmLease", "deleteVm", "getJob", "overrides", "putOverrides", "deleteOverrides",
-    "vmMemory", "setVmMemory", "vmIdlePolicy", "setVmIdlePolicy", "vmCpu", "setVmCpu", "rotateVmToken", "revokeVmToken", "media", "deleteMedia", "mediaCleanup", "jobs", "cancelJob", "audit", "updatesStatus", "updatesCheck", "updatesStage", "updatesApply", "updatesCancel", "updatesResolve"]) {
+    "vmMemory", "setVmMemory", "vmMemoryFloor", "setVmMemoryFloor", "vmIdlePolicy", "setVmIdlePolicy", "vmCpu", "setVmCpu", "rotateVmToken", "revokeVmToken", "media", "deleteMedia", "mediaCleanup", "jobs", "cancelJob", "audit", "updatesStatus", "updatesCheck", "updatesStage", "updatesApply", "updatesCancel", "updatesResolve"]) {
     c[m] = async (...args) => {
       calls.push({ method: m, args });
       const a = answers[m];
@@ -232,12 +232,33 @@ const lastState = (entry) => [...entry.panel.posted].reverse().find((m) => m.typ
     t.feature.dispose();
   }
   {
+    const floor = { minimumRamGb: null, hostMinimumRamBytes: 6442450944, effectiveMinimumRamMb: 6144, ramGb: 8, source: "host", mayEdit: true };
+    const idle = { timeoutMinutes: 60, action: "save", maxTimeoutMinutes: 120, forceEnabled: false };
+    const client = fakeClient({ health: { ...HEALTH, apiFeatures: [...HEALTH.apiFeatures, "primary-memory-floor"] }, whoami: ME_ADMIN, vms: () => [],
+      vmIdlePolicy: idle, vmMemoryFloor: floor,
+      setVmMemoryFloor: (_name, body) => Object.assign(floor, { minimumRamGb: body.minimumRamGb, source: body.minimumRamGb === null ? "host" : "vm" }) });
+    const t = makeFeature({ client }); const entry = await openReady(t);
+    const send = (action, args = {}) => entry.panel.send({ type: "hostadmin.action", action, args: { name: "work-vm", requestId: "floor", ...args } });
+    const result = () => entry.panel.posted.filter(m => m.type === "hostadmin.vmSettings").at(-1);
+    await send("loadVmSettings");
+    eq("floor: settings carry the minimum RAM", result().settings.memoryFloor.hostMinimumRamBytes, 6442450944);
+    for (const invalid of [-1, 1025, 2.5, "8"]) await send("setVmSettings", { minimumRamGb: invalid });
+    ok("floor: invalid minimum RAM is refused before any write", !client.calls.some(c => c.method === "setVmMemoryFloor"));
+    await send("setVmSettings", { minimumRamGb: 8 });
+    ok("floor: an override is saved", result().saved && floor.minimumRamGb === 8);
+    await send("setVmSettings", { minimumRamGb: null });
+    eq("floor: null returns to the host default", client.calls.filter(c => c.method === "setVmMemoryFloor").at(-1).args[1].minimumRamGb, null);
+    await send("setVmSettings", { minimumRamGb: 0 });
+    eq("floor: 0 never shrinks the VM", floor.minimumRamGb, 0);
+    t.feature.dispose();
+  }
+  {
     const client = fakeClient({ health: HEALTH, whoami: ME_ADMIN, vmIdlePolicy: { timeoutMinutes: 60, action: "save", maxTimeoutMinutes: 60, forceEnabled: true } });
     const t = makeFeature({ client }); const entry = await openReady(t);
     await entry.panel.send({ type: "hostadmin.action", action: "loadVmSettings", args: { name: "old-vm" } });
     const result = entry.panel.posted.filter(m => m.type === "hostadmin.vmSettings").at(-1);
     eq("settings: older host has unavailable memory", result.settings.memory, null);
-    ok("settings: older host never calls missing routes", !client.calls.some(c => c.method === "vmMemory" || c.method === "vmCpu"));
+    ok("settings: older host never calls missing routes", !client.calls.some(c => c.method === "vmMemory" || c.method === "vmCpu" || c.method === "vmMemoryFloor"));
     await entry.panel.send({ type: "hostadmin.action", action: "setVmSettings", args: { name: "old-vm", timeoutMinutes: 0, action: "off" } });
     ok("settings: forced idle cannot be disabled", !client.calls.some(c => c.method === "setVmIdlePolicy"));
     t.feature.dispose();

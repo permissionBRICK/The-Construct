@@ -23,7 +23,8 @@ public sealed partial class HostAdministration
             Read("memory", StateJson.Boolean(m.State["features"]?["primaryMemory"]) == true && (changes is null || changes.ContainsKey("ramGb")), () => client.VmMemoryAsync(name, ct)),
             Read("nested", StateJson.Boolean(m.State["features"]?["primaryNested"]) == true && (changes is null || changes.ContainsKey("nested")), () => client.VmNestedAsync(name, ct)),
             Read("idle", changes is null || changes.ContainsKey("timeoutMinutes") || changes.ContainsKey("action"), () => client.VmIdlePolicyAsync(name, ct)),
-            Read("network", StateJson.Boolean(m.State["features"]?["networkMode"]) == true && (changes is null || changes.ContainsKey("network")), () => client.VmNetworkAsync(name, ct)));
+            Read("network", StateJson.Boolean(m.State["features"]?["networkMode"]) == true && (changes is null || changes.ContainsKey("network")), () => client.VmNetworkAsync(name, ct)),
+            Read("memoryFloor", StateJson.Boolean(m.State["features"]?["primaryMemoryFloor"]) == true && changes is null, () => client.VmMemoryFloorAsync(name, ct)));
         var settings = new JsonObject(); var warnings = new HashSet<string>(StringComparer.Ordinal);
         foreach (var (key, value, error) in results)
         {
@@ -60,6 +61,10 @@ public sealed partial class HostAdministration
                 var changeRam = StateJson.Boolean(m.State["features"]?["primaryMemory"]) == true && args.ContainsKey("ramGb");
                 var changeNested = StateJson.Boolean(m.State["features"]?["primaryNested"]) == true && args.ContainsKey("nested");
                 if (changeNested && StateJson.Boolean(args["nested"]) is null) throw new VmSettingsValidationException("Choose on or off for nested virtualization.");
+                // null follows the host default; 0 never shrinks the VM. Admins only: the service refuses owners.
+                var changeFloor = StateJson.Boolean(m.State["features"]?["primaryMemoryFloor"]) == true && args.ContainsKey("minimumRamGb");
+                double? floor = changeFloor && args["minimumRamGb"] is not null
+                    ? Whole(args["minimumRamGb"], 0, 1024, "Choose a whole minimum RAM (GB) from 0 to 1024, or leave it empty for the host default.") : null;
                 var changeIdle = args.ContainsKey("timeoutMinutes") || args.ContainsKey("action");
                 var cpus = changeCpu ? Whole(args["cpus"], 1, 64, "Choose a whole CPU count from 1 to 64.") : 0;
                 var ram = changeRam ? Whole(args["ramGb"], 1, 1024, "Choose whole RAM (GB) from 1 to 1024.") : 0;
@@ -75,6 +80,7 @@ public sealed partial class HostAdministration
                 if (cpu is not null && cpus != StateJson.CoerceNumber(cpu["desiredCpus"])) await client.SetVmCpuAsync(name, new JsonObject { ["cpus"] = cpus }, ct);
                 if (memory is not null && ram != StateJson.CoerceNumber(memory["desiredRamGb"])) await client.SetVmMemoryAsync(name, new JsonObject { ["ramGb"] = ram }, ct);
                 if (changeNested) await client.SetVmNestedAsync(name, new JsonObject { ["enabled"] = args["nested"]?.DeepClone() }, ct);
+                if (changeFloor) await client.SetVmMemoryFloorAsync(name, new JsonObject { ["minimumRamGb"] = floor }, ct);
                 if (idle is not null && (timeout != StateJson.CoerceNumber(idle["timeoutMinutes"]) || idleAction != Text(idle["action"])))
                     await client.SetVmIdlePolicyAsync(name, new JsonObject { ["timeoutMinutes"] = timeout, ["action"] = idleAction }, ct);
                 if (StateJson.Boolean(m.State["features"]?["networkMode"]) == true && args["network"] is JsonObject network)

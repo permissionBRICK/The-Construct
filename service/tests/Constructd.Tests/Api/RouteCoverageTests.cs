@@ -69,6 +69,8 @@ public class RouteCoverageTests
         "GET /api/v1/vms/{name}/identity",
         "GET /api/v1/vms/{name}/nested",
         "PUT /api/v1/vms/{name}/nested",
+        "GET /api/v1/vms/{name}/memory-floor",
+        "PUT /api/v1/vms/{name}/memory-floor",
         "POST /api/v1/vms/{name}/guest-report",
         "POST /api/v1/vms/{name}/token",
         "DELETE /api/v1/vms/{name}/token",

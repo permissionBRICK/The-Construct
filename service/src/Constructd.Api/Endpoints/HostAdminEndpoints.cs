@@ -212,6 +212,8 @@ public static class HostAdminEndpoints
         if (sections.Count == 0) return CodedProblems.Validation("config", "At least one section is required.");
         if (!await metadata.TrySetSectionsAsync(sections, expected, ct)) return CodedProblems.Create(409, "config-conflict", "A section changed; reload configuration.");
         CodedProblems.Audit(http, "host.config", http.User.Actor(), target: "host", extra: "sections=" + string.Join("/", sections.Select(s => s.Section)));
+        // The host's minimum RAM takes effect on running VMs at once; applying it never shrinks them by itself.
+        if (sections.Any(s => s.Section == "virtualization")) _ = http.RequestServices.GetRequiredService<Constructd.Api.Jobs.PrimaryMemoryFloor>().ScheduleApplyAll();
         return await ConfigAsync(metadata, options, ct);
     }
 }

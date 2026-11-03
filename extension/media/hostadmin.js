@@ -794,6 +794,8 @@
     vmDialog.showModal(); requestVmSettings();
   }
   function closeVmSettings() { if (!vmSettingsSaving) vmDialog.close(); }
+  // The host's minimum RAM (bytes, null = off) as the per-VM field's placeholder.
+  function floorGb(bytes) { return bytes == null ? "off" : `${+(bytes / 1073741824).toFixed(1)} GB`; }
   function validateVmSettings() {
     const allowed = (state?.mode === "admin" || state?.mode === "user" && state.features?.networkMode) && !state.maintenance;
     for (const [id, data, desired, maximum, label] of [
@@ -804,10 +806,14 @@
       if (data && input.valueAsNumber !== data[desired] && (!Number.isInteger(input.valueAsNumber) || input.valueAsNumber < 1 || input.valueAsNumber > max))
         input.setCustomValidity(`${label} must be between 1 and ${max}.`);
     }
+    const floorInput = $("haVmMemoryFloor"); floorInput.setCustomValidity("");
+    if (vmSettingsData?.memoryFloor?.mayEdit && floorInput.value.trim() !== "" &&
+        (!Number.isInteger(floorInput.valueAsNumber) || floorInput.valueAsNumber < 0 || floorInput.valueAsNumber > 1024))
+      floorInput.setCustomValidity("Minimum RAM must be a whole number of GB from 0 to 1024, or empty for the host default.");
     const forcedOff = vmSettingsData?.idle?.forceEnabled && $("haVmIdleAction").value === "off";
     $("haVmIdleAction").setCustomValidity(forcedOff ? "The host requires idle handling." : "");
     const invalid = [...$("haVmSettingsForm").elements].find(input => input.willValidate && !input.validity.valid);
-    $("haVmSettingsApply").disabled = !vmSettingsData || ![vmSettingsData.cpu, vmSettingsData.memory, vmSettingsData.idle, vmSettingsData.network, vmSettingsData.nested].some(Boolean) || vmSettingsSaving || !allowed || !!invalid;
+    $("haVmSettingsApply").disabled = !vmSettingsData || ![vmSettingsData.cpu, vmSettingsData.memory, vmSettingsData.idle, vmSettingsData.network, vmSettingsData.nested, vmSettingsData.memoryFloor].some(Boolean) || vmSettingsSaving || !allowed || !!invalid;
     if (vmSettingsData && !vmSettingsSaving) text("haVmSettingsError", invalid ? invalid.validationMessage : !allowed ? "Editing is unavailable while host administration is disabled or updating." : [vmSettingsServerError, ...(vmSettingsData.warnings || [])].filter(Boolean).join(" "));
   }
   function receiveVmSettings(m) {
@@ -820,7 +826,11 @@
     vmSettingsServerError = m.error ? `${m.error} ${m.settings ? "Some changes may already be saved. Review the reloaded values before retrying." : "Reload to retry reading settings."}` : "";
     text("haVmSettingsError", vmSettingsServerError);
     if (m.settings) {
-      const { cpu, memory, idle, network, nested } = m.settings;
+      const { cpu, memory, idle, network, nested, memoryFloor } = m.settings;
+      show($("haVmMemoryFloorRow"), !!memoryFloor);
+      $("haVmMemoryFloor").disabled = !memoryFloor?.mayEdit;
+      $("haVmMemoryFloor").value = memoryFloor?.minimumRamGb ?? "";
+      $("haVmMemoryFloor").placeholder = memoryFloor ? `Host default: ${floorGb(memoryFloor.hostMinimumRamBytes)}` : "";
       show($("haVmNetwork"), !!network);
       show($("haVmNetworkModeRow"), !!network?.maySwitchMode);
       show($("haVmNetworkAddressFields"), !!network?.maySetAddress);
@@ -846,7 +856,8 @@
       $("haVmIdleAction").querySelector('[value="off"]').disabled = !!idle?.forceEnabled;
       text("haVmSettingsCurrent", [cpu ? `Current CPU: ${cpu.currentCpus}${cpu.pending ? `; pending: ${cpu.desiredCpus}` : ""}` : "CPU settings unavailable",
         memory ? `Current RAM: ${memory.currentRamGb} GB${memory.pending ? `; pending: ${memory.desiredRamGb} GB` : ""}` : "RAM settings unavailable",
-        nested ? `Nested virtualization: ${nested.current ? "on" : "off"}${nested.pending ? `; pending: ${nested.desired ? "on" : "off"}` : ""}` : "Nested settings unavailable"].join(". "));
+        nested ? `Nested virtualization: ${nested.current ? "on" : "off"}${nested.pending ? `; pending: ${nested.desired ? "on" : "off"}` : ""}` : "Nested settings unavailable",
+        ...(memoryFloor ? [`Minimum RAM under host pressure: ${memoryFloor.effectiveMinimumRamMb != null ? +(memoryFloor.effectiveMinimumRamMb / 1024).toFixed(1) + " GB" : "never shrunk"} (${memoryFloor.source === "vm" ? "this VM" : "host default"})`] : [])].join(". "));
       text("haVmSettingsLimits", `Owner/host maxima: CPU ${cpu?.maximumCpus ?? "unavailable"}, RAM ${memory?.maximumRamGb != null ? memory.maximumRamGb + " GB" : "unavailable"}. Idle cap: ${!idle ? "unavailable" : idle.maxTimeoutMinutes > 0 ? idle.maxTimeoutMinutes + " minutes" : "none"}${idle?.forceEnabled ? "; idle handling required" : ""}. Changes are checked when saved and applied.`);
     }
     validateVmSettings();
@@ -875,6 +886,10 @@
     if (nested && ($("haVmNested").value === "true") !== nested.desired) args.nested = $("haVmNested").value === "true";
     if (cpu && Number($("haVmCpus").value) !== cpu.desiredCpus) args.cpus = Number($("haVmCpus").value);
     if (memory && Number($("haVmRam").value) !== memory.desiredRamGb) args.ramGb = Number($("haVmRam").value);
+    if (vmSettingsData.memoryFloor?.mayEdit) {
+      const floor = $("haVmMemoryFloor").value.trim() === "" ? null : Number($("haVmMemoryFloor").value);
+      if (floor !== (vmSettingsData.memoryFloor.minimumRamGb ?? null)) args.minimumRamGb = floor;
+    }
     if (idle && (Number($("haVmTimeout").value) !== idle.timeoutMinutes || $("haVmIdleAction").value !== idle.action)) {
       args.timeoutMinutes = Number($("haVmTimeout").value); args.action = $("haVmIdleAction").value;
     }
