@@ -88,6 +88,246 @@ function ConvertFrom-ConstructProvisionResult {
     }
 }
 
+function Get-ConstructAgentFixPrompt {
+    <#
+        The AI-agent fix prompt for a provisioning run's failures. Built only for
+        VM-side step failures (items with a Title), never for host-side messages.
+        Returns the prompt's lines, or nothing when no VM step failed.
+    #>
+    [CmdletBinding()]
+    param([AllowNull()][AllowEmptyCollection()][object[]]$Errors)
+
+    $items = @(@($Errors) | Where-Object { $null -ne $_ })
+    $stepLines = @()
+    foreach ($item in $items) {
+        if (-not $item.Title) { continue }
+        $line = "- Step '$($item.Title)' failed (exit $($item.ExitCode))"
+        if ($item.LogPath) { $line += "; log: $($item.LogPath)" }
+        $stepLines += $line
+    }
+    if ($stepLines.Count -eq 0) { return }
+
+    $logPaths = @($items | Where-Object { $_.LogPath } | ForEach-Object { $_.LogPath })
+    $logRef = if ($logPaths.Count -eq 1) {
+        "Read the provisioning log at $($logPaths[0])"
+    } elseif ($logPaths.Count -gt 1) {
+        "Read the provisioning logs at: $($logPaths -join ', ')"
+    } else {
+        "Check the provisioning output above"
+    }
+    return @("On the last Construct provisioning run, the following step(s) failed:") + $stepLines +
+        @("$logRef and diagnose and fix the underlying problem.")
+}
+
+function Write-ConstructAgentFixPrompt {
+    <# Print the fix prompt (Get-ConstructAgentFixPrompt) as a copyable block. #>
+    [CmdletBinding()]
+    param([AllowNull()][AllowEmptyCollection()][string[]]$Lines)
+    if (@($Lines).Count -eq 0) { return }
+    Write-Host ""
+    Write-Host "  Paste this into your AI coding agent on the VM to diagnose:" -ForegroundColor Yellow
+    Write-Host "  ............................................................" -ForegroundColor DarkGray
+    Write-Host ""
+    foreach ($line in $Lines) { Write-Host "  $line" -ForegroundColor White }
+    Write-Host ""
+    Write-Host "  ............................................................" -ForegroundColor DarkGray
+}
+
+function Get-ConstructAgentFixModels {
+    <#
+        The model choices offered for one autofix agent. Value is what
+        bin/construct-agent-fix.sh receives: "" = the agent's configured default,
+        "latest:<family>" = the newest model of that GPT family in Codex's catalog
+        (resolved on the VM), anything else is passed through. Custom rows ask for
+        a name.
+    #>
+    param([Parameter(Mandatory)][ValidateSet('claude', 'codex', 'opencode')][string]$Agent)
+    $default = [pscustomobject]@{ Label = "Default      the model it is configured to use"; Value = ""; Custom = $false }
+    $custom  = [pscustomobject]@{ Label = "Custom...    type a model name"; Value = ""; Custom = $true }
+    switch ($Agent) {
+        'claude' {
+            return @($default,
+                [pscustomobject]@{ Label = "Opus         latest Opus"; Value = "opus"; Custom = $false },
+                [pscustomobject]@{ Label = "Fable        latest Fable"; Value = "fable"; Custom = $false },
+                $custom)
+        }
+        'codex' {
+            return @($default,
+                [pscustomobject]@{ Label = "Astra        latest GPT Astra"; Value = "latest:astra"; Custom = $false },
+                [pscustomobject]@{ Label = "Sol          latest GPT Sol"; Value = "latest:sol"; Custom = $false },
+                $custom)
+        }
+        'opencode' {
+            $custom.Label = "Custom...    type a provider/model name"
+            return @($default, $custom)
+        }
+    }
+}
+
+function Get-ConstructAgentFixCommand {
+    <#
+        The remote command that runs bin/construct-agent-fix.sh for one agent turn.
+        The prompt and the model travel base64-encoded, so neither the remote login
+        shell nor `bash -lc` can interpret anything a user typed as a model name.
+    #>
+    param(
+        [Parameter(Mandatory)][ValidateSet('claude', 'codex', 'opencode')][string]$Agent,
+        [Parameter(Mandatory)][string]$Prompt,
+        [string]$Model = ""
+    )
+    $b64 = { param($s) [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes([string]$s)) }
+    $cmd = "bash /opt/construct/repo/bin/construct-agent-fix.sh --agent $Agent --prompt-b64 $(& $b64 $Prompt)"
+    if ($Model) { $cmd += " --model-b64 $(& $b64 $Model)" }
+    return "bash -lc '$cmd'"
+}
+
+function Select-ConstructAgentFixAgent {
+    <# Agent menu, then that agent's model menu. Returns {Agent, Model, Label}, or $null for Back. #>
+    $agents = @(
+        [pscustomobject]@{ Agent = 'claude';   Label = 'Claude Code' },
+        [pscustomobject]@{ Agent = 'codex';    Label = 'Codex' },
+        [pscustomobject]@{ Agent = 'opencode'; Label = 'OpenCode' }
+    )
+    while ($true) {
+        $a = Show-Menu -Title "Which agent should fix it?" -Default 0 -Options @(
+            "Claude Code  claude -p",
+            "Codex        codex exec",
+            "OpenCode     opencode run",
+            "Back")
+        if ($a -ge $agents.Count) { return $null }
+        $agent = $agents[$a]
+        $models = @(Get-ConstructAgentFixModels -Agent $agent.Agent)
+        $m = Show-Menu -Title "Which model should $($agent.Label) use?" -Default 0 -Options (@($models | ForEach-Object { $_.Label }) + "Back")
+        if ($m -ge $models.Count) { continue }
+        $model = $models[$m].Value
+        if ($models[$m].Custom) {
+            $model = Invoke-TuiInput -NoScreen -Prompt "Model name (empty = the default model)"
+        }
+        return [pscustomobject]@{ Agent = $agent.Agent; Model = $model; Label = $agent.Label }
+    }
+}
+
+function Copy-ConstructTextToClipboard {
+    <# Put text on the Windows clipboard. Returns $true on success. #>
+    param([Parameter(Mandatory)][string]$Text)
+    if (Get-Command Set-Clipboard -ErrorAction SilentlyContinue) {
+        try { Set-Clipboard -Value $Text -ErrorAction Stop; return $true } catch { }
+    }
+    if (Get-Command clip.exe -ErrorAction SilentlyContinue) {
+        try { $Text | & clip.exe; return ($LASTEXITCODE -eq 0) } catch { }
+    }
+    return $false
+}
+
+function Invoke-ConstructAgentFix {
+    <#
+        Run one autofix agent turn on the VM in THIS console: ssh -t to the VM's ssh
+        alias (written by the provisioner), bin/construct-agent-fix.sh runs the agent
+        in its print/exec mode, and its output streams here until it exits. Waits up
+        to -WaitSeconds for SSH first, because a first install ends with a reboot.
+        Returns the agent's exit code, or $null when the VM could not be reached.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$SshTarget,
+        [Parameter(Mandatory)][ValidateSet('claude', 'codex', 'opencode')][string]$Agent,
+        [Parameter(Mandatory)][string]$Prompt,
+        [string]$Model = "",
+        [string]$Label = $Agent,
+        [int]$WaitSeconds = 120
+    )
+    $sshOpts = @('-o', 'StrictHostKeyChecking=accept-new', '-o', 'ConnectTimeout=10')
+    Write-Host ""
+    Write-Host "  Connecting to $SshTarget ..." -ForegroundColor DarkGray
+    $deadline = (Get-Date).AddSeconds($WaitSeconds)
+    $lastError = ""
+    $waitShown = $false
+    while ($true) {
+        $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+        $probe = & ssh.exe -n -o BatchMode=yes @sshOpts $SshTarget "true" 2>&1
+        $probeExit = $LASTEXITCODE
+        $ErrorActionPreference = $prevEAP
+        if ($probeExit -eq 0) { break }
+        $lastError = @($probe | ForEach-Object { "$_".Trim() } | Where-Object { $_ }) | Select-Object -Last 1
+        if ((Get-Date) -ge $deadline) {
+            Write-Host "  Could not reach the VM over SSH ($SshTarget)." -ForegroundColor Red
+            if ($lastError) { Write-Host "    $lastError" -ForegroundColor DarkGray }
+            Write-Host "  Paste the prompt above into your agent on the VM instead." -ForegroundColor Yellow
+            return $null
+        }
+        if (-not $waitShown) {
+            Write-Host ("  Waiting for the VM to accept SSH (up to {0} s)..." -f $WaitSeconds) -ForegroundColor DarkGray
+            $waitShown = $true
+        }
+        Start-Sleep -Seconds 5
+    }
+
+    $modelText = if (-not $Model) { "its default model" }
+                 elseif ($Model -like 'latest:*') { "the latest $($Model.Substring(7)) model" }
+                 else { "model $Model" }
+    Write-Host "  Starting $Label on the VM ($modelText). It works on its own and exits when it is done; Ctrl+C stops it." -ForegroundColor Cyan
+    Write-Host "  ............................................................" -ForegroundColor DarkGray
+    $remote = Get-ConstructAgentFixCommand -Agent $Agent -Prompt $Prompt -Model $Model
+    $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    & ssh.exe -t @sshOpts $SshTarget $remote
+    $exitCode = $LASTEXITCODE
+    $ErrorActionPreference = $prevEAP
+    Write-Host ""
+    Write-Host "  ............................................................" -ForegroundColor DarkGray
+    if ($exitCode -eq 0) {
+        Write-Host "  $Label finished." -ForegroundColor Green
+    } else {
+        Write-Host "  $Label ended with exit code $exitCode." -ForegroundColor Yellow
+    }
+    return $exitCode
+}
+
+function Test-ConstructConsoleInput {
+    <# True when a person can answer at this console (its input is not redirected). #>
+    return (-not [Console]::IsInputRedirected)
+}
+
+function Invoke-ConstructAgentFixMenu {
+    <#
+        After a run that printed the fix prompt: Autofix it (default), Copy the
+        prompt, or Close. Autofix picks an agent and a model and runs it on the VM in
+        this console (Invoke-ConstructAgentFix); the caller's own "Press Enter to
+        exit" pause follows either way. Without -SshTarget only Copy and Close are
+        offered. Interactive consoles only: with redirected input Show-Menu would
+        return its default, and that must never start an agent nobody chose.
+    #>
+    [CmdletBinding()]
+    param(
+        [AllowNull()][AllowEmptyCollection()][string[]]$PromptLines,
+        [string]$SshTarget = ""
+    )
+    if (@($PromptLines).Count -eq 0) { return }
+    if (-not (Test-ConstructConsoleInput)) { return }
+    $prompt = @($PromptLines) -join "`n"
+
+    while ($true) {
+        $options = @()
+        if ($SshTarget) { $options += "Autofix it       start an AI agent on the VM with this prompt" }
+        $options += "Copy the prompt  put it on the clipboard"
+        $options += "Close"
+        $choice = Show-Menu -Title "How do you want to handle the failed step(s)?" -Options $options -Default 0
+        $picked = $options[$choice]
+        if ($picked -like 'Autofix*') {
+            $pick = Select-ConstructAgentFixAgent
+            if ($null -eq $pick) { continue }
+            $null = Invoke-ConstructAgentFix -SshTarget $SshTarget -Agent $pick.Agent -Model $pick.Model -Label $pick.Label -Prompt $prompt
+            return
+        }
+        if ($picked -like 'Copy*') {
+            if (Copy-ConstructTextToClipboard -Text $prompt) {
+                Write-Host "  The prompt is on the clipboard." -ForegroundColor Green
+            } else {
+                Write-Host "  Could not reach the clipboard; select the prompt above and copy it." -ForegroundColor Yellow
+            }
+        }
+        return
+    }
+}
+
 function Show-ConstructHeader {
     <#
         Matrix-style header: green "digital rain" (random 0/1 -- ASCII only, so

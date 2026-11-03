@@ -1926,6 +1926,9 @@ if ($Action -in @('provision', 't3update')) {
     $global:ConstructProvisionHadErrors = $false
     $global:ConstructProvisionErrors = @()
     $global:ConstructProvisionFailureMessage = ""
+    # The ssh alias this run wrote into ~\.ssh\config (Set-HostSshConfig): the
+    # autofix choice after a failed step connects through it.
+    $global:ConstructProvisionSshTarget = ""
 }
 # -Action t3update only: the VM's provisioned Construct has no bin/construct-t3-update.sh,
 # so only a reprovision can update its T3 Code. Update-T3Code.ps1 reads it.
@@ -1957,40 +1960,11 @@ function Show-ProvisionResultScreen {
     }
     Write-Host "============================================================" -ForegroundColor DarkGray
 
-    # Copyable AI-agent fix prompt: built only for VM-side step failures (items
-    # with a Title), not host-side messages. The user pastes this into their AI
-    # coding agent on the VM (Claude Code over VS Code Remote-SSH) to diagnose.
+    # Copyable AI-agent fix prompt, for VM-side step failures only. A standalone run
+    # offers to copy it or to run an agent with it (Invoke-ConstructAgentFixMenu)
+    # right before its final pause.
     if ($Result) {
-        $stepLines = @()
-        foreach ($item in @($Result.Errors)) {
-            if (-not $item.Title) { continue }
-            $line = "- Step '$($item.Title)' failed (exit $($item.ExitCode))"
-            if ($item.LogPath) {
-                $line += "; log: $($item.LogPath)"
-            }
-            $stepLines += $line
-        }
-        if ($stepLines.Count -gt 0) {
-            Write-Host ""
-            Write-Host "  Paste this into your AI coding agent on the VM to diagnose:" -ForegroundColor Yellow
-            Write-Host "  ............................................................" -ForegroundColor DarkGray
-            Write-Host ""
-            $logPaths = @($Result.Errors | Where-Object { $_.LogPath } | ForEach-Object { $_.LogPath })
-            $logRef = if ($logPaths.Count -eq 1) {
-                "Read the provisioning log at $($logPaths[0])"
-            } elseif ($logPaths.Count -gt 1) {
-                "Read the provisioning logs at: $($logPaths -join ', ')"
-            } else {
-                "Check the provisioning output above"
-            }
-            Write-Host "  On the last Construct provisioning run, the following step(s) failed:" -ForegroundColor White
-            foreach ($sl in $stepLines) {
-                Write-Host "  $sl" -ForegroundColor White
-            }
-            Write-Host "  $logRef and diagnose and fix the underlying problem." -ForegroundColor White
-            Write-Host ""
-            Write-Host "  ............................................................" -ForegroundColor DarkGray
-        }
+        Write-ConstructAgentFixPrompt -Lines @(Get-ConstructAgentFixPrompt -Errors @($Result.Errors))
     }
 }
 
@@ -3416,6 +3390,7 @@ if ($doReboot) {
 # Configure the Windows host (local — no VM connection needed).
 Write-Step "Configuring the Windows host (~\.ssh and VS Code)"
 $keyPath = Set-HostSshConfig -PrivateKeyText $privateKeyText
+if ($Action -eq 'provision') { $global:ConstructProvisionSshTarget = $HostAlias }
 Set-VsCodeRemotePlatform
 if (",$AiTools," -like "*,opencode,*") {
     # On a service-managed VM the OpenCode server is reachable through the HOST FORWARD
@@ -3717,6 +3692,18 @@ finally {
     # before; panel runs skip it only when fully clean so errors cannot disappear
     # with the console window.
     if (-not $Auto -and ((-not $FromPanel) -or $global:ConstructProvisionHadErrors)) {
+        # Failed VM steps: offer to copy the fix prompt or to let an agent on the VM
+        # work on it right here. A run that never wrote the ssh alias falls back to
+        # the one a previous provision of this VM left in ~\.ssh\config.
+        if ($Action -eq 'provision' -and $script:ProvisionResult) {
+            $fixTarget = if ($global:ConstructProvisionSshTarget) { $global:ConstructProvisionSshTarget } else { $HostAlias }
+            try {
+                Invoke-ConstructAgentFixMenu -SshTarget $fixTarget `
+                    -PromptLines @(Get-ConstructAgentFixPrompt -Errors @($script:ProvisionResult.Errors))
+            } catch {
+                Write-Host "  Autofix stopped: $($_.Exception.Message)" -ForegroundColor Red
+            }
+        }
         Write-Host ""
         Read-Host "Press Enter to exit"
     }
