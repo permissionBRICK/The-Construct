@@ -1827,7 +1827,8 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await vault.close();
 
   // ── Key vault pop-out (Construct Companion's VaultApprovals) ─────────────────
-  // Renders pending approvals as plain text with Deny / Approve; Approve arms when the Companion says so.
+  // Renders pending approvals with Deny / Approve (the secrets' names first when the request comes in parts, the
+  // plain message otherwise); Approve arms when the Companion says so.
   const pop = await browser.newPage({ viewport: { width: 420, height: 650 }, timezoneId: "UTC", locale: "en-US" });
   const popErrors = [];
   pop.on("console", (m) => { if (m.type() === "error") popErrors.push(m.text()); });
@@ -1853,9 +1854,15 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     await pop.evaluate((n) => window.__posted.splice(n), saved);
   };
   const REQUEST = (vm) => `The VM “${vm}” asks for access to:\n  • github-token — GitHub token for the release repo\n\nAccess: 3 uses, until 15:30 (1 h)\nReason given: “release 4.2”\nRequested by root@${vm}`;
-  const SHOTS = [ITEM("s1", "agent-vm", "this PC", { message: REQUEST("agent-vm") }),
-    ITEM("s2", "build-vm", "on host.example", { left: "3 min left", title: "Key vault — one-time access", action: "Allow once",
-      message: "The VM “build-vm” asks to read this secret once:\n  • npm-publish — npm automation token\nRequested by root@build-vm", names: ["npm-publish"] }),
+  // The same requests in parts, as Companions and hosts with structured approvals send them.
+  const SECRET = (name, description, hasUsername) => ({ name, description, hasUsername: !!hasUsername });
+  const DETAILED = (id, vm, where, extra) => ITEM(id, vm, where, Object.assign({ message: REQUEST(vm), lead: "asks for access to", names: ["github-token", "staging-db"],
+    secrets: [SECRET("github-token", "GitHub token for the release repo"), SECRET("staging-db", "Staging database admin login", true)],
+    facts: [{ label: "Access", value: "3 uses, until 15:30 (1 h)" }], note: null, reason: "release 4.2", source: "root@" + vm }, extra || {}));
+  const SHOTS = [DETAILED("s1", "agent-vm", "this PC"),
+    DETAILED("s2", "build-vm", "on host.example", { left: "3 min left", title: "Key vault — replace secret", action: "Replace", lead: "wants to replace the value of", names: ["npm-publish"],
+      secrets: [SECRET("npm-publish", "npm automation token")], facts: [{ label: "New description", value: "npm automation token (rotated)" }],
+      note: "It also becomes auto-approved: agents on all your VMs read it without asking you, and no VM is scrubbed of it.", reason: "" }),
     ITEM("s3", "gpu-vm", "this PC", { left: "", title: "Key vault — delete secret", action: "Delete", names: ["old-deploy-key"],
       message: "The VM “gpu-vm” asks to delete this secret from the key vault:\n  • old-deploy-key — Deploy key for staging" })];
   await pushPop([ITEM("a1", "agent-vm", "this PC", { armIn: 400, message: "<img src=x onerror=window.__xss=1> asks for:\n  • github-token" })]);
@@ -1895,6 +1902,21 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("approvals: answered items leave the list", JSON.stringify(await pop.locator(".ap-item").evaluateAll((els) => els.map((e) => e.dataset.id))) === JSON.stringify(["a2"]));
   await pushPop([]);
   check("approvals: an empty list says so", await pop.locator("#aEmpty").isVisible() && (await pop.locator(".ap-item").count()) === 0);
+  await pushPop([DETAILED("d1", "agent-vm", "this PC", { note: "Agents on all your VMs could then read it.",
+    secrets: [SECRET("github-token", "<img src=x onerror=window.__xss=2>"), SECRET("staging-db", "Staging database admin login", true)] })]);
+  const card = pop.locator('.ap-item[data-id="d1"]');
+  check("approvals: a request in parts leads with the secrets' names, in bold",
+    JSON.stringify(await card.locator(".ap-secret-name").allTextContents()) === JSON.stringify(["github-token", "staging-db"])
+    && (await card.locator(".ap-secret-name").first().evaluate((e) => Number(getComputedStyle(e).fontWeight))) >= 700
+    && (await card.locator(".ap-kind").textContent()) === "Access request" && (await card.locator(".ap-who").textContent()) === "agent-vm · this PC asks for access to"
+    && (await card.locator(".ap-secret").nth(1).locator(".ap-user").textContent()) === "with username" && (await card.locator(".ap-secret").first().locator(".ap-user").count()) === 0
+    && (await card.locator(".ap-message").count()) === 0 && (await card.locator(".ap-left").textContent()) === "9 min left");
+  check("approvals: ...then the access, the note, the reason and who asked, all as plain text",
+    JSON.stringify(await card.locator(".ap-facts dt").allTextContents()) === JSON.stringify(["Access", "Reason", "Requested by"])
+    && JSON.stringify(await card.locator(".ap-facts dd").allTextContents()) === JSON.stringify(["3 uses, until 15:30 (1 h)", "“release 4.2”", "root@agent-vm"])
+    && (await card.locator(".ap-note").textContent()) === "Agents on all your VMs could then read it."
+    && (await card.locator(".ap-desc").first().textContent()).startsWith("<img") && (await pop.evaluate(() => window.__xss)) === undefined);
+  await pushPop([]);
   await shoot("1", SHOTS.slice(0, 1)); await shoot("3", SHOTS);
   check("approvals: there is nowhere to type or show a value", (await pop.locator('input, textarea, [contenteditable]').count()) === 0);
   check("approvals: no console/page errors", popErrors.length === 0, popErrors.join(" | "));

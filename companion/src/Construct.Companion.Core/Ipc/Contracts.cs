@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Construct.Companion.Core.Abstractions;
 using Construct.Companion.Core.Vault;
 
 namespace Construct.Companion.Core.Ipc;
@@ -48,11 +49,14 @@ public sealed record QuitRequest(string Reason);
 // dialog's texts and where a request came from (times in ms), never a value. POST /v1/vault/approvals/{id}
 // takes {"decision":"approve"|"deny"}; POST /v1/vault/approvals/displayed takes {"ids":[…]} (VaultApprovals.Displayed).
 public sealed record VaultApprovalList(IReadOnlyList<VaultApprovalItem> Approvals);
+// Lead … Source: the prompt in parts (ApprovalDetails), null when only the message is known (an older host).
 public sealed record VaultApprovalItem(string Id, string Instance, string Vm, string Kind, string? Host, string? RequestId, string? HostRequestId, string Op,
-    string Title, string Message, string Action, string Deny, IReadOnlyList<string> Names, long CreatedAt, long? Deadline)
+    string Title, string Message, string Action, string Deny, IReadOnlyList<string> Names, long CreatedAt, long? Deadline,
+    string? Lead, IReadOnlyList<ApprovalSecret>? Secrets, IReadOnlyList<ApprovalFact>? Facts, string? Note, string? Reason, string? Source)
 {
     public static VaultApprovalItem From(VaultPendingApproval a) => new(a.Id, a.Instance, a.Vm, a.Kind, a.Host, a.RequestId, a.HostRequestId, a.Op,
-        a.Title, a.Message, a.Action, a.Deny, a.Names, a.CreatedAt.ToUnixTimeMilliseconds(), a.Deadline?.ToUnixTimeMilliseconds());
+        a.Title, a.Message, a.Action, a.Deny, a.Names, a.CreatedAt.ToUnixTimeMilliseconds(), a.Deadline?.ToUnixTimeMilliseconds(),
+        a.Details?.Lead, a.Details?.Secrets, a.Details?.Facts, a.Details?.Note, a.Details?.Reason, a.Details?.Source);
 }
 public sealed record Problem(string Type, string Title, int Status, string Code, string? Detail = null);
 public sealed record ForwardSettings(bool Enabled = true, string HostLabel = "");

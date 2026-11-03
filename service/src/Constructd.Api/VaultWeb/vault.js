@@ -165,6 +165,42 @@
     });
   }
 
+  // A host that sends the request in parts: the secrets' names lead, then the access, the reason and who asked.
+  function structured(item) {
+    return Array.isArray(item.secrets) && item.secrets.length > 0 && typeof item.lead === 'string' && item.lead !== '';
+  }
+
+  function details(card, item) {
+    var head = el('div', 'head');
+    head.appendChild(el('span', 'kind', String(item.title || '').replace(/^key vault\s*[\u2014-]\s*/i, '') || 'Request'));
+    head.appendChild(el('span', 'meta', 'answer by ' + time(item.deadline)));
+    card.appendChild(head);
+    var who = el('p', 'who');
+    who.appendChild(el('strong', null, item.vm));
+    who.appendChild(document.createTextNode(' ' + item.lead));
+    card.appendChild(who);
+    var list = el('ul', 'secrets');
+    item.secrets.forEach(function (secret) {
+      var row = el('li', 'secret');
+      var line = el('div', 'secret-line');
+      line.appendChild(el('span', 'secret-name', secret.name));
+      if (secret.hasUsername) line.appendChild(el('span', 'tag', 'with username'));
+      row.appendChild(line);
+      if (secret.description) row.appendChild(el('div', 'desc', secret.description));
+      list.appendChild(row);
+    });
+    card.appendChild(list);
+    var facts = (Array.isArray(item.facts) ? item.facts : []).map(function (f) { return [f.label, f.value]; });
+    if (item.reason) facts.push(['Reason', '\u201c' + item.reason + '\u201d']);
+    if (item.source) facts.push(['Requested by', item.source]);
+    if (facts.length) {
+      var grid = el('dl', 'facts');
+      facts.forEach(function (f) { grid.appendChild(el('dt', null, f[0])); grid.appendChild(el('dd', null, f[1])); });
+      card.appendChild(grid);
+    }
+    if (item.note) card.appendChild(el('p', 'callout', item.note));
+  }
+
   function approvalCard(item) {
     var card = el('li', 'card');
     card.setAttribute('data-id', item.id);
@@ -173,10 +209,13 @@
       focusId = null;
       setTimeout(function () { card.scrollIntoView({ block: 'center' }); }, 0);
     }
-    card.appendChild(el('h3', null, item.title));
-    var meta = 'VM ' + item.vm + (item.source ? ' · ' + item.source : '') + ' · answer by ' + time(item.deadline);
-    card.appendChild(el('p', 'meta', meta));
-    card.appendChild(el('p', 'message', item.message));
+    if (structured(item)) details(card, item);
+    else {
+      card.appendChild(el('h3', null, item.title));
+      var meta = 'VM ' + item.vm + (item.source ? ' · ' + item.source : '') + ' · answer by ' + time(item.deadline);
+      card.appendChild(el('p', 'meta', meta));
+      card.appendChild(el('p', 'message', item.message));
+    }
     var actions = el('div', 'actions');
     var deny = el('button', null, 'Deny');
     deny.type = 'button';

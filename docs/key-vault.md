@@ -99,10 +99,13 @@ taken, `11` the vault is locked for this VM (hosted VMs: start or connect the VM
 
 A request appears in the Companion's key vault pop-out, next to the tray icon and on top of your
 other windows, in the design you chose for the control panel. The pop-out does not take the
-keyboard focus, so typing meant for another window cannot reach it. Each request names the VM
-(and its host), each secret and its description, the access asked for, the agent's reason, the
-requesting user and the time left. **Deny** works at once; **Approve** becomes clickable a second
-after the request appears. Requests from several VMs are listed together, oldest first.
+keyboard focus, so typing meant for another window cannot reach it. Each request leads with what it
+is (access, a one-time read, a replacement, a deletion, auto-approve) and the time left, then the
+VM (and its host) and the secrets it is about, each name in bold with its description below. The
+access asked for, the agent's reason and the requesting user follow, and a consequence worth
+noticing (such as a secret becoming auto-approved) is shown as a warning. T3 Code's banner and the
+phone approval page show requests the same way. **Deny** works at once; **Approve** becomes clickable
+a second after the request appears. Requests from several VMs are listed together, oldest first.
 
 The pop-out stays until no request is left. Its **×** hides it until the next request arrives;
 while requests wait, **Key vault requests (N)…** at the top of the tray menu, or a left click on
@@ -402,14 +405,22 @@ routes for pending approvals:
 ```
 GET  /v1/vault/approvals       200 {"approvals":[{"id","instance","vm","kind":"local"|"host","host":<slug>|null,
                                     "requestId":<the CLI's id>|null,"hostRequestId":<the host's id>|null,
-                                    "op","title","message","action","deny","names":[…],"createdAt":<ms>,"deadline":<ms>|null}]}
+                                    "op","title","message","action","deny","names":[…],"createdAt":<ms>,"deadline":<ms>|null,
+                                    "lead","secrets":[{"name","description","hasUsername"}],"facts":[{"label","value"}],
+                                    "note"|null,"reason","source"}]}
 POST /v1/vault/approvals/{id}  {"decision":"approve"|"deny"} -> 204 | 400 | 404 {"code":"not-found"}
                                | 409 {"code":"already-decided"} | 502 {"code":"host-failed"}
 POST /v1/vault/approvals/displayed  {"ids":[<id>,…]} -> 204 | 400 {"code":"invalidIds"} | 401
 ```
 
 `requestId` is the id of the pending note above, and `hostRequestId` the `request=` id of its
-`approveUrl`. Errors are RFC 7807 problems. `502` means the host did not take a hosted VM's answer;
+`approveUrl`. `message` is the whole request as plain text. `lead` … `source` are the same request in
+parts: `<vm> <lead>:` (`asks for access to`, `asks to read this secret once`, `wants to replace the
+value of`, `asks to delete this secret from the key vault`, `asks to auto-approve this secret`), the
+secrets, facts such as `Access` and `New description`, a note to notice, the agent's reason and who
+asked. They are `null` for an approval from a host that sends only its message.
+
+Errors are RFC 7807 problems. `502` means the host did not take a hosted VM's answer;
 the activity list has the reason.
 
 `displayed` takes 0 to 50 ids, each up to 128 characters of `A-Za-z0-9._~-`. T3 Code Desktop posts

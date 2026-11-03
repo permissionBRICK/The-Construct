@@ -416,6 +416,24 @@ public sealed class VaultHostsTests
     }
 
     [Fact]
+    public void AHostsApprovalInPartsIsKeptAndBoundedButNeverRequired()
+    {
+        var raw = Approval("a1", DateTimeOffset.UnixEpoch + TimeSpan.FromDays(20000));
+        Assert.Null(Assert.Single(VaultSync.ParseApprovals(JsonNode.Parse(new JsonObject { ["approvals"] = new JsonArray(raw.DeepClone()) }.ToJsonString()))).Details);
+        raw["lead"] = "asks for access to"; raw["reason"] = "release\tnow"; raw["source"] = "root@dev"; raw["note"] = "Line one\nline two";
+        raw["secrets"] = new JsonArray(new JsonObject { ["name"] = "github-token", ["description"] = "CI\u0007", ["hasUsername"] = true },
+            new JsonObject { ["name"] = "../etc", ["description"] = "dropped" }, new JsonObject { ["description"] = "no name" });
+        raw["facts"] = new JsonArray(new JsonObject { ["label"] = "Access", ["value"] = "3 uses, for 1 h" }, new JsonObject { ["label"] = "", ["value"] = "dropped" });
+        var details = Assert.Single(VaultSync.ParseApprovals(JsonNode.Parse(new JsonObject { ["approvals"] = new JsonArray(raw.DeepClone()) }.ToJsonString()))).Details!;
+        Assert.Equal(("asks for access to", "release now", "root@dev", "Line one\nline two"), (details.Lead, details.Reason, details.Source, details.Note));
+        Assert.Equal([new ApprovalSecret("github-token", "CI", true)], details.Secrets);
+        Assert.Equal([new ApprovalFact("Access", "3 uses, for 1 h")], details.Facts);
+        // No usable secret: the message is all there is.
+        raw["secrets"] = new JsonArray(new JsonObject { ["name"] = "../etc" });
+        Assert.Null(Assert.Single(VaultSync.ParseApprovals(JsonNode.Parse(new JsonObject { ["approvals"] = new JsonArray(raw.DeepClone()) }.ToJsonString()))).Details);
+    }
+
+    [Fact]
     public async Task HostApprovalsAreListedWithLocalOnesAndPostTheAnswer()
     {
         await using var h = new Harness();
@@ -428,6 +446,7 @@ public sealed class VaultHostsTests
         var prompt = Assert.IsType<ApprovalPrompt>(Assert.Single(h.Prompts.Shown));
         Assert.Equal("Key vault — access request", prompt.Title); Assert.Equal("Approve", prompt.Action);
         Assert.Equal("The VM “dev” asks for access to:\n• github-token — CI\n\nReason given: “release”", prompt.Message);
+        Assert.Null(prompt.Details); // this host sends the message only
         Assert.Equal("approve", h.Host.Decisions["a1"]);
         h.Host.Edit(x => x.Approvals.Add(Approval("a2", h.Clock.UtcNow + TimeSpan.FromMinutes(10))));
         h.Prompts.Approvals.Enqueue(false);

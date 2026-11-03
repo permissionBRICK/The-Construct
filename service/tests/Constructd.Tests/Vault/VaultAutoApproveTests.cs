@@ -189,6 +189,8 @@ public sealed class VaultAutoApproveTests
         Assert.Equal("autoApprove", approval["op"]!.GetValue<string>());
         Assert.Equal("Key vault — auto-approve secret", approval["title"]!.GetValue<string>());
         Assert.Equal("Auto-approve", approval["action"]!.GetValue<string>());
+        Assert.Equal("asks to auto-approve this secret", approval["lead"]!.GetValue<string>());
+        Assert.StartsWith("Agents on all your VMs could then read it", approval["note"]!.GetValue<string>());
         Assert.Equal(["db"], Strings(approval["names"]));
         Assert.Equal(HttpStatusCode.NoContent, await h.DecideAsync(id, "approve"));
         var on = (await h.PollAsync(id)).Body!;

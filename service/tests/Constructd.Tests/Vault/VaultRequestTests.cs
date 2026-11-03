@@ -47,6 +47,14 @@ public sealed class VaultRequestTests
         Assert.Contains("Reason given: “migrate”", approval["message"]!.GetValue<string>());
         Assert.Equal(2, approval["uses"]!.GetValue<int>());
         Assert.Equal(7200, approval["ttlSeconds"]!.GetValue<int>());
+        // The same request in parts, so pages can lead with the secrets' names.
+        Assert.Equal("asks for access to", approval["lead"]!.GetValue<string>());
+        var secret = approval["secrets"]!.AsArray().Single()!;
+        Assert.Equal(("db", true), (secret["name"]!.GetValue<string>(), secret["hasUsername"]!.GetValue<bool>()));
+        var fact = approval["facts"]!.AsArray().Single()!;
+        Assert.Equal(("Access", "2 uses, for 2 h"), (fact["label"]!.GetValue<string>(), fact["value"]!.GetValue<string>()));
+        Assert.Null(approval["note"]);
+        Assert.Equal("migrate", approval["reason"]!.GetValue<string>());
         Assert.Equal(h.Ms(TimeSpan.FromMinutes(10)), approval["deadline"]!.GetValue<long>());
 
         Assert.Equal(HttpStatusCode.NoContent, await h.DecideAsync(id, "approve"));

@@ -55,7 +55,7 @@ public sealed record VaultApprovalSource(string Instance, string Vm, string Op, 
 // CreatedAt is when the request was made (on the host, for a host approval), ArrivedAt when it was listed here.
 public sealed record VaultPendingApproval(string Id, string Instance, string Vm, string Kind, string? Host, string? RequestId, string? HostRequestId,
     string Op, string Title, string Message, string Action, string Deny, IReadOnlyList<string> Names, DateTimeOffset CreatedAt, DateTimeOffset? Deadline,
-    DateTimeOffset ArrivedAt, string HostName = "");
+    DateTimeOffset ArrivedAt, string HostName = "", ApprovalDetails? Details = null);
 // The outcome of an answer from another app: Failed = the host could not be told (the activity list says why).
 public enum VaultDecision { Decided, NotFound, AlreadyDecided, Failed }
 

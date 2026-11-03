@@ -210,6 +210,13 @@ public sealed class VaultTests
         Assert.Equal(["github-token", "npm"], granted["names"]!.AsArray().Select(n => n!.GetValue<string>()));
         var prompt = Assert.IsType<ApprovalPrompt>(Assert.Single(h.Prompts.Shown));
         Assert.Contains("2 uses", prompt.Message); Assert.Contains("“release”", prompt.Message); Assert.Contains("npm publish token", prompt.Message);
+        // The same request in parts, so the pop-out can lead with the names; the message stays the plain text it was.
+        var details = prompt.Details!;
+        Assert.Equal(("asks for access to", "release", "root@agent-vm"), (details.Lead, details.Reason, details.Source));
+        Assert.Equal([new ApprovalSecret("github-token", "GitHub token for CI", false), new ApprovalSecret("npm", "npm publish token", false)], details.Secrets);
+        Assert.Equal("Access", Assert.Single(details.Facts).Label); Assert.Null(details.Note);
+        Assert.Equal($"The VM “dev” asks for access to:\n  • github-token — GitHub token for CI\n  • npm — npm publish token\n\nAccess: {details.Facts[0].Value}\nReason given: “release”\nRequested by root@agent-vm",
+            prompt.Message);
         Assert.Equal(1, (await h.Ask("dev", Req("get", "npm")))["lease"]!["usesLeft"]!.GetValue<int>());
         Assert.Equal(0, (await h.Ask("dev", Req("get", "npm")))["lease"]!["usesLeft"]!.GetValue<int>());
         Assert.Single(h.Prompts.Shown);

@@ -30,18 +30,57 @@
     entry.busy = true; entry.error.textContent = ""; sync(entry);
     post({ type: "approvals.decide", id, decision });
   }
+  // The request in parts (lead, secrets, facts, note, reason, source): "VM asks for", each secret's name in
+  // bold with its description, then what access, why and who. Without them (an older host), its message.
+  function details(item) {
+    const parts = [];
+    const who = el("div", "ap-who");
+    const vm = el("b", null, item.vm);
+    who.append(vm, document.createTextNode(" · " + item.where + " " + item.lead));
+    who.title = who.textContent;
+    parts.push(who);
+    const list = el("ul", "ap-secrets");
+    for (const secret of item.secrets) {
+      const row = el("li", "ap-secret");
+      const line = el("div", "ap-secret-line");
+      line.append(el("span", "ap-secret-name", secret.name));
+      if (secret.hasUsername) line.append(el("span", "ap-user", "with username"));
+      row.append(line);
+      if (secret.description) row.append(el("div", "ap-desc", secret.description));
+      list.append(row);
+    }
+    parts.push(list);
+    const facts = (Array.isArray(item.facts) ? item.facts : []).map((f) => [f.label, f.value]);
+    if (item.reason) facts.push(["Reason", "\u201c" + item.reason + "\u201d"]);
+    if (item.source) facts.push(["Requested by", item.source]);
+    if (facts.length) {
+      const grid = el("dl", "ap-facts");
+      for (const [label, value] of facts) grid.append(el("dt", null, label), el("dd", null, value));
+      parts.push(grid);
+    }
+    if (item.note) parts.push(el("div", "ap-note", item.note));
+    return parts;
+  }
+  function structured(item) { return Array.isArray(item.secrets) && item.secrets.length > 0 && typeof item.lead === "string"; }
   function create(item) {
     const root = el("section", "lcard ap-item");
     root.dataset.id = item.id;
     const head = el("div", "ap-head");
-    const vm = el("span", "lcard-h ap-vm", item.vm + " · " + item.where);
-    vm.title = vm.textContent;
     const left = el("span", "ap-left");
-    head.append(vm, left);
-    const title = el("div", "ap-title", item.title);
-    const names = el("div", "ap-names");
-    for (const name of item.names || []) names.append(el("span", "ap-name", name));
-    const message = el("div", "ap-message", item.message);
+    let body;
+    if (structured(item)) {
+      // The window says KEY VAULT already: the title's kind is enough ("Access request").
+      const kind = String(item.title || "").replace(/^key vault\s*[\u2014-]\s*/i, "");
+      head.append(el("span", "ap-kind", kind ? kind.charAt(0).toUpperCase() + kind.slice(1) : "Request"), left);
+      body = details(item);
+    } else {
+      const vm = el("span", "lcard-h ap-vm", item.vm + " · " + item.where);
+      vm.title = vm.textContent;
+      head.append(vm, left);
+      const names = el("div", "ap-names");
+      for (const name of item.names || []) names.append(el("span", "ap-name", name));
+      body = [el("div", "ap-title", item.title), names, el("div", "ap-message", item.message)];
+    }
     const error = el("div", "ap-error");
     error.setAttribute("role", "status");
     const actions = el("div", "ap-actions");
@@ -51,7 +90,7 @@
     approve.type = "button"; approve.dataset.decision = "approve";
     approve.title = "Becomes available a second after the request appears";
     actions.append(deny, approve);
-    root.append(head, title, names, message, error, actions);
+    root.append(head, ...body, error, actions);
     const entry = { root, left, error, approve, deny, armed: false, busy: false, timer: 0 };
     deny.addEventListener("click", () => decide(item.id, "deny"));
     approve.addEventListener("click", () => decide(item.id, "approve"));

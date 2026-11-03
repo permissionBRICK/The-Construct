@@ -116,9 +116,12 @@ job is due for that VM. The guest then runs the scrub once, in the background.
 // PUT /vault/settings {"mode":"locked","keyCheck":"<base64>"}            -> 204
 //                     {"mode":"available","key":"<base64 K>","keyCheck":"…"} -> 204
 // GET /vault/approvals
-{"approvals":[{"id":"…","vm":"dev","op":"request|get|add|delete","title":"…","message":"…",
+{"approvals":[{"id":"…","vm":"dev","op":"request|get|add|delete|autoApprove","title":"…","message":"…",
                "action":"Approve","names":["github-token"],"uses":3,"ttlSeconds":3600,
-               "reason":"…","source":"root@dev","createdAt":ms,"deadline":ms}]}
+               "reason":"…","source":"root@dev","createdAt":ms,"deadline":ms,
+               // the prompt in parts (message is the same as plain text):
+               "lead":"asks for access to","secrets":[{"name":"github-token","description":"…","hasUsername":false}],
+               "facts":[{"label":"Access","value":"3 uses, for 1 h"}],"note":null}]}
 // POST /vault/approvals/{id} {"decision":"approve"}  -> 204 | 409 {"code":"already-decided"} | 404
 // GET /vault/leases
 {"leases":[{"id":"…","vm":"dev","name":"…","usesLeft":2|null,"expiresAt":ms,"reason":"…","origin":"approved|once|added"}]}

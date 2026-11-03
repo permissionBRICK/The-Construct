@@ -88,13 +88,13 @@ public sealed partial class VaultService : IAsyncDisposable
 
     private async Task<JsonObject> RequestAsync(string instance, VaultRequest request, CancellationToken token)
     {
-        string[] missing, auto, asked, described;
+        string[] missing, auto, asked; ApprovalSecret[] described;
         lock (gate)
         {
             missing = request.Names.Where(n => Find(n) is null).ToArray();
             auto = request.Names.Where(n => Find(n) is { AutoApprove: true }).ToArray();
             asked = request.Names.Except(missing).Except(auto).ToArray();
-            described = asked.Select(n => Bullet(Find(n)!)).ToArray();
+            described = asked.Select(n => Described(Find(n)!)).ToArray();
         }
         if (missing.Length > 0) return VaultProtocol.Response(request.Id, "notFound", $"No secret named {string.Join(", ", missing)} in the key vault (see construct secret list).");
         // Auto-approved secrets need neither the user nor a lease: every get of them is answered at once.
@@ -102,9 +102,8 @@ public sealed partial class VaultService : IAsyncDisposable
         if (asked.Length == 0) return Granted(request, auto, auto, null);
         // A uses-only lease still ends after a day, so a forgotten grant cannot outlive the task by weeks.
         var ttl = TimeSpan.FromSeconds(request.Ttl ?? (request.Uses is null ? DefaultTtl.TotalSeconds : VaultProtocol.MaxTtl));
-        var message = $"The VM “{instance}” asks for access to:\n{string.Join('\n', described)}\n\nAccess: {Access(request.Uses, clock.UtcNow + ttl, clock.UtcNow)}"
-            + Footer(request);
-        var answer = await AskAsync(instance, request, new("Key vault — access request", message), token, asked).ConfigureAwait(false);
+        var prompt = Prompt("Key vault — access request", instance, request, "asks for access to", described, [new("Access", Access(request.Uses, clock.UtcNow + ttl, clock.UtcNow))]);
+        var answer = await AskAsync(instance, request, prompt, token, asked).ConfigureAwait(false);
         if (answer != Approval.Approved) return Refused(request, answer, auto);
         // The lease runs from the approval, not from the request: a slow answer must not shorten it.
         var now = clock.UtcNow; var expires = now + ttl;
@@ -130,17 +129,17 @@ public sealed partial class VaultService : IAsyncDisposable
 
     private async Task<JsonObject> GetAsync(string instance, VaultRequest request, CancellationToken token)
     {
-        var name = request.Names[0]; string bullet; VaultLease? lease; VaultEntry found;
+        var name = request.Names[0]; VaultLease? lease; VaultEntry found;
         lock (gate)
         {
             if (Find(name) is not { } entry) return NotFound(request, name);
-            found = entry; bullet = Bullet(entry); lease = ActiveLease(instance, name, clock.UtcNow);
+            found = entry; lease = ActiveLease(instance, name, clock.UtcNow);
         }
         // Auto-approved and not leased: the value at once, without a lease or a use to count.
         if (lease is null && found.AutoApprove) return Value(request, found, null);
         if (lease is null)
         {
-            var answer = await AskAsync(instance, request, new("Key vault — one-time access", $"The VM “{instance}” asks to read this secret once:\n{bullet}" + Footer(request), "Allow once"),
+            var answer = await AskAsync(instance, request, Prompt("Key vault — one-time access", instance, request, "asks to read this secret once", [Described(found)], [], action: "Allow once"),
                 token).ConfigureAwait(false);
             if (answer != Approval.Approved) return Refused(request, answer);
             var once = new VaultLease(NewId(), instance, name, 1, clock.UtcNow + OnceTtl, clock.UtcNow, request.Reason, "once");
@@ -193,13 +192,13 @@ public sealed partial class VaultService : IAsyncDisposable
 
     private async Task<JsonObject> AddAsync(string instance, VaultRequest request, CancellationToken token)
     {
-        var name = request.Names[0]; string? bullet = null; var noted = false;
-        lock (gate) if (Find(name) is { } existing) { bullet = Bullet(existing); noted = request.AutoApprove == true && !existing.AutoApprove; }
-        if (bullet is not null)
+        var name = request.Names[0]; ApprovalSecret? current = null; var noted = false;
+        lock (gate) if (Find(name) is { } existing) { current = Described(existing); noted = request.AutoApprove == true && !existing.AutoApprove; }
+        if (current is not null)
         {
             if (!request.Replace) return VaultProtocol.Response(request.Id, "exists", $"A secret named {name} already exists. Pick another name, or pass --replace (needs the user's approval).");
-            var answer = await AskAsync(instance, request, new("Key vault — replace secret", $"The VM “{instance}” wants to replace the value of:\n{bullet}\n\nNew description: {request.Description}"
-                + (noted ? "\n\nIt also becomes auto-approved: agents on all your VMs read it without asking you, and no VM is scrubbed of it." : "") + Footer(request), "Replace"),
+            var answer = await AskAsync(instance, request, Prompt("Key vault — replace secret", instance, request, "wants to replace the value of", [current],
+                [new("New description", request.Description)], noted ? "It also becomes auto-approved: agents on all your VMs read it without asking you, and no VM is scrubbed of it." : null, "Replace"),
                 token).ConfigureAwait(false);
             if (answer != Approval.Approved) return Refused(request, answer);
         }
@@ -240,19 +239,17 @@ public sealed partial class VaultService : IAsyncDisposable
     // switching it off only takes that away again.
     private async Task<JsonObject> AutoApproveAsync(string instance, VaultRequest request, CancellationToken token)
     {
-        var name = request.Names[0]; var on = request.AutoApprove == true; string bullet;
+        var name = request.Names[0]; var on = request.AutoApprove == true; ApprovalSecret secret;
         lock (gate)
         {
             if (Find(name) is not { } entry) return NotFound(request, name);
             if (entry.AutoApprove == on) return Switched(request, name, on, on ? "Already auto-approved." : "Already needs approval.");
-            bullet = Bullet(entry);
+            secret = Described(entry);
         }
         if (on)
         {
-            var answer = await AskAsync(instance, request, new("Key vault — auto-approve secret",
-                $"The VM “{instance}” asks to auto-approve this secret:\n{bullet}\n\nAgents on all your VMs could then read it at any time without asking you, and no VM is scrubbed of it any more."
-                + Footer(request), "Auto-approve"),
-                token).ConfigureAwait(false);
+            var answer = await AskAsync(instance, request, Prompt("Key vault — auto-approve secret", instance, request, "asks to auto-approve this secret", [secret], [],
+                "Agents on all your VMs could then read it at any time without asking you, and no VM is scrubbed of it any more.", "Auto-approve"), token).ConfigureAwait(false);
             if (answer != Approval.Approved) return Refused(request, answer);
         }
         if (!SetFlag(name, on)) return NotFound(request, name);
@@ -267,9 +264,9 @@ public sealed partial class VaultService : IAsyncDisposable
 
     private async Task<JsonObject> DeleteAsync(string instance, VaultRequest request, CancellationToken token)
     {
-        var name = request.Names[0]; string bullet;
-        lock (gate) { if (Find(name) is not { } entry) return NotFound(request, name); bullet = Bullet(entry); }
-        var answer = await AskAsync(instance, request, new("Key vault — delete secret", $"The VM “{instance}” asks to delete this secret from the key vault:\n{bullet}" + Footer(request), "Delete"),
+        var name = request.Names[0]; ApprovalSecret secret;
+        lock (gate) { if (Find(name) is not { } entry) return NotFound(request, name); secret = Described(entry); }
+        var answer = await AskAsync(instance, request, Prompt("Key vault — delete secret", instance, request, "asks to delete this secret from the key vault", [secret], [], action: "Delete"),
             token).ConfigureAwait(false);
         if (answer != Approval.Approved) return Refused(request, answer);
         var deleted = false;
@@ -285,8 +282,9 @@ public sealed partial class VaultService : IAsyncDisposable
         (answer == Approval.TimedOut ? "No answer from the user before the request timed out." : "The user denied the request.")
         + (auto is { Count: > 0 } ? $" {string.Join(", ", auto)} need{(auto.Count == 1 ? "s" : "")} no approval: read {(auto.Count == 1 ? "it" : "them")} with construct secret get." : ""));
     private static JsonArray Names(IEnumerable<string> names) => new(names.Select(n => (JsonNode)n).ToArray());
-    private static string Bullet(VaultEntry entry) => $"  • {entry.Name}{(entry.Description.Length > 0 ? " — " + entry.Description : "")}{(entry.Username.Length > 0 ? " (with username)" : "")}";
-    private static string Footer(VaultRequest request) => (request.Reason.Length > 0 ? $"\nReason given: “{request.Reason}”" : "") + (request.Source.Length > 0 ? $"\nRequested by {request.Source}" : "");
+    private static ApprovalSecret Described(VaultEntry entry) => new(entry.Name, entry.Description, entry.Username.Length > 0);
+    private static ApprovalPrompt Prompt(string title, string instance, VaultRequest request, string lead, IReadOnlyList<ApprovalSecret> secrets, IReadOnlyList<ApprovalFact> facts,
+        string? note = null, string action = "Approve") => VaultPromptText.Prompt(title, instance, new(lead, secrets, facts, note, request.Reason, request.Source), action);
 
     // ── the PC side: the Key Vault window ──────────────────────────────────────
     public IReadOnlyList<VaultSecretView> Secrets()

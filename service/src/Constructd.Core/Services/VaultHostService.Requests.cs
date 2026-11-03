@@ -9,9 +9,10 @@ namespace Constructd.Core.Services;
 /// <summary>An answered guest request (<see cref="Response"/>) or one waiting for the user (<see cref="PendingId"/>).</summary>
 public sealed record VaultSubmission(JsonObject? Response, string? PendingId);
 
-/// <summary>One pending approval as the Companion and the phone page show it.</summary>
+/// <summary>One pending approval as the Companion and the phone show it. Lead … Note: the prompt in parts (<see cref="VaultPrompt"/>).</summary>
 public sealed record VaultApprovalView(string Id, string Vm, string Op, string Title, string Message, string Action,
-    IReadOnlyList<string> Names, int? Uses, int? TtlSeconds, string Reason, string Source, long CreatedAt, long Deadline);
+    IReadOnlyList<string> Names, int? Uses, int? TtlSeconds, string Reason, string Source, long CreatedAt, long Deadline,
+    string Lead, IReadOnlyList<VaultPromptSecret> Secrets, IReadOnlyList<VaultPromptFact> Facts, string? Note);
 
 public sealed partial class VaultHostService
 {
@@ -323,7 +324,8 @@ public sealed partial class VaultHostService
             ExpireLocked(now);
             return pending.Values.Where(p => p.State == PendingState.Pending && Ownership.SameName(p.Owner, owner)).OrderBy(p => p.CreatedAt)
                 .Select(p => new VaultApprovalView(p.Id, p.Vm, p.Request.Op, p.Prompt.Title, p.Prompt.Message, p.Prompt.Action, p.Names,
-                    p.Uses, p.TtlSeconds, p.Request.Reason, p.Request.Source, p.CreatedAt.ToUnixTimeMilliseconds(), p.Deadline.ToUnixTimeMilliseconds()))
+                    p.Uses, p.TtlSeconds, p.Request.Reason, p.Request.Source, p.CreatedAt.ToUnixTimeMilliseconds(), p.Deadline.ToUnixTimeMilliseconds(),
+                    p.Prompt.Lead, p.Prompt.Secrets, p.Prompt.Facts, p.Prompt.Note))
                 .ToArray();
         }
     }

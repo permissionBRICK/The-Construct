@@ -21,7 +21,14 @@ public sealed record InputPrompt(string Title, string Prompt, string? Value = nu
 public sealed record PickItem(string Id, string Label, string? Description = null, bool Picked = false, bool Disabled = false, bool Separator = false);
 public sealed record PickPrompt(string Title, IReadOnlyList<PickItem> Items, bool Multiple = false, string? Placeholder = null);
 // A key vault approval's texts (VaultPendingApproval); the tray pop-out shows them, never in a modal dialog.
-public sealed record ApprovalPrompt(string Title, string Message, string Action = "Approve", string Deny = "Deny");
+// Message is the whole request as plain text; Details the same request in parts, so a page can make the
+// secrets stand out (null from a host that predates them).
+public sealed record ApprovalPrompt(string Title, string Message, string Action = "Approve", string Deny = "Deny", ApprovalDetails? Details = null);
+// "<vm> <Lead>:" the Secrets, then the Facts ("Access", "New description"), a Note to notice, the agent's Reason
+// and who asked (Source); Reason and Source are "" when unknown.
+public sealed record ApprovalDetails(string Lead, IReadOnlyList<ApprovalSecret> Secrets, IReadOnlyList<ApprovalFact> Facts, string? Note, string Reason, string Source);
+public sealed record ApprovalSecret(string Name, string Description, bool HasUsername);
+public sealed record ApprovalFact(string Label, string Value);
 public sealed record FileDecisionItem(string Id, string Path, string Detail);
 public sealed record FileDecisionPrompt(string Title, string Message, IReadOnlyList<FileDecisionItem> Files)
 {
