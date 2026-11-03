@@ -5,6 +5,8 @@ Construct Companion. Agents in a VM can see which secrets exist and what they ar
 read a value only after you approve it in the Companion: for a number of uses, for a time,
 or both. When the access ends, the Companion searches that VM for every copy of the value. Agent
 logs are redacted automatically. Any other file is listed for you, and you decide per file.
+Less sensitive secrets can be [auto-approved](#auto-approved-secrets): agents then read them without
+asking you, and VMs are not scrubbed of them.
 
 VMs on a host service (remote Hyper-V or Proxmox) use a copy of the same vault kept on that host,
 so they work while your PC is off, and you can approve from a paired phone. See
@@ -13,6 +15,7 @@ so they work while your PC is off, and you can approve from a paired phone. See
 - [Managing secrets](#managing-secrets)
 - [What agents do](#what-agents-do)
 - [Approvals and leases](#approvals-and-leases)
+- [Auto-approved secrets](#auto-approved-secrets)
 - [Scrubbing a VM](#scrubbing-a-vm)
 - [Hosted VMs](#hosted-vms)
 - [Security model](#security-model)
@@ -28,7 +31,7 @@ Companion, the card only says where the vault is.
 
 | Tab | What it shows |
 |---|---|
-| **Secrets** | Name, username, description and how many VMs hold access. **Add…**, **Edit…**, **Delete**, **Copy secret** (cleared from the clipboard after 30 seconds unless something replaced it) and **Copy username**. |
+| **Secrets** | Name, username, description and how many VMs hold access. The **Auto-approve** switch, **Add…**, **Edit…**, **Delete**, **Copy secret** (cleared from the clipboard after 30 seconds unless something replaced it) and **Copy username**. |
 | **Access** | Every active lease: VM, secret, uses left, end time, the agent's reason. **Revoke access** ends a lease at once. Below it, scrubs that wait for their VM to come online; **Discard pending scrubs for VM** forgets them (for a VM you removed). |
 | **Activity** | What the vault did: approvals, expiries, scrubs and their results, warnings, including those reported by your hosts. |
 | **Hosts** | One section per enrolled host: sync state, the vault mode, paired phones (**Pair a phone…**, revoke), and **Show vault key…** / **Import vault key…** for a second PC. |
@@ -50,18 +53,20 @@ and keeps it, so it can still be restored on the PC and account that created it.
 ## What agents do
 
 The agent instruction file tells agents to request everything a task needs at the start, so you can
-approve once and leave. It also limits the vault to credentials you want used only with your
-explicit permission, such as admin logins or full-access deploy keys to critical systems. Anything
-needed for unattended work, or used regularly and non-critical, goes in `~/.secrets/` or the tool's
-own credential store. Git tokens and unclear cases are your call: agents follow the existing setup,
-or ask you once and record the answer in `~/construct-custom-system-prompt.md`. The CLI documents
-itself (`construct secret --help`):
+approve once and leave. Credentials you want used only with your explicit permission, such as admin
+logins or full-access deploy keys to critical systems, need your approval. Non-critical credentials
+that agents use regularly, such as read-only or test tokens, go into the vault auto-approved. Anything
+unattended work needs goes in `~/.secrets/` or the tool's own credential store, because the vault
+answers only while the Companion (or the VM's host service) is reachable. Git tokens and unclear
+cases are your call: agents follow the existing setup, or ask you once and record the answer in
+`~/construct-custom-system-prompt.md`. The CLI documents itself (`construct secret --help`):
 
 ```console
 $ construct secret list
-NAME           ACCESS        DESCRIPTION
-github-token   none          GitHub token for the release repo
-staging-db     none          Staging database admin login
+NAME           ACCESS         DESCRIPTION
+github-token   none           GitHub token for the release repo
+npm-read       auto-approved  Read-only token for the package mirror
+staging-db     none           Staging database admin login
 
 $ construct secret request github-token staging-db --for 2h --reason "release 4.2"
 Approved: github-token, staging-db — until 15:30
@@ -75,11 +80,14 @@ $ construct secret release --all
 |---|---|---|
 | `list`, `status` | no | All secrets with descriptions (never values) / only those this VM holds now |
 | `request <name>… [--uses N] [--for 2h] [--reason …]` | yes, once for all names | Pre-approves access. Without `--uses`/`--for` it asks for one hour. |
-| `get <name> [--username\|--json]` | only without a lease | Prints the value (or username) and counts one use. Without a lease it asks for a single use. |
+| `get <name> [--username\|--json]` | only without a lease | Prints the value (or username) and counts one use. Without a lease it asks for a single use, unless the secret is auto-approved. |
 | `release <name>…` / `--all` | no | Ends this VM's access. The scrub starts a few seconds later. |
 | `add <name> --description … [--username …] [--for 2h]` | no | Stores a secret the agent created, read from stdin or `--file`. This VM holds it for an hour (or `--for`), then it is scrubbed. |
-| `add <name> … --replace` | yes | Overwrites an existing secret's value. VMs that saw the old value are scrubbed of it. |
+| `add <name> … --auto-approve` | no | Stores it auto-approved: no lease, no scrub. |
+| `add <name> … --replace` | yes | Overwrites an existing secret's value. VMs that saw the old value are scrubbed of it. The secret keeps its auto-approve setting; with `--auto-approve` your approval switches it on too. |
 | `delete <name>` | yes | Removes a secret from the vault. |
+| `auto-approve <name> on` | yes | Switches auto-approve on. |
+| `auto-approve <name> off` | no | Switches it off: requests need your approval again. |
 
 `get` prints the value exactly, with no newline added. Values never appear on a command line:
 `add` reads stdin, and every value travels between the VM and the Companion only on stdin
@@ -91,10 +99,13 @@ taken, `11` the vault is locked for this VM (hosted VMs: start or connect the VM
 
 A request appears in the Companion's key vault pop-out, next to the tray icon and on top of your
 other windows, in the design you chose for the control panel. The pop-out does not take the
-keyboard focus, so typing meant for another window cannot reach it. Each request names the VM
-(and its host), each secret and its description, the access asked for, the agent's reason, the
-requesting user and the time left. **Deny** works at once; **Approve** becomes clickable a second
-after the request appears. Requests from several VMs are listed together, oldest first.
+keyboard focus, so typing meant for another window cannot reach it. Each request leads with what it
+is (access, a one-time read, a replacement, a deletion, auto-approve) and the time left, then the
+VM (and its host) and the secrets it is about, each name in bold with its description below. The
+access asked for, the agent's reason and the requesting user follow, and a consequence worth
+noticing (such as a secret becoming auto-approved) is shown as a warning. T3 Code's banner and the
+phone approval page show requests the same way. **Deny** works at once; **Approve** becomes clickable
+a second after the request appears. Requests from several VMs are listed together, oldest first.
 
 The pop-out stays until no request is left. Its **×** hides it until the next request arrives;
 while requests wait, **Key vault requests (N)…** at the top of the tray menu, or a left click on
@@ -114,9 +125,33 @@ A lease belongs to one VM and one secret:
 
 Leases and pending scrubs are saved with the vault, so they survive a Companion restart.
 
+## Auto-approved secrets
+
+Some secrets are not worth an approval each time: a read-only token, a test account's password, a
+key an agent uses every day. Switch on **Auto-approve** for such a secret on the **Secrets** tab
+(the Companion confirms it in a dialog; switching it off applies at once). An agent can store a new
+secret auto-approved with `construct secret add --auto-approve`. It can also ask to switch an existing
+one on with `construct secret auto-approve <name> on`, which needs your approval like any other
+request. `auto-approve <name> off` needs none.
+
+For an auto-approved secret:
+
+- `get` returns the value at once, on every VM of yours, without a lease and without counting uses.
+  Such reads are not listed in the activity.
+- `request` grants it at once without a lease, and the activity lists that. A request for several
+  secrets asks you only about the others. If you deny those, the agent can still read the
+  auto-approved ones.
+- VMs are not scrubbed of it. A lease that was approved before you switched auto-approve on ends
+  without a scrub, and scrubs of it that were still waiting are dropped.
+- `construct secret list` shows it as `auto-approved`, and `status` lists it as readable.
+
+Switching auto-approve off does not scrub VMs that read the secret while it was on. Revoke or
+replace the value if that matters. The setting syncs with your hosts like the rest of the entry, so
+hosted VMs follow it too.
+
 ## Scrubbing a VM
 
-When a lease ends, the Companion scrubs that VM: a few seconds after a release or revocation, at
+When a lease ends, the Companion scrubs that VM (unless the secret is [auto-approved](#auto-approved-secrets)): a few seconds after a release or revocation, at
 once on expiry, and one minute after the last use (the command that used it may still be
 running). The VM must be online with the Companion connected. Otherwise the scrub waits, and
 the **Access** tab lists it. A failed scrub is retried five minutes later. If the same VM holds
@@ -298,7 +333,9 @@ The vault keeps secrets off a VM until you approve, limits how long and how ofte
 them, and removes the copies that agents usually leave behind. It does not make an approved
 secret safe from the agent that received it: agents run as root, so during a lease they can copy
 the value anywhere, including off the VM. Approve only what the task needs, prefer short leases
-and few uses, and revoke anything you did not expect.
+and few uses, and revoke anything you did not expect. An auto-approved secret has none of these
+limits: every agent on every one of your VMs can read it at any time, and copies stay where agents
+leave them. Keep the switch off for anything critical.
 
 - Requests come from inside the VM and are treated as untrusted. Names, sizes and every field
   are validated, and reasons and descriptions are shown as quoted text.
@@ -323,6 +360,11 @@ and few uses, and revoke anything you did not expect.
   Values, usernames, the vault key, device tokens and pairing links are never part of it, and
   nothing else of the vault is reachable there.
 
+Nothing inside a VM can switch a secret to auto-approve on its own: an agent's `auto-approve on`
+is a request you approve, and only a new secret it stores itself starts out auto-approved. Hosts
+keep a readable copy of the setting for their own VMs. Your PC follows only the copy sealed inside
+the encrypted entry, so a host without the vault key cannot auto-approve a secret for your local VMs.
+
 On hosted VMs, the host service holds the vault copy and answers the VM, so the host is trusted
 with the values in **always available** mode. In **locked** mode it can read them only while your
 Companion has unlocked that VM. Paired phones can approve requests and decide about files, but
@@ -343,11 +385,19 @@ T3 Code treats the files as untrusted input and only ever renders a link from th
 rename), answers each request, and writes the response back into the spool.
 
 ```
-requests/<id>.json    {"v":1,"id","ts","op","names":[…],"uses","ttl","all","replace","reason",
-                       "description","username","secret":<base64>,"deadline":<ms>,"source"}
+requests/<id>.json    {"v":1,"id","ts","op","names":[…],"uses","ttl","all","replace","autoApprove",
+                       "reason","description","username","secret":<base64>,"deadline":<ms>,"source"}
 responses/<id>.json   {"v":1,"id","status":"ok|denied|notFound|exists|invalid|error","message",
-                       "secret":<base64>,"username","lease":{"usesLeft","expiresAt"},"names":[…],"items":[…]}
+                       "secret":<base64>,"username","lease":{"usesLeft","expiresAt"},"names":[…],
+                       "auto":[…],"autoApprove":<bool>,"items":[…]}
 ```
+
+`op` is `list`, `status`, `request`, `get`, `release`, `add`, `delete` or `autoApprove`.
+`autoApprove` is a boolean: required for the `autoApprove` operation, optional for `add`
+(true stores the secret auto-approved). Items of `list` and `status` carry `autoApprove`.
+`auto` names the secrets of a `request` that were granted without a lease, and those of a
+`release` that are not scrubbed. `add` and `autoApprove` answer with the secret's setting in
+`autoApprove`. A `get` of an auto-approved secret without a lease answers with `"lease":null`.
 
 The Companion's local API (`http://127.0.0.1:<port>`, bearer token from `endpoint.json`) has three
 routes for pending approvals:
@@ -355,14 +405,22 @@ routes for pending approvals:
 ```
 GET  /v1/vault/approvals       200 {"approvals":[{"id","instance","vm","kind":"local"|"host","host":<slug>|null,
                                     "requestId":<the CLI's id>|null,"hostRequestId":<the host's id>|null,
-                                    "op","title","message","action","deny","names":[…],"createdAt":<ms>,"deadline":<ms>|null}]}
+                                    "op","title","message","action","deny","names":[…],"createdAt":<ms>,"deadline":<ms>|null,
+                                    "lead","secrets":[{"name","description","hasUsername"}],"facts":[{"label","value"}],
+                                    "note"|null,"reason","source"}]}
 POST /v1/vault/approvals/{id}  {"decision":"approve"|"deny"} -> 204 | 400 | 404 {"code":"not-found"}
                                | 409 {"code":"already-decided"} | 502 {"code":"host-failed"}
 POST /v1/vault/approvals/displayed  {"ids":[<id>,…]} -> 204 | 400 {"code":"invalidIds"} | 401
 ```
 
 `requestId` is the id of the pending note above, and `hostRequestId` the `request=` id of its
-`approveUrl`. Errors are RFC 7807 problems. `502` means the host did not take a hosted VM's answer;
+`approveUrl`. `message` is the whole request as plain text. `lead` … `source` are the same request in
+parts: `<vm> <lead>:` (`asks for access to`, `asks to read this secret once`, `wants to replace the
+value of`, `asks to delete this secret from the key vault`, `asks to auto-approve this secret`), the
+secrets, facts such as `Access` and `New description`, a note to notice, the agent's reason and who
+asked. They are `null` for an approval from a host that sends only its message.
+
+Errors are RFC 7807 problems. `502` means the host did not take a hosted VM's answer;
 the activity list has the reason.
 
 `displayed` takes 0 to 50 ids, each up to 128 characters of `A-Za-z0-9._~-`. T3 Code Desktop posts

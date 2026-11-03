@@ -3,7 +3,9 @@ namespace Construct.Companion.Core.Vault;
 
 // One stored secret. Origin is "user" or "agent:<instance>" (registered from a VM by `construct secret add`).
 // UpdatedAt (ms) and UpdatedBy ("pc:<install id>" or "vm:<vm>") decide every merge with a host (last writer wins).
-public sealed record VaultEntry(string Name, string Description, string Username, Secret Value, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, string Origin, string UpdatedBy = "")
+// AutoApprove: VMs read it without asking the user, and no VM is scrubbed of it.
+public sealed record VaultEntry(string Name, string Description, string Username, Secret Value, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, string Origin, string UpdatedBy = "",
+    bool AutoApprove = false)
 {
     public override string ToString() => $"VaultEntry {{ Name = {Name} }}";
 }
@@ -38,7 +40,7 @@ public sealed class VaultDocument
 }
 
 // What the window shows; values stay behind VaultService.Reveal.
-public sealed record VaultSecretView(string Name, string Description, string Username, string Origin, DateTimeOffset UpdatedAt, int ActiveLeases);
+public sealed record VaultSecretView(string Name, string Description, string Username, string Origin, DateTimeOffset UpdatedAt, int ActiveLeases, bool AutoApprove = false);
 public sealed record VaultLeaseView(string Id, string Instance, string Name, int? UsesLeft, DateTimeOffset ExpiresAt, string Reason, string Origin);
 // Host is empty for this PC's own events and the host name for events pulled from a host's vault.
 public sealed record VaultActivity(DateTimeOffset At, string Instance, string Text, bool Warning = false, string Host = "");
@@ -53,7 +55,7 @@ public sealed record VaultApprovalSource(string Instance, string Vm, string Op, 
 // CreatedAt is when the request was made (on the host, for a host approval), ArrivedAt when it was listed here.
 public sealed record VaultPendingApproval(string Id, string Instance, string Vm, string Kind, string? Host, string? RequestId, string? HostRequestId,
     string Op, string Title, string Message, string Action, string Deny, IReadOnlyList<string> Names, DateTimeOffset CreatedAt, DateTimeOffset? Deadline,
-    DateTimeOffset ArrivedAt, string HostName = "");
+    DateTimeOffset ArrivedAt, string HostName = "", ApprovalDetails? Details = null);
 // The outcome of an answer from another app: Failed = the host could not be told (the activity list says why).
 public enum VaultDecision { Decided, NotFound, AlreadyDecided, Failed }
 

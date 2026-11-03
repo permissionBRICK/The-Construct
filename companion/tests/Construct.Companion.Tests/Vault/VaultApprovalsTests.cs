@@ -207,6 +207,11 @@ public sealed class VaultApprovalsTests
         Assert.Equal(("dev", "this PC", "Key vault — one-time access", "Allow once", "Deny", "5 min left"), (local["vm"]!.GetValue<string>(), local["where"]!.GetValue<string>(),
             local["title"]!.GetValue<string>(), local["action"]!.GetValue<string>(), local["deny"]!.GetValue<string>(), local["left"]!.GetValue<string>()));
         Assert.Contains("“release”", local["message"]!.GetValue<string>()); Assert.Equal("github-token", local["names"]![0]!.GetValue<string>());
+        // In parts too, for the page to lead with the names; a host approval without them carries nulls.
+        Assert.Equal(("asks to read this secret once", "github-token", "release"), (local["lead"]!.GetValue<string>(), local["secrets"]![0]!["name"]!.GetValue<string>(),
+            local["reason"]!.GetValue<string>()));
+        Assert.Empty(local["facts"]!.AsArray()); Assert.Null(local["note"]);
+        Assert.Null(hosted["secrets"]); Assert.Null(hosted["lead"]);
         Assert.Equal(("on host.example", "10 min left"), (hosted["where"]!.GetValue<string>(), hosted["left"]!.GetValue<string>()));
         Assert.Equal(1000, local["armIn"]!.GetValue<long>());
 

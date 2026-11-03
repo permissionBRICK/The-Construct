@@ -126,13 +126,15 @@ public sealed class VaultApprovals(VaultService vault, IClock clock)
             {
                 if (!shownAt.TryGetValue(a.Id, out var shown)) shownAt[a.Id] = shown = now;
                 var armIn = shown + ArmDelay - now;
-                items.Add(new JsonObject
+                var item = new JsonObject
                 {
                     ["id"] = a.Id, ["vm"] = a.Vm, ["where"] = a.Kind == "host" ? "on " + (a.HostName.Length > 0 ? a.HostName : a.Host) : "this PC",
                     ["title"] = a.Title, ["message"] = a.Message, ["action"] = a.Action, ["deny"] = a.Deny,
                     ["names"] = new JsonArray(a.Names.Select(n => (JsonNode)n).ToArray()), ["left"] = Left(a.Deadline, now),
                     ["armIn"] = armIn > TimeSpan.Zero ? (long)Math.Ceiling(armIn.TotalMilliseconds) : 0
-                });
+                };
+                VaultSync.WriteDetails(item, a.Details);
+                items.Add(item);
             }
         }
         return new JsonObject { ["type"] = "approvals.state", ["items"] = items };

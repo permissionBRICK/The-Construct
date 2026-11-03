@@ -292,7 +292,7 @@ public sealed class VaultHosts : IAsyncDisposable
             string instance; lock (gate) instance = Of(host.Slug).Online.Values.FirstOrDefault(i => i.VmName == approval.Vm)?.Name ?? approval.Vm;
             var source = new VaultApprovalSource(instance, approval.Vm, approval.Op, approval.Names, null, host.Slug, host.Host, approval.Id, approval.CreatedAt);
             // Answered here (SendAsync has told the host), or its deadline passed (the host expires it as well).
-            await vault.ApproveHostAsync(source, new(approval.Title, approval.Message, approval.Action), approval.Deadline,
+            await vault.ApproveHostAsync(source, new(approval.Title, approval.Message, approval.Action, Details: approval.Details), approval.Deadline,
                 approved => SendAsync(host, approval, approved), wait.Token).ConfigureAwait(false);
             lock (gate) Of(host.Slug).Answered.Add(approval.Id);
         }

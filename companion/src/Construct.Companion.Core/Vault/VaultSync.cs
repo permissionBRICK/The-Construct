@@ -1,17 +1,19 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using Construct.Companion.Core.Abstractions;
 using static Construct.Companion.Core.Runtime.RuntimeJson;
 namespace Construct.Companion.Core.Vault;
 
 // One entry as hosts store and exchange it: values only inside the K-encrypted payload; a tombstone has none.
-public sealed record VaultWireEntry(string Name, string Description, bool HasUsername, string? Payload, long UpdatedAt, string UpdatedBy, bool Deleted)
+// AutoApprove is the host's readable copy for its own decisions; the payload seals the copy a PC trusts.
+public sealed record VaultWireEntry(string Name, string Description, bool HasUsername, string? Payload, long UpdatedAt, string UpdatedBy, bool Deleted, bool AutoApprove = false)
 {
     public override string ToString() => $"VaultWireEntry {{ Name = {Name}, UpdatedAt = {UpdatedAt} }}";
 }
 public sealed record VaultHostSnapshot(long Revision, string Mode, string? KeyCheck, IReadOnlyList<string> UnlockedVms, IReadOnlyList<VaultWireEntry> Entries);
 public sealed record VaultHostApproval(string Id, string Vm, string Op, string Title, string Message, string Action, DateTimeOffset? Deadline,
-    IReadOnlyList<string> Names, DateTimeOffset? CreatedAt);
+    IReadOnlyList<string> Names, DateTimeOffset? CreatedAt, ApprovalDetails? Details = null);
 public sealed record VaultHostFile(string Id, string Vm, string Path, IReadOnlyList<string> Names, string Type, long Size);
 public sealed record VaultHostLease(string Id, string Vm, string Name, int? UsesLeft, DateTimeOffset ExpiresAt, string Reason, string Origin);
 public sealed record VaultDevice(string Id, string Label, DateTimeOffset? CreatedAt, DateTimeOffset? LastUsedAt);
@@ -41,7 +43,7 @@ public static partial class VaultSync
             var deleted = node.True("deleted");
             var payload = deleted ? null : node.Str("payload");
             if (!deleted && string.IsNullOrEmpty(payload)) continue;
-            parsed.Add(new(name, Sanitize(node.Str("description"), VaultProtocol.MaxText), node.True("hasUsername"), payload, at, by, deleted));
+            parsed.Add(new(name, Sanitize(node.Str("description"), VaultProtocol.MaxText), node.True("hasUsername"), payload, at, by, deleted, !deleted && node.True("autoApprove")));
         }
         var check = root.Str("keyCheck");
         return new(Long(root["revision"]) ?? 0, Mode(root.Str("mode")), check.Length == 0 ? null : check,
@@ -51,7 +53,7 @@ public static partial class VaultSync
     public static JsonObject ToJson(VaultWireEntry entry)
     {
         var json = new JsonObject { ["name"] = entry.Name, ["description"] = entry.Description, ["hasUsername"] = entry.HasUsername };
-        if (!entry.Deleted) json["payload"] = entry.Payload;
+        if (!entry.Deleted) { json["payload"] = entry.Payload; json["autoApprove"] = entry.AutoApprove; }
         json["updatedAt"] = entry.UpdatedAt; json["updatedBy"] = entry.UpdatedBy; json["deleted"] = entry.Deleted;
         return json;
     }
@@ -60,7 +62,26 @@ public static partial class VaultSync
         .Where(a => IsId(a.Str("id")))
         .Select(a => new VaultHostApproval(a.Str("id"), Sanitize(a.Str("vm"), 64), Sanitize(a.Str("op"), 20), Sanitize(a.Str("title"), 120) is { Length: > 0 } t ? t : "Key vault — access request",
             Paragraphs(a.Str("message"), 4000), Sanitize(a.Str("action"), 40) is { Length: > 0 } act ? act : "Approve", Long(a["deadline"]) is { } d ? Time(d) : null,
-            a.Array("names").Select(Text).Where(VaultProtocol.IsValidName).Distinct(StringComparer.Ordinal).Take(20).ToArray(), Long(a["createdAt"]) is { } c ? Time(c) : null)).ToArray();
+            a.Array("names").Select(Text).Where(VaultProtocol.IsValidName).Distinct(StringComparer.Ordinal).Take(20).ToArray(), Long(a["createdAt"]) is { } c ? Time(c) : null,
+            ParseDetails(a))).ToArray();
+    // The prompt in parts, from a host that sends them; null (the page shows the message) without any secret.
+    public static ApprovalDetails? ParseDetails(JsonObject a)
+    {
+        var secrets = a.Array("secrets").OfType<JsonObject>().Where(s => VaultProtocol.IsValidName(s.Str("name"))).Take(20)
+            .Select(s => new ApprovalSecret(s.Str("name"), Sanitize(s.Str("description"), VaultProtocol.MaxText), s.True("hasUsername"))).ToArray();
+        if (secrets.Length == 0 || Sanitize(a.Str("lead"), 100) is not { Length: > 0 } lead) return null;
+        var facts = a.Array("facts").OfType<JsonObject>().Select(f => new ApprovalFact(Sanitize(f.Str("label"), 40), Sanitize(f.Str("value"), VaultProtocol.MaxText)))
+            .Where(f => f.Label.Length > 0 && f.Value.Length > 0).Take(10).ToArray();
+        return new(lead, secrets, facts, Paragraphs(a.Str("note"), 600) is { Length: > 0 } note ? note : null, Sanitize(a.Str("reason"), VaultProtocol.MaxText), Sanitize(a.Str("source"), 60));
+    }
+    // The same parts as the pop-out page and the local API carry them.
+    public static void WriteDetails(JsonObject target, ApprovalDetails? d)
+    {
+        target["lead"] = d?.Lead;
+        target["secrets"] = d is null ? null : new JsonArray(d.Secrets.Select(s => (JsonNode)new JsonObject { ["name"] = s.Name, ["description"] = s.Description, ["hasUsername"] = s.HasUsername }).ToArray());
+        target["facts"] = d is null ? null : new JsonArray(d.Facts.Select(f => (JsonNode)new JsonObject { ["label"] = f.Label, ["value"] = f.Value }).ToArray());
+        target["note"] = d?.Note; target["reason"] = d?.Reason; target["source"] = d?.Source;
+    }
     public static IReadOnlyList<VaultHostFile> ParseFiles(JsonNode? body) => (body as JsonObject).Array("files").OfType<JsonObject>()
         .Where(f => IsId(f.Str("id")) && f.Str("path").StartsWith('/'))
         .Select(f => new VaultHostFile(f.Str("id"), Sanitize(f.Str("vm"), 64), Sanitize(f.Str("path"), 1024), f.Array("names").Select(Text).Where(VaultProtocol.IsValidName).ToArray(),

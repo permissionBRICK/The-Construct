@@ -4,7 +4,7 @@ using Microsoft.Data.Sqlite;
 namespace Constructd.Sqlite;
 
 /// <summary>
-/// The hosted key vault's tables (M850). Entries and devices are columns; leases, cleanups, scrub jobs
+/// The hosted key vault's tables (M850, M851). Entries and devices are columns; leases, cleanups, scrub jobs
 /// and file decisions keep their record as JSON next to the owner/VM columns they are found by.
 /// </summary>
 public sealed class SqliteVaultStore(SqliteDatabase database) : IVaultStore
@@ -51,7 +51,7 @@ public sealed class SqliteVaultStore(SqliteDatabase database) : IVaultStore
         using var r = cmd.ExecuteReader(); var entries = new List<VaultEntry>();
         while (r.Read())
             entries.Add(new(r.GetString("name"), r.GetString("description"), r.GetBool("has_username"), r.GetStringOrNull("payload"),
-                r.GetLong("updated_at"), r.GetString("updated_by"), r.GetBool("deleted")));
+                r.GetLong("updated_at"), r.GetString("updated_by"), r.GetBool("deleted"), r.GetBool("auto_approve")));
         return Task.FromResult<IReadOnlyList<VaultEntry>>(entries);
     }
 
@@ -62,13 +62,14 @@ public sealed class SqliteVaultStore(SqliteDatabase database) : IVaultStore
         {
             using var cmd = c.CreateCommand(); cmd.Transaction = tx;
             cmd.CommandText = """
-                INSERT INTO vault_entries (owner,name,description,has_username,payload,updated_at,updated_by,deleted)
-                VALUES (@owner,@name,@description,@user,@payload,@at,@by,@deleted)
+                INSERT INTO vault_entries (owner,name,description,has_username,payload,updated_at,updated_by,deleted,auto_approve)
+                VALUES (@owner,@name,@description,@user,@payload,@at,@by,@deleted,@auto)
                 ON CONFLICT(owner,name) DO UPDATE SET description=@description,has_username=@user,payload=@payload,
-                updated_at=@at,updated_by=@by,deleted=@deleted
+                updated_at=@at,updated_by=@by,deleted=@deleted,auto_approve=@auto
                 """;
             cmd.With("@owner", owner).With("@name", e.Name).With("@description", e.Description).With("@user", e.HasUsername ? 1 : 0)
-                .With("@payload", e.Payload).With("@at", e.UpdatedAt).With("@by", e.UpdatedBy).With("@deleted", e.Deleted ? 1 : 0).ExecuteNonQuery();
+                .With("@payload", e.Payload).With("@at", e.UpdatedAt).With("@by", e.UpdatedBy).With("@deleted", e.Deleted ? 1 : 0)
+                .With("@auto", e.AutoApprove ? 1 : 0).ExecuteNonQuery();
         }
         using var bump = c.CreateCommand(); bump.Transaction = tx;
         bump.CommandText = """

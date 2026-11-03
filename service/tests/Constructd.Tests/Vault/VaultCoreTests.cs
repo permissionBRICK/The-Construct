@@ -131,4 +131,52 @@ public sealed class VaultCoreTests
         Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds(1730000000000), request.Deadline);
         Assert.DoesNotContain("secret", request.ToString(), StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void The_payload_seals_the_auto_approve_flag_and_older_payloads_still_open()
+    {
+        JsonObject Plain(string payload, string name, long at) => JsonNode.Parse(VaultCrypto.Open(Key, payload, VaultCrypto.EntryAad(name, at)))!.AsObject();
+        Assert.True(Plain(VaultCrypto.SealEntry(Key, "pushover", 5, "", "token-123", autoApprove: true), "pushover", 5)["autoApprove"]!.GetValue<bool>());
+        Assert.False(Plain(VaultCrypto.SealEntry(Key, "db", 5, "", "token-123"), "db", 5)["autoApprove"]!.GetValue<bool>());
+        // A payload from before auto-approve ({"username","secret"} only) opens as before.
+        var legacy = VaultCrypto.Seal(Key, Encoding.UTF8.GetBytes("""{"username":"u","secret":"old-value"}"""), VaultCrypto.EntryAad("db", 7));
+        Assert.Equal(("u", "old-value"), VaultCrypto.OpenEntry(Key, "db", 7, legacy));
+    }
+
+    [Theory]
+    [InlineData("""{"op":"autoApprove","names":["a"]}""", "Say on or off: construct secret auto-approve <name> on|off.")]
+    [InlineData("""{"op":"autoApprove","names":["a"],"autoApprove":"on"}""", "Say on or off: construct secret auto-approve <name> on|off.")]
+    [InlineData("""{"op":"autoApprove","names":["a","b"],"autoApprove":true}""", "Name exactly one secret.")]
+    public void The_auto_approve_operation_needs_one_name_and_a_flag(string json, string error) =>
+        Assert.Equal(error, VaultProtocol.ParseRequest(JsonNode.Parse(json)!.AsObject(), "host-id-123").Error);
+
+    [Fact]
+    public void The_auto_approve_flag_is_read_only_as_a_json_boolean()
+    {
+        VaultRequest Parse(string json) => VaultProtocol.ParseRequest(JsonNode.Parse(json)!.AsObject(), "host-id-123").Request!;
+        Assert.False(Parse("""{"op":"autoApprove","names":["a"],"autoApprove":false}""").AutoApprove);
+        Assert.True(Parse("""{"op":"add","names":["a"],"secret":"c2VjcmV0","description":"x","autoApprove":true}""").AutoApprove);
+        Assert.Null(Parse("""{"op":"add","names":["a"],"secret":"c2VjcmV0","description":"x","autoApprove":1}""").AutoApprove);
+        Assert.Null(Parse("""{"op":"get","names":["a"]}""").AutoApprove);
+    }
+
+    [Fact]
+    public void The_auto_approve_texts_match_the_companion()
+    {
+        var entry = new VaultEntry("pushover", "Pushover app token", false, "x", 1, "pc:a", false);
+        var request = new VaultRequest("id-12345678", "autoApprove", ["pushover"], null, null, false, false, "notify jobs", "", "", null, null, "root@dev", true);
+        var prompt = VaultPrompts.AutoApprove("dev", entry, request);
+        Assert.Equal("Key vault — auto-approve secret", prompt.Title);
+        Assert.Equal("The VM “dev” asks to auto-approve this secret:\n  • pushover — Pushover app token\n\n" +
+                     "Agents on all your VMs could then read it at any time without asking you, and no VM is scrubbed of it any more.\n" +
+                     "Reason given: “notify jobs”\nRequested by root@dev", prompt.Message);
+        Assert.Equal("Auto-approve", prompt.Action);
+
+        var replace = request with { Op = "add", Description = "Rotated" };
+        const string Turns = "\n\nIt also becomes auto-approved: agents on all your VMs read it without asking you, and no VM is scrubbed of it.";
+        Assert.Equal("The VM “dev” wants to replace the value of:\n  • pushover — Pushover app token\n\nNew description: Rotated" + Turns +
+                     "\nReason given: “notify jobs”\nRequested by root@dev", VaultPrompts.Replace("dev", entry, replace).Message);
+        Assert.DoesNotContain("auto-approved", VaultPrompts.Replace("dev", entry with { AutoApprove = true }, replace).Message);
+        Assert.DoesNotContain("auto-approved", VaultPrompts.Replace("dev", entry, replace with { AutoApprove = null }).Message);
+    }
 }

@@ -57,24 +57,46 @@ public static class VaultRules
     public static string Files(int count) => count == 1 ? "1 file" : $"{count} files";
 }
 
-/// <summary>What an approval prompt shows, rendered by the host (the Companion and the phone show it as is).</summary>
-public sealed record VaultPrompt(string Title, string Message, string Action);
+/// <summary>
+/// What an approval prompt shows, rendered by the host (the Companion and the phone show it as is): the whole
+/// request as plain text (<see cref="Message"/>, for older Companions) and the same request in parts, so a page
+/// can make the secrets stand out: "&lt;vm&gt; <see cref="Lead"/>:", the <see cref="Secrets"/>, the
+/// <see cref="Facts"/> ("Access", "New description") and a <see cref="Note"/> to notice. The agent's reason and
+/// source travel with the approval itself.
+/// </summary>
+public sealed record VaultPrompt(string Title, string Message, string Action, string Lead, IReadOnlyList<VaultPromptSecret> Secrets,
+    IReadOnlyList<VaultPromptFact> Facts, string? Note);
 
-/// <summary>The approval texts, one per operation that needs the user's answer.</summary>
+public sealed record VaultPromptSecret(string Name, string Description, bool HasUsername);
+
+public sealed record VaultPromptFact(string Label, string Value);
+
+/// <summary>The approval texts, one per operation that needs the user's answer (the Companion's, see VaultPromptText).</summary>
 public static class VaultPrompts
 {
     public static VaultPrompt Request(string vm, IReadOnlyList<VaultEntry> entries, VaultRequest request, TimeSpan ttl) =>
-        new("Key vault — access request",
-            $"The VM “{vm}” asks for access to:\n{string.Join('\n', entries.Select(VaultRules.Bullet))}\n\nAccess: {VaultRules.Access(request.Uses, ttl)}"
-            + VaultRules.Footer(request), "Approve");
+        Build("Key vault — access request", vm, "asks for access to", entries, [new("Access", VaultRules.Access(request.Uses, ttl))], null, request, "Approve");
 
     public static VaultPrompt Once(string vm, VaultEntry entry, VaultRequest request) =>
-        new("Key vault — one-time access", $"The VM “{vm}” asks to read this secret once:\n{VaultRules.Bullet(entry)}" + VaultRules.Footer(request), "Allow once");
+        Build("Key vault — one-time access", vm, "asks to read this secret once", [entry], [], null, request, "Allow once");
 
     public static VaultPrompt Replace(string vm, VaultEntry entry, VaultRequest request) =>
-        new("Key vault — replace secret",
-            $"The VM “{vm}” wants to replace the value of:\n{VaultRules.Bullet(entry)}\n\nNew description: {request.Description}" + VaultRules.Footer(request), "Replace");
+        Build("Key vault — replace secret", vm, "wants to replace the value of", [entry], [new("New description", request.Description)],
+            request.AutoApprove == true && !entry.AutoApprove ? "It also becomes auto-approved: agents on all your VMs read it without asking you, and no VM is scrubbed of it." : null,
+            request, "Replace");
 
     public static VaultPrompt Delete(string vm, VaultEntry entry, VaultRequest request) =>
-        new("Key vault — delete secret", $"The VM “{vm}” asks to delete this secret from the key vault:\n{VaultRules.Bullet(entry)}" + VaultRules.Footer(request), "Delete");
+        Build("Key vault — delete secret", vm, "asks to delete this secret from the key vault", [entry], [], null, request, "Delete");
+
+    public static VaultPrompt AutoApprove(string vm, VaultEntry entry, VaultRequest request) =>
+        Build("Key vault — auto-approve secret", vm, "asks to auto-approve this secret", [entry], [],
+            "Agents on all your VMs could then read it at any time without asking you, and no VM is scrubbed of it any more.", request, "Auto-approve");
+
+    private static VaultPrompt Build(string title, string vm, string lead, IReadOnlyList<VaultEntry> entries, IReadOnlyList<VaultPromptFact> facts, string? note,
+        VaultRequest request, string action) =>
+        new(title,
+            $"The VM “{vm}” {lead}:\n{string.Join('\n', entries.Select(VaultRules.Bullet))}"
+            + (facts.Count > 0 ? "\n\n" + string.Join('\n', facts.Select(f => $"{f.Label}: {f.Value}")) : "")
+            + (note is null ? "" : "\n\n" + note) + VaultRules.Footer(request),
+            action, lead, entries.Select(e => new VaultPromptSecret(e.Name, e.Description, e.HasUsername)).ToArray(), facts, note);
 }

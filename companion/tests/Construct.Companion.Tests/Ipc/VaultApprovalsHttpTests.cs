@@ -17,7 +17,8 @@ namespace Construct.Companion.Tests.Ipc;
 public sealed class VaultApprovalsHttpTests
 {
     private const string Value = "SENTINEL-value-8d2f", Username = "SENTINEL-user-41c7";
-    private static readonly string[] Fields = ["id", "instance", "vm", "kind", "host", "requestId", "hostRequestId", "op", "title", "message", "action", "deny", "names", "createdAt", "deadline"];
+    private static readonly string[] Fields = ["id", "instance", "vm", "kind", "host", "requestId", "hostRequestId", "op", "title", "message", "action", "deny", "names", "createdAt", "deadline",
+        "lead", "secrets", "facts", "note", "reason", "source"];
 
     // The whole Host starts here: allow it more time than the runtime's own Eventually.
     private static async Task Eventually(Func<bool> condition)
@@ -60,6 +61,10 @@ public sealed class VaultApprovalsHttpTests
         Assert.Null(item["host"]); Assert.Null(item["hostRequestId"]);
         Assert.Equal(("Key vault — one-time access", "Allow once", "Deny"), (item["title"]!.GetValue<string>(), item["action"]!.GetValue<string>(), item["deny"]!.GetValue<string>()));
         Assert.Contains("“release”", item["message"]!.GetValue<string>()); Assert.Equal("github-token", Assert.Single(item["names"]!.AsArray())!.GetValue<string>());
+        var secret = Assert.Single(item["secrets"]!.AsArray())!;
+        Assert.Equal(("asks to read this secret once", "github-token", "GitHub token for CI", true, "release", "root@agent-vm"), (item["lead"]!.GetValue<string>(),
+            secret["name"]!.GetValue<string>(), secret["description"]!.GetValue<string>(), secret["hasUsername"]!.GetValue<bool>(), item["reason"]!.GetValue<string>(), item["source"]!.GetValue<string>()));
+        Assert.Empty(item["facts"]!.AsArray()); Assert.Null(item["note"]);
         Assert.True(item["createdAt"]!.GetValue<long>() > 0); Assert.True(item["deadline"]!.GetValue<long>() > item["createdAt"]!.GetValue<long>());
 
         var id = item["id"]!.GetValue<string>();

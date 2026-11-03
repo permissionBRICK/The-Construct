@@ -8,7 +8,8 @@ namespace Constructd.Core.Logic;
 /// <summary>
 /// The vault's AES-256-GCM formats (docs/plans/key-vault-hosted.md, "Key material"): every sealed value
 /// is <c>base64(nonce[12] || tag[16] || ciphertext)</c>. Entry payloads use the AAD
-/// <c>entry:&lt;name&gt;:&lt;updatedAt&gt;</c> and the plaintext <c>{"username":"…","secret":"…"}</c>;
+/// <c>entry:&lt;name&gt;:&lt;updatedAt&gt;</c> and the plaintext <c>{"username":"…","secret":"…","autoApprove":bool}</c>
+/// (payloads sealed before auto-approve existed have no <c>autoApprove</c>: false);
 /// the key check is <c>"construct-vault-check"</c> under the AAD <c>check</c>.
 /// </summary>
 public static class VaultCrypto
@@ -57,9 +58,9 @@ public static class VaultCrypto
         catch (CryptographicException) { return false; }
     }
 
-    public static string SealEntry(ReadOnlySpan<byte> key, string name, long updatedAt, string username, string secret)
+    public static string SealEntry(ReadOnlySpan<byte> key, string name, long updatedAt, string username, string secret, bool autoApprove = false)
     {
-        var plain = JsonSerializer.SerializeToUtf8Bytes(new EntryPlaintext(username, secret), EntryJson);
+        var plain = JsonSerializer.SerializeToUtf8Bytes(new EntryPlaintext(username, secret, autoApprove), EntryJson);
         try { return Seal(key, plain, EntryAad(name, updatedAt)); }
         finally { CryptographicOperations.ZeroMemory(plain); }
     }
@@ -95,6 +96,6 @@ public static class VaultCrypto
         if (key.Length != KeyBytes) throw new CryptographicException("The vault key must be 32 bytes.");
     }
 
-    private sealed record EntryPlaintext(string? Username, string? Secret);
+    private sealed record EntryPlaintext(string? Username, string? Secret, bool AutoApprove = false);
     private static readonly JsonSerializerOptions EntryJson = new(JsonSerializerDefaults.Web);
 }

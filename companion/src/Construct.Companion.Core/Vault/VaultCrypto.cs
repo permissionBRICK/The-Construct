@@ -47,14 +47,17 @@ public static class VaultCrypto
         return plain is not null && plain.AsSpan().SequenceEqual(Encoding.UTF8.GetBytes(CheckText));
     }
 
-    // Plaintext {"username","secret"}; the buffer holding the JSON is cleared after use.
-    public static string SealEntry(ReadOnlySpan<byte> key, string name, long updatedAt, string username, Secret value)
+    // Plaintext {"username","secret","autoApprove"}; the buffer holding the JSON is cleared after use. The host
+    // keeps its own readable copy of autoApprove (it decides requests without K); a PC trusts only the sealed one,
+    // so a host without K cannot switch a secret to auto-approve for this PC's VMs.
+    public static string SealEntry(ReadOnlySpan<byte> key, string name, long updatedAt, string username, Secret value, bool autoApprove = false)
     {
-        var plain = Encoding.UTF8.GetBytes(new JsonObject { ["username"] = username, ["secret"] = value.Reveal() }.ToJsonString());
+        var plain = Encoding.UTF8.GetBytes(new JsonObject { ["username"] = username, ["secret"] = value.Reveal(), ["autoApprove"] = autoApprove }.ToJsonString());
         try { return Encrypt(key, plain, EntryAad(name, updatedAt)); }
         finally { CryptographicOperations.ZeroMemory(plain); }
     }
-    public static (string Username, Secret Value)? OpenEntry(ReadOnlySpan<byte> key, string name, long updatedAt, string? payload)
+    // A payload sealed before auto-approve existed has no autoApprove: false.
+    public static (string Username, Secret Value, bool AutoApprove)? OpenEntry(ReadOnlySpan<byte> key, string name, long updatedAt, string? payload)
     {
         var plain = Decrypt(key, payload, EntryAad(name, updatedAt));
         if (plain is null) return null;
@@ -62,7 +65,8 @@ public static class VaultCrypto
         {
             if (Runtime.RuntimeJson.Parse(new UTF8Encoding(false, true).GetString(plain)) is not { } json
                 || json["secret"] is not JsonValue s || !s.TryGetValue<string>(out var secret) || secret.Length == 0) return null;
-            return (json["username"] is JsonValue u && u.TryGetValue<string>(out var username) ? username : "", new Secret(secret));
+            return (json["username"] is JsonValue u && u.TryGetValue<string>(out var username) ? username : "", new Secret(secret),
+                json["autoApprove"] is JsonValue a && a.TryGetValue<bool>(out var auto) && auto);
         }
         catch (DecoderFallbackException) { return null; }
         finally { CryptographicOperations.ZeroMemory(plain); }

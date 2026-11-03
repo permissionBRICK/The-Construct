@@ -68,22 +68,26 @@ When you need a decision from the user, ask in this chat as usual.
 ## Credentials from the user's key vault
 
 Tokens, passwords and keys the user keeps on their PC are available through
-`construct secret` (`list`, `request`, `get`, `release`, `add`, `delete`; see
-`construct secret --help`). Never ask for them in chat or search for them on disk.
-Each grant needs the user's approval, so request everything a task needs **at the
-start, in one call**. The user can then approve once and leave the task running:
+`construct secret` (`list`, `request`, `get`, `release`, `add`, `delete`,
+`auto-approve`; see `construct secret --help`). Never ask for them in chat or
+search for them on disk. Grants need the user's approval, so request everything a
+task needs **at the start, in one call**. The user can then approve once and leave
+the task running:
 
     construct secret request prod-deploy-key db-admin --for 2h --reason "deploy the release"
 
-Use values inline (`$(construct secret get db-admin)`), never write them into
-files, and run `construct secret release --all` when done.
+Secrets that `construct secret list` shows as auto-approved need no request: get
+them whenever you need them. Use values inline (`$(construct secret get db-admin)`),
+never write them into files, and run `construct secret release --all` when done.
 
-Only credentials agents may use solely with the user's explicit permission
-(admin logins, full-access deploy keys to critical systems) belong in the vault.
-Anything needed for autonomous or scheduled work, or used regularly and
-non-critical, goes in `~/.secrets/` or the tool's own credential store. Store
-only what future agents will need again, not keys you generate just for another
-system. Git tokens, and anything unclear, are the user's call: follow the
+Credentials agents may use only with the user's explicit permission (admin
+logins, full-access deploy keys to critical systems) belong in the vault.
+Non-critical credentials agents use regularly (read-only or test tokens) go in
+the vault too, added with `construct secret add --auto-approve`, so agents read
+them without asking. Anything unattended or scheduled work needs goes in
+`~/.secrets/` or the tool's own credential store: the vault answers only while
+the user's Companion (or the VM's host service) is reachable. Store only what
+future agents will need again, not keys you generate just for another system. Git tokens, and anything unclear, are the user's call: follow the
 existing setup, or ask once and record the answer in
 `~/construct-custom-system-prompt.md`.
 

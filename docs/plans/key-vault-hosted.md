@@ -41,13 +41,17 @@ approve button or pairing token that lives on T3's origin can be forged or read 
 Entry payloads are `AES-256-GCM(K)`, encoded as `base64(nonce[12] || tag[16] || ciphertext)`.
 The AAD is `"entry:<name>:<updatedAt>"` (no owner, so one payload serves every host of the
 user) and the plaintext is the UTF-8 JSON
-`{"username":"…","secret":"…"}`. Names, descriptions and `hasUsername` are stored in clear: agents
-may read them without approval, and the host needs them to render approval prompts while locked.
+`{"username":"…","secret":"…","autoApprove":false}` (payloads sealed before auto-approve existed
+lack `autoApprove`: false). Names, descriptions, `hasUsername` and `autoApprove` are stored in clear:
+agents may read them without approval, and the host needs them to render approval prompts and to
+answer auto-approved requests while locked. A PC takes `autoApprove` only from the sealed payload,
+so a host without `K` cannot switch a secret to auto-approve for the PC's own VMs.
 
 ## Vault entries and sync
 
-An entry is `{name, description, hasUsername, payload, updatedAt (ms), updatedBy, deleted}`. A
-deleted entry is a tombstone without a payload. Tombstones are kept for 30 days.
+An entry is `{name, description, hasUsername, autoApprove, payload, updatedAt (ms), updatedBy, deleted}`.
+A deleted entry is a tombstone without a payload. Tombstones are kept for 30 days. Switching
+`autoApprove` is an edit like any other: a new `updatedAt` and a re-sealed payload.
 
 The merge rule is the same on every side: for each name, the entry with the larger `updatedAt`
 wins; on a tie, the lexically larger `updatedBy` wins. The Companion syncs with each enrolled host
@@ -90,7 +94,7 @@ leases, sync or pair other devices.
 
 | Route | Body / reply |
 |---|---|
-| `POST /vms/{name}/vault/requests` | The request document of the guest spool contract (`op`, `names`, `uses`, `ttl`, `all`, `replace`, `reason`, `description`, `username`, `secret` base64, `deadline`). Ops that need no user answer reply `200` with the response document at once. Otherwise `202 {id}`. |
+| `POST /vms/{name}/vault/requests` | The request document of the guest spool contract (`op`, `names`, `uses`, `ttl`, `all`, `replace`, `autoApprove`, `reason`, `description`, `username`, `secret` base64, `deadline`). Ops that need no user answer reply `200` with the response document at once. Otherwise `202 {id}`. |
 | `GET /vms/{name}/vault/requests/{id}?wait=25` | Long poll, at most 25 s: `200` + response document when decided, `204` while still pending, `404` unknown or expired. |
 | `GET /vms/{name}/vault/scrubs` | Due scrub jobs for this VM: `{jobs:[{id, step:"scan"\|"apply", patterns:[{index, pattern(base64)}], names:[…], files:[{path(base64), action}]}]}` |
 | `POST /vms/{name}/vault/scrubs/{id}` | `{step:"scan", hits:[{path(base64), indexes:[…], size, type}], complete:true}` or `{step:"apply", results:[{path(base64), status, count, detail}]}` |
@@ -106,15 +110,18 @@ job is due for that VM. The guest then runs the scrub once, in the background.
 ```jsonc
 // GET /vault/entries
 {"revision":12,"mode":"available","keyCheck":"<base64>|null","unlockedVms":["dev"],
- "entries":[{"name":"github-token","description":"…","hasUsername":false,"payload":"<base64>",
+ "entries":[{"name":"github-token","description":"…","hasUsername":false,"autoApprove":false,"payload":"<base64>",
              "updatedAt":1730000000000,"updatedBy":"pc:3f…","deleted":false}]}
 // PUT /vault/entries  {"entries":[…same shape…]}  -> {"revision":13,"applied":2}
 // PUT /vault/settings {"mode":"locked","keyCheck":"<base64>"}            -> 204
 //                     {"mode":"available","key":"<base64 K>","keyCheck":"…"} -> 204
 // GET /vault/approvals
-{"approvals":[{"id":"…","vm":"dev","op":"request|get|add|delete","title":"…","message":"…",
+{"approvals":[{"id":"…","vm":"dev","op":"request|get|add|delete|autoApprove","title":"…","message":"…",
                "action":"Approve","names":["github-token"],"uses":3,"ttlSeconds":3600,
-               "reason":"…","source":"root@dev","createdAt":ms,"deadline":ms}]}
+               "reason":"…","source":"root@dev","createdAt":ms,"deadline":ms,
+               // the prompt in parts (message is the same as plain text):
+               "lead":"asks for access to","secrets":[{"name":"github-token","description":"…","hasUsername":false}],
+               "facts":[{"label":"Access","value":"3 uses, for 1 h"}],"note":null}]}
 // POST /vault/approvals/{id} {"decision":"approve"}  -> 204 | 409 {"code":"already-decided"} | 404
 // GET /vault/leases
 {"leases":[{"id":"…","vm":"dev","name":"…","usesLeft":2|null,"expiresAt":ms,"reason":"…","origin":"approved|once|added"}]}
@@ -145,7 +152,10 @@ vault (see the user guide), with these differences:
   `locked`: "The key vault is locked for this VM: start or connect it from your PC's Construct
   Companion." `list` and `status` work while locked.
 - `add` needs `K` as well, to encrypt the payload. `delete` needs approval but no `K` (it writes a
-  tombstone).
+  tombstone). `autoApprove` re-seals the payload, so it needs `K` too; switching on needs approval.
+- Auto-approved secrets: `request` grants them at once without a lease (no `K` needed), a `get`
+  without a lease reads them at once (needs `K`), and no lease end queues a scrub of them; due
+  cleanups of a secret that is auto-approved by then are dropped.
 - A scrub job keeps its own copy of the payload, so deleting or changing an entry cannot lose
   what has to be searched for. The patterns are computed when the job is delivered, which needs
   `K`: a locked VM's scrub waits until it is unlocked again.

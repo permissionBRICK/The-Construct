@@ -487,6 +487,73 @@ ok "delete: names/reason" test "$(req -c '[.names, .reason]')" = '[["old-token"]
 ok "delete: the deadline is 600 s out by default" deadline_after 600000
 ok "delete: confirmation" grep -qx 'Deleted old-token.' "${out}"
 
+# ── auto-approve ─────────────────────────────────────────────────────────────
+
+answer '{v:1, id:.id, status:"ok", items:[{name:"npm-read", description:"read-only", hasUsername:false, autoApprove:true, lease:null},
+  {name:"plain", description:"needs approval", hasUsername:false, autoApprove:false, lease:null}]}'
+run list
+ok "auto list: an auto-approved secret reads 'auto-approved'" grep -Eqx 'npm-read +auto-approved +read-only' "${out}"
+ok "auto list: the others still read 'none'" grep -Eqx 'plain +none +needs approval' "${out}"
+
+answer '{v:1, id:.id, status:"ok", names:.names, auto:[.names[0]], lease:{usesLeft:null, expiresAt:(.ts + 3600000)}}'
+run request npm-read plain
+ok "auto request: exits 0" test "${rc}" = 0
+ok "auto request: the leased one is approved" grep -qx "Approved: plain — until $(hm "$(( $(req .ts) + 3600000 ))")" "${out}"
+ok "auto request: the auto-approved one says so" grep -q '^Auto-approved: npm-read — no lease needed' "${out}"
+ok "auto request: nothing on stderr" test ! -s "${err}"
+answer '{v:1, id:.id, status:"ok", names:.names, auto:.names}'
+run request npm-read
+ok "auto request: all auto-approved prints no Approved line" sh -c "! grep -q '^Approved:' '${out}' && grep -q '^Auto-approved: npm-read' '${out}'"
+
+answer '{v:1, id:.id, status:"ok", names:.names, auto:["npm-read"]}'
+run release npm-read plain
+ok "auto release: prints what ended" grep -qx 'Released: npm-read, plain' "${out}"
+ok "auto release: only the others are scrubbed" sh -c "grep -q 'scrubs plain from this VM' '${err}' && ! grep -q 'npm-read' '${err}'"
+answer '{v:1, id:.id, status:"ok", names:.names, auto:.names}'
+run release npm-read
+ok "auto release: no scrub notice when nothing is scrubbed" test ! -s "${err}"
+
+answer '{v:1, id:.id, status:"ok", names:.names, autoApprove:true}'
+printf 'npm_readonly_value\n' | run add npm-read --description "read-only npm" --auto-approve
+ok "add --auto-approve: exits 0" test "${rc}" = 0
+ok "add --auto-approve: sends autoApprove true" test "$(req .autoApprove)" = true
+ok "add --auto-approve: a fresh secret needs no approval (60 s)" deadline_after 60000
+ok "add --auto-approve: says it is auto-approved" grep -q '^Stored npm-read in the key vault, auto-approved' "${out}"
+answer_ok
+printf 'npm_readonly_value\n' | run add npm-read --description "read-only npm" --auto-approve
+ok "add --auto-approve: an answer without the setting warns" grep -q "npm-read was stored without auto-approve" "${err}"
+ok "add --auto-approve: ... and still reports the lease" grep -q '^Stored npm-read in the key vault; this VM holds it' "${out}"
+printf 'npm_readonly_value\n' | run add npm-read --description "read-only npm"
+ok "add: without --auto-approve no autoApprove field is sent" test "$(req 'has("autoApprove")')" = false
+run list
+ok "list: no autoApprove field" test "$(req 'has("autoApprove")')" = false
+
+answer '{v:1, id:.id, status:"ok", names:.names, autoApprove:.autoApprove}'
+run auto-approve deploy-key on --reason "used daily"
+ok "auto-approve on: exits 0" test "${rc}" = 0
+ok "auto-approve on: op/names/autoApprove/reason" \
+  test "$(req -c '[.op, .names, .autoApprove, .reason]')" = '["autoApprove",["deploy-key"],true,"used daily"]'
+ok "auto-approve on: waits for the user (600 s)" deadline_after 600000
+ok "auto-approve on: confirmation" grep -q '^deploy-key is auto-approved' "${out}"
+run auto-approve deploy-key OFF
+ok "auto-approve off: sends autoApprove false" test "$(req -c '[.op, .autoApprove]')" = '["autoApprove",false]'
+ok "auto-approve off: needs no approval (60 s)" deadline_after 60000
+ok "auto-approve off: confirmation" grep -qx "deploy-key needs the user's approval again." "${out}"
+run auto-approve deploy-key maybe
+ok "auto-approve: on or off only" sh -c "test '${rc}' = 1 && grep -q 'say on or off' '${err}'"
+run auto-approve deploy-key
+ok "auto-approve: needs on or off" test "${rc}" = 1
+run auto-approve a b on
+ok "auto-approve: one name only" test "${rc}" = 1
+run auto-approve deploy-key on --uses 3
+ok "auto-approve: other options are refused by the command's name" grep -q "\-\-uses does not apply to 'auto-approve'" "${err}"
+run request a --auto-approve
+ok "--auto-approve belongs to add only" test "${rc}" = 1
+ok "auto-approve: refusals publish nothing" not_published
+answer '{v:1, id:.id, status:"denied", message:"The user denied the request."}'
+run auto-approve deploy-key on
+ok "auto-approve on: a denial exits 7" test "${rc}" = 7
+
 # ── no Companion / no answer ─────────────────────────────────────────────────
 
 touch "${ctl}/off"
@@ -529,7 +596,7 @@ bash "${CLI}" secrets release a >/dev/null 2>&1
 ok "'construct secrets' is an alias" test "$(req .op)" = release
 ok "--help exits 0" sh -c "bash '${CLI}' secret --help >/dev/null"
 ok "--help covers every command" \
-  sh -c "bash '${CLI}' secret --help | grep -q 'relinquish' && bash '${CLI}' secret --help | grep -q 'password-stdin'"
+  sh -c "bash '${CLI}' secret --help | grep -q 'relinquish' && bash '${CLI}' secret --help | grep -q 'password-stdin' && bash '${CLI}' secret --help | grep -q 'auto-approve <name> on|off'"
 ok "-h after a command shows help too" sh -c "bash '${CLI}' secret get -h | grep -q '^Usage: construct secret'"
 ok "no command exits 1" sh -c "! bash '${CLI}' secret >/dev/null 2>&1"
 ok "an unknown command exits 1" sh -c "! bash '${CLI}' secret frobnicate >/dev/null 2>&1"

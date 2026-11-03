@@ -166,6 +166,11 @@
         user.appendChild(document.createTextNode(s.username));
         line.appendChild(user);
       }
+      if (s.autoApprove) {
+        const auto = el("span", "tag", "auto-approved");
+        auto.title = "Agents read it without asking you, and VMs are not scrubbed of it";
+        line.appendChild(auto);
+      }
       if (s.holders > 0) {
         const held = el("span", "tag upd", "held by " + plural(s.holders, "VM", "VMs"));
         held.title = "VMs that may read it now: see the Access tab";
@@ -182,9 +187,33 @@
       if (s.username) actions.appendChild(button("Copy username", "ghost", "copyUsername", { name: s.name }, s.name));
       actions.appendChild(button("Edit…", "ghost", "edit", { name: s.name }, s.name));
       actions.appendChild(button("Delete", "ghost v-danger", "delete", { name: s.name }, s.name, "Delete it; VMs that hold it lose access and are scrubbed of it"));
+      // Last, so the switches line up whatever buttons a row has.
+      actions.appendChild(autoSwitch(s));
       row.appendChild(actions);
       host.appendChild(row);
     });
+  }
+
+  // Auto-approve: agents read the secret without asking, and VMs are not scrubbed of it. Switching it on
+  // is confirmed in a native dialog, so the switch only shows the new state once the vault has it.
+  function autoSwitch(s) {
+    const wrap = el("div", "v-auto");
+    wrap.appendChild(el("span", "v-auto-label", "Auto-approve"));
+    const sw = el("div", "switch sm");
+    sw.appendChild(el("span", "knob"));
+    const waiting = busy.has("setAutoApprove:" + s.name), off = state.unavailable != null;
+    sw.setAttribute("role", "switch");
+    sw.setAttribute("aria-checked", String(!!s.autoApprove));
+    sw.setAttribute("aria-label", "Auto-approve " + s.name);
+    sw.title = s.autoApprove ? "Agents read it without asking you, and VMs are not scrubbed of it. Switch off to require your approval again."
+      : "Let agents read it without asking you. VMs are then not scrubbed of it: for less sensitive secrets only.";
+    sw.tabIndex = off ? -1 : 0;
+    sw.classList.toggle("busy", waiting || off);
+    const flip = () => { if (!waiting && !off) request("setAutoApprove", { name: s.name, on: !s.autoApprove }, s.name); };
+    sw.addEventListener("click", flip);
+    sw.addEventListener("keydown", (e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); flip(); } });
+    wrap.appendChild(sw);
+    return wrap;
   }
 
   const ORIGIN = { approved: "approved", once: "one-time", added: "added by the VM" };

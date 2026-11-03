@@ -53,7 +53,7 @@ public static class VaultEndpoints
         return api;
     }
 
-    public sealed record EntryDto(string? Name, string? Description, bool? HasUsername, string? Payload, long? UpdatedAt, string? UpdatedBy, bool? Deleted);
+    public sealed record EntryDto(string? Name, string? Description, bool? HasUsername, string? Payload, long? UpdatedAt, string? UpdatedBy, bool? Deleted, bool? AutoApprove = null);
     public sealed record EntriesRequest(List<EntryDto?>? Entries);
     public sealed record SettingsRequest(string? Mode, string? Key, string? KeyCheck);
     public sealed record UnlockRequest(string? Key);
@@ -85,7 +85,7 @@ public static class VaultEndpoints
         {
             revision = view.Revision, mode = view.Mode, keyCheck = view.KeyCheck, unlockedVms = view.UnlockedVms,
             entries = view.Entries.Select(e => new { name = e.Name, description = e.Description, hasUsername = e.HasUsername, payload = e.Payload,
-                updatedAt = e.UpdatedAt, updatedBy = e.UpdatedBy, deleted = e.Deleted }),
+                updatedAt = e.UpdatedAt, updatedBy = e.UpdatedBy, deleted = e.Deleted, autoApprove = e.AutoApprove }),
             devices = view.Devices.Select(Device),
         });
     }
@@ -96,7 +96,7 @@ public static class VaultEndpoints
         if (request?.Entries is not { } list) return CodedProblems.Validation("entries", "Expected {entries:[…]}.");
         var entries = list.Select((e, i) => e is null
             ? throw new VaultProblemException(400, "validation", "Expected an entry object.", $"entries[{i}]")
-            : new VaultEntry(e.Name ?? "", e.Description ?? "", e.HasUsername ?? false, e.Payload, e.UpdatedAt ?? 0, e.UpdatedBy ?? "", e.Deleted ?? false)).ToArray();
+            : new VaultEntry(e.Name ?? "", e.Description ?? "", e.HasUsername ?? false, e.Payload, e.UpdatedAt ?? 0, e.UpdatedBy ?? "", e.Deleted ?? false, e.AutoApprove ?? false)).ToArray();
         var (revision, applied) = await vault.PutEntriesAsync(Owner(http), entries, ct).ConfigureAwait(false);
         http.SetAuditDetail($"entries={entries.Length}, applied={applied}, revision={revision}");
         return Results.Ok(new { revision, applied });

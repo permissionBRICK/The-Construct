@@ -30,8 +30,9 @@
 #   construct secret get     <name> [--username | --json] [--reason TEXT]
 #   construct secret release <name>... | --all
 #   construct secret add     <name> --description TEXT [--username USER] [--for DURATION]
-#                            [--file PATH] [--replace]
+#                            [--file PATH] [--replace] [--auto-approve]
 #   construct secret delete  <name> [--reason TEXT]
+#   construct secret auto-approve <name> on|off [--reason TEXT]
 #   (every command also takes --wait SEC; aliases: ls, relinquish, rm)
 #
 # Exit codes (documented in bin/construct's header too):
@@ -103,12 +104,14 @@ Usage: construct secret list   [--json]
        construct secret get     <name> [--username | --json] [--reason TEXT]
        construct secret release <name>... | --all
        construct secret add     <name> --description TEXT [--username USER]
-                                [--for DURATION] [--file PATH] [--replace]
+                                [--for DURATION] [--file PATH] [--replace] [--auto-approve]
        construct secret delete  <name> [--reason TEXT]
+       construct secret auto-approve <name> on|off [--reason TEXT]
 Every command also takes --wait SEC.
 
 The key vault lives in the Construct Companion on the user's PC. This VM sees a
-secret only while it holds a lease the user approved in a Companion popup.
+secret only while it holds a lease the user approved in a Companion popup, or
+when the secret is auto-approved: then every get is answered without asking.
 On a VM that runs on a host service, requests go to the host service instead,
 and the user approves them from their PC or a paired phone.
 
@@ -127,6 +130,9 @@ Commands:
                      trailing newline is dropped) or from --file (stored
                      byte-exact), never from an argument. This VM gets a lease.
   delete, rm         Ask the user to delete a secret from the vault.
+  auto-approve       on: ask the user to auto-approve a secret (agents on all
+                     their VMs then read it without asking, and no VM is
+                     scrubbed of it). off: require approval again, at once.
 
 Options:
   --uses N             request: the lease ends after N gets (1-1000)
@@ -142,6 +148,8 @@ Options:
   --username USER      add: a username stored with the secret
   --file PATH          add: read the value from PATH ("-" = stdin, byte-exact)
   --replace            add: overwrite an existing secret (the user must approve)
+  --auto-approve       add: store it auto-approved (with --replace the user's
+                       approval covers this too); for less sensitive secrets only
   --all                release: every lease this VM holds
 
 How to use it (agents):
@@ -157,6 +165,11 @@ How to use it (agents):
   * Release when done:  construct secret release --all
     The Companion then scrubs the values from this VM: agent logs are redacted
     automatically, any other file that contains one needs the user's decision.
+  * Secrets that `list` shows as "auto-approved" need no request: get them
+    whenever needed. They are never scrubbed.
+  * Storing a credential that is not critical (a read-only or test token)?
+    Add it with --auto-approve, so later tasks can use it without asking the
+    user. Critical credentials (admin logins, full-access deploy keys) never.
 
 Exit codes:
   0 ok · 1 usage or local error · 6 no Companion connected (nobody was asked)
@@ -313,7 +326,7 @@ ensure_spool() {
 # jq variables, hence the single quotes.
 # shellcheck disable=SC2016
 REQUEST_JQ='{v: 1, id: $id, ts: $ts, op: $op, names: $ARGS.positional,
-  uses: $uses, ttl: $ttl, all: $all, replace: $replace,
+  uses: $uses, ttl: $ttl, all: $all, replace: $replace, autoApprove: $autoApprove,
   reason: $reason, description: $description, username: $username,
   deadline: $deadline, source: $source}'
 DROP_EMPTY_JQ='with_entries(select(.value != null and .value != ""))'
@@ -359,7 +372,7 @@ write_request() {
 
   jq_args=(--arg id "${REQ_ID}" --argjson ts "${REQ_TS}" --arg op "${op}"
     --argjson uses "${R_USES:-null}" --argjson ttl "${R_TTL:-null}"
-    --argjson all "${R_ALL}" --argjson replace "${R_REPLACE}"
+    --argjson all "${R_ALL}" --argjson replace "${R_REPLACE}" --argjson autoApprove "${R_AUTO:-null}"
     --arg reason "${R_REASON}" --arg description "${R_DESCRIPTION}" --arg username "${R_USERNAME}"
     --argjson deadline "${REQ_DEADLINE}" --arg source "${source}")
 
@@ -669,7 +682,7 @@ op_items() {
   local -a rows=() names=() access=() descs=()
   local row name has uses expires desc a w_name=4 w_access=6 i
   mapfile -t rows < <(jq -r '(.items // [])[]
-    | [(.name // ""), (if .lease == null then "-" else "+" end),
+    | [(.name // ""), (if .lease != null then "+" elif .autoApprove == true then "a" else "-" end),
        (.lease.usesLeft // ""), (.lease.expiresAt // ""), (.description // "")]
     | map(tostring | gsub("[[:cntrl:]]"; " ")) | join("\u001f")' "${RESP}" 2>/dev/null || true)
   if (( ${#rows[@]} == 0 )); then printf '%s\n' "${empty_text}"; return 0; fi
@@ -678,6 +691,8 @@ op_items() {
     if [[ "${has}" == "+" ]]; then
       a="$(lease_text "${uses}" "${expires}" left)"
       a="${a:-granted}"
+    elif [[ "${has}" == "a" ]]; then
+      a="auto-approved"
     else
       a="none"
     fi
@@ -692,24 +707,30 @@ op_items() {
   done
 }
 
+# Is $1 one of the remaining arguments?
+in_list() { local x="$1" y; shift; for y in "$@"; do [[ "${y}" == "${x}" ]] && return 0; done; return 1; }
+
 op_request() {
   round_trip request "${OPT_WAIT:-600}"
-  local -a approved=() missing=()
-  local n a found message lease
+  local -a approved=() auto=() leased=() missing=()
+  local n message lease
   mapfile -t approved < <(resp_list '.names')
+  mapfile -t auto < <(resp_list '.auto')
   if (( ${#approved[@]} == 0 )); then
     message="$(resp_str '.message')"
     fail "${EXIT_DENIED}" "${message:-the user approved none of the requested secrets}"
   fi
   for n in "${R_NAMES[@]}"; do
-    found=false
-    for a in "${approved[@]}"; do
-      if [[ "${a}" == "${n}" ]]; then found=true; fi
-    done
-    if [[ "${found}" != true ]]; then missing+=("${n}"); fi
+    in_list "${n}" "${approved[@]}" || missing+=("${n}")
+  done
+  for n in "${approved[@]}"; do
+    in_list "${n}" ${auto[@]+"${auto[@]}"} || leased+=("${n}")
   done
   lease="$(lease_text "$(resp_str '.lease.usesLeft')" "$(resp_str '.lease.expiresAt')" "")"
-  printf 'Approved: %s%s\n' "$(join_names "${approved[@]}")" "${lease:+ — ${lease}}"
+  if (( ${#leased[@]} > 0 )); then printf 'Approved: %s%s\n' "$(join_names "${leased[@]}")" "${lease:+ — ${lease}}"; fi
+  if (( ${#auto[@]} > 0 )); then
+    printf 'Auto-approved: %s — no lease needed, get it at any time; not scrubbed\n' "$(join_names "${auto[@]}")"
+  fi
   if (( ${#missing[@]} > 0 )); then warn "not approved: $(join_names "${missing[@]}")"; fi
 }
 
@@ -741,11 +762,18 @@ op_get() {
 
 op_release() {
   round_trip release "${OPT_WAIT:-60}"
-  local -a released=()
+  local -a released=() auto=() scrubbed=()
+  local n
   mapfile -t released < <(resp_list '.names')
+  mapfile -t auto < <(resp_list '.auto')
   if (( ${#released[@]} == 0 )); then printf 'Nothing to release.\n'; return 0; fi
   printf 'Released: %s\n' "$(join_names "${released[@]}")"
-  warn "${PEER} now scrubs $(join_names "${released[@]}") from this VM (agent logs are redacted automatically; other files that contain a value need the user's decision)"
+  for n in "${released[@]}"; do
+    in_list "${n}" ${auto[@]+"${auto[@]}"} || scrubbed+=("${n}")
+  done
+  if (( ${#scrubbed[@]} > 0 )); then
+    warn "${PEER} now scrubs $(join_names "${scrubbed[@]}") from this VM (agent logs are redacted automatically; other files that contain a value need the user's decision)"
+  fi
 }
 
 op_add() {
@@ -753,6 +781,13 @@ op_add() {
   # Overwriting needs the user's approval, a fresh secret does not.
   if [[ "${R_REPLACE}" == true ]]; then wait_default=600; fi
   round_trip add "${OPT_WAIT:-${wait_default}}"
+  if [[ "$(resp_str '.autoApprove')" == "true" ]]; then
+    printf 'Stored %s in the key vault, auto-approved: agents get it without asking, and VMs are not scrubbed of it.\n' "${name}"
+    return 0
+  fi
+  if [[ "${R_AUTO}" == true ]]; then
+    warn "${name} was stored without auto-approve (${PEER} may not support it yet); 'construct secret auto-approve ${name} on' asks the user"
+  fi
   expires="$(resp_str '.lease.expiresAt')"
   if [[ "${expires}" =~ ^[0-9]+$ ]]; then
     printf "Stored %s in the key vault; this VM holds it until %s. Run 'construct secret release %s' when done.\n" \
@@ -765,6 +800,18 @@ op_add() {
 op_delete() {
   round_trip delete "${OPT_WAIT:-600}"
   printf 'Deleted %s.\n' "${R_NAMES[0]}"
+}
+
+op_auto_approve() {
+  local name="${R_NAMES[0]}" wait_default=60
+  # Switching it on needs the user's approval, switching it off does not.
+  if [[ "${R_AUTO}" == true ]]; then wait_default=600; fi
+  round_trip autoApprove "${OPT_WAIT:-${wait_default}}"
+  if [[ "$(resp_str '.autoApprove')" == "true" ]]; then
+    printf '%s is auto-approved: agents get it without asking, and VMs are not scrubbed of it.\n' "${name}"
+  else
+    printf "%s needs the user's approval again.\n" "${name}"
+  fi
 }
 
 # ── _scrub: the host service's scrub jobs (hosted mode, internal) ────────────
@@ -924,11 +971,13 @@ op_scrub() {
 if [[ $# -lt 1 ]]; then usage >&2; exit 1; fi
 
 op="$1"; shift
+cmd="${op}"   # as typed, for messages
 case "${op}" in
   -h|--help|help) usage; exit 0 ;;
   ls) op=list ;;
   relinquish) op=release ;;
   rm) op=delete ;;
+  auto-approve) op=autoApprove ;;
   list|status|request|get|release|add|delete) ;;
   _scrub)
     # Internal (started by the activity heartbeat), not in --help.
@@ -942,7 +991,7 @@ case "${op}" in
 esac
 
 OPT_JSON=false OPT_USERNAME=false OPT_FILE="" OPT_WAIT=""
-R_USES="" R_TTL="" R_ALL=false R_REPLACE=false R_REASON="" R_DESCRIPTION="" R_USERNAME=""
+R_USES="" R_TTL="" R_ALL=false R_REPLACE=false R_REASON="" R_DESCRIPTION="" R_USERNAME="" R_AUTO=""
 R_NAMES=()
 opt_for="" have_for=false have_file=false have_description=false
 given=()
@@ -961,12 +1010,13 @@ while [[ $# -gt 0 ]]; do
   case "${opt}" in
     -h|--help) usage; exit 0 ;;
     --) shift; R_NAMES+=("$@"); break ;;
-    --json|--all|--replace)
+    --json|--all|--replace|--auto-approve)
       [[ "${arg}" == "${opt}" ]] || die "${opt} takes no value"
       case "${opt}" in
         --json) OPT_JSON=true ;;
         --all) R_ALL=true ;;
         --replace) R_REPLACE=true ;;
+        --auto-approve) R_AUTO=true ;;
       esac
       ;;
     --username)
@@ -997,12 +1047,24 @@ case "${op}" in
   request) allowed="--uses --for --reason --wait" ;;
   get) allowed="--username --json --reason --wait" ;;
   release) allowed="--all --wait" ;;
-  add) allowed="--description --username --for --file --replace --reason --wait" ;;
-  delete) allowed="--reason --wait" ;;
+  add) allowed="--description --username --for --file --replace --auto-approve --reason --wait" ;;
+  delete|autoApprove) allowed="--reason --wait" ;;
 esac
+
 for o in ${given[@]+"${given[@]}"}; do
-  [[ " ${allowed} " == *" ${o} "* ]] || die "${o} does not apply to '${op}' (try: construct secret --help)"
+  [[ " ${allowed} " == *" ${o} "* ]] || die "${o} does not apply to '${cmd}' (try: construct secret --help)"
 done
+
+# auto-approve <name> on|off: the setting is the last word, not a name.
+if [[ "${op}" == autoApprove ]]; then
+  (( ${#R_NAMES[@]} == 2 )) || die "usage: construct secret auto-approve <name> on|off"
+  case "${R_NAMES[1],,}" in
+    on) R_AUTO=true ;;
+    off) R_AUTO=false ;;
+    *) die "say on or off: construct secret auto-approve <name> on|off" ;;
+  esac
+  R_NAMES=("${R_NAMES[0]}")
+fi
 
 # Names: validated, de-duplicated in order.
 names=()
@@ -1023,8 +1085,8 @@ case "${op}" in
     (( count >= 1 )) || die "name the secrets to request (construct secret request <name>...)"
     (( count <= MAX_NAMES )) || die "at most ${MAX_NAMES} secrets per request"
     ;;
-  get|add|delete)
-    (( count == 1 )) || die "'${op}' takes exactly one name"
+  get|add|delete|autoApprove)
+    (( count == 1 )) || die "'${cmd}' takes exactly one name"
     ;;
   release)
     if [[ "${R_ALL}" == true ]]; then
@@ -1078,4 +1140,5 @@ case "${op}" in
   release) op_release ;;
   add) op_add ;;
   delete) op_delete ;;
+  autoApprove) op_auto_approve ;;
 esac

@@ -36,7 +36,7 @@ internal sealed class PromptApprover : IDisposable
                 if (vault.PendingApprovals().FirstOrDefault(a => !seen.Contains(a.Id)) is not { } found) { running = false; return; }
                 next = found; seen.Add(next.Id); close = new(); showing = (next.Id, close);
             }
-            try { await vault.DecideAsync(next.Id, await prompts.ApproveAsync(new(next.Title, next.Message, next.Action, next.Deny), close.Token)); }
+            try { await vault.DecideAsync(next.Id, await prompts.ApproveAsync(new(next.Title, next.Message, next.Action, next.Deny, next.Details), close.Token)); }
             catch (OperationCanceledException) { }
             finally { lock (gate) showing = null; close.Dispose(); }
         }

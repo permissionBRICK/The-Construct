@@ -174,7 +174,7 @@ public sealed partial class VaultHostService(IVaultStore store, IVmRepository vm
                 {
                     if (Live(current, winner.Name) is not { } old) continue;
                     if (!winner.Deleted && !ValueChanged(key, old, winner)) continue;
-                    await EndLeasesAsync(owner, old.Name, Copy(old), now + ReleaseDelay, ct).ConfigureAwait(false);
+                    await EndLeasesAsync(owner, old, now + ReleaseDelay, ct).ConfigureAwait(false);
                 }
             }
             finally { if (key is not null) CryptographicOperations.ZeroMemory(key); }
@@ -194,7 +194,7 @@ public sealed partial class VaultHostService(IVaultStore store, IVmRepository vm
         if (entry.Deleted) return new(entry.Name, "", false, null, entry.UpdatedAt, by, true);
         if (entry.Payload is not { } payload || payload.Length > MaxPayloadChars || !IsSealed(payload, 2))
             throw Validation(field + ".payload", "A live entry needs its sealed payload.");
-        return new(entry.Name, VaultProtocol.Sanitize(entry.Description, VaultProtocol.MaxText), entry.HasUsername, payload, entry.UpdatedAt, by, false);
+        return new(entry.Name, VaultProtocol.Sanitize(entry.Description, VaultProtocol.MaxText), entry.HasUsername, payload, entry.UpdatedAt, by, false, entry.AutoApprove);
     }
 
     // Without K the host cannot tell a new value from a re-sealed one, so any new payload counts.
@@ -226,8 +226,8 @@ public sealed partial class VaultHostService(IVaultStore store, IVmRepository vm
         {
             var lease = (await store.ListAsync<VaultLease>(owner, ct).ConfigureAwait(false)).FirstOrDefault(l => l.Id == id)
                 ?? throw new VaultProblemException(404, "not-found", "No such lease.");
-            await EndAsync(lease, clock.UtcNow, null, ct).ConfigureAwait(false);
-            await RecordAsync(owner, lease.Vm, $"Revoked access to {lease.Name}; scrubbing the VM.", false, ct).ConfigureAwait(false);
+            var scrubbed = await EndAsync(lease, clock.UtcNow, null, ct).ConfigureAwait(false);
+            await RecordAsync(owner, lease.Vm, $"Revoked access to {lease.Name}{(scrubbed ? "; scrubbing the VM" : "")}.", false, ct).ConfigureAwait(false);
         }
         finally { gate.Release(); }
     }
@@ -321,21 +321,24 @@ public sealed partial class VaultHostService(IVaultStore store, IVmRepository vm
         catch (FormatException) { return false; }
     }
 
-    // Ends a lease and queues a scrub of the value that VM saw (one per VM, secret and value).
-    private async Task EndAsync(VaultLease lease, DateTimeOffset due, IReadOnlyList<VaultEntry>? entries, CancellationToken ct)
+    // Ends a lease and queues a scrub of the value that VM saw (one per VM, secret and value). An auto-approved
+    // secret is never scrubbed: false then (the activity texts say so).
+    private async Task<bool> EndAsync(VaultLease lease, DateTimeOffset due, IReadOnlyList<VaultEntry>? entries, CancellationToken ct)
     {
         await store.DeleteAsync<VaultLease>(lease.Id, ct).ConfigureAwait(false);
         entries ??= await store.ListEntriesAsync(lease.Owner, ct).ConfigureAwait(false);
-        if (Live(entries, lease.Name) is { } entry) await QueueCleanupAsync(lease.Owner, lease.Vm, Copy(entry), due, ct).ConfigureAwait(false);
+        var entry = Live(entries, lease.Name);
+        if (entry is { AutoApprove: false }) await QueueCleanupAsync(lease.Owner, lease.Vm, Copy(entry), due, ct).ConfigureAwait(false);
+        return entry is not { AutoApprove: true };
     }
 
-    // Every lease on a secret ends, and each VM is scrubbed of the given (old) value.
-    private async Task EndLeasesAsync(string owner, string name, VaultSecretCopy copy, DateTimeOffset due, CancellationToken ct)
+    // Every lease on a secret ends, and each VM is scrubbed of the old value it saw, unless that one was auto-approved.
+    private async Task EndLeasesAsync(string owner, VaultEntry old, DateTimeOffset due, CancellationToken ct)
     {
-        foreach (var lease in (await store.ListAsync<VaultLease>(owner, ct).ConfigureAwait(false)).Where(l => l.Name == name))
+        foreach (var lease in (await store.ListAsync<VaultLease>(owner, ct).ConfigureAwait(false)).Where(l => l.Name == old.Name))
         {
             await store.DeleteAsync<VaultLease>(lease.Id, ct).ConfigureAwait(false);
-            await QueueCleanupAsync(owner, lease.Vm, copy, due, ct).ConfigureAwait(false);
+            if (!old.AutoApprove) await QueueCleanupAsync(owner, lease.Vm, Copy(old), due, ct).ConfigureAwait(false);
         }
     }
 

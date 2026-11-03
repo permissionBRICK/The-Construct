@@ -50,11 +50,18 @@ internal sealed class VaultHarness : IDisposable
 
     public long Ms(TimeSpan from = default) => (App.Clock.UtcNow + from).ToUnixTimeMilliseconds();
 
-    public object Entry(string name, string secret, string username = "", string description = "", long? at = null, string by = "pc:test")
+    public object Entry(string name, string secret, string username = "", string description = "", long? at = null, string by = "pc:test", bool autoApprove = false)
     {
         var stamp = at ?? Ms();
-        return new { name, description, hasUsername = username.Length > 0, payload = VaultCrypto.SealEntry(Key, name, stamp, username, secret), updatedAt = stamp, updatedBy = by, deleted = false };
+        return new { name, description, hasUsername = username.Length > 0, payload = VaultCrypto.SealEntry(Key, name, stamp, username, secret, autoApprove), updatedAt = stamp, updatedBy = by, deleted = false, autoApprove };
     }
+
+    /// <summary>The sealed payload's plaintext ({"username","secret","autoApprove"}).</summary>
+    public JsonObject Sealed(JsonNode entry) => JsonNode.Parse(VaultCrypto.Open(Key, entry["payload"]!.GetValue<string>(),
+        VaultCrypto.EntryAad(entry["name"]!.GetValue<string>(), entry["updatedAt"]!.GetValue<long>())))!.AsObject();
+
+    public async Task<string[]> ActivityAsync() =>
+        (await Bob.GetFromJsonAsync<JsonObject>("/api/v1/vault/activity"))!["events"]!.AsArray().Select(e => e!["text"]!.GetValue<string>()).ToArray();
 
     public async Task<JsonObject> PutEntriesAsync(params object[] entries)
     {

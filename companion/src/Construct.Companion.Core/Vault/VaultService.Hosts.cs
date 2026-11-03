@@ -82,15 +82,17 @@ public sealed partial class VaultService
                 }
                 d.Tombstones.RemoveAll(t => t.Name == r.Name);
                 var origin = r.UpdatedBy.StartsWith("vm:", StringComparison.Ordinal) ? "agent:" + r.UpdatedBy[3..] : entry?.Origin ?? "user";
+                // The sealed flag, not the host's readable copy: only a holder of K can make a secret auto-approved here.
                 d.Secrets.Add(new(r.Name, r.Description, Runtime.RuntimeJson.Sanitize(opened.Username, VaultProtocol.MaxText), opened.Value,
-                    entry?.CreatedAt ?? VaultSync.Time(r.UpdatedAt), VaultSync.Time(r.UpdatedAt), origin, r.UpdatedBy));
+                    entry?.CreatedAt ?? VaultSync.Time(r.UpdatedAt), VaultSync.Time(r.UpdatedAt), origin, r.UpdatedBy, opened.AutoApprove));
                 pulled.Add(r.Name); changed = true;
             }
             foreach (var entry in d.Secrets)
             {
                 var at = VaultSync.Ms(entry.UpdatedAt);
                 if (!theirs.TryGetValue(entry.Name, out var r) || VaultSync.Newer(at, entry.UpdatedBy, r.UpdatedAt, r.UpdatedBy))
-                    push.Add(new(entry.Name, entry.Description, entry.Username.Length > 0, VaultCrypto.SealEntry(key, entry.Name, at, entry.Username, entry.Value), at, entry.UpdatedBy, false));
+                    push.Add(new(entry.Name, entry.Description, entry.Username.Length > 0, VaultCrypto.SealEntry(key, entry.Name, at, entry.Username, entry.Value, entry.AutoApprove),
+                        at, entry.UpdatedBy, false, entry.AutoApprove));
             }
             foreach (var tomb in d.Tombstones)
             {
