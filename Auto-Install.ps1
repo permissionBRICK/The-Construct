@@ -358,6 +358,7 @@ if ($T3CodeChannel) { $T3CodeChannel = $T3CodeChannel.ToLower() }
 # error prints the VM result again at the true end of the parent flow and forces a
 # pause so the panel-launched console cannot vanish before it is read.
 function Wait-Exit {
+    $fixPrompt = @()
     if ($global:ConstructProvisionHadErrors) {
         $items = @($global:ConstructProvisionErrors)
         Write-Host ""
@@ -375,38 +376,11 @@ function Wait-Exit {
         }
         Write-Host "============================================================" -ForegroundColor DarkGray
 
-        # Copyable AI-agent fix prompt: built only for VM-side step failures (items
-        # with a Title), not host-side messages. The user pastes this into their AI
-        # coding agent on the VM (Claude Code over VS Code Remote-SSH) to diagnose.
-        $stepLines = @()
-        foreach ($item in $items) {
-            if (-not $item.Title) { continue }
-            $line = "- Step '$($item.Title)' failed (exit $($item.ExitCode))"
-            if ($item.LogPath) {
-                $line += "; log: $($item.LogPath)"
-            }
-            $stepLines += $line
-        }
-        if ($stepLines.Count -gt 0) {
-            Write-Host ""
-            Write-Host "  Paste this into your AI coding agent on the VM to diagnose:" -ForegroundColor Yellow
-            Write-Host "  ............................................................" -ForegroundColor DarkGray
-            Write-Host ""
-            $logPaths = @($items | Where-Object { $_.LogPath } | ForEach-Object { $_.LogPath })
-            $logRef = if ($logPaths.Count -eq 1) {
-                "Read the provisioning log at $($logPaths[0])"
-            } elseif ($logPaths.Count -gt 1) {
-                "Read the provisioning logs at: $($logPaths -join ', ')"
-            } else {
-                "Check the provisioning output above"
-            }
-            Write-Host "  On the last Construct provisioning run, the following step(s) failed:" -ForegroundColor White
-            foreach ($sl in $stepLines) {
-                Write-Host "  $sl" -ForegroundColor White
-            }
-            Write-Host "  $logRef and diagnose and fix the underlying problem." -ForegroundColor White
-            Write-Host ""
-            Write-Host "  ............................................................" -ForegroundColor DarkGray
+        # Copyable AI-agent fix prompt, for VM-side step failures only. The menu
+        # below the final result offers to copy it or to run an agent with it.
+        if (Get-Command Get-ConstructAgentFixPrompt -ErrorAction SilentlyContinue) {
+            $fixPrompt = @(Get-ConstructAgentFixPrompt -Errors $items)
+            Write-ConstructAgentFixPrompt -Lines $fixPrompt
         }
     }
     # A fatal error (the outer catch / trap) pauses too: a panel-launched console
@@ -417,6 +391,16 @@ function Wait-Exit {
     # The run is over once its result is on screen: a console left open at this prompt keeps nothing locked.
     if ($script:LifecycleRunOwned) { Exit-ConstructLifecycleRun; $script:LifecycleRunOwned = $false }
     if ((-not $FromPanel) -or $global:ConstructProvisionHadErrors -or $global:ConstructInstallFailed) {
+        # Failed VM steps: copy the fix prompt, or let an agent on the VM work on it
+        # in this console. The provisioner names the ssh alias it wrote; a run that
+        # never got that far falls back to this VM's alias.
+        if ($global:ConstructProvisionHadErrors -and $fixPrompt.Count -gt 0) {
+            $fixTarget = "$($global:ConstructProvisionSshTarget)"
+            if (-not $fixTarget -and $script:VmIdentity) { $fixTarget = "$($script:VmIdentity.HostAlias)" }
+            # Never at the cost of the pause below: the console must stay readable.
+            try { Invoke-ConstructAgentFixMenu -PromptLines $fixPrompt -SshTarget $fixTarget }
+            catch { Write-Host "  Autofix stopped: $($_.Exception.Message)" -ForegroundColor Red }
+        }
         Read-Host "Press Enter to exit" | Out-Null
     }
 }

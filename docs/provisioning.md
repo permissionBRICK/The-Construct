@@ -109,6 +109,35 @@ the menu is open. With no profiles present it still shows, noting the VM will be
 default blank config. Pass `-Projects` to skip the menu. The non-interactive `provision.sh`
 takes them via `PROJECTS=`. See [Project profiles](projects.md) for the profile format.
 
+### When provisioning steps fail
+
+A run whose VM steps failed (first install, reinstall or reprovision) ends with the result
+screen: the failed steps, and a prompt that tells an AI coding agent which step failed and
+where its log is. Before the final *Press Enter to exit*, an arrow-key menu offers:
+
+- **Autofix it** (the default) — pick an agent, then a model, and that agent works on the
+  prompt on the VM, in this same console:
+
+  | Agent | Runs | Models |
+  |---|---|---|
+  | Claude Code | `claude -p` | its default, Opus, Fable (the latest of each), or a typed name |
+  | Codex | `codex exec` | its default, the latest GPT Astra or Sol model, or a typed name |
+  | OpenCode | `opencode run` | its default, or a typed `provider/model` |
+
+  The console connects with `ssh -t` through the `~\.ssh\config` alias the run wrote (waiting
+  up to two minutes while a freshly installed VM reboots) and starts
+  `bin/construct-agent-fix.sh`. The agent runs unattended as root, in the same permission mode
+  Construct configures for it, and prints its progress and final message. It exits when its
+  turn is done; Ctrl+C stops it. "Latest Astra/Sol" is looked up on the VM in Codex's model
+  catalog (`codex debug models`), so the newest model of that family is used without a
+  Construct update; when the catalog has none, Codex's default model runs.
+- **Copy the prompt** — puts the prompt on the clipboard, for an agent you start yourself.
+- **Close** — neither.
+
+The menu needs a console someone can answer. With redirected input it is skipped, and the
+run ends exactly as before. A run that failed before any VM step reported (a host-side
+error) shows no prompt and no menu.
+
 ## Non-interactive provisioner (`bin/provision.sh`)
 
 `bin/provision.sh` is the VM-side, no-prompt counterpart to `ui-setup.sh`. It's what the
