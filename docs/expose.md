@@ -13,6 +13,10 @@ http://localhost:5173/
 
 The link is the thing to hand to the user. Everything below is the contract behind it.
 
+Forwards are VM state and do not survive a reinstall. A forward a project always needs is
+declared in its profile's `forwards`, which provisioning requests again on every run; see
+[Project profiles § Port forwards](projects.md#port-forwards).
+
 On a Proxmox VM in **direct** network mode, `construct expose 3000 --to host` returns
 `http://<vm-address>:3000/` immediately. It allocates no relay port, creates no listener,
 and saves no forward to list or close. The service responds with `kind: "direct"` and

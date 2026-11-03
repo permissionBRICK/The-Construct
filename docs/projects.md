@@ -31,6 +31,7 @@ selected project may declare:
 - MCP servers (see below)
 - optional host packages (installed by default; `ALLOW_HOST_PACKAGES=false` in the VM config opts out)
 - custom provisioning commands run on every provision (see below)
+- port forwards requested on every provision (see [Port forwards](#port-forwards))
 - test commands and notes
 
 **Where profiles live.** The VM's `/opt/construct/projects` is the single **live** source
@@ -234,6 +235,51 @@ perform conflicting global setup. Each profile prints a start message and its
 grouped command log on completion; command failures do not cancel other profiles.
 
 Run them by hand with `sudo /opt/construct/repo/bin/run-provision-commands.sh`.
+
+## Port forwards
+
+Forwards opened with [`construct expose`](expose.md) belong to the VM, not to a project.
+A reinstall deletes them together with the VM (a service-managed VM's forwards go with
+its host-side record, a local VM's request spool goes with its disk), and nothing
+carries them over. A forward that should come back is declared in a profile:
+
+```jsonc
+{
+  "name": "customer-portal",
+  "repos": [{ "url": "git@github.com:acme/customer-portal.git" }],
+  "provisionCommands": ["systemctl enable --now customer-portal"],
+  "forwards": [
+    { "port": 3000, "label": "customer portal" },
+    { "port": 9000, "label": "webhook receiver", "to": "host" }
+  ]
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `port` | The port inside the VM, 1–65535 (required). |
+| `label` | Optional; shown in `construct expose --list` and the Construct client. |
+| `to` | `client` (default): a tunnel to the user's PC. `host`: a port on the host's LAN address, subject to the host service's host-forward permission. |
+
+`bin/project-forwards.sh` runs on every provision, after the
+[provisioning commands](#provisioning-commands), and requests each entry with
+`construct expose <port> --to <to> --label <label> --reuse --wait 0`:
+
+- **Get-or-create.** `--reuse` keeps an existing forward for the same port and target, so a
+  reprovision opens nothing twice and an agent may already have exposed the port by hand.
+  A port listed by several selected profiles with the same target is requested once.
+- **Never blocks.** A client forward nobody has picked up yet is queued and opens as soon as
+  the user's Construct client connects; provisioning does not wait for it.
+- **Failures warn.** A refused or failed request is logged and the remaining entries still
+  run, as with the provisioning commands.
+- **Additive.** Removing an entry does not close a forward that is open now; close it with
+  `construct expose --close <port>`. The next reinstall drops it for good.
+
+Because `to` defaults to `client` rather than to the VM's `CONSTRUCT_EXPOSE_DEFAULT_TARGET`,
+a shared profile opens the same kind of forward on every VM. The canonical form therefore
+always spells `to` out. A profile without forwards carries no `forwards` key at all.
+
+Run it by hand with `sudo /opt/construct/repo/bin/project-forwards.sh`.
 
 ## Checkout projects
 

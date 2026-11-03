@@ -1439,6 +1439,16 @@ else
     bash "${REPO_DIR}/bin/run-provision-commands.sh"
 fi
 
+# 6c. The port forwards the selected projects declare (`forwards`, docs/projects.md).
+#     Forwards are VM state that a reinstall deletes with the VM; this step is what
+#     brings back the ones a profile asks for, get-or-create, so a reprovision adds
+#     nothing twice. After 6b so a project's own server can already be up; needs the
+#     VM token (2a) and generated.json (5). Not deferred with the project commands:
+#     the restore changes nothing it depends on.
+run_step optional "Requesting project port forwards" \
+  env CONFIG_FILE="${CONFIG_FILE}" AGENT_HOME="${AGENT_HOME:-/opt/construct}" \
+  bash "${REPO_DIR}/bin/project-forwards.sh"
+
 # 7. (Re)start the agent service. Use restart, NOT start: construct.service is
 #    Type=oneshot + RemainAfterExit=yes, so on a reprovision it is already "active"
 #    and a plain `start` is a no-op that would NOT re-run ExecStartPre

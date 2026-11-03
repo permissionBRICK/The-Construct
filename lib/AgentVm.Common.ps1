@@ -3956,6 +3956,17 @@ function ConvertTo-ConstructJsonValue {
     return ("{`n" + ($lines -join "`n") + "`n$endIndent}")
 }
 
+# A forwards[] port as JS reads it: a JSON number that is an integer from 1 to
+# 65535 (8080.0 included, as Number.isInteger does), returned as [int]; $null
+# otherwise. A [bool] or a numeric string is not a number here.
+function Get-ConstructForwardPort {
+    param($Value)
+    if (-not ($Value -is [int] -or $Value -is [long] -or $Value -is [double] -or $Value -is [decimal] -or $Value -is [float])) { return $null }
+    $d = [double]$Value
+    if ([double]::IsNaN($d) -or [double]::IsInfinity($d) -or [math]::Floor($d) -ne $d -or $d -lt 1 -or $d -gt 65535) { return $null }
+    return [int]$d
+}
+
 # ── Profile sanitisation (mirrors extension/src/projects.js sanitizeProfile) ─
 
 function Invoke-ConstructSanitizeProfile {
@@ -4111,6 +4122,29 @@ function Invoke-ConstructSanitizeProfile {
         $provisionCommands = @()
     }
 
+    # sanitizeForwards: a valid port is required; "to" defaults to "client" and an
+    # unknown "to" drops the entry; a blank label is omitted. Case-sensitive to
+    # match JS ===. Numbers follow JS Number.isInteger (8080.0 is the port 8080).
+    $forwards = @()
+    $rawFw = $null
+    if ($o.PSObject.Properties.Name -contains 'forwards') { $rawFw = $o.forwards }
+    if ($rawFw -is [array] -or $rawFw -is [System.Collections.IList]) {
+        foreach ($f in @($rawFw)) {
+            if ($null -eq $f -or -not (& $isObj $f)) { continue }
+            $fwPort = Get-ConstructForwardPort $f.port
+            if ($null -eq $fwPort) { continue }
+            $fwTo = "client"
+            if ($f.PSObject.Properties.Name -contains 'to') {
+                if (-not ($f.to -is [string] -and ($f.to -ceq "client" -or $f.to -ceq "host"))) { continue }
+                $fwTo = $f.to
+            }
+            $entry = [ordered]@{ port = $fwPort; to = $fwTo }
+            $fwLabel = & $nonEmpty $f.label
+            if ($fwLabel) { $entry['label'] = $fwLabel }
+            $forwards += [pscustomobject]$entry
+        }
+    }
+
     # tests: opaque object, pass through if plain object, else empty.
     $tests = [ordered]@{}
     if ($o.PSObject.Properties.Name -contains 'tests') {
@@ -4122,7 +4156,8 @@ function Invoke-ConstructSanitizeProfile {
         }
     }
 
-    # Build the output in FIXED key order (D3).
+    # Build the output in FIXED key order (D3). forwards only when non-empty, like
+    # the JS engine: profiles without forwards keep their exact canonical bytes.
     $result = [ordered]@{
         name              = $nm
         repos             = $repos
@@ -4130,8 +4165,9 @@ function Invoke-ConstructSanitizeProfile {
         mcp               = $mcp
         hostPackages      = $hostPackages
         provisionCommands = $provisionCommands
-        tests             = [pscustomobject]$tests
     }
+    if ($forwards.Count -gt 0) { $result['forwards'] = $forwards }
+    $result['tests'] = [pscustomobject]$tests
     return [pscustomobject]$result
 }
 
@@ -4178,7 +4214,7 @@ function Test-ConstructProfile {
         return [pscustomobject]@{ Ok = $false; Errors = @("profile is not a JSON object") }
     }
 
-    $KNOWN = @("name", "repos", "sdks", "mcp", "hostPackages", "provisionCommands", "tests")
+    $KNOWN = @("name", "repos", "sdks", "mcp", "hostPackages", "provisionCommands", "forwards", "tests")
     foreach ($p in $Object.PSObject.Properties) {
         if ($KNOWN -notcontains $p.Name) {
             $errors.Add("unknown key `"$($p.Name)`"")
@@ -4314,6 +4350,34 @@ function Test-ConstructProfile {
             $ok = ($val -is [array] -or $val -is [System.Collections.IList]) -and
                   @($val | Where-Object { -not (& $str $_) }).Count -eq 0
             if (-not $ok) { $errors.Add("`"$key`" must be an array of non-empty strings") }
+        }
+    }
+
+    # forwards
+    if ($Object.PSObject.Properties.Name -contains 'forwards') {
+        $fw = $Object.forwards
+        if (-not ($fw -is [array] -or $fw -is [System.Collections.IList])) {
+            $errors.Add('"forwards" must be an array')
+        } else {
+            for ($i = 0; $i -lt @($fw).Count; $i++) {
+                $f = @($fw)[$i]
+                if (-not (& $isObj $f)) { $errors.Add("forwards[$i] must be an object with a `"port`""); continue }
+                foreach ($fk in $f.PSObject.Properties) {
+                    if (@("port", "label", "to") -cnotcontains $fk.Name) {
+                        $errors.Add("forwards[$i] unknown key `"$($fk.Name)`"")
+                    }
+                }
+                if ($null -eq (Get-ConstructForwardPort $f.port)) {
+                    $errors.Add("forwards[$i].port must be an integer from 1 to 65535")
+                }
+                if ($f.PSObject.Properties.Name -contains 'label' -and $f.label -isnot [string]) {
+                    $errors.Add("forwards[$i].label must be a string")
+                }
+                if ($f.PSObject.Properties.Name -contains 'to' -and
+                    -not ($f.to -is [string] -and ($f.to -ceq "client" -or $f.to -ceq "host"))) {
+                    $errors.Add("forwards[$i].to must be `"client`" or `"host`"")
+                }
+            }
         }
     }
 

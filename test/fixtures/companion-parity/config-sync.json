@@ -920,6 +920,50 @@
   },
   {
     "input": {
+      "name": "a",
+      "raw": "{\"name\":\"a\",\"forwards\":[{\"label\":\"vite\",\"port\":5173},{\"port\":8080.0,\"to\":\"host\"},{\"port\":1e3,\"label\":\" \"}],\"tests\":{}}"
+    },
+    "kind": "canonical",
+    "output": {
+      "content": "{\n  \"name\": \"a\",\n  \"repos\": [],\n  \"sdks\": {},\n  \"mcp\": [],\n  \"hostPackages\": [],\n  \"provisionCommands\": [],\n  \"forwards\": [\n    {\n      \"port\": 5173,\n      \"to\": \"client\",\n      \"label\": \"vite\"\n    },\n    {\n      \"port\": 8080,\n      \"to\": \"host\"\n    },\n    {\n      \"port\": 1000,\n      \"to\": \"client\"\n    }\n  ],\n  \"tests\": {}\n}\n",
+      "ok": true
+    }
+  },
+  {
+    "input": {
+      "name": "a",
+      "raw": "{\"name\":\"a\",\"forwards\":[]}"
+    },
+    "kind": "canonical",
+    "output": {
+      "content": "{\n  \"name\": \"a\",\n  \"repos\": [],\n  \"sdks\": {},\n  \"mcp\": [],\n  \"hostPackages\": [],\n  \"provisionCommands\": [],\n  \"tests\": {}\n}\n",
+      "ok": true
+    }
+  },
+  {
+    "input": {
+      "name": "a",
+      "raw": "{\"name\":\"a\",\"forwards\":[{\"port\":0},{\"port\":80.5},{\"port\":\"80\"},{\"port\":1,\"to\":\"Host\"},{\"port\":2,\"label\":3,\"target\":\"host\"},7,null]}"
+    },
+    "kind": "canonical",
+    "output": {
+      "ok": false,
+      "reason": "is not a valid profile: forwards[0].port must be an integer from 1 to 65535; forwards[1].port must be an integer from 1 to 65535; forwards[2].port must be an integer from 1 to 65535; forwards[3].to must be \"client\" or \"host\"; forwards[4] unknown key \"target\"; forwards[4].label must be a string; forwards[5] must be an object with a \"port\"; forwards[6] must be an object with a \"port\""
+    }
+  },
+  {
+    "input": {
+      "name": "a",
+      "raw": "{\"name\":\"a\",\"forwards\":{\"port\":1}}"
+    },
+    "kind": "canonical",
+    "output": {
+      "ok": false,
+      "reason": "is not a valid profile: \"forwards\" must be an array"
+    }
+  },
+  {
+    "input": {
       "existingNames": [],
       "manifest": {},
       "selected": [

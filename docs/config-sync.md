@@ -759,7 +759,10 @@ for steady state.
   (preferably via `construct project set`) or it is lost on reinstall;
   `provisionCommands` run on **every** provision: install all requirements on a
   fresh VM, reuse satisfied installations on reprovision, and update only under
-  the project's intended version policy (see [Provisioning commands](projects.md#provisioning-commands)).
+  the project's intended version policy (see [Provisioning commands](projects.md#provisioning-commands));
+  and next to `construct expose`, in one sentence, that forwards are lost on
+  reinstall unless the profile lists them under `forwards` (see
+  [Port forwards](projects.md#port-forwards)).
 
 ## 16. Security notes
 

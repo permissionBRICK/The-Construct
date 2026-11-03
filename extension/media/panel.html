@@ -338,6 +338,12 @@
         <p class="pm-note" style="margin-top:10px">Provision commands — one bash command per line, run in order after clone (must be idempotent).</p>
         <textarea id="pmProvision" class="pm-ta mono" rows="3" spellcheck="false" placeholder="npm ci"></textarea>
       </section>
+
+      <section class="pm-sec">
+        <h3 class="pm-h">Port forwards</h3>
+        <p class="pm-note">One per line as <code>port [client|host] [label]</code> (e.g. <code>5173 vite dev</code>, <code>8080 host api</code>; the target defaults to <code>client</code>). Requested with <code>construct expose</code> on every provision, so they come back after a reinstall.</p>
+        <textarea id="pmForwards" class="pm-ta mono" rows="2" spellcheck="false" placeholder="5173 client vite dev"></textarea>
+      </section>
     </div>
 
     <div class="modal-actions">

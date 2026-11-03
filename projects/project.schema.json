@@ -119,6 +119,20 @@
         "minLength": 1
       }
     },
+    "forwards": {
+      "comment": "Ports to expose with `construct expose`, requested on EVERY provision after the provisioning commands (get-or-create: a reprovision never opens a second forward for the same port and target). Forwards are VM state that a reinstall deletes; listing one here is what brings it back. `to` defaults to client (a tunnel to the user's PC); host asks the host service for a LAN port. Removing an entry does not close a live forward.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["port"],
+        "additionalProperties": false,
+        "properties": {
+          "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+          "label": { "type": "string" },
+          "to": { "type": "string", "enum": ["client", "host"] }
+        }
+      }
+    },
     "tests": {
       "type": "object"
     }
