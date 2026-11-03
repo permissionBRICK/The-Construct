@@ -153,9 +153,13 @@ public sealed class VaultHostsTests
         var key = VaultCrypto.NewKey(); var other = VaultCrypto.NewKey();
         var payload = VaultCrypto.SealEntry(key, "github-token", 1730000000000, "ci-bot", new Secret("ghp_s3cret\nline two"));
         var raw = Convert.FromBase64String(payload);
-        Assert.Equal(12 + 16 + Encoding.UTF8.GetByteCount("{\"username\":\"ci-bot\",\"secret\":\"ghp_s3cret\\nline two\"}"), raw.Length);
+        Assert.Equal(12 + 16 + Encoding.UTF8.GetByteCount("{\"username\":\"ci-bot\",\"secret\":\"ghp_s3cret\\nline two\",\"autoApprove\":false}"), raw.Length);
         var opened = VaultCrypto.OpenEntry(key, "github-token", 1730000000000, payload)!.Value;
-        Assert.Equal(("ci-bot", "ghp_s3cret\nline two"), (opened.Username, opened.Value.Reveal()));
+        Assert.Equal(("ci-bot", "ghp_s3cret\nline two", false), (opened.Username, opened.Value.Reveal(), opened.AutoApprove));
+        Assert.True(VaultCrypto.OpenEntry(key, "a", 1, VaultCrypto.SealEntry(key, "a", 1, "", new Secret("value-1"), true))!.Value.AutoApprove);
+        // A payload sealed before auto-approve existed opens as not auto-approved.
+        var legacy = VaultCrypto.Encrypt(key, Encoding.UTF8.GetBytes("{\"username\":\"\",\"secret\":\"value-1\"}"), VaultCrypto.EntryAad("a", 1));
+        Assert.False(VaultCrypto.OpenEntry(key, "a", 1, legacy)!.Value.AutoApprove);
         Assert.Null(VaultCrypto.OpenEntry(key, "npm-token", 1730000000000, payload));     // moved to another name
         Assert.Null(VaultCrypto.OpenEntry(key, "github-token", 1730000000001, payload));  // replayed under another time
         Assert.Null(VaultCrypto.OpenEntry(other, "github-token", 1730000000000, payload)); // another vault key
@@ -189,6 +193,35 @@ public sealed class VaultHostsTests
         // Nothing changed: the next pass reads but does not write.
         await h.Sync();
         Assert.Single(h.Host.Calls("PUT", "/vault/entries")); Assert.Single(h.Host.Calls("PUT", "/vault/settings"));
+    }
+
+    [Fact]
+    public async Task AutoApproveSyncsAndThisPcTrustsOnlyTheSealedSetting()
+    {
+        await using var h = new Harness();
+        h.Vault.Save(new("github-token", "GitHub token for CI", "", new Secret("ghp_s3cretTokenValue")));
+        await h.Sync();
+        h.Clock.Advance(TimeSpan.FromSeconds(1));
+        h.Vault.SetAutoApprove("github-token", true);
+        await h.Sync();
+        var pushed = h.Host.Entries["github-token"];
+        Assert.True(pushed["autoApprove"]!.GetValue<bool>());
+        Assert.True(VaultCrypto.OpenEntry(h.Key, "github-token", pushed["updatedAt"]!.GetValue<long>(), pushed["payload"]!.GetValue<string>())!.Value.AutoApprove);
+
+        // A host can flip its readable copy, but without K it cannot seal the setting: this PC keeps to the payload.
+        var at = h.Now + 1000;
+        h.Host.Edit(x => x.Entries["npm"] = VaultSync.ToJson(new VaultWireEntry("npm", "from a VM", false,
+            VaultCrypto.SealEntry(h.Key, "npm", at, "", new Secret("npm_abcdefgh")), at, "vm:dev", false, AutoApprove: true)));
+        // Sealed by a holder of K (a VM's add on the host): it counts.
+        h.Host.Edit(x => x.Entries["test-token"] = VaultSync.ToJson(new VaultWireEntry("test-token", "from a VM", false,
+            VaultCrypto.SealEntry(h.Key, "test-token", at, "", new Secret("test_abcdefgh"), true), at, "vm:dev", false, AutoApprove: true)));
+        await h.Sync();
+        Assert.False(h.Vault.Secrets().Single(s => s.Name == "npm").AutoApprove);
+        Assert.True(h.Vault.Secrets().Single(s => s.Name == "test-token").AutoApprove);
+        // A tombstone is never auto-approved, whatever a host says.
+        var stone = new JsonObject { ["entries"] = new JsonArray(VaultSync.ToJson(new("gone", "", false, null, 1, "pc:a", true))) };
+        stone["entries"]![0]!["autoApprove"] = true;
+        Assert.False(VaultSync.ParseEntries(JsonNode.Parse(stone.ToJsonString()))!.Entries.Single().AutoApprove);
     }
 
     [Fact]

@@ -24,10 +24,13 @@ public sealed record VaultOwnerState(string Owner, long Revision, string? Mode, 
 
 /// <summary>
 /// One synchronized entry. <see cref="Payload"/> is <c>base64(nonce||tag||ciphertext)</c> of
-/// <c>{"username","secret"}</c> under <c>K</c> with the AAD <c>entry:&lt;name&gt;:&lt;updatedAt&gt;</c>;
+/// <c>{"username","secret","autoApprove"}</c> under <c>K</c> with the AAD <c>entry:&lt;name&gt;:&lt;updatedAt&gt;</c>;
 /// a tombstone (<see cref="Deleted"/>) has none. <see cref="UpdatedAt"/> is in Unix milliseconds.
+/// <see cref="AutoApprove"/>: VMs read it without the user's approval and are never scrubbed of it. The host
+/// decides by this plain copy (it may lack <c>K</c>); PCs trust only the sealed one.
 /// </summary>
-public sealed record VaultEntry(string Name, string Description, bool HasUsername, string? Payload, long UpdatedAt, string UpdatedBy, bool Deleted)
+public sealed record VaultEntry(string Name, string Description, bool HasUsername, string? Payload, long UpdatedAt, string UpdatedBy, bool Deleted,
+    bool AutoApprove = false)
 {
     public override string ToString() => $"VaultEntry {{ Name = {Name}, UpdatedAt = {UpdatedAt} }}";
 }

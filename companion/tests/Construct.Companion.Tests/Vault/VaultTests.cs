@@ -88,6 +88,9 @@ public sealed class VaultTests
     [InlineData("{\"v\":1,\"id\":\"1700-1-2a\",\"op\":\"add\",\"names\":[\"a\"],\"description\":\"d\",\"secret\":\"%%%\"}", true, "base64")]
     [InlineData("{\"v\":1,\"id\":\"1700-1-2a\",\"op\":\"add\",\"names\":[\"a\"],\"description\":\"d\",\"secret\":\"\"}", true, "empty")]
     [InlineData("{\"v\":1,\"id\":\"1700-1-2a\",\"op\":\"add\",\"names\":[\"a\"],\"description\":\"d\",\"secret\":\"/w==\"}", true, "UTF-8")]
+    [InlineData("{\"v\":1,\"id\":\"1700-1-2a\",\"op\":\"autoApprove\",\"names\":[\"a\"]}", true, "on or off")]
+    [InlineData("{\"v\":1,\"id\":\"1700-1-2a\",\"op\":\"autoApprove\",\"names\":[\"a\"],\"autoApprove\":\"yes\"}", true, "on or off")]
+    [InlineData("{\"v\":1,\"id\":\"1700-1-2a\",\"op\":\"autoApprove\",\"names\":[\"a\",\"b\"],\"autoApprove\":true}", true, "exactly one")]
     public void MalformedRequestsAreDroppedOrAnsweredInvalid(string line, bool answerable, string? error)
     {
         var (request, id, message) = VaultProtocol.ParseRequest(line);
@@ -478,6 +481,156 @@ public sealed class VaultTests
         Assert.Equal("invalid", answers["1700-1-2a"]["status"]!.GetValue<string>());
         Assert.Contains(VaultProtocol.RespondScript("1700-1-2a"), ssh.Scripts);
         await broker.DisposeAsync(); Assert.True(session.Disposed);
+    }
+
+    // ── auto-approve ─────────────────────────────────────────────────────────────
+    private static string[] Strings(JsonNode? node) => node!.AsArray().Select(n => n!.GetValue<string>()).ToArray();
+    private static string Status(JsonObject response) => response["status"]!.GetValue<string>();
+
+    [Fact]
+    public async Task AnAutoApprovedSecretIsReadWithoutAskingOrALease()
+    {
+        var h = new Harness(v => Seed(v, username: "ci-bot"));
+        var changed = 0; h.Vault.EntriesChanged += () => changed++;
+        var before = h.Vault.Secrets().Single().UpdatedAt;
+        h.Clock.Advance(TimeSpan.FromSeconds(1));
+        Assert.True(h.Vault.SetAutoApprove("github-token", true));
+        Assert.False(h.Vault.SetAutoApprove("nope", true));
+        var secret = h.Vault.Secrets().Single();
+        Assert.True(secret.AutoApprove); Assert.True(secret.UpdatedAt > before); Assert.Equal(1, changed); // a new stamp syncs it to the hosts
+        Assert.True(h.Reopen().Secrets().Single().AutoApprove);
+        Assert.Contains(h.Vault.Activity(), a => a.Text.Contains("github-token is auto-approved now", StringComparison.Ordinal));
+
+        var get = await h.Ask("dev", Req("get", "github-token"));
+        Assert.Equal("ok", Status(get)); Assert.Equal("ghp_s3cretTokenValue", Decode(get["secret"])); Assert.Equal("ci-bot", get["username"]!.GetValue<string>());
+        Assert.Null(get["lease"]);
+        var request = await h.Ask("other", Req("request", "github-token"));
+        Assert.Equal(["github-token"], Strings(request["names"])); Assert.Equal(["github-token"], Strings(request["auto"])); Assert.Null(request["lease"]);
+        Assert.Empty(h.Prompts.Shown); Assert.Empty(h.Vault.Leases()); Assert.Empty(h.Pending);
+        Assert.Contains(h.Vault.Activity(), a => a.Instance == "other" && a.Text == "Access to github-token auto-approved.");
+        var listed = (await h.Ask("dev", Req("list")))["items"]!.AsArray().Single()!;
+        Assert.True(listed["autoApprove"]!.GetValue<bool>()); Assert.Null(listed["lease"]);
+        Assert.Equal(["github-token"], (await h.Ask("dev", Req("status")))["items"]!.AsArray().Select(i => i!["name"]!.GetValue<string>()));
+        var all = Req("release"); all["all"] = true;
+        Assert.Equal("Nothing to release.", (await h.Ask("dev", all))["message"]!.GetValue<string>());
+
+        // Switched off, a get asks again.
+        Assert.True(h.Vault.SetAutoApprove("github-token", false));
+        Assert.Contains(h.Vault.Activity(), a => a.Text == "github-token needs your approval again.");
+        h.Prompts.Approvals.Enqueue(false);
+        Assert.Equal("denied", Status(await h.Ask("dev", Req("get", "github-token"))));
+        Assert.Empty((await h.Ask("dev", Req("status")))["items"]!.AsArray());
+    }
+
+    [Fact]
+    public async Task ARequestAsksOnlyAboutTheSecretsThatAreNotAutoApproved()
+    {
+        var h = new Harness(v => { Seed(v); v.Save(new("npm", "npm publish token", "", new Secret("npm_abcdefgh"))); v.SetAutoApprove("github-token", true); });
+        h.Prompts.Approvals.Enqueue(true);
+        var request = Req("request", "github-token", "npm"); request["uses"] = 2;
+        var granted = await h.Ask("dev", request);
+        Assert.Equal(["github-token", "npm"], Strings(granted["names"])); Assert.Equal(["github-token"], Strings(granted["auto"]));
+        Assert.Equal(2, granted["lease"]!["usesLeft"]!.GetValue<int>());
+        var prompt = Assert.IsType<ApprovalPrompt>(Assert.Single(h.Prompts.Shown));
+        Assert.Contains("npm publish token", prompt.Message); Assert.DoesNotContain("github-token", prompt.Message);
+        Assert.Equal("npm", Assert.Single(h.Vault.Leases()).Name);
+
+        h.Prompts.Approvals.Enqueue(false);
+        var denied = await h.Ask("other", Req("request", "github-token", "npm"));
+        Assert.Equal("denied", Status(denied));
+        Assert.Equal("The user denied the request. github-token needs no approval: read it with construct secret get.", denied["message"]!.GetValue<string>());
+        Assert.Equal("ok", Status(await h.Ask("other", Req("get", "github-token"))));
+    }
+
+    [Fact]
+    public async Task LeasesOnAnAutoApprovedSecretEndWithoutAScrub()
+    {
+        var h = new Harness(v => { Seed(v); v.Save(new("npm", "npm", "", new Secret("npm_abcdefgh"))); v.Save(new("db", "db", "", new Secret("db-password-1"))); });
+        h.Prompts.Approvals.Enqueue(true);
+        var request = Req("request", "github-token", "npm", "db"); request["ttl"] = 600;
+        await h.Ask("dev", request);
+        // A scrub already waiting for its VM is dropped once the secret is auto-approved.
+        await h.Ask("dev", Req("release", "npm"));
+        Assert.Equal("npm", Assert.Single(h.Pending).Name);
+        h.Vault.SetAutoApprove("npm", true); h.Vault.SetAutoApprove("github-token", true); h.Vault.Sweep();
+        Assert.Empty(h.Pending);
+        // An approved lease still works and counts its uses, but its end queues no scrub.
+        Assert.Equal("ok", Status(await h.Ask("dev", Req("get", "github-token"))));
+        var released = await h.Ask("dev", Req("release", "github-token"));
+        Assert.Equal(["github-token"], Strings(released["names"])); Assert.Equal(["github-token"], Strings(released["auto"]));
+        Assert.Empty(h.Pending);
+        Assert.Contains(h.Vault.Activity(), a => a.Text == "Released github-token (auto-approved, no scrub).");
+        // Expiry: the auto-approved one quietly, the other one with its scrub.
+        h.Prompts.Approvals.Enqueue(true);
+        await h.Ask("dev", request);
+        h.Vault.SetAutoApprove("db", false);
+        h.Clock.Advance(TimeSpan.FromMinutes(10)); h.Vault.Sweep();
+        Assert.Equal("db", Assert.Single(h.Pending).Name);
+        Assert.Contains(h.Vault.Activity(), a => a.Text == "Access to db expired; scrubbing the VM.");
+        // Deleting an auto-approved secret scrubs nobody either.
+        h.Prompts.Approvals.Enqueue(true);
+        await h.Ask("dev", Req("request", "npm"));
+        h.Vault.Delete("npm");
+        Assert.Equal("db", Assert.Single(h.Pending).Name);
+    }
+
+    [Fact]
+    public async Task AgentsStoreSecretsAutoApprovedButSwitchingOneOnNeedsTheUser()
+    {
+        var h = new Harness();
+        var add = Req("add", "npm-read"); add["description"] = "Read-only npm token"; add["secret"] = B64("npm_readonly_1"); add["autoApprove"] = true;
+        var stored = await h.Ask("dev", add);
+        Assert.Equal("ok", Status(stored)); Assert.True(stored["autoApprove"]!.GetValue<bool>()); Assert.Null(stored["lease"]);
+        Assert.True(h.Vault.Secrets().Single().AutoApprove); Assert.Empty(h.Vault.Leases()); Assert.Empty(h.Prompts.Shown);
+        Assert.Contains(h.Vault.Activity(), a => a.Text == "Stored npm-read from the VM; auto-approved.");
+
+        var plain = Req("add", "deploy-key"); plain["description"] = "Deploy key"; plain["secret"] = B64("deploy-value-123");
+        var leased = await h.Ask("dev", plain);
+        Assert.False(leased["autoApprove"]!.GetValue<bool>()); Assert.NotNull(leased["lease"]);
+
+        var on = Req("autoApprove", "deploy-key"); on["autoApprove"] = true; on["reason"] = "used daily";
+        h.Prompts.Approvals.Enqueue(false);
+        Assert.Equal("denied", Status(await h.Ask("dev", on)));
+        Assert.False(h.Vault.Secrets().Single(s => s.Name == "deploy-key").AutoApprove);
+        h.Prompts.Approvals.Enqueue(true);
+        on["id"] = "1700000000000-9001-1";
+        var switched = await h.Ask("dev", on);
+        Assert.Equal("Auto-approved.", switched["message"]!.GetValue<string>()); Assert.True(switched["autoApprove"]!.GetValue<bool>());
+        var prompt = Assert.IsType<ApprovalPrompt>(h.Prompts.Shown.Last());
+        Assert.Equal("Key vault — auto-approve secret", prompt.Title); Assert.Equal("Auto-approve", prompt.Action);
+        Assert.Contains("deploy-key — Deploy key", prompt.Message); Assert.Contains("no VM is scrubbed of it", prompt.Message); Assert.Contains("“used daily”", prompt.Message);
+        Assert.True(h.Vault.Secrets().Single(s => s.Name == "deploy-key").AutoApprove);
+        Assert.Contains(h.Vault.Activity(), a => a.Text == "Auto-approve for deploy-key approved at the VM's request.");
+
+        var shown = h.Prompts.Shown.Count;
+        on["id"] = "1700000000000-9002-1";
+        Assert.Equal("Already auto-approved.", (await h.Ask("dev", on))["message"]!.GetValue<string>());
+        var off = Req("autoApprove", "deploy-key"); off["autoApprove"] = false;
+        var offed = await h.Ask("dev", off);
+        Assert.Equal("Needs approval again.", offed["message"]!.GetValue<string>()); Assert.False(offed["autoApprove"]!.GetValue<bool>());
+        Assert.Equal(shown, h.Prompts.Shown.Count);
+        Assert.False(h.Vault.Secrets().Single(s => s.Name == "deploy-key").AutoApprove);
+        var missing = Req("autoApprove", "nope"); missing["autoApprove"] = true;
+        Assert.Equal("notFound", Status(await h.Ask("dev", missing)));
+    }
+
+    [Fact]
+    public async Task AReplacementKeepsTheSettingUnlessTheUserApprovesSwitchingItOn()
+    {
+        var h = new Harness(v => Seed(v));
+        h.Prompts.Approvals.Enqueue(true);
+        var replace = Req("add", "github-token"); replace["description"] = "Rotated"; replace["secret"] = B64("ghp_second_value"); replace["replace"] = true; replace["autoApprove"] = true;
+        Assert.True((await h.Ask("dev", replace))["autoApprove"]!.GetValue<bool>());
+        Assert.Contains("It also becomes auto-approved", Assert.IsType<ApprovalPrompt>(h.Prompts.Shown.Last()).Message);
+        Assert.True(h.Vault.Secrets().Single().AutoApprove); Assert.Empty(h.Vault.Leases());
+
+        h.Prompts.Approvals.Enqueue(true);
+        var again = Req("add", "github-token"); again["description"] = "Rotated again"; again["secret"] = B64("ghp_third_value"); again["replace"] = true;
+        Assert.True((await h.Ask("dev", again))["autoApprove"]!.GetValue<bool>());
+        Assert.DoesNotContain("auto-approved", Assert.IsType<ApprovalPrompt>(h.Prompts.Shown.Last()).Message);
+        // The window's editor keeps the setting too.
+        h.Vault.Save(new("github-token", "Edited", "", new Secret("ghp_fourth_value")), "github-token");
+        Assert.True(h.Vault.Secrets().Single().AutoApprove);
     }
 
     [Fact]

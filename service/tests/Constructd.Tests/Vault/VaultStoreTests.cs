@@ -5,6 +5,7 @@ using Constructd.Core.Abstractions;
 using Constructd.Core.Domain;
 using Constructd.Fakes;
 using Constructd.Sqlite;
+using Constructd.Sqlite.Migrations;
 using Constructd.Tests.Support;
 using Microsoft.Data.Sqlite;
 
@@ -46,6 +47,10 @@ public sealed class VaultStoreTests : IDisposable
         await store.SaveSettingsAsync("bob", "locked", "check", null, default);
         Assert.Null((await store.GetOwnerAsync("bob", default))!.WrappedKey);
         Assert.Single(await store.ListOwnersAsync(default));
+        await store.SaveEntriesAsync("bob", [new("a", "second", false, "payload-c", 30, "vm:dev", false, AutoApprove: true)], default);
+        Assert.Equal(new VaultEntry("a", "second", false, "payload-c", 30, "vm:dev", false, true), (await store.ListEntriesAsync("bob", default)).Single());
+        await store.SaveEntriesAsync("bob", [new("a", "second", false, "payload-b", 20, "vm:dev", false)], default);
+        Assert.False((await store.ListEntriesAsync("bob", default)).Single().AutoApprove);
 
         var lease = new VaultLease("l1", "bob", "dev", "a", 3, at.AddHours(1), at, "why", "approved");
         await store.SaveAsync(lease, default);
@@ -106,6 +111,29 @@ public sealed class VaultStoreTests : IDisposable
         Assert.Equal("pw-123456-long", VaultHarness.Secret(answer));
         Assert.Equal(4, answer["lease"]!["usesLeft"]!.GetValue<int>());
         Assert.Equal(32, key.Length);
+    }
+
+    [Fact]
+    public async Task The_auto_approve_column_is_added_to_an_existing_key_vault_database()
+    {
+        Directory.CreateDirectory(_root);
+        var database = new SqliteDatabase(Path.Combine(_root, "m850.db"));
+        database.EnsureCreated();
+        using (var c = database.Open())
+        {
+            // A host that only had M850: its entries table without the column, one entry in it.
+            using var cmd = c.CreateCommand();
+            cmd.CommandText = """
+                ALTER TABLE vault_entries DROP COLUMN auto_approve; DELETE FROM schema_migrations WHERE id=851;
+                INSERT INTO vault_entries (owner,name,description,has_username,payload,updated_at,updated_by,deleted) VALUES ('bob','db','',0,'p',10,'pc:x',0);
+                """;
+            cmd.ExecuteNonQuery();
+            using (var tx = c.BeginTransaction()) { new M851_VaultAutoApprove().Apply(c, tx); tx.Commit(); }
+            cmd.CommandText = "SELECT COUNT(*) FROM pragma_table_info('vault_entries') WHERE name='auto_approve'";
+            Assert.Equal(1L, cmd.ExecuteScalar());
+        }
+        var entry = (await new SqliteVaultStore(database).ListEntriesAsync("bob", default)).Single();
+        Assert.Equal(new VaultEntry("db", "", false, "p", 10, "pc:x", false), entry);
     }
 
     public void Dispose()

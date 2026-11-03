@@ -7,9 +7,12 @@ using Constructd.Core.Domain;
 
 namespace Constructd.Core.Logic;
 
-/// <summary>One validated <c>construct secret</c> call from a guest. <see cref="Secret"/> is the decoded value of an <c>add</c>.</summary>
+/// <summary>
+/// One validated <c>construct secret</c> call from a guest. <see cref="Secret"/> is the decoded value of an <c>add</c>;
+/// <see cref="AutoApprove"/> the flag an <c>add</c> or <c>autoApprove</c> sets (null: not given).
+/// </summary>
 public sealed record VaultRequest(string Id, string Op, IReadOnlyList<string> Names, int? Uses, int? Ttl, bool All, bool Replace,
-    string Reason, string Description, string Username, string? Secret, DateTimeOffset? Deadline, string Source)
+    string Reason, string Description, string Username, string? Secret, DateTimeOffset? Deadline, string Source, bool? AutoApprove = null)
 {
     public override string ToString() => $"VaultRequest {{ Id = {Id}, Op = {Op} }}";
 }
@@ -28,7 +31,7 @@ public static partial class VaultProtocol
     public const int MaxRequestBytes = 65536, MaxSecretBytes = 32768, MaxText = 300, MaxUses = 1000, MinTtl = 60, MaxTtl = 86400;
     // Shorter values would match all over a VM; such secrets are reported as not scannable instead.
     public const int MinPatternLength = 6;
-    public static readonly string[] Operations = ["list", "status", "request", "get", "release", "add", "delete"];
+    public static readonly string[] Operations = ["list", "status", "request", "get", "release", "add", "delete", "autoApprove"];
     public static readonly string[] FileActions = ["keep", "redact", "delete"];
 
     public static bool IsValidName(string? name) => name is not null && NamePattern().IsMatch(name);
@@ -51,8 +54,10 @@ public static partial class VaultProtocol
             if (!names.Contains(name)) names.Add(name);
         }
         var all = raw.True("all");
-        var count = op switch { "request" => names.Count is >= 1 and <= 20, "get" or "add" or "delete" => names.Count == 1, "release" => all || names.Count >= 1, _ => true };
+        var count = op switch { "request" => names.Count is >= 1 and <= 20, "get" or "add" or "delete" or "autoApprove" => names.Count == 1, "release" => all || names.Count >= 1, _ => true };
         if (!count) return Invalid(op == "request" ? "Name between 1 and 20 secrets." : op == "release" ? "Name a secret or pass --all." : "Name exactly one secret.");
+        bool? autoApprove = raw["autoApprove"] is JsonValue flag && flag.GetValueKind() is JsonValueKind.True or JsonValueKind.False ? flag.GetValue<bool>() : null;
+        if (op == "autoApprove" && autoApprove is null) return Invalid("Say on or off: construct secret auto-approve <name> on|off.");
         if (!Bounded(raw["uses"], 1, MaxUses, out var uses)) return Invalid($"--uses must be between 1 and {MaxUses}.");
         if (!Bounded(raw["ttl"], MinTtl, MaxTtl, out var ttl)) return Invalid("--for must be between 1 minute and 24 hours.");
         string? value = null;
@@ -71,7 +76,7 @@ public static partial class VaultProtocol
         DateTimeOffset? deadline = raw["deadline"] is JsonValue d && d.TryGetValue<double>(out var ms) && double.IsFinite(ms) && ms > 0
             ? DateTimeOffset.FromUnixTimeMilliseconds((long)Math.Min(ms, 253402300799999)) : null;
         return (new(id, op, names, uses, ttl, all, raw.True("replace"), Sanitize(raw.Str("reason"), MaxText), Sanitize(raw.Str("description"), MaxText),
-            Sanitize(raw.Str("username"), MaxText), value, deadline, Sanitize(raw.Str("source"), 60)), id, null);
+            Sanitize(raw.Str("username"), MaxText), value, deadline, Sanitize(raw.Str("source"), 60), autoApprove), id, null);
     }
     private static bool Bounded(JsonNode? node, int min, int max, out int? value)
     {

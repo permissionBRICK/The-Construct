@@ -59,7 +59,7 @@ public sealed partial class VaultService
     private static string Subject(VaultApprovalSource source)
     {
         var names = string.Join(", ", source.Names);
-        return source.Op switch { "add" => "replacing " + names, "delete" => "deleting " + names, _ => "access to " + names };
+        return source.Op switch { "add" => "replacing " + names, "delete" => "deleting " + names, "autoApprove" => "auto-approving " + names, _ => "access to " + names };
     }
 
     // A host's pending approval, listed like a local VM's request. Completes once it is answered here (forward
@@ -67,8 +67,9 @@ public sealed partial class VaultService
     // (answered on another device, or expired on the host) and throws.
     public Task ApproveHostAsync(VaultApprovalSource source, ApprovalPrompt prompt, DateTimeOffset? deadline, Func<bool, Task<VaultDecision>> forward, CancellationToken cancellationToken) =>
         ApproveAsync(source, prompt, deadline, cancellationToken, forward);
-    private Task<Approval> AskAsync(string instance, VaultRequest request, ApprovalPrompt prompt, CancellationToken token) =>
-        ApproveAsync(new(instance, instance, request.Op, request.Names, request.Id), prompt, request.Deadline, token);
+    // names: the secrets the prompt is about, when not all of the request's (auto-approved ones need no answer).
+    private Task<Approval> AskAsync(string instance, VaultRequest request, ApprovalPrompt prompt, CancellationToken token, IReadOnlyList<string>? names = null) =>
+        ApproveAsync(new(instance, instance, request.Op, names ?? request.Names, request.Id), prompt, request.Deadline, token);
 
     private async Task<Approval> ApproveAsync(VaultApprovalSource source, ApprovalPrompt prompt, DateTimeOffset? deadline, CancellationToken token,
         Func<bool, Task<VaultDecision>>? forward = null)

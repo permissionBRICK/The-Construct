@@ -67,6 +67,7 @@ public sealed class VaultViewTests
         Assert.Equal(("GitHub token for CI", "ci-bot", "", 1), (github["description"]!.GetValue<string>(), github["username"]!.GetValue<string>(), github["addedBy"]!.GetValue<string>(), github["holders"]!.GetValue<int>()));
         var agent = Element(state["secrets"]!.AsArray(), "name", "npm-token");
         Assert.Equal(("dev", 1), (agent["addedBy"]!.GetValue<string>(), agent["holders"]!.GetValue<int>()));
+        Assert.False(github["autoApprove"]!.GetValue<bool>());
         Assert.Equal(["build-vm", "dev"], state["leases"]!.AsArray().Select(l => l!["vm"]!.GetValue<string>()).Order());
         var hosted = Element(state["leases"]!.AsArray(), "id", "l1");
         Assert.Equal((Slug, "host.example", 2, "release 4.2"), (hosted["host"]!.GetValue<string>(), hosted["hostName"]!.GetValue<string>(), hosted["usesLeft"]!.GetValue<int>(), hosted["reason"]!.GetValue<string>()));
@@ -118,6 +119,9 @@ public sealed class VaultViewTests
     [InlineData("""{"type":"vault.setMode","mode":"locked"}""")]
     [InlineData("""{"type":"vault.pairPhone","host":""}""")]
     [InlineData("""{"type":"vault.revokeDevice","host":"h_7462"}""")]
+    [InlineData("""{"type":"vault.setAutoApprove","name":"github-token"}""")]
+    [InlineData("""{"type":"vault.setAutoApprove","name":"github-token","on":"true"}""")]
+    [InlineData("""{"type":"vault.setAutoApprove","on":true}""")]
     public void MalformedOrUnknownRequestsAreRefused(string json) => Assert.Throws<ArgumentException>(() => Parse(json));
 
     [Fact]
@@ -163,6 +167,27 @@ public sealed class VaultViewTests
         window.Entries.Enqueue(new("npm-token", "npm token for releases", "", null));
         await view.ExecuteAsync(new("edit", Name: "npm-token"), default);
         Assert.Equal(new("npm-token has no username.", true), await view.ExecuteAsync(new("copyUsername", Name: "npm-token"), default));
+    }
+
+    [Fact]
+    public async Task TheAutoApproveSwitchConfirmsSwitchingOnButNotOff()
+    {
+        await using var h = new Harness();
+        var (view, _) = View(h);
+        h.Vault.Save(new("github-token", "GitHub token for CI", "", new Secret(Value)));
+        Assert.Equal(new VaultCommand("setAutoApprove", Name: "github-token", On: true), Parse("""{"type":"vault.setAutoApprove","name":"github-token","on":true}"""));
+        h.Prompts.Confirmations.Enqueue(false);
+        Assert.Null(await view.ExecuteAsync(new("setAutoApprove", Name: "github-token", On: true), default));
+        Assert.False(h.Vault.Secrets().Single().AutoApprove);
+        var prompt = Assert.IsType<ConfirmationPrompt>(Assert.Single(h.Prompts.Shown));
+        Assert.Equal("Auto-approve", prompt.Action); Assert.Contains("“github-token”", prompt.Message); Assert.Contains("no VM is scrubbed of it", prompt.Message);
+        h.Prompts.Confirmations.Enqueue(true);
+        Assert.Null(await view.ExecuteAsync(new("setAutoApprove", Name: "github-token", On: true), default));
+        Assert.True(Element(view.State()["secrets"]!.AsArray(), "name", "github-token")["autoApprove"]!.GetValue<bool>());
+        Assert.Null(await view.ExecuteAsync(new("setAutoApprove", Name: "github-token", On: true), default)); // already on: nothing to ask
+        Assert.Null(await view.ExecuteAsync(new("setAutoApprove", Name: "github-token", On: false), default));
+        Assert.False(h.Vault.Secrets().Single().AutoApprove); Assert.Equal(2, h.Prompts.Shown.Count);
+        Assert.Equal(new("That secret no longer exists.", true), await view.ExecuteAsync(new("setAutoApprove", Name: "nope", On: true), default));
     }
 
     [Fact]

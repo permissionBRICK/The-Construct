@@ -73,8 +73,15 @@ public static class VaultPrompts
 
     public static VaultPrompt Replace(string vm, VaultEntry entry, VaultRequest request) =>
         new("Key vault — replace secret",
-            $"The VM “{vm}” wants to replace the value of:\n{VaultRules.Bullet(entry)}\n\nNew description: {request.Description}" + VaultRules.Footer(request), "Replace");
+            $"The VM “{vm}” wants to replace the value of:\n{VaultRules.Bullet(entry)}\n\nNew description: {request.Description}"
+            + (request.AutoApprove == true && !entry.AutoApprove ? "\n\nIt also becomes auto-approved: agents on all your VMs read it without asking you, and no VM is scrubbed of it." : "")
+            + VaultRules.Footer(request), "Replace");
 
     public static VaultPrompt Delete(string vm, VaultEntry entry, VaultRequest request) =>
         new("Key vault — delete secret", $"The VM “{vm}” asks to delete this secret from the key vault:\n{VaultRules.Bullet(entry)}" + VaultRules.Footer(request), "Delete");
+
+    public static VaultPrompt AutoApprove(string vm, VaultEntry entry, VaultRequest request) =>
+        new("Key vault — auto-approve secret",
+            $"The VM “{vm}” asks to auto-approve this secret:\n{VaultRules.Bullet(entry)}\n\nAgents on all your VMs could then read it at any time without asking you, and no VM is scrubbed of it any more."
+            + VaultRules.Footer(request), "Auto-approve");
 }

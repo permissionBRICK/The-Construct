@@ -5,7 +5,8 @@ using static Construct.Companion.Core.Runtime.RuntimeJson;
 namespace Construct.Companion.Core.Vault;
 
 // One entry as hosts store and exchange it: values only inside the K-encrypted payload; a tombstone has none.
-public sealed record VaultWireEntry(string Name, string Description, bool HasUsername, string? Payload, long UpdatedAt, string UpdatedBy, bool Deleted)
+// AutoApprove is the host's readable copy for its own decisions; the payload seals the copy a PC trusts.
+public sealed record VaultWireEntry(string Name, string Description, bool HasUsername, string? Payload, long UpdatedAt, string UpdatedBy, bool Deleted, bool AutoApprove = false)
 {
     public override string ToString() => $"VaultWireEntry {{ Name = {Name}, UpdatedAt = {UpdatedAt} }}";
 }
@@ -41,7 +42,7 @@ public static partial class VaultSync
             var deleted = node.True("deleted");
             var payload = deleted ? null : node.Str("payload");
             if (!deleted && string.IsNullOrEmpty(payload)) continue;
-            parsed.Add(new(name, Sanitize(node.Str("description"), VaultProtocol.MaxText), node.True("hasUsername"), payload, at, by, deleted));
+            parsed.Add(new(name, Sanitize(node.Str("description"), VaultProtocol.MaxText), node.True("hasUsername"), payload, at, by, deleted, !deleted && node.True("autoApprove")));
         }
         var check = root.Str("keyCheck");
         return new(Long(root["revision"]) ?? 0, Mode(root.Str("mode")), check.Length == 0 ? null : check,
@@ -51,7 +52,7 @@ public static partial class VaultSync
     public static JsonObject ToJson(VaultWireEntry entry)
     {
         var json = new JsonObject { ["name"] = entry.Name, ["description"] = entry.Description, ["hasUsername"] = entry.HasUsername };
-        if (!entry.Deleted) json["payload"] = entry.Payload;
+        if (!entry.Deleted) { json["payload"] = entry.Payload; json["autoApprove"] = entry.AutoApprove; }
         json["updatedAt"] = entry.UpdatedAt; json["updatedBy"] = entry.UpdatedBy; json["deleted"] = entry.Deleted;
         return json;
     }

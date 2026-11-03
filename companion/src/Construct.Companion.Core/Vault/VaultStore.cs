@@ -53,7 +53,8 @@ public sealed class VaultStore(IFileSystem files, IDataProtection protection, st
         ["secrets"] = new JsonArray(document.Secrets.Select(s => (JsonNode)new JsonObject
         {
             ["name"] = s.Name, ["description"] = s.Description, ["username"] = s.Username, ["secret"] = s.Value.Reveal(),
-            ["createdAt"] = s.CreatedAt.ToUnixTimeMilliseconds(), ["updatedAt"] = s.UpdatedAt.ToUnixTimeMilliseconds(), ["origin"] = s.Origin, ["updatedBy"] = s.UpdatedBy
+            ["createdAt"] = s.CreatedAt.ToUnixTimeMilliseconds(), ["updatedAt"] = s.UpdatedAt.ToUnixTimeMilliseconds(), ["origin"] = s.Origin, ["updatedBy"] = s.UpdatedBy,
+            ["autoApprove"] = s.AutoApprove
         }).ToArray()),
         ["leases"] = new JsonArray(document.Leases.Select(l => (JsonNode)new JsonObject
         {
@@ -86,7 +87,8 @@ public sealed class VaultStore(IFileSystem files, IDataProtection protection, st
         }
         foreach (var s in root.Array("secrets").OfType<JsonObject>())
             if (VaultProtocol.IsValidName(s.Str("name")) && s.Str("secret").Length > 0)
-                document.Secrets.Add(new(s.Str("name"), s.Str("description"), s.Str("username"), new(s.Str("secret")), Time(s["createdAt"]), Time(s["updatedAt"]), s.Str("origin"), s.Str("updatedBy")));
+                document.Secrets.Add(new(s.Str("name"), s.Str("description"), s.Str("username"), new(s.Str("secret")), Time(s["createdAt"]), Time(s["updatedAt"]), s.Str("origin"), s.Str("updatedBy"),
+                    s.True("autoApprove")));
         foreach (var l in root.Array("leases").OfType<JsonObject>())
             if (VaultProtocol.IsValidName(l.Str("name")) && l.Str("instance").Length > 0)
                 document.Leases.Add(new(l.Str("id"), l.Str("instance"), l.Str("name"), Int(l["usesLeft"]), Time(l["expiresAt"]), Time(l["grantedAt"]), l.Str("reason"), l.Str("origin")));

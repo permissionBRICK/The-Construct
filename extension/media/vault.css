@@ -61,6 +61,8 @@
 .v-actions.v-start { justify-content: flex-start; }
 .v-actions .btn { padding: 4px 10px; font-size: 11.5px; }
 .btn.v-danger:hover { color: var(--crit); }
+.v-auto { display: inline-flex; align-items: center; gap: 7px; margin-left: 10px; }
+.v-auto-label { font-size: 11.5px; color: var(--dim); }
 .btn.v-busy { cursor: wait; }
 
 /* Activity: a timeline grouped by day. */

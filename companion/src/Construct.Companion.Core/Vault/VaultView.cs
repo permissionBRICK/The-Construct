@@ -18,7 +18,7 @@ public interface IVaultWindow
 }
 
 // One request of the Key Vault page ({type:"vault.<action>", …}), validated by VaultView.Parse.
-public sealed record VaultCommand(string Action, string Name = "", string Host = "", string Id = "", string Mode = "", string Vm = "");
+public sealed record VaultCommand(string Action, string Name = "", string Host = "", string Id = "", string Mode = "", string Vm = "", bool On = false);
 // What the page shows after a command: an error, or a confirmation such as "Copied".
 public sealed record VaultNotice(string Text, bool Error);
 
@@ -37,7 +37,7 @@ public sealed class VaultView(VaultService vault, VaultHosts hosts, IPrompts pro
         NoClipboard = new("The clipboard is unavailable.", true), Failed = new("The key vault could not complete this.", true);
     public static IReadOnlySet<string> Actions { get; } = new HashSet<string>(StringComparer.Ordinal)
     {
-        "ready", "refresh", "add", "edit", "delete", "copySecret", "copyUsername", "revokeLease", "discardScrubs", "reset",
+        "ready", "refresh", "add", "edit", "delete", "copySecret", "copyUsername", "setAutoApprove", "revokeLease", "discardScrubs", "reset",
         "sync", "setMode", "pairPhone", "revokeDevice", "showKey", "importKey"
     };
 
@@ -53,7 +53,7 @@ public sealed class VaultView(VaultService vault, VaultHosts hosts, IPrompts pro
             {
                 ["name"] = s.Name, ["description"] = s.Description, ["username"] = s.Username,
                 ["addedBy"] = s.Origin.StartsWith("agent:", StringComparison.Ordinal) ? s.Origin["agent:".Length..] : "",
-                ["updatedAt"] = VaultSync.Ms(s.UpdatedAt),
+                ["updatedAt"] = VaultSync.Ms(s.UpdatedAt), ["autoApprove"] = s.AutoApprove,
                 ["holders"] = s.ActiveLeases + hostLeases.Count(l => l.Lease.Name == s.Name)
             });
         var leases = new JsonArray();
@@ -125,6 +125,8 @@ public sealed class VaultView(VaultService vault, VaultHosts hosts, IPrompts pro
         return action switch
         {
             "edit" or "delete" or "copySecret" or "copyUsername" => new(action, Name: Field("name", VaultProtocol.IsValidName)),
+            "setAutoApprove" => new(action, Name: Field("name", VaultProtocol.IsValidName), On: message.TryGetProperty("on", out var on) && on.ValueKind is JsonValueKind.True or JsonValueKind.False
+                ? on.GetBoolean() : throw new ArgumentException("The key vault request has an invalid on.")),
             "revokeLease" => new(action, Id: Field("id", IsId), Host: Field("host", IsLabel, optional: true)),
             "discardScrubs" => new(action, Vm: Field("vm", IsLabel)),
             "setMode" => new(action, Host: Field("host", IsLabel), Mode: Field("mode", m => m is VaultSync.Available or VaultSync.Locked)),
@@ -170,6 +172,13 @@ public sealed class VaultView(VaultService vault, VaultHosts hosts, IPrompts pro
                 if (Find(c.Name) is null) return SecretGone;
                 if (vault.Username(c.Name) is not { Length: > 0 } username) return new($"{c.Name} has no username.", true);
                 return await window.CopyAsync(new Secret(username), false, ct).ConfigureAwait(false) ? new($"Copied the username of {c.Name}.", false) : NoClipboard;
+            case "setAutoApprove":
+                if (Find(c.Name) is not { } secret) return SecretGone;
+                if (secret.AutoApprove == c.On) return null;
+                // Switching it on is the user's choice, but the page is untrusted input: the native dialog confirms it.
+                if (c.On && !await ConfirmAsync($"Auto-approve “{c.Name}”? Agents on all your VMs can then read it at any time without asking you, and no VM is scrubbed of it. Use this for less sensitive secrets only.",
+                        "Auto-approve", ct).ConfigureAwait(false)) return null;
+                return vault.SetAutoApprove(c.Name, c.On) ? null : SecretGone;
             case "revokeLease":
                 if (c.Host.Length == 0)
                 {

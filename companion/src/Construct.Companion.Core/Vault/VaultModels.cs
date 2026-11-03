@@ -3,7 +3,9 @@ namespace Construct.Companion.Core.Vault;
 
 // One stored secret. Origin is "user" or "agent:<instance>" (registered from a VM by `construct secret add`).
 // UpdatedAt (ms) and UpdatedBy ("pc:<install id>" or "vm:<vm>") decide every merge with a host (last writer wins).
-public sealed record VaultEntry(string Name, string Description, string Username, Secret Value, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, string Origin, string UpdatedBy = "")
+// AutoApprove: VMs read it without asking the user, and no VM is scrubbed of it.
+public sealed record VaultEntry(string Name, string Description, string Username, Secret Value, DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, string Origin, string UpdatedBy = "",
+    bool AutoApprove = false)
 {
     public override string ToString() => $"VaultEntry {{ Name = {Name} }}";
 }
@@ -38,7 +40,7 @@ public sealed class VaultDocument
 }
 
 // What the window shows; values stay behind VaultService.Reveal.
-public sealed record VaultSecretView(string Name, string Description, string Username, string Origin, DateTimeOffset UpdatedAt, int ActiveLeases);
+public sealed record VaultSecretView(string Name, string Description, string Username, string Origin, DateTimeOffset UpdatedAt, int ActiveLeases, bool AutoApprove = false);
 public sealed record VaultLeaseView(string Id, string Instance, string Name, int? UsesLeft, DateTimeOffset ExpiresAt, string Reason, string Origin);
 // Host is empty for this PC's own events and the host name for events pulled from a host's vault.
 public sealed record VaultActivity(DateTimeOffset At, string Instance, string Text, bool Warning = false, string Host = "");

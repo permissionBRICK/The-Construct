@@ -34,8 +34,8 @@ public sealed partial class VaultHostService
                     var entries = await store.ListEntriesAsync(owner.Owner, ct).ConfigureAwait(false);
                     foreach (var lease in expired)
                     {
-                        await EndAsync(lease, now, entries, ct).ConfigureAwait(false);
-                        await RecordAsync(owner.Owner, lease.Vm, $"Access to {lease.Name} expired; scrubbing the VM.", false, ct).ConfigureAwait(false);
+                        var scrubbed = await EndAsync(lease, now, entries, ct).ConfigureAwait(false);
+                        await RecordAsync(owner.Owner, lease.Vm, $"Access to {lease.Name} expired{(scrubbed ? "; scrubbing the VM" : "")}.", false, ct).ConfigureAwait(false);
                     }
                 }
                 await ScheduleAsync(owner.Owner, now, ct).ConfigureAwait(false);
@@ -75,7 +75,7 @@ public sealed partial class VaultHostService
     }
 
     // One scan per VM at a time, for every cleanup that is due — unless that VM holds the same value
-    // again: that lease's own end scrubs it.
+    // again: that lease's own end scrubs it. A secret that became auto-approved meanwhile is not scrubbed.
     private async Task ScheduleAsync(string owner, DateTimeOffset now, CancellationToken ct)
     {
         var cleanups = await store.ListAsync<VaultCleanup>(owner, ct).ConfigureAwait(false);
@@ -83,7 +83,11 @@ public sealed partial class VaultHostService
         var leases = await store.ListAsync<VaultLease>(owner, ct).ConfigureAwait(false);
         var entries = await store.ListEntriesAsync(owner, ct).ConfigureAwait(false);
         var jobs = await store.ListAsync<VaultScrubJob>(owner, ct).ConfigureAwait(false);
-        foreach (var group in cleanups.Where(c => c.DueAt <= now).GroupBy(c => c.Vm, StringComparer.OrdinalIgnoreCase))
+        var ready = new List<VaultCleanup>();
+        foreach (var cleanup in cleanups.Where(c => c.DueAt <= now))
+            if (Live(entries, cleanup.Copy.Name) is { AutoApprove: true }) await store.DeleteAsync<VaultCleanup>(cleanup.Id, ct).ConfigureAwait(false);
+            else ready.Add(cleanup);
+        foreach (var group in ready.GroupBy(c => c.Vm, StringComparer.OrdinalIgnoreCase))
         {
             if (jobs.Any(j => j.Step == "scan" && Ownership.SameName(j.Vm, group.Key))) continue;
             var due = group.Where(c => !(ActiveLease(leases, c.Vm, c.Copy.Name, now) is not null && Live(entries, c.Copy.Name)?.Payload == c.Copy.Payload)).ToArray();

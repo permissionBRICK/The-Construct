@@ -1694,7 +1694,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       { name: "github-token", description: "GitHub token for the release repo", username: "", addedBy: "", updatedAt: NOW - 3 * 86400000, holders: 2 },
       { name: "staging-db", description: "Staging database admin login", username: "admin", addedBy: "", updatedAt: NOW - 40 * 86400000, holders: 0 },
       { name: "npm-publish", description: "npm automation token", username: "", addedBy: "build-vm", updatedAt: NOW - 7200000, holders: 1 },
-      { name: "deploy-key", description: "", username: "deployer", addedBy: "", updatedAt: NOW - 600000, holders: 0 } ],
+      { name: "deploy-key", description: "", username: "deployer", addedBy: "", updatedAt: NOW - 600000, holders: 0, autoApprove: true } ],
     leases: [
       { id: "l1", host: "host.example_7462", hostName: "host.example", vm: "build-vm", name: "npm-publish", usesLeft: null, expiresAt: NOW + 3000000, reason: "", origin: "added" },
       { id: "a1", host: "", hostName: "", vm: "agent-vm", name: "github-token", usesLeft: 3, expiresAt: NOW + 2520000, reason: "release 4.2", origin: "approved" },
@@ -1744,6 +1744,19 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await vault.fill("#vFilter", "nothing like it");
   check("vault: ...and says when nothing matches", await vault.locator("#vSecretsNoMatch").isVisible());
   await vault.fill("#vFilter", "");
+  const autoSwitch = (name) => vault.locator(`.v-secret[data-name="${name}"] .v-auto .switch`);
+  check("vault: every secret has an auto-approve switch showing its setting",
+    (await vault.locator(".v-secret .v-auto .switch").count()) === 4 && (await autoSwitch("deploy-key").getAttribute("aria-checked")) === "true"
+    && (await autoSwitch("github-token").getAttribute("aria-checked")) === "false"
+    && (await vault.locator('.v-secret[data-name="deploy-key"] .tag').textContent()) === "auto-approved");
+  await autoSwitch("github-token").click();
+  check("vault: switching auto-approve on asks the Companion, which confirms natively", JSON.stringify(await vposted()) === JSON.stringify([{ type: "vault.setAutoApprove", name: "github-token", on: true }])
+    && (await autoSwitch("github-token").getAttribute("aria-checked")) === "false" && (await autoSwitch("github-token").getAttribute("class")).includes("busy"));
+  await vaultDone("setAutoApprove");
+  await autoSwitch("deploy-key").focus();
+  await vault.keyboard.press(" ");
+  check("vault: the switch works from the keyboard and switches off too", JSON.stringify(await vposted()) === JSON.stringify([{ type: "vault.setAutoApprove", name: "deploy-key", on: false }]));
+  await vaultDone("setAutoApprove");
 
   await vault.click('.utab[data-tab="access"]');
   check("vault: the Access tab replaces the Secrets tab", await vault.locator("#tab-access").isVisible() && !(await vault.locator("#tab-secrets").isVisible())
