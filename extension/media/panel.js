@@ -344,6 +344,25 @@
     return String(text || "").split("\n").map((s) => s.trim()).filter(Boolean);
   }
 
+  // forwards[] <-> "port [client|host] [label]" lines. The target is always written
+  // out, so a label that starts with "client"/"host" cannot be misread on save.
+  function forwardsToText(forwards) {
+    return (Array.isArray(forwards) ? forwards : []).filter((f) => f && typeof f === "object").map((f) =>
+      [String(f.port), f.to === "host" ? "host" : "client", typeof f.label === "string" ? f.label.trim() : ""]
+        .filter(Boolean).join(" ")).join("\n");
+  }
+  function textToForwards(text) {
+    const out = [];
+    String(text || "").split("\n").forEach((line) => {
+      const m = /^(\d{1,5})(?:\s+(client|host)(?=\s|$))?(?:\s+(.*))?$/.exec(line.trim());
+      if (!m || Number(m[1]) < 1 || Number(m[1]) > 65535) return;
+      const entry = { port: Number(m[1]), to: m[2] || "client" };
+      if (m[3] && m[3].trim()) entry.label = m[3].trim();
+      out.push(entry);
+    });
+    return out;
+  }
+
   function populateModal(name, profile) {
     editName = name || "";
     profile = profile || {};
@@ -363,6 +382,7 @@
     setTa("pmMcp", JSON.stringify(Array.isArray(profile.mcp) ? profile.mcp : [], null, 2));
     setTa("pmHostPkgs", (Array.isArray(profile.hostPackages) ? profile.hostPackages : []).join("\n"));
     setTa("pmProvision", (Array.isArray(profile.provisionCommands) ? profile.provisionCommands : []).join("\n"));
+    setTa("pmForwards", forwardsToText(profile.forwards));
     const err = $("pmMcpErr"); if (err) err.hidden = true;
     openModal(true);
   }
@@ -398,6 +418,7 @@
       mcp: mcp,
       hostPackages: linesToArray($("pmHostPkgs") && $("pmHostPkgs").value),
       provisionCommands: linesToArray($("pmProvision") && $("pmProvision").value),
+      forwards: textToForwards($("pmForwards") && $("pmForwards").value),
     };
     // Preserve the un-edited tests block so a save doesn't drop it.
     if (editTests) out.tests = editTests;

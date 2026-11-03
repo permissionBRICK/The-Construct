@@ -195,6 +195,21 @@ if (-not $nodeAvailable) {
     $psObj7 = $fixture7Json | ConvertFrom-Json
     $psResult7 = ConvertTo-ConstructCanonicalJson -Name "infer-type" -Object $psObj7
     ok "canonical: MCP inferred type byte-matches JS" ($psResult7 -ceq $jsResult7)
+
+    # Fixture 8: forwards -- port,to,label order, "to" spelled out, integral floats
+    # are ports, a blank label is dropped, a single-element array stays an array.
+    foreach ($fwJson in @(
+        '{"name":"fw","forwards":[{"label":"vite","port":5173},{"port":8080.0,"to":"host"},{"port":1e3,"label":" "}],"tests":{"t":1}}',
+        '{"name":"fw","forwards":[{"port":9000,"label":"only one"}]}',
+        '{"name":"fw","forwards":[]}')) {
+        $jsFw = Get-JsCanonical "fw" $fwJson
+        $psFw = ConvertTo-ConstructCanonicalJson -Name "fw" -Object ($fwJson | ConvertFrom-Json)
+        ok "canonical: forwards byte-match JS ($fwJson)" ($psFw -ceq $jsFw)
+        if ($psFw -cne $jsFw) {
+            Write-Host "    PS: $psFw" -ForegroundColor DarkYellow
+            Write-Host "    JS: $jsFw" -ForegroundColor DarkYellow
+        }
+    }
 }
 
 # ── Test-ConstructProfile agreement with validateProfile ─────────────────────
@@ -250,6 +265,20 @@ if (-not $nodeAvailable) {
     $psRn = Test-ConstructProfile -Name "rn" -Object $rnObj
     $jsRn = Get-JsValidation "rn" $rnJson
     ok "validate: repos not array agrees" ($psRn.Ok -eq $false -and $jsRn.ok -eq $false)
+
+    # forwards: the same error list, message for message.
+    foreach ($fwJson in @(
+        '{"name":"fw","forwards":[{"port":5173},{"port":8080.0,"label":"api","to":"host"},{"port":1,"label":""}]}',
+        '{"name":"fw","forwards":[{"port":0},{"port":80.5},{"port":"80"},{"port":true},{"port":1,"to":"Host"},{"port":2,"label":3,"target":"host"},{"port":3,"to":null},7,null]}',
+        '{"name":"fw","forwards":{"port":1}}')) {
+        $psFw = Test-ConstructProfile -Name "fw" -Object ($fwJson | ConvertFrom-Json)
+        $jsFw = Get-JsValidation "fw" $fwJson
+        ok "validate: forwards errors agree ($fwJson)" ($psFw.Ok -eq $jsFw.ok -and ((@($psFw.Errors) -join '|') -ceq (@($jsFw.errors) -join '|')))
+        if ((@($psFw.Errors) -join '|') -cne (@($jsFw.errors) -join '|')) {
+            Write-Host "    PS: $(@($psFw.Errors) -join '|')" -ForegroundColor DarkYellow
+            Write-Host "    JS: $(@($jsFw.errors) -join '|')" -ForegroundColor DarkYellow
+        }
+    }
 
     # Valid: profile with only name.
     $onJson = '{"name":"onlyname"}'

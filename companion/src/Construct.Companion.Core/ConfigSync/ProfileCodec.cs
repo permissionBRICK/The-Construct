@@ -12,11 +12,17 @@ public static class ProfileCodec
     private static string Text(JsonNode? n) => n is JsonValue v && v.TryGetValue<string>(out var s) ? s : n?.ToJsonString() ?? "";
     private static bool Map(JsonNode? n) => n is JsonObject o && o.All(p => StringValue(p.Value));
     private static readonly string[] Agents = ["claude", "codex", "opencode"];
+    private static readonly string[] ForwardKeys = ["port", "label", "to"];
+    private static readonly string[] ForwardTargets = ["client", "host"];
+    // JS Number.isInteger on the parsed double: 8080.0 and 8.08e3 are the port 8080 there too.
+    private static int? ForwardPort(JsonNode? n) => n is JsonValue v && v.GetValueKind() == JsonValueKind.Number && v.TryGetValue<double>(out var d)
+        && double.IsFinite(d) && Math.Floor(d) == d && d >= 1 && d <= 65535 ? (int)d : null;
+    private static bool ForwardTarget(JsonNode? n) => n is JsonValue v && v.TryGetValue<string>(out var s) && ForwardTargets.Contains(s);
     public static IReadOnlyList<string> ValidateProfile(string name, JsonNode? node)
     {
         if (node is not JsonObject obj) return ["profile is not a JSON object"];
         var errors = new List<string>();
-        foreach (var k in obj.Select(p => p.Key)) if (!new[] { "name", "repos", "sdks", "mcp", "hostPackages", "provisionCommands", "tests" }.Contains(k)) errors.Add($"unknown key \"{k}\"");
+        foreach (var k in obj.Select(p => p.Key)) if (!new[] { "name", "repos", "sdks", "mcp", "hostPackages", "provisionCommands", "forwards", "tests" }.Contains(k)) errors.Add($"unknown key \"{k}\"");
         if (!Str(obj["name"])) errors.Add("\"name\" must be a non-empty string");
         else
         {
@@ -70,6 +76,18 @@ public static class ProfileCodec
             }
         }
         foreach (var key in new[] { "hostPackages", "provisionCommands" }) if (obj.ContainsKey(key) && !(obj[key] is JsonArray a && a.All(Str))) errors.Add($"\"{key}\" must be an array of non-empty strings");
+        if (obj.ContainsKey("forwards"))
+        {
+            if (obj["forwards"] is not JsonArray forwards) errors.Add("\"forwards\" must be an array");
+            else for (var i = 0; i < forwards.Count; i++)
+            {
+                if (forwards[i] is not JsonObject f) { errors.Add($"forwards[{i}] must be an object with a \"port\""); continue; }
+                foreach (var k in f.Select(p => p.Key)) if (!ForwardKeys.Contains(k)) errors.Add($"forwards[{i}] unknown key \"{k}\"");
+                if (ForwardPort(f["port"]) is null) errors.Add($"forwards[{i}].port must be an integer from 1 to 65535");
+                if (f.ContainsKey("label") && !StringValue(f["label"])) errors.Add($"forwards[{i}].label must be a string");
+                if (f.ContainsKey("to") && !ForwardTarget(f["to"])) errors.Add($"forwards[{i}].to must be \"client\" or \"host\"");
+            }
+        }
         if (obj.ContainsKey("tests") && obj["tests"] is not JsonObject) errors.Add("\"tests\" must be an object");
         return errors;
     }
@@ -128,7 +146,18 @@ public static class ProfileCodec
             if (m.ContainsKey("enabled")) e["enabled"] = m["enabled"]!.DeepClone();
             mcp.Add(e);
         }
-        return new(true, ConfigSyncRules.Serialize(new JsonObject { ["name"] = name.Trim(), ["repos"] = repos, ["sdks"] = sdks, ["mcp"] = mcp, ["hostPackages"] = o["hostPackages"]?.DeepClone() ?? new JsonArray(), ["provisionCommands"] = o["provisionCommands"]?.DeepClone() ?? new JsonArray(), ["tests"] = NormalizeNumbers(o["tests"]) ?? new JsonObject() }));
+        var forwards = new JsonArray();
+        foreach (var f in (o["forwards"] as JsonArray ?? []).Cast<JsonObject>())
+        {
+            var e = new JsonObject { ["port"] = ForwardPort(f["port"]), ["to"] = f.ContainsKey("to") ? f["to"]!.DeepClone() : "client" };
+            if (Str(f["label"])) e["label"] = f["label"]!.DeepClone();
+            forwards.Add(e);
+        }
+        var profile = new JsonObject { ["name"] = name.Trim(), ["repos"] = repos, ["sdks"] = sdks, ["mcp"] = mcp, ["hostPackages"] = o["hostPackages"]?.DeepClone() ?? new JsonArray(), ["provisionCommands"] = o["provisionCommands"]?.DeepClone() ?? new JsonArray() };
+        // Only when non-empty, like the JS engine: profiles without forwards keep their bytes.
+        if (forwards.Count > 0) profile["forwards"] = forwards;
+        profile["tests"] = NormalizeNumbers(o["tests"]) ?? new JsonObject();
+        return new(true, ConfigSyncRules.Serialize(profile));
     }
 }
 public sealed record CanonicalResult(bool Ok,

@@ -354,6 +354,10 @@ function configSync() {
   for(const obj of objects) { const input={name:'a',raw:JSON.stringify(obj)}; add('canonical',input,c.canonicalizeProfileText(input.name,input.raw)); }
   for (const raw of ['{"name":"a","tests":{"a":1.0,"b":1e2,"c":-0,"d":1.5e300,"e":1e-7,"f":1e-6,"g":1e20}}', JSON.stringify({name:'a',tests:{del:'\x7f',other:'\u2028'}})]) add('canonical',{name:'a',raw},c.canonicalizeProfileText('a',raw));
   for(const raw of ['{"name":"a","tests":{"10":1,"2":2},"sdks":{"10":"v","2":"v"}}',JSON.stringify({name:'a',tests:{controls:'\x0b\x1b'}})]) add('canonical',{name:'a',raw},c.canonicalizeProfileText('a',raw));
+  // forwards: canonical order port,to,label with to spelled out; omitted when empty; integral floats are ports.
+  for (const raw of ['{"name":"a","forwards":[{"label":"vite","port":5173},{"port":8080.0,"to":"host"},{"port":1e3,"label":" "}],"tests":{}}', '{"name":"a","forwards":[]}',
+    '{"name":"a","forwards":[{"port":0},{"port":80.5},{"port":"80"},{"port":1,"to":"Host"},{"port":2,"label":3,"target":"host"},7,null]}', '{"name":"a","forwards":{"port":1}}'])
+    add('canonical',{name:'a',raw},c.canonicalizeProfileText('a',raw));
   const selections=[{remoteUrl:'https://host/repo',ref:'HEAD',relPath:'projects/a.json',name:'a',content:'{}'}];
   for(const input of [{selected:selections,manifest:{},existingNames:[]},{selected:selections,manifest:{},existingNames:['a','a-2']},{selected:selections,manifest:{a:{remoteUrl:'https://host/repo',pathInRemote:'projects/a.json'}},existingNames:['a']},{selected:[...selections,...selections],manifest:{},existingNames:[]}]) add('import',input,c.planUpstreamImport(input));
   const profiles=[{name:'a',raw:'{"name":"a"}'},{name:'default',raw:'{}'},{name:'../bad',raw:'{}'},{name:'invalid',raw:'{"name":"invalid","repos":0}'},{name:'tracked',raw:'{}'}];

@@ -294,6 +294,29 @@ function sanitizeMcp(mcp) {
   return out;
 }
 
+// A profile's port forwards (`forwards`): what `construct expose <port> --label
+// --to` would request, re-requested by provisioning (bin/project-forwards.sh).
+const FORWARD_KEYS = ["port", "label", "to"];
+const FORWARD_TARGETS = ["client", "host"];
+function isForwardPort(v) { return typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 65535; }
+
+/** Sanitize forwards[]: each entry needs a valid port; `to` defaults to "client"
+ *  (a profile is shared, so it must not depend on one VM's default target), an
+ *  unknown `to` drops the entry rather than turning a host forward into a client
+ *  one, and a blank label is omitted. A non-array -> []. Pure. */
+function sanitizeForwards(forwards) {
+  if (!Array.isArray(forwards)) return [];
+  const out = [];
+  for (const f of forwards) {
+    if (!isPlainObject(f) || !isForwardPort(f.port)) continue;
+    if ("to" in f && !FORWARD_TARGETS.includes(f.to)) continue;
+    const entry = { port: f.port, to: "to" in f ? f.to : "client" };
+    if (nonEmptyString(f.label)) entry.label = f.label;
+    out.push(entry);
+  }
+  return out;
+}
+
 /** Sanitize a string[] (hostPackages / provisionCommands): keep non-empty strings,
  *  preserving order (provisionCommands run in array order). A non-array -> []. Pure. */
 function sanitizeStringArray(arr) {
@@ -331,7 +354,7 @@ function validateProfile(name, obj) {
   const errors = [];
   const str = (v) => typeof v === "string" && v.trim() !== "";
   if (!isPlainObject(obj)) return { ok: false, errors: ["profile is not a JSON object"] };
-  const KNOWN = ["name", "repos", "sdks", "mcp", "hostPackages", "provisionCommands", "tests"];
+  const KNOWN = ["name", "repos", "sdks", "mcp", "hostPackages", "provisionCommands", "forwards", "tests"];
   for (const k of Object.keys(obj)) {
     if (!KNOWN.includes(k)) errors.push(`unknown key "${k}"`);
   }
@@ -401,6 +424,16 @@ function validateProfile(name, obj) {
       if (!ok) errors.push(`"${key}" must be an array of non-empty strings`);
     }
   }
+  if ("forwards" in obj) {
+    if (!Array.isArray(obj.forwards)) errors.push('"forwards" must be an array');
+    else obj.forwards.forEach((f, i) => {
+      if (!isPlainObject(f)) { errors.push(`forwards[${i}] must be an object with a "port"`); return; }
+      for (const k of Object.keys(f)) { if (!FORWARD_KEYS.includes(k)) errors.push(`forwards[${i}] unknown key "${k}"`); }
+      if (!isForwardPort(f.port)) errors.push(`forwards[${i}].port must be an integer from 1 to 65535`);
+      if ("label" in f && typeof f.label !== "string") errors.push(`forwards[${i}].label must be a string`);
+      if ("to" in f && !FORWARD_TARGETS.includes(f.to)) errors.push(`forwards[${i}].to must be "client" or "host"`);
+    });
+  }
   if ("tests" in obj && !isPlainObject(obj.tests)) errors.push('"tests" must be an object');
   return { ok: errors.length === 0, errors };
 }
@@ -438,8 +471,12 @@ function sanitizeProfile(name, obj) {
     mcp: sanitizeMcp(o.mcp),
     hostPackages: sanitizeStringArray(o.hostPackages),
     provisionCommands: sanitizeStringArray(o.provisionCommands),
-    tests: isPlainObject(o.tests) ? o.tests : {},
   };
+  // Only when non-empty: every profile written before this key existed keeps its
+  // exact canonical bytes, so no engine rewrites (or an older one rejects) it.
+  const forwards = sanitizeForwards(o.forwards);
+  if (forwards.length) out.forwards = forwards;
+  out.tests = isPlainObject(o.tests) ? o.tests : {};
   return out;
 }
 
@@ -511,7 +548,7 @@ module.exports = {
   buildScanScript, parseScan,
   buildDiscoveredProfile, coveredUrls, planImport,
   toChips, reconcileSelection, additiveMergeSelection,
-  sanitizeRepos, sanitizeSdks, sanitizeMcp, sanitizeMcpEntry, sanitizeStringArray, sanitizeProfile,
+  sanitizeRepos, sanitizeSdks, sanitizeMcp, sanitizeMcpEntry, sanitizeStringArray, sanitizeForwards, sanitizeProfile,
   isReservedProfileName, validateProfile, canonicalProfileJson,
   DEFAULT_INSTALL_REPO, DEFAULT_INSTALL_REF, installUrlFor, buildShareCommand, buildDeployPs1,
 };

@@ -182,6 +182,16 @@ jq -s '
       )
       | add
     ),
+    # One {profile, port, to, label} per declared port forward, for
+    # project-forwards.sh. A port asked for by several profiles (same target) is
+    # requested once, under the first profile that declared it.
+    forwards: (
+      [ .[] | .name as $profile
+        | (.forwards // [])[]
+        | select(type == "object" and (.port | type) == "number")
+        | { profile: $profile, port: .port, to: (.to // "client"), label: (.label // "") } ]
+      | reduce .[] as $f ([]; if any(.[]; .port == $f.port and .to == $f.to) then . else . + [$f] end)
+    ),
     tests: map({(.name): (.tests // {})}) | add
   }
 ' "${project_json_args[@]}" >"${RUNTIME_DIR}/generated.json"

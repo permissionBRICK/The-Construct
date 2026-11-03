@@ -290,6 +290,28 @@ ok("reserved: default.json (with extension) is NOT the base name", !projects.isR
   ok("validate: tests non-object rejected", !projects.validateProfile("x", { name: "x", tests: [] }).ok);
   ok("validate: errors accumulate (several reported at once)",
     projects.validateProfile("x", { name: "y", repos: {}, junk: 1 }).errors.length >= 3);
+  const fw = (forwards) => projects.validateProfile("x", { name: "x", forwards });
+  ok("validate: forwards with port/label/to pass", fw([{ port: 5173 }, { port: 8080, label: "api", to: "host" }, { port: 1, to: "client", label: "" }]).ok);
+  ok("validate: forwards 8080.0 is the integer 8080", fw([{ port: 8080.0 }]).ok);
+  ok("validate: forwards non-array rejected", eq(fw({ port: 1 }).errors, ['"forwards" must be an array']));
+  ok("validate: forwards entry non-object rejected", eq(fw([5173]).errors, ['forwards[0] must be an object with a "port"']));
+  ok("validate: forwards port missing/zero/too big/fractional/string rejected",
+    [[{}], [{ port: 0 }], [{ port: 65536 }], [{ port: 80.5 }], [{ port: "80" }], [{ port: true }]].every((f) =>
+      eq(fw(f).errors, ["forwards[0].port must be an integer from 1 to 65535"])));
+  ok("validate: forwards non-string label rejected", eq(fw([{ port: 1, label: 2 }]).errors, ["forwards[0].label must be a string"]));
+  ok("validate: forwards unknown target rejected (case-sensitive)",
+    eq(fw([{ port: 1, to: "lan" }, { port: 2, to: "Host" }]).errors, ['forwards[0].to must be "client" or "host"', 'forwards[1].to must be "client" or "host"']));
+  ok("validate: forwards unknown key rejected", eq(fw([{ port: 1, target: "host" }]).errors, ['forwards[0] unknown key "target"']));
+})();
+
+// ── sanitizeForwards (coercive) ───────────────────────────────────────────────
+(function () {
+  ok("forwards: non-array -> []", eq(projects.sanitizeForwards(null), []) && eq(projects.sanitizeForwards({}), []));
+  ok("forwards: to defaults to client, blank label dropped, label kept verbatim",
+    eq(projects.sanitizeForwards([{ port: 5173, label: "  " }, { port: 9000, label: " api ", to: "host" }]),
+      [{ port: 5173, to: "client" }, { port: 9000, to: "host", label: " api " }]));
+  ok("forwards: bad port or unknown target drops the entry (never downgraded to client)",
+    eq(projects.sanitizeForwards([{ port: 0 }, { port: 1, to: "lan" }, "x", { port: 2 }]), [{ port: 2, to: "client" }]));
 })();
 
 // ── canonicalProfileJson (config-sync §6 canonical byte form) ─────────────────
@@ -310,6 +332,15 @@ ok("reserved: default.json (with extension) is NOT the base name", !projects.isR
   ok("canonical: output re-validates strictly", projects.validateProfile("web", JSON.parse(out)).ok);
   ok("canonical: matches writeProjectProfile's byte form (stringify+\\n)",
     out === JSON.stringify(JSON.parse(out), null, 2) + "\n");
+  ok("canonical: no forwards key without forwards (existing profiles keep their bytes)",
+    !("forwards" in JSON.parse(projects.canonicalProfileJson("web", { name: "web", forwards: [] }))));
+  const withFw = projects.canonicalProfileJson("web", { tests: {}, forwards: [{ label: "vite", port: 5173 }], name: "web" });
+  ok("canonical: forwards sit between provisionCommands and tests", eq(Object.keys(JSON.parse(withFw)),
+    ["name", "repos", "sdks", "mcp", "hostPackages", "provisionCommands", "forwards", "tests"]));
+  ok("canonical: forward entry is port, to, label with to spelled out",
+    eq(Object.keys(JSON.parse(withFw).forwards[0]), ["port", "to", "label"]) && JSON.parse(withFw).forwards[0].to === "client");
+  ok("canonical: forwards output re-validates and is idempotent",
+    projects.validateProfile("web", JSON.parse(withFw)).ok && projects.canonicalProfileJson("web", JSON.parse(withFw)) === withFw);
 })();
 
 // ── C4 share builders (config-sync §12/§13) ────────────────────────────────
