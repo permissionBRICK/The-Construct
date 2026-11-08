@@ -147,6 +147,8 @@ public sealed class TestApp(
             // Explicit, because appsettings.json names Sqlite as the production default.
             ["Constructd:Persistence"] = "Memory",
             ["Constructd:PublicHost"] = "buildbox.test",
+            // Per instance: the HTTPS certificate lives in files, and tests must not see each other's.
+            ["Constructd:Https:CertificateDirectory"] = Path.Combine(Path.GetTempPath(), "constructd-test-https-" + Guid.NewGuid().ToString("n")),
             ["Constructd:MaxForwardsPerVm"] = "3",
             ["Constructd:VmReachableTimeoutMinutes"] = "1",
             ["Constructd:SshForwardPorts:Start"] = "2201",

@@ -44,9 +44,9 @@ const CHILD_ACTIONS = [
 
 const CONFIG_SCHEMA = require("./hostadmin-config-schema");
 /** The host-config sections of §1.5, in display order. */
-const CONFIG_SECTIONS = ["capacity", "memoryPressure", "userDefaults", "userCaps", "lifecycle", "media", "network", "virtualization", "updates", "usage", "vault"];
+const CONFIG_SECTIONS = ["capacity", "memoryPressure", "userDefaults", "userCaps", "lifecycle", "media", "network", "virtualization", "updates", "usage", "vault", "https"];
 // Sections an older host does not have: shown only when the host's configuration carries them.
-const NEWER_CONFIG_SECTIONS = ["memoryPressure", "usage", "vault"];
+const NEWER_CONFIG_SECTIONS = ["memoryPressure", "usage", "vault", "https"];
 
 /** The tabs of §10.2 and the feature each one needs. `host-admin` gates the module. */
 const TABS = [

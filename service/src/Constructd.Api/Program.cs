@@ -4,6 +4,7 @@ using Constructd.Api.Auth;
 using Constructd.Api.Composition;
 using Constructd.Api.Endpoints;
 using Constructd.Api.Hosting;
+using Constructd.Api.Https;
 using Constructd.Api.Infrastructure;
 using Constructd.Core.Configuration;
 
@@ -51,7 +52,10 @@ if (OperatingSystem.IsWindows())
 
 if (!string.IsNullOrWhiteSpace(options.ListenUrl))
 {
-    builder.WebHost.UseUrls(options.ListenUrl);
+    // Plus the loopback endpoint the HTTPS shared port relays the vault pages to (docs/https-forwards.md).
+    builder.WebHost.UseUrls(VaultRelayEndpoint.ListenUrl(options) is { } vaultRelayUrl
+        ? $"{options.ListenUrl};{vaultRelayUrl}"
+        : options.ListenUrl);
 }
 
 ConfigureTls(builder, options);
@@ -108,6 +112,20 @@ if (options.Fake)
 // message, stack trace and Data with it.
 app.UseMiddleware<RequestOutcomeMiddleware>();
 
+// The vault relay endpoint answers the vault pages and the routes they call, nothing else.
+var vaultRelay = app.Services.GetRequiredService<VaultRelayEndpoint>();
+app.Services.GetRequiredService<HttpsGateway>().VaultRelayPort = () => vaultRelay.Port;
+app.Use(async (http, next) =>
+{
+    if (vaultRelay.IsRelayed(http) && !VaultRelayEndpoint.Allowed(http.Request.Path))
+    {
+        http.Response.StatusCode = StatusCodes.Status404NotFound;
+        return;
+    }
+
+    await next(http);
+});
+
 app.UseStatusCodePages();
 app.UseRouting();
 app.UseAuthentication();
@@ -141,7 +159,8 @@ app.MapGroup("/api/v1")
     .MapChildConfigurationEndpoints()
     .MapUpdateEndpoints()
     .MapNetworkEndpoints()
-    .MapVaultEndpoints();
+    .MapVaultEndpoints()
+    .MapHttpsEndpoints();
 
 // The key vault's phone pages: anonymous static files outside /api/v1.
 app.MapVaultWebEndpoints();

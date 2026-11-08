@@ -18,4 +18,8 @@ public sealed record VirtualizationConfig(bool NestedDefault, bool NestedSelecta
 public sealed record UpdatesConfig(string Repository, string Channel, int DrainTimeoutMinutes, int HealthTimeoutSeconds);
 /// <summary>The key vault's host settings. <c>WebUrl</c>: the address phones use for the approval page (null = the service's own).</summary>
 public sealed record VaultConfig(string? WebUrl = null);
+/// <summary>HTTPS forwards (docs/https-forwards.md). <c>SharedPort</c>: the port (usually 443) on which every VM's
+/// main HTTPS forward is served under the VM's own public name, and the vault pages under the vault web address;
+/// null turns the shared listener off. <c>StartOnRequest</c>: opening a stopped or saved VM's HTTPS URL starts it.</summary>
+public sealed record HttpsConfig(int? SharedPort = null, bool StartOnRequest = true);
 public sealed record MaintenanceMarker(MaintenanceState State, string? UpdateId, DateTimeOffset Since);

@@ -67,16 +67,39 @@ public sealed record ForwardResponse(
     string? Message = null,
     DateTimeOffset? AckedAt = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] ForwardDestination? Destination = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Kind = null)
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Kind = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool Https = false,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool Main = false,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] bool? UpstreamTls = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? PortUrl = null)
 {
     /// <summary>
     /// <paramref name="publicHost"/> is the LAN name host forwards are advertised on. A client
     /// forward is opened by the extension on the user's PC instead, so its link is built from the
     /// ack: <c>hostLabel</c> when the user's PC has a name other machines use, loopback otherwise.
     /// </summary>
-    public static ForwardResponse From(PortForward forward, string publicHost)
+    /// <param name="httpsMainPort">
+    /// The host's shared HTTPS port when a main HTTPS forward is reachable there under the VM's own name
+    /// (a shared port is configured and every VM has its own public name), null otherwise.
+    /// </param>
+    public static ForwardResponse From(PortForward forward, string publicHost, int? httpsMainPort = null)
     {
         ArgumentNullException.ThrowIfNull(forward);
+
+        if (forward.Https && forward.PublicPort is int httpsPort)
+        {
+            // docs/https-forwards.md: the forward's own port always works; a main forward is also served
+            // on the shared port under the VM's own name, and that is the address it advertises.
+            var host = ForwardHost.ForUrl(publicHost) ?? publicHost;
+            var portUrl = $"https://{host}:{httpsPort}/";
+            var mainUrl = forward.Main && httpsMainPort is int shared
+                ? shared == 443 ? $"https://{host}/" : $"https://{host}:{shared}/"
+                : null;
+            return new(
+                forward.Id, forward.VmName, forward.VmPort, forward.PublicPort,
+                forward.Target, forward.Label, forward.Created, mainUrl ?? portUrl,
+                Https: true, Main: forward.Main, UpstreamTls: forward.UpstreamTls, PortUrl: mainUrl is null ? null : portUrl);
+        }
 
         // Every host in a link goes through the one rule (ForwardHost, docs/expose.md): an IPv6
         // literal gets exactly one bracket pair, everything else is passed through unchanged.

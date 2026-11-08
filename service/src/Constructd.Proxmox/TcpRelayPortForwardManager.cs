@@ -36,6 +36,7 @@ public sealed class TcpRelayPortForwardManager : IPortForwardManager, IAsyncDisp
     private readonly IHypervisorDriver _driver;
     private readonly IHostAddressResolver _addresses;
     private readonly ILogger<TcpRelayPortForwardManager> _logger;
+    private readonly IHttpsForwardHost _https;
     private readonly IPAddress _listenAddress;
     private readonly PortAllocator _sshPorts;
     private readonly PortAllocator _appPorts;
@@ -51,7 +52,8 @@ public sealed class TcpRelayPortForwardManager : IPortForwardManager, IAsyncDisp
         IHypervisorDriver driver,
         IHostAddressResolver addresses,
         ConstructdOptions options,
-        ILogger<TcpRelayPortForwardManager> logger)
+        ILogger<TcpRelayPortForwardManager> logger,
+        IHttpsForwardHost? https = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         _clock = clock;
@@ -60,6 +62,7 @@ public sealed class TcpRelayPortForwardManager : IPortForwardManager, IAsyncDisp
         _driver = driver;
         _addresses = addresses;
         _logger = logger;
+        _https = https ?? NoHttpsForwardHost.Instance;
 
         var ssh = options.SshForwardPorts;
         var app = options.AppForwardPorts;
@@ -159,6 +162,10 @@ public sealed class TcpRelayPortForwardManager : IPortForwardManager, IAsyncDisp
         string label, int maxForwards, CancellationToken cancellationToken) =>
         AddForwardAsync(vmName, vmPort, target, label, maxForwards, cancellationToken, null);
 
+    public Task<AddForwardResult> TryAddHttpsForwardAsync(string vmName, int vmPort, string label, HttpsForwardOptions https,
+        int maxForwards, CancellationToken cancellationToken) =>
+        AddForwardAsync(vmName, vmPort, ForwardTarget.Host, label, maxForwards, cancellationToken, null, https);
+
     public Task<AddForwardResult> TryAddDestinationForwardAsync(ForwardRequest request,
         ForwardDestination destination, CancellationToken cancellationToken)
     {
@@ -180,7 +187,8 @@ public sealed class TcpRelayPortForwardManager : IPortForwardManager, IAsyncDisp
         string label,
         int maxForwards,
         CancellationToken cancellationToken,
-        ForwardDestination? destination)
+        ForwardDestination? destination,
+        HttpsForwardOptions? https = null)
     {
         var gate = GateFor(vmName);
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -208,7 +216,10 @@ public sealed class TcpRelayPortForwardManager : IPortForwardManager, IAsyncDisp
                 Target: target,
                 Label: label,
                 Created: _clock.UtcNow,
-                Destination: destination);
+                Destination: destination,
+                Https: https is not null,
+                Main: https?.Main == true,
+                UpstreamTls: https?.UpstreamTls);
 
             try
             {
@@ -226,7 +237,17 @@ public sealed class TcpRelayPortForwardManager : IPortForwardManager, IAsyncDisp
 
             if (publicPort is int port)
             {
-                EnsureListener(forward.Id, port, vmName, TargetFor(forward));
+                try
+                {
+                    Materialize(forward, port);
+                }
+                catch when (forward.Https)
+                {
+                    // An HTTPS forward nobody can bind would be a record without a listener holding a port.
+                    await _store.RemoveAsync(forward.Id, cancellationToken).ConfigureAwait(false);
+                    _appPorts.Release(port);
+                    throw;
+                }
             }
 
             return AddForwardResult.Added(forward);
@@ -315,7 +336,7 @@ public sealed class TcpRelayPortForwardManager : IPortForwardManager, IAsyncDisp
                 var current = await _store.GetAsync(forward.Id, cancellationToken);
                 if (current?.PublicPort is not int port) continue;
                 _appPorts.TryReserve(port);
-                if (EnsureListener(current.Id, port, current.VmName, TargetFor(current))) repaired++;
+                if (Materialize(current, port)) repaired++;
             }
             finally { gate.Release(); }
         }
@@ -330,7 +351,7 @@ public sealed class TcpRelayPortForwardManager : IPortForwardManager, IAsyncDisp
         var total = _listeners.Values
             .Where(listener => string.Equals(listener.VmName, vmName, StringComparison.OrdinalIgnoreCase))
             .Sum(listener => listener.ActiveConnections);
-        return Task.FromResult(total);
+        return Task.FromResult(total + _https.ActiveConnections(vmName));
     }
 
     public async ValueTask DisposeAsync()
@@ -420,8 +441,17 @@ public sealed class TcpRelayPortForwardManager : IPortForwardManager, IAsyncDisp
         if (forward.PublicPort is int port)
         {
             _appPorts.Release(port);
-            await StopListenerAsync(forward.Id).ConfigureAwait(false);
+            if (forward.Https) await _https.StopAsync(forward.Id).ConfigureAwait(false);
+            else await StopListenerAsync(forward.Id).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>A raw relay for a plain host forward; the HTTPS host's TLS listener for an HTTPS one.</summary>
+    private bool Materialize(PortForward forward, int port)
+    {
+        if (!forward.Https) return EnsureListener(forward.Id, port, forward.VmName, TargetFor(forward));
+        _https.Ensure(forward);
+        return false;
     }
 
     private bool CanBind(int port)

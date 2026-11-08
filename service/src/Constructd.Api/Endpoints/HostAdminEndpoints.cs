@@ -32,7 +32,8 @@ public static class HostAdminEndpoints
     {
         var effective = await EffectiveAsync(user.Name, null, policy, ct);
         return new(user.Name, user.Role, user.Enabled, user.MaxVms, user.AllowHostForwards, user.Created, user.Allowance ?? UserAllowance.Unset,
-            effective, new(effective.Usage.Primaries, effective.Usage.Children), (await tokens.ListAsync(user.Name, ct)).Count, user.AllowNested, await usage.UserMonthAsync(user.Name, ct));
+            effective, new(effective.Usage.Primaries, effective.Usage.Children), (await tokens.ListAsync(user.Name, ct)).Count, user.AllowNested, await usage.UserMonthAsync(user.Name, ct),
+            user.AllowHttpsForwards);
     }
     private static async Task<IResult> UsersAsync(IUserStore users, IDelegationPolicy policy, ITokenService tokens, Constructd.Api.Hosting.TokenUsageReader usage, CancellationToken ct)
     {
@@ -62,7 +63,8 @@ public static class HostAdminEndpoints
             JsonValueKind.Null => null,
             _ => (bool?)request.AllowNested.GetBoolean()
         };
-        user = user with { Role = role, Enabled = enabled, MaxVms = request.MaxVms ?? user.MaxVms, AllowHostForwards = request.AllowHostForwards ?? user.AllowHostForwards, AllowNested = allowNested };
+        user = user with { Role = role, Enabled = enabled, MaxVms = request.MaxVms ?? user.MaxVms, AllowHostForwards = request.AllowHostForwards ?? user.AllowHostForwards, AllowNested = allowNested,
+            AllowHttpsForwards = request.AllowHttpsForwards ?? user.AllowHttpsForwards };
         if (!await users.UpdateAsync(user, ct)) return Problems.NotFound("Unknown user.");
         if (!enabled) { sessions.RemoveForPrincipal(user.Name); foreach (var vm in await vms.ListAsync(user.Name, ct)) sessions.RemoveForPrincipal("vm:" + vm.Name); }
         CodedProblems.Audit(http, "user.update", user.Name, target: user.Name);
@@ -84,11 +86,13 @@ public static class HostAdminEndpoints
         CodedProblems.Audit(http, "token.revoke", name, target: id);
         return await tokens.RevokeAsync(name, id, ct) ? Results.NoContent() : Problems.NotFound("Unknown token.");
     }
-    private static async Task<IResult> CapabilitiesAsync(ICapabilityAggregator aggregator, IHostConfigStore config, ConstructdOptions options, IHypervisorDriver driver, CancellationToken ct)
+    private static async Task<IResult> CapabilitiesAsync(HttpContext http, ICapabilityAggregator aggregator, IHostConfigStore config, ConstructdOptions options, IHypervisorDriver driver, CancellationToken ct)
     {
         var caps = await aggregator.GetAsync(ct); var network = await config.GetAsync<NetworkConfig>("network", ct) ?? HostAdminDefaults.Network;
         var defaults = await config.GetAsync<UserDefaultsConfig>("userDefaults", ct) ?? HostAdminDefaults.UserDefaults;
         var virtualization = await config.GetAsync<VirtualizationConfig>("virtualization", ct) ?? HostAdminDefaults.Virtualization;
+        var https = await config.GetAsync<HttpsConfig>("https", ct) ?? HostAdminDefaults.Https;
+        var certificate = http.RequestServices.GetService<Constructd.Api.Https.HttpsCertificateStore>()?.Current;
         return Results.Ok(new
         {
             backend = caps.Backend,
@@ -103,7 +107,15 @@ public static class HostAdminEndpoints
                 defaults.AllowNeverLifetime,
                 defaults.MaxChildLifetimeSeconds,
                 capacityMode = (await CapacityConfigAsync(config, options, ct)).Mode,
-                memoryPressure = await config.GetAsync<MemoryPressureConfig>("memoryPressure", ct) ?? HostAdminDefaults.MemoryPressure
+                memoryPressure = await config.GetAsync<MemoryPressureConfig>("memoryPressure", ct) ?? HostAdminDefaults.MemoryPressure,
+                // docs/https-forwards.md: whether `construct expose --https` can work here, and whether a main
+                // forward gets a port-less address under the VM's own name.
+                https = new
+                {
+                    available = certificate is not null,
+                    sharedPort = https.SharedPort,
+                    mainAddress = https.SharedPort is not null && !string.IsNullOrWhiteSpace(options.PublicHostPattern),
+                }
             }
         });
     }
@@ -201,6 +213,8 @@ public static class HostAdminEndpoints
             }
             catch (Exception ex) when (ex is JsonException or FormatException or InvalidOperationException) { return CodedProblems.Validation(property.Name, "Invalid section value."); }
             if (HostConfigValidation.Validate(value) is { } error) return CodedProblems.Validation(property.Name, error);
+            if (value is HttpsConfig https && HostConfigValidation.HttpsPortConflict(https, options) is { } portConflict)
+                return CodedProblems.Validation("https.sharedPort", portConflict);
             if (HostConfigValidation.UnsupportedOnPlatform(value, options.IsProxmox))
                 return CodedProblems.Create(400, "unsupported-on-platform", "Direct network mode requires Proxmox.");
             if (value is VirtualizationConfig { NestedDefault: true } && !driver.NestedAvailable && !await NestedDefaultOnAsync(metadata, ct))
@@ -214,6 +228,9 @@ public static class HostAdminEndpoints
         CodedProblems.Audit(http, "host.config", http.User.Actor(), target: "host", extra: "sections=" + string.Join("/", sections.Select(s => s.Section)));
         // The host's minimum RAM takes effect on running VMs at once; applying it never shrinks them by itself.
         if (sections.Any(s => s.Section == "virtualization")) _ = http.RequestServices.GetRequiredService<Constructd.Api.Jobs.PrimaryMemoryFloor>().ScheduleApplyAll();
+        // The shared HTTPS port follows its setting at once, not at the gateway's next pass.
+        if (sections.Any(s => s.Section is "https" or "vault") && http.RequestServices.GetService<Constructd.Api.Https.HttpsGateway>() is { } gateway)
+            await gateway.ReconcileSharedAsync(ct);
         return await ConfigAsync(metadata, options, ct);
     }
 }

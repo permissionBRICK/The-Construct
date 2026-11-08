@@ -832,6 +832,23 @@ fi
 #     `KEY=denied` when the host service refuses host forwards to this VM's owner.
 HOST_FORWARDS_FILE="${CONSTRUCT_HOST_FORWARDS_FILE:-/etc/construct/host-forwards}"
 
+# host:port of a URL, with the scheme's default port spelled out when the URL leaves it
+# implicit (a main HTTPS forward on the shared port 443 is https://<vm-name>/), so every
+# reader of the status file finds a port after the last colon.
+url_authority() {
+  local url="$1" scheme authority
+  scheme="${url%%://*}"
+  authority="${url#*://}"
+  authority="${authority%%/*}"
+  if [[ "${authority}" == \[*\] || "${authority}" != *:* ]]; then
+    case "${scheme}" in
+      https) authority="${authority}:443" ;;
+      http) authority="${authority}:80" ;;
+    esac
+  fi
+  printf '%s' "${authority}"
+}
+
 # The authority (host:port) recorded for one key, or "" -- how this script and
 # Provision-AgentVM.ps1 read the same file.
 host_forward_authority() {
@@ -848,39 +865,45 @@ setup_host_forwards() {
   local expose="${REPO_DIR}/bin/construct-expose.sh" lines="" tmp
   local entry key label port url rc authority rest
 
-  # KEY|label|port, one per ENABLED web service ('|' because a label may carry a
-  # colon). A service that is switched off asks for nothing, so its key is simply
-  # absent from the file.
+  # KEY|label|port|https-flags, one per ENABLED web service ('|' because a label may
+  # carry a colon). A service that is switched off asks for nothing, so its key is
+  # simply absent from the file.
   local -a wanted=()
+  local -a https_args=()
+  local https_flags
   case ",${AI_TOOLS}," in
-    *,opencode,*) wanted+=("OPENCODE|opencode server|${OPENCODE_PORT}") ;;
+    *,opencode,*) wanted+=("OPENCODE|opencode server|${OPENCODE_PORT}|") ;;
   esac
   if [[ "${T3CODE}" == "true" ]]; then
     # The port a browser must reach: the TLS listener when T3 is served over HTTPS
-    # (bin/setup-t3-https.sh), the plain one otherwise.
+    # (bin/setup-t3-https.sh), the plain one otherwise. T3 is the VM's main web UI:
+    # when the host can publish it with its own trusted certificate
+    # (docs/https-forwards.md) it does; otherwise this is a plain host forward.
     if [[ "${T3CODE_HTTPS}" == "false" ]]; then
-      wanted+=("T3|T3 Code web GUI|${T3CODE_PORT}")
+      wanted+=("T3|T3 Code web GUI|${T3CODE_PORT}|--https-if-available --main")
     else
-      wanted+=("T3|T3 Code web GUI (https)|${T3CODE_HTTPS_PORT}")
+      wanted+=("T3|T3 Code web GUI (https)|${T3CODE_HTTPS_PORT}|--https-if-available --main --upstream-tls")
     fi
   fi
 
   for entry in ${wanted[@]+"${wanted[@]}"}; do
-    key="${entry%%|*}"
-    rest="${entry#*|}"
-    label="${rest%|*}"
-    port="${rest##*|}"
+    IFS='|' read -r key label port https_flags <<<"${entry}"
+    https_args=()
+    if [[ -n "${https_flags}" ]]; then read -r -a https_args <<<"${https_flags}"; fi
     rc=0
     # stdout is the link and nothing else; the CLI's own diagnostics go to stderr and
     # therefore into the provisioning log the host is streaming.
-    url="$(CONFIG_FILE="${CONFIG_FILE}" bash "${expose}" "${port}" --to host --reuse --label "${label}")" || rc=$?
+    url="$(CONFIG_FILE="${CONFIG_FILE}" bash "${expose}" "${port}" --to host --reuse --label "${label}" \
+      ${https_args[@]+"${https_args[@]}"})" || rc=$?
     authority=""
     if (( rc == 0 )) && [[ -n "${url}" ]]; then
-      authority="${url#*://}"
-      authority="${authority%%/*}"
+      authority="$(url_authority "${url}")"
     fi
     if [[ -n "${authority}" ]]; then
       lines="${lines}${key}=${authority}"$'\n'
+      # An https:// link from a host forward means the HOST terminates TLS with its own
+      # certificate, so the advertised origin is https whatever this VM serves itself.
+      if [[ "${url}" == https://* ]]; then lines="${lines}${key}_HTTPS=true"$'\n'; fi
       ok "  ${key}: ${url}"
     elif (( rc == 7 )); then
       # The owner may not have host forwards. Recorded, not guessed at: the host
@@ -932,7 +955,8 @@ record_t3_forward_url() {
   if [[ -n "${authority}" ]]; then
     origin="$(_cfg_unquote "$(sed -n 's/^T3CODE_PUBLIC_BASE_URL=//p' "${CONFIG_FILE}" 2>/dev/null | head -1 || true)")"
     want_port="${authority##*:}"
-    origin_port="${origin##*:}"
+    origin_port=""
+    if [[ -n "${origin}" ]]; then origin_port="$(url_authority "${origin}")"; origin_port="${origin_port##*:}"; fi
     # The HOST halves may legitimately be spelled differently (the service advertises the
     # VM's public name, the guest its CONSTRUCT_EXTERNAL_HOST); the PORT is what says
     # whether the origin is the forwarded one.
@@ -964,11 +988,17 @@ record_t3_forward_url() {
 # Read back from the status file rather than kept in a variable: run_step pipes the
 # step into `tee`, so it runs in a SUBSHELL and nothing it assigns survives.
 T3CODE_PUBLIC_PORT=""
+T3CODE_PUBLIC_SCHEME=""
 _t3_forward_authority="$(host_forward_authority T3)"
 if [[ -n "${_t3_forward_authority}" ]]; then
   _t3_forward_port="${_t3_forward_authority##*:}"
   if [[ "${_t3_forward_port}" =~ ^[0-9]+$ ]] && (( _t3_forward_port >= 1 && _t3_forward_port <= 65535 )); then
     T3CODE_PUBLIC_PORT="${_t3_forward_port}"
+    # The host terminates TLS on this forward (docs/https-forwards.md): the advertised
+    # origin is https even when T3's own HTTPS proxy is off.
+    if [[ "$(sed -n 's/^T3_HTTPS=//p' "${HOST_FORWARDS_FILE}" 2>/dev/null | head -1 || true)" == "true" ]]; then
+      T3CODE_PUBLIC_SCHEME="https"
+    fi
   fi
 fi
 # Persist it for the standalone re-runs of setup-t3-https.sh / install-ai-tools.sh (the
@@ -982,6 +1012,11 @@ if [[ -n "${CONSTRUCT_SERVICE_URL:-}" ]]; then
   elif [[ -f "${CONFIG_FILE}" ]] && grep -q '^T3CODE_PUBLIC_PORT=' "${CONFIG_FILE}"; then
     # No forward this run (denied / error / T3 off): a stale port must not be advertised.
     sed -i '/^T3CODE_PUBLIC_PORT=/d' "${CONFIG_FILE}"
+  fi
+  if [[ -n "${T3CODE_PUBLIC_SCHEME}" ]]; then
+    cfg T3CODE_PUBLIC_SCHEME "${T3CODE_PUBLIC_SCHEME}"
+  elif [[ -f "${CONFIG_FILE}" ]] && grep -q '^T3CODE_PUBLIC_SCHEME=' "${CONFIG_FILE}"; then
+    sed -i '/^T3CODE_PUBLIC_SCHEME=/d' "${CONFIG_FILE}"
   fi
 fi
 
@@ -1076,6 +1111,7 @@ if [[ "${T3CODE}" == "true" ]]; then
   _t3_public_port_env=()
   if [[ -n "${T3CODE_PUBLIC_PORT}" ]]; then
     _t3_public_port_env=("T3CODE_PUBLIC_PORT=${T3CODE_PUBLIC_PORT}")
+    if [[ -n "${T3CODE_PUBLIC_SCHEME}" ]]; then _t3_public_port_env+=("T3CODE_PUBLIC_SCHEME=${T3CODE_PUBLIC_SCHEME}"); fi
   fi
   run_step optional "Installing T3 Code web GUI" \
     env TARGET_USER="${CLAUDE_USER}" AI_TOOLS_OVERRIDE=t3code AI_CONSOLE_INTEGRATION=false \

@@ -40,8 +40,8 @@ public sealed class SqliteUserStore(SqliteDatabase database) : IUserStore, IUser
         await using var connection = await database.OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT OR IGNORE INTO users (name, role, max_vms, created, allow_host_forwards, enabled, allow_child_creation, max_retained_children, cpu_budget, ram_budget_bytes, storage_budget_bytes, max_child_lifetime_seconds, allow_never_lifetime, allow_sharing, allow_nested)
-            VALUES (@name, @role, @maxVms, @created, @allowHostForwards, @enabled, @allow_child_creation, @max_retained_children, @cpu_budget, @ram_budget_bytes, @storage_budget_bytes, @max_child_lifetime_seconds, @allow_never_lifetime, @allow_sharing, @allowNested);
+            INSERT OR IGNORE INTO users (name, role, max_vms, created, allow_host_forwards, enabled, allow_child_creation, max_retained_children, cpu_budget, ram_budget_bytes, storage_budget_bytes, max_child_lifetime_seconds, allow_never_lifetime, allow_sharing, allow_nested, allow_https_forwards)
+            VALUES (@name, @role, @maxVms, @created, @allowHostForwards, @enabled, @allow_child_creation, @max_retained_children, @cpu_budget, @ram_budget_bytes, @storage_budget_bytes, @max_child_lifetime_seconds, @allow_never_lifetime, @allow_sharing, @allowNested, @allowHttpsForwards);
             """;
         command
             .With("@name", user.Name)
@@ -58,7 +58,8 @@ public sealed class SqliteUserStore(SqliteDatabase database) : IUserStore, IUser
             .With("@storage_budget_bytes", user.Allowance?.StorageBudgetBytes)
             .With("@max_child_lifetime_seconds", user.Allowance?.MaxChildLifetimeSeconds)
             .With("@allow_never_lifetime", user.Allowance?.AllowNeverLifetime)
-            .With("@allow_sharing", user.Allowance?.AllowSharing);
+            .With("@allow_sharing", user.Allowance?.AllowSharing)
+            .With("@allowHttpsForwards", user.AllowHttpsForwards ? 1 : 0);
 
         return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 1;
     }
@@ -71,7 +72,8 @@ public sealed class SqliteUserStore(SqliteDatabase database) : IUserStore, IUser
         await using var command = connection.CreateCommand();
         command.CommandText = """
             UPDATE users
-               SET role = @role, max_vms = @maxVms, allow_host_forwards = @allowHostForwards, enabled = @enabled, allow_nested = @allowNested
+               SET role = @role, max_vms = @maxVms, allow_host_forwards = @allowHostForwards, enabled = @enabled, allow_nested = @allowNested,
+                   allow_https_forwards = @allowHttpsForwards
              WHERE name = @name;
             """;
         command
@@ -80,6 +82,7 @@ public sealed class SqliteUserStore(SqliteDatabase database) : IUserStore, IUser
             .With("@maxVms", user.MaxVms)
             .With("@allowHostForwards", user.AllowHostForwards ? 1 : 0)
             .With("@allowNested", user.AllowNested)
+            .With("@allowHttpsForwards", user.AllowHttpsForwards ? 1 : 0)
             .With("@enabled", user.Enabled ? 1 : 0);
 
         return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 1;
@@ -101,7 +104,8 @@ public sealed class SqliteUserStore(SqliteDatabase database) : IUserStore, IUser
         reader.GetInt("max_vms"),
         SqliteDatabase.ReadTime(reader.GetString("created")),
         reader.GetBool("allow_host_forwards"), reader.GetBool("enabled"),
-        new UserAllowance(reader.GetBoolOrNull("allow_child_creation"), reader.GetIntOrNull("max_retained_children"), reader.GetIntOrNull("cpu_budget"), reader.GetLongOrNull("ram_budget_bytes"), reader.GetLongOrNull("storage_budget_bytes"), reader.GetLongOrNull("max_child_lifetime_seconds"), reader.GetBoolOrNull("allow_never_lifetime"), reader.GetBoolOrNull("allow_sharing")), reader.GetBoolOrNull("allow_nested"));
+        new UserAllowance(reader.GetBoolOrNull("allow_child_creation"), reader.GetIntOrNull("max_retained_children"), reader.GetIntOrNull("cpu_budget"), reader.GetLongOrNull("ram_budget_bytes"), reader.GetLongOrNull("storage_budget_bytes"), reader.GetLongOrNull("max_child_lifetime_seconds"), reader.GetBoolOrNull("allow_never_lifetime"), reader.GetBoolOrNull("allow_sharing")), reader.GetBoolOrNull("allow_nested"),
+        reader.GetBoolOrNull("allow_https_forwards") == true);
     public async Task<bool> SetEnabledAsync(string name, bool enabled, CancellationToken ct)
     {
         await using var connection = await database.OpenAsync(ct);

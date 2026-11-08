@@ -616,5 +616,68 @@ CONSTRUCT_FORWARDS_DIR="${spool}" CONFIG_FILE="${poison_cfg}" \
 ok "config.env cannot redirect the spool directory" test "$(requests | wc -l)" = 1
 ok "config.env cannot redirect the spool directory (no evil path)" test ! -d /tmp/evil
 
+# ── HTTPS forwards (docs/https-forwards.md) ──────────────────────────────────
+
+# The help shows the HTTPS options only when the host says this VM may use them.
+reset_stub
+printf '200' >"${stub_dir}/code"
+printf '{"available":false,"reason":"no-certificate","message":"This host has no HTTPS certificate.","mainAddress":null}' >"${stub_dir}/response"
+help_out="$(remote --help 2>&1)"
+ok "https: the help hides --https when the host cannot serve it" sh -c "! printf '%s' \"\$1\" | grep -q -- '--https'" _ "${help_out}"
+ok "https: the help asks the host for this VM" \
+  grep -qx 'GET https://buildbox.example.local:7462/api/v1/vms/work-vm/https' "${stub_dir}/requests"
+
+reset_stub
+printf '200' >"${stub_dir}/code"
+printf '{"available":true,"reason":null,"message":null,"mainAddress":"https://work-vm.vms.example/"}' >"${stub_dir}/response"
+help_out="$(remote --help 2>&1)"
+ok "https: the help shows --https when the host serves it" grep -q -- '--https ' <<<"${help_out}"
+ok "https: ...and where --main is served" grep -q 'https://work-vm.vms.example/' <<<"${help_out}"
+
+help_local="$(expose --help 2>&1)"
+ok "https: a local VM's help never mentions it" sh -c "! printf '%s' \"\$1\" | grep -q -- '--https'" _ "${help_local}"
+ok "https: a local VM refuses --https" sh -c "! CONSTRUCT_FORWARDS_DIR='${spool}' CONFIG_FILE='${empty_cfg}' bash '${CLI}' expose 3000 --https >/dev/null 2>&1"
+ok "https: --https cannot target the client" sh -c "! STUB_DIR='${stub_dir}' PATH='${stubs}:${PATH}' CONFIG_FILE='${remote_cfg}' CONSTRUCT_VM_TOKEN_FILE='${token_file}' bash '${CLI}' expose 3000 --https --to client >/dev/null 2>&1"
+ok "https: --main needs --https" sh -c "! STUB_DIR='${stub_dir}' PATH='${stubs}:${PATH}' CONFIG_FILE='${remote_cfg}' CONSTRUCT_VM_TOKEN_FILE='${token_file}' bash '${CLI}' expose 3000 --main >/dev/null 2>&1"
+
+# An HTTPS forward prints the https link the service returns.
+reset_stub
+printf '201' >"${stub_dir}/code"
+printf '{"id":"fwd-h","vmName":"work-vm","vmPort":5178,"publicPort":2310,"target":"host","label":"T3","url":"https://work-vm.vms.example/","https":true,"main":true,"portUrl":"https://work-vm.vms.example:2310/"}' >"${stub_dir}/response"
+https_out="$(remote 5178 --https --main --upstream-tls --label T3 2>&1)"
+ok "https: prints the https link" test "${https_out}" = "https://work-vm.vms.example/"
+ok "https: the body asks for https, main and upstream TLS on a host forward" \
+  sh -c "grep -q '\"https\":true' '${stub_dir}/bodies' && grep -q '\"main\":true' '${stub_dir}/bodies' && grep -q '\"upstreamTls\":true' '${stub_dir}/bodies' && grep -q '\"target\":\"host\"' '${stub_dir}/bodies'"
+
+# Refused by the host: a clear message and the refused exit code.
+reset_stub
+printf '403' >"${stub_dir}/code"
+printf '{"code":"https-unavailable","detail":"HTTPS forwards are not enabled for '"'"'alice'"'"'."}' >"${stub_dir}/response"
+refused_out="$(remote 5178 --https 2>&1)"; refused_code=$?
+ok "https: an unavailable host is a refusal (exit 7)" test "${refused_code}" = 7
+ok "https: ...that says why" grep -q 'not enabled for' <<<"${refused_out}"
+
+# --https-if-available (provisioning): falls back to a plain host forward.
+reset_stub
+printf '409' >"${stub_dir}/code"
+printf '{"code":"https-unavailable","detail":"This host has no HTTPS certificate."}' >"${stub_dir}/response"
+printf '201' >"${stub_dir}/code-2"
+printf '{"id":"fwd-p","vmPort":5178,"publicPort":2311,"target":"host","label":"T3","url":"http://buildbox.example.local:2311/"}' >"${stub_dir}/response-2"
+fallback_out="$(remote 5178 --to host --https-if-available --main --label T3 2>&1)"; fallback_code=$?
+ok "https-if-available: falls back to a plain host forward" test "${fallback_code}:${fallback_out}" = "0:http://buildbox.example.local:2311/"
+ok "https-if-available: the second request is a plain one" sh -c "test \"\$(grep -c '\"https\":true' '${stub_dir}/bodies')\" = 1"
+
+# --reuse keeps HTTPS and plain forwards of the same port apart.
+reset_stub
+printf '200' >"${stub_dir}/code"
+printf '[{"id":"fwd-p","vmPort":5178,"target":"host","url":"http://buildbox.example.local:2311/"},{"id":"fwd-h","vmPort":5178,"target":"host","https":true,"url":"https://work-vm.vms.example:2310/"}]' >"${stub_dir}/response"
+reuse_https="$(remote 5178 --https --reuse 2>&1)"
+ok "https --reuse: finds the HTTPS forward" test "${reuse_https}" = "https://work-vm.vms.example:2310/"
+reset_stub
+printf '200' >"${stub_dir}/code"
+printf '[{"id":"fwd-h","vmPort":5178,"target":"host","https":true,"url":"https://work-vm.vms.example:2310/"},{"id":"fwd-p","vmPort":5178,"target":"host","url":"http://buildbox.example.local:2311/"}]' >"${stub_dir}/response"
+reuse_plain="$(remote 5178 --to host --reuse 2>&1)"
+ok "plain --reuse: never picks the HTTPS forward" test "${reuse_plain}" = "http://buildbox.example.local:2311/"
+
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"
 [[ "${fail}" -eq 0 ]]

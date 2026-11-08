@@ -1,5 +1,6 @@
 using Constructd.Api.Auth;
 using Constructd.Api.Contracts;
+using Constructd.Api.Https;
 using Constructd.Api.Infrastructure;
 using Constructd.Api.Jobs;
 using Constructd.Core.Abstractions;
@@ -19,6 +20,10 @@ public static class ForwardEndpoints
     {
         api.MapGet("/vms/{name}/forwards", ListAsync)
             .RequireAuthorization(Policies.VmScoped).WithName("ListForwards");
+
+        // Whether this VM may publish HTTPS forwards: `construct expose --help` only offers the option then.
+        api.MapGet("/vms/{name}/https", HttpsAsync)
+            .RequireAuthorization(Policies.VmScoped).WithName("VmHttpsAvailability");
 
         api.MapPost("/vms/{name}/forwards", CreateAsync)
             .RequireAuthorization(Policies.VmScoped).Audited("forward.add").WithName("CreateForward");
@@ -81,7 +86,22 @@ public static class ForwardEndpoints
         // Advertised under THIS VM's public host (plan §4.12) — the service's PublicHost unless the
         // host runs a PublicHostPattern, in which case every VM has its own name.
         var publicHost = options.PublicHostFor(lookup.Vm!.Name);
-        return TypedResults.Ok(list.Select(f => ForwardResponse.From(f, publicHost)).ToList());
+        var mainPort = await HttpsMainPortAsync(http, options, cancellationToken);
+        return TypedResults.Ok(list.Select(f => ForwardResponse.From(f, publicHost, mainPort)).ToList());
+    }
+
+    private static async Task<IResult> HttpsAsync(
+        string name,
+        HttpContext http,
+        IVmRepository repository,
+        IAuthorizationService authorization,
+        CancellationToken cancellationToken)
+    {
+        var lookup = await ApiHelpers.ResolveVmAsync(http, repository, authorization, name,
+            Policies.ForwardRequester, cancellationToken).ConfigureAwait(false);
+        return lookup.Ok
+            ? TypedResults.Ok(await HttpsAvailability.CheckAsync(lookup.Vm!, http.RequestServices, cancellationToken))
+            : lookup.Failure!;
     }
 
     private static async Task<IResult> CreateAsync(
@@ -105,6 +125,11 @@ public static class ForwardEndpoints
         }
 
         var vm = lookup.Vm!;
+        var https = request?.Https == true;
+        if ((request?.Main == true || request?.UpstreamTls is not null) && !https)
+            return CodedProblems.Validation("https", "'main' and 'upstreamTls' need https=true.");
+        if (https && vm.Kind == VmKind.Child)
+            return CodedProblems.Create(400, "https-primary-only", "HTTPS forwards are for primary VMs.");
         if (vm.Kind == VmKind.Child) return await ChildForwardOperations.CreateAsync(vm, request, http, cancellationToken);
         if (request?.ConnectPort is not null || request?.Via is not null)
             return CodedProblems.Validation("destination", "Primary forwards cannot specify via or connectPort.");
@@ -120,12 +145,24 @@ public static class ForwardEndpoints
             return Problems.BadRequest("'vmPort' must be between 1 and 65535.");
         }
 
-        // Client is the default target: private to the user's PC, no LAN exposure (plan §4.6).
-        var target = ForwardTarget.Client;
+        // Client is the default target: private to the user's PC, no LAN exposure (plan §4.6). An HTTPS
+        // forward is served by the host, so it is a host forward whether or not the target was named.
+        var target = https ? ForwardTarget.Host : ForwardTarget.Client;
         if (!string.IsNullOrWhiteSpace(request.Target) &&
             !ApiHelpers.TryParseEnum(request.Target, out target))
         {
             return Problems.BadRequest($"'target' must be one of: {ApiHelpers.Options<ForwardTarget>()}.");
+        }
+
+        if (https && target != ForwardTarget.Host)
+        {
+            return CodedProblems.Validation("target", "An HTTPS forward is served by the host: target must be host.");
+        }
+
+        if (https && await HttpsAvailability.CheckAsync(vm, http.RequestServices, cancellationToken) is { Available: false } unavailable)
+        {
+            http.SetAuditDetail($"https unavailable: {unavailable.Reason}");
+            return CodedProblems.Create(unavailable.Reason == "not-allowed" ? 403 : 409, "https-unavailable", unavailable.Message!);
         }
 
         var label = request.Label?.Trim() ?? string.Empty;
@@ -138,7 +175,7 @@ public static class ForwardEndpoints
 
         if (target == ForwardTarget.Host)
         {
-            if ((await network.CurrentAsync(vm, cancellationToken)).Mode == "direct")
+            if (!https && (await network.CurrentAsync(vm, cancellationToken)).Mode == "direct")
             {
                 var endpoint = await network.EndpointAsync(vm, cancellationToken);
                 if (endpoint is null) return CodedProblems.Create(409, "no-address", "The guest has not reported an address yet.");
@@ -151,8 +188,9 @@ public static class ForwardEndpoints
                 return CodedProblems.Create(403, "host-forwards-disabled", "Host-target forwards are disabled on this host.");
             // The policy follows the VM's OWNER, not the caller: an admin acting on someone else's VM
             // must not be able to route around that user's restriction.
+            // An HTTPS forward has its own permission, checked above (HttpsAvailability).
             var owner = await users.GetAsync(vm.Owner, cancellationToken).ConfigureAwait(false);
-            if (owner is null || !owner.AllowHostForwards)
+            if (!https && (owner is null || !owner.AllowHostForwards))
             {
                 http.SetAuditDetail("host forwards disabled for the owner");
                 return Problems.Forbidden(
@@ -166,9 +204,13 @@ public static class ForwardEndpoints
             // The cap, the "is this VM still there" check and the insert all happen inside the manager
             // under the VM's own gate: a guest could otherwise fire concurrent requests through the gap
             // between counting and adding, or attach a forward to a VM that is being torn down.
-            result = await forwards.TryAddForwardAsync(
-                vm.Name, vmPort, target, label, options.MaxForwardsPerVm, cancellationToken)
-                .ConfigureAwait(false);
+            result = https
+                ? await forwards.TryAddHttpsForwardAsync(vm.Name, vmPort, label,
+                    new HttpsForwardOptions(request.Main == true, request.UpstreamTls), options.MaxForwardsPerVm, cancellationToken)
+                    .ConfigureAwait(false)
+                : await forwards.TryAddForwardAsync(
+                    vm.Name, vmPort, target, label, options.MaxForwardsPerVm, cancellationToken)
+                    .ConfigureAwait(false);
         }
         catch (PortRangeExhaustedException ex)
         {
@@ -191,11 +233,12 @@ public static class ForwardEndpoints
 
         var forward = result.Forward!;
         http.SetAuditDetail(
-            $"id={forward.Id}, vmPort={vmPort}, target={target}, publicPort={forward.PublicPort?.ToString() ?? "-"}");
+            $"id={forward.Id}, vmPort={vmPort}, target={target}, publicPort={forward.PublicPort?.ToString() ?? "-"}" +
+            (forward.Https ? $", https, main={forward.Main}" : ""));
 
         return TypedResults.Created(
             $"/api/v1/vms/{vm.Name}/forwards/{forward.Id}",
-            ForwardResponse.From(forward, options.PublicHostFor(vm.Name)));
+            ForwardResponse.From(forward, options.PublicHostFor(vm.Name), await HttpsMainPortAsync(http, options, cancellationToken)));
     }
 
     private static async Task<IResult> DeleteAsync(
@@ -346,6 +389,17 @@ public static class ForwardEndpoints
             $", hostLabel={(string.IsNullOrEmpty(hostLabel) ? "-" : hostLabel)}");
 
         return TypedResults.Ok(ForwardResponse.From(forward with { Ack = ack }, options.PublicHostFor(vm.Name)));
+    }
+
+    /// <summary>
+    /// The shared HTTPS port when main HTTPS forwards are reachable on it under each VM's own name: a shared
+    /// port is configured and <c>PublicHostPattern</c> gives every VM a name of its own (docs/https-forwards.md).
+    /// </summary>
+    internal static async Task<int?> HttpsMainPortAsync(HttpContext http, ConstructdOptions options, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(options.PublicHostPattern)) return null;
+        var gateway = http.RequestServices.GetService<HttpsGateway>();
+        return gateway is null ? null : (await gateway.ConfigAsync(cancellationToken).ConfigureAwait(false)).SharedPort;
     }
 
     /// <summary>A host label ends up in a URL the CLI prints; a message ends up on its stderr.</summary>

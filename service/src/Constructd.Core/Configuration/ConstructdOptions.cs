@@ -106,12 +106,19 @@ public sealed class ConstructdOptions
     public string VaultWebBase()
     {
         if (!string.IsNullOrWhiteSpace(VaultWebUrl)) return VaultWebUrl.Trim().TrimEnd('/');
-        var port = 7462;
-        var first = (ListenUrl ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault();
-        if (first is not null && Uri.TryCreate(first.Replace("://*", "://localhost", StringComparison.Ordinal).Replace("://+", "://localhost", StringComparison.Ordinal),
-                UriKind.Absolute, out var listen)) port = listen.Port;
-        return $"https://{PublicHost}:{port}";
+        return $"https://{PublicHost}:{ApiPort()}";
     }
+
+    /// <summary>The port of the first <see cref="ListenUrl"/>, 7462 when unset or unreadable.</summary>
+    public int ApiPort()
+    {
+        var first = (ListenUrl ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault();
+        return first is not null && Uri.TryCreate(first.Replace("://*", "://localhost", StringComparison.Ordinal).Replace("://+", "://localhost", StringComparison.Ordinal),
+            UriKind.Absolute, out var listen) ? listen.Port : 7462;
+    }
+
+    /// <summary>HTTPS forwards: where the host keeps its certificate (docs/https-forwards.md).</summary>
+    public HttpsOptions Https { get; set; } = new();
 
     /// <summary>
     /// Hyper-V virtual switch new VMs are attached to. The service host's own switch (plan §4.4
@@ -444,4 +451,25 @@ public sealed class IsoOptions
     /// <c>bin/build-autoinstall-iso.sh</c>).
     /// </summary>
     public string SourceId { get; set; } = "ubuntu-server-minimal";
+}
+
+/// <summary>
+/// HTTPS forwards (docs/https-forwards.md). The certificate itself is set through the API, the admin CLI
+/// or the host administration UI; these options only say where it is kept.
+/// </summary>
+public sealed class HttpsOptions
+{
+    /// <summary>Directory for the certificate chain and its private key. Empty: <c>https</c> next to the database.</summary>
+    public string CertificateDirectory { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Loopback port of the internal plain-HTTP endpoint the shared HTTPS port relays the vault pages to.
+    /// Zero (the default) picks a free port at startup; only the vault page routes answer on it.
+    /// </summary>
+    public int VaultRelayPort { get; set; }
+
+    /// <summary>The certificate directory in effect.</summary>
+    public string ResolveCertificateDirectory(string databasePath) =>
+        !string.IsNullOrWhiteSpace(CertificateDirectory) ? CertificateDirectory
+            : Path.Combine(Path.GetDirectoryName(Path.GetFullPath(databasePath)) ?? ".", "https");
 }

@@ -62,8 +62,8 @@ public sealed class SqliteForwardStore(SqliteDatabase database) : IForwardStore
         await using var connection = await database.OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO forwards (id, vm_name, vm_port, public_port, target, label, created, destination_vm, destination_via, destination_connect_address, destination_connect_port, requested_by, relationship, destination_verified)
-            VALUES (@id, @vmName, @vmPort, @publicPort, @target, @label, @created, @dvm, @via, @address, @port, @requester, @relationship, @verified);
+            INSERT INTO forwards (id, vm_name, vm_port, public_port, target, label, created, destination_vm, destination_via, destination_connect_address, destination_connect_port, requested_by, relationship, destination_verified, https, main, upstream_tls)
+            VALUES (@id, @vmName, @vmPort, @publicPort, @target, @label, @created, @dvm, @via, @address, @port, @requester, @relationship, @verified, @https, @main, @upstreamTls);
             """;
         command
             .With("@id", forward.Id)
@@ -72,7 +72,10 @@ public sealed class SqliteForwardStore(SqliteDatabase database) : IForwardStore
             .With("@publicPort", forward.PublicPort)
             .With("@target", forward.Target.ToString())
             .With("@label", forward.Label)
-            .With("@created", SqliteDatabase.Text(forward.Created));
+            .With("@created", SqliteDatabase.Text(forward.Created))
+            .With("@https", forward.Https ? 1 : 0)
+            .With("@main", forward.Main ? 1 : 0)
+            .With("@upstreamTls", forward.UpstreamTls is bool tls ? tls ? 1 : 0 : null);
 
         BindDestination(command, forward.Destination);
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
@@ -146,7 +149,10 @@ public sealed class SqliteForwardStore(SqliteDatabase database) : IForwardStore
         ReadAck(reader), reader.GetStringOrNull("destination_vm") is { } destinationVm ? new(
             destinationVm, reader.GetStringOrNull("destination_via"), reader.GetStringOrNull("destination_connect_address"),
             reader.GetInt("destination_connect_port"), reader.GetString("requested_by"),
-            SqliteDatabase.ReadEnum<ForwardRelationship>(reader.GetString("relationship")), reader.GetIntOrNull("destination_verified") == 1) : null);
+            SqliteDatabase.ReadEnum<ForwardRelationship>(reader.GetString("relationship")), reader.GetIntOrNull("destination_verified") == 1) : null,
+        reader.GetIntOrNull("https") == 1,
+        reader.GetIntOrNull("main") == 1,
+        reader.GetIntOrNull("upstream_tls") is int upstreamTls ? upstreamTls == 1 : null);
 
     /// <summary>The ack columns, or null when nobody has acked this forward.</summary>
     private static ForwardAck? ReadAck(SqliteDataReader reader)

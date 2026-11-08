@@ -11,6 +11,11 @@ namespace Constructd.Core.Domain;
 /// Admin flag (default <c>true</c>): may this user's VMs materialize LAN-reachable
 /// <see cref="ForwardTarget.Host"/> forwards (plan §4.6)?
 /// </param>
+/// <param name="AllowHttpsForwards">
+/// Admin flag (default <c>false</c>): may this user's VMs publish HTTPS forwards with the host's own
+/// certificate (docs/https-forwards.md)? Separate from <paramref name="AllowHostForwards"/>, because such a
+/// link is trusted by every browser and phone.
+/// </param>
 public sealed record User(
     string Name,
     Role Role,
@@ -19,4 +24,5 @@ public sealed record User(
     bool AllowHostForwards = true,
     bool Enabled = true,
     UserAllowance? Allowance = null,
-    bool? AllowNested = null);
+    bool? AllowNested = null,
+    bool AllowHttpsForwards = false);

@@ -575,7 +575,7 @@
     "fields": [
       {
         "default": null,
-        "help": "The https address phones use for the key vault's approval page, e.g. https://vault.example.net: a reverse proxy with a trusted certificate that forwards /vault/ and /api/v1/vault/ to the host service. It must not be the same origin (scheme, host and port) as any T3 Code address. Null uses the host service's own address, whose self-signed certificate phones warn about.",
+        "help": "The https address phones use for the key vault's approval page, e.g. https://vault.example.net: a reverse proxy with a trusted certificate that forwards /vault/ and /api/v1/vault/ to the host service. It must not be the same origin (scheme, host and port) as any T3 Code address. With an HTTPS certificate and a shared HTTPS port set below, the host serves this address itself. Null uses the host service's own address, whose self-signed certificate phones warn about.",
         "key": "webUrl",
         "label": "Approval page address",
         "nullLabel": "The host service's own address",
@@ -585,6 +585,31 @@
     ],
     "key": "vault",
     "label": "Key vault",
+    "rawOnly": []
+  },
+  {
+    "fields": [
+      {
+        "default": null,
+        "help": "Usually 443. Serves each VM's main HTTPS forward under the VM's own name (needs PublicHostPattern) and the key vault pages under the approval page address. Needs a certificate. Off: HTTPS forwards only get their own ports.",
+        "key": "sharedPort",
+        "label": "Shared HTTPS port",
+        "max": 65535,
+        "min": 1,
+        "nullLabel": "Off",
+        "nullable": true,
+        "type": "int"
+      },
+      {
+        "default": true,
+        "help": "Opening a stopped or saved VM's HTTPS address starts it and shows a page that reloads until it answers.",
+        "key": "startOnRequest",
+        "label": "Start VMs on request",
+        "type": "bool"
+      }
+    ],
+    "key": "https",
+    "label": "HTTPS forwards",
     "rawOnly": []
   }
 ]

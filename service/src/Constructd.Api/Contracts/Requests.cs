@@ -5,7 +5,8 @@ namespace Constructd.Api.Contracts;
 // silent default, and every enum arrives as a string that the endpoint parses explicitly — a typo
 // then produces a 400 problem document instead of a deserializer exception.
 
-public sealed record CreateUserRequest(string? Name, string? Role, int? MaxVms, bool? AllowHostForwards, UserAllowance? Allowance = null, bool? AllowNested = null);
+public sealed record CreateUserRequest(string? Name, string? Role, int? MaxVms, bool? AllowHostForwards, UserAllowance? Allowance = null, bool? AllowNested = null,
+    bool? AllowHttpsForwards = null);
 
 public sealed record CreateTokenRequest(string? Label);
 
@@ -18,7 +19,11 @@ public sealed record CreateVmOptions(bool? Nested, bool? AutomaticCheckpoints, I
 
 public sealed record PowerRequest(string? Action);
 
-public sealed record CreateForwardRequest(int? VmPort, string? Label, string? Target, int? ConnectPort = null, string? Via = null);
+/// <param name="Https">The host terminates TLS with its own certificate (docs/https-forwards.md). Implies target=host.</param>
+/// <param name="Main">With <paramref name="Https"/>: also serve it as the VM's main web UI on the host's shared HTTPS port.</param>
+/// <param name="UpstreamTls">With <paramref name="Https"/>: whether the VM port itself speaks TLS; omitted = detect.</param>
+public sealed record CreateForwardRequest(int? VmPort, string? Label, string? Target, int? ConnectPort = null, string? Via = null,
+    bool? Https = null, bool? Main = null, bool? UpstreamTls = null);
 
 /// <param name="Status"><c>open</c> or <c>error</c>.</param>
 /// <param name="LocalPort">The port the extension actually opened. Required for <c>open</c>.</param>
