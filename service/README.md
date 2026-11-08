@@ -269,6 +269,7 @@ gate: the resource policy is evaluated again inside every handler.
 | Key vault | `GET`, `PUT /vault/entries`; `PUT /vault/settings`; `POST /vms/{name}/vault/unlock`; `GET /vault/leases`; `DELETE /vault/leases/{id}`; `GET`, `POST /vault/devices`; `DELETE /vault/devices/{id}`; `GET /vault/activity` | The caller's own vault only (an admin gets no access to other users' vaults); unlock: owner of a running primary. |
 | Key vault approvals | `GET /vault/approvals`; `POST /vault/approvals/{id}`; `GET /vault/files`; `POST /vault/files/{id}`; `GET /vault/device` | The owner or one of their paired devices (`VaultDevice`); `/vault/device` is device-only. |
 | Key vault guest | `POST /vms/{name}/vault/requests`; `GET /vms/{name}/vault/requests/{id}?wait=`; `GET /vms/{name}/vault/scrubs`; `POST /vms/{name}/vault/scrubs/{id}` | That primary VM's own token; a child answers `403 vault-child`. |
+| HTTPS forwards | `GET /host/https`; `PUT`, `DELETE /host/https/certificate`; `GET /vms/{name}/https` | Host routes: admins. The VM route: the VM's own token or its owner; it says whether `construct expose --https` can work for that VM ([docs/https-forwards.md](../docs/https-forwards.md)). |
 
 There is deliberately no child-media content download route and no interactive-video
 console route.
@@ -652,6 +653,8 @@ Bound from the `Constructd` section of `appsettings.json`, from environment vari
 | `WslDistro` | `Ubuntu` | WSL distro used for the ISO build. Empty uses WSL's default distro (no `-d`). |
 | `PublicHost` | `localhost` | LAN name/IP that endpoints and forwards are advertised on, and what the API certificate is bound to. |
 | `PublicHostPattern` | – (empty) | Per-VM host name template, e.g. `{name}.vpn.example`. With a wildcard DNS record pointing at this host, every VM gets its OWN name, so two VMs' web UIs are separate origins (browsers scope cookies by host, not by port). `{name}` must appear exactly once and the pattern must render to a valid DNS name for every VM name — checked at startup. Empty = every VM is advertised on `PublicHost`. The certificate is unaffected. |
+| `Https:CertificateDirectory` | – (`https` next to the database) | Where the HTTPS-forward certificate chain and key are kept (owner-only files). Set through `PUT /host/https/certificate`, `constructd admin https import` or the host administration UI ([docs/https-forwards.md](../docs/https-forwards.md)). |
+| `Https:VaultRelayPort` | `0` (any free port) | Loopback port of the internal plain-HTTP endpoint the shared HTTPS port relays the vault pages to; it answers only the vault page routes. |
 | `VaultWebUrl` | – (empty) | Base URL of the key vault's phone pages (`/vault/`, `/vault/pair`) for a reverse proxy with a public certificate. Empty = `https://<PublicHost>:<ListenUrl port>`. The host config value `vault.webUrl` (Host Administration) takes precedence. |
 | `SwitchName` | `Default Switch` | Hyper-V virtual switch new VMs are attached to. |
 | `VmStorageRoot` | – (empty) | Folder the per-VM VHDX is created in. Empty leaves the path to the driver, i.e. Hyper-V's own default folder — the same location a local install uses. |
@@ -715,6 +718,7 @@ exists; a timestamp requires an exact match. A conflict returns `409 config-conf
 | `virtualization` | `nestedDefault`, `nestedSelectable`, `minimumRamBytes` (Proxmox: the RAM auto-ballooning may shrink a running primary to; null = off, otherwise at least 1 GiB; omitted in a replacement = 6 GiB; changes apply to running VMs at once) | `true`, `true`, 6 GiB |
 | `updates` | `repository`, `channel`, `drainTimeoutMinutes`, `healthTimeoutSeconds` | `permissionBRICK/The-Construct`, `main`, 60 min, 120 s |
 | `vault` | `webUrl`: the https address phones use for the key vault's approval page, e.g. a reverse proxy with a trusted certificate that forwards `/vault/` and `/api/v1/vault/` here. An https origin with an optional port and no path, query or fragment (`http` only for a loopback host); it must not share an origin with any T3 Code address. Overrides `Constructd:VaultWebUrl` | null: `Constructd:VaultWebUrl`, else the service's own address |
+| `https` | `sharedPort`: the port (usually 443) on which each VM's main HTTPS forward is served under the VM's own name and the vault pages under the host of `vault.webUrl`; null = off; must not be inside a forward range or the API port. `startOnRequest`: opening a stopped or saved VM's HTTPS address starts it ([docs/https-forwards.md](../docs/https-forwards.md)) | null, `true` |
 
 When `capacity.ramHeadroomBytes` is null, RAM headroom is `max(1 GiB, total RAM / 8)`
 on Proxmox and `max(4 GiB, total RAM / 8)` on Hyper-V. A configured byte value,
@@ -1315,12 +1319,16 @@ directly — no HTTP, no authentication, no listener, no jobs:
 ```powershell
 constructd admin users add DOMAIN\alice --role Admin --max-vms 10
 constructd admin users add DOMAIN\alice --role User --max-vms 2 --no-host-forwards
+constructd admin users add DOMAIN\bob --role User --max-vms 1 --https-forwards
 constructd admin users remove DOMAIN\alice
 constructd admin users list [--json]
 constructd admin tokens issue DOMAIN\alice --label laptop [--json]
 constructd admin tokens revoke-all DOMAIN\alice
 constructd admin forwards reconcile
 constructd admin host status [--json]
+constructd admin https status [--json]
+constructd admin https import --cert fullchain.pem --key privkey.pem   # or --pfx <file> [--password-file <file>]
+constructd admin https remove
 constructd admin iso build [--force] [--json]
 constructd admin iso status [--json]
 constructd admin iso prune [--json]
