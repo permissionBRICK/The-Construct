@@ -135,6 +135,9 @@ public sealed class ConstructdOptions
     /// <summary>HTTPS forwards: where the host keeps its certificate (docs/https-forwards.md).</summary>
     public HttpsOptions Https { get; set; } = new();
 
+    /// <summary>Host-stored config backups: where the encrypted payloads live (docs/remote-host.md).</summary>
+    public BackupsOptions Backups { get; set; } = new();
+
     /// <summary>
     /// Hyper-V virtual switch new VMs are attached to. The service host's own switch (plan §4.4
     /// creates an internal NAT switch at install); the default is Hyper-V's <c>Default Switch</c>, so
@@ -472,6 +475,17 @@ public sealed class IsoOptions
 /// HTTPS forwards (docs/https-forwards.md). The certificate itself is set through the API, the admin CLI
 /// or the host administration UI; these options only say where it is kept.
 /// </summary>
+public sealed class BackupsOptions
+{
+    /// <summary>Directory for the encrypted backup payloads. Empty: <c>backups</c> next to the database.</summary>
+    public string? RootDir { get; set; }
+
+    /// <summary>The backup directory in effect.</summary>
+    public string ResolveRootDir(string databasePath) =>
+        Path.TrimEndingDirectorySeparator(Path.GetFullPath(!string.IsNullOrWhiteSpace(RootDir) ? RootDir
+            : Path.Combine(Path.GetDirectoryName(Path.GetFullPath(databasePath)) ?? ".", "backups")));
+}
+
 public sealed class HttpsOptions
 {
     /// <summary>Directory for the certificate chain and its private key. Empty: <c>https</c> next to the database.</summary>

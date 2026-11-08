@@ -21,6 +21,7 @@ public static partial class HostConfigValidation
         ["updates"] = HostAdminDefaults.Updates,
         ["vault"] = HostAdminDefaults.Vault,
         ["https"] = HostAdminDefaults.Https,
+        ["backups"] = HostAdminDefaults.Backups,
     };
     public static string? Allowance(UserAllowance a) => a.MaxRetainedChildren < 0 || a.CpuBudget < 0 || a.RamBudgetBytes < 0 || a.StorageBudgetBytes < 0
         ? "Budgets and counts must be non-negative." : a.MaxChildLifetimeSeconds is < 300 ? "A finite lifetime limit must be at least 300 seconds." : null;
@@ -40,6 +41,10 @@ public static partial class HostConfigValidation
         MediaConfig m when m.MaxBytes < 1 || m.MaxItemsPerUser < 1 || m.UploadChunkBytes < 1048576 || m.UploadChunkBytes > 67108864 || m.UploadTtlHours < 1 || m.AcquireTimeoutMinutes < 1 || m.UnreferencedTtlHours < 1 => "Media sizes/counts must be positive; chunks must be 1–64 MiB.",
         VaultConfig v when VaultWebAddress.Problem(v.WebUrl) is { } problem => problem,
         HttpsConfig h when h.SharedPort is < 1 or > 65535 => "The shared HTTPS port must be null or between 1 and 65535.",
+        BackupsConfig b when b.IntervalHours is < 0 or > 720 || b.Keep < 1 || b.Keep > b.MaxKeep || b.MaxKeep > 50 ||
+            b.PinDays is < 1 or > 365 || b.RetainDeletedDays is < 0 or > 3650 || b.MinFreeBytes < 0 || b.MaxBytesPerVm is < 64L << 20 =>
+            "Backups require an interval of 0-720 hours, 1 <= keep <= maxKeep <= 50, 1-365 pin days, 0-3650 retention days, " +
+            "a non-negative free-space reserve and a per-VM limit of null or at least 64 MiB.",
         VirtualizationConfig v when v.MinimumRamBytes is < 1L << 30 => "The minimum RAM must be null or at least 1 GiB.",
         UpdatesConfig u when string.IsNullOrEmpty(u.Repository) || !RepositoryPattern().IsMatch(u.Repository) || u.Channel != "main" || u.DrainTimeoutMinutes < 1 || u.HealthTimeoutSeconds < 30 => "Updates require owner/repository, main channel and positive timeouts (health at least 30 seconds).",
         _ => null,
