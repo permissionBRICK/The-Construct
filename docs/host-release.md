@@ -140,6 +140,8 @@ the service or interrupt VMs.
 
 Windows production apply requires `Constructd:CertThumbprint` for the updater's loopback health
 pin. On Linux, an absent thumbprint is derived from `CertPath`/`CertPassword` at handoff time.
+While a renamed host keeps its previous certificate (`PreviousCertPath`/`PreviousCertThumbprint`),
+that one is pinned instead: the loopback health check sends no SNI, so it is the one it sees.
 Missing or unreadable certificate configuration is refused with `update-health-pin-required`
 before drain or replacement.
 
