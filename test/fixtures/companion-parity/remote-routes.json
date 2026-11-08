@@ -56,6 +56,86 @@
     }
   },
   {
+    "args": [
+      "name /?ü"
+    ],
+    "method": "vmBackups",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC/backups"
+    }
+  },
+  {
+    "args": [
+      "name /?ü"
+    ],
+    "method": "vmBackupStatus",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC/backups/status"
+    }
+  },
+  {
+    "args": [
+      "name /?ü"
+    ],
+    "method": "requestVmBackup",
+    "output": {
+      "body": {},
+      "method": "POST",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC/backups/request"
+    }
+  },
+  {
+    "args": [
+      "name /?ü"
+    ],
+    "method": "vmBackupSettings",
+    "output": {
+      "body": null,
+      "method": "GET",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC/backups/settings"
+    }
+  },
+  {
+    "args": [
+      "name /?ü",
+      {
+        "intervalHours": null,
+        "keep": 6
+      }
+    ],
+    "method": "setVmBackupSettings",
+    "output": {
+      "body": {
+        "intervalHours": null,
+        "keep": 6
+      },
+      "method": "PUT",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC/backups/settings"
+    }
+  },
+  {
+    "args": [
+      "name /?ü",
+      {
+        "intervalHours": 0,
+        "keep": null
+      }
+    ],
+    "method": "setVmBackupSettings",
+    "output": {
+      "body": {
+        "intervalHours": 0,
+        "keep": null
+      },
+      "method": "PUT",
+      "url": "https://host:7462/api/v1/vms/name%20%2F%3F%C3%BC/backups/settings"
+    }
+  },
+  {
     "args": [],
     "method": "vmDefaults",
     "output": {

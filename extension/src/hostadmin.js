@@ -33,7 +33,7 @@
 //                  tab, perform an action — every step re-classifying on refusal
 
 /** The `apiFeatures` names a current service advertises (§3.4). */
-const FEATURE_NAMES = ["host-admin", "children", "media", "console", "updates", "network", "primary-cpu", "primary-memory", "network-mode", "usage"];
+const FEATURE_NAMES = ["host-admin", "children", "media", "console", "updates", "network", "primary-cpu", "primary-memory", "network-mode", "usage", "config-backups"];
 const { formatTokens, formatCost } = require("./usage");
 
 /** The exhaustive `ChildAction` enum of §2.2, for rendering `allowedActions`. */
@@ -44,9 +44,9 @@ const CHILD_ACTIONS = [
 
 const CONFIG_SCHEMA = require("./hostadmin-config-schema");
 /** The host-config sections of §1.5, in display order. */
-const CONFIG_SECTIONS = ["capacity", "memoryPressure", "userDefaults", "userCaps", "lifecycle", "media", "network", "virtualization", "updates", "usage", "vault", "https"];
+const CONFIG_SECTIONS = ["capacity", "memoryPressure", "userDefaults", "userCaps", "lifecycle", "media", "network", "virtualization", "updates", "usage", "vault", "https", "backups"];
 // Sections an older host does not have: shown only when the host's configuration carries them.
-const NEWER_CONFIG_SECTIONS = ["memoryPressure", "usage", "vault", "https"];
+const NEWER_CONFIG_SECTIONS = ["memoryPressure", "usage", "vault", "https", "backups"];
 
 /** The tabs of §10.2 and the feature each one needs. `host-admin` gates the module. */
 const TABS = [
@@ -134,6 +134,7 @@ function featureSet(health) {
     primaryMemory: list.indexOf("primary-memory") >= 0,
     primaryNested: list.indexOf("primary-nested") >= 0,
     primaryMemoryFloor: list.includes("primary-memory-floor"),
+    configBackups: list.includes("config-backups"),
   };
 }
 

@@ -99,7 +99,7 @@ function snapshotMessages(snapshot, connectedInstance, registerOffer = null) {
     if (!m || typeof m.type !== "string") continue;
     if (key === "state") {
       const state = { ...m.state };
-      for (const field of ["children", "idlePolicy", "hostAdminOffer"]) {
+      for (const field of ["children", "idlePolicy", "backups", "hostAdminOffer"]) {
         if (Object.prototype.hasOwnProperty.call(snapshot, field)) {
           const value = snapshot[field];
           state[field] = value && value.type === field

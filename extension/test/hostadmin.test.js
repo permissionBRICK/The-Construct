@@ -56,10 +56,11 @@ function fakeClient(answers = {}) {
 
 (async () => {
   console.log("\n=== feature detection ===");
-  deep("features: every flag false without apiFeatures", ha.featureSet({}), { hostAdmin: false, usage: false, windowsGuests: false, children: false, media: false, console: false, updates: false, network: false, networkMode: false, primaryCpu: false, primaryMemory: false, primaryNested: false, primaryMemoryFloor: false });
-  deep("features: the full list", ha.featureSet(HEALTH_FULL), { hostAdmin: true, usage: true, windowsGuests: false, children: true, media: true, console: true, updates: true, network: true, networkMode: false, primaryCpu: true, primaryMemory: true, primaryNested: false, primaryMemoryFloor: false });
+  deep("features: every flag false without apiFeatures", ha.featureSet({}), { hostAdmin: false, usage: false, windowsGuests: false, children: false, media: false, console: false, updates: false, network: false, networkMode: false, primaryCpu: false, primaryMemory: false, primaryNested: false, primaryMemoryFloor: false, configBackups: false });
+  deep("features: the full list", ha.featureSet(HEALTH_FULL), { hostAdmin: true, usage: true, windowsGuests: false, children: true, media: true, console: true, updates: true, network: true, networkMode: false, primaryCpu: true, primaryMemory: true, primaryNested: false, primaryMemoryFloor: false, configBackups: false });
   eq("features: Proxmox hosts advertise the minimum RAM", ha.featureSet({ apiFeatures: ["host-admin", "primary-memory-floor"] }).primaryMemoryFloor, true);
-  deep("features: stage-1 service advertises host-admin only", ha.featureSet({ apiFeatures: ["host-admin"] }), { hostAdmin: true, usage: false, windowsGuests: false, children: false, media: false, console: false, updates: false, network: false, networkMode: false, primaryCpu: false, primaryMemory: false, primaryNested: false, primaryMemoryFloor: false });
+  eq("features: config backups are their own flag", ha.featureSet({ apiFeatures: ["host-admin", "config-backups"] }).configBackups, true);
+  deep("features: stage-1 service advertises host-admin only", ha.featureSet({ apiFeatures: ["host-admin"] }), { hostAdmin: true, usage: false, windowsGuests: false, children: false, media: false, console: false, updates: false, network: false, networkMode: false, primaryCpu: false, primaryMemory: false, primaryNested: false, primaryMemoryFloor: false, configBackups: false });
   ok("maintenance: a 503 maintenance error is recognised", ha.isMaintenanceError(apiErr(503, { code: "maintenance", phase: "draining" })));
   ok("maintenance: a 503 without a body is treated as maintenance", ha.isMaintenanceError(apiErr(503, null)));
   ok("maintenance: a 500 is not", !ha.isMaintenanceError(apiErr(500, { code: "maintenance" })));

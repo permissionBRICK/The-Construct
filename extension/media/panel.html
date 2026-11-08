@@ -219,6 +219,41 @@
           <p class="cost-note">The host service decides, so it works with this PC switched off. A VM stays alive while an agent is working, even with nobody connected.</p>
         </section>
 
+        <!-- Config backups (docs/plans/host-config-backups.md §3.8). A remote VM whose host advertises
+             config-backups gets the status, the per-VM override, the host's list and its buttons; a
+             local VM only the file and key buttons. Hidden until state.backups says which. -->
+        <section class="setgroup" id="backupsModule" hidden>
+          <div class="mhead"><h2 class="seclabel">Backups</h2><span class="meta" id="bkHint"></span></div>
+          <div id="bkRemote" hidden>
+            <p class="bk-status" id="bkStatus" role="status"></p>
+            <p class="bk-warn" id="bkWarning" role="alert" hidden></p>
+            <div class="bk-row" id="bkOverride">
+              <label class="bk-lbl" for="bkInterval">Every</label>
+              <input class="bk-num" id="bkInterval" type="number" min="0" max="720" step="1" aria-describedby="bkOverrideNote" />
+              <label class="bk-lbl" for="bkKeep">hours, keep</label>
+              <input class="bk-num" id="bkKeep" type="number" min="1" max="50" step="1" aria-describedby="bkOverrideNote" />
+              <span class="bk-lbl">backups</span>
+              <button class="btn" id="bkApply">apply</button>
+              <span class="suffix" id="bkOverrideNote" role="status"></span>
+            </div>
+            <div class="bk-list" id="bkList" role="radiogroup" aria-label="Backups stored on the host"></div>
+            <div class="bk-actions">
+              <button class="btn" id="bkNow" title="Ask the VM for a backup now; it starts at its next check-in">Back up now</button>
+              <button class="btn" id="bkRestore" title="Restore the selected backup onto this VM">Restore&hellip;</button>
+              <button class="btn" id="bkEnroll" title="Enrol this PC's backup key on the VM" hidden>Enrol this PC</button>
+            </div>
+          </div>
+          <p class="bk-warn" id="bkKeyWarning" hidden></p>
+          <p class="bk-warn" id="bkProblem" hidden></p>
+          <div class="bk-actions">
+            <button class="btn" id="bkSaveFile" title="Save an encrypted backup file on this PC">Save to this PC</button>
+            <button class="btn" id="bkRestoreFile" title="Restore a backup file from this PC onto this VM">Restore from file&hellip;</button>
+            <button class="btn ghost" id="bkKeyExport" title="Save this PC's backup key, protected by a passphrase">Export backup key&hellip;</button>
+            <button class="btn ghost" id="bkKeyImport" title="Use a backup key exported on another PC">Import backup key&hellip;</button>
+          </div>
+          <p class="cost-note" id="bkNote">Backups are encrypted on the VM; only PCs holding an enrolled backup key can open them.</p>
+        </section>
+
     <section class="setgroup" id="hostConversionSettings" hidden>
       <div class="gh"><h2 class="seclabel">Share this PC as a host</h2></div>
       <p class="lead">Set up a Construct host for other users and adopt this VM with its existing data and settings. You become the host administrator.</p>

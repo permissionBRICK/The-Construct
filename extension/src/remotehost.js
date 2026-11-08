@@ -651,6 +651,12 @@ function createClient(opts = {}) {
     setVmMemoryFloor: (name, body) => request("PUT", `/vms/${encodeURIComponent(name)}/memory-floor`, body),
     vmIdlePolicy: (name) => request("GET", `/vms/${encodeURIComponent(name)}/idle-policy`),
     setVmIdlePolicy: (name, body) => request("PUT", `/vms/${encodeURIComponent(name)}/idle-policy`, body),
+    // Config backups (docs/plans/host-config-backups.md §3.5; the VM's owner or an admin).
+    vmBackups: (name) => request("GET", `/vms/${encodeURIComponent(name)}/backups`),
+    vmBackupStatus: (name) => request("GET", `/vms/${encodeURIComponent(name)}/backups/status`),
+    requestVmBackup: (name) => request("POST", `/vms/${encodeURIComponent(name)}/backups/request`, {}),
+    vmBackupSettings: (name) => request("GET", `/vms/${encodeURIComponent(name)}/backups/settings`),
+    setVmBackupSettings: (name, body) => request("PUT", `/vms/${encodeURIComponent(name)}/backups/settings`, body),
     vmCpu: (name) => request("GET", `/vms/${encodeURIComponent(name)}/cpu`),
     setVmCpu: (name, body) => request("PUT", `/vms/${encodeURIComponent(name)}/cpu`, body),
     listVms: () => request("GET", "/vms"),

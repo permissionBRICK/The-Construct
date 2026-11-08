@@ -143,6 +143,70 @@ function lifecycleInvocations() {
     const action="consoleAccess",opts={instance,reset};
     rows.push({action,opts,output:m.buildInvocation(action,opts),args:m.instanceArgs(action,instance),params:m.paramsForAction(action,instance)||[]});
   }
+  // Config backups (docs/plans/host-config-backups.md §3.8): every action against every target with a valid input,
+  // then the input validation (file vs id, malformed ids, a host id on a local VM, an older script) on a local and a remote VM.
+  const backupId="0123456789abcdef0123456789abcdef", file="C:/Users/someone/Backups/dev 1.cbk", keyFile="C:/Users/someone/construct-backup-key.json";
+  const good={backupEnroll:{},backupSave:{backupFile:file,backupId},backupRestore:{backupId},backupKeyExport:{backupKeyFile:keyFile},backupKeyImport:{backupKeyFile:keyFile}};
+  const backupInputs=[{},{backupFile:file},{backupId},{backupFile:file,backupId},{backupId:backupId.toUpperCase()},{backupKeyFile:keyFile},{backupFile:"  ",backupKeyFile:"  "},{backupId:42},{backupFile:"-x 'quoted' file.cbk"}];
+  for(const action of Object.keys(good)) {
+    for(const instance of targets) for(const declared of [null,[],["VmHost","HostAlias","SshPort","LocalKeyName"],["InstanceName"]]) {
+      const opts={instance,instanceParams:declared,settings,supportsBackupActions:true,...good[action]};
+      rows.push({action,opts,output:m.buildInvocation(action,opts),args:m.instanceArgs(action,instance,declared),params:m.paramsForAction(action,instance,declared)||[]});
+    }
+    for(const instance of [targets[1],targets[4]]) for(const input of backupInputs) for(const supportsBackupActions of [true,false]) {
+      const opts={instance,instanceParams:["InstanceName"],supportsBackupActions,...input};
+      rows.push({action,opts,output:m.buildInvocation(action,opts),args:m.instanceArgs(action,instance,["InstanceName"]),params:m.paramsForAction(action,instance,["InstanceName"])||[]});
+    }
+  }
+  return rows;
+}
+// Config backups (docs/plans/host-config-backups.md §3.7, §3.8): the panel model, the override form, the warning,
+// the file name. Real inputs: a failing status, a list with a pinned backup, per-VM overrides and this PC's key.
+function configBackups() {
+  const m = require("../src/backups"), rows = [], now = Date.parse("2026-11-08T12:00:00Z");
+  const add = (kind, input, output) => rows.push({ kind, input, now, output });
+  const id = (c) => c.repeat(32);
+  const failing = { enabled: true, lastAttemptAt: "2026-11-08T10:00:00Z", lastSuccessAt: "2026-11-06T09:30:00Z",
+    lastFailure: { at: "2026-11-08T10:00:00Z", trigger: "scheduled", reason: "vm-disk-space", detail: "need 3221225472, free 2147483648, reserve 2147483648" },
+    failingSince: "2026-11-07T10:00:00Z", requestPending: false, count: 3, totalBytes: 4831838208, nextDueAt: "2026-11-08T16:00:00Z" };
+  const healthy = { enabled: true, lastAttemptAt: "2026-11-08T09:00:00Z", lastSuccessAt: "2026-11-08T09:00:00Z", lastFailure: null, failingSince: null,
+    requestPending: true, count: 1, totalBytes: 734003200, nextDueAt: null };
+  const statuses = [failing, healthy, { ...healthy, enabled: false, count: 0, lastSuccessAt: null },
+    { ...failing, lastFailure: { at: "2026-11-08T10:00:00Z", trigger: "manual", reason: "host-refused", detail: "host-disk-space" } },
+    { ...failing, lastFailure: { reason: "no-recipients", detail: "" } }, { ...failing, lastFailure: { reason: "something\nnew", detail: "x".repeat(250) } }, null];
+  const list = { backups: [
+    { id: id("a"), createdAt: "2026-11-08T09:00:00Z", trigger: "scheduled", sizeBytes: 1610612736, sha256: "f".repeat(64), pinnedUntil: null },
+    { id: id("b"), createdAt: "2026-11-05T22:15:00Z", trigger: "pre-reinstall", sizeBytes: 1503238553, sha256: "e".repeat(64), pinnedUntil: "2026-11-19T22:15:00Z" },
+    { id: id("c"), createdAt: "2026-10-31T08:00:00Z", trigger: "manual", sizeBytes: 524288000, sha256: "d".repeat(64), pinnedUntil: "2026-11-01T08:00:00Z" },
+    { id: "not-an-id", createdAt: "2026-10-01T08:00:00Z", trigger: "scheduled", sizeBytes: 1 }, { id: id("d"), createdAt: "bad", trigger: "constructor", sizeBytes: null }] };
+  const settings = [
+    { intervalHours: null, keep: 6, effective: { enabled: true, intervalHours: 24, keep: 6 }, host: { enabled: true, intervalHours: 24, keep: 4, maxKeep: 10 } },
+    { intervalHours: 0, keep: null, effective: { enabled: true, intervalHours: 0, keep: 4 }, host: { enabled: true, intervalHours: 24, keep: 4, maxKeep: 10 } },
+    { intervalHours: 12.5, keep: "3", effective: {}, host: { maxKeep: 0 } }, null];
+  const keys = [null, { fingerprint: "AB".repeat(32), label: "Work PC", createdAt: "2026-11-01T08:00:00Z", exportedAt: null },
+    { fingerprint: "0123456789abcdef".repeat(4), label: "Laptop\t2", createdAt: "2026-11-01T08:00:00Z", exportedAt: "2026-11-02T08:00:00Z" }, { fingerprint: "short" }];
+  for (const key of keys) {
+    add("panel", { remote: false, key }, m.toPanelBackups({ remote: false, key }, now));
+    add("key", key, m.toKeyView(key));
+  }
+  for (const supported of [false, null]) add("panel", { remote: true, supported, key: keys[1] }, m.toPanelBackups({ remote: true, supported, key: keys[1] }, now));
+  for (const status of statuses) for (const setting of settings.slice(0, 2)) {
+    const input = { remote: true, supported: true, status, list, settings: setting, key: keys[1], problem: "" };
+    add("panel", input, m.toPanelBackups(input, now));
+  }
+  for (const setting of settings) {
+    const input = { remote: true, supported: true, status: healthy, list: null, settings: setting, key: keys[2], problem: "Could not read the host's backups: HTTP 503\u0007" };
+    add("panel", input, m.toPanelBackups(input, now));
+  }
+  for (const form of [{}, { intervalHours: "", keep: "" }, { intervalHours: "0", keep: "1" }, { intervalHours: " 720 ", keep: "10" }, { intervalHours: "721", keep: "11" },
+    { intervalHours: "-1", keep: "0" }, { intervalHours: "1.5", keep: "2e1" }, { intervalHours: 24, keep: 6 }, { intervalHours: 24.5, keep: true }, { intervalHours: null, keep: null },
+    { intervalHours: "0007", keep: "99999999999999999999" }, { intervalHours: [], keep: {} }])
+    for (const maxKeep of [10, 50, undefined, 0, 7.5])
+      add("override", { form, maxKeep }, m.parseOverride(form, maxKeep));
+  for (const status of statuses) for (const warned of [null, "2026-11-07T10:00:00Z", "2026-11-01T00:00:00Z"])
+    add("warning", { instance: "work-vm", status, warned }, m.backupWarning("work-vm", status, warned));
+  add("warning", { instance: "a \u201cname\u201d\n", status: failing, warned: null }, m.backupWarning("a \u201cname\u201d\n", failing, null));
+  for (const instance of ["agent-vm", "work vm", "../x", "", "  ", "ü🧱", ".hidden.", "a:b*c"]) add("fileName", instance, m.backupFileName(instance, now));
   return rows;
 }
 function lifecycleLaunches() {
@@ -212,7 +276,7 @@ function t3Pure() {
 function remoteRoutes() {
  const m=remotehost, rows=[]; const value="name /?ü";
  const calls=[
- ["vmMemory",value],["setVmMemory",value,{ramGb:12}],["vmIdlePolicy",value],["setVmIdlePolicy",value,{timeoutMinutes:60,action:"shutdown"}],["vmDefaults"],["vmCpu",value],["setVmCpu",value,{cpus:8}],["whoami"],["listVms"],["getVm",value],["getState",value],["getEndpoint",value],["power",value,"start"],["createVm",{name:"dev"}],["deleteVm",value,{force:true}],["getJob",value],["health"],["hostCapabilities"],["vmIdentity",value],["vmCapabilities",value],["hostStatus"],["hostCapacity",true],["hostConfig"],["putHostConfig",{mode:"x"}],["isoCatalog"],
+ ["vmMemory",value],["setVmMemory",value,{ramGb:12}],["vmIdlePolicy",value],["setVmIdlePolicy",value,{timeoutMinutes:60,action:"shutdown"}],["vmBackups",value],["vmBackupStatus",value],["requestVmBackup",value],["vmBackupSettings",value],["setVmBackupSettings",value,{intervalHours:null,keep:6}],["setVmBackupSettings",value,{intervalHours:0,keep:null}],["vmDefaults"],["vmCpu",value],["setVmCpu",value,{cpus:8}],["whoami"],["listVms"],["getVm",value],["getState",value],["getEndpoint",value],["power",value,"start"],["createVm",{name:"dev"}],["deleteVm",value,{force:true}],["getJob",value],["health"],["hostCapabilities"],["vmIdentity",value],["vmCapabilities",value],["hostStatus"],["hostCapacity",true],["hostConfig"],["putHostConfig",{mode:"x"}],["isoCatalog"],
  ["users"],["getUser",value],["createUser",{name:"x"}],["updateUser",value,{role:"admin"}],["deleteUser",value],["userAllowance",value],["putUserAllowance",value,{maxVms:2}],["userTokens",value],["issueUserToken",value,null],["revokeUserToken",value,"id /"],
  ["vms",{all:true,empty:"",owner:value}],["sharedVms"],["children",value],["overrides",value],["putOverrides",value,{ram:8}],["deleteOverrides",value],["lifecycle",value,{action:"reprovision"}],["setVmSharing",value,{shared:true}],["renewVmLease",value,{minutes:30}],["rotateVmToken",value,null],["revokeVmToken",value],
  ["media",{type:"iso"}],["mediaItem",value],["mediaReferences",value],["deleteMedia",value],["mediaCleanup"],["jobs",{state:"running"}],["cancelJob",value],["audit",{limit:20}],["forwardsVia",value],["updatesStatus"],["updatesCheck",null],["updatesStage",{releaseTag:"x"}],["updatesApply",{updateId:"x"}],["updatesCancel",{updateId:"x"}],["updatesResolve",{updateId:"x"}]];
@@ -490,7 +554,7 @@ function hostAdminIpc() {
  for(const input of [{},{mode:"admin",activeTab:"vms"},{mode:"admin",features:{updates:true}},{mode:"user"},{maintenance:{phase:"draining"}},{updatePending:{id:"one"}}])add("poll",input,m.pollIntervalMs(input));
  for(const input of [null,"", "5m", "4m", "24h", "2d", "never", "NEVER", " 12h ", "0m", "-5h", "99999999999999999999d", "five"])
   add("lifetime",input,m.parseLifetime(input));
- for(const features of [[],["host-admin","windows-guests","media"],["host-admin"],["host-admin","network-mode"],["host-admin","primary-nested","usage"],["host-admin","children","media","console","network","network-mode","primary-nested","usage","updates","primary-cpu","primary-memory","source-cache"],["host-admin","children","updates"],["host-admin","children","media","updates","network","console","primary-cpu","primary-memory"]]) {
+ for(const features of [[],["host-admin","windows-guests","media"],["host-admin"],["host-admin","network-mode"],["host-admin","primary-nested","usage"],["host-admin","children","media","console","network","network-mode","primary-nested","usage","updates","primary-cpu","primary-memory","source-cache"],["host-admin","children","updates"],["host-admin","children","media","updates","network","console","primary-cpu","primary-memory"],["host-admin","config-backups"],["config-backups"]]) {
   const input={apiFeatures:features}; add("features",input,m.featureSet(input)); add("tabs",input,m.tabsFor({features:m.featureSet(input)}));
  }
  for(const form of [{},{name:"alice",role:"admin",enabled:"false",maxVms:"3",allowHostForwards:"true"},{name:"",role:"root",enabled:"invalid",maxVms:"-1"},{allowChildCreation:"true",maxRetainedChildren:"4",cpuBudget:"8",ramBudgetGiB:"1.5",storageBudgetGiB:"100",maxChildLifetime:"24h",allowNeverLifetime:"false",allowSharing:"inherit"},{maxChildLifetime:"never",ramBudgetGiB:"bad",maxRetainedChildren:"1.5"}])
@@ -528,6 +592,13 @@ function hostAdminIpc() {
  }
  for (const https of [{ sharedPort: null, startOnRequest: true, source: "default", updatedAt: null }, { sharedPort: 443, startOnRequest: false, source: "stored", updatedAt: "2026-11-08T08:00:00Z" }]) {
   const input = { ...pressureConfig, https };
+  add("config", input, m.toConfigView(input));
+ }
+ // The config-backups section (docs/plans/host-config-backups.md §3.6): shown only when the host carries it.
+ // Keys in sorted order: the fixture stores inputs sorted, and the section text keeps the input's key order.
+ for (const backups of [{ enabled: true, intervalHours: 24, keep: 4, maxBytesPerVm: null, maxKeep: 10, minFreeBytes: 5368709120, pinDays: 14, retainDeletedDays: 14, source: "default", updatedAt: null },
+   { enabled: false, intervalHours: 0, keep: 2, maxBytesPerVm: 21474836480, maxKeep: 3, minFreeBytes: 0, pinDays: 30, retainDeletedDays: 0, source: "stored", updatedAt: "2026-11-08T09:00:00Z" }]) {
+  const input = { ...pressureConfig, backups };
   add("config", input, m.toConfigView(input));
  }
  const pressureCapabilities = { backend: "proxmox", policy: pressureConfig };
@@ -709,6 +780,7 @@ async function exportAll() {
     "usage-exports": usageExports(),
     "instance-fingerprints": instanceFingerprints(),
     "lifecycle-runs": lifecycleRuns(),
+    "config-backups": configBackups(),
   };
 }
 if (require.main === module) (async () => {

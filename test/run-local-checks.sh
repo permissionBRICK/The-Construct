@@ -19,6 +19,7 @@ if [[ "$group" == panel || "$group" == all ]]; then
   node extension/test/lifecycle.test.js
   node extension/test/lifecycle-preparation.test.js
   node extension/test/lifecycle-run.test.js
+  node extension/test/backups.test.js
   pwsh -NoProfile -File test/lifecycle-run.test.ps1
   pwsh -NoProfile -File test/vm-resources.test.ps1
   pwsh -NoProfile -File test/console-local.test.ps1

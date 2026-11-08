@@ -40,6 +40,7 @@ public static class CompanionComposition
         services.TryAddSingleton<RemoteVmWizard>();
         services.TryAddSingleton<HostConversionWorkflow>();
         services.TryAddSingleton<HostAdministration>();
+        services.TryAddSingleton<BackupWarnings>();
         services.TryAddSingleton<InstanceConsole>();
         services.TryAddSingleton<MessageDispatcher>();
         services.TryAddSingleton<CompanionBackend>();

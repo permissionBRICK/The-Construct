@@ -1,6 +1,6 @@
 namespace Construct.Companion.Core.Abstractions;
 
-// Shows desktop input, single/multiple pickers, confirmation, and save dialogs.
+// Shows desktop input, single/multiple pickers, confirmation, and save/open file dialogs.
 // Null means cancelled; item IDs are returned unchanged rather than display labels.
 public interface IPrompts
 {
@@ -10,6 +10,8 @@ public interface IPrompts
     Task<bool> ConfirmAsync(ConfirmationPrompt prompt, CancellationToken cancellationToken = default) => ConfirmAsync(prompt.Title, prompt.Message, cancellationToken);
     Task ShowSecretOnceAsync(string title, Secret value, string note, CancellationToken cancellationToken = default);
     Task<string?> SaveFileAsync(SaveFilePrompt prompt, CancellationToken cancellationToken = default);
+    // An existing file to read (the Backups module's "Restore from file" and key import); null = cancelled.
+    Task<string?> OpenFileAsync(OpenFilePrompt prompt, CancellationToken cancellationToken = default) => Task.FromResult<string?>(null);
     // Per-file choice of FileDecisionPrompt.Actions keyed by item id; null = dismissed (keep everything).
     Task<IReadOnlyDictionary<string, string>?> DecideFilesAsync(FileDecisionPrompt prompt, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyDictionary<string, string>?>(null);
 }
@@ -36,3 +38,4 @@ public sealed record FileDecisionPrompt(string Title, string Message, IReadOnlyL
     public static readonly string[] Actions = [Keep, Redact, Delete];
 }
 public sealed record SaveFilePrompt(string Title, string? DefaultPath = null, string? Filter = null);
+public sealed record OpenFilePrompt(string Title, string? Filter = null);

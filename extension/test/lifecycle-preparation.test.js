@@ -3,7 +3,7 @@ const assert = require("assert");
 const fs = require("fs");
 const vm = require("vm");
 const source = fs.readFileSync(require("path").join(__dirname, "../extension.js"), "utf8");
-const helper = source.slice(source.indexOf("async function preparePanelLifecycle("), source.indexOf("function handleMessage("));
+const helper = source.slice(source.indexOf("async function preparePanelLifecycle("), source.indexOf("async function handleMessage("));
 function sandboxFor(busy) {
   const calls = [], messages = [], errors = [];
   const sandbox = {

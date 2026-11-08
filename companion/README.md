@@ -209,6 +209,7 @@ views and runtime messages use IPC). The limitations of the implemented rows are
 | message | `customRebuild` | implemented |
 | message | `openPanel` | implemented |
 | message | `ready` | implemented |
+| message | `saveBackupSettings` | implemented |
 | message | `saveIdlePolicy` | implemented |
 | message | `saveProject` | implemented |
 | message | `saveSettings` | implemented |
@@ -219,6 +220,13 @@ views and runtime messages use IPC). The limitations of the implemented rows are
 | command | `addConfigRemote` | implemented |
 | command | `addProject` | implemented |
 | command | `addRemoteAndPublish` | implemented |
+| command | `backupEnroll` | implemented |
+| command | `backupKeyExport` | implemented |
+| command | `backupKeyImport` | implemented |
+| command | `backupNow` | implemented |
+| command | `backupRestore` | implemented |
+| command | `backupRestoreFile` | implemented |
+| command | `backupSave` | implemented |
 | command | `childConsole` | implemented |
 | command | `openConsole` | implemented |
 | command | `childDelete` | implemented |

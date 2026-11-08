@@ -8,13 +8,19 @@ namespace Construct.Companion.Core.Lifecycle;
 
 public static class LifecycleBuilder
 {
-    public static string? ScriptForAction(string action) => action switch { "reprovision" or "exportConfig" => "Provision-AgentVM.ps1", "reinstall" or "redownload" => "Auto-Install.ps1", "setCheckpoints" => "Set-AgentVmCheckpoints.ps1", "setResources" => "Set-AgentVmResources.ps1", "updateT3" => "Update-T3Code.ps1", _ => null };
-    private static string Label(string action) => action switch { "reprovision" => "Reprovision", "exportConfig" => "Export config", "reinstall" => "Reinstall", "redownload" => "Redownload", "setCheckpoints" => "Automatic checkpoints", "setResources" => "Apply VM resources", "removeInstance" => "Remove instance", "updateT3" => "Update T3 Code", _ => action };
+    // Config backups (docs/plans/host-config-backups.md §3.8): the panel's Backups module drives these
+    // Provision-AgentVM.ps1 actions, targeted like exportConfig and never elevated.
+    public static readonly IReadOnlyDictionary<string, string> BackupActions = new Dictionary<string, string>(StringComparer.Ordinal)
+    { ["backupEnroll"] = "backup-enroll", ["backupSave"] = "backup-save", ["backupRestore"] = "backup-restore", ["backupKeyExport"] = "backup-key-export", ["backupKeyImport"] = "backup-key-import" };
+    public static bool IsBackupAction(string action) => BackupActions.ContainsKey(action);
+    public static string? ScriptForAction(string action) => action switch { "reprovision" or "exportConfig" or "backupEnroll" or "backupSave" or "backupRestore" or "backupKeyExport" or "backupKeyImport" => "Provision-AgentVM.ps1", "reinstall" or "redownload" => "Auto-Install.ps1", "setCheckpoints" => "Set-AgentVmCheckpoints.ps1", "setResources" => "Set-AgentVmResources.ps1", "updateT3" => "Update-T3Code.ps1", _ => null };
+    private static string Label(string action) => action switch { "reprovision" => "Reprovision", "exportConfig" => "Export config", "reinstall" => "Reinstall", "redownload" => "Redownload", "setCheckpoints" => "Automatic checkpoints", "setResources" => "Apply VM resources", "removeInstance" => "Remove instance", "updateT3" => "Update T3 Code",
+        "backupEnroll" => "Enrol backup key", "backupSave" => "Save backup to this PC", "backupRestore" => "Restore backup", "backupKeyExport" => "Export backup key", "backupKeyImport" => "Import backup key", _ => action };
     public static string[] ParamsForAction(string action, JsonObject? instance, string[]? declared = null)
     {
         if (Instances.IsRemoteBackend(StateJson.Text(instance?["backend"])) && action is "reinstall" or "redownload") return ["Backend", "ServiceUrl", "InstanceName", "ConfigBranch"];
-        if (declared?.Contains("InstanceName", StringComparer.Ordinal) == true) return action switch { "reprovision" or "reinstall" or "redownload" => ["InstanceName", "ConfigBranch"], "exportConfig" or "setCheckpoints" or "setResources" or "updateT3" => ["InstanceName"], _ => [] };
-        return action switch { "reprovision" => ["VmHost", "HostAlias", "SshPort", "LocalKeyName", "ConfigBranch"], "exportConfig" or "updateT3" => ["VmHost", "HostAlias", "SshPort", "LocalKeyName"], "reinstall" or "redownload" => ["VmName", "ConfigBranch"], "setCheckpoints" or "setResources" => ["VmName"], _ => [] };
+        if (declared?.Contains("InstanceName", StringComparer.Ordinal) == true) return action switch { "reprovision" or "reinstall" or "redownload" => ["InstanceName", "ConfigBranch"], "exportConfig" or "setCheckpoints" or "setResources" or "updateT3" => ["InstanceName"], _ when IsBackupAction(action) => ["InstanceName"], _ => [] };
+        return action switch { "reprovision" => ["VmHost", "HostAlias", "SshPort", "LocalKeyName", "ConfigBranch"], "exportConfig" or "updateT3" => ["VmHost", "HostAlias", "SshPort", "LocalKeyName"], _ when IsBackupAction(action) => ["VmHost", "HostAlias", "SshPort", "LocalKeyName"], "reinstall" or "redownload" => ["VmName", "ConfigBranch"], "setCheckpoints" or "setResources" => ["VmName"], _ => [] };
     }
     public static string DerivedConfigBranch(string? alias)
     {
@@ -68,10 +74,10 @@ public static class LifecycleBuilder
             if (Supports("supportsOpenCodeBackgroundWatcher")) Bool("-OpenCodeBackgroundWatcher", "opencodeBackgroundWatcher");
             Bool("-T3Code", "t3code"); if (Supports("supportsT3CodeChannel")) Text("-T3CodeChannel", "t3codeChannel"); if (Supports("supportsT3CodePatched")) Bool("-T3CodePatched", "t3codePatched"); if (Supports("supportsT3CodeAutoApprove")) Bool("-T3CodeAutoApprove", "t3codeAutoApprove");
         }
-        JsonObject Done(string script, bool destructive, bool elevate, string label)
+        JsonObject Done(string script, bool destructive, bool elevate, string label, bool spec = false)
         {
             var result = new JsonObject { ["script"] = script, ["args"] = new JsonArray(FlattenArgPairs(pairs).Select(s => (JsonNode?)JsonValue.Create(s)).ToArray()), ["destructive"] = destructive, ["elevate"] = elevate, ["label"] = label };
-            if (instance is not null && !Instances.IsDefaultInstance(instance)) result["argSpec"] = pairs; return result;
+            if (spec || instance is not null && !Instances.IsDefaultInstance(instance)) result["argSpec"] = pairs; return result;
         }
         switch (action)
         {
@@ -79,6 +85,25 @@ public static class LifecycleBuilder
                 Pair("-Action", JsonValue.Create("provision")); Projects(); Text("-GitUserName", "gitName"); Text("-GitEmail", "gitEmail"); Bool("-VsCodeServeWeb", "serveWeb"); Bool("-VsCodeTunnel", "tunnel"); Bool("-SmbShare", "smb"); Patches(); pairs.Add(new JsonObject { ["flag"] = "-NonInteractive" }); return Done("Provision-AgentVM.ps1", false, false, "Reprovision");
             // T3 Code alone, without a reprovision: the VM's own config.env decides the channel and the build.
             case "updateT3": Pair("-Mode", JsonValue.Create("quick")); return Done("Update-T3Code.ps1", false, false, "Update T3 Code");
+            // Config backups: not elevated (the PC key lives in this user's profile), the caller confirms a restore. Strict
+            // inputs: a missing path, a malformed id or both a file and an id are refused (null), a host backup id is
+            // refused for a VM without a host service. The pair spec is always attached, so every value is quoted.
+            case "backupEnroll": case "backupSave": case "backupRestore": case "backupKeyExport": case "backupKeyImport":
+            {
+                var label = Label(action);
+                if (StateJson.Boolean(options["supportsBackupActions"]) == false) return new() { ["blocked"] = true, ["reason"] = $"{label} needs a newer Construct on this PC: the installed Provision-AgentVM.ps1 has no backup actions. Update Construct first." };
+                static string Path(JsonNode? value) => StateJson.Text(value) is { } text ? StateJson.Trim(text) : "";
+                var file = Path(options["backupFile"]); var keyFile = Path(options["backupKeyFile"]); var idNode = options["backupId"];
+                var id = idNode is null || StateJson.Text(idNode) == "" ? "" : StateJson.String(idNode);
+                if (id.Length > 0 && !Regex.IsMatch(id, "^[0-9a-f]{32}$")) return null;
+                if (id.Length > 0 && !Instances.IsRemoteBackend(StateJson.Text(instance?["backend"]))) return new() { ["blocked"] = true, ["reason"] = $"{label}: host backups exist only for a VM on a host service." };
+                Pair("-Action", JsonValue.Create(BackupActions[action]));
+                if (action == "backupSave") { if (file.Length == 0) return null; Pair("-BackupFile", JsonValue.Create(file)); if (id.Length > 0) Pair("-BackupId", JsonValue.Create(id)); }
+                else if (action == "backupRestore") { if ((file.Length == 0) == (id.Length == 0)) return null; if (file.Length > 0) Pair("-BackupFile", JsonValue.Create(file)); else Pair("-BackupId", JsonValue.Create(id)); }
+                else if (action is "backupKeyExport" or "backupKeyImport") { if (keyFile.Length == 0) return null; Pair("-BackupKeyFile", JsonValue.Create(keyFile)); }
+                else if (file.Length > 0 || id.Length > 0 || keyFile.Length > 0) return null;
+                return Done("Provision-AgentVM.ps1", false, false, label, spec: true);
+            }
             case "exportConfig": Pair("-Action", JsonValue.Create("export")); Pair("-BackupDir", options["backupDir"]); if (Supports("supportsHistoryRetentionDays")) Text("-HistoryRetentionDays", "historyRetentionDays"); return Done("Provision-AgentVM.ps1", false, false, "Export config");
             case "reinstall": case "redownload":
                 Pair("-Action", JsonValue.Create(action)); Pair("-BackupMode", JsonValue.Create(StateJson.Text(options["backupMode"]) is "existing" or "wipe" ? StateJson.Text(options["backupMode"]) : "save")); Projects(); Text("-VmMemoryGB", "ram"); Text("-VmDiskGB", "disk"); if (Supports("supportsVmCpuCount")) Text("-VmCpuCount", "cpu"); if (Supports("supportsCheckpoints")) Bool("-AutomaticCheckpoints", "autoCheckpoints"); if (action == "redownload") Text("-UbuntuRelease", "ubuntu"); Text("-GitUserName", "gitName"); Text("-GitEmail", "gitEmail"); Patches(); if (Supports("supportsHistoryRetentionDays")) Text("-HistoryRetentionDays", "historyRetentionDays"); return Done("Auto-Install.ps1", true, !Instances.IsRemoteBackend(StateJson.Text(instance?["backend"])), Label(action));

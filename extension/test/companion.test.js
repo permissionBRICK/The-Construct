@@ -89,15 +89,16 @@ test("Host narrow snapshot envelopes are unwrapped for panel state", () => {
   const snapshot = { state: { type: "state", state: {} },
     children: { type: "children", children: { items: [] } },
     idlePolicy: { type: "idlePolicy", idlePolicy: { timeoutMinutes: 10 } },
+    backups: { type: "backups", backups: { remote: true, items: [] } },
     hostAdminOffer: { type: "hostAdminOffer", offer: { host: "remote" } } };
   assert.deepEqual(c.snapshotMessages(snapshot, null)[0].state, {
-    connectedInstance: null, registerOffer: null, children: { items: [] }, idlePolicy: { timeoutMinutes: 10 }, hostAdminOffer: { host: "remote" }
+    connectedInstance: null, registerOffer: null, children: { items: [] }, idlePolicy: { timeoutMinutes: 10 }, backups: { remote: true, items: [] }, hostAdminOffer: { host: "remote" }
   });
 });
 test("snapshot emits existing message shapes and overlays window connection without mutation", () => {
-  const snapshot = { state: { type: "state", state: { instance: "a", connectedInstance: null } }, audio: { type: "audio", enabled: true }, children: [], idlePolicy: null, hostAdminOffer: null };
+  const snapshot = { state: { type: "state", state: { instance: "a", connectedInstance: null } }, audio: { type: "audio", enabled: true }, children: [], idlePolicy: null, backups: null, hostAdminOffer: null };
   const messages = c.snapshotMessages(snapshot, "b", { host: "b.mshome.net", suggestedName: "b" });
-  assert.deepEqual(messages[0].state, { instance: "a", connectedInstance: "b", registerOffer: { host: "b.mshome.net", suggestedName: "b" }, children: [], idlePolicy: null, hostAdminOffer: null });
+  assert.deepEqual(messages[0].state, { instance: "a", connectedInstance: "b", registerOffer: { host: "b.mshome.net", suggestedName: "b" }, children: [], idlePolicy: null, backups: null, hostAdminOffer: null });
   assert.deepEqual(c.overlayMessage({ type: "state", state: { registerOffer: { host: "stale" } } }, null).state, { connectedInstance: null, registerOffer: null });
   assert.equal(snapshot.state.state.connectedInstance, null);
   assert.equal(messages[1], snapshot.audio);
@@ -297,14 +298,15 @@ test("actual extension transitions fallback -> Companion -> grace -> fallback wi
   const h = extensionHarness({ modules: { "./src/companion": { ...c, createClient: opts => { options = opts; return s.client; } } } });
   t.after(() => h.extension.deactivate());
   await h.extension.activate(h.context);
-  assert.equal(s.client.status, "absent"); assert.equal(h.timers.jobs.size, 3);
+  // The fallback's startup jobs: notifications, forwarder, config-backup status, startup repatch.
+  assert.equal(s.client.status, "absent"); assert.equal(h.timers.jobs.size, 4);
   s.setFile(JSON.stringify(s.document)); await s.client.check();
   assert.equal(s.client.status, "alive"); assert.equal(h.timers.jobs.size, 0);
   s.setHealthy(false); await s.client.check();
   assert.equal(s.client.status, "lost"); assert.equal(h.timers.jobs.size, 0);
   await s.clock.advance(9999); assert.equal(h.timers.jobs.size, 0);
   await s.clock.advance(1); await s.client.check();
-  assert.equal(s.client.status, "absent"); assert.equal(h.timers.jobs.size, 3);
+  assert.equal(s.client.status, "absent"); assert.equal(h.timers.jobs.size, 4);
   s.setHealthy(true); await s.client.check();
   assert.equal(s.client.status, "alive"); assert.equal(h.timers.jobs.size, 0);
 });

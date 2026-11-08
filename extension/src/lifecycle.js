@@ -47,6 +47,14 @@ const CHECKPOINTS = "Set-AgentVmCheckpoints.ps1"; // apply the checkpoint policy
 const RESOURCES = "Set-AgentVmResources.ps1";     // restart the LIVE VM with a new RAM size / vCPU count (elevated)
 const UPDATE_T3 = "Update-T3Code.ps1";       // T3 Code on the VM + the matching Desktop, no reprovision (no admin)
 const BACKUP_DIR_NAME = ".construct-backup"; // mirrors Get-ConstructBackupDir
+// Config backups (docs/plans/host-config-backups.md §3.8): the panel's Backups module drives these
+// Provision-AgentVM.ps1 actions. Targeted like exportConfig, never elevated.
+const BACKUP_ACTIONS = Object.freeze({
+  backupEnroll: "backup-enroll", backupSave: "backup-save", backupRestore: "backup-restore",
+  backupKeyExport: "backup-key-export", backupKeyImport: "backup-key-import",
+});
+/** Is this one of the backup actions above? Pure. */
+function isBackupAction(action) { return Object.prototype.hasOwnProperty.call(BACKUP_ACTIONS, String(action)); }
 // The CAPABILITY MARKER for name-only targeting (B11): the adapter every host script
 // resolves -InstanceName through. See NAME_TARGET_PARAMS for why its PRESENCE, and not
 // the parameter's declaration, is what the probe asks about.
@@ -98,6 +106,11 @@ function normalizeBackupMode(bm) {
 const INSTANCE_PARAMS = {
   reprovision: ["VmHost", "HostAlias", "SshPort", "LocalKeyName", "ConfigBranch"],
   exportConfig: ["VmHost", "HostAlias", "SshPort", "LocalKeyName"],
+  backupEnroll: ["VmHost", "HostAlias", "SshPort", "LocalKeyName"],
+  backupSave: ["VmHost", "HostAlias", "SshPort", "LocalKeyName"],
+  backupRestore: ["VmHost", "HostAlias", "SshPort", "LocalKeyName"],
+  backupKeyExport: ["VmHost", "HostAlias", "SshPort", "LocalKeyName"],
+  backupKeyImport: ["VmHost", "HostAlias", "SshPort", "LocalKeyName"],
   reinstall: ["VmName", "ConfigBranch"],
   redownload: ["VmName", "ConfigBranch"],
   setCheckpoints: ["VmName"],
@@ -145,6 +158,11 @@ const REMOTE_INSTANCE_PARAMS = {
 const NAME_TARGET_PARAMS = {
   reprovision: ["InstanceName", "ConfigBranch"],
   exportConfig: ["InstanceName"],
+  backupEnroll: ["InstanceName"],
+  backupSave: ["InstanceName"],
+  backupRestore: ["InstanceName"],
+  backupKeyExport: ["InstanceName"],
+  backupKeyImport: ["InstanceName"],
   reinstall: ["InstanceName", "ConfigBranch"],
   redownload: ["InstanceName", "ConfigBranch"],
   setCheckpoints: ["InstanceName"],
@@ -199,6 +217,11 @@ function paramsForAction(action, instance, declared) {
 const REQUIRED_INSTANCE_PARAMS = {
   reprovision: ["VmHost", "HostAlias", "SshPort", "LocalKeyName"],
   exportConfig: ["VmHost", "HostAlias", "SshPort", "LocalKeyName"],
+  backupEnroll: ["VmHost", "HostAlias", "SshPort", "LocalKeyName"],
+  backupSave: ["VmHost", "HostAlias", "SshPort", "LocalKeyName"],
+  backupRestore: ["VmHost", "HostAlias", "SshPort", "LocalKeyName"],
+  backupKeyExport: ["VmHost", "HostAlias", "SshPort", "LocalKeyName"],
+  backupKeyImport: ["VmHost", "HostAlias", "SshPort", "LocalKeyName"],
   reinstall: ["VmName"],
   redownload: ["VmName"],
   setCheckpoints: ["VmName"],
@@ -220,6 +243,11 @@ const REQUIRED_REMOTE_INSTANCE_PARAMS = {
 const REQUIRED_NAME_TARGET_PARAMS = {
   reprovision: ["InstanceName"],
   exportConfig: ["InstanceName"],
+  backupEnroll: ["InstanceName"],
+  backupSave: ["InstanceName"],
+  backupRestore: ["InstanceName"],
+  backupKeyExport: ["InstanceName"],
+  backupKeyImport: ["InstanceName"],
   reinstall: ["InstanceName"],
   redownload: ["InstanceName"],
   setCheckpoints: ["InstanceName"],
@@ -249,6 +277,11 @@ const ACTION_LABELS = {
   setResources: "Apply VM resources",
   removeInstance: "Remove instance",
   updateT3: "Update T3 Code",
+  backupEnroll: "Enrol backup key",
+  backupSave: "Save backup to this PC",
+  backupRestore: "Restore backup",
+  backupKeyExport: "Export backup key",
+  backupKeyImport: "Import backup key",
 };
 
 /**
@@ -442,6 +475,8 @@ function flattenArgPairs(pairs) {
  *   reinstall    -> Auto-Install.ps1 -Action reinstall  -BackupMode <mode>
  *   redownload   -> Auto-Install.ps1 -Action redownload -BackupMode <mode>
  *   updateT3     -> Update-T3Code.ps1 -Mode quick  (T3 Code alone, no reprovision)
+ *   backup*      -> Provision-AgentVM.ps1 -Action backup-… (BACKUP_ACTIONS; opts.backupFile,
+ *                   opts.backupId, opts.backupKeyFile)
  * Returns { script, args, destructive, elevate, label } or null for an unknown action.
  *
  * `opts.instance` (optional) is the ACTIVE INSTANCE (the normalized object from
@@ -476,9 +511,9 @@ function buildInvocation(action, opts = {}) {
   // pre-instances build. Registry-sourced values only ever ride a targeted invocation,
   // which is where the quoting matters.
   const targeted = !!(opts.instance && !instances.isDefaultInstance(opts.instance));
-  const done = (script, extra) => {
+  const done = (script, extra, spec) => {
     const inv = { script, args: flattenArgPairs(parts), ...extra };
-    if (targeted) inv.argSpec = parts.slice();
+    if (targeted || spec) inv.argSpec = parts.slice();
     return inv;
   };
   const addSwitch = (flag) => { parts.push({ flag }); };
@@ -534,6 +569,38 @@ function buildInvocation(action, opts = {}) {
       // reprovision. The VM's own config.env decides the channel and the build.
       addPair("-Mode", "quick");
       return done(UPDATE_T3, { destructive: false, elevate: false, label: "Update T3 Code" });
+
+    // Config backups (docs/plans/host-config-backups.md §3.8). Not elevated: the PC key lives in this
+    // user's profile. Not `destructive` in the confirm-modal sense either: the caller confirms a restore
+    // itself. Strict inputs: a missing path, a malformed id, or both a file and an id are refused (null),
+    // never defaulted, and a host backup id is refused for a VM without a host service. The paths come
+    // from file dialogs, not the registry, but the pair spec is attached anyway so a value is always quoted.
+    case "backupEnroll": case "backupSave": case "backupRestore": case "backupKeyExport": case "backupKeyImport": {
+      const label = ACTION_LABELS[action];
+      if (opts.supportsBackupActions === false) {
+        return { blocked: true, reason: `${label} needs a newer Construct on this PC: the installed ${PROVISION} has no backup actions. Update Construct first.` };
+      }
+      const text = (v) => (typeof v === "string" ? v.trim() : "");
+      const file = text(opts.backupFile), keyFile = text(opts.backupKeyFile);
+      const id = opts.backupId == null || opts.backupId === "" ? "" : opts.backupId;
+      if (id !== "" && !/^[0-9a-f]{32}$/.test(String(id))) return null;
+      if (id !== "" && !isRemoteBackend(opts.instance && opts.instance.backend)) {
+        return { blocked: true, reason: `${label}: host backups exist only for a VM on a host service.` };
+      }
+      addPair("-Action", BACKUP_ACTIONS[action]);
+      if (action === "backupSave") {
+        if (!file) return null;
+        addPair("-BackupFile", file);
+        if (id) addPair("-BackupId", id);
+      } else if (action === "backupRestore") {
+        if (!file === !id) return null;
+        if (file) addPair("-BackupFile", file); else addPair("-BackupId", id);
+      } else if (action === "backupKeyExport" || action === "backupKeyImport") {
+        if (!keyFile) return null;
+        addPair("-BackupKeyFile", keyFile);
+      } else if (file || id || keyFile) return null;
+      return done(PROVISION, { destructive: false, elevate: false, label }, true);
+    }
 
     case "reinstall":
     case "redownload": {
@@ -828,9 +895,18 @@ function scriptSupportsParam(scriptsDir, file, name) {
   return new RegExp("\\$" + name + "\\s*(?:=|,|\\)|$)", "im").test(code);
 }
 
+/**
+ * Does the installed Provision-AgentVM.ps1 know the config-backup actions? They arrived together with
+ * -BackupFile, so its declaration is the probe; an older script would refuse `-Action backup-…` at
+ * binding time and the console would only flash an error.
+ */
+function scriptSupportsBackupActions(scriptsDir) {
+  return scriptSupportsParam(scriptsDir, PROVISION, "BackupFile");
+}
+
 /** The script an action launches (so the instance-arg probe reads the right file). */
 function scriptForAction(action) {
-  if (action === "reprovision" || action === "exportConfig") return PROVISION;
+  if (action === "reprovision" || action === "exportConfig" || isBackupAction(action)) return PROVISION;
   if (action === "reinstall" || action === "redownload") return AUTO_INSTALL;
   if (action === "setCheckpoints") return CHECKPOINTS;
   if (action === "setResources") return RESOURCES;
@@ -1169,6 +1245,10 @@ function run(action, opts = {}) {
     supportsT3CodeAutoApprove: scriptSupportsT3CodeAutoApprove(scriptsDir, action),
     supportsOpenCodeBackgroundWatcher: scriptSupportsOpenCodeBackgroundWatcher(scriptsDir, action),
     supportsHistoryRetentionDays: scriptSupportsHistoryRetentionDays(scriptsDir, action),
+    backupFile: opts.backupFile,
+    backupId: opts.backupId,
+    backupKeyFile: opts.backupKeyFile,
+    supportsBackupActions: isBackupAction(action) ? scriptSupportsBackupActions(scriptsDir) : undefined,
   });
   // A refusal, not an invocation: this install cannot TARGET the active instance, and
   // running anyway would hit the default VM. Say which and stop — never fall back.
@@ -1286,7 +1366,7 @@ let runPending = Promise.resolve();
 function runSettled() { return runPending; }
 
 module.exports = {
-  PROVISION, AUTO_INSTALL, CHECKPOINTS, RESOURCES, UPDATE_T3, BACKUP_DIR_NAME,
+  PROVISION, AUTO_INSTALL, CHECKPOINTS, RESOURCES, UPDATE_T3, BACKUP_DIR_NAME, BACKUP_ACTIONS, isBackupAction, scriptSupportsBackupActions,
   INSTANCE_PARAMS, REQUIRED_INSTANCE_PARAMS, ACTION_LABELS,
   REMOTE_INSTANCE_PARAMS, REQUIRED_REMOTE_INSTANCE_PARAMS,
   NAME_TARGET_PARAMS, REQUIRED_NAME_TARGET_PARAMS, INSTANCE_TARGET_LIB,
