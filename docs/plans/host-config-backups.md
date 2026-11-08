@@ -74,12 +74,14 @@ The payload is the tarball layout `bin/export-config.sh` writes today (`home/`, 
   with reflinks and `/tmp` is on the root file system, so the staged copy shares blocks with the
   originals. Without reflink support it falls back to a real copy; the estimate (3.3) accounts
   for it.
-- **Online SQLite snapshots.** Unless `EXPORT_REASON=reinstall`, the export does **not** stop
-  `t3code-serve`. Every SQLite database it captures (T3 `statev2.sqlite` / legacy `state.sqlite`,
+- **Online SQLite snapshots.** `EXPORT_REASON` is `reinstall` (the default, so every existing
+  caller keeps today's behaviour) or `backup` (`construct-backup.sh` passes `backup` for the
+  `scheduled` and `manual` triggers and `reinstall` for `pre-reinstall`). With `backup` the
+  export does **not** stop `t3code-serve`. Every SQLite database it captures (T3 `statev2.sqlite` / legacy `state.sqlite`,
   OpenCode `opencode.db`, Codex `memories_*.sqlite`) is copied with SQLite's online backup API
   (`python3 -I` with `sqlite3.Connection.backup`; fallback `sqlite3 <src> ".backup <dst>"`; last
   resort a plain copy with a warning). The `-wal`/`-shm` side files are not captured; the
-  snapshot is self-contained. With `EXPORT_REASON=reinstall` it keeps today's behaviour (snapshot
+  snapshot is self-contained. With `reinstall` it keeps today's behaviour (snapshot
   busy T3 threads into `t3-resume.json`, stop T3, copy, start T3).
 - **No local archive.** `construct-backup.sh` streams
   `tar -C <stage> -cf - . | zstd -T0 -3 -q | age -r <ephemeral recipient>` straight into the
