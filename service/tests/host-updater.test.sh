@@ -48,8 +48,10 @@ write(publish/'Constructd.Api','old');(publish/'Constructd.Api').chmod(0o755)
 write(publish/'removed.dll','old-owned');write(publish/'unowned.txt','unowned')
 write(scripts/'keys/bootstrap_ed25519','preserved-key');write(data/'constructd.db','preserved-db')
 write(data/'constructd.db-wal','preserved-wal')
-settings={'Constructd':{'DatabasePath':str(data/'constructd.db'),'Iso':{'CacheDir':str(data/'iso')},'HostAdmin':{'Media':{'RootDir':str(data/'media')},'Source':{'RootDir':str(scripts/'custom-cache')}}}}
+settings={'Constructd':{'DatabasePath':str(data/'constructd.db'),'Iso':{'CacheDir':str(data/'iso')},'HostAdmin':{'Media':{'RootDir':str(data/'media')},'Source':{'RootDir':str(scripts/'custom-cache')}},
+    'Backups':{'RootDir':str(scripts/'custom-backups')}}}
 dump(publish/'appsettings.Production.json',settings);write(scripts/'custom-cache/cached.zip','preserved-cache')
+write(scripts/'custom-backups/0123456789abcdef/dev'/('0'*32+'.age'),'preserved-backup')
 old=[{'path':'service/'+name,'sha256':sha(publish/name)} for name in ('Constructd.Api','removed.dll')]
 stamp=datetime.datetime.now(datetime.timezone.utc).isoformat()
 dump(publish/'install.json',dict(source='installer',commit='b'*40,packageVersion='old',installedAt=stamp,previousCommit=None,updateId=None,files=old))
@@ -112,6 +114,7 @@ elif action=='assert':
     assert (b/'publish/unowned.txt').read_text()=='unowned'
     assert (b/'scripts/keys/bootstrap_ed25519').read_text()=='preserved-key'
     assert (b/'scripts/custom-cache/cached.zip').read_text()=='preserved-cache'
+    assert (b/'scripts/custom-backups/0123456789abcdef/dev'/('0'*32+'.age')).read_text()=='preserved-backup'
     assert read(b/'publish/appsettings.Production.json')['Constructd']['DatabasePath']==str(b/'data/constructd.db')
 elif action=='check-success':
     assert (b/'publish/Constructd.Api').read_text()=='new'

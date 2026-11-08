@@ -1192,6 +1192,9 @@ if ($AclOnly) {
     foreach ($extra in @($aclSettings.Constructd.HostAdmin.Media.RootDir, $aclSettings.Constructd.HostAdmin.Source.RootDir, $aclSettings.Constructd.Iso.CacheDir)) {
         if ($extra) { $aclEntries += @{Path=$extra;Kind='Data';Name='media/cache root'} }
     }
+    if ($aclSettings.Constructd.Backups.RootDir) {
+        $aclEntries += @{Path=[string]$aclSettings.Constructd.Backups.RootDir;Kind='Data';Name='config backup root'}
+    }
     foreach ($entry in (Sort-ConstructHardeningOrder -Entries $aclEntries)) {
         Set-ConstructPathAcl -Path $entry.Path -Kind $entry.Kind -Name $entry.Name
     }
@@ -1310,14 +1313,20 @@ if ($savedHostAdmin.Source.PSObject.Properties['RootDir'] -and $savedHostAdmin.S
 } else {
     $savedHostAdmin.Source | Add-Member -NotePropertyName RootDir -NotePropertyValue $sourceRootDir -Force
 }
-foreach ($dir in @($serviceRoot, $DataDir, $isoCacheDir, $sourceRootDir)) {
+# Encrypted config backups of the VMs (docs/remote-host.md); an operator's own directory is kept.
+$backupRootDir = Join-Path $DataDir 'backups'
+if ($priorSettings -and $priorSettings.Constructd -and $priorSettings.Constructd.PSObject.Properties['Backups'] -and
+    $priorSettings.Constructd.Backups.PSObject.Properties['RootDir'] -and $priorSettings.Constructd.Backups.RootDir) {
+    $backupRootDir = [string]$priorSettings.Constructd.Backups.RootDir
+}
+foreach ($dir in @($serviceRoot, $DataDir, $isoCacheDir, $backupRootDir, $sourceRootDir)) {
     if (-not (Test-Path -LiteralPath $dir)) {
         if ($PSCmdlet.ShouldProcess($dir, "Create the directory")) {
             New-Item -ItemType Directory -Path $dir -Force | Out-Null
         }
     }
 }
-Write-Ok "$DataDir (database), $isoCacheDir (autoinstall ISO catalog)"
+Write-Ok "$DataDir (database), $isoCacheDir (autoinstall ISO catalog), $backupRootDir (config backups)"
 
 # ── 1b. Lock down what the service executes and trusts ───────────────────────
 # The service runs as LocalSystem: anything an unprivileged user can write into the
@@ -1343,6 +1352,7 @@ if ($SkipAclHardening) {
     # (where Authenticated Users inherit Modify) installs without a manual ACL fix.
     $hardening = @(
         @{ Path = $sourceRootDir; Kind = 'Data'; Name = "construct source cache" }
+        @{ Path = $backupRootDir; Kind = 'Data'; Name = "construct config backups" }
         @{ Path = $serviceRoot; Kind = 'Data'; Name = "the service root" }
         @{ Path = $PublishDir;  Kind = 'Code'; Name = "-PublishDir" }
         @{ Path = $ScriptsDir;  Kind = 'Code'; Name = "-ScriptsDir" }
@@ -1495,6 +1505,7 @@ $settings = [ordered]@{
     }
     Constructd = [ordered]@{
         HostAdmin        = $savedHostAdmin
+        Backups          = [ordered]@{ RootDir = $backupRootDir }
         BrowserConsoleEnabled = $browserConsoleEnabled
         Persistence      = "Sqlite"
         DatabasePath     = (Join-Path $DataDir "constructd.db")
