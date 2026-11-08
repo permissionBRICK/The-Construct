@@ -2363,12 +2363,46 @@ function Invoke-RemoteVmHostBackup {
     return $created
 }
 
+function Invoke-RemoteVmHostBackupVerify {
+    <# Provision-AgentVM.ps1 -Action backup-verify against a REMOTE instance's endpoint:
+       `construct backup verify --from-host <id>` on the still-running VM, which downloads,
+       decrypts and unpacks the host's backup without writing it. $true when it passes. #>
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)]$Endpoint,
+        [Parameter(Mandatory)][string]$KeyName,
+        [Parameter(Mandatory)][string]$BackupId,
+        [Parameter(Mandatory)][string]$KeysJson
+    )
+    $ps = Join-Path $PSScriptRoot "Provision-AgentVM.ps1"
+    if (-not (Test-Path -LiteralPath $ps)) { throw "Provision-AgentVM.ps1 not found in $PSScriptRoot." }
+    $a = @{
+        Action         = 'backup-verify'
+        BackupId       = $BackupId
+        BackupKeysJson = $KeysJson
+        Auto           = $true
+        VmHost         = [string]$Endpoint.SshHost
+        SshPort        = [int]$Endpoint.SshPort
+        HostAlias      = $Name
+        LocalKeyName   = $KeyName
+        SeedUser       = 'construct'
+        SshIpv4        = $true
+    }
+    $global:ConstructBackupVerifyResult = $null
+    try {
+        $null = & $ps @a
+        return ($global:ConstructBackupVerifyResult -eq 0)
+    } finally { $global:ConstructBackupVerifyResult = $null }
+}
+
 function Select-ConstructNewestHostBackup {
-    <# The newest backup of -Name on the host that this PC's key opens, offered first when
-       -Ask; $null when there is none, it cannot be listed, or the user declines. #>
-    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$ServiceUrl, $Auth, [switch]$Ask)
+    <# The newest backup of -Name on the host that this PC's key really opens (and that
+       passes -Verify, when given), offered first when -Ask; $null when there is none, it
+       cannot be listed, or the user declines. #>
+    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$ServiceUrl, $Auth, [switch]$Ask,
+          [scriptblock]$Verify)
     $found = $null
-    try { $found = Find-ConstructReadableHostBackup -BaseUrl $ServiceUrl -VmName $Name -Auth $Auth }
+    try { $found = Find-ConstructReadableHostBackup -BaseUrl $ServiceUrl -VmName $Name -Auth $Auth -Verify $Verify }
     catch {
         Write-Warning "Could not list the host's backups of '$Name': $($_.Exception.Message)"
         return $null
@@ -2441,6 +2475,18 @@ function Select-ConstructRemoteReinstallBackup {
         }
     }
 
+    # While the old VM still runs, an earlier host backup is relied on only after the VM
+    # itself downloaded, decrypted and unpacked it: the reinstall deletes the VM next.
+    $verifyOnVm = $null
+    if ($hostBackups -and $Reachable) {
+        # Captured as a command: a GetNewClosure() block cannot see this script's functions.
+        $verifyFn = Get-Command Invoke-RemoteVmHostBackupVerify -CommandType Function
+        $verifyOnVm = {
+            param($backup, $keysJson)
+            & $verifyFn -Name $Name -Endpoint $Endpoint -KeyName $KeyName -BackupId $backup.Id -KeysJson $keysJson
+        }.GetNewClosure()
+    }
+
     $doSave = $false
     if ($Reachable) {
         if ($BackupMode) { $doSave = ($BackupMode -eq 'save') }
@@ -2470,7 +2516,7 @@ function Select-ConstructRemoteReinstallBackup {
         } catch {
             Write-Warning "Backing up to the host failed: $($_.Exception.Message)"
         }
-        $newest = Select-ConstructNewestHostBackup -Name $Name -ServiceUrl $ServiceUrl -Auth $Auth -Ask:$Interactive
+        $newest = Select-ConstructNewestHostBackup -Name $Name -ServiceUrl $ServiceUrl -Auth $Auth -Ask:$Interactive -Verify $verifyOnVm
         if ($newest) { $choice.HostBackupId = [string]$newest.Id; return $choice }
         Write-Warning "Saving the config to this PC instead."
     }
@@ -2503,7 +2549,7 @@ function Select-ConstructRemoteReinstallBackup {
         # 'existing' asks for exactly this; 'save' with an unreachable VM is the failed save
         # above (asked in the console only); the console's own "No" still offers it.
         $ask = if ($BackupMode -eq 'existing') { $false } elseif ($BackupMode -eq 'save') { $Interactive } else { $true }
-        $newest = Select-ConstructNewestHostBackup -Name $Name -ServiceUrl $ServiceUrl -Auth $Auth -Ask:$ask
+        $newest = Select-ConstructNewestHostBackup -Name $Name -ServiceUrl $ServiceUrl -Auth $Auth -Ask:$ask -Verify $verifyOnVm
         if ($newest) { $choice.HostBackupId = [string]$newest.Id; return $choice }
     }
     if (Test-Path -LiteralPath (Join-Path $BackupDir "extracted\backup-info.json")) {

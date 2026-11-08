@@ -1115,6 +1115,21 @@ function Restore-ConstructHostBackup {
     if ($res.ExitCode -ne 0) { throw "Restoring host backup $BackupId on the VM failed: $(Get-ConstructBackupExitMessage $res.ExitCode)." }
 }
 
+function Test-ConstructHostBackup {
+    <#
+        Does the host's backup -BackupId open, decompress and unpack on the VM, and is it
+        that backup? `construct backup verify --from-host <id>` with E (from -KeysJson) on
+        stdin; nothing is written on the VM. Returns the CLI's exit code (0 = usable).
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)]$Connection, [Parameter(Mandatory)][string]$BackupId, [Parameter(Mandatory)][string]$KeysJson, [string]$KeyDir)
+    $identity = Unprotect-ConstructBackupIdentity -KeysJson $KeysJson -KeyDir $KeyDir -ExpectedBackupId $BackupId
+    try {
+        $res = Invoke-ConstructBackupCli -Connection $Connection -Arguments @('verify', '--from-host', $BackupId) -FirstLine $identity -Stdout Console
+    } finally { $identity = $null }
+    return [int]$res.ExitCode
+}
+
 # ── Host API (contract 3.5) ──────────────────────────────────────────────────
 
 function Resolve-ConstructBackupApiAuth {
@@ -1158,16 +1173,43 @@ function Get-ConstructHostBackupList {
 }
 
 function Find-ConstructReadableHostBackup {
-    <# The newest of the host's backups of -VmName that one of this PC's keys can open, or $null. #>
+    <#
+        The newest of the host's backups of -VmName that this PC can really open, or $null.
+        "Open" means one of this PC's keys unwraps the backup's key (an RSA decryption, not
+        just a matching fingerprint); the unwrapped key is dropped right away. With -Verify
+        the candidate must also pass that check ({ param($backup, $keysJson) ... } returning
+        $true), e.g. `construct backup verify` on a VM that is still reachable. A backup that
+        fails either check is skipped with a warning and the next older one is tried.
+    #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)][string]$BaseUrl, [Parameter(Mandatory)][string]$VmName, $Auth, [string]$KeyDir)
+    param([Parameter(Mandatory)][string]$BaseUrl, [Parameter(Mandatory)][string]$VmName, $Auth, [string]$KeyDir,
+          [scriptblock]$Verify)
     $mine = @(Get-ConstructBackupPrivateKeyFiles -KeyDir $KeyDir)
     if ($mine.Count -eq 0) { return $null }
     foreach ($b in @(Get-ConstructHostBackupList -BaseUrl $BaseUrl -VmName $VmName -Auth $Auth)) {
+        $candidateKeysJson = $null
         try {
-            $keys = ConvertFrom-ConstructBackupKeysJson -Json (Get-ConstructHostBackupKeysJson -BaseUrl $BaseUrl -VmName $VmName -BackupId $b.Id -Auth $Auth)
+            $candidateKeysJson = Get-ConstructHostBackupKeysJson -BaseUrl $BaseUrl -VmName $VmName -BackupId $b.Id -Auth $Auth
+            $keys = ConvertFrom-ConstructBackupKeysJson -Json $candidateKeysJson
         } catch { continue }
-        if ($keys.BackupId -ceq $b.Id -and (Test-ConstructBackupKeysReadable -Keys $keys -KeyDir $KeyDir)) { return $b }
+        if ($keys.BackupId -cne $b.Id -or -not (Test-ConstructBackupKeysReadable -Keys $keys -KeyDir $KeyDir)) { continue }
+        $identity = $null
+        try {
+            $identity = Unprotect-ConstructBackupIdentity -KeysJson $candidateKeysJson -KeyDir $KeyDir -ExpectedBackupId $b.Id
+        } catch {
+            Write-Warning "The host's backup $($b.Id) cannot be opened on this PC: $($_.Exception.Message) Trying an older one."
+            continue
+        } finally { $identity = $null }
+        if ($Verify) {
+            $verified = $false
+            try { $verified = [bool](& $Verify $b $candidateKeysJson) }
+            catch { Write-Warning "Checking the host's backup $($b.Id) failed: $($_.Exception.Message)" }
+            if (-not $verified) {
+                Write-Warning "The host's backup $($b.Id) did not pass the check on the VM; trying an older one."
+                continue
+            }
+        }
+        return $b
     }
     return $null
 }

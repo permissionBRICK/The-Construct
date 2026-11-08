@@ -220,6 +220,11 @@ ok 'backup-info.json names the backup id' sh -c "tar -xOf '${tmp}/fetched.tar.zs
 printf 'AGE-SECRET-KEY-1QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ\n' \
   | guest fetch --from-host "${id1}" --out "${tmp}/wrong.tar.zst" >/dev/null 2>&1
 ok 'a wrong identity fails with exit 8' test "$?" = 8
+printf '%s\n' "${E}" | guest verify --from-host "${id1}" >/dev/null 2>"${tmp}/verify.err"
+ok 'verify passes for the host backup with its identity' test "$?" = 0
+printf 'AGE-SECRET-KEY-1QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ\n' \
+  | guest verify --from-host "${id1}" >/dev/null 2>&1
+ok 'verify with a wrong identity fails with exit 8' test "$?" = 8
 
 # ── 5. download: the container the PC saves ──────────────────────────────────
 guest download "${id1}" >"${tmp}/saved.cbk" 2>"${tmp}/download.err"

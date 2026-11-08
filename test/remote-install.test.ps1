@@ -1039,10 +1039,11 @@ Write-Host "=== Remote reinstall: backups on the host ===" -ForegroundColor Cyan
 & {
     Set-StrictMode -Off   # Auto-Install.ps1 does not run under strict mode
     foreach ($name in @('Select-ConstructRemoteReinstallBackup', 'Select-ConstructNewestHostBackup', 'Get-BackupProjectNames',
-                        'Invoke-RemoteVmHostBackup', 'Start-ConstructGitPreflight')) {
+                        'Invoke-RemoteVmHostBackup', 'Invoke-RemoteVmHostBackupVerify', 'Start-ConstructGitPreflight')) {
         $text = Get-InstallerFunctionText $name
         ok "extract: Auto-Install.ps1 defines $name" ($text -ne "")
         if ($name -eq 'Invoke-RemoteVmHostBackup') { $script:hostBackupFnText = $text; continue }
+        if ($name -eq 'Invoke-RemoteVmHostBackupVerify') { $script:hostBackupVerifyFnText = $text; continue }
         if ($text) { Invoke-Expression $text }
     }
     . (Join-Path $repoRoot "lib/AgentVm.Backup.ps1")
@@ -1057,7 +1058,18 @@ Write-Host "=== Remote reinstall: backups on the host ===" -ForegroundColor Cyan
         if ($script:createFails) { throw 'Backing up the VM to its host failed: exit 6' }
         return [pscustomobject]@{ Id = ('a' * 32); GitCredentialHosts = @('github.com') }
     }
-    function Find-ConstructReadableHostBackup { param($BaseUrl, $VmName, $Auth) $log.Add("newest:$VmName"); return $script:newest }
+    $script:verifyFails = $false
+    function Invoke-RemoteVmHostBackupVerify {
+        param($Name, $Endpoint, $KeyName, $BackupId, $KeysJson)
+        $log.Add("verify:${Name}:${KeyName}:${BackupId}:$KeysJson")
+        return (-not $script:verifyFails)
+    }
+    function Find-ConstructReadableHostBackup {
+        param($BaseUrl, $VmName, $Auth, [scriptblock]$Verify)
+        $log.Add("newest:$VmName")
+        if ($script:newest -and $Verify -and -not (& $Verify $script:newest 'KEYS-JSON')) { return $null }
+        return $script:newest
+    }
     function Invoke-RemoteVmConfigExport {
         param($Name, $Endpoint, $KeyName, $BackupDir, [switch]$ScanReposOnly)
         $log.Add("pc-export:$Name")
@@ -1098,6 +1110,11 @@ Write-Host "=== Remote reinstall: backups on the host ===" -ForegroundColor Cyan
     $r = Invoke-Choice -Mode 'save'
     ok "host: a failed backup falls back to the newest host backup (panel: no question)" ($r.HostBackupId -eq ('b' * 32) -and @($log | Where-Object { $_ -like 'ask:*' }).Count -eq 0)
     ok "host: ...whose git hosts are unknown, so the preflight runs as for a fresh install" ($null -eq $r.GitCredentialHosts)
+    ok "host: ...after the still-running VM checked it (verify on the VM, before the delete)" ($log -contains "verify:work-vm:construct_work-vm_ed25519:$('b' * 32):KEYS-JSON")
+    $script:verifyFails = $true
+    $r = Invoke-Choice -Mode 'save'
+    ok "host: a host backup the VM cannot open is not relied on -> today's export to this PC" (-not $r.HostBackupId -and $r.RestoreDir -eq $bk -and $log -contains 'pc-export:work-vm')
+    $script:verifyFails = $false
     $r = Invoke-Choice -Mode 'save' -Interactive $true
     ok "host: in the console the newest host backup is offered" ($r.HostBackupId -eq ('b' * 32) -and $log -contains "ask:$newestQ")
     $script:answers[$newestQ] = $false
@@ -1131,6 +1148,7 @@ Write-Host "=== Remote reinstall: backups on the host ===" -ForegroundColor Cyan
     $r = Invoke-Choice -Mode 'existing'
     ok "existing: the newest host backup, without a question" ($r.HostBackupId -eq ('b' * 32) -and @($log | Where-Object { $_ -like 'ask:*' }).Count -eq 0 -and
         ($log -notcontains 'pc-export:work-vm'))
+    ok "existing: ...checked on the still-running VM first" (@($log | Where-Object { $_ -like "verify:*:$('b' * 32):*" }).Count -eq 1)
     $script:newest = $null
     $r = Invoke-Choice -Mode 'existing'
     ok "existing: no host backup -> the backup saved on this PC" (-not $r.HostBackupId -and $r.RestoreDir -eq $bk)
@@ -1144,6 +1162,7 @@ Write-Host "=== Remote reinstall: backups on the host ===" -ForegroundColor Cyan
 
     $r = Invoke-Choice -Mode 'save' -Reachable $false
     ok "unreachable: save uses the newest host backup (panel)" ($r.HostBackupId -eq ('b' * 32) -and ($log -notcontains 'host-backup:work-vm:construct_work-vm_ed25519'))
+    ok "unreachable: ...without a check on the VM (there is none to ask)" (@($log | Where-Object { $_ -like 'verify:*' }).Count -eq 0)
     $r = Invoke-Choice -Mode 'save' -Reachable $false -Interactive $true
     ok "unreachable: ...offered in the console" ($r.HostBackupId -eq ('b' * 32) -and $log -contains "ask:$newestQ")
 
@@ -1182,6 +1201,30 @@ if ($env:FAKE_PROVISION_REPORT -eq '1') { $global:ConstructBackupCreateResult = 
         $env:FAKE_PROVISION_REPORT = '0'
         ok "create: no report is an error" ((Get-ThrowMessage { Invoke-RemoteVmHostBackup -Name 'work-vm' -Endpoint $ep -KeyName 'k' }) -match 'reported no backup')
     } finally { Remove-Item Env:FAKE_PROVISION_REPORT -ErrorAction SilentlyContinue }
+
+    # Invoke-RemoteVmHostBackupVerify runs -Action backup-verify the same way.
+    Set-Content -LiteralPath (Join-Path $fakeRoot 'Provision-AgentVM.ps1') -Value @'
+param([string]$Action, [string]$BackupId, [string]$BackupKeysJson, [switch]$Auto, [string]$VmHost, [int]$SshPort, [string]$HostAlias,
+      [string]$LocalKeyName, [string]$SeedUser, [switch]$SshIpv4)
+$global:FakeProvisionArgs = @{} + $PSBoundParameters
+"pipeline noise from the provisioner"
+if ($env:FAKE_VERIFY_CODE) { $global:ConstructBackupVerifyResult = [int]$env:FAKE_VERIFY_CODE }
+if ($env:FAKE_VERIFY_CODE -and $env:FAKE_VERIFY_CODE -ne '0') { throw "did not pass the check: exit $env:FAKE_VERIFY_CODE" }
+'@
+    Invoke-Expression ($script:hostBackupVerifyFnText.Replace('$PSScriptRoot', '$fakeRoot'))
+    try {
+        $env:FAKE_VERIFY_CODE = '0'
+        $ok = Invoke-RemoteVmHostBackupVerify -Name 'work-vm' -Endpoint $ep -KeyName 'construct_work-vm_ed25519' -BackupId ('b' * 32) -KeysJson '{"k":1}'
+        $fa = $global:FakeProvisionArgs
+        ok "verify: the provisioner runs -Action backup-verify with the id and the keys file, unattended" (
+            $ok -eq $true -and $fa.Action -eq 'backup-verify' -and $fa.BackupId -eq ('b' * 32) -and $fa.BackupKeysJson -eq '{"k":1}' -and $fa.Auto -and
+            $fa.HostAlias -eq 'work-vm' -and $fa.LocalKeyName -eq 'construct_work-vm_ed25519' -and $fa.SeedUser -eq 'construct')
+        ok "verify: ...and the hand-over global is cleared" ($null -eq $global:ConstructBackupVerifyResult)
+        $env:FAKE_VERIFY_CODE = ''
+        ok "verify: no report is a failed check" ((Invoke-RemoteVmHostBackupVerify -Name 'work-vm' -Endpoint $ep -KeyName 'k' -BackupId ('b' * 32) -KeysJson '{}') -eq $false)
+        $env:FAKE_VERIFY_CODE = '8'
+        ok "verify: a failing check throws (the caller skips that backup)" ((Get-ThrowMessage { Invoke-RemoteVmHostBackupVerify -Name 'work-vm' -Endpoint $ep -KeyName 'k' -BackupId ('b' * 32) -KeysJson '{}' }) -match 'did not pass')
+    } finally { Remove-Item Env:FAKE_VERIFY_CODE -ErrorAction SilentlyContinue }
 
     # The git preflight: the fresh backup's host list replaces the PC backup's credential store.
     $profDir = Join-Path $tmpRoot 'pf-projects'

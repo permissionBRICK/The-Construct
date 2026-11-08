@@ -42,6 +42,14 @@ read old ones. To restore, a PC unwraps E with its own key and hands it to the V
 (on standard input, never on a command line or a disk); the VM then downloads and decrypts the
 backup itself.
 
+**What the encryption protects, and what it does not.** The backups the host stores, and any
+copy of its storage, cannot be read without one of your PCs' keys; changing or swapping a
+payload file is caught, because it no longer decrypts with its backup's key. The host is still
+the machine your VM runs on: whoever controls the host service and the hypervisor controls the
+VM itself (its disk, its memory), so a backup cannot be protected against *that* party
+substituting content. Trust the host operator with the VM, and the encryption keeps the stored
+backups private from everyone else, including later readers of the host's disks and backups.
+
 **What it needs:**
 
 - a host service that offers the feature (an older host: the VM's `construct backup create`
@@ -107,6 +115,15 @@ backups and a usable key on this PC:
 | `save` (the default; "Yes" in the console) | The VM backs itself up to the host now (`pre-reinstall`). If that fails, or the VM is not reachable: the newest host backup this PC can open — offered in the console, taken without a question from the panel. If there is none: the config is exported to this PC as before. |
 | `existing` | The newest host backup this PC can open; when there is none, the backup saved on this PC. |
 | `wipe` | Nothing is saved or restored. |
+
+**Before the VM is deleted** the reinstall makes sure the backup it relies on can be restored.
+"Can open" means this PC actually unwraps the backup's key, not just that its key is named in
+the keys file; a backup that fails that is skipped and the next older one is tried. While the old
+VM still runs, an earlier host backup (the fallback after a failed fresh backup, or
+`existing`) must also pass `construct backup verify` on that VM: the VM downloads, decrypts and
+unpacks it without writing it anywhere and checks that it is that backup. A backup that fails is
+skipped the same way; when none passes, the config is exported to this PC as before. A VM that is
+no longer reachable cannot run the check, so then only the unwrap is tested.
 
 The chosen backup goes to provisioning as `-RestoreHostBackupId <id>`. After `provision.sh`,
 the provisioner unwraps the backup's key with this PC's key, the VM downloads and decrypts the
@@ -322,6 +339,7 @@ sudo construct backup status                     # the host's view: last backup,
 sudo construct backup list                       # the host's backups of this VM
 sudo construct backup create                     # back up to the host now
 sudo construct backup create --stdout > x.cbk    # a backup file, no host involved
+# verify --from-host ID reads the backup's key from stdin, like fetch and restore
 sudo construct backup recipients list            # the enrolled PC keys
 sudo construct backup estimate                   # the space a backup would need
 

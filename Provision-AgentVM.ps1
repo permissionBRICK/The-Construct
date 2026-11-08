@@ -177,8 +177,11 @@ param(
     #   backup-key-import   -- install the key in -BackupKeyFile on this PC (no VM).
     #   backup-create       -- enrol, then back the VM up to its host (-BackupTrigger);
     #                          the remote reinstall uses it before it deletes the VM.
+    #   backup-verify       -- check on the VM that the host's backup -BackupId (keys file
+    #                          -BackupKeysJson) opens and is complete; the remote reinstall
+    #                          uses it before it relies on an older host backup.
     [ValidateSet("provision", "export", "t3update", "backup-enroll", "backup-save", "backup-restore",
-                 "backup-key-export", "backup-key-import", "backup-create")]
+                 "backup-key-export", "backup-key-import", "backup-create", "backup-verify")]
     [string]$Action = "provision",
     # -Action backup-save / backup-restore: the backup container on this PC (.cbk).
     [string]$BackupFile = "",
@@ -190,6 +193,9 @@ param(
     # -Action backup-create: the trigger the host records for the backup.
     [ValidateSet("manual", "pre-reinstall")]
     [string]$BackupTrigger = "manual",
+    # -Action backup-verify: the backup's keys file as the host returned it (no secret: the
+    # backup key in it is wrapped for the enrolled PCs).
+    [string]$BackupKeysJson = "",
     # Restore the host's backup with this id onto the VM after provisioning (the remote
     # reinstall, Auto-Install.ps1). A VM on a host service only; never with -RestoreDir.
     [string]$RestoreHostBackupId = "",
@@ -1347,6 +1353,9 @@ function Assert-BackupArguments {
             }
             if ($BackupFile -and -not (Test-Path -LiteralPath $BackupFile -PathType Leaf)) { throw "Backup file not found: $BackupFile" }
         }
+        'backup-verify' {
+            if (-not $BackupId -or -not $BackupKeysJson) { throw '-Action backup-verify needs -BackupId <id> and -BackupKeysJson <keys file>.' }
+        }
         'backup-key-export' {
             if (-not $BackupKeyFile) { throw '-Action backup-key-export needs -BackupKeyFile <path>.' }
         }
@@ -1459,6 +1468,14 @@ function Invoke-BackupSshAction {
             # Read by the caller (Auto-Install.ps1's reinstall), which runs this script in-process.
             $global:ConstructBackupCreateResult = $created
             Write-Ok "Backup $($created.Id) stored on the host ($(Format-ConstructBackupSize $created.SizeBytes))"
+        }
+        'backup-verify' {
+            Write-Step "Checking the host's backup $BackupId on the VM"
+            $code = Test-ConstructHostBackup -Connection $connection -BackupId $BackupId -KeysJson $BackupKeysJson
+            # Read by the caller (Auto-Install.ps1's reinstall), which runs this script in-process.
+            $global:ConstructBackupVerifyResult = $code
+            if ($code -ne 0) { throw "The host's backup $BackupId did not pass the check on the VM: $(Get-ConstructBackupExitMessage $code)." }
+            Write-Ok "Backup $BackupId opens and is complete"
         }
         'backup-save' {
             if ($BackupId) { Write-Step "Saving the host's backup $BackupId to this PC" }

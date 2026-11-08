@@ -154,6 +154,7 @@ documented output.
 | `create --stdout` | – | a container (below) | same build, no host involved; works on a VM without a service |
 | `download <id>` | – | a container | writes the host's keys file and payload as a container |
 | `fetch --from-host <id> --out <file>` | line 1: `E` | – | downloads, decrypts to `<file>` (a `.tar.zst`, mode 0600), checks `backupId` |
+| `verify --from-host <id>` | line 1: `E` | – | downloads, decrypts and unpacks the whole backup without writing it, checks `backupId`; the reinstall's check before it relies on an earlier backup |
 | `restore --from-host <id>` | line 1: `E` | – | fetch + `restore-config.sh` + extras (below) + `POST …/restored` |
 | `restore --stdin --expect-id <id>` | line 1: `E`, then the raw age payload | – | decrypt from stdin, check `backupId`, restore + extras; no host involved |
 | `list` | – | host JSON | `GET …/backups` |
@@ -356,6 +357,11 @@ VMs; a failure is a warning, not a provisioning error).
   fails, offer (console) or, with `-FromPanel`/non-interactive, use the newest host backup when
   one exists, else fall back to today's client-side export.
 - `-BackupMode existing`: the newest host backup; when the host has none, today's PC backup.
+- Before the VM is deleted, an earlier host backup counts only when this PC really unwraps its
+  key (an RSA decryption, not a fingerprint match) and, while the old VM is reachable, when
+  `construct backup verify --from-host <id>` passes on that VM (internal action
+  `Provision-AgentVM.ps1 -Action backup-verify -BackupId <id> -BackupKeysJson <keys>`). A
+  backup that fails is skipped and the next older one is tried; none left means today's export.
 - `-BackupMode wipe`: unchanged.
 - The chosen id goes to `Provision-AgentVM.ps1 -RestoreHostBackupId <id>`. Provisioning then
   runs the restore step against the host backup: unwrap `E` from `GET …/keys`,
@@ -387,6 +393,15 @@ host-admin Config tab gets the `backups` section through the config schema.
 **Companion:** the same panel; routes in `RemoteHostRoutes.cs`; lifecycle commands in
 `LifecycleBuilder.cs`; the status poll and toast (3.7). **Extension:** the same panel, routes in
 `remotehost.js`, actions in `lifecycle.js`, a warning message instead of a toast.
+
+### 3.9 Trust model
+
+The host stores only ciphertext, and a payload changed at rest no longer decrypts with its
+backup's key. The host service is, however, the VM's hypervisor: it can read and change the
+running VM's disk and memory, including anything the VM could use to sign backups. Integrity
+against the host operator is therefore out of reach and not attempted; the encryption keeps the
+stored backups private from everyone without a PC key, including later readers of the host's
+storage.
 
 ## 4. Compatibility
 

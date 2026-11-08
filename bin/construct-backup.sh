@@ -74,12 +74,16 @@ ones either: a restore needs the key a recipient PC unwraps.
   download ID          Write the host's backup ID to stdout as a container.
   fetch --from-host ID --out FILE
                        Download backup ID and decrypt it into FILE (.tar.zst).
+  verify --from-host ID
+                       Download and decrypt backup ID without writing it
+                       anywhere, and check that it is backup ID: a backup a
+                       reinstall may rely on.
   restore --from-host ID
   restore --stdin --expect-id ID
                        Restore backup ID onto this VM: from the host, or from
                        the encrypted payload that follows the key on stdin.
-                       fetch and restore read the backup key from the first
-                       line of stdin.
+                       fetch, verify and restore read the backup key from the
+                       first line of stdin.
   list                 The host's backups of this VM (JSON).
   status               The host's backup status for this VM (JSON).
   recipients list      The enrolled PC keys (JSON).
@@ -968,6 +972,44 @@ cmd_fetch() {
   msg "backup ${id} decrypted into ${out}"
 }
 
+# Decrypt, decompress and unpack the payload on stdin without writing any of it,
+# keeping only backup-info.json (VERIFY_INFO). tar reads the whole archive, so the
+# download is consumed to the end and a damaged tail fails too.
+# shellcheck disable=SC2317 # runs as download_payload's consumer
+verify_stream() {
+  age -d -i <(printf '%s\n' "${E}") | zstd -dcq | tar -xOf - ./backup-info.json >"${VERIFY_INFO}"
+}
+
+cmd_verify() {
+  local id="" found
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --from-host) shift; [[ $# -gt 0 ]] || usage_fail "--from-host requires a backup id"; id="$1" ;;
+      *) usage_fail "unknown verify option: $1" ;;
+    esac
+    shift
+  done
+  [[ -n "${id}" ]] || usage_fail "usage: construct backup verify --from-host ID"
+  validate_id "${id}"
+  need_tools age jq tar zstd sha256sum
+  require_service
+  read_identity
+  VERIFY_INFO="${WORK_DIR}/verify-info.json"
+  download_payload "${id}" verify_stream
+  E=""
+  download_check "${id}" || exit "${EXIT_CRYPTO}"
+  if [[ "${DL_CONSUMER_RC}" -ne 0 ]]; then
+    msg "backup ${id} could not be decrypted and unpacked with the key on stdin"
+    exit "${EXIT_CRYPTO}"
+  fi
+  found="$(jq -r 'if type == "object" then (.backupId // empty) | tostring else empty end' "${VERIFY_INFO}" 2>/dev/null || true)"
+  if [[ "${found}" != "${id}" ]]; then
+    msg "the decrypted backup is not backup ${id}${found:+ (it is ${found})}"
+    exit "${EXIT_CRYPTO}"
+  fi
+  msg "backup ${id} is complete and opens with the key on stdin"
+}
+
 run_restore_config() { # <archive>
   local script rc=0
   script="$(find_script restore-config.sh)" \
@@ -1301,6 +1343,7 @@ case "${command}" in
   create) cmd_create "$@" ;;
   download) cmd_download "$@" ;;
   fetch) cmd_fetch "$@" ;;
+  verify) cmd_verify "$@" ;;
   restore) cmd_restore "$@" ;;
   restore-extras) cmd_restore_extras "$@" ;;
   restored) cmd_restored "$@" ;;

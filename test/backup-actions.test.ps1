@@ -182,6 +182,11 @@ case "$1" in
       printf '%s\n' "$3" > "$d/from-host"
       age -d -i <(printf '%s\n' "$e") -o "$d/restored.bin" "$d/payload-only.age" || exit 8
     fi ;;
+  verify)
+    [[ "$2" == --from-host ]] || exit 2
+    IFS= read -r e
+    printf '%s\n' "$3" > "$d/verify-id"
+    age -d -i <(printf '%s\n' "$e") "$d/payload-only.age" >/dev/null 2>&1 || exit 8 ;;
   *) exit 2 ;;
 esac
 '@.Replace("`r`n", "`n"))
@@ -274,6 +279,15 @@ ok 'restore host: restore --from-host <id> with E on stdin' ((Get-Content (Join-
 ok 'restore host: a keys file of another backup is refused before anything runs' (
     (Get-ThrowMessage { Restore-ConstructHostBackup -Connection $conn -BackupId ('1' * 32) -KeysJson $keysJson -KeyDir $keyDir }) -match 'belongs to backup')
 
+$code = Test-ConstructHostBackup -Connection $conn -BackupId $env:FAKE_ID -KeysJson $keysJson -KeyDir $keyDir
+ok 'verify host: verify --from-host <id> with E on stdin, exit 0 when it opens' ($code -eq 0 -and (Get-Content (Join-Path $fakeDir 'verify-id')).Trim() -eq $env:FAKE_ID)
+$wrongIdentity = (& age-keygen 2>$null | Where-Object { $_ -like 'AGE-SECRET-KEY-1*' })
+$env:CONSTRUCT_TEST_IDENTITY = $wrongIdentity
+$wrongWrapped = (& bash -c 'printf %s "$CONSTRUCT_TEST_IDENTITY" | openssl pkeyutl -encrypt -pubin -inkey "$1" -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -pkeyopt rsa_mgf1_md:sha256 | base64 -w0' _ (Join-Path $fakeDir 'recipient.pem')).Trim()
+Remove-Item Env:CONSTRUCT_TEST_IDENTITY
+$wrongKeys = $keysJson.Replace($wrapped, $wrongWrapped)
+ok 'verify host: a key that does not open the payload gives exit 8' ((Test-ConstructHostBackup -Connection $conn -BackupId $env:FAKE_ID -KeysJson $wrongKeys -KeyDir $keyDir) -eq 8)
+
 $created = New-ConstructHostBackup -Connection $conn -Trigger 'pre-reinstall' -KeyDir $keyDir
 ok 'create: the host backup id and the git credential hosts come back' ($created.Id -eq $env:FAKE_ID -and @($created.GitCredentialHosts) -contains 'github.com')
 ok 'create: --trigger pre-reinstall reached the guest' ((Get-Content (Join-Path $fakeDir 'construct-calls'))[-1] -eq 'backup create --trigger pre-reinstall')
@@ -334,6 +348,22 @@ $script:apiCalls.Clear()
 $found = Find-ConstructReadableHostBackup -BaseUrl 'https://host.example.com:7462' -VmName 'work-vm' -Auth $tokenAuth -KeyDir $keyDir
 ok 'api: the newest backup THIS PC can open is chosen (an unreadable newer one is skipped)' ($found.Id -eq $env:FAKE_ID)
 ok 'api: ...by reading the keys files, newest first' ($script:apiCalls[1] -eq "GET /vms/work-vm/backups/$('9' * 32)/keys token" -and $script:apiCalls[2] -eq "GET /vms/work-vm/backups/$($env:FAKE_ID)/keys token")
+# A keys file that names this PC's key but whose wrapped key does not decrypt (damaged,
+# or forged) is not "openable": the next older backup is chosen instead.
+$damagedKeys = ([ordered]@{ format = 'construct-backup-keys/1'; backupId = ('9' * 32); createdAt = '2026-11-08T11:00:00Z'
+                            recipients = @([ordered]@{ fingerprint = $key.Fingerprint; label = $key.Label; wrapped = [Convert]::ToBase64String((New-ConstructRandomBytes 384)) }) } | ConvertTo-Json -Depth 4 -Compress)
+$unreadableKeysSaved = $unreadableKeys; $unreadableKeys = $damagedKeys
+$found = Find-ConstructReadableHostBackup -BaseUrl 'https://host.example.com:7462' -VmName 'work-vm' -Auth $tokenAuth -KeyDir $keyDir 3>$null
+ok 'api: a backup whose wrapped key does not decrypt is skipped (the fingerprint alone is not enough)' ($found.Id -eq $env:FAKE_ID)
+# -Verify: a candidate that fails the check on the VM is skipped too; the check gets the keys file.
+$script:verified = New-Object System.Collections.Generic.List[string]
+$found = Find-ConstructReadableHostBackup -BaseUrl 'https://host.example.com:7462' -VmName 'work-vm' -Auth $tokenAuth -KeyDir $keyDir `
+    -Verify { param($backup, $kj) $script:verified.Add($backup.Id); return $false } 3>$null
+ok 'api: -Verify false -> no backup is chosen' ($null -eq $found -and $script:verified -contains $env:FAKE_ID)
+$found = Find-ConstructReadableHostBackup -BaseUrl 'https://host.example.com:7462' -VmName 'work-vm' -Auth $tokenAuth -KeyDir $keyDir `
+    -Verify { param($backup, $kj) return ($kj -match $backup.Id) } 3>$null
+ok 'api: -Verify true -> the backup is chosen, and the check sees its keys file' ($found.Id -eq $env:FAKE_ID)
+$unreadableKeys = $unreadableKeysSaved
 ok 'api: a PC without any key finds nothing and asks nothing' ($null -eq (Find-ConstructReadableHostBackup -BaseUrl 'https://h' -VmName 'w' -Auth $tokenAuth -KeyDir (Join-Path $tmp 'nokey')))
 ok 'api: a malformed id never reaches a URL' ((Get-ThrowMessage { Get-ConstructHostBackupKeysJson -BaseUrl 'https://h' -VmName 'w' -BackupId '../x' -Auth $tokenAuth }) -match 'not a backup id')
 ${function:Invoke-ConstructApi} = $realApi

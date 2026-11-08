@@ -499,6 +499,18 @@ ok '... and leaves no file' test ! -e "${tmp}/fetch-bad.tar.zst"
 run_backup "${host_cfg}" -- fetch --from-host "${BACKUP_ID}" --out "${tmp}/fetch-nokey.tar.zst" </dev/null >/dev/null 2>&1
 ok 'fetch without a key on stdin exits 2' test "$?" = 2
 
+# verify: download + decrypt + unpack without writing the backup anywhere.
+printf '%s\n' "${EH}" | run_backup "${host_cfg}" -- verify --from-host "${BACKUP_ID}" >"${tmp}/verify.out" 2>"${tmp}/verify.err"
+ok 'verify exits 0 for a backup the key opens' test "$?" = 0
+ok '... prints nothing on stdout' test ! -s "${tmp}/verify.out"
+ok '... and leaves nothing in the stage' stage_empty
+printf '%s\n' "${E1}" | run_backup "${host_cfg}" -- verify --from-host "${BACKUP_ID}" >/dev/null 2>&1
+ok 'verify with the wrong key exits 8' test "$?" = 8
+printf '%s\n' "${EH}" | run_backup "${host_cfg}" -- verify --from-host "${OTHER_ID}" >/dev/null 2>&1
+ok 'verify of an unknown backup exits 6' test "$?" = 6
+run_backup "${host_cfg}" -- verify --from-host "${BACKUP_ID}" </dev/null >/dev/null 2>&1
+ok 'verify without a key on stdin exits 2' test "$?" = 2
+
 # restore --from-host: fetch + restore + extras + restored.
 rm -rf "${rhome}" "${rprojects}" "${rrecips}" "${rtoken}"
 mkdir -p "${rhome}"
