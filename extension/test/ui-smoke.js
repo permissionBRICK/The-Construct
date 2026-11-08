@@ -1301,6 +1301,118 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     return (await page.locator("#idleHint").textContent()).includes("clamped");
   })());
 
+  // ── Backups module (docs/plans/host-config-backups.md §3.8) ────────────────
+  // The models come from the real src/backups.js, the same builder the extension uses (the Companion's port is
+  // parity-checked against it).
+  {
+    const bk = require("../src/backups");
+    const now = Date.parse("2026-11-08T12:00:00Z");
+    const key = { fingerprint: "ab".repeat(32), label: "Work PC", exportedAt: null };
+    const settings = { intervalHours: null, keep: 6, effective: { enabled: true, intervalHours: 24, keep: 6 }, host: { enabled: true, intervalHours: 24, keep: 4, maxKeep: 10 } };
+    const list = { backups: [
+      { id: "a".repeat(32), createdAt: "2026-11-08T09:00:00Z", trigger: "scheduled", sizeBytes: 1610612736, pinnedUntil: null },
+      { id: "b".repeat(32), createdAt: "2026-11-05T22:15:00Z", trigger: "pre-reinstall", sizeBytes: 1503238553, pinnedUntil: "2026-11-19T22:15:00Z" }] };
+    const failing = { enabled: true, lastSuccessAt: "2026-11-06T09:30:00Z", failingSince: "2026-11-07T10:00:00Z", requestPending: false, count: 2, totalBytes: 3113851289,
+      lastFailure: { reason: "no-recipients", detail: "" }, nextDueAt: "2026-11-08T16:00:00Z" };
+    const remote = bk.toPanelBackups({ remote: true, supported: true, status: failing, list, settings, key, problem: "" }, now);
+    const local = bk.toPanelBackups({ remote: false, key: { ...key, exportedAt: "2026-11-02T08:00:00Z" } }, now);
+    const push = async (backups) => { await page.evaluate((b) => window.postMessage({ type: "state", state: { online: true, host: "h", backups: b } }, "*"), backups); await page.waitForTimeout(60); };
+    const lastPost = async (pred) => (await page.evaluate(() => window.__posted)).filter(pred).at(-1);
+
+    check("backups: hidden when the state carries no backups", !(await page.locator("#backupsModule").isVisible()));
+    check("backups: lives in Settings", await page.locator("#settingsView #backupsModule").count() === 1);
+    await push(bk.toPanelBackups({ remote: true, supported: false, key }, now));
+    check("backups: hidden for a remote VM whose host lacks config-backups (model null)", !(await page.locator("#backupsModule").isVisible()));
+
+    // A local VM: only the file and key buttons.
+    await push(local);
+    check("backups: a local VM shows the module", await page.locator("#backupsModule").isVisible());
+    check("backups: ...without the host status, override, list or host buttons",
+      !(await page.locator("#bkRemote").isVisible()) && !(await page.locator("#bkNow").isVisible()) && !(await page.locator("#bkRestore").isVisible()) && !(await page.locator("#bkInterval").isVisible()));
+    check("backups: ...with the file and key buttons",
+      await page.locator("#bkSaveFile").isVisible() && await page.locator("#bkRestoreFile").isVisible() && await page.locator("#bkKeyExport").isVisible() && await page.locator("#bkKeyImport").isVisible());
+    check("backups: an exported key raises no warning", !(await page.locator("#bkKeyWarning").isVisible()));
+    await page.evaluate(() => { window.__posted.length = 0; });
+    await page.click("#bkSaveFile");
+    const localSave = await lastPost((m) => m.type === "command" && m.id === "backupSave");
+    check("backups: Save to this PC on a local VM asks for a fresh backup (no host id)", !!localSave && !("backup" in localSave));
+    for (const [button, id] of [["#bkRestoreFile", "backupRestoreFile"], ["#bkKeyExport", "backupKeyExport"], ["#bkKeyImport", "backupKeyImport"]]) {
+      await page.click(button);
+      check(`backups: ${button} posts ${id}`, !!(await lastPost((m) => m.type === "command" && m.id === id)));
+    }
+
+    // A remote VM on a host with config-backups.
+    await push(remote);
+    check("backups: a remote VM shows the host part", await page.locator("#bkRemote").isVisible() && await page.locator("#bkNow").isVisible());
+    check("backups: the status line says when the last backup ran",
+      (await page.locator("#bkStatus").textContent()).includes("Last backup 2026-11-06 09:30 UTC"));
+    check("backups: a failing streak shows the warning", await page.locator("#bkWarning").isVisible()
+      && (await page.locator("#bkWarning").textContent()).includes("failing since 2026-11-07 10:00 UTC"));
+    check("backups: a missing recipient offers Enrol this PC", await page.locator("#bkEnroll").isVisible());
+    check("backups: an unexported key warns", await page.locator("#bkKeyWarning").isVisible());
+    check("backups: the list shows both backups, newest first",
+      await page.locator("#bkList .bk-item").count() === 2 && (await page.locator("#bkList .bk-item").first().textContent()).includes("2026-11-08 09:00 UTC"));
+    check("backups: the pre-reinstall backup is marked pinned",
+      await page.locator("#bkList .bk-item").nth(1).locator(".bk-pin").count() === 1 && await page.locator("#bkList .bk-item").first().locator(".bk-pin").count() === 0);
+    check("backups: the newest backup is selected by default", await page.locator("#bkList input[type=radio]").first().isChecked());
+    check("backups: the override shows the stored keep and an empty interval",
+      (await page.inputValue("#bkKeep")) === "6" && (await page.inputValue("#bkInterval")) === "");
+    check("backups: host defaults are the placeholders", (await page.getAttribute("#bkInterval", "placeholder")) === "24" && (await page.getAttribute("#bkKeep", "placeholder")) === "4");
+    check("backups: keep is capped at the host's maximum", (await page.getAttribute("#bkKeep", "max")) === "10");
+
+    await page.evaluate(() => { window.__posted.length = 0; });
+    await page.click("#bkNow");
+    check("backups: Back up now posts backupNow", !!(await lastPost((m) => m.type === "command" && m.id === "backupNow")));
+    await page.click("#bkSaveFile");
+    check("backups: Save to this PC sends the selected (newest) host backup",
+      (await lastPost((m) => m.type === "command" && m.id === "backupSave")).backup === "a".repeat(32));
+    await page.locator("#bkList input[type=radio]").nth(1).check();
+    await page.click("#bkRestore");
+    check("backups: Restore sends the backup picked in the list",
+      (await lastPost((m) => m.type === "command" && m.id === "backupRestore")).backup === "b".repeat(32));
+    await push(remote);
+    check("backups: a refresh keeps the picked backup", await page.locator("#bkList input[type=radio]").nth(1).isChecked());
+    await page.click("#bkEnroll");
+    check("backups: Enrol this PC posts backupEnroll", !!(await lastPost((m) => m.type === "command" && m.id === "backupEnroll")));
+
+    // Override validation: interval 0..720 or empty, keep 1..maxKeep or empty.
+    const apply = async (interval, keep) => {
+      await page.evaluate(() => { window.__posted.length = 0; });
+      await page.fill("#bkInterval", interval); await page.fill("#bkKeep", keep); await page.click("#bkApply"); await page.waitForTimeout(30);
+      return { posted: await lastPost((m) => m.type === "saveBackupSettings"), note: await page.locator("#bkOverrideNote").textContent() };
+    };
+    let result = await apply("721", "");
+    check("backups: an interval above 720 is refused before posting", !result.posted && result.note.includes("0 to 720"));
+    result = await apply("12", "11");
+    check("backups: keep above the host's maximum is refused", !result.posted && result.note.includes("1 to 10"));
+    result = await apply("", "0");
+    check("backups: keep 0 is refused", !result.posted);
+    result = await apply("0", "10");
+    check("backups: interval 0 and keep at the maximum are accepted",
+      !!result.posted && result.posted.settings.intervalHours === "0" && result.posted.settings.keep === "10");
+    result = await apply("", "");
+    check("backups: empty fields post the host default", !!result.posted && result.posted.settings.intervalHours === "" && result.posted.settings.keep === "");
+    await page.fill("#bkInterval", "48");
+    await push(remote);
+    check("backups: a refresh does not overwrite a half-typed override", (await page.inputValue("#bkInterval")) === "48");
+    await page.click("#bkApply");
+
+    // A pending request disables Back up now; a healthy status clears the warning and the enrol offer.
+    const pending = bk.toPanelBackups({ remote: true, supported: true, list, settings, key,
+      status: { ...failing, failingSince: null, lastFailure: null, requestPending: true } }, now);
+    await page.evaluate((b) => window.postMessage({ type: "backups", backups: b }, "*"), pending);
+    await page.waitForTimeout(60);
+    check("backups: a narrow {type:'backups'} push repaints the module", !(await page.locator("#bkWarning").isVisible()) && !(await page.locator("#bkEnroll").isVisible()));
+    check("backups: a pending request disables Back up now", await page.locator("#bkNow").isDisabled());
+    const empty = bk.toPanelBackups({ remote: true, supported: true, list: { backups: [] }, settings, key, status: { enabled: true, count: 0 } }, now);
+    await push(empty);
+    check("backups: no backups yet says so and disables Restore",
+      (await page.locator("#bkList").textContent()).includes("No backups") && await page.locator("#bkRestore").isDisabled());
+    await page.evaluate(() => window.postMessage({ type: "backups", backups: null }, "*"));
+    await page.waitForTimeout(60);
+    check("backups: a null push hides the module", !(await page.locator("#backupsModule").isVisible()));
+  }
+
   await page.click("#backBtn");
 
   // ── The `saved` VM state reads as a resume ────────────────────────────────

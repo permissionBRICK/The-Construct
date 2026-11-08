@@ -121,4 +121,9 @@ internal sealed class DesktopPrompts(Control dispatcher) : IPrompts
         using var dialog=new SaveFileDialog { Title=prompt.Title,FileName=prompt.DefaultPath ?? "",Filter=prompt.Filter ?? "All files|*.*",OverwritePrompt=true };
         return dialog.ShowDialog()==DialogResult.OK ? dialog.FileName : null;
     },cancellationToken);
+    public Task<string?> OpenFileAsync(OpenFilePrompt prompt,CancellationToken cancellationToken=default) => OnUi(()=>
+    {
+        using var dialog=new OpenFileDialog { Title=prompt.Title,Filter=prompt.Filter ?? "All files|*.*",CheckFileExists=true,Multiselect=false };
+        return dialog.ShowDialog()==DialogResult.OK ? dialog.FileName : null;
+    },cancellationToken);
 }

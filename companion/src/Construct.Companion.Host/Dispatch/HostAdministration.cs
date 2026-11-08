@@ -16,7 +16,7 @@ using static Construct.Companion.Core.HostAdmin.HostAdminProtocol;
 namespace Construct.Companion.Host.Dispatch;
 
 // The port of hostadmin.js + hostadmin-ui.js: enrolment, per-host admin models driven by
-// hostadmin.* messages, the host extras of an instance (children, offer, idle policy) and polling.
+// hostadmin.* messages, the host extras of an instance (children, offer, idle policy, backups) and polling.
 public sealed partial class HostAdministration(IStateFileSystem files, ITokenStore tokens, IRemoteApi api,
     IPrompts prompts, ILauncher launcher, IClock clock, IpcSettings settings, IpcEvents events, RuntimeMessageBus bus, CompanionInstances instances, RemoteVmWizard vmWizard)
 {
@@ -184,6 +184,8 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
         if (instances.Remote(entry) is null) { childCache.TryRemove(entry.Name, out _); bus.Publish(entry.Name, new { type = "children", instance = entry.Name, children }); }
         bus.Publish(entry.Name, new { type = "hostAdminOffer", instance = entry.Name, offer });
         bus.Publish(entry.Name, new { type = "idlePolicy", instance = entry.Name, idlePolicy = idle });
+        // The Backups module: the file and key buttons for every VM, the host's side for a remote one (§3.8).
+        await PublishBackupsAsync(entry, ct);
     }
     // Detection is shared by the instance panel and the key vault: at most once a minute per host.
     private async Task DetectIfStale(Model model, RemoteHostClient client, CancellationToken ct)

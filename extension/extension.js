@@ -45,6 +45,7 @@ const notify = require("./src/notify");
 const remotehost = require("./src/remotehost");
 const forwarder = require("./src/forwarder");
 const forwarderui = require("./src/forwarder-ui");
+const backups = require("./src/backups");
 const hypervRemote = require("./src/drivers/hyperv-remote");
 const hostadmin = require("./src/hostadmin");
 const hostadminui = require("./src/hostadmin-ui");
@@ -175,6 +176,7 @@ function startFallback(context) {
   };
   later(startNotifyWatch);
   later(noteForwarderConnected);
+  later(startBackupStatusWatch);
   scheduleStartupRepatch(context);
   try {
     cfgDir = host.configDir(process.env) || null;
@@ -194,7 +196,7 @@ async function companionPresenceChanged(status, previous) {
     instanceGate.set(inst.name, "companion-handoff");
     instanceGate.set(inst.name, instances.targetFingerprint(inst));
     fallbackStarted = false;
-    stopAutoRefresh(); stopNotifyWatch(); stopConfigWatcher();
+    stopAutoRefresh(); stopNotifyWatch(); stopConfigWatcher(); stopBackupStatusWatch();
     for (const timer of fallbackStartupTimers) clearTimeout(timer);
     fallbackStartupTimers.clear();
     if (repatchTimer) clearTimeout(repatchTimer);
@@ -318,6 +320,10 @@ const lastT3WebUrl = new Map();   // instance name -> origin
 /** The active instance's idle policy (remote only), cached for the state push. */
 let cachedIdlePolicy = null;
 let cachedIdlePolicyInstance = null;
+/** The active instance's Backups module (src/backups.js), cached like the idle policy: a resolved
+ *  `null` hides the module, and nothing is sent before it is resolved. */
+let cachedBackups = null;
+let cachedBackupsInstance = null;
 /** Host administration (docs/plans/host-administration-contracts.md §10): the panel's
  *  Child VMs card and its "Host administration" offer, resolved per ACTIVE instance like
  *  the idle policy (null = hide), and the feature object itself (src/hostadmin-ui.js). */
@@ -747,6 +753,7 @@ function postState(target, state) {
   if (cachedIdlePolicyInstance === activeInstance().name) {
     extra.idlePolicy = cachedIdlePolicy;
   }
+  if (cachedBackupsInstance === activeInstance().name) extra.backups = cachedBackups;
   // Child VMs + the host-administration offer (§10.2), same contract as idlePolicy: a
   // resolved `null` HIDES the card/button, and before resolution nothing is sent.
   if (cachedHostAdminInstance === activeInstance().name) {
@@ -995,6 +1002,12 @@ async function refreshAll() {
   // check. A local instance resolves to null, which is what hides the card.
   try {
     await readIdlePolicy(inst);
+    if (!instanceGate.valid(gate)) return;
+    for (const w of liveWebviews) postState(w, withUsage !== aug ? withUsage : aug);
+  } catch (_) { /* never break a refresh over an optional card */ }
+  // The Backups module, the same way: one feature probe (cached) and three reads for a remote VM.
+  try {
+    await readBackups(inst);
     if (!instanceGate.valid(gate)) return;
     for (const w of liveWebviews) postState(w, withUsage !== aug ? withUsage : aug);
   } catch (_) { /* never break a refresh over an optional card */ }
@@ -1723,6 +1736,236 @@ async function saveIdlePolicy(policy) {
     const detail = (e && e.message) || String(e);
     logLine(`idle policy: could not save "${inst.name}" — ${detail}`);
     vscode.window.showWarningMessage(`Couldn't save the idle policy for "${inst.name}": ${detail}`);
+  }
+}
+
+// ── Config backups (docs/plans/host-config-backups.md §3.7, §3.8; pure half src/backups.js) ─────
+// The Companion is the primary UI and does the same in Dispatch/MessageDispatcher.Backups.cs; this is
+// the fallback. A remote VM's status, override and list come from its host service; the file and key
+// buttons launch Provision-AgentVM.ps1's backup actions like Export config.
+
+const isRemoteInstance = (inst) => String((inst && inst.backend) || "").trim().toLowerCase() === "hyperv-remote";
+
+/** This PC's backup key description (pc-key.json, written by lib/AgentVm.Backup.ps1), or null. */
+function readPcBackupKey() {
+  const file = backups.pcKeyPath(host.localAppData(process.env));
+  if (!file) return null;
+  try { return JSON.parse(fs.readFileSync(file, "utf8").replace(/^\uFEFF/, "")); } catch (_) { return null; }
+}
+
+/** The host's backup answers for one remote instance. `supported` is null when the host could not
+ *  be asked (keep the last reading), false when it lacks the feature. Never rejects. */
+async function readHostBackups(inst, opts) {
+  const probe = await hypervRemote.queryFeatures(inst, { ...opts, log: logLine });
+  if (!probe || !Array.isArray(probe.features)) return { supported: probe && probe.old ? false : null };
+  if (probe.features.indexOf(backups.FEATURE) < 0) return { supported: false };
+  const { client, problem } = hypervRemote.resolveClient(inst, { ...opts, log: logLine });
+  if (!client) return { supported: null, problem };
+  const name = hypervRemote.vmNameOf(inst);
+  const failures = [];
+  const read = (promise) => promise.catch((e) => { failures.push((e && e.message) || String(e)); return null; });
+  const [status, list, settings] = await Promise.all([read(client.vmBackupStatus(name)), read(client.vmBackups(name)), read(client.vmBackupSettings(name))]);
+  return { supported: true, status, list, settings, problem: failures.length ? "Could not read the host's backups: " + failures[0] : "" };
+}
+
+/** The active instance's Backups module, for the state push. Best-effort and cached. */
+async function readBackups(inst) {
+  const target = inst || activeInstance();
+  const key = readPcBackupKey();
+  if (!isRemoteInstance(target)) {
+    cachedBackups = backups.toPanelBackups({ remote: false, key });
+    cachedBackupsInstance = target.name;
+    return cachedBackups;
+  }
+  if (cachedBackupsInstance !== target.name) { cachedBackups = null; cachedBackupsInstance = target.name; }
+  const token = instanceGate.token();
+  try {
+    const opts = await driverOpts(target);
+    if (!instanceGate.valid(token)) return cachedBackups;
+    const read = await readHostBackups(target, opts);
+    if (!instanceGate.valid(token) || read.supported === null) return cachedBackups;
+    cachedBackups = backups.toPanelBackups({ remote: true, key, ...read }, Date.now());
+    if (read.status) noteBackupStatus(target, read.status);
+    return cachedBackups;
+  } catch (e) {
+    logLine(`backups: could not read "${target.name}" — ${(e && e.message) || e}`);
+    return cachedBackups;
+  }
+}
+
+function broadcastBackups(name) {
+  for (const w of liveWebviews) safePost(w, { type: "backups", instance: name, backups: cachedBackups });
+}
+
+/** Re-read the module for a captured target and repaint it, unless the window moved on. */
+async function refreshBackupsFor(target) {
+  await readBackups(targetInstance(target));
+  if (!instances.targetSuperseded(instanceGate, target)) broadcastBackups(target.name);
+}
+
+/**
+ * One warning per failure streak (§3.7): the streak's `failingSince` is remembered in the instance's
+ * state (the key the Companion uses too), so neither a refresh nor a restart repeats it. When the
+ * Companion runs it does this instead and shows a Windows notification.
+ */
+const warnedBackupStreaks = new Map();
+function noteBackupStatus(inst, status) {
+  let warned = warnedBackupStreaks.has(inst.name) ? warnedBackupStreaks.get(inst.name) : null;
+  let store = null;
+  try {
+    store = stateStore(inst);
+    const saved = instancestate.readState(store)[backups.STREAK_KEY];
+    if (typeof saved === "string") warned = saved;
+  } catch (_) { store = null; }
+  const w = backups.backupWarning(inst.name, status, warned);
+  warnedBackupStreaks.set(inst.name, w.remember);
+  if (store && w.remember !== warned) {
+    try {
+      if (w.remember === null) {
+        const next = { ...instancestate.readState(store) };
+        delete next[backups.STREAK_KEY];
+        instancestate.replaceState(store, next);
+      } else instancestate.saveState(store, { [backups.STREAK_KEY]: w.remember });
+    } catch (e) { logLine(`backups: could not remember the warning for "${inst.name}" — ${(e && e.message) || e}`); }
+  }
+  if (w.notify) vscode.window.showWarningMessage(`${w.title}: ${w.body}`);
+}
+
+/** Every 15 minutes in fallback mode: the status of each remote instance whose host has the feature. */
+const BACKUP_STATUS_POLL_MS = 15 * 60 * 1000;
+let backupStatusTimer = null;
+function startBackupStatusWatch() {
+  if (backupStatusTimer) return;
+  const tick = () => { if (!hostJobsSuspended()) void checkBackupStatuses(); };
+  backupStatusTimer = setInterval(tick, BACKUP_STATUS_POLL_MS);
+  tick();
+}
+function stopBackupStatusWatch() {
+  if (backupStatusTimer) { clearInterval(backupStatusTimer); backupStatusTimer = null; }
+}
+async function checkBackupStatuses() {
+  for (const inst of instances.list(registryNow())) {
+    if (!isRemoteInstance(inst)) continue;
+    try {
+      const opts = await driverOpts(inst);
+      const probe = await hypervRemote.queryFeatures(inst, { ...opts, log: logLine });
+      if (!probe || !Array.isArray(probe.features) || probe.features.indexOf(backups.FEATURE) < 0) continue;
+      const { client } = hypervRemote.resolveClient(inst, { ...opts, log: logLine });
+      if (client) noteBackupStatus(inst, await client.vmBackupStatus(hypervRemote.vmNameOf(inst)));
+    } catch (e) { logLine(`backups: status of "${inst.name}" — ${(e && e.message) || e}`); }
+  }
+}
+
+/** The remote client of a captured instance, or an error that says why there is none. */
+async function backupClient(inst) {
+  const opts = await driverOpts(inst);
+  const { client, problem } = hypervRemote.resolveClient(inst, { ...opts, log: logLine });
+  if (!client) throw new Error(problem || "the host service is not reachable");
+  return client;
+}
+
+/** The override's "apply". Re-validated here: the webview is untrusted input. */
+async function saveBackupSettings(form) {
+  const target = actionTarget();
+  const inst = targetInstance(target);
+  if (!isRemoteInstance(inst)) {
+    vscode.window.showInformationMessage(`Backup settings live on a host service, and "${inst.name}" runs on this PC.`);
+    return;
+  }
+  const known = cachedBackupsInstance === inst.name && cachedBackups && cachedBackups.override;
+  const parsed = backups.parseOverride(form, known ? known.maxKeep : backups.MAX_KEEP);
+  try {
+    if (!parsed.ok) { vscode.window.showWarningMessage(parsed.problems.map((p) => p.reason).join("; ")); return; }
+    const client = await backupClient(inst);
+    if (targetSuperseded(target, "The backup settings change")) return;
+    await client.setVmBackupSettings(hypervRemote.vmNameOf(inst), parsed.body);
+    logLine(`backups: "${inst.name}" -> interval ${parsed.body.intervalHours}, keep ${parsed.body.keep}`);
+  } catch (e) {
+    const detail = (e && e.message) || String(e);
+    logLine(`backups: could not save the settings of "${inst.name}" — ${detail}`);
+    vscode.window.showWarningMessage(`Couldn't save the backup settings for "${inst.name}": ${detail}`);
+  } finally {
+    await refreshBackupsFor(target);
+  }
+}
+
+const BACKUP_LABELS = {
+  backupNow: "Back up now", backupEnroll: "Enrol this PC", backupSave: "Save to this PC", backupRestore: "Restore",
+  backupRestoreFile: "Restore from file", backupKeyExport: "Export backup key", backupKeyImport: "Import backup key",
+};
+
+/** Ask before a restore: it replaces the VM's agent config with the backup's. */
+async function confirmBackupRestore(inst, what) {
+  const yes = "Restore";
+  const pick = await vscode.window.showWarningMessage(`Restore ${what} onto \u201c${inst.name}\u201d?`,
+    { modal: true, detail: "This replaces the VM's agent logins, memory, chat history, secrets and git credentials with the backup's. Project repositories are not touched." }, yes);
+  return pick === yes;
+}
+
+/** The Backups module's buttons. `message.backup` (a host backup id) is untrusted input. */
+async function runBackupCommand(id, message) {
+  const target = actionTarget();
+  const inst = targetInstance(target);
+  const label = BACKUP_LABELS[id];
+  const remote = isRemoteInstance(inst);
+  try {
+    if (id === "backupNow") {
+      if (!remote) throw new Error("host backups need a VM on a host service");
+      const client = await backupClient(inst);
+      if (targetSuperseded(target, label)) return;
+      await client.requestVmBackup(hypervRemote.vmNameOf(inst));
+      vscode.window.showInformationMessage(`Backup of \u201c${inst.name}\u201d requested. It starts at the VM's next check-in.`);
+      await refreshBackupsFor(target);
+      return;
+    }
+    const scriptsDir = resolveScriptsDirFor(inst);
+    if (!scriptsDir) { warnNoScriptsDir(); return; }
+    const run = (action, extra) => {
+      if (targetSuperseded(target, label)) return;
+      lifecycle.run(action, { scriptsDir, instance: inst, ...extra, stillCurrent: () => !targetSuperseded(target, label) });
+    };
+    const backupId = remote && backups.isBackupId(message.backup) ? message.backup : "";
+    if (id === "backupEnroll") { run("backupEnroll", {}); return; }
+    if (id === "backupSave") {
+      const uri = await vscode.window.showSaveDialog({
+        title: `Save a backup of \u201c${inst.name}\u201d`,
+        filters: { "Construct backup": ["cbk"], "All files": ["*"] },
+        defaultUri: vscode.Uri.file(path.join(os.homedir(), backups.backupFileName(inst.name, Date.now()))),
+      });
+      if (uri) run("backupSave", { backupFile: uri.fsPath, backupId: backupId || undefined });
+      return;
+    }
+    if (id === "backupRestore") {
+      const items = (cachedBackupsInstance === inst.name && cachedBackups && cachedBackups.items) || [];
+      const row = items.find((b) => b.id === backupId);
+      if (!row) throw new Error("that backup is no longer listed; refresh and pick it again");
+      if (await confirmBackupRestore(inst, `the backup from ${row.when}`)) run("backupRestore", { backupId });
+      return;
+    }
+    if (id === "backupRestoreFile") {
+      const picked = await vscode.window.showOpenDialog({
+        title: `Restore a backup file onto \u201c${inst.name}\u201d`, canSelectMany: false,
+        filters: { "Construct backup": ["cbk"], "All files": ["*"] },
+      });
+      if (picked && picked.length && await confirmBackupRestore(inst, `\u201c${path.basename(picked[0].fsPath)}\u201d`)) run("backupRestore", { backupFile: picked[0].fsPath });
+      return;
+    }
+    if (id === "backupKeyExport") {
+      const uri = await vscode.window.showSaveDialog({
+        title: "Export this PC's backup key", filters: { JSON: ["json"] },
+        defaultUri: vscode.Uri.file(path.join(os.homedir(), backups.KEY_FILE_NAME)),
+      });
+      if (uri) run("backupKeyExport", { backupKeyFile: uri.fsPath });
+      return;
+    }
+    if (id === "backupKeyImport") {
+      const picked = await vscode.window.showOpenDialog({ title: "Import a backup key", canSelectMany: false, filters: { JSON: ["json"], "All files": ["*"] } });
+      if (picked && picked.length) run("backupKeyImport", { backupKeyFile: picked[0].fsPath });
+    }
+  } catch (e) {
+    const detail = (e && e.message) || String(e);
+    logLine(`backups: ${id} for "${inst.name}" — ${detail}`);
+    vscode.window.showErrorMessage(`${label} failed for \u201c${inst.name}\u201d: ${detail}`);
   }
 }
 
@@ -3998,6 +4241,7 @@ async function onInstanceChanged() {
   gitDetected = null; gitDetectedAt = 0;
   cachedConfigSync = null;
   cachedIdlePolicy = null; cachedIdlePolicyInstance = null;
+  cachedBackups = null; cachedBackupsInstance = null;
   cachedChildren = null; cachedHostAdminOffer = null; cachedHostAdminInstance = null;
   // The notification watcher is one long-lived SSH connection to ONE VM: reconnect it
   // to the new instance (its spool lives on that VM, so nothing is lost on the old one).
@@ -4894,6 +5138,11 @@ async function handleMessage(message, webview, context) {
       void saveIdlePolicy(message.policy || {});
       return;
 
+    case "saveBackupSettings":
+      // The Backups module's per-VM override (host-config-backups §3.8), re-validated in saveBackupSettings.
+      void saveBackupSettings(message.settings || {});
+      return;
+
     case "command": {
       const id = message.id;
       if (id === "openConsole") return preparePanelLifecycle(webview, id, async () => {
@@ -4924,6 +5173,12 @@ async function handleMessage(message, webview, context) {
       if (id === "registerThisVm") { void runRegisterThisVm(); return; }
       if (id === "openVault") { void runOpenVault(); return; }
       if (id === "removeInstance") { void runRemoveInstance(); return; }
+      // Config backups (host-config-backups §3.8): host requests, file dialogs, Provision-AgentVM.ps1 actions.
+      if (id === "backupNow" || id === "backupEnroll" || id === "backupSave" || id === "backupRestore" ||
+          id === "backupRestoreFile" || id === "backupKeyExport" || id === "backupKeyImport") {
+        void runBackupCommand(id, message);
+        return;
+      }
       // Host administration (§10.2): the Child VMs card's two actions, the Host button
       // and the first-VM offer. The child name is validated against what THIS window
       // listed — the webview is untrusted input.
@@ -5782,6 +6037,7 @@ function maybeAutoOpenPanel(context) {
 
 function deactivate() {
   companionDisposed = true;
+  stopBackupStatusWatch();
   if (companionClient) companionClient.dispose();
   for (const child of companionMigrationChildren) { try { child.kill(); } catch (_) {} }
   companionMigrationChildren.clear();

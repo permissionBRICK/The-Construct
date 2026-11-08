@@ -59,6 +59,7 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
                     instances.Host.WriteProjectProfile(ProjectRoot(entry), project, JsonNode.Parse(ProfileCodec.CanonicalizeProfileText(project, profile.ToJsonString()).Content!)!.AsObject());
                     await EnableNewProjects(entry, profilesBefore, ct); await RefreshAsync(entry, ct); return;
                 case "saveIdlePolicy": await SaveIdle(entry, message["policy"] as JsonObject ?? [], ct); return;
+                case "saveBackupSettings": await SaveBackupSettings(entry, message["settings"] as JsonObject ?? [], ct); return;
                 case "command": await Command(entry, message, ct); return;
                 default: Refuse(name, type, "This message is not supported by Construct Companion."); return;
             }
@@ -107,6 +108,9 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
                     entry.Runtime?.BeginFastRefresh();
                 } break;
             case "reprovision": case "reinstall": case "redownload": case "exportConfig": await Lifecycle(entry, id, m, ct); break;
+            // Config backups (docs/plans/host-config-backups.md §3.8): MessageDispatcher.Backups.cs.
+            case "backupNow": case "backupEnroll": case "backupSave": case "backupRestore": case "backupRestoreFile": case "backupKeyExport": case "backupKeyImport":
+                await BackupCommand(entry, id, m, ct); break;
             case "openForward": case "closeForward":
                 var forward = RequireForwardId(Text(m, "forward"));
                 if (entry.Runtime?.Forwarder is not { } forwarder) { Refuse(name, id, "The forward is no longer active."); break; }
@@ -286,27 +290,31 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
         try { if (remote.Length > 0) { await CheckedScript(entry, AgentUpdateScript.Build(remote), ct, TimeSpan.FromMinutes(10)); await RefreshAsync(entry, ct); } }
         finally { if (t3) await Lifecycle(entry, "updateT3", [], ct); }
     }
-    private async Task Lifecycle(CompanionInstance entry, string action, JsonObject message, CancellationToken ct)
+    private async Task Lifecycle(CompanionInstance entry, string action, JsonObject message, CancellationToken ct, JsonObject? extra = null)
     {
-        // One lifecycle run at a time on this PC (an export is not one); the claim covers the checks and the launch.
+        // One lifecycle run at a time on this PC (an export or a backup action is not one); the claim covers the checks and the launch.
         IDisposable? claim = null;
         try
         {
-            if (action != "exportConfig")
+            if (action != "exportConfig" && !LifecycleBuilder.IsBackupAction(action))
             {
                 claim = runs.TryBegin(entry.Name, action, out var busy);
                 if (claim is null) { Refuse(entry.Name, action, busy); return; }
             }
             var directory = RequireDirectory(entry);
             if (action is "reprovision" or "reinstall" or "redownload" && !await LifecyclePreflight(entry, action, ct)) return;
-            var invocation = LifecycleBuilder.BuildInvocation(action, new()
+            var options = new JsonObject
             {
                 ["instance"] = entry.Definition.DeepClone(), ["settings"] = entry.Store.ReadSettings(),
                 ["instanceParams"] = JsonSerializer.SerializeToNode(LifecycleBuilder.InstanceParameterSupport(files, directory, action, entry.Definition)),
                 ["supportsHistoryRetentionDays"] = LifecycleBuilder.ActionScriptSupportsParameter(files, directory, action, "HistoryRetentionDays"),
                 ["projects"] = await EffectiveProjects(entry, ct), ["backupMode"] = message["backup"]?.DeepClone(),
                 ["backupDir"] = Path.Combine(directory, "config")
-            });
+            };
+            // The backup actions arrived with -BackupFile: an older Provision-AgentVM.ps1 is refused instead of failing to bind.
+            if (LifecycleBuilder.IsBackupAction(action)) options["supportsBackupActions"] = LifecycleBuilder.ActionScriptSupportsParameter(files, directory, action, "BackupFile");
+            foreach (var (key, value) in extra ?? []) options[key] = value?.DeepClone();
+            var invocation = LifecycleBuilder.BuildInvocation(action, options);
             if (invocation is null || StateJson.Boolean(invocation["blocked"]) == true) { Refuse(entry.Name, action, invocation is null ? "This lifecycle action is unavailable." : Text(invocation, "reason")); return; }
             if (StateJson.Boolean(invocation["destructive"]) == true && !await prompts.ConfirmAsync(Text(invocation, "label"), $"{Text(invocation, "label")} \"{entry.Name}\"? This deletes and recreates its VM.", ct)) return;
             var script = Path.Combine(directory, Text(invocation, "script"));
@@ -433,6 +441,8 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
         if (type == "command" && id is "editProject" or "deleteProject" && !EditableProject(Text(message, "project"))) throw new IpcFailure(400, "invalidProject", "The project name is invalid or reserved.");
         if (type == "command" && id is "openForward" or "closeForward") RequireForwardId(Text(message, "forward"));
         if (type == "command" && id == "updateAgent") RequireAgent(Text(message, "agent"));
+        if (type == "saveBackupSettings" && message["settings"] is not JsonObject) throw new IpcFailure(400, "invalidSettings", "A settings object is required.");
+        if (type == "command" && (id == "backupRestore" || id == "backupSave" && message["backup"] is not null && Text(message, "backup").Length > 0)) RequireBackupId(message["backup"]);
     }
     public static bool IsRefresh(JsonObject message) => Text(message, "type") == "ready" || Text(message, "type") == "command" && Text(message, "id") == "refresh";
     private static bool EditableProject(string name) => HostState.SafeProfileName(name).Length > 0 && name is not ("default" or "project.schema");
