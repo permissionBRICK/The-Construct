@@ -4712,7 +4712,7 @@ async function preparePanelLifecycle(webview, id, work) {
 // The panel buttons that start a lifecycle run, and the run each starts.
 const PANEL_RUN_ACTIONS = { reprovision: "reprovision", reinstall: "reinstall", redownload: "redownload", customReinstall: "reinstall", customRedownload: "redownload", convertToHost: "convertToHost" };
 
-function handleMessage(message, webview, context) {
+async function handleMessage(message, webview, context) {
   if (!message || typeof message.type !== "string" || companionDisposed) return;
   if (companionStarting) return companionReady.then(() => handleMessage(message, webview, context));
   if (companionDeferred()) return proxyCompanion(message, webview);
