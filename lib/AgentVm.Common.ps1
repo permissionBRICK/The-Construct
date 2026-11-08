@@ -190,9 +190,9 @@ function Select-ConstructAgentFixAgent {
     )
     while ($true) {
         $a = Show-Menu -Title "Which agent should fix it?" -Default 0 -Options @(
-            "Claude Code  claude -p",
-            "Codex        codex exec",
-            "OpenCode     opencode run",
+            "Claude Code",
+            "Codex",
+            "OpenCode",
             "Back")
         if ($a -ge $agents.Count) { return $null }
         $agent = $agents[$a]
@@ -219,13 +219,48 @@ function Copy-ConstructTextToClipboard {
     return $false
 }
 
+function Invoke-ConstructConsoleProcess {
+    <#
+        Run a program on THIS console (stdin, stdout and stderr are the console's own),
+        wait for it and return its exit code. `& program` inside a function would send
+        the program's stdout into the function's output, where a caller's assignment
+        discards it; a terminal UI needs the console itself in any case. Arguments are
+        joined into one Windows command line: one with whitespace is double-quoted, and
+        none may contain a double quote.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [string[]]$ArgumentList = @()
+    )
+    $parts = @(foreach ($arg in $ArgumentList) {
+        if ($arg.Contains('"')) { throw "Invoke-ConstructConsoleProcess: an argument contains a double quote: $arg" }
+        # Backslashes before the closing quote would escape it: double them.
+        if ($arg -eq '' -or $arg -match '\s') { '"' + ($arg -replace '(\\+)$', '$1$1') + '"' } else { $arg }
+    })
+    $startArgs = @{ FilePath = $FilePath; NoNewWindow = $true; Wait = $true; PassThru = $true }
+    if ($parts.Count -gt 0) { $startArgs.ArgumentList = $parts -join ' ' }
+    $process = Start-Process @startArgs
+    return $process.ExitCode
+}
+
+function Get-ConstructAgentQuitHint {
+    <# How the user leaves the agent's interactive session. #>
+    param([Parameter(Mandatory)][ValidateSet('claude', 'codex', 'opencode')][string]$Agent)
+    switch ($Agent) {
+        'codex' { return "type /quit" }
+        default { return "type /exit" }
+    }
+}
+
 function Invoke-ConstructAgentFix {
     <#
-        Run one autofix agent turn on the VM in THIS console: ssh -t to the VM's ssh
-        alias (written by the provisioner), bin/construct-agent-fix.sh runs the agent
-        in its print/exec mode, and its output streams here until it exits. Waits up
-        to -WaitSeconds for SSH first, because a first install ends with a reboot.
-        Returns the agent's exit code, or $null when the VM could not be reached.
+        Open an interactive agent session on the VM in THIS console: ssh -t to the VM's
+        ssh alias (written by the provisioner), and bin/construct-agent-fix.sh starts
+        the agent's own terminal UI with the fix prompt as its first message. The user
+        follows the agent, answers it and keeps talking to it here; quitting the agent
+        returns to this script. Waits up to -WaitSeconds for SSH first, because a first
+        install ends with a reboot. Returns the session's exit code, or $null when the
+        VM could not be reached.
     #>
     param(
         [Parameter(Mandatory)][string]$SshTarget,
@@ -264,19 +299,16 @@ function Invoke-ConstructAgentFix {
     $modelText = if (-not $Model) { "its default model" }
                  elseif ($Model -like 'latest:*') { "the latest $($Model.Substring(7)) model" }
                  else { "model $Model" }
-    Write-Host "  Starting $Label on the VM ($modelText). It works on its own and exits when it is done; Ctrl+C stops it." -ForegroundColor Cyan
-    Write-Host "  ............................................................" -ForegroundColor DarkGray
+    Write-Host "  Opening $Label on the VM ($modelText). It starts on the prompt above; follow it, answer it and keep talking to it here." -ForegroundColor Cyan
+    Write-Host "  When you are done, $(Get-ConstructAgentQuitHint -Agent $Agent) to come back to this window." -ForegroundColor Cyan
     $remote = Get-ConstructAgentFixCommand -Agent $Agent -Prompt $Prompt -Model $Model
-    $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-    & ssh.exe -t @sshOpts $SshTarget $remote
-    $exitCode = $LASTEXITCODE
-    $ErrorActionPreference = $prevEAP
+    $exitCode = Invoke-ConstructConsoleProcess -FilePath 'ssh.exe' -ArgumentList (@('-t') + $sshOpts + @($SshTarget, $remote))
     Write-Host ""
     Write-Host "  ............................................................" -ForegroundColor DarkGray
     if ($exitCode -eq 0) {
-        Write-Host "  $Label finished." -ForegroundColor Green
+        Write-Host "  $Label session closed." -ForegroundColor Green
     } else {
-        Write-Host "  $Label ended with exit code $exitCode." -ForegroundColor Yellow
+        Write-Host "  $Label session ended with exit code $exitCode." -ForegroundColor Yellow
     }
     return $exitCode
 }
@@ -289,8 +321,8 @@ function Test-ConstructConsoleInput {
 function Invoke-ConstructAgentFixMenu {
     <#
         After a run that printed the fix prompt: Autofix it (default), Copy the
-        prompt, or Close. Autofix picks an agent and a model and runs it on the VM in
-        this console (Invoke-ConstructAgentFix); the caller's own "Press Enter to
+        prompt, or Close. Autofix picks an agent and a model and opens its session on
+        the VM in this console (Invoke-ConstructAgentFix); the caller's own "Press Enter to
         exit" pause follows either way. Without -SshTarget only Copy and Close are
         offered. Interactive consoles only: with redirected input Show-Menu would
         return its default, and that must never start an agent nobody chose.
@@ -306,7 +338,7 @@ function Invoke-ConstructAgentFixMenu {
 
     while ($true) {
         $options = @()
-        if ($SshTarget) { $options += "Autofix it       start an AI agent on the VM with this prompt" }
+        if ($SshTarget) { $options += "Autofix it       open an AI agent session on the VM with this prompt" }
         $options += "Copy the prompt  put it on the clipboard"
         $options += "Close"
         $choice = Show-Menu -Title "How do you want to handle the failed step(s)?" -Options $options -Default 0

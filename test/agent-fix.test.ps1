@@ -3,7 +3,8 @@
     Host side of the "Autofix it" choice after a provisioning run with failed VM
     steps (lib/AgentVm.Common.ps1): the fix prompt, the menus, the remote command,
     and where Auto-Install.ps1 / Provision-AgentVM.ps1 offer it. Show-Menu, the
-    clipboard and ssh.exe are stubbed; nothing connects anywhere. Run:
+    clipboard, ssh.exe and the console-attached run are stubbed; nothing connects
+    anywhere. Run:
 
         pwsh -NoProfile -File test/agent-fix.test.ps1
 #>
@@ -62,6 +63,31 @@ ok "command: the prompt round-trips" ((FromB64 ([regex]::Match($cmd, '--prompt-b
 ok "command: a hostile model name round-trips" ((FromB64 ([regex]::Match($cmd, "--model-b64 ([^ ']+)").Groups[1].Value)) -eq $odd)
 ok "command: no model flag for the default model" ((Get-ConstructAgentFixCommand -Agent claude -Prompt "p") -notmatch 'model')
 
+# ── the console-attached run (real processes, Linux/macOS only) ──────────────
+# The agent session must own the console: its output must neither vanish into a
+# caller's `$null = ...` nor reach the console through a pipe.
+if ($IsLinux -or $IsMacOS) {
+    $argvDir = Join-Path ([IO.Path]::GetTempPath()) ("agent-fix-" + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $argvDir | Out-Null
+    try {
+        $argvOut = Join-Path $argvDir 'argv'
+        $argvScript = Join-Path $argvDir 'argv.sh'
+        Set-Content -Path $argvScript -Value "printf '%s\n' `"`$@`" > '$argvOut'; exit 7"
+        function Invoke-Captured { Invoke-ConstructConsoleProcess -FilePath 'bash' -ArgumentList @($argvScript, '-t', 'agent-vm', "bash -lc 'a b'", 'two  spaces', 'trail\ x\', '') }
+        $captured = @(Invoke-Captured)
+        $argv = @(Get-Content -Path $argvOut)
+        ok "console run: returns only the exit code" ($captured.Count -eq 1 -and $captured[0] -eq 7)
+        ok "console run: every argument arrives as one, unchanged" (
+            ($argv[0..5] -join '|') -eq "-t|agent-vm|bash -lc 'a b'|two  spaces|trail\ x\|")
+        $null = Invoke-ConstructConsoleProcess -FilePath 'bash' -ArgumentList @('-c', 'exit 0')
+        $threw = $false
+        try { $null = Invoke-ConstructConsoleProcess -FilePath 'bash' -ArgumentList @('-c', 'echo "x"') } catch { $threw = $true }
+        ok "console run: refuses an argument with a double quote" $threw
+    } finally {
+        Remove-Item -Recurse -Force -Path $argvDir -ErrorAction SilentlyContinue
+    }
+}
+
 # ── the menu, with stubs ─────────────────────────────────────────────────────
 function Test-ConstructConsoleInput { $script:interactive }
 function Show-Menu {
@@ -75,9 +101,14 @@ function Copy-ConstructTextToClipboard { param($Text) $script:clipboard = $Text;
 function Start-Sleep { param($Seconds) }
 function ssh.exe {
     $script:sshCalls.Add(@($args))
-    if ($args -contains '-t') { $global:LASTEXITCODE = $script:agentExit; return }
     $global:LASTEXITCODE = $script:probeExit
     if ($script:probeExit -ne 0) { "ssh: Could not resolve hostname agent-vm" }
+}
+function Invoke-ConstructConsoleProcess {
+    param($FilePath, [string[]]$ArgumentList)
+    if ($FilePath -ne 'ssh.exe') { throw "unexpected console program: $FilePath" }
+    $script:sshCalls.Add(@($ArgumentList))
+    return $script:agentExit
 }
 function Reset-Stubs([int[]]$Answers) {
     $script:menus = New-Object System.Collections.Generic.List[object]
@@ -174,10 +205,15 @@ ok "unreachable: says why and what to do instead" ($out -match 'Could not reach 
 Reset-Stubs @()
 $script:agentExit = 3
 $out = (Invoke-ConstructAgentFix -SshTarget 'agent-vm' -Agent codex -Prompt 'p' -Label 'Codex' 6>&1 | ForEach-Object { "$_" }) -join "`n"
-ok "agent exit: a failed run is reported with its code" ($out -match 'Codex ended with exit code 3')
+ok "agent exit: a failed session is reported with its code" ($out -match 'Codex session ended with exit code 3')
 Reset-Stubs @()
 $out = (Invoke-ConstructAgentFix -SshTarget 'agent-vm' -Agent codex -Prompt 'p' -Model 'latest:sol' -Label 'Codex' 6>&1 | ForEach-Object { "$_" }) -join "`n"
-ok "agent start: names the model family in words" ($out -match 'Starting Codex on the VM \(the latest sol model\)' -and $out -match 'Codex finished\.')
+ok "agent start: names the model family in words" ($out -match 'Opening Codex on the VM \(the latest sol model\)' -and $out -match 'Codex session closed\.')
+ok "agent start: says how to leave Codex" ($out -match 'type /quit to come back')
+Reset-Stubs @()
+$out = (Invoke-ConstructAgentFix -SshTarget 'agent-vm' -Agent claude -Prompt 'p' -Label 'Claude Code' 6>&1 | ForEach-Object { "$_" }) -join "`n"
+ok "agent start: says how to leave Claude Code" ($out -match 'type /exit to come back')
+ok "agent run: the function returns only the exit code" (@(Invoke-ConstructAgentFix -SshTarget 'agent-vm' -Agent claude -Prompt 'p' 6>$null).Count -eq 1)
 
 # ── where the scripts offer it ───────────────────────────────────────────────
 $aiScript = Get-Content -Raw (Join-Path $here "..\Auto-Install.ps1")

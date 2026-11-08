@@ -509,6 +509,32 @@ configure_claude_sandbox_setting() {
   chown -R "${owner}:${owner}" "${settings_dir}" 2>/dev/null || true
 }
 
+# Mark the workspace repos directory as trusted in Claude Code's ~/.claude.json, as
+# configure_codex_settings does for Codex, so an interactive claude started there
+# (the provisioning autofix session, bin/construct-agent-fix.sh) does not open with
+# the folder-trust dialog, whose preselected answer is "No, exit". Written only
+# while the flag is missing: Claude rewrites this file itself while it runs.
+configure_claude_workspace_trust() {
+  local home_dir="$1"
+  local owner="$2"
+  local cf="${home_dir}/.claude.json"
+
+  if [[ -s "${cf}" ]] && jq -e --arg ws "${WORKSPACE_ROOT}" '.projects[$ws].hasTrustDialogAccepted == true' "${cf}" >/dev/null 2>&1; then
+    return 0
+  fi
+  step "Marking ${WORKSPACE_ROOT} as a trusted folder in ${cf}"
+  [[ -s "${cf}" ]] || echo '{}' >"${cf}"
+  local tmp
+  tmp="$(mktemp)"
+  if jq --arg ws "${WORKSPACE_ROOT}" '.projects[$ws].hasTrustDialogAccepted = true' "${cf}" >"${tmp}" 2>/dev/null; then
+    cat "${tmp}" >"${cf}"
+  else
+    warn "WARNING: ${cf} is not valid JSON; leaving Claude's folder trust as it is"
+  fi
+  rm -f "${tmp}"
+  chown "${owner}:${owner}" "${cf}" 2>/dev/null || true
+}
+
 # In bypass permissions mode Claude Code still asks before an rm or rmdir whose
 # target it cannot resolve statically (a glob after a cd, a command substitution, a
 # path outside the working directories). CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS=1
@@ -616,6 +642,7 @@ install_claude_code() {
     claude_owner="root"
   fi
   configure_claude_sandbox_setting "${claude_home}" "${claude_owner}"
+  configure_claude_workspace_trust "${claude_home}" "${claude_owner}"
   # Remote-SSH server (machine scope): applies when VS Code connects via Remote-SSH.
   configure_claude_vscode_setting "${claude_home}/.vscode-server/data/Machine" "${claude_owner}" "${claude_home}/.vscode-server"
   # Local `code serve-web` server on the VM (runs as root): seed the SAME

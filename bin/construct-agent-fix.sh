@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# construct-agent-fix.sh -- run one unattended AI agent turn on the VM to fix a failed
-# provisioning step, and exit when the agent is done.
+# construct-agent-fix.sh -- open an interactive AI agent session on the VM whose first
+# message is the fix prompt for a failed provisioning step.
 #
 # The Windows host starts it over `ssh -t` from the console that ran the install or
-# provisioning (the "Autofix it" choice after a run that reported failed steps), so
-# the agent's output appears in that same console:
+# provisioning (the "Autofix it" choice after a run that reported failed steps). The
+# agent's own terminal UI runs in that console: it starts working on the prompt right
+# away, and the user can follow it, answer it and keep talking to it. Quitting the
+# agent ends the session and returns to the console.
 #
 #   bash /opt/construct/repo/bin/construct-agent-fix.sh \
 #     --agent claude|codex|opencode [--model-b64 <base64>] --prompt-b64 <base64>
@@ -20,14 +22,8 @@
 #   anything else  passed to the agent as given (Claude aliases such as opus or fable,
 #                  a full model id, OpenCode's provider/model)
 #
-# Each agent runs in its print/exec mode, so it exits once its turn is over:
-#   claude -p      progress (its text and one line per tool call) streams through jq;
-#                  without jq the final message is all that is shown
-#   codex exec     streams its own progress, then prints the final message
-#   opencode run   streams its own progress and the final message
-#
-# Exit status: the agent's own, or 2 for a usage error and 127 when the agent's CLI
-# is not installed on this VM.
+# Exit status: the agent's own, or 2 for a usage error or a missing terminal, and 127
+# when the agent's CLI is not installed on this VM.
 set -uo pipefail
 
 usage() {
@@ -64,6 +60,12 @@ dim=$'\033[2m'
 reset=$'\033[0m'
 note() { printf '%s%s%s\n' "${dim}" "$*" "${reset}"; }
 
+need_cli() {
+  command -v "$1" >/dev/null 2>&1 && return 0
+  echo "construct-agent-fix: $2 ($1) is not installed on this VM." >&2
+  exit 127
+}
+
 # The newest model of one GPT family ("astra", "sol") in Codex's catalog: the listed
 # slugs named gpt-<version>-<family>, highest version wins. `codex debug models`
 # refreshes the catalog; the cached copy covers a CLI without that command.
@@ -83,58 +85,28 @@ codex_latest_model() {
     | last // empty' 2>/dev/null | grep . || return 1
 }
 
-# One line per Claude stream-json event worth showing: the agent's text as it writes
-# it (the last text is its final message), a dim line per tool call, and the reason
-# when the run ends in an error. A line that is not JSON is passed through unchanged.
-CLAUDE_STREAM_FILTER='
-  def clip($n): if length > $n then .[0:$n] + "..." else . end;
-  def detail: (.command // .file_path // .path // .pattern // .url // .description // "")
-    | tostring | split("\n")[0] | clip(110);
-  . as $line | (try fromjson catch null) as $e
-  | if ($e | type) != "object" then $line + "\n"
-    elif $e.type == "assistant" then
-      ($e.message.content // [])[]
-      | if .type == "text" then "\n" + .text + "\n"
-        elif .type == "tool_use" then
-          (.input | detail) as $d
-          | "\u001b[2m  > " + .name + (if $d == "" then "" else ": " + $d end) + "\u001b[0m\n"
-        else empty end
-    elif $e.type == "result" and (($e.is_error // false) or (($e.subtype // "success") != "success")) then
-      # A turn that ended in an error message already showed it as its text.
-      if ($e.subtype // "success") == "success" then "\nClaude stopped with an error.\n"
-      else "\nClaude stopped (" + $e.subtype + ")"
-        + (if (($e.result // "") | tostring) == "" then "" else ": " + ($e.result | tostring) end) + "\n"
-      end
-    else empty end'
+# Each agent runs its interactive UI, which needs a terminal on both ends.
+if [ ! -t 0 ] || [ ! -t 1 ]; then
+  echo "construct-agent-fix: the agent session needs a terminal; connect with ssh -t." >&2
+  exit 2
+fi
 
-cd "${HOME}" 2>/dev/null || cd /
+# The workspace root: Construct marks it trusted for Claude Code and Codex, so neither
+# opens with a folder-trust question (Claude's preselects "No, exit").
+cd "${WORKSPACE_ROOT:-/root/repos}" 2>/dev/null || cd "${HOME}" 2>/dev/null || cd /
 
+# Each agent gets the same permission mode Construct configures for it, set on the
+# command line as well because the failed step may be the one that writes that config.
 case "${agent}" in
   claude)
-    if ! command -v claude >/dev/null 2>&1; then
-      echo "construct-agent-fix: Claude Code (claude) is not installed on this VM." >&2
-      exit 127
-    fi
-    # Bypass mode on purpose: the turn runs unattended, and print mode would refuse
-    # every tool call that needs a permission. IS_SANDBOX lets Claude Code accept
-    # bypass mode as root; Construct sets both in Claude's settings as well, but the
-    # failed step may be the one that writes them.
-    args=(-p --permission-mode bypassPermissions)
+    need_cli claude "Claude Code"
+    # IS_SANDBOX lets Claude Code accept bypass mode as root.
+    args=(--permission-mode bypassPermissions)
     [ -n "${model}" ] && args+=(--model "${model}")
-    if command -v jq >/dev/null 2>&1; then
-      IS_SANDBOX=1 claude "${args[@]}" --verbose --output-format stream-json "${prompt}" \
-        | jq -R -r -j --unbuffered "${CLAUDE_STREAM_FILTER}"
-      status="${PIPESTATUS[0]}"
-      exit "${status}"
-    fi
-    note "(jq is not installed: Claude's progress is hidden, its final message follows when it is done)"
     IS_SANDBOX=1 exec claude "${args[@]}" "${prompt}"
     ;;
   codex)
-    if ! command -v codex >/dev/null 2>&1; then
-      echo "construct-agent-fix: Codex (codex) is not installed on this VM." >&2
-      exit 127
-    fi
+    need_cli codex "Codex"
     case "${model}" in
       latest:*)
         family="${model#latest:}"
@@ -147,22 +119,16 @@ case "${agent}" in
         fi
         ;;
     esac
-    # The turn runs unattended; Construct configures Codex the same way
-    # (approval_policy never, sandbox danger-full-access). The fix may need to work
-    # outside any git repository, so the repository check is skipped.
-    args=(exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox)
+    # Construct configures Codex with approval_policy never and danger-full-access.
+    args=(--dangerously-bypass-approvals-and-sandbox)
     [ -n "${model}" ] && args+=(--model "${model}")
     exec codex "${args[@]}" "${prompt}"
     ;;
   opencode)
-    if ! command -v opencode >/dev/null 2>&1; then
-      echo "construct-agent-fix: OpenCode (opencode) is not installed on this VM." >&2
-      exit 127
-    fi
-    # Construct configures OpenCode with "permission": "allow", so the run does not stop
-    # for approvals.
-    args=(run)
+    need_cli opencode "OpenCode"
+    # Construct configures OpenCode with "permission": "allow".
+    args=()
     [ -n "${model}" ] && args+=(--model "${model}")
-    exec opencode "${args[@]}" "${prompt}"
+    exec opencode "${args[@]}" --prompt "${prompt}"
     ;;
 esac
