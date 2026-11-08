@@ -112,6 +112,9 @@ stop or uninstall an existing app. `-Force` does not override the opt-out.
 - State: `%LOCALAPPDATA%\The-Construct\companion\settings.json` and `endpoint.json`.
   The latter contains a bearer credential: do not paste it into reports or logs.
 - Key vault: `%LOCALAPPDATA%\The-Construct-Vault\vault.dat`, DPAPI-encrypted for your Windows account.
+- Config backup key: `%LOCALAPPDATA%\The-Construct\backup\`, written by the PowerShell scripts
+  (`pc-key.dpapi` is the DPAPI-protected key). The panel's Backups card only reads `pc-key.json`
+  to warn while the key has never been exported.
 - Logs: `%LOCALAPPDATA%\The-Construct\companion\logs\companion.log`, five rotating
   files of up to 1 MiB. `%TEMP%` is the path fallback when LOCALAPPDATA is unavailable.
 - Per-user registrations: HKCU Run value `ConstructCompanion`, the `construct://`
@@ -122,6 +125,13 @@ Settings include active instance, UI theme, capture device, notifications, forwa
 and host label, repatch delay, scripts directory, debug logging (which also keeps
 the PowerShell consoles it launches open), and Start with Windows. Updates preserve state and an existing `autostart: false` preference.
 Instances and remote credentials retain the existing Construct paths and formats.
+
+Config backups: shortly after it starts and every 15 minutes, the Companion reads the backup
+status of each remote VM whose host offers config backups. While backups of a VM fail, it shows
+one Windows notification for that failure streak (clicking it opens the VM's panel). The streak
+it reported is stored in the VM's settings, so a restart does not repeat it; a new streak after
+a successful backup notifies again. The panel's **Backups** card in Settings shows the details
+and the actions; see [the control panel](control-panel.md#backups).
 
 The VS Code setting `construct.companion` defaults to `auto`: a live compatible
 Companion takes over host jobs. Set it to `off` for extension fallback mode. With
