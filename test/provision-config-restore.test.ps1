@@ -14,6 +14,11 @@ $restoreBranch = $ast.Find({ param($n)
 }, $true)
 if (-not $restoreBranch) { throw 'Missing production restore branch.' }
 $block = [scriptblock]::Create($restoreBranch.Extent.Text)
+# The deferred project phase is shared with the host-backup restore (test/backup-actions.test.ps1).
+$deferredPhase = $ast.Find({ param($n)
+    $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-DeferredProjectCommands' }, $true)
+if (-not $deferredPhase) { throw 'Missing Invoke-DeferredProjectCommands.' }
+. ([scriptblock]::Create($deferredPhase.Extent.Text))
 
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ('construct-restore-test-' + [guid]::NewGuid().ToString('N'))
 $vmRoot = Join-Path $fixture 'vm'
