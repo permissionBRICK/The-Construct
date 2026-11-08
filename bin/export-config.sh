@@ -70,10 +70,21 @@
 #   HISTORY_RETENTION_DAYS keep only transcripts touched in the last N days
 #                  (default 30; 0 keeps all history)
 #   OUT            output tarball path          (default /tmp/construct-config-backup.tar.gz)
+#   STAGE_DIR      stage into this directory and stop before packing: no OUT,
+#                  no tarball, and the directory stays with the caller, also on
+#                  failure (construct-backup.sh packs, encrypts and uploads it)
+#   EXPORT_REASON  reinstall (default) or backup. reinstall is the export taken
+#                  before a reinstall: busy T3 Code threads are recorded in
+#                  t3-resume.json and t3code-serve is stopped across the copy of
+#                  its event store. backup leaves every service running and copies
+#                  each SQLite database with SQLite's online backup API instead,
+#                  as one self-contained file (no -wal/-shm).
 #   CONFIG_FILE    construct config.env         (default /etc/construct/config.env)
 #   WORKSPACE_ROOT where repos are cloned       (default from config / /root/repos)
 #   REPO_DIR       uploaded repo                (default /opt/construct/repo)
 #   PROJECTS_STORE persisted project profiles   (default /opt/construct/projects)
+#
+# Without STAGE_DIR the script removes its own stage when it fails.
 #
 set -euo pipefail
 
@@ -86,14 +97,50 @@ CONFIG_FILE="${CONFIG_FILE:-/etc/construct/config.env}"
 REPO_DIR="${REPO_DIR:-/opt/construct/repo}"
 PROJECTS_STORE="${PROJECTS_STORE:-/opt/construct/projects}"
 
+_stage_dir_arg="${STAGE_DIR:-}"
+_export_reason_arg="${EXPORT_REASON:-reinstall}"
+
 # Pull WORKSPACE_ROOT (and anything else useful) from config.env when present.
 if [[ -f "${CONFIG_FILE}" ]]; then
   # shellcheck disable=SC1090
   set -a; . "${CONFIG_FILE}"; set +a
 fi
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-/root/repos}"
+# The caller's choice, never config.env's.
+STAGE_DIR="${_stage_dir_arg}"
+EXPORT_REASON="${_export_reason_arg}"
+case "${EXPORT_REASON}" in
+  reinstall|backup) ;;
+  *) printf 'export-config.sh: EXPORT_REASON must be reinstall or backup, not %s\n' "${EXPORT_REASON}" >&2; exit 2 ;;
+esac
 
-STAGE="$(mktemp -d /tmp/construct-export.XXXXXX)"
+# Cleanup on any exit: a T3 Code server stopped for the copy is started again,
+# and a failed run removes the stage it made itself. A STAGE_DIR belongs to the
+# caller, who removes it.
+STAGE=""
+covered=""
+_t3_stopped=""
+cleanup_export() {
+  local rc=$?
+  trap - EXIT
+  if [[ -n "${_t3_stopped}" ]]; then
+    systemctl start t3code-serve 2>/dev/null || true
+  fi
+  if [[ -n "${covered}" ]]; then rm -f "${covered}"; fi
+  if [[ "${rc}" -ne 0 && -z "${STAGE_DIR}" && -n "${STAGE}" ]]; then rm -rf "${STAGE}"; fi
+  exit "${rc}"
+}
+trap cleanup_export EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+if [[ -n "${STAGE_DIR}" ]]; then
+  mkdir -p "${STAGE_DIR}"
+  STAGE="${STAGE_DIR}"
+else
+  STAGE="$(mktemp -d /tmp/construct-export.XXXXXX)"
+fi
 HOMEROOT="${STAGE}/home"
 PROJOUT="${STAGE}/projects"
 mkdir -p "${HOMEROOT}" "${PROJOUT}"
@@ -124,7 +171,9 @@ add() {
   [[ -e "${src}" ]] || return 0
   dst="${HOMEROOT}/${rel}"
   mkdir -p "$(dirname "${dst}")"
-  cp -a "${src}" "${dst}"
+  # Reflinks where the file system has them (XFS guests): the stage shares
+  # blocks with the originals instead of doubling the space they take.
+  cp -a --reflink=auto "${src}" "${dst}"
   printf '%s\n' "${rel}" >>"${MANIFEST}"
   log "+ ${rel}"
 }
@@ -138,6 +187,49 @@ add_glob() {
     add "${rel}"
   done
   shopt -u nullglob dotglob
+}
+
+# Snapshot a live SQLite database (relative to EXPORT_HOME) into the stage as
+# one self-contained file, without stopping whatever writes it (EXPORT_REASON
+# backup). SQLite's online backup API reads one consistent state even while the
+# database changes, so the -wal/-shm side files are not needed next to the
+# copy. Fallbacks: the sqlite3 shell's .backup, and as a last resort -- with a
+# warning -- a plain copy of the database and its side files, the way a
+# reinstall export takes them.
+add_sqlite_snapshot() {
+  local rel="$1" src dst side
+  src="${EXPORT_HOME}/${rel}"
+  [[ -f "${src}" ]] || return 0
+  dst="${HOMEROOT}/${rel}"
+  mkdir -p "$(dirname "${dst}")"
+  rm -f "${dst}" "${dst}-wal" "${dst}-shm" "${dst}-journal"
+  if command -v python3 >/dev/null 2>&1 && python3 -I - "${src}" "${dst}" 2>/dev/null <<'PY'
+import pathlib, sqlite3, sys
+src = sqlite3.connect(pathlib.Path(sys.argv[1]).resolve().as_uri() + "?mode=ro", uri=True, timeout=30)
+try:
+    dst = sqlite3.connect(sys.argv[2])
+    try:
+        src.backup(dst)
+    finally:
+        dst.close()
+finally:
+    src.close()
+PY
+  then
+    log "+ ${rel} (online snapshot)"
+  elif rm -f "${dst}" "${dst}-wal" "${dst}-shm" && command -v sqlite3 >/dev/null 2>&1 \
+      && sqlite3 -readonly "${src}" ".timeout 30000" ".backup '${dst}'" >/dev/null 2>&1; then
+    log "+ ${rel} (online snapshot, sqlite3)"
+  else
+    rm -f "${dst}" "${dst}-wal" "${dst}-shm"
+    note "warning: no online snapshot of ${rel} was possible; copying the database files as they are (the copy may be inconsistent)"
+    for side in "" "-wal" "-shm"; do add "${rel}${side}"; done
+    return 0
+  fi
+  chmod --reference="${src}" "${dst}" 2>/dev/null || true
+  chown --reference="${src}" "${dst}" 2>/dev/null || true
+  touch -r "${src}" "${dst}" 2>/dev/null || true
+  printf '%s\n' "${rel}" >>"${MANIFEST}"
 }
 
 agents="${AI_TOOLS:-claude-code,codex,opencode}"
@@ -208,7 +300,7 @@ if [[ "${INCLUDE_AUTH}" == "true" ]]; then
   sw_token_file="${VSCODE_SERVE_WEB_TOKEN_FILE:-/etc/construct/vscode-serve-web.token}"
   if [[ -s "${sw_token_file}" ]]; then
     mkdir -p "${STAGE}/etc/construct"
-    cp -a "${sw_token_file}" "${STAGE}/etc/construct/vscode-serve-web.token"
+    cp -a --reflink=auto "${sw_token_file}" "${STAGE}/etc/construct/vscode-serve-web.token"
     printf 'etc/construct/vscode-serve-web.token\n' >>"${MANIFEST}"
     log "+ etc/construct/vscode-serve-web.token"
   fi
@@ -226,7 +318,7 @@ if [[ "${INCLUDE_AUTH}" == "true" ]]; then
   tls_dir="${T3CODE_TLS_DIR:-/etc/construct/tls}"
   if [[ -d "${tls_dir}" ]] && compgen -G "${tls_dir}/*" >/dev/null 2>&1; then
     mkdir -p "${STAGE}/etc/construct"
-    cp -a "${tls_dir}" "${STAGE}/etc/construct/tls"
+    cp -a --reflink=auto "${tls_dir}" "${STAGE}/etc/construct/tls"
     printf 'etc/construct/tls\n' >>"${MANIFEST}"
     log "+ etc/construct/tls (T3 HTTPS local CA)"
   fi
@@ -283,7 +375,15 @@ if has_agent "codex" || [[ -d "${EXPORT_HOME}/.codex" ]]; then
   add ".codex/AGENTS.md"
   add ".codex/config.toml"
   add ".codex/memories"
-  add_glob ".codex/memories_*.sqlite*"
+  if [[ "${EXPORT_REASON}" == "backup" ]]; then
+    shopt -s nullglob
+    for _db in "${EXPORT_HOME}"/.codex/memories_*.sqlite; do
+      add_sqlite_snapshot "${_db#"${EXPORT_HOME}/"}"
+    done
+    shopt -u nullglob
+  else
+    add_glob ".codex/memories_*.sqlite*"
+  fi
   if [[ "${INCLUDE_AUTH}" == "true" ]]; then
     add ".codex/auth.json"
     # Per-MCP-server OAuth tokens (access/refresh, keyed by server). Codex keeps
@@ -322,7 +422,11 @@ if has_agent "opencode" || [[ -d "${EXPORT_HOME}/.config/opencode" ]]; then
   if [[ "${INCLUDE_HISTORY}" == "true" ]]; then
     add ".local/share/opencode/storage"
     add ".local/share/opencode/project"
-    add_glob ".local/share/opencode/opencode.db*"
+    if [[ "${EXPORT_REASON}" == "backup" ]]; then
+      add_sqlite_snapshot ".local/share/opencode/opencode.db"
+    else
+      add_glob ".local/share/opencode/opencode.db*"
+    fi
   fi
 fi
 
@@ -347,35 +451,46 @@ if [[ "${T3CODE:-false}" == "true" || -d "${EXPORT_HOME}/.t3/userdata" ]]; then
     # sessions, pairing state) in ONE database -- they cannot be split, so it is
     # gated on INCLUDE_AUTH: a sanitized INCLUDE_AUTH=false backup must not leak
     # session tokens, even at the cost of dropping the t3 threads from that
-    # backup. Stop the server across the copy: the db/-wal/-shm files are copied
-    # one after another, and a live write or checkpoint between them would yield
-    # a torn, unusable snapshot -- unlike the small always-rewritten opencode.db,
-    # this store is the ONLY copy of the t3 threads.
-    _t3_stopped=""
-    if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet t3code-serve 2>/dev/null; then
-      # Record the busy threads first: the stop below ends their turns, and a
-      # reinstalled VM tells them what happened (bin/construct-t3-resume.py). The
-      # helper sits next to this script, in the repo and in the host's /tmp upload.
-      _t3_resume_helper="${T3_RESUME_HELPER:-$(dirname "${BASH_SOURCE[0]}")/construct-t3-resume.py}"
-      if [[ -f "${_t3_resume_helper}" ]]; then
-        if python3 -I "${_t3_resume_helper}" snapshot --reason reinstall --out "${STAGE}/t3-resume.json"; then
-          if [[ -s "${STAGE}/t3-resume.json" ]]; then log "+ t3-resume.json (busy T3 Code threads)"; fi
-        else
-          note "warning: could not record the busy T3 Code threads; a reinstall will not resume them"
-        fi
+    # backup. A reinstall export stops the server across the copy: the
+    # db/-wal/-shm files are copied one after another, and a live write or
+    # checkpoint between them would yield a torn, unusable snapshot -- unlike the
+    # small always-rewritten opencode.db, this store is the ONLY copy of the t3
+    # threads. A backup takes an online snapshot instead and leaves T3 running
+    # (the busy threads keep working, so there is nothing to resume).
+    if [[ "${EXPORT_REASON}" == "backup" ]]; then
+      if [[ -f "${EXPORT_HOME}/.t3/userdata/statev2.sqlite" ]]; then
+        add_sqlite_snapshot ".t3/userdata/statev2.sqlite"
+      else
+        add_sqlite_snapshot ".t3/userdata/state.sqlite"
       fi
-      systemctl stop t3code-serve 2>/dev/null && _t3_stopped=1
-    fi
-    # T3 Code 0.1.0 moved the store to statev2.sqlite, seeded once from
-    # state.sqlite and self-contained from then on; the old file stays behind
-    # unused. Take only the store the server opens.
-    if [[ -f "${EXPORT_HOME}/.t3/userdata/statev2.sqlite" ]]; then
-      add_glob ".t3/userdata/statev2.sqlite*"
     else
-      add_glob ".t3/userdata/state.sqlite*"
-    fi
-    if [[ -n "${_t3_stopped}" ]]; then
-      systemctl start t3code-serve 2>/dev/null || true
+      _t3_stopped=""
+      if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet t3code-serve 2>/dev/null; then
+        # Record the busy threads first: the stop below ends their turns, and a
+        # reinstalled VM tells them what happened (bin/construct-t3-resume.py). The
+        # helper sits next to this script, in the repo and in the host's /tmp upload.
+        _t3_resume_helper="${T3_RESUME_HELPER:-$(dirname "${BASH_SOURCE[0]}")/construct-t3-resume.py}"
+        if [[ -f "${_t3_resume_helper}" ]]; then
+          if python3 -I "${_t3_resume_helper}" snapshot --reason reinstall --out "${STAGE}/t3-resume.json"; then
+            if [[ -s "${STAGE}/t3-resume.json" ]]; then log "+ t3-resume.json (busy T3 Code threads)"; fi
+          else
+            note "warning: could not record the busy T3 Code threads; a reinstall will not resume them"
+          fi
+        fi
+        systemctl stop t3code-serve 2>/dev/null && _t3_stopped=1
+      fi
+      # T3 Code 0.1.0 moved the store to statev2.sqlite, seeded once from
+      # state.sqlite and self-contained from then on; the old file stays behind
+      # unused. Take only the store the server opens.
+      if [[ -f "${EXPORT_HOME}/.t3/userdata/statev2.sqlite" ]]; then
+        add_glob ".t3/userdata/statev2.sqlite*"
+      else
+        add_glob ".t3/userdata/state.sqlite*"
+      fi
+      if [[ -n "${_t3_stopped}" ]]; then
+        _t3_stopped=""
+        systemctl start t3code-serve 2>/dev/null || true
+      fi
     fi
   fi
   if [[ "${INCLUDE_HISTORY}" == "true" ]]; then
@@ -543,6 +658,15 @@ jq -n \
     addedProjects: $addedProjects }
   + (if $t3codeProxyUrl == "" then {} else { t3codeProxyUrl: $t3codeProxyUrl } end)' \
   >"${STAGE}/backup-info.json"
+
+# ── Stage only: the caller packs ─────────────────────────────────────────────
+if [[ -n "${STAGE_DIR}" ]]; then
+  printf '==> Export staged: %s (%s)\n' "${STAGE}" "$(du -sh "${STAGE}" 2>/dev/null | cut -f1)"
+  if [[ "${#added_list[@]}" -gt 0 ]]; then
+    printf '    Captured %s project profile(s): %s\n' "${#added_list[@]}" "${added_list[*]}"
+  fi
+  exit 0
+fi
 
 # ── Pack ─────────────────────────────────────────────────────────────────────
 rm -f "${OUT}"
