@@ -267,6 +267,27 @@ ok("pin: a malformed fingerprint is refused",
       kind: "credential", user: "u", password: "hunter2",
     }).spawnArgs.join(" ").includes(Buffer.from("hunter2", "utf16le").toString("base64")));
 
+  const bodyLaunch = rh.buildDelegateLaunch({
+    remoteLib: "L.ps1", baseUrl: SVC, method: "PUT", route: "/api/v1/host/https/certificate",
+    bodyJson: JSON.stringify({ privateKeyPem: "KEY-MATERIAL" }), kind: "negotiate",
+  });
+  ok("delegate: a request body is read from stdin, never embedded",
+    bodyLaunch.command.includes("FromBase64String([Console]::In.ReadLine())") && !bodyLaunch.command.includes(Buffer.from(JSON.stringify({ privateKeyPem: "KEY-MATERIAL" })).toString("base64")));
+  {
+    const written = [];
+    const spawnBody = () => {
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.kill = () => {};
+      child.stdin = { write(t) { written.push(String(t)); }, end() {} };
+      setImmediate(() => { child.stdout.emit("data", Buffer.from('CONSTRUCT_API {"status":200,"error":"","body":"{}"}\n')); child.emit("close", 0); });
+      return child;
+    };
+    const credClient = rh.createClient({ baseUrl: SVC, auth: { kind: "credential", user: "DOMAIN\\alice", password: "hunter2" }, pin: FP_A, remoteLib: "L.ps1", spawnImpl: spawnBody });
+    await credClient.request("PUT", "/host/https/certificate", { privateKeyPem: "KEY-MATERIAL" });
+    eq("delegate: stdin carries the password, then the base64 body",
+      written.join(""), "hunter2\n" + Buffer.from(JSON.stringify({ privateKeyPem: "KEY-MATERIAL" }), "utf8").toString("base64") + "\n");
+  }
+
   eq("delegate: the envelope is parsed out of noisy stdout",
     rh.parseDelegateOutput('WARNING: something\nCONSTRUCT_API {"status":200,"error":"","body":{"name":"x"}}\n').body.name, "x");
   eq("delegate: no envelope -> null", rh.parseDelegateOutput("nothing here"), null);

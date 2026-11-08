@@ -25,6 +25,7 @@ public sealed class HostAdminIpcParityTests
             "overview" => HostAdminViews.Overview(input, now: now), "capacity" => HostAdminViews.Capacity(input), "media" => HostAdminViews.Media(input), "iso" => HostAdminViews.IsoCatalog(input),
             "job" => HostAdminViews.Job(input), "audit" => HostAdminViews.Audit(input), "config" => HostAdminViews.Config(input), "capabilities" => HostAdminViews.Capabilities(input),
             "childrenCard" => HostAdminViews.ChildrenCard(input!.AsObject(), now),
+            "https" => HostAdminViews.Https(input, now), "httpsRequest" => HostAdminViews.CertificateRequest(input!.AsObject()),
             "updates" => HostAdminViews.Updates(input), "updateActions" => HostAdminViews.UpdateActions(input), "user" => HostAdminViews.User(input), "allowanceForm" => HostAdminViews.AllowanceForm(input), "allowanceText" => JsonValue.Create(HostAdminViews.AllowanceText(input)),
             _ => throw new InvalidOperationException(kind)
         };

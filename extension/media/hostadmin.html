@@ -213,6 +213,35 @@
         <p class="cost-note">One JSON object per section; a section is replaced whole. Validation problems from the host appear next to the section.</p>
         <div id="cfgSections"></div>
       </section>
+      <!-- The host's TLS certificate for HTTPS forwards. Hidden on a host without them. Key
+           files are read here, sent with the one request and cleared; nothing keeps them. -->
+      <section class="module" id="httpsCard" hidden>
+        <div class="mhead"><h2 class="seclabel">HTTPS certificate</h2><span class="meta" id="httpsState"></span></div>
+        <p class="cost-note">The host serves HTTPS forwards with this certificate, so browsers and phones trust their links. The key stays on the host.</p>
+        <div id="httpsInfo"></div>
+        <div id="httpsWarnings"></div>
+        <p class="problem" id="httpsProblem" role="alert" hidden></p>
+        <div class="settings-actions ha-inline-actions" id="httpsActions">
+          <button class="btn" id="httpsSet" type="button">Set certificate</button>
+          <button class="btn danger" id="httpsRemove" type="button">Remove</button>
+        </div>
+        <div class="settings-actions ha-inline-actions" id="httpsRemoveConfirm" hidden>
+          <span class="cost-note ha-inline-question">Remove the certificate? HTTPS forwards stop working.</span>
+          <button class="btn danger" id="httpsRemoveYes" type="button">Remove</button>
+          <button class="btn ghost" id="httpsRemoveNo" type="button">Cancel</button>
+        </div>
+        <form class="ha-form ha-https-form" id="httpsForm" autocomplete="off" hidden>
+          <label>Format <select id="httpsFormat"><option value="pem">PEM chain + key</option><option value="pfx">PFX</option></select></label>
+          <label data-https="pem">Certificate chain (PEM) <input type="file" id="httpsChain" accept=".pem,.crt,.cer,.txt" /></label>
+          <label data-https="pem">Private key (PEM) <input type="file" id="httpsKey" accept=".pem,.key,.txt" /></label>
+          <label data-https="pfx" hidden>PFX file <input type="file" id="httpsPfx" accept=".pfx,.p12" /></label>
+          <label data-https="pfx" hidden>Password <input type="password" id="httpsPassword" autocomplete="new-password" /></label>
+          <div class="settings-actions ha-inline-actions">
+            <button class="save-btn" id="httpsInstall" type="submit">Install</button>
+            <button class="btn ghost" id="httpsCancel" type="button">Cancel</button>
+          </div>
+        </form>
+      </section>
       <section class="module">
         <div class="mhead"><h2 class="seclabel">Backend capabilities</h2><span class="meta" id="capBackend"></span></div>
         <div class="ha-table" id="capTable"></div>

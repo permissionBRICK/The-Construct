@@ -333,6 +333,8 @@ input:focus, select:focus { outline: none; border-color: var(--rain); box-shadow
 .fwd-port { font-family: var(--mono); color: var(--rain); min-width: 58px; }
 .fwd-label { flex: 1; color: var(--dim); word-break: break-word; }
 .fwd-target { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.5px; color: var(--faint); text-transform: uppercase; }
+.fwd-https { color: var(--rain); }
+.fwd-alt { display: block; font-family: var(--mono); font-size: 10.5px; color: var(--faint); user-select: text; overflow-wrap: anywhere; }
 .fwd-state { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.5px; text-transform: uppercase; color: var(--faint); }
 .fwd-row.open .fwd-state { color: var(--rain); }
 .fwd-row.error .fwd-state { color: var(--crit); }

@@ -39,6 +39,7 @@ function fakeClient(answers = {}) {
     "vms", "sharedVms", "children", "lifecycle", "setVmSharing", "renewVmLease", "deleteVm", "getJob", "overrides", "putOverrides", "deleteOverrides",
     "rotateVmToken", "revokeVmToken", "media", "deleteMedia", "mediaCleanup", "jobs", "cancelJob", "audit",
     "updatesStatus", "updatesCheck", "updatesStage", "updatesApply", "updatesCancel", "updatesResolve",
+    "httpsStatus", "setHttpsCertificate", "removeHttpsCertificate",
   ];
   for (const m of methods) {
     c[m] = async (...args) => {
@@ -743,6 +744,74 @@ function fakeClient(answers = {}) {
     eq("secrets: the VM token is returned once", r2.secret, "VM-SECRET");
     const dump = JSON.stringify(m.state) + lines.join("\n");
     ok("secrets: neither plaintext is in the state or the log", dump.indexOf("PLAINTEXT-SECRET") < 0 && dump.indexOf("VM-SECRET") < 0);
+  }
+
+  console.log("\n=== HTTPS forwards: permission and certificate card ===");
+  {
+    eq("https: the permission is off unless the host says on", ha.toUserRow({ name: "alice" }).allowHttpsForwards, false);
+    eq("https: ...and on when it does", ha.toUserRow({ name: "alice", allowHttpsForwards: true }).allowHttpsForwards, true);
+    deep("https: the user form sends the toggle", ha.parseUserForm({ allowHttpsForwards: "true" }).body, { allowHttpsForwards: true });
+    deep("https: ...and its refusal", ha.parseUserForm({ allowHttpsForwards: "false", allowHostForwards: "true" }).body, { allowHostForwards: true, allowHttpsForwards: false });
+    ok("https: a bad value is refused", !ha.parseUserForm({ allowHttpsForwards: "maybe" }).ok);
+    const NOW_MS = Date.parse("2026-09-11T12:00:00Z");
+    const status = {
+      certificate: { subject: "CN=*.vms.example", issuer: "CN=Example CA", dnsNames: ["*.vms.example", "vms.example"], notAfter: "2026-09-20T00:00:00+00:00",
+        sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08", chainLength: 2, installedAt: "2026-08-02T09:15:00+00:00" },
+      config: { sharedPort: 443, startOnRequest: true },
+      listeners: [{ kind: "shared", port: 443, listening: true }, { kind: "forward", port: 0, forwardId: "f-build", listening: false, error: "could not listen on port 31444" }],
+      warnings: ["The certificate expires in 8 days."],
+    };
+    const v = ha.toHttpsView(status, NOW_MS);
+    eq("https: names are listed", v.certificate.names, "*.vms.example, vms.example");
+    eq("https: days left", v.certificate.expiry, "8 days left");
+    eq("https: under 14 days is flagged", v.certificate.expiring, true);
+    eq("https: the fingerprint is grouped", v.certificate.sha256.slice(0, 11), "9F:86:D0:81");
+    deep("https: only the failed listeners are listed", v.failedListeners, ["f-build: could not listen on port 31444"]);
+    eq("https: the shared port", v.sharedPort, "443");
+    eq("https: expired", ha.toHttpsView({ certificate: { ...status.certificate, notAfter: "2026-09-01T00:00:00Z" } }, NOW_MS).certificate.expiry, "expired");
+    eq("https: no certificate", ha.toHttpsView({ certificate: null }, NOW_MS).certificate, null);
+    ok("https: a PEM pair needs both halves", !ha.httpsCertificateRequest({ certificatePem: "chain" }).ok);
+    deep("https: an empty PFX password is sent as null", ha.httpsCertificateRequest({ pfx: "cGZ4", password: "" }).body, { pfx: "cGZ4", password: null });
+
+    const lines = [];
+    let stored = status;
+    const c = fakeClient({ health: HEALTH_FULL, whoami: ME_ADMIN, hostConfig: {}, hostCapabilities: { backend: "hyperv-local", capabilities: {} },
+      httpsStatus: () => stored,
+      setHttpsCertificate: (body) => {
+        if (body.privateKeyPem === "WRONG-KEY-MATERIAL") throw apiErr(400, { code: "invalid-certificate", detail: "The private key does not match the certificate." });
+        return stored;
+      },
+      removeHttpsCertificate: () => (stored = { ...status, certificate: null }) });
+    const m = ha.createHostAdminModel({ client: c, host: H, backend: "hyperv-remote", now: () => NOW_MS, log: (l) => lines.push(l) });
+    await m.detect();
+    await m.load("config");
+    eq("https: the config tab reads the card", m.state.config.https.certificate.subject, "CN=*.vms.example");
+    let r = await m.perform("setHttpsCertificate", { certificatePem: "CHAIN-MATERIAL", privateKeyPem: "KEY-MATERIAL" });
+    const put = c.calls.filter((x) => x.method === "setHttpsCertificate").pop();
+    deep("https: Set certificate PUTs the PEM pair", put.args[0], { certificatePem: "CHAIN-MATERIAL", privateKeyPem: "KEY-MATERIAL" });
+    ok("https: ...and reports it", r.ok && m.state.notice.text === "HTTPS certificate installed.");
+    r = await m.perform("setHttpsCertificate", { certificatePem: "CHAIN-MATERIAL", privateKeyPem: "WRONG-KEY-MATERIAL" });
+    ok("https: a refusal shows its detail inline", !r.ok && m.state.config.https.problem === "The private key does not match the certificate.");
+    eq("https: ...without a notice", m.state.notice, null);
+    eq("https: ...and without leaving admin mode", m.state.mode, "admin");
+    const before = c.calls.length;
+    r = await m.perform("setHttpsCertificate", { certificatePem: "CHAIN-MATERIAL" });
+    ok("https: an incomplete pair never reaches the host", !r.ok && c.calls.length === before && /PEM certificate chain and its key/.test(m.state.config.https.problem));
+    r = await m.perform("removeHttpsCertificate", {});
+    ok("https: Remove DELETEs the certificate", r.ok && c.calls[c.calls.length - 1].method === "removeHttpsCertificate" && m.state.config.https.certificate === null);
+    const dump = JSON.stringify(m.state) + lines.join("\n");
+    ok("https: no key material in the state or the log", !/KEY-MATERIAL|CHAIN-MATERIAL/.test(dump));
+    r = await m.perform("updateUser", { name: "bob", form: { allowHttpsForwards: "true" } });
+    deep("https: the toggle is saved through PUT /users/{name}", c.calls[c.calls.length - 1].args, ["bob", { allowHttpsForwards: true }]);
+
+    const old = fakeClient({ health: HEALTH_FULL, whoami: ME_ADMIN, hostConfig: {}, httpsStatus: apiErr(404, null) });
+    const mo = ha.createHostAdminModel({ client: old, host: H, backend: "hyperv-remote", now: () => NOW_MS });
+    await mo.detect(); await mo.load("config");
+    eq("https: a host without HTTPS forwards hides the card", mo.state.config.https, null);
+    const broken = fakeClient({ health: HEALTH_FULL, whoami: ME_ADMIN, hostConfig: {}, httpsStatus: apiErr(500, null, "boom") });
+    const mb = ha.createHostAdminModel({ client: broken, host: H, backend: "hyperv-remote", now: () => NOW_MS });
+    await mb.detect(); await mb.load("config");
+    eq("https: an unreadable status says so in the card", mb.state.config.https.unavailable, "boom");
   }
 
   console.log(`\n  host-administration unit tests — ${pass}/${pass + fail} passed\n`);

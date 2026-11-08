@@ -155,6 +155,29 @@ is disabled until there is one; **✕** closes the forward.
   tunnels, on the same ports.
 - **`construct.forwards.enabled`** switches the whole thing off; requests then simply stay
   queued on the VM, which is the same answer as "no VS Code attached".
+- An **HTTPS** forward (`construct expose --https`) is a host forward that the host serves
+  with its own trusted certificate. Its row is marked **https**, and **▷** opens its https
+  link. A **main** HTTPS forward (`--main`) is marked **https · main**: its link uses the
+  VM's own name on the shared port, and the row also shows the address on its own port.
+  The Companion's tray menu adds "(HTTPS)" to these forwards.
+
+### HTTPS certificate and permission (host administration)
+
+HTTPS forwards need two things that a host admin sets in **Host administration**:
+
+- **Configuration → HTTPS certificate.** This card shows the installed certificate: subject,
+  names, the expiry date with the days left, the SHA-256 fingerprint and the issuer. It
+  also lists the host's warnings, such as a certificate that expires soon or does not
+  cover the VMs' names, and any TLS listener that failed. **Set certificate** opens a form
+  in the card. Pick a PEM certificate chain and its PEM key, or a PFX file and its password.
+  The files are read in the panel and sent with the one request; they are not stored or
+  logged on this PC. If the host refuses them, its reason appears in the card.
+  **Remove** asks for confirmation in the card, then deletes the certificate. The card is
+  hidden on a host that does not offer HTTPS forwards. The **HTTPS forwards** section of the
+  host configuration above it sets the shared port and whether a request starts a VM.
+- **Users → Edit → HTTPS forwards.** This permission lets a user's VMs publish links with
+  the host's certificate. It is separate from **Host forwards** and off by default. The
+  Users table marks users who have it with **https forwards**.
 
 ## Idle policy (remote VMs)
 
