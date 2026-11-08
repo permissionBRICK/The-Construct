@@ -995,10 +995,13 @@ if [[ -n "${_t3_forward_authority}" ]]; then
   _t3_forward_port="${_t3_forward_authority##*:}"
   if [[ "${_t3_forward_port}" =~ ^[0-9]+$ ]] && (( _t3_forward_port >= 1 && _t3_forward_port <= 65535 )); then
     T3CODE_PUBLIC_PORT="${_t3_forward_port}"
-    # ...and the host it is served under: with HTTPS forwards on a shared port that is the
-    # VM's own name only while T3 is its main forward (docs/https-forwards.md).
-    _t3_forward_host="${_t3_forward_authority%:*}"; _t3_forward_host="${_t3_forward_host#[}"; _t3_forward_host="${_t3_forward_host%]}"
-    if [[ -n "${_t3_forward_host}" && "${_t3_forward_host}" =~ ^[A-Za-z0-9.:-]+$ ]]; then T3CODE_PUBLIC_HOST="${_t3_forward_host}"; fi
+    # ...and, for an HTTPS forward, the host it is served under: on a shared port that is the
+    # VM's own name only while T3 is its main forward (docs/https-forwards.md). A plain forward
+    # is served under CONSTRUCT_EXTERNAL_HOST, the name T3's own certificate is issued for.
+    if [[ "$(sed -n 's/^T3_HTTPS=//p' "${HOST_FORWARDS_FILE}" 2>/dev/null | head -1 || true)" == "true" ]]; then
+      _t3_forward_host="${_t3_forward_authority%:*}"; _t3_forward_host="${_t3_forward_host#[}"; _t3_forward_host="${_t3_forward_host%]}"
+      if [[ -n "${_t3_forward_host}" && "${_t3_forward_host}" =~ ^[A-Za-z0-9.:-]+$ ]]; then T3CODE_PUBLIC_HOST="${_t3_forward_host}"; fi
+    fi
     # The host terminates TLS on this forward (docs/https-forwards.md): the advertised
     # origin is https even when T3's own HTTPS proxy is off.
     if [[ "$(sed -n 's/^T3_HTTPS=//p' "${HOST_FORWARDS_FILE}" 2>/dev/null | head -1 || true)" == "true" ]]; then

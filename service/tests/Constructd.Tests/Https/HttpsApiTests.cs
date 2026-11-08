@@ -274,7 +274,8 @@ public sealed class HttpsApiTests
         using var _ = app;
         var issued = TestCertificates.SelfSigned(["*.vms.test"]);
         app.Service<HttpsCertificateStore>().Import(issued.ChainPem, issued.KeyPem);
-        using var squatter = new TcpListener(IPAddress.Any, 0);
+        // Held for the whole test, so the shared listener cannot bind it (FreePort's range rule applies here too).
+        using var squatter = new TcpListener(IPAddress.Any, FreePort());
         squatter.Start();
         var busy = ((IPEndPoint)squatter.LocalEndpoint).Port;
         Assert.Equal(HttpStatusCode.OK, (await admin.PutJsonAsync("/api/v1/host/config", new { https = new { sharedPort = busy, startOnRequest = true } })).StatusCode);
