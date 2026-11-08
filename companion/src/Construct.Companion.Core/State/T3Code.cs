@@ -207,5 +207,7 @@ exit 0
     public static string BuildProxyUrlScript(string url) => NormalizeProxyUrl(url) is ({ } checkedUrl, null)
         ? GuestScripts.Render("t3-proxy-url", new Dictionary<string, string> { ["url"] = "'" + checkedUrl + "'" })
         : throw new ArgumentException(ProxyUrlError, nameof(url));
+    public static string BuildAutoApprovalScript(bool enabled) => GuestScripts.Render("t3-auto-approve",
+        new Dictionary<string, string> { ["enabled"] = enabled ? "true" : "false" });
     public static JsonObject? PlanLiveAction(bool want, bool had, string newChannel, string oldChannel) => want && !had ? new JsonObject { ["action"] = "enable", ["channel"] = newChannel } : !want && had ? new JsonObject { ["action"] = "disable" } : want && had && newChannel != oldChannel ? new JsonObject { ["action"] = "setChannel", ["channel"] = newChannel } : null;
 }

@@ -65,7 +65,6 @@ public static class SettingsMapping
         previous ??= []; next ??= [];
         bool Is(JsonObject o, string k) => StateJson.Boolean(o[k]) == true;
         var result = new List<string>();
-        if (Is(previous, "t3codeAutoApprove") != Is(next, "t3codeAutoApprove")) result.Add("T3 tool permission auto-approval");
         if (Is(previous, "t3codePatched") != Is(next, "t3codePatched") ||
             (Is(next, "t3codePatched") && Is(next, "t3code") && (!Is(previous, "t3code") ||
             !StateJson.StrictEquals(StateJson.Truthy(previous["t3codeChannel"]) ? previous["t3codeChannel"] : JsonValue.Create("stable"), StateJson.Truthy(next["t3codeChannel"]) ? next["t3codeChannel"] : JsonValue.Create("stable")))))

@@ -435,6 +435,21 @@ function normalizeProxyUrl(value) {
   return { url: v, error: null };
 }
 
+function buildAutoApprovalScript(enabled) {
+  if (typeof enabled !== "boolean") throw new Error("A boolean auto-approval setting is required.");
+  return guestScripts.render("t3-auto-approve", { enabled: enabled ? "true" : "false" });
+}
+
+async function setAutoApprovalOnVm(enabled, opts = {}) {
+  const script = buildAutoApprovalScript(enabled);
+  const transport = opts._ssh || ssh;
+  return _serial(opts, async () => {
+    if (!(await transport.isReachable(opts))) return { error: "The VM is offline. Start it and save settings again to apply T3 tool permission auto-approval." };
+    const result = await transport.runRemoteScript(script, { ...opts, timeoutMs: opts.timeoutMs || 30000 });
+    return result.code === 0 ? {} : { error: "The VM did not apply T3 tool permission auto-approval. Save again to retry. " + (result.stderr || "").trim().slice(-200) };
+  });
+}
+
 /** Bash: store (or, for "", remove) the VM's T3CODE_PROXY_URL. `url` must come from
  *  normalizeProxyUrl, whose alphabet has no quote, so single quotes make it shell-ready. */
 function buildProxyUrlScript(url) {
@@ -472,5 +487,6 @@ module.exports = {
   extractPairUrl, extractPairLinks, baseUrl,
   openWebUi, enableOnVm, disableOnVm, setChannelOnVm,
   normalizeProxyUrl, buildProxyUrlScript, setProxyUrlOnVm,
+  buildAutoApprovalScript, setAutoApprovalOnVm,
   planT3LiveAction, _resetQueue,
 };

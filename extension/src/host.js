@@ -421,7 +421,6 @@ function patchReprovisionChanges(previous, next) {
   previous = previous || {};
   next = next || {};
   const changes = [];
-  if ((previous.t3codeAutoApprove === true) !== (next.t3codeAutoApprove === true)) changes.push("T3 tool permission auto-approval");
   const sourceBuildChanged =
     (previous.t3codePatched === true) !== (next.t3codePatched === true);
   const sourceManagedT3Changed =
