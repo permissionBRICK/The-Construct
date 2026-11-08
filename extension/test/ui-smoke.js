@@ -1462,6 +1462,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
       byUser: [{ user: "alice", tokens: 1200, costUsd: 1.23, vms: 1 }],
       byVm: [{ vm: "gone", user: "alice", deleted: true, tokens: 1200, costUsd: 1.23, lastReportedAt: "2026-09-17T11:00:00Z", tools: [{ tool: "codex", tokens: 1200, costUsd: 1.23 }] }] }) };
   await pushAdmin(usageState);
+  await admin.waitForTimeout(60);
   check("usage: totals and estimated cost render", (await admin.locator("#hostUsageTotals").innerText()).includes("1.2K tokens · $1.23"));
   check("usage: deleted VM is greyed and labelled", (await admin.locator("#usageVmTable .disabled").innerText()).includes("gone (deleted)"));
   check("usage: per-tool split is available on hover", (await admin.locator("#usageVmTable .disabled").getAttribute("title")).includes("codex: 1.2K tokens"));
