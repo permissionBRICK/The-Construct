@@ -11,8 +11,8 @@ namespace Constructd.Core.Logic;
 /// <item><c>keep</c> ≥ 3: the <c>keep − 2</c> newest, the newest before the week start and the newest
 /// before the month start.</item>
 /// </list>
-/// Weeks start Monday 00:00 UTC, months on the 1st 00:00 UTC. When slots coincide fewer than
-/// <c>keep</c> remain; the rule never deletes to make room.
+/// Weeks start Monday 00:00 UTC, months on the 1st 00:00 UTC. When slots coincide, the next newest
+/// backups fill the free places, so <c>keep</c> backups remain whenever that many exist.
 /// </summary>
 public static class BackupRotation
 {
@@ -39,6 +39,11 @@ public static class BackupRotation
         var kept = new HashSet<string>(candidates.Take(keep >= 3 ? keep - 2 : 1).Select(b => b.Id), StringComparer.Ordinal);
         if (keep >= 2 && candidates.FirstOrDefault(b => b.CreatedAt < WeekStart(now)) is { } week) kept.Add(week.Id);
         if (keep >= 3 && candidates.FirstOrDefault(b => b.CreatedAt < MonthStart(now)) is { } month) kept.Add(month.Id);
+        foreach (var next in candidates)
+        {
+            if (kept.Count >= keep) break;
+            kept.Add(next.Id);
+        }
         return candidates.Where(b => !kept.Contains(b.Id)).Select(b => b.Id).ToList();
     }
 }

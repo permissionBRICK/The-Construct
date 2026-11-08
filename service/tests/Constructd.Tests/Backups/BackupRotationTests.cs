@@ -57,31 +57,33 @@ public sealed class BackupRotationTests
 
     [Fact]
     public void Keep_ten_keeps_eight_newest_and_both_older_slots() =>
-        // The eight newest are d12..d19; d12 is also the week slot, so nine remain.
-        Assert.Equal(["d11", "d12", "d13", "d14", "d15", "d16", "d17", "d18", "d19"], Kept(Daily, 10, "2026-11-08T12:00:00Z"));
+        // The eight newest are d12..d19; d12 is also the week slot, so the next newest, d10, fills the tenth place.
+        Assert.Equal(["d10", "d11", "d12", "d13", "d14", "d15", "d16", "d17", "d18", "d19"], Kept(Daily, 10, "2026-11-08T12:00:00Z"));
 
     [Fact]
     public void The_week_slot_moves_on_at_the_monday_boundary()
     {
-        // Just before Monday 2026-11-09 00:00 the week slot is d12; at the boundary it becomes the newest before it, d19.
+        // Just before Monday 2026-11-09 00:00 the week slot is d12; at the boundary it becomes the newest before it,
+        // d19, which is also the newest, so the next newest fills the second place.
         Assert.Equal(["d12", "d19"], Kept(Daily, 2, "2026-11-08T23:59:59Z"));
-        Assert.Equal(["d19"], Kept(Daily, 2, "2026-11-09T00:00:00Z"));
+        Assert.Equal(["d18", "d19"], Kept(Daily, 2, "2026-11-09T00:00:00Z"));
     }
 
     [Fact]
     public void The_month_slot_moves_on_at_the_first_of_the_month()
     {
         Assert.Equal(["d11", "d12", "d19"], Kept(Daily, 3, "2026-11-08T12:00:00Z"));
-        // On 2026-12-01 the newest before the month and before the week (Monday 2026-11-30) are both d19.
-        Assert.Equal(["d19"], Kept(Daily, 3, "2026-12-01T00:00:00Z"));
+        // On 2026-12-01 the newest before the month and before the week (Monday 2026-11-30) are both d19;
+        // the next newest fill the free places.
+        Assert.Equal(["d17", "d18", "d19"], Kept(Daily, 3, "2026-12-01T00:00:00Z"));
     }
 
     [Fact]
-    public void Coinciding_slots_leave_fewer_than_keep_and_never_delete_to_make_room()
+    public void Coinciding_slots_are_filled_with_the_next_newest()
     {
-        // Two backups, both before the week and the month: the newest fills all three slots.
+        // Two backups, both before the week and the month: the newest fills all three slots, the other one the rest.
         var old = new[] { Complete("a", "2026-10-01T00:00:00Z"), Complete("b", "2026-10-02T00:00:00Z") };
-        Assert.Equal(["b"], Kept(old, 3, "2026-11-08T12:00:00Z"));
+        Assert.Equal(["a", "b"], Kept(old, 3, "2026-11-08T12:00:00Z"));
         Assert.Equal(["a", "b"], Kept(old, 4, "2026-11-08T12:00:00Z"));
         Assert.Empty(BackupRotation.Expired([Complete("only", "2026-11-08T01:00:00Z")], 1, At("2026-11-08T12:00:00Z")));
     }

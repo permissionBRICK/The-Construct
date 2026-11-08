@@ -304,8 +304,8 @@ keep the union of:
 
 Weeks start Monday 00:00 UTC, months on the 1st 00:00 UTC. Because the older slots hold "the
 newest before a boundary", a backup kept there survives until the boundary moves on, so a few
-copies reach back up to a week and up to a month. When slots coincide fewer than `keep` remain;
-the rule never deletes to make room.
+copies reach back up to a week and up to a month. When slots coincide, the next newest backups
+fill the free places, so `keep` backups remain whenever that many exist.
 
 **Pinning.** A `pre-reinstall` backup gets `pinnedUntil = createdAt + PinDays`;
 `POST …/restored` clears it. That keeps the good backup from being rotated out by the empty
@@ -360,13 +360,12 @@ VMs; a failure is a warning, not a provisioning error).
 - The chosen id goes to `Provision-AgentVM.ps1 -RestoreHostBackupId <id>`. Provisioning then
   runs the restore step against the host backup: unwrap `E` from `GET …/keys`,
   `construct backup fetch --from-host <id> --out /tmp/construct-config-restore.tar.zst` (E on
-  stdin), then the existing `restore-config.sh` invocation, the same failure handling and the
-  deferred project-commands phase (`DEFER_PROJECT_COMMANDS` is set when either `-RestoreDir`
-  has an archive or `-RestoreHostBackupId` is given), followed by the guest-side restore extras
-  (`construct backup restore` does them; for this path the client runs
-  `construct backup restore-extras <file>` — a hidden subcommand of `construct-backup.sh` —
-  before deleting the file) and `POST …/backups/{id}/restored` via the CLI
-  (`construct backup restored <id>`, hidden).
+  stdin), then the existing `restore-config.sh` invocation and the same failure handling, then the
+  guest-side restore extras (`construct backup restore` does them; for this path the client runs
+  `construct backup restore-extras <file>`, a hidden subcommand), then the deferred
+  project-commands phase (`DEFER_PROJECT_COMMANDS` is set when either `-RestoreDir` has an
+  archive or `-RestoreHostBackupId` is given), then `POST …/backups/{id}/restored` via the CLI
+  (`construct backup restored <id>`, hidden), and finally the file is deleted.
 - Git credentials: with a fresh pre-reinstall backup the `create` result also carries
   `"gitCredentialHosts":["host", …]` (hosts only, no secrets), which replaces
   `Test-BackupHasGitCredentials` for the preflight. For the newest-host-backup path the

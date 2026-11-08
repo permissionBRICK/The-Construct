@@ -110,11 +110,11 @@ backups and a usable key on this PC:
 
 The chosen backup goes to provisioning as `-RestoreHostBackupId <id>`. After `provision.sh`,
 the provisioner unwraps the backup's key with this PC's key, the VM downloads and decrypts the
-backup (`construct backup fetch`), `restore-config.sh` restores it, and the project checkout and
-project commands run afterwards, exactly as with a backup from this PC. The VM then restores
+backup (`construct backup fetch`) and `restore-config.sh` restores it. The VM then restores
 the backup's project profiles (only the ones it does not have), its serve-web token (the
-browser `?tkn=` URL stays the same) and its enrolled backup keys, and tells the host that the
-backup was restored, which unpins it.
+browser `?tkn=` URL stays the same) and its enrolled backup keys. The project checkout and
+project commands run afterwards, exactly as with a backup from this PC, and finally the VM
+tells the host that the backup was restored, which unpins it.
 
 If the restore fails, the VM is still provisioned and the backup stays on the host; the error
 names the command that retries it:

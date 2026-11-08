@@ -3254,12 +3254,15 @@ if ($RestoreDir) {
         $hostRestoreSucceeded = $true
         Write-Ok "Saved config restored from the host backup"
 
-        if ($deferProjectCommands) { Invoke-DeferredProjectCommands }
-
+        # The extras (project profiles, serve-web token, backup keys) come back before the
+        # deferred project phase, so that phase already sees the restored profiles.
         $hostExtras = Invoke-ConstructBackupCli -Connection $hostConnection -Arguments @('restore-extras', $hostRestoreFile) -Stdout Console
         if ($hostExtras.ExitCode -ne 0) {
             Write-Warning "Restoring the backup's project profiles, serve-web token and backup keys failed: $(Get-ConstructBackupExitMessage $hostExtras.ExitCode)."
         }
+
+        if ($deferProjectCommands) { Invoke-DeferredProjectCommands }
+
         $hostRestored = Invoke-ConstructBackupCli -Connection $hostConnection -Arguments @('restored', $RestoreHostBackupId) -Stdout Console
         if ($hostRestored.ExitCode -ne 0) {
             Write-Warning "Could not tell the host that backup $RestoreHostBackupId was restored ($(Get-ConstructBackupExitMessage $hostRestored.ExitCode)); it stays pinned until its pin expires."

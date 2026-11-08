@@ -363,7 +363,7 @@ more backup than are kept, because old backups are removed only after a new one 
 backups (`pinnedUntil` in the future) stay and do not count. Of the rest the union of these stays:
 `keep` 1 the newest; 2 the newest and the newest created before the start of the current week; ≥ 3
 the `keep − 2` newest, the newest before the week start and the newest before the month start (weeks
-start Monday 00:00 UTC, months on the 1st 00:00 UTC). When slots coincide fewer than `keep` remain.
+start Monday 00:00 UTC, months on the 1st 00:00 UTC). When slots coincide, the next newest backups fill the free places.
 A `pre-reinstall` backup is pinned for `pinDays` after its creation; `POST …/restored` unpins it.
 
 **Cleanup** (`BackupCleanupService`, hourly, skipped during maintenance): rotation for every pair;
