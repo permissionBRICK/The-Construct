@@ -7,7 +7,9 @@
 # on the secret files so the coding agents accept them.
 #
 # Inputs (via environment):
-#   BACKUP_TGZ   path to a backup tarball produced by export-config.sh, OR
+#   BACKUP_TGZ   path to a backup tarball produced by export-config.sh (a
+#                .tar.gz) or by `construct backup fetch` (a .tar.zst; GNU tar
+#                detects the compression itself), OR
 #   BACKUP_DIR   path to an already-extracted backup (containing home/)
 #   EXPORT_HOME  home to restore into            (default /root)
 #
@@ -60,7 +62,7 @@ if [[ -n "${BACKUP_TGZ}" ]]; then
   cleanup_tmp="$(mktemp -d /tmp/construct-restore.XXXXXX)"
   BACKUP_DIR="${cleanup_tmp}"
   archive_list="${cleanup_tmp}/archive.list"
-  if ! tar -tzf "${BACKUP_TGZ}" >"${archive_list}"; then
+  if ! tar -tf "${BACKUP_TGZ}" >"${archive_list}"; then
     err "Backup tarball is unreadable or truncated: ${BACKUP_TGZ}"
     exit 1
   fi
@@ -187,7 +189,7 @@ fi
 # copy without nesting under a "home" directory.
 if [[ -n "${archive_restore}" ]]; then
   log "extracting saved home tree from archive"
-  if ! tar -xzf "${BACKUP_TGZ}" -C "${EXPORT_HOME}" \
+  if ! tar -xf "${BACKUP_TGZ}" -C "${EXPORT_HOME}" \
       --strip-components="${archive_strip_components}" "${archive_home_member}"; then
     err "Agent config overlay failed while extracting ${BACKUP_TGZ} into ${EXPORT_HOME}."
     err "Free space: $(df -h "${EXPORT_HOME}" 2>/dev/null | awk 'NR==2 {print $4 " available on " $1}' || echo unknown)"
@@ -333,7 +335,7 @@ if [[ -n "${tls_restore}" ]]; then
     # Extract WITHOUT --strip-components: both the './etc/...' and 'etc/...'
     # member spellings then land at the same path inside the staging dir.
     _tls_stage="$(mktemp -d /tmp/construct-restore-tls.XXXXXX)"
-    if tar -xzf "${BACKUP_TGZ}" -C "${_tls_stage}" \
+    if tar -xf "${BACKUP_TGZ}" -C "${_tls_stage}" \
         "$(grep -Eom1 '^(\./)?etc/construct/tls' "${archive_list}")" 2>/dev/null \
        && [[ -d "${_tls_stage}/etc/construct/tls" ]]; then
       cp -a "${_tls_stage}/etc/construct/tls/." "${TLS_DIR}/" || _tls_ok=""
