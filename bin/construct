@@ -10,6 +10,7 @@
 #   construct expose <port> [--label …]            port forward + the link to open
 #   construct vm <command> [args]                    manage delegated child VMs
 #   construct secret <command> [args]              key vault: lease secrets the user approves
+#   construct backup <command> [args]              encrypted config backups stored by the host
 #   construct config get|set|unset|list [args]     per-VM settings agents may change
 #   construct systemprompt                         regenerate every agent's instruction
 #                                                  file (template + ~/construct-custom-system-prompt.md)
@@ -38,6 +39,10 @@
 #  11  secret: the vault is locked for this VM (start or connect it from the
 #      user's PC)
 #   2  config: unknown key or invalid value
+#   backup: 2 usage, 3 no recipients enrolled, 4 no host service or the host
+#      lacks the feature, 5 not enough space on the VM, 6 host refused,
+#      7 transfer failed, 8 decryption or verification failed, 9 another
+#      backup or restore is running, 10 export or restore step failed
 set -euo pipefail
 
 PROJECTS_STORE="${PROJECTS_STORE:-/opt/construct/projects}"
@@ -223,6 +228,12 @@ case "$1" in
     secret_impl="$(find_helper construct-secret.sh)" \
       || die "construct-secret.sh not found (looked next to $0 and in ${CONSTRUCT_REPO_DIR}/bin)"
     exec bash "${secret_impl}" "$@"
+    ;;
+  backup|backups)
+    shift
+    backup_impl="$(find_helper construct-backup.sh)" \
+      || die "construct-backup.sh not found (looked next to $0 and in ${CONSTRUCT_REPO_DIR}/bin)"
+    exec bash "${backup_impl}" "$@"
     ;;
   config)
     shift
