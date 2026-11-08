@@ -231,7 +231,7 @@ request. Disabling a user immediately rejects their Bearer tokens and their VMs'
 VM tokens retain the forwards/activity scope plus identity, guest-report intake and token-usage intake.
 New primary creation issues a `primary` token; it never grants user identity or admin access.
 
-Discovery advertises `host-admin`, `children`, `media`, `console`, `updates`, `network` and (when enabled) `source-cache`
+Discovery advertises `host-admin`, `children`, `media`, `console`, `updates`, `network`, `config-backups` and (when enabled) `source-cache`
 in production and fake mode. SQLite admission, media/capacity adapters, child lifecycle,
 console, updates and child connectivity are integrated. The fake admission store commits
 or rolls back participating stores under one lock, including readers; its scope accepts
@@ -270,6 +270,7 @@ gate: the resource policy is evaluated again inside every handler.
 | Key vault approvals | `GET /vault/approvals`; `POST /vault/approvals/{id}`; `GET /vault/files`; `POST /vault/files/{id}`; `GET /vault/device` | The owner or one of their paired devices (`VaultDevice`); `/vault/device` is device-only. |
 | Key vault guest | `POST /vms/{name}/vault/requests`; `GET /vms/{name}/vault/requests/{id}?wait=`; `GET /vms/{name}/vault/scrubs`; `POST /vms/{name}/vault/scrubs/{id}` | That primary VM's own token; a child answers `403 vault-child`. |
 | HTTPS forwards | `GET /host/https`; `PUT`, `DELETE /host/https/certificate`; `GET /vms/{name}/https` | Host routes: admins. The VM route: the VM's own token or its owner; it says whether `construct expose --https` can work for that VM ([docs/https-forwards.md](../docs/https-forwards.md)). |
+| Config backups | `POST /vms/{name}/backups`; `PUT /vms/{name}/backups/{id}/keys`; `PUT /vms/{name}/backups/{id}/content`; `POST /vms/{name}/backups/report`; `POST /vms/{name}/backups/{id}/restored`; `DELETE /vms/{name}/backups/{id}`; `GET /vms/{name}/backups`; `GET /vms/{name}/backups/status`; `GET /vms/{name}/backups/{id}/content`; `GET /vms/{name}/backups/{id}/keys`; `POST /vms/{name}/backups/request`; `GET`, `PUT /vms/{name}/backups/settings` | Upload, report and restored: that primary's own token only. Reads: the token or the owner/Admin. Delete: the owner/Admin any backup, the token only its own open session. Request and settings: owner/Admin user credential. A child answers `409 not-a-primary`. See *Config backups*. |
 
 There is deliberately no child-media content download route and no interactive-video
 console route.
@@ -290,8 +291,9 @@ Guests post the spool contract's request document; answers that need no user com
 (`200`), the rest as `202 {id}` to long-poll (`?wait=` up to 25 s: `200` answer, `204` pending, `404`
 unknown or already picked up). Pending approvals live in memory; the first answer wins (`409
 already-decided`). Leases, pending scrubs, scrub jobs and file decisions are durable; agent logs are
-redacted without asking and every other hit waits in `GET /vault/files`. The heartbeat reply is
-`200 {"vaultScrub": true}` while a scrub job can be delivered to that VM, `204` otherwise.
+redacted without asking and every other hit waits in `GET /vault/files`. The heartbeat reply
+carries `"vaultScrub": true` while a scrub job can be delivered to that VM (with the config-backup
+fields below when those are due too), and is `204` when nothing is due.
 
 The phone pages are served anonymously at `/vault/` and `/vault/pair` (strict CSP, no inline code).
 Their base URL, used for the pairing QR code and a pending request's `approveUrl`, is the host config
@@ -301,6 +303,87 @@ value `vault.webUrl` (Host Administration, admins only), else `Constructd:VaultW
 apart. The pairing page never follows a T3 Code link on its own origin;
 `Constructd:Vault:SchedulerEnabled=false` stops the 10 s lease/approval/scrub tick (tests).
 Discovery advertises `key-vault`.
+
+### Config backups
+
+The contract is [docs/plans/host-config-backups.md](../docs/plans/host-config-backups.md); the user
+guide is [docs/remote-host.md](../docs/remote-host.md#6b-config-backups-on-the-host). A primary VM
+backs up its config export to the host, encrypted in the guest (`construct backup`): the host stores
+an age payload and a keys file whose recipients are RSA keys of the user's PCs, and can open
+neither. Backups belong to *(owner, VM name)*, not to one VM incarnation: a reinstalled VM of the
+same owner and name sees its predecessor's backups, another owner reusing the name sees none, and
+nothing about a backup refers to the `vms` row, so it survives the VM's deletion. Discovery
+advertises `config-backups` on both platforms.
+
+**Trigger.** `POST /vms/{name}/activity` answers `200` with only the fields that are true, else `204`:
+`{"vaultScrub": true, "backupDue": true, "backupTrigger": "scheduled"|"manual"}`. A backup is due
+(primaries only) when the host has backups enabled and is not draining for maintenance, no upload
+session of the VM is open, and either an
+owner's request is pending (less than an hour old; due even when the VM is busy), or the effective
+interval is above 0, the last success is at least one interval old (no success yet: due since the VM
+was created) and the last attempt at least `min(interval, 6 h)` old. A due scheduled backup waits for
+a heartbeat with `busy: false` until it has been due for six hours. The rule is
+`Core/Logic/BackupSchedule.cs`; the guest decides nothing on its own.
+
+| Route | Caller | Request → reply |
+|---|---|---|
+| `POST /vms/{name}/backups` | VM | `{"trigger":"scheduled"\|"manual"\|"pre-reinstall","estimatedBytes"}` → `201 {"id","maxBytes"}`; `403 backups-disabled`; `409 backup-in-progress`; `507 host-disk-space` / `backup-quota`; `503 maintenance` while the host drains. Opening (or being refused for space) sets `lastAttemptAt` and clears a pending request. |
+| `PUT /vms/{name}/backups/{id}/keys` | VM | The keys JSON (≤ 64 KiB, `format` `construct-backup-keys/1`, `backupId` = `{id}`, 1–32 recipients with a 64-hex `fingerprint`, a label matching `^[A-Za-z0-9._ -]{1,64}$` and base64 `wrapped`) → `204`; `400 validation` (with `field`); `409 backup-not-open`. Stored as sent. |
+| `PUT /vms/{name}/backups/{id}/content` | VM | `application/octet-stream`, with a length or chunked → `200 {"id","sizeBytes","sha256","createdAt"}`; `409 backup-keys-missing` / `backup-not-open`; `413 backup-too-large`; `507 host-disk-space`. Any failure removes the partial file, closes the session and records the failure. |
+| `DELETE /vms/{name}/backups/{id}` | VM (its own open session) / owner, Admin (any) | `204`; `404`. Deleting a session under a running upload cancels the upload. |
+| `POST /vms/{name}/backups/report` | VM | `{"trigger","result":"skipped"\|"failed","reason","detail"}` (reason: lowercase code such as `vm-disk-space`, `no-recipients`, `export-failed`, `upload-failed`, `host-refused`, `verify-failed`; detail ≤ 500 characters) → `204`. Records the attempt and the failure, starts the failure streak, clears a pending request. |
+| `POST /vms/{name}/backups/{id}/restored` | VM | → `204` (clears `pinnedUntil`); `404`. |
+| `GET /vms/{name}/backups` | VM, owner, Admin | `{"backups":[{"id","createdAt","trigger","sizeBytes","sha256","pinnedUntil"}]}`: complete backups, newest first; `pinnedUntil` is null once a pin has passed. |
+| `GET /vms/{name}/backups/{id}/content` | VM, owner, Admin | The payload with `Content-Length` and `ETag: "<sha256>"`. |
+| `GET /vms/{name}/backups/{id}/keys` | VM, owner, Admin | The keys JSON. |
+| `GET /vms/{name}/backups/status` | VM, owner, Admin | `{"enabled","lastAttemptAt","lastSuccessAt","lastFailure":{"at","trigger","reason","detail"}\|null,"failingSince","requestPending","count","totalBytes","nextDueAt"}`. `failingSince` is set by the first failure or skip after a success and cleared by a success; `nextDueAt` is null when scheduling is off. |
+| `POST /vms/{name}/backups/request` | owner, Admin | → `202 {"requestPending":true}`; `403 backups-disabled`. |
+| `GET` / `PUT /vms/{name}/backups/settings` | owner, Admin | `{"intervalHours":null\|0..720,"keep":null\|1..maxKeep}` → `{"intervalHours","keep","effective":{"enabled","intervalHours","keep"},"host":{"enabled","intervalHours","keep","maxKeep"}}`; `400 validation`. `null` is the host default; `intervalHours: 0` turns scheduled backups off for the VM (manual and pre-reinstall still work). A host interval of 0 turns them off for every VM. |
+
+`{id}` is 32 lowercase hex (route constraint `{id:regex(^[0-9a-f]{{32}}$)}`). Mutating routes are
+audited as `backup.create`, `backup.keys`, `backup.upload`, `backup.delete`, `backup.report`,
+`backup.restored`, `backup.request` and `backup.settings`, with ids, sizes and reason codes, never
+content or the guest's free-text detail.
+
+**Storage.** `Constructd:Backups:RootDir` (default `backups` next to the database; the installers set
+`/var/lib/constructd/backups` and `C:\ProgramData\Construct\service\backups` and harden it like the
+media directory; both updaters treat it as preserved data). Payloads live at
+`<root>/<first 16 hex of sha256(lowercase owner)>/<lowercase vm>/<id>.age`, `<id>.age.partial` while
+uploading; no directory on the way may be a link. Keys files and state live in the `backups` and
+`backup_vms` tables (migration 870). The upload is streamed, never buffered: the request lifts the
+server's body limit for itself, hashes and counts while writing, stops at `maxBytes` and re-checks
+the free space every 64 MiB, and holds a non-mutation maintenance handle (`backup-upload`) so an
+update drains it rather than cutting it off. Opening a session requires
+`free − max(estimatedBytes, last size of the VM) × 1.2 ≥ minFreeBytes` and, with a quota,
+`stored total + max(estimatedBytes, last size) ≤ maxBytesPerVm`; `maxBytes` is
+`min(free − minFreeBytes, maxBytesPerVm − stored total)`. A quota therefore has to leave room for one
+more backup than are kept, because old backups are removed only after a new one is complete.
+
+**Rotation** (`Core/Logic/BackupRotation.cs`, after every completed backup and hourly). Pinned
+backups (`pinnedUntil` in the future) stay and do not count. Of the rest the union of these stays:
+`keep` 1 the newest; 2 the newest and the newest created before the start of the current week; ≥ 3
+the `keep − 2` newest, the newest before the week start and the newest before the month start (weeks
+start Monday 00:00 UTC, months on the 1st 00:00 UTC). When slots coincide fewer than `keep` remain.
+A `pre-reinstall` backup is pinned for `pinDays` after its creation; `POST …/restored` unpins it.
+
+**Cleanup** (`BackupCleanupService`, hourly, skipped during maintenance): rotation for every pair;
+open sessions older than two hours that nothing is uploading into are deleted, as are partial files
+nothing is writing and payload files without a row; expired requests are cleared; a pair with no VM
+of that owner and name gets `vm_missing_since` (cleared when such a VM exists again), and once that is
+older than `retainDeletedDays` all its backups and its state are deleted.
+
+**Host config section `backups`** (`GET`/`PUT /host/config`):
+
+| Field | Default | Valid | Meaning |
+|---|---|---|---|
+| `enabled` | `true` | | Off refuses new sessions and requests (`403 backups-disabled`); stored backups stay readable. |
+| `intervalHours` | `24` | 0–720 | Default schedule; 0 means no scheduled backups on this host. |
+| `keep` | `4` | 1–`maxKeep` | Default number kept per VM. |
+| `maxKeep` | `10` | `keep`–50 | Upper bound for a VM's own `keep`. |
+| `pinDays` | `14` | 1–365 | How long a `pre-reinstall` backup is pinned. |
+| `retainDeletedDays` | `14` | 0–3650 | How long backups outlive their VM. |
+| `minFreeBytes` | `5368709120` (5 GiB) | ≥ 0 | Free space the host keeps on the backup file system. |
+| `maxBytesPerVm` | `null` | null or ≥ 64 MiB | Optional cap on the stored total of one VM. |
 
 ### Jobs, the event stream and the one-time secret
 
@@ -696,6 +779,7 @@ Bound from the `Constructd` section of `appsettings.json`, from environment vari
 | `HostAdmin:Source:MaxItemBytes` | `268435456` | Maximum declared size of one source ZIP (256 MiB). |
 | `HostAdmin:Source:MaxTotalBytes` | `2147483648` | Hard host-wide byte cap (2 GiB), at least MaxItemBytes; no eviction. |
 | `HostAdmin:Source:FakeReleaseDir` | empty | Fake mode only: `host-<commit>/manifest.json` plus its source ZIP. Ignored in production. |
+| `Backups:RootDir` | `<data>\backups` | Encrypted config backups of the VMs (*Config backups*); created on first use, hardened by the installers, preserved by the updaters. Must not overlap the ISO, media, source or updates roots. Fake mode without a value uses a temporary directory. |
 | `BootstrapAdmin` | – | Identity seeded as the first admin when the user store is empty. |
 | `BootstrapAdminMaxVms` | `10` | Quota for that admin. |
 | `BootstrapAdminToken` | – | Optional plaintext token for the bootstrap admin (hashed at startup). Only for hosts that cannot use Negotiate; remove it once a real token has been issued. |
