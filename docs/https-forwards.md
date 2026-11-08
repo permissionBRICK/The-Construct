@@ -61,7 +61,8 @@ the machine issuing the certificate uses to push it:
 set -euo pipefail
 t=$(mktemp -d); trap 'rm -rf "$t"' EXIT
 tar -xf - -C "$t" fullchain.pem privkey.pem
-exec /opt/constructd/constructd admin https import --cert "$t/fullchain.pem" --key "$t/privkey.pem"
+# Proxmox host install path; on a Windows host it is constructd.exe in the service folder.
+exec /opt/construct/host/Constructd.Api admin https import --cert "$t/fullchain.pem" --key "$t/privkey.pem"
 ```
 
 ### Who may use it
