@@ -76,7 +76,7 @@ the installer builds the service on the node and fetches a .NET SDK once.
 |---|---|---|
 | `constructd` (systemd unit `constructd.service`, root) | `/opt/construct/host` | The host service on `https://<node>:7462`: users, tokens, VM registry, jobs, idle policy, audit — the API in [service/README.md](../service/README.md) |
 | The Construct checkout | `/opt/construct/scripts` | `bin/`, `keys/`, `config/` … what guests are provisioned from and served through the source cache |
-| Data | `/var/lib/constructd` | `constructd.db` (SQLite), `iso/`, `media/`, `source/`, `logs/` (the service's own log, `constructd-yyyyMMdd.log`, 14 days; a failed `qm` command's error text lands here) |
+| Data | `/var/lib/constructd` | `constructd.db` (SQLite), `iso/`, `media/`, `source/`, `backups/` (the VMs' encrypted config backups, mode 0750, `Constructd:Backups:RootDir`; see [Config backups on the host](remote-host.md#6b-config-backups-on-the-host)), `logs/` (the service's own log, `constructd-yyyyMMdd.log`, 14 days; a failed `qm` command's error text lands here) |
 | TLS | `/etc/constructd/tls.pfx` (+ `tls.pass`), after a rename also `tls-previous.*` | A self-signed certificate for the public host; clients pin its fingerprint at enrolment. After a rename the old one stays in service as the previous certificate ([Renaming the host](#renaming-the-host)) |
 | The VM image | `<image-storage>:import/construct-ubuntu-<release>-xfs-amd64.qcow2` | The Ubuntu cloud image, its root file system converted to XFS; every VM is cloned from it |
 | Per-VM seeds | `<image-storage>:snippets/construct-<vm>-user.yaml` | cloud-init user data the service writes per VM and deletes with it |
@@ -170,7 +170,11 @@ the running binary still reports its compiled commit. A build from a checkout re
 Use `install-construct-host.sh --host-release latest` for the first supporting build or for
 repair. It accepts both older service-only archives and the new release layout. `--source`
 keeps explicit checkout scripts; otherwise a release package supplies its own scripts. Settings,
-certificate and service registration remain installer responsibilities. Self-update preserves them.
+certificate and service registration remain installer responsibilities. Self-update preserves them,
+and never touches the data directory, the media and source roots or the config backup directory
+(`Constructd:Backups:RootDir`). A node installed before config backups existed gets
+`/var/lib/constructd/backups` and the setting on its next installer run; until then the service
+uses `backups/` next to the database, which is the same directory.
 
 A node that self-updates from a build older than child VM support keeps its old media layout:
 no `construct-media` storage and `HostAdmin:Media:RootDir` at `/var/lib/constructd/media`. Run

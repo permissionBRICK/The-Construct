@@ -39,6 +39,7 @@ public static class HostAdminComposition
         else services.AddSingleton<IReleaseInfo, ReleaseInfo>();
         services.AddMediaPlatform(options);
         services.AddSourcePlatform(options);
+        services.AddConfigBackups(options);
         services.AddCapacityPlatform(options);
         services.AddChildVmPlatform(options);
         services.AddSingleton<Constructd.Api.Jobs.PrimaryVmJobs>();

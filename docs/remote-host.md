@@ -583,6 +583,60 @@ in Host Administration's Configuration tab. The RAM card shows pressure and the 
 saved VMs carry a "saved (memory pressure)" badge and a `vm.pressure-save` audit entry.
 If every VM is busy, the host stays under pressure and the panel reports insufficient idle VMs.
 
+## 6b. Config backups on the host
+
+A host that advertises `config-backups` in `/health` keeps encrypted backups of each remote
+VM's **config export**: agent sign-ins, memory and chat history, `~/.secrets`, T3 Code state,
+git and CLI credentials (what [`docs/backup-restore.md`](backup-restore.md) restores). The rest
+of the VM is disposable, and project profiles keep travelling through
+[config sync](config-sync.md). Disk images are not part of it.
+
+**The host never sees cleartext.** The VM packs, compresses and encrypts the export itself
+(`construct backup`, a fresh age key per backup) and wraps that key to the public key of every
+PC that enrolled with the VM. Only those PCs can unlock a backup; the VM can create backups
+unattended but cannot read old ones, and the host stores ciphertext plus the wrapped keys.
+A PC enrols when it provisions the VM. A VM with no enrolled PC skips its backups and reports
+`no-recipients` until one enrols.
+
+**When.** No service runs in the VM. The host answers the VM's activity heartbeat (§6) with
+`backupDue` when a backup is due, and the VM uploads it with its VM token. A scheduled backup is
+due once the interval (default 24 hours) has passed since the last successful one, waits for a
+heartbeat that reports the VM idle (at most six hours), and is retried no sooner than
+`min(interval, 6 h)` after a failed attempt. **Back up now** in the panel's Backups module asks
+for one at the next heartbeat, busy or not; the request lapses after an hour without a backup
+starting. A reinstall from the client backs the VM up to the host first (`pre-reinstall`) and
+restores that backup into the new VM, so the backup never passes through the PC. A saved or
+stopped VM sends no heartbeat and gets no backup, which is fine: it has not changed.
+
+**How many.** Per VM four backups by default, spread over time: the newest ones, the newest
+taken before this week began (Monday 00:00 UTC) and the newest taken before this month began.
+Old backups are removed only after a new one is complete. A `pre-reinstall` backup is pinned
+for 14 days, or until a restore from it succeeded, so the reinstalled VM's first scheduled
+backups cannot rotate it out.
+
+**Per VM.** The owner can set the interval (0 turns scheduled backups off for that VM; manual
+and pre-reinstall backups still work) and the number kept, up to the host's maximum, in the
+Backups module ([control panel](control-panel.md)). Backups belong to the owner and the VM
+name: a reinstalled VM of the same name sees its predecessor's backups, another user who later
+takes the name sees none. After the VM is deleted its backups stay for 14 days, then they go.
+
+**Space.** Before a backup the VM checks that staging it leaves at least
+`max(2 GiB, 5 % of its disk)` free, and the host checks that storing it leaves its own reserve
+(5 GiB by default) free, re-checking while the upload runs. A backup that does not fit is
+skipped with a reason rather than filling either disk, and anything a failed run wrote is
+removed. The panel shows the last backup and a warning while backups fail, and the Companion
+raises one Windows notification per failure streak.
+
+**Saving to the PC.** "Save to this PC" and "Restore from a backup on this PC" are manual
+actions in the same module; the file is the same encrypted container, readable only by an
+enrolled PC. The backup key of a PC can be exported (protected by a passphrase) to unlock
+backups from another PC.
+
+The admin sets the host defaults in Host Administration's Configuration tab (section
+`backups`: on/off, interval, number kept and its maximum, pin days, days kept after a VM is
+deleted, the free-space reserve and an optional per-VM size limit). The routes and settings are
+listed in [`service/README.md`](../service/README.md#config-backups).
+
 ---
 
 ## 7. Troubleshooting
@@ -594,6 +648,7 @@ If every VM is busy, the host stays under pressure and the panel reports insuffi
 | `Certificate fingerprint mismatch` | the host's certificate changed. Confirm with the admin, then delete `%LOCALAPPDATA%\The-Construct\remote\<hostslug>.pin` and re-enrol. A host that was only *renamed* keeps its old certificate on the old URL until the admin retires it ([Renaming the host](proxmox-host.md#renaming-the-host)); after that, enrol the new URL instead. |
 | `409` from `GET /vms/{name}/endpoint` | the VM exists but has no SSH forward yet — it is still being created. |
 | `403` on a VM that exists | it belongs to somebody else. Ownership is per user; an unknown VM answers `404`. |
+| The Backups module warns that backups fail | the status names the reason: `no-recipients` (no PC enrolled with the VM: reprovision it, or run the enrol action, from a current client), `vm-disk-space` (the VM's disk is too full to stage the export), `host-refused` with `host-disk-space` / `backup-quota` (the host is below its reserve, or the VM's size limit is reached: an admin frees space or raises the limit), `export-failed` / `upload-failed` (see the VM's journal: `journalctl -t construct-backup`). |
 | The VM was created but provisioning failed | the instance is already in the registry (§3, step 8). Run `Auto-Install.ps1 -InstanceName <name>` and pick **Reprovision** — no VM is created twice; the service may populate its source cache. |
 | `Installing browser console gateway` fails with `TLS handshake timeout` / `failed to resolve reference "docker.io/guacamole/guacd…"` | Docker Hub is not reachable from the VM's network (a company network may block it outright — the same PC's browser cannot open docker.io either). The step is optional: provisioning finishes without the browser console and lists the step in its summary. The guest pulls through `mirror.gcr.io` by default (`DOCKER_REGISTRY_MIRRORS`, [provisioning](provisioning.md)); if that is blocked as well, point the setting at a reachable mirror and reprovision, or re-run `sudo bash /opt/construct/repo/console-viewer/install.sh` once a registry answers. |
 | `The Hyper-V driver failed during 'create-vm' …` (or any driver operation) with no reason | the job's error names only the operation and the VM, on purpose (it is persisted, audited and returned by the API). The reason is in the job's progress lines right above it (`powershell: …` on Hyper-V, `qm: …` on Proxmox) and in the service's own log on the host: `C:\ProgramData\Construct\service\logs\constructd-<yyyyMMdd>.log` (Hyper-V) or `/var/lib/constructd/logs/` (Proxmox), one file per day, 14 kept. A leftover VM or `.vhdx` of the same name and a missing catalog ISO are the usual causes of a failed create. |
@@ -909,8 +964,10 @@ registry — and so are several hosts.
   spool and the service API behind them, and the activity heartbeat.
 * [`docs/https-forwards.md`](https-forwards.md) — HTTPS forwards: links with the host's own
   trusted certificate, the shared HTTPS port, start-on-request.
-* [`docs/control-panel.md`](control-panel.md) — the instance picker, the Forwards card and
-  the idle-policy card.
+* [`docs/control-panel.md`](control-panel.md) — the instance picker, the Forwards card,
+  the idle-policy card and the Backups module.
+* [`docs/backup-restore.md`](backup-restore.md) — host backups, backup files on the PC and the
+  local-VM export.
 * [`docs/drivers.md`](drivers.md) — the driver contract and the `hyperv-remote` section.
 * [`service/README.md`](../service/README.md) — the API, authentication, jobs, config,
   the admin CLI and `Install-ConstructHost.ps1`.
