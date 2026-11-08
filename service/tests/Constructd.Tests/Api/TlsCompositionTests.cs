@@ -77,8 +77,10 @@ public class TlsCompositionTests : IDisposable
     [Fact]
     public async Task After_a_rename_only_the_new_name_gets_the_new_certificate()
     {
-        var previous = Pfx("tls-previous.pfx", "127.0.0.1", "node1", "127.0.0.1");
-        var current = Pfx("tls.pfx", "construct.example.test", "node1", "construct.example.test");
+        // The current certificate also lists 127.0.0.1 and the previous one does not: had the IP target
+        // been sent as SNI, the current certificate would be chosen, so the first handshake proves no SNI.
+        var previous = Pfx("tls-previous.pfx", "192.0.2.10", "node1", "192.0.2.10");
+        var current = Pfx("tls.pfx", "construct.example.test", "node1", "construct.example.test", "127.0.0.1");
         var options = new ConstructdOptions
         {
             CertPath = current,

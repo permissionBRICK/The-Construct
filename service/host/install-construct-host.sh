@@ -381,32 +381,51 @@ fi
 # ── 4. TLS certificate (clients pin its fingerprint at enrolment) ─────────────
 # The current certificate names the public host: guests check the service with curl --cacert, which
 # checks the name too. Clients pin the fingerprint of the certificate they enrolled with. So on a
-# rename (the certificate does not name the public host) the old certificate is not thrown away: it
-# moves to tls-previous.* and the service keeps presenting it to address-based URLs (no SNI) and the
-# names it lists, while a new certificate names the new host (Constructd.Core.Logic.
+# rename to a DNS name (the certificate does not name the public host) the old certificate is not
+# thrown away: it moves to tls-previous.* and the service keeps presenting it to address-based URLs
+# (no SNI) and the names it lists, while a new certificate names the new host (Constructd.Core.Logic.
 # TlsCertificateSelection). Clients and guests move to the new URL when they like;
-# --drop-previous-certificate retires the old one once nobody uses it.
+# --drop-previous-certificate retires the old one once nobody uses it. A rename to an ADDRESS cannot
+# work that way (clients send no SNI for an address, so the handshake cannot tell the two URLs apart):
+# that reissues as before, and clients re-enrol. The step runs late, right before the settings that
+# name the files (section 5b), so it can check the service that will actually serve them.
 cert_names_host() {  # <crt> <host>: the certificate's SAN lists <host> exactly (DNS or IP entry)
   local host="${2,,}"
   openssl x509 -in "$1" -noout -ext subjectAltName 2>/dev/null | tail -n +2 | tr ',' '\n' \
     | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]' \
     | grep -qxF -e "dns:${host}" -e "ip address:${host}" -e "ip:${host}"
 }
+service_supports_previous_cert() {  # the service in HOST_DIR reads Constructd:PreviousCertPath
+  grep -qa 'PreviousCertPath' "${HOST_DIR}/Constructd.Core.dll" 2>/dev/null
+}
 ensure_tls_certificate() {
   PFX="${ETC_DIR}/tls.pfx"; PFX_PASS_FILE="${ETC_DIR}/tls.pass"; CRT="${ETC_DIR}/tls.crt"
   PREV_PFX="${ETC_DIR}/tls-previous.pfx"; PREV_PASS_FILE="${ETC_DIR}/tls-previous.pass"; PREV_CRT="${ETC_DIR}/tls-previous.crt"
+  local old_service="the service in ${HOST_DIR} predates the previous-certificate setting, so it would present only the new certificate and every client enrolled on the old URL would fail; refresh it with --host-release latest"
   if [[ "${DROP_PREVIOUS_CERT}" -eq 1 && ( -f "${PREV_PFX}" || -f "${PREV_PASS_FILE}" || -f "${PREV_CRT}" ) ]]; then
     rm -f "${PREV_PFX}" "${PREV_PASS_FILE}" "${PREV_CRT}"
     note "dropped the previous certificate (clients still pinned to it must re-enrol)"
   fi
   if [[ -f "${CRT}" ]] && ! cert_names_host "${CRT}" "${PUBLIC_HOST}"; then
-    if [[ -f "${PFX}" && -f "${PFX_PASS_FILE}" ]]; then
-      [[ ! -f "${PREV_CRT}" ]] || die "the certificate does not name ${PUBLIC_HOST}, and the one kept from an earlier rename is still in service as the previous certificate. Once every client and guest uses the current name, re-run with --drop-previous-certificate (without renaming), then rename."
-      mv -f "${PFX}" "${PREV_PFX}"; mv -f "${PFX_PASS_FILE}" "${PREV_PASS_FILE}"; mv -f "${CRT}" "${PREV_CRT}"
-      note "the existing certificate does not name ${PUBLIC_HOST}: it stays in service as the previous certificate, for the clients that pinned it (address-based URLs and the names it lists)"
-    else
+    if [[ -f "${PREV_CRT}" ]] && cert_names_host "${PREV_CRT}" "${PUBLIC_HOST}"; then
+      # Back to the host the previous certificate names (an undone or mistyped rename): it is the
+      # current one again, and the interim certificate goes.
+      [[ -f "${PREV_PFX}" && -f "${PREV_PASS_FILE}" ]] || die "${PREV_CRT} is kept without its ${PREV_PFX} / ${PREV_PASS_FILE}; restore them first"
+      rm -f "${PFX}" "${PFX_PASS_FILE}" "${CRT}"
+      mv -f "${PREV_PFX}" "${PFX}"; mv -f "${PREV_PASS_FILE}" "${PFX_PASS_FILE}"; mv -f "${PREV_CRT}" "${CRT}"
+      note "back to ${PUBLIC_HOST}: the previous certificate is the current one again (clients enrolled on the interim name must re-enrol)"
+    elif [[ -f "${PREV_CRT}" ]]; then
+      die "the certificate does not name ${PUBLIC_HOST}, and the certificate from before the earlier rename is still kept as the previous one: the one every client enrolled before that rename pinned. Finish that rename first: once every client and guest uses the current name, re-run with --drop-previous-certificate and the current --public-host, then rename. If instead the current certificate was issued for a mistaken name nobody uses, delete ${CRT}, ${PFX} and ${PFX_PASS_FILE} and re-run; the previous certificate stays."
+    elif [[ ! -f "${PFX}" || ! -f "${PFX_PASS_FILE}" ]]; then
       rm -f "${PFX}" "${PFX_PASS_FILE}" "${CRT}"
       note "the existing certificate does not name ${PUBLIC_HOST} and is incomplete; issuing a new one (clients must re-confirm the fingerprint)"
+    elif [[ "${PUBLIC_HOST}" =~ ^[0-9.]+$ || "${PUBLIC_HOST}" == *:* ]]; then
+      rm -f "${PFX}" "${PFX_PASS_FILE}" "${CRT}"
+      note "the existing certificate does not name the address ${PUBLIC_HOST}; issuing a new one (clients send no SNI for an address, so the old one cannot stay beside it: clients must re-enrol)"
+    else
+      service_supports_previous_cert || die "renaming to ${PUBLIC_HOST} keeps the old certificate in service, but ${old_service}. Nothing was changed."
+      mv -f "${PFX}" "${PREV_PFX}"; mv -f "${PFX_PASS_FILE}" "${PREV_PASS_FILE}"; mv -f "${CRT}" "${PREV_CRT}"
+      note "the existing certificate does not name ${PUBLIC_HOST}: it stays in service as the previous certificate, for the clients that pinned it (address-based URLs and the names it lists)"
     fi
   fi
   if [[ ! -f "${PFX}" || ! -f "${PFX_PASS_FILE}" || ! -f "${CRT}" ]]; then
@@ -428,12 +447,11 @@ ensure_tls_certificate() {
   PREVIOUS_FINGERPRINT=""
   if [[ -f "${PREV_CRT}" ]]; then
     [[ -f "${PREV_PFX}" && -f "${PREV_PASS_FILE}" ]] || die "${PREV_CRT} is kept without its ${PREV_PFX} / ${PREV_PASS_FILE}; restore them or re-run with --drop-previous-certificate"
+    service_supports_previous_cert || die "a previous certificate is kept in ${ETC_DIR}, but ${old_service} (or retire it with --drop-previous-certificate)"
     PREVIOUS_FINGERPRINT="$(openssl x509 -in "${PREV_CRT}" -noout -fingerprint -sha256 | sed 's/^.*=//')"
     note "previous certificate still in service, SHA-256 ${PREVIOUS_FINGERPRINT}"
   fi
 }
-say "TLS certificate"
-ensure_tls_certificate
 
 # ── 4b. Kerberos (Windows sign-in) ────────────────────────────────────────────
 # A keytab for HTTP/<public host> lets the service accept Negotiate from domain PCs like a
@@ -550,6 +568,12 @@ try:
 finally:
     if os.path.exists(temp): os.unlink(temp)
 LEDGER_PY
+
+# ── 5b. TLS certificate (section 4) ──────────────────────────────────────────
+# Here rather than in section 4: the certificate files change right before the settings that name
+# them, and the service checked for previous-certificate support is the one now in ${HOST_DIR}.
+say "TLS certificate"
+ensure_tls_certificate
 
 # ── 6. appsettings.Production.json ───────────────────────────────────────────
 say "Writing ${HOST_DIR}/appsettings.Production.json"

@@ -57,6 +57,14 @@ public class TlsCertificateSelectionTests : IDisposable
     }
 
     [Fact]
+    public void An_address_entry_names_that_address()
+    {
+        // TlsCompositionTests relies on this: an IP sent as SNI would select a certificate listing it.
+        Assert.True(TlsCertificateSelection.Names(previous, "192.0.2.10"));
+        Assert.False(TlsCertificateSelection.Names(current, "192.0.2.10"));
+    }
+
+    [Fact]
     public void The_common_name_alone_does_not_name_a_host()
     {
         using var cnOnly = TestCertificates.Create("cn-only.example.test", "other.example.test");

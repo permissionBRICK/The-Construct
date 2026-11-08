@@ -182,8 +182,10 @@ media items keep pointing at files the child driver refuses (`validation (mediaP
 ### Renaming the host
 
 The public host is what clients dial and what the certificate names. To move a host from an
-address to a DNS name (or to another name), re-run the installer with the new one, and with the
-options you installed with, since a re-run rewrites the settings:
+address to a DNS name (or to another name), first make sure the node runs a service that knows
+the previous-certificate setting (update it from the panel, or add `--host-release latest`; the
+installer refuses the rename otherwise and changes nothing). Then re-run the installer with the new
+name, and with the options you installed with, since a re-run rewrites the settings:
 
 ```sh
 bash service/host/install-construct-host.sh --public-host construct.example.net --storage <id> --bridge <name> --admin <name>
@@ -195,7 +197,9 @@ with `curl --cacert`, which also checks the name. So the old certificate is not 
 - It moves to `/etc/constructd/tls-previous.*` and stays in service, as `Constructd:PreviousCertPath`.
   The service presents it to every handshake without SNI (address-based URLs such as
   `https://192.0.2.10:7462`; clients never send an address as SNI) and to the names it lists.
-  Every PC and VM enrolled on the old URL keeps working, unchanged.
+  Every PC and VM enrolled on the old URL keeps its pinned certificate. The host does advertise
+  SSH endpoints and forward URLs under the new name from now on, so those PCs must be able to
+  resolve it.
 - A new certificate names the new host. Only a client that dials the new name gets it. The
   installer prints both fingerprints.
 - Each user moves when convenient: add the host again under the new URL (the new fingerprint is
@@ -206,9 +210,15 @@ with `curl --cacert`, which also checks the name. So the old certificate is not 
   `--drop-previous-certificate` (without changing `--public-host`). A client still on the old URL
   then fails with a fingerprint mismatch, by design, and must be re-enrolled.
 
-A second rename is refused while a previous certificate is still kept: retire it first. The
-`PreviousCert*` settings work on a Windows host as well (`PreviousCertThumbprint` for a store
-certificate), but `Install-ConstructHost.ps1` does not set them yet.
+A second rename is refused while a previous certificate is still kept: retire it first. Renaming
+back to the host the previous certificate names (an undone or mistyped rename) swaps it back in as
+the current certificate. A rename to an **address** cannot keep the old certificate beside the new
+one, because the handshake carries no name to tell the two URLs apart: it issues a new certificate
+as before, and clients re-enrol.
+
+On a Windows host the service reads `PreviousCertThumbprint` (a store certificate) as well; the
+updater's health pin needs the thumbprint there, as it does for `CertThumbprint`.
+`Install-ConstructHost.ps1` does not set it yet.
 
 ## 4. How a VM comes to be
 

@@ -29,7 +29,7 @@ public static class TlsComposition
             return;
         }
 
-        // Kestrel prefers the selector over ServerCertificate; it receives the SNI name, or null without SNI.
+        // Kestrel prefers the selector over ServerCertificate; it receives the SNI name, or null/empty without SNI.
         https.ServerCertificateSelector = (_, serverName) => TlsCertificateSelection.Choose(serverName, current, previous);
     }
 
