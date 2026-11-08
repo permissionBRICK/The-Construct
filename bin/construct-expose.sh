@@ -102,11 +102,12 @@ USAGE
 # the help is concerned, so nobody tries a link the host cannot give.
 https_usage() {
   [[ -n "${SERVICE_URL}" && -r "${VM_TOKEN_FILE}" ]] || return 0
-  local API_TIMEOUT=5 main_address
+  local API_TIMEOUT=5 main_address named_address
   api_call GET "/api/v1/vms/${INSTANCE_NAME}/https"
   api_ok || return 0
   [[ "$(json_field "${API_BODY}" available)" == "true" ]] || return 0
   main_address="$(json_field "${API_BODY}" mainAddress)"
+  named_address="$(json_field "${API_BODY}" namedAddress)"
   cat <<'USAGE'
 
 HTTPS (available on this VM's host):
@@ -117,11 +118,21 @@ HTTPS (available on this VM's host):
       --upstream-tls    With --https: the port itself already speaks TLS
                         (detected when not given).
 USAGE
+  if [[ -n "${named_address}" ]]; then
+    printf '      --name <name>     With --https: the forward'"'"'s own address, %s
+' "${named_address}"
+    printf '                        (default name: the port). Each forward gets its own
+                        address, so web apps never share cookies or sessions.
+'
+  fi
   if [[ -n "${main_address}" ]]; then
     printf '      --main            With --https: the VM'"'"'s main web UI, served without a
 '
-    printf '                        port at %s (one per VM; the newest wins).
+    printf '                        port at %s. One per VM: refused while
 ' "${main_address}"
+    printf '                        another one is open (provisioning makes T3 Code main).
+      --replace-main    With --main: take the main address over anyway.
+'
   fi
 }
 
@@ -627,6 +638,11 @@ api_fail() {
     printf '  Without --https the port opens as a plain forward (construct expose --help).\n' >&2
     exit "${EXIT_REFUSED}"
   fi
+  if [[ "${API_STATUS}" == "409" && ( "${API_BODY}" == *'"https-name-taken"'* || "${API_BODY}" == *'"main-taken"'* ) ]]; then
+    printf 'construct expose: the host service refused to %s.\n' "${what}" >&2
+    if [[ -n "${detail}" ]]; then printf '  %s\n' "${detail}" >&2; fi
+    exit "${EXIT_REFUSED}"
+  fi
   case "${API_STATUS}" in
     403)
       printf 'construct expose: the host service refused to %s (403).\n' "${what}" >&2
@@ -691,6 +707,7 @@ remote_find_by_port() {
     is_https=false
     [[ "$(json_field "${object}" https)" == "true" ]] && is_https=true
     [[ "${is_https}" == "${HTTPS}" ]] || continue
+    if [[ -n "${NAME}" && "$(json_field "${object}" name)" != "${NAME}" ]]; then continue; fi
     FOUND_FORWARD="${object}"
     return 0
   done < <(json_objects "${API_BODY}")
@@ -703,6 +720,8 @@ https_fields() {
   printf ',"https":true'
   if [[ "${MAIN}" == "true" ]]; then printf ',"main":true'; fi
   if [[ "${UPSTREAM_TLS}" == "true" ]]; then printf ',"upstreamTls":true'; fi
+  if [[ -n "${NAME}" ]]; then printf ',"name":"%s"' "$(json_escape "${NAME}")"; fi
+  if [[ "${REPLACE_MAIN}" == "true" ]]; then printf ',"replaceMain":true'; fi
 }
 
 # GET-OR-CREATE. Provisioning runs on every reprovision and must not leave a second
@@ -715,7 +734,7 @@ remote_get_or_create() {
   api_call POST "$(forwards_path)" \
     "{\"vmPort\":${port},\"label\":\"$(json_escape "${label}")\",\"target\":\"${target}\"$(https_fields)}"
   if [[ "${HTTPS_IF_AVAILABLE}" == "true" && "${API_STATUS}" =~ ^40[39]$ && "${API_BODY}" == *'"https-unavailable"'* ]]; then
-    HTTPS=false; MAIN=false; UPSTREAM_TLS=false; HTTPS_IF_AVAILABLE=false
+    HTTPS=false; MAIN=false; UPSTREAM_TLS=false; HTTPS_IF_AVAILABLE=false; NAME=""; REPLACE_MAIN=false
     remote_get_or_create "${port}" "${label}" "${target}"
     return 0
   fi
@@ -843,6 +862,8 @@ HTTPS=false
 HTTPS_IF_AVAILABLE=false
 MAIN=false
 UPSTREAM_TLS=false
+NAME=""
+REPLACE_MAIN=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -857,6 +878,8 @@ while [[ $# -gt 0 ]]; do
     --https-if-available) HTTPS=true; HTTPS_IF_AVAILABLE=true ;;
     --main) MAIN=true ;;
     --upstream-tls) UPSTREAM_TLS=true ;;
+    --name) shift; [[ $# -gt 0 ]] || die "--name requires a value"; NAME="${1,,}" ;;
+    --replace-main) REPLACE_MAIN=true ;;
     --) shift; if [[ $# -gt 0 ]]; then port="$1"; shift; fi; break ;;
     -*) die "unknown option: $1 (try: construct expose --help)" ;;
     *)
@@ -871,8 +894,12 @@ if [[ "${HTTPS}" == "true" ]]; then
   # The host terminates the TLS, so an HTTPS forward is a host forward.
   [[ -z "${target}" || "${target}" == "host" ]] || die "--https is served by the host: it cannot be combined with --to ${target}"
   target="host"
-elif [[ "${MAIN}" == "true" || "${UPSTREAM_TLS}" == "true" ]]; then
-  die "--main and --upstream-tls need --https"
+elif [[ "${MAIN}" == "true" || "${UPSTREAM_TLS}" == "true" || -n "${NAME}" || "${REPLACE_MAIN}" == "true" ]]; then
+  die "--main, --upstream-tls, --name and --replace-main need --https"
+fi
+[[ "${REPLACE_MAIN}" != "true" || "${MAIN}" == "true" ]] || die "--replace-main needs --main"
+if [[ -n "${NAME}" && ! "${NAME}" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]; then
+  die "--name '${NAME}': use lowercase letters, digits and hyphens, starting and ending with a letter or digit"
 fi
 target="${target:-${DEFAULT_TARGET}}"
 case "${target}" in

@@ -880,9 +880,9 @@ setup_host_forwards() {
     # when the host can publish it with its own trusted certificate
     # (docs/https-forwards.md) it does; otherwise this is a plain host forward.
     if [[ "${T3CODE_HTTPS}" == "false" ]]; then
-      wanted+=("T3|T3 Code web GUI|${T3CODE_PORT}|--https-if-available --main")
+      wanted+=("T3|T3 Code web GUI|${T3CODE_PORT}|--https-if-available --main --replace-main")
     else
-      wanted+=("T3|T3 Code web GUI (https)|${T3CODE_HTTPS_PORT}|--https-if-available --main --upstream-tls")
+      wanted+=("T3|T3 Code web GUI (https)|${T3CODE_HTTPS_PORT}|--https-if-available --main --replace-main --upstream-tls")
     fi
   fi
 

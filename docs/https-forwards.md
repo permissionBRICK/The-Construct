@@ -83,9 +83,37 @@ the name the browser asks for:
 
 | Name | Served |
 |---|---|
-| a VM's own public name (needs `PublicHostPattern`) | that VM's **main** HTTPS forward: `https://<vm>.vms.example/` |
 | the host of `vault.webUrl` | the key vault's phone pages and the routes they call, nothing else |
+| a VM's own public name (needs `PublicHostPattern`) | that VM's **main** HTTPS forward: `https://<vm>.vms.example/` |
+| `<vm>-<name>` under the pattern | that HTTPS forward, by its name: `https://work-vm-app.vms.example/` |
 | anything else | `404` |
+
+The rows are checked in that order, and the first match wins. A VM's own name stays reserved even
+while the VM has no main forward, and a forward never gets the vault's name or a VM's.
+
+#### Forward names
+
+Every HTTPS forward has a name and is served as `<vm>-<name>` on the shared port. The name is one
+DNS label: lowercase letters, digits and hyphens, starting and ending with a letter or digit. It
+defaults to the VM port (`work-vm-5173`), which stays the same when a forward is recreated, so
+links and bookmarks keep working. `--name app` gives `work-vm-app`.
+
+* **Why one name per forward:** browsers keep cookies and sessions per host name and ignore the
+  port. Under one name, every web app of a VM, its main UI included, would see the others'
+  cookies, and two instances of one app would log each other out. With a name each, they are
+  separate sites.
+* **One label, so no new certificate:** `work-vm-app.vms.example` is one level under the domain,
+  like `work-vm.vms.example`, so the wildcard certificate (`*.vms.example`) and the wildcard DNS
+  record that cover the VM's own name cover it too.
+* **Unique on the host:** VM names may contain hyphens, so `work` + `vm-app` and `work-vm` + `app`
+  are the same name. A create request whose name is taken by another HTTPS forward, by a VM's own
+  name or by the vault's is refused with code `https-name-taken` (409, exit 7 from the CLI) and
+  says who holds it. A VM created later that happens to have such a name wins; the forward keeps
+  its port address.
+* **At most 63 characters** for `<vm>-<name>`, the length of one label. A longer one is refused.
+* **Fallbacks:** without a shared port or a pattern, or when the certificate does not cover the
+  name, the forward is advertised with its own port, as before. That port address always works
+  (`portUrl` when `url` is the named one).
 
 The vault pages are relayed to an internal loopback endpoint of the service that answers only
 `/vault/…`, `/api/v1/vault/approvals…`, `/api/v1/vault/files…` and `/api/v1/vault/device`, so the
@@ -103,9 +131,13 @@ not up yet just gets the waiting page.
 ## 2. Guest: publish a port
 
 ```bash
-construct expose 5173 --https            # prints https://work-vm.vms.example:2310/
-construct expose 5178 --https --main     # prints https://work-vm.vms.example/ (shared port)
+construct expose 5173 --https              # prints https://work-vm-5173.vms.example/ (shared port)
+construct expose 5173 --https --name app   # prints https://work-vm-app.vms.example/
+construct expose 5178 --https --main       # prints https://work-vm.vms.example/
 ```
+
+Without a shared port, or without `PublicHostPattern`, each prints its forward's own port address
+instead, `https://work-vm.vms.example:2310/`.
 
 `construct expose --help` shows these options only when the host would really serve them for this
 VM: `GET /api/v1/vms/{name}/https` answers `available: true` only when the host has a certificate
@@ -115,22 +147,31 @@ has the permission. Otherwise it gives a `reason` (`no-certificate`, `certificat
 is refused with code `https-unavailable` (exit 7 from the CLI).
 
 * `--https` implies `--to host`. The forward gets its own public port from the app range, like
-  any host forward, and its link is `https://<vm public name>:<port>/`.
-* `--main` marks the VM's main web UI. With a shared port and a pattern it is also served
-  without a port, and that is the link printed (the forward's own port keeps working, `portUrl`).
-  The newest main forward of a VM wins.
+  any host forward, and its link is its named address on the shared port, or
+  `https://<vm public name>:<port>/` without one.
+* `--name <name>` names it ([Forward names](#forward-names)); the default is the VM port.
+* `--main` marks the VM's main web UI, served under the VM's own name. One per VM: a second
+  one is refused with code `main-taken` (409, exit 7) while another main forward is open, naming
+  that one. Provisioning makes T3 Code the main forward.
+* `--replace-main` (with `--main`) takes the address over anyway. The newest main forward is
+  served; the replaced one keeps its own name and gets the VM's name back when the newer one is
+  closed.
 * `--upstream-tls` says the VM port itself speaks TLS (the host does not verify the guest's
   certificate). Without it the host tries a TLS handshake first and falls back to plain HTTP,
   remembering the answer for a while.
-* `--reuse` keeps HTTPS and plain forwards of the same port apart.
+* `--reuse` keeps HTTPS and plain forwards of the same port apart; with `--name` it reuses only
+  the forward of that name.
 
-The API fields are `https`, `main` and `upstreamTls` on `POST /vms/{name}/forwards`; a forward in a
-list carries `https: true`, `main`, `upstreamTls` and, for a main forward, `portUrl` next to `url`.
+The API fields are `https`, `main`, `upstreamTls`, `name` and `replaceMain` on
+`POST /vms/{name}/forwards`. A forward in a list carries `https: true`, `main`, `upstreamTls`, its
+`name`, and `portUrl` next to `url` when `url` is a shared-port address.
+`GET /vms/{name}/https` gives `mainAddress` and `namedAddress`
+(`https://work-vm-<name>.vms.example/`) when those exist.
 Only primary VMs can have HTTPS forwards.
 
 ### T3 Code
 
-Provisioning asks for T3's forward with `--https-if-available --main` (plus `--upstream-tls` when
+Provisioning asks for T3's forward with `--https-if-available --main --replace-main` (plus `--upstream-tls` when
 T3's own HTTPS proxy is on). That is `--https` when it is available and a plain host forward when
 it is not, so a host without a certificate behaves exactly as before. With an HTTPS forward the
 advertised T3 origin (`T3CODE_PUBLIC_BASE_URL`, pairing links) is the host's https address. A VM

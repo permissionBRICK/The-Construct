@@ -403,6 +403,20 @@ public sealed class SqlitePersistenceTests : IDisposable
     }
 
     [Fact]
+    public async Task An_https_forwards_name_survives_a_restart_and_none_means_the_default()
+    {
+        var store = new SqliteForwardStore(Open());
+        await store.AddAsync(new PortForward("named", "work-vm", 5173, 2310, ForwardTarget.Host, "app", Now,
+            Https: true, HttpsName: "app"), CancellationToken.None);
+        await store.AddAsync(new PortForward("default", "work-vm", 5174, 2311, ForwardTarget.Host, "other", Now,
+            Https: true), CancellationToken.None);
+
+        var reread = await new SqliteForwardStore(Open()).ListAsync("work-vm", CancellationToken.None);
+        Assert.Equal("app", reread.Single(f => f.Id == "named").HttpsName);
+        Assert.Null(reread.Single(f => f.Id == "default").HttpsName);
+    }
+
+    [Fact]
     public async Task Acking_an_unknown_forward_reports_it_rather_than_inventing_a_row()
     {
         var store = new SqliteForwardStore(Open());

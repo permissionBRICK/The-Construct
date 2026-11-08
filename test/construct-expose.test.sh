@@ -679,5 +679,49 @@ printf '[{"id":"fwd-h","vmPort":5178,"target":"host","https":true,"url":"https:/
 reuse_plain="$(remote 5178 --to host --reuse 2>&1)"
 ok "plain --reuse: never picks the HTTPS forward" test "${reuse_plain}" = "http://buildbox.example.local:2311/"
 
+# Forward names and the main guard (docs/https-forwards.md, "Forward names").
+reset_stub
+printf '200' >"${stub_dir}/code"
+printf '{"available":true,"reason":null,"message":null,"mainAddress":"https://work-vm.vms.example/","namedAddress":"https://work-vm-<name>.vms.example/"}' >"${stub_dir}/response"
+help_out="$(remote --help 2>&1)"
+ok "names: the help shows --name with the address it gives" grep -q 'https://work-vm-<name>.vms.example/' <<<"${help_out}"
+ok "names: ...and --replace-main" grep -q -- '--replace-main' <<<"${help_out}"
+
+reset_stub
+printf '201' >"${stub_dir}/code"
+printf '{"id":"fwd-n","vmName":"work-vm","vmPort":5173,"publicPort":2312,"target":"host","label":"app","url":"https://work-vm-app.vms.example/","https":true,"name":"app","portUrl":"https://work-vm.vms.example:2312/"}' >"${stub_dir}/response"
+named_out="$(remote 5173 --https --name App --label app 2>&1)"
+ok "names: prints the named link" test "${named_out}" = "https://work-vm-app.vms.example/"
+ok "names: the body carries the lowercased name" grep -q '"name":"app"' "${stub_dir}/bodies"
+
+reset_stub
+printf '201' >"${stub_dir}/code"
+printf '{"id":"fwd-m","vmName":"work-vm","vmPort":5174,"publicPort":2313,"target":"host","label":"web","url":"https://work-vm.vms.example/","https":true,"main":true,"name":"5174"}' >"${stub_dir}/response"
+remote 5174 --https --main --replace-main >/dev/null 2>&1
+ok "names: --replace-main asks for it" sh -c "grep -q '\"main\":true' '${stub_dir}/bodies' && grep -q '\"replaceMain\":true' '${stub_dir}/bodies'"
+
+ok "names: --name needs --https" sh -c "! STUB_DIR='${stub_dir}' PATH='${stubs}:${PATH}' CONFIG_FILE='${remote_cfg}' CONSTRUCT_VM_TOKEN_FILE='${token_file}' bash '${CLI}' expose 3000 --name app >/dev/null 2>&1"
+ok "names: --replace-main needs --main" sh -c "! STUB_DIR='${stub_dir}' PATH='${stubs}:${PATH}' CONFIG_FILE='${remote_cfg}' CONSTRUCT_VM_TOKEN_FILE='${token_file}' bash '${CLI}' expose 3000 --https --replace-main >/dev/null 2>&1"
+ok "names: a name is a DNS label" sh -c "! STUB_DIR='${stub_dir}' PATH='${stubs}:${PATH}' CONFIG_FILE='${remote_cfg}' CONSTRUCT_VM_TOKEN_FILE='${token_file}' bash '${CLI}' expose 3000 --https --name 'my_app' >/dev/null 2>&1"
+
+reset_stub
+printf '409' >"${stub_dir}/code"
+printf '{"code":"https-name-taken","detail":"This VM already has an HTTPS forward named '"'"'app'"'"'."}' >"${stub_dir}/response"
+taken_out="$(remote 5175 --https --name app 2>&1)"; taken_code=$?
+ok "names: a taken name is a refusal (exit 7)" test "${taken_code}" = 7
+ok "names: ...that says why" grep -q "already has an HTTPS forward named" <<<"${taken_out}"
+reset_stub
+printf '409' >"${stub_dir}/code"
+printf '{"code":"main-taken","detail":"'"'"'T3'"'"' (VM port 5178) is this VM'"'"'s main HTTPS forward."}' >"${stub_dir}/response"
+main_out="$(remote 5175 --https --main 2>&1)"; main_code=$?
+ok "names: a held main address is a refusal (exit 7)" test "${main_code}:$(grep -c 'main HTTPS forward' <<<"${main_out}")" = "7:1"
+
+# --reuse with --name only reuses the forward of that name.
+reset_stub
+printf '200' >"${stub_dir}/code"
+printf '[{"id":"fwd-a","vmPort":5173,"target":"host","https":true,"name":"5173","url":"https://work-vm-5173.vms.example/"},{"id":"fwd-b","vmPort":5173,"target":"host","https":true,"name":"docs","url":"https://work-vm-docs.vms.example/"}]' >"${stub_dir}/response"
+reuse_named="$(remote 5173 --https --name docs --reuse 2>&1)"
+ok "names --reuse: picks the forward with that name" test "${reuse_named}" = "https://work-vm-docs.vms.example/"
+
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"
 [[ "${fail}" -eq 0 ]]

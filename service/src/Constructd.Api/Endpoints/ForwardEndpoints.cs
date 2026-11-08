@@ -6,6 +6,7 @@ using Constructd.Api.Jobs;
 using Constructd.Core.Abstractions;
 using Constructd.Core.Configuration;
 using Constructd.Core.Domain;
+using Constructd.Core.Logic;
 using Microsoft.AspNetCore.Authorization;
 
 namespace Constructd.Api.Endpoints;
@@ -87,7 +88,8 @@ public static class ForwardEndpoints
         // host runs a PublicHostPattern, in which case every VM has its own name.
         var publicHost = options.PublicHostFor(lookup.Vm!.Name);
         var mainPort = await HttpsMainPortAsync(http, options, cancellationToken);
-        return TypedResults.Ok(list.Select(f => ForwardResponse.From(f, publicHost, mainPort)).ToList());
+        var routes = await HttpsRoutesAsync(http, options, mainPort, cancellationToken);
+        return TypedResults.Ok(list.Select(f => ForwardResponse.From(f, publicHost, mainPort, SharedHost(http, routes, f))).ToList());
     }
 
     private static async Task<IResult> HttpsAsync(
@@ -126,8 +128,10 @@ public static class ForwardEndpoints
 
         var vm = lookup.Vm!;
         var https = request?.Https == true;
-        if ((request?.Main == true || request?.UpstreamTls is not null) && !https)
-            return CodedProblems.Validation("https", "'main' and 'upstreamTls' need https=true.");
+        if ((request?.Main == true || request?.UpstreamTls is not null || request?.Name is not null || request?.ReplaceMain is not null) && !https)
+            return CodedProblems.Validation("https", "'main', 'upstreamTls', 'name' and 'replaceMain' need https=true.");
+        if (request?.ReplaceMain == true && request.Main != true)
+            return CodedProblems.Validation("replaceMain", "'replaceMain' needs main=true.");
         if (https && vm.Kind == VmKind.Child)
             return CodedProblems.Create(400, "https-primary-only", "HTTPS forwards are for primary VMs.");
         if (vm.Kind == VmKind.Child) return await ChildForwardOperations.CreateAsync(vm, request, http, cancellationToken);
@@ -198,6 +202,33 @@ public static class ForwardEndpoints
             }
         }
 
+        string? httpsName = null;
+        if (https)
+        {
+            // docs/https-forwards.md, "Forward names": one name per HTTPS forward across the host, never a VM's or
+            // the vault's, and one open main forward per VM unless the request takes it over.
+            httpsName = string.IsNullOrWhiteSpace(request.Name) ? null : request.Name.Trim().ToLowerInvariant();
+            var forwardName = httpsName ?? vmPort.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if (HttpsForwardNames.Problem(vm.Name, forwardName) is { } problem)
+                return CodedProblems.Validation("name", problem);
+            if (await HttpsNameConflictAsync(http, options, vm.Name, forwardName, cancellationToken) is { } conflict)
+            {
+                http.SetAuditDetail($"https name {HttpsForwardNames.Label(vm.Name, forwardName)} taken");
+                return CodedProblems.Create(409, "https-name-taken", conflict);
+            }
+
+            if (request.Main == true && request.ReplaceMain != true &&
+                (await http.RequestServices.GetRequiredService<IForwardStore>().ListAsync(vm.Name, cancellationToken))
+                    .Where(f => f.Https && f.Main && f.PublicPort is not null)
+                    .OrderByDescending(f => f.Created).FirstOrDefault() is { } holder)
+            {
+                http.SetAuditDetail($"main held by {holder.Id}");
+                return CodedProblems.Create(409, "main-taken",
+                    $"'{(holder.Label.Length > 0 ? holder.Label : "port " + holder.VmPort)}' (VM port {holder.VmPort}) is this VM's main HTTPS forward. " +
+                    "Close it, or ask to replace it (construct expose --replace-main, replaceMain=true).");
+            }
+        }
+
         AddForwardResult result;
         try
         {
@@ -206,7 +237,7 @@ public static class ForwardEndpoints
             // between counting and adding, or attach a forward to a VM that is being torn down.
             result = https
                 ? await forwards.TryAddHttpsForwardAsync(vm.Name, vmPort, label,
-                    new HttpsForwardOptions(request.Main == true, request.UpstreamTls), options.MaxForwardsPerVm, cancellationToken)
+                    new HttpsForwardOptions(request.Main == true, request.UpstreamTls, httpsName), options.MaxForwardsPerVm, cancellationToken)
                     .ConfigureAwait(false)
                 : await forwards.TryAddForwardAsync(
                     vm.Name, vmPort, target, label, options.MaxForwardsPerVm, cancellationToken)
@@ -234,11 +265,13 @@ public static class ForwardEndpoints
         var forward = result.Forward!;
         http.SetAuditDetail(
             $"id={forward.Id}, vmPort={vmPort}, target={target}, publicPort={forward.PublicPort?.ToString() ?? "-"}" +
-            (forward.Https ? $", https, main={forward.Main}" : ""));
+            (forward.Https ? $", https, main={forward.Main}, name={HttpsForwardNames.Effective(forward)}" : ""));
 
+        var sharedPort = await HttpsMainPortAsync(http, options, cancellationToken);
+        var routes = await HttpsRoutesAsync(http, options, sharedPort, cancellationToken);
         return TypedResults.Created(
             $"/api/v1/vms/{vm.Name}/forwards/{forward.Id}",
-            ForwardResponse.From(forward, options.PublicHostFor(vm.Name), await HttpsMainPortAsync(http, options, cancellationToken)));
+            ForwardResponse.From(forward, options.PublicHostFor(vm.Name), sharedPort, SharedHost(http, routes, forward)));
     }
 
     private static async Task<IResult> DeleteAsync(
@@ -400,6 +433,55 @@ public static class ForwardEndpoints
         if (string.IsNullOrWhiteSpace(options.PublicHostPattern)) return null;
         var gateway = http.RequestServices.GetService<HttpsGateway>();
         return gateway is null ? null : (await gateway.ConfigAsync(cancellationToken).ConfigureAwait(false)).SharedPort;
+    }
+
+    /// <summary>The shared port's route table when HTTPS forwards are served there by name, null otherwise.</summary>
+    internal static async Task<HttpsRouteTable?> HttpsRoutesAsync(HttpContext http, ConstructdOptions options, int? sharedPort,
+        CancellationToken cancellationToken)
+    {
+        if (sharedPort is null || string.IsNullOrWhiteSpace(options.PublicHostPattern)) return null;
+        var services = http.RequestServices;
+        return await HttpsGateway.BuildRoutesAsync(services.GetRequiredService<IForwardStore>(), services.GetRequiredService<IVmRepository>(),
+            services.GetRequiredService<IHostConfigStore>(), options, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The name the shared port serves <paramref name="forward"/> under, when the host's certificate covers it; null
+    /// keeps the forward's own port address.
+    /// </summary>
+    internal static string? SharedHost(HttpContext http, HttpsRouteTable? routes, PortForward forward)
+    {
+        if (routes is null || !forward.Https || routes.HostOf(forward) is not { } host) return null;
+        return http.RequestServices.GetService<HttpsCertificateStore>()?.Current is { } certificate && certificate.Covers(host) ? host : null;
+    }
+
+    /// <summary>
+    /// Why <c>&lt;vm&gt;-&lt;name&gt;</c> cannot be a new HTTPS forward's name, or null: it is a VM's name, the vault's
+    /// web host, or another open HTTPS forward's name. Compared as labels, so it holds whether or not the host runs
+    /// a per-VM name pattern yet.
+    /// </summary>
+    private static async Task<string?> HttpsNameConflictAsync(HttpContext http, ConstructdOptions options, string vmName, string name,
+        CancellationToken cancellationToken)
+    {
+        var services = http.RequestServices;
+        var label = HttpsForwardNames.Label(vmName, name);
+        if ((await services.GetRequiredService<IVmRepository>().ListAsync(owner: null, cancellationToken).ConfigureAwait(false))
+            .FirstOrDefault(v => string.Equals(v.Name, label, StringComparison.OrdinalIgnoreCase)) is { } vm)
+            return $"'{label}' is the name of the VM '{vm.Name}'. Choose another name (construct expose --name).";
+
+        var routes = await HttpsGateway.BuildRoutesAsync(services.GetRequiredService<IForwardStore>(), services.GetRequiredService<IVmRepository>(),
+            services.GetRequiredService<IHostConfigStore>(), options, cancellationToken).ConfigureAwait(false);
+        var host = HttpsForwardNames.Host(options.PublicHostPattern, options.PublicHost, vmName, name);
+        if (host is not null && string.Equals(host, routes.VaultHost, StringComparison.OrdinalIgnoreCase))
+            return $"'{host}' is the key vault's address. Choose another name (construct expose --name).";
+
+        var taken = (await services.GetRequiredService<IForwardStore>().ListAsync(vmName: null, cancellationToken).ConfigureAwait(false))
+            .Where(f => f.Https && f.PublicPort is not null)
+            .FirstOrDefault(f => string.Equals(HttpsForwardNames.Label(f.VmName, HttpsForwardNames.Effective(f)), label, StringComparison.OrdinalIgnoreCase));
+        return taken is null ? null
+            : string.Equals(taken.VmName, vmName, StringComparison.OrdinalIgnoreCase)
+                ? $"This VM already has an HTTPS forward named '{name}' ('{(taken.Label.Length > 0 ? taken.Label : "port " + taken.VmPort)}', VM port {taken.VmPort}). Choose another name (construct expose --name), or reuse it (--reuse)."
+                : $"'{label}' is already the name of an HTTPS forward of the VM '{taken.VmName}'. Choose another name (construct expose --name).";
     }
 
     /// <summary>A host label ends up in a URL the CLI prints; a message ends up on its stderr.</summary>
