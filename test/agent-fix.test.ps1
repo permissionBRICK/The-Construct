@@ -232,7 +232,7 @@ ok "provisioner: records the alias right after writing the ssh config" (
 ok "provisioner: a new run starts without an alias" ($prov -match '\$global:ConstructProvisionSshTarget = ""')
 $finally = $prov.Substring($prov.LastIndexOf("`nfinally {"))
 ok "provisioner: the menu only in its own pause (never under -Auto, where the caller owns it)" (
-    $finally -match "if \(-not \`$Auto -and \(\(-not \`$FromPanel\) -or \`$global:ConstructProvisionHadErrors\)\) \{" -and
+    $finally -match "if \(-not \`$Auto -and \(\(-not \`$FromPanel\) -or \`$global:ConstructProvisionHadErrors -or \`$script:BackupActionFailed\)\) \{" -and
     $finally.IndexOf('Invoke-ConstructAgentFixMenu') -gt $finally.IndexOf('if (-not $Auto -and') -and
     $finally.IndexOf('Invoke-ConstructAgentFixMenu') -lt $finally.IndexOf('Read-Host "Press Enter to exit"'))
 ok "provisioner: the result screen uses the shared prompt" ($prov -match 'Write-ConstructAgentFixPrompt -Lines @\(Get-ConstructAgentFixPrompt -Errors @\(\$Result\.Errors\)\)')

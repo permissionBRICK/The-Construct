@@ -498,7 +498,7 @@ Write-Host ""
 Write-Host "=== Remote provisioning arguments ===" -ForegroundColor Cyan
 $SkipCompanion = $false
 $ClaudePartialStreaming = "on"; $MicPassthrough = "off"; $OpenCodeBackgroundWatcher = "on"
-$T3Code = "on"; $T3CodeChannel = "stable"; $T3CodePatched = "off"
+$T3Code = "on"; $T3CodeChannel = "stable"; $T3CodePatched = "off"; $T3CodeAutoApprove = "off"
 $AutoResolve = $false; $Repo = "owner/repo"; $Ref = "main"
 $script:RemoteBound  = @{}
 # A provisioner that declares everything -- the current one.
@@ -506,7 +506,7 @@ $fullParams = @{}
 foreach ($p in @('VmHost','SshPort','HostAlias','LocalKeyName','ConfigBranch','ServiceUrl','InstanceName','VmTokenB64',
                  'Projects','GitUserName','GitEmail','GitCloneCredentialsB64','AgentPassword','RestoreDir','AutoResolve',
                  'Auto','Repo','Ref','ClaudePartialStreaming','MicPassthrough','OpenCodeBackgroundWatcher',
-                 'T3Code','T3CodeChannel','T3CodePatched','PublicHost')) { $fullParams[$p] = $true }
+                 'T3Code','T3CodeChannel','T3CodePatched','T3CodeAutoApprove','PublicHost')) { $fullParams[$p] = $true }
 $script:RemoteProvCmd = [pscustomobject]@{ Parameters = $fullParams }
 
 $ep = @{ SshHost = 'buildbox.example.local'; SshPort = 2201 }
@@ -806,7 +806,12 @@ ok "rebuild: no remote path derives construct_<name>_ed25519 outside the new-ent
 ok "rebuild: the existing-instance key comes from the registry entry" (
     $autoRbText -match '\$instKey\s+=\s+\[string\]\$existingEntry\.KeyName')
 ok "rebuild: every config export passes that key" (
-    ([regex]::Matches($autoRbText, 'Invoke-RemoteVmConfigExport -Name \$instName -Endpoint \$endpoint -KeyName \$instKey')).Count -eq 3)
+    ([regex]::Matches($autoRbText, 'Invoke-RemoteVmConfigExport -Name \$instName -Endpoint \$endpoint -KeyName \$instKey')).Count -eq 2 -and
+    $autoRbText -match 'Select-ConstructRemoteReinstallBackup -Name \$instName -Endpoint \$endpoint -KeyName \$instKey' -and
+    (Get-InstallerFunctionText 'Select-ConstructRemoteReinstallBackup') -match 'Invoke-RemoteVmConfigExport -Name \$Name -Endpoint \$Endpoint -KeyName \$KeyName' -and
+    (Get-InstallerFunctionText 'Select-ConstructRemoteReinstallBackup') -match 'Invoke-RemoteVmHostBackup -Name \$Name -Endpoint \$Endpoint -KeyName \$KeyName')
+ok "rebuild: the host backup hands -KeyName to the provisioner" (
+    (Get-InstallerFunctionText 'Invoke-RemoteVmHostBackup') -match 'LocalKeyName\s+= \$KeyName')
 ok "rebuild: the export hands -KeyName to the provisioner" (
     (Get-InstallerFunctionText 'Invoke-RemoteVmConfigExport') -match 'LocalKeyName = \$KeyName')
 ok "rebuild: the name rule is skipped for the instance being rebuilt" (
@@ -1024,6 +1029,191 @@ $assertIdx = $remoteLibText.IndexOf('Assert-ConstructTransportSafe -BaseUrl $bas
 $authIdx   = $remoteLibText.IndexOf("switch ([string]`$Auth['Mode'])", $invokeIdx)
 ok "http: Invoke-ConstructApi refuses the transport before selecting a credential" (
     $assertIdx -gt 0 -and $authIdx -gt 0 -and $assertIdx -lt $authIdx)
+
+# ── (h2) A remote reinstall with backups on the host ────────────────────────
+# Select-ConstructRemoteReinstallBackup decides, before the VM is deleted, what the rebuilt
+# VM restores (docs/plans/host-config-backups.md 3.8). Driven with every collaborator
+# stubbed: the host API, the PC key, the SSH steps and the console.
+Write-Host ""
+Write-Host "=== Remote reinstall: backups on the host ===" -ForegroundColor Cyan
+& {
+    Set-StrictMode -Off   # Auto-Install.ps1 does not run under strict mode
+    foreach ($name in @('Select-ConstructRemoteReinstallBackup', 'Select-ConstructNewestHostBackup', 'Get-BackupProjectNames',
+                        'Invoke-RemoteVmHostBackup', 'Start-ConstructGitPreflight')) {
+        $text = Get-InstallerFunctionText $name
+        ok "extract: Auto-Install.ps1 defines $name" ($text -ne "")
+        if ($name -eq 'Invoke-RemoteVmHostBackup') { $script:hostBackupFnText = $text; continue }
+        if ($text) { Invoke-Expression $text }
+    }
+    . (Join-Path $repoRoot "lib/AgentVm.Backup.ps1")
+    $log = New-Object System.Collections.Generic.List[string]
+    $script:feature = $true; $script:keyFails = $false; $script:createFails = $false; $script:newest = $null; $script:exportFails = $false
+    $script:answers = @{}
+    function Test-ConstructApiFeature { param($BaseUrl, $Feature, $Auth, $TimeoutSec) $log.Add("feature:$Feature"); return $script:feature }
+    function Get-ConstructBackupPcKey { param([switch]$Create) if ($script:keyFails) { throw 'DPAPI is not available' }; return [pscustomobject]@{ Fingerprint = ('f' * 64) } }
+    function Invoke-RemoteVmHostBackup {
+        param($Name, $Endpoint, $KeyName)
+        $log.Add("host-backup:${Name}:$KeyName")
+        if ($script:createFails) { throw 'Backing up the VM to its host failed: exit 6' }
+        return [pscustomobject]@{ Id = ('a' * 32); GitCredentialHosts = @('github.com') }
+    }
+    function Find-ConstructReadableHostBackup { param($BaseUrl, $VmName, $Auth) $log.Add("newest:$VmName"); return $script:newest }
+    function Invoke-RemoteVmConfigExport {
+        param($Name, $Endpoint, $KeyName, $BackupDir, [switch]$ScanReposOnly)
+        $log.Add("pc-export:$Name")
+        if ($script:exportFails) { throw 'scp failed' }
+        New-Item -ItemType Directory -Path (Join-Path $BackupDir 'extracted') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $BackupDir 'extracted/backup-info.json') -Value '{"addedProjects":["loose-repo"]}'
+        "stray pipeline output of the provisioner"
+    }
+    function Invoke-TuiConfirm {
+        param($ScreenTitle, $Body, $Question, $YesLabel, $NoLabel, [switch]$DefaultNo, [switch]$NoScreen)
+        $log.Add("ask:$Question")
+        if ($script:answers.ContainsKey($Question)) { return $script:answers[$Question] }
+        return $true
+    }
+    function Show-TuiScreen { param($Title, $Body) }
+    function Write-Ok { param($m) }
+    function Write-Note { param($m) }
+    $ep = @{ SshHost = 'host.example.com'; SshPort = 2201 }
+    $bk = Join-Path $tmpRoot 'reinstall-backup'
+    $older = [pscustomobject]@{ Id = ('b' * 32); CreatedAt = '2026-11-01T03:00:00Z'; Trigger = 'scheduled'; SizeBytes = 52428800 }
+    function Invoke-Choice {
+        param([string]$Mode, [bool]$Reachable = $true, [bool]$Interactive = $false)
+        $log.Clear()
+        Select-ConstructRemoteReinstallBackup -Name 'work-vm' -Endpoint $ep -KeyName 'construct_work-vm_ed25519' -BackupDir $bk `
+            -Reachable $Reachable -ServiceUrl 'https://host.example.com:7462' -Auth @{ Mode = 'token' } -BackupMode $Mode -Interactive $Interactive 3>$null
+    }
+    $saveQ = 'Save and auto-restore the config?'
+    $newestQ = 'Restore that backup after the reinstall?'
+    $pcQ = 'Auto-restore the saved config?'
+
+    $r = Invoke-Choice -Mode 'save'
+    ok "host: save backs the VM up to the host before the delete" ($r.HostBackupId -eq ('a' * 32) -and $log -contains 'host-backup:work-vm:construct_work-vm_ed25519')
+    ok "host: ...with the backup's git credential hosts for the preflight" (@($r.GitCredentialHosts) -contains 'github.com')
+    ok "host: ...and no export to this PC" (-not $r.RestoreDir -and ($log -notcontains 'pc-export:work-vm') -and -not $r.Cancel)
+    ok "host: the feature is asked for by its name" ($log -contains 'feature:config-backups')
+
+    $script:createFails = $true; $script:newest = $older
+    $r = Invoke-Choice -Mode 'save'
+    ok "host: a failed backup falls back to the newest host backup (panel: no question)" ($r.HostBackupId -eq ('b' * 32) -and @($log | Where-Object { $_ -like 'ask:*' }).Count -eq 0)
+    ok "host: ...whose git hosts are unknown, so the preflight runs as for a fresh install" ($null -eq $r.GitCredentialHosts)
+    $r = Invoke-Choice -Mode 'save' -Interactive $true
+    ok "host: in the console the newest host backup is offered" ($r.HostBackupId -eq ('b' * 32) -and $log -contains "ask:$newestQ")
+    $script:answers[$newestQ] = $false
+    $r = Invoke-Choice -Mode 'save' -Interactive $true
+    ok "host: declined, today's export to this PC runs" (-not $r.HostBackupId -and $r.RestoreDir -eq $bk -and $log -contains 'pc-export:work-vm')
+    ok "host: ...and the result is the decision alone, not the export's pipeline output" ($r -is [hashtable])
+    ok "host: ...and its project profiles are folded back in" (@($r.ProjectNames) -contains 'loose-repo')
+    $script:answers.Remove($newestQ)
+    $script:newest = $null
+    $r = Invoke-Choice -Mode 'save'
+    ok "host: no host backup to fall back on -> today's export to this PC" (-not $r.HostBackupId -and $r.RestoreDir -eq $bk -and $log -contains 'pc-export:work-vm')
+    $script:exportFails = $true
+    $script:answers['Continue with the reinstall WITHOUT a saved config?'] = $false
+    $r = Invoke-Choice -Mode 'save'
+    ok "host: when that fails too, the reinstall can be cancelled (as before)" ($r.Cancel)
+    $script:answers.Remove('Continue with the reinstall WITHOUT a saved config?')
+    $script:exportFails = $false; $script:createFails = $false
+
+    $script:keyFails = $true
+    $r = Invoke-Choice -Mode 'save'
+    ok "key: a PC that cannot hold a key uses the export to this PC" (-not $r.HostBackupId -and $r.RestoreDir -eq $bk -and ($log -notcontains 'host-backup:work-vm:construct_work-vm_ed25519'))
+    $script:keyFails = $false
+
+    $script:feature = $false
+    $r = Invoke-Choice -Mode 'save'
+    ok "old host: without config-backups the flow is today's (export to this PC)" (-not $r.HostBackupId -and $r.RestoreDir -eq $bk -and
+        @($log | Where-Object { $_ -like 'host-backup:*' -or $_ -like 'newest:*' }).Count -eq 0)
+    $script:feature = $true
+
+    $script:newest = $older
+    $r = Invoke-Choice -Mode 'existing'
+    ok "existing: the newest host backup, without a question" ($r.HostBackupId -eq ('b' * 32) -and @($log | Where-Object { $_ -like 'ask:*' }).Count -eq 0 -and
+        ($log -notcontains 'pc-export:work-vm'))
+    $script:newest = $null
+    $r = Invoke-Choice -Mode 'existing'
+    ok "existing: no host backup -> the backup saved on this PC" (-not $r.HostBackupId -and $r.RestoreDir -eq $bk)
+    Remove-Item -LiteralPath $bk -Recurse -Force
+    $r = Invoke-Choice -Mode 'existing'
+    ok "existing: neither -> blank" (-not $r.HostBackupId -and -not $r.RestoreDir -and -not $r.Cancel)
+
+    $script:newest = $older
+    $r = Invoke-Choice -Mode 'wipe'
+    ok "wipe: nothing is saved, nothing restored, the host is not even asked" (-not $r.HostBackupId -and -not $r.RestoreDir -and $log.Count -eq 0)
+
+    $r = Invoke-Choice -Mode 'save' -Reachable $false
+    ok "unreachable: save uses the newest host backup (panel)" ($r.HostBackupId -eq ('b' * 32) -and ($log -notcontains 'host-backup:work-vm:construct_work-vm_ed25519'))
+    $r = Invoke-Choice -Mode 'save' -Reachable $false -Interactive $true
+    ok "unreachable: ...offered in the console" ($r.HostBackupId -eq ('b' * 32) -and $log -contains "ask:$newestQ")
+
+    $r = Invoke-Choice -Mode '' -Interactive $true
+    ok "console: 'save and restore?' yes -> a host backup" ($r.HostBackupId -eq ('a' * 32) -and $log -contains "ask:$saveQ")
+    $script:answers[$saveQ] = $false
+    $script:answers[$newestQ] = $false
+    New-Item -ItemType Directory -Path (Join-Path $bk 'extracted') -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $bk 'extracted/backup-info.json') -Value '{}'
+    $r = Invoke-Choice -Mode '' -Interactive $true
+    ok "console: 'no' still offers the newest host backup, then the backup on this PC" ($log -contains "ask:$newestQ" -and $log -contains "ask:$pcQ" -and $r.RestoreDir -eq $bk)
+    $script:answers = @{}
+
+    # Invoke-RemoteVmHostBackup runs the provisioner in-process and reads its result.
+    $fakeRoot = Join-Path $tmpRoot 'fake-scripts'
+    New-Item -ItemType Directory -Path $fakeRoot -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $fakeRoot 'Provision-AgentVM.ps1') -Value @'
+param([string]$Action, [string]$BackupTrigger, [switch]$Auto, [string]$VmHost, [int]$SshPort, [string]$HostAlias,
+      [string]$LocalKeyName, [string]$SeedUser, [switch]$SshIpv4)
+$global:FakeProvisionArgs = @{} + $PSBoundParameters
+"pipeline noise from the provisioner"
+if ($env:FAKE_PROVISION_REPORT -eq '1') { $global:ConstructBackupCreateResult = [pscustomobject]@{ Id = ('c' * 32); GitCredentialHosts = @() } }
+'@
+    Invoke-Expression ($script:hostBackupFnText.Replace('$PSScriptRoot', '$fakeRoot'))
+    $env:FAKE_PROVISION_REPORT = '1'
+    try {
+        $created = Invoke-RemoteVmHostBackup -Name 'work-vm' -Endpoint $ep -KeyName 'construct_work-vm_ed25519'
+        $fa = $global:FakeProvisionArgs
+        ok "create: the provisioner runs -Action backup-create -BackupTrigger pre-reinstall, unattended" (
+            $fa.Action -eq 'backup-create' -and $fa.BackupTrigger -eq 'pre-reinstall' -and $fa.Auto)
+        ok "create: ...against the endpoint, with the instance's key, alias, seed user and IPv4" (
+            $fa.VmHost -eq 'host.example.com' -and $fa.SshPort -eq 2201 -and $fa.HostAlias -eq 'work-vm' -and
+            $fa.LocalKeyName -eq 'construct_work-vm_ed25519' -and $fa.SeedUser -eq 'construct' -and $fa.SshIpv4)
+        ok "create: the result is the provisioner's report, not its pipeline output" ($created.Id -eq ('c' * 32))
+        ok "create: ...and the hand-over global is cleared" ($null -eq $global:ConstructBackupCreateResult)
+        $env:FAKE_PROVISION_REPORT = '0'
+        ok "create: no report is an error" ((Get-ThrowMessage { Invoke-RemoteVmHostBackup -Name 'work-vm' -Endpoint $ep -KeyName 'k' }) -match 'reported no backup')
+    } finally { Remove-Item Env:FAKE_PROVISION_REPORT -ErrorAction SilentlyContinue }
+
+    # The git preflight: the fresh backup's host list replaces the PC backup's credential store.
+    $profDir = Join-Path $tmpRoot 'pf-projects'
+    New-Item -ItemType Directory -Path $profDir -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $profDir 'private.json') -Value '{"repos":[{"url":"https://github.com/o/r.git"}]}'
+    function Get-ConstructConfigProjectsDir { param($ScriptsDir) return $profDir }
+    function Get-ProjectRepoUrls { param($ProjectsDir, $Names) return @('https://github.com/o/r.git') }
+    function Test-BackupHasGitCredentials { param($BackupDir, $Urls) return $false }
+    function Test-ConstructGitCredentialPromptAllowed { param($ExistingInstall, $Action, $InputRedirected, $BackupHasCredentials) $script:pfHas = $BackupHasCredentials; return $true }
+    function New-ConstructGitCredentialSession { param([switch]$NoPrompt, $CredentialsB64, [switch]$ExistingInstall) return @{ Existing = [bool]$ExistingInstall } }
+    $restoreDir = ''; $GitCloneCredentialsB64 = ''; $ConfigRepo = ''; $Action = 'reinstall'; $script:ConstructGitExistingInstall = $false
+    foreach ($case in @(
+            @{ Hosts = @('github.com'); Expect = $true; Name = 'hosts that cover every repo skip the prompt' },
+            @{ Hosts = @('gitlab.example.com'); Expect = $false; Name = 'a host the backup lacks keeps the prompt' },
+            @{ Hosts = $null; Expect = $false; Name = 'an older host backup (hosts unknown) prompts as for a fresh install' })) {
+        $script:ConstructGitCredentialSession = $null
+        $script:RemoteHostBackupId = ('a' * 32); $script:RemoteHostBackupGitHosts = $case.Hosts
+        Start-ConstructGitPreflight
+        ok "preflight: $($case.Name)" ([bool]$script:pfHas -eq $case.Expect -and [bool]$script:ConstructGitCredentialSession.Existing -eq $case.Expect)
+    }
+    $script:ConstructGitCredentialSession = $null; $script:RemoteHostBackupId = ''; $script:RemoteHostBackupGitHosts = $null
+}
+$riText = $autoAst.Extent.Text
+$iSelect = $riText.IndexOf('$riBackup = Select-ConstructRemoteReinstallBackup -Name $instName')
+$iRemove = $riText.IndexOf('Remove-ConstructVm @removeArgs')
+ok "reinstall: the backup is chosen before the VM is deleted" ($iSelect -gt 0 -and $iRemove -gt $iSelect)
+ok "reinstall: ...and the panel's runs are non-interactive" ($riText -match '-Interactive \(-not \$FromPanel -and -not \[Console\]::IsInputRedirected\)')
+ok "reinstall: the chosen host backup reaches the provisioner, probed first" (
+    $riText -match "if \(\`$script:RemoteProvCmd\.Parameters\.ContainsKey\('RestoreHostBackupId'\)\) \{\s+\`$provArgs\['RestoreHostBackupId'\] = \`$script:RemoteHostBackupId")
+ok "reinstall: the clone-credential step uses the host list for a host backup" (
+    $riText -match 'Test-ConstructBackupGitHostsCover -Hosts @\(\$script:RemoteHostBackupGitHosts\) -Urls @\(Get-ProjectRepoUrls -ProjectsDir \$freshProjDir -Names \$chosenProjects\)')
+ok "reinstall: the backup lib is loaded with the remote client" ($riText -match '\$backupLib = Join-Path \$PSScriptRoot "lib\\AgentVm\.Backup\.ps1"')
 
 # ── (i) The registry write (lib/AgentVm.Instances.ps1's additive helpers) ───
 # Run in a CHILD SCOPE: the library turns on Set-StrictMode -Version Latest, which the

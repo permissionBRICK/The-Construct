@@ -1620,7 +1620,7 @@ function Start-ConstructGitPreflight {
         # prompting stays allowed, and the session is SEEDED with the backup's entries so
         # only the hosts it does not cover are asked for -- never the ones it does.
         $profileUrls = @()
-        if ($restoreDir -and (Get-Command Get-ProjectRepoUrls -ErrorAction SilentlyContinue)) {
+        if (($restoreDir -or $script:RemoteHostBackupId) -and (Get-Command Get-ProjectRepoUrls -ErrorAction SilentlyContinue)) {
             $profDir = if (Get-Command Get-ConstructConfigProjectsDir -ErrorAction SilentlyContinue) {
                 Get-ConstructConfigProjectsDir -ScriptsDir $PSScriptRoot
             } else { Join-Path $PSScriptRoot 'projects' }
@@ -1629,6 +1629,13 @@ function Start-ConstructGitPreflight {
             if ($profNames.Count -gt 0) { $profileUrls = @(Get-ProjectRepoUrls -ProjectsDir $profDir -Names $profNames) }
         }
         $hasBackupCredentials = $restoreDir -and (Test-BackupHasGitCredentials -BackupDir $restoreDir -Urls $profileUrls)
+        # A remote reinstall restoring a HOST backup: its fresh backup reported the hosts its
+        # credential store covers (never the secrets); an older host backup reported nothing,
+        # so the preflight treats it like a fresh install.
+        if (-not $restoreDir -and $script:RemoteHostBackupId -and $null -ne $script:RemoteHostBackupGitHosts -and
+            (Get-Command Test-ConstructBackupGitHostsCover -ErrorAction SilentlyContinue)) {
+            $hasBackupCredentials = Test-ConstructBackupGitHostsCover -Hosts @($script:RemoteHostBackupGitHosts) -Urls $profileUrls
+        }
         $noPrompt = -not (Test-ConstructGitCredentialPromptAllowed -ExistingInstall:$script:ConstructGitExistingInstall `
             -Action $Action -InputRedirected:([Console]::IsInputRedirected) -BackupHasCredentials:$hasBackupCredentials)
         $script:ConstructGitCredentialSession = New-ConstructGitCredentialSession -NoPrompt:$noPrompt -CredentialsB64 $GitCloneCredentialsB64 `
@@ -2324,6 +2331,199 @@ function Invoke-RemoteVmConfigExport {
     & $ps @a
 }
 
+function Invoke-RemoteVmHostBackup {
+    <# Provision-AgentVM.ps1 -Action backup-create against a REMOTE instance's endpoint:
+       enrol this PC's backup key, then `construct backup create --trigger pre-reinstall`
+       on the VM, which uploads the encrypted backup to its host. Returns the create
+       result ({Id, SizeBytes, Sha256, Trigger, GitCredentialHosts}); throws on failure. #>
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)]$Endpoint,
+        [Parameter(Mandatory)][string]$KeyName
+    )
+    $ps = Join-Path $PSScriptRoot "Provision-AgentVM.ps1"
+    if (-not (Test-Path -LiteralPath $ps)) { throw "Provision-AgentVM.ps1 not found in $PSScriptRoot." }
+    $a = @{
+        Action        = 'backup-create'
+        BackupTrigger = 'pre-reinstall'
+        Auto          = $true
+        VmHost        = [string]$Endpoint.SshHost
+        SshPort       = [int]$Endpoint.SshPort
+        HostAlias     = $Name
+        LocalKeyName  = $KeyName
+        SeedUser      = 'construct'
+        SshIpv4       = $true
+    }
+    $global:ConstructBackupCreateResult = $null
+    try {
+        $null = & $ps @a
+        $created = $global:ConstructBackupCreateResult
+    } finally { $global:ConstructBackupCreateResult = $null }
+    if (-not $created -or -not $created.Id) { throw "The VM reported no backup." }
+    return $created
+}
+
+function Select-ConstructNewestHostBackup {
+    <# The newest backup of -Name on the host that this PC's key opens, offered first when
+       -Ask; $null when there is none, it cannot be listed, or the user declines. #>
+    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$ServiceUrl, $Auth, [switch]$Ask)
+    $found = $null
+    try { $found = Find-ConstructReadableHostBackup -BaseUrl $ServiceUrl -VmName $Name -Auth $Auth }
+    catch {
+        Write-Warning "Could not list the host's backups of '$Name': $($_.Exception.Message)"
+        return $null
+    }
+    if (-not $found) {
+        Write-Note "The host keeps no backup of '$Name' that this PC can open."
+        return $null
+    }
+    $when = Format-ConstructBackupTime $found.CreatedAt
+    if ($Ask) {
+        $use = Invoke-TuiConfirm -ScreenTitle "Restore the newest backup on the host?" -Body @(
+            "The host keeps a backup of '$Name' from $when ($($found.Trigger), $(Format-ConstructBackupSize $found.SizeBytes)).",
+            "It can be restored automatically onto the freshly reinstalled VM."
+        ) -Question "Restore that backup after the reinstall?" `
+          -YesLabel "Yes  restore the backup from $when (recommended)" `
+          -NoLabel  "No   do not use it"
+        if (-not $use) { return $null }
+    }
+    Write-Ok "Using the host backup from $when; it will be restored automatically after the reinstall."
+    return $found
+}
+
+function Select-ConstructRemoteReinstallBackup {
+    <#
+        Which saved config a REMOTE reinstall restores (docs/backup-restore.md, plan 3.8),
+        decided before the VM is deleted. Returns
+            @{ HostBackupId; GitCredentialHosts; RestoreDir; ProjectNames; Cancel }
+
+        On a host that offers config backups (apiFeatures 'config-backups') and with a
+        usable backup key on this PC:
+          save (or "yes" in the console): back the VM up to the host now (pre-reinstall).
+                 If that fails, or the VM is not reachable: the newest host backup this PC
+                 can open -- offered in the console, taken without asking from the panel.
+                 Neither: today's export to this PC.
+          existing: the newest host backup; none -> the backup saved on this PC.
+          wipe: nothing.
+        Without the feature, the key, or lib\AgentVm.Backup.ps1: today's flow, the export
+        to this PC and the backup saved on this PC.
+
+        GitCredentialHosts is the fresh backup's list of git credential hosts, $null when
+        unknown (an older backup): the git preflight then behaves as for a fresh install.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)]$Endpoint,
+        [Parameter(Mandatory)][string]$KeyName,
+        [Parameter(Mandatory)][string]$BackupDir,
+        [bool]$Reachable,
+        [string]$ServiceUrl,
+        $Auth,
+        [string]$BackupMode,
+        [bool]$Interactive
+    )
+    $choice = @{ HostBackupId = ''; GitCredentialHosts = $null; RestoreDir = ''; ProjectNames = @(); Cancel = $false }
+
+    $hostBackups = $false
+    if ($BackupMode -ne 'wipe' -and $ServiceUrl -and (Get-Command Test-ConstructApiFeature -ErrorAction SilentlyContinue)) {
+        $hostBackups = [bool](Test-ConstructApiFeature -BaseUrl $ServiceUrl -Feature 'config-backups' -Auth $Auth)
+    }
+    if ($hostBackups -and -not (Get-Command Get-ConstructBackupPcKey -ErrorAction SilentlyContinue)) {
+        Write-Warning "lib/AgentVm.Backup.ps1 is missing from this install; saving the config to this PC instead of the host."
+        $hostBackups = $false
+    }
+    if ($hostBackups) {
+        # A PC that cannot hold a key could neither enrol nor open a host backup.
+        try { $null = Get-ConstructBackupPcKey -Create }
+        catch {
+            Write-Warning "This PC has no usable backup key ($($_.Exception.Message)); saving the config to this PC instead of the host."
+            $hostBackups = $false
+        }
+    }
+
+    $doSave = $false
+    if ($Reachable) {
+        if ($BackupMode) { $doSave = ($BackupMode -eq 'save') }
+        else {
+            $where = if ($hostBackups) { "backed up to the host (encrypted for this PC)" } else { "saved to this PC" }
+            $doSave = Invoke-TuiConfirm -ScreenTitle "Save & restore the agent config" -Body @(
+                "The VM's current agent config (auth, memory, chat history, skills,",
+                "instruction files, project setup) can be $where and",
+                "restored automatically onto the freshly reinstalled VM."
+            ) -Question "Save and auto-restore the config?" `
+              -YesLabel "Yes  save it now and restore it after the reinstall (recommended)" `
+              -NoLabel  "No   reinstall completely blank"
+        }
+    }
+
+    if ($doSave -and $hostBackups) {
+        try {
+            Show-TuiScreen -Title "Backing up the VM's agent config to the host" -Body @(
+                "Encrypting auth, memory, skills, instruction files, and project setup on the VM",
+                "and storing them on the host..."
+            )
+            $created = Invoke-RemoteVmHostBackup -Name $Name -Endpoint $Endpoint -KeyName $KeyName
+            $choice.HostBackupId = [string]$created.Id
+            $choice.GitCredentialHosts = $created.GitCredentialHosts
+            Write-Ok "Config backed up to the host; it will be restored automatically after the reinstall."
+            return $choice
+        } catch {
+            Write-Warning "Backing up to the host failed: $($_.Exception.Message)"
+        }
+        $newest = Select-ConstructNewestHostBackup -Name $Name -ServiceUrl $ServiceUrl -Auth $Auth -Ask:$Interactive
+        if ($newest) { $choice.HostBackupId = [string]$newest.Id; return $choice }
+        Write-Warning "Saving the config to this PC instead."
+    }
+
+    if ($doSave) {
+        try {
+            Show-TuiScreen -Title "Saving the VM's agent config" -Body @(
+                "Exporting auth, memory, skills, instruction files, and project setup to this host..."
+            )
+            # Discarded: the provisioner's stray pipeline output would otherwise become part
+            # of this function's result.
+            $null = Invoke-RemoteVmConfigExport -Name $Name -Endpoint $Endpoint -KeyName $KeyName -BackupDir $BackupDir
+            $choice.RestoreDir = $BackupDir
+            $choice.ProjectNames = @(Get-BackupProjectNames -BackupDir $BackupDir)
+            Write-Ok "Config saved; it will be restored automatically after the reinstall."
+        } catch {
+            Write-Warning "Saving the config failed: $($_.Exception.Message)"
+            $goOn = Invoke-TuiConfirm -NoScreen -DefaultNo `
+                -Question "Continue with the reinstall WITHOUT a saved config?" `
+                -YesLabel "Continue  reinstall blank; the old config is lost" `
+                -NoLabel  "Cancel    keep the VM as it is"
+            if (-not $goOn) { $choice.Cancel = $true }
+        }
+        return $choice
+    }
+
+    # Nothing saved now: a backup made earlier.
+    if ($BackupMode -eq 'wipe') { return $choice }
+    if ($hostBackups) {
+        # 'existing' asks for exactly this; 'save' with an unreachable VM is the failed save
+        # above (asked in the console only); the console's own "No" still offers it.
+        $ask = if ($BackupMode -eq 'existing') { $false } elseif ($BackupMode -eq 'save') { $Interactive } else { $true }
+        $newest = Select-ConstructNewestHostBackup -Name $Name -ServiceUrl $ServiceUrl -Auth $Auth -Ask:$ask
+        if ($newest) { $choice.HostBackupId = [string]$newest.Id; return $choice }
+    }
+    if (Test-Path -LiteralPath (Join-Path $BackupDir "extracted\backup-info.json")) {
+        $useBackup = if ($BackupMode) { ($BackupMode -ne 'wipe') } else {
+            Invoke-TuiConfirm -ScreenTitle "Restore a previously saved config?" -Body @(
+                "A config backup from an earlier run exists on this host. It can restore",
+                "the agent config automatically after the reinstall."
+            ) -Question "Auto-restore the saved config?" `
+              -YesLabel "Yes  restore it onto the fresh VM (recommended)" `
+              -NoLabel  "No   reinstall completely blank"
+        }
+        if ($useBackup) {
+            $choice.RestoreDir = $BackupDir
+            $choice.ProjectNames = @(Get-BackupProjectNames -BackupDir $BackupDir)
+            Write-Ok "Saved config loaded; it will be restored automatically after the reinstall."
+        }
+    }
+    return $choice
+}
+
 function New-ConstructRemoteProvisionArgs {
     <#
         The splat for Provision-AgentVM.ps1 against a REMOTE instance -- the identity
@@ -2424,12 +2624,18 @@ if ($RemoteInstall) {
     $restoredProjectNames     = @()   # project profiles that save generated
     $script:RemoteRebuildName = ""    # set when this run is REBUILDING a known instance
     $script:RemoteBound       = $PSBoundParameters
+    $script:RemoteHostBackupId       = ""     # a reinstall restores this backup from the HOST
+    $script:RemoteHostBackupGitHosts = $null  # ...whose git credential hosts, when known
     # ── The API client + the instance registry ────────────────────────────────
     $remoteLib = Join-Path $PSScriptRoot "lib\AgentVm.Remote.ps1"
     if (-not (Test-Path -LiteralPath $remoteLib)) {
         throw "A remote install needs lib/AgentVm.Remote.ps1, which is missing from this install. Update The Construct."
     }
     . $remoteLib
+    # Host-stored config backups (docs/backup-restore.md). Optional: without it a reinstall
+    # saves the config to this PC, as before.
+    $backupLib = Join-Path $PSScriptRoot "lib\AgentVm.Backup.ps1"
+    if (Test-Path -LiteralPath $backupLib) { . $backupLib }
 
     $registry = Read-ConstructInstanceRegistrySnapshot
     if ($null -eq $registry) {
@@ -2642,8 +2848,8 @@ if ($RemoteInstall) {
 
         # ── Reinstall: delete on the host, then create + provision a fresh VM ──
         $bk = Get-ConstructBackupDir -Dir $PSScriptRoot
-        $doSave = $false
-        if (Test-ConstructVmSshPort -SshHost ([string]$endpoint.SshHost) -SshPort ([int]$endpoint.SshPort) -TimeoutMs 5000) {
+        $riReachable = [bool](Test-ConstructVmSshPort -SshHost ([string]$endpoint.SshHost) -SshPort ([int]$endpoint.SshPort) -TimeoutMs 5000)
+        if ($riReachable) {
             try {
                 Show-TuiScreen -Title "Checking the VM's repos for unsaved work" -Body @(
                     "Scanning $instName for uncommitted or unpushed changes the reinstall would destroy..."
@@ -2663,58 +2869,24 @@ if ($RemoteInstall) {
                 Write-Warning "Could not scan the VM's repos: $($_.Exception.Message)"
                 Write-Host "    Proceeding without the unsaved-work check." -ForegroundColor DarkGray
             }
-
-            if ($BackupMode) { $doSave = ($BackupMode -eq 'save') }
-            else {
-                $doSave = Invoke-TuiConfirm -ScreenTitle "Save & restore the agent config" -Body @(
-                    "The VM's current agent config (auth, memory, chat history, skills,",
-                    "instruction files, project setup) can be saved to this host and",
-                    "restored automatically onto the freshly reinstalled VM."
-                ) -Question "Save and auto-restore the config?" `
-                  -YesLabel "Yes  save it now and restore it after the reinstall (recommended)" `
-                  -NoLabel  "No   reinstall completely blank"
-            }
-            if ($doSave) {
-                try {
-                    Show-TuiScreen -Title "Saving the VM's agent config" -Body @(
-                        "Exporting auth, memory, skills, instruction files, and project setup to this host..."
-                    )
-                    Invoke-RemoteVmConfigExport -Name $instName -Endpoint $endpoint -KeyName $instKey -BackupDir $bk
-                    $restoreDir = $bk
-                    $restoredProjectNames = Get-BackupProjectNames -BackupDir $bk
-                    Write-Ok "Config saved; it will be restored automatically after the reinstall."
-                } catch {
-                    Write-Warning "Saving the config failed: $($_.Exception.Message)"
-                    $goOn = Invoke-TuiConfirm -NoScreen -DefaultNo `
-                        -Question "Continue with the reinstall WITHOUT a saved config?" `
-                        -YesLabel "Continue  reinstall blank; the old config is lost" `
-                        -NoLabel  "Cancel    keep the VM as it is"
-                    if (-not $goOn) {
-                        Write-Note "Reinstall cancelled."
-                        Write-Host ""; Wait-Exit
-                        return
-                    }
-                }
-            }
         } else {
             Write-Warning "The VM isn't reachable over SSH -- skipping the unsaved-work scan and config save."
         }
 
-        if (-not $doSave -and (Test-Path -LiteralPath (Join-Path $bk "extracted\backup-info.json"))) {
-            $useBackup = if ($BackupMode) { ($BackupMode -ne 'wipe') } else {
-                Invoke-TuiConfirm -ScreenTitle "Restore a previously saved config?" -Body @(
-                    "A config backup from an earlier run exists on this host. It can restore",
-                    "the agent config automatically after the reinstall."
-                ) -Question "Auto-restore the saved config?" `
-                  -YesLabel "Yes  restore it onto the fresh VM (recommended)" `
-                  -NoLabel  "No   reinstall completely blank"
-            }
-            if ($useBackup) {
-                $restoreDir = $bk
-                $restoredProjectNames = Get-BackupProjectNames -BackupDir $bk
-                Write-Ok "Saved config loaded; it will be restored automatically after the reinstall."
-            }
+        # The config to restore: a backup on the host when it offers them (taken now, or
+        # the newest one), else the export to this PC -- Select-ConstructRemoteReinstallBackup.
+        $riBackup = Select-ConstructRemoteReinstallBackup -Name $instName -Endpoint $endpoint -KeyName $instKey `
+                        -BackupDir $bk -Reachable $riReachable -ServiceUrl $svcUrl -Auth $remoteAuth -BackupMode $BackupMode `
+                        -Interactive (-not $FromPanel -and -not [Console]::IsInputRedirected)
+        if ($riBackup.Cancel) {
+            Write-Note "Reinstall cancelled."
+            Write-Host ""; Wait-Exit
+            return
         }
+        $restoreDir = [string]$riBackup.RestoreDir
+        $restoredProjectNames = @($riBackup.ProjectNames)
+        $script:RemoteHostBackupId = [string]$riBackup.HostBackupId
+        $script:RemoteHostBackupGitHosts = $riBackup.GitCredentialHosts
 
         # The same last-chance typed confirmation as the local path -- and the same
         # -FromPanel exemption, because the panel's modal already asked.
@@ -2942,6 +3114,12 @@ if ($RemoteInstall) {
                         -and (Test-BackupHasGitCredentials -BackupDir $restoreDir -Urls @(Get-ProjectRepoUrls -ProjectsDir $freshProjDir -Names $chosenProjects))) {
             $ccParams['NoPrompt'] = $true
             Write-Note "Reusing the saved git credentials from the restore for cloning -- they cover every repo host; skipping the credential prompt."
+        } elseif (-not $restoreDir -and $script:RemoteHostBackupId -and $null -ne $script:RemoteHostBackupGitHosts `
+                        -and (Get-Command Test-ConstructBackupGitHostsCover -ErrorAction SilentlyContinue) `
+                        -and (Test-ConstructBackupGitHostsCover -Hosts @($script:RemoteHostBackupGitHosts) -Urls @(Get-ProjectRepoUrls -ProjectsDir $freshProjDir -Names $chosenProjects))) {
+            # The VM clones after the restore, with its own restored credential store.
+            $ccParams['NoPrompt'] = $true
+            Write-Note "The host backup's git credentials cover every repo host; the VM clones with them after the restore -- skipping the credential prompt."
         }
         $chosenCloneCredB64 = Resolve-GitCloneCredential @ccParams
     }
@@ -3023,6 +3201,13 @@ if ($RemoteInstall) {
     if ($existingEntry -and $script:RemoteProvCmd.Parameters.ContainsKey('ProvisionEvent')) { $provArgs['ProvisionEvent'] = 'reinstalled' }
     $provArgs['AgentPassword'] = $chosenAgentPassword
     if ($restoreDir) { $provArgs['RestoreDir'] = $restoreDir }
+    if ($script:RemoteHostBackupId) {
+        if ($script:RemoteProvCmd.Parameters.ContainsKey('RestoreHostBackupId')) {
+            $provArgs['RestoreHostBackupId'] = $script:RemoteHostBackupId
+        } else {
+            Write-Warning "This install's Provision-AgentVM.ps1 cannot restore host backups; backup $($script:RemoteHostBackupId) stays on the host. Update The Construct, then restore it: Provision-AgentVM.ps1 -Action backup-restore -InstanceName $instName -BackupId $($script:RemoteHostBackupId)"
+        }
+    }
 
     try {
         # Called DIRECTLY, not through Invoke-DeElevatedProvision: a remote install never
