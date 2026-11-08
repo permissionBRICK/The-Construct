@@ -65,10 +65,20 @@ public static partial class AdminCli
         }
     }
 
+    /// <summary>
+    /// The host settings store. The CLI host registers only the stores, not the host-administration
+    /// services, so the SQLite one is built here; without a database the defaults are reported.
+    /// </summary>
+    private static IHostConfigStore HostConfig(IServiceProvider services, IClock clock) =>
+        services.GetService<IHostConfigStore>()
+        ?? (services.GetService<Constructd.Sqlite.SqliteDatabase>() is { } database
+            ? new Constructd.Sqlite.SqliteHostConfigStore(database, clock)
+            : new Constructd.Fakes.InMemoryHostConfigStore(clock));
+
     private static async Task<int> HttpsStatusAsync(HttpsCertificateStore store, IServiceProvider services, ConstructdOptions options,
         IClock clock, AdminOutput writer, CancellationToken ct)
     {
-        var config = services.GetRequiredService<IHostConfigStore>();
+        var config = HostConfig(services, clock);
         var status = await HttpsEndpoints.DescribeAsync(store, config, options, clock, gateway: null, ct);
         var info = store.Current?.Info;
         var https = await config.GetAsync<Core.Domain.HttpsConfig>("https", ct) ?? HostAdminDefaults.Https;
