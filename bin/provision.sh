@@ -1165,6 +1165,7 @@ install_construct_cli() {
   install -m 0755 "${REPO_DIR}/bin/construct-expose.sh" "${bin_dir}/construct-expose.sh" || return 1
   install -m 0755 "${REPO_DIR}/bin/construct-vm.sh" "${bin_dir}/construct-vm.sh" || return 1
   install -m 0755 "${REPO_DIR}/bin/construct-secret.sh" "${bin_dir}/construct-secret.sh" || return 1
+  install -m 0755 "${REPO_DIR}/bin/construct-backup.sh" "${bin_dir}/construct-backup.sh" || return 1
   install -m 0755 "${REPO_DIR}/bin/construct-config.sh" "${bin_dir}/construct-config.sh" || return 1
   install -m 0755 "${REPO_DIR}/bin/construct-idle-report.sh" "${bin_dir}/construct-idle-report.sh" || return 1
   # Forward spool (docs/expose.md): root-owned 0755, deliberately NOT 1777 like

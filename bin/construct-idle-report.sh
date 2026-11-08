@@ -40,6 +40,10 @@ API_TIMEOUT="${CONSTRUCT_SERVICE_TIMEOUT_SEC:-20}"
 # What a "vaultScrub": true reply starts (as `<cmd> secret _scrub`), and how.
 SCRUB_CMD="${CONSTRUCT_IDLE_SCRUB_CMD:-}"
 SYSTEMD_RUN="${CONSTRUCT_IDLE_SYSTEMD_RUN:-systemd-run}"
+# What a "backupDue": true reply starts (as `<cmd> backup create --trigger <t>`),
+# and the systemctl that tells whether the previous backup still runs.
+BACKUP_CMD="${CONSTRUCT_IDLE_BACKUP_CMD:-}"
+SYSTEMCTL="${CONSTRUCT_IDLE_SYSTEMCTL:-systemctl}"
 
 log() { printf 'construct-idle-report: %s\n' "$*" >&2; }
 
@@ -285,8 +289,14 @@ post_activity() {
     http_body="$(head -c 200 "${work}/body" 2>/dev/null || true)"
     log "activity report failed (HTTP ${status:-000})${http_body:+: ${http_body}}"
     log "$(head -n 1 "${work}/stderr" 2>/dev/null || true)"
-  elif vault_scrub_due "${work}/body"; then
-    start_vault_scrub
+  else
+    if vault_scrub_due "${work}/body"; then
+      start_vault_scrub
+    fi
+    local trigger
+    if trigger="$(backup_due "${work}/body")"; then
+      start_backup "${trigger}"
+    fi
   fi
   rm -rf "${work}"
 }
@@ -331,6 +341,63 @@ start_vault_scrub() {
     setsid -f "${cmd}" secret _scrub </dev/null >/dev/null 2>&1 || log "could not start the key vault scrub"
   else
     nohup "${cmd}" secret _scrub </dev/null >/dev/null 2>&1 &
+  fi
+  return 0
+}
+
+# ── config backups ───────────────────────────────────────────────────────────
+# The reply carries "backupDue": true (and "backupTrigger": "scheduled" or
+# "manual") when the host wants a config backup of this VM
+# (docs/plans/host-config-backups.md). The host decides when; this VM never
+# schedules one itself. `construct backup create` packs, encrypts and uploads,
+# which takes a while, so it runs detached in a transient unit of its own, and
+# only when the previous one has ended: the unit name is the guard, and the
+# backup's own lock catches a run started outside systemd.
+
+# Prints the trigger and succeeds when the reply asks for a backup.
+backup_due() {
+  local file="$1" trigger=""
+  [[ -s "${file}" ]] || return 1
+  if command -v jq >/dev/null 2>&1; then
+    jq -e 'type == "object" and .backupDue == true' "${file}" >/dev/null 2>&1 || return 1
+    trigger="$(jq -r 'if (.backupTrigger | type) == "string" then .backupTrigger else "" end' "${file}" 2>/dev/null || true)"
+  else
+    tr -d '\r\n' <"${file}" 2>/dev/null \
+      | grep -Eq '^[[:space:]]*\{.*"backupDue"[[:space:]]*:[[:space:]]*true' || return 1
+    trigger="$(grep -Eo '"backupTrigger"[[:space:]]*:[[:space:]]*"[a-z]*"' "${file}" 2>/dev/null \
+      | head -n 1 | sed -E 's/.*"([a-z]*)"$/\1/' || true)"
+  fi
+  case "${trigger}" in
+    scheduled|manual) ;;
+    *) trigger=scheduled ;;
+  esac
+  printf '%s' "${trigger}"
+}
+
+start_backup() {
+  local trigger="$1" cmd="${BACKUP_CMD}" state
+  if [[ -z "${cmd}" ]]; then
+    cmd="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/construct"
+    [[ -x "${cmd}" ]] || cmd="construct"
+  fi
+  if [[ -n "${INVOCATION_ID:-}" ]] && command -v "${SYSTEMD_RUN}" >/dev/null 2>&1; then
+    state="$("${SYSTEMCTL}" is-active construct-backup 2>/dev/null || true)"
+    case "${state}" in
+      active|activating|deactivating|reloading|refreshing) return 0 ;;
+    esac
+    "${SYSTEMD_RUN}" --quiet --no-block --collect --unit construct-backup \
+      --property=SyslogIdentifier=construct-backup -- "${cmd}" backup create --trigger "${trigger}" \
+      </dev/null >/dev/null 2>&1 || log "could not start the config backup (systemd-run failed)"
+    return 0
+  fi
+  if command -v setsid >/dev/null 2>&1 && command -v logger >/dev/null 2>&1; then
+    # shellcheck disable=SC2016 # $0 and $1 belong to the inner shell
+    setsid -f bash -c '"$0" backup create --trigger "$1" 2>&1 | logger -t construct-backup' "${cmd}" "${trigger}" \
+      </dev/null >/dev/null 2>&1 || log "could not start the config backup"
+  elif command -v setsid >/dev/null 2>&1; then
+    setsid -f "${cmd}" backup create --trigger "${trigger}" </dev/null >/dev/null 2>&1 || log "could not start the config backup"
+  else
+    nohup "${cmd}" backup create --trigger "${trigger}" </dev/null >/dev/null 2>&1 &
   fi
   return 0
 }
