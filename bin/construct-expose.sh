@@ -93,6 +93,36 @@ Configuration (/etc/construct/config.env, see docs/expose.md):
   CONSTRUCT_EXPOSE_WAIT_SEC         default wait, in seconds
   CONSTRUCT_SERVICE_CA_FILE         PEM certificate pinned for the service
 USAGE
+  https_usage
+}
+
+# The HTTPS options are shown only when the host would really serve them for this VM
+# (GET /vms/<name>/https: a valid certificate covering this VM's name, host forwards on,
+# and the owner's HTTPS-forward permission). Everywhere else they do not exist as far as
+# the help is concerned, so nobody tries a link the host cannot give.
+https_usage() {
+  [[ -n "${SERVICE_URL}" && -r "${VM_TOKEN_FILE}" ]] || return 0
+  local API_TIMEOUT=5 main_address
+  api_call GET "/api/v1/vms/${INSTANCE_NAME}/https"
+  api_ok || return 0
+  [[ "$(json_field "${API_BODY}" available)" == "true" ]] || return 0
+  main_address="$(json_field "${API_BODY}" mainAddress)"
+  cat <<'USAGE'
+
+HTTPS (available on this VM's host):
+      --https           Publish the port over HTTPS with the host's trusted
+                        certificate: phones, browsers and other machines open the
+                        printed https:// link without a warning. Implies --to host.
+                        Hand the user exactly the link it prints.
+      --upstream-tls    With --https: the port itself already speaks TLS
+                        (detected when not given).
+USAGE
+  if [[ -n "${main_address}" ]]; then
+    printf '      --main            With --https: the VM'"'"'s main web UI, served without a
+'
+    printf '                        port at %s (one per VM; the newest wins).
+' "${main_address}"
+  fi
 }
 
 # ── configuration ────────────────────────────────────────────────────────────
@@ -592,6 +622,11 @@ api_detail() {
 api_fail() {
   local what="$1" detail
   detail="$(api_detail)"
+  if [[ "${API_STATUS}" =~ ^40[39]$ && "${API_BODY}" == *'"https-unavailable"'* ]]; then
+    printf 'construct expose: HTTPS forwards are not available for this VM%s\n' "${detail:+: ${detail}}" >&2
+    printf '  Without --https the port opens as a plain forward (construct expose --help).\n' >&2
+    exit "${EXIT_REFUSED}"
+  fi
   case "${API_STATUS}" in
     403)
       printf 'construct expose: the host service refused to %s (403).\n' "${what}" >&2
@@ -644,7 +679,7 @@ remote_find_forward() {
 # Like remote_find_forward it is NOT called in a command substitution, so an API
 # failure ends the command with the right exit code instead of reading as "none".
 remote_find_by_port() {
-  local want_port="$1" want_target="$2" object
+  local want_port="$1" want_target="$2" object is_https
   FOUND_FORWARD=""
   api_call GET "$(forwards_path)"
   api_ok || api_fail "list the forwards of ${INSTANCE_NAME}"
@@ -653,26 +688,46 @@ remote_find_by_port() {
     [[ -n "${object}" ]] || continue
     [[ "$(json_field "${object}" vmPort)" == "${want_port}" ]] || continue
     [[ "$(json_field "${object}" target)" == "${want_target}" ]] || continue
+    is_https=false
+    [[ "$(json_field "${object}" https)" == "true" ]] && is_https=true
+    [[ "${is_https}" == "${HTTPS}" ]] || continue
     FOUND_FORWARD="${object}"
     return 0
   done < <(json_objects "${API_BODY}")
   return 1
 }
 
+# The HTTPS fields of a create request (docs/https-forwards.md), empty for a plain forward.
+https_fields() {
+  [[ "${HTTPS}" == "true" ]] || return 0
+  printf ',"https":true'
+  if [[ "${MAIN}" == "true" ]]; then printf ',"main":true'; fi
+  if [[ "${UPSTREAM_TLS}" == "true" ]]; then printf ',"upstreamTls":true'; fi
+}
+
+# GET-OR-CREATE. Provisioning runs on every reprovision and must not leave a second
+# host forward (and a second public port) behind for the same VM port each time; the
+# service has no upsert, so the lookup is here. Result in FOUND_FORWARD. With
+# --https-if-available a host without a certificate gets the plain forward instead.
+remote_get_or_create() {
+  local port="$1" label="$2" target="$3"
+  if [[ "${REUSE}" == "true" ]] && remote_find_by_port "${port}" "${target}"; then return 0; fi
+  api_call POST "$(forwards_path)" \
+    "{\"vmPort\":${port},\"label\":\"$(json_escape "${label}")\",\"target\":\"${target}\"$(https_fields)}"
+  if [[ "${HTTPS_IF_AVAILABLE}" == "true" && "${API_STATUS}" =~ ^40[39]$ && "${API_BODY}" == *'"https-unavailable"'* ]]; then
+    HTTPS=false; MAIN=false; UPSTREAM_TLS=false; HTTPS_IF_AVAILABLE=false
+    remote_get_or_create "${port}" "${label}" "${target}"
+    return 0
+  fi
+  api_ok || api_fail "open port ${port}"
+  api_body_is object || api_unreadable "$(forwards_path)"
+  FOUND_FORWARD="${API_BODY}"
+}
+
 remote_expose() {
   local port="$1" label="$2" target="$3" wait_sec="$4" id="" link deadline object rc=0 body=""
-  # GET-OR-CREATE. Provisioning runs on every reprovision and must not leave a second
-  # host forward (and a second public port) behind for the same VM port each time; the
-  # service has no upsert, so the lookup is here.
-  if [[ "${REUSE}" == "true" ]] && remote_find_by_port "${port}" "${target}"; then
-    body="${FOUND_FORWARD}"
-  else
-    api_call POST "$(forwards_path)" \
-      "{\"vmPort\":${port},\"label\":\"$(json_escape "${label}")\",\"target\":\"${target}\"}"
-    api_ok || api_fail "open port ${port}"
-    api_body_is object || api_unreadable "$(forwards_path)"
-    body="${API_BODY}"
-  fi
+  remote_get_or_create "${port}" "${label}" "${target}"
+  body="${FOUND_FORWARD}"
 
   # A direct answer has a URL but no durable forward id or relay port.
   if [[ "$(json_field "${body}" kind)" == "direct" ]]; then
@@ -784,6 +839,10 @@ target=""
 wait_sec=""
 close_ref=""
 REUSE=false
+HTTPS=false
+HTTPS_IF_AVAILABLE=false
+MAIN=false
+UPSTREAM_TLS=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -794,6 +853,10 @@ while [[ $# -gt 0 ]]; do
     -t|--to) shift; [[ $# -gt 0 ]] || die "--to requires client or host"; target="$1" ;;
     -w|--wait) shift; [[ $# -gt 0 ]] || die "--wait requires a number of seconds"; wait_sec="$1" ;;
     -r|--reuse) REUSE=true ;;
+    --https) HTTPS=true ;;
+    --https-if-available) HTTPS=true; HTTPS_IF_AVAILABLE=true ;;
+    --main) MAIN=true ;;
+    --upstream-tls) UPSTREAM_TLS=true ;;
     --) shift; if [[ $# -gt 0 ]]; then port="$1"; shift; fi; break ;;
     -*) die "unknown option: $1 (try: construct expose --help)" ;;
     *)
@@ -804,6 +867,13 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
+if [[ "${HTTPS}" == "true" ]]; then
+  # The host terminates the TLS, so an HTTPS forward is a host forward.
+  [[ -z "${target}" || "${target}" == "host" ]] || die "--https is served by the host: it cannot be combined with --to ${target}"
+  target="host"
+elif [[ "${MAIN}" == "true" || "${UPSTREAM_TLS}" == "true" ]]; then
+  die "--main and --upstream-tls need --https"
+fi
 target="${target:-${DEFAULT_TARGET}}"
 case "${target}" in
   client|host) ;;
@@ -827,6 +897,8 @@ case "${mode}" in
     label="$(clean_label "${label}")"
     if [[ -n "${SERVICE_URL}" ]]; then
       remote_expose "${port}" "${label}" "${target}" "${wait_sec}"
+    elif [[ "${HTTPS}" == "true" && "${HTTPS_IF_AVAILABLE}" != "true" ]]; then
+      die "--https needs a host service: only a VM on a Construct host can publish a port with the host's certificate"
     elif [[ "${target}" == "host" ]]; then
       local_expose_host "${port}"
     else

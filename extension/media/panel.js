@@ -762,10 +762,28 @@
         : "Opened on this PC over the SSH connection";
       row.appendChild(target);
 
+      // An HTTPS forward: the host serves it with its trusted certificate.
+      if (item.https === true) {
+        const https = document.createElement("span");
+        https.className = "fwd-target fwd-https";
+        https.textContent = item.main === true ? "https · main" : "https";
+        https.title = item.main === true
+          ? "HTTPS with the host's certificate, under this VM's own name"
+          : "HTTPS with the host's certificate";
+        row.appendChild(https);
+      }
+
       const label = document.createElement("span");
       label.className = "fwd-label";
       label.textContent = item.label || (item.status === "error" ? item.message : "");
       if (item.status === "error" && item.message) label.title = item.message;
+      // A main HTTPS forward also answers on its own port; say where, selectable.
+      if (item.https === true && item.portUrl) {
+        const alt = document.createElement("span");
+        alt.className = "fwd-alt";
+        alt.textContent = "also " + item.portUrl;
+        label.appendChild(alt);
+      }
       row.appendChild(label);
 
       const state = document.createElement("span");

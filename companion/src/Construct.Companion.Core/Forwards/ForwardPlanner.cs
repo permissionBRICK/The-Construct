@@ -91,7 +91,8 @@ public static class ForwardPlanner
         foreach (var record in Safe(input, "host"))
         {
             var item = Item(record, "host", false); var url = record.Str("url");
-            item["status"] = url.Length > 0 ? "open" : "queued"; item["localPort"] = Port(record["publicPort"]); item["url"] = url.Length > 0 ? url : null; items.Add(item);
+            item["status"] = url.Length > 0 ? "open" : "queued"; item["localPort"] = Port(record["publicPort"]); item["url"] = url.Length > 0 ? url : null;
+            if (record.True("https")) RemoteForwardList.HttpsFields(record, item); items.Add(item);
         }
         foreach (var record in Safe(input, "pending"))
         {
@@ -116,6 +117,7 @@ public static class ForwardPlanner
                 ["message"] = item.Str("message"), ["closable"] = remote || !snapshot.False("owner") };
             if (item.ContainsKey("vmPort")) output["vmPort"] = item["vmPort"]?.DeepClone();
             if (item["child"] is JsonValue child && child.TryGetValue<string>(out var name) && name.Length > 0) output["child"] = name;
+            if (item.True("https")) RemoteForwardList.HttpsFields(item, output);
             projected.Add(output);
         }
         return new() { ["mode"] = remote ? "remote" : "local", ["owner"] = !snapshot.False("owner"), ["visible"] = items.Count > 0 || remote, ["items"] = projected };

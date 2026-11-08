@@ -156,6 +156,10 @@ public sealed class InMemoryPortForwardManager : IPortForwardManager
         string label, int maxForwards, CancellationToken cancellationToken) =>
         AddForwardAsync(vmName, vmPort, target, label, maxForwards, cancellationToken, null);
 
+    public Task<AddForwardResult> TryAddHttpsForwardAsync(string vmName, int vmPort, string label, HttpsForwardOptions https,
+        int maxForwards, CancellationToken cancellationToken) =>
+        AddForwardAsync(vmName, vmPort, ForwardTarget.Host, label, maxForwards, cancellationToken, null, https);
+
     public Task<AddForwardResult> TryAddDestinationForwardAsync(ForwardRequest request,
         ForwardDestination destination, CancellationToken cancellationToken)
     {
@@ -173,7 +177,7 @@ public sealed class InMemoryPortForwardManager : IPortForwardManager
         ForwardTarget target,
         string label,
         int maxForwards,
-        CancellationToken cancellationToken, ForwardDestination? destination)
+        CancellationToken cancellationToken, ForwardDestination? destination, HttpsForwardOptions? https = null)
     {
         ThrowIfFailing();
 
@@ -206,7 +210,10 @@ public sealed class InMemoryPortForwardManager : IPortForwardManager
                 Target: target,
                 Label: label,
                 Created: _clock.UtcNow,
-                Destination: destination);
+                Destination: destination,
+                Https: https is not null,
+                Main: https?.Main == true,
+                UpstreamTls: https?.UpstreamTls);
 
             try
             {
@@ -343,8 +350,8 @@ public sealed class InMemoryPortForwardManager : IPortForwardManager
 
     private static string SshKey(string vmName) => $"ssh:{vmName}";
 
-    private static string Rule(int publicPort, string vmName, int vmPort) =>
-        $"host:{publicPort} -> {vmName}:{vmPort}";
+    private static string Rule(int publicPort, string vmName, int vmPort, bool https = false) =>
+        $"{(https ? "https" : "host")}:{publicPort} -> {vmName}:{vmPort}";
 
     private SemaphoreSlim GateFor(string vmName) =>
         _vmGates.GetOrAdd(vmName, _ => new SemaphoreSlim(1, 1));
@@ -358,7 +365,7 @@ public sealed class InMemoryPortForwardManager : IPortForwardManager
     }
 
     private void Materialize(PortForward forward, int publicPort) =>
-        Materialized[forward.Id] = Rule(publicPort, forward.Destination?.ConnectAddress ?? forward.VmName, forward.Destination?.ConnectPort ?? forward.VmPort);
+        Materialized[forward.Id] = Rule(publicPort, forward.Destination?.ConnectAddress ?? forward.VmName, forward.Destination?.ConnectPort ?? forward.VmPort, forward.Https);
 
     private void ReleasePublicPort(PortForward forward)
     {

@@ -359,6 +359,13 @@ function createHostAdminFeature(deps = {}) {
         case "shareVm": case "updateUser": case "createUser": case "capacityRefresh": case "mediaCleanup": case "updatesCheck": case "updatesStage":
           await model.perform(action, args);
           break;
+        case "setHttpsCertificate":
+        case "removeHttpsCertificate":
+          // Inline in the card (no modal): the webview confirms Remove itself, and the
+          // answer already carries the new status, so the tab is not read again.
+          reloadTab = false;
+          await model.perform(action, action === "setHttpsCertificate" ? args : {});
+          break;
         case "saveConfig": {
           const r = await model.perform("saveConfig", { sections: args.sections });
           if (r.ok) safePost(entry, { type: "hostadmin.configSaved" });

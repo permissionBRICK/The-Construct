@@ -46,7 +46,7 @@ public static partial class AdminCli
     private const string Usage = """
         Usage: constructd admin <command> [options]
 
-          users add <name> --role Admin|User --max-vms <n> [--no-host-forwards]
+          users add <name> --role Admin|User --max-vms <n> [--no-host-forwards] [--https-forwards]
           users remove <name>
           users list
           vms adopt <name> --owner <user> --cpu <n> --ram-mb <n> --disk-gb <n> --incarnation <guid>
@@ -55,6 +55,10 @@ public static partial class AdminCli
           forwards reconcile
           db check
           host status
+          https status
+          https import --cert <chain.pem> --key <key.pem>
+          https import --pfx <file> [--password-file <file>]
+          https remove
           iso build [--force]
           iso status
           iso prune
@@ -102,6 +106,7 @@ public static partial class AdminCli
                 ("forwards", "reconcile") => await ReconcileAsync(positional, services, writer, cancellationToken).ConfigureAwait(false),
                 ("db", "check") => await AdminDbCheck.RunAsync(positional, services, output, cancellationToken),
                 ("host", "status") => HostStatus(positional, services, writer),
+                ("https", _) => await HttpsAsync(positional, services, writer, cancellationToken),
                 ("iso", "build") => await IsoBuildAsync(positional, services, writer, output, cancellationToken).ConfigureAwait(false),
                 ("iso", "status") => IsoStatus(positional, services, writer),
                 ("iso", "prune") => IsoPrune(positional, services, writer),
@@ -130,7 +135,7 @@ public static partial class AdminCli
         var options = new OptionSet(
             args.Skip(3),
             valueOptions: ["--role", "--max-vms"],
-            flags: ["--no-host-forwards"]);
+            flags: ["--no-host-forwards", "--https-forwards"]);
 
         var role = Role.User;
         if (options.Value("--role") is { } roleText)
@@ -165,7 +170,8 @@ public static partial class AdminCli
 
         var clock = services.GetRequiredService<IClock>();
         var users = services.GetRequiredService<IUserStore>();
-        var user = new User(name.Trim(), role, maxVms, clock.UtcNow, allowHostForwards);
+        var user = new User(name.Trim(), role, maxVms, clock.UtcNow, allowHostForwards,
+            AllowHttpsForwards: options.Flag("--https-forwards"));
 
         if (!await users.CreateAsync(user, cancellationToken).ConfigureAwait(false))
         {
@@ -623,6 +629,7 @@ public static partial class AdminCli
         role = user.Role.ToString(),
         maxVms = user.MaxVms,
         allowHostForwards = user.AllowHostForwards,
+        allowHttpsForwards = user.AllowHttpsForwards,
         created = user.Created,
     };
 

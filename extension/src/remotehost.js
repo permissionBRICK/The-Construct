@@ -487,12 +487,9 @@ function buildDelegateScript(spec) {
     lines.push("$auth = New-ConstructApiAuth -Mode negotiate");
   }
   lines.push("$body = $null");
-  if (bodyJson) {
-    lines.push(
-      "$body = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(" +
-        psSingleQuote(Buffer.from(bodyJson, "utf8").toString("base64")) + "))"
-    );
-  }
+  // The body arrives on stdin (after the password line, if any), never on the command line:
+  // it may carry key material, and a command line is visible to other processes and limited in length.
+  if (bodyJson) lines.push("$body = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadLine()))");
   lines.push(
     "$r = Invoke-ConstructApi -BaseUrl " + psSingleQuote(baseUrl) +
       " -Method " + psSingleQuote(method) +
@@ -562,6 +559,7 @@ function runDelegate(spec, opts = {}) {
     if (child.stdin) {
       try {
         if (spec.kind === "credential") child.stdin.write(String(spec.password == null ? "" : spec.password) + "\n");
+        if (spec.bodyJson) child.stdin.write(Buffer.from(spec.bodyJson, "utf8").toString("base64") + "\n");
         child.stdin.end();
       } catch (_) { /* the child may have died already; the close handler reports it */ }
     }
@@ -682,6 +680,11 @@ function createClient(opts = {}) {
     hostConfig: () => request("GET", "/host/config"),
     putHostConfig: (body) => request("PUT", "/host/config", body),
     isoCatalog: () => request("GET", "/host/iso-catalog"),
+    // The host's HTTPS certificate (HTTPS forwards; admin). The PUT body carries key material:
+    // it goes to the one request and nowhere else.
+    httpsStatus: () => request("GET", "/host/https"),
+    setHttpsCertificate: (body) => request("PUT", "/host/https/certificate", body),
+    removeHttpsCertificate: () => request("DELETE", "/host/https/certificate"),
     // Users and allowances (§8.4; admin). `createUser`/`deleteUser`/`issueUserToken` are
     // the EXISTING routes, reached through the same client for the first time.
     users: () => request("GET", "/users"),

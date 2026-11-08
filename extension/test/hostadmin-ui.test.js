@@ -31,7 +31,8 @@ function fakeClient(answers = {}) {
   const c = { host: "buildbox.example.local", calls };
   for (const m of ["health", "whoami", "hostStatus", "hostCapacity", "hostConfig", "putHostConfig", "hostCapabilities", "isoCatalog", "users", "createUser", "updateUser", "deleteUser",
     "putUserAllowance", "userTokens", "issueUserToken", "revokeUserToken", "vms", "children", "lifecycle", "setVmSharing", "renewVmLease", "deleteVm", "getJob", "overrides", "putOverrides", "deleteOverrides",
-    "vmMemory", "setVmMemory", "vmMemoryFloor", "setVmMemoryFloor", "vmIdlePolicy", "setVmIdlePolicy", "vmCpu", "setVmCpu", "rotateVmToken", "revokeVmToken", "media", "deleteMedia", "mediaCleanup", "jobs", "cancelJob", "audit", "updatesStatus", "updatesCheck", "updatesStage", "updatesApply", "updatesCancel", "updatesResolve"]) {
+    "vmMemory", "setVmMemory", "vmMemoryFloor", "setVmMemoryFloor", "vmIdlePolicy", "setVmIdlePolicy", "vmCpu", "setVmCpu", "rotateVmToken", "revokeVmToken", "media", "deleteMedia", "mediaCleanup", "jobs", "cancelJob", "audit", "updatesStatus", "updatesCheck", "updatesStage", "updatesApply", "updatesCancel", "updatesResolve",
+    "httpsStatus", "setHttpsCertificate", "removeHttpsCertificate"]) {
     c[m] = async (...args) => {
       calls.push({ method: m, args });
       const a = answers[m];
@@ -587,6 +588,30 @@ const lastState = (entry) => [...entry.panel.posted].reverse().find((m) => m.typ
     ok("wiring: the forwarder transport gets the service's features", /createRemoteTransport\(\{ ssh, cfg, client, features \}\)/.test(extSrc));
     ok("wiring: a switch clears the caches", /cachedChildren = null; cachedHostAdminOffer = null; cachedHostAdminInstance = null;/.test(extSrc));
     ok("wiring: deactivate disposes the feature", /hostAdmin\.dispose\(\)/.test(extSrc));
+  }
+
+  console.log("\n=== HTTPS certificate (inline, no modal) ===");
+  {
+    const status = { certificate: { subject: "CN=*.vms.example", dnsNames: ["*.vms.example"], notAfter: "2027-01-01T00:00:00Z", sha256: "AB" }, config: { sharedPort: 443 }, listeners: [], warnings: [] };
+    const client = fakeClient({ health: HEALTH, whoami: ME_ADMIN, hostConfig: {}, httpsStatus: status,
+      setHttpsCertificate: (body) => { if (body.privateKeyPem === "BAD-KEY-MATERIAL") throw apiErr(400, { code: "invalid-certificate", detail: "The key does not match." }); return status; },
+      removeHttpsCertificate: { ...status, certificate: null } });
+    const t = makeFeature({ client }); const entry = await openReady(t);
+    await entry.panel.send({ type: "hostadmin.tab", tab: "config" });
+    eq("https: the config tab carries the card", lastState(entry).config.https.certificate.subject, "CN=*.vms.example");
+    const reads = client.calls.filter((c) => c.method === "hostConfig").length;
+    await entry.panel.send({ type: "hostadmin.action", action: "setHttpsCertificate", args: { certificatePem: "CHAIN-MATERIAL", privateKeyPem: "GOOD-KEY-MATERIAL" } });
+    ok("https: Set certificate asks no modal", t.vscode.rec.warnings.length === 0 && t.vscode.rec.infos.length === 0);
+    ok("https: ...reaches the host once", client.calls.filter((c) => c.method === "setHttpsCertificate").length === 1);
+    eq("https: ...and does not read the tab again", client.calls.filter((c) => c.method === "hostConfig").length, reads);
+    await entry.panel.send({ type: "hostadmin.action", action: "setHttpsCertificate", args: { certificatePem: "CHAIN-MATERIAL", privateKeyPem: "BAD-KEY-MATERIAL" } });
+    eq("https: a refusal is shown in the card", lastState(entry).config.https.problem, "The key does not match.");
+    await entry.panel.send({ type: "hostadmin.action", action: "removeHttpsCertificate", args: {} });
+    ok("https: Remove asks no modal (the card confirms inline)", t.vscode.rec.warnings.length === 0 && client.calls.some((c) => c.method === "removeHttpsCertificate"));
+    eq("https: ...and the card shows no certificate", lastState(entry).config.https.certificate, null);
+    const seen = JSON.stringify(entry.panel.posted) + t.logs.join("\n");
+    ok("https: key material is never posted back or logged", !/KEY-MATERIAL|CHAIN-MATERIAL/.test(seen));
+    t.feature.dispose();
   }
 
   {

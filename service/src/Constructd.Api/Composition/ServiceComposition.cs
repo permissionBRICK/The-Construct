@@ -56,6 +56,8 @@ public static class ServiceComposition
             services.AddPlatformImplementations(options);
         }
 
+        services.AddHttpsForwards();
+
         // Platform-agnostic, so these are the real implementations in every mode: the job engine runs
         // jobs in this process and persists them through whichever IJobStore was registered, and the
         // idle engine only talks to the driver, the forward manager and the repository.

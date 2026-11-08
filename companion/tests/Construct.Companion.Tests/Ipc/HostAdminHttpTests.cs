@@ -465,6 +465,73 @@ public sealed class HostAdminHttpTests
         var snapshot = await h.Client.GetFromJsonAsync<JsonObject>("/v1/instances/agent-vm/snapshot");
         Assert.True(snapshot!["hostAdminOffer"]!["offer"]!["updateAvailable"]!.GetValue<bool>());
     }
+    [Fact]
+    public async Task HttpsCertificateCardSetsAndRemovesInlineWithoutPrompts()
+    {
+        var api = new RoutingRemoteApi(); var previous = api.Handle; var installed = true;
+        JsonElement Status() => JsonSerializer.SerializeToElement(new
+        {
+            certificate = installed ? new { subject = "CN=*.vms.example", issuer = "CN=Example CA", dnsNames = new[] { "*.vms.example" }, notAfter = "2027-01-01T00:00:00+00:00", sha256 = "ab", chainLength = 2, installedAt = "2026-11-01T00:00:00+00:00" } : null,
+            config = new { sharedPort = 443, startOnRequest = true }, listeners = Array.Empty<object>(), warnings = Array.Empty<string>(),
+        });
+        api.Handle = r =>
+        {
+            if (r.Url.AbsolutePath == "/api/v1/host/https") return new(200, Status());
+            if (r.Url.AbsolutePath != "/api/v1/host/https/certificate") return previous(r);
+            if (r.Method == "DELETE") { installed = false; return new(200, Status()); }
+            return r.Body?.GetRawText().Contains("BAD-KEY", StringComparison.Ordinal) == true
+                ? new(400, JsonSerializer.SerializeToElement(new { code = "invalid-certificate", detail = "The private key does not match the certificate." }))
+                : new(200, Status());
+        };
+        await using var h = await Enroll(api);
+        const string Host = "/v1/hosts/host.example_7462";
+        async Task<JsonObject> After(object message, Func<JsonObject, bool> done)
+        {
+            using var response = await h.Post(Host + "/messages", message); Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+            JsonObject? snapshot = null;
+            for (var i = 0; i < 100 && (snapshot is null || !done(snapshot)); i++) { await Task.Delay(20); snapshot = await h.Client.GetFromJsonAsync<JsonObject>(Host + "/snapshot"); }
+            return snapshot!;
+        }
+        static JsonNode? Card(JsonObject s) => s["state"]?["config"]?["https"];
+        using (await h.Post(Host + "/messages", new { type = "hostadmin.ready" })) { }
+        var loaded = await After(new { type = "hostadmin.tab", tab = "config" }, s => Card(s) is JsonObject);
+        Assert.Equal("AB", Card(loaded)!["certificate"]!["sha256"]!.GetValue<string>());
+
+        var refused = await After(new { type = "hostadmin.action", action = "setHttpsCertificate", args = new { certificatePem = "CHAIN-MATERIAL", privateKeyPem = "BAD-KEY-MATERIAL" } },
+            s => Card(s)?["problem"]?.GetValue<string>() is { Length: > 0 });
+        Assert.Equal("The private key does not match the certificate.", Card(refused)!["problem"]!.GetValue<string>());
+        Assert.Equal("admin", refused["state"]!["mode"]!.GetValue<string>());
+
+        var installedState = await After(new { type = "hostadmin.action", action = "setHttpsCertificate", args = new { certificatePem = "CHAIN-MATERIAL", privateKeyPem = "GOOD-KEY-MATERIAL" } },
+            s => s["state"]?["notice"]?["text"]?.GetValue<string>() == "HTTPS certificate installed.");
+        Assert.Equal("", Card(installedState)!["problem"]!.GetValue<string>());
+        var put = api.Requests.Last(r => r.Method == "PUT" && r.Url.AbsolutePath == "/api/v1/host/https/certificate");
+        Assert.Equal("GOOD-KEY-MATERIAL", put.Body!.Value.GetProperty("privateKeyPem").GetString());
+
+        var removed = await After(new { type = "hostadmin.action", action = "removeHttpsCertificate", args = new { } }, s => Card(s)?["certificate"] is null);
+        Assert.Contains(api.Requests, r => r.Method == "DELETE" && r.Url.AbsolutePath == "/api/v1/host/https/certificate");
+        Assert.Empty(h.Get<FakePrompts, IPrompts>().Shown);
+        Assert.DoesNotContain("KEY-MATERIAL", removed.ToJsonString(), StringComparison.Ordinal);
+
+        using var incomplete = await h.Post(Host + "/messages", new { type = "hostadmin.action", action = "setHttpsCertificate", args = new { certificatePem = "CHAIN-MATERIAL" } });
+        Assert.Equal(HttpStatusCode.BadRequest, incomplete.StatusCode);
+    }
+
+    [Fact]
+    public async Task HostWithoutHttpsForwardsHidesTheCertificateCard()
+    {
+        var api = new RoutingRemoteApi(); var previous = api.Handle;
+        api.Handle = r => r.Url.AbsolutePath == "/api/v1/host/https" ? new(404, JsonSerializer.SerializeToElement(new { code = "not-found" })) : previous(r);
+        await using var h = await Enroll(api);
+        using (await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.ready" })) { }
+        using (await h.Post("/v1/hosts/host.example_7462/messages", new { type = "hostadmin.tab", tab = "config" })) { }
+        JsonObject? snapshot = null;
+        for (var i = 0; i < 100 && snapshot?["state"]?["config"] is null; i++) { await Task.Delay(20); snapshot = await h.Client.GetFromJsonAsync<JsonObject>("/v1/hosts/host.example_7462/snapshot"); }
+        Assert.True(snapshot!["state"]!["config"]!.AsObject().ContainsKey("https"));
+        Assert.Null(snapshot["state"]!["config"]!["https"]);
+        Assert.Equal("admin", snapshot["state"]!["mode"]!.GetValue<string>());
+    }
+
     private static async Task<Harness> Enroll(RoutingRemoteApi api, Action<IServiceCollection>? configure = null)
     { var h = await Harness.Start(s => { s.AddSingleton<IRemoteApi>(api); configure?.Invoke(s); }); using var response = await h.Post("/v1/hosts", new { url = "host.example", fingerprint = new string('a', 64) }); Assert.Equal(HttpStatusCode.Created, response.StatusCode); return h; }
 }

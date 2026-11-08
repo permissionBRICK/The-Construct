@@ -779,7 +779,11 @@ advertised under. The T3 web GUI inside each VM serves its own HTTPS with its ow
 which is what the provisioner imports into this PC's trust store.
 
 Unset (the default) means every VM is advertised on `PublicHost`, exactly as before this
-setting existed. The target design is one LAN address per VM (Proxmox); the wildcard is the
+setting existed.
+
+With a wildcard **certificate** for the same names the host can also serve each VM's web UI over
+HTTPS with that certificate, so no client has to trust a VM's own CA: see
+[https-forwards.md](https-forwards.md). The target design is one LAN address per VM (Proxmox); the wildcard is the
 Hyper-V-era bridge.
 
 ### What the client does with it
@@ -903,6 +907,8 @@ registry — and so are several hosts.
   on a domain, with the expected result of each step and where to look when it fails.
 * [`docs/expose.md`](expose.md) — `construct expose`, the two forward targets, the guest
   spool and the service API behind them, and the activity heartbeat.
+* [`docs/https-forwards.md`](https-forwards.md) — HTTPS forwards: links with the host's own
+  trusted certificate, the shared HTTPS port, start-on-request.
 * [`docs/control-panel.md`](control-panel.md) — the instance picker, the Forwards card and
   the idle-policy card.
 * [`docs/drivers.md`](drivers.md) — the driver contract and the `hyperv-remote` section.

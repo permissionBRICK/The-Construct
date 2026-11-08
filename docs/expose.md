@@ -55,8 +55,13 @@ opt-in, and on a remote install the admin can disable it per user — the servic
 `403` and the CLI says so (exit code 7).
 
 The agent-facing system prompt (`config/systemprompt.md`) deliberately mentions **only**
-`construct expose <port>`. Host forwarding is documented here and in `--help`, so agents do
-not reach for LAN exposure by habit.
+`construct expose <port>` and points at `--help` for the rest. Host forwarding is documented
+here and in `--help`, so agents do not reach for LAN exposure by habit.
+
+A third kind, **HTTPS forwards** (`--https`), publishes a port with the host's own trusted
+certificate. It is a host forward whose TLS the host terminates, needs a certificate on the host
+and a per-user permission, and appears in `--help` only when this VM can really use it. See
+[https-forwards.md](https-forwards.md).
 
 The CLI's own legacy output is left alone for the same zero-change reason the rest of this
 batch is: `construct help` (which `construct notify --help` also prints) and the diagnostics

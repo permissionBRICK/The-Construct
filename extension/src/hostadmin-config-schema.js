@@ -73,6 +73,10 @@ module.exports = [
     {"key":"retentionDays","label":"Usage retention","type":"int","default":400,"help":"Daily usage retention. Cleanup runs every 24 hours.","min":1,"max":36500,"unit":"days"}
   ] },
   { key: "vault", label: "Key vault", rawOnly: [], fields: [
-    {"key":"webUrl","label":"Approval page address","type":"string","default":null,"help":"The https address phones use for the key vault's approval page, e.g. https://vault.example.net: a reverse proxy with a trusted certificate that forwards /vault/ and /api/v1/vault/ to the host service. It must not be the same origin (scheme, host and port) as any T3 Code address. Null uses the host service's own address, whose self-signed certificate phones warn about.","nullable":true,"nullLabel":"The host service's own address"}
+    {"key":"webUrl","label":"Approval page address","type":"string","default":null,"help":"The https address phones use for the key vault's approval page, e.g. https://vault.example.net: a reverse proxy with a trusted certificate that forwards /vault/ and /api/v1/vault/ to the host service. It must not be the same origin (scheme, host and port) as any T3 Code address. With an HTTPS certificate and a shared HTTPS port set below, the host serves this address itself. Null uses the host service's own address, whose self-signed certificate phones warn about.","nullable":true,"nullLabel":"The host service's own address"}
+  ] },
+  { key: "https", label: "HTTPS forwards", rawOnly: [], fields: [
+    {"key":"sharedPort","label":"Shared HTTPS port","type":"int","default":null,"help":"Usually 443. Serves each VM's main HTTPS forward under the VM's own name (needs PublicHostPattern) and the key vault pages under the approval page address. Needs a certificate. Off: HTTPS forwards only get their own ports.","min":1,"max":65535,"nullable":true,"nullLabel":"Off"},
+    {"key":"startOnRequest","label":"Start VMs on request","type":"bool","default":true,"help":"Opening a stopped or saved VM's HTTPS address starts it and shows a page that reloads until it answers."}
   ] }
 ];

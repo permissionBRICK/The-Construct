@@ -20,6 +20,7 @@ public static partial class HostConfigValidation
         ["virtualization"] = HostAdminDefaults.Virtualization,
         ["updates"] = HostAdminDefaults.Updates,
         ["vault"] = HostAdminDefaults.Vault,
+        ["https"] = HostAdminDefaults.Https,
     };
     public static string? Allowance(UserAllowance a) => a.MaxRetainedChildren < 0 || a.CpuBudget < 0 || a.RamBudgetBytes < 0 || a.StorageBudgetBytes < 0
         ? "Budgets and counts must be non-negative." : a.MaxChildLifetimeSeconds is < 300 ? "A finite lifetime limit must be at least 300 seconds." : null;
@@ -38,10 +39,20 @@ public static partial class HostConfigValidation
         LifecycleConfig l when l.GracefulShutdownTimeoutSeconds < 30 || l.LeaseTickSeconds < 30 || l.LeaseRetrySeconds < 30 => "Lifecycle timeouts must be at least 30 seconds.",
         MediaConfig m when m.MaxBytes < 1 || m.MaxItemsPerUser < 1 || m.UploadChunkBytes < 1048576 || m.UploadChunkBytes > 67108864 || m.UploadTtlHours < 1 || m.AcquireTimeoutMinutes < 1 || m.UnreferencedTtlHours < 1 => "Media sizes/counts must be positive; chunks must be 1–64 MiB.",
         VaultConfig v when VaultWebAddress.Problem(v.WebUrl) is { } problem => problem,
+        HttpsConfig h when h.SharedPort is < 1 or > 65535 => "The shared HTTPS port must be null or between 1 and 65535.",
         VirtualizationConfig v when v.MinimumRamBytes is < 1L << 30 => "The minimum RAM must be null or at least 1 GiB.",
         UpdatesConfig u when string.IsNullOrEmpty(u.Repository) || !RepositoryPattern().IsMatch(u.Repository) || u.Channel != "main" || u.DrainTimeoutMinutes < 1 || u.HealthTimeoutSeconds < 30 => "Updates require owner/repository, main channel and positive timeouts (health at least 30 seconds).",
         _ => null,
     };
+    /// <summary>The shared HTTPS port must not collide with a port this service already owns.</summary>
+    public static string? HttpsPortConflict(HttpsConfig https, ConstructdOptions options)
+    {
+        if (https.SharedPort is not int port) return null;
+        if (port >= options.SshForwardPorts.Start && port <= options.SshForwardPorts.End ||
+            port >= options.AppForwardPorts.Start && port <= options.AppForwardPorts.End)
+            return $"Port {port} is inside a forward port range.";
+        return port == options.ApiPort() ? $"Port {port} is the API's own port." : null;
+    }
     public static bool UnsupportedOnPlatform(object value, bool isProxmox) =>
         value is NetworkConfig { DefaultMode: "direct" } && !isProxmox;
     [GeneratedRegex(@"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")]

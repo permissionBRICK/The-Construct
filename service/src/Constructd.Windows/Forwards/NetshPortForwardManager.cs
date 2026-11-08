@@ -73,6 +73,7 @@ public sealed class NetshPortForwardManager : IPortForwardManager
     private readonly ITcpTableReader _tcpTable;
     private readonly ConstructdOptions _options;
     private readonly ILogger<NetshPortForwardManager> _logger;
+    private readonly IHttpsForwardHost _https;
 
     private readonly PortAllocator _sshPorts;
     private readonly PortAllocator _appPorts;
@@ -100,7 +101,8 @@ public sealed class NetshPortForwardManager : IPortForwardManager
         ITcpTableReader tcpTable,
         ConstructdOptions options,
         ILogger<NetshPortForwardManager> logger,
-        Func<int, bool>? portAvailable = null)
+        Func<int, bool>? portAvailable = null,
+        IHttpsForwardHost? https = null)
     {
         ArgumentNullException.ThrowIfNull(options);
 
@@ -113,6 +115,7 @@ public sealed class NetshPortForwardManager : IPortForwardManager
         _tcpTable = tcpTable;
         _options = options;
         _logger = logger;
+        _https = https ?? NoHttpsForwardHost.Instance;
 
         _sshPorts = new PortAllocator(options.SshForwardPorts.Start, options.SshForwardPorts.End);
         _appPorts = new PortAllocator(options.AppForwardPorts.Start, options.AppForwardPorts.End);
@@ -225,6 +228,10 @@ public sealed class NetshPortForwardManager : IPortForwardManager
         string label, int maxForwards, CancellationToken cancellationToken) =>
         AddForwardAsync(vmName, vmPort, target, label, maxForwards, cancellationToken, null);
 
+    public Task<AddForwardResult> TryAddHttpsForwardAsync(string vmName, int vmPort, string label, HttpsForwardOptions https,
+        int maxForwards, CancellationToken cancellationToken) =>
+        AddForwardAsync(vmName, vmPort, ForwardTarget.Host, label, maxForwards, cancellationToken, null, https);
+
     public Task<AddForwardResult> TryAddDestinationForwardAsync(ForwardRequest request,
         ForwardDestination destination, CancellationToken cancellationToken)
     {
@@ -242,7 +249,7 @@ public sealed class NetshPortForwardManager : IPortForwardManager
         ForwardTarget target,
         string label,
         int maxForwards,
-        CancellationToken cancellationToken, ForwardDestination? destination)
+        CancellationToken cancellationToken, ForwardDestination? destination, HttpsForwardOptions? https = null)
     {
         var name = ArgumentGuard.VmName(vmName);
         ArgumentGuard.Port(vmPort, "vm port");
@@ -276,7 +283,10 @@ public sealed class NetshPortForwardManager : IPortForwardManager
                 Target: target,
                 Label: label,
                 Created: _clock.UtcNow,
-                Destination: destination);
+                Destination: destination,
+                Https: https is not null,
+                Main: https?.Main == true,
+                UpstreamTls: https?.UpstreamTls);
 
             try
             {
@@ -297,8 +307,16 @@ public sealed class NetshPortForwardManager : IPortForwardManager
             {
                 try
                 {
-                    var address = destination?.ConnectAddress ?? (await ResolveVmAddressAsync(name, port, cancellationToken).ConfigureAwait(false)).Address;
-                    await AddRuleAsync(name, port, address, destination?.ConnectPort ?? vmPort, cancellationToken).ConfigureAwait(false);
+                    if (forward.Https)
+                    {
+                        // TLS is terminated in this process; a portproxy rule on the port would take it away.
+                        _https.Ensure(forward);
+                    }
+                    else
+                    {
+                        var address = destination?.ConnectAddress ?? (await ResolveVmAddressAsync(name, port, cancellationToken).ConfigureAwait(false)).Address;
+                        await AddRuleAsync(name, port, address, destination?.ConnectPort ?? vmPort, cancellationToken).ConfigureAwait(false);
+                    }
                 }
                 catch
                 {
@@ -466,6 +484,15 @@ public sealed class NetshPortForwardManager : IPortForwardManager
                     continue;
                 }
 
+                if (forward.Https)
+                {
+                    // Served in-process: a portproxy rule left on the port (an older build) would shadow it.
+                    if (existing.ContainsKey(port) && !await DeleteRuleAsync(port, cancellationToken).ConfigureAwait(false))
+                        throw Fail(forward.VmName, port, "netsh delete left a rule on an HTTPS forward's port");
+                    _https.Ensure(forward);
+                    continue;
+                }
+
                 if (forward.Destination is { } destination)
                 {
                     // Child host exposure is admitted only by a future address authority.
@@ -555,18 +582,20 @@ public sealed class NetshPortForwardManager : IPortForwardManager
 
         foreach (var forward in await _store.ListAsync(vmName, cancellationToken).ConfigureAwait(false))
         {
-            if (forward.PublicPort is int publicPort)
+            // HTTPS forwards are counted by the process that terminates them, shared port included.
+            if (forward.PublicPort is int publicPort && !forward.Https)
             {
                 ports.Add(publicPort);
             }
         }
 
+        var https = _https.ActiveConnections(vmName);
         if (ports.Count == 0)
         {
-            return 0;
+            return https;
         }
 
-        return TcpConnectionCounter.CountEstablished(_tcpTable.Read(), ports);
+        return TcpConnectionCounter.CountEstablished(_tcpTable.Read(), ports) + https;
     }
 
     // ── host rules ───────────────────────────────────────────────────────────────────────────────
@@ -764,7 +793,11 @@ public sealed class NetshPortForwardManager : IPortForwardManager
             return;
         }
 
-        if (forward.Target == ForwardTarget.Host)
+        if (forward.Https)
+        {
+            await _https.StopAsync(forward.Id).ConfigureAwait(false);
+        }
+        else if (forward.Target == ForwardTarget.Host)
         {
             await DeleteRuleAsync(port, cancellationToken).ConfigureAwait(false);
         }

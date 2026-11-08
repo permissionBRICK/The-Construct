@@ -42,6 +42,20 @@ public interface IPortForwardManager
         int maxForwards,
         CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Adds a host forward of a primary VM whose public port terminates TLS with the host's certificate
+    /// (docs/https-forwards.md). Same cap, gate and port range as <see cref="TryAddForwardAsync"/>; the port
+    /// is materialized by the <see cref="IHttpsForwardHost"/> instead of a raw relay.
+    /// </summary>
+    Task<AddForwardResult> TryAddHttpsForwardAsync(
+        string vmName,
+        int vmPort,
+        string label,
+        HttpsForwardOptions https,
+        int maxForwards,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException("HTTPS forwards are unavailable on this host.");
+
     /// <summary>Adds a distinct child destination atomically with the forward under the manager gate.</summary>
     Task<AddForwardResult> TryAddDestinationForwardAsync(
         ForwardRequest request, ForwardDestination destination, CancellationToken cancellationToken) =>

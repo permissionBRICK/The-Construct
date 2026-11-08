@@ -1144,6 +1144,27 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("forwards: closing a host forward posts its id",
     posted.some((m) => m.type === "command" && m.id === "closeForward" && m.forward === "h-1"));
 
+  // HTTPS forwards (the host's certificate): marked, opened on their own url, and a main one
+  // also names the address on its own port.
+  await page.evaluate(() => window.postMessage({ type: "forwards", forwards:
+    { mode: "remote", owner: true, visible: true, items: [
+      { id: "h-main", vmPort: 3773, label: "t3 code", target: "host", status: "open", localPort: 31443, url: "https://dev.vms.example/", message: "", closable: true, https: true, main: true, portUrl: "https://vms.example:31443/" },
+      { id: "h-tls", vmPort: 8443, label: "api", target: "host", status: "open", localPort: 31444, url: "https://vms.example:31444/", message: "", closable: true, https: true },
+      { id: "h-plain", vmPort: 8080, label: "webhook", target: "host", status: "open", localPort: 31234, url: "http://vms.example:31234/", message: "", closable: true },
+    ] } }, "*"));
+  await page.waitForTimeout(60);
+  check("forwards: a main HTTPS forward is marked https · main",
+    (await page.locator("#fwdList .fwd-row").nth(0).locator(".fwd-https").textContent()) === "https · main");
+  check("forwards: ...links to its url",
+    (await page.locator("#fwdList .fwd-row").nth(0).locator(".fwd-open").getAttribute("title")) === "Open https://dev.vms.example/");
+  check("forwards: ...and also names its own-port address",
+    (await page.locator("#fwdList .fwd-row").nth(0).locator(".fwd-alt").textContent()) === "also https://vms.example:31443/");
+  check("forwards: a plain HTTPS forward is marked https",
+    (await page.locator("#fwdList .fwd-row").nth(1).locator(".fwd-https").textContent()) === "https"
+    && (await page.locator("#fwdList .fwd-row").nth(1).locator(".fwd-alt").count()) === 0);
+  check("forwards: a forward without TLS carries no https mark",
+    (await page.locator("#fwdList .fwd-row").nth(2).locator(".fwd-https").count()) === 0);
+
   // Forwards survive an offline push: a VM that stopped answering has not closed the
   // ports this PC is holding open.
   await page.evaluate(() => window.postMessage({ type: "state", state: { online: false, host: "h" } }, "*"));
@@ -1640,6 +1661,13 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await admin.waitForTimeout(40);
   check("admin: the user editor opens with the stored allowance", await admin.locator("#usrEditCard").isVisible()
     && (await admin.locator("#ua_maxChildLifetime").inputValue()) === "12h" && (await admin.locator("#ua_ramBudgetGiB").inputValue()) === "16");
+  check("admin: the user editor offers HTTPS forwards, refused by default",
+    (await admin.locator("#ue_allowHttpsForwards").inputValue()) === "false" && (await admin.locator("#ueUserForm").textContent()).includes("Lets this user's VMs publish links with the host's trusted certificate."));
+  await admin.evaluate(() => { window.__posted.length = 0; });
+  await admin.selectOption("#ue_allowHttpsForwards", "true");
+  await admin.click("#ueSaveUser");
+  aposted = await admin.evaluate(() => window.__posted);
+  check("admin: Save user posts the HTTPS permission", aposted.some((m) => m.action === "updateUser" && m.args.name === "alice" && m.args.form.allowHttpsForwards === "true"));
   await admin.evaluate(() => { window.__posted.length = 0; });
   await admin.fill("#ua_maxRetainedChildren", "5");
   await admin.click("#ueSaveAllowance");
@@ -1667,6 +1695,66 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   aposted = await admin.evaluate(() => window.__posted);
   check("admin: an edited section is posted with its CAS stamp",
     aposted.some((m) => m.action === "saveConfig" && m.args.sections.length === 1 && m.args.sections[0].key === "capacity" && m.args.sections[0].expectedUpdatedAt === "2026-09-07T09:00:00Z"));
+  check("admin: a host without HTTPS forwards shows no certificate card", !(await admin.locator("#httpsCard").isVisible()));
+  const httpsModel = require("../src/hostadmin");
+  const httpsCard = httpsModel.toHttpsView({
+    certificate: { subject: "CN=*.vms.example", issuer: "CN=Example CA", dnsNames: ["*.vms.example", "vms.example"], notAfter: "2026-09-20T00:00:00Z", sha256: "ab".repeat(32), chainLength: 2 },
+    config: { sharedPort: 443 }, listeners: [{ kind: "forward", forwardId: "f-build", port: 0, listening: false, error: "could not listen on port 31444" }],
+    warnings: ["The certificate expires in 8 days."] }, Date.parse("2026-09-11T12:00:00Z"));
+  const httpsState = { ...ADMIN_STATE, activeTab: "config", config: { ...ADMIN_STATE.config, problems: [], https: httpsCard } };
+  await pushAdmin(httpsState);
+  await admin.waitForTimeout(60);
+  const httpsText = await admin.locator("#httpsCard").textContent();
+  check("admin: the certificate card shows subject, names, expiry and fingerprint",
+    await admin.locator("#httpsCard").isVisible() && httpsText.includes("CN=*.vms.example") && httpsText.includes("*.vms.example, vms.example")
+    && httpsText.includes("8 days left") && httpsText.includes("AB:AB:AB"));
+  check("admin: ...the warnings and the failed listeners",
+    httpsText.includes("The certificate expires in 8 days.") && httpsText.includes("f-build: could not listen on port 31444"));
+  await admin.click("#httpsSet");
+  check("admin: Set certificate opens the inline form (PEM by default)",
+    await admin.locator("#httpsForm").isVisible() && await admin.locator("#httpsChain").isVisible() && !(await admin.locator("#httpsPfx").isVisible()));
+  await admin.evaluate(() => { window.__posted.length = 0; });
+  await admin.setInputFiles("#httpsChain", { name: "chain.pem", mimeType: "text/plain", buffer: Buffer.from("CHAIN-TEXT") });
+  await admin.click("#httpsInstall");
+  await admin.waitForTimeout(60);
+  check("admin: a missing key file is refused inline, nothing is posted",
+    (await admin.locator("#httpsProblem").textContent()).includes("Choose the certificate chain and the key file.") && !(await admin.evaluate(() => window.__posted)).some((m) => m.action === "setHttpsCertificate"));
+  await admin.setInputFiles("#httpsKey", { name: "key.pem", mimeType: "text/plain", buffer: Buffer.from("KEY-TEXT") });
+  await admin.click("#httpsInstall");
+  await admin.waitForTimeout(100);
+  aposted = await admin.evaluate(() => window.__posted);
+  check("admin: Install posts the PEM chain and key read from the files",
+    aposted.some((m) => m.action === "setHttpsCertificate" && m.args.certificatePem === "CHAIN-TEXT" && m.args.privateKeyPem === "KEY-TEXT"));
+  check("admin: ...then closes the form and clears the chosen files",
+    !(await admin.locator("#httpsForm").isVisible()) && (await admin.evaluate(() => document.getElementById("httpsChain").files.length + document.getElementById("httpsKey").files.length)) === 0);
+  await admin.click("#httpsSet");
+  await admin.selectOption("#httpsFormat", "pfx");
+  await admin.setInputFiles("#httpsPfx", { name: "host.pfx", mimeType: "application/x-pkcs12", buffer: Buffer.from([0, 1, 2, 250, 251, 252]) });
+  await admin.fill("#httpsPassword", "pfx-pass");
+  await admin.evaluate(() => { window.__posted.length = 0; });
+  await admin.click("#httpsInstall");
+  await admin.waitForTimeout(100);
+  aposted = await admin.evaluate(() => window.__posted);
+  check("admin: a PFX is posted as base64 with its password",
+    aposted.some((m) => m.action === "setHttpsCertificate" && m.args.pfx === Buffer.from([0, 1, 2, 250, 251, 252]).toString("base64") && m.args.password === "pfx-pass"));
+  check("admin: ...and the password field is cleared", (await admin.evaluate(() => document.getElementById("httpsPassword").value)) === "");
+  await pushAdmin({ ...httpsState, config: { ...httpsState.config, https: { ...httpsCard, problem: "The private key does not match the certificate." } } });
+  await admin.waitForTimeout(60);
+  check("admin: the host's refusal shows inline in the card",
+    (await admin.locator("#httpsProblem").textContent()) === "The private key does not match the certificate." && await admin.locator("#httpsProblem").isVisible());
+  await admin.evaluate(() => { window.__posted.length = 0; });
+  await admin.click("#httpsRemove");
+  check("admin: Remove asks inline first", await admin.locator("#httpsRemoveConfirm").isVisible() && !(await admin.evaluate(() => window.__posted)).length);
+  await admin.click("#httpsRemoveNo");
+  check("admin: ...Cancel posts nothing", !(await admin.locator("#httpsRemoveConfirm").isVisible()) && !(await admin.evaluate(() => window.__posted)).length);
+  await admin.click("#httpsRemove");
+  await admin.click("#httpsRemoveYes");
+  aposted = await admin.evaluate(() => window.__posted);
+  check("admin: ...and confirming posts removeHttpsCertificate", aposted.some((m) => m.action === "removeHttpsCertificate"));
+  await pushAdmin({ ...httpsState, config: { ...httpsState.config, https: httpsModel.toHttpsView({ certificate: null, config: { sharedPort: null } }, Date.now()) } });
+  await admin.waitForTimeout(60);
+  check("admin: without a certificate the card says so and offers no Remove",
+    (await admin.locator("#httpsInfo").textContent()).includes("No certificate") && !(await admin.locator("#httpsRemove").isVisible()));
   await pushAdmin({ ...ADMIN_STATE, activeTab: "media" });
   await admin.waitForTimeout(60);
   check("admin: a referenced media item cannot be deleted from here", await admin.locator("#mediaTable button", { hasText: "Delete" }).isDisabled());

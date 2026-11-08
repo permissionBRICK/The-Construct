@@ -44,9 +44,9 @@ const CHILD_ACTIONS = [
 
 const CONFIG_SCHEMA = require("./hostadmin-config-schema");
 /** The host-config sections of §1.5, in display order. */
-const CONFIG_SECTIONS = ["capacity", "memoryPressure", "userDefaults", "userCaps", "lifecycle", "media", "network", "virtualization", "updates", "usage", "vault"];
+const CONFIG_SECTIONS = ["capacity", "memoryPressure", "userDefaults", "userCaps", "lifecycle", "media", "network", "virtualization", "updates", "usage", "vault", "https"];
 // Sections an older host does not have: shown only when the host's configuration carries them.
-const NEWER_CONFIG_SECTIONS = ["memoryPressure", "usage", "vault"];
+const NEWER_CONFIG_SECTIONS = ["memoryPressure", "usage", "vault", "https"];
 
 /** The tabs of §10.2 and the feature each one needs. `host-admin` gates the module. */
 const TABS = [
@@ -567,6 +567,8 @@ function toUserRow(user) {
     enabled: u.enabled !== false,
     maxVms: num(u.maxVms),
     allowHostForwards: u.allowHostForwards !== false,
+    // Off by default and separate from host forwards: an older host never sends it.
+    allowHttpsForwards: u.allowHttpsForwards === true,
     allowNested: typeof u.allowNested === "boolean" ? u.allowNested : null,
     created: formatWhen(u.created),
     primaries: num(vms.primaries) || 0,
@@ -705,6 +707,64 @@ function toCapabilityRows(body) {
   const policy = b.policy && typeof b.policy === "object" ? b.policy : {};
   walk("policy.", policy);
   return { backend: str(b.backend), rows, notes: Array.isArray(caps.notes) ? caps.notes.map(str) : [] };
+}
+
+/** A SHA-256 hex digest as "AB:CD:…"; anything else unchanged. Pure. */
+function fingerprintText(value) {
+  const s = str(value).toUpperCase();
+  return /^[0-9A-F]+$/.test(s) && s.length % 2 === 0 ? s.match(/../g).join(":") : s;
+}
+
+/**
+ * The Configuration tab's HTTPS certificate card from `GET /host/https` (HTTPS forwards):
+ * the installed certificate, what the host warns about, and the TLS listeners that failed.
+ * `problem` is the inline refusal of the last "Set certificate". Pure.
+ */
+function toHttpsView(status, now) {
+  const s = status && typeof status === "object" ? status : {};
+  const c = s.certificate && typeof s.certificate === "object" ? s.certificate : null;
+  const config = s.config && typeof s.config === "object" ? s.config : {};
+  const listeners = (Array.isArray(s.listeners) ? s.listeners : []).filter((l) => l && typeof l === "object");
+  let certificate = null;
+  if (c) {
+    const end = Date.parse(str(c.notAfter));
+    const daysLeft = Number.isFinite(end) ? Math.floor((end - (typeof now === "number" ? now : Date.now())) / 86400000) : null;
+    certificate = {
+      subject: str(c.subject), issuer: str(c.issuer),
+      names: (Array.isArray(c.dnsNames) ? c.dnsNames.map(str).filter(Boolean) : []).join(", ") || "—",
+      validUntil: formatWhen(c.notAfter),
+      daysLeft,
+      expiry: daysLeft === null ? "" : daysLeft < 0 ? "expired" : `${daysLeft} day${daysLeft === 1 ? "" : "s"} left`,
+      expiring: daysLeft !== null && daysLeft < 14,
+      sha256: fingerprintText(c.sha256),
+      chainLength: num(c.chainLength) || 0,
+      installedAt: formatWhen(c.installedAt),
+    };
+  }
+  return {
+    certificate,
+    sharedPort: num(config.sharedPort) === null ? "off" : String(num(config.sharedPort)),
+    warnings: (Array.isArray(s.warnings) ? s.warnings : []).map(str).filter(Boolean),
+    listening: listeners.filter((l) => l.listening === true).length,
+    failedListeners: listeners.filter((l) => l.listening !== true || str(l.error)).map((l) =>
+      (str(l.kind) === "shared" ? "Shared port" : str(l.vmName) || str(l.forwardId) || "Forward") +
+      ((num(l.port) || 0) > 0 ? " :" + num(l.port) : "") + ": " + (str(l.error) || "not listening")),
+    problem: "",
+  };
+}
+
+/**
+ * The webview's certificate choice → the `PUT /host/https/certificate` body: a PEM chain
+ * with its key, or a base64 PFX with an optional password. Never logged. Pure.
+ */
+function httpsCertificateRequest(input) {
+  const a = input && typeof input === "object" ? input : {};
+  const pfx = typeof a.pfx === "string" ? a.pfx.trim() : "";
+  if (pfx) return { ok: true, body: { pfx, password: typeof a.password === "string" && a.password !== "" ? a.password : null } };
+  const certificatePem = typeof a.certificatePem === "string" ? a.certificatePem : "";
+  const privateKeyPem = typeof a.privateKeyPem === "string" ? a.privateKeyPem : "";
+  if (!certificatePem.trim() || !privateKeyPem.trim()) return { ok: false, error: "Choose a PEM certificate chain and its key, or a PFX file." };
+  return { ok: true, body: { certificatePem, privateKeyPem } };
 }
 
 /** The non-terminal update states (§11.8). */
@@ -896,6 +956,8 @@ function parseUserForm(form) {
   if (maxVms !== null) body.maxVms = maxVms;
   const hf = parseTri(f.allowHostForwards, "allowHostForwards", problems);
   if (hf !== null) body.allowHostForwards = hf;
+  const https = parseTri(f.allowHttpsForwards, "allowHttpsForwards", problems);
+  if (https !== null) body.allowHttpsForwards = https;
   if (Object.hasOwn(f, "allowNested")) body.allowNested = parseTri(f.allowNested, "allowNested", problems);
   if (!problems.length && !Object.keys(body).length) problems.push({ field: "", reason: "nothing to change" });
   return { ok: problems.length === 0, body, problems };
@@ -1320,7 +1382,11 @@ function createHostAdminModel(deps = {}) {
         const sections = toConfigView(await client.hostConfig());
         let capabilities = null;
         try { capabilities = toCapabilityRows(await client.hostCapabilities()); } catch (e) { if (refused(e)) return state; }
-        state.config = { sections, capabilities, problems: [] };
+        // The HTTPS certificate card: null hides it (a host without HTTPS forwards answers 404).
+        let https = null;
+        try { https = toHttpsView(await client.httpsStatus(), now()); }
+        catch (e) { if (refused(e)) return state; if (errStatus(e) !== 404) https = { ...toHttpsView(null, now()), unavailable: errText(e) }; }
+        state.config = { sections, capabilities, problems: [], https };
       } else if (id === "maintenance") {
         await model.refreshUpdates();
       }
@@ -1587,6 +1653,32 @@ function createHostAdminModel(deps = {}) {
             throw e;
           }
         }
+        case "setHttpsCertificate": {
+          // The key material passes through to the one request and is neither stored nor logged.
+          const request = httpsCertificateRequest(args);
+          const inline = (reason) => {
+            if (state.config && state.config.https) state.config = { ...state.config, https: { ...state.config.https, problem: reason } };
+            else notice("error", reason);
+            return { ok: false, error: reason };
+          };
+          if (!request.ok) return inline(request.error);
+          try {
+            const res = await client.setHttpsCertificate(request.body);
+            if (state.config) state.config = { ...state.config, https: toHttpsView(res, now()) };
+            notice("info", "HTTPS certificate installed.");
+            return { ok: true };
+          } catch (e) {
+            if (errStatus(e) !== 400) throw e;
+            const b = e.body && typeof e.body === "object" ? e.body : {};
+            return inline(str(b.detail) || str(b.reason) || errText(e));
+          }
+        }
+        case "removeHttpsCertificate": {
+          const res = await client.removeHttpsCertificate();
+          if (state.config) state.config = { ...state.config, https: toHttpsView(res, now()) };
+          notice("info", "HTTPS certificate removed.");
+          return { ok: true };
+        }
         case "updatesCheck": {
           const res = await client.updatesCheck(str(args.releaseTag) ? { releaseTag: str(args.releaseTag) } : {});
           const text = checkResultText(res);
@@ -1635,6 +1727,7 @@ module.exports = {
   featureSet, isMaintenanceError, maintenanceOf, classifyHost, resolveHostState, applyRefusal, tabsFor, pollIntervalMs,
   leaseText, guestText, resourcesText, operationText, toVmRow, toVmRows, toCapacityBars, toOverview,
   allowanceText, toUserRow, toMediaRow, toIsoCatalogView, toJobRow, toAuditRow, toConfigView, toCapabilityRows,
+  fingerprintText, toHttpsView, httpsCertificateRequest,
   updateActionsFor, toUpdateView, checkResultText,
   parseLifetime, lifetimeTextOf, allowanceForm, parseAllowanceForm, parseOverridesForm, parseUserForm, parseNewUserForm,
   parseConfigSection, buildConfigRequest, configProblemsOf,

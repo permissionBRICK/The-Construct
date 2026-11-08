@@ -82613,6 +82613,317 @@
     }
   },
   {
+    "input": [
+      {
+        "created": "2026-11-08T08:00:00+00:00",
+        "https": true,
+        "id": "f-t3",
+        "label": "t3 code",
+        "main": true,
+        "portUrl": "https://vms.example:31443/",
+        "publicPort": 31443,
+        "target": "host",
+        "upstreamTls": false,
+        "url": "https://dev.vms.example/",
+        "vmName": "dev",
+        "vmPort": 3773
+      },
+      {
+        "created": "2026-11-08T08:01:00+00:00",
+        "https": true,
+        "id": "f-api",
+        "label": "api",
+        "publicPort": 31444,
+        "target": "host",
+        "upstreamTls": true,
+        "url": "https://vms.example:31444/",
+        "vmName": "dev",
+        "vmPort": 8443
+      },
+      {
+        "created": "2026-11-08T08:02:00+00:00",
+        "id": "f-web",
+        "label": "webhook",
+        "publicPort": 31234,
+        "target": "host",
+        "url": "http://vms.example:31234/",
+        "vmName": "dev",
+        "vmPort": 8080
+      },
+      {
+        "https": "true",
+        "id": "f-odd",
+        "label": "odd",
+        "main": true,
+        "portUrl": "",
+        "publicPort": 31445,
+        "target": "host",
+        "url": "https://vms.example:31445/",
+        "vmName": "dev",
+        "vmPort": 9000
+      }
+    ],
+    "kind": "remote",
+    "output": {
+      "acks": [],
+      "closes": [],
+      "host": [
+        {
+          "https": true,
+          "id": "f-t3",
+          "label": "t3 code",
+          "main": true,
+          "portUrl": "https://vms.example:31443/",
+          "publicPort": 31443,
+          "target": "host",
+          "url": "https://dev.vms.example/",
+          "vmPort": 3773
+        },
+        {
+          "https": true,
+          "id": "f-api",
+          "label": "api",
+          "publicPort": 31444,
+          "target": "host",
+          "url": "https://vms.example:31444/",
+          "vmPort": 8443
+        },
+        {
+          "id": "f-web",
+          "label": "webhook",
+          "publicPort": 31234,
+          "target": "host",
+          "url": "http://vms.example:31234/",
+          "vmPort": 8080
+        },
+        {
+          "id": "f-odd",
+          "label": "odd",
+          "publicPort": 31445,
+          "target": "host",
+          "url": "https://vms.example:31445/",
+          "vmPort": 9000
+        }
+      ],
+      "pending": [],
+      "requests": []
+    }
+  },
+  {
+    "input": {
+      "acks": [],
+      "closes": [],
+      "host": [
+        {
+          "https": true,
+          "id": "f-t3",
+          "label": "t3 code",
+          "main": true,
+          "portUrl": "https://vms.example:31443/",
+          "publicPort": 31443,
+          "target": "host",
+          "url": "https://dev.vms.example/",
+          "vmPort": 3773
+        },
+        {
+          "https": true,
+          "id": "f-api",
+          "label": "api",
+          "publicPort": 31444,
+          "target": "host",
+          "url": "https://vms.example:31444/",
+          "vmPort": 8443
+        },
+        {
+          "id": "f-web",
+          "label": "webhook",
+          "publicPort": 31234,
+          "target": "host",
+          "url": "http://vms.example:31234/",
+          "vmPort": 8080
+        },
+        {
+          "id": "f-odd",
+          "label": "odd",
+          "publicPort": 31445,
+          "target": "host",
+          "url": "https://vms.example:31445/",
+          "vmPort": 9000
+        }
+      ],
+      "mode": "remote",
+      "pending": [],
+      "requests": []
+    },
+    "kind": "snapshot",
+    "output": {
+      "items": [
+        {
+          "https": true,
+          "id": "f-t3",
+          "label": "t3 code",
+          "localPort": 31443,
+          "main": true,
+          "message": "",
+          "owned": false,
+          "portUrl": "https://vms.example:31443/",
+          "status": "open",
+          "target": "host",
+          "url": "https://dev.vms.example/",
+          "vmPort": 3773
+        },
+        {
+          "id": "f-web",
+          "label": "webhook",
+          "localPort": 31234,
+          "message": "",
+          "owned": false,
+          "status": "open",
+          "target": "host",
+          "url": "http://vms.example:31234/",
+          "vmPort": 8080
+        },
+        {
+          "https": true,
+          "id": "f-api",
+          "label": "api",
+          "localPort": 31444,
+          "message": "",
+          "owned": false,
+          "status": "open",
+          "target": "host",
+          "url": "https://vms.example:31444/",
+          "vmPort": 8443
+        },
+        {
+          "id": "f-odd",
+          "label": "odd",
+          "localPort": 31445,
+          "message": "",
+          "owned": false,
+          "status": "open",
+          "target": "host",
+          "url": "https://vms.example:31445/",
+          "vmPort": 9000
+        }
+      ],
+      "mode": "remote",
+      "owner": true
+    }
+  },
+  {
+    "input": {
+      "items": [
+        {
+          "https": true,
+          "id": "f-t3",
+          "label": "t3 code",
+          "localPort": 31443,
+          "main": true,
+          "message": "",
+          "owned": false,
+          "portUrl": "https://vms.example:31443/",
+          "status": "open",
+          "target": "host",
+          "url": "https://dev.vms.example/",
+          "vmPort": 3773
+        },
+        {
+          "id": "f-web",
+          "label": "webhook",
+          "localPort": 31234,
+          "message": "",
+          "owned": false,
+          "status": "open",
+          "target": "host",
+          "url": "http://vms.example:31234/",
+          "vmPort": 8080
+        },
+        {
+          "https": true,
+          "id": "f-api",
+          "label": "api",
+          "localPort": 31444,
+          "message": "",
+          "owned": false,
+          "status": "open",
+          "target": "host",
+          "url": "https://vms.example:31444/",
+          "vmPort": 8443
+        },
+        {
+          "id": "f-odd",
+          "label": "odd",
+          "localPort": 31445,
+          "message": "",
+          "owned": false,
+          "status": "open",
+          "target": "host",
+          "url": "https://vms.example:31445/",
+          "vmPort": 9000
+        }
+      ],
+      "mode": "remote",
+      "owner": true
+    },
+    "kind": "panel",
+    "output": {
+      "items": [
+        {
+          "closable": true,
+          "https": true,
+          "id": "f-t3",
+          "label": "t3 code",
+          "localPort": 31443,
+          "main": true,
+          "message": "",
+          "portUrl": "https://vms.example:31443/",
+          "status": "open",
+          "target": "host",
+          "url": "https://dev.vms.example/",
+          "vmPort": 3773
+        },
+        {
+          "closable": true,
+          "id": "f-web",
+          "label": "webhook",
+          "localPort": 31234,
+          "message": "",
+          "status": "open",
+          "target": "host",
+          "url": "http://vms.example:31234/",
+          "vmPort": 8080
+        },
+        {
+          "closable": true,
+          "https": true,
+          "id": "f-api",
+          "label": "api",
+          "localPort": 31444,
+          "message": "",
+          "status": "open",
+          "target": "host",
+          "url": "https://vms.example:31444/",
+          "vmPort": 8443
+        },
+        {
+          "closable": true,
+          "id": "f-odd",
+          "label": "odd",
+          "localPort": 31445,
+          "message": "",
+          "status": "open",
+          "target": "host",
+          "url": "https://vms.example:31445/",
+          "vmPort": 9000
+        }
+      ],
+      "mode": "remote",
+      "owner": true,
+      "visible": true
+    }
+  },
+  {
     "input": {
       "armed": null,
       "enabled": false,

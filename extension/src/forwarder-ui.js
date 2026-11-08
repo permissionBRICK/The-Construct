@@ -259,6 +259,11 @@ function toPanelForwards(snapshot) {
       // The child a child-target forward reaches (§12.2) — present ONLY on such an item,
       // so a plain forward's panel item carries exactly the fields it always did.
       ...(typeof item.child === "string" && item.child ? { child: item.child } : {}),
+      // An HTTPS forward (the host's certificate): marked, and a main one may also name the
+      // address on its own port. Absent on every other item.
+      ...(item.https === true ? { https: true } : {}),
+      ...(item.https === true && item.main === true ? { main: true } : {}),
+      ...(item.https === true && typeof item.portUrl === "string" && item.portUrl ? { portUrl: item.portUrl } : {}),
       // May THIS window close it? Remotely the service is the authority, so any window
       // may ask it to delete any of the VM's forwards. Locally the spool has one owner,
       // and a non-owner deleting the owner's request/ack documents would tear down a

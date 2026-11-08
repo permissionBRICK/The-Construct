@@ -61,7 +61,8 @@ public static class AdminEndpoints
             return Problems.BadRequest("'maxVms' must be a non-negative number.");
         }
 
-        var user = new User(name, role, maxVms, clock.UtcNow, request.AllowHostForwards ?? true, Allowance: request.Allowance, AllowNested: request.AllowNested);
+        var user = new User(name, role, maxVms, clock.UtcNow, request.AllowHostForwards ?? true, Allowance: request.Allowance, AllowNested: request.AllowNested,
+            AllowHttpsForwards: request.AllowHttpsForwards ?? false);
 
         if (!await users.CreateAsync(user, cancellationToken).ConfigureAwait(false))
         {

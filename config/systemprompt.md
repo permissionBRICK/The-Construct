@@ -29,7 +29,8 @@ reachable from the user's machine over that name.
 When you start a server the user should open — a dev server, a preview, a
 notebook — run `construct expose <port>` and hand the user the link it prints.
 It opens that port on the user's own machine, waits until the link actually
-works, and tells you if nothing is connected right now. Forwards are lost on
+works, and tells you if nothing is connected right now. `construct expose --help`
+lists the other ways this VM's host can publish a port. Forwards are lost on
 reinstall; to keep one, add it to the project's profile:
 `"forwards": [{"port": 5173, "label": "vite dev"}]`.
 

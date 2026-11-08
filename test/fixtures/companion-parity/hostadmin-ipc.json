@@ -618,6 +618,7 @@
     "now": 1789128000000,
     "output": {
       "allowHostForwards": true,
+      "allowHttpsForwards": false,
       "allowNested": null,
       "allowance": {
         "allowChildCreation": "",
@@ -639,6 +640,732 @@
       "role": "user",
       "tokens": 0,
       "usageTokensMonth": "1.2M"
+    }
+  },
+  {
+    "input": {
+      "allowHostForwards": true,
+      "created": "2026-08-01T08:00:00+00:00",
+      "enabled": true,
+      "maxVms": 2,
+      "name": "DOMAIN\\alice",
+      "role": "User",
+      "tokens": 1,
+      "vms": {
+        "children": 0,
+        "primaries": 1
+      }
+    },
+    "kind": "user",
+    "now": 1789128000000,
+    "output": {
+      "allowHostForwards": true,
+      "allowHttpsForwards": false,
+      "allowNested": null,
+      "allowance": {
+        "allowChildCreation": "",
+        "allowNeverLifetime": "",
+        "allowSharing": "",
+        "cpuBudget": "",
+        "maxChildLifetime": "",
+        "maxRetainedChildren": "",
+        "ramBudgetGiB": "",
+        "storageBudgetGiB": ""
+      },
+      "children": 0,
+      "created": "2026-08-01 08:00 UTC",
+      "effective": "—",
+      "enabled": true,
+      "maxVms": 2,
+      "name": "DOMAIN\\alice",
+      "primaries": 1,
+      "role": "user",
+      "tokens": 1
+    }
+  },
+  {
+    "input": {
+      "allowHostForwards": true,
+      "allowHttpsForwards": false,
+      "created": "2026-08-01T08:00:00+00:00",
+      "enabled": true,
+      "maxVms": 2,
+      "name": "DOMAIN\\alice",
+      "role": "User",
+      "tokens": 1,
+      "vms": {
+        "children": 0,
+        "primaries": 1
+      }
+    },
+    "kind": "user",
+    "now": 1789128000000,
+    "output": {
+      "allowHostForwards": true,
+      "allowHttpsForwards": false,
+      "allowNested": null,
+      "allowance": {
+        "allowChildCreation": "",
+        "allowNeverLifetime": "",
+        "allowSharing": "",
+        "cpuBudget": "",
+        "maxChildLifetime": "",
+        "maxRetainedChildren": "",
+        "ramBudgetGiB": "",
+        "storageBudgetGiB": ""
+      },
+      "children": 0,
+      "created": "2026-08-01 08:00 UTC",
+      "effective": "—",
+      "enabled": true,
+      "maxVms": 2,
+      "name": "DOMAIN\\alice",
+      "primaries": 1,
+      "role": "user",
+      "tokens": 1
+    }
+  },
+  {
+    "input": {
+      "allowHostForwards": true,
+      "allowHttpsForwards": true,
+      "created": "2026-08-01T08:00:00+00:00",
+      "enabled": true,
+      "maxVms": 2,
+      "name": "DOMAIN\\alice",
+      "role": "User",
+      "tokens": 1,
+      "vms": {
+        "children": 0,
+        "primaries": 1
+      }
+    },
+    "kind": "user",
+    "now": 1789128000000,
+    "output": {
+      "allowHostForwards": true,
+      "allowHttpsForwards": true,
+      "allowNested": null,
+      "allowance": {
+        "allowChildCreation": "",
+        "allowNeverLifetime": "",
+        "allowSharing": "",
+        "cpuBudget": "",
+        "maxChildLifetime": "",
+        "maxRetainedChildren": "",
+        "ramBudgetGiB": "",
+        "storageBudgetGiB": ""
+      },
+      "children": 0,
+      "created": "2026-08-01 08:00 UTC",
+      "effective": "—",
+      "enabled": true,
+      "maxVms": 2,
+      "name": "DOMAIN\\alice",
+      "primaries": 1,
+      "role": "user",
+      "tokens": 1
+    }
+  },
+  {
+    "input": {
+      "allowHttpsForwards": "true"
+    },
+    "kind": "userForm",
+    "now": 1789128000000,
+    "output": {
+      "body": {
+        "allowHttpsForwards": true
+      },
+      "ok": true,
+      "problems": []
+    }
+  },
+  {
+    "input": {
+      "allowHostForwards": "true",
+      "allowHttpsForwards": "false"
+    },
+    "kind": "userForm",
+    "now": 1789128000000,
+    "output": {
+      "body": {
+        "allowHostForwards": true,
+        "allowHttpsForwards": false
+      },
+      "ok": true,
+      "problems": []
+    }
+  },
+  {
+    "input": {
+      "allowHttpsForwards": ""
+    },
+    "kind": "userForm",
+    "now": 1789128000000,
+    "output": {
+      "body": {},
+      "ok": false,
+      "problems": [
+        {
+          "field": "",
+          "reason": "nothing to change"
+        }
+      ]
+    }
+  },
+  {
+    "input": {
+      "allowHttpsForwards": "maybe"
+    },
+    "kind": "userForm",
+    "now": 1789128000000,
+    "output": {
+      "body": {},
+      "ok": false,
+      "problems": [
+        {
+          "field": "allowHttpsForwards",
+          "reason": "must be true, false or empty (inherit)"
+        }
+      ]
+    }
+  },
+  {
+    "input": null,
+    "kind": "https",
+    "now": 1789128000000,
+    "output": {
+      "certificate": null,
+      "failedListeners": [],
+      "listening": 0,
+      "problem": "",
+      "sharedPort": "off",
+      "warnings": []
+    }
+  },
+  {
+    "input": {},
+    "kind": "https",
+    "now": 1789128000000,
+    "output": {
+      "certificate": null,
+      "failedListeners": [],
+      "listening": 0,
+      "problem": "",
+      "sharedPort": "off",
+      "warnings": []
+    }
+  },
+  {
+    "input": {
+      "certificate": {
+        "chainLength": 2,
+        "dnsNames": [
+          "*.vms.example",
+          "vms.example"
+        ],
+        "installedAt": "2026-08-02T09:15:00+00:00",
+        "issuer": "CN=Example Issuing CA, O=Example",
+        "notAfter": "2026-10-30T23:59:59+00:00",
+        "notBefore": "2026-08-01T00:00:00+00:00",
+        "sha256": "9F86D081884C7D659A2FEAA0C55AD015A3BF4F1B2B0B822CD15D6C15B0F00A08",
+        "subject": "CN=*.vms.example"
+      },
+      "config": {
+        "sharedPort": 443,
+        "startOnRequest": true
+      },
+      "directory": "C:\\ProgramData\\Construct\\https",
+      "listeners": [
+        {
+          "error": null,
+          "forwardId": null,
+          "kind": "shared",
+          "listening": true,
+          "port": 443,
+          "vmName": null
+        },
+        {
+          "error": null,
+          "forwardId": "f-dev",
+          "kind": "forward",
+          "listening": true,
+          "port": 31443,
+          "vmName": "dev"
+        },
+        {
+          "error": "could not listen on port 31444 (AddressAlreadyInUse)",
+          "forwardId": "f-build",
+          "kind": "forward",
+          "listening": false,
+          "port": 0,
+          "vmName": null
+        }
+      ],
+      "names": {
+        "example": "example-vm.vms.example",
+        "exampleCovered": true,
+        "publicHost": "vms.example",
+        "publicHostCovered": true,
+        "publicHostPattern": "{name}.vms.example",
+        "vaultHost": "vault.vms.example",
+        "vaultHostCovered": true
+      },
+      "warnings": []
+    },
+    "kind": "https",
+    "now": 1789128000000,
+    "output": {
+      "certificate": {
+        "chainLength": 2,
+        "daysLeft": 49,
+        "expiring": false,
+        "expiry": "49 days left",
+        "installedAt": "2026-08-02 09:15 UTC",
+        "issuer": "CN=Example Issuing CA, O=Example",
+        "names": "*.vms.example, vms.example",
+        "sha256": "9F:86:D0:81:88:4C:7D:65:9A:2F:EA:A0:C5:5A:D0:15:A3:BF:4F:1B:2B:0B:82:2C:D1:5D:6C:15:B0:F0:0A:08",
+        "subject": "CN=*.vms.example",
+        "validUntil": "2026-10-30 23:59 UTC"
+      },
+      "failedListeners": [
+        "f-build: could not listen on port 31444 (AddressAlreadyInUse)"
+      ],
+      "listening": 2,
+      "problem": "",
+      "sharedPort": "443",
+      "warnings": []
+    }
+  },
+  {
+    "input": {
+      "certificate": {
+        "chainLength": 2,
+        "dnsNames": [
+          "*.vms.example",
+          "vms.example"
+        ],
+        "installedAt": "2026-08-02T09:15:00+00:00",
+        "issuer": "CN=Example Issuing CA, O=Example",
+        "notAfter": "2026-09-20T00:00:00+00:00",
+        "notBefore": "2026-08-01T00:00:00+00:00",
+        "sha256": "abc",
+        "subject": "CN=*.vms.example"
+      },
+      "config": {
+        "sharedPort": 443,
+        "startOnRequest": true
+      },
+      "directory": "C:\\ProgramData\\Construct\\https",
+      "listeners": [
+        {
+          "error": null,
+          "forwardId": null,
+          "kind": "shared",
+          "listening": true,
+          "port": 443,
+          "vmName": null
+        },
+        {
+          "error": null,
+          "forwardId": "f-dev",
+          "kind": "forward",
+          "listening": true,
+          "port": 31443,
+          "vmName": "dev"
+        },
+        {
+          "error": "could not listen on port 31444 (AddressAlreadyInUse)",
+          "forwardId": "f-build",
+          "kind": "forward",
+          "listening": false,
+          "port": 0,
+          "vmName": null
+        }
+      ],
+      "names": {
+        "example": "example-vm.vms.example",
+        "exampleCovered": true,
+        "publicHost": "vms.example",
+        "publicHostCovered": true,
+        "publicHostPattern": "{name}.vms.example",
+        "vaultHost": "vault.vms.example",
+        "vaultHostCovered": true
+      },
+      "warnings": [
+        "The certificate expires in 8 days."
+      ]
+    },
+    "kind": "https",
+    "now": 1789128000000,
+    "output": {
+      "certificate": {
+        "chainLength": 2,
+        "daysLeft": 8,
+        "expiring": true,
+        "expiry": "8 days left",
+        "installedAt": "2026-08-02 09:15 UTC",
+        "issuer": "CN=Example Issuing CA, O=Example",
+        "names": "*.vms.example, vms.example",
+        "sha256": "ABC",
+        "subject": "CN=*.vms.example",
+        "validUntil": "2026-09-20 00:00 UTC"
+      },
+      "failedListeners": [
+        "f-build: could not listen on port 31444 (AddressAlreadyInUse)"
+      ],
+      "listening": 2,
+      "problem": "",
+      "sharedPort": "443",
+      "warnings": [
+        "The certificate expires in 8 days."
+      ]
+    }
+  },
+  {
+    "input": {
+      "certificate": {
+        "chainLength": 2,
+        "dnsNames": [],
+        "installedAt": "2026-08-02T09:15:00+00:00",
+        "issuer": "CN=Example Issuing CA, O=Example",
+        "notAfter": "2026-09-13T00:00:00+00:00",
+        "notBefore": "2026-08-01T00:00:00+00:00",
+        "sha256": "9F86D081884C7D659A2FEAA0C55AD015A3BF4F1B2B0B822CD15D6C15B0F00A08",
+        "subject": "CN=*.vms.example"
+      },
+      "config": {
+        "sharedPort": 443,
+        "startOnRequest": true
+      },
+      "directory": "C:\\ProgramData\\Construct\\https",
+      "listeners": [
+        {
+          "error": null,
+          "forwardId": null,
+          "kind": "shared",
+          "listening": true,
+          "port": 443,
+          "vmName": null
+        },
+        {
+          "error": null,
+          "forwardId": "f-dev",
+          "kind": "forward",
+          "listening": true,
+          "port": 31443,
+          "vmName": "dev"
+        },
+        {
+          "error": "could not listen on port 31444 (AddressAlreadyInUse)",
+          "forwardId": "f-build",
+          "kind": "forward",
+          "listening": false,
+          "port": 0,
+          "vmName": null
+        }
+      ],
+      "names": {
+        "example": "example-vm.vms.example",
+        "exampleCovered": true,
+        "publicHost": "vms.example",
+        "publicHostCovered": true,
+        "publicHostPattern": "{name}.vms.example",
+        "vaultHost": "vault.vms.example",
+        "vaultHostCovered": true
+      },
+      "warnings": []
+    },
+    "kind": "https",
+    "now": 1789128000000,
+    "output": {
+      "certificate": {
+        "chainLength": 2,
+        "daysLeft": 1,
+        "expiring": true,
+        "expiry": "1 day left",
+        "installedAt": "2026-08-02 09:15 UTC",
+        "issuer": "CN=Example Issuing CA, O=Example",
+        "names": "—",
+        "sha256": "9F:86:D0:81:88:4C:7D:65:9A:2F:EA:A0:C5:5A:D0:15:A3:BF:4F:1B:2B:0B:82:2C:D1:5D:6C:15:B0:F0:0A:08",
+        "subject": "CN=*.vms.example",
+        "validUntil": "2026-09-13 00:00 UTC"
+      },
+      "failedListeners": [
+        "f-build: could not listen on port 31444 (AddressAlreadyInUse)"
+      ],
+      "listening": 2,
+      "problem": "",
+      "sharedPort": "443",
+      "warnings": []
+    }
+  },
+  {
+    "input": {
+      "certificate": {
+        "chainLength": 2,
+        "dnsNames": [
+          "*.vms.example",
+          "vms.example"
+        ],
+        "installedAt": "2026-08-02T09:15:00+00:00",
+        "issuer": "CN=Example Issuing CA, O=Example",
+        "notAfter": "2026-09-01T00:00:00+00:00",
+        "notBefore": "2026-08-01T00:00:00+00:00",
+        "sha256": "9F86D081884C7D659A2FEAA0C55AD015A3BF4F1B2B0B822CD15D6C15B0F00A08",
+        "subject": "CN=*.vms.example"
+      },
+      "config": {
+        "sharedPort": 443,
+        "startOnRequest": true
+      },
+      "directory": "C:\\ProgramData\\Construct\\https",
+      "listeners": [
+        {
+          "error": null,
+          "forwardId": null,
+          "kind": "shared",
+          "listening": true,
+          "port": 443,
+          "vmName": null
+        },
+        {
+          "error": null,
+          "forwardId": "f-dev",
+          "kind": "forward",
+          "listening": true,
+          "port": 31443,
+          "vmName": "dev"
+        },
+        {
+          "error": "could not listen on port 31444 (AddressAlreadyInUse)",
+          "forwardId": "f-build",
+          "kind": "forward",
+          "listening": false,
+          "port": 0,
+          "vmName": null
+        }
+      ],
+      "names": {
+        "example": "example-vm.vms.example",
+        "exampleCovered": true,
+        "publicHost": "vms.example",
+        "publicHostCovered": true,
+        "publicHostPattern": "{name}.vms.example",
+        "vaultHost": "vault.vms.example",
+        "vaultHostCovered": true
+      },
+      "warnings": [
+        "The certificate has expired."
+      ]
+    },
+    "kind": "https",
+    "now": 1789128000000,
+    "output": {
+      "certificate": {
+        "chainLength": 2,
+        "daysLeft": -11,
+        "expiring": true,
+        "expiry": "expired",
+        "installedAt": "2026-08-02 09:15 UTC",
+        "issuer": "CN=Example Issuing CA, O=Example",
+        "names": "*.vms.example, vms.example",
+        "sha256": "9F:86:D0:81:88:4C:7D:65:9A:2F:EA:A0:C5:5A:D0:15:A3:BF:4F:1B:2B:0B:82:2C:D1:5D:6C:15:B0:F0:0A:08",
+        "subject": "CN=*.vms.example",
+        "validUntil": "2026-09-01 00:00 UTC"
+      },
+      "failedListeners": [
+        "f-build: could not listen on port 31444 (AddressAlreadyInUse)"
+      ],
+      "listening": 2,
+      "problem": "",
+      "sharedPort": "443",
+      "warnings": [
+        "The certificate has expired."
+      ]
+    }
+  },
+  {
+    "input": {
+      "certificate": null,
+      "config": {
+        "sharedPort": 8443,
+        "startOnRequest": false
+      },
+      "directory": "C:\\ProgramData\\Construct\\https",
+      "listeners": [
+        {
+          "error": "no certificate is installed",
+          "forwardId": null,
+          "kind": "shared",
+          "listening": false,
+          "port": 8443,
+          "vmName": null
+        }
+      ],
+      "names": {
+        "example": "vms.example",
+        "exampleCovered": null,
+        "publicHost": "vms.example",
+        "publicHostCovered": null,
+        "publicHostPattern": null,
+        "vaultHost": null,
+        "vaultHostCovered": null
+      },
+      "warnings": [
+        "Main forwards are only served on the shared port when Constructd:PublicHostPattern gives every VM its own name."
+      ]
+    },
+    "kind": "https",
+    "now": 1789128000000,
+    "output": {
+      "certificate": null,
+      "failedListeners": [
+        "Shared port :8443: no certificate is installed"
+      ],
+      "listening": 0,
+      "problem": "",
+      "sharedPort": "8443",
+      "warnings": [
+        "Main forwards are only served on the shared port when Constructd:PublicHostPattern gives every VM its own name."
+      ]
+    }
+  },
+  {
+    "input": {
+      "certificate": {
+        "chainLength": 2,
+        "dnsNames": [
+          "*.vms.example",
+          "vms.example"
+        ],
+        "installedAt": "2026-08-02T09:15:00+00:00",
+        "issuer": "CN=Example Issuing CA, O=Example",
+        "notAfter": "2026-10-30T23:59:59+00:00",
+        "notBefore": "2026-08-01T00:00:00+00:00",
+        "sha256": "9F86D081884C7D659A2FEAA0C55AD015A3BF4F1B2B0B822CD15D6C15B0F00A08",
+        "subject": "CN=*.vms.example"
+      },
+      "config": {
+        "sharedPort": null,
+        "startOnRequest": true
+      },
+      "directory": "C:\\ProgramData\\Construct\\https",
+      "listeners": [],
+      "names": {
+        "example": "example-vm.vms.example",
+        "exampleCovered": true,
+        "publicHost": "vms.example",
+        "publicHostCovered": true,
+        "publicHostPattern": "{name}.vms.example",
+        "vaultHost": "vault.vms.example",
+        "vaultHostCovered": true
+      },
+      "warnings": []
+    },
+    "kind": "https",
+    "now": 1789128000000,
+    "output": {
+      "certificate": {
+        "chainLength": 2,
+        "daysLeft": 49,
+        "expiring": false,
+        "expiry": "49 days left",
+        "installedAt": "2026-08-02 09:15 UTC",
+        "issuer": "CN=Example Issuing CA, O=Example",
+        "names": "*.vms.example, vms.example",
+        "sha256": "9F:86:D0:81:88:4C:7D:65:9A:2F:EA:A0:C5:5A:D0:15:A3:BF:4F:1B:2B:0B:82:2C:D1:5D:6C:15:B0:F0:0A:08",
+        "subject": "CN=*.vms.example",
+        "validUntil": "2026-10-30 23:59 UTC"
+      },
+      "failedListeners": [],
+      "listening": 0,
+      "problem": "",
+      "sharedPort": "off",
+      "warnings": []
+    }
+  },
+  {
+    "input": {},
+    "kind": "httpsRequest",
+    "now": 1789128000000,
+    "output": {
+      "error": "Choose a PEM certificate chain and its key, or a PFX file.",
+      "ok": false
+    }
+  },
+  {
+    "input": {
+      "certificatePem": "certificate chain",
+      "privateKeyPem": "private key"
+    },
+    "kind": "httpsRequest",
+    "now": 1789128000000,
+    "output": {
+      "body": {
+        "certificatePem": "certificate chain",
+        "privateKeyPem": "private key"
+      },
+      "ok": true
+    }
+  },
+  {
+    "input": {
+      "certificatePem": "certificate chain",
+      "privateKeyPem": "  "
+    },
+    "kind": "httpsRequest",
+    "now": 1789128000000,
+    "output": {
+      "error": "Choose a PEM certificate chain and its key, or a PFX file.",
+      "ok": false
+    }
+  },
+  {
+    "input": {
+      "password": "",
+      "pfx": " cGZ4LWJ5dGVz "
+    },
+    "kind": "httpsRequest",
+    "now": 1789128000000,
+    "output": {
+      "body": {
+        "password": null,
+        "pfx": "cGZ4LWJ5dGVz"
+      },
+      "ok": true
+    }
+  },
+  {
+    "input": {
+      "password": "pfx-password",
+      "pfx": "cGZ4LWJ5dGVz"
+    },
+    "kind": "httpsRequest",
+    "now": 1789128000000,
+    "output": {
+      "body": {
+        "password": "pfx-password",
+        "pfx": "cGZ4LWJ5dGVz"
+      },
+      "ok": true
+    }
+  },
+  {
+    "input": {
+      "certificatePem": "certificate chain",
+      "pfx": "",
+      "privateKeyPem": "private key"
+    },
+    "kind": "httpsRequest",
+    "now": 1789128000000,
+    "output": {
+      "body": {
+        "certificatePem": "certificate chain",
+        "privateKeyPem": "private key"
+      },
+      "ok": true
     }
   },
   {
@@ -6714,7 +7441,7 @@
         "expectedUpdatedAt": null,
         "help": [
           {
-            "help": "The https address phones use for the key vault's approval page, e.g. https://vault.example.net: a reverse proxy with a trusted certificate that forwards /vault/ and /api/v1/vault/ to the host service. It must not be the same origin (scheme, host and port) as any T3 Code address. Null uses the host service's own address, whose self-signed certificate phones warn about.",
+            "help": "The https address phones use for the key vault's approval page, e.g. https://vault.example.net: a reverse proxy with a trusted certificate that forwards /vault/ and /api/v1/vault/ to the host service. It must not be the same origin (scheme, host and port) as any T3 Code address. With an HTTPS certificate and a shared HTTPS port set below, the host serves this address itself. Null uses the host service's own address, whose self-signed certificate phones warn about.",
             "key": "webUrl",
             "label": "Approval page address"
           }
@@ -7101,7 +7828,7 @@
         "expectedUpdatedAt": "2026-10-02T08:00:00Z",
         "help": [
           {
-            "help": "The https address phones use for the key vault's approval page, e.g. https://vault.example.net: a reverse proxy with a trusted certificate that forwards /vault/ and /api/v1/vault/ to the host service. It must not be the same origin (scheme, host and port) as any T3 Code address. Null uses the host service's own address, whose self-signed certificate phones warn about.",
+            "help": "The https address phones use for the key vault's approval page, e.g. https://vault.example.net: a reverse proxy with a trusted certificate that forwards /vault/ and /api/v1/vault/ to the host service. It must not be the same origin (scheme, host and port) as any T3 Code address. With an HTTPS certificate and a shared HTTPS port set below, the host serves this address itself. Null uses the host service's own address, whose self-signed certificate phones warn about.",
             "key": "webUrl",
             "label": "Approval page address"
           }
@@ -7112,6 +7839,792 @@
         "source": "stored",
         "text": "{\n  \"webUrl\": \"https://vault.example.net\"\n}",
         "updatedAt": "2026-10-02 08:00 UTC"
+      }
+    ]
+  },
+  {
+    "input": {
+      "https": {
+        "sharedPort": null,
+        "source": "default",
+        "startOnRequest": true,
+        "updatedAt": null
+      },
+      "memoryPressure": {
+        "cooldownMinutesAfterSave": 10,
+        "enabled": true,
+        "highWaterPercent": 90,
+        "lowWaterPercent": 80,
+        "minSecondsBetweenSaves": 60,
+        "source": "default",
+        "swapHighWaterPercent": 50
+      }
+    },
+    "kind": "config",
+    "now": 1789128000000,
+    "output": [
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Observe reports capacity; Enforce refuses requests exceeding available capacity.",
+            "key": "mode",
+            "label": "Admission mode"
+          },
+          {
+            "help": "Automatic reserves the greater of one eighth of RAM and 1 GiB on Proxmox or 4 GiB on Hyper-V.",
+            "key": "ramHeadroomBytes",
+            "label": "RAM headroom"
+          },
+          {
+            "help": "Storage kept free for the host.",
+            "key": "storageHeadroomBytes",
+            "label": "Storage headroom"
+          },
+          {
+            "help": "Maximum total active vCPUs.",
+            "key": "cpuBudget",
+            "label": "Host CPU budget"
+          },
+          {
+            "help": "Host ceiling for each VM's CPU count.",
+            "key": "maxVcpusPerVm",
+            "label": "Maximum vCPUs per VM"
+          },
+          {
+            "help": "How often capacity is reconciled with the hypervisor.",
+            "key": "reconcileSeconds",
+            "label": "Reconcile interval"
+          },
+          {
+            "help": "How long an orphan reservation is retained before cleanup.",
+            "key": "orphanReservationTimeoutSeconds",
+            "label": "Orphan reservation timeout"
+          }
+        ],
+        "key": "capacity",
+        "label": "Capacity",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Save eligible VMs when measured memory pressure is too high.",
+            "key": "enabled",
+            "label": "Enable memory pressure handling"
+          },
+          {
+            "help": "Start handling pressure above this RAM usage.",
+            "key": "highWaterPercent",
+            "label": "High water"
+          },
+          {
+            "help": "Stop handling pressure below this RAM usage; must be below high water.",
+            "key": "lowWaterPercent",
+            "label": "Low water"
+          },
+          {
+            "help": "Swap usage threshold. Zero ignores swap.",
+            "key": "swapHighWaterPercent",
+            "label": "Swap high water"
+          },
+          {
+            "help": "Minimum time between pressure-triggered saves.",
+            "key": "minSecondsBetweenSaves",
+            "label": "Minimum save interval"
+          },
+          {
+            "help": "Wait before handling pressure again after saving.",
+            "key": "cooldownMinutesAfterSave",
+            "label": "Cooldown after save"
+          }
+        ],
+        "key": "memoryPressure",
+        "label": "Memory pressure",
+        "present": true,
+        "source": "default",
+        "text": "{\n  \"cooldownMinutesAfterSave\": 10,\n  \"enabled\": true,\n  \"highWaterPercent\": 90,\n  \"lowWaterPercent\": 80,\n  \"minSecondsBetweenSaves\": 60,\n  \"swapHighWaterPercent\": 50\n}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Default primary VM limit for a user.",
+            "key": "maxPrimaries",
+            "label": "Maximum primary VMs"
+          },
+          {
+            "help": "Allow users to create child VMs.",
+            "key": "allowChildCreation",
+            "label": "Allow child creation"
+          },
+          {
+            "help": "Default maximum retained children per user.",
+            "key": "maxRetainedChildren",
+            "label": "Retained children"
+          },
+          {
+            "help": "Total vCPUs allowed across the user's VMs.",
+            "key": "cpuBudget",
+            "label": "CPU budget"
+          },
+          {
+            "help": "Total reserved RAM allowed across the user's VMs.",
+            "key": "ramBudgetBytes",
+            "label": "RAM budget"
+          },
+          {
+            "help": "Total reserved storage allowed across the user's VMs.",
+            "key": "storageBudgetBytes",
+            "label": "Storage budget"
+          },
+          {
+            "help": "Maximum finite child lifetime. The minimum is five minutes.",
+            "key": "maxChildLifetimeSeconds",
+            "label": "Maximum child lifetime"
+          },
+          {
+            "help": "Allow children with a never-expiring lifetime.",
+            "key": "allowNeverLifetime",
+            "label": "Allow no expiry"
+          },
+          {
+            "help": "Allow children to be shared host-wide.",
+            "key": "allowSharing",
+            "label": "Allow sharing"
+          }
+        ],
+        "key": "userDefaults",
+        "label": "User defaults",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Hard ceiling on retained children per user.",
+            "key": "maxRetainedChildren",
+            "label": "Retained children"
+          },
+          {
+            "help": "Total vCPUs allowed across the user's VMs. This host cap applies after user defaults and overrides.",
+            "key": "cpuBudget",
+            "label": "CPU budget"
+          },
+          {
+            "help": "Total reserved RAM allowed across the user's VMs. This host cap applies after user defaults and overrides.",
+            "key": "ramBudgetBytes",
+            "label": "RAM budget"
+          },
+          {
+            "help": "Total reserved storage allowed across the user's VMs. This host cap applies after user defaults and overrides.",
+            "key": "storageBudgetBytes",
+            "label": "Storage budget"
+          },
+          {
+            "help": "Maximum finite child lifetime. The minimum is five minutes. This host cap applies after user defaults and overrides.",
+            "key": "maxChildLifetimeSeconds",
+            "label": "Maximum child lifetime"
+          },
+          {
+            "help": "Allow children with a never-expiring lifetime. This host cap applies after user defaults and overrides.",
+            "key": "allowNeverLifetime",
+            "label": "Allow no expiry"
+          },
+          {
+            "help": "Allow children to be shared host-wide. This host cap applies after user defaults and overrides.",
+            "key": "allowSharing",
+            "label": "Allow sharing"
+          }
+        ],
+        "key": "userCaps",
+        "label": "Host caps on users",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Time allowed for a guest to shut down gracefully.",
+            "key": "gracefulShutdownTimeoutSeconds",
+            "label": "Graceful shutdown timeout"
+          },
+          {
+            "help": "How often child leases are checked.",
+            "key": "leaseTickSeconds",
+            "label": "Lease check interval"
+          },
+          {
+            "help": "Time before retrying an overdue child's shutdown.",
+            "key": "leaseRetrySeconds",
+            "label": "Lease retry interval"
+          }
+        ],
+        "key": "lifecycle",
+        "label": "Lifecycle",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Maximum total media storage per user.",
+            "key": "maxBytes",
+            "label": "Maximum media bytes per user"
+          },
+          {
+            "help": "Maximum media items retained per user.",
+            "key": "maxItemsPerUser",
+            "label": "Media items per user"
+          },
+          {
+            "help": "Upload chunk size, from 1 to 64 MiB.",
+            "key": "uploadChunkBytes",
+            "label": "Upload chunk size"
+          },
+          {
+            "help": "Time allowed to finish an upload.",
+            "key": "uploadTtlHours",
+            "label": "Upload TTL"
+          },
+          {
+            "help": "Time allowed to acquire media.",
+            "key": "acquireTimeoutMinutes",
+            "label": "Acquire timeout"
+          },
+          {
+            "help": "Allow media downloads from HTTP URLs.",
+            "key": "allowHttp",
+            "label": "Allow HTTP downloads"
+          },
+          {
+            "help": "Delete unreferenced media after this interval. Disabled retains it.",
+            "key": "unreferencedTtlHours",
+            "label": "Unreferenced media TTL"
+          }
+        ],
+        "key": "media",
+        "label": "Media",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Disabling refuses new primary host forwards immediately.",
+            "key": "hostForwardsEnabled",
+            "label": "Enable host forwards"
+          },
+          {
+            "help": "Report guest direct addresses.",
+            "key": "directAddressReporting",
+            "label": "Report direct addresses"
+          },
+          {
+            "help": "Applies to VMs following the host default on their next full stop/start. Mode changes remove existing forwards.",
+            "key": "defaultMode",
+            "label": "Default VM mode"
+          },
+          {
+            "help": "Allow owners to select relayed or direct mode for their VMs.",
+            "key": "ownerMaySwitchMode",
+            "label": "Owners may switch VM mode"
+          }
+        ],
+        "key": "network",
+        "label": "Network",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Expose virtualization extensions to new VMs by default.",
+            "key": "nestedDefault",
+            "label": "Enable nesting by default"
+          },
+          {
+            "help": "Users may choose nesting unless their user policy overrides this.",
+            "key": "nestedSelectable",
+            "label": "Allow users to select nesting"
+          },
+          {
+            "help": "While host memory use is above the node's ballooning target (80% unless set on the node), Proxmox auto-ballooning shrinks running primary VMs toward this much RAM, and gives it back when there is room. VMs with this much RAM or less are never shrunk. Admins can override it per VM in VM settings. Changes apply to running VMs at once.",
+            "key": "minimumRamBytes",
+            "label": "Minimum RAM under host pressure"
+          }
+        ],
+        "key": "virtualization",
+        "label": "Virtualization",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "GitHub owner/repository. The host-local installation may pin this value.",
+            "key": "repository",
+            "label": "Update repository"
+          },
+          {
+            "help": "Only the main channel is supported.",
+            "key": "channel",
+            "label": "Update channel"
+          },
+          {
+            "help": "Time allowed to drain host jobs before updating.",
+            "key": "drainTimeoutMinutes",
+            "label": "Drain timeout"
+          },
+          {
+            "help": "Time allowed for the updated service to become healthy.",
+            "key": "healthTimeoutSeconds",
+            "label": "Health timeout"
+          }
+        ],
+        "key": "updates",
+        "label": "Updates",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Usually 443. Serves each VM's main HTTPS forward under the VM's own name (needs PublicHostPattern) and the key vault pages under the approval page address. Needs a certificate. Off: HTTPS forwards only get their own ports.",
+            "key": "sharedPort",
+            "label": "Shared HTTPS port"
+          },
+          {
+            "help": "Opening a stopped or saved VM's HTTPS address starts it and shows a page that reloads until it answers.",
+            "key": "startOnRequest",
+            "label": "Start VMs on request"
+          }
+        ],
+        "key": "https",
+        "label": "HTTPS forwards",
+        "present": true,
+        "source": "default",
+        "text": "{\n  \"sharedPort\": null,\n  \"startOnRequest\": true\n}",
+        "updatedAt": ""
+      }
+    ]
+  },
+  {
+    "input": {
+      "https": {
+        "sharedPort": 443,
+        "source": "stored",
+        "startOnRequest": false,
+        "updatedAt": "2026-11-08T08:00:00Z"
+      },
+      "memoryPressure": {
+        "cooldownMinutesAfterSave": 10,
+        "enabled": true,
+        "highWaterPercent": 90,
+        "lowWaterPercent": 80,
+        "minSecondsBetweenSaves": 60,
+        "source": "default",
+        "swapHighWaterPercent": 50
+      }
+    },
+    "kind": "config",
+    "now": 1789128000000,
+    "output": [
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Observe reports capacity; Enforce refuses requests exceeding available capacity.",
+            "key": "mode",
+            "label": "Admission mode"
+          },
+          {
+            "help": "Automatic reserves the greater of one eighth of RAM and 1 GiB on Proxmox or 4 GiB on Hyper-V.",
+            "key": "ramHeadroomBytes",
+            "label": "RAM headroom"
+          },
+          {
+            "help": "Storage kept free for the host.",
+            "key": "storageHeadroomBytes",
+            "label": "Storage headroom"
+          },
+          {
+            "help": "Maximum total active vCPUs.",
+            "key": "cpuBudget",
+            "label": "Host CPU budget"
+          },
+          {
+            "help": "Host ceiling for each VM's CPU count.",
+            "key": "maxVcpusPerVm",
+            "label": "Maximum vCPUs per VM"
+          },
+          {
+            "help": "How often capacity is reconciled with the hypervisor.",
+            "key": "reconcileSeconds",
+            "label": "Reconcile interval"
+          },
+          {
+            "help": "How long an orphan reservation is retained before cleanup.",
+            "key": "orphanReservationTimeoutSeconds",
+            "label": "Orphan reservation timeout"
+          }
+        ],
+        "key": "capacity",
+        "label": "Capacity",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Save eligible VMs when measured memory pressure is too high.",
+            "key": "enabled",
+            "label": "Enable memory pressure handling"
+          },
+          {
+            "help": "Start handling pressure above this RAM usage.",
+            "key": "highWaterPercent",
+            "label": "High water"
+          },
+          {
+            "help": "Stop handling pressure below this RAM usage; must be below high water.",
+            "key": "lowWaterPercent",
+            "label": "Low water"
+          },
+          {
+            "help": "Swap usage threshold. Zero ignores swap.",
+            "key": "swapHighWaterPercent",
+            "label": "Swap high water"
+          },
+          {
+            "help": "Minimum time between pressure-triggered saves.",
+            "key": "minSecondsBetweenSaves",
+            "label": "Minimum save interval"
+          },
+          {
+            "help": "Wait before handling pressure again after saving.",
+            "key": "cooldownMinutesAfterSave",
+            "label": "Cooldown after save"
+          }
+        ],
+        "key": "memoryPressure",
+        "label": "Memory pressure",
+        "present": true,
+        "source": "default",
+        "text": "{\n  \"cooldownMinutesAfterSave\": 10,\n  \"enabled\": true,\n  \"highWaterPercent\": 90,\n  \"lowWaterPercent\": 80,\n  \"minSecondsBetweenSaves\": 60,\n  \"swapHighWaterPercent\": 50\n}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Default primary VM limit for a user.",
+            "key": "maxPrimaries",
+            "label": "Maximum primary VMs"
+          },
+          {
+            "help": "Allow users to create child VMs.",
+            "key": "allowChildCreation",
+            "label": "Allow child creation"
+          },
+          {
+            "help": "Default maximum retained children per user.",
+            "key": "maxRetainedChildren",
+            "label": "Retained children"
+          },
+          {
+            "help": "Total vCPUs allowed across the user's VMs.",
+            "key": "cpuBudget",
+            "label": "CPU budget"
+          },
+          {
+            "help": "Total reserved RAM allowed across the user's VMs.",
+            "key": "ramBudgetBytes",
+            "label": "RAM budget"
+          },
+          {
+            "help": "Total reserved storage allowed across the user's VMs.",
+            "key": "storageBudgetBytes",
+            "label": "Storage budget"
+          },
+          {
+            "help": "Maximum finite child lifetime. The minimum is five minutes.",
+            "key": "maxChildLifetimeSeconds",
+            "label": "Maximum child lifetime"
+          },
+          {
+            "help": "Allow children with a never-expiring lifetime.",
+            "key": "allowNeverLifetime",
+            "label": "Allow no expiry"
+          },
+          {
+            "help": "Allow children to be shared host-wide.",
+            "key": "allowSharing",
+            "label": "Allow sharing"
+          }
+        ],
+        "key": "userDefaults",
+        "label": "User defaults",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Hard ceiling on retained children per user.",
+            "key": "maxRetainedChildren",
+            "label": "Retained children"
+          },
+          {
+            "help": "Total vCPUs allowed across the user's VMs. This host cap applies after user defaults and overrides.",
+            "key": "cpuBudget",
+            "label": "CPU budget"
+          },
+          {
+            "help": "Total reserved RAM allowed across the user's VMs. This host cap applies after user defaults and overrides.",
+            "key": "ramBudgetBytes",
+            "label": "RAM budget"
+          },
+          {
+            "help": "Total reserved storage allowed across the user's VMs. This host cap applies after user defaults and overrides.",
+            "key": "storageBudgetBytes",
+            "label": "Storage budget"
+          },
+          {
+            "help": "Maximum finite child lifetime. The minimum is five minutes. This host cap applies after user defaults and overrides.",
+            "key": "maxChildLifetimeSeconds",
+            "label": "Maximum child lifetime"
+          },
+          {
+            "help": "Allow children with a never-expiring lifetime. This host cap applies after user defaults and overrides.",
+            "key": "allowNeverLifetime",
+            "label": "Allow no expiry"
+          },
+          {
+            "help": "Allow children to be shared host-wide. This host cap applies after user defaults and overrides.",
+            "key": "allowSharing",
+            "label": "Allow sharing"
+          }
+        ],
+        "key": "userCaps",
+        "label": "Host caps on users",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Time allowed for a guest to shut down gracefully.",
+            "key": "gracefulShutdownTimeoutSeconds",
+            "label": "Graceful shutdown timeout"
+          },
+          {
+            "help": "How often child leases are checked.",
+            "key": "leaseTickSeconds",
+            "label": "Lease check interval"
+          },
+          {
+            "help": "Time before retrying an overdue child's shutdown.",
+            "key": "leaseRetrySeconds",
+            "label": "Lease retry interval"
+          }
+        ],
+        "key": "lifecycle",
+        "label": "Lifecycle",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Maximum total media storage per user.",
+            "key": "maxBytes",
+            "label": "Maximum media bytes per user"
+          },
+          {
+            "help": "Maximum media items retained per user.",
+            "key": "maxItemsPerUser",
+            "label": "Media items per user"
+          },
+          {
+            "help": "Upload chunk size, from 1 to 64 MiB.",
+            "key": "uploadChunkBytes",
+            "label": "Upload chunk size"
+          },
+          {
+            "help": "Time allowed to finish an upload.",
+            "key": "uploadTtlHours",
+            "label": "Upload TTL"
+          },
+          {
+            "help": "Time allowed to acquire media.",
+            "key": "acquireTimeoutMinutes",
+            "label": "Acquire timeout"
+          },
+          {
+            "help": "Allow media downloads from HTTP URLs.",
+            "key": "allowHttp",
+            "label": "Allow HTTP downloads"
+          },
+          {
+            "help": "Delete unreferenced media after this interval. Disabled retains it.",
+            "key": "unreferencedTtlHours",
+            "label": "Unreferenced media TTL"
+          }
+        ],
+        "key": "media",
+        "label": "Media",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Disabling refuses new primary host forwards immediately.",
+            "key": "hostForwardsEnabled",
+            "label": "Enable host forwards"
+          },
+          {
+            "help": "Report guest direct addresses.",
+            "key": "directAddressReporting",
+            "label": "Report direct addresses"
+          },
+          {
+            "help": "Applies to VMs following the host default on their next full stop/start. Mode changes remove existing forwards.",
+            "key": "defaultMode",
+            "label": "Default VM mode"
+          },
+          {
+            "help": "Allow owners to select relayed or direct mode for their VMs.",
+            "key": "ownerMaySwitchMode",
+            "label": "Owners may switch VM mode"
+          }
+        ],
+        "key": "network",
+        "label": "Network",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "Expose virtualization extensions to new VMs by default.",
+            "key": "nestedDefault",
+            "label": "Enable nesting by default"
+          },
+          {
+            "help": "Users may choose nesting unless their user policy overrides this.",
+            "key": "nestedSelectable",
+            "label": "Allow users to select nesting"
+          },
+          {
+            "help": "While host memory use is above the node's ballooning target (80% unless set on the node), Proxmox auto-ballooning shrinks running primary VMs toward this much RAM, and gives it back when there is room. VMs with this much RAM or less are never shrunk. Admins can override it per VM in VM settings. Changes apply to running VMs at once.",
+            "key": "minimumRamBytes",
+            "label": "Minimum RAM under host pressure"
+          }
+        ],
+        "key": "virtualization",
+        "label": "Virtualization",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": null,
+        "help": [
+          {
+            "help": "GitHub owner/repository. The host-local installation may pin this value.",
+            "key": "repository",
+            "label": "Update repository"
+          },
+          {
+            "help": "Only the main channel is supported.",
+            "key": "channel",
+            "label": "Update channel"
+          },
+          {
+            "help": "Time allowed to drain host jobs before updating.",
+            "key": "drainTimeoutMinutes",
+            "label": "Drain timeout"
+          },
+          {
+            "help": "Time allowed for the updated service to become healthy.",
+            "key": "healthTimeoutSeconds",
+            "label": "Health timeout"
+          }
+        ],
+        "key": "updates",
+        "label": "Updates",
+        "present": false,
+        "source": "default",
+        "text": "{}",
+        "updatedAt": ""
+      },
+      {
+        "expectedUpdatedAt": "2026-11-08T08:00:00Z",
+        "help": [
+          {
+            "help": "Usually 443. Serves each VM's main HTTPS forward under the VM's own name (needs PublicHostPattern) and the key vault pages under the approval page address. Needs a certificate. Off: HTTPS forwards only get their own ports.",
+            "key": "sharedPort",
+            "label": "Shared HTTPS port"
+          },
+          {
+            "help": "Opening a stopped or saved VM's HTTPS address starts it and shows a page that reloads until it answers.",
+            "key": "startOnRequest",
+            "label": "Start VMs on request"
+          }
+        ],
+        "key": "https",
+        "label": "HTTPS forwards",
+        "present": true,
+        "source": "stored",
+        "text": "{\n  \"sharedPort\": 443,\n  \"startOnRequest\": false\n}",
+        "updatedAt": "2026-11-08 08:00 UTC"
       }
     ]
   },
@@ -7679,6 +9192,7 @@
     "now": 1789128000000,
     "output": {
       "allowHostForwards": true,
+      "allowHttpsForwards": false,
       "allowNested": null,
       "allowance": {
         "allowChildCreation": "",

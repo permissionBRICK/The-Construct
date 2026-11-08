@@ -111,6 +111,8 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
         if (action == "shareVm") RequireScope(args);
         if (action == "updatesResolve") RequireResolve(args);
         if (action == "saveConfig") RequireSections(args);
+        if (action == "setHttpsCertificate" && StateJson.Boolean(HostAdminViews.CertificateRequest(args)["ok"]) != true)
+            throw new IpcFailure(400, "invalidCertificate", "Choose a PEM certificate chain and its key, or a PFX file.");
     }
     public async Task DispatchAsync(string slug, JsonObject message, CancellationToken ct)
     {
@@ -325,7 +327,7 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
                 case "operations": m.State["operations"] = new JsonObject { ["jobs"] = HostAdminViews.Map(await client.JobsAsync(new() { ["limit"] = 100 }, ct), HostAdminViews.Job), ["audit"] = HostAdminViews.Map(await client.AuditAsync(new() { ["limit"] = 50 }, ct), HostAdminViews.Audit), ["auditProblem"] = "" }; break;
                 case "config":
                     var config = await client.HostConfigAsync(ct);
-                    m.State["config"] = new JsonObject { ["sections"] = HostAdminViews.Config(config), ["capabilities"] = HostAdminViews.Capabilities(await client.HostCapabilitiesAsync(ct)), ["problems"] = new JsonArray() }; break;
+                    m.State["config"] = new JsonObject { ["sections"] = HostAdminViews.Config(config), ["capabilities"] = HostAdminViews.Capabilities(await client.HostCapabilitiesAsync(ct)), ["problems"] = new JsonArray(), ["https"] = await HttpsCard(client, ct) }; break;
                 case "maintenance": await RefreshUpdates(m, client, ct); break;
             }
             m.State["lastKnownAt"] = clock.UtcNow.ToString("O");
@@ -403,6 +405,18 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
             case "revokeToken": result = await client.RevokeUserTokenAsync(name, id, ct); break;
             case "revokeVmToken": result = await client.RevokeVmTokenAsync(name, ct); break;
             case "saveConfig": result = await client.PutHostConfigAsync(RequireSections(args), ct); events.HostAdmin(m.Host.Slug, new { type = "hostadmin.configSaved" }); break;
+            case "setHttpsCertificate":
+            {
+                // Inline in the card: the answer carries the new status, a refusal its reason; the key passes through to this request only.
+                var request = HostAdminViews.CertificateRequest(args);
+                if (StateJson.Boolean(request["ok"]) != true) { HttpsProblem(m, Text(request["error"])); return; }
+                try { result = await client.SetHttpsCertificateAsync(request["body"], ct); }
+                catch (RemoteApiException e) when (e.Status == 400)
+                { HttpsProblem(m, Text(e.Body?["detail"]) is { Length: > 0 } detail ? detail : Text(e.Body?["reason"]) is { Length: > 0 } reason ? reason : e.Message); return; }
+                SetHttps(m, result); m.State["notice"] = new JsonObject { ["level"] = "info", ["text"] = "HTTPS certificate installed." }; return;
+            }
+            case "removeHttpsCertificate":
+                SetHttps(m, await client.RemoveHttpsCertificateAsync(ct)); m.State["notice"] = new JsonObject { ["level"] = "info", ["text"] = "HTTPS certificate removed." }; return;
             case "updatesCheck": result = await client.UpdatesCheckAsync(ReleaseTagBody(args), ct); m.LastLatestCheck = default; break;
             case "updatesStage": result = await client.UpdatesStageAsync(ReleaseTagBody(args), ct); break;
             case "updatesApply": result = await client.UpdatesApplyAsync(new JsonObject { ["updateId"] = args["updateId"]?.DeepClone() }, ct); break;
@@ -415,6 +429,19 @@ public sealed partial class HostAdministration(IStateFileSystem files, ITokenSto
         m.State["notice"] = new JsonObject { ["level"] = "info", ["text"] = "Host action completed." };
         await Load(m, client, ct);
     }
+    // The HTTPS certificate card: null hides it (a host without HTTPS forwards answers 404).
+    private async Task<JsonObject?> HttpsCard(RemoteHostClient client, CancellationToken ct)
+    {
+        try { return HostAdminViews.Https(await client.HttpsStatusAsync(ct), clock.UtcNow); }
+        catch (RemoteApiException e) when (e.Status is not (0 or 401 or 403))
+        {
+            if (e.Status == 404) return null;
+            var view = HostAdminViews.Https(null, clock.UtcNow); view["unavailable"] = e.Message; return view;
+        }
+    }
+    private void SetHttps(Model m, JsonNode? status) { if (m.State["config"] is JsonObject config) config["https"] = HostAdminViews.Https(status, clock.UtcNow); }
+    private static void HttpsProblem(Model m, string reason)
+    { if (m.State["config"]?["https"] is JsonObject https) https["problem"] = reason; else Notice(m, reason); }
     private static async Task SetCpu(Model m, RemoteHostClient client, string name, double cpus, CancellationToken ct)
     {
         if (!double.IsFinite(cpus) || cpus != Math.Floor(cpus) || cpus < 1 || cpus > 64)

@@ -119,10 +119,16 @@ t3_https_public_host() {
 }
 
 # The value written to T3CODE_PUBLIC_BASE_URL. No trailing slash, no path: the
-# patched T3 server treats it as an origin.
+# patched T3 server treats it as an origin. The scheme's default port is left out,
+# the way a browser writes the Origin it sends (a main HTTPS forward on the host's
+# shared port 443, docs/https-forwards.md).
 t3_https_public_base_url() {
-  local host="$1" port="$2"
-  printf 'https://%s:%s' "$(t3_https_url_host "${host}")" "${port}"
+  local host="$1" port="$2" scheme="${3:-https}"
+  if [[ "${scheme}" == "https" && "${port}" == "443" || "${scheme}" == "http" && "${port}" == "80" ]]; then
+    printf '%s://%s' "${scheme}" "$(t3_https_url_host "${host}")"
+  else
+    printf '%s://%s:%s' "${scheme}" "$(t3_https_url_host "${host}")" "${port}"
+  fi
 }
 
 # The leaf certificate's SAN list, comma-joined in openssl's syntax. Order is
@@ -277,6 +283,10 @@ T3CODE_HTTPS_PORT="${T3CODE_HTTPS_PORT:-$(read_cfg T3CODE_HTTPS_PORT)}"; T3CODE_
 # origin when somebody really stated a forwarded port.
 T3CODE_PUBLIC_PORT_STATED="${T3CODE_PUBLIC_PORT:-$(read_cfg T3CODE_PUBLIC_PORT)}"
 T3CODE_PUBLIC_PORT="${T3CODE_PUBLIC_PORT_STATED:-${T3CODE_HTTPS_PORT}}"
+# https when the host service terminates TLS on that forward with its own certificate
+# (docs/https-forwards.md), stated by bin/provision.sh; the origin is then https even
+# with this VM's own proxy off.
+T3CODE_PUBLIC_SCHEME_STATED="${T3CODE_PUBLIC_SCHEME:-$(read_cfg T3CODE_PUBLIC_SCHEME)}"
 CONSTRUCT_EXTERNAL_HOST="${CONSTRUCT_EXTERNAL_HOST:-$(read_cfg CONSTRUCT_EXTERNAL_HOST)}"
 [[ "${T3CODE_HTTPS}" == "true" ]] || T3CODE_HTTPS=false
 [[ "${_teardown}" == "true" ]] && T3CODE_HTTPS=false
@@ -375,8 +385,11 @@ if [[ "${T3CODE_HTTPS}" != "true" ]]; then
   fi
   if [[ "${_teardown}" != "true" && -n "${T3CODE_PUBLIC_PORT_STATED}" ]]; then
     _disabled_public_host="$(t3_https_public_host "${CONSTRUCT_EXTERNAL_HOST}" "$(hostname 2>/dev/null || echo vm)")"
-    cfg T3CODE_PUBLIC_BASE_URL "http://$(t3_https_url_host "${_disabled_public_host}"):${T3CODE_PUBLIC_PORT_STATED}"
-    note "advertising the forwarded plain-HTTP origin http://$(t3_https_url_host "${_disabled_public_host}"):${T3CODE_PUBLIC_PORT_STATED}"
+    _disabled_scheme=http
+    [[ "${T3CODE_PUBLIC_SCHEME_STATED}" == "https" ]] && _disabled_scheme=https
+    _disabled_origin="$(t3_https_public_base_url "${_disabled_public_host}" "${T3CODE_PUBLIC_PORT_STATED}" "${_disabled_scheme}")"
+    cfg T3CODE_PUBLIC_BASE_URL "${_disabled_origin}"
+    note "advertising the forwarded origin ${_disabled_origin}"
   else
     cfg_clear T3CODE_PUBLIC_BASE_URL
   fi
