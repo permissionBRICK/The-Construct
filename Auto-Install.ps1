@@ -142,6 +142,8 @@ param(
     # Forwarded down: patched T3 Code + Desktop. Empty keeps the saved choice.
     [Alias('T3CodeLimitResume')]
     [string]$T3CodePatched = "",
+    [ValidateSet("", "true", "false")]
+    [string]$T3CodeAutoApprove = "",
     # Forwarded to Create-AgentVM.ps1: Hyper-V automatic checkpoints (a snapshot at
     # every VM start). OFF by default for Construct -- on a disposable agent VM the
     # checkpoint only costs disk and I/O. Applies when the VM is CREATED (install /
@@ -2384,6 +2386,7 @@ function New-ConstructRemoteProvisionArgs {
         T3Code                    = $T3Code
         T3CodeChannel             = $T3CodeChannel
         T3CodePatched         = $T3CodePatched
+        T3CodeAutoApprove         = $T3CodeAutoApprove
     }
     if ($Projects) { $a['Projects'] = $Projects }
     if ($CloneCredB64) { $a['GitCloneCredentialsB64'] = $CloneCredB64 }
@@ -2405,7 +2408,7 @@ function New-ConstructRemoteProvisionArgs {
         $a['Repo'] = $Repo; $a['Ref'] = $Ref
     }
     if ($SkipCompanion -and $script:RemoteProvCmd -and $script:RemoteProvCmd.Parameters.ContainsKey('SkipCompanion')) { $a['SkipCompanion'] = $true }
-    foreach ($opt in @('T3CodeChannel', 'T3CodePatched', 'OpenCodeBackgroundWatcher')) {
+    foreach ($opt in @('T3CodeChannel', 'T3CodePatched', 'T3CodeAutoApprove', 'OpenCodeBackgroundWatcher')) {
         if ($script:RemoteProvCmd -and -not $script:RemoteProvCmd.Parameters.ContainsKey($opt)) { $a.Remove($opt) }
     }
     if ($script:ConstructFeatureParameters) {
@@ -3227,6 +3230,7 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
         $reprovArgs['T3Code'] = $T3Code
         $reprovArgs['T3CodeChannel'] = $T3CodeChannel
         $reprovArgs['T3CodePatched'] = $T3CodePatched
+        $reprovArgs['T3CodeAutoApprove'] = $T3CodeAutoApprove
         # Only when explicitly chosen: empty leaves the provisioner's own alias
         # derivation in charge, so the default path splats exactly what it always did.
         if ($ConfigBranch) { $reprovArgs['ConfigBranch'] = $ConfigBranch }
@@ -3243,6 +3247,7 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
             if (-not $reprovCmd.Parameters.ContainsKey('T3CodePatched')) {
                 $reprovArgs.Remove('T3CodePatched')
             }
+            if (-not $reprovCmd.Parameters.ContainsKey('T3CodeAutoApprove')) { $reprovArgs.Remove('T3CodeAutoApprove') }
             if (-not $reprovCmd.Parameters.ContainsKey('OpenCodeBackgroundWatcher')) {
                 $reprovArgs.Remove('OpenCodeBackgroundWatcher')
             }
@@ -3250,6 +3255,7 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
             $reprovCmd = $null
             $reprovArgs.Remove('T3CodeChannel')
             $reprovArgs.Remove('T3CodePatched')
+            $reprovArgs.Remove('T3CodeAutoApprove')
             $reprovArgs.Remove('OpenCodeBackgroundWatcher')
         }
         try {
@@ -3587,6 +3593,7 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
                 T3Code                = $T3Code
                 T3CodeChannel         = $T3CodeChannel
                 T3CodePatched     = $T3CodePatched
+                T3CodeAutoApprove     = $T3CodeAutoApprove
             }
             if (-not $VmIsDefault) { $acReprovArgs['VmHost'] = $VmDnsName; $acReprovArgs['HostAlias'] = $VmAlias; $acReprovArgs['LocalKeyName'] = $VmKeyName }
             # Explicit config-sync branch only (empty = the provisioner derives it).
@@ -3603,6 +3610,7 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
                 if (-not $acProvCmd.Parameters.ContainsKey('T3CodePatched')) {
                     $acReprovArgs.Remove('T3CodePatched')
                 }
+                if (-not $acProvCmd.Parameters.ContainsKey('T3CodeAutoApprove')) { $acReprovArgs.Remove('T3CodeAutoApprove') }
                 if (-not $acProvCmd.Parameters.ContainsKey('OpenCodeBackgroundWatcher')) {
                     $acReprovArgs.Remove('OpenCodeBackgroundWatcher')
                 }
@@ -3610,6 +3618,7 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
                 $acProvCmd = $null
                 $acReprovArgs.Remove('T3CodeChannel')
                 $acReprovArgs.Remove('T3CodePatched')
+                $acReprovArgs.Remove('T3CodeAutoApprove')
                 $acReprovArgs.Remove('OpenCodeBackgroundWatcher')
             }
             Add-ConstructFeatureArguments -Arguments $acReprovArgs -Values $script:ConstructFeatureParameters -Command $acProvCmd

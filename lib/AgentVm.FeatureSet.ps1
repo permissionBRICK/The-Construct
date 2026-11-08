@@ -14,6 +14,7 @@ function Get-ConstructFeatureTable {
         @{ Name='OpenCode background watcher'; Parameter='OpenCodeBackgroundWatcher'; Key='opencodeBackgroundWatcher'; Minimal=$false; Full=$true; Prompt='Enable the OpenCode background watcher patch?' }
         @{ Name='T3 Code'; Parameter='T3Code'; Key='t3code'; Minimal=$false; Full=$true; Prompt='Install the T3 Code web GUI (stable)?' }
         @{ Name='Patched T3 Code + Desktop'; Parameter='T3CodePatched'; Key='t3codePatched'; Minimal=$false; Full=$true; Prompt='Build patched T3 Code + Desktop?' }
+        @{ Name='Automatically accept T3 tool permissions'; Parameter='T3CodeAutoApprove'; Key='t3codeAutoApprove'; Minimal=$false; Full=$false; Prompt='Automatically accept tool permissions on this disposable Construct VM?' }
         @{ Name='T3 Code HTTPS'; Parameter='T3CodeHttps'; Key='t3codeHttps'; Minimal=$true; Full=$true; Prompt='Enable T3 Code HTTPS (the VM default)?' }
     )
 }

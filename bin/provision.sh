@@ -448,6 +448,10 @@ T3CODE_HTTPS="${T3CODE_HTTPS:-${_t3code_https_saved:-true}}"
 . "$(dirname "${BASH_SOURCE[0]}")/t3code-patched.sh"
 T3CODE_PATCHED="$(resolve_t3code_patched "${CONFIG_FILE}")"
 [[ "${T3CODE_PATCHED}" == "true" ]] || T3CODE_PATCHED=false
+# Per-VM opt-in, retained across reprovision; read by the patched server per request.
+_t3_auto_saved="$(sed -n 's/^T3CODE_AUTO_APPROVE=//p' "${CONFIG_FILE}" 2>/dev/null | head -1 || true)"
+T3CODE_AUTO_APPROVE="${T3CODE_AUTO_APPROVE:-${_t3_auto_saved:-false}}"
+[[ "${T3CODE_AUTO_APPROVE}" == "true" ]] || T3CODE_AUTO_APPROVE=false
 # Optional dependency-free OpenCode background watcher plugin. Separate from
 # the T3 patch set: this controls whether OpenCode itself exposes the
 # background/background_output/background_kill tools. Empty input keeps the
@@ -737,6 +741,7 @@ write_configuration() {
     cfg T3CODE_HTTPS "${T3CODE_HTTPS}" || return
   fi
   cfg T3CODE_PATCHED "${T3CODE_PATCHED}" || return
+  cfg T3CODE_AUTO_APPROVE "${T3CODE_AUTO_APPROVE}" || return
   sed -i '/^T3CODE_LIMIT_RESUME=/d' "${CONFIG_FILE}" || return
   cfg OPENCODE_BACKGROUND_WATCHER "${OPENCODE_BACKGROUND_WATCHER}" || return
   # Persist the external identity only when it carries information (a non-empty

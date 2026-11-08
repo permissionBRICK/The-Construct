@@ -76,7 +76,7 @@ ok "an IPv6 literal is stored quoted (config-set.sh's renderer)" test "$(line_of
 config get t3-proxy-url
 ok "get unquotes it" test "$(cat "${out}")" = 'https://[2001:db8::7]:8443'
 config list
-ok "list shows the key and value" test "$(cat "${out}")" = 't3-proxy-url=https://[2001:db8::7]:8443'
+ok "list shows the key and value" test "$(cat "${out}")" = $'t3-proxy-url=https://[2001:db8::7]:8443\nt3-auto-approve='
 ok "the stored file is still sourceable" bash -c "set -e; . '${cfg}'; test \"\${T3CODE_PROXY_URL}\" = 'https://[2001:db8::7]:8443'"
 ok "unset succeeds" test "$(status_of unset t3-proxy-url)" = 0
 ok "unset removes the line" sh -c "! grep -q '^T3CODE_PROXY_URL=' '${cfg}'"
@@ -86,7 +86,7 @@ cp "${cfg}" "${tmp}/before"
 ok "unset of an absent key succeeds" test "$(status_of unset t3-proxy-url)" = 0
 ok "unset of an absent key leaves the file alone" unchanged
 config list
-ok "list shows an unset key as empty" test "$(cat "${out}")" = 't3-proxy-url='
+ok "list shows an unset key as empty" test "$(cat "${out}")" = $'t3-proxy-url=\nt3-auto-approve='
 
 # ── validation ───────────────────────────────────────────────────────────────
 seed
@@ -160,6 +160,13 @@ if command -v shellcheck >/dev/null 2>&1; then
   ok "shellcheck: construct-config.sh is clean" shellcheck "${ROOT}/bin/construct-config.sh"
   ok "shellcheck: this test is clean" shellcheck "${BASH_SOURCE[0]}"
 fi
+
+ok "enable auto approval" test "$(status_of set t3-auto-approve true)" = 0
+config get t3-auto-approve
+ok "read auto approval" test "$(cat "${out}")" = true
+ok "reject malformed boolean" test "$(status_of set t3-auto-approve yes)" = 2
+ok "disable auto approval" test "$(status_of set t3-auto-approve false)" = 0
+ok "remove auto approval" test "$(status_of unset t3-auto-approve)" = 0
 
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"
 [[ "${fail}" -eq 0 ]]

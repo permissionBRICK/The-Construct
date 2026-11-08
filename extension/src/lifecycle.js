@@ -517,6 +517,7 @@ function buildInvocation(action, opts = {}) {
       pushBool("-T3Code", s.t3code);
       if (opts.supportsT3CodeChannel !== false) pushPair("-T3CodeChannel", s.t3codeChannel);
       if (opts.supportsT3CodePatched !== false) pushBool("-T3CodePatched", s.t3codePatched);
+      if (opts.supportsT3CodeAutoApprove !== false) pushBool("-T3CodeAutoApprove", s.t3codeAutoApprove);
       // Launched from the panel: don't prompt for the SMB drive letter etc. (still pauses
       // at the end so output is readable — -NonInteractive is NOT -Auto).
       addSwitch("-NonInteractive");
@@ -567,6 +568,7 @@ function buildInvocation(action, opts = {}) {
       pushBool("-T3Code", s.t3code);
       if (opts.supportsT3CodeChannel !== false) pushPair("-T3CodeChannel", s.t3codeChannel);
       if (opts.supportsT3CodePatched !== false) pushBool("-T3CodePatched", s.t3codePatched);
+      if (opts.supportsT3CodeAutoApprove !== false) pushBool("-T3CodeAutoApprove", s.t3codeAutoApprove);
       // How much chat history the pre-delete config save keeps (Auto-Install forwards it
       // to the export). Capability-gated like the flags above.
       if (opts.supportsHistoryRetentionDays !== false) pushPair("-HistoryRetentionDays", s.historyRetentionDays);
@@ -741,6 +743,20 @@ function scriptSupportsRemoveInstance(scriptsDir) {
 function scriptSupportsT3CodePatched(scriptsDir, action) {
   if (!scriptsDir) return false;
   const re = /\$T3CodePatched\s*(?:=|,|\)|$)/im;
+  const check = (file) => {
+    let txt;
+    try { txt = fs.readFileSync(path.join(scriptsDir, file), "utf8"); } catch (_) { return false; }
+    const code = txt.replace(/<#[\s\S]*?#>/g, "").replace(/^[ \t]*#.*$/gm, "");
+    return re.test(code);
+  };
+  if (action === "reprovision") return check(PROVISION);
+  if (action === "reinstall" || action === "redownload") return check(AUTO_INSTALL);
+  return check(PROVISION) && check(AUTO_INSTALL);
+}
+
+function scriptSupportsT3CodeAutoApprove(scriptsDir, action) {
+  if (!scriptsDir) return false;
+  const re = /\$T3CodeAutoApprove\s*(?:=|,|\)|$)/im;
   const check = (file) => {
     let txt;
     try { txt = fs.readFileSync(path.join(scriptsDir, file), "utf8"); } catch (_) { return false; }
@@ -1150,6 +1166,7 @@ function run(action, opts = {}) {
     supportsVmCpuCount: scriptSupportsVmCpuCount(scriptsDir),
     supportsT3CodeChannel: scriptSupportsT3CodeChannel(scriptsDir, action),
     supportsT3CodePatched: scriptSupportsT3CodePatched(scriptsDir, action),
+    supportsT3CodeAutoApprove: scriptSupportsT3CodeAutoApprove(scriptsDir, action),
     supportsOpenCodeBackgroundWatcher: scriptSupportsOpenCodeBackgroundWatcher(scriptsDir, action),
     supportsHistoryRetentionDays: scriptSupportsHistoryRetentionDays(scriptsDir, action),
   });

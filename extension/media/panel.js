@@ -463,6 +463,7 @@
       t3code: swOn($("setT3")),
       t3codeChannel: val("setT3Channel"),
       t3codePatched: swOn($("setT3Patched")),
+      t3codeAutoApprove: swOn($("setT3AutoApprove")),
     };
   }
   // A save answers with the whole form, so its settings echo applies in full.
@@ -1328,6 +1329,7 @@
     setSw("setT3", s.t3code);
     if (s.t3codeChannel) setVal("setT3Channel", s.t3codeChannel);
     setSw("setT3Patched", s.t3codePatched);
+    setSw("setT3AutoApprove", s.t3codeAutoApprove);
     setSw("setAutoCheckpoints", s.autoCheckpoints);
     renderResourcePending();
   }

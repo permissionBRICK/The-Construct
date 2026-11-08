@@ -21,7 +21,7 @@ public static class SettingsMapping
         ("vsCodeServeWeb", "serveWeb", 'b'), ("vsCodeTunnel", "tunnel", 'b'), ("smbShare", "smb", 'b'),
         ("claudePartialStreaming", "partialStreaming", 'b'), ("opencodeBackgroundWatcher", "opencodeBackgroundWatcher", 'b'),
         ("micPassthrough", "mic", 'b'), ("t3code", "t3code", 'b'), ("t3codeChannel", "t3codeChannel", 'c'),
-        ("t3codePatched", "t3codePatched", 'b'), ("vmAutoCheckpoints", "autoCheckpoints", 'b'),
+        ("t3codeAutoApprove", "t3codeAutoApprove", 'b'), ("t3codePatched", "t3codePatched", 'b'), ("vmAutoCheckpoints", "autoCheckpoints", 'b'),
         ("historyRetentionDays", "historyRetentionDays", 'n')
     ];
     public static JsonObject MapToForm(JsonObject? raw)
@@ -65,6 +65,7 @@ public static class SettingsMapping
         previous ??= []; next ??= [];
         bool Is(JsonObject o, string k) => StateJson.Boolean(o[k]) == true;
         var result = new List<string>();
+        if (Is(previous, "t3codeAutoApprove") != Is(next, "t3codeAutoApprove")) result.Add("T3 tool permission auto-approval");
         if (Is(previous, "t3codePatched") != Is(next, "t3codePatched") ||
             (Is(next, "t3codePatched") && Is(next, "t3code") && (!Is(previous, "t3code") ||
             !StateJson.StrictEquals(StateJson.Truthy(previous["t3codeChannel"]) ? previous["t3codeChannel"] : JsonValue.Create("stable"), StateJson.Truthy(next["t3codeChannel"]) ? next["t3codeChannel"] : JsonValue.Create("stable")))))

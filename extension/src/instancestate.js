@@ -234,7 +234,7 @@ function saveState(st, patch) {
  * Returns the patch written, or null. Throws only when the store cannot be written
  * (no scripts dir for the default instance) — callers treat it as best-effort.
  */
-const BACKFILL_CONFIG_KEYS = Object.freeze(["t3code", "t3codeChannel", "t3codePatched", "opencodeBackgroundWatcher"]);
+const BACKFILL_CONFIG_KEYS = Object.freeze(["t3code", "t3codeChannel", "t3codePatched", "t3codeAutoApprove", "opencodeBackgroundWatcher"]);
 function backfillFromProbe(st, probed) {
   if (!probed || probed.online !== true || probed.probeError) return null;
   const spec = (probed.vmSpec && typeof probed.vmSpec === "object") ? probed.vmSpec : {};

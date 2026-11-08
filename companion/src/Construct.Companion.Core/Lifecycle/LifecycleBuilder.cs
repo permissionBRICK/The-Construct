@@ -66,7 +66,7 @@ public static class LifecycleBuilder
         {
             Bool("-ClaudePartialStreaming", "partialStreaming"); Bool("-MicPassthrough", "mic");
             if (Supports("supportsOpenCodeBackgroundWatcher")) Bool("-OpenCodeBackgroundWatcher", "opencodeBackgroundWatcher");
-            Bool("-T3Code", "t3code"); if (Supports("supportsT3CodeChannel")) Text("-T3CodeChannel", "t3codeChannel"); if (Supports("supportsT3CodePatched")) Bool("-T3CodePatched", "t3codePatched");
+            Bool("-T3Code", "t3code"); if (Supports("supportsT3CodeChannel")) Text("-T3CodeChannel", "t3codeChannel"); if (Supports("supportsT3CodePatched")) Bool("-T3CodePatched", "t3codePatched"); if (Supports("supportsT3CodeAutoApprove")) Bool("-T3CodeAutoApprove", "t3codeAutoApprove");
         }
         JsonObject Done(string script, bool destructive, bool elevate, string label)
         {
