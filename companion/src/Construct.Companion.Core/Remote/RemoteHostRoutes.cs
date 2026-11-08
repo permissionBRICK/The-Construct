@@ -32,6 +32,10 @@ public sealed partial class RemoteHostClient
     public Task<JsonNode?> HostCapacityAsync(bool refresh, CancellationToken cancellationToken = default) => RequestAsync("GET", "/host/capacity" + RemoteHost.BuildQuery(new JsonObject { ["refresh"] = refresh ? "true" : null }), null, cancellationToken);
     public Task<JsonNode?> HostConfigAsync(CancellationToken cancellationToken = default) => RequestAsync("GET", "/host/config", null, cancellationToken);
     public Task<JsonNode?> PutHostConfigAsync(JsonNode? body, CancellationToken cancellationToken = default) => RequestAsync("PUT", "/host/config", body, cancellationToken);
+    // The host's HTTPS certificate (HTTPS forwards; admin). The PUT body carries key material and goes to this one request only.
+    public Task<JsonNode?> HttpsStatusAsync(CancellationToken cancellationToken = default) => RequestAsync("GET", "/host/https", null, cancellationToken);
+    public Task<JsonNode?> SetHttpsCertificateAsync(JsonNode? body, CancellationToken cancellationToken = default) => RequestAsync("PUT", "/host/https/certificate", body, cancellationToken);
+    public Task<JsonNode?> RemoveHttpsCertificateAsync(CancellationToken cancellationToken = default) => RequestAsync("DELETE", "/host/https/certificate", null, cancellationToken);
     public Task<JsonNode?> IsoCatalogAsync(CancellationToken cancellationToken = default) => RequestAsync("GET", "/host/iso-catalog", null, cancellationToken);
     public Task<JsonNode?> UsersAsync(CancellationToken cancellationToken = default) => RequestAsync("GET", "/users", null, cancellationToken);
     public Task<JsonNode?> GetUserAsync(string name, CancellationToken cancellationToken = default) => RequestAsync("GET", $"/users/{RemoteHost.Encode(name)}", null, cancellationToken);

@@ -7,9 +7,9 @@ namespace Construct.Companion.Core.HostAdmin;
 public static partial class HostAdminProtocol
 {
     public static readonly string[] Tabs = ["overview", "vms", "users", "usage", "media", "operations", "config", "maintenance"];
-    public static readonly string[] ConfigSections = ["capacity", "memoryPressure", "userDefaults", "userCaps", "lifecycle", "media", "network", "virtualization", "updates", "usage", "vault"];
+    public static readonly string[] ConfigSections = ["capacity", "memoryPressure", "userDefaults", "userCaps", "lifecycle", "media", "network", "virtualization", "updates", "usage", "vault", "https"];
     // Sections an older host does not have: shown only when the host's configuration carries them.
-    public static readonly string[] NewerConfigSections = ["memoryPressure", "usage", "vault"];
+    public static readonly string[] NewerConfigSections = ["memoryPressure", "usage", "vault", "https"];
     public static string Text(JsonNode? node) => StateJson.Trim(node is null ? "" : StateJson.String(node));
     public static JsonObject Features(JsonNode? health)
     {
@@ -97,6 +97,7 @@ public static partial class HostAdminProtocol
             if (kind != "newUser" && Tri("enabled") is { } enabled) body["enabled"] = enabled;
             if (Number("maxVms") is { } max) body["maxVms"] = max;
             if (Tri("allowHostForwards") is { } forwards) body["allowHostForwards"] = forwards;
+            if (kind != "newUser" && Tri("allowHttpsForwards") is { } https) body["allowHttpsForwards"] = https;
             if (kind != "newUser" && form.ContainsKey("allowNested")) body["allowNested"] = Tri("allowNested");
             if (body.Count == 0 && problems.Count == 0) Problem("", "nothing to change");
         }

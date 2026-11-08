@@ -646,11 +646,15 @@ function readForwardList(list) {
 
     if (target !== "client") {
       // Presentation only: never a request, so no tunnel is ever planned for it.
-      host.push({
+      const record = {
         id, vmPort, label, target,
         publicPort: toPort(raw.publicPort),
         url: typeof raw.url === "string" && raw.url ? raw.url : null,
-      });
+      };
+      // An HTTPS forward: the host terminates TLS with its own certificate. A main one is
+      // advertised under the VM's own name and also answers on its own port (`portUrl`).
+      if (raw.https === true) Object.assign(record, httpsFields(raw));
+      host.push(record);
       continue;
     }
 
@@ -695,6 +699,14 @@ function readForwardList(list) {
     }
   }
   return { requests, acks, host, closes, pending };
+}
+
+/** The HTTPS marks of a host forward record: present only on an HTTPS forward. Pure. */
+function httpsFields(raw) {
+  const out = { https: true };
+  if (raw.main === true) out.main = true;
+  if (typeof raw.portUrl === "string" && raw.portUrl) out.portUrl = raw.portUrl;
+  return out;
 }
 
 /**
@@ -1047,6 +1059,7 @@ function toSnapshot(input = {}) {
       url: record.url || null,
       message: "",
       owned: false,
+      ...(record.https === true ? httpsFields(record) : {}),
     });
   }
 

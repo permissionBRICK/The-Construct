@@ -50,7 +50,8 @@ public sealed class DesktopSnapshot(IClock clock)
                 break;
             case "forwards":
                 var rows = m["forwards"]?["items"] as JsonArray ?? m["items"] as JsonArray ?? [];
-                Forwards = rows.OfType<JsonObject>().Select(f => new TrayForward(StateJson.String(f["id"]), StateJson.Text(f["label"]) ?? StateJson.String(f["id"]), StateJson.String(f["url"]))).ToArray(); break;
+                // An HTTPS forward (the host's certificate) says so in the tray menu too.
+                Forwards = rows.OfType<JsonObject>().Select(f => new TrayForward(StateJson.String(f["id"]), (StateJson.Text(f["label"]) ?? StateJson.String(f["id"])) + (StateJson.Boolean(f["https"]) == true ? " (HTTPS)" : ""), StateJson.String(f["url"]))).ToArray(); break;
             case "hostAdminOffer":
                 ApplyOffer(m["offer"] as JsonObject); break;
             case "lifecycle": State = State with { Busy = StateJson.Truthy(m["busy"]) }; break;

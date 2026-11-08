@@ -265,6 +265,17 @@ function forwardRuntime() {
       const list = [{...request,destination,status,localPort:18800,message:"guest address changed"},{id:"host",vmPort:443,target:"host",url:"https://host/"}];
       const read = forwards.readForwardList(list); add("remote",list,read); add("snapshot",{...read,mode:"remote"},forwards.toSnapshot({...read,mode:"remote"}));
     }
+  // HTTPS forwards as GET /vms/{name}/forwards lists them: a main one (shared port, also its own
+  // port), a plain HTTPS one, and a host forward without TLS.
+  {
+    const list = [
+      {id:"f-t3",vmName:"dev",vmPort:3773,publicPort:31443,target:"host",label:"t3 code",created:"2026-11-08T08:00:00+00:00",url:"https://dev.vms.example/",https:true,main:true,upstreamTls:false,portUrl:"https://vms.example:31443/"},
+      {id:"f-api",vmName:"dev",vmPort:8443,publicPort:31444,target:"host",label:"api",created:"2026-11-08T08:01:00+00:00",url:"https://vms.example:31444/",https:true,upstreamTls:true},
+      {id:"f-web",vmName:"dev",vmPort:8080,publicPort:31234,target:"host",label:"webhook",created:"2026-11-08T08:02:00+00:00",url:"http://vms.example:31234/"},
+      {id:"f-odd",vmName:"dev",vmPort:9000,publicPort:31445,target:"host",label:"odd",url:"https://vms.example:31445/",https:"true",main:true,portUrl:""},
+    ];
+    const read = forwards.readForwardList(list); add("remote",list,read); add("snapshot",{...read,mode:"remote"},forwards.toSnapshot({...read,mode:"remote"}));
+  }
   for (const enabled of [false,true]) for (const online of [false,true]) for (const armed of [null,"dev","other"]) for (const vmState of ["off","saved","running","unknown"])
     { const input={enabled,online,armed,vmState,name:"dev"}; add("lifecycle",input,forwards.planLifecycle(input)); }
   for (const outcome of ["supported","unsupported","unanswered","stood-down","running",""]) for (const current of [false,true])
@@ -442,6 +453,31 @@ function hostAdminIpc() {
    byVm: [{ vm: "gone", user: "alice", deleted: true, tokens: 1234567, costUsd: 12.34, lastReportedAt: "2026-09-11T10:00:00Z", tools: [{ tool: "claude", tokens: 1234567, costUsd: 12.34 }] }] }]) add("tokenUsage", input, m.toTokenUsageView(input));
  for (const input of [{ tokenUsage: { today: { tokens: 1234 }, month: { tokens: 1234567 }, lastReportedAt: "2026-09-11T10:00:00Z" } }, { tokenUsage: { lastReportedAt: null } }]) add("vm", input, m.toVmRow(input, now));
  add("user", { usageTokensMonth: 1234567 }, m.toUserRow({ usageTokensMonth: 1234567 }));
+ // HTTPS forwards: the per-user permission (off by default) and the certificate card.
+ for (const allowHttpsForwards of [undefined, false, true]) {
+  const input = { name: "DOMAIN\\alice", role: "User", enabled: true, maxVms: 2, allowHostForwards: true, created: "2026-08-01T08:00:00+00:00", tokens: 1, vms: { primaries: 1, children: 0 }, ...(allowHttpsForwards === undefined ? {} : { allowHttpsForwards }) };
+  add("user", input, m.toUserRow(input));
+ }
+ for (const form of [{ allowHttpsForwards: "true" }, { allowHttpsForwards: "false", allowHostForwards: "true" }, { allowHttpsForwards: "" }, { allowHttpsForwards: "maybe" }])
+  add("userForm", form, m.parseUserForm(form));
+ const certificate = { subject: "CN=*.vms.example", issuer: "CN=Example Issuing CA, O=Example", dnsNames: ["*.vms.example", "vms.example"],
+  notBefore: "2026-08-01T00:00:00+00:00", notAfter: "2026-10-30T23:59:59+00:00", sha256: "9F86D081884C7D659A2FEAA0C55AD015A3BF4F1B2B0B822CD15D6C15B0F00A08", chainLength: 2, installedAt: "2026-08-02T09:15:00+00:00" };
+ const httpsStatus = { certificate, directory: "C:\\ProgramData\\Construct\\https", config: { sharedPort: 443, startOnRequest: true },
+  names: { publicHost: "vms.example", publicHostCovered: true, publicHostPattern: "{name}.vms.example", example: "example-vm.vms.example", exampleCovered: true, vaultHost: "vault.vms.example", vaultHostCovered: true },
+  listeners: [{ kind: "shared", port: 443, forwardId: null, vmName: null, listening: true, error: null }, { kind: "forward", port: 31443, forwardId: "f-dev", vmName: "dev", listening: true, error: null },
+   { kind: "forward", port: 0, forwardId: "f-build", vmName: null, listening: false, error: "could not listen on port 31444 (AddressAlreadyInUse)" }], warnings: [] };
+ for (const input of [null, {}, httpsStatus,
+  { ...httpsStatus, certificate: { ...certificate, notAfter: "2026-09-20T00:00:00+00:00", sha256: "abc" }, warnings: ["The certificate expires in 8 days."] },
+  { ...httpsStatus, certificate: { ...certificate, notAfter: "2026-09-13T00:00:00+00:00", dnsNames: [] } },
+  { ...httpsStatus, certificate: { ...certificate, notAfter: "2026-09-01T00:00:00+00:00" }, warnings: ["The certificate has expired."] },
+  { certificate: null, directory: "C:\\ProgramData\\Construct\\https", config: { sharedPort: 8443, startOnRequest: false },
+   names: { publicHost: "vms.example", publicHostCovered: null, publicHostPattern: null, example: "vms.example", exampleCovered: null, vaultHost: null, vaultHostCovered: null },
+   listeners: [{ kind: "shared", port: 8443, forwardId: null, vmName: null, listening: false, error: "no certificate is installed" }],
+   warnings: ["Main forwards are only served on the shared port when Constructd:PublicHostPattern gives every VM its own name."] },
+  { ...httpsStatus, config: { sharedPort: null, startOnRequest: true }, listeners: [] }]) add("https", input, m.toHttpsView(input, now));
+ for (const input of [{}, { certificatePem: "certificate chain", privateKeyPem: "private key" }, { certificatePem: "certificate chain", privateKeyPem: "  " },
+  { pfx: " cGZ4LWJ5dGVz ", password: "" }, { pfx: "cGZ4LWJ5dGVz", password: "pfx-password" }, { pfx: "", certificatePem: "certificate chain", privateKeyPem: "private key" }])
+  add("httpsRequest", input, m.httpsCertificateRequest(input));
  for(const input of [null,{}, {repos:[]},{repos:[{url:"https://example.test/a.git"}]},{repos:[{url:"git@host:repo.git"}]},{repos:[{directory:"a/b",url:"x"}]},{repos:[{directory:"../escape",url:"x"}]},{repos:[{directory:"a#b",url:"x"}]},{repos:[{url:"a"},{url:"b"}]}])add("projectOpenPath",input,require("../src/remote").projectOpenPath(input));
  for(const code of ["cascade-confirmation-required","cascade-scope-changed","cascade-token-expired","other"])for(const status of [409,400]) add("cascadeKind",{code,status},m.cascadeKindOf({code,status}));
  for(const problem of [{},{code:"cascade-scope-changed",children:["child"]},{children:[{name:"one",sharing:"host",state:"Running",diskGb:4,mediaCount:2},{name:"two",sharing:"private"}],cascadeToken:"fake",expiresAt:"2026-09-11T13:00:00Z"}])add("cascade",{primary:"agent-vm",problem},m.cascadeConfirmation({primary:"agent-vm",problem}));
@@ -488,6 +524,10 @@ function hostAdminIpc() {
  add("config", pressureConfig, m.toConfigView(pressureConfig));
  for (const vault of [{ webUrl: null, source: "default", updatedAt: null }, { webUrl: "https://vault.example.net", source: "stored", updatedAt: "2026-10-02T08:00:00Z" }]) {
   const input = { ...pressureConfig, vault };
+  add("config", input, m.toConfigView(input));
+ }
+ for (const https of [{ sharedPort: null, startOnRequest: true, source: "default", updatedAt: null }, { sharedPort: 443, startOnRequest: false, source: "stored", updatedAt: "2026-11-08T08:00:00Z" }]) {
+  const input = { ...pressureConfig, https };
   add("config", input, m.toConfigView(input));
  }
  const pressureCapabilities = { backend: "proxmox", policy: pressureConfig };

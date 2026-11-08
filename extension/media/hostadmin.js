@@ -59,6 +59,7 @@
     input.id = id;
     input.dataset.field = o.field || id;
     wrap.appendChild(input);
+    if (o.help) wrap.appendChild(el("span", "ha-field-help", o.help));
     if (o.problem) wrap.appendChild(el("div", "problem", o.problem));
     return wrap;
   }
@@ -387,6 +388,7 @@
       role.appendChild(el("span", "ha-badge", r.role));
       if (!r.enabled) role.appendChild(el("span", "ha-badge off", "disabled"));
       if (!r.allowHostForwards) role.appendChild(el("span", "ha-badge", "no host forwards"));
+      if (r.allowHttpsForwards) role.appendChild(el("span", "ha-badge", "https forwards"));
       row.appendChild(role);
       row.appendChild(cell(`${r.primaries} / ${r.children} (max ${r.maxVms == null ? "—" : r.maxVms})`));
       const tokens = cell(r.tokens + " API tokens");
@@ -412,6 +414,8 @@
     uf.appendChild(field("Enabled", "ue_enabled", r.enabled ? "true" : "false", { options: [["true", "enabled"], ["false", "disabled"]], field: "enabled" }));
     uf.appendChild(field("Max primaries", "ue_maxVms", r.maxVms == null ? "" : r.maxVms, { type: "number", field: "maxVms" }));
     uf.appendChild(field("Host forwards", "ue_allowHostForwards", r.allowHostForwards ? "true" : "false", { options: [["true", "allowed"], ["false", "refused"]], field: "allowHostForwards" }));
+    uf.appendChild(field("HTTPS forwards", "ue_allowHttpsForwards", r.allowHttpsForwards ? "true" : "false", { options: [["true", "allowed"], ["false", "refused"]], field: "allowHttpsForwards",
+      help: "Lets this user's VMs publish links with the host's trusted certificate." }));
     uf.appendChild(field("Nested virtualization", "ue_allowNested", r.allowNested, { options: TRI, field: "allowNested" }));
     const af = $("ueAllowanceForm");
     clear(af);
@@ -662,6 +666,90 @@
     text("capNotes", caps && caps.notes.length ? "Notes: " + caps.notes.join(" · ") : "");
   }
 
+  // ── HTTPS certificate (Configuration tab) ───────────────────────────────────
+  // Read-only data from `state.config.https`; the form and the inline confirm are static
+  // markup, so a state push never clears a file the admin is choosing.
+  let httpsLocalProblem = "";
+  function renderHttps(s) {
+    const h = s.config && s.config.https;
+    show($("httpsCard"), !!h);
+    if (!h) return;
+    const c = h.certificate;
+    text("httpsState", h.unavailable ? "unavailable" : c ? (c.expiry || "installed") : "none");
+    const info = $("httpsInfo");
+    clear(info);
+    const row = (k, v, cls) => {
+      const r = el("div", "row");
+      r.appendChild(el("span", "k", k));
+      r.appendChild(el("span", "v" + (cls ? " " + cls : ""), v));
+      info.appendChild(r);
+    };
+    if (h.unavailable) info.appendChild(el("p", "cost-note", "Could not read the certificate: " + h.unavailable));
+    else if (c) {
+      row("Subject", c.subject || "—");
+      row("Names", c.names);
+      row("Valid until", c.validUntil + (c.expiry ? " · " + c.expiry : ""), c.expiring ? "ha-warn" : "");
+      row("SHA-256", c.sha256 || "—", "mono");
+      row("Issuer", c.issuer || "—");
+    } else info.appendChild(el("p", "cost-note", "No certificate. HTTPS forwards are unavailable."));
+    if (!h.unavailable) row("Listeners", `${h.listening} listening · shared port ${h.sharedPort}`);
+    const warnings = $("httpsWarnings");
+    clear(warnings);
+    (h.warnings || []).concat(h.failedListeners || []).forEach((w) => warnings.appendChild(el("p", "ha-https-warning", w)));
+    const problem = httpsLocalProblem || h.problem || "";
+    text("httpsProblem", problem);
+    show($("httpsProblem"), !!problem);
+    show($("httpsActions"), !h.unavailable && $("httpsForm").hidden && $("httpsRemoveConfirm").hidden);
+    const remove = $("httpsRemove");
+    if (remove) remove.hidden = !c;
+  }
+  function httpsShow(part) {
+    for (const [id, name] of [["httpsForm", "form"], ["httpsRemoveConfirm", "confirm"]]) show($(id), part === name);
+    if (state) renderHttps(state);
+  }
+  function httpsReset() {
+    // Drop every chosen file and the password: nothing of the key outlives the request.
+    for (const id of ["httpsChain", "httpsKey", "httpsPfx", "httpsPassword"]) { const i = $(id); if (i) i.value = ""; }
+  }
+  function httpsFormat() {
+    const pfx = $("httpsFormat").value === "pfx";
+    document.querySelectorAll("#httpsForm [data-https]").forEach((l) => { l.hidden = l.dataset.https !== (pfx ? "pfx" : "pem"); });
+  }
+  function httpsSetProblem(message) { httpsLocalProblem = message; if (state) renderHttps(state); }
+  const HTTPS_MAX_FILE = 256 * 1024;
+  async function httpsSubmit(e) {
+    e.preventDefault();
+    const pfx = $("httpsFormat").value === "pfx";
+    const inputs = pfx ? [$("httpsPfx")] : [$("httpsChain"), $("httpsKey")];
+    if (inputs.some((i) => !i.files || !i.files.length)) { httpsSetProblem(pfx ? "Choose a PFX file." : "Choose the certificate chain and the key file."); return; }
+    const big = inputs.map((i) => i.files[0]).find((f) => f.size > HTTPS_MAX_FILE);
+    if (big) { httpsSetProblem(`${big.name} is larger than 256 KiB.`); return; }
+    let args;
+    try {
+      if (pfx) {
+        const bytes = new Uint8Array(await inputs[0].files[0].arrayBuffer());
+        let binary = "";
+        for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+        args = { pfx: btoa(binary), password: $("httpsPassword").value };
+      } else {
+        args = { certificatePem: await inputs[0].files[0].text(), privateKeyPem: await inputs[1].files[0].text() };
+      }
+    } catch (_) {
+      httpsSetProblem("Could not read the file.");
+      return;
+    } finally { httpsReset(); }
+    httpsLocalProblem = "";
+    httpsShow(null);
+    act("setHttpsCertificate", args);
+  }
+  $("httpsSet") && $("httpsSet").addEventListener("click", () => { httpsLocalProblem = ""; httpsReset(); httpsFormat(); httpsShow("form"); });
+  $("httpsCancel") && $("httpsCancel").addEventListener("click", () => { httpsLocalProblem = ""; httpsReset(); httpsShow(null); });
+  $("httpsFormat") && $("httpsFormat").addEventListener("change", httpsFormat);
+  $("httpsForm") && $("httpsForm").addEventListener("submit", httpsSubmit);
+  $("httpsRemove") && $("httpsRemove").addEventListener("click", () => { httpsLocalProblem = ""; httpsShow("confirm"); });
+  $("httpsRemoveNo") && $("httpsRemoveNo").addEventListener("click", () => httpsShow(null));
+  $("httpsRemoveYes") && $("httpsRemoveYes").addEventListener("click", () => { httpsShow(null); act("removeHttpsCertificate", {}); });
+
   // ── Maintenance ─────────────────────────────────────────────────────────────
   function renderMaintenance(s) {
     const u = s.maintenanceTab;
@@ -726,6 +814,7 @@
     renderMedia(s);
     renderOperations(s);
     if (refreshForms || JSON.stringify(previous.config) !== JSON.stringify(s.config)) renderConfig(s);
+    renderHttps(s);
     renderMaintenance(s);
     // Every mutation is disabled while the host is updating (§10.3), and re-enabled afterwards:
     // the Companion keeps this document alive across an update, so a button disabled here must

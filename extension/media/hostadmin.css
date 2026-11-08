@@ -70,6 +70,15 @@
 .ha-section .problem { color: var(--crit); font-size: 11px; margin: 3px 0 0; white-space: pre-wrap; }
 .ha-pre { font-family: var(--mono); font-size: 11px; color: var(--dim); background: rgba(0,0,0,0.35); border: 1px solid var(--line); border-radius: 4px; padding: 8px; white-space: pre-wrap; max-height: 240px; overflow: auto; }
 .ha-new-user { align-items: end; }
+.ha-form .ha-field-help { color: var(--faint); font-size: 10.5px; }
+
+/* HTTPS certificate card (Configuration tab). */
+#httpsInfo .v { overflow-wrap: anywhere; }
+#httpsInfo .v.mono { font-family: var(--mono); font-size: 11px; }
+#httpsInfo .v.ha-warn, .ha-https-warning { color: var(--warn); }
+.ha-https-warning { font-size: 11px; margin: 6px 0 0; }
+#httpsProblem { color: var(--crit); font-size: 11px; margin: 8px 0 0; white-space: pre-wrap; }
+.ha-inline-question { margin: 0; }
 
 /* VM headers and records share one column definition; details get their own line. */
 #tab-vms { overflow-x: auto; }

@@ -16,6 +16,13 @@ public static class RemoteForwardList
         return new() { ["vmName"] = name, ["via"] = IsSafeId(via) ? via : "", ["connectAddress"] = address.StartsWith('[') && address.EndsWith(']') ? address[1..^1] : address,
             ["connectPort"] = Port(raw["connectPort"]) ?? vmPort, ["verified"] = raw.True("verified") };
     }
+    /// <summary>The HTTPS marks of a host forward record, present only on an HTTPS forward (forwarder.js httpsFields).</summary>
+    public static void HttpsFields(JsonObject raw, JsonObject into)
+    {
+        into["https"] = true;
+        if (raw.True("main")) into["main"] = true;
+        if (raw["portUrl"] is JsonValue portUrl && portUrl.TryGetValue<string>(out var link) && link.Length > 0) into["portUrl"] = link;
+    }
     public static JsonObject Read(JsonArray entries)
     {
         var result = new JsonObject { ["requests"] = new JsonArray(), ["acks"] = new JsonArray(), ["host"] = new JsonArray(), ["closes"] = new JsonArray(), ["pending"] = new JsonArray() };
@@ -26,8 +33,11 @@ public static class RemoteForwardList
             var label = Sanitize(raw.Str("label"), 100);
             if (target != "client")
             {
-                result.Array("host").Add(new JsonObject { ["id"] = id, ["vmPort"] = port, ["label"] = label, ["target"] = target,
-                    ["publicPort"] = Port(raw["publicPort"]), ["url"] = raw["url"] is JsonValue url && url.TryGetValue<string>(out var s) && s.Length > 0 ? s : null }); continue;
+                var record = new JsonObject { ["id"] = id, ["vmPort"] = port, ["label"] = label, ["target"] = target,
+                    ["publicPort"] = Port(raw["publicPort"]), ["url"] = raw["url"] is JsonValue url && url.TryGetValue<string>(out var s) && s.Length > 0 ? s : null };
+                // An HTTPS forward (the host's certificate); a main one also answers on its own port.
+                if (raw.True("https")) HttpsFields(raw, record);
+                result.Array("host").Add(record); continue;
             }
             if (raw.Str("status").Equals("closed", StringComparison.OrdinalIgnoreCase) || raw.Str("state").Equals("closed", StringComparison.OrdinalIgnoreCase))
             { result.Array("closes").Add(id); continue; }
