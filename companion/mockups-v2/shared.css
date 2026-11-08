@@ -1,0 +1,255 @@
+* {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}
+
+button,
+input,
+select,
+textarea {
+  color: inherit;
+  font: inherit;
+}
+
+button,
+a,
+input,
+select,
+textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button {
+  border: 0;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+svg {
+  display: block;
+}
+
+.icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 18px;
+  width: 18px;
+}
+
+.icon svg {
+  height: 100%;
+  width: 100%;
+}
+
+.sr-only {
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus, #83e6b1);
+  outline-offset: 3px;
+}
+
+::selection {
+  background: var(--selection, rgba(87, 214, 149, 0.28));
+}
+
+.mockup-dialog {
+  background: var(--dialog-bg, #151b24);
+  border: 1px solid var(--dialog-border, #2b3441);
+  border-radius: var(--dialog-radius, 16px);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.45);
+  color: var(--dialog-text, #edf2f7);
+  margin: auto;
+  max-height: min(760px, calc(100vh - 48px));
+  max-width: calc(100vw - 32px);
+  padding: 0;
+  width: 560px;
+}
+
+.mockup-dialog::backdrop {
+  backdrop-filter: blur(5px);
+  background: rgba(3, 7, 12, 0.64);
+}
+
+.dialog-head {
+  align-items: flex-start;
+  display: flex;
+  gap: 24px;
+  justify-content: space-between;
+  padding: 24px 24px 0;
+}
+
+.dialog-eyebrow {
+  color: var(--muted, #93a0af);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  margin: 0 0 6px;
+  text-transform: uppercase;
+}
+
+.dialog-title {
+  font-size: 21px;
+  line-height: 1.25;
+  margin: 0;
+}
+
+.dialog-close {
+  align-items: center;
+  background: transparent;
+  border-radius: 8px;
+  color: var(--muted, #93a0af);
+  display: flex;
+  height: 32px;
+  justify-content: center;
+  width: 32px;
+}
+
+.dialog-close:hover {
+  background: var(--hover, rgba(255, 255, 255, 0.07));
+  color: var(--dialog-text, #edf2f7);
+}
+
+.dialog-body {
+  color: var(--dialog-text, #edf2f7);
+  font-size: 14px;
+  line-height: 1.6;
+  overflow: auto;
+  padding: 20px 24px 24px;
+}
+
+.dialog-body p:first-child {
+  margin-top: 0;
+}
+
+.dialog-body p:last-child {
+  margin-bottom: 0;
+}
+
+.dialog-actions {
+  align-items: center;
+  border-top: 1px solid var(--dialog-border, #2b3441);
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  padding: 16px 24px;
+}
+
+.dialog-field {
+  display: grid;
+  gap: 7px;
+  margin-top: 16px;
+}
+
+.dialog-field label {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.dialog-field input,
+.dialog-field select,
+.dialog-field textarea {
+  background: var(--field-bg, #0e141d);
+  border: 1px solid var(--dialog-border, #2b3441);
+  border-radius: 9px;
+  min-height: 42px;
+  padding: 10px 12px;
+  width: 100%;
+}
+
+.dialog-note {
+  background: var(--note-bg, rgba(255, 255, 255, 0.045));
+  border-radius: 10px;
+  color: var(--muted, #93a0af);
+  font-size: 12px;
+  padding: 12px 14px;
+}
+
+#toast-region {
+  bottom: 24px;
+  display: grid;
+  gap: 10px;
+  pointer-events: none;
+  position: fixed;
+  right: 24px;
+  width: min(380px, calc(100vw - 32px));
+  z-index: 100;
+}
+
+.mockup-toast {
+  align-items: center;
+  animation: toast-in 180ms ease-out;
+  background: var(--toast-bg, #f3f6f8);
+  border: 1px solid var(--toast-border, transparent);
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.28);
+  color: var(--toast-text, #10151c);
+  display: flex;
+  font-size: 13px;
+  gap: 10px;
+  line-height: 1.4;
+  padding: 13px 16px;
+}
+
+.mockup-toast .icon {
+  color: var(--toast-icon, #18794e);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@media (max-width: 640px) {
+  #toast-region {
+    bottom: 16px;
+    right: 16px;
+  }
+
+  .dialog-head,
+  .dialog-body {
+    padding-left: 20px;
+    padding-right: 20px;
+  }
+
+  .dialog-actions {
+    padding: 14px 20px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

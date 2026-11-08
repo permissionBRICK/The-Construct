@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Atlas · Construct Companion concept</title>
+  <link rel="stylesheet" href="shared.css">
+  <link rel="stylesheet" href="atlas.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand-row">
+        <a class="atlas-brand" href="index.html" aria-label="Back to design directions">
+          <span class="brand-symbol"><span data-icon="layers"></span></span>
+          <span><strong>Construct</strong><small>Atlas concept</small></span>
+        </a>
+        <button class="mobile-close icon-button" id="close-menu" aria-label="Close navigation"><span data-icon="x"></span></button>
+      </div>
+      <nav class="primary-nav" aria-label="Primary navigation">
+        <p class="nav-label">Workspace</p>
+        <button class="nav-item active" data-page="overview"><span data-icon="home"></span><span>Overview</span></button>
+        <button class="nav-item" data-page="projects"><span data-icon="folder"></span><span>Projects</span><span class="nav-count">6</span></button>
+        <button class="nav-item" data-page="usage"><span data-icon="activity"></span><span>Usage</span></button>
+        <p class="nav-label">Trust & infrastructure</p>
+        <button class="nav-item" data-page="vault"><span data-icon="shield"></span><span>Key vault</span><span class="nav-alert">2</span></button>
+        <button class="nav-item" data-page="host"><span data-icon="network"></span><span>Host admin</span></button>
+        <p class="nav-label">Application</p>
+        <button class="nav-item" data-page="settings"><span data-icon="sliders"></span><span>Settings</span></button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="companion-health"><span class="status-dot"></span><div><strong>Companion running</strong><small>All background services ready</small></div></div>
+        <a class="concept-link" href="index.html"><span data-icon="grid"></span> All design directions <span data-icon="arrowUpRight"></span></a>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <button class="mobile-menu icon-button" id="open-menu" aria-label="Open navigation"><span data-icon="menu"></span></button>
+        <div class="scope-picker">
+          <span class="scope-icon"><span data-icon="server"></span></span>
+          <button id="scope-button" aria-expanded="false">
+            <span><small>Selected instance</small><strong id="scope-name">agent-vm</strong></span>
+            <span data-icon="chevronDown"></span>
+          </button>
+          <div class="scope-menu" id="scope-menu" hidden>
+            <p>Switch context</p>
+            <button data-instance="agent-vm" data-kind="Local Hyper-V"><span class="instance-state online"></span><span><strong>agent-vm</strong><small>Local Hyper-V</small></span><span data-icon="check"></span></button>
+            <button data-instance="build-vm" data-kind="host.example · Remote"><span class="instance-state online"></span><span><strong>build-vm</strong><small>host.example · Remote</small></span></button>
+            <button data-instance="test-vm" data-kind="Local Hyper-V · Off"><span class="instance-state off"></span><span><strong>test-vm</strong><small>Local Hyper-V · Off</small></span></button>
+            <div class="scope-menu-footer"><button id="add-instance"><span data-icon="plus"></span>Add or register an instance</button></div>
+          </div>
+        </div>
+        <div class="topbar-context"><span class="context-dot"></span><span id="scope-kind">Local Hyper-V</span></div>
+        <div class="topbar-actions">
+          <button class="search-trigger" id="open-search"><span data-icon="search"></span><span>Search or run a command</span><kbd>Ctrl K</kbd></button>
+          <button class="icon-button notification-button" aria-label="Notifications" data-toast="No unread notifications"><span data-icon="bell"></span><i></i></button>
+          <button class="avatar" aria-label="Local Windows account">AC</button>
+        </div>
+      </header>
+
+      <main class="main-content" id="page" tabindex="-1"></main>
+    </div>
+  </div>
+  <script src="shared.js"></script>
+  <script src="atlas.js"></script>
+</body>
+</html>

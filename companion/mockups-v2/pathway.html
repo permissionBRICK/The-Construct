@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pathway · Construct Companion concept</title>
+  <link rel="stylesheet" href="shared.css">
+  <link rel="stylesheet" href="pathway.css">
+</head>
+<body>
+  <header class="path-header">
+    <a class="path-brand" href="index.html" aria-label="Back to design directions"><span class="path-logo"><span data-icon="arrowUpRight"></span></span><span>Construct</span><small>Pathway</small></a>
+    <nav class="path-nav" aria-label="Primary navigation">
+      <button class="active" data-page="home">Home</button>
+      <button data-page="approvals">Approvals <span id="approval-count">2</span></button>
+      <button data-page="library">Library</button>
+      <button data-page="infrastructure">Infrastructure</button>
+    </nav>
+    <div class="header-actions">
+      <label class="vm-select"><span class="online-dot"></span><select id="path-instance" aria-label="Selected VM"><option value="agent-vm">agent-vm</option><option value="build-vm">build-vm</option><option value="test-vm">test-vm</option></select><span data-icon="chevronDown"></span></label>
+      <button class="settings-button" data-page="settings" aria-label="Settings"><span data-icon="sliders"></span></button>
+    </div>
+  </header>
+  <main id="page" class="path-main" tabindex="-1"></main>
+  <footer class="path-footer"><a href="index.html"><span data-icon="arrowLeft"></span>All three design directions</a><span><i></i>Companion connected on this PC</span></footer>
+  <script src="shared.js"></script>
+  <script src="pathway.js"></script>
+</body>
+</html>

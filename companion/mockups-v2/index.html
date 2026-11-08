@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Construct Companion · Design directions v2</title>
+  <link rel="stylesheet" href="shared.css">
+  <style>
+    :root {
+      --ink: #18201d;
+      --muted: #647069;
+      --paper: #f4f3ed;
+      --line: #d9ddd4;
+      --green: #1d5c45;
+      --lime: #d5f36a;
+      --focus: #1d5c45;
+      --selection: #dcebb5;
+      color-scheme: light;
+      font-family: Inter, "Segoe UI", sans-serif;
+    }
+    body { background: var(--paper); color: var(--ink); }
+    .shell { margin: auto; max-width: 1440px; padding: 0 48px 64px; }
+    header { align-items: center; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; padding: 28px 0; }
+    .brand { align-items: center; display: flex; font-size: 14px; font-weight: 750; gap: 12px; letter-spacing: -.01em; }
+    .brand-mark { align-items: center; background: var(--ink); border-radius: 8px; color: var(--lime); display: flex; height: 34px; justify-content: center; width: 34px; }
+    .brand-mark svg { height: 20px; width: 20px; }
+    .version { color: var(--muted); font-family: ui-monospace, monospace; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+    .hero { display: grid; gap: 40px; grid-template-columns: minmax(0, 1.3fr) minmax(280px, .7fr); padding: 64px 0 48px; }
+    .kicker { align-items: center; color: var(--green); display: flex; font-size: 11px; font-weight: 800; gap: 8px; letter-spacing: .12em; margin: 0 0 18px; text-transform: uppercase; }
+    .kicker::before { background: var(--green); content: ""; height: 7px; width: 7px; }
+    h1 { font-size: clamp(38px, 5.3vw, 72px); font-weight: 580; letter-spacing: -.055em; line-height: .98; margin: 0; max-width: 850px; }
+    .hero-copy { align-self: end; color: var(--muted); font-size: 15px; line-height: 1.7; margin: 0; max-width: 450px; }
+    .hero-copy strong { color: var(--ink); font-weight: 650; }
+    .design-grid { display: grid; gap: 20px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .design-card { background: #fff; border: 1px solid var(--line); border-radius: 18px; display: flex; flex-direction: column; min-width: 0; overflow: hidden; transition: box-shadow 180ms, transform 180ms; }
+    .design-card:hover { box-shadow: 0 18px 45px rgba(32, 44, 37, .09); transform: translateY(-3px); }
+    .preview { height: 258px; overflow: hidden; padding: 22px; position: relative; }
+    .preview-atlas { background: #0d141c; }
+    .atlas-window { background: #111b25; border: 1px solid #273543; border-radius: 10px; display: grid; grid-template-columns: 46px 1fr; height: 240px; overflow: hidden; }
+    .atlas-rail { align-items: center; background: #0b1219; display: flex; flex-direction: column; gap: 15px; padding-top: 18px; }
+    .atlas-rail i { border: 1px solid #43505d; border-radius: 3px; height: 12px; opacity: .65; width: 12px; }
+    .atlas-rail i:first-child { background: #60d99a; border-color: #60d99a; }
+    .atlas-main { padding: 15px; }
+    .mini-top { display: flex; gap: 6px; margin-bottom: 17px; }
+    .mini-top i { background: #263542; border-radius: 3px; height: 8px; width: 58px; }
+    .mini-top i:last-child { background: #60d99a; margin-left: auto; width: 32px; }
+    .mini-atlas-hero { background: #182732; border-left: 2px solid #60d99a; height: 54px; margin-bottom: 10px; padding: 12px; }
+    .mini-line { background: #435463; border-radius: 3px; height: 6px; margin-bottom: 7px; width: 55%; }
+    .mini-line.short { width: 32%; }
+    .mini-line.green { background: #60d99a; width: 24%; }
+    .mini-cards { display: grid; gap: 8px; grid-template-columns: 1fr 1fr; }
+    .mini-cards i { background: #18232e; border: 1px solid #293846; border-radius: 5px; height: 56px; }
+    .preview-pathway { background: #e9e6df; }
+    .path-window { background: #fbfaf6; border: 1px solid #d6d0c6; border-radius: 14px; height: 245px; padding: 18px; }
+    .path-nav { align-items: center; display: flex; gap: 5px; margin-bottom: 20px; }
+    .path-dot { background: #ef6a4c; border-radius: 50%; height: 14px; margin-right: auto; width: 14px; }
+    .path-nav i { background: #d9d5ce; border-radius: 5px; height: 6px; width: 28px; }
+    .path-title { background: #292d42; border-radius: 4px; height: 12px; margin-bottom: 8px; width: 64%; }
+    .path-subtitle { background: #d9d5ce; border-radius: 4px; height: 6px; margin-bottom: 20px; width: 42%; }
+    .path-actions { display: grid; gap: 8px; grid-template-columns: repeat(3, 1fr); }
+    .path-actions div { background: #fff; border: 1px solid #e0dcd4; border-radius: 9px; height: 95px; padding: 10px; }
+    .path-actions i { background: #e6e1f9; border-radius: 6px; display: block; height: 23px; margin-bottom: 16px; width: 23px; }
+    .path-actions div:nth-child(2) i { background: #ffe0d7; }
+    .path-actions div:nth-child(3) i { background: #d9eee6; }
+    .path-actions span { background: #b8b4ae; border-radius: 3px; display: block; height: 5px; width: 70%; }
+    .preview-pulse { background: #e7b854; }
+    .pulse-window { background: #20201e; border: 1px solid #393934; border-radius: 8px; color: white; display: grid; grid-template-rows: 30px 1fr; height: 240px; overflow: hidden; }
+    .pulse-top { align-items: center; border-bottom: 1px solid #393934; display: flex; gap: 5px; padding: 0 10px; }
+    .pulse-top i { background: #4b4b44; height: 6px; width: 35px; }
+    .pulse-top i:first-child { background: #e7b854; }
+    .pulse-body { display: grid; grid-template-columns: 1.2fr .8fr; }
+    .pulse-feed { border-right: 1px solid #393934; padding: 14px; }
+    .pulse-event { border-left: 1px solid #56564e; display: flex; gap: 8px; height: 42px; margin-left: 3px; padding-left: 10px; position: relative; }
+    .pulse-event::before { background: #20201e; border: 1px solid #e7b854; border-radius: 50%; content: ""; height: 5px; left: -3px; position: absolute; top: 2px; width: 5px; }
+    .pulse-event i { background: #505049; display: block; height: 5px; width: 65%; }
+    .pulse-event i:last-child { margin-left: auto; width: 15%; }
+    .pulse-side { padding: 14px 10px; }
+    .pulse-side div { background: #2c2c28; border: 1px solid #41413b; height: 48px; margin-bottom: 8px; padding: 8px; }
+    .pulse-side i { background: #5d5c52; display: block; height: 5px; margin-bottom: 6px; width: 60%; }
+    .pulse-side i:last-child { background: #e7b854; width: 35%; }
+    .card-copy { display: flex; flex: 1; flex-direction: column; padding: 24px; }
+    .number { color: var(--muted); font-family: ui-monospace, monospace; font-size: 11px; }
+    h2 { font-size: 25px; letter-spacing: -.035em; margin: 10px 0 10px; }
+    .tagline { color: var(--green); font-size: 12px; font-weight: 750; margin: 0 0 14px; }
+    .description { color: var(--muted); font-size: 13px; line-height: 1.65; margin: 0 0 20px; }
+    .principles { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; margin: 0 0 24px; padding: 0; }
+    .principles li { background: #f2f3ed; border: 1px solid #e1e4dc; border-radius: 99px; color: #536058; font-size: 10px; font-weight: 650; padding: 5px 8px; }
+    .open { align-items: center; border-top: 1px solid var(--line); display: flex; font-size: 12px; font-weight: 750; justify-content: space-between; margin-top: auto; padding-top: 17px; }
+    .open .icon { transition: transform 160ms; }
+    .design-card:hover .open .icon { transform: translate(2px, -2px); }
+    .compare { padding-top: 64px; }
+    .compare-head { align-items: end; display: flex; justify-content: space-between; margin-bottom: 22px; }
+    .compare h2 { font-size: 30px; margin: 0; }
+    .compare-head p { color: var(--muted); font-size: 12px; margin: 0; }
+    .table-wrap { background: #fff; border: 1px solid var(--line); border-radius: 14px; overflow-x: auto; }
+    table { border-collapse: collapse; font-size: 12px; min-width: 760px; width: 100%; }
+    th, td { border-bottom: 1px solid #e8eae4; line-height: 1.55; padding: 16px 20px; text-align: left; vertical-align: top; }
+    th { background: #f8f8f4; color: var(--muted); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+    td:first-child { color: var(--ink); font-weight: 700; width: 18%; }
+    tr:last-child td { border-bottom: 0; }
+    footer { align-items: center; color: var(--muted); display: flex; font-size: 11px; justify-content: space-between; line-height: 1.5; padding-top: 28px; }
+    .offline { align-items: center; display: flex; gap: 7px; }
+    .offline::before { background: #4c9b73; border-radius: 50%; content: ""; height: 6px; width: 6px; }
+    @media (max-width: 1050px) {
+      .design-grid { grid-template-columns: 1fr; }
+      .design-card { display: grid; grid-template-columns: minmax(300px, .85fr) 1.15fr; }
+      .preview { height: auto; min-height: 300px; }
+      .preview > div { height: 100%; min-height: 245px; }
+    }
+    @media (max-width: 760px) {
+      .shell { padding: 0 22px 40px; }
+      header { padding: 20px 0; }
+      .hero { gap: 22px; grid-template-columns: 1fr; padding: 42px 0 32px; }
+      h1 { font-size: 44px; }
+      .design-card { display: flex; }
+      .preview { height: 250px; min-height: 0; }
+      .preview > div { height: 240px; min-height: 0; }
+      .compare { padding-top: 44px; }
+      .compare-head { align-items: start; flex-direction: column; gap: 8px; }
+      footer { align-items: flex-start; flex-direction: column; gap: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header>
+      <a class="brand" href="index.html" aria-label="Construct design directions home">
+        <span class="brand-mark"><span data-icon="layers"></span></span>
+        Construct Companion
+      </a>
+      <span class="version">Independent concept set / v2</span>
+    </header>
+
+    <section class="hero">
+      <div>
+        <p class="kicker">Three product models</p>
+        <h1>One Companion.<br>Three ways to run it.</h1>
+      </div>
+      <p class="hero-copy"><strong>These prototypes reorganize the product, not just its pixels.</strong> Each direction covers instances, projects, settings, host administration, updates, usage, and the key vault. Click through the navigation, dialogs, approvals, and state changes.</p>
+    </section>
+
+    <section class="design-grid" aria-label="Design directions">
+      <a class="design-card" href="atlas.html">
+        <div class="preview preview-atlas" aria-hidden="true">
+          <div class="atlas-window">
+            <div class="atlas-rail"><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="atlas-main">
+              <div class="mini-top"><i></i><i></i><i></i></div>
+              <div class="mini-atlas-hero"><div class="mini-line green"></div><div class="mini-line short"></div></div>
+              <div class="mini-cards"><i></i><i></i><i></i><i></i></div>
+            </div>
+          </div>
+        </div>
+        <div class="card-copy">
+          <span class="number">01 / OPERATIONS</span>
+          <h2>Atlas</h2>
+          <p class="tagline">A calm control room for several machines.</p>
+          <p class="description">The selected VM is the primary object. A persistent scope bar keeps every action targeted, while operational detail moves into a right-hand inspector. The vault becomes a separate trust domain instead of another settings card.</p>
+          <ul class="principles"><li>Object-first navigation</li><li>Scoped settings</li><li>Progressive disclosure</li></ul>
+          <span class="open">Open Atlas <span data-icon="arrowUpRight"></span></span>
+        </div>
+      </a>
+
+      <a class="design-card" href="pathway.html">
+        <div class="preview preview-pathway" aria-hidden="true">
+          <div class="path-window">
+            <div class="path-nav"><span class="path-dot"></span><i></i><i></i><i></i></div>
+            <div class="path-title"></div><div class="path-subtitle"></div>
+            <div class="path-actions"><div><i></i><span></span></div><div><i></i><span></span></div><div><i></i><span></span></div></div>
+          </div>
+        </div>
+        <div class="card-copy">
+          <span class="number">02 / GUIDED</span>
+          <h2>Pathway</h2>
+          <p class="tagline">Start with the job, not the module.</p>
+          <p class="description">The home screen asks what you want to accomplish. Multi-step work gets a visible plan and a review stage. Settings explain their effect before saving, and vault requests form an approval inbox with safe defaults.</p>
+          <ul class="principles"><li>Task-first home</li><li>Guided changes</li><li>Approval inbox</li></ul>
+          <span class="open">Open Pathway <span data-icon="arrowUpRight"></span></span>
+        </div>
+      </a>
+
+      <a class="design-card" href="pulse.html">
+        <div class="preview preview-pulse" aria-hidden="true">
+          <div class="pulse-window">
+            <div class="pulse-top"><i></i><i></i><i></i></div>
+            <div class="pulse-body">
+              <div class="pulse-feed"><div class="pulse-event"><i></i><i></i></div><div class="pulse-event"><i></i><i></i></div><div class="pulse-event"><i></i><i></i></div><div class="pulse-event"><i></i><i></i></div></div>
+              <div class="pulse-side"><div><i></i><i></i></div><div><i></i><i></i></div><div><i></i><i></i></div></div>
+            </div>
+          </div>
+        </div>
+        <div class="card-copy">
+          <span class="number">03 / LIVE</span>
+          <h2>Pulse</h2>
+          <p class="tagline">The Companion as an event-driven dock.</p>
+          <p class="description">A unified timeline combines jobs, forwards, sync, updates, and vault activity. Selecting an event opens a detail pane without losing your place. Dense views, filters, and keyboard commands favor repeat desktop use.</p>
+          <ul class="principles"><li>Event-first home</li><li>Split inspector</li><li>Command-driven</li></ul>
+          <span class="open">Open Pulse <span data-icon="arrowUpRight"></span></span>
+        </div>
+      </a>
+    </section>
+
+    <section class="compare">
+      <div class="compare-head"><h2>Same work, different flow</h2><p>Use the table as a walkthrough map.</p></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Task</th><th>Atlas</th><th>Pathway</th><th>Pulse</th></tr></thead>
+          <tbody>
+            <tr><td>Open a project</td><td>Projects → select profile → Open workspace</td><td>Home → Continue work → project</td><td>Workspaces → project → inspector</td></tr>
+            <tr><td>Approve a secret</td><td>Vault → Requests → review scope → approve</td><td>Approvals inbox → guided request review</td><td>Timeline request → pinned decision pane</td></tr>
+            <tr><td>Resize a VM</td><td>Settings → VM resources → staged change bar</td><td>Maintain → Change resources → review restart</td><td>Machines → hardware inspector → apply</td></tr>
+            <tr><td>Resolve a sync issue</td><td>Projects → repository health → conflict detail</td><td>Home health notice → guided repair</td><td>Sync event → related files and actions</td></tr>
+            <tr><td>Manage a host</td><td>Scope switcher → Host administration</td><td>Infrastructure → host workspace</td><td>Machines → host → split detail tabs</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer><span>Static concept prototypes. All names, values, and activity are sample data.</span><span class="offline">No server, packages, or network required</span></footer>
+  </main>
+  <script src="shared.js"></script>
+</body>
+</html>

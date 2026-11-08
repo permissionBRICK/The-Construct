@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pulse · Construct Companion concept</title>
+  <link rel="stylesheet" href="shared.css">
+  <link rel="stylesheet" href="pulse.css">
+</head>
+<body>
+  <div class="pulse-app">
+    <header class="pulse-header">
+      <a class="pulse-brand" href="index.html"><span class="pulse-mark"><span data-icon="activity"></span></span><strong>CONSTRUCT</strong><small>/ PULSE</small></a>
+      <nav class="pulse-tabs" aria-label="Workspaces">
+        <button class="active" data-page="timeline"><span data-icon="activity"></span>Timeline <i id="timeline-badge">2</i></button>
+        <button data-page="machines"><span data-icon="server"></span>Machines</button>
+        <button data-page="workspaces"><span data-icon="folder"></span>Workspaces</button>
+        <button data-page="vault"><span data-icon="shield"></span>Vault</button>
+        <button data-page="host"><span data-icon="network"></span>Host</button>
+      </nav>
+      <div class="pulse-global-actions">
+        <button class="live-toggle active" id="mic-toggle" title="Toggle microphone passthrough"><span data-icon="mic"></span><span>MIC ARMED</span></button>
+        <button class="command-button" id="command-open"><span data-icon="command"></span><span>Command</span><kbd>CTRL K</kbd></button>
+        <button class="pulse-icon-button" data-page="settings" aria-label="Settings"><span data-icon="sliders"></span></button>
+      </div>
+    </header>
+    <div class="pulse-scopebar">
+      <div class="scope-label"><span class="live-dot"></span><strong id="pulse-instance">agent-vm</strong><span id="pulse-location">LOCAL / HYPER-V</span></div>
+      <div class="scope-switcher"><button data-scope="agent-vm" class="active">agent-vm</button><button data-scope="build-vm">build-vm</button><button data-scope="test-vm">test-vm <i></i></button><button data-action="add-instance" aria-label="Add instance"><span data-icon="plus"></span></button></div>
+      <div class="system-summary"><span><i class="ok"></i> SSH 12ms</span><span><i class="ok"></i> SYNC 4m</span><span><i></i> UPDATE READY</span><span id="clock">14:32:08</span></div>
+    </div>
+    <main id="page" class="pulse-main" tabindex="-1"></main>
+    <footer class="pulse-statusbar"><span><i class="live-dot"></i>Companion online</span><span>2 forwards</span><span>Notifications on</span><a href="index.html">Design direction 03 / Pulse <span data-icon="arrowUpRight"></span></a><span>v2 concept · sample state</span></footer>
+  </div>
+  <script src="shared.js"></script>
+  <script src="pulse.js"></script>
+</body>
+</html>
