@@ -51,6 +51,8 @@ function parseVmConfig(map) {
   if (t3 !== null) out.t3code = t3;
   const ch = cfgUnquote(map.T3CODE_CHANNEL).trim();
   if (ch === "stable" || ch === "nightly") out.t3codeChannel = ch;
+  const autoApprove = bool(map.T3CODE_AUTO_APPROVE);
+  if (autoApprove !== null) out.t3codeAutoApprove = autoApprove;
   const patched = bool(map.T3CODE_PATCHED);
   if (patched !== null) out.t3codePatched = patched;
   const watcher = bool(map.OPENCODE_BACKGROUND_WATCHER);

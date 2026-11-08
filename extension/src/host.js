@@ -350,6 +350,7 @@ function mapToForm(raw) {
     const ch = String(raw.t3codeChannel);
     if (ch === "stable" || ch === "nightly") form.t3codeChannel = ch;
   }
+  if (typeof raw.t3codeAutoApprove === "boolean") form.t3codeAutoApprove = raw.t3codeAutoApprove;
   if (typeof raw.t3codePatched === "boolean") form.t3codePatched = raw.t3codePatched;
   if (typeof raw.vmAutoCheckpoints === "boolean") form.autoCheckpoints = raw.vmAutoCheckpoints;
   if (has("historyRetentionDays")) form.historyRetentionDays = String(raw.historyRetentionDays);
@@ -405,6 +406,7 @@ function mapFromForm(form) {
   // sent the key).
   if (form.t3codeChannel === "stable" || form.t3codeChannel === "nightly") out.t3codeChannel = form.t3codeChannel;
   setBool("t3codePatched", form.t3codePatched);
+  setBool("t3codeAutoApprove", form.t3codeAutoApprove);
   setBool("vmAutoCheckpoints", form.autoCheckpoints);
   // Days of agent chat history the config backup keeps (bin/export-config.sh
   // HISTORY_RETENTION_DAYS); passed on reinstall / redownload / Export config.
@@ -419,6 +421,7 @@ function patchReprovisionChanges(previous, next) {
   previous = previous || {};
   next = next || {};
   const changes = [];
+  if ((previous.t3codeAutoApprove === true) !== (next.t3codeAutoApprove === true)) changes.push("T3 tool permission auto-approval");
   const sourceBuildChanged =
     (previous.t3codePatched === true) !== (next.t3codePatched === true);
   const sourceManagedT3Changed =

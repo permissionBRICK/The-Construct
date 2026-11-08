@@ -5,7 +5,7 @@
 # agent on this VM may change. Everything else in that file is written by
 # provisioning, by the host service or by the user's PC, and stays out of reach:
 # only the keys in ALLOWED below are accepted. An entry belongs there only when
-# it is a convenience for this one VM with no security impact. Settings of the
+# it is a convenience for this one VM with no host security impact. Settings of the
 # host service, and anything that grants access, points the VM at a service or
 # carries credentials (CONSTRUCT_SERVICE_URL, tokens, certificates, users), are
 # never allowlisted.
@@ -34,6 +34,7 @@ CONSTRUCT_REPO_DIR="${CONSTRUCT_REPO_DIR:-/opt/construct/repo}"
 # prints the normalized value or fails, and hint_<validator> says what it accepts.
 ALLOWED=(
   "t3-proxy-url|T3CODE_PROXY_URL|origin"
+  "t3-auto-approve|T3CODE_AUTO_APPROVE|boolean"
 )
 
 EXIT_INVALID=2
@@ -53,6 +54,9 @@ the keys below are accepted; host settings and anything that grants access are
 not changeable from the VM.
 
 Keys:
+  t3-auto-approve  true/false: automatically accept tool permission prompts in
+                   patched T3 on this Construct VM. Off by default. Applies to
+                   new requests immediately; questions and login stay interactive.
   t3-proxy-url   The address the user reaches this VM's T3 Code at through
                  their own reverse proxy, e.g. https://t3.example.net:8443
                  (http:// works too; no path, query or fragment). T3 Code's
@@ -76,6 +80,9 @@ USAGE
 # An http(s) origin: scheme, a host name, IPv4 or bracketed IPv6 literal, and an
 # optional port. One trailing slash is dropped; a path, query, fragment or user
 # name is refused. The same shape the Companion and the pairing scripts accept.
+valid_boolean() { [[ "$1" == true || "$1" == false ]] || return 1; printf '%s' "$1"; }
+hint_boolean() { printf 'true or false'; }
+
 valid_origin() {
   local v="$1" port
   v="${v#"${v%%[![:space:]]*}"}"

@@ -10,11 +10,11 @@ function Assert($Condition, $Message) {
     $script:count++
 }
 $table = @(Get-ConstructFeatureTable)
-Assert ($table.Count -eq 13) 'All thirteen components, in the specified order'
-$expectedParams = @('SkipCompanion','ClaudePartialStreaming','GitCredentialStore','VsCodeServeWeb','VsCodeTunnel','SmbShare','MountRepoShare','MicPassthrough','AutomaticCheckpoints','OpenCodeBackgroundWatcher','T3Code','T3CodePatched','T3CodeHttps')
+Assert ($table.Count -eq 14) 'All fourteen components, in the specified order'
+$expectedParams = @('SkipCompanion','ClaudePartialStreaming','GitCredentialStore','VsCodeServeWeb','VsCodeTunnel','SmbShare','MountRepoShare','MicPassthrough','AutomaticCheckpoints','OpenCodeBackgroundWatcher','T3Code','T3CodePatched','T3CodeAutoApprove','T3CodeHttps')
 Assert (($table.Parameter -join ',') -eq ($expectedParams -join ',')) 'Prompt order matches the specification'
-$minimal = @($true,$true,$true,$false,$false,$false,$false,$false,$false,$false,$false,$false,$true)
-$full = @($true,$true,$true,$true,$false,$true,$false,$true,$false,$true,$true,$true,$true)
+$minimal = @($true,$true,$true,$false,$false,$false,$false,$false,$false,$false,$false,$false,$false,$true)
+$full = @($true,$true,$true,$true,$false,$true,$false,$true,$false,$true,$true,$true,$false,$true)
 foreach ($tier in @('minimal','full')) {
     $result = Resolve-ConstructFeatureSet -FeatureSet $tier
     $expected = if ($tier -eq 'minimal') { $minimal } else { $full }
@@ -131,10 +131,10 @@ try {
         Initialize-ConstructInstallFeatures -Bound $bound -Snapshot $snapshot
         $expectedMenus = if ($gate -in @('fresh','remote','custom','fresh-add-config')) { 1 } else { 0 }
         Assert ($script:Menus -eq $expectedMenus) "$gate feature menu gate"
-        $expectedQuestions = if ($gate -eq 'custom') { 13 } else { 0 }
+        $expectedQuestions = if ($gate -eq 'custom') { 14 } else { 0 }
         Assert ($script:Questions.Count -eq $expectedQuestions) "$gate Custom question gate"
         if ($gate -in @('fresh','remote','custom','explicit','panel','auto','noninteractive','redirected','fresh-add-config')) {
-            Assert ($script:Screens -eq (1 + $expectedMenus) -and $script:Summary.Count -eq 13) "$gate informational summary"
+            Assert ($script:Screens -eq (1 + $expectedMenus) -and $script:Summary.Count -eq 14) "$gate informational summary"
             Assert ($bound.ContainsKey('T3CodePatched') -and $bound.ContainsKey('T3CodeHttps')) "$gate elevation forwards all choices"
             $saved=Read-ConstructSettings -Dir $dir
             Assert ($saved.companion -and $saved.gitCredentialStore) "$gate client preference persistence"
