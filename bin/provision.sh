@@ -880,9 +880,9 @@ setup_host_forwards() {
     # when the host can publish it with its own trusted certificate
     # (docs/https-forwards.md) it does; otherwise this is a plain host forward.
     if [[ "${T3CODE_HTTPS}" == "false" ]]; then
-      wanted+=("T3|T3 Code web GUI|${T3CODE_PORT}|--https-if-available --main")
+      wanted+=("T3|T3 Code web GUI|${T3CODE_PORT}|--https-if-available --main --replace-main")
     else
-      wanted+=("T3|T3 Code web GUI (https)|${T3CODE_HTTPS_PORT}|--https-if-available --main --upstream-tls")
+      wanted+=("T3|T3 Code web GUI (https)|${T3CODE_HTTPS_PORT}|--https-if-available --main --replace-main --upstream-tls")
     fi
   fi
 
@@ -989,11 +989,19 @@ record_t3_forward_url() {
 # step into `tee`, so it runs in a SUBSHELL and nothing it assigns survives.
 T3CODE_PUBLIC_PORT=""
 T3CODE_PUBLIC_SCHEME=""
+T3CODE_PUBLIC_HOST=""
 _t3_forward_authority="$(host_forward_authority T3)"
 if [[ -n "${_t3_forward_authority}" ]]; then
   _t3_forward_port="${_t3_forward_authority##*:}"
   if [[ "${_t3_forward_port}" =~ ^[0-9]+$ ]] && (( _t3_forward_port >= 1 && _t3_forward_port <= 65535 )); then
     T3CODE_PUBLIC_PORT="${_t3_forward_port}"
+    # ...and, for an HTTPS forward, the host it is served under: on a shared port that is the
+    # VM's own name only while T3 is its main forward (docs/https-forwards.md). A plain forward
+    # is served under CONSTRUCT_EXTERNAL_HOST, the name T3's own certificate is issued for.
+    if [[ "$(sed -n 's/^T3_HTTPS=//p' "${HOST_FORWARDS_FILE}" 2>/dev/null | head -1 || true)" == "true" ]]; then
+      _t3_forward_host="${_t3_forward_authority%:*}"; _t3_forward_host="${_t3_forward_host#[}"; _t3_forward_host="${_t3_forward_host%]}"
+      if [[ -n "${_t3_forward_host}" && "${_t3_forward_host}" =~ ^[A-Za-z0-9.:-]+$ ]]; then T3CODE_PUBLIC_HOST="${_t3_forward_host}"; fi
+    fi
     # The host terminates TLS on this forward (docs/https-forwards.md): the advertised
     # origin is https even when T3's own HTTPS proxy is off.
     if [[ "$(sed -n 's/^T3_HTTPS=//p' "${HOST_FORWARDS_FILE}" 2>/dev/null | head -1 || true)" == "true" ]]; then
@@ -1017,6 +1025,11 @@ if [[ -n "${CONSTRUCT_SERVICE_URL:-}" ]]; then
     cfg T3CODE_PUBLIC_SCHEME "${T3CODE_PUBLIC_SCHEME}"
   elif [[ -f "${CONFIG_FILE}" ]] && grep -q '^T3CODE_PUBLIC_SCHEME=' "${CONFIG_FILE}"; then
     sed -i '/^T3CODE_PUBLIC_SCHEME=/d' "${CONFIG_FILE}"
+  fi
+  if [[ -n "${T3CODE_PUBLIC_HOST}" ]]; then
+    cfg T3CODE_PUBLIC_HOST "${T3CODE_PUBLIC_HOST}"
+  elif [[ -f "${CONFIG_FILE}" ]] && grep -q '^T3CODE_PUBLIC_HOST=' "${CONFIG_FILE}"; then
+    sed -i '/^T3CODE_PUBLIC_HOST=/d' "${CONFIG_FILE}"
   fi
 fi
 
@@ -1112,6 +1125,7 @@ if [[ "${T3CODE}" == "true" ]]; then
   if [[ -n "${T3CODE_PUBLIC_PORT}" ]]; then
     _t3_public_port_env=("T3CODE_PUBLIC_PORT=${T3CODE_PUBLIC_PORT}")
     if [[ -n "${T3CODE_PUBLIC_SCHEME}" ]]; then _t3_public_port_env+=("T3CODE_PUBLIC_SCHEME=${T3CODE_PUBLIC_SCHEME}"); fi
+    if [[ -n "${T3CODE_PUBLIC_HOST}" ]]; then _t3_public_port_env+=("T3CODE_PUBLIC_HOST=${T3CODE_PUBLIC_HOST}"); fi
   fi
   run_step optional "Installing T3 Code web GUI" \
     env TARGET_USER="${CLAUDE_USER}" AI_TOOLS_OVERRIDE=t3code AI_CONSOLE_INTEGRATION=false \

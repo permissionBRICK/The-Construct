@@ -60,8 +60,9 @@ here and in `--help`, so agents do not reach for LAN exposure by habit.
 
 A third kind, **HTTPS forwards** (`--https`), publishes a port with the host's own trusted
 certificate. It is a host forward whose TLS the host terminates, needs a certificate on the host
-and a per-user permission, and appears in `--help` only when this VM can really use it. See
-[https-forwards.md](https-forwards.md).
+and a per-user permission, and appears in `--help` only when this VM can really use it. Each one is
+served under its own name, `<vm>-<name>` (`--name`, default the port), and `--main` puts one under
+the VM's own name. See [https-forwards.md](https-forwards.md).
 
 The CLI's own legacy output is left alone for the same zero-change reason the rest of this
 batch is: `construct help` (which `construct notify --help` also prints) and the diagnostics

@@ -76,7 +76,8 @@ public sealed class HttpsGateway : IHttpsForwardHost, IHostedService, IAsyncDisp
     private int? _sharedPortWanted;
     private string? _sharedError;
     private Task? _sharedLoop;
-    private (Dictionary<string, PortForward> Hosts, string? VaultHost, DateTimeOffset Expires) _routes = (new(), null, DateTimeOffset.MinValue);
+    private (HttpsRouteTable Table, DateTimeOffset Expires, int Generation) _routes = (HttpsRouteTable.Empty(), DateTimeOffset.MinValue, -1);
+    private int _routesGeneration;
 
     public HttpsGateway(
         IForwardStore store,
@@ -176,7 +177,17 @@ public sealed class HttpsGateway : IHttpsForwardHost, IHostedService, IAsyncDisp
         return list;
     }
 
-    /// <summary>The configured shared port, or null when the shared listener is off.</summary>
+    /// <summary>
+    /// The shared port while it is configured AND its listener is up, null otherwise: only then is anything advertised
+    /// on it (a port that is in use or not allowed would otherwise give every HTTPS forward a dead link).
+    /// </summary>
+    public async Task<int?> ServingSharedPortAsync(CancellationToken ct)
+    {
+        var wanted = (await ConfigAsync(ct).ConfigureAwait(false)).SharedPort;
+        return wanted is int port && _shared is { } shared && shared.Port == port ? port : null;
+    }
+
+    /// <summary>The HTTPS host settings; <see cref="HttpsConfig.SharedPort"/> is null when the shared listener is off.</summary>
     public async Task<HttpsConfig> ConfigAsync(CancellationToken ct) =>
         await _config.GetAsync<HttpsConfig>("https", ct).ConfigureAwait(false) ?? HostAdminDefaults.Https;
 
@@ -332,40 +343,30 @@ public sealed class HttpsGateway : IHttpsForwardHost, IHostedService, IAsyncDisp
     private async Task<Route> SharedRouteAsync(string serverName)
     {
         var name = serverName.Trim().TrimEnd('.');
-        var (hosts, vaultHost) = await RoutesAsync().ConfigureAwait(false);
-        if (vaultHost is not null && string.Equals(name, vaultHost, StringComparison.OrdinalIgnoreCase)) return new VaultRoute();
-        return name.Length > 0 && hosts.TryGetValue(name, out var forward) ? new ForwardRoute(forward) : new NoRoute(name);
+        var table = await RoutesAsync().ConfigureAwait(false);
+        if (table.VaultHost is not null && string.Equals(name, table.VaultHost, StringComparison.OrdinalIgnoreCase)) return new VaultRoute();
+        return name.Length > 0 && table.Hosts.TryGetValue(name, out var forward) ? new ForwardRoute(forward) : new NoRoute(name);
     }
 
-    /// <summary>VM public name → its main HTTPS forward, plus the vault host; rebuilt at most every few seconds.</summary>
-    private async Task<(Dictionary<string, PortForward> Hosts, string? VaultHost)> RoutesAsync()
+    /// <summary>
+    /// The names the shared port serves (<see cref="HttpsRouteTable"/>: the vault host, each VM's main forward under
+    /// its own name, each HTTPS forward as &lt;vm&gt;-&lt;name&gt;); rebuilt at most every few seconds.
+    /// </summary>
+    private async Task<HttpsRouteTable> RoutesAsync()
     {
         var now = _clock.UtcNow;
         var cached = _routes;
-        if (cached.Expires > now) return (cached.Hosts, cached.VaultHost);
+        if (cached.Expires > now && cached.Generation == Volatile.Read(ref _routesGeneration)) return cached.Table;
         await _routeGate.WaitAsync(_stop.Token).ConfigureAwait(false);
         try
         {
-            if (_routes.Expires > now) return (_routes.Hosts, _routes.VaultHost);
-            var hosts = new Dictionary<string, PortForward>(StringComparer.OrdinalIgnoreCase);
-            if (!string.IsNullOrWhiteSpace(_options.PublicHostPattern))
-            {
-                var vms = (await _vms.ListAsync(owner: null, _stop.Token).ConfigureAwait(false))
-                    .Where(v => v.Kind == VmKind.Primary && !v.Deleting)
-                    .ToDictionary(v => v.Name, StringComparer.OrdinalIgnoreCase);
-                foreach (var forward in (await _store.ListAsync(vmName: null, _stop.Token).ConfigureAwait(false))
-                             .Where(f => f.Https && f.Main && f.PublicPort is not null && vms.ContainsKey(f.VmName))
-                             .OrderBy(f => f.Created))
-                {
-                    hosts[_options.PublicHostFor(forward.VmName)] = forward;
-                }
-            }
-
-            var vault = await _config.GetAsync<VaultConfig>("vault", _stop.Token).ConfigureAwait(false);
-            var (url, _) = VaultWebAddress.Resolve(vault?.WebUrl, _options);
-            var vaultHost = Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps ? uri.IdnHost : null;
-            _routes = (hosts, vaultHost, now + RouteTtl);
-            return (hosts, vaultHost);
+            if (_routes.Expires > now && _routes.Generation == Volatile.Read(ref _routesGeneration)) return _routes.Table;
+            // The table remembers the generation it was built for: a forward added or removed while it was being
+            // built (or any time later) bumps the generation, and the next lookup rebuilds.
+            var generation = Volatile.Read(ref _routesGeneration);
+            var table = await BuildRoutesAsync(_store, _vms, _config, _options, _stop.Token).ConfigureAwait(false);
+            _routes = (table, now + RouteTtl, generation);
+            return table;
         }
         finally
         {
@@ -373,7 +374,26 @@ public sealed class HttpsGateway : IHttpsForwardHost, IHostedService, IAsyncDisp
         }
     }
 
-    private void InvalidateRoutes() => _routes = (_routes.Hosts, _routes.VaultHost, DateTimeOffset.MinValue);
+    /// <summary>
+    /// The route table from the stores, uncached: what the gateway serves and what the API advertises come from the
+    /// same rules (docs/https-forwards.md, "The shared HTTPS port").
+    /// </summary>
+    internal static async Task<HttpsRouteTable> BuildRoutesAsync(IForwardStore store, IVmRepository vms, IHostConfigStore config,
+        ConstructdOptions options, CancellationToken ct)
+    {
+        var vault = await config.GetAsync<VaultConfig>("vault", ct).ConfigureAwait(false);
+        var (url, _) = VaultWebAddress.Resolve(vault?.WebUrl, options);
+        var vaultHost = Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps ? uri.IdnHost : null;
+        if (string.IsNullOrWhiteSpace(options.PublicHostPattern)) return HttpsRouteTable.Empty(vaultHost);
+        var primaries = (await vms.ListAsync(owner: null, ct).ConfigureAwait(false))
+            .Where(v => v.Kind == VmKind.Primary && !v.Deleting)
+            .Select(v => v.Name)
+            .ToList();
+        var forwards = await store.ListAsync(vmName: null, ct).ConfigureAwait(false);
+        return HttpsRouteTable.Build(forwards, primaries, options.PublicHostPattern, options.PublicHost, vaultHost);
+    }
+
+    private void InvalidateRoutes() => Interlocked.Increment(ref _routesGeneration);
 
     /// <summary>The upstream stream, or null when the guest (or the vault endpoint) does not answer.</summary>
     private async Task<Stream?> ConnectAsync(Route route, string serverName)

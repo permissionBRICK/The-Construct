@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Constructd.Core.Domain;
+using Constructd.Core.Logic;
 
 // Endpoint also exists in Microsoft.AspNetCore.Http (routing); the domain record is the one meant here.
 using DomainEndpoint = Constructd.Core.Domain.Endpoint;
@@ -71,7 +72,8 @@ public sealed record ForwardResponse(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool Https = false,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool Main = false,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] bool? UpstreamTls = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? PortUrl = null)
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? PortUrl = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Name = null)
 {
     /// <summary>
     /// <paramref name="publicHost"/> is the LAN name host forwards are advertised on. A client
@@ -79,26 +81,31 @@ public sealed record ForwardResponse(
     /// ack: <c>hostLabel</c> when the user's PC has a name other machines use, loopback otherwise.
     /// </summary>
     /// <param name="httpsMainPort">
-    /// The host's shared HTTPS port when a main HTTPS forward is reachable there under the VM's own name
-    /// (a shared port is configured and every VM has its own public name), null otherwise.
+    /// The host's shared HTTPS port when HTTPS forwards are reachable there by name (a shared port is configured
+    /// and every VM has its own public name), null otherwise.
     /// </param>
-    public static ForwardResponse From(PortForward forward, string publicHost, int? httpsMainPort = null)
+    /// <param name="sharedHost">
+    /// The name the shared port serves this HTTPS forward under (<c>HttpsRouteTable.HostOf</c>): the VM's own name
+    /// for its main forward, <c>&lt;vm&gt;-&lt;name&gt;</c> otherwise, null when it is reachable on its own port only.
+    /// </param>
+    public static ForwardResponse From(PortForward forward, string publicHost, int? httpsMainPort = null, string? sharedHost = null)
     {
         ArgumentNullException.ThrowIfNull(forward);
 
         if (forward.Https && forward.PublicPort is int httpsPort)
         {
-            // docs/https-forwards.md: the forward's own port always works; a main forward is also served
-            // on the shared port under the VM's own name, and that is the address it advertises.
+            // docs/https-forwards.md: the forward's own port always works; on the shared port a main forward is
+            // served under the VM's own name and every HTTPS forward as <vm>-<name>, and that is what it advertises.
             var host = ForwardHost.ForUrl(publicHost) ?? publicHost;
             var portUrl = $"https://{host}:{httpsPort}/";
-            var mainUrl = forward.Main && httpsMainPort is int shared
-                ? shared == 443 ? $"https://{host}/" : $"https://{host}:{shared}/"
+            var sharedUrl = sharedHost is not null && httpsMainPort is int shared
+                ? shared == 443 ? $"https://{ForwardHost.ForUrl(sharedHost) ?? sharedHost}/" : $"https://{ForwardHost.ForUrl(sharedHost) ?? sharedHost}:{shared}/"
                 : null;
             return new(
                 forward.Id, forward.VmName, forward.VmPort, forward.PublicPort,
-                forward.Target, forward.Label, forward.Created, mainUrl ?? portUrl,
-                Https: true, Main: forward.Main, UpstreamTls: forward.UpstreamTls, PortUrl: mainUrl is null ? null : portUrl);
+                forward.Target, forward.Label, forward.Created, sharedUrl ?? portUrl,
+                Https: true, Main: forward.Main, UpstreamTls: forward.UpstreamTls, PortUrl: sharedUrl is null ? null : portUrl,
+                Name: HttpsForwardNames.Effective(forward));
         }
 
         // Every host in a link goes through the one rule (ForwardHost, docs/expose.md): an IPv6

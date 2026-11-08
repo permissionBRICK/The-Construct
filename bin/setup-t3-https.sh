@@ -22,6 +22,7 @@
 #   T3CODE_HTTPS             enable the TLS proxy       (default true)
 #   T3CODE_HTTPS_PORT        TLS listen port            (default 5178)
 #   T3CODE_PUBLIC_PORT       port a CLIENT reaches the TLS listener on
+#   T3CODE_PUBLIC_HOST       host name that port is served under (with T3CODE_PUBLIC_PORT)
 #                            (default: T3CODE_HTTPS_PORT). It differs only on a
 #                            service-managed VM, where the host service forwards
 #                            the listener on a public port of its own choosing
@@ -287,6 +288,11 @@ T3CODE_PUBLIC_PORT="${T3CODE_PUBLIC_PORT_STATED:-${T3CODE_HTTPS_PORT}}"
 # (docs/https-forwards.md), stated by bin/provision.sh; the origin is then https even
 # with this VM's own proxy off.
 T3CODE_PUBLIC_SCHEME_STATED="${T3CODE_PUBLIC_SCHEME:-$(read_cfg T3CODE_PUBLIC_SCHEME)}"
+# The host name that forward is served under, stated by bin/provision.sh from the forward's own
+# address. With HTTPS forwards on a shared port that is the VM's name only while T3 is the VM's
+# main forward, otherwise <vm>-<name> (docs/https-forwards.md), so CONSTRUCT_EXTERNAL_HOST is not
+# enough. Used for the advertised origin only, and only together with a stated public port.
+T3CODE_PUBLIC_HOST_STATED="${T3CODE_PUBLIC_HOST:-$(read_cfg T3CODE_PUBLIC_HOST)}"
 CONSTRUCT_EXTERNAL_HOST="${CONSTRUCT_EXTERNAL_HOST:-$(read_cfg CONSTRUCT_EXTERNAL_HOST)}"
 [[ "${T3CODE_HTTPS}" == "true" ]] || T3CODE_HTTPS=false
 [[ "${_teardown}" == "true" ]] && T3CODE_HTTPS=false
@@ -384,7 +390,7 @@ if [[ "${T3CODE_HTTPS}" != "true" ]]; then
     cfg T3CODE_HTTPS false
   fi
   if [[ "${_teardown}" != "true" && -n "${T3CODE_PUBLIC_PORT_STATED}" ]]; then
-    _disabled_public_host="$(t3_https_public_host "${CONSTRUCT_EXTERNAL_HOST}" "$(hostname 2>/dev/null || echo vm)")"
+    _disabled_public_host="${T3CODE_PUBLIC_HOST_STATED:-$(t3_https_public_host "${CONSTRUCT_EXTERNAL_HOST}" "$(hostname 2>/dev/null || echo vm)")}"
     _disabled_scheme=http
     [[ "${T3CODE_PUBLIC_SCHEME_STATED}" == "https" ]] && _disabled_scheme=https
     _disabled_origin="$(t3_https_public_base_url "${_disabled_public_host}" "${T3CODE_PUBLIC_PORT_STATED}" "${_disabled_scheme}")"
@@ -538,7 +544,9 @@ fi
 # ── 4. Persist the contract + the host handoff ───────────────────────────────
 # The ADVERTISED origin, on the port a CLIENT reaches -- the host forward's public
 # port on a service-managed VM, the listener's port everywhere else.
-public_base_url="$(t3_https_public_base_url "${public_host}" "${T3CODE_PUBLIC_PORT}")"
+origin_host="${public_host}"
+if [[ -n "${T3CODE_PUBLIC_PORT_STATED}" && -n "${T3CODE_PUBLIC_HOST_STATED}" ]]; then origin_host="${T3CODE_PUBLIC_HOST_STATED}"; fi
+public_base_url="$(t3_https_public_base_url "${origin_host}" "${T3CODE_PUBLIC_PORT}")"
 cfg T3CODE_HTTPS true
 cfg T3CODE_HTTPS_PORT "${T3CODE_HTTPS_PORT}"
 cfg T3CODE_PUBLIC_BASE_URL "${public_base_url}"

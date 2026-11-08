@@ -46,7 +46,7 @@ public sealed class HttpsGatewayTests : IAsyncDisposable
             PublicHost = "buildbox.test",
             PublicHostPattern = Pattern,
             SshForwardPorts = new PortRangeOptions(42501, 42509),
-            AppForwardPorts = new PortRangeOptions(42511, 42519),
+            AppForwardPorts = new PortRangeOptions(42511, 42559), // wide: ports a test just closed sit in TIME-WAIT and do not bind
             Https = { CertificateDirectory = _directory },
         };
         _certificates = new HttpsCertificateStore(_options, _clock, NullLogger<HttpsCertificateStore>.Instance);
@@ -152,6 +152,27 @@ public sealed class HttpsGatewayTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task The_shared_port_reaches_every_https_forward_under_its_own_name()
+    {
+        await AddVmAsync("work-vm");
+        using var main = new HttpGuest("main");
+        using var side = new HttpGuest("side");
+        await AddHttpsForwardAsync("work-vm", main.Port, main: true);
+        await AddHttpsForwardAsync("work-vm", side.Port, name: "side");
+        var shared = FreePort();
+        await _config.SetAsync("https", new HttpsConfig(shared), "test", CancellationToken.None);
+        await _gateway.ReconcileSharedAsync(CancellationToken.None);
+
+        // The Host header reaches the guest as the browser sent it, under any of the names.
+        var named = await RequestAsync(shared, "work-vm-side.vms.test", "work-vm-side.vms.test");
+        Assert.Contains("guest=side", named.Response);
+        Assert.Contains("host=work-vm-side.vms.test", named.Response);
+        Assert.Contains("guest=main", (await RequestAsync(shared, $"work-vm-{main.Port}.vms.test", $"work-vm-{main.Port}.vms.test")).Response);
+        Assert.Contains("guest=main", (await RequestAsync(shared, "work-vm.vms.test", "work-vm.vms.test")).Response);
+        Assert.Contains("404 Not Found", (await RequestAsync(shared, "work-vm-other.vms.test", "work-vm-other.vms.test")).Response);
+    }
+
+    [Fact]
     public async Task A_renewed_certificate_is_served_without_a_restart()
     {
         await AddVmAsync("work-vm");
@@ -204,10 +225,10 @@ public sealed class HttpsGatewayTests : IAsyncDisposable
             TokenKind: VmTokenKind.Primary), 10, CancellationToken.None);
     }
 
-    private async Task<PortForward> AddHttpsForwardAsync(string vm, int vmPort, bool main = false)
+    private async Task<PortForward> AddHttpsForwardAsync(string vm, int vmPort, bool main = false, string? name = null)
     {
         _driver.Port = vmPort;
-        var added = await _manager.TryAddHttpsForwardAsync(vm, vmPort, "web", new HttpsForwardOptions(main), 0, CancellationToken.None);
+        var added = await _manager.TryAddHttpsForwardAsync(vm, vmPort, "web", new HttpsForwardOptions(main, null, name), 0, CancellationToken.None);
         Assert.Equal(AddForwardStatus.Added, added.Status);
         return added.Forward!;
     }
