@@ -401,7 +401,10 @@ backup's key. The host service is, however, the VM's hypervisor: it can read and
 running VM's disk and memory, including anything the VM could use to sign backups. Integrity
 against the host operator is therefore out of reach and not attempted; the encryption keeps the
 stored backups private from everyone without a PC key, including later readers of the host's
-storage.
+storage. Backups are not signed by the VM either: the only credential that can upload one, the
+VM token, is a root-only file on the VM (the host stores its hash, the PC never persists it), so
+any party able to forge an upload can also read a VM-held signing key and write the VM's
+recipient list directly. A signature would add key management without raising that bar.
 
 ## 4. Compatibility
 

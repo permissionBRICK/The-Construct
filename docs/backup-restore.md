@@ -49,6 +49,9 @@ the machine your VM runs on: whoever controls the host service and the hyperviso
 VM itself (its disk, its memory), so a backup cannot be protected against *that* party
 substituting content. Trust the host operator with the VM, and the encryption keeps the stored
 backups private from everyone else, including later readers of the host's disks and backups.
+The same goes for the VM: a backup is as trustworthy as the VM that made it. The VM token that
+lets it upload backups exists only on the VM, readable by root (the host keeps a hash of it, the
+PC never stores it), so whoever can upload a backup in the VM's name already controls the VM.
 
 **What it needs:**
 
