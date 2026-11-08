@@ -115,22 +115,26 @@ A run whose VM steps failed (first install, reinstall or reprovision) ends with 
 screen: the failed steps, and a prompt that tells an AI coding agent which step failed and
 where its log is. Before the final *Press Enter to exit*, an arrow-key menu offers:
 
-- **Autofix it** (the default) — pick an agent, then a model, and that agent works on the
-  prompt on the VM, in this same console:
+- **Autofix it** (the default) — pick an agent, then a model, and that agent's own
+  interactive session opens on the VM, in this same console, with the prompt as its first
+  message:
 
-  | Agent | Runs | Models |
-  |---|---|---|
-  | Claude Code | `claude -p` | its default, Opus, Fable (the latest of each), or a typed name |
-  | Codex | `codex exec` | its default, the latest GPT Astra or Sol model, or a typed name |
-  | OpenCode | `opencode run` | its default, or a typed `provider/model` |
+  | Agent | Runs | Models | Leave with |
+  |---|---|---|---|
+  | Claude Code | `claude` | its default, Opus, Fable (the latest of each), or a typed name | `/exit` |
+  | Codex | `codex` | its default, the latest GPT Astra or Sol model, or a typed name | `/quit` |
+  | OpenCode | `opencode --prompt` | its default, or a typed `provider/model` | `/exit` |
 
   The console connects with `ssh -t` through the `~\.ssh\config` alias the run wrote (waiting
   up to two minutes while a freshly installed VM reboots) and starts
-  `bin/construct-agent-fix.sh`. The agent runs unattended as root, in the same permission mode
-  Construct configures for it, and prints its progress and final message. It exits when its
-  turn is done; Ctrl+C stops it. "Latest Astra/Sol" is looked up on the VM in Codex's model
-  catalog (`codex debug models`), so the newest model of that family is used without a
-  Construct update; when the catalog has none, Codex's default model runs.
+  `bin/construct-agent-fix.sh`. The agent starts working on the prompt right away, as root
+  in the workspace root (`/root/repos`) and in the same permission mode Construct configures
+  for it. You watch it work, answer its questions and keep talking to it until the problem
+  is fixed; leaving the agent returns to the console and its *Press Enter to exit*.
+  Provisioning marks the workspace root as trusted for Claude Code and Codex, so neither
+  opens with a folder-trust question. "Latest Astra/Sol" is looked up on the VM in Codex's
+  model catalog (`codex debug models`), so the newest model of that family is used without
+  a Construct update; when the catalog has none, Codex's default model runs.
 - **Copy the prompt** — puts the prompt on the clipboard, for an agent you start yourself.
 - **Close** — neither.
 
@@ -491,6 +495,11 @@ for the user that runs it — no manual config:
   `claudeCode.initialPermissionMode="bypassPermissions"`.
 
 Both are merged with `jq`, preserving existing settings, and re-applied on every run.
+
+`~/.claude.json` also gets `projects["/root/repos"].hasTrustDialogAccepted=true` (the workspace
+root), so `claude` started there skips the folder-trust question, whose preselected answer is
+*No, exit*. It is written only while the flag is missing, because Claude Code rewrites that file
+itself while it runs.
 
 Bypass mode alone still asks before an `rm` or `rmdir` whose target Claude Code cannot resolve
 statically (a glob after a `cd`, a command substitution, a path outside the working

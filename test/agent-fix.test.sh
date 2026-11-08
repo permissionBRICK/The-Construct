@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Regression tests for bin/construct-agent-fix.sh, the VM side of the "Autofix it"
-# choice after a provisioning run with failed steps. Stub claude/codex/opencode
-# binaries record how they were called; no real agent runs.
+# choice after a provisioning run with failed steps, and for the Claude folder trust
+# that lets its session start without a question. Stub claude/codex/opencode
+# binaries record how they were called; no real agent runs. The script needs a
+# terminal, so each run goes through script(1) (util-linux) for a pty.
 # Run: bash test/agent-fix.test.sh
 
 set -u
@@ -27,14 +29,18 @@ ok() {
 
 stubs="${tmp}/stubs"
 home="${tmp}/home"
-mkdir -p "${stubs}" "${home}"
+workspace="${tmp}/repos"
+mkdir -p "${stubs}" "${home}" "${workspace}"
 calls="${tmp}/calls"
+where="${tmp}/where"
 
-# Each stub writes its argv (one argument per line) and IS_SANDBOX to $calls.
+# Each stub writes its argv (one argument per line) to $CALLS, and its working
+# directory and whether it has a terminal to $WHERE.
 cat >"${stubs}/claude" <<'EOF'
 #!/usr/bin/env bash
 { printf 'IS_SANDBOX=%s\n' "${IS_SANDBOX:-}"; printf '%s\n' "$@"; } >"${CALLS}"
-if [ -n "${CLAUDE_STREAM:-}" ]; then cat "${CLAUDE_STREAM}"; else echo "plain final message"; fi
+tty=no; [ -t 0 ] && [ -t 1 ] && tty=tty
+printf '%s\n' "$(pwd)" "${tty}" >"${WHERE}"
 exit "${CLAUDE_EXIT:-0}"
 EOF
 cat >"${stubs}/codex" <<'EOF'
@@ -45,26 +51,33 @@ if [ "${1:-}" = debug ] && [ "${2:-}" = models ]; then
   exit 0
 fi
 printf '%s\n' "$@" >"${CALLS}"
-echo "codex final message"
 exit "${CODEX_EXIT:-0}"
 EOF
 cat >"${stubs}/opencode" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$@" >"${CALLS}"
-echo "opencode final message"
 EOF
 chmod +x "${stubs}"/*
 
-# A PATH with the stubs and the few tools the script needs, but without jq.
-nojq="${tmp}/nojq"
-mkdir -p "${nojq}"
-for tool in bash base64 cat grep; do ln -s "$(command -v "${tool}")" "${nojq}/${tool}"; done
+# A PATH with the few tools the script needs, but no agent CLIs.
+bare="${tmp}/bare"
+mkdir -p "${bare}"
+for tool in bash base64 cat grep; do ln -s "$(command -v "${tool}")" "${bare}/${tool}"; done
 
 b64() { printf '%s' "$1" | base64 -w0; }
-run() { env HOME="${home}" CALLS="${calls}" PATH="${stubs}:${PATH}" bash "${SCRIPT}" "$@"; }
-arg_line() { grep -nxF -- "$1" "${calls}" | head -1 | cut -d: -f1; }
+# Run the script on a pty, the way ssh -t starts it. Extra environment comes from
+# the caller (VAR=value run ...); the exit status is the script's.
+in_pty() { script -qec "$(printf '%q ' "$@")" /dev/null; }
+run() {
+  rm -f "${calls}" "${where}"
+  in_pty env HOME="${home}" WORKSPACE_ROOT="${workspace}" CALLS="${calls}" WHERE="${where}" \
+    PATH="${stubs}:${PATH}" bash "${SCRIPT}" "$@"
+}
 has_arg() { grep -qxF -- "$1" "${calls}"; }
+no_arg() { ! grep -qxF -- "$1" "${calls}"; }
+first_arg_is() { [ "$(head -1 "${calls}")" = "$1" ]; }
 last_arg_is() { [ "$(tail -n "$(printf '%s\n' "$1" | wc -l)" "${calls}")" = "$1" ]; }
+arg_after() { grep -A1 -xF -- "$1" "${calls}" | sed -n 2p; }
 
 prompt="$(printf "On the last Construct provisioning run, the following step(s) failed:\n- Step 'Installing .NET SDK' failed (exit 7); log: /var/log/construct/provision/step-0.log\nRead the provisioning log at /var/log/construct/provision/step-0.log and diagnose and fix the underlying problem.")"
 
@@ -75,71 +88,40 @@ run --agent claude >/dev/null 2>&1
 ok "a missing prompt is a usage error" test $? -eq 2
 run --agent claude --prompt-b64 '!!!not-base64' >/dev/null 2>&1
 ok "a prompt that is not base64 is rejected" test $? -eq 2
-env HOME="${home}" CALLS="${calls}" PATH="${nojq}" "$(command -v bash)" "${SCRIPT}" --agent codex --prompt-b64 "$(b64 x)" >/dev/null 2>&1
+in_pty env HOME="${home}" CALLS="${calls}" PATH="${bare}" "$(command -v bash)" "${SCRIPT}" --agent codex --prompt-b64 "$(b64 x)" >/dev/null 2>&1
 ok "a missing agent CLI exits 127" test $? -eq 127
+rm -f "${calls}"
+out="$(env HOME="${home}" CALLS="${calls}" WHERE="${where}" PATH="${stubs}:${PATH}" bash "${SCRIPT}" --agent claude --prompt-b64 "$(b64 x)" </dev/null 2>&1)"
+status=$?
+ok "without a terminal: refuses, and says to use ssh -t" sh -c "test ${status} -eq 2 && grep -q 'ssh -t' <<'X'
+${out}
+X"
+ok "without a terminal: no agent starts" test ! -e "${calls}"
 
-# ── claude: print mode, bypass, progress through jq ──────────────────────────
-stream="${tmp}/stream.jsonl"
-cat >"${stream}" <<'EOF'
-{"type":"system","subtype":"init","model":"claude-opus"}
-{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"hidden"},{"type":"text","text":"Looking at the log."}]}}
-{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"tail -n 50 /var/log/construct/provision/step-0.log\nsecond line"}}]}}
-{"type":"user","message":{"content":[{"type":"tool_result","content":"lots of output"}]}}
-not json at all
-{"type":"assistant","message":{"content":[{"type":"text","text":"Fixed: the SDK feed was unreachable; reinstalled it."}]}}
-{"type":"result","subtype":"success","is_error":false,"result":"Fixed: the SDK feed was unreachable; reinstalled it."}
-EOF
-out="$(CLAUDE_STREAM="${stream}" run --agent claude --model-b64 "$(b64 opus)" --prompt-b64 "$(b64 "${prompt}")" 2>&1)"
+# ── claude: interactive, bypass, the prompt as its first message ─────────────
+run --agent claude --model-b64 "$(b64 opus)" --prompt-b64 "$(b64 "${prompt}")" >/dev/null 2>&1
 status=$?
 ok "claude: exits with the agent's status" test "${status}" -eq 0
-ok "claude: runs in print mode" has_arg -p
-ok "claude: bypass permission mode" sh -c "grep -qx -- '--permission-mode' '${calls}' && grep -qx bypassPermissions '${calls}'"
+ok "claude: its interactive UI, on the terminal" sh -c "grep -qx tty '${where}'"
+ok "claude: not print mode" no_arg -p
+ok "claude: no stream output" no_arg --output-format
+ok "claude: bypass permission mode" test "$(arg_after --permission-mode)" = bypassPermissions
 ok "claude: IS_SANDBOX=1 so bypass works as root" grep -qx 'IS_SANDBOX=1' "${calls}"
-ok "claude: passes the chosen model" sh -c "grep -A1 -x -- '--model' '${calls}' | grep -qx opus"
-ok "claude: streams JSON for the progress view" sh -c "grep -qx -- '--output-format' '${calls}' && grep -qx stream-json '${calls}' && grep -qx -- '--verbose' '${calls}'"
+ok "claude: passes the chosen model" test "$(arg_after --model)" = opus
 ok "claude: the prompt arrives intact as the last argument" last_arg_is "${prompt}"
-ok "claude: shows the agent's text" grep -q 'Looking at the log.' <<<"${out}"
-ok "claude: shows the final message" grep -q 'Fixed: the SDK feed was unreachable; reinstalled it.' <<<"${out}"
-ok "claude: the final message is shown once (the result event does not repeat it)" \
-  test "$(grep -c 'Fixed: the SDK feed' <<<"${out}")" -eq 1
-ok "claude: one line per tool call, first command line only" grep -q '  > Bash: tail -n 50 /var/log/construct/provision/step-0.log' <<<"${out}"
-ok "claude: no second command line" sh -c "! grep -q 'second line' <<'X'
-${out}
-X"
-ok "claude: thinking and tool results stay hidden" sh -c "! grep -qE 'hidden|lots of output' <<'X'
-${out}
-X"
-ok "claude: a non-JSON line passes through" grep -qx 'not json at all' <<<"${out}"
+ok "claude: starts in the workspace root (trusted, so no trust question)" test "$(head -1 "${where}")" = "${workspace}"
 
-err_stream="${tmp}/err.jsonl"
-printf '%s\n' '{"type":"result","subtype":"error_max_turns","is_error":true,"result":""}' >"${err_stream}"
-out="$(CLAUDE_STREAM="${err_stream}" CLAUDE_EXIT=1 run --agent claude --prompt-b64 "$(b64 "${prompt}")" 2>&1)"
+CLAUDE_EXIT=1 run --agent claude --prompt-b64 "$(b64 x)" >/dev/null 2>&1
 status=$?
-ok "claude: a failed turn keeps the agent's exit status" test "${status}" -eq 1
-ok "claude: a failed turn says why" grep -q 'Claude stopped (error_max_turns)' <<<"${out}"
-ok "claude: no --model for the default model" sh -c "! grep -qx -- '--model' '${calls}'"
+ok "claude: keeps a failed session's exit status" test "${status}" -eq 1
+ok "claude: no --model for the default model" no_arg --model
 
-api_err="${tmp}/api-err.jsonl"
-cat >"${api_err}" <<'EOF2'
-{"type":"assistant","message":{"content":[{"type":"text","text":"There's an issue with the selected model."}]}}
-{"type":"result","subtype":"success","is_error":true,"result":"There's an issue with the selected model."}
-EOF2
-out="$(CLAUDE_STREAM="${api_err}" CLAUDE_EXIT=1 run --agent claude --prompt-b64 "$(b64 x)" 2>&1)"
-ok "claude: an error turn shows its message once and says it stopped" sh -c "test \"\$(grep -c 'issue with the selected model' <<'X'
-${out}
-X
-)\" -eq 1 && grep -q 'Claude stopped with an error.' <<'X'
-${out}
-X"
+rm -f "${calls}" "${where}"
+in_pty env HOME="${home}" WORKSPACE_ROOT="${tmp}/missing" CALLS="${calls}" WHERE="${where}" \
+  PATH="${stubs}:${PATH}" bash "${SCRIPT}" --agent claude --prompt-b64 "$(b64 x)" >/dev/null 2>&1
+ok "claude: no workspace root -> starts in the home directory" test "$(head -1 "${where}")" = "${home}"
 
-out="$(env HOME="${home}" CALLS="${calls}" PATH="${stubs}:${nojq}" "$(command -v bash)" "${SCRIPT}" --agent claude --prompt-b64 "$(b64 "${prompt}")" 2>&1)"
-ok "claude without jq: plain print mode, final message only" sh -c "grep -q 'plain final message' <<'X'
-${out}
-X
-! grep -qx stream-json '${calls}'"
-ok "claude without jq: still bypass and sandboxed" sh -c "grep -qx bypassPermissions '${calls}' && grep -qx 'IS_SANDBOX=1' '${calls}'"
-
-# ── codex: exec mode and the latest-model families ───────────────────────────
+# ── codex: interactive and the latest-model families ─────────────────────────
 catalog="${tmp}/catalog.json"
 cat >"${catalog}" <<'EOF'
 {"models":[
@@ -153,21 +135,19 @@ cat >"${catalog}" <<'EOF'
 ]}
 EOF
 out="$(CODEX_CATALOG="${catalog}" run --agent codex --model-b64 "$(b64 latest:astra)" --prompt-b64 "$(b64 "${prompt}")" 2>&1)"
-ok "codex: exec mode" sh -c "head -1 '${calls}' | grep -qx exec"
-ok "codex: runs outside a git repository" has_arg --skip-git-repo-check
-ok "codex: no approvals or sandbox for the unattended turn" has_arg --dangerously-bypass-approvals-and-sandbox
-ok "codex: latest astra = the newest listed astra (hidden and variants ignored)" sh -c "grep -A1 -x -- '--model' '${calls}' | grep -qx gpt-6-astra"
+ok "codex: its interactive UI, not exec mode" sh -c "! grep -qx exec '${calls}'"
+ok "codex: no approvals or sandbox, as Construct configures it" first_arg_is --dangerously-bypass-approvals-and-sandbox
+ok "codex: latest astra = the newest listed astra (hidden and variants ignored)" test "$(arg_after --model)" = gpt-6-astra
 ok "codex: names the resolved model" grep -q 'Latest astra model: gpt-6-astra' <<<"${out}"
 ok "codex: the prompt arrives intact as the last argument" last_arg_is "${prompt}"
-ok "codex: relays the agent's output" grep -q 'codex final message' <<<"${out}"
 
 CODEX_CATALOG="${catalog}" run --agent codex --model-b64 "$(b64 latest:sol)" --prompt-b64 "$(b64 x)" >/dev/null 2>&1
-ok "codex: latest sol compares versions numerically (6.1 > 6 > 5.6)" sh -c "grep -A1 -x -- '--model' '${calls}' | grep -qx gpt-6.1-sol"
+ok "codex: latest sol compares versions numerically (6.1 > 6 > 5.6)" test "$(arg_after --model)" = gpt-6.1-sol
 
 mkdir -p "${home}/.codex"
 cp "${catalog}" "${home}/.codex/models_cache.json"
 run --agent codex --model-b64 "$(b64 latest:sol)" --prompt-b64 "$(b64 x)" >/dev/null 2>&1
-ok "codex: falls back to the cached catalog" sh -c "grep -A1 -x -- '--model' '${calls}' | grep -qx gpt-6.1-sol"
+ok "codex: falls back to the cached catalog" test "$(arg_after --model)" = gpt-6.1-sol
 rm "${home}/.codex/models_cache.json"
 
 out="$(run --agent codex --model-b64 "$(b64 latest:astra)" --prompt-b64 "$(b64 x)" 2>&1)"
@@ -177,18 +157,51 @@ X"
 
 CODEX_EXIT=4 run --agent codex --model-b64 "$(b64 "gpt-5.6-luna")" --prompt-b64 "$(b64 x)" >/dev/null 2>&1
 status=$?
-ok "codex: a custom model passes through" sh -c "grep -A1 -x -- '--model' '${calls}' | grep -qx gpt-5.6-luna"
+ok "codex: a custom model passes through" test "$(arg_after --model)" = gpt-5.6-luna
 ok "codex: exits with the agent's status" test "${status}" -eq 4
 
 # ── opencode ─────────────────────────────────────────────────────────────────
 odd_model="openrouter/qwen/qwen3:free'\"; touch ${tmp}/pwned"
-out="$(run --agent opencode --model-b64 "$(b64 "${odd_model}")" --prompt-b64 "$(b64 "${prompt}")" 2>&1)"
-ok "opencode: run mode" sh -c "head -1 '${calls}' | grep -qx run"
-ok "opencode: a model with shell characters arrives verbatim" sh -c "grep -A1 -x -- '--model' '${calls}' | tail -1 | grep -qxF -- \"\$1\"" _ "${odd_model}"
+run --agent opencode --model-b64 "$(b64 "${odd_model}")" --prompt-b64 "$(b64 "${prompt}")" >/dev/null 2>&1
+ok "opencode: its interactive UI, not run mode" sh -c "! grep -qx run '${calls}'"
+ok "opencode: a model with shell characters arrives verbatim" test "$(arg_after --model)" = "${odd_model}"
 ok "opencode: and nothing in it was executed" test ! -e "${tmp}/pwned"
-ok "opencode: the prompt arrives intact as the last argument" last_arg_is "${prompt}"
+ok "opencode: the prompt arrives intact through --prompt" sh -c "test \"\$(grep -A1000 -xF -- '--prompt' '${calls}' | tail -n +2)\" = \"\$1\"" _ "${prompt}"
 run --agent opencode --prompt-b64 "$(b64 x)" >/dev/null 2>&1
-ok "opencode: no --model for the default model" sh -c "! grep -qx -- '--model' '${calls}'"
+ok "opencode: no --model for the default model" no_arg --model
+
+# ── Claude folder trust for the workspace root (bin/install-ai-tools.sh) ─────
+trust() {
+  # shellcheck disable=SC2016 # $1/$2 belong to the inner bash
+  env WORKSPACE_ROOT=/root/repos CONSTRUCT_AI_TOOLS_FUNCS_ONLY=true \
+    bash -c 'source "$1"; configure_claude_workspace_trust "$2" "$(id -un)"' _ "${ROOT}/bin/install-ai-tools.sh" "$1" 2>&1
+}
+trusted() { jq -e '.projects["/root/repos"].hasTrustDialogAccepted == true' "$1/.claude.json" >/dev/null; }
+
+th="${tmp}/trust-new"
+mkdir -p "${th}"
+trust "${th}" >/dev/null
+ok "trust: a missing ~/.claude.json is created with the workspace root trusted" trusted "${th}"
+
+th="${tmp}/trust-merge"
+mkdir -p "${th}"
+printf '%s\n' '{"numStartups":3,"mcpServers":{"x":{"command":"y"}},"projects":{"/root/repos":{"disabledMcpServers":["z"]},"/other":{"hasTrustDialogAccepted":false}}}' >"${th}/.claude.json"
+trust "${th}" >/dev/null
+ok "trust: sets the flag on an existing entry" trusted "${th}"
+ok "trust: keeps everything else" jq -e '.numStartups == 3 and .mcpServers.x.command == "y"
+  and .projects["/root/repos"].disabledMcpServers == ["z"] and .projects["/other"].hasTrustDialogAccepted == false' "${th}/.claude.json" >/dev/null
+before="$(cat "${th}/.claude.json")"
+out="$(trust "${th}")"
+ok "trust: already trusted -> the file is left alone" sh -c "test \"\$1\" = \"\$(cat '${th}/.claude.json')\" && test -z \"\$2\"" _ "${before}" "${out}"
+
+th="${tmp}/trust-bad"
+mkdir -p "${th}"
+printf 'not json' >"${th}/.claude.json"
+out="$(trust "${th}")"
+ok "trust: an invalid file is left as it is, with a warning" sh -c "test \"\$(cat '${th}/.claude.json')\" = 'not json' && grep -q 'not valid JSON' <<'X'
+${out}
+X"
+ok "trust: installing Claude Code applies it" sh -c "awk '/^install_claude_code\\(\\)/,/^}/' '${ROOT}/bin/install-ai-tools.sh' | grep -q 'configure_claude_workspace_trust \"\${claude_home}\" \"\${claude_owner}\"'"
 
 printf '\n  agent-fix tests - %d/%d passed\n' "${pass}" "$((pass + fail))"
 [ "${fail}" -eq 0 ]
