@@ -77,7 +77,7 @@ the installer builds the service on the node and fetches a .NET SDK once.
 | `constructd` (systemd unit `constructd.service`, root) | `/opt/construct/host` | The host service on `https://<node>:7462`: users, tokens, VM registry, jobs, idle policy, audit — the API in [service/README.md](../service/README.md) |
 | The Construct checkout | `/opt/construct/scripts` | `bin/`, `keys/`, `config/` … what guests are provisioned from and served through the source cache |
 | Data | `/var/lib/constructd` | `constructd.db` (SQLite), `iso/`, `media/`, `source/`, `logs/` (the service's own log, `constructd-yyyyMMdd.log`, 14 days; a failed `qm` command's error text lands here) |
-| TLS | `/etc/constructd/tls.pfx` (+ `tls.pass`) | A self-signed certificate for the public host; clients pin its fingerprint at enrolment |
+| TLS | `/etc/constructd/tls.pfx` (+ `tls.pass`), after a rename also `tls-previous.*` | A self-signed certificate for the public host; clients pin its fingerprint at enrolment. After a rename the old one stays in service as the previous certificate ([Renaming the host](#renaming-the-host)) |
 | The VM image | `<image-storage>:import/construct-ubuntu-<release>-xfs-amd64.qcow2` | The Ubuntu cloud image, its root file system converted to XFS; every VM is cloned from it |
 | Per-VM seeds | `<image-storage>:snippets/construct-<vm>-user.yaml` | cloud-init user data the service writes per VM and deletes with it |
 
@@ -100,7 +100,7 @@ node with `--build` / for a non-main `--ref`. In order it does:
 1. **Directories** — the layout above.
 2. **Storage and network** — the disk storage must offer `images` (default `local-lvm`); the image storage must be a *directory* storage (default `local`) and gets `import` and `snippets` content enabled; the bridge (default `vmbr0`) must exist.
 3. **Cloud image** — downloads `https://cloud-images.ubuntu.com/<release>/current/…` into the image storage, checksum-verified against Ubuntu's `SHA256SUMS`, and rebuilds it with an XFS root (`service/host/xfs-cloud-image.sh`: same partitions and boot files, root copied onto XFS made by the image's own `mkfs.xfs`, fstab and the kernel command line switched to the root's UUID). XFS reflinks let a guest's git worktrees share their build outputs; see [worktrees.md](worktrees.md). Skipped when already cached; the ext4 image of earlier releases (`…-cloudimg-amd64.qcow2`) is removed.
-4. **TLS** — a self-signed certificate (10 years, SAN = public host and node name) as PFX; kept on re-runs.
+4. **TLS** — a self-signed certificate (10 years, SAN = public host and node name) as PFX; kept on re-runs. When it does not name the public host (a rename), it is kept as the previous certificate and a new one is issued: [Renaming the host](#renaming-the-host).
 5. **Files** — the service into `/opt/construct/host`, the checkout into `/opt/construct/scripts`.
 6. **`appsettings.Production.json`** — root-only, since it carries the PFX password. Every value the Proxmox platform reads is in it (section 4).
 7. **systemd** — `constructd.service`, enabled, running as root because `qm`/`pvesh` need it. Sleep, suspend and hibernate are masked and logind ignores the lid, the suspend keys and idleness, so a laptop node stays up under its guests (the Windows installer's `powercfg` step).
@@ -154,7 +154,8 @@ The service verifies the Linux release, drains active jobs, then launches
 It backs up owned files and the database, replaces the service and matching scripts, restarts
 `constructd`, and checks the pinned loopback health response and `admin db check --json`.
 Failed health checks roll back; failed recovery stays in maintenance for an administrator.
-The certificate pin comes from the configured `CertPath`/`CertPassword` PFX.
+The certificate pin comes from the configured `CertPath`/`CertPassword` PFX, or from the previous
+certificate while a rename keeps one: the health check dials `127.0.0.1`, which sends no SNI.
 
 Logs are `/var/lib/constructd/updates/updater.log` and
 `journalctl -u construct-host-update-<updateId>`. Recovery state is in the same directory's
@@ -177,6 +178,37 @@ the installer once after such an update; it registers the storage and moves the 
 `template/iso`, but it does **not** move media files that were already there. Move any
 `*.iso` from the old root into `template/iso` yourself before restarting the service, or the
 media items keep pointing at files the child driver refuses (`validation (mediaPath)`).
+
+### Renaming the host
+
+The public host is what clients dial and what the certificate names. To move a host from an
+address to a DNS name (or to another name), re-run the installer with the new one, and with the
+options you installed with, since a re-run rewrites the settings:
+
+```sh
+bash service/host/install-construct-host.sh --public-host construct.example.net --storage <id> --bridge <name> --admin <name>
+```
+
+Clients pin the fingerprint of the certificate they enrolled with, and guests check the service
+with `curl --cacert`, which also checks the name. So the old certificate is not thrown away:
+
+- It moves to `/etc/constructd/tls-previous.*` and stays in service, as `Constructd:PreviousCertPath`.
+  The service presents it to every handshake without SNI (address-based URLs such as
+  `https://192.0.2.10:7462`; clients never send an address as SNI) and to the names it lists.
+  Every PC and VM enrolled on the old URL keeps working, unchanged.
+- A new certificate names the new host. Only a client that dials the new name gets it. The
+  installer prints both fingerprints.
+- Each user moves when convenient: add the host again under the new URL (the new fingerprint is
+  shown once to confirm, and the token is asked for again, because both are stored per URL), then
+  reprovision each VM with `-ServiceUrl https://construct.example.net:7462`. That gives the guest
+  the new URL and the new certificate.
+- Once nobody uses the old URL any more, retire the old certificate with
+  `--drop-previous-certificate` (without changing `--public-host`). A client still on the old URL
+  then fails with a fingerprint mismatch, by design, and must be re-enrolled.
+
+A second rename is refused while a previous certificate is still kept: retire it first. The
+`PreviousCert*` settings work on a Windows host as well (`PreviousCertThumbprint` for a store
+certificate), but `Install-ConstructHost.ps1` does not set them yet.
 
 ## 4. How a VM comes to be
 

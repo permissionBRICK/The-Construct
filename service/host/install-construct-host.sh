@@ -14,7 +14,9 @@
 #
 # Options (all optional):
 #   --public-host <name|ip>   address clients dial and the Kerberos service name; default: the node's
-#                             FQDN when it resolves, else its primary IPv4
+#                             FQDN when it resolves, else its primary IPv4. Changing it keeps the old
+#                             certificate in service for the clients that pinned it (docs/proxmox-host.md)
+#   --drop-previous-certificate  retire the certificate kept from an earlier rename
 #   --package <zip|dir>       a linux-x64 publish of Constructd.Api you built yourself
 #   --host-release <tag>      fetch the service from this release (default: latest); refreshes an install
 #   --build                   build the service from the checkout with the .NET SDK (fetched once
@@ -42,7 +44,7 @@
 #   /opt/construct/host        the service (Constructd.Api, appsettings.Production.json)
 #   /opt/construct/scripts     the Construct checkout the service hands to guests (bin/, keys/, ...)
 #   /var/lib/constructd        constructd.db, iso/, media/, source/
-#   /etc/constructd            tls.pfx + tls.pass (root-only), install.json
+#   /etc/constructd            tls.pfx + tls.pass (root-only), install.json; tls-previous.* after a rename
 #   <image-storage>:import/construct-ubuntu-<release>-xfs-amd64.qcow2   the VM image (XFS root)
 #   <image-storage>:snippets/  one cloud-init user-data file per VM, written by the service
 #   systemd unit constructd.service, listening on https://0.0.0.0:<listen-port>
@@ -69,6 +71,7 @@ LISTEN_PORT=7462
 SSH_PORTS="2201-2299"
 APP_PORTS="2300-2999"
 ROTATE=0
+DROP_PREVIOUS_CERT=0
 SKIP_IMAGE=0
 KEYTAB=""
 NETBIOS_DOMAIN=""
@@ -108,6 +111,7 @@ while [[ $# -gt 0 ]]; do
     --ssh-ports)     SSH_PORTS="$2"; shift 2 ;;
     --app-ports)     APP_PORTS="$2"; shift 2 ;;
     --rotate-token)  ROTATE=1; shift ;;
+    --drop-previous-certificate) DROP_PREVIOUS_CERT=1; shift ;;
     --skip-image)    SKIP_IMAGE=1; shift ;;
     --keytab)        KEYTAB="$2"; shift 2 ;;
     --netbios-domain) NETBIOS_DOMAIN="$2"; shift 2 ;;
@@ -375,30 +379,61 @@ if [[ -f "${LEGACY_IMAGE}" ]]; then
 fi
 
 # ── 4. TLS certificate (clients pin its fingerprint at enrolment) ─────────────
+# The current certificate names the public host: guests check the service with curl --cacert, which
+# checks the name too. Clients pin the fingerprint of the certificate they enrolled with. So on a
+# rename (the certificate does not name the public host) the old certificate is not thrown away: it
+# moves to tls-previous.* and the service keeps presenting it to address-based URLs (no SNI) and the
+# names it lists, while a new certificate names the new host (Constructd.Core.Logic.
+# TlsCertificateSelection). Clients and guests move to the new URL when they like;
+# --drop-previous-certificate retires the old one once nobody uses it.
+cert_names_host() {  # <crt> <host>: the certificate's SAN lists <host> exactly (DNS or IP entry)
+  local host="${2,,}"
+  openssl x509 -in "$1" -noout -ext subjectAltName 2>/dev/null | tail -n +2 | tr ',' '\n' \
+    | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]' \
+    | grep -qxF -e "dns:${host}" -e "ip address:${host}" -e "ip:${host}"
+}
+ensure_tls_certificate() {
+  PFX="${ETC_DIR}/tls.pfx"; PFX_PASS_FILE="${ETC_DIR}/tls.pass"; CRT="${ETC_DIR}/tls.crt"
+  PREV_PFX="${ETC_DIR}/tls-previous.pfx"; PREV_PASS_FILE="${ETC_DIR}/tls-previous.pass"; PREV_CRT="${ETC_DIR}/tls-previous.crt"
+  if [[ "${DROP_PREVIOUS_CERT}" -eq 1 && ( -f "${PREV_PFX}" || -f "${PREV_PASS_FILE}" || -f "${PREV_CRT}" ) ]]; then
+    rm -f "${PREV_PFX}" "${PREV_PASS_FILE}" "${PREV_CRT}"
+    note "dropped the previous certificate (clients still pinned to it must re-enrol)"
+  fi
+  if [[ -f "${CRT}" ]] && ! cert_names_host "${CRT}" "${PUBLIC_HOST}"; then
+    if [[ -f "${PFX}" && -f "${PFX_PASS_FILE}" ]]; then
+      [[ ! -f "${PREV_CRT}" ]] || die "the certificate does not name ${PUBLIC_HOST}, and the one kept from an earlier rename is still in service as the previous certificate. Once every client and guest uses the current name, re-run with --drop-previous-certificate (without renaming), then rename."
+      mv -f "${PFX}" "${PREV_PFX}"; mv -f "${PFX_PASS_FILE}" "${PREV_PASS_FILE}"; mv -f "${CRT}" "${PREV_CRT}"
+      note "the existing certificate does not name ${PUBLIC_HOST}: it stays in service as the previous certificate, for the clients that pinned it (address-based URLs and the names it lists)"
+    else
+      rm -f "${PFX}" "${PFX_PASS_FILE}" "${CRT}"
+      note "the existing certificate does not name ${PUBLIC_HOST} and is incomplete; issuing a new one (clients must re-confirm the fingerprint)"
+    fi
+  fi
+  if [[ ! -f "${PFX}" || ! -f "${PFX_PASS_FILE}" || ! -f "${CRT}" ]]; then
+    local key="${TMP_ROOT}/tls.key" san="DNS:${NODE}"
+    if [[ "${PUBLIC_HOST}" =~ ^[0-9.]+$ ]]; then san="${san},IP:${PUBLIC_HOST}"; else san="${san},DNS:${PUBLIC_HOST}"; fi
+    openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes -keyout "${key}" -out "${CRT}" \
+      -subj "/CN=${PUBLIC_HOST}" -addext "subjectAltName=${san}" >/dev/null 2>&1
+    openssl rand -hex 24 >"${PFX_PASS_FILE}"; chmod 0600 "${PFX_PASS_FILE}"
+    openssl pkcs12 -export -inkey "${key}" -in "${CRT}" -out "${PFX}" -passout "file:${PFX_PASS_FILE}" \
+      -keypbe AES-256-CBC -certpbe AES-256-CBC -macalg sha256
+    chmod 0600 "${PFX}"
+    rm -f "${key}"
+    note "created a self-signed certificate for ${PUBLIC_HOST} (10 years)"
+  else
+    note "keeping ${PFX}"
+  fi
+  FINGERPRINT="$(openssl x509 -in "${CRT}" -noout -fingerprint -sha256 | sed 's/^.*=//')"
+  note "SHA-256 fingerprint ${FINGERPRINT}"
+  PREVIOUS_FINGERPRINT=""
+  if [[ -f "${PREV_CRT}" ]]; then
+    [[ -f "${PREV_PFX}" && -f "${PREV_PASS_FILE}" ]] || die "${PREV_CRT} is kept without its ${PREV_PFX} / ${PREV_PASS_FILE}; restore them or re-run with --drop-previous-certificate"
+    PREVIOUS_FINGERPRINT="$(openssl x509 -in "${PREV_CRT}" -noout -fingerprint -sha256 | sed 's/^.*=//')"
+    note "previous certificate still in service, SHA-256 ${PREVIOUS_FINGERPRINT}"
+  fi
+}
 say "TLS certificate"
-PFX="${ETC_DIR}/tls.pfx"; PFX_PASS_FILE="${ETC_DIR}/tls.pass"; CRT="${ETC_DIR}/tls.crt"
-# A certificate that does not name the public host is reissued: clients pin the fingerprint, so
-# tell them (the installer prints the new one) — a stale name would fail every TLS handshake anyway.
-if [[ -f "${CRT}" ]] && ! openssl x509 -in "${CRT}" -noout -ext subjectAltName 2>/dev/null | grep -qE "(DNS|IP( Address)?):${PUBLIC_HOST}(,|$)"; then
-  note "the existing certificate does not name ${PUBLIC_HOST}; issuing a new one (clients must re-confirm the fingerprint)"
-  rm -f "${PFX}" "${PFX_PASS_FILE}" "${CRT}"
-fi
-if [[ ! -f "${PFX}" || ! -f "${PFX_PASS_FILE}" || ! -f "${CRT}" ]]; then
-  KEY="${TMP_ROOT}/tls.key"
-  SAN="DNS:${NODE}"
-  if [[ "${PUBLIC_HOST}" =~ ^[0-9.]+$ ]]; then SAN="${SAN},IP:${PUBLIC_HOST}"; else SAN="${SAN},DNS:${PUBLIC_HOST}"; fi
-  openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes -keyout "${KEY}" -out "${CRT}" \
-    -subj "/CN=${PUBLIC_HOST}" -addext "subjectAltName=${SAN}" >/dev/null 2>&1
-  openssl rand -hex 24 >"${PFX_PASS_FILE}"; chmod 0600 "${PFX_PASS_FILE}"
-  openssl pkcs12 -export -inkey "${KEY}" -in "${CRT}" -out "${PFX}" -passout "file:${PFX_PASS_FILE}" \
-    -keypbe AES-256-CBC -certpbe AES-256-CBC -macalg sha256
-  chmod 0600 "${PFX}"
-  note "created a self-signed certificate for ${PUBLIC_HOST} (10 years)"
-else
-  note "keeping ${PFX}"
-fi
-FINGERPRINT="$(openssl x509 -in "${CRT}" -noout -fingerprint -sha256 | sed 's/^.*=//')"
-note "SHA-256 fingerprint ${FINGERPRINT}"
+ensure_tls_certificate
 
 # ── 4b. Kerberos (Windows sign-in) ────────────────────────────────────────────
 # A keytab for HTTP/<public host> lets the service accept Negotiate from domain PCs like a
@@ -519,6 +554,8 @@ LEDGER_PY
 # ── 6. appsettings.Production.json ───────────────────────────────────────────
 say "Writing ${HOST_DIR}/appsettings.Production.json"
 PFX_PASS="$(cat "${PFX_PASS_FILE}")"
+PREV_PASS=""
+[[ -z "${PREVIOUS_FINGERPRINT}" ]] || PREV_PASS="$(cat "${PREV_PASS_FILE}")"
 python3 - "${HOST_DIR}/appsettings.Production.json" <<PY
 import json, sys
 settings = {
@@ -555,6 +592,9 @@ settings = {
     }
   }
 }
+if "${PREVIOUS_FINGERPRINT}":
+    settings["Constructd"]["PreviousCertPath"] = "${PREV_PFX}"
+    settings["Constructd"]["PreviousCertPassword"] = "${PREV_PASS}"
 with open(sys.argv[1], "w") as f:
     json.dump(settings, f, indent=2)
     f.write("\n")
@@ -654,8 +694,8 @@ fi
 python3 - "${ETC_DIR}/install.json" <<PY
 import json, sys, datetime
 json.dump({"installedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(), "publicHost": "${PUBLIC_HOST}",
-           "node": "${NODE}", "fingerprint": "${FINGERPRINT}", "admin": "${ADMIN}", "listenPort": ${LISTEN_PORT},
-           "source": "${SOURCE_DIR}"}, open(sys.argv[1], "w"), indent=2)
+           "node": "${NODE}", "fingerprint": "${FINGERPRINT}", "previousFingerprint": "${PREVIOUS_FINGERPRINT}",
+           "admin": "${ADMIN}", "listenPort": ${LISTEN_PORT}, "source": "${SOURCE_DIR}"}, open(sys.argv[1], "w"), indent=2)
 PY
 
 # ── 9. Start and verify ──────────────────────────────────────────────────────
@@ -695,6 +735,11 @@ fi
 echo
 echo "    Service URL : https://${PUBLIC_HOST}:${LISTEN_PORT}"
 echo "    Fingerprint : ${FINGERPRINT}   (confirm this when the installer shows it)"
+if [[ -n "${PREVIOUS_FINGERPRINT}" ]]; then
+  echo "    Previous    : ${PREVIOUS_FINGERPRINT}"
+  echo "                  still served to address-based URLs and the old names, so clients enrolled before"
+  echo "                  the rename keep working; retire it with --drop-previous-certificate once nobody uses it"
+fi
 echo "    Admin user  : ${ADMIN}"
 if [[ -n "${TOKEN}" ]]; then
   echo "    Admin token : ${TOKEN}   (shown once; the installer stores it on the PC)"

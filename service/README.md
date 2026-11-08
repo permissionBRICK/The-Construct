@@ -648,6 +648,7 @@ Bound from the `Constructd` section of `appsettings.json`, from environment vari
 | `ListenUrl` | `https://0.0.0.0:7462` | What the service listens on. |
 | `CertPath` / `CertPassword` | – | PFX for TLS. |
 | `CertThumbprint` | – | Certificate from `LocalMachine\My` (what the client pins at enrollment). |
+| `PreviousCertPath` / `PreviousCertPassword` / `PreviousCertThumbprint` | – | The certificate the host presented before a rename of its public host. It stays in service for handshakes without SNI (address-based URLs) and for names the current certificate does not own alone, so clients that pinned it keep working; see [docs/proxmox-host.md](../docs/proxmox-host.md#renaming-the-host). The updater's loopback health check pins it while it is set. |
 | `ScriptsDir` | – | The Construct checkout the service invokes (`drivers\`, `lib\`, `bin\`). Validated at startup. |
 | `WslDistro` | `Ubuntu` | WSL distro used for the ISO build. Empty uses WSL's default distro (no `-d`). |
 | `PublicHost` | `localhost` | LAN name/IP that endpoints and forwards are advertised on, and what the API certificate is bound to. |

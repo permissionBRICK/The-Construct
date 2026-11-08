@@ -40,6 +40,33 @@ public sealed class LinuxHostUpdateTests
         }
         finally{File.Delete(path);}
     }
+    [Fact]
+    public async Task After_a_rename_the_health_check_pins_the_previous_certificate()
+    {
+        // The health check dials 127.0.0.1 without SNI, and that handshake gets the previous certificate.
+        if(OperatingSystem.IsWindows())return;
+        var dir=Directory.CreateTempSubdirectory("constructd-pin-").FullName;
+        try
+        {
+            var current=Path.Combine(dir,"tls.pfx");var previous=Path.Combine(dir,"tls-previous.pfx");
+            await File.WriteAllBytesAsync(current,TestCertificates.CreatePfx("construct.example.test","construct.example.test"));
+            await File.WriteAllBytesAsync(previous,TestCertificates.CreatePfx("192.0.2.10","192.0.2.10"));
+            using var expected=X509CertificateLoader.LoadPkcs12FromFile(previous,TestCertificates.Password);
+            using var app=new TestApp();var options=app.Service<ConstructdOptions>();
+            options.Fake=false;options.CertThumbprint=null;options.CertPath=current;options.CertPassword=TestCertificates.Password;
+            options.PreviousCertPath=previous;options.PreviousCertPassword=TestCertificates.Password;
+            using var fixture=new PackageTests();var(m,_)=fixture.Package(linux:true);var id=Guid.NewGuid().ToString("n");
+            var staged=new StagedUpdate(id,m,"stage",[],"linux");app.Service<FakeUpdateStager>().Staged[id]=staged;
+            await app.Service<IHostConfigStore>().SetAsync("update-staged:"+id,staged,"test",default);
+            await app.Service<IHostUpdateStore>().TryStartAsync(UpdateTests.Row(id),default);
+            await app.Service<HostUpdateJob>().ApplyAsync(id,"test",default);
+            var link=(await app.Service<IHostConfigStore>().GetAsync<UpdateJobLink>("update-job:"+id,default))!;
+            await foreach(var _ in app.Service<IJobEngine>().SubscribeAsync(link.JobId,default)){}
+            var h=await app.Service<FakeUpdaterLauncher>().ReadHandoffAsync(default);
+            Assert.NotNull(h);Assert.Equal(expected.Thumbprint,h.CertificateThumbprint);
+        }
+        finally{Directory.Delete(dir,recursive:true);}
+    }
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

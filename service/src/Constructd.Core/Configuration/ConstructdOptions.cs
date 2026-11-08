@@ -54,6 +54,21 @@ public sealed class ConstructdOptions
     public string? CertThumbprint { get; set; }
 
     /// <summary>
+    /// PFX path of the certificate this host presented before its public host was renamed (alternative
+    /// to <see cref="PreviousCertThumbprint"/>). Clients pinned that one, so it stays in service for
+    /// handshakes that do not ask for a name only the current certificate covers: address-based URLs
+    /// (no SNI) and the old names. See <c>Constructd.Core.Logic.TlsCertificateSelection</c>. Unset, the
+    /// default, means everyone gets the current certificate.
+    /// </summary>
+    public string? PreviousCertPath { get; set; }
+
+    /// <summary>Password for <see cref="PreviousCertPath"/>.</summary>
+    public string? PreviousCertPassword { get; set; }
+
+    /// <summary>Thumbprint of the previous certificate in the Windows store; see <see cref="PreviousCertPath"/>.</summary>
+    public string? PreviousCertThumbprint { get; set; }
+
+    /// <summary>
     /// Which hypervisor platform this host runs on: <c>hyperv</c> (the default: the Windows host with
     /// the Hyper-V driver, WSL/native ISO media and netsh forwards) or <c>proxmox</c> (a Proxmox VE
     /// node: VMs are cloned from a cached Ubuntu cloud image and seeded with cloud-init through

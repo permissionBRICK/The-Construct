@@ -591,7 +591,7 @@ If every VM is busy, the host stays under pressure and the panel reports insuffi
 |---|---|
 | `401` right after Kerberos was tried | the host does not accept your Windows identity (not domain-joined, no SPN, or you are not enrolled). Use a token, or ask the admin to add you. |
 | `whoami` answers with `known: false` | you authenticated fine, but nobody has enrolled you: ask the admin for a `POST /users`. |
-| `Certificate fingerprint mismatch` | the host's certificate changed. Confirm with the admin, then delete `%LOCALAPPDATA%\The-Construct\remote\<hostslug>.pin` and re-enrol. |
+| `Certificate fingerprint mismatch` | the host's certificate changed. Confirm with the admin, then delete `%LOCALAPPDATA%\The-Construct\remote\<hostslug>.pin` and re-enrol. A host that was only *renamed* keeps its old certificate on the old URL until the admin retires it ([Renaming the host](proxmox-host.md#renaming-the-host)); after that, enrol the new URL instead. |
 | `409` from `GET /vms/{name}/endpoint` | the VM exists but has no SSH forward yet — it is still being created. |
 | `403` on a VM that exists | it belongs to somebody else. Ownership is per user; an unknown VM answers `404`. |
 | The VM was created but provisioning failed | the instance is already in the registry (§3, step 8). Run `Auto-Install.ps1 -InstanceName <name>` and pick **Reprovision** — no VM is created twice; the service may populate its source cache. |
