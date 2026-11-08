@@ -682,9 +682,9 @@ ok "plain --reuse: never picks the HTTPS forward" test "${reuse_plain}" = "http:
 # Forward names and the main guard (docs/https-forwards.md, "Forward names").
 reset_stub
 printf '200' >"${stub_dir}/code"
-printf '{"available":true,"reason":null,"message":null,"mainAddress":"https://work-vm.vms.example/","namedAddress":"https://work-vm-<name>.vms.example/"}' >"${stub_dir}/response"
+printf '{"available":true,"reason":null,"message":null,"mainAddress":"https://work-vm.vms.example/","namedAddress":"https://work-vm-{name}.vms.example/"}' >"${stub_dir}/response"
 help_out="$(remote --help 2>&1)"
-ok "names: the help shows --name with the address it gives" grep -q 'https://work-vm-<name>.vms.example/' <<<"${help_out}"
+ok "names: the help shows --name with the address it gives" grep -qF 'https://work-vm-{name}.vms.example/' <<<"${help_out}"
 ok "names: ...and --replace-main" grep -q -- '--replace-main' <<<"${help_out}"
 
 reset_stub
@@ -702,6 +702,7 @@ ok "names: --replace-main asks for it" sh -c "grep -q '\"main\":true' '${stub_di
 
 ok "names: --name needs --https" sh -c "! STUB_DIR='${stub_dir}' PATH='${stubs}:${PATH}' CONFIG_FILE='${remote_cfg}' CONSTRUCT_VM_TOKEN_FILE='${token_file}' bash '${CLI}' expose 3000 --name app >/dev/null 2>&1"
 ok "names: --replace-main needs --main" sh -c "! STUB_DIR='${stub_dir}' PATH='${stubs}:${PATH}' CONFIG_FILE='${remote_cfg}' CONSTRUCT_VM_TOKEN_FILE='${token_file}' bash '${CLI}' expose 3000 --https --replace-main >/dev/null 2>&1"
+ok "names: an empty --name is an error" sh -c "! STUB_DIR='${stub_dir}' PATH='${stubs}:${PATH}' CONFIG_FILE='${remote_cfg}' CONSTRUCT_VM_TOKEN_FILE='${token_file}' bash '${CLI}' expose 3000 --https --name '' >/dev/null 2>&1"
 ok "names: a name is a DNS label" sh -c "! STUB_DIR='${stub_dir}' PATH='${stubs}:${PATH}' CONFIG_FILE='${remote_cfg}' CONSTRUCT_VM_TOKEN_FILE='${token_file}' bash '${CLI}' expose 3000 --https --name 'my_app' >/dev/null 2>&1"
 
 reset_stub

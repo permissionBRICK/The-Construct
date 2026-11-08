@@ -24,7 +24,7 @@ public static partial class HttpsForwardNames
     /// <summary>What a name may look like, for error messages.</summary>
     public const string Rule = "lowercase letters, digits and hyphens, starting and ending with a letter or digit";
 
-    [GeneratedRegex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex(@"\A[a-z0-9]([a-z0-9-]*[a-z0-9])?\z", RegexOptions.CultureInvariant)]
     private static partial Regex LabelRegex();
 
     /// <summary>The forward's name: the stored one, or the VM port.</summary>

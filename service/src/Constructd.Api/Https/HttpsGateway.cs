@@ -77,6 +77,7 @@ public sealed class HttpsGateway : IHttpsForwardHost, IHostedService, IAsyncDisp
     private string? _sharedError;
     private Task? _sharedLoop;
     private (HttpsRouteTable Table, DateTimeOffset Expires) _routes = (HttpsRouteTable.Empty(), DateTimeOffset.MinValue);
+    private int _routesGeneration;
 
     public HttpsGateway(
         IForwardStore store,
@@ -177,6 +178,16 @@ public sealed class HttpsGateway : IHttpsForwardHost, IHostedService, IAsyncDisp
     }
 
     /// <summary>The configured shared port, or null when the shared listener is off.</summary>
+    /// <summary>
+    /// The shared port while it is configured AND its listener is up, null otherwise: only then is anything advertised
+    /// on it (a port that is in use or not allowed would otherwise give every HTTPS forward a dead link).
+    /// </summary>
+    public async Task<int?> ServingSharedPortAsync(CancellationToken ct)
+    {
+        var wanted = (await ConfigAsync(ct).ConfigureAwait(false)).SharedPort;
+        return wanted is int port && _shared is { } shared && shared.Port == port ? port : null;
+    }
+
     public async Task<HttpsConfig> ConfigAsync(CancellationToken ct) =>
         await _config.GetAsync<HttpsConfig>("https", ct).ConfigureAwait(false) ?? HostAdminDefaults.Https;
 
@@ -350,8 +361,11 @@ public sealed class HttpsGateway : IHttpsForwardHost, IHostedService, IAsyncDisp
         try
         {
             if (_routes.Expires > now) return _routes.Table;
+            // A forward added or removed while the table is being built invalidates it: then the result is used for
+            // this lookup but not kept, so the next one rebuilds from the current state.
+            var generation = Volatile.Read(ref _routesGeneration);
             var table = await BuildRoutesAsync(_store, _vms, _config, _options, _stop.Token).ConfigureAwait(false);
-            _routes = (table, now + RouteTtl);
+            _routes = (table, Volatile.Read(ref _routesGeneration) == generation ? now + RouteTtl : DateTimeOffset.MinValue);
             return table;
         }
         finally
@@ -379,7 +393,11 @@ public sealed class HttpsGateway : IHttpsForwardHost, IHostedService, IAsyncDisp
         return HttpsRouteTable.Build(forwards, primaries, options.PublicHostPattern, options.PublicHost, vaultHost);
     }
 
-    private void InvalidateRoutes() => _routes = (_routes.Table, DateTimeOffset.MinValue);
+    private void InvalidateRoutes()
+    {
+        Interlocked.Increment(ref _routesGeneration);
+        _routes = (_routes.Table, DateTimeOffset.MinValue);
+    }
 
     /// <summary>The upstream stream, or null when the guest (or the vault endpoint) does not answer.</summary>
     private async Task<Stream?> ConnectAsync(Route route, string serverName)

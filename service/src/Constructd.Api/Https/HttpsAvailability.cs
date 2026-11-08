@@ -10,8 +10,9 @@ namespace Constructd.Api.Https;
 /// <param name="Message">What an owner or admin would change, null when available.</param>
 /// <param name="MainAddress">The address a main forward gets on the shared port, when there is one.</param>
 /// <param name="NamedAddress">
-/// What a forward's own address on the shared port looks like, with <c>&lt;name&gt;</c> standing for its name
-/// (<c>https://work-vm-&lt;name&gt;.vms.example/</c>), when forwards are served there by name.
+/// What a forward's own address on the shared port looks like, with <c>{name}</c> standing for its name
+/// (<c>https://work-vm-{name}.vms.example/</c>), when forwards are served there by name. Braces rather than angle
+/// brackets, which JSON encoders escape.
 /// </param>
 public sealed record HttpsAvailabilityResult(bool Available, string? Reason, string? Message, string? MainAddress, string? NamedAddress = null);
 
@@ -54,9 +55,11 @@ public static class HttpsAvailability
             return No("not-allowed", $"HTTPS forwards are not enabled for '{vm.Owner}'. A host admin allows them per user.");
 
         string? mainAddress = null;
-        var https = await config.GetAsync<HttpsConfig>("https", ct).ConfigureAwait(false) ?? HostAdminDefaults.Https;
         string? namedAddress = null;
-        if (https.SharedPort is int shared && !string.IsNullOrWhiteSpace(options.PublicHostPattern))
+        // Only a shared port whose listener is up is advertised (HttpsGateway.ServingSharedPortAsync).
+        var gateway = services.GetService<HttpsGateway>();
+        var serving = gateway is null ? null : await gateway.ServingSharedPortAsync(ct).ConfigureAwait(false);
+        if (serving is int shared && !string.IsNullOrWhiteSpace(options.PublicHostPattern))
         {
             var port = shared == 443 ? "" : $":{shared}";
             mainAddress = $"https://{publicHost}{port}/";
@@ -65,7 +68,7 @@ public static class HttpsAvailability
             if (HttpsForwardNames.Host(options.PublicHostPattern, options.PublicHost, vm.Name, probe) is { } named && certificate.Covers(named))
             {
                 var label = HttpsForwardNames.Label(vm.Name, probe);
-                namedAddress = $"https://{named.Replace(label, HttpsForwardNames.Label(vm.Name, "<name>"), StringComparison.OrdinalIgnoreCase)}{port}/";
+                namedAddress = $"https://{named.Replace(label, HttpsForwardNames.Label(vm.Name, "{name}"), StringComparison.OrdinalIgnoreCase)}{port}/";
             }
         }
 

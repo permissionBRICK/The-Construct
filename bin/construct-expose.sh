@@ -878,7 +878,7 @@ while [[ $# -gt 0 ]]; do
     --https-if-available) HTTPS=true; HTTPS_IF_AVAILABLE=true ;;
     --main) MAIN=true ;;
     --upstream-tls) UPSTREAM_TLS=true ;;
-    --name) shift; [[ $# -gt 0 ]] || die "--name requires a value"; NAME="${1,,}" ;;
+    --name) shift; [[ $# -gt 0 && -n "$1" ]] || die "--name requires a value"; NAME="${1,,}" ;;
     --replace-main) REPLACE_MAIN=true ;;
     --) shift; if [[ $# -gt 0 ]]; then port="$1"; shift; fi; break ;;
     -*) die "unknown option: $1 (try: construct expose --help)" ;;

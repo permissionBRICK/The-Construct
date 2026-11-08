@@ -207,14 +207,20 @@ public static class ForwardEndpoints
         {
             // docs/https-forwards.md, "Forward names": one name per HTTPS forward across the host, never a VM's or
             // the vault's, and one open main forward per VM unless the request takes it over.
-            httpsName = string.IsNullOrWhiteSpace(request.Name) ? null : request.Name.Trim().ToLowerInvariant();
-            var forwardName = httpsName ?? vmPort.ToString(System.Globalization.CultureInfo.InvariantCulture);
-            if (HttpsForwardNames.Problem(vm.Name, forwardName) is { } problem)
-                return CodedProblems.Validation("name", problem);
-            if (await HttpsNameConflictAsync(http, options, vm.Name, forwardName, cancellationToken) is { } conflict)
+            // Only an EXPLICIT name is checked. The default one (the VM port) never refuses a forward: when it is
+            // too long or taken, the route table just leaves it out and the forward keeps its port address.
+            if (request.Name is not null)
             {
-                http.SetAuditDetail($"https name {HttpsForwardNames.Label(vm.Name, forwardName)} taken");
-                return CodedProblems.Create(409, "https-name-taken", conflict);
+                if (string.IsNullOrWhiteSpace(request.Name))
+                    return CodedProblems.Validation("name", $"An empty name is not a forward name: use {HttpsForwardNames.Rule}, or leave it out.");
+                httpsName = request.Name.Trim().ToLowerInvariant();
+                if (HttpsForwardNames.Problem(vm.Name, httpsName) is { } problem)
+                    return CodedProblems.Validation("name", problem);
+                if (await HttpsNameConflictAsync(http, options, vm.Name, vmPort, httpsName, cancellationToken) is { } conflict)
+                {
+                    http.SetAuditDetail($"https name {HttpsForwardNames.Label(vm.Name, httpsName)} taken");
+                    return CodedProblems.Create(409, "https-name-taken", conflict);
+                }
             }
 
             if (request.Main == true && request.ReplaceMain != true &&
@@ -432,7 +438,7 @@ public static class ForwardEndpoints
     {
         if (string.IsNullOrWhiteSpace(options.PublicHostPattern)) return null;
         var gateway = http.RequestServices.GetService<HttpsGateway>();
-        return gateway is null ? null : (await gateway.ConfigAsync(cancellationToken).ConfigureAwait(false)).SharedPort;
+        return gateway is null ? null : await gateway.ServingSharedPortAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>The shared port's route table when HTTPS forwards are served there by name, null otherwise.</summary>
@@ -460,7 +466,7 @@ public static class ForwardEndpoints
     /// web host, or another open HTTPS forward's name. Compared as labels, so it holds whether or not the host runs
     /// a per-VM name pattern yet.
     /// </summary>
-    private static async Task<string?> HttpsNameConflictAsync(HttpContext http, ConstructdOptions options, string vmName, string name,
+    private static async Task<string?> HttpsNameConflictAsync(HttpContext http, ConstructdOptions options, string vmName, int vmPort, string name,
         CancellationToken cancellationToken)
     {
         var services = http.RequestServices;
@@ -480,7 +486,8 @@ public static class ForwardEndpoints
             .FirstOrDefault(f => string.Equals(HttpsForwardNames.Label(f.VmName, HttpsForwardNames.Effective(f)), label, StringComparison.OrdinalIgnoreCase));
         return taken is null ? null
             : string.Equals(taken.VmName, vmName, StringComparison.OrdinalIgnoreCase)
-                ? $"This VM already has an HTTPS forward named '{name}' ('{(taken.Label.Length > 0 ? taken.Label : "port " + taken.VmPort)}', VM port {taken.VmPort}). Choose another name (construct expose --name), or reuse it (--reuse)."
+                ? $"This VM already has an HTTPS forward named '{name}' ('{(taken.Label.Length > 0 ? taken.Label : "port " + taken.VmPort)}', VM port {taken.VmPort}). Choose another name (construct expose --name)" +
+                  (taken.VmPort == vmPort ? ", or reuse it (--reuse)." : ".")
                 : $"'{label}' is already the name of an HTTPS forward of the VM '{taken.VmName}'. Choose another name (construct expose --name).";
     }
 
