@@ -252,6 +252,7 @@ public sealed class HttpsApiTests
         Assert.Contains("'T3'", await taken.Content.ReadAsStringAsync());
         Assert.Equal(HttpStatusCode.BadRequest, (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5173, https = true, replaceMain = true })).StatusCode);
 
+        app.Clock.Advance(TimeSpan.FromSeconds(1)); // "newest" is by creation time; the test clock stands still otherwise
         var replaced = await (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5173, https = true, main = true, replaceMain = true })).ReadAsync<ForwardResponse>();
         Assert.Equal($"https://work-vm.vms.test:{shared}/", replaced.Url);
         // The older main forward keeps its own name, and gets the VM's back once the newer one is closed.
