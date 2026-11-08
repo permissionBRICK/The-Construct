@@ -1,4 +1,3 @@
-using System.Security.Cryptography.X509Certificates;
 using Constructd.Api.Admin;
 using Constructd.Api.Auth;
 using Constructd.Api.Composition;
@@ -156,36 +155,15 @@ return 0;
 
 // ---- helpers --------------------------------------------------------------------------------
 
-/// <summary>
-/// TLS with the certificate created at service install; the client pins its thumbprint at enrollment
-/// (plan §4.4). A thumbprint is resolved from the Windows certificate store, a path from a PFX.
-/// </summary>
+/// <summary>TLS for the API; see <see cref="TlsComposition"/>.</summary>
 static void ConfigureTls(WebApplicationBuilder builder, ConstructdOptions options)
 {
-    if (string.IsNullOrWhiteSpace(options.CertPath) && string.IsNullOrWhiteSpace(options.CertThumbprint))
+    if (!TlsComposition.IsConfigured(options))
     {
         return;
     }
 
-    builder.WebHost.ConfigureKestrel(kestrel => kestrel.ConfigureHttpsDefaults(https =>
-    {
-        if (!string.IsNullOrWhiteSpace(options.CertPath))
-        {
-            https.ServerCertificate = X509CertificateLoader.LoadPkcs12FromFile(
-                options.CertPath,
-                options.CertPassword);
-            return;
-        }
-
-        using var store = new X509Store(StoreName.My, StoreLocation.LocalMachine);
-        store.Open(OpenFlags.ReadOnly);
-        var found = store.Certificates.Find(X509FindType.FindByThumbprint, options.CertThumbprint!, validOnly: false);
-
-        https.ServerCertificate = found.Count > 0
-            ? found[0]
-            : throw new InvalidOperationException(
-                $"No certificate with thumbprint '{options.CertThumbprint}' in LocalMachine\\My.");
-    }));
+    builder.WebHost.ConfigureKestrel(kestrel => kestrel.ConfigureHttpsDefaults(https => TlsComposition.Apply(https, options)));
 }
 
 /// <summary>Exposed so the integration tests can drive the real host through WebApplicationFactory.</summary>

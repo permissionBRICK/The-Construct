@@ -73,12 +73,18 @@ public sealed class HostUpdateJob(IHostUpdateStore store, IReleaseSource source,
     }
     public async Task<object> ApplyAsync(string id, string actor, CancellationToken ct, OperationKeyRecord? operation=null)
     {
-        var thumbprint = options.CertThumbprint;
-        if (!OperatingSystem.IsWindows() && string.IsNullOrWhiteSpace(thumbprint) && !string.IsNullOrWhiteSpace(options.CertPath))
+        // The updater's health check dials https://127.0.0.1:<port>, an address, so it sends no SNI. After a
+        // rename that handshake gets the PREVIOUS certificate (TlsCertificateSelection), so pin that one then.
+        var previous = !string.IsNullOrWhiteSpace(options.PreviousCertPath) || !string.IsNullOrWhiteSpace(options.PreviousCertThumbprint);
+        var (pinThumbprint, pinPath, pinPassword) = previous
+            ? (options.PreviousCertThumbprint, options.PreviousCertPath, options.PreviousCertPassword)
+            : (options.CertThumbprint, options.CertPath, options.CertPassword);
+        var thumbprint = pinThumbprint;
+        if (!OperatingSystem.IsWindows() && string.IsNullOrWhiteSpace(thumbprint) && !string.IsNullOrWhiteSpace(pinPath))
         {
             try
             {
-                using var certificate = X509CertificateLoader.LoadPkcs12FromFile(options.CertPath, options.CertPassword);
+                using var certificate = X509CertificateLoader.LoadPkcs12FromFile(pinPath, pinPassword);
                 thumbprint = certificate.Thumbprint;
             }
             catch (Exception ex) when (ex is CryptographicException or IOException or UnauthorizedAccessException or ArgumentException)
