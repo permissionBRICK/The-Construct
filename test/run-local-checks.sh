@@ -74,6 +74,7 @@ if [[ "$group" == service || "$group" == all ]]; then
   node extension/test/t3code.test.js
   python3 test/t3-pairing-forward.test.py
   dotnet test service/Constructd.sln -c Release
+  bash test/backup-e2e.test.sh
   pwsh -NoProfile -File service/tests/Constructd.Tests/Windows/windows-guest-report.test.ps1
   pwsh -NoProfile -File test/windows-license-firmware.test.ps1
   pwsh -NoProfile -File service/tests/host-updater.test.ps1

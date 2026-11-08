@@ -535,9 +535,9 @@ ok 'host restore: keys from the host, unwrapped for this backup id' ($seq[0] -eq
 ok 'host restore: fetch --from-host <id> --out /tmp/construct-config-restore.tar.zst with E on stdin' (
     $fetchAt -gt 0 -and $seq[$fetchAt] -ceq "cli: fetch --from-host $($env:FAKE_ID) --out /tmp/construct-config-restore.tar.zst | stdin=AGE-SECRET-KEY-1TESTIDENTITY")
 ok 'host restore: then restore-config.sh on that file, logged like today' ($seq[$fetchAt + 1] -like 'stream: *BACKUP_TGZ=/tmp/construct-config-restore.tar.zst*restore-config.sh*tee /var/log/construct/restore-config.log')
-ok 'host restore: then the deferred project phase, the extras on the file and restored <id>' (
-    $seq[$fetchAt + 2] -eq 'deferred project commands' -and
-    $seq[$fetchAt + 3] -ceq 'cli: restore-extras /tmp/construct-config-restore.tar.zst | stdin=' -and
+ok 'host restore: then the extras on the file, the deferred project phase and restored <id>' (
+    $seq[$fetchAt + 2] -ceq 'cli: restore-extras /tmp/construct-config-restore.tar.zst | stdin=' -and
+    $seq[$fetchAt + 3] -eq 'deferred project commands' -and
     $seq[$fetchAt + 4] -ceq "cli: restored $($env:FAKE_ID) | stdin=")
 ok 'host restore: the cleartext file is deleted at the end' ($seq[$seq.Count - 1] -like 'ssh: rm -f /tmp/construct-config-restore.tar.zst*')
 ok 'host restore: E is only ever stdin' (@($seq | Where-Object { $_ -like '*AGE-SECRET-KEY*' -and $_ -notlike 'cli: fetch *' }).Count -eq 0)
