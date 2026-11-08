@@ -58,6 +58,7 @@ function guestScripts() {
   add("t3-pairing", { pairingBase: scripts.render("construct-t3-pairing-base") }, t3.buildPairingScript());
   for (const name of ["dev", "build-2"]) add("t3-pairing-instance", { instance: name, pairingBase: scripts.render("construct-t3-pairing-base") }, t3.buildPairingScript({ name }));
   for (const url of ["https://t3.example.net:8443", "https://[2001:db8::7]:8443", ""]) add("t3-proxy-url", { url: "'" + url + "'" }, t3.buildProxyUrlScript(url));
+  for (const enabled of [true, false]) add("t3-auto-approve", { enabled: String(enabled) }, t3.buildAutoApprovalScript(enabled));
   for (const report of ["daily", "monthly", "total"]) add("usage", { report }, usage.buildUsageScript(report));
   add("usage-collect", {}, require("../src/guest-scripts").render("usage-collect"));
   for (const name of scripts.names.filter(name => name.startsWith("construct-"))) add(name, {});

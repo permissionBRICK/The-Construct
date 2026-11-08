@@ -126,7 +126,8 @@ The host can also be a **Proxmox VE node**: one script installs the same service
 ### Unattended T3 tool permissions
 
 With patched T3 installed, enable **Automatically accept tool permissions** in
-Construct settings and reprovision the selected VM. This is off by default in
+Construct settings and save. This applies immediately on the selected VM for new
+requests, without restarting T3. This is off by default in
 all feature sets. It accepts command, file and permission requests once on that
 VM, including provider safety checks and explicit ask rules. Task questions,
 login/trust requests before a turn, and MCP forms remain interactive.

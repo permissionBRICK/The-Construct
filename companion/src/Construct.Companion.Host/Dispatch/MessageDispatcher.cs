@@ -233,6 +233,17 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
         state.Publish(entry.Name, new { type = "settings", instance = entry.Name, settings = merged });
         if (entry.Runtime is { } runtime) await runtime.SetAudioAsync(StateJson.Boolean(merged["mic"]) == true, ct);
         if (StateJson.Boolean(form["autoCheckpoints"]) is not null) await ApplyCheckpoints(entry, StateJson.Boolean(merged["autoCheckpoints"]) == true, ct);
+        // Reapply an explicit value even when already saved: a previous SSH attempt
+        // may have failed while the VM was offline, and Save must retry it.
+        if (StateJson.Boolean(form["t3codeAutoApprove"]) is bool autoApprove)
+        {
+            var applied = await entry.Ssh.RunRemoteScriptAsync(T3Code.BuildAutoApprovalScript(autoApprove), TimeSpan.FromSeconds(30), ct);
+            if (applied.Code != 0)
+            {
+                var detail = StateJson.Trim(applied.Stderr);
+                Refuse(entry.Name, "saveSettings", "Settings saved, but the VM did not apply T3 tool permission auto-approval. Check the connection and save again to retry. " + detail[..Math.Min(200, detail.Length)]);
+            }
+        }
         var changes = SettingsMapping.PatchReprovisionChanges(previous, merged);
         var t3 = T3Code.PlanLiveAction(StateJson.Boolean(merged["t3code"]) == true, StateJson.Boolean(previous["t3code"]) == true, Text(merged, "t3codeChannel"), Text(previous, "t3codeChannel"));
         if (t3 is not null && (Text(t3, "action") == "disable" || StateJson.Boolean(merged["t3codePatched"]) != true))

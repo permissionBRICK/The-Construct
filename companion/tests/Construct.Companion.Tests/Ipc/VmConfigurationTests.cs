@@ -12,6 +12,40 @@ namespace Construct.Companion.Tests.Ipc;
 public sealed class VmConfigurationTests
 {
     [Theory]
+    [InlineData(true)] [InlineData(false)]
+    public async Task AutoApprovalSavesLiveWithoutReprovisionAndRetriesAnAlreadySavedValue(bool enabled)
+    {
+        await using var h = await HttpTests.Harness.Start(runtimeJobs: false);
+        var entry = h.App.Services.GetRequiredService<CompanionInstances>().Get("agent-vm");
+        var ssh = (FakeSshTransport)entry.Ssh;
+        var dispatcher = h.App.Services.GetRequiredService<MessageDispatcher>();
+        JsonObject Save() => new() { ["type"] = "saveSettings", ["settings"] = new JsonObject { ["t3codeAutoApprove"] = enabled } };
+        using var subscription = h.App.Services.GetRequiredService<Host.Ipc.IpcEvents>().Subscribe();
+        ssh.ScriptHandler = (_, _) => Task.FromResult(new ProcessResult(255, "", "VM offline"));
+        await dispatcher.DispatchAsync(entry.Name, Save(), CancellationToken.None);
+        Assert.Equal(enabled, StateJson.Boolean(entry.Store.ReadSettings()["t3codeAutoApprove"]));
+        var errors = new List<string>();
+        while (subscription.Reader.TryRead(out var e))
+            if (e.Event == "message" && e.Data.GetProperty("message").TryGetProperty("error", out var error)) errors.Add(error.GetString()!);
+        Assert.Contains(errors, e => e.Contains("save again to retry", StringComparison.Ordinal));
+        ssh.ScriptHandler = (_, _) => Task.FromResult(new ProcessResult(0));
+        await dispatcher.DispatchAsync(entry.Name, Save(), CancellationToken.None);
+        Assert.Equal(2, ssh.Scripts.Count);
+        Assert.All(ssh.Scripts, script => Assert.Equal(T3Code.BuildAutoApprovalScript(enabled), script));
+        Assert.Empty(h.Get<FakePrompts, IPrompts>().Shown);
+        Assert.Empty(h.Get<FakeLauncher, ILauncher>().Detached);
+        Assert.Empty(h.Get<FakeLauncher, ILauncher>().Elevated);
+    }
+    [Fact]
+    public async Task UnrelatedSettingsDoNotWriteAutoApproval()
+    {
+        await using var h = await HttpTests.Harness.Start(runtimeJobs: false);
+        var entry = h.App.Services.GetRequiredService<CompanionInstances>().Get("agent-vm");
+        await h.App.Services.GetRequiredService<MessageDispatcher>().DispatchAsync(entry.Name,
+            new() { ["type"] = "saveSettings", ["settings"] = new JsonObject { ["gitName"] = "Test" } }, CancellationToken.None);
+        Assert.Empty(((FakeSshTransport)entry.Ssh).Scripts);
+    }
+    [Theory]
     [InlineData("ok")] [InlineData("fail")] [InlineData("timeout")]
     public async Task ResourceLaunchWaitsForElevatedConsoleBeforeShutdownAndUsesResultPlan(string outcome)
     {

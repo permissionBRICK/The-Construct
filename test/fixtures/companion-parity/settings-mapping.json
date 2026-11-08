@@ -255,7 +255,6 @@
       "t3codePatched": true
     },
     "output": [
-      "T3 tool permission auto-approval",
       "patched T3 Code + Desktop build"
     ],
     "previous": {}
@@ -291,7 +290,6 @@
       "t3codePatched": true
     },
     "output": [
-      "T3 tool permission auto-approval",
       "patched T3 Code + Desktop build"
     ],
     "previous": {
@@ -319,7 +317,6 @@
     "kind": "patch",
     "next": {},
     "output": [
-      "T3 tool permission auto-approval",
       "patched T3 Code + Desktop build"
     ],
     "previous": {
@@ -353,7 +350,6 @@
       "opencodeBackgroundWatcher": true
     },
     "output": [
-      "T3 tool permission auto-approval",
       "patched T3 Code + Desktop build",
       "OpenCode background watcher"
     ],

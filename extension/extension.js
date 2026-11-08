@@ -4765,6 +4765,11 @@ function handleMessage(message, webview, context) {
         const saveStore = stateStore(saveTarget.instance, scriptsDir);
         const prev = instancestate.readSettings(saveStore);
         const merged = host.mapToForm(instancestate.saveSettings(saveStore, message.settings));
+        if (message.settings && typeof message.settings.t3codeAutoApprove === "boolean") {
+          const applied = await t3code.setAutoApprovalOnVm(message.settings.t3codeAutoApprove,
+            { cfg: saveTarget.cfg, instance: saveTarget.instance });
+          if (applied.error) vscode.window.showWarningMessage("Settings saved, but " + applied.error);
+        }
         const patchChanges = host.patchReprovisionChanges(prev, merged);
         if (patchChanges.length) offerReprovisionForPatchSettings(scriptsDir, patchChanges, saveTarget);
         else vscode.window.showInformationMessage("Construct settings saved.");
