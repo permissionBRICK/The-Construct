@@ -10,7 +10,8 @@ work="$(mktemp -d)"
 trap 'rm -r "$work"' EXIT
 eval "$(sed -n '/^cert_names_host() {/,/^}$/p' service/host/install-construct-host.sh)"
 eval "$(sed -n '/^service_supports_previous_cert() {/,/^}$/p' service/host/install-construct-host.sh)"
-eval "$(sed -n '/^ensure_tls_certificate() {$/,/^}$/p' service/host/install-construct-host.sh)"
+eval "$(sed -n '/^plan_tls_certificate() {/,/^}$/p' service/host/install-construct-host.sh)"
+eval "$(sed -n '/^ensure_tls_certificate() {/,/^}$/p' service/host/install-construct-host.sh)"
 note() { :; }
 die() { echo "$*" >&2; exit 1; }
 ETC_DIR="$work/etc" TMP_ROOT="$work/tmp" HOST_DIR="$work/host" NODE=node1 DROP_PREVIOUS_CERT=0
@@ -41,6 +42,14 @@ unsupported
 PUBLIC_HOST=construct.example.test
 if (ensure_tls_certificate) 2>/dev/null; then fail "rename was accepted by a service without previous-certificate support"; fi
 [[ "$(state)" == "$first none" ]] || fail "refused rename changed the certificates"
+# The installer plans before it stops anything, against the service it is about to install: a staged
+# service that supports the setting passes the plan (changing no file), an old one is refused.
+stage="$work/stage"; mkdir -p "$stage"
+printf 'single-file bundle ... PreviousCertPath ...' >"$stage/Constructd.Api"
+plan_tls_certificate "$stage"
+[[ "$TLS_ACTION" == rename && "$(state)" == "$first none" ]] || fail "plan against a supporting staged service did not plan the rename, or changed files"
+rm "$stage/Constructd.Api"
+if (plan_tls_certificate "$stage") 2>/dev/null; then fail "plan accepted a staged service without support"; fi
 supported
 
 # The rename: the old certificate becomes the previous one, a new one names the new host.
