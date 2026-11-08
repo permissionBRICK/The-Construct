@@ -22,4 +22,11 @@ public sealed record VaultConfig(string? WebUrl = null);
 /// main HTTPS forward is served under the VM's own public name, and the vault pages under the vault web address;
 /// null turns the shared listener off. <c>StartOnRequest</c>: opening a stopped or saved VM's HTTPS URL starts it.</summary>
 public sealed record HttpsConfig(int? SharedPort = null, bool StartOnRequest = true);
+/// <summary>
+/// The host's <c>backups</c> configuration section (docs/plans/host-config-backups.md §3.6).
+/// <c>IntervalHours</c> 0 turns scheduled backups off on this host; manual and pre-reinstall
+/// backups still work while <c>Enabled</c>. <c>MaxBytesPerVm</c> null means no per-VM quota.
+/// </summary>
+public sealed record BackupsConfig(bool Enabled = true, int IntervalHours = 24, int Keep = 4, int MaxKeep = 10,
+    int PinDays = 14, int RetainDeletedDays = 14, long MinFreeBytes = 5L << 30, long? MaxBytesPerVm = null);
 public sealed record MaintenanceMarker(MaintenanceState State, string? UpdateId, DateTimeOffset Since);
