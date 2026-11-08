@@ -407,12 +407,14 @@ now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # The ephemeral identity E and its recipient. E stays in this shell.
 AGE_RECIPIENT=""
 new_identity() {
-  local generated line
+  local generated
   generated="$(age-keygen 2>/dev/null)" || return 1
   E=""
-  while IFS= read -r line; do
-    if [[ "${line}" =~ ${IDENTITY_RE} ]]; then E="${line}"; fi
-  done <<<"${generated}"
+  # A regex match, not a here-string: older bash versions back here-strings
+  # with a temporary file, and E must never touch the disk.
+  if [[ "${generated}" =~ (^|$'\n')(AGE-SECRET-KEY-1[0-9A-Z]+)($'\n'|$) ]]; then
+    E="${BASH_REMATCH[2]}"
+  fi
   generated=""
   [[ -n "${E}" ]] || return 1
   AGE_RECIPIENT="$(printf '%s\n' "${E}" | age-keygen -y 2>/dev/null)" || return 1
