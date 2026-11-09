@@ -3172,7 +3172,8 @@ if ($RemoteInstall) {
 
     $chosenAgentPassword = $AgentPassword
     if (-not $PSBoundParameters.ContainsKey('AgentPassword')) {
-        if ($FromPanel) { $chosenAgentPassword = "agent" }
+        # Unattended (panel, -Auto, -NonInteractive): the seeded default, as Enter would keep.
+        if ($FromPanel -or $Auto -or $NonInteractive) { $chosenAgentPassword = "agent" }
         else {
             $chosenAgentPassword = Invoke-TuiInput -ScreenTitle "Agent user password" -Body @(
                 "Optional: login password for the 'agent' user. This is a manual-fallback",
@@ -4077,8 +4078,8 @@ if (-not $SkipCreateVm) {
     # defaults to the seeded password 'agent'. A different value is applied to the
     # agent user at the very end of provisioning.
     if (-not $PSBoundParameters.ContainsKey('AgentPassword')) {
-        if ($FromPanel) {
-            # Launched from the control panel: don't prompt. The panel deliberately
+        if ($FromPanel -or $Auto -or $NonInteractive) {
+            # Launched from the control panel or unattended: don't prompt. The panel deliberately
             # doesn't collect or store this credential (it's a manual-fallback login
             # only -- normal access is as root over the pre-seeded SSH key), so keep
             # the seeded default 'agent', exactly as pressing Enter would.

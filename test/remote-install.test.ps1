@@ -1364,6 +1364,13 @@ foreach ($Nested in @('', 'true', 'false')) {
     )
 }
 
+# ── The agent password prompt (manual fallback credential) ─────────────────
+# Unattended runs (-Auto, -NonInteractive, the panel) keep the seeded default instead of
+# prompting: both the local and the remote create path guard the prompt the same way.
+$pwPrompts = [regex]::Matches($aiTxt, '(?s)if \(\$FromPanel -or \$Auto -or \$NonInteractive\) \{[^}]*?\$chosenAgentPassword = "agent"')
+$pwTui = [regex]::Matches($aiTxt, 'Invoke-TuiInput -ScreenTitle "Agent user password"')
+ok "agent password: every prompt is skipped by -Auto / -NonInteractive / the panel" ($pwTui.Count -ge 2 -and $pwPrompts.Count -eq $pwTui.Count)
+
 # ── Summary ─────────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "==============================" -ForegroundColor Cyan
