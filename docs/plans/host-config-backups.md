@@ -253,7 +253,7 @@ setting; both updaters treat it as protected data. Layout:
 `<root>/<first 16 hex of sha256(lowercase owner)>/<lowercase vm>/<id>.age` (`<id>.age.partial`
 while uploading). Keys files live in the database.
 
-**Tables** (migration `M870_ConfigBackups`):
+**Tables** (migration `M880_ConfigBackups`):
 
 ```
 backups(id TEXT PRIMARY KEY, owner TEXT NOT NULL COLLATE NOCASE, vm TEXT NOT NULL COLLATE NOCASE,

@@ -171,8 +171,9 @@ unchanged_build() {
 cfg() { bash "$REPO/bin/config-set.sh" "$CONFIG_FILE" "$1" "$2"; }
 rewrite() {
 ''' + provision[begin:end] + '}\nrewrite\n'], check=True,
-            env={'PATH': os.environ['PATH'], 'REPO': str(repo), 'CONFIG_FILE': str(self.config), 'T3CODE_PATCHED': 'true'})
-        self.assertEqual('KEEP=value\nT3CODE_PATCHED=true\n', self.config.read_text())
+            env={'PATH': os.environ['PATH'], 'REPO': str(repo), 'CONFIG_FILE': str(self.config), 'T3CODE_PATCHED': 'true',
+                 'T3CODE_AUTO_APPROVE': 'false'})
+        self.assertEqual('KEEP=value\nT3CODE_PATCHED=true\nT3CODE_AUTO_APPROVE=false\n', self.config.read_text())
 
     def test_vm_probe_reads_legacy_preference(self):
         repo = Path(__file__).resolve().parents[1]

@@ -350,7 +350,7 @@ content or the guest's free-text detail.
 media directory; both updaters treat it as preserved data). Payloads live at
 `<root>/<first 16 hex of sha256(lowercase owner)>/<lowercase vm>/<id>.age`, `<id>.age.partial` while
 uploading; no directory on the way may be a link. Keys files and state live in the `backups` and
-`backup_vms` tables (migration 870). The upload is streamed, never buffered: the request lifts the
+`backup_vms` tables (migration 880). The upload is streamed, never buffered: the request lifts the
 server's body limit for itself, hashes and counts while writing, stops at `maxBytes` and re-checks
 the free space every 64 MiB, and holds a non-mutation maintenance handle (`backup-upload`) so an
 update drains it rather than cutting it off. Opening a session requires
@@ -803,7 +803,7 @@ exists; a timestamp requires an exact match. A conflict returns `409 config-conf
 | `virtualization` | `nestedDefault`, `nestedSelectable`, `minimumRamBytes` (Proxmox: the RAM auto-ballooning may shrink a running primary to; null = off, otherwise at least 1 GiB; omitted in a replacement = 6 GiB; changes apply to running VMs at once) | `true`, `true`, 6 GiB |
 | `updates` | `repository`, `channel`, `drainTimeoutMinutes`, `healthTimeoutSeconds` | `permissionBRICK/The-Construct`, `main`, 60 min, 120 s |
 | `vault` | `webUrl`: the https address phones use for the key vault's approval page, e.g. a reverse proxy with a trusted certificate that forwards `/vault/` and `/api/v1/vault/` here. An https origin with an optional port and no path, query or fragment (`http` only for a loopback host); it must not share an origin with any T3 Code address. Overrides `Constructd:VaultWebUrl` | null: `Constructd:VaultWebUrl`, else the service's own address |
-| `https` | `sharedPort`: the port (usually 443) on which each VM's main HTTPS forward is served under the VM's own name and the vault pages under the host of `vault.webUrl`; null = off; must not be inside a forward range or the API port. `startOnRequest`: opening a stopped or saved VM's HTTPS address starts it ([docs/https-forwards.md](../docs/https-forwards.md)) | null, `true` |
+| `https` | `sharedPort`: the port (usually 443) on which each VM's main HTTPS forward is served under the VM's own name, every HTTPS forward as `<vm>-<name>`, and the vault pages under the host of `vault.webUrl`; null = off; must not be inside a forward range or the API port. `startOnRequest`: opening a stopped or saved VM's HTTPS address starts it ([docs/https-forwards.md](../docs/https-forwards.md)) | null, `true` |
 
 When `capacity.ramHeadroomBytes` is null, RAM headroom is `max(1 GiB, total RAM / 8)`
 on Proxmox and `max(4 GiB, total RAM / 8)` on Hyper-V. A configured byte value,

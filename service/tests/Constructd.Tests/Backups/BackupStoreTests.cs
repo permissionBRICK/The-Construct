@@ -6,7 +6,7 @@ using Microsoft.Data.Sqlite;
 
 namespace Constructd.Tests.Backups;
 
-/// <summary>The SQLite store (migration M870) and the in-memory fake behave alike.</summary>
+/// <summary>The SQLite store (migration M880) and the in-memory fake behave alike.</summary>
 public sealed class BackupStoreTests : IDisposable
 {
     private readonly string _directory = Path.Combine(Path.GetTempPath(), "constructd-backup-store-" + Guid.NewGuid().ToString("n"));

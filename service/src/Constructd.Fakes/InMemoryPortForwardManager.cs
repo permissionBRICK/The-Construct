@@ -213,7 +213,8 @@ public sealed class InMemoryPortForwardManager : IPortForwardManager
                 Destination: destination,
                 Https: https is not null,
                 Main: https?.Main == true,
-                UpstreamTls: https?.UpstreamTls);
+                UpstreamTls: https?.UpstreamTls,
+                HttpsName: https?.Name);
 
             try
             {

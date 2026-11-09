@@ -777,7 +777,7 @@
       label.className = "fwd-label";
       label.textContent = item.label || (item.status === "error" ? item.message : "");
       if (item.status === "error" && item.message) label.title = item.message;
-      // A main HTTPS forward also answers on its own port; say where, selectable.
+      // An HTTPS forward served on the shared port also answers on its own port; say where, selectable.
       if (item.https === true && item.portUrl) {
         const alt = document.createElement("span");
         alt.className = "fwd-alt";

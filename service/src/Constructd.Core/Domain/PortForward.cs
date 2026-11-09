@@ -21,11 +21,16 @@ namespace Constructd.Core.Domain;
 /// </param>
 /// <param name="Main">
 /// This HTTPS forward is the VM's main web UI: the host's shared HTTPS port also serves it under the VM's
-/// own public name, without a port in the URL. The newest main forward of a VM wins.
+/// own public name, without a port in the URL. A VM has one open main forward; a second one is refused
+/// unless it asks to replace it, and then the newest one wins (docs/https-forwards.md).
 /// </param>
 /// <param name="UpstreamTls">
 /// Whether the VM port itself speaks TLS (the host then connects with TLS and does not verify the guest's
 /// certificate). Null: detected on the first connection and remembered for a while.
+/// </param>
+/// <param name="HttpsName">
+/// The HTTPS forward's own name: the shared HTTPS port serves it as <c>&lt;vm&gt;-&lt;name&gt;</c> under the host's
+/// per-VM name pattern (<c>Constructd.Core.Logic.HttpsForwardNames</c>). Null means the default, the VM port.
 /// </param>
 public sealed record PortForward(
     string Id,
@@ -39,10 +44,11 @@ public sealed record PortForward(
     ForwardDestination? Destination = null,
     bool Https = false,
     bool Main = false,
-    bool? UpstreamTls = null);
+    bool? UpstreamTls = null,
+    string? HttpsName = null);
 
 /// <summary>What makes a host forward an HTTPS forward (docs/https-forwards.md).</summary>
-public sealed record HttpsForwardOptions(bool Main = false, bool? UpstreamTls = null);
+public sealed record HttpsForwardOptions(bool Main = false, bool? UpstreamTls = null, string? Name = null);
 
 /// <summary>
 /// The client half of a forward: the extension opened <see cref="LocalPort"/> on the user's PC, or

@@ -358,6 +358,11 @@ else
     run_setup >"${tmp}/run5d.out" 2>&1
   ok "disable + forwarded port: the origin uses the VM's public host name" \
     test "$(cfgval T3CODE_PUBLIC_BASE_URL)" = "http://work-vm.vpn.example:2305"
+  # ...and a forward's own host name, when provisioning states one, wins over it.
+  T3CODE_HTTPS=false T3CODE_PUBLIC_PORT=2305 CONSTRUCT_EXTERNAL_HOST=work-vm.vpn.example \
+    T3CODE_PUBLIC_HOST=work-vm-5177.vpn.example run_setup >"${tmp}/run5d2.out" 2>&1
+  ok "disable + forwarded host: the origin uses the forward's own host" \
+    test "$(cfgval T3CODE_PUBLIC_BASE_URL)" = "http://work-vm-5177.vpn.example:2305"
   # THE ZERO-CHANGE CONTROL: without a forwarded port the key is cleared, exactly as before.
   T3CODE_HTTPS=false run_setup >"${tmp}/run5e.out" 2>&1
   ok "disable without a forwarded port: the public base URL is cleared (unchanged)" \
@@ -381,6 +386,11 @@ else
     grep -qx "T3CODE_PUBLIC_BASE_URL=https://testvm.mshome.net:2302" "${STATUS}"
   ok "https + forwarded port: nginx still LISTENS on T3CODE_HTTPS_PORT, not the forward" \
     sh -c "grep -q 'listen 0.0.0.0:5178 ssl' '${SITE}' && ! grep -q ':2302' '${SITE}'"
+  # A forward served under its own name (an HTTPS forward on the host's shared port that is not
+  # the VM's main one, docs/https-forwards.md): the origin uses THAT host, not the VM's.
+  T3CODE_HTTPS=true T3CODE_PUBLIC_PORT=443 T3CODE_PUBLIC_HOST=work-vm-5178.vms.example run_setup >"${tmp}/run6d.out" 2>&1
+  ok "https + forwarded host: the advertised origin uses the forward's own host" \
+    test "$(cfgval T3CODE_PUBLIC_BASE_URL)" = "https://work-vm-5178.vms.example"
   # The control: no forwarded port -> the listener's own port, byte-identical to before.
   T3CODE_HTTPS=true run_setup >"${tmp}/run6c.out" 2>&1
   ok "https without a forwarded port: the advertised origin is the listener's port" \

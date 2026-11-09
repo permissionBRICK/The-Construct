@@ -219,7 +219,8 @@ public sealed class TcpRelayPortForwardManager : IPortForwardManager, IAsyncDisp
                 Destination: destination,
                 Https: https is not null,
                 Main: https?.Main == true,
-                UpstreamTls: https?.UpstreamTls);
+                UpstreamTls: https?.UpstreamTls,
+                HttpsName: https?.Name);
 
             try
             {

@@ -4,9 +4,9 @@ namespace Constructd.Sqlite.Migrations;
 // Host-stored config backups (docs/plans/host-config-backups.md §3.6). Keyed by owner and VM name, with no
 // foreign key to vms: backups outlive the VM so a reinstalled VM of the same owner and name finds them.
 // The payloads are files under Constructd:Backups:RootDir; the keys files live here.
-public sealed class M870_ConfigBackups : ISqliteMigration
+public sealed class M880_ConfigBackups : ISqliteMigration
 {
-    public int Id => 870;
+    public int Id => 880;
     public string Name => "config-backups";
     public bool Breaking => false;
     public void Apply(SqliteConnection connection, SqliteTransaction transaction)

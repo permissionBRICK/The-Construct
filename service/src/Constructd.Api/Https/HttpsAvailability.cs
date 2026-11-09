@@ -1,6 +1,7 @@
 using Constructd.Core.Abstractions;
 using Constructd.Core.Configuration;
 using Constructd.Core.Domain;
+using Constructd.Core.Logic;
 
 namespace Constructd.Api.Https;
 
@@ -8,7 +9,12 @@ namespace Constructd.Api.Https;
 /// <param name="Reason">Null when available; otherwise a stable code (see <see cref="HttpsAvailability"/>).</param>
 /// <param name="Message">What an owner or admin would change, null when available.</param>
 /// <param name="MainAddress">The address a main forward gets on the shared port, when there is one.</param>
-public sealed record HttpsAvailabilityResult(bool Available, string? Reason, string? Message, string? MainAddress);
+/// <param name="NamedAddress">
+/// What a forward's own address on the shared port looks like, with <c>{name}</c> standing for its name
+/// (<c>https://work-vm-{name}.vms.example/</c>), when forwards are served there by name. Braces rather than angle
+/// brackets, which JSON encoders escape.
+/// </param>
+public sealed record HttpsAvailabilityResult(bool Available, string? Reason, string? Message, string? MainAddress, string? NamedAddress = null);
 
 /// <summary>
 /// THE ONE RULE FOR "MAY THIS VM PUBLISH AN HTTPS FORWARD" (docs/https-forwards.md). Every condition has to
@@ -49,10 +55,24 @@ public static class HttpsAvailability
             return No("not-allowed", $"HTTPS forwards are not enabled for '{vm.Owner}'. A host admin allows them per user.");
 
         string? mainAddress = null;
-        var https = await config.GetAsync<HttpsConfig>("https", ct).ConfigureAwait(false) ?? HostAdminDefaults.Https;
-        if (https.SharedPort is int shared && !string.IsNullOrWhiteSpace(options.PublicHostPattern))
-            mainAddress = shared == 443 ? $"https://{publicHost}/" : $"https://{publicHost}:{shared}/";
-        return new(true, null, null, mainAddress);
+        string? namedAddress = null;
+        // Only a shared port whose listener is up is advertised (HttpsGateway.ServingSharedPortAsync).
+        var gateway = services.GetService<HttpsGateway>();
+        var serving = gateway is null ? null : await gateway.ServingSharedPortAsync(ct).ConfigureAwait(false);
+        if (serving is int shared && !string.IsNullOrWhiteSpace(options.PublicHostPattern))
+        {
+            var port = shared == 443 ? "" : $":{shared}";
+            mainAddress = $"https://{publicHost}{port}/";
+            // Rendered with a real name so the pattern and the certificate are checked, then shown with a placeholder.
+            const string probe = "name";
+            if (HttpsForwardNames.Host(options.PublicHostPattern, options.PublicHost, vm.Name, probe) is { } named && certificate.Covers(named))
+            {
+                var label = HttpsForwardNames.Label(vm.Name, probe);
+                namedAddress = $"https://{named.Replace(label, HttpsForwardNames.Label(vm.Name, "{name}"), StringComparison.OrdinalIgnoreCase)}{port}/";
+            }
+        }
+
+        return new(true, null, null, mainAddress, namedAddress);
     }
 
     private static HttpsAvailabilityResult No(string reason, string message) => new(false, reason, message, null);
