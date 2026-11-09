@@ -251,7 +251,12 @@ require_service() {
   unset token
 }
 
-urlencode() { jq -nr --arg value "$1" '$value | @uri'; }
+urlencode() {
+  # Instance names are [a-z0-9-]; without jq (before provisioning installed it) such a
+  # value needs no encoding.
+  if [[ "$1" =~ ^[A-Za-z0-9._~-]+$ ]]; then printf '%s' "$1"; return 0; fi
+  jq -nr --arg value "$1" '$value | @uri'
+}
 backups_path() { printf '/api/v1/vms/%s/backups' "$(urlencode "${INSTANCE_NAME}")"; }
 
 API_STATUS=""
@@ -334,6 +339,23 @@ api_fail() {
   exit "$(failure_exit_code)"
 }
 
+# Tell the host a key was enrolled, so it clears a "no-recipients" failure and asks for a
+# backup again at once. Best-effort and silent on a VM without a host service yet (the
+# early enrolment of a fresh VM) or on a host that does not know the result (400).
+report_enrolled() {
+  [[ -n "${SERVICE_URL}" && -r "${VM_TOKEN_FILE}" ]] || return 0
+  local token
+  token="$(head -n 1 "${VM_TOKEN_FILE}" 2>/dev/null | tr -d '\r\n' || true)"
+  [[ -n "${token}" ]] || return 0
+  ensure_work_dir
+  AUTH_HEADER_FILE="${WORK_DIR}/auth.headers"
+  ( umask 077; printf 'Authorization: %s %s\n' "${AUTH_SCHEME}" "${token}" >"${AUTH_HEADER_FILE}" )
+  unset token
+  api_call POST "$(backups_path)/report" '{"trigger":"manual","result":"enrolled","reason":"recipient-added","detail":""}'
+  api_ok || msg "the host was not told about the enrolment ($(describe_failure)); a backup that failed for lack of a key clears with the next successful one"
+  return 0
+}
+
 report() { # <result> <reason> <detail>
   local body
   body="$(jq -cn --arg trigger "${CREATE_TRIGGER}" --arg result "$1" --arg reason "$2" --arg detail "${3:0:500}" \
@@ -380,7 +402,22 @@ key_fingerprint() {
 recipient_meta() { # <fp> <field>
   local json="${RECIPIENTS_DIR}/$1.json"
   [[ -f "${json}" ]] || return 0
-  jq -r --arg f "$2" 'if type == "object" and (.[$f] | type) == "string" then .[$f] else empty end' "${json}" 2>/dev/null || true
+  if command -v jq >/dev/null 2>&1; then
+    jq -r --arg f "$2" 'if type == "object" and (.[$f] | type) == "string" then .[$f] else empty end' "${json}" 2>/dev/null || true
+  else
+    # Before provisioning installed jq (the early enrolment): the files this script writes
+    # hold one flat object of plain strings.
+    sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "${json}" 2>/dev/null | head -n 1 || true
+  fi
+}
+
+# A JSON string literal without jq: backslash and quote escaped, control characters dropped.
+json_str() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="$(printf '%s' "${s}" | tr -d '\000-\037')"
+  printf '"%s"' "${s}"
 }
 
 RECIP_FPS=()
@@ -1095,7 +1132,7 @@ install_recipient() { # <pem> <fp> <label> <addedAt or ""> <add|restore>
     mv -f "${RECIPIENTS_DIR}/.${fp}.pem.tmp" "${RECIPIENTS_DIR}/${fp}.pem"
   fi
   [[ -n "${added}" ]] || added="$(now_iso)"
-  jq -n --arg label "${label}" --arg addedAt "${added}" '{label:$label,addedAt:$addedAt}' \
+  printf '{"label":%s,"addedAt":%s}\n' "$(json_str "${label}")" "$(json_str "${added}")" \
     >"${RECIPIENTS_DIR}/.${fp}.json.tmp"
   chmod 0644 "${RECIPIENTS_DIR}/.${fp}.json.tmp"
   mv -f "${RECIPIENTS_DIR}/.${fp}.json.tmp" "${RECIPIENTS_DIR}/${fp}.json"
@@ -1252,9 +1289,9 @@ cmd_get() { # <list|status>
 cmd_recipients() {
   local sub="${1:-}"
   if [[ $# -gt 0 ]]; then shift; fi
-  need_tools openssl jq sha256sum
   case "${sub}" in
     list)
+      need_tools openssl jq sha256sum
       [[ $# -eq 0 ]] || usage_fail "usage: construct backup recipients list"
       local pem fp
       {
@@ -1280,6 +1317,8 @@ cmd_recipients() {
         shift
       done
       [[ -n "${have_label}" ]] || usage_fail "usage: construct backup recipients add --label LABEL (PEM on stdin)"
+      # openssl and coreutils only: provisioning enrols the PC's key before provision.sh has
+      # installed anything (jq included), so the heartbeat never finds a VM without a key.
       [[ "${label}" =~ ${LABEL_RE} ]] || usage_fail "a label is 1-64 characters from A-Z, a-z, 0-9, dot, underscore, space and hyphen"
       ensure_work_dir
       in="${WORK_DIR}/recipient.pem"
@@ -1300,6 +1339,7 @@ cmd_recipients() {
         *) msg "cannot write the recipient to ${RECIPIENTS_DIR}"; exit "${EXIT_STEP}" ;;
       esac
       msg "enrolled ${label} (${fp})"
+      report_enrolled
       printf '%s\n' "${fp}"
       ;;
     remove)

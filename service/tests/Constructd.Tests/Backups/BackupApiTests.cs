@@ -440,6 +440,40 @@ public sealed class BackupApiTests
     }
 
     [Fact]
+    public async Task An_enrolment_clears_a_missing_key_failure_and_makes_the_vm_due_again()
+    {
+        using var h = await BackupHarness.CreateAsync();
+        // The first scheduled run found no key: a failure streak, and the next try would wait.
+        Assert.Equal(HttpStatusCode.NoContent, (await h.Guest.PostAsJsonAsync("/api/v1/vms/dev/backups/report",
+            new { trigger = "scheduled", result = "skipped", reason = "no-recipients", detail = "" })).StatusCode);
+        Assert.NotNull((await h.GetAsync("/status"))["failingSince"]);
+        Assert.Empty(await h.HeartbeatAsync());
+
+        // A PC enrols: the failure and its streak are gone, and the next heartbeat asks again.
+        Assert.Equal(HttpStatusCode.NoContent, (await h.Guest.PostAsJsonAsync("/api/v1/vms/dev/backups/report",
+            new { trigger = "manual", result = "enrolled", reason = "recipient-added", detail = "" })).StatusCode);
+        var view = await h.GetAsync("/status");
+        Assert.Null(view["failingSince"]);
+        Assert.Null(view["lastFailure"]);
+        Assert.Equal("scheduled", (await h.HeartbeatAsync())["backupTrigger"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task An_enrolment_leaves_other_failures_alone()
+    {
+        using var h = await BackupHarness.CreateAsync();
+        Assert.Equal(HttpStatusCode.NoContent, (await h.Guest.PostAsJsonAsync("/api/v1/vms/dev/backups/report",
+            new { trigger = "scheduled", result = "skipped", reason = "vm-disk-space", detail = "" })).StatusCode);
+        var before = await h.GetAsync("/status");
+        Assert.Equal(HttpStatusCode.NoContent, (await h.Guest.PostAsJsonAsync("/api/v1/vms/dev/backups/report",
+            new { trigger = "manual", result = "enrolled", reason = "recipient-added", detail = "" })).StatusCode);
+        var after = await h.GetAsync("/status");
+        Assert.Equal("vm-disk-space", after["lastFailure"]!["reason"]!.GetValue<string>());
+        Assert.Equal(before["failingSince"]!.GetValue<DateTimeOffset>(), after["failingSince"]!.GetValue<DateTimeOffset>());
+        Assert.Empty(await h.HeartbeatAsync());
+    }
+
+    [Fact]
     public async Task A_pre_reinstall_backup_is_pinned_until_restored_and_survives_rotation_meanwhile()
     {
         using var h = await BackupHarness.CreateAsync();

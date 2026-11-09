@@ -160,7 +160,7 @@ documented output.
 | `list` | – | host JSON | `GET …/backups` |
 | `status` | – | host JSON | `GET …/backups/status` |
 | `recipients list` | – | JSON array `[{"fingerprint","label","addedAt"}]` | |
-| `recipients add --label <l>` | PEM | the fingerprint | validates an RSA key ≥ 3072 bits, writes `/etc/construct/backup-recipients/<fp>.pem` (0644) and `<fp>.json` (`{label, addedAt}`); idempotent |
+| `recipients add --label <l>` | PEM | the fingerprint | validates an RSA key ≥ 3072 bits, writes `/etc/construct/backup-recipients/<fp>.pem` (0644) and `<fp>.json` (`{label, addedAt}`); idempotent; needs only openssl and coreutils; on a VM with a host service it reports `result: "enrolled"` (best-effort) |
 | `recipients remove <fp>` | – | – | |
 | `estimate` | – | `{"needBytes","freeBytes","reserveBytes","reflink","ok"}` | |
 | `restore-extras <tarball>` (hidden) | – | – | only the restore extras below, for the provisioning path that ran `restore-config.sh` itself |
@@ -228,7 +228,7 @@ sees none. Problems use `CodedProblems.Create` (the `code` extension is the cont
 | `PUT …/backups/{id}/keys` | VM | keys JSON → `204`; `400 validation`; `409 backup-not-open` |
 | `PUT …/backups/{id}/content` | VM | `application/octet-stream`, streamed (chunked or with length) → `200 {"id","sizeBytes","sha256","createdAt"}`; `409 backup-keys-missing` / `backup-not-open`; `413 backup-too-large`; `507 host-disk-space`. Any failure deletes the partial file and closes the session as failed |
 | `DELETE …/backups/{id}` | VM (only its own open session) / user (any) | `204`; `404` |
-| `POST …/backups/report` | VM | `{"trigger","result":"skipped"\|"failed","reason","detail"}` (detail ≤ 500 chars) → `204` |
+| `POST …/backups/report` | VM | `{"trigger","result":"skipped"\|"failed"\|"enrolled","reason","detail"}` (detail ≤ 500 chars) → `204`. `enrolled` (sent by `recipients add`) clears a `no-recipients` failure, its streak and the attempt time, so the next heartbeat asks for a backup again |
 | `POST …/backups/{id}/restored` | VM | → `204`; clears `pinnedUntil` |
 | `GET …/backups` | VM, user | `{"backups":[{"id","createdAt","trigger","sizeBytes","sha256","pinnedUntil"}]}`, complete only, newest first |
 | `GET …/backups/{id}/content` | VM, user | the payload, `Content-Length`, `ETag: "<sha256>"` |
@@ -349,8 +349,12 @@ with `StandardOutput.BaseStream` / `StandardInput.BaseStream` copied to or from 
 `lib/AgentVm.Backup.ps1`), which works in Windows PowerShell 5.1 and PowerShell 7. `E` is
 written to the process stdin first and never logged.
 
-**Provisioning** enrols the PC key after `provision.sh` installed the CLI (both local and remote
-VMs; a failure is a warning, not a provisioning error).
+**Provisioning** enrols the PC key *before* `provision.sh` runs, with the repository's own
+`bash /opt/construct/repo/bin/construct-backup.sh recipients add` (openssl and coreutils only, so
+it works on a fresh VM). `provision.sh` installs the heartbeat, and a VM never backed up is due at
+once: a key enrolled only afterwards came too late and the first scheduled run failed with
+`no-recipients`. When that early step fails, provisioning retries with the installed CLI after
+`provision.sh` (both local and remote VMs; a failure is a warning, not a provisioning error).
 
 **Remote reinstall** (`Auto-Install.ps1`, remote branch), when the host advertises
 `config-backups`:

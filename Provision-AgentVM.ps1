@@ -3150,6 +3150,25 @@ if ($deferProjectCommands) { $envPrefix += " DEFER_PROJECT_COMMANDS='true'" }
 # resume of the T3 threads this run interrupts for that boot instead of starting it now.
 $rebootAfterArg = if ($script:UseRootKey) { "false" } else { "true" }
 $envPrefix += " REBOOT_AFTER_PROVISION='$rebootAfterArg'"
+
+# This PC's backup key goes onto the VM BEFORE provision.sh: provision.sh installs the
+# heartbeat, and a VM that has never been backed up is due for one at once, so a key
+# enrolled only afterwards came too late and the first scheduled run failed with
+# no-recipients. The repository's own script needs only openssl and coreutils, so this
+# works on a fresh VM too. Never a provisioning error: the step after provision.sh tries
+# again (with the installed CLI) when this one did not get through.
+$script:BackupKeyEnrolled = $false
+if (Get-Command Register-ConstructBackupPcKey -ErrorAction SilentlyContinue) {
+    Write-Step "Enrolling this PC's backup key on the VM"
+    try {
+        $enrolledKey = Register-ConstructBackupPcKey -Connection (Get-BackupConnection) -Cli 'bash /opt/construct/repo/bin/construct-backup.sh'
+        $script:BackupKeyEnrolled = $true
+        Write-Ok "Backup key '$($enrolledKey.Label)' enrolled ($($enrolledKey.Fingerprint.Substring(0, 16))...)"
+    } catch {
+        Write-Host "    Not yet ($($_.Exception.Message)); trying again after provisioning." -ForegroundColor DarkGray
+    }
+}
+
 Write-Host "  --- live provisioning output ---" -ForegroundColor DarkGray
 $provisionStream = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "$tokenExport$envPrefix bash /opt/construct/repo/bin/provision.sh$tokenCleanup"
 Write-Host "  --- end provisioning output ---" -ForegroundColor DarkGray
@@ -3187,10 +3206,10 @@ if ($provisionStream.ExitCode -eq 3) {
     Write-Ok "Provisioning finished cleanly"
 }
 
-# This PC's backup key goes onto every VM it provisions, local or remote, now that
-# provision.sh has installed the CLI: the VM's backups are then made for this PC too.
-# Never a provisioning error.
-if (Get-Command Register-ConstructBackupPcKey -ErrorAction SilentlyContinue) {
+# This PC's backup key goes onto every VM it provisions, local or remote: the VM's backups
+# are then made for this PC too. Normally done before provision.sh (above); this is the
+# retry with the CLI provision.sh installed. Never a provisioning error.
+if (-not $script:BackupKeyEnrolled -and (Get-Command Register-ConstructBackupPcKey -ErrorAction SilentlyContinue)) {
     Write-Step "Enrolling this PC's backup key on the VM"
     try {
         $enrolledKey = Register-ConstructBackupPcKey -Connection (Get-BackupConnection)

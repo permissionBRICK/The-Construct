@@ -260,6 +260,9 @@ guest create --trigger manual >/dev/null 2>&1
 ok 'create without recipients exits 3' test "$?" = 3
 status="$(admin GET "/vms/${VM}/backups/status")"
 ok 'status shows the no-recipients failure' sh -c "printf '%s' '${status}' | jq -e '.lastFailure.reason == \"no-recipients\" and .failingSince != null and .requestPending == false' >/dev/null"
+guest recipients add --label e2e-pc <"${tmp}/pckey/pub.pem" >/dev/null 2>&1
+status="$(admin GET "/vms/${VM}/backups/status")"
+ok 'enrolling a key clears the no-recipients failure on the host' sh -c "printf '%s' '${status}' | jq -e '.lastFailure == null and .failingSince == null' >/dev/null"
 
 # ── 10. another user's token sees nothing ────────────────────────────────────
 other_vm_token_status="$(curl -sS -o /dev/null -w '%{http_code}' -H 'Authorization: VmToken not-a-token' "${BASE}/api/v1/vms/${VM}/backups")"

@@ -129,6 +129,23 @@ public sealed class BackupCoordinator(IBackupStore store, IBackupFiles files, IH
         }, ct).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// A PC key was enrolled on the VM. When the last run failed for lack of one
+    /// (<c>no-recipients</c>), that failure and its streak are cleared and the attempt is
+    /// forgotten, so the next heartbeat asks for a backup again instead of waiting for the
+    /// retry delay. Returns whether anything was cleared.
+    /// </summary>
+    public async Task<bool> RecordEnrolmentLockedAsync(string owner, string vm, CancellationToken ct)
+    {
+        var state = await store.GetVmAsync(owner, vm, ct).ConfigureAwait(false);
+        if (state?.LastFailure is not { Reason: NoRecipientsReason }) return false;
+        await store.SaveVmAsync(state with { LastFailure = null, FailingSince = null, LastAttemptAt = null }, ct).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>The reason a guest reports when no PC key is enrolled on it.</summary>
+    public const string NoRecipientsReason = "no-recipients";
+
     private void TryPrune(string owner, string vm)
     {
         try { files.PruneDirectory(owner, vm); }

@@ -50,6 +50,9 @@ Write-Host '=== Guest command lines ===' -ForegroundColor Cyan
 ok 'cli: plain arguments stay bare' ((Format-ConstructBackupCommand @('restore', '--stdin', '--expect-id', ('a' * 32))) -ceq "construct backup restore --stdin --expect-id $('a' * 32)")
 ok 'cli: a label with a space is single-quoted' ((Format-ConstructBackupCommand @('recipients', 'add', '--label', 'Desk PC')) -ceq "construct backup recipients add --label 'Desk PC'")
 ok "cli: an apostrophe cannot break out" ((Format-ConstructBackupCommand @('x', "it's")) -ceq "construct backup x 'it'\''s'")
+ok 'cli: -Cli replaces the command (the repository script before provision.sh)' (
+    (Format-ConstructBackupCommand @('recipients', 'add', '--label', 'Desk PC') -Cli 'bash /opt/construct/repo/bin/construct-backup.sh') -ceq
+    "bash /opt/construct/repo/bin/construct-backup.sh recipients add --label 'Desk PC'")
 $direct = Get-ConstructBackupRemoteCommand -Command 'construct backup list' -Direct
 ok 'remote: as root it is a non-login bash -c' ($direct.StartsWith("bash -c '") -and $direct -notmatch 'bash -lc' -and $direct -notmatch 'sudo')
 ok 'remote: ...with a fixed PATH and HOME' ($direct -match 'export HOME=/root PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin;')
@@ -515,19 +518,44 @@ $env:LOCALAPPDATA = Join-Path $tmp 'localappdata'
 Write-Host ''
 Write-Host '=== Provision-AgentVM.ps1: provisioning with a host backup ===' -ForegroundColor Cyan
 $provText = $provAst.Extent.Text
+$iProvisionSh = $provText.IndexOf('$provisionStream = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "$tokenExport$envPrefix bash /opt/construct/repo/bin/provision.sh')
+$iEarly = $provText.IndexOf("-Cli 'bash /opt/construct/repo/bin/construct-backup.sh'")
 $iCheck = $provText.IndexOf('} elseif ($script:ProvisionResult.ErrorCount -ne 0) {')
-$iEnrol = $provText.IndexOf("Write-Step `"Enrolling this PC's backup key on the VM`"`n    try {")
+$iRetry = $provText.IndexOf("if (-not `$script:BackupKeyEnrolled -and (Get-Command Register-ConstructBackupPcKey -ErrorAction SilentlyContinue)) {")
 $iRestore = $provText.IndexOf('# Restore a saved config onto the freshly provisioned VM')
-ok 'enrol: provisioning enrols after provision.sh''s result and before the restore' ($iCheck -gt 0 -and $iEnrol -gt $iCheck -and $iRestore -gt $iEnrol)
-$enrolIf = $provAst.Find({ param($n) $n -is [System.Management.Automation.Language.IfStatementAst] -and
+ok 'enrol: provisioning enrols with the repository''s script BEFORE provision.sh installs the heartbeat' ($iEarly -gt 0 -and $iProvisionSh -gt $iEarly)
+ok 'enrol: ...and retries with the installed CLI after provision.sh''s result, before the restore, only when that failed' (
+    $iCheck -gt 0 -and $iRetry -gt $iCheck -and $iRestore -gt $iRetry)
+$earlyIf = $provAst.Find({ param($n) $n -is [System.Management.Automation.Language.IfStatementAst] -and
     $n.Clauses[0].Item1.Extent.Text -eq 'Get-Command Register-ConstructBackupPcKey -ErrorAction SilentlyContinue' }, $true)
-ok 'enrol: the step exists' ($null -ne $enrolIf)
-if ($enrolIf) {
-    function Register-ConstructBackupPcKey { param($Connection) throw 'guest has no construct backup' }
+$enrolIf = $provAst.Find({ param($n) $n -is [System.Management.Automation.Language.IfStatementAst] -and
+    $n.Clauses[0].Item1.Extent.Text -eq '-not $script:BackupKeyEnrolled -and (Get-Command Register-ConstructBackupPcKey -ErrorAction SilentlyContinue)' }, $true)
+ok 'enrol: both steps exist' ($null -ne $earlyIf -and $null -ne $enrolIf)
+ok 'enrol: the provisioner starts with the key not enrolled' ($provText.IndexOf('$script:BackupKeyEnrolled = $false') -gt 0 -and $provText.IndexOf('$script:BackupKeyEnrolled = $false') -lt $iEarly)
+if ($earlyIf -and $enrolIf) {
+    function Get-BackupConnection { return 'connection' }
+    # The early step uses the repository's script; a failure there is quiet and leaves the retry armed.
+    $script:cliSeen = $null
+    function Register-ConstructBackupPcKey { param($Connection, $Cli) $script:cliSeen = $Cli; throw 'no openssl yet' }
+    $script:BackupKeyEnrolled = $false   # as the provisioner sets it right before the step
+    $warnings = @(. ([scriptblock]::Create($earlyIf.Extent.Text)) 3>&1 | ForEach-Object { [string]$_ })
+    ok 'enrol early: the repository''s construct-backup.sh, as root' ($script:cliSeen -eq 'bash /opt/construct/repo/bin/construct-backup.sh')
+    ok 'enrol early: a failure is no warning and leaves the retry armed' ($warnings.Count -eq 0 -and $script:BackupKeyEnrolled -eq $false)
+    # Success there skips the retry.
+    function Register-ConstructBackupPcKey { param($Connection, $Cli) return [pscustomobject]@{ Label = 'pc'; Fingerprint = ('a' * 64) } }
+    . ([scriptblock]::Create($earlyIf.Extent.Text))
+    ok 'enrol early: success marks the key enrolled' ($script:BackupKeyEnrolled -eq $true)
+    $script:retried = $false
+    function Register-ConstructBackupPcKey { param($Connection, $Cli) $script:retried = $true; throw 'x' }
+    . ([scriptblock]::Create($enrolIf.Extent.Text))
+    ok 'enrol retry: skipped when the early step got through' (-not $script:retried)
+    # The retry after a failed early step: a failure is a warning, not a provisioning error.
+    $script:BackupKeyEnrolled = $false
+    function Register-ConstructBackupPcKey { param($Connection, $Cli) throw 'guest has no construct backup' }
     $warnings = @()
     & { . ([scriptblock]::Create($enrolIf.Extent.Text)) } 3>&1 | ForEach-Object { $warnings += [string]$_ }
-    ok 'enrol: a failure is a warning, not a provisioning error' (($warnings -join ' ') -match 'Could not enrol' -and ($warnings -join ' ') -match 'backup-enroll')
-    Remove-Item function:Register-ConstructBackupPcKey
+    ok 'enrol retry: a failure is a warning, not a provisioning error' (($warnings -join ' ') -match 'Could not enrol' -and ($warnings -join ' ') -match 'backup-enroll')
+    Remove-Item function:Register-ConstructBackupPcKey, function:Get-BackupConnection
 }
 ok 'defer: a host backup defers the project phase like a PC backup' ($provText -match '\$deferProjectCommands = \[bool\]\(\(\$RestoreDir -and \(Test-Path -LiteralPath \(Join-Path \$RestoreDir "backup.tar.gz"\)\)\) -or \$RestoreHostBackupId\)')
 ok 'skip: backup actions neither pack nor fetch the repository' (

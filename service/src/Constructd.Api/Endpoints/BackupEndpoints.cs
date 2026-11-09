@@ -182,12 +182,19 @@ public static partial class BackupEndpoints
         var (vm, failure) = await VmAsync(name, Policies.VmSelfOrOwnerOrAdmin, http, vms, authorization, ct);
         if (vm is null) return failure!;
         if (!BackupTriggers.IsValid(request?.Trigger)) return CodedProblems.Validation("trigger", "Expected scheduled, manual or pre-reinstall.");
-        if (request!.Result is not ("skipped" or "failed")) return CodedProblems.Validation("result", "Expected skipped or failed.");
+        if (request!.Result is not ("skipped" or "failed" or "enrolled")) return CodedProblems.Validation("result", "Expected skipped, failed or enrolled.");
         if (request.Reason is not { } reason || !ReasonPattern().IsMatch(reason))
             return CodedProblems.Validation("reason", "Expected a reason code (lowercase letters, digits and hyphens).");
         if (request.Detail is { Length: > MaxDetail }) return CodedProblems.Validation("detail", $"At most {MaxDetail} characters.");
 
         await using var held = await backups.LockAsync(vm.Owner, vm.Name, ct);
+        if (request.Result == "enrolled")
+        {
+            // A PC key was enrolled on the VM: a run that failed for lack of one is over.
+            var cleared = await backups.RecordEnrolmentLockedAsync(vm.Owner, vm.Name, ct);
+            CodedProblems.Audit(http, "backup.report", vm.Owner, extra: $"result=enrolled, cleared={(cleared ? "no-recipients" : "nothing")}");
+            return Results.NoContent();
+        }
         await backups.RecordFailureLockedAsync(vm.Owner, vm.Name, request.Trigger!, reason, request.Detail, ct);
         CodedProblems.Audit(http, "backup.report", vm.Owner, extra: $"trigger={request.Trigger}, result={request.Result}, reason={reason}");
         return Results.NoContent();

@@ -60,8 +60,11 @@ PC never stores it), so whoever can upload a backup in the VM's name already con
 - a VM provisioned by a Construct version that has `construct backup` (an older VM: the next
   reprovision installs it);
 - at least one PC key **enrolled** on the VM. Every provision enrols the key of the PC that
-  runs it, on local and remote VMs alike; a failure there is a warning, not a provisioning
-  error. Until some PC is enrolled, scheduled backups fail with `no-recipients`.
+  runs it, on local and remote VMs alike, before the VM's heartbeat can ask for its first
+  backup; a failure there is a warning, not a provisioning error. Until some PC is enrolled,
+  scheduled backups fail with `no-recipients`; enrolling a key later (a reprovision, or
+  **Enrol this PC** in the panel) clears that warning at once and the next backup follows
+  within minutes.
 
 **Status and warnings.** The Backups module shows the last backup and, while backups fail,
 a warning; the Companion raises one Windows notification per failure streak. The reasons a
