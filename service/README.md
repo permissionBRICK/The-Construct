@@ -322,7 +322,9 @@ session of the VM is open, and either an
 owner's request is pending (less than an hour old; due even when the VM is busy), or the effective
 interval is above 0, the last success is at least one interval old (no success yet: due since the VM
 was created) and the last attempt at least `min(interval, 6 h)` old. A due scheduled backup waits for
-a heartbeat with `busy: false` until it has been due for six hours. The rule is
+a heartbeat without work in progress until it has been due for six hours; an open SSH connection
+alone (`reasons: ["ssh-session"]`, e.g. the client's notification watch) does not count as work
+(`BackupSchedule.BusyForBackup`). The rule is
 `Core/Logic/BackupSchedule.cs`; the guest decides nothing on its own.
 
 | Route | Caller | Request → reply |

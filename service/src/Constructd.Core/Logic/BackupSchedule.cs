@@ -35,6 +35,21 @@ public static class BackupSchedule
     public static int EffectiveKeep(BackupsConfig host, BackupVmState? vm) =>
         Math.Clamp(vm?.Keep ?? host.Keep, 1, Math.Max(1, host.MaxKeep));
 
+    /// <summary>The heartbeat reason for an open SSH connection (bin/construct-idle-report.sh).</summary>
+    public const string SshSessionReason = "ssh-session";
+
+    /// <summary>
+    /// Whether a heartbeat counts as busy for a scheduled backup. An open SSH connection alone does
+    /// not: the client's own notification watch keeps one open to every VM it knows, and the
+    /// backup's online snapshots are safe beside an interactive session. Agent turns, T3 threads and
+    /// provisioning still make it wait. A busy heartbeat without reasons (an older guest) is busy.
+    /// </summary>
+    public static bool BusyForBackup(bool busy, IReadOnlyCollection<string> reasons)
+    {
+        ArgumentNullException.ThrowIfNull(reasons);
+        return busy && (reasons.Count == 0 || reasons.Any(r => !string.Equals(r, SshSessionReason, StringComparison.Ordinal)));
+    }
+
     public static bool RequestPending(BackupVmState? vm, DateTimeOffset now) =>
         vm?.RequestPendingAt is { } at && now - at < RequestLifetime;
 

@@ -155,9 +155,9 @@ internal sealed class BackupHarness : IDisposable
         return body["id"]!.GetValue<string>();
     }
 
-    public async Task<JsonObject> HeartbeatAsync(bool busy = false, HttpClient? client = null, string vm = "dev")
+    public async Task<JsonObject> HeartbeatAsync(bool busy = false, HttpClient? client = null, string vm = "dev", string[]? reasons = null)
     {
-        using var response = await (client ?? Guest).PostAsJsonAsync($"/api/v1/vms/{vm}/activity", new { busy, reasons = Array.Empty<string>() });
+        using var response = await (client ?? Guest).PostAsJsonAsync($"/api/v1/vms/{vm}/activity", new { busy, reasons = reasons ?? Array.Empty<string>() });
         if (response.StatusCode == HttpStatusCode.NoContent) return [];
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         // 200 only with something due; nothing due is 204.

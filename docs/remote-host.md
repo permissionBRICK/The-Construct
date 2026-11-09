@@ -601,7 +601,8 @@ A PC enrols when it provisions the VM. A VM with no enrolled PC skips its backup
 **When.** No service runs in the VM. The host answers the VM's activity heartbeat (§6) with
 `backupDue` when a backup is due, and the VM uploads it with its VM token. A scheduled backup is
 due once the interval (default 24 hours) has passed since the last successful one, waits for a
-heartbeat that reports the VM idle (at most six hours), and is retried no sooner than
+heartbeat without agent work or provisioning in progress (at most six hours; an open SSH
+connection alone does not hold it back), and is retried no sooner than
 `min(interval, 6 h)` after a failed attempt. **Back up now** in the panel's Backups module asks
 for one at the next heartbeat, busy or not; the request lapses after an hour without a backup
 starting. A reinstall from the client backs the VM up to the host first (`pre-reinstall`) and

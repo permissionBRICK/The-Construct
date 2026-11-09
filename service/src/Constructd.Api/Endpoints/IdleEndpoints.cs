@@ -158,7 +158,7 @@ public static class IdleEndpoints
         }
 
         var backup = await http.RequestServices.GetRequiredService<Constructd.Api.Backups.BackupCoordinator>()
-            .HeartbeatAsync(lookup.Vm!, busy, cancellationToken).ConfigureAwait(false);
+            .HeartbeatAsync(lookup.Vm!, Constructd.Core.Logic.BackupSchedule.BusyForBackup(busy, reasons), cancellationToken).ConfigureAwait(false);
         if (backup.Due)
         {
             due["backupDue"] = true;

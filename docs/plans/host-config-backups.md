@@ -282,7 +282,10 @@ Validation: `IntervalHours` 0..720 (0 = no scheduled backups on this host), `1 �
 interval > 0 (or a manual request), no open session, and either a manual request is pending, or
 `now − lastSuccessAt ≥ interval` (no success yet counts as due) and
 `now − lastAttemptAt ≥ min(interval, 6 h)`. A scheduled backup that is due waits for a heartbeat
-with `busy: false`, unless the VM has been due for 6 h. A saved or stopped VM sends no heartbeat
+without work in progress, unless the VM has been due for 6 h. An open SSH connection alone
+(`reasons: ["ssh-session"]`) is not work: the client's notification watch keeps one open to every
+VM it knows, and the online snapshots are safe beside an interactive session. Agent turns, T3
+threads and provisioning are. A saved or stopped VM sends no heartbeat
 and has changed nothing, so it is skipped without special code. A manual request expires after
 1 h without a session. Opening a session sets `lastAttemptAt` and clears the request.
 

@@ -363,6 +363,17 @@ public sealed class BackupApiTests
     }
 
     [Fact]
+    public async Task An_open_ssh_connection_alone_does_not_hold_back_a_scheduled_backup()
+    {
+        using var h = await BackupHarness.CreateAsync();
+        // Agent work holds it back...
+        Assert.Empty(await h.HeartbeatAsync(busy: true, reasons: ["ssh-session", "agent-log:claude"]));
+        // ...the client's notification watch (an SSH connection and nothing else) does not.
+        var due = await h.HeartbeatAsync(busy: true, reasons: ["ssh-session"]);
+        Assert.Equal("scheduled", due["backupTrigger"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task The_scheduled_backup_waits_for_an_idle_heartbeat_and_the_interval()
     {
         using var h = await BackupHarness.CreateAsync();

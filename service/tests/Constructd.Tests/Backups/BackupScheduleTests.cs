@@ -108,4 +108,14 @@ public sealed class BackupScheduleTests
         Assert.Equal(7, BackupSchedule.EffectiveKeep(Host, new("alice", "dev", Keep: 7)));
         Assert.Equal(3, BackupSchedule.EffectiveKeep(Host with { MaxKeep = 3, Keep = 2 }, new("alice", "dev", Keep: 7)));
     }
+
+    [Theory]
+    [InlineData(false, new string[0], false)]
+    [InlineData(true, new string[0], true)]                               // an older guest names no reason
+    [InlineData(true, new[] { "ssh-session" }, false)]                    // the client's watch alone
+    [InlineData(true, new[] { "ssh-session", "agent-log:claude" }, true)]
+    [InlineData(true, new[] { "t3-thread" }, true)]
+    [InlineData(true, new[] { "provisioning" }, true)]
+    public void Only_work_beyond_an_ssh_connection_makes_a_heartbeat_busy_for_backups(bool busy, string[] reasons, bool expected) =>
+        Assert.Equal(expected, BackupSchedule.BusyForBackup(busy, reasons));
 }
