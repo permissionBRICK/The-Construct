@@ -334,6 +334,41 @@ ok '... the other recipient stays' jq -e --arg fp "${fp}" 'length == 1 and .[0].
 run_backup "${local_cfg}" -- recipients remove not-a-fingerprint >/dev/null 2>&1
 ok 'remove with a malformed fingerprint exits 2' test "$?" = 2
 
+# Enrolment before provisioning installed jq: a PATH with everything but jq.
+nojq="${tmp}/nojq-bin"
+mkdir -p "${nojq}"
+for dir in /usr/local/bin /usr/bin /bin /usr/sbin /sbin; do
+  for exe in "${dir}"/*; do
+    name="$(basename "${exe}")"
+    [[ "${name}" == jq || -e "${nojq}/${name}" || ! -x "${exe}" ]] || ln -s "${exe}" "${nojq}/${name}"
+  done
+done
+nojq_recips="${tmp}/recipients-nojq"
+env -i PATH="${stubs}:${nojq}" HOME="${tmp}/roothome" LANG=C.UTF-8 TMPDIR="${tmp}/tmpdir" CONFIG_FILE="${local_cfg}" \
+  CONSTRUCT_BACKUP_RECIPIENTS_DIR="${nojq_recips}" STUB_DIR="${state}" \
+  bash "${CLI}" backup recipients add --label 'Early PC' <"${tmp}/pc.pub" >"${tmp}/nojq.out" 2>"${tmp}/nojq.err"
+ok 'recipients add works without jq (the early enrolment)' test "$?" = 0
+ok '... prints the fingerprint' test "$(cat "${tmp}/nojq.out")" = "${fp_expected}"
+ok '... and writes the label file as JSON' jq -e '.label == "Early PC" and (.addedAt | test("^[0-9]{4}-"))' "${nojq_recips}/${fp_expected}.json"
+first_added="$(jq -r .addedAt "${nojq_recips}/${fp_expected}.json")"
+sleep 1
+env -i PATH="${stubs}:${nojq}" HOME="${tmp}/roothome" LANG=C.UTF-8 TMPDIR="${tmp}/tmpdir" CONFIG_FILE="${local_cfg}" \
+  CONSTRUCT_BACKUP_RECIPIENTS_DIR="${nojq_recips}" STUB_DIR="${state}" \
+  bash "${CLI}" backup recipients add --label 'Early PC' <"${tmp}/pc.pub" >/dev/null 2>&1
+ok '... and a repeat keeps the first addedAt without jq too' test "$(jq -r .addedAt "${nojq_recips}/${fp_expected}.json")" = "${first_added}"
+
+# The host hears about an enrolment (it clears a no-recipients failure); a VM without a
+# service does not try.
+rm -f "${state}/reports"
+run_backup "${host_cfg}" CONSTRUCT_BACKUP_RECIPIENTS_DIR="${tmp}/recipients-report" -- recipients add --label 'Desk PC-1' <"${tmp}/pc.pub" >"${tmp}/rrep.out" 2>/dev/null
+ok 'recipients add on a VM with a host service reports the enrolment' \
+  jq -e -s 'length == 1 and .[0].result == "enrolled" and .[0].reason == "recipient-added"' "${state}/reports"
+ok '... and still prints only the fingerprint' test "$(cat "${tmp}/rrep.out")" = "${fp_expected}"
+touch "${state}/nofeature"
+run_backup "${host_cfg}" CONSTRUCT_BACKUP_RECIPIENTS_DIR="${tmp}/recipients-report2" -- recipients add --label 'Desk PC-1' <"${tmp}/pc.pub" >/dev/null 2>&1
+ok '... an older host that refuses the report does not fail the enrolment' test "$?" = 0
+rm -f "${state}/nofeature"
+
 # ── create --stdout: the container ───────────────────────────────────────────
 
 rm -f "${systemctl_log}"

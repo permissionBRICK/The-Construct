@@ -911,9 +911,11 @@ function ConvertTo-ConstructPosixArgument {
 }
 
 function Format-ConstructBackupCommand {
-    <# "construct backup <args>", every argument quoted for the guest's shell. Pure. #>
-    param([Parameter(Mandatory)][string[]]$Arguments)
-    return ('construct backup ' + ((@($Arguments) | ForEach-Object { ConvertTo-ConstructPosixArgument $_ }) -join ' '))
+    <# "construct backup <args>", every argument quoted for the guest's shell. Pure.
+       -Cli replaces "construct backup", e.g. with the repository's own script before
+       provision.sh has installed the CLI. #>
+    param([Parameter(Mandatory)][string[]]$Arguments, [string]$Cli = 'construct backup')
+    return ($Cli + ' ' + ((@($Arguments) | ForEach-Object { ConvertTo-ConstructPosixArgument $_ }) -join ' '))
 }
 
 function Get-ConstructBackupRemoteCommand {
@@ -955,8 +957,8 @@ function New-ConstructBackupConnection {
 }
 
 function Get-ConstructBackupSshArguments {
-    param([Parameter(Mandatory)]$Connection, [Parameter(Mandatory)][string[]]$Arguments)
-    $remote = Get-ConstructBackupRemoteCommand -Command (Format-ConstructBackupCommand -Arguments $Arguments) `
+    param([Parameter(Mandatory)]$Connection, [Parameter(Mandatory)][string[]]$Arguments, [string]$Cli = 'construct backup')
+    $remote = Get-ConstructBackupRemoteCommand -Command (Format-ConstructBackupCommand -Arguments $Arguments -Cli $Cli) `
                   -Direct:$Connection.Direct -SeedPassword $Connection.SeedPassword
     return @(@($Connection.Options) + @($Connection.Target, $remote))
 }
@@ -986,8 +988,8 @@ function Invoke-ConstructBackupCli {
     [CmdletBinding()]
     param([Parameter(Mandatory)]$Connection, [Parameter(Mandatory)][string[]]$Arguments,
           [AllowEmptyString()][string]$FirstLine = '', [byte[]]$StdinBytes, [string]$InFile, [long]$Offset = 0,
-          [string]$OutFile, [ValidateSet('Capture', 'Console')][string]$Stdout = 'Capture')
-    $sshArgs = Get-ConstructBackupSshArguments -Connection $Connection -Arguments $Arguments
+          [string]$OutFile, [ValidateSet('Capture', 'Console')][string]$Stdout = 'Capture', [string]$Cli = 'construct backup')
+    $sshArgs = Get-ConstructBackupSshArguments -Connection $Connection -Arguments $Arguments -Cli $Cli
     if ($OutFile) {
         return (Invoke-ConstructSshStreamToFile -FilePath $Connection.SshExe -ArgumentList $sshArgs -OutFile $OutFile -FirstLine $FirstLine)
     }
@@ -1008,11 +1010,11 @@ function Get-ConstructLastOutputLine {
 
 function Register-ConstructBackupPcKey {
     <# Enrol this PC's key on the VM (`construct backup recipients add`, PEM on stdin).
-       Creates the key on first need. Returns the key info. #>
+       Creates the key on first need. Returns the key info. -Cli: see Format-ConstructBackupCommand. #>
     [CmdletBinding()]
-    param([Parameter(Mandatory)]$Connection, [string]$KeyDir)
+    param([Parameter(Mandatory)]$Connection, [string]$KeyDir, [string]$Cli = 'construct backup')
     $key = Get-ConstructBackupPcKey -KeyDir $KeyDir -Create
-    $res = Invoke-ConstructBackupCli -Connection $Connection -Arguments @('recipients', 'add', '--label', $key.Label) `
+    $res = Invoke-ConstructBackupCli -Connection $Connection -Cli $Cli -Arguments @('recipients', 'add', '--label', $key.Label) `
                -StdinBytes ([System.Text.Encoding]::ASCII.GetBytes($key.PublicKeyPem)) -Stdout Capture
     if ($res.ExitCode -ne 0) {
         throw "Enrolling this PC's backup key on the VM failed: $(Get-ConstructBackupExitMessage $res.ExitCode)."
