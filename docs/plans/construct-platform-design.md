@@ -1,6 +1,6 @@
 # The Construct platform: client-side refactor (phase 0 design)
 
-Status: phase-0 design, revision 11, 2026-11-09. Factual claims were verified against the
+Status: phase-0 design, revision 12, 2026-11-09. Factual claims were verified against the
 repository at commit `d399476`. Nothing in this document is implemented. It replaces the
 client-side parts of [modular-remote-architecture.md](modular-remote-architecture.md) and the
 Companion decisions named in section 3; the guest contract and the host service stay in force.
@@ -13,7 +13,7 @@ and Proxmox clusters (section 18). Revision 8 settles the remaining questions of
 Revision 9 answers the fourth independent review, which read revision 8, and revision 10 answers
 its re-check (Appendix B). Revision 11 is a simplification pass the owner asked for (S24): eight mechanisms replaced by
 simpler ones, with the remaining risk named. It answers the two findings left open by the re-check
-of revision 10 that way. Revision 11 has not been reviewed;
+of revision 10 that way. Revision 12 answers the final review pass of revision 11 (eight findings, Appendix B);
 revisions 1 to 3 were, and revision 4 answers the third review. Revision 5 folded
 in the owner's first page comments (tool-set changes with opencode 2, the help assistant, the T3
 coupling overhaul, and the resume helper retired because T3 continues interrupted runs itself).
@@ -395,12 +395,20 @@ run again.
 | Concurrency | Per-VM exclusion for lifecycle jobs; host-wide only for host update and ISO builds. |
 | Questions | `{jobId, questionId, kind, choices, expiresAt}` via `/events`, answered via `POST /jobs/{id}/answers`; secret answers go to the bag. |
 
-OPEN for the implementation phase (owner, 2026-11-09, 17.27): failure recovery gets its own
-detailed discussion there. The known hard cases are reinstall and restore, where a retry starts
-from a wiped VM and the pre-reinstall backup is the safety net.
+Required of every retry, and not deferred: it keeps the original recovery backup, and it never
+silently overwrites data created since the previous attempt. Where a destructive retry cannot
+tell, the job stops and asks for recovery by hand. Today's scripts do not guarantee this: a
+reinstall can export the partly rebuilt VM over the original local backup
+(`Provision-AgentVM.ps1:2535`, `:2555`), and a restore deletes the current T3 databases and
+overlays the saved home (`bin/restore-config.sh:180`), which would erase chats written after a
+first attempt.
+
+OPEN for the implementation phase (owner, 2026-11-09, 17.27): how recovery works in detail gets its
+own discussion there, within the rule above.
 
 REQUIRED (phase 2a): a test that kills the engine at several points of `provision`, `reinstall`
-and `restore` and retries each to success (Appendix C.1).
+and `restore` and retries each to success, with the original backup intact and no newer data lost
+(Appendix C.1).
 
 ### 7.2 Drivers
 
@@ -659,7 +667,7 @@ row against the AAD. `payloadVersion` is inside the ciphertext.
 | `POST /epochs`, `GET /epochs` | 8.4 |
 | `POST /pairing`, `GET /pairing/{id}`, `PUT /pairing/{id}`, `GET /pairing/{id}/grant` | 8.3 |
 | `GET /devices`, `DELETE /devices/{id}` | registry and revocation |
-| `GET /export`, `POST /import` | a copy of the whole store, for a move (9.5) and for the export job (8.5) |
+| `GET /export`, `POST /import` | a copy of the whole store, for the export job (8.5) |
 
 Replica rules (REQUIRED, phase 3a, Appendix C.4): one SQLite file per engine holding replica,
 cursor and outbox, written transactionally; every outbox entry carries `writeId`, base revision
@@ -704,9 +712,9 @@ Revision 11: no expiring tombstones, no deleted index and no online move.
 
 | Topic | Rule |
 |---|---|
-| Deletions | Only explicit deletes; a missing VM file is restored; a concurrent edit of a deleted profile is a conflict. A deleted record stays as a tombstone for good, because profiles are small and deletions rare. Creating the name again writes a new revision of the same record. |
+| Deletions | Only explicit deletes; a missing VM file is restored; a concurrent edit of a deleted profile is a conflict. A deleted record stays as a tombstone for good, because profiles are small and deletions rare. Creating the name again writes a new revision of the same record. An edit based on a revision from before a deletion is a conflict, also after the name was created again; the deletion's revision is kept for that decision, beyond the history limit of 9.2. |
 | Long offline | An engine that comes back after any time replays the feed from its cursor. The tombstones are still there, so its edit of a deleted profile is a conflict like any other. |
-| Store move | The admin stops the old store, copies it with `GET /export` and `POST /import` or by copying its file, and gives devices and engines the new address; they ask for it when the old one stops answering. A few minutes without sync. Nothing is written meanwhile, because the store is stopped. |
+| Store move | The admin stops the old store, copies its database to the new place and gives devices and engines the new address; they ask for it when the old one stops answering. A few minutes without sync. The old store accepts no writes meanwhile; engines queue their edits (9.2) and send them to the new one. |
 
 ### 9.6 Merge and conflicts
 
@@ -793,7 +801,7 @@ writes of a newer version than supported refused with "update this device"; the 
 |---|---|
 | Host request | The engine asks for a backup in the heartbeat reply, as today, and remembers that it asked: one open request per VM, valid one hour. The first `POST /backups` from that VM while a request is open consumes it and is a scheduled backup with the host's trigger label; it cancels an open slot session. Any other `POST /backups` is a slot upload. One rule for every guest, old or new; no token travels (revision 11, replacing backup tickets). |
 | Slot | A `POST /backups` the host did not ask for: one slot per VM, staged then swapped after verification; a successful upload replaces the previous slot content (the slot is not a protected backup); one per 30 minutes; slot sessions expire after 30 minutes of inactivity; slot activity never changes `lastSuccessAt` or the schedule. |
-| Budgets | Two separate budgets per VM, so neither can use the other's space: `quota` (default 20 GiB) for host-requested backups and their staging, and the slot's own `slotMaxBytes` (2 GiB) plus the same again for staging. The host's free-space check stays as today. |
+| Budgets | Two separate budgets per VM, so neither can use the other's space: `quota` (default 20 GiB) for host-requested backups and their staging, and the slot's own `slotMaxBytes` (2 GiB) plus the same again for staging. The host's free-space check stays as today (`BackupEndpoints.cs:109`). The budgets are accounting, not reserved disk: slot uploads from many VMs can use up shared free space and delay a host-requested backup. Protected backups are never deleted to reclaim it; the owner frees space. |
 | Retention rule | Enforced inside `BackupRotation.Expired`, whatever `keep` says: the newest complete host-requested backup older than `minHorizonDays` (default 30) is never deleted, and until one is that old, the oldest is never deleted. The rule may keep more than `keep`. |
 | Pins and delete | Only a host-requested `pre-reinstall` backup auto-pins; devices may pin; a device deleting the protected backup is asked to confirm; VMs delete nothing. |
 | Visibility | `slot`, `scheduled`, `requested`, `pre-reinstall`, `pinned`, `protected`, size and file-count trend. |
@@ -929,7 +937,7 @@ update when the user is its admin (13.2).
 |---|---|
 | Authority | Each module follows its own stored policy and checks its package against the SHA-256 in the channel manifest, fetched over HTTPS as today (12A.2): a device its channel policy (12A), an engine its admin's `updates.channel` and `updates.auto`, T3 Desktop its T3 channel. A device never installs on an engine against that policy; "update everything" asks each engine to run its own updater. Hosts on another channel are shown, not updated. |
 | Update everything | One button asks each module to run its own update and shows each one's state. There is no stored plan. |
-| Engine | One action, `POST /host/updates/run` (revision 11, replacing today's separate check, stage, apply, cancel and resolve actions, `UpdateEndpoints.cs:18`): wait for running jobs, download the package and check its hash, copy the database, swap the files, restart, check health. If the new version does not come up, the previous files are put back and the service started again. The database copy is kept for a manual restore and is never restored automatically. The old actions stay as routes for old clients until phase 6. |
+| Engine | One action, `POST /host/updates/run` (revision 11, replacing today's separate check, stage, apply, cancel and resolve actions, `UpdateEndpoints.cs:18`): wait for running jobs, download the package and check its hash, copy the database, swap the files, restart, check health. If the new version does not come up, the previous files are put back and the service started again. The database copy is kept for a manual restore and is never restored automatically; if a migration already changed the database and the old version cannot start on it (`SqliteMigrationRunner.cs:23`), the admin restores that copy by hand. The old actions stay as routes for old clients until phase 6. |
 | Agent | Updates itself when idle. |
 | VMs | `CONSTRUCT_PAYLOAD_HASH` and `CONSTRUCT_CHANNEL` compared with the engine's channel release; differences become `reprovision` entries; run sequentially per host on confirmation or with `updates.autoReprovision`. |
 | Independence | SETTLED (owner, 2026-11-09, S20): the device agent, each engine and T3 Desktop each fetch and apply their own package without a live peer. A VM's guest payload updates through its engine (source cache and provision job), which is there whenever the VM runs, and the VM may start that itself (10.1). The button above only starts updates that are due together; it is never a precondition. T3 Desktop finds its own build from the T3 channel without asking a VM, and when a VM's reprovision moves its T3 server to a newer build, T3 Desktop moves to the matching build on its own. Versions that differ in between are covered by `apiFeatures` (6.1) and the skew window (12.2). REQUIRED (phase 3c): update tests with each peer offline: an agent with no engine reachable, an engine with no device, T3 Desktop with no VM. |
@@ -990,7 +998,7 @@ that, out-of-order promotion works, and a migration needing another's tables is 
 |---|---|
 | Who owns the channel | A device or user policy for devices (the device agent, 12.1); a host's channel is its admin's setting `updates.channel`, today validated to `main` only (`HostConfigValidation.cs:49`), extended to `stable | nightly | <url>`. |
 | VMs | An engine's VMs take their guest payload from the engine's channel through the source cache; the cache keeps one pinned commit per channel. A VM's `CONSTRUCT_CHANNEL` records which. |
-| Switching | A channel change is a `pending` entry ("switch to nightly: update host, then reprovision 2 VMs") resolved by the update plan, host first, then that host's VMs. The device switch offers to move hosts the user administers, because nightly clients may call host APIs stable hosts lack. |
+| Switching | A channel change is a `pending` entry ("switch to nightly: update host, then reprovision 2 VMs") resolved by the host's update, then the reprovision of that host's VMs. The device switch offers to move hosts the user administers, because nightly clients may call host APIs stable hosts lack. |
 | Downgrade | Nightly to stable: each host is checked with today's predicate (`ManifestRules.cs:57`, `UpdateCompatibility.Reasons`): the target is refused as `unsupported-downgrade` when its `database.schemaVersion` is below the current database's `minReadableBy` (or its settings schema below the settings minimum), and as `incompatible` when its `compat.minSchemaVersionToUpdateFrom` is above the current schema. A refused host stays on nightly and its VMs stay pending with it, because VMs consume their engine's channel. The device itself switches only while every engine it uses stays within one release of the target; otherwise its own switch is pending too. |
 | Patched T3 Code | Its release and nightly channel stays a separate setting (`T3CODE_CHANNEL`). |
 
@@ -1064,14 +1072,14 @@ installs, so it is built to be retried, not to be undone.
 | Updater's part | The old updater downloads the release, replaces the scripts folder (`Update-Construct.ps1:67`) and dot-sources the new lib. The new lib's `Set-ConstructInstalledMarker` stops a running Companion the way today's Companion install does (`POST /v1/quit {reason: update}` where the Companion has it), installs the agent package per user without elevation, starts it, and then advances the marker. A failure throws, so the updater reports `fail`; the install restores the Companion's own package and registrations and starts it again, as it does today (`lib/Construct.Companion.ps1:446-458`), and the old Companion keeps offering the update. The next click runs the new release's `Update-Construct.ps1` (see Scripts folder). The Companion hook that runs afterwards finds the agent and reports `unchanged`. |
 | State after the click | New files, the agent running, nothing converted. The agent shows only the upgrade dialog. VMs keep running; forwards and notifications pause until the dialog finishes. |
 | Dialog's part | Engine install with one admin prompt, the user's token, keys and recovery code, then the converter (13.1). The converter only reads the old state and copies it into records. It can be run again at any point, and a second run changes nothing that is already there. Its last step switches the local VMs over to the engine (`bin/adopt-host.py`) and writes `bridge.json {stage: converted}`. |
-| Old writers | Before the converter starts, the dialog asks the user to close VS Code and waits until no VS Code process is left. The updater has stopped the old Companion, and the agent holds the Companion's single-instance mutex (`SingleInstance.cs:7`), so it cannot come back. The agent also takes the lifecycle lock, which a running lifecycle script holds until it ends. With those gone nothing writes the old state; the thin extension is already installed, so VS Code opens with it afterwards. |
-| Failure | The failed step is shown with its error and Retry. A VM switch-over that fails is retried forward; `adopt-host.py` undoes its own partial run. Nothing else is reversed. The legacy backup key is removed from VMs only after `converted`. |
-| Way back | The old state is untouched until `converted`, so reinstalling the last old release by hand works: its source archive is published as a release asset, and the docs give the steps. It is not scripted. |
-| Accepted risks (S24) | An upgrade that fails halfway needs a retry or the owner's help. A script of the old stack that was already running when the dialog started, and takes no lock, can still finish a write; the converter can be run again. |
+| Old writers | Before the converter starts, the dialog asks the user to close VS Code and waits until no VS Code process is left. The updater has stopped the old Companion, and the agent holds the Companion's single-instance mutex (`SingleInstance.cs:7`, per Windows session), so it cannot come back. The agent also takes the lifecycle lock, which a running lifecycle script holds until it ends. With those gone nothing writes the old state; the thin extension is already installed, so VS Code opens with it afterwards. |
+| Failure | The failed step is shown with its error and Retry. A VM switch-over that fails is retried forward. `adopt-host.py` restores the files it saved when it catches an error (`bin/adopt-host.py:125`); a killed run, or a failure at a later VM, leaves the VMs switched so far as they are, and the retry continues from there. Nothing else is reversed. The legacy backup key is removed from VMs only after `converted`. |
+| Way back | The old files on the PC are untouched until `converted`, so reinstalling the last old release by hand works, and may include undoing the switch-over of a VM that was already switched: its source archive is published as a release asset, and the docs give the steps. It is not scripted. |
+| Accepted risks (S24) | An upgrade that fails halfway needs a retry or the owner's help. A script of the old stack that was already running when the dialog started, and takes no lock, can still finish a write. If that write changes an item the converter already copied, running the converter again does not bring it over; it is reconciled by hand from the old files, which stay. |
 | Scripts folder | No legacy script bodies ship. `Update-Construct.ps1` and `install.ps1` of the new release are standalone PowerShell bootstraps that need no agent: they download, verify, install and start the agent and honour the old parameters and result file, so a failed first attempt is retried from the old Companion's button or by hand. With an agent running they hand over to it. `Update-T3Code.ps1` and `Get-ConstructT3PairingLink.ps1` are shims onto agent routes; before conversion they answer "finish the upgrade in the Construct window". |
 | Extension | `Install-ControlPanelExtension` installs the thin extension (11.4); its failure still fails the update, as today. |
 | One click | Updates the files and starts the agent. The dialog then needs one admin prompt and the recovery-code step. VM reprovisions wait for a confirmation (17.7). |
-| Shared hosts | Hosts first: the host release is published and the known shared hosts are upgraded before the client release appears (15). Old client against a new host: works. The engine keeps the old routes; a user without a converted device has no records, and their vault, profiles and backups keep flowing through the old routes, with their existing backups counted as host-requested for retention. New agent against an old host: the agent can do one thing with it, start the host update through the existing admin route (`/host/updates`), when the user is its admin; otherwise the dialog waits and names the host. Every user converts on their own PC (11.6). |
+| Shared hosts | Hosts first: the host release is published and the known shared hosts are upgraded before the client release appears (15). Old client against a new host: works. The engine keeps the old routes; a user without a converted device has no records, and their vault, profiles and backups keep flowing through the old routes, with their existing backups counted as host-requested for retention. New agent against an old host: the agent can do one thing with it, start the host update through the existing admin action (`POST /host/updates/stage` with `autoApply`, `UpdateEndpoints.cs:12`, `:18`), when the user is its admin; otherwise the dialog waits and names the host. Every user converts on their own PC (11.6). |
 
 Test (REQUIRED, phase 3c): on the Windows VM of 14.3, install a class E release and the last
 release before the merge, provision a VM on each, click update, complete the dialog through its
@@ -1176,7 +1184,7 @@ every REQUIRED marker, names a work package on the branch, not a release.
 | 2a | Provision, reinstall, restore jobs with questions and the step model; guest payload unchanged; process-kill tests | 1b | Equivalence comparison (13.3) passes |
 | 2b | Secrets boundary tests; `construct-api.sh`; `construct manifest` installed; payload hashes; pending element data; unattended Proxmox child setup | 2a | No secret in persisted artefacts; pending from guest markers |
 | 2c | Host-requested backups, slot, budgets, retention rule | 2a | Appendix C.6 tests |
-| 3a | Store, envelope, engine replica, CAS, feed, payload versions; device key pair, `U`, `D`, kind-level write table, per-field merge; engine `D` grant; `project set` through the engine; export job; store container image (5.4) | 2b | Partition and rollback tests; the store suite green against the container |
+| 3a | Store, envelope, engine replica, CAS, feed, payload versions; device key pair, `U`, `D`, kind-level write table, per-field merge; engine `D` grant; `project set` through the engine; export job; store container image (5.4) | 2b | Partition and outbox tests; the store suite green against the container |
 | 3b | Pairing, recovery code (8.5), revocation by token deletion with the exposed-secret list (8.4), `B` and `K` under `U`, vault onto records, secret entry on request (10.3), conflict protocol, agent delivery, resume helper retired (4.1) | 3a | N devices, two engines suite |
 | 3c | Device agent replacing the Companion; converter; upgrade hook (13.2); thin extension; script shims; agent routes for T3 Desktop (11.4) | 3b | Migration test on a class E and a class F install |
 | 4 | New UI bundle; no native dialogs; first-run and upgrade dialog (11.6); help assistant (11.5); install statistics (5.5) | 3c, layout chosen | 67 prompt sites gone; screenshots green |
@@ -1466,6 +1474,22 @@ owner's request (S24) it simplifies eight parts and names what is given up.
 | Version skew (6.1, 12.2) | Three-release window, retirement schedule, per-route markers | Same release or one apart | Running further apart |
 | Manifest signing (12A.2) | Detached signature under a publisher key | SHA-256 over HTTPS as today | Protection against a compromised release host, until the public service |
 
+### Final pass, of revision 11
+
+Reviewed under S24: a named and accepted risk counts as an answer. Eight findings, two of them
+blocking, answered in revision 12 with rules and wording, not mechanisms.
+
+| Finding | Answer | Where |
+|---|---|---|
+| 1 (major) an edit from before a deletion could merge into a recreated profile | Such an edit is a conflict; the deletion's revision is kept | 9.5 |
+| 2 (major) destructive retries had no preservation requirement | A retry keeps the original recovery backup and overwrites no newer data, or stops for recovery by hand | 7.1, C.1 |
+| 3 a second converter run does not bring over a late old write | Said so; reconciled by hand | 13.2 |
+| 4 adoption does not always undo itself | Wording corrected; the manual way back may include undoing a switch-over | 13.2 |
+| 5 separate budgets do not reserve disk | Risk named | 10.2, C.6 |
+| 6 the move of a stopped store used an HTTP export | The database is copied | 9.5 |
+| 7 leftovers of the update plan and the rollback test | Removed | 12A.3, 15 |
+| 8 `/host/updates` is not an action | Corrected to the stage action with `autoApply` | 13.2 |
+
 ## Appendix C. Protocol requirements by phase
 
 Each entry names the property and the test that proves it; mechanism is the phase's choice.
@@ -1474,7 +1498,9 @@ Each entry names the property and the test that proves it; mechanism is the phas
 
 Tests kill the engine at several points of `provision`, `reinstall` and `restore` against the fake
 driver. After the restart the job is marked failed with the step it reached; Retry runs it again
-to success, without duplicate resources.
+to success, without duplicate resources. The original recovery backup is still there after a
+retried reinstall, and a retried restore does not remove chats or secrets created since the first
+attempt; a retry that cannot tell stops for recovery by hand.
 
 ### C.2 Secrets boundary (phase 2b)
 
@@ -1525,5 +1551,5 @@ reprovision applies only confirmed revisions and lists held ones.
 Properties: with `keep = 1` and daily uploads from day one, a host-requested backup reaches
 `minHorizonDays` and stays; gaps in the schedule do not release it; daily junk uploads across a
 month boundary never remove it; a full slot and a stalled slot upload never prevent a
-host-requested upload within the VM's `quota`; one host request accepts one upload as scheduled,
+host-requested upload within the VM's `quota` while the disk has room; one host request accepts one upload as scheduled,
 and a second create in the same hour is a slot upload; slot uploads never change schedule state.
