@@ -1,6 +1,6 @@
 # The Construct platform: client-side refactor (phase 0 design)
 
-Status: phase-0 design, revision 9, 2026-11-09. Factual claims were verified against the
+Status: phase-0 design, revision 10, 2026-11-09. Factual claims were verified against the
 repository at commit `d399476`. Nothing in this document is implemented. It replaces the
 client-side parts of [modular-remote-architecture.md](modular-remote-architecture.md) and the
 Companion decisions named in section 3; the guest contract and the host service stay in force.
@@ -10,8 +10,8 @@ merges, a required recovery code, the supported upgrade set, test VMs created on
 test cadence, the store as a container and install statistics. Revision 7 settles four of
 its questions (S16 to S18) and adds two later work packages the owner asked for: host setup media
 and Proxmox clusters (section 18). Revision 8 settles the remaining questions of section 17 (S19 to S23 and the table there).
-Revision 9 answers the fourth independent review, which read revision 8 (Appendix B).
-Revision 9 itself has not been re-checked;
+Revision 9 answers the fourth independent review, which read revision 8, and revision 10 answers
+its re-check (Appendix B). Revision 10 itself has not been re-checked;
 revisions 1 to 3 were, and revision 4 answers the third review. Revision 5 folded
 in the owner's first page comments (tool-set changes with opencode 2, the help assistant, the T3
 coupling overhaul, and the resume helper retired because T3 continues interrupted runs itself).
@@ -226,9 +226,24 @@ class with their own rules (4.2).
 | `construct project conflicts|resolve` and the prompt file in `config/` | 9.6 | 3b | New subcommands, no package |
 | `construct manifest` | 13.3 | 2b (before that, the rig runs the manifest script from the test tree over SSH without installing it) | Read-only reporting |
 | `provisioned.env` gains `CONSTRUCT_PAYLOAD_HASH`, `CONSTRUCT_DESIRED_HASH`, `CONSTRUCT_CHANNEL` | 7.5, 12A | 2b | Marker keys beside `CONSTRUCT_COMMIT` |
-| `construct-t3-resume.py` and its unit retire. T3 continues a run cut off by a server restart itself (`continueThreadsAfterServerUpdate`, default on, about 3 s after the server is back, at most 3 continuations per chain), and the helper speaks only the removed v1 HTTP API, so it already does nothing on current T3. The helper also mints the T3 API token `/etc/construct/t3-resume-token`, which the T3 registration check reads (`bin/install-ai-tools.sh:939`); that minting moves into the installer. Two differences from the helper are accepted or checked: T3 does not message a thread that was idle with background watchers, and T3 resumes when its server is back, which today is in the middle of a run: provisioning restarts T3 (`bin/install-ai-tools.sh:1246`) before the project commands (`bin/provision.sh:1493`). The barrier the helper had therefore moves into provisioning: a run that has to restart T3 stops the service at that point and starts it in its finish step, on success and on failure. Rig check: a deliberately long provision with an interrupted thread shows no continuation before the sentinel | 9.6 | 3b | Removal of a helper that no longer acts; the resume behaviour comes from T3 |
+| `construct-t3-resume.py` and its unit retire. T3 continues a run cut off by a server restart itself (`continueThreadsAfterServerUpdate`, default on, about 3 s after the server is back, at most 3 continuations per chain), and the helper speaks only the removed v1 HTTP API, so it already does nothing on current T3. The helper also mints the T3 API token `/etc/construct/t3-resume-token`, which the T3 registration check reads (`bin/install-ai-tools.sh:939`); that minting moves into the installer. Two differences from the helper are accepted or checked: T3 does not message a thread that was idle with background watchers, and T3 resumes when its server is back, which today is in the middle of a run, so the barrier the helper had moves into provisioning (see below the table) | 9.6 | 3b | Removal of a helper that no longer acts; the resume behaviour comes from T3 |
 | Help prompt file in `config/` for the help assistant | 11.5 | 4 | New prompt file, no package; uses the installed `t3` CLI |
 | `construct secret ask <name>`: files a request for a secret the user then enters on a device (working name) | 10.3 | 3b | New subcommand of the existing `construct secret` CLI, no package |
+
+T3 barrier (REQUIRED, phase 3b), replacing the resume helper's wait for the end of provisioning.
+Today T3 comes back in the middle of a run: the installer restarts it (`bin/install-ai-tools.sh:1246`)
+before the project commands (`bin/provision.sh:1493`), and a restore starts it on the restored
+thread database (`bin/restore-config.sh:208`) before the deferred project commands
+(`bin/provision.sh:295`). T3 would continue interrupted threads at either point.
+
+| Element | Rule |
+|---|---|
+| Span | From the first point at which a run stops T3, for a new build or for a restore, T3 stays stopped until the run's finish step. That covers install, restore and the deferred project commands. |
+| Start | The finish step starts T3, on success and on failure. When a reboot follows (`bin/provision.sh:147`), it leaves T3 enabled and stopped, and the boot starts it. |
+| Work that needs a live server | Project registration and the running-build check move behind that start: into the finish step, or into a one-shot unit after boot when a reboot follows. |
+| Unchanged build, no restore | T3 is not stopped at all and threads keep running, as today. |
+| Cost | The T3 UI is unavailable for the rest of a run that had to stop it. |
+| Tests | On the rig: an ordinary reprovision, a reinstall with restored interrupted threads, and a failing run, each with a deliberately long project command; no continuation starts before the sentinel, and T3 is up afterwards. |
 
 ### 4.2 Tool-set changes
 
@@ -605,11 +620,19 @@ public store is never a participant.
 The envelope `actor` is always the authenticated principal (`device:<id>` or `engine:<id>`); a
 record an engine writes for one of its VMs carries that VM in `origins` inside the payload. The
 store enforces only this kind-level table, because it cannot read contents. Rules inside a kind
-are enforced by the writer's code. For `secret` that means: an engine writes one only to carry out
-a change a device approved (a VM's `secret add`, replace or delete, a secret entered on request
-(10.3), the auto-approve reseal), and records the VM, the approving device and the request id in
-the payload, which devices show. To that extent an engine is trusted for the vault it hosts; in
-`available` mode it holds `K` anyway. The split of `vm` into `vm-desired` and `vm-applied` removes
+are enforced by the writer's code. For `secret` an engine may write exactly what the hosted vault does
+today, plus secret entry on request:
+
+| Engine write | Approval | Provenance recorded |
+|---|---|---|
+| A VM adds a secret under a name that does not exist (`VaultHostService.Requests.cs:170`) | None, as today | The authenticated VM |
+| A VM turns auto-approve off (`:247`) | None, as today: it tightens access | The authenticated VM |
+| A VM replaces a value, deletes a secret or turns auto-approve on | A device approves, as today | VM, approving device, request id |
+| A secret entered on request (10.3) | The entering device | VM, device, request id |
+
+Devices show that provenance. To that extent an engine is trusted for the vault it hosts; in
+`available` mode it holds `K` anyway. REQUIRED (phase 3b): a test of this matrix together with
+`If-Match` conflicts and lease cleanup. The split of `vm` into `vm-desired` and `vm-applied` removes
 the only other field-level rule.
 
 Devices write only kinds that are never merged (S9).
@@ -708,9 +731,11 @@ defaults are filled in (`forwards.to` is `client` when absent) and the canonical
 | `provisionCommands` | Three-way merge of the ordered list, item by item. Changes in different places both apply. When both sides insert at the same place, ours come first, then theirs; an identical insertion is kept once. The same item changed differently is a conflict. |
 | `name` and any field added later | Both changed differently is a conflict. |
 
-For every list: merged order is ours, then theirs' additions, and duplicates a side already had
-are preserved; one side removing an item the other changed is a conflict; both sides reordering
-differently is a conflict.
+`provisionCommands` keeps the positions its own rule gives: an insertion stays where its side put
+it. For the keyed lists and the set, where order carries no position: if only one side reordered,
+its order is taken and the other side's additions follow; if both reordered differently, the field
+is a conflict; otherwise the order is ours, then theirs' additions. For every list, duplicates a
+side already had are preserved, and one side removing an item the other changed is a conflict.
 
 The merged profile must then pass the schema and the checks a profile write passes today
 (`docs/config-sync.md` §6), and three more: no two repositories with the same effective directory,
@@ -888,16 +913,16 @@ first screen, in two variants.
 | Step | Fresh install | Upgrade from the old stack |
 |---|---|---|
 | 1. Host side | The installer has already installed the engine with its one admin prompt. | "This is a new Construct", with a few lines on what changed. One admin prompt installs the engine when this PC has a local VM. |
-| 2. Conversion | Not needed. | The converter (13.1) with progress per item. VMs keep running. |
-| 3. Recovery code | Shown once with save as file, print and copy; the user confirms they stored it (8.5). The vault key is created here. | The same. The existing vault key moves under `U`, so the code now restores the vault; an install without a vault gets one. |
+| 2. Recovery code | Shown once with save as file, print and copy; the user confirms they stored it (8.5). The vault key is created here. | The same. It comes before conversion because the records are sealed under `U`. The existing vault key moves under `U`, so the code now restores the vault; an install without a vault gets one. |
+| 3. Conversion | Not needed. | The converter (13.1) in two parts, prepare and activate (13.2), with progress per item. VMs keep running. |
 | 4. Statistics | The notice of 5.5 with the exact content and the switch. | The same. |
 | 5. Done | "Create your VM". | The converted VMs with their pending entries; reprovisions wait for a confirmation. |
 
 The rest of the UI stays closed until step 3 is done. A failed step shows its error with a retry
 and resumes there after a restart. A second device does not see this dialog; it is paired (8.3).
 A user whose VMs all run on a shared host runs the same dialog on their own PC: step 1 installs
-nothing, and step 2 converts that user's profiles, vault and backup keys, which only their PC can
-read. If that host has not been upgraded yet, the dialog says so before step 2 and offers the host
+nothing, and step 3 converts that user's profiles, vault and backup keys, which only their PC can
+read. If that host has not been upgraded yet, the dialog says so before step 3 and offers the host
 update when the user is its admin (13.2).
 
 ## 12. Updates
@@ -1040,11 +1065,12 @@ happens in the agent's upgrade dialog (11.6).
 
 | Element | Design |
 |---|---|
-| Updater's part | The old updater downloads the release, replaces the scripts folder (`Update-Construct.ps1:67`) and dot-sources the new lib. The new lib's `Set-ConstructInstalledMarker` stops a running Companion the way today's Companion install does (`POST /v1/quit {reason: update}` where the Companion has it), installs the agent package per user without elevation, starts it, and then advances the marker. A failure throws, so the updater reports `fail`; the install restores the Companion's own package as it does today (`lib/Construct.Companion.ps1:351`), and the old Companion keeps offering the update. The next click runs the new release's `Update-Construct.ps1` (see Scripts folder). The Companion hook that runs afterwards finds the agent and reports `unchanged`. |
+| Updater's part | The old updater downloads the release, replaces the scripts folder (`Update-Construct.ps1:67`) and dot-sources the new lib. The new lib's `Set-ConstructInstalledMarker` stops a running Companion the way today's Companion install does (`POST /v1/quit {reason: update}` where the Companion has it), installs the agent package per user without elevation, starts it, and then advances the marker. A failure throws, so the updater reports `fail`; the install restores the Companion's own package and registrations and starts it again, as it does today (`lib/Construct.Companion.ps1:446-458`), and the old Companion keeps offering the update. The next click runs the new release's `Update-Construct.ps1` (see Scripts folder). The Companion hook that runs afterwards finds the agent and reports `unchanged`. |
 | State after the click | New files, the agent running, nothing converted. The agent shows only the upgrade dialog. VMs keep running; forwards and notifications pause until the dialog finishes. |
-| Dialog's part | Engine install with one admin prompt, the user's token, writer exclusion, the converter (13.1) with adoption, the recovery code, then `bridge.json {stage: converted}`. Each step is journaled and resumes where it failed. |
-| Writer exclusion | The agent takes the lifecycle lock afresh (the updater has released its own by then) and the config-sync `.sync.lock`. These stop lifecycle scripts and sync, not every writer: an old extension window left open can still write settings (`extension/extension.js:2598`). The fence is therefore a move. After its last digest check the converter moves the old state files and folders into a dated legacy folder, each by rename, and compares digests once more on the moved copies, re-converting what changed. A writer that survives then writes into a place nothing reads; the agent notices the reappearing files and asks the user to reload that VS Code window. The converter writes only to engine, store and `bridge.json`. |
-| Failure in the dialog | The failed step is shown with its error and a retry. Guest-side changes stay additive until conversion commits: the new backup recipient is added and VM tokens are issued, but the legacy backup key is removed from VMs only after `stage: converted`. The way back before that point: move the legacy folder back and run the one-line installer with the ref `legacy`, a branch kept at the last commit of the old stack (the old installer treats any ref but `main` as a branch, `install.ps1:30`). After `converted` there is no supported way back. |
+| Dialog's part | Two parts. **Prepare** changes nothing in the old state or in any guest: engine install with one admin prompt, the user's token, keys and recovery code, the old profiles, settings and vault converted into records, and the local VMs registered with the engine as staged, not yet managed. Every prepare step is journaled and can be repeated. **Activate** is short: the fences below are confirmed, the digests checked a last time, each local VM adopted and its new backup recipient added, then `bridge.json {stage: converted}` written. |
+| Writer exclusion | Three fences, held from before the last digest check until `converted`, with the old state left in place (13.1). (1) The agent serves the old Companion's presence contract (`companion\endpoint.json`, `/v1/health`, `/v1/events`) for as long as old extension windows exist. An old window that sees a live Companion runs none of its host jobs, config sync included (`extension/extension.js:63-64`, `:168`, `:191-200`; `extension/src/companion.js:341`); a window that fell back during the changeover returns to that state when the agent appears. Every other old request is answered with "reload this window". (2) The converter holds `.sync.lock` in its place as a live process with a fresh timestamp, which blocks a sync tick of any window still in fallback and of the PowerShell engine (`extension/src/configsync.js:125`, `:180`). (3) The agent takes the lifecycle lock afresh; the updater has released its own by then. After `converted` the agent keeps serving the presence contract, so no old window resumes; a write to an old file after that point is ignored and reported with the request to reload that window. |
+| Failure in the dialog | A failure in prepare is shown with its error and a retry; there is nothing to undo. Adoption changes a guest (`bin/adopt-host.py:101`: `config.env`, service certificate, VM token, helpers, heartbeat units, and with them where the guest sends secret requests), so activate journals each guest's previous files before adopting it, and a failure in activate reverses the journal on every VM already adopted and returns to the prepared state. The legacy backup key is removed from VMs only after `converted`. |
+| Way back | The new release ships `Restore-ConstructLegacy.ps1`, a standalone script. It fetches the last source archive of the old stack, pinned by commit and SHA-256 and published as a release asset at the merge, extracts it into the original scripts folder (where the default VM's settings still are, `extension/src/instancestate.js:24`), runs that archive's Companion and extension install, and stops and unregisters the agent. Supported until `converted`; a run interrupted in activate is reversed first. After `converted` there is no supported way back. |
 | Scripts folder | No legacy script bodies ship. `Update-Construct.ps1` and `install.ps1` of the new release are standalone PowerShell bootstraps that need no agent: they download, verify, install and start the agent and honour the old parameters and result file, so a failed first attempt is retried from the old Companion's button or by hand. With an agent running they hand over to it. `Update-T3Code.ps1` and `Get-ConstructT3PairingLink.ps1` are shims onto agent routes; before conversion they answer "finish the upgrade in the Construct window". |
 | Extension | `Install-ControlPanelExtension` installs the thin extension (11.4); its failure still fails the update, as today. |
 | One click | Updates the files and starts the agent. The dialog then needs one admin prompt and the recovery-code step. VM reprovisions wait for a confirmation (17.7). |
@@ -1053,9 +1079,12 @@ happens in the agent's upgrade dialog (11.6).
 Test (REQUIRED, phase 3c): on the Windows VM of 14.3, install a class E release and the last
 release before the merge, provision a VM on each, click update, complete the dialog through its
 test automation, and assert the converted state and the guest manifest. A failure is injected
-before and after each replacement and conversion step, and after each the retry or the way back is
-exercised. Further cases: an old VS Code window left open during conversion, a second user of a
-shared host who has not converted, and a new agent against an old host. A test on
+before and after each replacement, prepare and activate step, and after each the retry or the way
+back is exercised; in particular a failure after a successful adoption, after which the restored
+old client must still operate the VM and its vault. The way back is run with a customised default
+VM and a second named instance. Further cases: an old VS Code window left open that attempts a
+settings write and a config-sync tick across the last digest check and after `converted`, a second
+user of a shared host who has not converted, and a new agent against an old host. A test on
 `Update-Construct.ps1` asserts that the lib dot-source and the marker call exist and that a marker
 exception reaches the result file as `fail`.
 
@@ -1140,7 +1169,7 @@ every REQUIRED marker, names a work package on the branch, not a release.
 | Builds | The branch publishes prereleases with the nightly channel manifest (12A), so moved installs update themselves. |
 | Moving an install | The one-line installer with the branch ref, then the upgrade dialog (11.6); the converter reads the previous install folder (12A.5). The merge later exercises the same path for everyone. |
 | Merge gates | Every REQUIRED test of the first release green (the review hold of 10.4 and the rotation contract of 8.4 are deferred and excluded); the full matrix (12A.4) green; the migration test on class E and F; T3 builds with the agent client released (11.4); the owner's installs running the branch, including one shared host with a second user. |
-| The merge | One PR from the branch into `main`, released as 2.0.0 in two steps: the host release first, the known shared hosts upgraded by their admin, then the client release (13.2). The branch `legacy` is created at the last commit of the old stack. Then `nightly` is created from `main`, becomes the default branch, and 12A applies. |
+| The merge | One PR from the branch into `main`, released as 2.0.0 in two steps: the host release first, the known shared hosts upgraded by their admin, then the client release (13.2). The last source archive of the old stack is published as a pinned release asset for the way back (13.2). Then `nightly` is created from `main`, becomes the default branch, and 12A applies. |
 
 | Phase | Delivers | Depends on | Exit criteria |
 |---|---|---|---|
@@ -1389,8 +1418,8 @@ Fifteen findings, all answered in revision 9. Not re-checked.
 
 | Finding | Answer | Where |
 |---|---|---|
-| 1 (blocker) no retry or way back after the scripts are replaced | Standalone bootstrap scripts that need no agent; a `legacy` branch for the way back; guest changes additive until conversion commits; failure injection at every step | 13.2 |
-| 2 old-state writers not all excluded | The old state is moved aside after the last check and compared again; a surviving window writes into a place nothing reads | 13.2 |
+| 1 (blocker) no retry or way back after the scripts are replaced | Standalone bootstrap scripts that need no agent; a restore script for the way back and conversion in a prepare and an activate part (both as of revision 10); failure injection at every step | 13.2 |
+| 2 old-state writers not all excluded | As of revision 10: the agent serves the old Companion's presence contract, which suspends old windows, and the converter holds the sync lock | 13.2 |
 | 3 vault merging on devices contradicts S9 | Secrets are never merged: `If-Match` writes; engines write a secret only for a device-approved change, with provenance; lease ending stays with the engine | 9.1, 9.6, 9.7 |
 | 4 recovery without an authentication protocol | Code of 160 bits; store-side verifier per user; rate-limited recovery issuing one enrolment token; atomic replacement; the limit of replacement stated | 8.5, C.3 |
 | 5 token deletion cannot be immediate everywhere | Device-bound tokens under every sign-in method; engines acknowledge; unreached engines listed; Windows sign-in left to the directory | 8.1, 8.4 |
@@ -1404,6 +1433,22 @@ Fifteen findings, all answered in revision 9. Not re-checked.
 | 13 no barrier before T3 continues threads | Provisioning stops T3 where it must restart it and starts it in its finish step | 4.1 |
 | 14 cluster id allocation and local-disk migration | Corrected | 18.2 |
 | 15 unreadable vault description | Corrected | 2.4 |
+
+### Re-check of revision 9
+
+The re-check found findings 9, 12, 14 and 15 resolved and 4, 5, 7, 8, 10 and 11 acceptable as
+phase requirements with named tests. Findings 1, 2, 3, 6 and 13 were insufficient and produced
+seven new findings, answered in revision 10. Not re-checked.
+
+| New finding | Answer | Where |
+|---|---|---|
+| 1 the `legacy` ref installs into another folder | A standalone restore script that puts the pinned old archive into the original scripts folder | 13.2, 15 |
+| 2 adoption changes guests before conversion commits | Conversion split into prepare, which touches no old state or guest, and activate, which journals and reverses adoption | 13.2, 11.6 |
+| 3 moving state does not exclude old writers | The old state stays in place; the agent serves the old Companion's presence contract, which suspends old windows, and the converter holds the sync lock | 13.2 |
+| 4 engine secret writes contradict today's guest operations | The permitted engine writes listed with their approval and provenance | 9.1 |
+| 5 two ordering rules for `provisionCommands` | Positional for commands; reorder rules for the other lists | 9.6, C.5 |
+| 6 T3 barrier incomplete | Barrier from the first stop to the finish step, across restore and reboot; server-dependent work moved behind the start | 4.1 |
+| 7 wrong line for the Companion rollback | Corrected to `:446-458` | 13.2 |
 
 ## Appendix C. Protocol requirements by phase
 
@@ -1456,8 +1501,9 @@ VM start one agent; an expired or reassigned attempt's resolve fails atomically 
 conflict open); an engine merging a VM-authored change keeps `origins`. Every rule of the per-field
 table (9.6) has a test with base, ours and theirs: both-appended `provisionCommands` yield ours
 then theirs, an identical insertion appears once, the same item edited on both sides is a conflict
-that carries the merged value of every other field; defaults are normalised before matching; the
-first-repository rule, remove-versus-change and each check after the merge produce a conflict. An
+that carries the merged value of every other field; defaults are normalised before matching; the first-repository rule, remove-versus-change and each check after the merge produce a conflict;
+an insertion at the head of `provisionCommands` on one side and at the tail on the other keeps both
+positions; a reorder on one side only is taken. An
 upstream refresh interrupted at any point and submitted again leaves profile and base consistent.
 
 Deferred with 10.4 and not part of the first-release gate: with `reviewVmChanges` on, a
