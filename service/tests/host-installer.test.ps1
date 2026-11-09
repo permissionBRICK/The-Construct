@@ -975,6 +975,13 @@ ok 'source cache directory is created' ($sourceInstaller -match 'foreach \([\s\S
 ok 'source cache receives Data ACL hardening' ($sourceInstaller.Contains('@{ Path = $sourceRootDir; Kind = ''Data''; Name = "construct source cache" }'))
 ok 'source root setting preserves operator value' ($sourceInstaller -match '\$sourceRootDir = \[string\]\$savedHostAdmin.Source.RootDir')
 ok 'source configuration is written' ($sourceInstaller -match 'HostAdmin\s*= \$savedHostAdmin')
+ok 'config backup directory is created' ($sourceInstaller -match 'foreach \([\s\S]*?\$backupRootDir, \$sourceRootDir\)\)')
+ok 'config backup directory receives Data ACL hardening' ($sourceInstaller.Contains('@{ Path = $backupRootDir; Kind = ''Data''; Name = "construct config backups" }'))
+ok 'config backup root defaults to the data directory and keeps an operator value' (
+    $sourceInstaller.Contains("`$backupRootDir = Join-Path `$DataDir 'backups'") -and
+    $sourceInstaller -match '\$backupRootDir = \[string\]\$priorSettings\.Constructd\.Backups\.RootDir')
+ok 'config backup root is written' ($sourceInstaller -match 'Backups\s*= \[ordered\]@\{ RootDir = \$backupRootDir \}')
+ok 'the updater ACL pass re-hardens the config backup root' ($sourceInstaller.Contains('$aclSettings.Constructd.Backups.RootDir'))
 
 # Field failure (2026-09-05): constructd crashed and stayed down -- AutoStart alone does not
 # restart a service that terminates. Checked on exit codes only; sc.exe output is localized.

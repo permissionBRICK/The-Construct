@@ -22,7 +22,11 @@ try {
         'test/remote-install.test.ps1',
         # Under Windows PowerShell 5.1 the DPAPI token-store tests run for real, including
         # the fresh-process read-back (System.Security is not preloaded there).
-        'test/remote-client.test.ps1'
+        'test/remote-client.test.ps1',
+        # The backup key under .NET Framework: RSACng with OAEP-SHA256, the hand-built
+        # SubjectPublicKeyInfo, real DPAPI, PBKDF2; and ssh.exe's command-line quoting.
+        'test/backup-keys.test.ps1',
+        'test/backup-actions.test.ps1'
     )) {
         powershell.exe -NoProfile -ExecutionPolicy Bypass -File $test
         if ($LASTEXITCODE) { throw "$test failed" }

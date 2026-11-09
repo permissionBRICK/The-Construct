@@ -14,6 +14,7 @@ public sealed class FakePrompts : IPrompts
     public Queue<IReadOnlyList<string>?> Picks { get; } = new();
     public Queue<bool> Confirmations { get; } = new();
     public Queue<string?> SaveFiles { get; } = new();
+    public Queue<string?> OpenFiles { get; } = new();
     public Task<string?> InputAsync(InputPrompt prompt, CancellationToken cancellationToken = default)
     { cancellationToken.ThrowIfCancellationRequested(); Shown.Add(prompt); return Task.FromResult(Inputs.Dequeue()); }
     public Task<IReadOnlyList<string>?> PickAsync(PickPrompt prompt, CancellationToken cancellationToken = default)
@@ -33,4 +34,6 @@ public sealed class FakePrompts : IPrompts
     { cancellationToken.ThrowIfCancellationRequested(); Shown.Add(prompt); return Task.FromResult(FileDecisions.TryDequeue(out var choice) ? choice : null); }
     public Task<string?> SaveFileAsync(SaveFilePrompt prompt, CancellationToken cancellationToken = default)
     { cancellationToken.ThrowIfCancellationRequested(); Shown.Add(prompt); return Task.FromResult(SaveFiles.Dequeue()); }
+    public Task<string?> OpenFileAsync(OpenFilePrompt prompt, CancellationToken cancellationToken = default)
+    { cancellationToken.ThrowIfCancellationRequested(); Shown.Add(prompt); return Task.FromResult(OpenFiles.Dequeue()); }
 }

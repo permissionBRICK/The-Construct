@@ -350,6 +350,24 @@ input:focus, select:focus { outline: none; border-color: var(--rain); box-shadow
 .idle-sel { font-family: var(--mono); font-size: 12px; color: var(--text); background: rgba(0,0,0,0.25); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; }
 .idle-lbl, .idle-unit { letter-spacing: 0.5px; }
 
+/* Config backups: status, per-VM override, the host's list and the file/key buttons. */
+.bk-status { margin: 0 0 8px; font-size: 11.5px; color: var(--dim); }
+.bk-warn { margin: 0 0 8px; padding: 7px 10px; border: 1px solid rgba(255,194,77,0.4); border-radius: 6px; background: rgba(255,194,77,0.06); font-size: 11.5px; color: var(--warn); }
+.bk-warn[hidden], #bkRemote[hidden], .bk-row[hidden] { display: none; }
+.bk-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 11.5px; color: var(--dim); margin-bottom: 8px; }
+.bk-num { width: 68px; font-family: var(--mono); font-size: 12px; color: var(--text); background: rgba(0,0,0,0.25); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; }
+.bk-lbl { letter-spacing: 0.5px; }
+.bk-row .suffix.error { color: var(--crit); }
+.bk-list { display: flex; flex-direction: column; margin-bottom: 8px; }
+.bk-item { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--text); padding: 4px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+.bk-item:last-child { border-bottom: none; }
+.bk-when { font-family: var(--mono); min-width: 150px; }
+.bk-trigger { flex: 1; color: var(--dim); }
+.bk-size { font-family: var(--mono); color: var(--dim); min-width: 64px; text-align: right; }
+.bk-pin { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.5px; text-transform: uppercase; color: var(--warn); }
+.bk-empty { font-size: 11.5px; color: var(--faint); padding: 4px 0; }
+.bk-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+
 /* Locked default chip: cursor not-allowed, no hover highlight */
 .chip.locked { cursor: default; opacity: 0.7; }
 .chip.locked:hover { background: rgba(0,0,0,0.2); }

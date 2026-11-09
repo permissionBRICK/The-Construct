@@ -139,6 +139,8 @@ d="$(setup_fixture "opencode-watcher" "false" "stable")"
 printf '{"t3code":false,"t3codeChannel":"stable","opencodeBackgroundWatcher":true}\n' \
   > "${d}/backup/backup-info.json"
 cp "${ROOT}/bin/install-ai-tools.sh" "${d}/repo/bin/install-ai-tools.sh"
+# install-ai-tools.sh sources this helper from its own directory.
+cp "${ROOT}/bin/t3code-patched.sh" "${d}/repo/bin/t3code-patched.sh"
 mkdir -p "${d}/repo/extension/vm"
 cp "${ROOT}/extension/vm/opencode-background.js" "${d}/repo/extension/vm/opencode-background.js"
 make_systemctl_stub "${d}"
@@ -176,6 +178,44 @@ ok "tarball: streams home tree into EXPORT_HOME" \
   grep -qx streamed "${d}/export_home/.codex/AGENTS.md"
 ok "tarball: does not nest restored files under home/" \
   test ! -e "${d}/export_home/home"
+
+# A .tar.zst (what `construct backup fetch` writes) restores like a .tar.gz:
+# GNU tar detects the compression of the archive itself, for the listing, the
+# metadata, the home tree and the TLS tree alike.
+d="$(setup_fixture "zstd-tarball" "false" "nightly")"
+mkdir -p "${d}/backup/home/.codex" "${d}/backup/etc/construct/tls"
+printf 'from zstd\n' >"${d}/backup/home/.codex/AGENTS.md"
+printf 'saved ca\n' >"${d}/backup/etc/construct/tls/ca.crt"
+tar -C "${d}/backup" -cf - . | zstd -q -o "${d}/backup.tar.zst"
+make_systemctl_stub "${d}"
+zstd_rc=0
+env BACKUP_TGZ="${d}/backup.tar.zst" \
+    EXPORT_HOME="${d}/export_home" \
+    CONFIG_FILE="${d}/config/config.env" \
+    REPO_DIR="${d}/repo" \
+    T3CODE_TLS_DIR="${d}/tls" \
+    PATH="${d}/bin:${PATH}" \
+    bash "${RESTORE}" >"${d}/out" 2>&1 || zstd_rc=$?
+ok "zstd archive: the restore succeeds" test "${zstd_rc}" = 0
+ok "zstd archive: the home tree is restored" grep -qx 'from zstd' "${d}/export_home/.codex/AGENTS.md"
+ok "zstd archive: backup-info.json is read (channel restored)" \
+  test "$(read_config_key "${d}/config/config.env" T3CODE_CHANNEL)" = "nightly"
+ok "zstd archive: the TLS tree is restored" grep -qx 'saved ca' "${d}/tls/ca.crt"
+ok "zstd archive: not nested under home/" test ! -e "${d}/export_home/home"
+
+# A truncated archive is still refused before anything is touched.
+d="$(setup_fixture "zstd-truncated" "false" "stable")"
+mkdir -p "${d}/backup/home"
+head -c 300000 /dev/urandom >"${d}/backup/home/blob"
+tar -C "${d}/backup" -cf - . | zstd -q -o "${d}/full.tar.zst"
+head -c 2000 "${d}/full.tar.zst" >"${d}/backup.tar.zst"
+make_systemctl_stub "${d}"
+trunc_rc=0
+env BACKUP_TGZ="${d}/backup.tar.zst" EXPORT_HOME="${d}/export_home" CONFIG_FILE="${d}/config/config.env" \
+    REPO_DIR="${d}/repo" PATH="${d}/bin:${PATH}" bash "${RESTORE}" >"${d}/out" 2>&1 || trunc_rc=$?
+ok "zstd archive: a truncated archive fails the restore" test "${trunc_rc}" -ne 0
+ok "zstd archive: ... saying it is unreadable" grep -q 'unreadable or truncated' "${d}/out"
+ok "zstd archive: ... before restoring anything" test ! -e "${d}/export_home/blob"
 
 # Project provisioning can recreate a repo-managed skill as a directory while
 # the saved home contains a symlink at the same path. The complete backed-up

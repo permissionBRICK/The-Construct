@@ -78,5 +78,15 @@ module.exports = [
   { key: "https", label: "HTTPS forwards", rawOnly: [], fields: [
     {"key":"sharedPort","label":"Shared HTTPS port","type":"int","default":null,"help":"Usually 443. Serves each VM's main HTTPS forward under the VM's own name (needs PublicHostPattern) and the key vault pages under the approval page address. Needs a certificate. Off: HTTPS forwards only get their own ports.","min":1,"max":65535,"nullable":true,"nullLabel":"Off"},
     {"key":"startOnRequest","label":"Start VMs on request","type":"bool","default":true,"help":"Opening a stopped or saved VM's HTTPS address starts it and shows a page that reloads until it answers."}
+  ] },
+  { key: "backups", label: "Config backups", rawOnly: [], fields: [
+    {"key":"enabled","label":"Enable config backups","type":"bool","default":true,"help":"VMs store encrypted config backups on this host; the host cannot read them. Off refuses new backups; stored ones stay until rotation or cleanup removes them."},
+    {"key":"intervalHours","label":"Backup interval","type":"int","default":24,"help":"Hours between scheduled backups of each VM. 0 turns scheduled backups off on this host; manual and pre-reinstall backups still work. Owners can set their own interval per VM.","unit":"hours","min":0,"max":720},
+    {"key":"keep","label":"Backups kept per VM","type":"int","default":4,"help":"Backups kept per VM, spread over the current week and month. At most the maximum below; owners can choose their own number up to it.","min":1,"max":50},
+    {"key":"maxKeep","label":"Most backups kept per VM","type":"int","default":10,"help":"The highest number of backups an owner may keep per VM.","min":1,"max":50},
+    {"key":"pinDays","label":"Keep the pre-reinstall backup","type":"int","default":14,"help":"Days a backup taken before a reinstall is kept even when newer ones would rotate it out. A successful restore from it releases it.","unit":"days","min":1,"max":365},
+    {"key":"retainDeletedDays","label":"Keep after a VM is deleted","type":"int","default":14,"help":"Days the backups of a deleted VM are kept. A new VM with the same owner and name sees them again.","unit":"days","min":0,"max":3650},
+    {"key":"minFreeBytes","label":"Free space kept","type":"bytes","default":5368709120,"help":"Free space on the backup disk that backups never use; a backup that would go below it is refused.","unit":"GiB","scale":1073741824,"min":0,"max":9007199254740991},
+    {"key":"maxBytesPerVm","label":"Storage per VM","type":"bytes","default":null,"help":"The most backup storage one VM may use, at least 64 MiB.","unit":"GiB","scale":1073741824,"min":67108864,"max":9007199254740991,"nullable":true,"nullLabel":"No limit besides free space"}
   ] }
 ];

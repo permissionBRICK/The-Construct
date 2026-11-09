@@ -39,6 +39,7 @@ const { createClient, snapshotMessages } = require("../src/companion");
         const panelState = snapshotMessages(snapshot, "attached")[0].state;
         assert.equal(panelState.children, snapshot.children.children); count++;
         assert.equal(panelState.idlePolicy, snapshot.idlePolicy.idlePolicy); count++;
+        assert.equal(panelState.backups, snapshot.backups.backups); count++;
         assert.equal(panelState.hostAdminOffer, snapshot.hostAdminOffer.offer); count++;
         await client.proxy("remote-vm", { type: "command", id: "notSupported" });
         for (let i = 0; i < 200 && !events.some(e => e.data.message?.id === "notSupported"); i++) await new Promise(r => setTimeout(r, 10));

@@ -29,7 +29,7 @@ public sealed record Health(bool Ok, string Version, int Pid, DateTimeOffset Sta
 public sealed record CompanionState(string? ActiveInstance, IReadOnlyList<string> Instances,
     IReadOnlyDictionary<string, Snapshot> Snapshots);
 public sealed record Snapshot(JsonElement? State, JsonElement? Settings, JsonElement? Audio,
-    JsonElement? Forwards, JsonElement? Children, JsonElement? IdlePolicy, JsonElement? HostAdminOffer);
+    JsonElement? Forwards, JsonElement? Children, JsonElement? IdlePolicy, JsonElement? HostAdminOffer, JsonElement? Backups = null);
 public sealed record InstanceMessage(string Instance, JsonElement Message);
 public sealed record AcceptedResponse(bool Accepted = true);
 public sealed record RemoteHost(string Slug, string Url, string Auth, bool Pinned, bool? Admin);

@@ -70,7 +70,8 @@ def get_update_target(path):
     base = h['publishDir'] if path.startswith('service/') else h['scriptsDir']
     dest = pathlib.Path(base, path[8:])
     protected = [h['dataDir'], setting('Constructd', 'Iso', 'CacheDir'), setting('Constructd', 'HostAdmin', 'Media', 'RootDir'),
-                 setting('Constructd', 'HostAdmin', 'Source', 'RootDir'), *(str(pathlib.Path(h['scriptsDir'], p)) for p in ('keys', 'projects', '.construct-tools'))]
+                 setting('Constructd', 'HostAdmin', 'Source', 'RootDir'), setting('Constructd', 'Backups', 'RootDir'),
+                 *(str(pathlib.Path(h['scriptsDir'], p)) for p in ('keys', 'projects', '.construct-tools'))]
     if not under(dest, base) or any(under(dest, p) for p in protected): fail()
     if path.startswith('scripts/') and under(dest, h['publishDir']): fail()
     assert_update_no_links(dest)

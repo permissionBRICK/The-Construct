@@ -452,6 +452,144 @@ SCRUB_INVOCATION=test-invocation post_scrub >/dev/null 2>&1
 ok "vaultScrub: the default command is the construct CLI next to the reporter" \
   grep -q -- "-- ${ROOT}/bin/construct secret _scrub\$" "${systemd_run_log}"
 
+# ── "backupDue": true starts `construct backup create` ──────────────────────
+# docs/plans/host-config-backups.md 3.4: the host asks for a config backup in the
+# heartbeat reply. The reporter starts `construct backup create --trigger <t>`
+# detached -- under systemd as the transient unit construct-backup, and only
+# while that unit is not active -- and never waits for it.
+
+backup_log="${tmp}/backup.log"
+unit_systemctl_log="${tmp}/unit-systemctl.log"
+cat >"${stubs}/backupcli" <<'STUB'
+#!/usr/bin/env bash
+printf 'start %s\n' "$*" >>"${BACKUP_LOG}"
+sleep "${BACKUP_SLEEP:-0}"
+printf 'done\n' >>"${BACKUP_LOG}"
+STUB
+cat >"${stubs}/unit-systemctl" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${UNIT_SYSTEMCTL_LOG}"
+if [[ "$1" == is-active ]]; then
+  printf '%s\n' "${BACKUP_UNIT_STATE:-inactive}"
+  [[ "${BACKUP_UNIT_STATE:-inactive}" == active ]] && exit 0
+  exit 3
+fi
+exit 0
+STUB
+chmod +x "${stubs}/backupcli" "${stubs}/unit-systemctl"
+
+post_backup() {
+  rm -f "${backup_log}" "${systemd_run_log}" "${unit_systemctl_log}" "${scrub_log}"
+  # An empty INVOCATION_ID reads as "not under systemd", like an unset one.
+  INVOCATION_ID="${BACKUP_INVOCATION:-}" \
+  BACKUP_LOG="${backup_log}" BACKUP_SLEEP="${BACKUP_SLEEP:-0}" SCRUB_LOG="${scrub_log}" \
+  SYSTEMD_RUN_LOG="${systemd_run_log}" UNIT_SYSTEMCTL_LOG="${unit_systemctl_log}" \
+  BACKUP_UNIT_STATE="${BACKUP_UNIT_STATE:-inactive}" \
+  CONSTRUCT_IDLE_SYSTEMD_RUN="${stubs}/systemd-run" CONSTRUCT_IDLE_SYSTEMCTL="${stubs}/unit-systemctl" \
+  CONSTRUCT_IDLE_BACKUP_CMD="${BACKUP_CMD_OVERRIDE-${stubs}/backupcli}" CONSTRUCT_IDLE_SCRUB_CMD="${stubs}/scrub" \
+    post
+}
+
+reset_scene
+printf '200' >"${stub_dir}/code"
+printf '{"backupDue":true,"backupTrigger":"manual"}' >"${stub_dir}/response"
+start_ms="$(date +%s%3N)"
+BACKUP_SLEEP=3 post_backup >"${tmp}/backup.out" 2>"${tmp}/backup.err"
+backup_rc=$?
+elapsed=$(( $(date +%s%3N) - start_ms ))
+ok "backupDue: the report still exits 0" test "${backup_rc}" = 0
+ok "backupDue: the report does not wait for the backup (${elapsed} ms)" test "${elapsed}" -lt 2000
+ok "backupDue: the report still says nothing" sh -c "test ! -s '${tmp}/backup.out' -a ! -s '${tmp}/backup.err'"
+ok "backupDue: 'construct backup create --trigger manual' is started" \
+  wait_for_line "${backup_log}" "start backup create --trigger manual"
+ok "backupDue: ... detached: it outlives the report and finishes" \
+  sh -c "for i in \$(seq 1 100); do grep -qx done '${backup_log}' && exit 0; sleep 0.05; done; exit 1"
+ok "backupDue: ... exactly once" test "$(grep -c '^start' "${backup_log}")" = 1
+ok "backupDue: no key vault scrub was asked for, none started" test ! -e "${scrub_log}"
+
+reset_scene
+printf '200' >"${stub_dir}/code"
+printf '{"backupDue":true}' >"${stub_dir}/response"
+post_backup >/dev/null 2>&1
+ok "backupDue without a trigger: started as scheduled" \
+  wait_for_line "${backup_log}" "start backup create --trigger scheduled"
+
+reset_scene
+printf '200' >"${stub_dir}/code"
+printf '{"backupDue":true,"backupTrigger":"pre-reinstall; rm -rf /"}' >"${stub_dir}/response"
+post_backup >/dev/null 2>&1
+ok "backupDue with an unknown trigger: started as scheduled, nothing else" \
+  wait_for_line "${backup_log}" "start backup create --trigger scheduled"
+
+for reply in '{"backupDue":false,"backupTrigger":"manual"}' '{"vaultScrub":false}' '' '"backupDue": true' '[{"backupDue":true}]'; do
+  reset_scene
+  printf '200' >"${stub_dir}/code"
+  printf '%s' "${reply}" >"${stub_dir}/response"
+  post_backup >/dev/null 2>&1
+  sleep 0.3
+  ok "no backup for the reply '${reply}'" test ! -e "${backup_log}"
+done
+
+reset_scene
+printf '500' >"${stub_dir}/code"
+printf '{"backupDue":true}' >"${stub_dir}/response"
+post_backup >/dev/null 2>&1
+sleep 0.3
+ok "no backup when the report itself failed" test ! -e "${backup_log}"
+
+# Under systemd: the transient unit construct-backup, only while it is not active.
+reset_scene
+printf '200' >"${stub_dir}/code"
+printf '{"backupDue":true,"backupTrigger":"scheduled"}' >"${stub_dir}/response"
+BACKUP_INVOCATION=test-invocation post_backup >"${tmp}/backup.out" 2>"${tmp}/backup.err"
+backup_rc=$?
+ok "backupDue under systemd: exits 0, says nothing" \
+  sh -c "test ${backup_rc} = 0 && test ! -s '${tmp}/backup.out' -a ! -s '${tmp}/backup.err'"
+ok "backupDue under systemd: asks whether construct-backup is active" \
+  grep -qx 'is-active construct-backup' "${unit_systemctl_log}"
+ok "backupDue under systemd: systemd-run starts the documented unit" \
+  grep -qx -- "--quiet --no-block --collect --unit construct-backup --property=SyslogIdentifier=construct-backup -- ${stubs}/backupcli backup create --trigger scheduled" \
+  "${systemd_run_log}"
+sleep 0.3
+ok "backupDue under systemd: not also forked off directly" test ! -e "${backup_log}"
+
+for unit_state in active activating deactivating; do
+  reset_scene
+  printf '200' >"${stub_dir}/code"
+  printf '{"backupDue":true,"backupTrigger":"manual"}' >"${stub_dir}/response"
+  BACKUP_UNIT_STATE="${unit_state}" BACKUP_INVOCATION=test-invocation post_backup >/dev/null 2>&1
+  ok "backupDue under systemd: no second backup while the unit is ${unit_state}" test ! -e "${systemd_run_log}"
+done
+
+reset_scene
+printf '200' >"${stub_dir}/code"
+printf '{"vaultScrub":true,"backupDue":true,"backupTrigger":"manual"}' >"${stub_dir}/response"
+BACKUP_INVOCATION=test-invocation post_backup >/dev/null 2>&1
+ok "vaultScrub and backupDue together: both are started" \
+  sh -c "grep -q -- '-- ${stubs}/scrub secret _scrub\$' '${systemd_run_log}' && grep -q -- '--unit construct-backup .*-- ${stubs}/backupcli backup create --trigger manual\$' '${systemd_run_log}'"
+
+reset_scene
+printf '200' >"${stub_dir}/code"
+printf '{"backupDue":true}' >"${stub_dir}/response"
+BACKUP_CMD_OVERRIDE="" BACKUP_INVOCATION=test-invocation post_backup >/dev/null 2>&1
+ok "backupDue: the default command is the construct CLI next to the reporter" \
+  grep -q -- "-- ${ROOT}/bin/construct backup create --trigger scheduled\$" "${systemd_run_log}"
+
+# Without jq the reply is read with grep; the same answers.
+backup_due_fn="$(sed -n '/^backup_due()/,/^}$/p' "${REPORTER}")"
+due_without_jq() { # <reply>: prints the trigger, fails when not due
+  printf '%s' "$1" >"${tmp}/reply.json"
+  FN="${backup_due_fn}" bash -c 'command() { [[ "$1" == -v && "$2" == jq ]] && return 1; builtin command "$@"; }
+    eval "${FN}"; backup_due "$1"' _ "${tmp}/reply.json"
+}
+ok "without jq: a due backup with its trigger" test "$(due_without_jq '{"ok":true,"backupDue": true,"backupTrigger" : "manual"}')" = manual
+ok "without jq: a reply over several lines" test "$(due_without_jq $'{\n  "backupDue": true,\n  "backupTrigger": "manual"\n}')" = manual
+ok "without jq: no trigger means scheduled" test "$(due_without_jq '{"backupDue":true}')" = scheduled
+due_without_jq '{"backupDue":false}' >/dev/null && no_jq_false=due || no_jq_false=not-due
+ok "without jq: backupDue false is not due" test "${no_jq_false}" = not-due
+due_without_jq '"backupDue": true' >/dev/null && no_jq_str=due || no_jq_str=not-due
+ok "without jq: a reply that is no object is not due" test "${no_jq_str}" = not-due
+
 # ── the systemd units ────────────────────────────────────────────────────────
 
 service_unit="${ROOT}/systemd/construct-idle-report.service"
@@ -517,12 +655,15 @@ ok "the construct CLI is installed executable" test -x "${prov_bin}/construct"
 ok "the expose implementation lands next to it" test -x "${prov_bin}/construct-expose.sh"
 ok "the child-VM implementation lands next to it" test -x "${prov_bin}/construct-vm.sh"
 ok "the key vault implementation lands next to it" test -x "${prov_bin}/construct-secret.sh"
+ok "the config backup implementation lands next to it" test -x "${prov_bin}/construct-backup.sh"
 ok "the per-VM settings implementation lands next to it" test -x "${prov_bin}/construct-config.sh"
 ok "the heartbeat reporter is installed too" test -x "${prov_bin}/construct-idle-report.sh"
 ok "the installed CLI finds its expose helper" \
   sh -c "CONFIG_FILE='${empty_cfg}' bash '${prov_bin}/construct' expose --help | grep -q 'construct expose'"
 ok "the installed CLI finds its child-VM helper" \
   sh -c "CONFIG_FILE='${empty_cfg}' bash '${prov_bin}/construct' vm --help | grep -q 'construct vm'"
+ok "the installed CLI finds its config backup helper" \
+  sh -c "CONFIG_FILE='${empty_cfg}' bash '${prov_bin}/construct' backup --help | grep -q 'construct backup'"
 ok "the installed CLI finds its settings helper" \
   sh -c "CONFIG_FILE='${empty_cfg}' bash '${prov_bin}/construct' config --help | grep -q 't3-proxy-url'"
 ok "the forward spool is created" \
@@ -689,7 +830,7 @@ ok "the provisioning marker is removed when the run finishes" \
 # already-present code is still 64 new findings to read past.
 
 if command -v shellcheck >/dev/null 2>&1; then
-  for f in bin/construct bin/construct-expose.sh bin/construct-vm.sh bin/construct-secret.sh bin/construct-idle-report.sh \
+  for f in bin/construct bin/construct-expose.sh bin/construct-vm.sh bin/construct-secret.sh bin/construct-idle-report.sh bin/construct-backup.sh \
            bin/provision.sh test/construct-expose.test.sh test/idle-report.test.sh; do
     now_count="$(shellcheck -f gcc "${ROOT}/${f}" 2>/dev/null | wc -l)"
     base_count=0

@@ -147,6 +147,19 @@ public class RouteCoverageTests
         "GET /vault/pair",
         "GET /vault/vault.js",
         "GET /vault/vault.css",
+        "POST /api/v1/vms/{name}/backups",
+        "PUT /api/v1/vms/{name}/backups/{id:regex(^[0-9a-f]{{32}}$)}/keys",
+        "PUT /api/v1/vms/{name}/backups/{id:regex(^[0-9a-f]{{32}}$)}/content",
+        "DELETE /api/v1/vms/{name}/backups/{id:regex(^[0-9a-f]{{32}}$)}",
+        "POST /api/v1/vms/{name}/backups/report",
+        "POST /api/v1/vms/{name}/backups/{id:regex(^[0-9a-f]{{32}}$)}/restored",
+        "GET /api/v1/vms/{name}/backups",
+        "GET /api/v1/vms/{name}/backups/{id:regex(^[0-9a-f]{{32}}$)}/content",
+        "GET /api/v1/vms/{name}/backups/{id:regex(^[0-9a-f]{{32}}$)}/keys",
+        "GET /api/v1/vms/{name}/backups/status",
+        "POST /api/v1/vms/{name}/backups/request",
+        "GET /api/v1/vms/{name}/backups/settings",
+        "PUT /api/v1/vms/{name}/backups/settings",
     ];
 
     // The key vault's phone pages: anonymous static files, outside /api/v1.
@@ -168,7 +181,9 @@ public class RouteCoverageTests
         foreach (var route in Routes(app).Where(r => !AnonymousRoutes.Contains(r.Route)))
         {
             var parts = route.Route.Split(' ', 2);
-            var path = System.Text.RegularExpressions.Regex.Replace(parts[1], @"\{[^}]+\}", "1");
+            // A parameter may carry a regex constraint with escaped braces ({{ }}); it gets a value that matches.
+            var path = System.Text.RegularExpressions.Regex.Replace(parts[1], @"\{(?:[^{}]|\{\{|\}\})+\}",
+                m => m.Value.Contains(":regex(", StringComparison.Ordinal) ? new string('0', 32) : "1");
             using var request = new HttpRequestMessage(new(parts[0]), path) { Content = System.Net.Http.Json.JsonContent.Create(new { }) };
             var response = await anonymous.SendAsync(request);
             Assert.True(response.StatusCode == System.Net.HttpStatusCode.Unauthorized, route.Route + ": " + response.StatusCode);

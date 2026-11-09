@@ -970,6 +970,114 @@
     });
   });
 
+  // ── Config backups (docs/plans/host-config-backups.md §3.8) ─────────────────
+  // state.backups is the model the host side builds (src/backups.js; the Companion's BackupProtocol.cs):
+  // null hides the module, `remote: false` (a local VM) shows only the file and key buttons, a remote VM
+  // on a host with config-backups also gets the status, the per-VM override and the host's list. The
+  // override is checked here for immediate feedback; the host side checks it again.
+  let backupsModel = null, backupsDirty = false, backupSelected = "";
+  function backupOverrideProblem(interval, keep, maxKeep) {
+    const whole = (v, min, max) => v === "" || (/^[0-9]+$/.test(v) && Number(v) >= min && Number(v) <= max);
+    if (!whole(interval, 0, 720)) return "Hours between backups: a whole number from 0 to 720, or empty for the host default.";
+    if (!whole(keep, 1, maxKeep)) return "Backups kept: a whole number from 1 to " + maxKeep + ", or empty for the host default.";
+    return "";
+  }
+  function setBackupText(id, value) {
+    const el = $(id);
+    if (!el) return;
+    el.textContent = value || "";
+    el.hidden = !value;
+  }
+  function renderBackups(model) {
+    const mod = $("backupsModule");
+    if (!mod) return;
+    backupsModel = model && typeof model === "object" ? model : null;
+    if (!backupsModel) { mod.hidden = true; return; }
+    mod.hidden = false;
+    const remote = backupsModel.remote === true;
+    $("bkRemote").hidden = !remote;
+    setBackupText("bkKeyWarning", backupsModel.keyWarning);
+    setBackupText("bkProblem", backupsModel.problem);
+    text("bkNote", remote
+      ? "Backups are encrypted on the VM; the host stores them but cannot read them. Only PCs holding an enrolled backup key can restore them."
+      : "Backup files are encrypted on the VM; only PCs holding an enrolled backup key can restore them. Reinstall keeps using Export config.");
+    if (!remote) { text("bkHint", ""); return; }
+
+    text("bkStatus", backupsModel.statusLine || "");
+    setBackupText("bkWarning", backupsModel.warning);
+    $("bkEnroll").hidden = backupsModel.warningReason !== "no-recipients";
+
+    const o = backupsModel.override;
+    $("bkOverride").hidden = !o;
+    if (o) {
+      const interval = $("bkInterval"), keep = $("bkKeep");
+      interval.placeholder = o.hostIntervalHours == null ? "host" : String(o.hostIntervalHours);
+      keep.placeholder = o.hostKeep == null ? "host" : String(o.hostKeep);
+      keep.max = String(o.maxKeep || 50);
+      // Never yank a value out from under someone mid-edit (same rule as the idle policy).
+      if (!backupsDirty) { interval.value = o.intervalHours || ""; keep.value = o.keep || ""; text("bkOverrideNote", ""); }
+      text("bkHint", "empty = host default" + (o.hostIntervalHours == null ? "" : " (every " + o.hostIntervalHours + " h, keep " + o.hostKeep + ")") + " · at most " + (o.maxKeep || 50) + " kept");
+    } else text("bkHint", "");
+
+    const items = Array.isArray(backupsModel.items) ? backupsModel.items : [];
+    if (!items.some((b) => b.id === backupSelected)) backupSelected = items.length ? items[0].id : "";
+    const list = $("bkList");
+    list.innerHTML = "";
+    if (!items.length) {
+      const empty = document.createElement("div");
+      empty.className = "bk-empty";
+      empty.textContent = "No backups on the host yet.";
+      list.appendChild(empty);
+    }
+    items.forEach((b) => {
+      const row = document.createElement("label");
+      row.className = "bk-item";
+      const pick = document.createElement("input");
+      pick.type = "radio"; pick.name = "bkPick"; pick.value = b.id; pick.checked = b.id === backupSelected;
+      pick.addEventListener("change", () => { if (pick.checked) backupSelected = b.id; });
+      const cell = (cls, value) => { const s = document.createElement("span"); s.className = cls; s.textContent = value || ""; return s; };
+      row.append(pick, cell("bk-when", b.when), cell("bk-trigger", b.trigger), cell("bk-size", b.size));
+      if (b.pinned) { const pin = cell("bk-pin", "pinned"); pin.title = "Kept until " + b.pinnedUntil + " or until a restore from it succeeded"; row.appendChild(pin); }
+      list.appendChild(row);
+    });
+    const now = $("bkNow");
+    now.disabled = backupsModel.enabled === false || backupsModel.pending === true;
+    now.title = backupsModel.enabled === false ? "Backups are turned off on this host"
+      : backupsModel.pending === true ? "A backup is already requested" : "Ask the VM for a backup now; it starts at its next check-in";
+    $("bkRestore").disabled = !items.length;
+  }
+  ["bkInterval", "bkKeep"].forEach((id) => {
+    const el = $(id);
+    if (el) el.addEventListener("input", () => { backupsDirty = true; const note = $("bkOverrideNote"); if (note) { note.classList.remove("error"); note.textContent = ""; } });
+  });
+  $("bkApply") && $("bkApply").addEventListener("click", () => {
+    const interval = $("bkInterval").value.trim(), keep = $("bkKeep").value.trim();
+    const maxKeep = (backupsModel && backupsModel.override && backupsModel.override.maxKeep) || 50;
+    const problem = backupOverrideProblem(interval, keep, maxKeep);
+    const note = $("bkOverrideNote");
+    note.classList.toggle("error", !!problem);
+    note.textContent = problem || "saving…";
+    if (problem) return;
+    backupsDirty = false;
+    post({ type: "saveBackupSettings", settings: { intervalHours: interval, keep } });
+  });
+  const backupCommand = (button, id, withBackup) => {
+    const el = $(button);
+    if (!el) return;
+    el.addEventListener("click", () => {
+      if (el.disabled) return;
+      const remote = !!(backupsModel && backupsModel.remote === true);
+      post(withBackup && remote ? { type: "command", id, backup: backupSelected } : { type: "command", id });
+    });
+  };
+  backupCommand("bkNow", "backupNow", false);
+  backupCommand("bkRestore", "backupRestore", true);
+  backupCommand("bkEnroll", "backupEnroll", false);
+  backupCommand("bkSaveFile", "backupSave", true);
+  backupCommand("bkRestoreFile", "backupRestoreFile", false);
+  backupCommand("bkKeyExport", "backupKeyExport", false);
+  backupCommand("bkKeyImport", "backupKeyImport", false);
+
   function render(s) {
     if (!s) return;
     // Which VM this window drives. Host-derived (registry), so render it before the
@@ -1035,6 +1143,8 @@
     // offline early-return and neither is cleared by clearLiveVmData.
     if (s.forwards !== undefined) renderForwards(s.forwards);
     if (s.idlePolicy !== undefined) renderIdlePolicy(s.idlePolicy);
+    // Config backups are host- and PC-derived as well (the key file lives on this PC).
+    if (s.backups !== undefined) renderBackups(s.backups);
     // Child VMs and the host-administration offer are host-service-derived too (§10.2):
     // rendered before the offline early-return, `null` hides, absent leaves them as they are.
     if (s.children !== undefined) renderChildren(s.children);
@@ -1310,7 +1420,7 @@
     // A answered after the window switched to B, A's last forwards snapshot, A's settings file. Extension-side session gating cannot help any
     // of them — it decides whether to POST, and these are already posted and queued behind
     // B's state push. Generic on purpose: every per-instance producer stamps `instance`
-    // (forwards, settings, idlePolicy) and is covered by this one line. A message
+    // (forwards, settings, idlePolicy, backups) and is covered by this one line. A message
     // with no `instance` (today: only `editProject`, a direct reply about the ONE host
     // config repo every instance shares) is deliberately unaffected.
     if (m.instance && shownInstance && m.instance !== shownInstance) return;
@@ -1322,6 +1432,7 @@
     else if (m.type === "forwards") renderForwards(m.forwards);
     else if (m.type === "children") renderChildren(m.children);
     else if (m.type === "idlePolicy") renderIdlePolicy(m.idlePolicy);
+    else if (m.type === "backups") renderBackups(m.backups);
     else if (m.type === "settings") applySettings(m.settings);
     else if (m.type === "editProject") populateModal(m.name, m.profile);
   });

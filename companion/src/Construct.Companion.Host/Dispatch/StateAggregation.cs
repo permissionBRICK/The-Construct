@@ -46,7 +46,7 @@ public sealed class StateAggregation(CompanionInstances instances, RuntimeMessag
         var profiles = instances.Host.ListProjectProfiles(instances.Host.ConfigDirectory ?? entry.Store.ScriptsDirectory);
         if (!entry.Store.HasPersistedSelection()) profiles = profiles.Concat((data["projects"] as JsonArray ?? []).OfType<JsonObject>().Select(p => StateJson.String(p["name"]))).Where(p => p.Length > 0).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         if (profiles.Length > 0 || entry.Store.HasPersistedSelection()) data["projects"] = new JsonArray(profiles.Select(p => (JsonNode)new JsonObject { ["name"] = p, ["selected"] = selected.Contains(p) }).ToArray());
-        foreach (var kind in new[] { "forwards", "children", "idlePolicy", "hostAdminOffer" })
+        foreach (var kind in new[] { "forwards", "children", "idlePolicy", "backups", "hostAdminOffer" })
             data[kind] = cached.TryGetValue(kind, out var message) && message.TryGetProperty(kind == "hostAdminOffer" ? "offer" : kind, out var value) ? JsonNode.Parse(value.GetRawText()) : null;
         return new() { ["type"] = "state", ["state"] = data };
     }
@@ -57,12 +57,12 @@ public sealed class StateAggregation(CompanionInstances instances, RuntimeMessag
         JsonElement Narrow(string kind) => cached.TryGetValue(kind, out var found) ? found : Value(new JsonObject { ["type"] = kind, [kind == "hostAdminOffer" ? "offer" : kind] = null });
         return new(Value(State(name)), Value(new { type = "settings", instance = name, settings = entry.Store.ReadSettings() }),
             cached.TryGetValue("audio", out var audio) ? audio : Value(new { type = "audio", instance = name, enabled = false, capturing = false }),
-            Narrow("forwards"), Narrow("children"), Narrow("idlePolicy"), Narrow("hostAdminOffer"));
+            Narrow("forwards"), Narrow("children"), Narrow("idlePolicy"), Narrow("hostAdminOffer"), Narrow("backups"));
     }
     public void PublishSnapshot(string name)
     {
         var snapshot = Snapshot(name);
-        foreach (var message in new[] { snapshot.State, snapshot.Settings, snapshot.Audio, snapshot.Forwards, snapshot.Children, snapshot.IdlePolicy, snapshot.HostAdminOffer })
+        foreach (var message in new[] { snapshot.State, snapshot.Settings, snapshot.Audio, snapshot.Forwards, snapshot.Children, snapshot.IdlePolicy, snapshot.Backups, snapshot.HostAdminOffer })
             if (message is { } value) events.Message(name, value);
     }
     public void Publish(string name, object message) => bus.Publish(name, message);

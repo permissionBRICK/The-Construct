@@ -43,7 +43,7 @@
 # What it leaves behind:
 #   /opt/construct/host        the service (Constructd.Api, appsettings.Production.json)
 #   /opt/construct/scripts     the Construct checkout the service hands to guests (bin/, keys/, ...)
-#   /var/lib/constructd        constructd.db, iso/, media/, source/
+#   /var/lib/constructd        constructd.db, iso/, media/, source/, backups/ (encrypted config backups)
 #   /etc/constructd            tls.pfx + tls.pass (root-only), install.json; tls-previous.* after a rename
 #   <image-storage>:import/construct-ubuntu-<release>-xfs-amd64.qcow2   the VM image (XFS root)
 #   <image-storage>:snippets/  one cloud-init user-data file per VM, written by the service
@@ -285,7 +285,7 @@ note "node ${NODE}, public host ${PUBLIC_HOST}, source ${SOURCE_DIR}"
 # ── 1. Directories ───────────────────────────────────────────────────────────
 say "Directories"
 install -d -m 0755 /opt/construct "${HOST_DIR}" "${SCRIPTS_DIR}"
-install -d -m 0750 "${DATA_DIR}" "${DATA_DIR}/iso" "${DATA_DIR}/media" "${DATA_DIR}/source"
+install -d -m 0750 "${DATA_DIR}" "${DATA_DIR}/iso" "${DATA_DIR}/media" "${DATA_DIR}/source" "${DATA_DIR}/backups"
 install -d -m 0700 "${ETC_DIR}"
 note "${HOST_DIR}, ${SCRIPTS_DIR}, ${DATA_DIR}, ${ETC_DIR}"
 
@@ -630,6 +630,7 @@ settings = {
       "CacheDir": "${DATA_DIR}/iso"
     },
     "HostAdmin": {"Media": {"RootDir": "${DATA_DIR}/media/template/iso"}, "Source": {"RootDir": "${DATA_DIR}/source"}},
+    "Backups": {"RootDir": "${DATA_DIR}/backups"},
     "Proxmox": {
       "Node": "${NODE}",
       "Storage": "${STORAGE}",

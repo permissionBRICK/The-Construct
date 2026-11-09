@@ -7,14 +7,14 @@ namespace Construct.Companion.Core.HostAdmin;
 public static partial class HostAdminProtocol
 {
     public static readonly string[] Tabs = ["overview", "vms", "users", "usage", "media", "operations", "config", "maintenance"];
-    public static readonly string[] ConfigSections = ["capacity", "memoryPressure", "userDefaults", "userCaps", "lifecycle", "media", "network", "virtualization", "updates", "usage", "vault", "https"];
+    public static readonly string[] ConfigSections = ["capacity", "memoryPressure", "userDefaults", "userCaps", "lifecycle", "media", "network", "virtualization", "updates", "usage", "vault", "https", "backups"];
     // Sections an older host does not have: shown only when the host's configuration carries them.
-    public static readonly string[] NewerConfigSections = ["memoryPressure", "usage", "vault", "https"];
+    public static readonly string[] NewerConfigSections = ["memoryPressure", "usage", "vault", "https", "backups"];
     public static string Text(JsonNode? node) => StateJson.Trim(node is null ? "" : StateJson.String(node));
     public static JsonObject Features(JsonNode? health)
     {
         var flags = (health?["apiFeatures"] as JsonArray ?? []).Select(Text).ToHashSet();
-        return new() { ["hostAdmin"] = flags.Contains("host-admin"), ["windowsGuests"] = flags.Contains("windows-guests"), ["usage"] = flags.Contains("usage"), ["children"] = flags.Contains("children"), ["media"] = flags.Contains("media"), ["console"] = flags.Contains("console"), ["updates"] = flags.Contains("updates"), ["network"] = flags.Contains("network"), ["networkMode"] = flags.Contains("network-mode"), ["primaryCpu"] = flags.Contains("primary-cpu"), ["primaryMemory"] = flags.Contains("primary-memory"), ["primaryNested"] = flags.Contains("primary-nested"), ["primaryMemoryFloor"] = flags.Contains("primary-memory-floor") };
+        return new() { ["hostAdmin"] = flags.Contains("host-admin"), ["windowsGuests"] = flags.Contains("windows-guests"), ["usage"] = flags.Contains("usage"), ["children"] = flags.Contains("children"), ["media"] = flags.Contains("media"), ["console"] = flags.Contains("console"), ["updates"] = flags.Contains("updates"), ["network"] = flags.Contains("network"), ["networkMode"] = flags.Contains("network-mode"), ["primaryCpu"] = flags.Contains("primary-cpu"), ["primaryMemory"] = flags.Contains("primary-memory"), ["primaryNested"] = flags.Contains("primary-nested"), ["primaryMemoryFloor"] = flags.Contains("primary-memory-floor"), ["configBackups"] = flags.Contains("config-backups") };
     }
     public static JsonArray TabsFor(JsonObject features) => new(Tabs.Select((id, i) => (JsonNode)new JsonObject
     { ["id"] = id, ["label"] = new[] { "Overview", "VMs", "Users", "Usage", "Media", "Operations", "Configuration", "Maintenance" }[i], ["available"] = StateJson.Boolean(features[id == "maintenance" ? "updates" : id == "usage" ? "usage" : "hostAdmin"]) == true, ["reason"] = StateJson.Boolean(features[id == "maintenance" ? "updates" : id == "usage" ? "usage" : "hostAdmin"]) == true ? "" : "not available on this host version" }).ToArray());

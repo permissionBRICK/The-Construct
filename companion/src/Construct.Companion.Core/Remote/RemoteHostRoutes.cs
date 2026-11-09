@@ -13,6 +13,12 @@ public sealed partial class RemoteHostClient
     public Task<JsonNode?> SetVmMemoryAsync(string name, JsonNode? body, CancellationToken cancellationToken = default) => RequestAsync("PUT", $"/vms/{RemoteHost.Encode(name)}/memory", body, cancellationToken);
     public Task<JsonNode?> VmIdlePolicyAsync(string name, CancellationToken cancellationToken = default) => RequestAsync("GET", $"/vms/{RemoteHost.Encode(name)}/idle-policy", cancellationToken: cancellationToken);
     public Task<JsonNode?> SetVmIdlePolicyAsync(string name, JsonNode? body, CancellationToken cancellationToken = default) => RequestAsync("PUT", $"/vms/{RemoteHost.Encode(name)}/idle-policy", body, cancellationToken);
+    // Config backups (docs/plans/host-config-backups.md §3.5; the VM's owner or an admin).
+    public Task<JsonNode?> VmBackupsAsync(string name, CancellationToken cancellationToken = default) => RequestAsync("GET", $"/vms/{RemoteHost.Encode(name)}/backups", cancellationToken: cancellationToken);
+    public Task<JsonNode?> VmBackupStatusAsync(string name, CancellationToken cancellationToken = default) => RequestAsync("GET", $"/vms/{RemoteHost.Encode(name)}/backups/status", cancellationToken: cancellationToken);
+    public Task<JsonNode?> RequestVmBackupAsync(string name, CancellationToken cancellationToken = default) => RequestAsync("POST", $"/vms/{RemoteHost.Encode(name)}/backups/request", new JsonObject(), cancellationToken);
+    public Task<JsonNode?> VmBackupSettingsAsync(string name, CancellationToken cancellationToken = default) => RequestAsync("GET", $"/vms/{RemoteHost.Encode(name)}/backups/settings", cancellationToken: cancellationToken);
+    public Task<JsonNode?> SetVmBackupSettingsAsync(string name, JsonNode? body, CancellationToken cancellationToken = default) => RequestAsync("PUT", $"/vms/{RemoteHost.Encode(name)}/backups/settings", body, cancellationToken);
     public Task<JsonNode?> VmCpuAsync(string name, CancellationToken cancellationToken = default) => RequestAsync("GET", $"/vms/{RemoteHost.Encode(name)}/cpu", cancellationToken: cancellationToken);
     public Task<JsonNode?> SetVmCpuAsync(string name, JsonNode? body, CancellationToken cancellationToken = default) => RequestAsync("PUT", $"/vms/{RemoteHost.Encode(name)}/cpu", body, cancellationToken);
     public Task<JsonNode?> WhoamiAsync(CancellationToken cancellationToken = default) => RequestAsync("GET", "/whoami", null, cancellationToken);

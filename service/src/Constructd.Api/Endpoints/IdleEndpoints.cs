@@ -147,13 +147,24 @@ public static class IdleEndpoints
 
         http.SetAuditDetail($"busy={busy}, reasons={reasons.Count}");
 
-        // The guest runs `construct secret _scrub` once when a key-vault scrub is due for it.
+        // The reply carries only what is due, or nothing (204). The guest runs `construct secret _scrub`
+        // once when a key-vault scrub is due for it, and `construct backup create` when the host wants
+        // a config backup (docs/plans/host-config-backups.md §3.4).
+        var due = new Dictionary<string, object>(StringComparer.Ordinal);
         if (await http.RequestServices.GetRequiredService<Constructd.Core.Services.VaultHostService>()
                 .ScrubDueAsync(lookup.Vm!, cancellationToken).ConfigureAwait(false))
         {
-            return TypedResults.Ok(new { vaultScrub = true });
+            due["vaultScrub"] = true;
         }
 
-        return TypedResults.NoContent();
+        var backup = await http.RequestServices.GetRequiredService<Constructd.Api.Backups.BackupCoordinator>()
+            .HeartbeatAsync(lookup.Vm!, Constructd.Core.Logic.BackupSchedule.BusyForBackup(busy, reasons), cancellationToken).ConfigureAwait(false);
+        if (backup.Due)
+        {
+            due["backupDue"] = true;
+            due["backupTrigger"] = backup.Trigger!;
+        }
+
+        return due.Count == 0 ? Results.NoContent() : Results.Ok(due);
     }
 }

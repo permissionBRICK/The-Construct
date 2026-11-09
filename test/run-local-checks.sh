@@ -19,6 +19,7 @@ if [[ "$group" == panel || "$group" == all ]]; then
   node extension/test/lifecycle.test.js
   node extension/test/lifecycle-preparation.test.js
   node extension/test/lifecycle-run.test.js
+  node extension/test/backups.test.js
   pwsh -NoProfile -File test/lifecycle-run.test.ps1
   pwsh -NoProfile -File test/vm-resources.test.ps1
   pwsh -NoProfile -File test/console-local.test.ps1
@@ -50,7 +51,7 @@ if [[ "$group" == service || "$group" == all ]]; then
   bash test/proxmox-nested-installer.test.sh
   /usr/bin/python3 -m unittest discover -s console-viewer -p 'test_*.py' -v
   node --check console-viewer/static/viewer.js
-  bash -n console-viewer/install.sh bin/construct-vm.sh bin/construct-secret.sh bin/construct-config.sh bin/construct-oom-guard.sh bin/project-forwards.sh bin/provision.sh bin/fetch-construct-source.sh bin/construct-worktree-clone.sh bin/construct-agent-fix.sh service/host/xfs-cloud-image.sh service/host/install-construct-host.sh
+  bash -n console-viewer/install.sh bin/construct-vm.sh bin/construct-secret.sh bin/construct-backup.sh bin/construct-config.sh bin/construct-oom-guard.sh bin/project-forwards.sh bin/provision.sh bin/fetch-construct-source.sh bin/construct-worktree-clone.sh bin/construct-agent-fix.sh service/host/xfs-cloud-image.sh service/host/install-construct-host.sh
   bash test/worktree-clone.test.sh
   bash test/codex-install.test.sh
   bash test/claude-rm-prompt.test.sh
@@ -64,9 +65,16 @@ if [[ "$group" == service || "$group" == all ]]; then
   node extension/test/drivers.test.js
   node extension/test/hostadmin.test.js
   bash test/construct-vm.test.sh
+  bash test/construct-backup.test.sh
+  bash test/export-config.test.sh
+  bash test/restore-config.test.sh
+  bash test/idle-report.test.sh
+  pwsh -NoProfile -File test/backup-keys.test.ps1
+  pwsh -NoProfile -File test/backup-actions.test.ps1
   node extension/test/t3code.test.js
   python3 test/t3-pairing-forward.test.py
   dotnet test service/Constructd.sln -c Release
+  bash test/backup-e2e.test.sh
   pwsh -NoProfile -File service/tests/Constructd.Tests/Windows/windows-guest-report.test.ps1
   pwsh -NoProfile -File test/windows-license-firmware.test.ps1
   pwsh -NoProfile -File service/tests/host-updater.test.ps1

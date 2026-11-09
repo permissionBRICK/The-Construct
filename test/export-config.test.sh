@@ -233,5 +233,119 @@ ok 'T3 older backup: saved state.sqlite restored' grep -qx saved "${fresh_v1}/st
 ok 'T3 older backup: fresh statev2 files removed so T3 imports it' \
   test ! -e "${fresh_v1}/statev2.sqlite" -a ! -e "${fresh_v1}/statev2.sqlite-wal" -a ! -e "${fresh_v1}/statev2.sqlite-shm"
 
+# ── STAGE_DIR and EXPORT_REASON (construct backup) ───────────────────────────
+# A T3 Code server that is running: this systemctl says so and logs every call.
+mkdir -p "${tmp}/t3bin"
+cat >"${tmp}/t3bin/systemctl" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${SERVICE_CALLS}"
+if [[ "$1" == is-active && "$*" == *t3code-serve* ]]; then exit 0; fi
+exit 0
+STUB
+chmod +x "${tmp}/t3bin/systemctl"
+live="${tmp}/live-home"
+mkdir -p "${live}/.t3/userdata" "${live}/.local/share/opencode" "${live}/.codex" "${live}/.claude"
+printf '# instructions\n' >"${live}/.claude/CLAUDE.md"
+# SQLite stores in WAL mode with a write still in the -wal (the writer never
+# closed): the online snapshot must carry it, without the side files.
+live_db() { # <path> <table>
+  python3 -I - "$1" "$2" <<'PY'
+import os, sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+c.execute("pragma journal_mode=wal")
+c.execute("pragma wal_autocheckpoint=0")
+c.execute(f"create table {sys.argv[2]}(v text)")
+c.execute(f"insert into {sys.argv[2]} values ('checkpointed')")
+c.commit()
+c.execute("pragma wal_checkpoint(truncate)")
+c.execute(f"insert into {sys.argv[2]} values ('only in the wal')")
+c.commit()
+os._exit(0)
+PY
+}
+live_db "${live}/.t3/userdata/statev2.sqlite" threads
+live_db "${live}/.local/share/opencode/opencode.db" sessions
+live_db "${live}/.codex/memories_1.sqlite" memories
+chmod 0600 "${live}/.t3/userdata/statev2.sqlite"
+rows() { python3 -I -c 'import sqlite3, sys; print(sqlite3.connect(sys.argv[1]).execute("select count(*) from " + sys.argv[2]).fetchone()[0])' "$1" "$2" 2>/dev/null; }
+t3_env=(env -i PATH="${tmp}/t3bin:${PATH}" SERVICE_CALLS="${tmp}/stage-calls"
+  CONFIG_FILE="${tmp}/config.env" REPO_DIR="${tmp}/repo" T3_RESUME_HELPER="${tmp}/no-resume-helper"
+  PROJECTS_STORE="${tmp}/projects" WORKSPACE_ROOT="${tmp}/workspace"
+  VSCODE_SERVE_WEB_TOKEN_FILE="${tmp}/absent-token" T3CODE_TLS_DIR="${tmp}/absent-tls"
+  EXPORT_HOME="${live}" INCLUDE_AUTH=true INCLUDE_HISTORY=true)
+
+stage="${tmp}/stage-backup"
+rm -f "${tmp}/stage-calls"
+rc=0
+"${t3_env[@]}" STAGE_DIR="${stage}" EXPORT_REASON=backup OUT="${tmp}/never.tar.gz" \
+  bash "${ROOT}/bin/export-config.sh" >"${tmp}/stage-backup.log" 2>&1 || rc=$?
+ok 'STAGE_DIR: exits 0' test "${rc}" = 0
+ok 'STAGE_DIR: no tarball is packed' test ! -e "${tmp}/never.tar.gz"
+ok 'STAGE_DIR: the stage holds the export layout' \
+  test -f "${stage}/home/.claude/CLAUDE.md" -a -f "${stage}/backup-info.json" -a -f "${stage}/MANIFEST.txt"
+ok 'STAGE_DIR: the stage stays with the caller' test -d "${stage}"
+ok 'backup: T3 Code is neither asked about nor stopped' test ! -e "${tmp}/stage-calls"
+ok 'backup: no t3-resume.json (nothing was interrupted)' test ! -e "${stage}/t3-resume.json"
+ok 'backup: T3 store snapshot carries the -wal rows' test "$(rows "${stage}/home/.t3/userdata/statev2.sqlite" threads)" = 2
+ok 'backup: OpenCode snapshot carries the -wal rows' test "$(rows "${stage}/home/.local/share/opencode/opencode.db" sessions)" = 2
+ok 'backup: Codex memories snapshot carries the -wal rows' test "$(rows "${stage}/home/.codex/memories_1.sqlite" memories)" = 2
+ok 'backup: no -wal/-shm side files are staged' \
+  test -z "$(find "${stage}" \( -name '*-wal' -o -name '*-shm' \) -print -quit)"
+ok 'backup: the snapshot keeps the database file mode' \
+  test "$(stat -c %a "${stage}/home/.t3/userdata/statev2.sqlite")" = 600
+ok 'backup: snapshots are listed in the manifest' \
+  sh -c "grep -qx '.t3/userdata/statev2.sqlite' '${stage}/MANIFEST.txt' && grep -qx '.local/share/opencode/opencode.db' '${stage}/MANIFEST.txt' && grep -qx '.codex/memories_1.sqlite' '${stage}/MANIFEST.txt'"
+ok 'backup: the live databases are untouched' \
+  sh -c "test -s '${live}/.t3/userdata/statev2.sqlite-wal' && test \"\$(stat -c %a '${live}/.t3/userdata/statev2.sqlite')\" = 600"
+
+# Default reason (reinstall): today's behaviour, T3 stopped across the copy.
+rm -f "${tmp}/stage-calls"
+"${t3_env[@]}" OUT="${tmp}/reinstall.tar.gz" bash "${ROOT}/bin/export-config.sh" >"${tmp}/reinstall.log" 2>&1
+ok 'reinstall (default): packs the tarball' test -s "${tmp}/reinstall.tar.gz"
+ok 'reinstall (default): T3 Code is stopped, then started again' \
+  test "$(grep -E '^(stop|start) ' "${tmp}/stage-calls" 2>/dev/null | tr '\n' '|')" = 'stop t3code-serve|start t3code-serve|'
+tar -tzf "${tmp}/reinstall.tar.gz" >"${tmp}/reinstall.members"
+ok 'reinstall (default): the database files are copied with their side files' \
+  sh -c "grep -qx './home/.t3/userdata/statev2.sqlite-wal' '${tmp}/reinstall.members' && grep -qx './home/.local/share/opencode/opencode.db-wal' '${tmp}/reinstall.members'"
+rm -f "${tmp}/stage-calls"
+"${t3_env[@]}" EXPORT_REASON=reinstall STAGE_DIR="${tmp}/stage-reinstall" bash "${ROOT}/bin/export-config.sh" >/dev/null 2>&1
+ok 'reinstall + STAGE_DIR: T3 Code is still stopped and started' \
+  test "$(grep -cE '^(stop|start) t3code-serve$' "${tmp}/stage-calls" 2>/dev/null)" = 2
+
+rc=0
+"${t3_env[@]}" EXPORT_REASON=sometimes OUT="${tmp}/bad-reason.tar.gz" bash "${ROOT}/bin/export-config.sh" >/dev/null 2>"${tmp}/bad-reason.err" || rc=$?
+ok 'an unknown EXPORT_REASON exits 2' test "${rc}" = 2
+ok '... and packs nothing' test ! -e "${tmp}/bad-reason.tar.gz"
+
+# Failures: the script's own stage is removed; a STAGE_DIR is left to the caller;
+# a T3 Code server stopped for the copy is started again.
+mkdir -p "${tmp}/failcp"
+cat >"${tmp}/failcp/cp" <<'STUB'
+#!/usr/bin/env bash
+dest="${!#}"
+printf '%s\n' "${dest}" >>"${CP_LOG}"
+if [[ "${dest}" == *"${CP_FAIL_ON}"* ]]; then exit 1; fi
+exec /bin/cp "$@"
+STUB
+chmod +x "${tmp}/failcp/cp"
+rm -f "${tmp}/cp.log" "${tmp}/stage-calls"
+rc=0
+"${t3_env[@]}" PATH="${tmp}/failcp:${tmp}/t3bin:${PATH}" CP_LOG="${tmp}/cp.log" CP_FAIL_ON=statev2.sqlite \
+  OUT="${tmp}/failed.tar.gz" bash "${ROOT}/bin/export-config.sh" >/dev/null 2>&1 || rc=$?
+ok 'a failing copy fails the export' test "${rc}" -ne 0
+own_stage="$(head -n 1 "${tmp}/cp.log" 2>/dev/null)"
+own_stage="${own_stage%%/home/*}"
+ok '... its own stage was under /tmp/construct-export.*' sh -c "case '${own_stage}' in /tmp/construct-export.*) exit 0;; esac; exit 1"
+ok '... and is removed' test ! -e "${own_stage}"
+ok '... no tarball is left' test ! -e "${tmp}/failed.tar.gz"
+ok '... and the T3 Code server it stopped is started again' \
+  test "$(grep -E '^(stop|start) ' "${tmp}/stage-calls" 2>/dev/null | tr '\n' '|')" = 'stop t3code-serve|start t3code-serve|'
+rm -f "${tmp}/cp.log"
+rc=0
+"${t3_env[@]}" PATH="${tmp}/failcp:${tmp}/t3bin:${PATH}" CP_LOG="${tmp}/cp.log" CP_FAIL_ON=CLAUDE.md \
+  STAGE_DIR="${tmp}/stage-failed" EXPORT_REASON=backup bash "${ROOT}/bin/export-config.sh" >/dev/null 2>&1 || rc=$?
+ok 'a failing export with STAGE_DIR fails too' test "${rc}" -ne 0
+ok '... and leaves the STAGE_DIR to its caller' test -d "${tmp}/stage-failed"
+
 printf '\n  export-config fixture tests — %d/%d passed\n\n' "${pass}" "$((pass + fail))"
 [[ "${fail}" -eq 0 ]]

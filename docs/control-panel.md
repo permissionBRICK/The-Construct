@@ -198,6 +198,61 @@ connections through any of its forwards, *and* no in-guest activity reported by 
 heartbeat. **An agent running a long unattended job keeps the VM alive with nobody
 connected** — that is the entire point of unattended agents.
 
+## Backups
+
+The **Backups** card in Settings handles encrypted config backups: agent logins, memory, chat
+history, `~/.secrets`, T3 Code state, git and CLI credentials (what Export config saves). The
+VM encrypts every backup before it leaves the VM. Only PCs whose backup key is enrolled on the
+VM can open one; the host stores backups but cannot read them. See
+[Config backups](backup-restore.md) for the full story and the
+[design](plans/host-config-backups.md) for the details.
+
+**Remote VM on a host with config backups.** The card appears when the host's service lists
+`config-backups` in its `/health` features, and stays hidden on older hosts.
+
+- The status line shows the last successful backup, how many are stored and their size, when
+  the next one is due, and a pending **Back up now** request. While backups fail, a warning
+  names the reason and the time the failures started. When the reason is that no PC key is
+  enrolled, **Enrol this PC** fixes it from here.
+- **Every _n_ hours, keep _m_ backups** overrides the host's schedule for this VM. Empty
+  fields use the host default, shown as placeholders. The interval is 0 to 720 hours, where 0
+  turns scheduled backups off for this VM (manual and pre-reinstall backups still work). The
+  number kept is 1 up to the host's maximum. The card checks the values before it sends them,
+  and a background refresh never overwrites a half-typed value.
+- The list shows the host's backups, newest first: time, what triggered it, size, and
+  **pinned** for a backup taken before a reinstall that is kept until a restore from it
+  succeeded. Pick one with its radio button (the newest is preselected).
+- **Back up now** asks the VM for a backup; it starts at the VM's next check-in with the
+  host. **Restore…** restores the picked backup onto the VM after a confirmation.
+
+**Every VM, local or remote:**
+
+- **Save to this PC** writes a backup file (`<instance>-<UTC time>.cbk`) where you choose. A
+  remote VM saves the picked host backup; a local VM, or a remote one without host backups,
+  makes a fresh one.
+- **Restore from file…** restores a `.cbk` file onto this VM after a confirmation, local or
+  remote.
+- **Export backup key…** saves this PC's key, protected by a passphrase that the console asks
+  for twice. **Import backup key…** installs a key exported on another PC. While this PC's key
+  has never been exported, the card warns: without a copy, a lost or reinstalled PC cannot
+  open its backups.
+
+Every button except **Back up now** opens a console running `Provision-AgentVM.ps1` with one
+of its `backup-…` actions, aimed at this VM like **Export config** and never elevated. A Construct
+install whose scripts predate backups refuses them with a hint to update. Reinstall of a local
+VM keeps using Export config; a remote reinstall backs up to the host first when the host
+supports it.
+
+The Companion checks the backup status of every remote VM shortly after it starts and every
+15 minutes, and shows one Windows notification per failure streak; the streak it already
+reported is stored with the VM's settings, so a restart does not repeat it. The VS Code
+extension in fallback mode shows one warning per streak instead.
+
+Host admins set the host's defaults in the host administration **Configuration** tab,
+section **Config backups**: on/off, interval, number kept and its per-VM maximum, how long a
+pre-reinstall backup stays pinned, how long backups of a deleted VM are kept, the free space
+backups never use, and an optional storage limit per VM.
+
 ## Coding agents & updates
 
 The **Coding agents** module lists Claude Code, Codex, and Opencode — plus T3 Code when its

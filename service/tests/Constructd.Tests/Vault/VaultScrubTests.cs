@@ -30,7 +30,7 @@ public sealed class VaultScrubTests
         using var h = await VaultHarness.CreateAsync();
         await h.PutEntriesAsync(h.Entry("github-token", "ghp_secret_value_1", "bot"), h.Entry("short", "abc"));
         await h.ApprovedAsync(h.Request("request", ["github-token", "short"], new { ttl = 600 }));
-        Assert.Empty(await h.HeartbeatAsync());
+        Assert.False((await h.HeartbeatAsync()).ContainsKey("vaultScrub"));
 
         h.App.Clock.Advance(TimeSpan.FromMinutes(11));
         await h.Vault.TickAsync(default);
@@ -45,7 +45,7 @@ public sealed class VaultScrubTests
         Assert.DoesNotContain(patterns, p => p.Text == "abc");
         // Delivered: not due again until the guest answers (or the redelivery timeout).
         Assert.Empty(await JobsAsync(h));
-        Assert.Empty(await h.HeartbeatAsync());
+        Assert.False((await h.HeartbeatAsync()).ContainsKey("vaultScrub"));
 
         await PostAsync(h, scan["id"]!.GetValue<string>(), new
         {
@@ -89,7 +89,7 @@ public sealed class VaultScrubTests
         activity = await ActivityAsync(h);
         Assert.Contains("Redacted github-token from 2 files of agent logs.", activity);
         Assert.Contains("Some data may stay in the write-ahead log of /root/.t3/userdata/state.sqlite until that app checkpoints it.", activity);
-        Assert.Empty(await h.HeartbeatAsync());
+        Assert.False((await h.HeartbeatAsync()).ContainsKey("vaultScrub"));
 
         // The user's decision becomes an apply job; a deleted database would take its side files along.
         using (var decide = await h.Bob.PostAsJsonAsync($"/api/v1/vault/files/{file["id"]!.GetValue<string>()}", new { action = "delete" }))
@@ -166,7 +166,7 @@ public sealed class VaultScrubTests
         h.Vault.Drop("dev");
         h.App.Clock.Advance(TimeSpan.FromSeconds(6));
 
-        Assert.Empty(await h.HeartbeatAsync());
+        Assert.False((await h.HeartbeatAsync()).ContainsKey("vaultScrub"));
         Assert.Empty(await JobsAsync(h));
         using (var unlock = await h.Bob.PostAsJsonAsync("/api/v1/vms/dev/vault/unlock", new { key = h.KeyBase64 }))
             Assert.Equal(HttpStatusCode.NoContent, unlock.StatusCode);

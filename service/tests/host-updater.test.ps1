@@ -129,6 +129,14 @@ try {
             Write-UpdateJson $settingsPath $settings
             $rejected=$false; try { Get-UpdateTarget 'scripts/operator-source-cache/cached.zip' $f.h $settings | Out-Null } catch { $rejected=$true }
             Assert $rejected 'Custom source cache is not a payload target'
+            $backupRoot=Join-Path $f.h.scriptsDir 'operator-backups'
+            $storedBackup=Join-Path $backupRoot ('0123456789abcdef/dev/'+('0'*32)+'.age')
+            [IO.Directory]::CreateDirectory((Split-Path $storedBackup -Parent)) | Out-Null
+            [IO.File]::WriteAllText($storedBackup,'preserved backup')
+            $settings.Constructd | Add-Member -NotePropertyName Backups -NotePropertyValue @{RootDir=$backupRoot}
+            Write-UpdateJson $settingsPath $settings
+            $rejected=$false; try { Get-UpdateTarget ('scripts/operator-backups/0123456789abcdef/dev/'+('0'*32)+'.age') $f.h $settings | Out-Null } catch { $rejected=$true }
+            Assert $rejected 'Config backup root is not a payload target'
             $script:failNew=$rollback
             Assert ((Invoke-ConstructHostUpdate $f.path $false $false) -eq 0) 'First update has a complete backup and recoverable apply'
             $record=Read-UpdateJson $f.record
@@ -136,6 +144,8 @@ try {
             Assert ($record.outcome -eq $expected) 'First update outcome'
             Assert ([IO.File]::ReadAllText($cachedSource) -eq 'preserved source') 'Custom source cache survives apply and rollback'
             Assert (-not (Test-Path (Join-Path $record.backupPath 'scripts/operator-source-cache'))) 'Custom source cache excluded from code scan'
+            Assert ([IO.File]::ReadAllText($storedBackup) -eq 'preserved backup') 'Config backups survive apply and rollback'
+            Assert (-not (Test-Path (Join-Path $record.backupPath 'scripts/operator-backups'))) 'Config backups excluded from code scan'
             Assert ([IO.File]::ReadAllText((Join-Path $record.backupPath 'service/Constructd.Api.exe')) -eq 'old') 'Fallback scan backed up old executable'
             Assert ([IO.File]::ReadAllText((Join-Path $record.backupPath 'service/removed.dll')) -eq 'old-owned') 'Fallback scan backed up old DLL'
             Assert ([IO.File]::ReadAllText((Join-Path $record.backupPath 'scripts/lib/old.ps1')) -eq 'old script') 'Fallback scan backed up old scripts'

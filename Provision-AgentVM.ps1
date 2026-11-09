@@ -164,8 +164,41 @@ param(
     #                          (bin/construct-t3-update.sh) and install the matching
     #                          T3 Code Desktop on this PC. Update-T3Code.ps1 decides
     #                          when this is enough.
-    [ValidateSet("provision", "export", "t3update")]
+    #   Encrypted config backups (docs/backup-restore.md; lib\AgentVm.Backup.ps1). Same
+    #   targeting as export; none of them provisions, uploads the repo or reboots:
+    #   backup-enroll       -- put this PC's backup key on the VM (construct backup
+    #                          recipients add), creating the key on first use.
+    #   backup-save         -- enrol, then save a backup container to -BackupFile: a
+    #                          fresh one, or the host's backup -BackupId.
+    #   backup-restore      -- restore -BackupFile, or the host's backup -BackupId, onto
+    #                          the VM.
+    #   backup-key-export   -- write this PC's backup key, passphrase-protected, to
+    #                          -BackupKeyFile (no VM involved).
+    #   backup-key-import   -- install the key in -BackupKeyFile on this PC (no VM).
+    #   backup-create       -- enrol, then back the VM up to its host (-BackupTrigger);
+    #                          the remote reinstall uses it before it deletes the VM.
+    #   backup-verify       -- check on the VM that the host's backup -BackupId (keys file
+    #                          -BackupKeysJson) opens and is complete; the remote reinstall
+    #                          uses it before it relies on an older host backup.
+    [ValidateSet("provision", "export", "t3update", "backup-enroll", "backup-save", "backup-restore",
+                 "backup-key-export", "backup-key-import", "backup-create", "backup-verify")]
     [string]$Action = "provision",
+    # -Action backup-save / backup-restore: the backup container on this PC (.cbk).
+    [string]$BackupFile = "",
+    # -Action backup-save / backup-restore: a backup stored on the VM's host service
+    # (32 lowercase hex). backup-restore needs a remote instance for it.
+    [string]$BackupId = "",
+    # -Action backup-key-export / backup-key-import: the passphrase-protected key file.
+    [string]$BackupKeyFile = "",
+    # -Action backup-create: the trigger the host records for the backup.
+    [ValidateSet("manual", "pre-reinstall")]
+    [string]$BackupTrigger = "manual",
+    # -Action backup-verify: the backup's keys file as the host returned it (no secret: the
+    # backup key in it is wrapped for the enrolled PCs).
+    [string]$BackupKeysJson = "",
+    # Restore the host's backup with this id onto the VM after provisioning (the remote
+    # reinstall, Auto-Install.ps1). A VM on a host service only; never with -RestoreDir.
+    [string]$RestoreHostBackupId = "",
     # Where to write the exported backup (-Action export). A folder; receives
     # backup.tar.gz, an extracted/ copy, and repo-scan.json.
     [string]$BackupDir = "",
@@ -441,6 +474,13 @@ if ($Action -in @('provision', 't3update') -and -not (Get-Command ConvertFrom-Co
 $stateLib = Join-Path $PSScriptRoot "lib\AgentVm.InstanceState.ps1"
 if (Test-Path -LiteralPath $stateLib) { . $stateLib }
 . (Join-Path $PSScriptRoot "lib\AgentVm.LifecycleRun.ps1")
+# Encrypted config backups: the PC key, unwrapping, the binary-safe SSH streams. Needed
+# by the backup-* actions, by the host-backup restore, and by provisioning's key
+# enrolment (which is skipped, with no error, when an older install lacks the file).
+$backupLib = Join-Path $PSScriptRoot "lib\AgentVm.Backup.ps1"
+if (Test-Path -LiteralPath $backupLib) { . $backupLib }
+$script:IsBackupAction = [bool]($Action -like 'backup-*')
+$script:BackupActionFailed = $false
 
 function Get-ConstructStateInstanceName {
     <#
@@ -1278,6 +1318,222 @@ function Enter-RootKeyFastPath {
     return $true
 }
 
+# --- Encrypted config backups (docs/backup-restore.md) ------------------------
+# The work itself is lib\AgentVm.Backup.ps1's; these functions bind it to this run's
+# connection (the root key or the seed user with sudo) and to the console.
+
+function Get-BackupConnection {
+    # The same identity, options and port as Invoke-Ssh, for the binary-safe streams.
+    $ssh = Get-Command ssh.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $ssh) { $ssh = Get-Command ssh -CommandType Application -ErrorAction Stop | Select-Object -First 1 }
+    return (New-ConstructBackupConnection -SshExe $ssh.Source -Options (@($script:SshPortArgs) + @($script:SshOpts)) `
+        -Target "$($script:ConnectUser)@$VmHost" -Direct:([bool]$script:UseRootKey) -SeedPassword $SeedPassword)
+}
+
+function Assert-BackupArguments {
+    # Fail before anything connects, with the parameter to fix.
+    if (-not (Get-Command Unprotect-ConstructBackupIdentity -ErrorAction SilentlyContinue)) {
+        throw "lib/AgentVm.Backup.ps1 is missing from this install; config backups need it. Update The Construct."
+    }
+    if ($RestoreHostBackupId) {
+        if ($Action -ne 'provision') { throw '-RestoreHostBackupId belongs to a provisioning run.' }
+        if (-not (Test-ConstructBackupId $RestoreHostBackupId)) { throw "-RestoreHostBackupId '$RestoreHostBackupId' is not a backup id (32 lowercase hex characters)." }
+        if (-not $ServiceUrl -or -not $InstanceName) { throw '-RestoreHostBackupId needs a VM on a host service (-ServiceUrl and -InstanceName).' }
+        if ($RestoreDir) { throw 'Pass either -RestoreDir or -RestoreHostBackupId, not both.' }
+    }
+    if ($BackupId -and -not (Test-ConstructBackupId $BackupId)) { throw "-BackupId '$BackupId' is not a backup id (32 lowercase hex characters)." }
+    switch ($Action) {
+        'backup-save' {
+            if (-not $BackupFile) { throw '-Action backup-save needs -BackupFile <path>.' }
+        }
+        'backup-restore' {
+            if ([bool]$BackupFile -eq [bool]$BackupId) { throw '-Action backup-restore needs either -BackupFile <path> or -BackupId <id>.' }
+            if ($BackupId -and (-not $ServiceUrl -or -not $InstanceName)) {
+                throw "-BackupId names a backup on a host service; restoring it needs the VM's instance on that service (-InstanceName)."
+            }
+            if ($BackupFile -and -not (Test-Path -LiteralPath $BackupFile -PathType Leaf)) { throw "Backup file not found: $BackupFile" }
+        }
+        'backup-verify' {
+            if (-not $BackupId -or -not $BackupKeysJson) { throw '-Action backup-verify needs -BackupId <id> and -BackupKeysJson <keys file>.' }
+        }
+        'backup-key-export' {
+            if (-not $BackupKeyFile) { throw '-Action backup-key-export needs -BackupKeyFile <path>.' }
+        }
+        'backup-key-import' {
+            if (-not $BackupKeyFile) { throw '-Action backup-key-import needs -BackupKeyFile <path>.' }
+            if (-not (Test-Path -LiteralPath $BackupKeyFile -PathType Leaf)) { throw "Key file not found: $BackupKeyFile" }
+        }
+    }
+}
+
+function Read-BackupPassphrase {
+    # Typed into THIS console even when the panel launched the run: a passphrase never
+    # travels as a parameter.
+    param([Parameter(Mandatory)][string]$Prompt)
+    if ([Console]::IsInputRedirected) { throw 'The backup key passphrase has to be typed in an interactive console.' }
+    return (Read-Host -Prompt $Prompt -AsSecureString)
+}
+
+function Write-BackupKeyExportHint {
+    Write-Host "    This PC's backup key has never been exported. If this PC is lost, so is every backup" -ForegroundColor Yellow
+    Write-Host "    made for it: export the key once (Provision-AgentVM.ps1 -Action backup-key-export -BackupKeyFile <file>)." -ForegroundColor Yellow
+}
+
+function Confirm-BackupKeyReplace {
+    param($Current, [string]$NewFingerprint, [string]$NewLabel)
+    Write-Host ""
+    Write-Warning "This PC already has a different backup key: '$($Current.Label)' ($($Current.Fingerprint.Substring(0, 16))...)."
+    Write-Host "    The imported key ('$NewLabel', $($NewFingerprint.Substring(0, 16))...) would replace it for every new enrolment." -ForegroundColor Yellow
+    Write-Host "    The current key stays in the key folder, so backups made for it remain readable on this PC." -ForegroundColor Yellow
+    if ([Console]::IsInputRedirected) { return $false }
+    $answer = Read-Host "    Replace this PC's backup key? Type yes to confirm"
+    return ([string]$answer).Trim() -eq 'yes'
+}
+
+function Invoke-BackupKeyFileAction {
+    # -Action backup-key-export / backup-key-import: this PC only, no VM.
+    Write-Host ""
+    Write-Host "The Construct -- backup key" -ForegroundColor White
+    if ($Action -eq 'backup-key-export') {
+        $key = Get-ConstructBackupPcKey -Create
+        Write-Host "    This PC's backup key: '$($key.Label)', fingerprint $($key.Fingerprint)" -ForegroundColor DarkGray
+        Write-Host "    The export opens every backup made for this key once its passphrase is known." -ForegroundColor DarkGray
+        Write-Host "    Keep the file and the passphrase in different places." -ForegroundColor DarkGray
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            $first = Read-BackupPassphrase -Prompt "    New passphrase (at least 8 characters)"
+            if ($first.Length -lt 8) {
+                $first.Dispose()
+                Write-Warning "The passphrase is shorter than 8 characters."
+                continue
+            }
+            $second = Read-BackupPassphrase -Prompt "    Repeat the passphrase"
+            $same = Test-ConstructSecureStringEqual $first $second
+            $second.Dispose()
+            if (-not $same) {
+                $first.Dispose()
+                Write-Warning "The two passphrases differ."
+                continue
+            }
+            try {
+                Write-Step "Encrypting the key (this takes a moment)"
+                $exported = Export-ConstructBackupKey -Path $BackupKeyFile -Passphrase $first
+            } finally { $first.Dispose() }
+            Write-Ok "Backup key exported to $($exported.Path)"
+            return
+        }
+        throw 'No passphrase was set; the backup key was not exported.'
+    }
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        $passphrase = Read-BackupPassphrase -Prompt "    Passphrase of $(Split-Path -Leaf $BackupKeyFile)"
+        $imported = $null
+        try {
+            Write-Step "Decrypting the key (this takes a moment)"
+            $imported = Import-ConstructBackupKey -Path $BackupKeyFile -Passphrase $passphrase -ConfirmReplace {
+                param($current, $fingerprint, $label)
+                Confirm-BackupKeyReplace -Current $current -NewFingerprint $fingerprint -NewLabel $label
+            }
+        } catch {
+            if ($_.Exception.Message -notlike 'Wrong passphrase*') { throw }
+            Write-Warning $_.Exception.Message
+        } finally { $passphrase.Dispose() }
+        if (-not $imported) { continue }
+        switch ($imported.Result) {
+            'unchanged' { Write-Ok "This PC already uses that key ('$($imported.Label)', $($imported.Fingerprint))." }
+            'cancelled' { Write-Host "    Kept this PC's current backup key; nothing was imported." -ForegroundColor Yellow }
+            default {
+                Write-Ok "Imported backup key '$($imported.Label)' ($($imported.Fingerprint))."
+                if ($imported.PreviousFingerprint) { Write-Host "    The previous key ($($imported.PreviousFingerprint.Substring(0, 16))...) stays usable for its backups." -ForegroundColor DarkGray }
+                Write-Host "    A reprovision (or -Action backup-enroll) enrols it on a VM, so the VM's next backups are made for it too." -ForegroundColor DarkGray
+            }
+        }
+        return
+    }
+    throw 'Wrong passphrase three times; the backup key was not imported.'
+}
+
+function Invoke-BackupSshAction {
+    # -Action backup-enroll / backup-create / backup-save / backup-restore, once this run is
+    # connected to the VM.
+    $connection = Get-BackupConnection
+    switch ($Action) {
+        'backup-enroll' {
+            Write-Step "Enrolling this PC's backup key on the VM"
+            $key = Register-ConstructBackupPcKey -Connection $connection
+            Write-Ok "Enrolled '$($key.Label)' ($($key.Fingerprint))"
+            if (-not $key.ExportedAt) { Write-BackupKeyExportHint }
+        }
+        'backup-create' {
+            Write-Step "Backing up the VM's agent config to its host"
+            $created = New-ConstructHostBackup -Connection $connection -Trigger $BackupTrigger
+            # Read by the caller (Auto-Install.ps1's reinstall), which runs this script in-process.
+            $global:ConstructBackupCreateResult = $created
+            Write-Ok "Backup $($created.Id) stored on the host ($(Format-ConstructBackupSize $created.SizeBytes))"
+        }
+        'backup-verify' {
+            Write-Step "Checking the host's backup $BackupId on the VM"
+            $code = Test-ConstructHostBackup -Connection $connection -BackupId $BackupId -KeysJson $BackupKeysJson
+            # Read by the caller (Auto-Install.ps1's reinstall), which runs this script in-process.
+            $global:ConstructBackupVerifyResult = $code
+            if ($code -ne 0) { throw "The host's backup $BackupId did not pass the check on the VM: $(Get-ConstructBackupExitMessage $code)." }
+            Write-Ok "Backup $BackupId opens and is complete"
+        }
+        'backup-save' {
+            if ($BackupId) { Write-Step "Saving the host's backup $BackupId to this PC" }
+            else { Write-Step "Backing up the VM's agent config to this PC" }
+            $saved = Save-ConstructBackupFile -Connection $connection -Path $BackupFile -BackupId $BackupId
+            Write-Ok "Saved backup $($saved.BackupId) ($(Format-ConstructBackupSize $saved.Bytes)) to $($saved.Path)"
+            if (-not $saved.Readable) { Write-Warning "This backup was not made for this PC's backup key: only a PC whose key it names can restore it." }
+            $key = Get-ConstructBackupPcKey
+            if ($key -and -not $key.ExportedAt) { Write-BackupKeyExportHint }
+        }
+        'backup-restore' {
+            if ($BackupFile) {
+                Write-Step "Restoring the agent config from $BackupFile"
+                Write-Host "  --- live restore output ---" -ForegroundColor DarkGray
+                $restoredId = Restore-ConstructBackupFile -Connection $connection -Path $BackupFile
+            } else {
+                Write-Step "Restoring the host's backup $BackupId"
+                $keysJson = Get-ConstructHostBackupKeysJson -BaseUrl $ServiceUrl -VmName $InstanceName -BackupId $BackupId -Auth $ServiceApiAuth
+                Write-Host "  --- live restore output ---" -ForegroundColor DarkGray
+                Restore-ConstructHostBackup -Connection $connection -BackupId $BackupId -KeysJson $keysJson
+                $restoredId = $BackupId
+            }
+            Write-Host "  --- end restore output ---" -ForegroundColor DarkGray
+            Write-Ok "Backup $restoredId restored onto the VM"
+        }
+    }
+}
+
+function Invoke-DeferredProjectCommands {
+    # A reinstall that restores a saved config clones the project repos and runs the
+    # project provisioning commands only after the restore (DEFER_PROJECT_COMMANDS).
+    Write-Step "Cloning project repos and running project provisioning commands (after the restore)"
+    Write-Host "  --- live provisioning output ---" -ForegroundColor DarkGray
+    # The checkout gets what this PC verified (one-shot file, consulted first) and the VM's
+    # restored store after it; a host skipped at the prompt stays skipped.
+    $projectStream = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "env PROVISION_PHASE=project-commands REBOOT_AFTER_PROVISION='$rebootAfterArg' CHECKOUT_PROJECTS='$checkoutArg' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' GIT_CLONE_SKIP_HOSTS_B64='$cloneSkipHostsB64' bash /opt/construct/repo/bin/provision.sh"
+    Write-Host "  --- end provisioning output ---" -ForegroundColor DarkGray
+    $projectResult = ConvertFrom-ConstructProvisionResult -Lines $projectStream.Lines
+    $projectErrors = @($projectResult.Errors)
+    if (-not $projectResult.IsValid -or $projectStream.ExitCode -notin @(0, 3)) {
+        $projectErrors = @([pscustomobject]@{ Title = 'Running project provisioning commands'; ExitCode = [int]$projectStream.ExitCode; LogPath = '' })
+    }
+    # One result block for both runs: the de-elevated parent and the result
+    # screen read only $script:ProvisionRawLines / $script:ProvisionResult.
+    $allErrors = @($script:ProvisionResult.Errors) + $projectErrors
+    $script:ProvisionRawLines = @('===CONSTRUCT-PROVISION-RESULT===', "errors=$($allErrors.Count)") +
+        @($allErrors | ForEach-Object { "error=$($_.Title)|$($_.ExitCode)|$($_.LogPath)" }) +
+        @('===END-CONSTRUCT-PROVISION-RESULT===')
+    $script:ProvisionResult = ConvertFrom-ConstructProvisionResult -Lines $script:ProvisionRawLines
+    $global:ConstructProvisionErrors = @($script:ProvisionResult.Errors)
+    if ($projectErrors.Count -gt 0) {
+        $global:ConstructProvisionHadErrors = $true
+        Write-Host "    Project provisioning commands reported errors; host setup will continue." -ForegroundColor Yellow
+    } else {
+        Write-Ok "Project provisioning commands finished"
+    }
+}
+
 # --- Step 1: pack this repo -------------------------------------------------
 
 function New-RepoArchive {
@@ -1983,6 +2239,13 @@ if ($Action -in @('provision', 't3update') -and -not $ScanReposOnly -and -not $R
     $script:LifecycleRunOwned = Enter-ConstructLifecycleRun -Action $(if ($Action -eq 'provision') { 'reprovision' } else { 'updateT3' }) -Instance (Get-ConstructStateInstanceName)
 }
 
+if ($script:IsBackupAction -or $RestoreHostBackupId) { Assert-BackupArguments }
+# The key file actions concern this PC alone: no connection, no VM.
+if ($Action -in @('backup-key-export', 'backup-key-import')) {
+    Invoke-BackupKeyFileAction
+    return
+}
+
 Write-Host ""
 Write-Host "The Construct VM provisioner" -ForegroundColor White
 Write-Host "Target: $VmHost  |  seed user: $SeedUser  |  final user: $RemoteUser" -ForegroundColor DarkGray
@@ -2043,8 +2306,9 @@ if ($ServiceUrl -and -not $ServiceApiAuth -and $script:InstanceServiceAuth -eq '
 
 # -Action export only reads the VM, and only needs the two scripts it runs (uploaded
 # below), so it never packs or replaces the guest repository. -Action t3update runs the
-# guest repository the VM was provisioned with, so it neither packs nor fetches one.
-if (-not $ServiceUrl) { if ($Action -notin @('export', 't3update')) { $archivePath = New-RepoArchive } } elseif ($Action -ne 't3update') {
+# guest repository the VM was provisioned with, so it neither packs nor fetches one, and
+# neither do the backup actions, which only talk to the VM's construct CLI.
+if (-not $ServiceUrl) { if ($Action -notin @('export', 't3update') -and -not $script:IsBackupAction) { $archivePath = New-RepoArchive } } elseif ($Action -ne 't3update' -and -not $script:IsBackupAction) {
     . (Join-Path $PSScriptRoot 'lib/AgentVm.Remote.ps1')
     $sourceRef = $Ref
     if (-not $PSBoundParameters.ContainsKey('Ref')) {
@@ -2070,7 +2334,7 @@ if (-not $ServiceUrl) { if ($Action -notin @('export', 't3update')) { $archivePa
 # endpoint.
 [System.IO.File]::WriteAllText($script:KnownHostsFile, "")
 Ensure-VmReachable
-if ($ServiceUrl -and $Action -ne 't3update') {
+if ($ServiceUrl -and $Action -ne 't3update' -and -not $script:IsBackupAction) {
     $sourceDeadline = [datetime]::UtcNow.AddSeconds($SourceEnsureTimeoutSec)
     $sourceState = Invoke-ConstructSourceTransport -Phase begin -Plan $sourcePlan -Pack { New-RepoArchive } -Ensure {
         param($commit, $operationKey)
@@ -2134,6 +2398,8 @@ if (Enter-RootKeyFastPath) {
 
 if ($Action -eq 't3update') {
     Write-Ok "Guest repository left unchanged (T3 Code update only)"
+} elseif ($script:IsBackupAction) {
+    Write-Ok "Guest repository left unchanged (config backup only)"
 } elseif ($ServiceUrl) {
     $script:SourceFetchTokenPath = ''
     $script:SourceOverlayPath = ''
@@ -2325,6 +2591,22 @@ if ($Action -eq 'export') {
     if ($script:SecureRootKeyPath) { Remove-Item -LiteralPath $script:SecureRootKeyPath -Force -ErrorAction SilentlyContinue }
     Write-Host ""
     Write-Host "Done (config export)." -ForegroundColor Green
+    return
+}
+
+# ── The backup actions over SSH (backup-enroll/-create/-save/-restore), then stop ──
+# Connected exactly like an export; only the VM's construct CLI is used, with the
+# backup data and the backup's key on ssh's stdin/stdout (lib\AgentVm.Backup.ps1).
+if ($script:IsBackupAction) {
+    try {
+        Invoke-BackupSshAction
+    } finally {
+        Remove-Item $script:KnownHostsFile -Force -ErrorAction SilentlyContinue
+        if ($script:SecureKeyPath)     { Remove-Item -LiteralPath $script:SecureKeyPath     -Force -ErrorAction SilentlyContinue }
+        if ($script:SecureRootKeyPath) { Remove-Item -LiteralPath $script:SecureRootKeyPath -Force -ErrorAction SilentlyContinue }
+    }
+    Write-Host ""
+    Write-Host "Done ($Action)." -ForegroundColor Green
     return
 }
 
@@ -2861,7 +3143,8 @@ $envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' 
 # restored credential store and git config (a credential this PC could not verify, a
 # host matched per repo path), and commands that read ~/.secrets, tokens or the machine
 # identity found none on the fresh VM and silently skipped their setup.
-$deferProjectCommands = [bool]($RestoreDir -and (Test-Path -LiteralPath (Join-Path $RestoreDir "backup.tar.gz")))
+# A host backup (-RestoreHostBackupId) is restored the same way, from the VM's side.
+$deferProjectCommands = [bool](($RestoreDir -and (Test-Path -LiteralPath (Join-Path $RestoreDir "backup.tar.gz"))) -or $RestoreHostBackupId)
 if ($deferProjectCommands) { $envPrefix += " DEFER_PROJECT_COMMANDS='true'" }
 # The bootstrap path always ends with a reboot ($doReboot below). The guest then holds the
 # resume of the T3 threads this run interrupts for that boot instead of starting it now.
@@ -2904,6 +3187,19 @@ if ($provisionStream.ExitCode -eq 3) {
     Write-Ok "Provisioning finished cleanly"
 }
 
+# This PC's backup key goes onto every VM it provisions, local or remote, now that
+# provision.sh has installed the CLI: the VM's backups are then made for this PC too.
+# Never a provisioning error.
+if (Get-Command Register-ConstructBackupPcKey -ErrorAction SilentlyContinue) {
+    Write-Step "Enrolling this PC's backup key on the VM"
+    try {
+        $enrolledKey = Register-ConstructBackupPcKey -Connection (Get-BackupConnection)
+        Write-Ok "Backup key '$($enrolledKey.Label)' enrolled ($($enrolledKey.Fingerprint.Substring(0, 16))...)"
+    } catch {
+        Write-Warning "Could not enrol this PC's backup key on the VM: $($_.Exception.Message) Backups of this VM cannot be opened on this PC until it is (Provision-AgentVM.ps1 -Action backup-enroll)."
+    }
+}
+
 # Restore a saved config onto the freshly provisioned VM (the reinstall
 # auto-restore). Done AFTER provision.sh so the user's saved instruction/config
 # files overwrite the freshly generated ones and auth/memory/skills come back;
@@ -2936,35 +3232,62 @@ if ($RestoreDir) {
         }
         Write-Ok "Saved config restored"
 
-        if ($deferProjectCommands) {
-            Write-Step "Cloning project repos and running project provisioning commands (after the restore)"
-            Write-Host "  --- live provisioning output ---" -ForegroundColor DarkGray
-            # The checkout gets what this PC verified (one-shot file, consulted first) and the VM's
-            # restored store after it; a host skipped at the prompt stays skipped.
-            $projectStream = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "env PROVISION_PHASE=project-commands REBOOT_AFTER_PROVISION='$rebootAfterArg' CHECKOUT_PROJECTS='$checkoutArg' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' GIT_CLONE_SKIP_HOSTS_B64='$cloneSkipHostsB64' bash /opt/construct/repo/bin/provision.sh"
-            Write-Host "  --- end provisioning output ---" -ForegroundColor DarkGray
-            $projectResult = ConvertFrom-ConstructProvisionResult -Lines $projectStream.Lines
-            $projectErrors = @($projectResult.Errors)
-            if (-not $projectResult.IsValid -or $projectStream.ExitCode -notin @(0, 3)) {
-                $projectErrors = @([pscustomobject]@{ Title = 'Running project provisioning commands'; ExitCode = [int]$projectStream.ExitCode; LogPath = '' })
-            }
-            # One result block for both runs: the de-elevated parent and the result
-            # screen read only $script:ProvisionRawLines / $script:ProvisionResult.
-            $allErrors = @($script:ProvisionResult.Errors) + $projectErrors
-            $script:ProvisionRawLines = @('===CONSTRUCT-PROVISION-RESULT===', "errors=$($allErrors.Count)") +
-                @($allErrors | ForEach-Object { "error=$($_.Title)|$($_.ExitCode)|$($_.LogPath)" }) +
-                @('===END-CONSTRUCT-PROVISION-RESULT===')
-            $script:ProvisionResult = ConvertFrom-ConstructProvisionResult -Lines $script:ProvisionRawLines
-            $global:ConstructProvisionErrors = @($script:ProvisionResult.Errors)
-            if ($projectErrors.Count -gt 0) {
-                $global:ConstructProvisionHadErrors = $true
-                Write-Host "    Project provisioning commands reported errors; host setup will continue." -ForegroundColor Yellow
-            } else {
-                Write-Ok "Project provisioning commands finished"
-            }
-        }
+        if ($deferProjectCommands) { Invoke-DeferredProjectCommands }
     } else {
         Write-Host "    -RestoreDir set but no backup.tar.gz in $RestoreDir -- skipping restore." -ForegroundColor DarkGray
+    }
+} elseif ($RestoreHostBackupId) {
+    # The reinstall's backup on the HOST (docs/backup-restore.md). This PC never sees the
+    # cleartext: it unwraps the backup's key E with its own key and hands E to the VM on
+    # ssh's stdin; the VM downloads and decrypts the backup itself. Then the same
+    # restore-config.sh run and failure handling as a PC backup, the deferred project
+    # phase, and the guest-side extras (project profiles, serve-web token, backup
+    # recipients), which the PC used to do from its extracted copy.
+    Write-Step "Restoring the agent config from the host backup $RestoreHostBackupId"
+    $hostRestoreFile = '/tmp/construct-config-restore.tar.zst'
+    $hostRestoreRetained = '/var/lib/construct/construct-config-restore.failed.tar.zst'
+    $hostRetry = "Provision-AgentVM.ps1 -Action backup-restore -InstanceName $InstanceName -BackupId $RestoreHostBackupId"
+    $hostRestoreSucceeded = $false
+    try {
+        try {
+            $hostKeysJson = Get-ConstructHostBackupKeysJson -BaseUrl $ServiceUrl -VmName $InstanceName -BackupId $RestoreHostBackupId -Auth $ServiceApiAuth
+            $hostIdentity = Unprotect-ConstructBackupIdentity -KeysJson $hostKeysJson -ExpectedBackupId $RestoreHostBackupId
+        } catch {
+            throw "Agent config restore failed: $($_.Exception.Message) The backup stays on the host; restore it later with: $hostRetry. The project repos were not cloned either (their checkout waits for the restore): reprovision after the restore."
+        }
+        $hostConnection = Get-BackupConnection
+        Invoke-Ssh -Sudo -Command "rm -f $hostRestoreFile" | Out-Null
+        try {
+            $hostFetch = Invoke-ConstructBackupCli -Connection $hostConnection -Arguments @('fetch', '--from-host', $RestoreHostBackupId, '--out', $hostRestoreFile) -FirstLine $hostIdentity -Stdout Console
+        } finally { $hostIdentity = $null }
+        if ($hostFetch.ExitCode -ne 0) {
+            throw "Agent config restore failed: downloading the host backup $RestoreHostBackupId onto the VM failed: $(Get-ConstructBackupExitMessage $hostFetch.ExitCode). The backup stays on the host; restore it later with: $hostRetry. The project repos were not cloned either (their checkout waits for the restore): reprovision after the restore."
+        }
+        $restoreStream = Invoke-SshStream -Sudo -PassThru -NoThrow -Command "install -d -m 700 /var/log/construct; set -o pipefail; EXPORT_HOME=/root BACKUP_TGZ=$hostRestoreFile CONSTRUCT_VERSION='$constructVersion' bash /opt/construct/repo/bin/restore-config.sh 2>&1 | tee /var/log/construct/restore-config.log"
+        if ($restoreStream.ExitCode -ne 0) {
+            try { Invoke-Ssh -Sudo -Command "chmod 600 $hostRestoreFile; mkdir -p /var/lib/construct; mv -f $hostRestoreFile $hostRestoreRetained" | Out-Null } catch { }
+            throw "Agent config restore failed (exit $($restoreStream.ExitCode)); remote log: /var/log/construct/restore-config.log; retained archive: $hostRestoreRetained. The project repos were not cloned either (their checkout waits for the restore): fix the restore, then reprovision."
+        }
+        $hostRestoreSucceeded = $true
+        Write-Ok "Saved config restored from the host backup"
+
+        # The extras (project profiles, serve-web token, backup keys) come back before the
+        # deferred project phase, so that phase already sees the restored profiles.
+        $hostExtras = Invoke-ConstructBackupCli -Connection $hostConnection -Arguments @('restore-extras', $hostRestoreFile) -Stdout Console
+        if ($hostExtras.ExitCode -ne 0) {
+            Write-Warning "Restoring the backup's project profiles, serve-web token and backup keys failed: $(Get-ConstructBackupExitMessage $hostExtras.ExitCode)."
+        }
+
+        if ($deferProjectCommands) { Invoke-DeferredProjectCommands }
+
+        $hostRestored = Invoke-ConstructBackupCli -Connection $hostConnection -Arguments @('restored', $RestoreHostBackupId) -Stdout Console
+        if ($hostRestored.ExitCode -ne 0) {
+            Write-Warning "Could not tell the host that backup $RestoreHostBackupId was restored ($(Get-ConstructBackupExitMessage $hostRestored.ExitCode)); it stays pinned until its pin expires."
+        }
+    } finally {
+        if ($hostRestoreSucceeded) {
+            try { Invoke-Ssh -Sudo -Command "rm -f $hostRestoreFile $hostRestoreRetained" | Out-Null } catch { }
+        }
     }
 }
 
@@ -3645,6 +3968,8 @@ catch {
         $global:ConstructProvisionHadErrors = $true
         $global:ConstructProvisionFailureMessage = $script:ProvisionFailureMessage
     }
+    # A failed backup action keeps a panel-launched console open on its error.
+    if ($script:IsBackupAction) { $script:BackupActionFailed = $true }
     # Standalone: show the failure above our own pause (readable even on a
     # double-click run). Chained (-Auto): rethrow so the upper script owns the
     # single error display + pause. De-elevated child (-ResultFile): don't
@@ -3693,7 +4018,7 @@ finally {
     # An upper script (-Auto) owns the single final pause. Direct runs pause as
     # before; panel runs skip it only when fully clean so errors cannot disappear
     # with the console window.
-    if (-not $Auto -and ((-not $FromPanel) -or $global:ConstructProvisionHadErrors)) {
+    if (-not $Auto -and ((-not $FromPanel) -or $global:ConstructProvisionHadErrors -or $script:BackupActionFailed)) {
         # Failed VM steps: offer to copy the fix prompt or to let an agent on the VM
         # work on it right here. A run that never wrote the ssh alias falls back to
         # the one a previous provision of this VM left in ~\.ssh\config.
@@ -3709,4 +4034,7 @@ finally {
         Write-Host ""
         Read-Host "Press Enter to exit"
     }
+    # A backup action run on its own (the panel's console) reports its outcome as the
+    # process exit code too.
+    if ($script:BackupActionFailed -and -not $Auto) { exit 1 }
 }

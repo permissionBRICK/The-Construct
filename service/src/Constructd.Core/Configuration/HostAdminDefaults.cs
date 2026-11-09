@@ -15,6 +15,7 @@ public static class HostAdminDefaults
     public static UpdatesConfig Updates { get; } = new("permissionBRICK/The-Construct", "main", 60, 120);
     public static VaultConfig Vault { get; } = new();
     public static HttpsConfig Https { get; } = new();
+    public static BackupsConfig Backups { get; } = new();
 }
 
 public sealed class HostAdminOptions

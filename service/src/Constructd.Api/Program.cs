@@ -142,6 +142,7 @@ app.MapGroup("/api/v1")
     .MapPrimaryMemoryFloorEndpoints()
     .MapForwardEndpoints()
     .MapIdleEndpoints()
+    .MapBackupEndpoints()
     .MapTokenUsageEndpoints()
     .MapJobEndpoints()
     // Host administration feature routes: one hook per implementation pair.
