@@ -1371,6 +1371,11 @@ $pwPrompts = [regex]::Matches($aiTxt, '(?s)if \(\$FromPanel -or \$Auto -or \$Non
 $pwTui = [regex]::Matches($aiTxt, 'Invoke-TuiInput -ScreenTitle "Agent user password"')
 ok "agent password: every prompt is skipped by -Auto / -NonInteractive / the panel" ($pwTui.Count -ge 2 -and $pwPrompts.Count -eq $pwTui.Count)
 
+# A scripted run (-Auto / -NonInteractive) never waits for Enter at the end.
+$waitExitText = ([regex]::Match($aiTxt, '(?s)function Wait-Exit \{.*?\n\}')).Value
+$guardAt = $waitExitText.IndexOf('if (($Auto -or $NonInteractive) -and -not $FromPanel) { return }')
+ok "end of run: a scripted run returns before the 'Press Enter to exit' pause" ($guardAt -gt 0 -and $guardAt -lt $waitExitText.IndexOf('Read-Host "Press Enter to exit"'))
+
 # ── Summary ─────────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "==============================" -ForegroundColor Cyan

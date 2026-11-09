@@ -392,6 +392,9 @@ function Wait-Exit {
     }
     # The run is over once its result is on screen: a console left open at this prompt keeps nothing locked.
     if ($script:LifecycleRunOwned) { Exit-ConstructLifecycleRun; $script:LifecycleRunOwned = $false }
+    # A scripted run (-Auto / -NonInteractive; the panel passes neither) has nobody to press
+    # Enter: it never pauses, not even after a failure, whose result is on screen and in the log.
+    if (($Auto -or $NonInteractive) -and -not $FromPanel) { return }
     if ((-not $FromPanel) -or $global:ConstructProvisionHadErrors -or $global:ConstructInstallFailed) {
         # Failed VM steps: copy the fix prompt, or let an agent on the VM work on it
         # in this console. The provisioner names the ssh alias it wrote; a run that
