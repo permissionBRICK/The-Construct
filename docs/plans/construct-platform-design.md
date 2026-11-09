@@ -1,6 +1,6 @@
 # The Construct platform: client-side refactor (phase 0 design)
 
-Status: phase-0 design, revision 8, 2026-11-09. Factual claims were verified against the
+Status: phase-0 design, revision 9, 2026-11-09. Factual claims were verified against the
 repository at commit `d399476`. Nothing in this document is implemented. It replaces the
 client-side parts of [modular-remote-architecture.md](modular-remote-architecture.md) and the
 Companion decisions named in section 3; the guest contract and the host service stay in force.
@@ -10,7 +10,8 @@ merges, a required recovery code, the supported upgrade set, test VMs created on
 test cadence, the store as a container and install statistics. Revision 7 settles four of
 its questions (S16 to S18) and adds two later work packages the owner asked for: host setup media
 and Proxmox clusters (section 18). Revision 8 settles the remaining questions of section 17 (S19 to S23 and the table there).
-Revisions 6 to 8 have not been reviewed independently;
+Revision 9 answers the fourth independent review, which read revision 8 (Appendix B).
+Revision 9 itself has not been re-checked;
 revisions 1 to 3 were, and revision 4 answers the third review. Revision 5 folded
 in the owner's first page comments (tool-set changes with opencode 2, the help assistant, the T3
 coupling overhaul, and the resume helper retired because T3 continues interrupted runs itself).
@@ -163,7 +164,9 @@ Facts the design depends on:
 12. Hosts keep token usage per VM, day and tool: input, output, cache and total tokens
     (`TokenUsageEndpoints.cs:60-67`).
 13. The vault document sits under user-scope DPAPI (`DpapiProtection.cs:12`). A vault that Windows
-    can no longer unprotect is moved aside and an empty one started (`VaultService.cs:374`). The
+    can no longer unprotect is marked unavailable (`VaultService.cs:37`); the user can then only
+    reset it, after a confirmation, which moves the file aside and starts an empty vault
+    (`VaultService.cs:374`, `VaultView.cs:197`). The
     key can be exported for a second PC (`VaultHosts.cs:492`), but no flow asks the user to keep
     a recovery copy.
 
@@ -192,8 +195,8 @@ SETTLED (owner, 2026-11-09; S9 to S23 from the plan walkthrough the same day), w
 | S17 | Install statistics are on by default, shown in the setup dialog with their exact content and one switch (5.5). | None. |
 | S18 | The Linux device agent is part of the merge; the macOS agent follows it (15). | A Linux PC is a client of a host elsewhere until the QEMU driver exists (phase 6). |
 | S19 | The review hold for profile changes written by a VM is not built for the first release (10.4). | A compromised VM can still change a profile that other VMs provision from, as today. |
-| S20 | Every module updates by itself: device agent, engine, T3 Desktop and each VM's guest payload. No update needs another module or a VM to be running (12.1). | Modules run different versions for a while; `apiFeatures` and the skew window cover that (6.1, 12.2). |
-| S21 | An agent can ask the user to enter a secret: it registers an empty vault entry and the user pastes the value into a dialog on a device (10.3). | None; the value never passes through the VM that asked. |
+| S20 | Every module updates by itself under its own stored policy: device agent, engine and T3 Desktop. A VM's guest payload updates through its engine, which is there whenever the VM runs. No update needs a device or a VM to be present (12.1). | Modules run different versions for a while; `apiFeatures` and the skew window cover that (6.1, 12.2). |
+| S21 | An agent can ask the user to enter a secret: it files a request under a name and the user pastes the value into a dialog on a device (10.3). | The VM that asked gets the value only through a later approved lease, like any secret. |
 | S22 | opencode 2 ships on `main` now, as its own release ahead of the rework (4.2). | None for the rework: its equivalence baseline is taken afterwards. |
 | S23 | Proxmox clusters get one engine per cluster; the investigation settles the details (18.2). | See 18.2. |
 
@@ -223,9 +226,9 @@ class with their own rules (4.2).
 | `construct project conflicts|resolve` and the prompt file in `config/` | 9.6 | 3b | New subcommands, no package |
 | `construct manifest` | 13.3 | 2b (before that, the rig runs the manifest script from the test tree over SSH without installing it) | Read-only reporting |
 | `provisioned.env` gains `CONSTRUCT_PAYLOAD_HASH`, `CONSTRUCT_DESIRED_HASH`, `CONSTRUCT_CHANNEL` | 7.5, 12A | 2b | Marker keys beside `CONSTRUCT_COMMIT` |
-| `construct-t3-resume.py` and its unit retire. T3 continues a run cut off by a server restart itself (`continueThreadsAfterServerUpdate`, default on, about 3 s after the server is back, at most 3 continuations per chain), and the helper speaks only the removed v1 HTTP API, so it already does nothing on current T3. The helper also mints the T3 API token `/etc/construct/t3-resume-token`, which the T3 registration check reads (`bin/install-ai-tools.sh:939`); that minting moves into the installer. Two differences from the helper are accepted or checked: T3 does not message a thread that was idle with background watchers, and T3 resumes when its server is back, not when provisioning has finished (rig check: no continuation before the sentinel) | 9.6 | 3b | Removal of a helper that no longer acts; the resume behaviour comes from T3 |
+| `construct-t3-resume.py` and its unit retire. T3 continues a run cut off by a server restart itself (`continueThreadsAfterServerUpdate`, default on, about 3 s after the server is back, at most 3 continuations per chain), and the helper speaks only the removed v1 HTTP API, so it already does nothing on current T3. The helper also mints the T3 API token `/etc/construct/t3-resume-token`, which the T3 registration check reads (`bin/install-ai-tools.sh:939`); that minting moves into the installer. Two differences from the helper are accepted or checked: T3 does not message a thread that was idle with background watchers, and T3 resumes when its server is back, which today is in the middle of a run: provisioning restarts T3 (`bin/install-ai-tools.sh:1246`) before the project commands (`bin/provision.sh:1493`). The barrier the helper had therefore moves into provisioning: a run that has to restart T3 stops the service at that point and starts it in its finish step, on success and on failure. Rig check: a deliberately long provision with an interrupted thread shows no continuation before the sentinel | 9.6 | 3b | Removal of a helper that no longer acts; the resume behaviour comes from T3 |
 | Help prompt file in `config/` for the help assistant | 11.5 | 4 | New prompt file, no package; uses the installed `t3` CLI |
-| `construct secret ask <name>`: registers an empty vault entry and asks the user to enter its value on a device (working name) | 10.3 | 3b | New subcommand of the existing `construct secret` CLI, no package |
+| `construct secret ask <name>`: files a request for a secret the user then enters on a device (working name) | 10.3 | 3b | New subcommand of the existing `construct secret` CLI, no package |
 
 ### 4.2 Tool-set changes
 
@@ -453,6 +456,12 @@ including "channel changed" and "guest payload changed" entries. One element per
 | Engine participant | Host key pair; store participant token | `D` always; `K` per vault mode; never `U`, `B.priv` or a restore key beyond one job |
 | VM | VM token | Section 10.1 |
 
+Device-bound access (REQUIRED, phase 3b). Every device holds a token bound to its key pair at the
+store and at each engine, whatever the sign-in method. With Windows sign-in (Negotiate) the
+Windows identity names the user and the device token names the device. An engine accepts a device
+when a `device` record of a user it hosts lists that key and is not revoked. The converter replaces
+the old per-user tokens with device tokens (13.1).
+
 ### 8.2 Key hierarchy
 
 PROPOSED: independent random keys wrapped under one root, so today's vault key is carried over
@@ -472,7 +481,7 @@ unchanged.
 Locked mode locks secret values only; sync and jobs keep working because `D` is granted
 separately. Hosts never hold `U`, `B.priv` or a restore key beyond a job, so "the host cannot read
 stored backups" survives S2. Legacy per-PC RSA private keys are imported under `U` for history
-(13.1); their public halves are removed from VMs at conversion.
+(13.1); their public halves are removed from VMs once conversion has committed (13.2).
 
 ### 8.3 Pairing a new device
 
@@ -502,8 +511,15 @@ protocol is built together with the public store (5.4).
 
 First release:
 
-- Device revocation: its engine and store tokens are deleted at once and its `device` record is
-  marked revoked. From then on it can fetch no record, no backup and no secret.
+- Device revocation: the revoking device deletes that device's token at the store and at every
+  engine it reaches, and marks the `device` record revoked. An engine that was not reached learns
+  it from the record at its next sync and is listed as "not yet confirmed" until it acknowledges.
+  From an engine's acknowledgement on, the revoked device gets no record, backup or secret from it.
+- An engine that can reach neither the store nor the revoking device keeps serving the revoked
+  device until it syncs. The UI states that window; nothing closes it.
+- With Windows sign-in, revocation removes the device's standing: its token, its approvals and any
+  later key grant. Whether the Windows account can still sign in from that machine is the
+  directory's decision, and the UI says so.
 - The UI then lists every vault secret that device could read, so the user rotates them at their
   source. Re-keying would not protect those values, because the device already had them.
 - Engine revocation: the participant token is deleted at once; its VMs appear in the pending
@@ -541,10 +557,10 @@ recovery copy, and a vault whose DPAPI protection breaks is lost (2.4).
 
 | Element | Design |
 |---|---|
-| Creation | The device generates the recovery key pair, seals `U` to its public half and stores that wrap as a record. The private half is derived from the code. |
+| Creation | The code is 160 random bits, shown in groups. Two things are derived from it: the recovery private key, to whose public half the device seals `U`, and a recovery secret, of which the store keeps only a verifier. Verifier and wrap exist once per user, also on a shared store. |
 | Handing over | The dialog shows the code once, with save as file, print and copy. The step completes when the user confirms they stored it. No account and no e-mail are involved. |
-| Use | On a new or reset device: install the agent, enter the store URL and the code, unseal `U`, re-enrol with the engines. This covers a lost device, a Windows reinstall and a password reset that breaks the device's key store. |
-| Replacement | Any full device can issue a new code; the old wrap is deleted. |
+| Use | On a new or reset device: install the agent, enter the store URL, the user name and the code. The device proves the recovery secret to the store, which answers with the wrap and a token for enrolling one device of that user; attempts are rate-limited. The device unseals `U` and registers its key as a `device` record, from which the engines accept it (8.1). This covers a lost device, a Windows reinstall and a password reset that breaks the device's key store. |
+| Replacement | Any full device can issue a new code; verifier and wrap are replaced in one atomic write. That ends the old code's ability to recover through the store. Someone who kept both the old code and a copy of the old wrap can still unseal the unchanged `U`; closing that needs rotation (S16). |
 | Limit | The code restores keys, not data. The data is the store database and the backup payloads on the host. |
 
 REQUIRED (phase 3a): an engine export job writing store database, host-key-wrapped replica keys,
@@ -582,16 +598,20 @@ public store is never a participant.
 | `device` | device | name, public key, status | devices (revocation by full devices) |
 | `secret` | vault entry | today's shape, payload sealed with `K` | devices; engines |
 | `conflict` | unresolved merge | base, ours, theirs, identities, claim | engines |
-| `upstream` | linked company repo | URL, ref, files, bases | devices |
+| `upstream` | linked company repo | URL, ref, files | devices |
+| `upstream-applied` | imported file | base commit, base content, provenance (9.7) | engines |
 | `review` | profile | confirmed revision and its content hash (10.4; not in the first release) | devices |
 
 The envelope `actor` is always the authenticated principal (`device:<id>` or `engine:<id>`); a
-record an engine writes for one of its VMs carries that VM in `origins` inside the payload, which
-is what the review hold (10.4) reads. The store enforces only this kind-level table, because it
-cannot read contents. Field-level rules inside a kind are enforced by the writer's code and
-verified by readers: an engine may write
-`secret` records only to reseal an entry for auto-approve, which devices check on read (same
-name, same plaintext except `autoApprove`, else the write is reported and reverted). The split of `vm` into `vm-desired` and `vm-applied` removes the only other field-level rule.
+record an engine writes for one of its VMs carries that VM in `origins` inside the payload. The
+store enforces only this kind-level table, because it cannot read contents. Rules inside a kind
+are enforced by the writer's code. For `secret` that means: an engine writes one only to carry out
+a change a device approved (a VM's `secret add`, replace or delete, a secret entered on request
+(10.3), the auto-approve reseal), and records the VM, the approving device and the request id in
+the payload, which devices show. To that extent an engine is trusted for the vault it hosts; in
+`available` mode it holds `K` anyway. The split of `vm` into `vm-desired` and `vm-applied` removes
+the only other field-level rule.
+
 Devices write only kinds that are never merged (S9).
 
 ### 9.2 Envelope, revisions, compare-and-swap, feed
@@ -672,24 +692,34 @@ Merge, by the engine that receives the `412` (engines are the only mergers, S9):
 | `setting`, `vm-desired`, `upstream`, `review` | No merge. The writing device re-reads, re-applies the user's one change and retries (9.2). Two devices changing the same key end with the later accepted write; history keeps the earlier one. An unaccepted local write never wins by time. |
 | `vm-applied` | Engine-only; no merge. |
 | `engine`, `device` | No merge; refused with `412` until re-read. Security transitions never use last-writer-wins. |
-| `secret` | Today's rule (higher `updatedAt`, tie by `updatedBy`); never a conflict record or a VM. |
+| `secret` | No merge (revision 9; today's rule of the higher `updatedAt` goes). A write carries `If-Match`; on `412` the writer re-reads and re-applies its one change. An engine that sees a secret's value change ends its VMs' leases on that secret and queues their scrubs, as the Companion does today (`VaultService.Hosts.cs:52`). Never a conflict record or a VM. |
 
 Profile fields (SETTLED as a direction, S10; rules PROPOSED). `ours` is the write that received
-the `412`, `theirs` the accepted store revision.
+the `412`, `theirs` the accepted store revision. Base and both sides are normalised first:
+defaults are filled in (`forwards.to` is `client` when absent) and the canonical form applied.
 
 | Field | Rule |
 |---|---|
-| `repos` | Items match by (`url`, `directory`), then by occurrence order among identical keys. A matched item merges field by field. |
-| `mcp` | Items match by `name`, the same way. |
+| `repos` | Items match by (`url`, `directory`), then by occurrence order among identical keys. A changed `url` or `directory` counts as a removal plus an addition. If the merged first repository differs from the first repository of either side, the field is a conflict, because the first repository sets the working directory of the commands. |
+| `mcp` | Items match by `name`. A matched item merges field by field; a change of its type on both sides is a conflict. |
 | `forwards` | Items match by (`port`, `to`). |
 | `hostPackages` | A set: additions from both sides are kept; a removal holds when the other side left the item alone. |
-| `sdks`, `tests` | Key by key; a key changed differently on both sides is a conflict for that key. |
-| `provisionCommands` | Three-way merge of the ordered list, item by item. Changes in different places both apply. When both sides insert at the same place, ours come first, then theirs; an identical insertion is kept once. The same item changed differently, or changed on one side and removed on the other, is a conflict. |
+| `sdks`, `tests` | Key by key. A value, string or list, is one unit; a key changed differently on both sides is a conflict for that key. |
+| `provisionCommands` | Three-way merge of the ordered list, item by item. Changes in different places both apply. When both sides insert at the same place, ours come first, then theirs; an identical insertion is kept once. The same item changed differently is a conflict. |
 | `name` and any field added later | Both changed differently is a conflict. |
 
-Merged lists keep ours, then theirs' additions; duplicates a side already had are preserved. A
-conflict record names the fields in conflict and carries the merged value of every other field,
-so the resolver starts from the merge and decides only what is left.
+For every list: merged order is ours, then theirs' additions, and duplicates a side already had
+are preserved; one side removing an item the other changed is a conflict; both sides reordering
+differently is a conflict.
+
+The merged profile must then pass the schema and the checks a profile write passes today
+(`docs/config-sync.md` §6), and three more: no two repositories with the same effective directory,
+no two forwards with the same port and target, no two MCP servers with the same name, each beyond
+duplicates a side already had. A failed check turns that field into a conflict. Which write counts
+as ours depends on arrival order, so the same two edits can merge in either order; both results
+pass the checks, and S10 names the remaining command-order risk. A conflict record names the
+fields in conflict and carries the merged value of every other field, so the resolver starts from
+the merge and decides only what is left.
 
 Conflict protocol (REQUIRED, phase 3b, Appendix C.5): `conflictId = hash(profile, baseRevision,
 oursWriteId, theirsRevision)`; claims with `attemptId` and expiry; resolve through the engine as
@@ -702,10 +732,15 @@ start <project> -` with the shipped prompt, `construct project resolve`), `headl
 ### 9.7 Company upstream repos and vault records
 
 Upstream repos: unchanged semantics (`docs/config-sync.md` §7). The device agent fetches with git
-and keeps link and bases in the `upstream` record. On a refresh it submits the stored base and the
-new upstream content to an engine, which merges with the 9.6 rules in place of `git merge-file`
-and writes the profile. Vault: a record kind with key `K`, today's merge rule on devices, no VM
-delivery; engine vault routes unchanged for the guest.
+and owns the link (`upstream`: URL, ref, files). The engine owns what was applied
+(`upstream-applied`: base commit, base content and provenance per imported file). On a refresh the
+device submits an operation id, the file, the new commit and the new content. The engine merges
+with the 9.6 rules in place of `git merge-file` and writes the profile, or the conflict, together
+with the new base in one `POST /records/batch`. A retry with the same operation id, or of a commit
+already applied, changes nothing, so a device that crashed mid-refresh simply submits again.
+
+Vault: a record kind with key `K`, no merge (9.6), no VM delivery; engine vault routes unchanged
+for the guest.
 
 ### 9.8 Record payload versions
 
@@ -741,22 +776,30 @@ the `+ 1` being staging room for the next upload; with daily backups and `keep =
 a typical backup of about 550 MB (37 backups).
 
 REQUIRED (phase 2c): a guest that predates tickets keeps getting scheduled backups until it is
-reprovisioned. The engine accepts its unticketed upload as scheduled only within one hour of
-asking for it in a heartbeat reply, and the pending element lists the VM as needing a reprovision
-for backup tickets.
+reprovisioned. Whether a guest knows tickets is taken from what the engine provisioned
+(`vm-applied`), never from what the guest says, so a capable guest cannot fall back to this rule.
+For such a guest the engine records one authorization when it asks for a backup in a heartbeat
+reply, bound to that VM and valid one hour. The first accepted `POST /backups` consumes it and
+counts as scheduled; every further create is a slot upload. The pending element lists the VM as
+needing a reprovision for backup tickets.
 
 ### 10.3 Devices and approvals
 
 Approvals stay with devices. New kinds (secret release in locked mode, pairing, trusting an
 engine, deleting an anchor, channel switch of a host) use the vault's pending record and UI element.
 
-Secret entry on request (SETTLED, owner 2026-11-09, S21). An agent that needs a credential the
-vault does not hold runs `construct secret ask <name> --description TEXT [--reason TEXT]`. The
-engine registers an empty entry and a pending request. A device shows it like an approval, with
-the VM, the name, the description and a field to paste the value into, in the secret editor of
-11.3. Saving stores the value in the vault; the VM learns only that the entry now has a value and
-gets it through an ordinary lease afterwards. Declining removes the empty entry. Today's
-`construct secret add` stays for values the agent itself holds.
+Secret entry on request (SETTLED, owner 2026-11-09, S21; contract PROPOSED). An agent that needs a
+credential the vault does not hold runs `construct secret ask <name> --description TEXT [--reason
+TEXT]`. The engine files a pending request bound to the user, the VM and a request id. No vault
+entry exists yet; `secret list` shows the name as requested. A device shows the request like an
+approval: the VM and host as the engine names them, then the agent's description and reason as
+plain text of bounded length, marked as written by the agent. The user pastes the value in the
+secret editor of 11.3. Saving creates the secret only if no entry of that name exists at that
+moment; otherwise the dialog says so and overwrites nothing. The new entry needs approval for
+every use, is never auto-approved by this path, and grants no lease. The VM learns that the entry
+exists and asks for a lease as for any secret. Declining, or the request expiring after a day,
+removes the request and nothing else. Today's `construct secret add` stays for values the agent
+itself holds.
 
 ### 10.4 VM-authored changes spreading to other VMs
 
@@ -852,7 +895,10 @@ first screen, in two variants.
 
 The rest of the UI stays closed until step 3 is done. A failed step shows its error with a retry
 and resumes there after a restart. A second device does not see this dialog; it is paired (8.3).
-On a shared host, each user's first device runs steps 3 to 5 for that user.
+A user whose VMs all run on a shared host runs the same dialog on their own PC: step 1 installs
+nothing, and step 2 converts that user's profiles, vault and backup keys, which only their PC can
+read. If that host has not been upgraded yet, the dialog says so before step 2 and offers the host
+update when the user is its admin (13.2).
 
 ## 12. Updates
 
@@ -860,12 +906,12 @@ On a shared host, each user's first device runs steps 3 to 5 for that user.
 
 | Step | Design |
 |---|---|
-| Authority | The device agent owns release policy: one channel (12A) and one publisher key; it verifies the channel manifest's signature (REQUIRED, phase R) and decides the target for each engine and itself; hosts cache packages but never gain install authority. Hosts on another channel are shown, not updated. |
+| Authority | Each module follows its own stored policy and verifies the channel manifest's signature itself (REQUIRED, phase R): a device its channel policy (12A), an engine its admin's `updates.channel` and `updates.auto`, T3 Desktop its T3 channel. A device never installs on an engine against that policy; "update everything" asks each engine to run its own updater. Hosts on another channel are shown, not updated. |
 | Plan | Durable device plan `{release, hosts:[{engine, state, error}], self}` surviving the agent's restart. |
 | Engine | Today's stage, drain, hand-off, verify, recover flow. |
 | Agent | Updates itself after its engines, when idle, then finishes the plan. |
 | VMs | `CONSTRUCT_PAYLOAD_HASH` and `CONSTRUCT_CHANNEL` compared with the engine's channel release; differences become `reprovision` entries; run sequentially per host on confirmation or with `updates.autoReprovision`. |
-| Independence | SETTLED (owner, 2026-11-09, S20): each module updates by itself from its channel manifest: the device agent, each engine, T3 Desktop and each VM's guest payload, which a VM may also start itself (10.1). No update needs another module or a VM to be running or reachable; the plan above only orders updates that happen to be due together. T3 Desktop finds and installs its own build from the T3 channel without asking a VM, and when a VM's reprovision moves its T3 server to a newer build, T3 Desktop moves to the matching build on its own. Versions that differ in between are covered by `apiFeatures` (6.1) and the skew window (12.2). |
+| Independence | SETTLED (owner, 2026-11-09, S20): the device agent, each engine and T3 Desktop each fetch and apply their own package without a live peer. A VM's guest payload updates through its engine (source cache and provision job), which is there whenever the VM runs, and the VM may start that itself (10.1). The plan above orders updates that are due together; it is never a precondition. T3 Desktop finds its own build from the T3 channel without asking a VM, and when a VM's reprovision moves its T3 server to a newer build, T3 Desktop moves to the matching build on its own. Versions that differ in between are covered by `apiFeatures` (6.1) and the skew window (12.2). REQUIRED (phase 3c): update tests with each peer offline: an agent with no engine reachable, an engine with no device, T3 Desktop with no VM. |
 
 ### 12.2 Rollback and version skew
 
@@ -960,10 +1006,10 @@ store and `bridge.json`; never modifies the old files.
 | `instances.json` local entries | Engine adopts the VM (`vms adopt`), issues a VM token, writes `/etc/construct/vm-token`; `vm-desired` and `vm-applied` records |
 | `instances\<name>.json`, `.construct-settings.json` | `vm-desired` (selection, settings) and `setting` records; `constructRef` to the device channel |
 | Remote instances, `remote\<slug>.pin`, `remote\<slug>.token` | `engine` records; tokens into the device token store |
-| `config\` `main` | `profile` and `upstream` records |
+| `config\` `main` | `profile`, `upstream` and `upstream-applied` records |
 | `config\` `vm`, `vm-<name>` branches with unmerged commits; conflicted trees | `conflict` records (branch content as ours, main as theirs, git merge base as base) |
 | `companion\settings.json`, `hosts.json`, VS Code `construct.*` | `setting`, `engine` records |
-| `backup\pc-key.*` | Legacy private key wrapped under `U` for history; the legacy public key is removed from every reachable VM at conversion and `B.pub` enrolled; unreachable VMs are listed in the pending element until updated |
+| `backup\pc-key.*` | Legacy private key wrapped under `U` for history; the legacy public key is removed from every reachable VM once conversion has committed (13.2), and `B.pub` enrolled before that; unreachable VMs are listed in the pending element until updated |
 | `vault.dat` | `secret` records sealed with the existing `K`; tombstones; per-host mode; leases migrate with `instance`, `name`, `usesLeft`, `expiresAt` and the value needing cleanup, and keep today's termination-to-scrub lifecycle on exhaustion, expiry, revocation or interruption (`VaultService.cs:423`); pending cleanups become engine scrub jobs, dropped with a log line when the instance no longer exists |
 | `~\.ssh`, `remote.SSH.remotePlatform`, certificate stores | Device agent, unchanged content |
 | `lifecycle-running.json`, result files | Gone |
@@ -994,19 +1040,22 @@ happens in the agent's upgrade dialog (11.6).
 
 | Element | Design |
 |---|---|
-| Updater's part | The old updater downloads the release and dot-sources its lib. The new lib's `Set-ConstructInstalledMarker` stops a running Companion the way today's Companion install does (`POST /v1/quit {reason: update}` where the Companion has it), installs the agent package per user without elevation, starts it, and then advances the marker. A failure throws, so the updater reports `fail`, the old Companion is started again and the update can be clicked again. The Companion hook that runs afterwards finds the agent and reports `unchanged`. |
+| Updater's part | The old updater downloads the release, replaces the scripts folder (`Update-Construct.ps1:67`) and dot-sources the new lib. The new lib's `Set-ConstructInstalledMarker` stops a running Companion the way today's Companion install does (`POST /v1/quit {reason: update}` where the Companion has it), installs the agent package per user without elevation, starts it, and then advances the marker. A failure throws, so the updater reports `fail`; the install restores the Companion's own package as it does today (`lib/Construct.Companion.ps1:351`), and the old Companion keeps offering the update. The next click runs the new release's `Update-Construct.ps1` (see Scripts folder). The Companion hook that runs afterwards finds the agent and reports `unchanged`. |
 | State after the click | New files, the agent running, nothing converted. The agent shows only the upgrade dialog. VMs keep running; forwards and notifications pause until the dialog finishes. |
 | Dialog's part | Engine install with one admin prompt, the user's token, writer exclusion, the converter (13.1) with adoption, the recovery code, then `bridge.json {stage: converted}`. Each step is journaled and resumes where it failed. |
-| Writer exclusion | The dialog takes the lifecycle lock and the config-sync `.sync.lock`, and asks open VS Code windows to suspend through the lifecycle-run marker the old extension honours. The converter snapshots digests of every old state file first and re-reads them at the end, re-converting any item that changed. It writes only to engine, store and `bridge.json`. |
-| Failure in the dialog | The failed step is shown with its error and a retry. The old state is untouched, so the way back is the one-line install of the last release before the merge. |
-| Scripts folder | The new release ships no legacy script bodies. The names T3 Desktop calls (`Update-Construct.ps1`, `Update-T3Code.ps1`, `Get-ConstructT3PairingLink.ps1`) and `install.ps1` remain as shims onto agent routes; before conversion they answer "finish the upgrade in the Construct window". |
+| Writer exclusion | The agent takes the lifecycle lock afresh (the updater has released its own by then) and the config-sync `.sync.lock`. These stop lifecycle scripts and sync, not every writer: an old extension window left open can still write settings (`extension/extension.js:2598`). The fence is therefore a move. After its last digest check the converter moves the old state files and folders into a dated legacy folder, each by rename, and compares digests once more on the moved copies, re-converting what changed. A writer that survives then writes into a place nothing reads; the agent notices the reappearing files and asks the user to reload that VS Code window. The converter writes only to engine, store and `bridge.json`. |
+| Failure in the dialog | The failed step is shown with its error and a retry. Guest-side changes stay additive until conversion commits: the new backup recipient is added and VM tokens are issued, but the legacy backup key is removed from VMs only after `stage: converted`. The way back before that point: move the legacy folder back and run the one-line installer with the ref `legacy`, a branch kept at the last commit of the old stack (the old installer treats any ref but `main` as a branch, `install.ps1:30`). After `converted` there is no supported way back. |
+| Scripts folder | No legacy script bodies ship. `Update-Construct.ps1` and `install.ps1` of the new release are standalone PowerShell bootstraps that need no agent: they download, verify, install and start the agent and honour the old parameters and result file, so a failed first attempt is retried from the old Companion's button or by hand. With an agent running they hand over to it. `Update-T3Code.ps1` and `Get-ConstructT3PairingLink.ps1` are shims onto agent routes; before conversion they answer "finish the upgrade in the Construct window". |
 | Extension | `Install-ControlPanelExtension` installs the thin extension (11.4); its failure still fails the update, as today. |
 | One click | Updates the files and starts the agent. The dialog then needs one admin prompt and the recovery-code step. VM reprovisions wait for a confirmation (17.7). |
-| Shared hosts | A host is upgraded by its admin through the host updater, independent of its users' PCs. Old clients keep working against an upgraded host, because `/api/v1` stays additive until route retirement (phase 6). A new agent facing an old host shows "this host needs an update" for what the host lacks. |
+| Shared hosts | Hosts first: the host release is published and the known shared hosts are upgraded before the client release appears (15). Old client against a new host: works. The engine keeps the old routes; a user without a converted device has no records, and their vault, profiles and backups keep flowing through the old routes, with their existing backups counted as ticketed for retention. New agent against an old host: the agent can do one thing with it, start the host update through the existing admin route (`/host/updates`), when the user is its admin; otherwise the dialog waits and names the host. Every user converts on their own PC (11.6). |
 
 Test (REQUIRED, phase 3c): on the Windows VM of 14.3, install a class E release and the last
 release before the merge, provision a VM on each, click update, complete the dialog through its
-test automation, and assert the converted state and the guest manifest. A test on
+test automation, and assert the converted state and the guest manifest. A failure is injected
+before and after each replacement and conversion step, and after each the retry or the way back is
+exercised. Further cases: an old VS Code window left open during conversion, a second user of a
+shared host who has not converted, and a new agent against an old host. A test on
 `Update-Construct.ps1` asserts that the lib dot-source and the marker call exist and that a marker
 exception reaches the result file as `fail`.
 
@@ -1090,8 +1139,8 @@ every REQUIRED marker, names a work package on the branch, not a release.
 | Old client code | Left untouched on the branch until the new agent and UI replace it, then deleted. No intermediate client mixing old and new is built. |
 | Builds | The branch publishes prereleases with the nightly channel manifest (12A), so moved installs update themselves. |
 | Moving an install | The one-line installer with the branch ref, then the upgrade dialog (11.6); the converter reads the previous install folder (12A.5). The merge later exercises the same path for everyone. |
-| Merge gates | Every REQUIRED test green; the full matrix (12A.4) green; the migration test on class E and F; T3 builds with the agent client released (11.4); the owner's installs running the branch, including one shared host with a second user. |
-| The merge | One PR from the branch into `main`, released as 2.0.0. Hosts are upgraded by their admin first (13.2). Then `nightly` is created from `main`, becomes the default branch, and 12A applies. |
+| Merge gates | Every REQUIRED test of the first release green (the review hold of 10.4 and the rotation contract of 8.4 are deferred and excluded); the full matrix (12A.4) green; the migration test on class E and F; T3 builds with the agent client released (11.4); the owner's installs running the branch, including one shared host with a second user. |
+| The merge | One PR from the branch into `main`, released as 2.0.0 in two steps: the host release first, the known shared hosts upgraded by their admin, then the client release (13.2). The branch `legacy` is created at the last commit of the old stack. Then `nightly` is created from `main`, becomes the default branch, and 12A applies. |
 
 | Phase | Delivers | Depends on | Exit criteria |
 |---|---|---|---|
@@ -1214,7 +1263,7 @@ Today one `constructd` manages the VMs of the node it runs on:
 |---|---|
 | The node is one setting, or the machine's host name | `ProxmoxDriver.cs:127-131` |
 | VM paths are `/nodes/{Node}/qemu/{id}`; a VM that `/cluster/resources` lists on another node is ignored | `ProxmoxDriver.cs:613`, `:563` |
-| New VM ids come from `/cluster/nextid`, which is safe in a cluster | `ProxmoxDriver.cs:593` |
+| New VM ids come from `/cluster/nextid`, which names a free id without reserving it; lookup and creation are separate steps, so a cluster engine must handle a collision | `ProxmoxDriver.cs:155`, `:593` |
 | Console and screenshots use the node's local QMP socket | `ProxmoxQmp.cs:58` |
 | Cloud-init snippets are written to a directory on this node; image and media storages default to local ones | `ConstructdOptions.cs:252-271` |
 | Forwards are TCP relays inside the engine process; database and backups sit in the engine's data directory | `TcpRelayPortForwardManager.cs`, `docs/proxmox-host.md` §1 |
@@ -1233,8 +1282,9 @@ What option B needs, to be confirmed by the investigation:
   are kept per node, and a placement rule chooses.
 - Node-local access is replaced: console and screenshots go through the node that runs the VM;
   snippets, image and media live on shared storage or are copied to each node.
-- Storage decides what can move: shared storage allows live migration; local storage keeps a VM
-  on its node unless it is replicated.
+- Storage decides how a VM moves: shared storage allows live migration without copying disks;
+  with local disks Proxmox migrates live by copying them; after a node failure only shared or
+  replicated storage brings a VM back on another node.
 - Forwards reach guests on other nodes only when the nodes share the bridge network; otherwise
   each node needs a relay.
 - The engine itself must survive a node failure: as a guest the cluster keeps available, with its
@@ -1333,6 +1383,28 @@ Not independently reviewed.
 | R1 #23, R2 #7: rig inside the development VM; a dedicated Windows machine as an option | S14: VMs created on demand on the host; a nested Windows child |
 | R3 #3, R3 #4: phase R changes the old stack's release resolution | 12A.5: the old stack is left alone |
 
+### Review 4, of revision 8
+
+Fifteen findings, all answered in revision 9. Not re-checked.
+
+| Finding | Answer | Where |
+|---|---|---|
+| 1 (blocker) no retry or way back after the scripts are replaced | Standalone bootstrap scripts that need no agent; a `legacy` branch for the way back; guest changes additive until conversion commits; failure injection at every step | 13.2 |
+| 2 old-state writers not all excluded | The old state is moved aside after the last check and compared again; a surviving window writes into a place nothing reads | 13.2 |
+| 3 vault merging on devices contradicts S9 | Secrets are never merged: `If-Match` writes; engines write a secret only for a device-approved change, with provenance; lease ending stays with the engine | 9.1, 9.6, 9.7 |
+| 4 recovery without an authentication protocol | Code of 160 bits; store-side verifier per user; rate-limited recovery issuing one enrolment token; atomic replacement; the limit of replacement stated | 8.5, C.3 |
+| 5 token deletion cannot be immediate everywhere | Device-bound tokens under every sign-in method; engines acknowledge; unreached engines listed; Windows sign-in left to the directory | 8.1, 8.4 |
+| 6 merge rules incomplete | Normalised defaults, key changes as removal plus addition, first-repository rule, remove-versus-change, reorder, checks after the merge | 9.6, C.5 |
+| 7 upstream refresh not recoverable | Engine-owned `upstream-applied` written with the profile in one batch; idempotent operation id | 9.1, 9.7 |
+| 8 legacy guest rule allows repeated uploads | One consumed authorization per engine request; ticket capability taken from `vm-applied` | 10.2, C.6 |
+| 9 secret request races and disclosure | A pending request and no placeholder entry; create only if absent; approval required, never auto-approved; description shown as the agent's plain text | 10.3 |
+| 10 shared-host users skip conversion | Every user converts on their own PC; hosts first; old client with new host and new agent with old host defined and tested | 11.6, 13.2, 15 |
+| 11 independent updates contradict update authority | Each module follows its own stored policy; the device plan only orders; offline-peer tests | 12.1 |
+| 12 merge gate requires deferred features | C.5 rewritten for engine merging; the review hold and rotation excluded from the first-release gate | 15, C.5 |
+| 13 no barrier before T3 continues threads | Provisioning stops T3 where it must restart it and starts it in its finish step | 4.1 |
+| 14 cluster id allocation and local-disk migration | Corrected | 18.2 |
+| 15 unreadable vault description | Corrected | 2.4 |
+
 ## Appendix C. Protocol requirements by phase
 
 Each entry names the property and the test that proves it; mechanism is the phase's choice.
@@ -1361,7 +1433,10 @@ loss; the store refuses writes under a retired epoch; a participant offline acro
 keeps its edits locally and publishes them re-encrypted after obtaining the new epoch; revoked
 tokens fail at once; recipients are replaced on every reachable VM and unreachable VMs are listed.
 Tests run with N devices, two engines, one store, and partitions injected at every message. For the first release (S16) only two of these are built and tested: revoked tokens fail at once,
-and the store refuses a write under any epoch but the active one.
+and the store refuses a write under any epoch but the active one. Also for the first release: an
+engine not reached at revocation acknowledges it after its next sync; recovery through the store
+is rate-limited and per user; replacing the code swaps verifier and wrap atomically; a device
+token is bound to its key under every sign-in method.
 
 ### C.4 Replica, outbox, rollback (phase 3a)
 
@@ -1378,11 +1453,15 @@ edits.
 
 Properties: identical conflict inputs produce one `conflictId`; two engines heartbeating the same
 VM start one agent; an expired or reassigned attempt's resolve fails atomically (profile unchanged,
-conflict open); a device merging a VM-authored change keeps `origins`; with `reviewVmChanges` on,
-a reprovision applies only confirmed revisions and lists held ones. Every rule of the per-field
+conflict open); an engine merging a VM-authored change keeps `origins`. Every rule of the per-field
 table (9.6) has a test with base, ours and theirs: both-appended `provisionCommands` yield ours
-then theirs, an identical insertion appears once, and the same item edited on both sides is a
-conflict that carries the merged value of every other field.
+then theirs, an identical insertion appears once, the same item edited on both sides is a conflict
+that carries the merged value of every other field; defaults are normalised before matching; the
+first-repository rule, remove-versus-change and each check after the merge produce a conflict. An
+upstream refresh interrupted at any point and submitted again leaves profile and base consistent.
+
+Deferred with 10.4 and not part of the first-release gate: with `reviewVmChanges` on, a
+reprovision applies only confirmed revisions and lists held ones.
 
 ### C.6 Backups (phase 2c)
 
@@ -1390,5 +1469,6 @@ Properties: with `keep = 1` and daily uploads from day one, a ticketed backup re
 `minHorizonDays` and stays; gaps in the schedule do not release the bootstrap anchor; daily
 malicious ticketed uploads across week and month boundaries never remove the protected anchor; a
 full slot, a stalled slot upload and simultaneous VMs never prevent a ticketed upload within the
-VM's `quota`; a ticket is consumed once; slot uploads never change schedule state; a guest without
-ticket support gets its upload accepted as scheduled only within an hour of the engine's request.
+VM's `quota`; a ticket is consumed once; slot uploads never change schedule state; a guest without ticket support gets exactly one upload accepted as scheduled per engine request, a
+second create in the same hour is a slot upload, and a guest provisioned with ticket support never
+falls under this rule.
