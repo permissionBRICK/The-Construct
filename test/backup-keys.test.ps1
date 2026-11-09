@@ -45,8 +45,16 @@ if (-not $realDpapi) {
 
 $tools = @{}
 foreach ($t in 'openssl', 'age', 'age-keygen', 'bash') { $tools[$t] = [bool](Get-Command $t -ErrorAction SilentlyContinue) }
-# The openssl comparisons drive openssl through bash (pipes of binary DER).
+# The openssl comparisons drive openssl through bash (pipes of binary DER). On Windows
+# `bash` is usually WSL's launcher, which drops the positional arguments these calls pass
+# (and sees another file system), so bash only counts when it hands an argument through.
+if ($tools.bash) {
+    $probe = ''
+    try { $probe = [string](& bash -c 'printf %s "$1"' _ 'construct-probe' 2>$null) } catch { $probe = '' }
+    $tools.bash = ($probe -ceq 'construct-probe')
+}
 $tools.openssl = $tools.openssl -and $tools.bash
+$tools.age = $tools.age -and $tools.bash
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('construct-backup-keys-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $tmp -Force | Out-Null
 
