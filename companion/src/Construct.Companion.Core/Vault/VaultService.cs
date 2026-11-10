@@ -174,7 +174,7 @@ public sealed partial class VaultService : IAsyncDisposable
         var ended = new List<string>(); var unscrubbed = new List<string>();
         Mutate(d =>
         {
-            foreach (var lease in d.Leases.Where(l => l.Instance == instance && (request.All || request.Names.Contains(l.Name))).ToArray())
+            foreach (var lease in d.Leases.Where(l => l.Instance == instance && request.Names.Contains(l.Name)).ToArray())
             {
                 End(d, lease, clock.UtcNow + ReleaseDelay);
                 if (ended.Contains(lease.Name)) continue;

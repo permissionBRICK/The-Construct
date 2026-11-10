@@ -154,7 +154,7 @@ public sealed partial class VaultHostService
     {
         var ended = new List<string>(); var scrubbed = new List<string>(); var auto = new List<string>();
         foreach (var lease in (await store.ListAsync<VaultLease>(vm.Owner, ct).ConfigureAwait(false))
-                     .Where(l => Ownership.SameName(l.Vm, vm.Name) && (request.All || request.Names.Contains(l.Name))).ToArray())
+                     .Where(l => Ownership.SameName(l.Vm, vm.Name) && request.Names.Contains(l.Name)).ToArray())
         {
             var scrub = await EndAsync(lease, clock.UtcNow + ReleaseDelay, entries, ct).ConfigureAwait(false);
             if (ended.Contains(lease.Name)) continue;

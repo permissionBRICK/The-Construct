@@ -153,7 +153,7 @@ ok "list: the id starts with ts" test "$(req '.id | split("-")[0]')" = "$(req .t
 ok "list: ts is epoch milliseconds" sh -c "jq -r .ts '${log}/last.json' | grep -Eqx '[0-9]{13}'"
 ok "list: the deadline is 60 s out by default" deadline_after 60000
 ok "list: source is user@host" sh -c "jq -r .source '${log}/last.json' | grep -Eqx '[^@ ]+@[^@ ]+'"
-ok "list: all/replace are false" test "$(req '[.all, .replace] | tostring')" = "[false,false]"
+ok "list: replace is false and there is no all field" test "$(req -c '[has("all"), .replace]')" = "[false,false]"
 ok "list: no uses/ttl/secret/reason fields" test "$(req '[.uses, .ttl, .secret, .reason] | map(select(. != null)) | length')" = 0
 ok "list: header row" sh -c "head -1 '${out}' | grep -Eqx 'NAME +ACCESS +DESCRIPTION'"
 ok "list: no lease reads 'none'" grep -Eqx 'alpha +none +first' "${out}"
@@ -354,20 +354,25 @@ ok "no files left after all of that" test "$(leftovers)" = 0
 answer_ok
 run release a b
 ok "release: exits 0" test "${rc}" = 0
-ok "release: op/names/all" test "$(req -c '[.op, .names, .all]')" = '["release",["a","b"],false]'
+ok "release: op/names, no all field" test "$(req -c '[.op, .names, has("all")]')" = '["release",["a","b"],false]'
 ok "release: the deadline is 60 s out by default" deadline_after 60000
 ok "release: prints what ended" grep -qx 'Released: a, b' "${out}"
 ok "release: says the Companion scrubs the VM" grep -q 'scrubs a, b from this VM' "${err}"
 answer '{v:1, id:.id, status:"ok", names:[]}'
-run relinquish --all
-ok "relinquish is an alias; --all sends all:true and no names" \
-  test "$(req -c '[.op, .names, .all]')" = '["release",[],true]'
+run relinquish a
+ok "relinquish is an alias" test "$(req -c '[.op, .names]')" = '["release",["a"]]'
 ok "release: nothing to release" grep -qx 'Nothing to release.' "${out}"
 ok "release: no scrub notice when nothing ended" test ! -s "${err}"
 run release
-ok "release: needs names or --all" test "${rc}" = 1
+ok "release: needs names" test "${rc}" = 1
+ok "release: without names nothing is sent" not_published
+# Leases belong to the VM, so a release-everything option would end other agents' leases too.
+run release --all
+ok "release: there is no --all" test "${rc}" = 1
+ok "release: --all is not sent" not_published
 run release a --all
-ok "release: names and --all together are refused" test "${rc}" = 1
+ok "release: --all is refused next to names too" test "${rc}" = 1
+ok "release: names with --all are not sent" not_published
 
 # ── add ──────────────────────────────────────────────────────────────────────
 
