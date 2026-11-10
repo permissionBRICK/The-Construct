@@ -122,19 +122,3 @@ The host can also be a **Proxmox VE node**: one script installs the same service
 <div align="center">
 <sub><i>Unfortunately, no one can be told what the Construct is. You have to <a href="#-load-the-construct">see it for yourself</a>.</i></sub>
 </div>
-
-### Unattended T3 tool permissions
-
-With patched T3 installed, enable **Automatically accept tool permissions** in
-Construct settings and save. This applies immediately on the selected VM for new
-requests, without restarting T3. This is off by default in
-all feature sets. It accepts command, file and permission requests once on that
-VM, including provider safety checks and explicit ask rules. Task questions,
-login/trust requests before a turn, and MCP forms remain interactive.
-
-On an existing VM, `construct config set t3-auto-approve true` enables it for new
-requests immediately; use `false` to disable it. The executing server reads its
-own `/etc/construct/config.env`. A connected Desktop or linked environment cannot
-enable this for another machine. Provider denials that produce no approval
-request cannot be overridden by this setting. This requires a Construct T3 build
-containing the auto-approval patch.
