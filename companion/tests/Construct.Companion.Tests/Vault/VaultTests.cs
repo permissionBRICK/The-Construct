@@ -83,7 +83,9 @@ public sealed class VaultTests
     [InlineData("{\"v\":1,\"id\":\"1700-1-2a\",\"op\":\"request\",\"names\":[]}", true, "between 1 and 20")]
     [InlineData("{\"v\":1,\"id\":\"1700-1-2a\",\"op\":\"request\",\"names\":[\"a\"],\"uses\":0}", true, "--uses")]
     [InlineData("{\"v\":1,\"id\":\"1700-1-2a\",\"op\":\"request\",\"names\":[\"a\"],\"ttl\":90000}", true, "--for")]
-    [InlineData("{\"v\":1,\"id\":\"1700-1-2a\",\"op\":\"release\",\"names\":[]}", true, "--all")]
+    [InlineData("{\"v\":1,\"id\":\"1700-1-2a\",\"op\":\"release\",\"names\":[]}", true, "Name the secrets to release.")]
+    // An older CLI's `release --all`: releasing every lease of the VM is gone, so it is refused.
+    [InlineData("{\"v\":1,\"id\":\"1700-1-2a\",\"op\":\"release\",\"names\":[],\"all\":true}", true, "Name the secrets to release.")]
     [InlineData("{\"v\":1,\"id\":\"1700-1-2a\",\"op\":\"add\",\"names\":[\"a\"],\"secret\":\"c2VjcmV0\"}", true, "--description")]
     [InlineData("{\"v\":1,\"id\":\"1700-1-2a\",\"op\":\"add\",\"names\":[\"a\"],\"description\":\"d\",\"secret\":\"%%%\"}", true, "base64")]
     [InlineData("{\"v\":1,\"id\":\"1700-1-2a\",\"op\":\"add\",\"names\":[\"a\"],\"description\":\"d\",\"secret\":\"\"}", true, "empty")]
@@ -251,9 +253,8 @@ public sealed class VaultTests
         await h.Ask("dev", Req("request", "github-token", "npm"));
         var released = await h.Ask("dev", Req("release", "npm"));
         Assert.Equal(["npm"], released["names"]!.AsArray().Select(n => n!.GetValue<string>()));
-        var all = Req("release"); all["all"] = true;
-        Assert.Equal(["github-token"], (await h.Ask("dev", all))["names"]!.AsArray().Select(n => n!.GetValue<string>()));
-        Assert.Equal("Nothing to release.", (await h.Ask("dev", all))["message"]!.GetValue<string>());
+        Assert.Equal(["github-token"], (await h.Ask("dev", Req("release", "github-token", "npm")))["names"]!.AsArray().Select(n => n!.GetValue<string>()));
+        Assert.Equal("Nothing to release.", (await h.Ask("dev", Req("release", "github-token")))["message"]!.GetValue<string>());
         Assert.Equal(2, h.Pending.Count); Assert.All(h.Pending, p => Assert.Equal(h.Clock.UtcNow + VaultService.ReleaseDelay, p.DueAt));
     }
 
@@ -518,8 +519,7 @@ public sealed class VaultTests
         var listed = (await h.Ask("dev", Req("list")))["items"]!.AsArray().Single()!;
         Assert.True(listed["autoApprove"]!.GetValue<bool>()); Assert.Null(listed["lease"]);
         Assert.Equal(["github-token"], (await h.Ask("dev", Req("status")))["items"]!.AsArray().Select(i => i!["name"]!.GetValue<string>()));
-        var all = Req("release"); all["all"] = true;
-        Assert.Equal("Nothing to release.", (await h.Ask("dev", all))["message"]!.GetValue<string>());
+        Assert.Equal("Nothing to release.", (await h.Ask("dev", Req("release", "github-token")))["message"]!.GetValue<string>());
 
         // Switched off, a get asks again.
         Assert.True(h.Vault.SetAutoApprove("github-token", false));

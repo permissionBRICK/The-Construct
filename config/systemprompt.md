@@ -78,8 +78,11 @@ the task running:
     construct secret request prod-deploy-key db-admin --for 2h --reason "deploy the release"
 
 Secrets that `construct secret list` shows as auto-approved need no request: get
-them whenever you need them. Use values inline (`$(construct secret get db-admin)`),
-never write them into files, and run `construct secret release --all` when done.
+them whenever you need them. Use values inline (`$(construct secret get db-admin)`)
+and never write them into files. When your task is done, release the names it
+requested (`construct secret release prod-deploy-key db-admin`). Leases belong to
+the VM, not to you: other agents here may hold leases of their own, so release
+only yours. Leases left over expire on their own.
 
 Credentials agents may use only with the user's explicit permission (admin
 logins, full-access deploy keys to critical systems) belong in the vault.

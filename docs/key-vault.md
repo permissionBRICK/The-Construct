@@ -73,7 +73,7 @@ Approved: github-token, staging-db — until 15:30
 
 $ git push https://x-access-token:$(construct secret get github-token)@github.com/org/repo.git
 $ construct secret get staging-db --username
-$ construct secret release --all
+$ construct secret release github-token staging-db
 ```
 
 | Command | Approval | What it does |
@@ -81,7 +81,7 @@ $ construct secret release --all
 | `list`, `status` | no | All secrets with descriptions (never values) / only those this VM holds now |
 | `request <name>… [--uses N] [--for 2h] [--reason …]` | yes, once for all names | Pre-approves access. Without `--uses`/`--for` it asks for one hour. |
 | `get <name> [--username\|--json]` | only without a lease | Prints the value (or username) and counts one use. Without a lease it asks for a single use, unless the secret is auto-approved. |
-| `release <name>…` / `--all` | no | Ends this VM's access. The scrub starts a few seconds later. |
+| `release <name>…` | no | Ends this VM's access to the named secrets. The scrub starts a few seconds later. |
 | `add <name> --description … [--username …] [--for 2h]` | no | Stores a secret the agent created, read from stdin or `--file`. This VM holds it for an hour (or `--for`), then it is scrubbed. |
 | `add <name> … --auto-approve` | no | Stores it auto-approved: no lease, no scrub. |
 | `add <name> … --replace` | yes | Overwrites an existing secret's value. VMs that saw the old value are scrubbed of it. The secret keeps its auto-approve setting; with `--auto-approve` your approval switches it on too. |
@@ -385,7 +385,7 @@ T3 Code treats the files as untrusted input and only ever renders a link from th
 rename), answers each request, and writes the response back into the spool.
 
 ```
-requests/<id>.json    {"v":1,"id","ts","op","names":[…],"uses","ttl","all","replace","autoApprove",
+requests/<id>.json    {"v":1,"id","ts","op","names":[…],"uses","ttl","replace","autoApprove",
                        "reason","description","username","secret":<base64>,"deadline":<ms>,"source"}
 responses/<id>.json   {"v":1,"id","status":"ok|denied|notFound|exists|invalid|error","message",
                        "secret":<base64>,"username","lease":{"usesLeft","expiresAt"},"names":[…],

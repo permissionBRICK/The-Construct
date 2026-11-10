@@ -28,7 +28,7 @@
 #   construct secret status [--json]
 #   construct secret request <name>... [--uses N] [--for DURATION] [--reason TEXT]
 #   construct secret get     <name> [--username | --json] [--reason TEXT]
-#   construct secret release <name>... | --all
+#   construct secret release <name>...
 #   construct secret add     <name> --description TEXT [--username USER] [--for DURATION]
 #                            [--file PATH] [--replace] [--auto-approve]
 #   construct secret delete  <name> [--reason TEXT]
@@ -102,7 +102,7 @@ Usage: construct secret list   [--json]
        construct secret status [--json]
        construct secret request <name>... [--uses N] [--for DURATION] [--reason TEXT]
        construct secret get     <name> [--username | --json] [--reason TEXT]
-       construct secret release <name>... | --all
+       construct secret release <name>...
        construct secret add     <name> --description TEXT [--username USER]
                                 [--for DURATION] [--file PATH] [--replace] [--auto-approve]
        construct secret delete  <name> [--reason TEXT]
@@ -125,7 +125,8 @@ Commands:
                      Uses up one use of the lease; without a lease the user is
                      asked first.
   release, relinquish
-                     End leases. The Companion then scrubs the values from this VM.
+                     End this VM's leases on the named secrets. The Companion
+                     then scrubs their values from this VM.
   add                Store a new secret. The value is read from stdin (one
                      trailing newline is dropped) or from --file (stored
                      byte-exact), never from an argument. This VM gets a lease.
@@ -150,7 +151,6 @@ Options:
   --replace            add: overwrite an existing secret (the user must approve)
   --auto-approve       add: store it auto-approved (with --replace the user's
                        approval covers this too); for less sensitive secrets only
-  --all                release: every lease this VM holds
 
 How to use it (agents):
   * Request everything a task needs up front, in one call, so the user approves
@@ -162,9 +162,13 @@ How to use it (agents):
     Never echo a secret, never write one into a file or a repository.
   * Need the username too? One `get --json` costs one use; --username plus a
     plain get costs two.
-  * Release when done:  construct secret release --all
-    The Companion then scrubs the values from this VM: agent logs are redacted
-    automatically, any other file that contains one needs the user's decision.
+  * Release what you requested when your task is done:
+      construct secret release github-admin-token registry-pass
+    Leases belong to the VM, so other agents here may hold leases of their own:
+    release only the names your task requested. Leases left over expire on
+    their own. The Companion then scrubs the values from this VM: agent logs are
+    redacted automatically, any other file that contains one needs the user's
+    decision.
   * Secrets that `list` shows as "auto-approved" need no request: get them
     whenever needed. They are never scrubbed.
   * Storing a credential that is not critical (a read-only or test token)?
@@ -326,7 +330,7 @@ ensure_spool() {
 # jq variables, hence the single quotes.
 # shellcheck disable=SC2016
 REQUEST_JQ='{v: 1, id: $id, ts: $ts, op: $op, names: $ARGS.positional,
-  uses: $uses, ttl: $ttl, all: $all, replace: $replace, autoApprove: $autoApprove,
+  uses: $uses, ttl: $ttl, replace: $replace, autoApprove: $autoApprove,
   reason: $reason, description: $description, username: $username,
   deadline: $deadline, source: $source}'
 DROP_EMPTY_JQ='with_entries(select(.value != null and .value != ""))'
@@ -372,7 +376,7 @@ write_request() {
 
   jq_args=(--arg id "${REQ_ID}" --argjson ts "${REQ_TS}" --arg op "${op}"
     --argjson uses "${R_USES:-null}" --argjson ttl "${R_TTL:-null}"
-    --argjson all "${R_ALL}" --argjson replace "${R_REPLACE}" --argjson autoApprove "${R_AUTO:-null}"
+    --argjson replace "${R_REPLACE}" --argjson autoApprove "${R_AUTO:-null}"
     --arg reason "${R_REASON}" --arg description "${R_DESCRIPTION}" --arg username "${R_USERNAME}"
     --argjson deadline "${REQ_DEADLINE}" --arg source "${source}")
 
@@ -991,7 +995,7 @@ case "${op}" in
 esac
 
 OPT_JSON=false OPT_USERNAME=false OPT_FILE="" OPT_WAIT=""
-R_USES="" R_TTL="" R_ALL=false R_REPLACE=false R_REASON="" R_DESCRIPTION="" R_USERNAME="" R_AUTO=""
+R_USES="" R_TTL="" R_REPLACE=false R_REASON="" R_DESCRIPTION="" R_USERNAME="" R_AUTO=""
 R_NAMES=()
 opt_for="" have_for=false have_file=false have_description=false
 given=()
@@ -1010,11 +1014,10 @@ while [[ $# -gt 0 ]]; do
   case "${opt}" in
     -h|--help) usage; exit 0 ;;
     --) shift; R_NAMES+=("$@"); break ;;
-    --json|--all|--replace|--auto-approve)
+    --json|--replace|--auto-approve)
       [[ "${arg}" == "${opt}" ]] || die "${opt} takes no value"
       case "${opt}" in
         --json) OPT_JSON=true ;;
-        --all) R_ALL=true ;;
         --replace) R_REPLACE=true ;;
         --auto-approve) R_AUTO=true ;;
       esac
@@ -1046,7 +1049,7 @@ case "${op}" in
   list|status) allowed="--json --wait" ;;
   request) allowed="--uses --for --reason --wait" ;;
   get) allowed="--username --json --reason --wait" ;;
-  release) allowed="--all --wait" ;;
+  release) allowed="--wait" ;;
   add) allowed="--description --username --for --file --replace --auto-approve --reason --wait" ;;
   delete|autoApprove) allowed="--reason --wait" ;;
 esac
@@ -1089,11 +1092,7 @@ case "${op}" in
     (( count == 1 )) || die "'${cmd}' takes exactly one name"
     ;;
   release)
-    if [[ "${R_ALL}" == true ]]; then
-      (( count == 0 )) || die "use either names or --all, not both"
-    else
-      (( count >= 1 )) || die "name the leases to release, or use --all"
-    fi
+    (( count >= 1 )) || die "name the secrets to release (construct secret release <name>...)"
     ;;
 esac
 

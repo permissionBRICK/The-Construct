@@ -77,7 +77,7 @@ public sealed class VaultGuestScriptTests
             Assert.Equal("agent:dev", vault.Secrets().Single(s => s.Name == "made-here").Origin);
 
             Assert.Equal(9, (await Cli(spool, null, "get", "missing-one")).Code);
-            var released = await Cli(spool, null, "release", "--all");
+            var released = await Cli(spool, null, "release", "api-token", "made-here");
             Assert.Equal(0, released.Code); Assert.Contains("made-here", released.Stdout);
             Assert.Empty(vault.Leases());
             Assert.Empty(Directory.EnumerateFiles(Path.Combine(spool, "responses")));

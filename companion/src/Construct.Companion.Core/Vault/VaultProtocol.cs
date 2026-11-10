@@ -8,7 +8,7 @@ namespace Construct.Companion.Core.Vault;
 
 // One `construct secret` call, validated. Value is the decoded secret of an `add`. AutoApprove is the
 // setting an `add` asks for (null: not given) or the one an `autoApprove` call sets.
-public sealed record VaultRequest(string Id, string Op, IReadOnlyList<string> Names, int? Uses, int? Ttl, bool All, bool Replace,
+public sealed record VaultRequest(string Id, string Op, IReadOnlyList<string> Names, int? Uses, int? Ttl, bool Replace,
     string Reason, string Description, string Username, Secret? Value, DateTimeOffset? Deadline, string Source, bool? AutoApprove = null)
 {
     public override string ToString() => $"VaultRequest {{ Id = {Id}, Op = {Op} }}";
@@ -48,9 +48,8 @@ public static partial class VaultProtocol
             if (node is not JsonValue v || !v.TryGetValue<string>(out var name) || !IsValidName(name)) return Invalid("Secret names use letters, digits, '.', '_' and '-' (at most 64, starting with a letter or digit).");
             if (!names.Contains(name)) names.Add(name);
         }
-        var all = raw.True("all");
-        var count = op switch { "request" => names.Count is >= 1 and <= 20, "get" or "add" or "delete" or "autoApprove" => names.Count == 1, "release" => all || names.Count >= 1, _ => true };
-        if (!count) return Invalid(op == "request" ? "Name between 1 and 20 secrets." : op == "release" ? "Name a secret or pass --all." : "Name exactly one secret.");
+        var count = op switch { "request" => names.Count is >= 1 and <= 20, "get" or "add" or "delete" or "autoApprove" => names.Count == 1, "release" => names.Count >= 1, _ => true };
+        if (!count) return Invalid(op == "request" ? "Name between 1 and 20 secrets." : op == "release" ? "Name the secrets to release." : "Name exactly one secret.");
         if (!Bounded(raw["uses"], 1, MaxUses, out var uses)) return Invalid($"--uses must be between 1 and {MaxUses}.");
         if (!Bounded(raw["ttl"], MinTtl, MaxTtl, out var ttl)) return Invalid("--for must be between 1 minute and 24 hours.");
         bool? autoApprove = raw["autoApprove"] is JsonValue a && a.TryGetValue<bool>(out var flag) ? flag : null;
@@ -70,7 +69,7 @@ public static partial class VaultProtocol
         }
         DateTimeOffset? deadline = raw["deadline"] is JsonValue d && d.TryGetValue<double>(out var ms) && double.IsFinite(ms) && ms > 0
             ? DateTimeOffset.FromUnixTimeMilliseconds((long)Math.Min(ms, 253402300799999)) : null;
-        return (new(id, op, names, uses, ttl, all, raw.True("replace"), Sanitize(raw.Str("reason"), MaxText), Sanitize(raw.Str("description"), MaxText),
+        return (new(id, op, names, uses, ttl, raw.True("replace"), Sanitize(raw.Str("reason"), MaxText), Sanitize(raw.Str("description"), MaxText),
             Sanitize(raw.Str("username"), MaxText), value, deadline, Sanitize(raw.Str("source"), 60), autoApprove), id, null);
     }
     private static bool Bounded(JsonNode? node, int min, int max, out int? value)

@@ -83,7 +83,7 @@ public sealed class VaultCoreTests
     public void Approval_texts_match_the_companion_with_durations_instead_of_clock_times()
     {
         var entry = new VaultEntry("github-token", "GitHub token for the release repo", true, "x", 1, "pc:a", false);
-        var request = new VaultRequest("id-12345678", "request", ["github-token"], 3, 7200, false, false, "release 4.2", "", "", null, null, "root@dev");
+        var request = new VaultRequest("id-12345678", "request", ["github-token"], 3, 7200, false, "release 4.2", "", "", null, null, "root@dev");
         var prompt = VaultPrompts.Request("dev", [entry], request, TimeSpan.FromSeconds(7200));
         Assert.Equal("Key vault — access request", prompt.Title);
         Assert.Equal("The VM “dev” asks for access to:\n  • github-token — GitHub token for the release repo (with username)\n\n" +
@@ -107,7 +107,8 @@ public sealed class VaultCoreTests
     [InlineData("""{"op":"add","names":["a"],"secret":"!!","description":"x"}""", "The secret is not valid base64.")]
     [InlineData("""{"op":"add","names":["a"],"secret":"//79","description":"x"}""", "The secret must be UTF-8 text.")]
     [InlineData("""{"op":"add","names":["a"],"secret":"YWJj","description":" "}""", "Describe the secret with --description.")]
-    [InlineData("""{"op":"release","names":[]}""", "Name a secret or pass --all.")]
+    [InlineData("""{"op":"release","names":[]}""", "Name the secrets to release.")]
+    [InlineData("""{"op":"release","names":[],"all":true}""", "Name the secrets to release.")]
     public void Requests_are_validated_like_the_companion_spool(string json, string error)
     {
         var (request, id, message) = VaultProtocol.ParseRequest(JsonNode.Parse(json)!.AsObject(), "host-id-123");
@@ -164,7 +165,7 @@ public sealed class VaultCoreTests
     public void The_auto_approve_texts_match_the_companion()
     {
         var entry = new VaultEntry("pushover", "Pushover app token", false, "x", 1, "pc:a", false);
-        var request = new VaultRequest("id-12345678", "autoApprove", ["pushover"], null, null, false, false, "notify jobs", "", "", null, null, "root@dev", true);
+        var request = new VaultRequest("id-12345678", "autoApprove", ["pushover"], null, null, false, "notify jobs", "", "", null, null, "root@dev", true);
         var prompt = VaultPrompts.AutoApprove("dev", entry, request);
         Assert.Equal("Key vault — auto-approve secret", prompt.Title);
         Assert.Equal("The VM “dev” asks to auto-approve this secret:\n  • pushover — Pushover app token\n\n" +
