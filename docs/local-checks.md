@@ -27,6 +27,7 @@ bash test/run-local-checks.sh t3
 bash test/run-local-checks.sh service
 bash test/run-local-checks.sh companion
 bash test/run-local-checks.sh release
+bash test/run-local-checks.sh ui
 # Or run every group:
 bash test/run-local-checks.sh all
 # Or the groups of the paths changed since the base branch (origin/nightly, origin/rework or
@@ -48,6 +49,7 @@ stays within one directory and `**` crosses directories. A row without a group s
 | `extension/src/**`, `extension/media/**`, `extension/vm/**`, `extension/test/**` | `panel`, `companion` |
 | `extension/src/updates.js`, `extension/src/t3code*`, `bin/*t3*`, `test/t3-*` | `t3` |
 | `service/**`, `drivers/**`, `lib/**`, `bin/**`, `console-viewer/**` | `service` |
+| `ui/**` | `ui` |
 | `scripts/**`, `.github/**`, `VERSION`, `test/release.test.py`, `test/construct-release.test.py`, `test/run-local-checks.sh`, `test/helpers/changed-groups.py`, `docs/local-checks.md`, `service/src/Constructd.Core/Logic/ReleaseChannel.cs`, `service/tests/Constructd.Tests/Updates/ReleaseChannelTests.cs` | `release` |
 | `docs/**`, `*.md`, `assets/**` | |
 
@@ -56,6 +58,10 @@ For installers, also run the touched script's own tests.
 The `companion` group builds with warnings as errors, runs Companion .NET tests,
 Node parity and Companion suites, the three Companion PowerShell suites, and the
 first-install feature-set suite. It is included in `all`; the Companion workflow only publishes its Windows deliverable.
+
+The `ui` group runs the client UI's unit tests (vitest), builds its static bundle
+and compares its screenshots in headless Chromium (Playwright). After an intended
+visual change, refresh the pictures with `npm run test:screens:update` in `ui/`.
 
 The panel defaults to the native theme; set `UI_SMOKE_THEME=classic` or `terminal`
 to check another theme. These runners group the former workflow checks; other

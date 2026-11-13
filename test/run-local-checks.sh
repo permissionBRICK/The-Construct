@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 # A configured guest environment must not alter host-side fixtures or tests.
 unset CONSTRUCT_SERVICE_URL CONSTRUCT_SERVICE_CA_FILE CONSTRUCT_EXTERNAL_HOST CONSTRUCT_EXTERNAL_SSH_PORT CONSTRUCT_INSTANCE_NAME CONSTRUCT_T3_VOICE_INPUT
-usage='Usage: bash test/run-local-checks.sh [panel|t3|service|companion|release|all | --changed [<base>]]'
+usage='Usage: bash test/run-local-checks.sh [panel|t3|service|companion|release|ui|all | --changed [<base>]]'
 group="${1:-all}"
 if [[ "$group" == --changed ]]; then
   # Touched paths since the merge base with <base> (default: the first of origin/nightly,
@@ -23,7 +23,7 @@ if [[ "$group" == --changed ]]; then
   for selected in $groups; do bash "$0" "$selected"; done
   exit 0
 fi
-case "$group" in panel|t3|service|companion|release|all) ;; *) echo "$usage" >&2; exit 2 ;; esac
+case "$group" in panel|t3|service|companion|release|ui|all) ;; *) echo "$usage" >&2; exit 2 ;; esac
 if [[ "$group" == panel || "$group" == all ]]; then
   node extension/test/guest-console.test.js
   node extension/test/console.test.js
@@ -121,4 +121,9 @@ if [[ "$group" == release || "$group" == all ]]; then
   dotnet test service/tests/Constructd.Tests -c Release --filter 'FullyQualifiedName~Constructd.Tests.Updates'
   pwsh -NoProfile -File service/tests/host-updater.test.ps1
   bash service/tests/host-updater.test.sh
+fi
+
+if [[ "$group" == ui || "$group" == all ]]; then
+  # The new client UI: unit tests, the static bundle, screenshots in headless Chromium.
+  (cd ui && npm install --no-audit --no-fund && npm test && npm run build && npx playwright test)
 fi
