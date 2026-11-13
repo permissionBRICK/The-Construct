@@ -12,6 +12,7 @@ public static class UpdateComposition
 {
     public static IServiceCollection AddUpdatePlatform(this IServiceCollection services,ConstructdOptions options)
     {
+        services.AddSingleton<VmAgents>();
         var data=Path.GetDirectoryName(Path.GetFullPath(options.DatabasePath))!;
         if(options.Fake)
         {
@@ -19,10 +20,12 @@ public static class UpdateComposition
             services.AddSingleton<FakeUpdateStager>();services.AddSingleton<IUpdateStager>(sp=>sp.GetRequiredService<FakeUpdateStager>());
             services.AddSingleton<FakeUpdaterLauncher>();services.AddSingleton<IUpdaterLauncher>(sp=>sp.GetRequiredService<FakeUpdaterLauncher>());
             services.AddSingleton<FakeHostLock>();services.AddSingleton<IHostLock>(sp=>sp.GetRequiredService<FakeHostLock>());
+            services.AddSingleton<FakeAgentReleases>();services.AddSingleton<IAgentReleases>(sp=>sp.GetRequiredService<FakeAgentReleases>());
         }
         else
         {
             services.AddSingleton<IHostLock>(new FileHostLock(data));
+            services.AddSingleton<IAgentReleases>(sp=>new AgentReleases(new HttpClient{Timeout=TimeSpan.FromSeconds(15)},sp.GetRequiredService<IClock>()));
             services.AddSingleton<IReleaseSource>(_=>new GitHubReleaseSource(new HttpClient(new HttpClientHandler{AllowAutoRedirect=false}){Timeout=TimeSpan.FromMinutes(30)}, options.HostAdmin.Source.MaxItemBytes));
             services.AddSingleton<IUpdateStager>(sp=>sp.GetRequiredService<PackageStager>());
             if(options.IsExternal) services.AddSingleton<IUpdaterLauncher>(sp=>sp.GetRequiredService<UnsupportedFeaturePlatform>());

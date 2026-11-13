@@ -2388,6 +2388,46 @@
         }
       }
     },
+    "/api/v1/vms/{name}/agents": {
+      "get": {
+        "tags": [
+          "TokenUsageEndpoints"
+        ],
+        "operationId": "GetVmAgents",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VmAgentsResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/jobs": {
       "get": {
         "tags": [
@@ -8945,6 +8985,27 @@
         ],
         "type": "string"
       },
+      "GuestAgentRequest": {
+        "required": [
+          "tool",
+          "version"
+        ],
+        "type": "object",
+        "properties": {
+          "tool": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "version": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
       "GuestReport": {
         "required": [
           "constructCommit",
@@ -11209,6 +11270,15 @@
             "items": {
               "$ref": "#/components/schemas/TokenUsageDayRequest"
             }
+          },
+          "agents": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/GuestAgentRequest"
+            }
           }
         }
       },
@@ -12510,6 +12580,58 @@
           "applied": {
             "type": "integer",
             "format": "int32"
+          }
+        }
+      },
+      "VmAgentResponse": {
+        "required": [
+          "tool",
+          "name",
+          "version",
+          "latest",
+          "updateAvailable"
+        ],
+        "type": "object",
+        "properties": {
+          "tool": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "latest": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "updateAvailable": {
+            "type": "boolean"
+          }
+        }
+      },
+      "VmAgentsResponse": {
+        "required": [
+          "reportedAt",
+          "agents"
+        ],
+        "type": "object",
+        "properties": {
+          "reportedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "agents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VmAgentResponse"
+            }
           }
         }
       },

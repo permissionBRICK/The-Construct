@@ -80,8 +80,17 @@ for report in daily monthly; do
     mv "${work}/next.json" "${work}/days.json"
   done
 done
-jq -e 'length > 0' "${work}/days.json" >/dev/null || exit 0
-jq '{generatedAt: (now | todate), days: .}' "${work}/days.json" >"${work}/request.json" || exit 0
+# The installed coding agents and their versions ride along (the host shows them per VM);
+# the first semver anywhere in --version's output, as the old panel's probe reads it.
+printf '[]' >"${work}/agents.json"
+for tool in claude codex opencode t3; do
+  command -v "${tool}" >/dev/null 2>&1 || continue
+  version="$(timeout 20 "${tool}" --version 2>&1 </dev/null | grep -oE '[0-9]+[.][0-9]+[.][0-9]+([-.+][0-9A-Za-z.+-]+)?' | head -1 | cut -c1-60 || true)"
+  [[ -n "${version}" ]] || continue
+  jq --arg t "${tool}" --arg v "${version}" '. + [{tool: $t, version: $v}]' "${work}/agents.json" >"${work}/next.json" && mv "${work}/next.json" "${work}/agents.json"
+done
+jq -e 'length > 0' "${work}/days.json" >/dev/null || jq -e 'length > 0' "${work}/agents.json" >/dev/null || exit 0
+jq --slurpfile agents "${work}/agents.json" '{generatedAt: (now | todate), days: ., agents: $agents[0]}' "${work}/days.json" >"${work}/request.json" || exit 0
 token="$(head -n 1 "${VM_TOKEN_FILE}" 2>/dev/null | tr -d '\r\n' || true)"
 [[ -n "${token}" ]] || { log "no usable VM token; not reporting usage"; exit 0; }
 ( umask 077; printf 'Authorization: %s %s\n' "${AUTH_SCHEME}" "${token}" >"${work}/headers" )

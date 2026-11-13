@@ -147,6 +147,7 @@ public class RouteCoverageTests
         "POST /api/v1/vms/{name}/activity",
         "POST /api/v1/vms/{name}/usage",
         "GET /api/v1/vms/{name}/usage",
+        "GET /api/v1/vms/{name}/agents",
         "POST /api/v1/vms/{name}/jobs",
         "GET /api/v1/vms/{name}/provision-status",
         "GET /api/v1/vms/{name}/desired",

@@ -77,3 +77,11 @@ public sealed record VmDesiredStateResponse(VmDesiredState? Desired, string? Has
 /// </summary>
 public sealed record JobRetryRequest(ProvisionSecretsRequest? Secrets = null);
 
+/// <summary>One coding agent of a VM. <paramref name="Latest"/> is the newest release where it is published (null when unknown).</summary>
+public sealed record VmAgentResponse(string Tool, string Name, string Version, string? Latest, bool UpdateAvailable);
+
+/// <summary>
+/// <c>GET /vms/{name}/agents</c>: the coding agents the VM last reported (with its token-usage report) and whether a
+/// newer release is out. <paramref name="ReportedAt"/> is null and the list empty while the VM has reported none.
+/// </summary>
+public sealed record VmAgentsResponse(DateTimeOffset? ReportedAt, IReadOnlyList<VmAgentResponse> Agents);

@@ -283,7 +283,7 @@ gate: the resource policy is evaluated again inside every handler.
 | Primary lifecycle | `POST /vms`; `POST /vms/{name}/power`; `DELETE /vms/{name}` | Enrolled user for create/power; owner/Admin for delete. Primary delete uses the cascade preview/token flow when children exist; the confirmation may carry `keep: "shared"` to leave shared children in place (a reinstall). |
 | Primary identity | `GET /vms/{name}/identity`; `POST /vms/{name}/guest-report`; `POST`, `DELETE /vms/{name}/token`; `GET`, `PUT`, `DELETE /vms/{name}/overrides` | Self/owner/Admin for identity/report; owner/Admin user credential for token rotation; Admin for overrides. |
 | Idle policy/activity | `GET`, `PUT /vms/{name}/idle-policy`; `POST /vms/{name}/activity` | Owner/Admin user credential for policy; the matching VM token or owner/Admin for activity. |
-| Token usage | `POST /vms/{name}/usage`; `GET /host/usage`; `GET /vms/{name}/usage` | Matching VM token or owner/Admin for intake; enrolled users read their own usage, admins read all. |
+| Token usage | `POST /vms/{name}/usage`; `GET /host/usage`; `GET /vms/{name}/usage`; `GET /vms/{name}/agents` | Matching VM token or owner/Admin for intake; enrolled users read their own usage, admins read all. |
 | Child lifecycle | `POST /vms/{parent}/children`; `POST /vms/{name}/lifecycle`; `POST /vms/{name}/lease`; `PUT /vms/{name}/sharing`; `PUT /vms/{name}/hardware`; `PUT /vms/{name}/media`; `DELETE /vms/{name}` | Parent delegate creates; operator lifecycle; owner/Admin-only lease, sharing, configuration and deletion. Shared callers cannot delete or configure. |
 | Addresses/forwards | `GET /vms/{name}/addresses`; `GET`, `POST /vms/{name}/forwards`; `DELETE /vms/{name}/forwards/{id}`; `POST /vms/{name}/forwards/{id}/ack` | Existing self/owner rules for a primary; child relationship rules for a child. Ack always requires a user credential and, for a child, the owner of the `via` primary or Admin. |
 | Jobs | `GET /jobs`; `GET /jobs/{id}`; `GET /jobs/{id}/events`; `POST /jobs/{id}/cancel`; `POST /jobs/{id}/retry` | Owner/initiator or Admin; retry: the VM's owner or an Admin, user credentials. Event streams replay progress and phase history, then one terminal state. |
@@ -580,6 +580,14 @@ names of at most 128 characters. Token counts are non-negative signed 64-bit
 integers. Costs must fit a non-negative signed 64-bit micro-dollar value; fractions
 smaller than one micro-dollar are truncated. Invalid batches write nothing.
 Successful telemetry does not enter the audit log; refused and failed requests do.
+
+The usage report also carries the VM's coding agents, `agents: [{tool, version}]` (`claude`, `codex`, `opencode`,
+`t3`; the first semver of each CLI's `--version`), and the guest posts it with `days: []` when only agents changed.
+The engine keeps the last list per VM (bound to the VM's creation time, in the host config store). `GET
+/vms/{name}/agents` (owner/Admin) answers `{reportedAt, agents: [{tool, name, version, latest, updateAvailable}]}`;
+`latest` is read where the old panel read it (npm for Claude Code and T3 Code, honouring the VM's T3 channel,
+GitHub releases for Codex and OpenCode), cached for six hours and null when unreachable. A report without `agents`
+leaves the stored list alone.
 
 Usage reads return `{window, generatedAt, totals:{tokens,costUsd}, byUser, byVm}`.
 User rows include `user`, `tokens`, `costUsd`, `vms`, `lastReportedAt` and `tools`.
