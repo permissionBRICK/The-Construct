@@ -9,9 +9,11 @@ import subprocess
 import zipfile
 
 
-def package(root, output, commit, repository, companion_release_tag=None):
+def package(root, output, commit, repository, companion_release_tag=None, channel='stable', version='1.0.0'):
     if not re.fullmatch(r'[0-9a-f]{40}', commit) or not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository):
         raise ValueError('Invalid release identity')
+    if channel not in ('stable', 'nightly') or not re.fullmatch(r'\d+\.\d+\.\d+', version):
+        raise ValueError('Invalid channel or version')
     if subprocess.check_output(['git', '-C', str(root), 'rev-parse', 'HEAD'], text=True).strip() != commit:
         raise ValueError('Release must package the checked-out commit')
     manifest_path = output / 'manifest.json'
@@ -49,6 +51,11 @@ def package(root, output, commit, repository, companion_release_tag=None):
         if not re.fullmatch(r'companion-[0-9a-f]{40}', companion_release_tag):
             raise ValueError('Invalid Companion release tag')
         manifest['companionReleaseTag'] = companion_release_tag
+    # The channel manifest (docs/release-flow.md): additive keys old clients ignore. The guest
+    # payload a VM receives is the source archive, so its hash identifies the guest payload.
+    manifest.update(channel=channel, version=f'{version}+{commit}', guestPayloadHash=source_hash,
+                    packages={key: {'asset': manifest[key + 'Asset'], 'sha256': manifest[key + 'Sha256']}
+                              for key in ('payload', 'frameworkDependent', 'linux', 'source') if key + 'Asset' in manifest})
     with (output / 'SHA256SUMS').open('a') as sums:
         sums.write(f'{source_hash}  {source.name}\n')
     manifest_path.write_text(json.dumps(manifest, indent=2) + '\n')
@@ -61,5 +68,7 @@ if __name__ == '__main__':
     parser.add_argument('--commit', required=True)
     parser.add_argument('--repository', required=True)
     parser.add_argument('--companion-release-tag')
+    parser.add_argument('--channel', choices=['stable', 'nightly'], default='stable')
+    parser.add_argument('--version', default='1.0.0', help='X.Y.Z; the manifest records X.Y.Z+<commit>')
     args = parser.parse_args()
-    package(args.root, args.output, args.commit, args.repository, args.companion_release_tag)
+    package(args.root, args.output, args.commit, args.repository, args.companion_release_tag, args.channel, args.version)

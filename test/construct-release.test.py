@@ -83,6 +83,23 @@ class CompanionPlanTests(unittest.TestCase):
             packager.package(self.root, output, commit, 'owner/repo', 'companion-' + self.base)
             self.assertEqual(json.loads((output / 'manifest.json').read_text())['companionReleaseTag'], 'companion-' + self.base)
 
+    def test_package_writes_channel_manifest_fields(self):
+        with tempfile.TemporaryDirectory() as out:
+            output = Path(out); commit = self.companion
+            manifest = dict(commit=commit, repository='owner/repo', releaseTag='host-' + commit)
+            for key, name in [('payload', f'construct-host-{commit[:7]}-win-x64.zip'), ('frameworkDependent', f'construct-host-{commit[:7]}-win-x64-fdd.zip')]:
+                data = key.encode(); (output / name).write_bytes(data)
+                manifest.update({key + 'Asset': name, key + 'SizeBytes': len(data), key + 'Sha256': hashlib.sha256(data).hexdigest()})
+            (output / 'manifest.json').write_text(json.dumps(manifest)); (output / 'SHA256SUMS').write_text('')
+            with self.assertRaises(ValueError):
+                packager.package(self.root, output, commit, 'owner/repo', channel='beta', version='1.2.3')
+            packager.package(self.root, output, commit, 'owner/repo', channel='nightly', version='1.2.3')
+            result = json.loads((output / 'manifest.json').read_text())
+            self.assertEqual((result['channel'], result['version']), ('nightly', '1.2.3+' + commit))
+            self.assertEqual(result['guestPayloadHash'], result['sourceSha256'])
+            self.assertEqual(result['packages'], {key: {'asset': result[key + 'Asset'], 'sha256': result[key + 'Sha256']}
+                                                  for key in ('payload', 'frameworkDependent', 'source')})
+
 
 class ReleaseTests(unittest.TestCase):
     def test_malformed_companion_pointer_is_refused(self):
@@ -195,6 +212,61 @@ class ReleaseTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         publisher.publish(output)
                     api.assert_not_called()
+
+
+
+class NightlyPublishTests(unittest.TestCase):
+    def publish(self, channel_commit, ancestry, head=None):
+        commit = 'a' * 40
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            fixture(output, commit)
+            manifest = json.loads((output / 'manifest.json').read_text())
+            manifest.update(channel='nightly', version='1.0.0+' + commit)
+            (output / 'manifest.json').write_text(json.dumps(manifest))
+            channel_release = dict(tag_name='channel-nightly', draft=False, assets=[dict(name='manifest.json')]) if channel_commit else None
+            def check_output(command, **kwargs):
+                if command[:3] == ['git', 'ls-remote', 'origin']:
+                    self.assertEqual(command[3], 'refs/heads/rework')
+                    return (head or commit) + '\trefs/heads/rework'
+                self.assertEqual(command[:4], ['gh', 'release', 'download', 'channel-nightly'])
+                return json.dumps(dict(commit=channel_commit))
+            def run(command, **kwargs):
+                if command[1:3] == ['merge-base', '--is-ancestor']:
+                    return SimpleNamespace(returncode=0 if ancestry(command[3], command[4]) else 1)
+                return SimpleNamespace(returncode=0)
+            api = lambda path: channel_release if path == '/releases/tags/channel-nightly' else None
+            with patch.dict(os.environ, GITHUB_SHA=commit, GITHUB_REPOSITORY='owner/repo', GITHUB_REF_NAME='rework'), \
+                 patch.object(publisher, 'api', side_effect=api), \
+                 patch.object(publisher.subprocess, 'check_output', side_effect=check_output), \
+                 patch.object(publisher.subprocess, 'run', side_effect=run) as mocked:
+                publisher.publish(output, 'nightly')
+            return [call.args[0] for call in mocked.call_args_list if call.args[0][0] == 'gh'], output
+
+    def test_nightly_is_a_prerelease_that_never_becomes_latest_and_replaces_the_channel_manifest(self):
+        commands, output = self.publish(None, lambda a, b: False)
+        commit = 'a' * 40
+        self.assertEqual(commands[0][:6], ['gh', 'release', 'create', 'host-' + commit, '--draft', '--prerelease'])
+        self.assertFalse(any('--latest' in command for command in commands))
+        self.assertEqual(commands[3][:5], ['gh', 'release', 'create', 'channel-nightly', '--prerelease'])
+        self.assertEqual(commands[4], ['gh', 'release', 'upload', 'channel-nightly', '--clobber', str(output / 'manifest.json')])
+
+    def test_older_nightly_run_leaves_the_channel_manifest(self):
+        newer = 'b' * 40
+        commands, _ = self.publish(newer, lambda a, b: (a, b) == ('a' * 40, newer), head=newer)
+        self.assertFalse(any('channel-nightly' in command for command in commands))
+
+    def test_newer_nightly_replaces_existing_channel_manifest_without_recreating_it(self):
+        older = 'b' * 40
+        commands, _ = self.publish(older, lambda a, b: (a, b) == (older, 'a' * 40))
+        self.assertEqual([c[2] for c in commands if 'channel-nightly' in c], ['upload'])
+
+    def test_channel_mismatch_is_refused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory); fixture(output, 'a' * 40)
+            with patch.dict(os.environ, GITHUB_SHA='a' * 40, GITHUB_REPOSITORY='owner/repo'), patch.object(publisher, 'api') as api:
+                with self.assertRaises(ValueError): publisher.publish(output, 'nightly')
+                api.assert_not_called()
 
 
 if __name__ == '__main__':
