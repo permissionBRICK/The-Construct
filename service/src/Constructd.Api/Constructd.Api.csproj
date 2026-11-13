@@ -36,6 +36,13 @@
 
   <ItemGroup Condition="'$(RuntimeIdentifier)' == '' or $(RuntimeIdentifier.StartsWith('win'))">
     <!--
+      The Hyper-V driver's own PowerShell (Constructd.Windows/HyperV/HyperVScripts.cs), copied to
+      hyperv\ next to the service and dot-sourced from there, so the service needs no Construct
+      checkout. Here rather than in Constructd.Windows: only the executable's project knows the
+      runtime, and a Linux (Proxmox) publish leaves these out.
+    -->
+    <None Include="../Constructd.Windows/HyperV/Scripts/*.ps1" Link="hyperv/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <!--
       What adopting a VM the old client made writes into the guest (Jobs/LocalVmAdoption.cs): the
       enrollment script and the helpers it installs, copied to guest\ next to the service.
     -->

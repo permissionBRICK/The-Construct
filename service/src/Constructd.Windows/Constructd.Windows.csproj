@@ -31,15 +31,6 @@
     <Compile Include="../../../lib/Construct.Download.cs" Link="Iso/Construct.Download.cs" />
   </ItemGroup>
 
-  <ItemGroup Condition="'$(RuntimeIdentifier)' == '' or $(RuntimeIdentifier.StartsWith('win'))">
-    <!--
-      The Hyper-V driver's own PowerShell (HyperV/HyperVScripts.cs): copied next to the service as
-      hyperv\*.ps1 and dot-sourced from there, so the service needs no Construct checkout. Left out of
-      a Linux (Proxmox) publish, which has no Hyper-V.
-    -->
-    <None Include="HyperV/Scripts/*.ps1" Link="hyperv/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-  </ItemGroup>
-
   <ItemGroup>
     <!-- Logging only: the composition root does the DI wiring, so no container dependency here. -->
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
