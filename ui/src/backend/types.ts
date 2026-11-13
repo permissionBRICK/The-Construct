@@ -24,9 +24,11 @@ export interface VmSettings {
   identity: { gitName: string; gitEmail: string; keepCredentials: boolean; historyDays: '30' | '90' | 'all' };
 }
 
-export interface Agent { name: string; version: string; latest: string; installed: boolean }
+/** `newer`: the engine says a newer version is out; without it the versions are compared. */
+export interface Agent { name: string; version: string; latest: string; installed: boolean; newer?: boolean }
 export interface ChildVm { name: string; os: string; left: string; power: Power }
-export interface Forward { port: number; label: string; to: 'This device' | 'LAN'; url: string }
+/** A forward of this device to a VM; `closable`: this device opened it and can close it. */
+export interface Forward { id: string; port: number; label: string; to: 'This device' | 'LAN'; url: string; closable?: boolean; status?: string }
 /** `protected`: kept by the retention rule whatever `keep` says (the newest host-requested backup past the horizon). */
 export interface Backup { id: string; at: string; kind: 'Scheduled' | 'Requested' | 'Before reinstall' | 'Slot'; size: string; files: number | null; pinned: boolean; protected: boolean }
 
@@ -56,12 +58,14 @@ export interface Vm {
   projectsOn: string[];
   forwards: Forward[];
   sharing: { vscodeWeb: boolean; smb: boolean; mic: boolean };
+  /** This device's link to the VM: its SSH alias and whether the alias is in the SSH config; null when the device has none. */
+  link?: { alias: string; sshConfig: string | null; share: string | null } | null;
   backups: Backup[];
   backupSchedule: { everyH: number; keep: number };
   /** The version Update moves this VM to, as its engine reports it. Undefined: derived from the host and the release. */
   updateTo?: string | null;
   /** Parts of this VM's pages whose route failed, with the error; the rest of the page shows what it has. */
-  problems?: Partial<Record<'backups' | 'status', string>>;
+  problems?: Partial<Record<'backups' | 'status' | 'settings' | 'agents' | 'connection', string>>;
 }
 
 export interface Profile {
@@ -128,6 +132,8 @@ export interface VaultRequest {
   span: string;
   /** The word on the allow button, from the engine (Approve, Allow once, Delete, ...); empty: Allow. */
   action?: string;
+  /** The span the VM asked for, in seconds; the default of the approval's span. Null: the request names none. */
+  ttlSeconds?: number | null;
 }
 
 export interface Secret { name: string; note: string; usedBy: string[]; last: string; auto: boolean }
@@ -180,7 +186,8 @@ export interface HostVm {
   tokensToday: string;
 }
 export interface HostMedia { name: string; owner: string; role: string; state: string; size: string; refs: number; created: string }
-export interface HostJob { id: string; kind: string; vm: string; owner: string; state: 'running' | 'failed' | 'done'; phase: string; created: string }
+/** `retry`: the engine retries this failed job (a provision or reinstall). */
+export interface HostJob { id: string; kind: string; vm: string; owner: string; state: 'running' | 'failed' | 'done'; phase: string; created: string; retry?: boolean }
 export interface AuditEntry { at: string; actor: string; action: string; target: string }
 export interface ConfigSection { name: string; json: string; updated: string }
 export interface Certificate { subject: string; validUntil: string; daysLeft: number; sha256: string; issuer: string }
@@ -221,12 +228,20 @@ export interface Host {
   updateTo?: string | null;
   /** Set when the engine could not be read; the host's pages show what they have and this. */
   problem?: string | null;
+  /** A solo host (the engine on the user's own PC): whether other devices on the LAN reach it. Undefined elsewhere. */
+  lan?: boolean;
 }
 
 /** Shown once after adding a user: what that user's client needs. */
 export interface NewUserHandout { hostId: string; user: string; address: string; token: string | null }
 
 export interface Part { name: string; version: string; to: string | null; note: 'admin' | 'channel' | null }
+
+/** A run of "update everything" as the agent reports it: each part (this device, a host, the user's VMs on a host) and its state. */
+export interface Everything {
+  running: boolean;
+  parts: { part: 'device' | 'engine' | 'vms'; name: string; state: 'pending' | 'running' | 'done' | 'skipped' | 'failed'; detail: string | null }[];
+}
 
 export interface Prefs {
   channel: Channel;
@@ -249,7 +264,7 @@ export type Feature =
   | 'vault' | 'repair-chat' | 'forwards' | 'sharing' | 'projects' | 'agents' | 'open' | 'console'
   | 'vm-password' | 'vm-services' | 'vm-disk' | 'vm-boot' | 'reinstall' | 'restore' | 'device-update'
   | 'channel' | 'os-prefs' | 'windows-sign-in' | 'export-code' | 'code-reveal' | 'vm-token' | 'host-retry'
-  | 'take-back' | 'project-on' | 'approval-span';
+  | 'take-back' | 'project-on' | 'approval-span' | 'agent-update' | 'notifications' | 'log' | 'vm-history' | 't3-proxy';
 
 /** First run of a device with no identity yet (11.6): set up the account, pair, or recover; then create a VM. */
 export interface FirstRun {
@@ -281,7 +296,8 @@ export interface FirstRunRequest {
 }
 
 export interface State {
-  device: { name: string };
+  /** `sshKey`: this device's SSH public key; `can`: what this device's platform offers (undefined: all). */
+  device: { name: string; sshKey?: string | null; can?: { mic: boolean; share: boolean; startWithOs: boolean } };
   version: string;
   /** A newer release on this device's channel, or null. */
   release: string | null;
@@ -310,6 +326,8 @@ export interface State {
   na: Feature[];
   /** Set while this device has no identity: the first-run screen stands in for everything else. */
   firstRun: FirstRun | null;
+  /** The last "update everything" run since this device started; null before one. */
+  everything?: Everything | null;
 }
 
 export type SettingsPatch = { [K in keyof VmSettings]?: Partial<VmSettings[K]> };
@@ -366,7 +384,9 @@ export interface Backend {
   saveProfile(name: string, doc: Record<string, unknown>, revision: number | undefined): Promise<ProfileSave>;
   addProject(name: string): void;
   syncProjects(): void;
-  closeForward(vmId: string, port: number): void;
+  closeForward(vmId: string, forwardId: string): void;
+  /** This device's SSH config: write the VM's `Host` alias again, or remove it. */
+  setSshAlias(vmId: string, on: boolean): void;
   setSharing(vmId: string, key: keyof Vm['sharing'], on: boolean): void;
   backupNow(vmId: string): void;
   restoreBackup(vmId: string, backupId: string): void;
@@ -379,7 +399,8 @@ export interface Backend {
   probeHost(address: string): Promise<HostProbe>;
 
   /* Key vault */
-  answerLease(requestId: string, allow: boolean): void;
+  /** `ttlSeconds`: the span the user chose; undefined keeps the span the VM asked for. */
+  answerLease(requestId: string, allow: boolean, ttlSeconds?: number): void;
   /** `value` null declines the request. */
   enterSecret(requestId: string, value: string | null): void;
   addSecret(name: string, note: string, value: string): void;
@@ -405,6 +426,8 @@ export interface Backend {
   /* Hosts */
   updateHost(hostId: string): void;
   updateHostVms(hostId: string): void;
+  /** A solo host: let devices on the LAN reach it (before a second device pairs). */
+  setLanAccess(hostId: string, on: boolean): void;
   addUser(hostId: string, user: { name: string; role: 'admin' | 'user'; maxVms: number; hostForwards: HostUser['hostForwards'] }): void;
   saveUser(hostId: string, user: HostUser): void;
   removeUser(hostId: string, name: string): void;

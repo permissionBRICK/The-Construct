@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { Job, VaultRequest, Vm } from '../backend/types';
+import type { Everything, Job, VaultRequest, Vm } from '../backend/types';
+import { spanChoices, spanText } from '../backend/api/map';
 import { failedTitle, jobWord, mainAction } from '../model/vm';
 import { Icon } from './icons';
 import { Bar, Btn, Confirm, Field, Pip, Switch, Tag, UpTag } from './kit';
@@ -15,7 +16,11 @@ export function VaultCard({ r, onDone }: { r: VaultRequest; onDone?: () => void 
   const [value, setValue] = useState('');
   const done = () => { setValue(''); onDone?.(); };
   const save = () => { if (value) { be.enterSecret(r.id, value); done(); } };
-  const span = r.span && !na(s, 'approval-span') ? ` ${r.span}` : '';
+  // The span the VM asked for is the default; the user may pick another before allowing.
+  const choose = !na(s, 'approval-span') && r.kind === 'lease' && !!r.ttlSeconds;
+  const [ttl, setTtl] = useState<number | undefined>(undefined);
+  const spanWord = ttl ? spanText(ttl) : r.span;
+  const span = spanWord && !na(s, 'approval-span') ? ` ${spanWord}` : '';
   return (
     <div class="blk warn ask" role="alertdialog" aria-label={`Vault request for ${r.secret}`}>
       <div class="bh"><Icon n="key" /><b>{r.secret}</b><span>{r.vmName} · {r.hostName}</span></div>
@@ -31,9 +36,32 @@ export function VaultCard({ r, onDone }: { r: VaultRequest; onDone?: () => void 
       ) : (
         <div class="two">
           <Btn onClick={() => { be.answerLease(r.id, false); done(); }}>Deny</Btn>
-          <Btn kind="pri" onClick={() => { be.answerLease(r.id, true); done(); }}>{r.action || 'Allow'}{span}</Btn>
+          {choose ? (
+            <span class="split">
+              <Btn kind="pri" onClick={() => { be.answerLease(r.id, true, ttl); done(); }}>{r.action || 'Allow'}{span}</Btn>
+              <details class="more">
+                <summary aria-label="Other spans"><Icon n="down" /></summary>
+                <div class="vml">{spanChoices(r.ttlSeconds).filter(x => x !== (ttl ?? r.ttlSeconds)).map(x => (
+                  <button type="button" onClick={e => { (e.currentTarget.closest('details') as HTMLDetailsElement).open = false; setTtl(x === r.ttlSeconds ? undefined : x); }}>{spanText(x)}</button>
+                ))}</div>
+              </details>
+            </span>
+          ) : <Btn kind="pri" onClick={() => { be.answerLease(r.id, true); done(); }}>{r.action || 'Allow'}{span}</Btn>}
         </div>
       )}
+    </div>
+  );
+}
+
+/** The last "update everything": each part and its state, as the agent reports it. */
+export function EverythingBlock({ e }: { e: Everything }) {
+  const word = { pending: 'waits', running: 'running', done: 'done', skipped: 'skipped', failed: 'failed' };
+  return (
+    <div class={`blk job ${e.parts.some(p => p.state === 'failed') ? 'bad' : ''}`} aria-label="Update everything">
+      <div class="bh"><Icon n="up" /><b>{e.running ? 'Updating' : 'Update'}</b></div>
+      {e.parts.map(p => (
+        <div class="bf"><span class="grow">{p.name}</span>{p.detail && <span class="d">{p.detail}</span>}<span class={p.state === 'failed' ? 'badc' : p.state === 'done' ? 'okc' : ''}>{word[p.state]}</span></div>
+      ))}
     </div>
   );
 }
@@ -91,8 +119,8 @@ export function JobBlock({ job, vm }: { job: Job; vm: Vm }) {
         {(log || !job.repair) && <LogView job={job} />}
         {job.repair && <Repair job={job} />}
         <div class="two">
-          {job.kind === 'reinstall'
-            ? <Confirm label="Retry" icon="retry" verb="Reinstall again" sm={false} onYes={() => be.retryJob(job.id)} />
+          {job.kind === 'reinstall' || job.kind === 'restore'
+            ? <Confirm label="Retry" icon="retry" verb={job.kind === 'reinstall' ? 'Reinstall again' : 'Restore again'} sm={false} onYes={() => be.retryJob(job.id)} />
             : <Btn icon="retry" onClick={() => be.retryJob(job.id)}>Retry</Btn>}
           <Btn onClick={() => be.dismissJob(job.id)}>Close</Btn>
         </div>

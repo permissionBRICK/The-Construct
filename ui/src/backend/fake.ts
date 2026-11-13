@@ -3,6 +3,7 @@ import { NEXT_RELEASE, PAIR_WORDS, RECOVERY_CODE, REINSTALL_STEPS, REPROVISION_S
 import { activeJob, newer, vmUpdateTarget } from '../model/vm';
 import { applies, applyPatch } from '../model/settings';
 import { updateParts } from '../model/update';
+import { spanText } from './api/map';
 
 /* An in-memory backend with invented data. It simulates jobs with progress, a failure with the repair agent's
    chat, vault requests, an agent asking for a new secret, an update of everything, pairing and revoking.
@@ -90,7 +91,7 @@ export class FakeBackend implements Backend {
       case 'calm': break;
       case 'update': d.release = NEXT_RELEASE; break;
       case 'changed': this.vm(d, 'atlas').changeWaits = 'webshop'; break;
-      case 'lease': d.vaultRequests.push({ id: 'r1', kind: 'lease', secret: 'forge-token', vmId: 'atlas', vmName: 'atlas', hostName: 'This PC', reason: 'Push the release', span: '2 h' }); break;
+      case 'lease': d.vaultRequests.push({ id: 'r1', kind: 'lease', secret: 'forge-token', vmId: 'atlas', vmName: 'atlas', hostName: 'This PC', reason: 'Push the release', span: '2 h', ttlSeconds: 7200 }); break;
       case 'enter': d.vaultRequests.push({ id: 'r2', kind: 'enter', secret: 'payments-sandbox', vmId: 'atlas', vmName: 'atlas', hostName: 'This PC', reason: 'API key of the payments sandbox', span: '' }); break;
       case 'job': d.jobs.push(this.newJob('atlas', 'reprovision', 3, 62)); break;
       case 'failed': case 'repair': {
@@ -143,7 +144,7 @@ export class FakeBackend implements Backend {
   /** Preview frame triggers. */
   demo(what: Demo) {
     switch (what) {
-      case 'lease': return this.set(d => { d.vaultRequests.push({ id: 'r' + this.seq++, kind: 'lease', secret: 'forge-token', vmId: 'atlas', vmName: 'atlas', hostName: 'This PC', reason: 'Push the release', span: '2 h' }); });
+      case 'lease': return this.set(d => { d.vaultRequests.push({ id: 'r' + this.seq++, kind: 'lease', secret: 'forge-token', vmId: 'atlas', vmName: 'atlas', hostName: 'This PC', reason: 'Push the release', span: '2 h', ttlSeconds: 7200 }); });
       case 'enter': return this.set(d => { d.vaultRequests.push({ id: 'r' + this.seq++, kind: 'enter', secret: 'payments-sandbox', vmId: 'harbor', vmName: 'harbor', hostName: 'orchard', reason: 'API key of the payments sandbox', span: '' }); });
       case 'release': return this.set(d => { d.release = NEXT_RELEASE; });
       case 'fail-next': this.failNext = true; return this.set(() => {}, 'The next job fails');
@@ -190,7 +191,12 @@ export class FakeBackend implements Backend {
     if (cur && cur.state === 'running') return;
     this.queuedRunning = null;
     const i = this.queue.findIndex(q => activeJob(this.s, q.vmId)?.state !== 'running');
-    if (i < 0) return;
+    if (i < 0) {
+      if (!this.queue.length && this.s.everything?.running) {
+        this.set(d => { d.everything = { running: false, parts: d.everything!.parts.map(p => (p.state === 'running' || p.state === 'pending' ? { ...p, state: 'done' } : p)) }; });
+      }
+      return;
+    }
     const [q] = this.queue.splice(i, 1);
     this.queuedRunning = this.startJob(q.vmId, q.kind, q.extra);
   }
@@ -298,6 +304,16 @@ export class FakeBackend implements Backend {
     this.set(d => {
       if (newer(to, d.version) && !due.length) d.version = to;
       for (const h of d.hosts) if (h.admin && h.channel === d.prefs.channel && newer(to, h.version) && !d.vms.some(v => v.hostId === h.id)) h.version = to;
+      d.everything = {
+        running: due.length > 0,
+        parts: [
+          ...d.hosts.flatMap(h => [
+            { part: 'engine' as const, name: h.name, state: h.admin ? 'done' as const : 'skipped' as const, detail: h.admin ? null : 'Its admin updates this host.' },
+            { part: 'vms' as const, name: `Your VMs on ${h.name}`, state: due.some(x => d.vms.find(v => v.id === x.vmId)?.hostId === h.id) ? 'running' as const : 'done' as const, detail: null },
+          ]),
+          { part: 'device' as const, name: 'This device', state: due.length ? 'pending' as const : 'done' as const, detail: null },
+        ],
+      };
     }, 'Updating everything');
     this.queue.push(...due.map(x => ({ vmId: x.vmId, kind: 'update' as const, extra: { from: x.from, to: x.to, scope: 'all' as const } })));
     if (due.length) this.drain();
@@ -389,8 +405,14 @@ export class FakeBackend implements Backend {
 
   syncProjects() { this.set(d => { d.sync.when = 'just now'; }, 'Synced'); }
 
-  closeForward(vmId: string, port: number) {
-    this.set(d => { const v = this.vm(d, vmId); v.forwards = v.forwards.filter(f => f.port !== port); }, `Closed ${port}`);
+  closeForward(vmId: string, forwardId: string) {
+    const f = this.s.vms.find(v => v.id === vmId)?.forwards.find(x => x.id === forwardId);
+    if (!f?.closable) return;
+    this.set(d => { const v = this.vm(d, vmId); v.forwards = v.forwards.filter(x => x.id !== forwardId); }, `Closed ${f.port}`);
+  }
+
+  setSshAlias(vmId: string, on: boolean) {
+    this.set(d => { const v = this.vm(d, vmId); v.link = { alias: v.link?.alias ?? v.name, sshConfig: on ? 'added' : 'removed', share: v.link?.share ?? null }; }, on ? 'Alias written' : 'Alias removed');
   }
 
   setSharing(vmId: string, key: keyof Vm['sharing'], on: boolean) {
@@ -447,9 +469,10 @@ export class FakeBackend implements Backend {
 
   /* --- vault --- */
 
-  answerLease(requestId: string, allow: boolean) {
-    const r = this.s.vaultRequests.find(x => x.id === requestId);
-    if (!r) return;
+  answerLease(requestId: string, allow: boolean, ttlSeconds?: number) {
+    const found = this.s.vaultRequests.find(x => x.id === requestId);
+    if (!found) return;
+    const r = ttlSeconds ? { ...found, span: spanText(ttlSeconds) } : found;
     this.set(d => {
       d.vaultRequests = d.vaultRequests.filter(x => x.id !== requestId);
       d.history.unshift({ at: 'now', vmName: r.vmName, secret: r.secret, event: allow ? `Allowed ${r.span}` : 'Denied' });
@@ -556,6 +579,10 @@ export class FakeBackend implements Backend {
       if (!updateParts(d).some(p => p.to)) d.release = null;
     }, `${h.name} runs ${to}`);
     if (this.timers) this.after(5, done); else done();
+  }
+
+  setLanAccess(hostId: string, on: boolean) {
+    this.hostSet(hostId, x => { if (x.lan !== undefined) x.lan = on; }, on ? 'Reachable on the LAN' : 'This PC only');
   }
 
   updateHostVms(hostId: string) {
@@ -668,7 +695,7 @@ export class FakeBackend implements Backend {
   }
 
   cancelHostJob(hostId: string, jobId: string) { this.hostSet(hostId, x => { const j = x.jobs.find(y => y.id === jobId); if (j) { j.state = 'failed'; j.phase = 'cancelled'; } }, 'Cancelled'); }
-  retryHostJob(hostId: string, jobId: string) { this.hostSet(hostId, x => { const j = x.jobs.find(y => y.id === jobId); if (j) { j.state = 'done'; j.phase = 'done'; } }, 'Done'); }
+  retryHostJob(hostId: string, jobId: string) { this.hostSet(hostId, x => { const j = x.jobs.find(y => y.id === jobId && y.retry); if (j) { j.state = 'done'; j.phase = 'done'; j.retry = false; } }, 'Done'); }
 
   setUsageWindow(hostId: string, w: 'today' | 'month' | 'all') { this.hostSet(hostId, x => { x.usage.window = w; }); }
 

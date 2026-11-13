@@ -6,7 +6,7 @@ import { section, VM_PAGES, type Page, type Route } from '../model/route';
 import { Icon, type IconName } from './icons';
 import { Btn, Dot, Pip } from './kit';
 import { na, useApp } from './ctx';
-import { JobBlock, PowerBtn, ReinstallConfirm, Tiles, VaultCard, VaultCards } from './blocks';
+import { EverythingBlock, JobBlock, PowerBtn, ReinstallConfirm, Tiles, VaultCard, VaultCards } from './blocks';
 import { PageView } from './pages';
 
 /* The three surfaces from the same parts: the tray pop-out (the stack), the window (sidebar, VM tabs,
@@ -52,6 +52,7 @@ export function Stack({ footer }: { footer: boolean }) {
         <Btn icon="term" onClick={() => be.open(vm.id, 'ssh')} disabled={na(s, 'open')}>SSH</Btn>
       </div>
       {job ? <JobBlock job={job} vm={vm} /> : wipe ? <ReinstallConfirm vm={vm} onCancel={() => setWipe(false)} /> : <Tiles vm={vm} onReinstall={() => setWipe(true)} />}
+      {s.everything && (s.everything.running || s.everything.parts.some(p => p.state === 'failed')) && <EverythingBlock e={s.everything} />}
       {footer && (
         <nav class="sft">
           <button type="button" onClick={() => shell.openWindow({ page: 'vault' })}><Icon n="key" />Key vault</button>

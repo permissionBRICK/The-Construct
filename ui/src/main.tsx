@@ -3,8 +3,8 @@ import { App } from './ui/App';
 import { FakeBackend, SCENES, type Scene } from './backend/fake';
 import { ApiBackend } from './backend/api/backend';
 import type { Backend, Scheme } from './backend/types';
-import { formatRoute, type Route } from './model/route';
 import type { Surface } from './ui/ctx';
+import { makeShell } from './ui/shell';
 import './styles/app.css';
 
 /* The standalone app. Served by the device agent, it opens with the agent's token in the fragment
@@ -48,16 +48,9 @@ if (scheme === 'green' || scheme === 'blue' || scheme === 'copper' || scheme ===
 const theme = q.get('theme');
 if (theme === 'light' || theme === 'dark') be.setPrefs({ theme });
 
-// Standalone, the pop-out opens the window by navigating; the desktop shell provides its own.
-const shell = {
-  openWindow(r: Route) {
-    const u = new URL(location.href);
-    u.searchParams.set('surf', 'win');
-    u.hash = formatRoute(r);
-    location.href = u.toString();
-  },
-  close() { /* nothing to close in a browser tab */ },
-};
+// In the Windows shell the page runs in WebView2: closing and opening the window are the shell's, asked through
+// its host object. In a browser the pop-out opens the window by navigating, and there is nothing to close.
+const shell = makeShell(window);
 
 document.documentElement.dataset.surf = surf;
 render(<App be={be} surf={surf} shell={shell} hashRouting />, document.getElementById('app')!);

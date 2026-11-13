@@ -1,6 +1,6 @@
 import type { components as E } from '../generated/engine';
 import type { components as A } from '../generated/agent';
-import type { Backup, Device, Host, HostJob, HostUpdate, HostUser, HostVm, Job, JobKind, Lease, Power, Profile, Secret, VaultEvent, VaultRequest, Vm, WinGuest, WinKey } from '../types';
+import type { Agent, Backup, Device, Everything, Forward, Host, HostJob, HostUpdate, HostUser, HostVm, Job, JobKind, Lease, Power, Profile, Secret, SettingsPatch, VaultEvent, VaultRequest, Vm, VmSettings, WinGuest, WinKey } from '../types';
 
 /* From what the agent and the engines report to the pieces of `State`. Pure functions, no I/O: each takes
    the responses it needs and leaves out what they do not say. */
@@ -28,6 +28,17 @@ export type SecretHistoryItem = A['schemas']['SecretHistoryItem'];
 export type ApprovalItem = A['schemas']['VaultApprovalItem'];
 export type EntryRequestItem = A['schemas']['VaultEntryRequestItem'];
 export type ProfileResponse = E['schemas']['ProfileResponse'];
+export type DesiredResponse = E['schemas']['VmDesiredStateResponse'];
+export type DesiredState = E['schemas']['VmDesiredState'];
+export type ProvisionSettings = E['schemas']['ProvisionSettings'];
+export type AgentsResponse = E['schemas']['VmAgentsResponse'];
+export type HostStatus = E['schemas']['HostStatusResponse'];
+export type HostConfig = E['schemas']['HostConfigResponse'];
+export type HostWindows = E['schemas']['HostWindowsResponse'];
+export type HostCapabilities = E['schemas']['HostCapabilitiesResponse'];
+export type IsoCatalog = E['schemas']['IsoCatalogResponse'];
+export type ConnectionView = A['schemas']['ConnectionView'];
+export type EverythingView = A['schemas']['EverythingView'];
 
 /** `2026-11-13T19:18:40.85+00:00` → `2026-11-13 19:18` (UTC, as the engine stores it). */
 export function when(iso: string | null | undefined): string {
@@ -70,7 +81,45 @@ export interface VmParts {
   update?: VmUpdateStatus | null;
   backups?: BackupSummary[] | null;
   backupSettings?: BackupSettings | null;
+  desired?: DesiredResponse | null;
+  agents?: AgentsResponse | null;
   problems?: Vm['problems'];
+}
+
+/* A VM's settings that live in its desired state (7.5): the engine's ProvisionSettings, which the guest reads
+   as `true`/`false` strings; null keeps the guest's own default, shown here as that default. */
+const SERVICES: [keyof VmSettings['services'], keyof ProvisionSettings, boolean][] = [
+  ['t3Web', 't3CodeHttps', true], ['vscodeWeb', 'vsCodeServeWeb', true], ['vscodeTunnel', 'vsCodeTunnel', false], ['smb', 'smbShare', true],
+  ['mic', 'micPassthrough', false], ['claudeLive', 'claudePartialStreaming', true], ['opencodeWatcher', 'openCodeBackgroundWatcher', false],
+];
+const flag = (v: unknown, d: boolean) => (v === 'true' || v === true ? true : v === 'false' || v === false ? false : d);
+
+function services(p: ProvisionSettings | null | undefined): VmSettings['services'] {
+  const out = { t3ProxyUrl: '' } as VmSettings['services'];
+  for (const [k, f, d] of SERVICES) (out as Record<string, unknown>)[k] = flag(p?.[f], d);
+  // T3 Code's web server runs only where T3 Code itself is on.
+  out.t3Web = out.t3Web && flag(p?.t3Code, true);
+  return out;
+}
+
+/** A Services or Identity patch as the fields of ProvisionSettings it changes; fields the page does not show are not named. */
+export function settingsFields(patch: SettingsPatch): Partial<ProvisionSettings> {
+  const out: Record<string, unknown> = {};
+  for (const [k, f] of SERVICES) if (patch.services?.[k] !== undefined) out[f] = patch.services[k] ? 'true' : 'false';
+  if (patch.services?.t3Web) out.t3Code = 'true';
+  if (patch.identity?.gitName !== undefined) out.gitUserName = patch.identity.gitName.trim() || null;
+  if (patch.identity?.gitEmail !== undefined) out.gitEmail = patch.identity.gitEmail.trim() || null;
+  if (patch.identity?.keepCredentials !== undefined) out.gitCredentialStore = patch.identity.keepCredentials;
+  return out as Partial<ProvisionSettings>;
+}
+
+/** The desired state with `fields` and `projects` changed and everything else kept as the engine sent it. */
+export function withDesired(current: DesiredState | null | undefined, fields: Partial<ProvisionSettings>, projects?: string[]): DesiredState {
+  return { ...(current ?? {}), projects: projects ?? [...(current?.projects ?? [])], settings: { ...(current?.settings ?? {}), ...fields } } as DesiredState;
+}
+
+export function toAgents(a: AgentsResponse | null | undefined): Agent[] {
+  return (a?.agents ?? []).map(x => ({ name: x.name || x.tool, version: x.version, latest: x.latest ?? x.version, installed: true, newer: x.updateAvailable }));
 }
 
 /** One of the user's primaries, with what its engine said about it. `id` is chosen by the caller. */
@@ -95,8 +144,11 @@ export function toVm(id: string, engine: string, r: VmResponse, all: VmResponse[
       hw: { memGb: p.status?.pendingRamGb ?? r.pendingRamGb ?? r.ramGb, cpus: p.status?.pendingCpu ?? r.pendingCpu ?? r.cpu, checkpoints: false, startWithHost: false },
       disk: { diskGb: r.diskGb, ubuntu: '' },
       idle: { afterMin: idle.timeoutMinutes, then: idle.action === 'off' ? 'never' : idle.action },
-      services: { t3Web: false, vscodeWeb: false, vscodeTunnel: false, smb: false, mic: false, claudeLive: false, opencodeWatcher: false, t3ProxyUrl: '' },
-      identity: { gitName: '', gitEmail: '', keepCredentials: false, historyDays: '30' },
+      services: services(p.desired?.desired?.settings),
+      identity: {
+        gitName: p.desired?.desired?.settings.gitUserName ?? '', gitEmail: p.desired?.desired?.settings.gitEmail ?? '',
+        keepCredentials: p.desired?.desired?.settings.gitCredentialStore ?? false, historyDays: '30',
+      },
     },
     appliedHw: { memGb: r.ramGb, cpus: r.cpu },
     usage: {
@@ -106,11 +158,11 @@ export function toVm(id: string, engine: string, r: VmResponse, all: VmResponse[
     },
     memTotalGb: r.ramGb,
     diskTotalGb: r.diskGb,
-    agents: [],
+    agents: toAgents(p.agents),
     children: all.filter(c => c.kind === 'child' && c.parent === r.name).map(c => ({
       name: c.name, os: '', left: c.lease?.expiresAt ? when(c.lease.expiresAt) : '–', power: power(c.state),
     })),
-    projectsOn: [],
+    projectsOn: [...(p.desired?.desired?.projects ?? [])],
     forwards: [],
     sharing: { vscodeWeb: false, smb: false, mic: false },
     backups: (p.backups ?? []).map(toBackup),
@@ -194,6 +246,7 @@ export function toHostJob(j: JobResponse): HostJob {
     state: j.state === 'failed' || j.state === 'cancelled' ? 'failed' : j.state === 'succeeded' ? 'done' : 'running',
     phase: j.phase ?? j.state,
     created: when(j.created),
+    retry: j.state === 'failed' && (j.kind === 'provision' || j.kind === 'reinstall'),
   };
 }
 
@@ -293,66 +346,67 @@ type Loose = Record<string, unknown>;
 const str = (v: unknown) => (typeof v === 'string' ? v : v === null || v === undefined ? '' : String(v));
 
 /** `GET /host/config`: one section per key; `source` and `updatedAt` are the engine's, not the section's. */
-export function toConfig(cfg: Loose): Host['config'] {
+export function toConfig(cfg: HostConfig): Host['config'] {
   return Object.entries(cfg).filter(([, v]) => v && typeof v === 'object').map(([name, v]) => {
-    const { source: _s, updatedAt, ...rest } = v as Loose;
-    return { name, json: JSON.stringify(rest, null, 2), updated: updatedAt ? when(str(updatedAt)) : 'default' };
+    const { source: _s, updatedAt, ...rest } = v as Loose & { source?: string; updatedAt?: string | null };
+    return { name, json: JSON.stringify(rest, null, 2), updated: updatedAt ? when(updatedAt) : 'default' };
   });
 }
 
-/** `GET /host/status` is not typed in the contract; read what it has. */
-export function toStatus(st: Loose | null): Pick<Host, 'health' | 'capacity'> {
-  const h = (st?.health ?? {}) as Loose;
-  const cap = (st?.capacity ?? {}) as Loose;
-  const ram = (cap.ram ?? {}) as Loose, cpu = (cap.cpu ?? {}) as Loose;
-  const vols = (Array.isArray(cap.volumes) ? cap.volumes : []) as Loose[];
-  const num = (v: unknown) => (typeof v === 'number' ? v : 0);
+export function toStatus(st: HostStatus | null): Pick<Host, 'health' | 'capacity'> {
+  const h = st?.health, cap = st?.capacity;
   const tb = (n: number) => Math.round((n / 1024 ** 4) * 100) / 100;
-  const total = vols.reduce((s, v) => s + num(v.totalBytes), 0), free = vols.reduce((s, v) => s + num(v.freeBytes), 0);
+  const vols = cap?.volumes ?? [];
+  const total = vols.reduce((s, v) => s + v.totalBytes, 0), free = vols.reduce((s, v) => s + v.freeBytes, 0);
   return {
-    health: { hypervisor: str(h.hypervisor) || '–', database: str(h.database) || '–', media: str(h.media) || '–', inventory: str(h.inventory) || '–' },
+    health: { hypervisor: h?.hypervisor || '–', database: h?.database || '–', media: h?.media || '–', inventory: h?.inventory || '–' },
     capacity: {
       mode: st?.capacityMode === 'enforce' ? 'enforce' : 'observe',
-      ram: [gb(num(ram.committedBytes)) ?? 0, gb(num(ram.totalBytes)) ?? 0],
-      cpu: [num(cpu.active), num(cpu.logical)],
+      ram: [gb(cap?.ram.committedBytes ?? 0) ?? 0, gb(cap?.ram.totalBytes ?? 0) ?? 0],
+      cpu: [cap?.cpu.active ?? 0, cap?.cpu.logical ?? 0],
       disk: [tb(total - free), tb(total)],
     },
   };
+}
+
+const KINDS: Record<string, string> = { hyperv: 'Hyper-V', proxmox: 'Proxmox', external: 'External' };
+export const hostKind = (c: HostCapabilities | null | undefined) => (c ? KINDS[c.kind] ?? c.kind : '');
+
+/** The host's install images: the catalog's files, the current one marked. */
+export function toIsos(c: IsoCatalog | null | undefined): Host['isos'] {
+  return (c?.entries ?? []).map(e => ({ name: e.fileName, current: e.isCurrent, size: bytes(e.sizeBytes) }));
 }
 
 /** Host update states (HostUpdateState, camelCase) while an update is under way. */
 const UPDATE_RUNNING = new Set(['checking', 'staged', 'draining', 'handedOff', 'applying']);
 export const updateRunning = (row: unknown) => !!row && UPDATE_RUNNING.has(str((row as Loose).state));
 
-/** The status route's history rows: `{updateId, commit, state, phase, started, finished, error}`. */
 export function toUpdates(u: HostUpdateStatus): HostUpdate[] {
-  return (u.history as Loose[]).map(x => {
-    const st = str(x.state);
+  return u.history.map(x => {
+    const st: string = x.state;
     return {
-      at: when(str(x.started)),
+      at: when(x.started),
       from: '–',
-      to: shortCommit(str(x.commit)),
+      to: shortCommit(x.commit),
       state: st === 'succeeded' ? 'done' : st.startsWith('rolledBack') ? 'rolled back' : UPDATE_RUNNING.has(st) ? 'running' : 'failed',
       by: '–',
     };
   });
 }
 
-/** `GET /host/windows` is not typed in the contract; the records are WindowsKeyInfo and WindowsGuestStatus. */
-export function toWindows(w: Loose | null): { winKeys: WinKey[]; winGuests: (WinGuest & { incarnation: string })[] } {
-  const keys = (Array.isArray(w?.keys) ? w!.keys : []) as Loose[];
+export function toWindows(w: HostWindows | null): { winKeys: WinKey[]; winGuests: (WinGuest & { incarnation: string })[] } {
   // A released guest is an earlier incarnation of a VM that was deleted; it holds no key and takes no action.
-  const guests = ((Array.isArray(w?.guests) ? w!.guests : []) as Loose[]).filter(g => g.released !== true);
-  const held = new Set(guests.map(g => str(g.keyId)).filter(Boolean));
+  const guests = (w?.guests ?? []).filter(g => !g.released);
+  const held = new Set(guests.map(g => g.keyId).filter(Boolean));
   const kind = (k: string): WinKey['kind'] => (/mak/i.test(k) ? 'MAK' : /kms/i.test(k) ? 'KMS' : 'Retail');
   return {
-    winKeys: keys.map(k => ({ id: str(k.id), product: str(k.product), edition: str(k.edition), kind: kind(str(k.kind)), partial: str(k.partialKey), used: str(k.used), held: held.has(str(k.id)) })),
+    winKeys: (w?.keys ?? []).map(k => ({ id: k.id, product: k.product, edition: k.edition, kind: kind(k.kind), partial: k.partialKey, used: String(k.used), held: held.has(k.id) })),
     winGuests: guests.map(g => ({
-      name: str(g.vmName),
-      stage: str(g.stage),
+      name: g.vmName,
+      stage: g.stage,
       activation: g.activation === 'activated' ? 'activated' : g.activation === 'grace' ? 'grace' : 'not activated',
-      keyId: str(g.keyId) || null,
-      incarnation: str(g.incarnation),
+      keyId: g.keyId || null,
+      incarnation: g.incarnation,
     })),
   };
 }
@@ -399,10 +453,10 @@ export function toSecret(v: SecretView): Secret {
   return { name: v.name, note: v.description, usedBy: [...new Set(v.leases.map(l => l.vm))], last: whenMs(v.updatedAt), auto: v.autoApprove };
 }
 
-/** Leases have no id the agent can end, so they carry engine, VM and secret. */
+/** A lease's key is the engine that holds it and its id there, as the agent's take-back route names it. */
 export function toLeases(views: SecretView[], now: number): Lease[] {
   return views.flatMap(v => v.leases.map(l => ({
-    id: `${l.engine}/${l.vm}/${l.name}`, secret: l.name, vmName: `${l.vm} · ${l.engineName}`, reason: '',
+    id: requestKey(l.engine, l.id), secret: l.name, vmName: `${l.vm} · ${l.engineName}`, reason: '',
     left: l.usesLeft !== null && l.usesLeft !== undefined ? `${l.usesLeft} uses` : left(l.expiresAt, now),
   })));
 }
@@ -419,7 +473,47 @@ export function toVaultEvent(h: SecretHistoryItem, devices: Device[]): VaultEven
 export function toApproval(a: ApprovalItem, vmId: string): VaultRequest {
   return {
     id: requestKey(a.engine, a.id), kind: 'lease', secret: a.names.join(', '), vmId, vmName: a.vm, hostName: a.engineName,
-    reason: a.reason, span: '', action: a.action,
+    reason: a.reason, span: a.ttlSeconds ? spanText(a.ttlSeconds) : a.uses ? `${a.uses} use${a.uses === 1 ? '' : 's'}` : '', action: a.action, ttlSeconds: a.ttlSeconds ?? null,
+  };
+}
+
+/** 7200 → `2 h`, 900 → `15 min`, 86400 → `24 h`. */
+export function spanText(s: number): string {
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  // Exact: the label never names a shorter span than the one granted.
+  return [h && `${h} h`, m && `${m} min`, sec && `${sec} s`].filter(Boolean).join(' ') || '0 s';
+}
+
+/** The spans the approval offers: the VM's own first, then the usual ones. The engine takes 60 s to a day. */
+export function spanChoices(own: number | null | undefined): number[] {
+  const base = [900, 3600, 8 * 3600, 86400];
+  return own ? [own, ...base.filter(x => x !== own)] : base;
+}
+
+/* --- this device's links and updates --- */
+
+/** Forwards, the microphone, the share and the SSH alias of one VM, from the agent's connections. */
+export function toLink(c: ConnectionView, share: { letter: string | null } | null): Pick<Vm, 'forwards' | 'link'> & { mic: boolean; smb: boolean } {
+  const forwards: Forward[] = c.forwards.map(f => ({
+    id: f.id, port: f.vmPort ?? f.localPort ?? 0, label: f.label || (f.child ? `${f.child}` : ''), to: f.target === 'lan' ? 'LAN' : 'This device',
+    url: f.url ?? (f.localPort ? `127.0.0.1:${f.localPort}` : ''), closable: f.closable, status: f.message || f.status,
+  }));
+  return { forwards, link: { alias: c.alias, sshConfig: c.sshConfig ?? null, share: share?.letter ?? null }, mic: c.mic.enabled, smb: !!share?.letter };
+}
+
+/** The agent wrote the VM's `Host` block, or found it as it should be. */
+export const aliasWritten = (status: string | null | undefined) => status === 'added' || status === 'replaced' || status === 'unchanged';
+
+const PART_STATES = new Set(['pending', 'running', 'done', 'skipped', 'failed']);
+export function toEverything(v: EverythingView): Everything {
+  return {
+    running: v.running,
+    parts: v.parts.map(p => ({
+      part: p.part === 'engine' || p.part === 'vms' ? p.part : 'device',
+      name: p.part === 'vms' ? `Your VMs on ${p.name}` : p.name,
+      state: (PART_STATES.has(p.state) ? p.state : 'pending') as Everything['parts'][number]['state'],
+      detail: p.detail ?? null,
+    })),
   };
 }
 

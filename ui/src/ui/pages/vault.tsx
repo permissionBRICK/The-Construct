@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
 import { QrSquare, Icon } from '../icons';
-import { Btn, Confirm, Field, Head, NotYet, Page, Sec, Seg, Switch, Table, Tabs, Tag } from '../kit';
+import { Btn, Confirm, Field, Head, NotYet, Page, Row, Sec, Seg, Switch, Table, Tabs, Tag } from '../kit';
 import { copy, na, useApp } from '../ctx';
 import type { Page as P } from '../../model/route';
 
@@ -119,6 +119,18 @@ export function Devices() {
   );
 }
 
+/** A solo host on this PC answers only this PC until LAN access is on; a second device needs it to pair. */
+function LanAccess() {
+  const { s, be } = useApp();
+  const solo = s.hosts.filter(h => h.admin && h.lan !== undefined);
+  if (!solo.length) return null;
+  return (
+    <Sec title="LAN access">
+      {solo.map(h => <Row l={h.name}><Switch on={!!h.lan} onChange={v => be.setLanAccess(h.id, v)} label={`LAN access to ${h.name}`} /></Row>)}
+    </Sec>
+  );
+}
+
 const mmss = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
 export function Pair() {
@@ -130,6 +142,7 @@ export function Pair() {
     <Page>
       <Head title="Pair a device" back={back} />
       {!p && <div class="line"><Btn kind="pri" icon="plus" onClick={() => be.startPairing()}>Start</Btn></div>}
+      {(p?.state === 'code' || p?.state === 'showing') && <LanAccess />}
       {p?.state === 'code' && (
         <div class="blk form narrow">
           <Field value={code} onInput={setCode} label="Code from the new device" placeholder="Code from the new device" mono wide onEnter={() => be.enterPairingCode(code)} />

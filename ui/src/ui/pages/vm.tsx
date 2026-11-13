@@ -1,14 +1,18 @@
 import { useState } from 'preact/hooks';
-import type { Profile, SettingsPatch, Vm, VmSettings } from '../../backend/types';
+import type { Agent, Profile, SettingsPatch, Vm, VmSettings } from '../../backend/types';
 import { activeJob, vmDot, vmWord, newer, vmUpdateTarget } from '../../model/vm';
 import { groupApplies, hwChange } from '../../model/settings';
 import { profileError } from '../../model/profile';
+import { aliasWritten } from '../../backend/api/map';
 import { Icon } from '../icons';
 import { Btn, Confirm, Copyable, Dot, Field, Head, KV, NotYet, Page, Row, Sec, Seg, Switch, Table, Tabs, Tag, UpTag } from '../kit';
 import { copy, na, useApp } from '../ctx';
 import { ActionButtons, JobBlock, PowerBtn, ReinstallConfirm, VaultCards } from '../blocks';
 
 /* Pages of one VM: overview, projects (list, one project, its file), connections, backups, settings. */
+
+/** A newer version of a coding agent is out: the engine says so, else the versions are compared. */
+const agentBehind = (a: Agent) => a.newer ?? newer(a.latest, a.version);
 
 export function useBack() {
   const { surf, go } = useApp();
@@ -20,7 +24,7 @@ export function Overview({ vm }: { vm: Vm }) {
   const [wipe, setWipe] = useState(false);
   const job = activeJob(s, vm.id);
   const host = s.hosts.find(h => h.id === vm.hostId);
-  const outdated = vm.agents.some(a => newer(a.latest, a.version));
+  const outdated = vm.agents.some(agentBehind);
   const vmUp = vmUpdateTarget(s, vm);
   const big = (n: number | null) => (n === null ? '–' : String(n));
   const use = [
@@ -56,8 +60,9 @@ export function Overview({ vm }: { vm: Vm }) {
         <div><span class="sk">Construct</span><b>{vm.version}</b>{vmUp && <UpTag v={vmUp} />}</div>
       </div>
       <div class="g2">
-        <Sec title="Coding agents" right={outdated && <Btn sm onClick={() => be.updateAgents(vm.id)}>Update all</Btn>}>
-          {na(s, 'agents') ? <NotYet /> : <Table cols={[{ h: 'Agent' }, { h: 'Version', cls: 'e m' }]} rows={vm.agents.filter(a => a.installed).map(a => [a.name, <>{a.version}{newer(a.latest, a.version) && <> <Tag warn>→ {a.latest}</Tag></>}</>])} />}
+        <Sec title="Coding agents" right={outdated && !na(s, 'agent-update') && <Btn sm onClick={() => be.updateAgents(vm.id)}>Update all</Btn>}>
+          {vm.problems?.agents && <div class="line badc">{vm.problems.agents}</div>}
+          {na(s, 'agents') ? <NotYet /> : <Table cols={[{ h: 'Agent' }, { h: 'Version', cls: 'e m' }]} rows={vm.agents.filter(a => a.installed).map(a => [a.name, <>{a.version}{agentBehind(a) && <> <Tag warn>→ {a.latest}</Tag></>}</>])} />}
         </Sec>
         <Sec title="Child VMs">
           <Table cols={[{ h: 'Name' }, { h: 'System', cls: 'x' }, { h: 'Left', cls: 'm' }, { h: '', cls: 'e' }]}
@@ -201,19 +206,29 @@ export function ProjectFile({ vm, name }: { vm: Vm; name?: string }) {
 
 export function Connections({ vm }: { vm: Vm }) {
   const { s, be } = useApp();
+  const can = s.device.can;
+  const off = <span class="d">Not on this device</span>;
+  const aliasOn = !!vm.link && aliasWritten(vm.link.sshConfig);
+  const ssh = aliasOn ? `ssh ${vm.link!.alias}` : `ssh ${vm.sshPort && vm.sshPort !== 22 ? `-p ${vm.sshPort} ` : ''}root@${vm.address}`;
   return (
     <Page>
       <Head title="Connections" back={useBack()} />
+      {vm.problems?.connection && <div class="line badc">{vm.problems.connection}</div>}
       <Sec title="Forwards">
         {na(s, 'forwards') ? <NotYet /> : <Table cols={[{ h: 'Port', cls: 'm' }, { h: 'Label' }, { h: 'To', cls: 'x' }, { h: 'Link', cls: 'x m' }, { h: '', cls: 'e' }]}
-          rows={vm.forwards.map(f => [f.port, f.label, f.to, f.url, <><Btn sm icon="open" onClick={() => be.openForward(vm.id, f.port)}>Open</Btn> <Btn sm onClick={() => be.closeForward(vm.id, f.port)}>Close</Btn></>])} />}
+          rows={vm.forwards.map(f => [f.port, f.label, f.to, f.url, <>{f.url && <Btn sm icon="open" onClick={() => be.openForward(vm.id, f.port)}>Open</Btn>}{f.closable && <> <Btn sm onClick={() => be.closeForward(vm.id, f.id)}>Close</Btn></>}</>])} />}
       </Sec>
-      <Sec title="SSH"><Copyable text={`ssh ${vm.sshPort && vm.sshPort !== 22 ? `-p ${vm.sshPort} ` : ''}root@${vm.address}`} /></Sec>
-      <Sec title="Sharing">{na(s, 'sharing') ? <NotYet /> : <>
-        <Row l={<>VS Code web <span class="d m">:8000</span></>}><Switch on={vm.sharing.vscodeWeb} onChange={v => be.setSharing(vm.id, 'vscodeWeb', v)} label="VS Code web" /></Row>
-        <Row l={<>SMB share <span class="d m">Z:</span></>}><Switch on={vm.sharing.smb} onChange={v => be.setSharing(vm.id, 'smb', v)} label="SMB share" /></Row>
-        <Row l="Microphone"><Switch on={vm.sharing.mic} onChange={v => be.setSharing(vm.id, 'mic', v)} label="Microphone" /></Row>
-      </>}</Sec>
+      <Sec title="SSH" right={vm.link && (aliasOn
+        ? <Btn sm onClick={() => be.setSshAlias(vm.id, false)}>Remove alias</Btn>
+        : <Btn sm onClick={() => be.setSshAlias(vm.id, true)}>Write alias</Btn>)}>
+        <Copyable text={ssh} />
+        {vm.link?.sshConfig === 'failed' && <div class="line badc">The alias could not be written to the SSH config</div>}
+      </Sec>
+      <Sec title="Sharing">
+        <Row l={<>VS Code web <span class="d m">:8000</span></>}>{na(s, 'sharing') ? <span class="d">Not available yet</span> : <Switch on={vm.sharing.vscodeWeb} onChange={v => be.setSharing(vm.id, 'vscodeWeb', v)} label="VS Code web" />}</Row>
+        <Row l={<>SMB share {vm.link?.share && <span class="d m">{vm.link.share}</span>}</>}>{can && !can.share ? off : <Switch on={vm.sharing.smb} onChange={v => be.setSharing(vm.id, 'smb', v)} label="SMB share" />}</Row>
+        <Row l="Microphone">{can && !can.mic ? off : <Switch on={vm.sharing.mic} onChange={v => be.setSharing(vm.id, 'mic', v)} label="Microphone" />}</Row>
+      </Sec>
     </Page>
   );
 }
@@ -295,7 +310,7 @@ export function Settings({ vm }: { vm: Vm }) {
         <Row l="Microphone"><Switch on={st.services.mic} onChange={v => svc('mic', v)} label="Microphone" /></Row>
         <Row l="Claude Code live streaming"><Switch on={st.services.claudeLive} onChange={v => svc('claudeLive', v)} label="Claude Code live streaming" /></Row>
         <Row l="OpenCode background watcher"><Switch on={st.services.opencodeWatcher} onChange={v => svc('opencodeWatcher', v)} label="OpenCode background watcher" /></Row>
-        <Row l="T3 proxy URL">{inp('T3 proxy URL', st.services.t3ProxyUrl, v => svc('t3ProxyUrl', v))}</Row>
+        <Row l="T3 proxy URL">{na(s, 't3-proxy') ? <span class="d">Not available yet</span> : inp('T3 proxy URL', st.services.t3ProxyUrl, v => svc('t3ProxyUrl', v))}</Row>
       </Sec>
     ),
     id: () => na(s, 'vm-services') ? <Sec title="Git"><NotYet /></Sec> : (
@@ -306,15 +321,16 @@ export function Settings({ vm }: { vm: Vm }) {
           <Row l="Keep credentials on the VM"><Switch on={st.identity.keepCredentials} onChange={v => save({ identity: { keepCredentials: v } })} label="Keep credentials on the VM" /></Row>
         </Sec>
         <Sec title="Login">
-          <Row l={<>Password <span class="d m">agent</span></>}><PasswordChange vm={vm} /></Row>
-          <Row l={<>Chat history in backups <span class="d">days</span></>}><Seg label="Chat history" opts={['30', '90', 'all'] as const} labels={{ all: 'All' }} value={st.identity.historyDays} onChange={v => save({ identity: { historyDays: v } })} /></Row>
+          <Row l={<>Password <span class="d m">agent</span></>}>{na(s, 'vm-password') ? <span class="d">Not available yet</span> : <PasswordChange vm={vm} />}</Row>
+          <Row l={<>Chat history in backups <span class="d">days</span></>}>{na(s, 'vm-history') ? <span class="d">Not available yet</span> : <Seg label="Chat history" opts={['30', '90', 'all'] as const} labels={{ all: 'All' }} value={st.identity.historyDays} onChange={v => save({ identity: { historyDays: v } })} />}</Row>
         </Sec>
       </>
     ),
     agents: () => na(s, 'agents') ? <Sec title="Coding agents"><NotYet /></Sec> : (
-      <Sec title="Coding agents" right={vm.agents.some(a => newer(a.latest, a.version)) && <Btn sm onClick={() => be.updateAgents(vm.id)}>Update all</Btn>}>
+      <Sec title="Coding agents" right={vm.agents.some(agentBehind) && !na(s, 'agent-update') && <Btn sm onClick={() => be.updateAgents(vm.id)}>Update all</Btn>}>
+        {vm.problems?.agents && <div class="line badc">{vm.problems.agents}</div>}
         <Table cols={[{ h: 'Agent' }, { h: 'Version', cls: 'm' }, { h: 'Latest', cls: 'x m' }, { h: 'Installed', cls: 'e' }]}
-          rows={vm.agents.map(a => [a.name, a.version, newer(a.latest, a.version) ? <Tag warn>{a.latest}</Tag> : a.latest, <Switch on={a.installed} onChange={() => {}} label={`${a.name} installed`} disabled />])} />
+          rows={vm.agents.map(a => [a.name, a.version, agentBehind(a) ? <Tag warn>{a.latest}</Tag> : a.latest, <Switch on={a.installed} onChange={() => {}} label={`${a.name} installed`} disabled />])} />
       </Sec>
     ),
   };
@@ -325,6 +341,7 @@ export function Settings({ vm }: { vm: Vm }) {
         <div class="blk warn row"><b class="grow">{pendingRestart}</b><Btn sm kind="pri" icon="power" onClick={() => be.restart(vm.id)}>Restart now</Btn></div>
       )}
       <Tabs items={[['res', 'Resources'], ['svc', 'Services'], ['id', 'Identity'], ['agents', 'Agents']]} value={tab} onChange={t => go({ page: 'settings', arg: t })} />
+      {vm.problems?.settings && (tab === 'svc' || tab === 'id') && <div class="line badc">{vm.problems.settings}</div>}
       {body[tab]()}
     </Page>
   );

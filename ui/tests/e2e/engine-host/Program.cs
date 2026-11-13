@@ -97,7 +97,7 @@ sealed class E2eEngine(string directory) : WebApplicationFactory<Program>
             ["Constructd:Backups:RootDir"] = Path.Combine(directory, "backups"),
         };
         foreach (var (key, value) in settings) builder.UseSetting(key, value);
-        builder.ConfigureTestServices(services => services.AddSingleton<ISshRunner>(new ScriptedGuest(Url, directory)));
+        builder.ConfigureTestServices(services => services.AddSingleton<ISshRunner>(sp => new ScriptedGuest(Url, directory, sp)));
     }
 
     private static byte[] SourceZip()
@@ -140,9 +140,11 @@ sealed class E2eEngine(string directory) : WebApplicationFactory<Program>
 /// are enrolled and removed, <c>create</c> uploads a backup through the engine's routes with the VM token the
 /// test leaves in <c>vm-token</c> beside the database (a token change waits on the reinstall's own VM lock),
 /// wrapped for every recipient; <c>verify</c> and <c>restore</c> check the key on stdin. It starts with one
-/// recipient standing for the user's device.
+/// recipient standing for the user's device; once the test names the account in <c>account</c>, the account's
+/// backup key <c>B</c> from the store is a recipient too, so a device can open a stored backup. The provision
+/// script fails once with a critical exit when the test leaves <c>fail-next</c> beside the database.
 /// </summary>
-sealed partial class ScriptedGuest(string engineUrl, string directory) : ISshRunner
+sealed partial class ScriptedGuest(string engineUrl, string directory, IServiceProvider services) : ISshRunner
 {
     private readonly Dictionary<string, string> _marker = new(StringComparer.Ordinal);
     private readonly Dictionary<string, (string Pem, string Label)> _recipients = Device();
@@ -161,6 +163,13 @@ sealed partial class ScriptedGuest(string engineUrl, string directory) : ISshRun
         if (inner.Contains("construct-backup.sh", StringComparison.Ordinal))
             return await BackupAsync(inner, standardInput, lines, ct);
         string[] output = [];
+        if (command.Contains("bin/provision.sh", StringComparison.Ordinal) && !command.Contains("PROVISION_PHASE", StringComparison.Ordinal)
+            && File.Exists(Path.Combine(directory, "fail-next")))
+        {
+            File.Delete(Path.Combine(directory, "fail-next"));
+            foreach (var line in new[] { "apt-get: could not get lock", "===CONSTRUCT-PROVISION-RESULT===", "errors=0", "===END-CONSTRUCT-PROVISION-RESULT===" }) lines?.Report(line);
+            return 2;
+        }
         if (command.Contains("bin/provision.sh", StringComparison.Ordinal) && !command.Contains("PROVISION_PHASE", StringComparison.Ordinal))
         {
             lock (_marker)
@@ -246,6 +255,7 @@ sealed partial class ScriptedGuest(string engineUrl, string directory) : ISshRun
         var id = (await opened.Content.ReadFromJsonAsync<JsonObject>(ct))!["id"]!.GetValue<string>();
         Dictionary<string, (string Pem, string Label)> recipients;
         lock (_recipients) recipients = new(_recipients, StringComparer.Ordinal);
+        if (AccountBackupKey() is { } account) recipients[BackupJobKey.PublicFingerprint(account)!] = (account, "account");
         var keys = new JsonObject
         {
             ["format"] = "construct-backup-keys/1", ["backupId"] = id, ["createdAt"] = DateTimeOffset.UtcNow.ToString("O"),
@@ -263,6 +273,18 @@ sealed partial class ScriptedGuest(string engineUrl, string directory) : ISshRun
         lock (_recipients) _made[id] = (e, recipients);
         lines?.Report($"{{\"id\":\"{id}\",\"sizeBytes\":256,\"sha256\":\"x\",\"trigger\":\"pre-reinstall\",\"gitCredentialHosts\":[]}}");
         return 0;
+    }
+
+    /// <summary>The public half of the account's <c>B</c> as the store keeps it, once the test named the account.</summary>
+    private string? AccountBackupKey()
+    {
+        var file = Path.Combine(directory, "account");
+        if (!File.Exists(file)) return null;
+        var keys = services.GetRequiredService<Constructd.Store.Identity.StoreDirectory>().Keys(File.ReadAllText(file).Trim());
+        if (keys is null) return null;
+        using var rsa = RSA.Create();
+        rsa.ImportSubjectPublicKeyInfo(keys.BackupPublic, out _);
+        return rsa.ExportSubjectPublicKeyInfoPem();
     }
 
     [GeneratedRegex(@"(?<![A-Z_])([A-Z0-9_]+)='((?:[^']|'\\'')*)'")]

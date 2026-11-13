@@ -58,6 +58,14 @@ export function App({ be, surf, shell, hashRouting, initialRoute, mode }: AppPro
     return () => removeEventListener('hashchange', f);
   }, [hashRouting]);
 
+  // The pop-out and the lone vault card close with Escape, as a tray surface does.
+  useEffect(() => {
+    if (surf !== 'pop' && surf !== 'alone') return;
+    const f = (e: KeyboardEvent) => { if (e.key === 'Escape') shell.close(); };
+    addEventListener('keydown', f);
+    return () => removeEventListener('keydown', f);
+  }, [surf, shell]);
+
   const toast = (t: string) => {
     setToast(t);
     clearTimeout(timer.current);
