@@ -49,9 +49,15 @@ public static class AgentVaultRoutes
         vault.MapPost("/approvals/{engine}/{id}", async (DeviceAgent agent, string engine, string id, [FromBody] ApprovalDecision decision, CancellationToken ct) =>
         {
             if (decision.Decision is not ("allow" or "deny")) throw new AgentFailure(400, "invalid-decision", "allow or deny.");
-            await agent.DecideApprovalAsync(engine, id, decision.Decision == "allow", ct);
+            await agent.DecideApprovalAsync(engine, id, decision.Decision == "allow", ct, decision.TtlSeconds);
             return TypedResults.NoContent();
-        }).WithName("DecideVaultApproval").WithDescription("allow or deny. On a locked engine an allow first unlocks the VM that asked.");
+        }).WithName("DecideVaultApproval").WithDescription("allow or deny; an allow of a lease request may carry ttlSeconds, the duration the user chose (60 to 86400). On a locked engine an allow first unlocks the VM that asked.");
+
+        vault.MapDelete("/leases/{engine}/{id}", async (DeviceAgent agent, string engine, string id, CancellationToken ct) =>
+        {
+            await agent.EndLeaseAsync(engine, id, ct);
+            return TypedResults.NoContent();
+        }).WithName("EndVaultLease").WithDescription("Ends a lease before its time, at that engine; the VM's copy is scrubbed as on expiry.");
 
         vault.MapGet("/entry-requests", async (DeviceAgent agent, CancellationToken ct) => TypedResults.Ok(await agent.EntryRequestsAsync(ct)))
             .WithName("ListEntryRequests").WithDescription("Agents asking the user to enter a secret (construct secret ask). Description and reason are the agent's text.");

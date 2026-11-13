@@ -12610,6 +12610,13 @@
               "null",
               "string"
             ]
+          },
+          "ttlSeconds": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
           }
         }
       },

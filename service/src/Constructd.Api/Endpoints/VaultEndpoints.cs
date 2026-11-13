@@ -72,7 +72,8 @@ public static class VaultEndpoints
     public sealed record ModeRequest(string? Mode, KeyGrantDto? Grant);
     /// <param name="Payload">The value sealed with <c>K</c> under the entry's name and <paramref name="UpdatedAt"/>.</param>
     public sealed record EntrySaveRequest([property: ConstructSecret] string? Payload, long? UpdatedAt, bool? HasUsername);
-    public sealed record DecisionRequest(string? Decision);
+    /// <param name="TtlSeconds">With <c>approve</c> on a lease request: the duration the user chose, replacing the VM's (60 to 86400).</param>
+    public sealed record DecisionRequest(string? Decision, int? TtlSeconds = null);
     public sealed record FileRequest(string? Action);
     public sealed record DeviceRequest(string? Label);
 
@@ -226,8 +227,8 @@ public static class VaultEndpoints
     private static Task<IResult> DecideAsync(string id, DecisionRequest? request, HttpContext http, VaultHostService vault, CancellationToken ct) => Run(http, async () =>
     {
         if (request?.Decision is not ("approve" or "deny")) return CodedProblems.Validation("decision", "Expected approve or deny.");
-        http.SetAuditDetail($"decision={request.Decision}, by={(http.User.IsVaultDevice() ? "device" : "user")}");
-        await vault.DecideAsync(Owner(http), id, request.Decision == "approve", ct, Approver(http)).ConfigureAwait(false);
+        http.SetAuditDetail($"decision={request.Decision}, by={(http.User.IsVaultDevice() ? "device" : "user")}, ttl={request.TtlSeconds?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "asked"}");
+        await vault.DecideAsync(Owner(http), id, request.Decision == "approve", ct, Approver(http), request.TtlSeconds).ConfigureAwait(false);
         return Results.NoContent();
     });
 

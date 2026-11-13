@@ -391,7 +391,8 @@ state (checked every 30 s), the deletion fence and restart. Before the Companion
 Guests post the spool contract's request document; answers that need no user come back at once
 (`200`), the rest as `202 {id}` to long-poll (`?wait=` up to 25 s: `200` answer, `204` pending, `404`
 unknown or already picked up). Pending approvals live in memory; the first answer wins (`409
-already-decided`). Leases, pending scrubs, scrub jobs and file decisions are durable; agent logs are
+already-decided`). An approve of a lease request may carry `ttlSeconds` (60 to 86400), the duration the user chose; the lease then
+lasts that long instead of what the VM asked for. Leases, pending scrubs, scrub jobs and file decisions are durable; agent logs are
 redacted without asking and every other hit waits in `GET /vault/files`. The heartbeat reply
 carries `"vaultScrub": true` while a scrub job can be delivered to that VM (with the config-backup
 fields below when those are due too), and is `204` when nothing is due.

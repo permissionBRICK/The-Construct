@@ -124,7 +124,8 @@ CONSTRUCT_AGENT_UPDATE_OPENAPI=1 dotnet test agent/Construct.Agent.slnx --filter
 | `POST /api/vault/secrets/{name}/reveal` | `{name, username, value}`: the only route that returns a value |
 | `PUT /api/vault/secrets/{name}/auto-approve {on}` | Switches auto-approve |
 | `GET /api/vault/history` | Every write of every secret, newest first, with its provenance (VM, approving or entering device, request id) |
-| `GET /api/vault/approvals`, `POST /api/vault/approvals/{engine}/{id} {decision: allow\|deny}` | The engines' pending approvals; on a `locked` engine an allow first unlocks the VM that asked |
+| `GET /api/vault/approvals`, `POST /api/vault/approvals/{engine}/{id} {decision: allow\|deny, ttlSeconds?}` | The engines' pending approvals with the `uses` and `ttlSeconds` the VM asked for; an allow of a lease request may carry the duration the user chose (60 to 86400 s), which the lease gets. On a `locked` engine an allow first unlocks the VM that asked |
+| `DELETE /api/vault/leases/{engine}/{id}` | Ends a lease early (the lease views carry `id`); the engine scrubs the value as on expiry |
 | `GET /api/vault/entry-requests`, `POST /api/vault/entry-requests/{engine}/{id} {value, username?}`, `POST …/decline` | `construct secret ask`: the user enters the value, sealed here with `K`; created only while the name is free, never auto-approved, no lease |
 | `POST /api/engines/{engine}/vms/{vm}/backups/{backup}/restore {requestId?}` | Restores a stored backup into the running VM: reads its keys file from the engine, unwraps the backup's key with the account's `B` here and starts the engine's `restore` job with it in the job's secrets. `409 backup-key-not-held` when `B` does not open it. Answers `{jobId, replayed}`; follow the job through the proxy |
 | `GET/PUT /api/vault/engines/{engine}/mode {mode}` | An engine's vault mode and whether it holds `K`; `available` grants `K`, `locked` withdraws it |

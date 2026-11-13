@@ -1140,7 +1140,7 @@
         "tags": [
           "vault"
         ],
-        "description": "allow or deny. On a locked engine an allow first unlocks the VM that asked.",
+        "description": "allow or deny; an allow of a lease request may carry ttlSeconds, the duration the user chose (60 to 86400). On a locked engine an allow first unlocks the VM that asked.",
         "operationId": "DecideVaultApproval",
         "parameters": [
           {
@@ -1170,6 +1170,48 @@
           },
           "required": true
         },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/leases/{engine}/{id}": {
+      "delete": {
+        "tags": [
+          "vault"
+        ],
+        "description": "Ends a lease before its time, at that engine; the VM's copy is scrubbed as on expiry.",
+        "operationId": "EndVaultLease",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "204": {
             "description": "No Content"
@@ -2340,6 +2382,13 @@
         "properties": {
           "decision": {
             "type": "string"
+          },
+          "ttlSeconds": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
           }
         }
       },
@@ -3115,6 +3164,7 @@
         "required": [
           "engine",
           "engineName",
+          "id",
           "vm",
           "name",
           "usesLeft",
@@ -3126,6 +3176,9 @@
             "type": "string"
           },
           "engineName": {
+            "type": "string"
+          },
+          "id": {
             "type": "string"
           },
           "vm": {
@@ -3503,6 +3556,20 @@
           "deadline": {
             "type": "integer",
             "format": "int64"
+          },
+          "uses": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          },
+          "ttlSeconds": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
           }
         }
       },

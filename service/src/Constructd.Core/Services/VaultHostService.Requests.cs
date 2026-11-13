@@ -36,6 +36,8 @@ public sealed partial class VaultHostService
         // Who answered (device:<id>, phone:<id> or user:<name>): the provenance of an approved write (9.1).
         public string? Approver { get; set; }
         public DateTimeOffset? DecidedAt { get; set; }
+        // The lease duration the user chose when approving; null keeps what the VM asked for.
+        public int? ChosenTtlSeconds { get; set; }
         public JsonObject? Response { get; set; }
         public string? LeaseId { get; set; }
         public bool Ready { get; set; }
@@ -378,8 +380,11 @@ public sealed partial class VaultHostService
 
     /// <summary><c>POST /vault/approvals/{id}</c>: the first answer wins; later ones get 409.</summary>
     /// <param name="approver">Who answers: <c>device:&lt;id&gt;</c>, <c>phone:&lt;id&gt;</c> or <c>user:&lt;name&gt;</c>, kept as the provenance of the write.</param>
-    public async Task DecideAsync(string owner, string id, bool approve, CancellationToken ct, string? approver = null)
+    /// <param name="ttlSeconds">The lease duration the user chose (1 minute to 24 hours); null keeps the VM's. Only a lease request has one.</param>
+    public async Task DecideAsync(string owner, string id, bool approve, CancellationToken ct, string? approver = null, int? ttlSeconds = null)
     {
+        if (ttlSeconds is { } chosen && (chosen < VaultProtocol.MinTtl || chosen > VaultProtocol.MaxTtl))
+            throw new VaultProblemException(400, "validation", "A lease lasts from 1 minute to 24 hours.");
         await gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
@@ -390,7 +395,10 @@ public sealed partial class VaultHostService
                 if (!pending.TryGetValue(id, out record!) || !Ownership.SameName(record.Owner, owner)) throw NotFound("No such request.");
                 if (record.State != PendingState.Pending)
                     throw new VaultProblemException(409, "already-decided", record.State == PendingState.TimedOut ? "The request timed out." : "The request was already answered.");
+                if (approve && ttlSeconds is not null && record.Request.Op != "request")
+                    throw new VaultProblemException(400, "validation", "Only a lease request takes a duration.");
                 record.State = approve ? PendingState.Approved : PendingState.Denied;
+                record.ChosenTtlSeconds = approve ? ttlSeconds : null;
                 record.DecidedAt = clock.UtcNow;
                 record.Approver = approver ?? "user:" + owner;
             }
@@ -420,7 +428,7 @@ public sealed partial class VaultHostService
             case "request":
             {
                 // The lease runs from the approval, not from the request: a slow answer must not shorten it.
-                var now = clock.UtcNow; var ttl = TimeSpan.FromSeconds(record.TtlSeconds ?? DefaultTtl.TotalSeconds);
+                var now = clock.UtcNow; var ttl = TimeSpan.FromSeconds(record.ChosenTtlSeconds ?? record.TtlSeconds ?? DefaultTtl.TotalSeconds);
                 var entries = await EntriesAsync(vm.Owner, ct).ConfigureAwait(false);
                 var leases = await store.ListAsync<VaultLease>(vm.Owner, ct).ConfigureAwait(false);
                 VaultLease? granted = null; var names = new List<string>();
