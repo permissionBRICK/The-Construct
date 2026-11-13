@@ -564,6 +564,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Server-sent events from `since` on (the `id` of the last event seen). Without `since`, or when the events after it are gone (too far behind, or an earlier run of the engine), the stream starts with `reset`: reload what you show, then continue from its `seq`. */
+        get: operations["GetEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/vms/{name}/jobs": {
         parameters: {
             query?: never;
@@ -4089,6 +4106,13 @@ export interface components {
         CapabilityLevel: "unsupported" | "conditional" | "supported";
         /** @enum {string} */
         CapacityMode: "observe" | "enforce";
+        ChangeEventResponse: {
+            /** Format: int64 */
+            seq: number;
+            type: string;
+            id?: null | string;
+            vm?: null | string;
+        };
         /** @enum {string} */
         ChildAction: "inspect" | "start" | "shutdown" | "save" | "restart" | "delete" | "share" | "renew" | "hardware" | "media" | "console" | "forwardClient" | "forwardHost" | "addresses" | "overrides" | "rotateToken";
         ChildConfigurationEndpointsReleaseRequest: {
@@ -7326,6 +7350,37 @@ export interface operations {
             };
         };
     };
+    GetEvents: {
+        parameters: {
+            query?: {
+                since?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": components["schemas"]["ChangeEventResponse"];
+                };
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     StartVmJob: {
         parameters: {
             query?: never;
@@ -9456,8 +9511,8 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description OK */
-            200: {
+            /** @description No Content */
+            204: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9487,8 +9542,8 @@ export interface operations {
             };
         };
         responses: {
-            /** @description OK */
-            200: {
+            /** @description No Content */
+            204: {
                 headers: {
                     [name: string]: unknown;
                 };
