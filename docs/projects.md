@@ -251,7 +251,7 @@ carries them over. A forward that should come back is declared in a profile:
   "forwards": [
     { "port": 3000, "label": "customer portal" },
     { "port": 9000, "label": "webhook receiver", "to": "host" },
-    { "port": 3001, "label": "portal (https)", "https": true, "name": "portal" }
+    { "port": 3001, "label": "portal (https)", "https": true, "upstreamTls": false, "name": "portal" }
   ]
 }
 ```
@@ -262,17 +262,18 @@ carries them over. A forward that should come back is declared in a profile:
 | `label` | Optional; shown in `construct expose --list` and the Construct client. |
 | `to` | `client` (default): a tunnel to the user's PC. `host`: a port on the host's LAN address, subject to the host service's host-forward permission. |
 | `https` | Optional, `true`: an [HTTPS forward](https-forwards.md) with the host's certificate. It is a host forward, so `to` is `host` or left out. |
+| `upstreamTls` | **Required** with `https`, not allowed without: `false` when the port serves plain HTTP (`--upstream-plain`), `true` when it speaks TLS itself (`--upstream-tls`). The host connects exactly that way and never guesses. |
 | `name` | Optional, with `https` only: the forward's name on the shared HTTPS port (`construct expose --name`), one DNS label of lowercase letters, digits and hyphens. The default is the port. |
-| `upstreamTls` | Optional, `true` with `https` only: the port itself speaks TLS (`construct expose --upstream-tls`). |
 
 `bin/project-forwards.sh` runs on every provision, after the
 [provisioning commands](#provisioning-commands), and requests each entry with
 `construct expose <port> --to <to> --label <label> --reuse --wait 0`
-(an `https` entry adds `--https-if-available`, `--name` and `--upstream-tls`):
+(an `https` entry adds `--https-if-available`, `--upstream-plain` or `--upstream-tls`, and `--name`):
 
 - **Get-or-create.** `--reuse` keeps an existing forward for the same port and target, so a
   reprovision opens nothing twice and an agent may already have exposed the port by hand.
-  A port listed by several selected profiles with the same target is requested once.
+  A port listed by several selected profiles with the same target is requested once. An HTTPS
+  forward whose `upstreamTls` changed in the profile is replaced on the next provision.
 - **Never blocks.** A client forward nobody has picked up yet is queued and opens as soon as
   the user's Construct client connects; provisioning does not wait for it.
 - **Failures warn.** A refused or failed request is logged and the remaining entries still

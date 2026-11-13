@@ -7,7 +7,7 @@ putting a certificate's private key into a VM: the **host** holds the certificat
 on the forward's public port and relays the decrypted stream to the VM port.
 
 ```
-browser ──TLS (host certificate)──▶ constructd :2310 ──plain or TLS──▶ VM :5178
+browser ──TLS (host certificate)──▶ constructd :2310 ──plain or TLS, as the forward says──▶ VM :5178
 ```
 
 The relay is byte-for-byte after the handshake, so WebSockets, streaming responses and uploads of
@@ -135,9 +135,9 @@ not up yet just gets the waiting page.
 ## 2. Guest: publish a port
 
 ```bash
-construct expose 5173 --https              # prints https://work-vm-5173.vms.example/ (shared port)
-construct expose 5173 --https --name app   # prints https://work-vm-app.vms.example/
-construct expose 5178 --https --main       # prints https://work-vm.vms.example/
+construct expose 5173 --https --upstream-plain             # prints https://work-vm-5173.vms.example/ (shared port)
+construct expose 5173 --https --upstream-plain --name app  # prints https://work-vm-app.vms.example/
+construct expose 5178 --https --upstream-tls --main        # prints https://work-vm.vms.example/
 ```
 
 Without a shared port, or without `PublicHostPattern`, each prints its forward's own port address
@@ -153,6 +153,14 @@ is refused with code `https-unavailable` (exit 7 from the CLI).
 * `--https` implies `--to host`. The forward gets its own public port from the app range, like
   any host forward, and its link is its named address on the shared port, or
   `https://<vm public name>:<port>/` without one.
+* `--upstream-plain` or `--upstream-tls` is **required** with `--https`: whether the VM port
+  serves plain HTTP (a dev server, most apps) or speaks TLS itself (the host does not verify the
+  guest's certificate). The host connects exactly that way. It never probes the port or falls back
+  to the other protocol, so a slow start cannot be mistaken for the wrong one. A forward that says
+  TLS to a port answering in plain HTTP gets a page that says so; the other way round the browser
+  sees the app's own complaint (nginx: "plain HTTP request was sent to HTTPS port"). When the port
+  changes, ask again with `--reuse` and the other flag: the old forward is closed and replaced, and
+  its name and main address go to the new one.
 * `--name <name>` names it ([Forward names](#forward-names)); the default is the VM port.
 * `--main` marks the VM's main web UI, served under the VM's own name. One per VM: a second
   one is refused with code `main-taken` (409, exit 7) while another main forward is open, naming
@@ -160,20 +168,22 @@ is refused with code `https-unavailable` (exit 7 from the CLI).
 * `--replace-main` (with `--main`) takes the address over anyway. The newest main forward is
   served; the replaced one keeps its own name and gets the VM's name back when the newer one is
   closed.
-* `--upstream-tls` says the VM port itself speaks TLS (the host does not verify the guest's
-  certificate). Without it the host tries a TLS handshake first and falls back to plain HTTP,
-  remembering the answer for a while.
 * `--reuse` keeps HTTPS and plain forwards of the same port apart; with `--name` it reuses only
-  the forward of that name.
+  the forward of that name. It reuses an HTTPS forward only when it says the same about the port
+  (`--upstream-plain`/`--upstream-tls`), and replaces it otherwise.
 
 To have provisioning request one on every VM a project runs on, declare it in the project's
-profile: `"forwards": [{"port": 5173, "https": true, "name": "app"}]` (see
+profile: `"forwards": [{"port": 5173, "https": true, "upstreamTls": false, "name": "app"}]` (see
 [Project profiles § Port forwards](projects.md#port-forwards)). Provisioning asks with
 `--https-if-available`, so the same profile opens a plain host forward where the host offers no
 HTTPS. `--main` is left to T3 Code, which provisioning makes the main forward.
 
 The API fields are `https`, `main`, `upstreamTls`, `name` and `replaceMain` on
-`POST /vms/{name}/forwards`. A forward in a list carries `https: true`, `main`, `upstreamTls`, its
+`POST /vms/{name}/forwards`; `upstreamTls` (`true` or `false`) is required with `https: true`, and
+a request without it is refused with a validation problem on `upstreamTls` (400). A host that
+cannot serve HTTPS for the VM answers `https-unavailable` first, whatever the request says. A
+forward stored before `upstreamTls` was required is plain HTTP. A forward in a list carries
+`https: true`, `main`, `upstreamTls`, its
 `name`, and `portUrl` next to `url` when `url` is a shared-port address.
 `GET /vms/{name}/https` gives `mainAddress` and `namedAddress`
 (`https://work-vm-{name}.vms.example/`) while the shared port serves them.
@@ -181,8 +191,8 @@ Only primary VMs can have HTTPS forwards.
 
 ### T3 Code
 
-Provisioning asks for T3's forward with `--https-if-available --main --replace-main` (plus `--upstream-tls` when
-T3's own HTTPS proxy is on). That is `--https` when it is available and a plain host forward when
+Provisioning asks for T3's forward with `--https-if-available --main --replace-main` and
+`--upstream-tls` when T3's own HTTPS proxy is on, `--upstream-plain` when it is not. That is `--https` when it is available and a plain host forward when
 it is not, so a host without a certificate behaves exactly as before. With an HTTPS forward the
 advertised T3 origin (`T3CODE_PUBLIC_BASE_URL`, pairing links) is the host's https address: the
 host name and port of T3's forward as the host service reports it (`T3CODE_PUBLIC_HOST` and

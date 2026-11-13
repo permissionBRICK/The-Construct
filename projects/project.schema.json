@@ -120,7 +120,7 @@
       }
     },
     "forwards": {
-      "comment": "Ports to expose with `construct expose`, requested on EVERY provision after the provisioning commands (get-or-create: a reprovision never opens a second forward for the same port and target). Forwards are VM state that a reinstall deletes; listing one here is what brings it back. `to` defaults to client (a tunnel to the user's PC); host asks the host service for a LAN port. `https: true` asks for an HTTPS forward with the host's certificate (docs/https-forwards.md), a host forward, with `name` and `upstreamTls` as `construct expose --name` and `--upstream-tls`; where the host offers no HTTPS for the VM it opens a plain host forward instead. Removing an entry does not close a live forward.",
+      "comment": "Ports to expose with `construct expose`, requested on EVERY provision after the provisioning commands (get-or-create: a reprovision never opens a second forward for the same port and target). Forwards are VM state that a reinstall deletes; listing one here is what brings it back. `to` defaults to client (a tunnel to the user's PC); host asks the host service for a LAN port. `https: true` asks for an HTTPS forward with the host's certificate (docs/https-forwards.md), a host forward that must say what its port speaks: `upstreamTls` false for plain HTTP, true for TLS (`construct expose --upstream-plain` / `--upstream-tls`); the host never guesses. `name` is `--name`. Where the host offers no HTTPS for the VM it opens a plain host forward instead. Removing an entry does not close a live forward.",
       "type": "array",
       "items": {
         "type": "object",
@@ -136,8 +136,8 @@
         },
         "allOf": [
           { "if": { "required": ["https"], "properties": { "https": { "const": true } } },
-            "then": { "properties": { "to": { "const": "host" } } },
-            "else": { "not": { "anyOf": [{ "required": ["name"] }, { "required": ["upstreamTls"], "properties": { "upstreamTls": { "const": true } } }] } } }
+            "then": { "required": ["upstreamTls"], "properties": { "to": { "const": "host" } } },
+            "else": { "not": { "anyOf": [{ "required": ["name"] }, { "required": ["upstreamTls"] }] } } }
         ]
       }
     },

@@ -202,6 +202,7 @@ if (-not $nodeAvailable) {
         '{"name":"fw","forwards":[{"label":"vite","port":5173},{"port":8080.0,"to":"host"},{"port":1e3,"label":" "}],"tests":{"t":1}}',
         '{"name":"fw","forwards":[{"port":9000,"label":"only one"}]}',
         '{"name":"fw","forwards":[{"label":"app","upstreamTls":true,"name":"app","https":true,"port":5173},{"port":5174,"https":true,"to":"host","upstreamTls":false},{"port":5175,"https":false,"to":"host"}]}',
+        '{"name":"fw","forwards":[{"port":5176,"https":true},{"port":5177,"https":true,"upstreamTls":"false"},{"port":5178,"https":true,"upstreamTls":false,"to":"client"},{"port":9}]}',
         '{"name":"fw","forwards":[]}')) {
         $jsFw = Get-JsCanonical "fw" $fwJson
         $psFw = ConvertTo-ConstructCanonicalJson -Name "fw" -Object ($fwJson | ConvertFrom-Json)
@@ -272,8 +273,8 @@ if (-not $nodeAvailable) {
         '{"name":"fw","forwards":[{"port":5173},{"port":8080.0,"label":"api","to":"host"},{"port":1,"label":""}]}',
         '{"name":"fw","forwards":[{"port":0},{"port":80.5},{"port":"80"},{"port":true},{"port":1,"to":"Host"},{"port":2,"label":3,"target":"host"},{"port":3,"to":null},7,null]}',
         '{"name":"fw","forwards":{"port":1}}',
-        '{"name":"fw","forwards":[{"port":1,"https":true,"name":"app","upstreamTls":true},{"port":2,"https":true,"to":"host","name":"a-1"},{"port":3,"https":false}]}',
-        ('{"name":"fw","forwards":[{"port":1,"https":"true"},{"port":2,"https":1},{"port":3,"https":true,"to":"client"},{"port":4,"name":"app"},{"port":5,"upstreamTls":true},{"port":6,"https":true,"upstreamTls":1},{"port":7,"https":true,"name":"App"},{"port":8,"https":true,"name":"-a"},{"port":9,"https":true,"name":"a_b"},{"port":10,"https":true,"name":5},{"port":11,"https":true,"name":"a\n"},{"port":12,"https":true,"name":"' + ('a' * 64) + '"},{"port":13,"https":null,"name":null}]}'))) {
+        '{"name":"fw","forwards":[{"port":1,"https":true,"name":"app","upstreamTls":true},{"port":2,"https":true,"to":"host","name":"a-1","upstreamTls":false},{"port":3,"https":false}]}',
+        ('{"name":"fw","forwards":[{"port":1,"https":"true"},{"port":2,"https":1},{"port":3,"https":true,"to":"client","upstreamTls":false},{"port":4,"name":"app"},{"port":5,"upstreamTls":true},{"port":6,"https":true,"upstreamTls":1},{"port":7,"https":true,"upstreamTls":false,"name":"App"},{"port":8,"https":true,"upstreamTls":false,"name":"-a"},{"port":9,"https":true,"upstreamTls":false,"name":"a_b"},{"port":10,"https":true,"upstreamTls":false,"name":5},{"port":11,"https":true,"upstreamTls":false,"name":"a\n"},{"port":12,"https":true,"upstreamTls":false,"name":"' + ('a' * 64) + '"},{"port":13,"https":null,"name":null},{"port":14,"https":true},{"port":15,"upstreamTls":false}]}'))) {
         $psFw = Test-ConstructProfile -Name "fw" -Object ($fwJson | ConvertFrom-Json)
         $jsFw = Get-JsValidation "fw" $fwJson
         ok "validate: forwards errors agree ($fwJson)" ($psFw.Ok -eq $jsFw.ok -and ((@($psFw.Errors) -join '|') -ceq (@($jsFw.errors) -join '|')))

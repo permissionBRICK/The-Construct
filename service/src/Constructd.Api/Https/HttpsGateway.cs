@@ -38,12 +38,8 @@ public sealed class HttpsGateway : IHttpsForwardHost, IHostedService, IAsyncDisp
 {
     private static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(10);
-    // A TLS server answers a ClientHello within milliseconds; a plain one either refuses it at once or waits
-    // for a request line that never comes, so detection gives up quickly. An explicit upstreamTls waits longer.
-    private static readonly TimeSpan UpstreamProbeTimeout = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan RequestHeadTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan AddressTtl = TimeSpan.FromSeconds(60);
-    private static readonly TimeSpan UpstreamModeTtl = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan RouteTtl = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan StartThrottle = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan SharedReconcileInterval = TimeSpan.FromSeconds(10);
@@ -66,7 +62,6 @@ public sealed class HttpsGateway : IHttpsForwardHost, IHostedService, IAsyncDisp
     private readonly ConcurrentDictionary<string, string> _forwardErrors = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, StrongBox> _connections = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, (IPAddress Address, DateTimeOffset Expires)> _addressCache = new(StringComparer.OrdinalIgnoreCase);
-    private readonly ConcurrentDictionary<string, (bool Tls, DateTimeOffset Expires)> _upstreamMode = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, DateTimeOffset> _startRequested = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _sharedGate = new(1, 1);
     private readonly SemaphoreSlim _routeGate = new(1, 1);
@@ -145,7 +140,6 @@ public sealed class HttpsGateway : IHttpsForwardHost, IHostedService, IAsyncDisp
     public async Task StopAsync(string forwardId)
     {
         _forwardErrors.TryRemove(forwardId, out _);
-        _upstreamMode.TryRemove(forwardId, out _);
         if (_forwardListeners.TryRemove(forwardId, out var listener)) await listener.DisposeAsync().ConfigureAwait(false);
         InvalidateRoutes();
     }
@@ -320,10 +314,11 @@ public sealed class HttpsGateway : IHttpsForwardHost, IHostedService, IAsyncDisp
                     return;
                 }
 
-                await using var upstream = await ConnectAsync(route, serverName).ConfigureAwait(false);
+                var connected = await ConnectAsync(route, serverName).ConfigureAwait(false);
+                await using var upstream = connected.Stream;
                 if (upstream is null)
                 {
-                    await UnavailableAsync(tls, route).ConfigureAwait(false);
+                    await UnavailableAsync(tls, route, connected.NoTls).ConfigureAwait(false);
                     return;
                 }
 
@@ -395,13 +390,16 @@ public sealed class HttpsGateway : IHttpsForwardHost, IHostedService, IAsyncDisp
 
     private void InvalidateRoutes() => Interlocked.Increment(ref _routesGeneration);
 
-    /// <summary>The upstream stream, or null when the guest (or the vault endpoint) does not answer.</summary>
-    private async Task<Stream?> ConnectAsync(Route route, string serverName)
+    /// <summary>
+    /// The upstream stream, or null when the guest (or the vault endpoint) does not answer. NoTls: the port of a
+    /// forward that says it speaks TLS accepted the connection but did not complete a TLS handshake.
+    /// </summary>
+    private async Task<(Stream? Stream, bool NoTls)> ConnectAsync(Route route, string serverName)
     {
         if (route is VaultRoute)
         {
             var port = VaultRelayPort();
-            return port > 0 ? await TryConnectAsync(new IPEndPoint(IPAddress.Loopback, port)).ConfigureAwait(false) : null;
+            return (port > 0 ? await TryConnectAsync(new IPEndPoint(IPAddress.Loopback, port)).ConfigureAwait(false) : null, false);
         }
 
         var forward = ((ForwardRoute)route).Forward;
@@ -412,44 +410,42 @@ public sealed class HttpsGateway : IHttpsForwardHost, IHostedService, IAsyncDisp
         }
         catch (Exception ex) when (ex is InvalidOperationException or SocketException)
         {
-            return null;
+            return (null, false);
         }
 
-        var mode = forward.UpstreamTls
-                   ?? (_upstreamMode.TryGetValue(forward.Id, out var known) && known.Expires > _clock.UtcNow ? known.Tls : (bool?)null);
-        if (mode != false)
+        // The forward says what the VM port speaks (docs/https-forwards.md): no probing, no fallback. A forward
+        // stored before upstreamTls was required has none and is plain HTTP.
+        if (forward.UpstreamTls == true)
         {
             var stream = await TryConnectAsync(endpoint).ConfigureAwait(false);
             if (stream is null)
             {
                 _addressCache.TryRemove(forward.VmName, out _);
-                return null;
+                return (null, false);
             }
 
             var upstreamTls = new SslStream(stream, leaveInnerStreamOpen: false, (_, _, _, _) => true);
-            using var probe = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
-            probe.CancelAfter(forward.UpstreamTls == true ? HandshakeTimeout : UpstreamProbeTimeout);
+            using var handshake = CancellationTokenSource.CreateLinkedTokenSource(_stop.Token);
+            handshake.CancelAfter(HandshakeTimeout);
             try
             {
                 await upstreamTls.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
                 {
                     TargetHost = serverName.Length > 0 ? serverName : _options.PublicHostFor(forward.VmName),
                     ApplicationProtocols = [SslApplicationProtocol.Http11],
-                }, probe.Token).ConfigureAwait(false);
-                _upstreamMode[forward.Id] = (true, _clock.UtcNow + UpstreamModeTtl);
-                return upstreamTls;
+                }, handshake.Token).ConfigureAwait(false);
+                return (upstreamTls, false);
             }
             catch (Exception ex) when ((ex is AuthenticationException or IOException or OperationCanceledException) && !_stop.IsCancellationRequested)
             {
                 await upstreamTls.DisposeAsync().ConfigureAwait(false);
-                if (forward.UpstreamTls == true) return null;
-                _upstreamMode[forward.Id] = (false, _clock.UtcNow + UpstreamModeTtl);
+                return (null, true);
             }
         }
 
         var plain = await TryConnectAsync(endpoint).ConfigureAwait(false);
         if (plain is null) _addressCache.TryRemove(forward.VmName, out _);
-        return plain;
+        return (plain, false);
     }
 
     private async Task<Stream?> TryConnectAsync(IPEndPoint endpoint)
@@ -514,7 +510,7 @@ public sealed class HttpsGateway : IHttpsForwardHost, IHostedService, IAsyncDisp
 
     // ── when the guest does not answer ─────────────────────────────────────────────────────────────
 
-    private async Task UnavailableAsync(SslStream client, Route route)
+    private async Task UnavailableAsync(SslStream client, Route route, bool noTls = false)
     {
         if (route is VaultRoute)
         {
@@ -532,7 +528,13 @@ public sealed class HttpsGateway : IHttpsForwardHost, IHostedService, IAsyncDisp
 
         var state = await _driver.GetStateAsync(vm.Name, _stop.Token).ConfigureAwait(false);
         string message;
-        if (state == VmState.Running)
+        if (state == VmState.Running && noTls)
+        {
+            // Still a refreshing page: a service that is starting can accept a connection before it answers.
+            message = $"{vm.Name} answers on port {forward.VmPort}, but not with TLS, and this forward says the port speaks TLS. " +
+                      "If it serves plain HTTP, open the forward again with construct expose --upstream-plain.";
+        }
+        else if (state == VmState.Running)
         {
             message = $"{vm.Name} is running, but nothing answers on port {forward.VmPort} yet.";
         }

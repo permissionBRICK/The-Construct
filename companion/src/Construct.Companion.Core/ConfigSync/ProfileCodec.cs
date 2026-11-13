@@ -96,8 +96,9 @@ public static class ProfileCodec
                 if (f.ContainsKey("name") && !ForwardName(f["name"])) errors.Add($"forwards[{i}].name must be one DNS label: up to 63 lowercase letters, digits and hyphens, starting and ending with a letter or digit");
                 if (f.ContainsKey("upstreamTls") && !Bool(f["upstreamTls"])) errors.Add($"forwards[{i}].upstreamTls must be true or false");
                 if (True(f["https"]) && IsText(f["to"], "client")) errors.Add($"forwards[{i}].to must be \"host\" or left out: the host serves an HTTPS forward");
+                if (True(f["https"]) && !f.ContainsKey("upstreamTls")) errors.Add($"forwards[{i}].upstreamTls is required with \"https\": true: false when the port serves plain HTTP, true when it speaks TLS itself");
                 if (f.ContainsKey("name") && !True(f["https"])) errors.Add($"forwards[{i}].name needs \"https\": true");
-                if (True(f["upstreamTls"]) && !True(f["https"])) errors.Add($"forwards[{i}].upstreamTls needs \"https\": true");
+                if (f.ContainsKey("upstreamTls") && !True(f["https"])) errors.Add($"forwards[{i}].upstreamTls needs \"https\": true");
             }
         }
         if (obj.ContainsKey("tests") && obj["tests"] is not JsonObject) errors.Add("\"tests\" must be an object");
@@ -161,14 +162,15 @@ public static class ProfileCodec
         var forwards = new JsonArray();
         foreach (var f in (o["forwards"] as JsonArray ?? []).Cast<JsonObject>())
         {
-            // An HTTPS forward is a host forward (the host terminates the TLS); name and upstreamTls only go with it.
+            // An HTTPS forward is a host forward (the host terminates the TLS) that says what its port speaks;
+            // name only goes with it.
             var https = True(f["https"]);
             var e = new JsonObject { ["port"] = ForwardPort(f["port"]), ["to"] = https ? "host" : f.ContainsKey("to") ? f["to"]!.DeepClone() : "client" };
             if (https)
             {
                 e["https"] = true;
+                e["upstreamTls"] = True(f["upstreamTls"]);
                 if (ForwardName(f["name"])) e["name"] = f["name"]!.DeepClone();
-                if (True(f["upstreamTls"])) e["upstreamTls"] = true;
             }
             if (Str(f["label"])) e["label"] = f["label"]!.DeepClone();
             forwards.Add(e);

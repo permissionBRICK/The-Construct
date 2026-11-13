@@ -76,15 +76,15 @@ class ProjectForwardsTests(unittest.TestCase):
 
     def test_merge_makes_https_forwards_host_forwards_and_keeps_names_apart(self):
         merged = self.profiles(
-            z=[dict(port=5173, https=True, name='app', label='vite'), dict(port=5173, https=True, upstreamTls=True),
-               dict(port=5173, to='host')],
-            a=[dict(port=5173, https=True, to='host', name='app'), dict(port=5173, https=True, name='other'),
-               dict(port=8443, https=False, to='host')])
+            z=[dict(port=5173, https=True, upstreamTls=False, name='app', label='vite'),
+               dict(port=5173, https=True, upstreamTls=True), dict(port=5173, to='host')],
+            a=[dict(port=5173, https=True, upstreamTls=False, to='host', name='app'),
+               dict(port=5173, https=True, upstreamTls=False, name='other'), dict(port=8443, https=False, to='host')])
         self.assertEqual(merged, [
-            dict(profile='z', port=5173, to='host', label='vite', https=True, name='app', upstreamTls=False),
-            dict(profile='z', port=5173, to='host', label='', https=True, name='', upstreamTls=True),
+            dict(profile='z', port=5173, to='host', label='vite', https=True, upstreamTls=False, name='app'),
+            dict(profile='z', port=5173, to='host', label='', https=True, upstreamTls=True, name=''),
             dict(profile='z', port=5173, to='host', label=''),
-            dict(profile='a', port=5173, to='host', label='', https=True, name='other', upstreamTls=False),
+            dict(profile='a', port=5173, to='host', label='', https=True, upstreamTls=False, name='other'),
             dict(profile='a', port=8443, to='host', label=''),
         ])
 
@@ -105,21 +105,21 @@ class ProjectForwardsTests(unittest.TestCase):
         ])
         self.assertIn('5173 (client, vite dev; web): http://localhost:5173/', result.stdout)
 
-    def test_an_https_forward_is_requested_if_available_with_its_name_and_upstream_tls(self):
+    def test_an_https_forward_is_requested_if_available_saying_what_its_port_speaks(self):
         self.profiles(web=[dict(port=5173, https=True, name='app', upstreamTls=True, label='vite dev'),
-                           dict(port=5174, https=True)])
+                           dict(port=5174, https=True, upstreamTls=False)])
         result = self.run_script(STUB_HTTPS='1')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls.read_text().splitlines(), [
-            "5173 --to host --reuse --wait 0 --label vite\\ dev --https-if-available --name app --upstream-tls ",
-            "5174 --to host --reuse --wait 0 --https-if-available ",
+            "5173 --to host --reuse --wait 0 --label vite\\ dev --https-if-available --upstream-tls --name app ",
+            "5174 --to host --reuse --wait 0 --https-if-available --upstream-plain ",
         ])
         self.assertIn('5173 (https app, vite dev; web): https://localhost:5173/', result.stdout)
         self.assertIn('5174 (https; web): https://localhost:5174/', result.stdout)
         self.assertNotIn('plain host forward', result.stdout)
 
     def test_an_https_forward_the_host_cannot_serve_says_it_is_plain(self):
-        self.profiles(web=[dict(port=5173, https=True)])
+        self.profiles(web=[dict(port=5173, https=True, upstreamTls=False)])
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('5173 (https; web): http://localhost:5173/', result.stdout)
@@ -143,7 +143,7 @@ class ProjectForwardsTests(unittest.TestCase):
         # reuses the queued requests instead of adding new ones.
         spool = self.root / 'forwards'
         self.profiles(web=[dict(port=5173, label='vite dev'), dict(port=8080, to='host'), dict(port=3000),
-                           dict(port=8443, https=True, name='app')])
+                           dict(port=8443, https=True, upstreamTls=True, name='app')])
         env = dict(CONSTRUCT_EXPOSE_SCRIPT=str(ROOT / 'bin/construct-expose.sh'), CONSTRUCT_FORWARDS_DIR=str(spool),
                    CONSTRUCT_EXTERNAL_HOST='vm-1.example.test')
         for _ in range(2):

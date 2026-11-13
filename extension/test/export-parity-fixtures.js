@@ -433,9 +433,9 @@ function configSync() {
   // forwards: canonical order port,to,label with to spelled out; omitted when empty; integral floats are ports.
   for (const raw of ['{"name":"a","forwards":[{"label":"vite","port":5173},{"port":8080.0,"to":"host"},{"port":1e3,"label":" "}],"tests":{}}', '{"name":"a","forwards":[]}',
     '{"name":"a","forwards":[{"port":0},{"port":80.5},{"port":"80"},{"port":1,"to":"Host"},{"port":2,"label":3,"target":"host"},7,null]}', '{"name":"a","forwards":{"port":1}}',
-    // HTTPS forwards: to becomes host, name/upstreamTls only with https, false booleans are dropped.
+    // HTTPS forwards: to becomes host, upstreamTls is required with https and kept as stated, name only with https.
     '{"name":"a","forwards":[{"label":"app","upstreamTls":true,"name":"app","https":true,"port":5173},{"port":5174,"https":true,"to":"host","upstreamTls":false},{"port":5175,"https":false,"to":"host"}]}',
-    '{"name":"a","forwards":[{"port":1,"https":"true"},{"port":2,"https":1},{"port":3,"https":true,"to":"client"},{"port":4,"name":"app"},{"port":5,"upstreamTls":true},{"port":6,"https":true,"upstreamTls":1},{"port":7,"https":true,"name":"App"},{"port":8,"https":true,"name":"a_b"},{"port":9,"https":true,"name":"a\\n"},{"port":10,"https":null,"name":null}]}'])
+    '{"name":"a","forwards":[{"port":1,"https":"true"},{"port":2,"https":1},{"port":3,"https":true,"to":"client","upstreamTls":false},{"port":4,"name":"app"},{"port":5,"upstreamTls":true},{"port":6,"https":true,"upstreamTls":1},{"port":7,"https":true,"upstreamTls":false,"name":"App"},{"port":8,"https":true,"upstreamTls":false,"name":"a_b"},{"port":9,"https":true,"upstreamTls":false,"name":"a\\n"},{"port":10,"https":null,"name":null},{"port":11,"https":true},{"port":12,"upstreamTls":false}]}'])
     add('canonical',{name:'a',raw},c.canonicalizeProfileText('a',raw));
   const selections=[{remoteUrl:'https://host/repo',ref:'HEAD',relPath:'projects/a.json',name:'a',content:'{}'}];
   for(const input of [{selected:selections,manifest:{},existingNames:[]},{selected:selections,manifest:{},existingNames:['a','a-2']},{selected:selections,manifest:{a:{remoteUrl:'https://host/repo',pathInRemote:'projects/a.json'}},existingNames:['a']},{selected:[...selections,...selections],manifest:{},existingNames:[]}]) add('import',input,c.planUpstreamImport(input));

@@ -377,8 +377,9 @@
 
       <section class="pm-sec">
         <h3 class="pm-h">Port forwards</h3>
-        <p class="pm-note">One per line as <code>port [client|host|https] [label]</code> (e.g. <code>5173 vite dev</code>, <code>8080 host api</code>, <code>3000 https:app web app</code>; the target defaults to <code>client</code>). <code>https</code> uses the host's certificate where the host offers it and a plain host forward elsewhere; <code>:name</code> names its address, <code>https+tls</code> means the port itself speaks TLS. Requested with <code>construct expose</code> on every provision, so they come back after a reinstall.</p>
+        <p class="pm-note">One per line as <code>port [client|host|https+plain|https+tls] [label]</code> (e.g. <code>5173 vite dev</code>, <code>8080 host api</code>, <code>3000 https+plain:app web app</code>; the target defaults to <code>client</code>). <code>https</code> uses the host's certificate where the host offers it and a plain host forward elsewhere; <code>+plain</code> or <code>+tls</code> says whether the port serves plain HTTP or TLS itself, <code>:name</code> names its address. Requested with <code>construct expose</code> on every provision, so they come back after a reinstall.</p>
         <textarea id="pmForwards" class="pm-ta mono" rows="2" spellcheck="false" placeholder="5173 client vite dev"></textarea>
+        <div class="pm-err" id="pmForwardsErr" hidden>Say what the port speaks: <code>https+plain</code> or <code>https+tls</code>, optionally with <code>:name</code> — <span id="pmForwardsBad"></span></div>
       </section>
     </div>
 

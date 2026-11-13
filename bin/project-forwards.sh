@@ -11,8 +11,9 @@
 # (it opens as soon as the user's Construct client connects) instead of holding
 # up provisioning.
 #
-# An entry with `https: true` adds --https-if-available (plus --name and
-# --upstream-tls when it sets them): an HTTPS forward with the host's certificate
+# An entry with `https: true` adds --https-if-available, --upstream-tls or
+# --upstream-plain as its `upstreamTls` says, and --name when it sets one: an
+# HTTPS forward with the host's certificate
 # where the host offers one for this VM, a plain host forward everywhere else
 # (a local install, a host without a certificate or without the permission), so
 # one shared profile works on every VM. That is how provisioning asks for T3.
@@ -79,8 +80,8 @@ while IFS= read -r entry; do
   kind="${to}"
   if [[ "${https}" == "true" ]]; then
     args+=(--https-if-available)
+    if [[ "$(jq -r '.upstreamTls == true' <<<"${entry}")" == "true" ]]; then args+=(--upstream-tls); else args+=(--upstream-plain); fi
     [[ -n "${name}" ]] && args+=(--name "${name}")
-    [[ "$(jq -r '.upstreamTls == true' <<<"${entry}")" == "true" ]] && args+=(--upstream-tls)
     kind="https${name:+ ${name}}"
   fi
   rc=0

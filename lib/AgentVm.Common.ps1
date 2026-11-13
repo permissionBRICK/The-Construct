@@ -4413,8 +4413,9 @@ function Invoke-ConstructSanitizeProfile {
     # sanitizeForwards: a valid port is required; "to" defaults to "client" and an
     # unknown "to" drops the entry; a blank label is omitted. Case-sensitive to
     # match JS ===. Numbers follow JS Number.isInteger (8080.0 is the port 8080).
-    # "https" counts only when it is true; it makes "to" "host", an entry that also
-    # says "to": "client" is dropped, and "name"/"upstreamTls" only go with it.
+    # "https" counts only when it is true; it makes "to" "host", and an entry that
+    # also says "to": "client" or has no boolean "upstreamTls" is dropped, never
+    # guessed; "name" only goes with it.
     $forwards = @()
     $rawFw = $null
     if ($o.PSObject.Properties.Name -contains 'forwards') { $rawFw = $o.forwards }
@@ -4431,13 +4432,14 @@ function Invoke-ConstructSanitizeProfile {
             $fwHttps = Test-ConstructJsonTrue $f.https
             if ($fwHttps) {
                 if ($fwTo -ceq "client" -and $f.PSObject.Properties.Name -contains 'to') { continue }
+                if ($f.upstreamTls -isnot [bool]) { continue }
                 $fwTo = "host"
             }
             $entry = [ordered]@{ port = $fwPort; to = $fwTo }
             if ($fwHttps) {
                 $entry['https'] = $true
+                $entry['upstreamTls'] = [bool]$f.upstreamTls
                 if (Test-ConstructForwardName $f.name) { $entry['name'] = $f.name }
-                if (Test-ConstructJsonTrue $f.upstreamTls) { $entry['upstreamTls'] = $true }
             }
             $fwLabel = & $nonEmpty $f.label
             if ($fwLabel) { $entry['label'] = $fwLabel }
@@ -4691,10 +4693,13 @@ function Test-ConstructProfile {
                 if ($fwHttps -and $f.to -is [string] -and $f.to -ceq "client") {
                     $errors.Add("forwards[$i].to must be `"host`" or left out: the host serves an HTTPS forward")
                 }
+                if ($fwHttps -and $fwNames -notcontains 'upstreamTls') {
+                    $errors.Add("forwards[$i].upstreamTls is required with `"https`": true: false when the port serves plain HTTP, true when it speaks TLS itself")
+                }
                 if ($fwNames -contains 'name' -and -not $fwHttps) {
                     $errors.Add("forwards[$i].name needs `"https`": true")
                 }
-                if ((Test-ConstructJsonTrue $f.upstreamTls) -and -not $fwHttps) {
+                if ($fwNames -contains 'upstreamTls' -and -not $fwHttps) {
                     $errors.Add("forwards[$i].upstreamTls needs `"https`": true")
                 }
             }

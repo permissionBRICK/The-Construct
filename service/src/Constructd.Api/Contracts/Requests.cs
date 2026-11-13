@@ -21,7 +21,7 @@ public sealed record PowerRequest(string? Action);
 
 /// <param name="Https">The host terminates TLS with its own certificate (docs/https-forwards.md). Implies target=host.</param>
 /// <param name="Main">With <paramref name="Https"/>: also serve it as the VM's main web UI on the host's shared HTTPS port.</param>
-/// <param name="UpstreamTls">With <paramref name="Https"/>: whether the VM port itself speaks TLS; omitted = detect.</param>
+/// <param name="UpstreamTls">With <paramref name="Https"/>, required: true when the VM port itself speaks TLS, false when it serves plain HTTP.</param>
 /// <param name="Name">With <paramref name="Https"/>: the forward's own name, served as <c>&lt;vm&gt;-&lt;name&gt;</c> on the shared
 /// HTTPS port; omitted = the VM port.</param>
 /// <param name="ReplaceMain">With <paramref name="Main"/>: take the VM's main address over from an open main forward.</param>

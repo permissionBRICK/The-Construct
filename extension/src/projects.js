@@ -297,8 +297,9 @@ function sanitizeMcp(mcp) {
 // A profile's port forwards (`forwards`): what `construct expose <port> --label
 // --to` would request, re-requested by provisioning (bin/project-forwards.sh).
 // `https: true` asks for an HTTPS forward with the host's certificate
-// (docs/https-forwards.md), with `name` and `upstreamTls` as `--name` and
-// `--upstream-tls`; provisioning requests it with --https-if-available.
+// (docs/https-forwards.md). It must say what the port speaks, `upstreamTls`
+// (--upstream-tls / --upstream-plain): the host never guesses. `name` is
+// `--name`; provisioning requests it with --https-if-available.
 const FORWARD_KEYS = ["port", "label", "to", "https", "name", "upstreamTls"];
 const FORWARD_TARGETS = ["client", "host"];
 // One DNS label, as `construct expose --name` takes it.
@@ -311,8 +312,9 @@ function isForwardName(v) { return typeof v === "string" && FORWARD_NAME.test(v)
  *  unknown `to` drops the entry rather than turning a host forward into a client
  *  one, and a blank label is omitted. `https` counts only when it is `true`; it
  *  makes `to` "host" (the host terminates the TLS), and an entry that also says
- *  `to: "client"` is dropped. `name` and `upstreamTls` are kept only on an HTTPS
- *  entry, a `name` only when it is one DNS label. A non-array -> []. Pure. */
+ *  `to: "client"` or does not say what the port speaks (a boolean `upstreamTls`)
+ *  is dropped rather than guessed. `name` is kept only on an HTTPS entry and only
+ *  when it is one DNS label. A non-array -> []. Pure. */
 function sanitizeForwards(forwards) {
   if (!Array.isArray(forwards)) return [];
   const out = [];
@@ -320,12 +322,12 @@ function sanitizeForwards(forwards) {
     if (!isPlainObject(f) || !isForwardPort(f.port)) continue;
     if ("to" in f && !FORWARD_TARGETS.includes(f.to)) continue;
     const https = f.https === true;
-    if (https && f.to === "client") continue;
+    if (https && (f.to === "client" || typeof f.upstreamTls !== "boolean")) continue;
     const entry = { port: f.port, to: https ? "host" : "to" in f ? f.to : "client" };
     if (https) {
       entry.https = true;
+      entry.upstreamTls = f.upstreamTls;
       if (isForwardName(f.name)) entry.name = f.name;
-      if (f.upstreamTls === true) entry.upstreamTls = true;
     }
     if (nonEmptyString(f.label)) entry.label = f.label;
     out.push(entry);
@@ -452,8 +454,9 @@ function validateProfile(name, obj) {
       if ("name" in f && !isForwardName(f.name)) errors.push(`forwards[${i}].name must be one DNS label: up to 63 lowercase letters, digits and hyphens, starting and ending with a letter or digit`);
       if ("upstreamTls" in f && typeof f.upstreamTls !== "boolean") errors.push(`forwards[${i}].upstreamTls must be true or false`);
       if (f.https === true && f.to === "client") errors.push(`forwards[${i}].to must be "host" or left out: the host serves an HTTPS forward`);
+      if (f.https === true && !("upstreamTls" in f)) errors.push(`forwards[${i}].upstreamTls is required with "https": true: false when the port serves plain HTTP, true when it speaks TLS itself`);
       if ("name" in f && f.https !== true) errors.push(`forwards[${i}].name needs "https": true`);
-      if (f.upstreamTls === true && f.https !== true) errors.push(`forwards[${i}].upstreamTls needs "https": true`);
+      if ("upstreamTls" in f && f.https !== true) errors.push(`forwards[${i}].upstreamTls needs "https": true`);
     });
   }
   if ("tests" in obj && !isPlainObject(obj.tests)) errors.push('"tests" must be an object');
