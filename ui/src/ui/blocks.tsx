@@ -119,8 +119,8 @@ export function JobBlock({ job, vm }: { job: Job; vm: Vm }) {
         {(log || !job.repair) && <LogView job={job} />}
         {job.repair && <Repair job={job} />}
         <div class="two">
-          {job.kind === 'reinstall'
-            ? <Confirm label="Retry" icon="retry" verb="Reinstall again" sm={false} onYes={() => be.retryJob(job.id)} />
+          {job.kind === 'reinstall' || job.kind === 'restore'
+            ? <Confirm label="Retry" icon="retry" verb={job.kind === 'reinstall' ? 'Reinstall again' : 'Restore again'} sm={false} onYes={() => be.retryJob(job.id)} />
             : <Btn icon="retry" onClick={() => be.retryJob(job.id)}>Retry</Btn>}
           <Btn onClick={() => be.dismissJob(job.id)}>Close</Btn>
         </div>

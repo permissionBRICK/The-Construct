@@ -3,6 +3,7 @@ import type { Agent, Profile, SettingsPatch, Vm, VmSettings } from '../../backen
 import { activeJob, vmDot, vmWord, newer, vmUpdateTarget } from '../../model/vm';
 import { groupApplies, hwChange } from '../../model/settings';
 import { profileError } from '../../model/profile';
+import { aliasWritten } from '../../backend/api/map';
 import { Icon } from '../icons';
 import { Btn, Confirm, Copyable, Dot, Field, Head, KV, NotYet, Page, Row, Sec, Seg, Switch, Table, Tabs, Tag, UpTag } from '../kit';
 import { copy, na, useApp } from '../ctx';
@@ -207,8 +208,8 @@ export function Connections({ vm }: { vm: Vm }) {
   const { s, be } = useApp();
   const can = s.device.can;
   const off = <span class="d">Not on this device</span>;
-  const ssh = vm.link?.alias ? `ssh ${vm.link.alias}` : `ssh ${vm.sshPort && vm.sshPort !== 22 ? `-p ${vm.sshPort} ` : ''}root@${vm.address}`;
-  const aliasOn = !!vm.link && vm.link.sshConfig !== 'removed' && vm.link.sshConfig !== 'failed';
+  const aliasOn = !!vm.link && aliasWritten(vm.link.sshConfig);
+  const ssh = aliasOn ? `ssh ${vm.link!.alias}` : `ssh ${vm.sshPort && vm.sshPort !== 22 ? `-p ${vm.sshPort} ` : ''}root@${vm.address}`;
   return (
     <Page>
       <Head title="Connections" back={useBack()} />

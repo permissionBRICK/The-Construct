@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ApiBackend } from '../../src/backend/api/backend';
 import { SseParser } from '../../src/backend/api/events';
+import { spanText } from '../../src/backend/api/map';
 import { activeJob } from '../../src/model/vm';
 import { updateParts } from '../../src/model/update';
 
@@ -280,6 +281,34 @@ describe('ApiBackend', () => {
     // Nothing ran on the VM; the dot comes from the engine's provision-status.
     expect(calls.some(c => c.method === 'POST' && c.path.includes('/jobs'))).toBe(false);
     expect(be.snapshot().vms.find(v => v.name === 'harbor')!.changeWaits).toBe('Settings');
+  });
+
+  it('stores two quick changes of one VM one after the other, so neither is lost', async () => {
+    const { be, on, settle } = world();
+    let doc: Record<string, unknown> = { projects: ['webshop'], settings: { aiTools: 'claude-code' } };
+    on('GET', `/api/engines/${E1}/api/v1/vms/atlas/desired`, () => ({ json: { desired: doc, hash: 'h', updatedAt: null, updatedBy: null } }));
+    on('PUT', `/api/engines/${E1}/api/v1/vms/atlas/desired`, b => { doc = b as Record<string, unknown>; return { json: { desired: b, hash: 'h2', updatedAt: null, updatedBy: null } }; });
+    await be.start();
+    be.setProjectOn('atlas', 'toolkit', true);
+    be.saveSettings('atlas', { services: { smb: false } });
+    await settle();
+    await settle();
+    expect(doc).toEqual({ projects: ['webshop', 'toolkit'], settings: { aiTools: 'claude-code', smbShare: 'false' } });
+  });
+
+  it('shows T3 Code web on only where T3 Code is on, and switching it on turns both on', async () => {
+    const { be, on, calls, settle } = world();
+    on('GET', `/api/engines/${E1}/api/v1/vms/atlas/desired`, { json: { desired: { projects: [], settings: { t3Code: 'false', t3CodeHttps: 'true' } }, hash: 'h', updatedAt: null, updatedBy: null } });
+    on('PUT', `/api/engines/${E1}/api/v1/vms/atlas/desired`, b => ({ json: { desired: b, hash: 'h2', updatedAt: null, updatedBy: null } }));
+    await be.start();
+    expect(be.snapshot().vms.find(v => v.name === 'atlas')!.settings.services.t3Web).toBe(false);
+    be.saveSettings('atlas', { services: { t3Web: true } });
+    await settle();
+    expect(calls.find(c => c.method === 'PUT')!.body).toEqual({ projects: [], settings: { t3Code: 'true', t3CodeHttps: 'true' } });
+  });
+
+  it('labels an approval span exactly', () => {
+    expect([7200, 900, 3700, 86400, 90].map(spanText)).toEqual(['2 h', '15 min', '1 h 1 min 40 s', '24 h', '1 min 30 s']);
   });
 
   it('shows a failing desired-state read on the Settings page only', async () => {

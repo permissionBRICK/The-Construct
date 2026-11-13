@@ -128,7 +128,7 @@ export function sampleState(): State {
         settings: settings(16, 8),
         children: [{ name: 'win-test', os: 'Windows 11', left: '5 h 20 m', power: 'on' }],
         projectsOn: ['webshop', 'toolkit'],
-        link: { alias: 'atlas', sshConfig: 'written', share: null },
+        link: { alias: 'atlas', sshConfig: 'added', share: null },
         forwards: [
           { id: 'f1', port: 5173, label: 'vite dev', to: 'This device', url: 'localhost:5173', closable: true },
           { id: 'f2', port: 8080, label: 'api', to: 'This device', url: 'localhost:8080', closable: true },

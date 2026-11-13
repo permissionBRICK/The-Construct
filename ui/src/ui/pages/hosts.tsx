@@ -318,7 +318,9 @@ function HOps({ h }: { h: Host }) {
       <Sec title="Jobs">
         <Table cols={[{ h: 'Job', cls: 'm' }, { h: 'Kind' }, { h: 'VM', cls: 'x' }, { h: 'Owner', cls: 'x' }, { h: 'State' }, { h: 'Phase', cls: 'x' }, { h: 'Created', cls: 'x' }, { h: '', cls: 'e' }]}
           rows={h.jobs.map(j => [j.id, j.kind, j.vm, j.owner, <span class={j.state === 'failed' ? 'badc' : ''}>{j.state}</span>, j.phase, j.created,
-            j.state === 'running' ? <Confirm label="Cancel" onYes={() => be.cancelHostJob(h.id, j.id)} /> : j.state === 'failed' && j.retry && !na(s, 'host-retry') ? <Btn sm icon="retry" onClick={() => be.retryHostJob(h.id, j.id)}>Retry</Btn> : ''])} />
+            j.state === 'running' ? <Confirm label="Cancel" onYes={() => be.cancelHostJob(h.id, j.id)} /> : j.state === 'failed' && j.retry && !na(s, 'host-retry') ? (j.kind === 'reinstall'
+              ? <Confirm key={`retry-${j.id}`} label="Retry" icon="retry" verb="Reinstall again" onYes={() => be.retryHostJob(h.id, j.id)} />
+              : <Btn sm icon="retry" onClick={() => be.retryHostJob(h.id, j.id)}>Retry</Btn>) : ''])} />
       </Sec>
       <Sec title="Audit">
         <Table cols={[{ h: 'At' }, { h: 'Actor' }, { h: 'Action', cls: 'm' }, { h: 'Target', cls: 'e' }]} rows={h.audit.map(a => [a.at, a.actor, a.action, a.target])} />

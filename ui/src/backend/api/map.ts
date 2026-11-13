@@ -97,6 +97,8 @@ const flag = (v: unknown, d: boolean) => (v === 'true' || v === true ? true : v 
 function services(p: ProvisionSettings | null | undefined): VmSettings['services'] {
   const out = { t3ProxyUrl: '' } as VmSettings['services'];
   for (const [k, f, d] of SERVICES) (out as Record<string, unknown>)[k] = flag(p?.[f], d);
+  // T3 Code's web server runs only where T3 Code itself is on.
+  out.t3Web = out.t3Web && flag(p?.t3Code, true);
   return out;
 }
 
@@ -104,6 +106,7 @@ function services(p: ProvisionSettings | null | undefined): VmSettings['services
 export function settingsFields(patch: SettingsPatch): Partial<ProvisionSettings> {
   const out: Record<string, unknown> = {};
   for (const [k, f] of SERVICES) if (patch.services?.[k] !== undefined) out[f] = patch.services[k] ? 'true' : 'false';
+  if (patch.services?.t3Web) out.t3Code = 'true';
   if (patch.identity?.gitName !== undefined) out.gitUserName = patch.identity.gitName.trim() || null;
   if (patch.identity?.gitEmail !== undefined) out.gitEmail = patch.identity.gitEmail.trim() || null;
   if (patch.identity?.keepCredentials !== undefined) out.gitCredentialStore = patch.identity.keepCredentials;
@@ -476,9 +479,9 @@ export function toApproval(a: ApprovalItem, vmId: string): VaultRequest {
 
 /** 7200 → `2 h`, 900 → `15 min`, 86400 → `24 h`. */
 export function spanText(s: number): string {
-  if (s >= 3600 && s % 3600 === 0) return `${s / 3600} h`;
-  if (s >= 3600) return `${Math.round(s / 360) / 10} h`;
-  return `${Math.max(1, Math.round(s / 60))} min`;
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  // Exact: the label never names a shorter span than the one granted.
+  return [h && `${h} h`, m && `${m} min`, sec && `${sec} s`].filter(Boolean).join(' ') || '0 s';
 }
 
 /** The spans the approval offers: the VM's own first, then the usual ones. The engine takes 60 s to a day. */
@@ -497,6 +500,9 @@ export function toLink(c: ConnectionView, share: { letter: string | null } | nul
   }));
   return { forwards, link: { alias: c.alias, sshConfig: c.sshConfig ?? null, share: share?.letter ?? null }, mic: c.mic.enabled, smb: !!share?.letter };
 }
+
+/** The agent wrote the VM's `Host` block, or found it as it should be. */
+export const aliasWritten = (status: string | null | undefined) => status === 'added' || status === 'replaced' || status === 'unchanged';
 
 const PART_STATES = new Set(['pending', 'running', 'done', 'skipped', 'failed']);
 export function toEverything(v: EverythingView): Everything {

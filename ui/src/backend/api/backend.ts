@@ -145,6 +145,7 @@ export class ApiBackend implements Backend {
   private links = new Map<string, { c: ConnectionView; share: { letter: string | null } | null }>();
   private linkProblem: string | null = null;
   private deviceAutoUpdate = false;
+  private desiredSaves = new Map<string, Promise<void>>();
   constructor(private opts: ApiOptions) {
     this.fetchImpl = opts.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
     const headers = { Authorization: `Bearer ${opts.token}` };
@@ -844,7 +845,15 @@ export class ApiBackend implements Backend {
 
   /** Reads the VM's desired state from its engine, changes the named fields (and the projects), and stores it whole,
       so fields this page does not show are kept as the engine holds them. */
-  private async changeDesired(engine: string, name: string, fields: Partial<ProvisionSettings>, projects?: (current: string[]) => string[]) {
+  private changeDesired(engine: string, name: string, fields: Partial<ProvisionSettings>, projects?: (current: string[]) => string[]): Promise<void> {
+    // One save per VM at a time: each reads what the one before it stored, so neither drops the other's change.
+    const key = vmKey(engine, name.toLowerCase());
+    const next = (this.desiredSaves.get(key) ?? Promise.resolve()).catch(() => {}).then(() => this.storeDesired(engine, name, fields, projects));
+    this.desiredSaves.set(key, next);
+    return next;
+  }
+
+  private async storeDesired(engine: string, name: string, fields: Partial<ProvisionSettings>, projects?: (current: string[]) => string[]) {
     const c = this.engine(engine);
     const path = { params: { path: { name } } };
     const now = await ok(c.GET('/api/v1/vms/{name}/desired', path));

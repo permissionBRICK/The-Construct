@@ -412,7 +412,7 @@ export class FakeBackend implements Backend {
   }
 
   setSshAlias(vmId: string, on: boolean) {
-    this.set(d => { const v = this.vm(d, vmId); v.link = { alias: v.link?.alias ?? v.name, sshConfig: on ? 'written' : 'removed', share: v.link?.share ?? null }; }, on ? 'Alias written' : 'Alias removed');
+    this.set(d => { const v = this.vm(d, vmId); v.link = { alias: v.link?.alias ?? v.name, sshConfig: on ? 'added' : 'removed', share: v.link?.share ?? null }; }, on ? 'Alias written' : 'Alias removed');
   }
 
   setSharing(vmId: string, key: keyof Vm['sharing'], on: boolean) {
