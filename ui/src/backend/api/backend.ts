@@ -702,11 +702,11 @@ export class ApiBackend implements Backend {
     return this.vmJob(engine, name, 'provision', {}, as);
   }
 
-  /** A provision or reinstall job of a primary. Without stored settings (the first job) the engine's defaults go along. */
+  /** A provision or reinstall job of a primary, through the agent, which adds this device's git clone credentials.
+      Without stored settings (the first job) the engine's defaults go along. */
   private async vmJob(engine: string, name: string, kind: 'provision' | 'reinstall', extra: Loose, as?: Started) {
-    const c = this.engine(engine);
-    const path = { params: { path: { name } } };
-    const post = (desired?: object) => ok(c.POST('/api/v1/vms/{name}/jobs', { ...path, body: { kind, requestId: crypto.randomUUID(), ...extra, ...(desired ? { desired } : {}) } as never }));
+    const path = { params: { path: { engine, vm: name } } };
+    const post = (desired?: object) => ok(this.agent.POST('/api/engines/{engine}/vms/{vm}/jobs', { ...path, body: { kind, requestId: crypto.randomUUID(), ...extra, ...(desired ? { desired } : {}) } as never }));
     await this.run(async () => {
       let r;
       try { r = await post(); } catch (e) {
@@ -787,7 +787,7 @@ export class ApiBackend implements Backend {
     void this.run(() => ok(this.engine(engine).POST('/api/v1/jobs/{id}/cancel', { params: { path: { id } } })), 'Stopping', engine);
   }
 
-  /** A failed provision or reinstall through the engine's retry route; a restore needs its backup's key again,
+  /** A failed provision or reinstall through the engine's retry route (by the agent, with clone credentials); a restore needs its backup's key again,
       so it starts once more through the agent's restore route; a failed create provisions the VM it left. */
   retryJob(key: string) {
     const job = this.s.jobs.find(j => j.id === key);
@@ -807,7 +807,7 @@ export class ApiBackend implements Backend {
     if (raw.kind === 'create-vm') { void this.provision(ref.engine, ref.name); return; }
     const st = this.started.get(key);
     void this.run(async () => {
-      const r = await ok(this.engine(engine).POST('/api/v1/jobs/{id}/retry', { params: { path: { id } }, body: {} }));
+      const r = await ok(this.agent.POST('/api/engines/{engine}/jobs/{id}/retry', { params: { path: { engine, id } }, body: {} as never }));
       await this.track(engine, r.jobId, st ? { ...st, backupId: undefined } : undefined);
     }, undefined, engine);
   }
@@ -988,7 +988,7 @@ export class ApiBackend implements Backend {
       // (none chosen yet: the guest's defaults; Settings changes them later).
       const c = this.engine(engine);
       const d = await ok(c.GET('/api/v1/vm-defaults'));
-      const r = await ok(c.POST('/api/v1/vms', { body: { name, ramGb: d.recommendedRamGb, diskGb: d.recommendedDiskGb, desired: { projects: [], settings: {} } } as never }));
+      const r = await ok(this.agent.POST('/api/engines/{engine}/vms', { params: { path: { engine } }, body: { name, ramGb: d.recommendedRamGb, diskGb: d.recommendedDiskGb, desired: { projects: [], settings: {} } } as never }));
       await this.refreshEngine(engine);
       await this.track(engine, r.jobId, { kind: 'create' });
     });
@@ -1315,10 +1315,11 @@ export class ApiBackend implements Backend {
     this.hostAct(hostId, c => ok(c.POST('/api/v1/jobs/{id}/cancel', { params: { path: { id: jobId } } })), 'Cancelling');
   }
 
-  /** A failed provision or reinstall on the host's Operations page; the engine retries it with the VM's stored settings. */
+  /** A failed provision or reinstall on the host's Operations page; the engine retries it with the VM's stored settings
+      (through the agent: the user's own VM gets this device's clone credentials, another user's none). */
   retryHostJob(hostId: string, jobId: string) {
     if (!this.s.hosts.find(h => h.id === hostId)?.jobs.some(j => j.id === jobId && j.retry)) return;
-    this.hostAct(hostId, c => ok(c.POST('/api/v1/jobs/{id}/retry', { params: { path: { id: jobId } }, body: {} })), 'Retrying');
+    this.hostAct(hostId, () => ok(this.agent.POST('/api/engines/{engine}/jobs/{id}/retry', { params: { path: { engine: hostId, id: jobId } }, body: {} as never })), 'Retrying');
   }
 
   setUsageWindow(hostId: string, window: Host['usage']['window']) {

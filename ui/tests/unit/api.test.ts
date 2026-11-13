@@ -175,13 +175,13 @@ describe('ApiBackend', () => {
   it('starts a reprovision as a provision job on the VM\'s engine, sending defaults when the engine has none', async () => {
     const { be, calls, on, settle } = world({ engines: [{ id: E1, name: 'orchard', url: 'https://orchard.test:8443' }, { id: E2, name: 'lab', url: 'https://lab.test:8443' }] });
     let n = 0;
-    on('POST', `/api/engines/${E2}/api/v1/vms/harbor/jobs`, body => (++n === 1 ? { status: 409, json: { title: 'desired-state-missing', status: 409, code: 'desired-state-missing' } } : (expect(body).toMatchObject({ kind: 'provision', desired: { projects: [], settings: {} } }), { status: 202, json: { jobId: 'j9', kind: 'provision', replayed: false } })));
+    on('POST', `/api/engines/${E2}/vms/harbor/jobs`, body => (++n === 1 ? { status: 409, json: { title: 'desired-state-missing', status: 409, code: 'desired-state-missing' } } : (expect(body).toMatchObject({ kind: 'provision', desired: { projects: [], settings: {} } }), { status: 202, json: { jobId: 'j9', kind: 'provision', replayed: false } })));
     on('GET', `/api/engines/${E2}/api/v1/jobs/j9`, { json: job('j9', 'harbor', 'running') });
     await be.start();
     be.reprovision('harbor');
     await settle();
     const p = posts(calls);
-    expect(p.map(c => c.path)).toEqual([`/api/engines/${E2}/api/v1/vms/harbor/jobs`, `/api/engines/${E2}/api/v1/vms/harbor/jobs`]);
+    expect(p.map(c => c.path)).toEqual([`/api/engines/${E2}/vms/harbor/jobs`, `/api/engines/${E2}/vms/harbor/jobs`]);
     expect(p[0].body).toMatchObject({ kind: 'provision' });
     expect((p[0].body as { desired?: unknown }).desired).toBeUndefined();
     expect((p[0].body as { requestId: string }).requestId).not.toBe((p[1].body as { requestId: string }).requestId);
@@ -191,7 +191,7 @@ describe('ApiBackend', () => {
 
   it('follows job progress and the end from the agent\'s events, reading the job again each time', async () => {
     const { be, on, settle } = world();
-    on('POST', `/api/engines/${E1}/api/v1/vms/atlas/jobs`, { status: 202, json: { jobId: 'j1', kind: 'provision', replayed: false } });
+    on('POST', `/api/engines/${E1}/vms/atlas/jobs`, { status: 202, json: { jobId: 'j1', kind: 'provision', replayed: false } });
     on('GET', `/api/engines/${E1}/api/v1/jobs/j1`, { json: job('j1', 'atlas', 'queued') });
     await be.start();
     be.reprovision('atlas');
@@ -445,16 +445,16 @@ describe('ApiBackend', () => {
     await settle();
   });
 
-  it('creates a VM on a pasted host with its token and settings in one request; the engine provisions it', async () => {
+  it('creates a VM on a pasted host with its token and settings in one request through the agent; the engine provisions it', async () => {
     const { be, calls, on, settle } = world();
     on('POST', '/api/engines/probe', { json: { url: 'https://lab.test:8443', pin: 'P2', status: 'ok', known: null } });
     on('POST', '/api/engines', { json: { id: E2, name: 'lab', url: 'https://lab.test:8443', pin: 'P2', engineId: null, enrolled: true, signedIn: true, store: false } });
     on('GET', `/api/engines/${E2}/api/v1/vm-defaults`, { json: { hostLogicalCpus: 8, maximumCpus: 8, recommendedCpus: 8, maximumRamGb: 16, recommendedRamGb: 8, recommendedDiskGb: 64 } });
-    on('POST', `/api/engines/${E2}/api/v1/vms`, { status: 202, json: { jobId: 'c1', nested: false, nestedFromHostDefault: true, ignoredOptions: [] } });
+    on('POST', `/api/engines/${E2}/vms`, { status: 202, json: { jobId: 'c1', nested: false, nestedFromHostDefault: true, ignoredOptions: [], hostsWithoutCredential: [] } });
     on('GET', `/api/engines/${E2}/api/v1/whoami`, { json: { name: 'alex', kind: 'user', scheme: 'Device', known: true, role: 'user' } });
     on('GET', `/api/engines/${E2}/api/v1/vms`, { json: [vmResponse('quill', 'alex')] });
     on('GET', `/api/engines/${E2}/api/v1/jobs/c1`, { json: job('c1', 'quill', 'running', 'create-vm') });
-    on('POST', `/api/engines/${E2}/api/v1/vms/quill/jobs`, { status: 202, json: { jobId: 'p1', kind: 'provision', replayed: false } });
+    on('POST', `/api/engines/${E2}/vms/quill/jobs`, { status: 202, json: { jobId: 'p1', kind: 'provision', replayed: false } });
     on('GET', `/api/engines/${E2}/api/v1/jobs/p1`, { json: job('p1', 'quill', 'running') });
     await be.start();
     expect(be.createVm({ where: 'remote', name: 'quill', hostAddress: 'https://lab.test:8443', signIn: 'windows' })).toBeNull();
@@ -467,7 +467,7 @@ describe('ApiBackend', () => {
     expect(posts(calls).map(c => [c.path, c.body])).toEqual([
       ['/api/engines/probe', { address: 'https://lab.test:8443' }],
       ['/api/engines', { address: 'https://lab.test:8443', pin: 'p2', userToken: 'tok', windowsSignIn: false }],
-      [`/api/engines/${E2}/api/v1/vms`, { name: 'quill', ramGb: 8, diskGb: 64, desired: { projects: [], settings: {} } }],
+      [`/api/engines/${E2}/vms`, { name: 'quill', ramGb: 8, diskGb: 64, desired: { projects: [], settings: {} } }],
     ]);
     expect(be.snapshot().notice?.text).toBe('Created quill');
   });
@@ -744,7 +744,7 @@ describe('ApiBackend events and jobs', () => {
 
   it('never shows a job as running again after it ended', async () => {
     const { be, on, settle } = world();
-    on('POST', `/api/engines/${E1}/api/v1/vms/atlas/jobs`, { status: 202, json: { jobId: 'j1', kind: 'provision', replayed: false } });
+    on('POST', `/api/engines/${E1}/vms/atlas/jobs`, { status: 202, json: { jobId: 'j1', kind: 'provision', replayed: false } });
     on('GET', `/api/engines/${E1}/api/v1/jobs/j1`, { json: job('j1', 'atlas', 'running') });
     await be.start();
     be.reprovision('atlas');
@@ -761,9 +761,9 @@ describe('ApiBackend events and jobs', () => {
     expect(activeJob(be.snapshot(), 'atlas')).toMatchObject({ state: 'failed' });
   });
 
-  it('starts a reinstall with the fresh-image switch, shows its failed step, and retries it through the engine', async () => {
+  it('starts a reinstall with the fresh-image switch through the agent, shows its failed step, and retries it through the agent', async () => {
     const { be, calls, on, settle } = world();
-    on('POST', `/api/engines/${E1}/api/v1/vms/atlas/jobs`, { status: 202, json: { jobId: 'r1', kind: 'reinstall', replayed: false } });
+    on('POST', `/api/engines/${E1}/vms/atlas/jobs`, { status: 202, json: { jobId: 'r1', kind: 'reinstall', replayed: false } });
     on('GET', `/api/engines/${E1}/api/v1/jobs/r1`, { json: job('r1', 'atlas', 'running', 'reinstall', [{ at: '', text: 'backing up', step: 'backup', state: 'running', percent: null }]) });
     await be.start();
     be.reinstall('atlas', true);
@@ -776,13 +776,13 @@ describe('ApiBackend events and jobs', () => {
     await settle();
     const j = activeJob(be.snapshot(), 'atlas')!;
     expect(j).toMatchObject({ kind: 'reinstall', state: 'failed', step: 'Creating', error: 'driver-failed', log: ['apt locked'] });
-    on('POST', `/api/engines/${E1}/api/v1/jobs/r1/retry`, { status: 202, json: { jobId: 'r2', kind: 'reinstall', replayed: false } });
+    on('POST', `/api/engines/${E1}/jobs/r1/retry`, { status: 202, json: { jobId: 'r2', kind: 'reinstall', replayed: false } });
     on('GET', `/api/engines/${E1}/api/v1/jobs/r2`, { json: { ...job('r2', 'atlas', 'running', 'reinstall'), created: '2026-11-13T11:00:00Z' } });
     on('GET', `/api/engines/${E1}/api/v1/jobs`, { json: [{ ...job('r2', 'atlas', 'running', 'reinstall'), created: '2026-11-13T11:00:00Z' }] });
     be.retryJob(j.id);
     await settle();
     const p = posts(calls);
-    expect(p.map(c => c.path)).toEqual([`/api/engines/${E1}/api/v1/vms/atlas/jobs`, `/api/engines/${E1}/api/v1/jobs/r1/retry`]);
+    expect(p.map(c => c.path)).toEqual([`/api/engines/${E1}/vms/atlas/jobs`, `/api/engines/${E1}/jobs/r1/retry`]);
     expect(activeJob(be.snapshot(), 'atlas')).toMatchObject({ kind: 'reinstall', state: 'running' });
   });
 
@@ -924,7 +924,7 @@ describe('ApiBackend device, connections and vault', () => {
     on('GET', `/api/engines/${E1}/api/v1/host/lan-access`, { json: { enabled: false } });
     on('PUT', `/api/engines/${E1}/api/v1/host/lan-access`, { json: { enabled: true } });
     on('GET', `/api/engines/${E1}/api/v1/jobs`, { json: [job('h1', 'kai-box', 'failed'), job('h2', 'kai-box', 'failed', 'delete-vm')] });
-    on('POST', `/api/engines/${E1}/api/v1/jobs/h1/retry`, { status: 202, json: { jobId: 'h3', kind: 'provision', replayed: false } });
+    on('POST', `/api/engines/${E1}/jobs/h1/retry`, { status: 202, json: { jobId: 'h3', kind: 'provision', replayed: false } });
     await be.start();
     const host = be.snapshot().hosts[0];
     expect(host.lan).toBe(false);
@@ -934,7 +934,7 @@ describe('ApiBackend device, connections and vault', () => {
     be.retryHostJob(E1, 'h1');
     await settle();
     expect(posts(calls).map(c => [c.method, c.path, c.body])).toEqual([
-      ['PUT', `/api/engines/${E1}/api/v1/host/lan-access`, { enabled: true }], ['POST', `/api/engines/${E1}/api/v1/jobs/h1/retry`, {}],
+      ['PUT', `/api/engines/${E1}/api/v1/host/lan-access`, { enabled: true }], ['POST', `/api/engines/${E1}/jobs/h1/retry`, {}],
     ]);
   });
 });
@@ -958,7 +958,7 @@ describe('ApiBackend host fingerprint', () => {
 describe('ApiBackend lost jobs', () => {
   it('does not bring back a job the agent reported lost when an older read arrives', async () => {
     const { be, on, settle } = world();
-    on('POST', `/api/engines/${E1}/api/v1/vms/atlas/jobs`, { status: 202, json: { jobId: 'j1', kind: 'provision', replayed: false } });
+    on('POST', `/api/engines/${E1}/vms/atlas/jobs`, { status: 202, json: { jobId: 'j1', kind: 'provision', replayed: false } });
     on('GET', `/api/engines/${E1}/api/v1/jobs/j1`, { json: job('j1', 'atlas', 'running') });
     await be.start();
     be.reprovision('atlas');

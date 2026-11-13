@@ -4339,6 +4339,7 @@ export interface components {
             diskGb: null | number;
             opts: null | components["schemas"]["CreateVmOptions"];
             desired?: null | components["schemas"]["VmDesiredState"];
+            secrets?: null | components["schemas"]["ProvisionSecretsRequest"];
         };
         CurrentOperationResponse: {
             jobId: string;
