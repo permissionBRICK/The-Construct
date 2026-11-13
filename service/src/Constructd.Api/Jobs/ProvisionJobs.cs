@@ -140,8 +140,9 @@ public sealed class ProvisionJobs(IJobStore jobs, IJobQueryStore history, IPersi
     /// is retried with a <c>provision</c> job. The new VM token reaches the guest as a provision secret. The caller
     /// holds the VM's operation gate. Throws <see cref="JobFailureException"/> with the provision result when it fails.
     /// </summary>
+    /// <param name="secrets">The create request's secrets (clone credentials, sudo password), or none; the VM token joins them.</param>
     public async Task<ProvisionJobResult> ProvisionCreatedAsync(string jobId, Vm vm, VmDesiredState given, string actor, string vmToken,
-        IProgress<string> progress, CancellationToken ct)
+        IProgress<string> progress, CancellationToken ct, JobSecretBag? secrets = null)
     {
         var state = new StoredDesiredState(given, ProvisionScript.DesiredHash(given), clock.UtcNow, actor, vm.Created);
         await desired.SetDesiredAsync(vm.Name, state, ct);
@@ -152,7 +153,7 @@ public sealed class ProvisionJobs(IJobStore jobs, IJobQueryStore history, IPersi
         // A new VM: whatever key an earlier machine at its address had is not this one's.
         await targets.ForgetHostKeyAsync(target, ct);
         var channel = HostUpdateTrust.Apply(await config.GetAsync<UpdatesConfig>("updates", ct) ?? HostAdminDefaults.Updates, options).Channel;
-        var bag = new JobSecretBag();
+        var bag = secrets ?? new JobSecretBag();
         bag.Set(ProvisionScript.VmTokenVariable, Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(vmToken)));
         var outcome = await job.RunAsync(new ProvisionRun(jobId, vm, target, commit, state, channel, false, options.Iso.SeedUser,
             target.IsRoot ? targets.BootstrapPublicKey() : null, bag), progress, ct);

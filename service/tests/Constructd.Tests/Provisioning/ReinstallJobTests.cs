@@ -139,6 +139,32 @@ public sealed class ReinstallJobTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task The_clone_credentials_a_reinstall_is_started_with_reach_both_provision_phases()
+    {
+        var guest = new FakeBackupGuest();
+        var h = await HostAsync(guest);
+        var creds = Convert.ToBase64String(Encoding.UTF8.GetBytes("https://bob:reinstall-clone-secret-97531@git.example.test"));
+        var response = await h.Client.PostJsonAsync($"/api/v1/vms/{ProvisionHarness.Vm}/jobs", new
+        {
+            kind = "reinstall", requestId = "reinstall-creds", commit = ProvisionHarness.Commit, desired = ProvisionHarness.Desired(),
+            secrets = new { gitCloneCredentialsB64 = creds },
+        });
+        Assert.True(response.StatusCode == HttpStatusCode.Accepted, await response.Content.ReadAsStringAsync());
+        var job = await h.Client.WaitForJobAsync((await response.ReadAsync<VmJobAcceptedResponse>()).JobId);
+        Assert.True(job.State == JobState.Succeeded, job.Error);
+
+        // Staged (stdin) for the main run, which defers the checkout, and again for the project phase after the restore.
+        var calls = guest.Calls.ToList();
+        var restoreAt = calls.FindIndex(c => c.Command.Contains(" restore --from-host", StringComparison.Ordinal));
+        var staged = calls.Select((c, i) => (c, i)).Where(x => x.c.Command.StartsWith("umask 077; cat > /tmp/.construct-provision-secrets.", StringComparison.Ordinal)
+            && x.c.StandardInput?.Contains($"{ProvisionScript.CloneCredentialsVariable}='{creds}'", StringComparison.Ordinal) == true).Select(x => x.i).ToList();
+        Assert.Contains(staged, i => i < restoreAt);
+        Assert.Contains(staged, i => i > restoreAt);
+        Assert.DoesNotContain(calls, c => c.Command.Contains(creds, StringComparison.Ordinal) || c.Command.Contains("reinstall-clone-secret", StringComparison.Ordinal));
+        Assert.DoesNotContain("reinstall-clone-secret", JsonSerializer.Serialize(job), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task A_reinstall_whose_restore_brings_the_host_keys_back_keeps_the_stored_key()
     {
         var guest = new FakeBackupGuest { RestoreHostKeys = "restored SSH host keys" };
