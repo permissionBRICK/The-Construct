@@ -36,6 +36,8 @@ public sealed class EngineKeyStore : IDisposable
             CREATE TABLE IF NOT EXISTS engine_grants (account TEXT NOT NULL, name TEXT NOT NULL, epoch INTEGER NOT NULL, sealed BLOB NOT NULL,
                 PRIMARY KEY (account, name, epoch));
             CREATE TABLE IF NOT EXISTS engine_device_tokens (hash BLOB PRIMARY KEY, account TEXT NOT NULL, device_id TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS engine_device_ssh_keys (account TEXT NOT NULL, device_id TEXT NOT NULL, public_key TEXT NOT NULL,
+                PRIMARY KEY (account, device_id));
             """);
 
         using var read = Command("SELECT private_key FROM engine_host_key WHERE one = 1");
@@ -148,11 +150,38 @@ public sealed class EngineKeyStore : IDisposable
         }
     }
 
+    /// <summary>Everything this engine holds for a device: its tokens and its SSH public key (a revocation).</summary>
     public void DeleteDeviceTokens(string account, string deviceId)
     {
         lock (_lock)
         {
             Run("DELETE FROM engine_device_tokens WHERE account = $a AND device_id = $d", ("$a", account), ("$d", deviceId));
+            Run("DELETE FROM engine_device_ssh_keys WHERE account = $a AND device_id = $d", ("$a", account), ("$d", deviceId));
+        }
+    }
+
+    // ---- device SSH keys ------------------------------------------------------------------------
+
+    /// <summary>The device's SSH public key (one per device; a new one replaces the old).</summary>
+    public void PutDeviceSshKey(string account, string deviceId, string publicKey)
+    {
+        lock (_lock)
+        {
+            Run("INSERT INTO engine_device_ssh_keys (account, device_id, public_key) VALUES ($a, $d, $k) ON CONFLICT (account, device_id) DO UPDATE SET public_key = $k",
+                ("$a", account), ("$d", deviceId), ("$k", publicKey));
+        }
+    }
+
+    /// <summary>The SSH public keys the account's devices registered here, by device id.</summary>
+    public IReadOnlyList<(string DeviceId, string PublicKey)> DeviceSshKeys(string account)
+    {
+        lock (_lock)
+        {
+            using var command = Command("SELECT device_id, public_key FROM engine_device_ssh_keys WHERE account = $a ORDER BY device_id", ("$a", account));
+            using var reader = command.ExecuteReader();
+            var keys = new List<(string, string)>();
+            while (reader.Read()) keys.Add((reader.GetString(0), reader.GetString(1)));
+            return keys;
         }
     }
 

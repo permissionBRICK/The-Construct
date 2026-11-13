@@ -138,7 +138,7 @@ behind an agent route is reported as 403, never 401, so 401 always means the age
 |---|---|
 | `GET /api/device/features` | `{platform, notifications, microphone, share, startWithOs, shell}`: what this device can do |
 | `GET`, `PUT /api/device/settings {channel?, autoUpdate?, startWithOs?}` | The release channel (`stable`, `nightly`, an https manifest URL), automatic updates (off by default), start with the OS (`null` where not available) |
-| `GET /api/device/ssh-key` | The device's SSH public key (`~/.ssh/construct_ed25519`, created on first use); a VM must authorize it |
+| `GET /api/device/ssh-key` | The device's SSH public key (`~/.ssh/construct_ed25519`, created on first use). The agent registers it at every engine it enrols at (and again on connect); the engine authorizes it on the user's VMs |
 | `GET /api/connections`, `POST /api/connections/refresh` | The user's own primary VMs on every engine: state, the address this device dials (`direct` for a VM on this PC's engine on Windows, else the engine's `forwarded` endpoint), local forwards, the microphone |
 | `DELETE /api/connections/{engine}/{vm}/forwards/{id}` | Closes a local forward (also at the engine) |
 | `PUT /api/connections/{engine}/{vm}/mic {on}` | Microphone passthrough; kept for the VM's next start |

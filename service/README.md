@@ -293,6 +293,7 @@ gate: the resource policy is evaluated again inside every handler.
 | Console | `GET /vms/{name}/console/capabilities`; `POST /vms/{name}/console/sessions`; `POST /vms/{name}/console/sessions/{sid}/renew`; `DELETE /vms/{name}/console/sessions/{sid}`; `GET /vms/{name}/console/sessions/{sid}/screenshot`; `POST .../{sid}/keyboard`; `POST .../{sid}/mouse` | Current VM operator; session remains bound to its creating principal and is re-authorized on every call. |
 | Host updates | `GET /host/updates/status`; `POST /host/updates/check`; `POST /host/updates/stage`; `POST /host/updates/apply`; `POST /host/updates/cancel`; `POST /host/updates/resolve` | Admin. Apply (including resume) and resolve are the only narrowly maintenance-exempt mutations. |
 | Updates (12.1) | `POST /host/updates/run`; `POST /host/vms/reprovision`; `POST /me/vms/reprovision`; `GET`, `PUT /me/updates`; `GET`, `POST /vms/{name}/update` | Run and every-VM reprovision: Admin. My VMs and my setting: the calling user, their own VMs only. The VM route: that primary's own token or its owner, never another user's VM. See *Updates*. |
+| Devices (8.1) | `GET /engine`; `POST /devices/enroll`; `DELETE /devices/{id}`; `PUT /engine/grants`; `GET /sync/records/{id}`; `PUT /device/ssh-key` | Enrol: anonymous with the device key's proof. The rest: the caller's own account; records and the SSH key only with a device token, the key always the calling device's. See *Device SSH keys on VMs*. |
 | Key vault | `GET`, `PUT /vault/entries`; `PUT /vault/settings`; `POST /vms/{name}/vault/unlock`; `GET /vault/leases`; `DELETE /vault/leases/{id}`; `GET`, `POST /vault/devices`; `DELETE /vault/devices/{id}`; `GET /vault/activity` | The caller's own vault only (an admin gets no access to other users' vaults); unlock: owner of a running primary. |
 | Key vault approvals | `GET /vault/approvals`; `POST /vault/approvals/{id}`; `GET /vault/files`; `POST /vault/files/{id}`; `GET /vault/device` | The owner or one of their paired devices (`VaultDevice`); `/vault/device` is device-only. |
 | Key vault guest | `POST /vms/{name}/vault/requests`; `GET /vms/{name}/vault/requests/{id}?wait=`; `GET /vms/{name}/vault/scrubs`; `POST /vms/{name}/vault/scrubs/{id}` | That primary VM's own token; a child answers `403 vault-child`. |
@@ -361,6 +362,19 @@ starts it: a restore of the same backup that did not finish is not run again (`r
 and a reinstall whose restore started never deletes the VM again; both say what to do by hand. These
 records (`reinstall:<vm>`, `restore:<vm>` in the host config store) hold backup ids, a fingerprint and
 times, never a key.
+
+### Device SSH keys on VMs
+
+A device reaches its user's VMs over SSH (forwards, notifications, open actions). It registers one
+OpenSSH public key with `PUT /device/ssh-key {publicKey}` (device token only; a new key replaces the
+device's old one). For every account that granted this engine `D`, the engine keeps the keys of the
+account's active devices in `/root/.ssh/authorized_keys` of each primary VM the account owns: root,
+because the device's alias and tunnels connect as root, as the old client's did. Each line ends in
+`construct-device:<device id>`; a write replaces exactly those lines and keeps every other line. The
+engine writes at the end of each provision (before the reboot), when a device registers or is revoked
+here, when the profile sync loop reads a revocation from the device records, and at the next heartbeat
+of a VM it could not reach then. What was written where is kept in memory: after a restart every
+running VM is written once more.
 
 ### Key vault on hosted VMs
 

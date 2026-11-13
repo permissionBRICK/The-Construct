@@ -5358,6 +5358,39 @@
         }
       }
     },
+    "/api/v1/device/ssh-key": {
+      "put": {
+        "tags": [
+          "EngineParticipationEndpoints"
+        ],
+        "operationId": "PutDeviceSshKey",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceSshKeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/engine/grants": {
       "put": {
         "tags": [
@@ -8832,6 +8865,17 @@
           "token": {
             "type": "string",
             "x-construct-secret": true
+          }
+        }
+      },
+      "DeviceSshKeyRequest": {
+        "required": [
+          "publicKey"
+        ],
+        "type": "object",
+        "properties": {
+          "publicKey": {
+            "type": "string"
           }
         }
       },

@@ -49,7 +49,7 @@ public sealed record ProvisionRestore(string BackupId, string? KnownHosts = null
 /// reported, so nothing that is stored can hold one.
 /// </summary>
 public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmAppliedStateStore applied,
-    IPersistedJobRunner phases, RecoveryMarks marks, IClock clock)
+    IPersistedJobRunner phases, RecoveryMarks marks, IClock clock, Constructd.Api.Devices.DeviceSshKeys deviceKeys)
 {
     public static readonly string[] Steps = ["source", "copy", "provision", "restore", "project-commands", "applied", "finish"];
     private static readonly TimeSpan ShortTimeout = TimeSpan.FromMinutes(5);
@@ -64,6 +64,8 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
     {
         var context = new Context(run, progress);
         var seedUser = run.Desired.Desired.Settings.SeedUser ?? run.DefaultSeedUser;
+        // A provision (also of a reinstalled guest) may start from a fresh disk: device keys are written again.
+        deviceKeys.Forget(run.Vm);
         var errors = new List<ProvisionStepError>();
         string? payloadHash = null;
         string? tarPath = null;
@@ -137,6 +139,7 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
 
             // ── finish ───────────────────────────────────────────────────────────────
             await BeginAsync(context, "finish", cancel);
+            await WriteDeviceKeysAsync(context, run);
             var rebooted = await FinishAsync(context, run, seedUser);
             context.Done(rebooted ? "the VM reboots in a few seconds" : "the VM keeps running");
 
@@ -383,6 +386,28 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
             Key("CONSTRUCT_CHANNEL"), Key("INSTALLED_AT"), Key("REPROVISIONED_AT"), clock.UtcNow, run.JobId);
         await applied.SetAppliedAsync(run.Vm.Name, state, CancellationToken.None);
         return state;
+    }
+
+    /// <summary>
+    /// The SSH keys of the owner's devices into root's <c>authorized_keys</c> (<see cref="Constructd.Api.Devices.DeviceSshKeys"/>).
+    /// Not required: a VM that is not written now is written at its next heartbeat.
+    /// </summary>
+    private async Task WriteDeviceKeysAsync(Context context, ProvisionRun run)
+    {
+        if (!deviceKeys.Manages(run.Vm.Owner)) return;
+        // Under the same lock as every other write of device keys, so a revocation in between is not overwritten.
+        await deviceKeys.WriteWithAsync(run.Vm, async (script, _) =>
+        {
+            try
+            {
+                var written = await RootCommandAsync(context with { Quiet = true }, "finish", script, ShortTimeout);
+                return written.ExitCode == 0 && written.Lines.Any(l => l.Trim() == Constructd.Api.Devices.DeviceSshKeys.Done);
+            }
+            catch (ProvisionStepException)
+            {
+                return false; // Unreachable or no sudo: the heartbeat writes them.
+            }
+        }, CancellationToken.None);
     }
 
     /// <summary>

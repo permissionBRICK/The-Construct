@@ -34,6 +34,11 @@ public sealed class FolderGuests : ISshRunner, IProvisionTargets, IDisposable
 
     public string Folder(string vm) => Path.Combine(_root.Path, vm);
 
+    /// <summary>The VM's root <c>authorized_keys</c> (beside its folder).</summary>
+    public string AuthorizedKeysPath(string vm) => Path.Combine(_root.Path, vm + ".ssh", "authorized_keys");
+
+    public string AuthorizedKeys(string vm) => System.IO.File.Exists(AuthorizedKeysPath(vm)) ? System.IO.File.ReadAllText(AuthorizedKeysPath(vm)) : "";
+
     public string? File(string vm, string profile) =>
         System.IO.File.Exists(Path.Combine(Folder(vm), profile + ".json")) ? System.IO.File.ReadAllText(Path.Combine(Folder(vm), profile + ".json")) : null;
 
@@ -88,6 +93,7 @@ public sealed class FolderGuests : ISshRunner, IProvisionTargets, IDisposable
         if (Down.Contains(target.Host)) return 255;
         var start = new ProcessStartInfo("bash", "-s") { RedirectStandardInput = true, RedirectStandardOutput = true, UseShellExecute = false };
         start.Environment["CONSTRUCT_PROJECTS_STORE"] = Folder(target.Host);
+        start.Environment["CONSTRUCT_AUTHORIZED_KEYS"] = AuthorizedKeysPath(target.Host);
         using var process = Process.Start(start)!;
         await process.StandardInput.WriteAsync(standardInput);
         process.StandardInput.Close();

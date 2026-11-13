@@ -85,6 +85,7 @@ public class RouteCoverageTests
         "POST /api/v1/devices/enroll",
         "DELETE /api/v1/devices/{id}",
         "PUT /api/v1/engine/grants",
+        "PUT /api/v1/device/ssh-key",
         "GET /api/v1/sync/records/{id}",
         "PUT /api/v1/vms/{name}/profiles/{profile}",
         "DELETE /api/v1/vms/{name}/profiles/{profile}",

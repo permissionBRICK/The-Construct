@@ -56,6 +56,7 @@ public sealed class DeviceServices : IAsyncDisposable
     {
         var settings = new DeviceSettings(Path.Combine(options.DataDirectory, "device.json"));
         var ssh = new SshClientConfig(platform);
+        agent.SshPublicKey = ct => ssh.EnsureDeviceKeyAsync("construct-agent", ct);
         var clock = new SystemClock(options.Time);
         var runner = new RuntimeProcessRunner();
         var probe = new SocketPortProbe();

@@ -29,6 +29,9 @@ public static class EngineParticipationEndpoints
         api.MapDelete("/devices/{id}", RevokeAsync)
             .RequireAuthorization(Policies.User).Audited("engine.device.revoke", "id").WithName("RevokeDevice").Produces(StatusCodes.Status204NoContent);
 
+        api.MapPut("/device/ssh-key", PutSshKey)
+            .RequireAuthorization(Policies.User).Audited("engine.device.ssh-key").WithName("PutDeviceSshKey").Produces(StatusCodes.Status204NoContent);
+
         api.MapPut("/engine/grants", PutGrants)
             .RequireAuthorization(Policies.User).Audited("engine.grants").WithName("PutEngineGrants").Produces(StatusCodes.Status204NoContent);
 
@@ -54,7 +57,18 @@ public static class EngineParticipationEndpoints
         }
     }
 
-    private static async Task<IResult> RevokeAsync(string id, HttpContext http, EngineDevices devices, CancellationToken ct)
+    /// <summary>Only a device registers, and only its own key: the device id is the caller's, never from the request.</summary>
+    private static IResult PutSshKey([FromBody] DeviceSshKeyRequest request, HttpContext http, Constructd.Api.Devices.DeviceSshKeys deviceKeys)
+    {
+        if (http.User.FindFirst(DeviceAuthenticationHandler.DeviceClaim)?.Value is not { Length: > 0 } device)
+            return Refused(403, "devices-only", "A device registers its key with its device token.");
+        if (Constructd.Api.Devices.DeviceSshKeys.Normalize(request.PublicKey) is not { } key)
+            return Refused(400, "invalid-key", "One OpenSSH public key line.");
+        deviceKeys.Register(http.User.NameOrEmpty(), device, key);
+        return TypedResults.NoContent();
+    }
+
+    private static async Task<IResult> RevokeAsync(string id, HttpContext http, EngineDevices devices, Constructd.Api.Devices.DeviceSshKeys deviceKeys, CancellationToken ct)
     {
         try
         {
@@ -64,6 +78,9 @@ public static class EngineParticipationEndpoints
         {
             // The tokens are gone; without D the records are read once a device grants it.
         }
+
+        // Its SSH key went with its tokens; the account's VMs lose it.
+        deviceKeys.Changed(http.User.NameOrEmpty());
 
         return TypedResults.NoContent();
     }

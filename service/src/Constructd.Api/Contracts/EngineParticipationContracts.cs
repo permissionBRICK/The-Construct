@@ -21,3 +21,6 @@ public sealed record EngineGrantsRequest([property: ConstructSecret] IReadOnlyLi
 
 /// <summary><c>GET /sync/records/{id}</c>: a record of the caller's account, opened with this engine's <c>D</c>.</summary>
 public sealed record SyncRecordResponse(string Id, string Kind, string Actor, long Revision, JsonNode? Value);
+
+/// <summary><c>PUT /device/ssh-key</c>: the calling device's SSH public key (one OpenSSH line), for its user's VMs.</summary>
+public sealed record DeviceSshKeyRequest(string PublicKey);

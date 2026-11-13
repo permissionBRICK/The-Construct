@@ -218,6 +218,31 @@ public sealed partial class DeviceAgent : IDisposable
         }
 
         if (entry.DeviceToken is null) await EnrollLockedAsync(entry, ct).ConfigureAwait(false);
+        else await RegisterSshKeyLockedAsync(entry, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The device's SSH public key line; the device features set it (<see cref="Device.DeviceServices"/>).
+    /// Registered at every engine this device enrols at, so the engine authorizes it on the user's VMs.
+    /// </summary>
+    public Func<CancellationToken, Task<string>>? SshPublicKey { get; set; }
+
+    /// <summary>
+    /// Registers this device's SSH key at an engine where it holds a device token. A failure leaves the
+    /// device without SSH to that engine's VMs until the next enrolment or connect; it is not an error
+    /// of the flow that enrolled.
+    /// </summary>
+    private async Task RegisterSshKeyLockedAsync(EngineEntry entry, CancellationToken ct)
+    {
+        if (SshPublicKey is not { } read || entry.DeviceToken is null) return;
+        try
+        {
+            var key = await read(ct).ConfigureAwait(false);
+            await EngineApi(entry).PutDeviceSshKeyAsync(new DeviceSshKeyRequest { PublicKey = key }, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is AgentFailure or ApiException or HttpRequestException)
+        {
+        }
     }
 
     /// <summary>Asks the engine for a device token by this device's key (8.1); false when the engine refuses.</summary>
@@ -242,6 +267,7 @@ public sealed partial class DeviceAgent : IDisposable
                 Save();
             }
 
+            await RegisterSshKeyLockedAsync(entry, ct).ConfigureAwait(false);
             return true;
         }
         catch (ApiException ex) when (ex.StatusCode is 403 or 409)
