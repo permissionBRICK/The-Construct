@@ -57,6 +57,7 @@ public static class ServiceComposition
         }
 
         services.AddHttpsForwards();
+        services.AddProvisioning(options);
 
         // Platform-agnostic, so these are the real implementations in every mode: the job engine runs
         // jobs in this process and persists them through whichever IJobStore was registered, and the

@@ -193,9 +193,9 @@ public sealed record VmStateResponse(VmState State);
 /// <summary>Answer to every call that starts a job: <c>202 Accepted</c> plus the job id.</summary>
 public sealed record JobAcceptedResponse(string JobId);
 
-public sealed record JobProgressResponse(DateTimeOffset At, string Text)
+public sealed record JobProgressResponse(DateTimeOffset At, string Text, string? Step = null, string? State = null, int? Percent = null)
 {
-    public static JobProgressResponse From(JobProgressLine line) => new(line.At, line.Text);
+    public static JobProgressResponse From(JobProgressLine line) => new(line.At, line.Text, line.Step, line.State, line.Percent);
 }
 
 /// <summary>

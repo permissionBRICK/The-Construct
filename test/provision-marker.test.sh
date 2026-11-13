@@ -142,6 +142,22 @@ MARKER_FILE="${m4}" tmp_notes="${n4}" CONSTRUCT_VERSION="4444444" record_timesta
 ok "a later versioned reprovision records the commit again" is "4444444" "$(key_of "${m4}" CONSTRUCT_COMMIT)"
 ok "...still exactly one CONSTRUCT_COMMIT line" is "1" "$(grep -c '^CONSTRUCT_COMMIT=' "${m4}")"
 
+# ── 4b. The engine's three marker keys (design 4.1, 7.5) ─────────────────────
+m5="${tmp}/5.env"; n5="${tmp}/5.notes"; : >"${n5}"
+ph="$(printf 'a%.0s' {1..64})"; dh="$(printf 'b%.0s' {1..64})"
+MARKER_FILE="${m5}" tmp_notes="${n5}" CONSTRUCT_VERSION="5555555" CONSTRUCT_PAYLOAD_HASH="${ph}" \
+  CONSTRUCT_DESIRED_HASH="${dh}" CONSTRUCT_CHANNEL="main" record_timestamps
+ok "records CONSTRUCT_PAYLOAD_HASH when given" is "${ph}" "$(key_of "${m5}" CONSTRUCT_PAYLOAD_HASH)"
+ok "records CONSTRUCT_DESIRED_HASH when given" is "${dh}" "$(key_of "${m5}" CONSTRUCT_DESIRED_HASH)"
+ok "records CONSTRUCT_CHANNEL when given" is "main" "$(key_of "${m5}" CONSTRUCT_CHANNEL)"
+MARKER_FILE="${m5}" tmp_notes="${n5}" CONSTRUCT_VERSION="5555555" CONSTRUCT_DESIRED_HASH="${ph}" record_timestamps
+ok "a later run moves the desired hash" is "${ph}" "$(key_of "${m5}" CONSTRUCT_DESIRED_HASH)"
+ok "...and keeps the keys it was not given" is "main" "$(key_of "${m5}" CONSTRUCT_CHANNEL)"
+m6="${tmp}/6.env"; n6="${tmp}/6.notes"; : >"${n6}"
+MARKER_FILE="${m6}" tmp_notes="${n6}" CONSTRUCT_PAYLOAD_HASH="nothex" CONSTRUCT_DESIRED_HASH="abc" \
+  CONSTRUCT_CHANNEL="main; rm -rf /" record_timestamps
+ok "malformed engine markers are not written" is "INSTALLED_AT,REPROVISIONED_AT," "$(keys_of "${m6}")"
+
 # ── 5. The probe reads exactly this file and key ──────────────────────────────
 PROBE="${ROOT}/extension/vm/probe.sh"
 ok "shared probe reads CONSTRUCT_COMMIT from provisioned.env" \

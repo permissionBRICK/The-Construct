@@ -349,9 +349,10 @@ public sealed class InProcessJobEngine(IClock clock, IJobStore store, Action<Job
         }
     }
 
-    private void Report(JobEntry entry, string text)
+    private void Report(JobEntry entry, string text, JobStepProgress? step = null)
     {
-        var line = new JobProgressLine(clock.UtcNow, text);
+        var line = step is null ? new JobProgressLine(clock.UtcNow, text)
+            : new JobProgressLine(clock.UtcNow, text, step.Step, step.State, step.Percent);
         Job snapshot;
 
         lock (entry.Gate)
@@ -407,8 +408,10 @@ public sealed class InProcessJobEngine(IClock clock, IJobStore store, Action<Job
     /// Synchronous progress sink. <see cref="Progress{T}"/> is deliberately not used: it posts to the
     /// thread pool, which would reorder job progress lines.
     /// </summary>
-    private sealed class JobProgress(InProcessJobEngine engine, JobEntry entry) : IProgress<string>
+    private sealed class JobProgress(InProcessJobEngine engine, JobEntry entry) : IJobStepProgress
     {
         public void Report(string value) => engine.Report(entry, value);
+
+        public void Report(JobStepProgress value) => engine.Report(entry, value.Line ?? $"{value.Step}: {value.State}", value);
     }
 }
