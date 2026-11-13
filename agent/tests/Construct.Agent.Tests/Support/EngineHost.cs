@@ -20,8 +20,12 @@ public sealed class EngineHost : WebApplicationFactory<Program>
     private readonly string _directory = Path.Combine(Path.GetTempPath(), "agent-test-engine-" + Guid.NewGuid().ToString("n"));
     private readonly int _port = FreePort();
 
-    public EngineHost()
+    private readonly Action<IServiceCollection>? _services;
+
+    /// <param name="services">Replaces engine services (an SSH runner that records instead of dialling).</param>
+    public EngineHost(Action<IServiceCollection>? services = null)
     {
+        _services = services;
         Directory.CreateDirectory(_directory);
         using var key = RSA.Create(2048);
         var request = new CertificateRequest("CN=engine.test", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
@@ -66,6 +70,7 @@ public sealed class EngineHost : WebApplicationFactory<Program>
             ["Constructd:ForwardReconcileSeconds"] = "0",
         };
         foreach (var (key, value) in settings) builder.UseSetting(key, value);
+        if (_services is { } replace) builder.ConfigureServices(replace);
     }
 
     /// <summary>Adds a user and returns an API token for them: the sign-in the first device uses.</summary>

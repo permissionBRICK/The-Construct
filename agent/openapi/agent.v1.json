@@ -715,6 +715,79 @@
         }
       }
     },
+    "/api/engines/{engine}/vms/{vm}/backups/{backup}/restore": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "description": "Restores a stored backup into the running VM: the backup's key is unwrapped here with the account's backup key and goes only to the engine's restore job. Follow the job through the proxy.",
+        "operationId": "RestoreBackup",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "vm",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "backup",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/RestoreRequest"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreStarted"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/devices/{id}/secrets": {
       "get": {
         "tags": [
@@ -2878,6 +2951,32 @@
           "recoveryCode": {
             "type": "string",
             "x-construct-secret": true
+          }
+        }
+      },
+      "RestoreRequest": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "RestoreStarted": {
+        "required": [
+          "jobId",
+          "replayed"
+        ],
+        "type": "object",
+        "properties": {
+          "jobId": {
+            "type": "string"
+          },
+          "replayed": {
+            "type": "boolean"
           }
         }
       },

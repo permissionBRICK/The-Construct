@@ -81,6 +81,12 @@ public static class AgentVaultRoutes
             return TypedResults.NoContent();
         }).WithName("UnlockVmVault").WithDescription("Gives a running VM on a locked engine K until it stops.");
 
+        api.MapPost("/engines/{engine}/vms/{vm}/backups/{backup}/restore", async (DeviceAgent agent, string engine, string vm, string backup,
+                [FromBody] RestoreRequest? request, CancellationToken ct) =>
+            TypedResults.Ok(await agent.RestoreBackupAsync(engine, vm, backup, request?.RequestId, ct)))
+            .WithTags("agent").WithName("RestoreBackup")
+            .WithDescription("Restores a stored backup into the running VM: the backup's key is unwrapped here with the account's backup key and goes only to the engine's restore job. Follow the job through the proxy.");
+
         api.MapGet("/devices/{id}/secrets", async (DeviceAgent agent, string id, CancellationToken ct) => TypedResults.Ok(await agent.SecretsReadableByAsync(id, ct)))
             .WithTags("agent").WithName("SecretsReadableByDevice").WithDescription("Every secret a device could read (all of the account's), to rotate at their source when it is revoked.");
     }
