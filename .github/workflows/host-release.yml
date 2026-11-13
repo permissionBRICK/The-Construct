@@ -33,6 +33,13 @@ jobs:
       - name: Package pinned commit
         shell: pwsh
         run: ./service/host/New-ConstructHostPackage.ps1 -PublishDir /tmp/host-publish -FrameworkDependentPublishDir /tmp/host-publish-fdd -LinuxPublishDir /tmp/host-publish-linux -OutputDir /tmp/host-release -Commit "${{ github.sha }}" -Repository "$env:GITHUB_REPOSITORY"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # The device agent (agent/): Windows x64 tray app and Linux x64 host, each with the UI bundle;
+      # the next step lists both in the channel manifest with their SHA-256.
+      - name: Package the device agent
+        run: python3 scripts/package-agent.py --output /tmp/host-release --commit "$GITHUB_SHA" --version "${{ steps.build.outputs.version }}"
       - name: Decide which Companion release this commit installs
         id: companion
         env:

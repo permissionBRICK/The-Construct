@@ -111,7 +111,11 @@ public static class Repair
             foreach (var argument in launch.Arguments) start.ArgumentList.Add(argument);
         }
 
-        using (var process = Process.Start(start)) await process!.WaitForExitAsync(ct).ConfigureAwait(false);
+        using (var process = Process.Start(start))
+        {
+            // On Linux the shell that detaches the agent ends at once; on Windows the process is the agent itself.
+            if (!OperatingSystem.IsWindows()) await process!.WaitForExitAsync(ct).ConfigureAwait(false);
+        }
         for (var i = 0; i < 60; i++)
         {
             if (await RunningAsync(options, ct).ConfigureAwait(false) is { } endpoint) return endpoint;

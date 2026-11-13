@@ -28,6 +28,9 @@ public sealed class AgentOptions
 
     public TimeProvider Time { get; init; } = TimeProvider.System;
 
+    /// <summary>The device's OS parts (5.1); null picks the Linux one. The Windows shell passes its own.</summary>
+    public Device.IDevicePlatform? Platform { get; init; }
+
     public string Version { get; init; } =
         typeof(AgentOptions).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "development";
 

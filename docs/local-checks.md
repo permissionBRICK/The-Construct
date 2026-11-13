@@ -52,7 +52,8 @@ stays within one directory and `**` crosses directories. A row without a group s
 | `extension/src/updates.js`, `extension/src/t3code*`, `bin/*t3*`, `test/t3-*` | `t3` |
 | `service/**`, `drivers/**`, `lib/**`, `bin/**`, `console-viewer/**` | `service` |
 | `ui/**` | `ui` |
-| `agent/**`, `service/src/Construct.Keys/**`, `service/src/Constructd.Store/**`, `service/src/Constructd.Sync/**`, `service/src/Constructd.Api/**`, `service/openapi/**` | `agent`, `ui` |
+| `agent/**`, `test/agent-install.test.sh`, `service/src/Construct.Keys/**`, `service/src/Constructd.Store/**`, `service/src/Constructd.Sync/**`, `service/src/Constructd.Api/**`, `service/openapi/**` | `agent`, `ui` |
+| `companion/src/Construct.Companion.Core/**`, `companion/src/Construct.Companion.Windows/**`, `companion/src/Construct.Companion.Fakes/**`, `extension/vm/**` | `agent` |
 | `scripts/**`, `.github/**`, `VERSION`, `test/release.test.py`, `test/construct-release.test.py`, `test/run-local-checks.sh`, `test/helpers/changed-groups.py`, `docs/local-checks.md`, `service/src/Constructd.Core/Logic/ReleaseChannel.cs`, `service/tests/Constructd.Tests/Updates/ReleaseChannelTests.cs` | `release` |
 | `docs/**`, `*.md`, `assets/**` | |
 
@@ -105,7 +106,11 @@ first-install feature-set suite. It is included in `all`; the Companion workflow
 The `agent` group builds the device agent with warnings as errors and runs its tests: several
 agents in process against the real engine in fake mode on a loopback HTTPS port (setup, pairing,
 recovery, the proxy, revocation, the event stream, the local API's token and origin rules, repair,
-and the OpenAPI drift check). It needs only the .NET 10 SDK.
+and the OpenAPI drift check), the device features with the platform faked (VM links and forwards,
+notifications, the SSH config, self-update against a fake channel, "update everything"), builds
+the Windows shell with Windows targeting, and runs the Linux install script's test. It needs the
+.NET 10 SDK, python3 and pwsh (a syntax check of the Windows install script). The agent reuses
+the Companion's Core, Windows and Fakes projects, so changes there run this group too.
 
 The `ui` group runs the client UI's unit tests (vitest), builds its static bundle
 and compares its screenshots in headless Chromium (Playwright). After an intended
