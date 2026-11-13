@@ -494,7 +494,11 @@ public sealed class VaultRecordTests
 
             foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
             {
-                var bytes = await File.ReadAllBytesAsync(file);
+                // SQLite removes its -wal, -shm and -journal files when the last connection closes, which can
+                // happen between the listing and the read; a file that is gone holds nothing.
+                byte[] bytes;
+                try { bytes = await File.ReadAllBytesAsync(file); }
+                catch (FileNotFoundException) { continue; }
                 foreach (var value in values)
                 {
                     foreach (var form in new[] { value, Convert.ToBase64String(Encoding.UTF8.GetBytes(value)) })
