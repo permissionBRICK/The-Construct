@@ -47,6 +47,8 @@ public static partial class EngineProxy
         if (context.Request.ContentLength > 0 || context.Request.Headers.TransferEncoding.Count > 0)
         {
             request.Content = new StreamContent(context.Request.Body);
+            // A fixed length stays fixed: some engine routes (media chunks) require Content-Length.
+            if (context.Request.ContentLength is { } length) request.Content.Headers.ContentLength = length;
             if (context.Request.ContentType is { } contentType) request.Content.Headers.ContentType = MediaTypeHeaderValue.Parse(contentType);
         }
 
@@ -90,6 +92,22 @@ public static partial class EngineProxy
                 {
                     context.Response.Headers.Remove("Location");
                 }
+            }
+            else if ((int)response.StatusCode == StatusCodes.Status202Accepted && response.Content.Headers.ContentType?.MediaType == "application/json")
+            {
+                // Some job routes answer 202 {jobId} without a Location; the small body is read to follow the job.
+                var bytes = await response.Content.ReadAsByteArrayAsync(context.RequestAborted);
+                try
+                {
+                    if (System.Text.Json.Nodes.JsonNode.Parse(bytes)?["jobId"]?.GetValue<string>() is { } jobId && JobLocation().IsMatch("/api/v1/jobs/" + jobId))
+                        _ = agent.Jobs.Watch(id, jobId);
+                }
+                catch (Exception ex) when (ex is System.Text.Json.JsonException or InvalidOperationException)
+                {
+                }
+
+                await context.Response.Body.WriteAsync(bytes, context.RequestAborted);
+                return;
             }
 
             await using var body = await response.Content.ReadAsStreamAsync(context.RequestAborted);

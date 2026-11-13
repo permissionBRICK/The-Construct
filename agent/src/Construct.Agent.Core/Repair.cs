@@ -71,7 +71,7 @@ public static class Repair
 
         output.WriteLine("Restarting the agent ...");
         if (running is not null) await StopAsync(running, ct).ConfigureAwait(false);
-        else if (endpoint is not null) Kill(endpoint.Pid);
+        else if (endpoint is not null) Kill(endpoint.Pid, endpoint.StartedAt);
 
         var started = await StartAsync(options, launch, ct).ConfigureAwait(false);
         output.WriteLine(started is not null ? $"Agent: running again, pid {started.Pid}, {started.BaseUrl}" : "Agent: did not come up; run `construct-agent run` to see why.");
@@ -135,7 +135,7 @@ public static class Repair
         }
 
         for (var i = 0; i < 40 && Alive(endpoint.Pid); i++) await Task.Delay(250, ct).ConfigureAwait(false);
-        Kill(endpoint.Pid);
+        Kill(endpoint.Pid, endpoint.StartedAt);
     }
 
     private static async Task<string> EngineStatusAsync(EngineEntry engine, CancellationToken ct)
@@ -169,13 +169,17 @@ public static class Repair
         }
     }
 
-    /// <summary>Ends a process only when it is an agent (its name says so), never an unrelated reuse of the pid.</summary>
-    private static void Kill(int pid)
+    /// <summary>
+    /// Ends a process only when it is the agent of the token file: its name says agent and it started
+    /// shortly before the file's start time, so a later reuse of the pid is left alone.
+    /// </summary>
+    private static void Kill(int pid, DateTimeOffset startedAt)
     {
         try
         {
             using var process = Process.GetProcessById(pid);
-            if (process.ProcessName is "construct-agent" or "dotnet") process.Kill();
+            var started = new DateTimeOffset(process.StartTime.ToUniversalTime(), TimeSpan.Zero);
+            if (process.ProcessName is "construct-agent" or "dotnet" && started <= startedAt && started > startedAt - TimeSpan.FromMinutes(2)) process.Kill();
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {

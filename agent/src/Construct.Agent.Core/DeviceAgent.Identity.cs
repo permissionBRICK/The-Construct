@@ -39,8 +39,11 @@ public sealed partial class DeviceAgent
             var engine = Find(engineId) ?? throw NoEngine();
             var userToken = Reveal(engine.UserToken) ?? throw new AgentFailure(409, "not-signed-in", "The first device signs in at the engine with the user's token.");
 
-            using (var signedIn = AnonymousStore(engine))
+            // A setup cut short (the agent stopped, an answer lost) is taken up again where it stopped:
+            // the store registered this device and may hold the wraps of the U sealed here already.
+            if (!_state.SetupPending)
             {
+                using var signedIn = AnonymousStore(engine);
                 signedIn.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", userToken);
                 var publicKey = _key.PublicKey.ToString();
                 using var response = await signedIn.PostAsJsonAsync("devices",
@@ -49,6 +52,7 @@ public sealed partial class DeviceAgent
                 var enrolled = (await response.Content.ReadFromJsonAsync<EnrollResponse>(StoreJson.Options, ct).ConfigureAwait(false))!;
                 lock (_state)
                 {
+                    _state.SetupPending = true;
                     _state.DeviceName = deviceName;
                     _state.Account = enrolled.Account;
                     _state.StoreEngine = engine.Id;
@@ -56,27 +60,56 @@ public sealed partial class DeviceAgent
                     Save();
                 }
             }
-
-            // The account keys: U and everything under it (8.2).
-            long epoch;
-            using (var http = StoreHttp()) epoch = await new Constructd.Store.Client.HttpStoreClient(http).ActiveEpochAsync(ct).ConfigureAwait(false);
-            var keys = AccountKeys.Create(epoch);
-            using (var http = StoreHttp())
-            using (var response = await http.PutAsJsonAsync("keys", keys.Wrap(), StoreJson.Options, ct).ConfigureAwait(false))
+            else if (_state.StoreEngine != engine.Id)
             {
-                await EnsureStoreAsync(response, ct).ConfigureAwait(false);
+                throw new AgentFailure(409, "setup-pending", "A setup against another engine is unfinished; finish it there.");
             }
 
-            lock (_state)
+            deviceName = _state.DeviceName!;
+            AccountKeys? keys = null;
+            if (_state.RootSeal is { } seal)
             {
-                _state.RootSeal = keys.SealRootTo(_key.PublicKey);
-                Save();
+                using var http = StoreHttp();
+                using var response = await http.GetAsync("keys", ct).ConfigureAwait(false);
+                if (response.IsSuccessStatusCode)
+                {
+                    var root = AccountKeys.OpenRoot(_key, seal);
+                    try { keys = AccountKeys.Open(root, (await response.Content.ReadFromJsonAsync<WrappedKeys>(StoreJson.Options, ct).ConfigureAwait(false))!); }
+                    finally { CryptographicOperations.ZeroMemory(root); }
+                }
+                else if (response.StatusCode != HttpStatusCode.NotFound)
+                {
+                    await EnsureStoreAsync(response, ct).ConfigureAwait(false);
+                }
+            }
+
+            if (keys is null)
+            {
+                // The account keys: U and everything under it (8.2). U is sealed here and saved before
+                // the store holds anything wrapped under it, so no answer lost in between strands it.
+                long epoch;
+                using (var http = StoreHttp()) epoch = await new Constructd.Store.Client.HttpStoreClient(http).ActiveEpochAsync(ct).ConfigureAwait(false);
+                keys = AccountKeys.Create(epoch);
+                lock (_state)
+                {
+                    _state.RootSeal = keys.SealRootTo(_key.PublicKey);
+                    Save();
+                }
+
+                using var put = StoreHttp();
+                using var response = await put.PutAsJsonAsync("keys", keys.Wrap(), StoreJson.Options, ct).ConfigureAwait(false);
+                await EnsureStoreAsync(response, ct).ConfigureAwait(false);
             }
 
             _keys = keys;
             await WriteDeviceRecordAsync(DeviceId, deviceName, _key.PublicKey.ToString(), DeviceRecordValue.Active, ct).ConfigureAwait(false);
             code = await SetRecoveryLockedAsync(ct).ConfigureAwait(false);
             await ConnectLockedAsync(engine, vaultMode ?? "locked", ct).ConfigureAwait(false);
+            lock (_state)
+            {
+                _state.SetupPending = false;
+                Save();
+            }
         }
         finally
         {
@@ -186,6 +219,7 @@ public sealed partial class DeviceAgent
     {
         lock (_state)
         {
+            _state.SetupPending = false;
             _state.DeviceName = deviceName;
             _state.Account = account;
             _state.StoreEngine = storeEngine.Id;

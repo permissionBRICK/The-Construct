@@ -36,22 +36,24 @@ public sealed class CoreTests
     public void The_event_buffer_reports_a_gap_instead_of_a_silent_hole()
     {
         var events = new AgentEvents();
-        for (var i = 0; i < AgentEvents.Capacity + 10; i++) events.Publish("agent");
+        var first = events.Publish("agent").Seq;
+        for (var i = 1; i < AgentEvents.Capacity + 10; i++) events.Publish("agent");
+        var last = first + AgentEvents.Capacity + 9;
 
-        using (var behind = events.Subscribe(5)) Assert.True(behind.Gap);
-        using (var current = events.Subscribe(AgentEvents.Capacity + 5))
+        using (var behind = events.Subscribe(first + 5)) Assert.True(behind.Gap);
+        using (var current = events.Subscribe(last - 5))
         {
             Assert.False(current.Gap);
             Assert.Equal(5, current.Replay.Count);
         }
 
-        // A sequence from an earlier run of the agent is a gap too.
-        using (var stale = events.Subscribe(1_000_000)) Assert.True(stale.Gap);
+        // A sequence from an earlier run of the agent is behind this run's first event: a gap too.
+        using (var earlier = events.Subscribe(first - 100)) Assert.True(earlier.Gap);
 
-        using var live = events.Subscribe(AgentEvents.Capacity + 10);
+        using var live = events.Subscribe(last);
         events.Publish("pairing");
         Assert.True(live.Live.TryRead(out var next));
-        Assert.Equal(AgentEvents.Capacity + 11, next!.Seq);
+        Assert.Equal(last + 1, next!.Seq);
     }
 
     [Fact]

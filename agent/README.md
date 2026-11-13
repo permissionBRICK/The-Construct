@@ -85,7 +85,7 @@ CONSTRUCT_AGENT_UPDATE_OPENAPI=1 dotnet test agent/Construct.Agent.slnx --filter
 | `DELETE /api/engines/{id}` | Removes it (not the engine that holds the store) |
 | `POST /api/engines/{id}/connect {vaultMode?}` | Grants `D`, and `K` when `vaultMode` is `available`; enrols this device |
 | `/api/engines/{id}/api/v1/...` | The proxy, below |
-| `POST /api/device/setup {engine, deviceName, vaultMode?}` | The account's first device against that engine's built-in store, signed in with the user token: registers the device, creates the account keys, stores their wraps, writes the device and engine records, sets the recovery code, grants and enrols. Answers `{recoveryCode}`, the only time the code leaves the agent. |
+| `POST /api/device/setup {engine, deviceName, vaultMode?}` | The account's first device against that engine's built-in store, signed in with the user token: registers the device, creates the account keys, stores their wraps, writes the device and engine records, sets the recovery code, grants and enrols. Answers `{recoveryCode}`, the only time the code leaves the agent. A setup cut short (agent stopped, answer lost) is resumed by calling it again; `U` is sealed and saved before the store holds anything under it. |
 | `POST /api/device/recovery-code` | A new recovery code; the old one stops working |
 | `POST /api/device/recover {engine, account, recoveryCode, deviceName}` | A fresh device takes over the account with the code, then enrols at every engine of the account |
 | `POST /api/pairing {engine, deviceName}` | This device asks to join: `{pairingId, words, expiresAt, storeUrl, storePin}`; the agent waits for the approval itself and reports `pairing` events |
@@ -106,18 +106,18 @@ connection itself, checks the certificate against the pin, follows no redirect, 
 device's token with a fresh proof (or the user's sign-in at an engine where the device is not
 enrolled). From the UI's request only the method, path, query, body, `Content-Type` and a few
 content headers pass; its `Authorization` and anything else do not. A `Location` on the engine's
-API is rewritten to the proxy path; `Set-Cookie` and `WWW-Authenticate` are dropped.
+API is rewritten to the proxy path; a fixed `Content-Length` is kept; `Set-Cookie` and `WWW-Authenticate` are dropped.
 
 ### Events
 
-`GET /api/events` is one server-sent event stream: `id` is a sequence number, `event` the type,
+`GET /api/events` is one server-sent event stream: `id` is a sequence number that keeps increasing across restarts of the agent, `event` the type,
 `data` `{seq, type, engine, data}`.
 
 | Type | When |
 |---|---|
 | `agent` | The agent's state changed (engines, device); reload `GET /api/state` |
 | `pairing` | A pairing on this device changed state |
-| `job.progress`, `job.phase`, `job.state` | A job an engine accepted through the proxy (`202` with a job `Location`): its lines, its phase, its end, exactly once |
+| `job.progress`, `job.phase`, `job.state` | A job an engine accepted through the proxy (`202` with a job `Location`, or with `{jobId}` in the body): its lines, its phase, its end, exactly once |
 | `job.lost` | The engine no longer shows that job |
 | `reset` | The events after `since` are gone (more than 1000 behind, or an earlier run); reload the state |
 

@@ -4,7 +4,7 @@ using System.Threading.Channels;
 namespace Construct.Agent.Events;
 
 /// <summary>One change the UI hears about on <c>/api/events</c>.</summary>
-/// <param name="Seq">Increasing per agent run; the UI resumes with <c>?since=</c>.</param>
+/// <param name="Seq">Increasing, also across runs of the agent; the UI resumes with <c>?since=</c>.</param>
 /// <param name="Type"><c>agent</c> (the agent's own state changed), <c>pairing</c>, <c>job.progress</c>, <c>job.phase</c>, <c>job.state</c>.</param>
 /// <param name="Engine">The agent's engine id for engine events.</param>
 public sealed record AgentEvent(long Seq, string Type, string? Engine, JsonNode? Data);
@@ -21,7 +21,9 @@ public sealed class AgentEvents
     private readonly object _lock = new();
     private readonly Queue<AgentEvent> _recent = new();
     private readonly List<Channel<AgentEvent>> _subscribers = [];
-    private long _last;
+    // Numbered from the start time on, so a sequence from an earlier run is always behind this run's
+    // first event and reads as a gap, never as a valid point to resume from.
+    private long _last = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() * 1000;
 
     public AgentEvent Publish(string type, string? engine = null, JsonNode? data = null)
     {

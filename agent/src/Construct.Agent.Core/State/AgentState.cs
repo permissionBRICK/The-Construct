@@ -36,8 +36,11 @@ public sealed class AgentState
 
     public List<EngineEntry> Engines { get; set; } = [];
 
+    /// <summary>A first-device setup that registered this device but has not finished; setup again resumes it.</summary>
+    public bool SetupPending { get; set; }
+
     [JsonIgnore]
-    public bool Registered => Account is not null && StoreToken is not null && RootSeal is not null;
+    public bool Registered => Account is not null && StoreToken is not null && RootSeal is not null && !SetupPending;
 }
 
 /// <summary>One engine the user works with.</summary>
