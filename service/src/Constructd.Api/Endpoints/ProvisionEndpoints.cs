@@ -108,20 +108,16 @@ public static partial class ProvisionEndpoints
         var failed = all.FirstOrDefault(j => j.Id == id);
         if (failed is null) return Problems.NotFound("Unknown job.");
         if (!http.User.IsAdmin() && !Ownership.SameName(http.User.NameOrEmpty(), failed.Owner)) return Problems.Forbidden("Job access refused.");
-        if (failed.Kind is not (JobKinds.Provision or JobKinds.Reinstall or JobKinds.Restore) || failed.VmName is null)
+        if (!JobRetryRules.IsLifecycleKind(failed.Kind) || failed.VmName is null)
             return CodedProblems.Create(409, "not-retryable", $"A {failed.Kind} job cannot be retried.");
         if (failed.State != JobState.Failed) return CodedProblems.Create(409, "job-not-failed", "Only a failed job can be retried.");
         var vm = await vms.GetAsync(failed.VmName, ct);
         if (vm is null) return Problems.NotFound("Unknown VM.");
-        // The same VM: one created again under the name, by anybody, is not the one the job ran on.
-        if (!Ownership.SameName(vm.Owner, failed.Owner) || vm.Created > failed.Created)
-            return CodedProblems.Create(409, "vm-changed", "The VM this job ran on no longer exists.");
+        if (JobRetryRules.Refusal(failed, vm, []) is { Code: "vm-changed" } changed) return CodedProblems.Create(changed.Status, changed.Code, changed.Message);
         if (await LifecycleEndpoints.AuthorizeAsync(vm, http, true, ct) is { } denied) return denied;
 
-        var requestId = "retry:" + failed.Id;
-        if (all.Any(j => j.Kind is JobKinds.Provision or JobKinds.Reinstall or JobKinds.Restore && j.Created > failed.Created
-                && j.OperationKey != requestId && Ownership.SameName(j.VmName, vm.Name) && Ownership.SameName(j.Owner, vm.Owner)))
-            return CodedProblems.Create(409, "job-superseded", "A later job ran on this VM; only the latest one can be retried.");
+        var requestId = JobRetryRules.RequestId(failed);
+        if (JobRetryRules.Refusal(failed, vm, all) is { } refused) return CodedProblems.Create(refused.Status, refused.Code, refused.Message);
         string? backupId = null;
         if (failed.Kind == JobKinds.Restore)
         {

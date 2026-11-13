@@ -47,7 +47,7 @@ public sealed record HostCpuSummary(int Logical, int? Budget, int Active, int? A
 /// </summary>
 public sealed record HostConfigResponse(CapacityConfig Capacity, UsageConfig Usage, MemoryPressureConfig MemoryPressure,
     UserDefaultsConfig UserDefaults, UserCapsConfig UserCaps, LifecycleConfig Lifecycle, MediaConfig Media, NetworkConfig Network,
-    VirtualizationConfig Virtualization, UpdatesConfig Updates, VaultConfig Vault, HttpsConfig Https, BackupsConfig Backups);
+    VirtualizationConfig Virtualization, UpdatesConfig Updates, VaultConfig Vault, HttpsConfig Https, BackupsConfig Backups, RepairConfig Repair);
 
 // ── GET /host/windows ──
 

@@ -118,6 +118,10 @@
 .network.source:string
 .network.updatedAt:null
 .network:object
+.repair.auto:bool
+.repair.source:string
+.repair.updatedAt:null
+.repair:object
 .updates.auto:bool
 .updates.channel:string
 .updates.drainTimeoutMinutes:number

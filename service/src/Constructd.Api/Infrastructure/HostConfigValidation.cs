@@ -22,6 +22,7 @@ public static partial class HostConfigValidation
         ["vault"] = HostAdminDefaults.Vault,
         ["https"] = HostAdminDefaults.Https,
         ["backups"] = HostAdminDefaults.Backups,
+        ["repair"] = HostAdminDefaults.Repair,
     };
     public static string? Allowance(UserAllowance a) => a.MaxRetainedChildren < 0 || a.CpuBudget < 0 || a.RamBudgetBytes < 0 || a.StorageBudgetBytes < 0
         ? "Budgets and counts must be non-negative." : a.MaxChildLifetimeSeconds is < 300 ? "A finite lifetime limit must be at least 300 seconds." : null;
