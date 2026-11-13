@@ -350,7 +350,9 @@ public sealed partial class VaultHostService(IVaultStore store, IVmRepository vm
         await store.DeleteAsync<VaultLease>(lease.Id, ct).ConfigureAwait(false);
         entries ??= await EntriesAsync(lease.Owner, ct).ConfigureAwait(false);
         var entry = Live(entries, lease.Name);
-        if (entry is { AutoApprove: false }) await QueueCleanupAsync(lease.Owner, lease.Vm, Copy(entry), due, ct).ConfigureAwait(false);
+        // The value the lease was granted on, not one that replaced it since: that one the VM never saw.
+        var seen = lease.Seen ?? (entry is null ? null : Copy(entry));
+        if (entry is not { AutoApprove: true } && seen is not null) await QueueCleanupAsync(lease.Owner, lease.Vm, seen, due, ct).ConfigureAwait(false);
         return entry is not { AutoApprove: true };
     }
 
@@ -360,7 +362,7 @@ public sealed partial class VaultHostService(IVaultStore store, IVmRepository vm
         foreach (var lease in (await store.ListAsync<VaultLease>(owner, ct).ConfigureAwait(false)).Where(l => l.Name == old.Name))
         {
             await store.DeleteAsync<VaultLease>(lease.Id, ct).ConfigureAwait(false);
-            if (!old.AutoApprove) await QueueCleanupAsync(owner, lease.Vm, Copy(old), due, ct).ConfigureAwait(false);
+            if (!old.AutoApprove) await QueueCleanupAsync(owner, lease.Vm, lease.Seen ?? Copy(old), due, ct).ConfigureAwait(false);
         }
     }
 

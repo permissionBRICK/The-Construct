@@ -194,6 +194,37 @@ public sealed class VaultRecordTests
     }
 
     [Fact]
+    public async Task An_approved_one_time_get_does_not_hand_out_a_value_replaced_before_pickup()
+    {
+        using var h = await RecordVaultHarness.CreateAsync();
+        await h.DeviceWriteAsync("db", "db_password_A1");
+        var id = await h.PendingAsync(h.Request("get", ["db"]));
+        using (var device = h.Device())
+            Assert.Equal(HttpStatusCode.NoContent, (await device.PostAsJsonAsync($"vault/approvals/{id}", new { decision = "approve" })).StatusCode);
+        await h.DeviceWriteAsync("db", "db_password_B2");
+        var answer = await h.PollAsync(id);
+        Assert.Equal("denied", answer["status"]!.GetValue<string>());
+        Assert.DoesNotContain(Convert.ToBase64String(Encoding.UTF8.GetBytes("db_password_B2")), answer.ToJsonString());
+    }
+
+    [Fact]
+    public async Task Revoking_a_lease_after_a_device_replaced_the_value_scrubs_the_old_value_not_the_new()
+    {
+        using var h = await RecordVaultHarness.CreateAsync();
+        await h.DeviceWriteAsync("db", "db_password_A1");
+        await h.ApprovedAsync(h.Request("request", ["db"], new { ttl = 3600 }));
+        await h.DeviceWriteAsync("db", "db_password_B2");
+        var leaseId = (await h.LeasesAsync()).Single()!["id"]!.GetValue<string>();
+        Assert.Equal(HttpStatusCode.NoContent, (await h.Bob.DeleteAsync($"/api/v1/vault/leases/{leaseId}")).StatusCode);
+        h.App.Clock.Advance(TimeSpan.FromSeconds(10));
+        var vm = (await h.App.Vms.GetAsync("dev", default))!;
+        Assert.True(await h.Vault.ScrubDueAsync(vm, default));
+        var jobs = (await h.Guest.GetFromJsonAsync<JsonObject>("/api/v1/vms/dev/vault/scrubs"))!.ToJsonString();
+        Assert.Contains(Convert.ToBase64String(Encoding.UTF8.GetBytes("db_password_A1")), jobs);
+        Assert.DoesNotContain(Convert.ToBase64String(Encoding.UTF8.GetBytes("db_password_B2")), jobs);
+    }
+
+    [Fact]
     public async Task A_secret_deleted_on_a_device_ends_its_leases_at_the_VMs_next_request()
     {
         using var h = await RecordVaultHarness.CreateAsync();

@@ -508,6 +508,9 @@ public sealed partial class VaultHostService
         try
         {
             var state = await OwnerAsync(vm.Owner, CancellationToken.None).ConfigureAwait(false);
+            // A device may have replaced the value since the approval: that lease ends here, not with the new value.
+            if (state is { Records: true })
+                await ReconcileLeasesAsync(state, await EntriesAsync(vm.Owner, CancellationToken.None).ConfigureAwait(false), CancellationToken.None).ConfigureAwait(false);
             var lease = (await store.ListAsync<VaultLease>(vm.Owner, CancellationToken.None).ConfigureAwait(false)).FirstOrDefault(l => l.Id == record.LeaseId);
             if (lease is null || !LiveLease(lease, clock.UtcNow))
                 return VaultProtocol.Response(record.Request.Id, "denied", $"Access to {record.Request.Names[0]} was revoked on the PC.");
