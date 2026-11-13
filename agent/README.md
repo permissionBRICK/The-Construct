@@ -131,7 +131,7 @@ CONSTRUCT_AGENT_UPDATE_OPENAPI=1 dotnet test agent/Construct.Agent.slnx --filter
 | `GET /api/vault/approvals`, `POST /api/vault/approvals/{engine}/{id} {decision: allow\|deny, ttlSeconds?}` | The engines' pending approvals with the `uses` and `ttlSeconds` the VM asked for; an allow of a lease request may carry the duration the user chose (60 to 86400 s), which the lease gets. On a `locked` engine an allow first unlocks the VM that asked |
 | `DELETE /api/vault/leases/{engine}/{id}` | Ends a lease early (the lease views carry `id`); the engine scrubs the value as on expiry |
 | `GET /api/vault/entry-requests`, `POST /api/vault/entry-requests/{engine}/{id} {value, username?}`, `POST …/decline` | `construct secret ask`: the user enters the value, sealed here with `K`; created only while the name is free, never auto-approved, no lease |
-| `POST /api/engines/{engine}/vms/{vm}/backups/{backup}/restore {requestId?}` | Restores a stored backup into the running VM: reads its keys file from the engine, unwraps the backup's key with the account's `B` here and starts the engine's `restore` job with it in the job's secrets. `409 backup-key-not-held` when `B` does not open it. Answers `{jobId, replayed}`; follow the job through the proxy |
+| `POST /api/engines/{engine}/vms/{vm}/backups/{backup}/restore {requestId?}` | Restores a stored backup into the running VM: reads its keys file from the engine, unwraps the backup's key with the account's `B` here, or else with an old per-PC backup key the account holds (`setting:legacy-backup-key:<fingerprint>`, looked up by the recipients the keys file names, opened under `U` here), and starts the engine's `restore` job with it in the job's secrets. `409 backup-key-not-held` when none of them opens it. Answers `{jobId, replayed}`; follow the job through the proxy |
 | `GET/PUT /api/vault/engines/{engine}/mode {mode}` | An engine's vault mode and whether it holds `K`; `available` grants `K`, `locked` withdraws it |
 | `POST /api/vault/engines/{engine}/vms/{vm}/unlock` | Hands a running VM on a `locked` engine `K` until it stops |
 
@@ -159,10 +159,11 @@ repository's `main` profiles through the store engine's `PUT /profiles/{name}`; 
 change as that VM's write with the merge base as its base, so the engine merges per field and opens a
 conflict (branch ours, main theirs); the upstream links into `legacy-upstream.json`; the vault's secrets
 (only when the account's `K` is the old key); each old backup private key wrapped under `U` into a
-`setting` record `setting:legacy-backup-key:<fingerprint>`; the account's `B.pub` onto every VM it reaches
-over SSH with the old client's key (`construct backup recipients add`); last, each local VM adopted by the
-engine (`POST /vms/{name}/adopt`). Then `stage: converted`, and only then the old backup keys come off the
-VMs. Open vault leases and pending cleanups are not carried over: a VM asks again.
+`setting` record `setting:legacy-backup-key:<fingerprint>`; the account's `B.pub` onto every VM, through the engine that runs it
+(`POST /vms/{name}/backup-recipients`), over SSH with the old client's key only for a VM no engine reaches yet (a local VM
+before its adoption, a host where this device holds no device token); never for a VM a host answers is not the user's; last, each local VM adopted by the engine (`POST /vms/{name}/adopt`, which enrols `B.pub` as well).
+Then `stage: converted`, and only then the old backup keys come off the VMs, through the engine (`DELETE
+/vms/{name}/backup-recipients/{fingerprint}`, refused while `B.pub` is not on the VM) or, for a VM no engine runs, over SSH. Open vault leases and pending cleanups are not carried over: a VM asks again.
 
 ### Device routes
 
@@ -170,12 +171,13 @@ VMs. Open vault leases and pending cleanups are not carried over: a VM asks agai
 |---|---|
 | `GET /api/device/features` | `{platform, notifications, microphone, share, startWithOs, shell}`: what this device can do |
 | `GET`, `PUT /api/device/settings {channel?, autoUpdate?, startWithOs?}` | The release channel (`stable`, `nightly`, an https manifest URL), automatic updates (off by default), start with the OS (`null` where not available) |
-| `GET /api/device/ssh-key` | The device's SSH public key (`~/.ssh/construct_ed25519`, created on first use). The agent registers it at every engine it enrols at (and again on connect); the engine authorizes it on the user's VMs |
+| `GET /api/device/ssh-key` | The device's SSH public key (`~/.ssh/construct_ed25519`, created on first use). The agent registers it at every engine it enrols at (and again on connect); the engine authorizes it on the user's VMs. With it the agent registers the account's `B.pub`, which the engine enrols on the user's VMs |
 | `GET /api/connections`, `POST /api/connections/refresh` | The user's own primary VMs on every engine: state, the address this device dials (the engine's `direct` address for a VM on this PC's engine, where it names one, else its `forwarded` endpoint), local forwards, the microphone |
 | `DELETE /api/connections/{engine}/{vm}/forwards/{id}` | Closes a local forward (also at the engine) |
 | `PUT /api/connections/{engine}/{vm}/mic {on}` | Microphone passthrough; kept for the VM's next start |
 | `PUT`, `DELETE /api/connections/{engine}/{vm}/ssh-config` | The VM's `Host` alias in `~/.ssh/config` and VS Code's `remote.SSH.remotePlatform` entry |
 | `POST /api/connections/{engine}/{vm}/open {what: t3\|vscode\|ssh}` | T3 Code's pairing link in the browser, VS Code Remote-SSH, an SSH terminal |
+| `POST /api/connections/{engine}/{vm}/t3-pairing` | A one-time T3 Code pairing link for T3 Desktop on one of the user's own running VMs, minted on the VM as the old `Get-ConstructT3PairingLink.ps1` did (label `construct-t3-desktop[-<vm>]`, ten minutes, the administrative scopes where the VM's T3 offers them): `{pairUrl, links: [{kind, pairUrl}], scopes}`. The link carries a one-time token; it is in this answer only, never in a log or a message. The shim `Get-ConstructT3PairingLink.ps1` prints it in its old one-line format |
 | `GET`, `POST`, `DELETE /api/connections/{engine}/{vm}/share` | The workspace share of a VM on this PC on a drive letter (Windows) |
 | `GET /api/update`, `POST /api/update/check`, `POST /api/update/install` | Version, channel, the version on offer; install it when idle |
 | `GET`, `POST /api/update/everything` | "Update everything": the parts and their state |

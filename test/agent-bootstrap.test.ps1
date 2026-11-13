@@ -274,5 +274,19 @@ Assert ($run.Code -eq 1 -and -not $line.ok -and $line.error -match 'Finish the u
 $run = Invoke-World $world (Join-Path $shims 'Update-T3Code.ps1')
 Assert ($run.Code -eq 1 -and $run.Output -match 'Finish the upgrade in the Construct window') "the T3 update shim says to finish the upgrade: $($run.Output)"
 
+# ---- the pairing shim after the conversion: the agent's link in the old output ----
+$world = New-World 't3-converted' @{ agentRunning = $true; arguments = @('-InstanceName', 'Work') }
+$converted = (Get-Content -Raw $harness).Replace("if (`$Uri -match '/api/upgrade$') { return @{ legacy = `$true; stage = 'converting' } }",
+    "if (`$Uri -match '/api/upgrade$') { return @{ legacy = `$true; stage = 'converted' } }`n    if (`$Uri -match '/api/connections$') { return @(@{ engine = 'e1'; vm = 'work' }) }`n    if (`$Uri -match '/api/connections/e1/work/t3-pairing$') { return [pscustomobject]@{ pairUrl = 'https://host.example:29991/pair#token=ONE-TIME'; links = @([pscustomobject]@{ kind = 'forwarded'; pairUrl = 'https://host.example:29991/pair#token=ONE-TIME' }); scopes = 'administrative' } }")
+Set-Content $harness $converted
+$run = Invoke-World $world (Join-Path $shims 'Get-ConstructT3PairingLink.ps1')
+$line = $run.Output.Trim() | ConvertFrom-Json
+Assert ($run.Code -eq 0 -and $line.ok -and $line.instance -eq 'work' -and $line.pairUrl -eq 'https://host.example:29991/pair#token=ONE-TIME' -and $line.scopes -eq 'administrative') "the pairing shim prints the agent's link: $($run.Output)"
+Assert (@($line.links).Count -eq 1 -and $line.links[0].kind -eq 'forwarded') "the pairing shim keeps the links: $($run.Output)"
+Assert ($run.Calls -contains 'rest Post http://127.0.0.1:5555/api/connections/e1/work/t3-pairing') "the pairing shim asks the agent: $($run.Calls)"
+$run = Invoke-World (New-World 't3-unknown' @{ agentRunning = $true; arguments = @('-InstanceName', 'other') }) (Join-Path $shims 'Get-ConstructT3PairingLink.ps1')
+$line = $run.Output.Trim() | ConvertFrom-Json
+Assert ($run.Code -eq 1 -and -not $line.ok -and $line.error -match 'No VM named other') "an unknown VM gets no link: $($run.Output)"
+
 Remove-Item -Recurse -Force $dir
 Write-Host "PASS: $script:count agent bootstrap assertions"

@@ -34,6 +34,7 @@ public static class ProvisionComposition
         services.AddSingleton<ISshRunner>(_ => new SystemSshRunner(new ProcessRunner()));
         services.AddSingleton<IProvisionTargets, ProvisionTargets>();
         services.AddSingleton<Constructd.Api.Devices.DeviceSshKeys>();
+        services.AddSingleton<Constructd.Api.Devices.AccountBackupKeys>();
         services.AddSingleton<RecoveryMarks>();
         services.AddSingleton<ReinstallKeys>();
         services.AddSingleton<ProvisionJob>();

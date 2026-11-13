@@ -58,12 +58,36 @@ public sealed class AdoptableGuest : ISshRunner
 
     public List<string> Commands { get; } = [];
 
+    /// <summary>The fingerprints enrolled as backup recipients on the guest.</summary>
+    public HashSet<string> Recipients { get; } = [];
+
     /// <summary>How many switch-overs fail (exit 1) before one succeeds.</summary>
     public int FailSwitches { get; set; }
 
     public Task<int> RunAsync(SshTarget target, string command, string? standardInput, IProgress<string>? lines, TimeSpan timeout, CancellationToken ct)
     {
         lock (Commands) Commands.Add(command);
+        // The guest's backup recipients (construct-backup.sh), by fingerprint.
+        if (command.Contains("recipients add", StringComparison.Ordinal) && standardInput is not null)
+        {
+            using var rsa = RSA.Create();
+            rsa.ImportFromPem(standardInput);
+            lock (Recipients) Recipients.Add(Convert.ToHexStringLower(SHA256.HashData(rsa.ExportSubjectPublicKeyInfo())));
+            return Task.FromResult(0);
+        }
+
+        if (command.Contains("recipients list", StringComparison.Ordinal))
+        {
+            lock (Recipients) lines?.Report(new JsonArray(Recipients.Select(fp => (JsonNode)new JsonObject { ["fingerprint"] = fp, ["label"] = "PC" }).ToArray()).ToJsonString());
+            return Task.FromResult(0);
+        }
+
+        if (command.Contains("recipients remove ", StringComparison.Ordinal))
+        {
+            lock (Recipients) Recipients.RemoveWhere(fp => command.Contains("recipients remove " + fp, StringComparison.Ordinal));
+            return Task.FromResult(0);
+        }
+
         if (command.StartsWith("cat /etc/machine-id", StringComparison.Ordinal))
         {
             lines?.Report("0123456789abcdef0123456789abcdef");
@@ -157,10 +181,13 @@ public sealed class LegacyFixture : IDisposable
         var path = Path.Combine(Root, "backup", "pc-key.dpapi");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllBytes(path, Protection.Protect(Encoding.UTF8.GetBytes(rsa.ToXmlString(true))));
+        BackupPublicPem = rsa.ExportSubjectPublicKeyInfoPem();
         return BackupFingerprint = Convert.ToHexStringLower(SHA256.HashData(rsa.ExportSubjectPublicKeyInfo()));
     }
 
     public string? BackupFingerprint { get; private set; }
+
+    public string? BackupPublicPem { get; private set; }
 
     /// <summary>The config repository: <c>main</c> with the profiles, then a VM branch with an unmerged edit.</summary>
     public void ConfigRepo(IReadOnlyDictionary<string, string> main, string? branch = null, IReadOnlyDictionary<string, string?>? branchFiles = null,

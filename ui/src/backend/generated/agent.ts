@@ -773,6 +773,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/connections/{engine}/{vm}/t3-pairing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description A one-time T3 Code pairing link for T3 Desktop on one of the user's own running VMs (`pairUrl`, `links`, `scopes`). The link carries a one-time token: it is in this answer only. */
+        post: operations["CreateT3PairingLink"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/connections/{engine}/{vm}/share": {
         parameters: {
             query?: never;
@@ -1144,6 +1161,15 @@ export interface components {
         };
         SwitchRequest: {
             on: boolean;
+        };
+        T3PairingLink: {
+            pairUrl: string;
+            links: components["schemas"]["T3PairingLinkEntry"][];
+            scopes: string;
+        };
+        T3PairingLinkEntry: {
+            kind: string;
+            pairUrl: string;
         };
         UpdatePart: {
             part: string;
@@ -2970,6 +2996,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OpenResult"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    CreateT3PairingLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine: string;
+                vm: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["T3PairingLink"];
                 };
             };
             /** @description An error. */

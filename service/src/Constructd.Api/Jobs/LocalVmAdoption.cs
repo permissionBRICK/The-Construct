@@ -165,6 +165,14 @@ public static class LocalVmAdoption
         // adopt-host.py prints only fixed, credential-free messages.
         foreach (var line in said.Items) progress.Report("guest: " + line);
         if (exit != 0) throw new VmAdoptionException("guest", $"The guest could not be switched to the engine (exit {exit}); it restored its files.");
+
+        // The account's backup key, so the VM encrypts its backups to the account from now on. Not required: a device enrols it later.
+        // The admin CLI runs without the participation store: nothing to enrol there.
+        if (services.GetService<Constructd.Sync.Participation.EngineKeyStore>()?.BackupKey(owner) is { } backupKey)
+        {
+            var added = await ssh.RunAsync(target, BackupScript.RecipientsAdd(Constructd.Api.Devices.AccountBackupKeys.Label), backupKey, null, TimeSpan.FromMinutes(2), ct);
+            progress.Report(added == 0 ? "The account's backup key is enrolled" : $"The account's backup key was not enrolled (exit {added}); a device enrols it later");
+        }
     }
 
     private sealed class Lines : IProgress<string>

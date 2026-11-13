@@ -5963,6 +5963,120 @@
         }
       }
     },
+    "/api/v1/device/backup-key": {
+      "put": {
+        "tags": [
+          "EngineParticipationEndpoints"
+        ],
+        "operationId": "PutAccountBackupKey",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountBackupKeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vms/{name}/backup-recipients": {
+      "post": {
+        "tags": [
+          "EngineParticipationEndpoints"
+        ],
+        "operationId": "AddVmBackupRecipient",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupRecipientResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vms/{name}/backup-recipients/{fingerprint}": {
+      "delete": {
+        "tags": [
+          "EngineParticipationEndpoints"
+        ],
+        "operationId": "RemoveVmBackupRecipient",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "fingerprint",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/engine/grants": {
       "put": {
         "tags": [
@@ -8268,6 +8382,17 @@
   },
   "components": {
     "schemas": {
+      "AccountBackupKeyRequest": {
+        "required": [
+          "publicKey"
+        ],
+        "type": "object",
+        "properties": {
+          "publicKey": {
+            "type": "string"
+          }
+        }
+      },
       "AcquireMediaRequest": {
         "required": [
           "url",
@@ -8638,6 +8763,17 @@
             "items": {
               "$ref": "#/components/schemas/BackupSummaryResponse"
             }
+          }
+        }
+      },
+      "BackupRecipientResponse": {
+        "required": [
+          "fingerprint"
+        ],
+        "type": "object",
+        "properties": {
+          "fingerprint": {
+            "type": "string"
           }
         }
       },

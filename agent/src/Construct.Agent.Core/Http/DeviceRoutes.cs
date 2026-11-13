@@ -81,6 +81,10 @@ public static class DeviceRoutes
             TypedResults.Ok(await device.Actions.OpenAsync(engine, vm, request.What, ct))).WithName("OpenVm")
             .WithDescription("Opens the VM: `t3` (T3 Code's pairing link in the browser), `vscode` (Remote-SSH), `ssh` (a terminal).");
 
+        vm.MapPost("/t3-pairing", async (string engine, string vm, CancellationToken ct) =>
+            TypedResults.Ok(await device.Actions.T3PairingAsync(engine, vm, ct))).WithName("CreateT3PairingLink")
+            .WithDescription("A one-time T3 Code pairing link for T3 Desktop on one of the user's own running VMs (`pairUrl`, `links`, `scopes`). The link carries a one-time token: it is in this answer only.");
+
         vm.MapGet("/share", async (string engine, string vm, CancellationToken ct) => TypedResults.Ok(await device.Actions.ShareAsync(engine, vm, ct))).WithName("GetShare");
 
         vm.MapPost("/share", async (string engine, string vm, CancellationToken ct) => TypedResults.Ok(await device.Actions.MapShareAsync(engine, vm, ct))).WithName("MapShare")
