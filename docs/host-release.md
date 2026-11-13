@@ -7,6 +7,8 @@ generate the manifest, then publish. **No tests run in GitHub Actions.** Run the
 regression checks locally before pushing. The ISO builder is released separately and
 resolved through `config/iso-builder.json` (latest release by default).
 
+Nightly prereleases, the channel manifests and release cuts for the new stack: [Release flow and channels](release-flow.md).
+
 The per-user tray app ships independently as `companion-<commit>`; see
 [Construct Companion](companion.md) for its installer, package layout and release gates.
 Its release is published with `--latest=false` so the complete Construct manifest
