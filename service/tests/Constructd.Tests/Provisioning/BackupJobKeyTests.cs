@@ -43,6 +43,42 @@ public sealed class BackupJobKeyTests
         Assert.Null(BackupJobKey.Unwrap(null, Id, job.PrivatePem));
     }
 
+    /// <summary>The guest wraps with openssl (<c>build_keys_json</c>) and names keys by <c>key_fingerprint</c>: the engine must agree with both.</summary>
+    [Fact]
+    public void The_job_key_reads_what_openssl_wraps_as_the_guest_does()
+    {
+        var openssl = (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator)
+            .Select(d => Path.Combine(d, "openssl")).FirstOrDefault(File.Exists);
+        if (openssl is null || !OperatingSystem.IsLinux()) return;
+        var job = BackupJobKey.Create();
+        var dir = Directory.CreateTempSubdirectory("construct-jobkey-");
+        try
+        {
+            var pub = Path.Combine(dir.FullName, "job.pem");
+            File.WriteAllText(pub, job.PublicPem);
+            var wrapped = Run(openssl, ["pkeyutl", "-encrypt", "-pubin", "-inkey", pub, "-pkeyopt", "rsa_padding_mode:oaep",
+                "-pkeyopt", "rsa_oaep_md:sha256", "-pkeyopt", "rsa_mgf1_md:sha256"], Encoding.ASCII.GetBytes(E));
+            Assert.Equal(E, BackupJobKey.Unwrap(Keys(Id, (job.Fingerprint, Convert.ToBase64String(wrapped))), Id, job.PrivatePem));
+            var der = Run(openssl, ["pkey", "-pubin", "-in", pub, "-outform", "DER"], []);
+            Assert.Equal(job.Fingerprint, Convert.ToHexStringLower(SHA256.HashData(der)));
+        }
+        finally { dir.Delete(true); }
+
+        static byte[] Run(string file, string[] args, byte[] input)
+        {
+            var start = new System.Diagnostics.ProcessStartInfo(file) { RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true };
+            foreach (var arg in args) start.ArgumentList.Add(arg);
+            using var process = System.Diagnostics.Process.Start(start)!;
+            process.StandardInput.BaseStream.Write(input);
+            process.StandardInput.Close();
+            using var output = new MemoryStream();
+            process.StandardOutput.BaseStream.CopyTo(output);
+            process.WaitForExit();
+            Assert.Equal(0, process.ExitCode);
+            return output.ToArray();
+        }
+    }
+
     [Fact]
     public void Known_hosts_loses_only_the_address_of_the_reinstalled_VM()
     {
