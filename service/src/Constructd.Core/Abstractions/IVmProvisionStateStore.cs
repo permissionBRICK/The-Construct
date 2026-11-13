@@ -16,9 +16,13 @@ public interface IVmDesiredStateSource
 
 public static class VmDesiredStateSourceExtensions
 {
-    /// <summary>The stored settings of this VM, or null when none are stored or they belong to an earlier VM of the name.</summary>
+    /// <summary>
+    /// The stored settings of this VM, or null when none are stored or they belong to an earlier VM of the name. A row
+    /// written before the creation time was recorded counts only when it was written after this VM was created.
+    /// </summary>
     public static async Task<StoredDesiredState?> GetDesiredForAsync(this IVmDesiredStateSource source, Vm vm, CancellationToken ct) =>
-        await source.GetDesiredAsync(vm.Name, ct) is { } stored && (stored.VmCreated is null || stored.VmCreated == vm.Created) ? stored : null;
+        await source.GetDesiredAsync(vm.Name, ct) is { } stored && (stored.VmCreated is { } created ? created == vm.Created : stored.UpdatedAt >= vm.Created)
+            ? stored : null;
 }
 
 /// <summary>What the guest reported after the last provision run (the <c>vm-applied</c> record).</summary>

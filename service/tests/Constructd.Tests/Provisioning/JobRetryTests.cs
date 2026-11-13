@@ -92,4 +92,22 @@ public sealed class JobRetryTests
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         Assert.Contains("vm-changed", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task A_restore_cut_off_before_it_ran_is_retried_with_the_backup_named_again()
+    {
+        await using var h = await StartAsync();
+        h.App.Clock.Advance(TimeSpan.FromMinutes(1));
+        var failed = new Job("cut0ff", JobKinds.Restore, ProvisionHarness.Vm, "alice", JobState.Failed, [], null, "interrupted by a restart",
+            h.App.Clock.UtcNow, h.App.Clock.UtcNow, "alice", "restore-1", "restore");
+        await h.App.Service<IJobStore>().UpsertAsync(failed, default);
+        const string key = "AGE-SECRET-KEY-1QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ";
+
+        var unnamed = await h.Client.PostJsonAsync("/api/v1/jobs/cut0ff/retry", new { secrets = new { backupKey = key } });
+        Assert.Equal(HttpStatusCode.BadRequest, unnamed.StatusCode);
+        Assert.Contains("backupId", await unnamed.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        // Named, it reaches the restore job's own checks: this VM has no such backup.
+        var named = await h.Client.PostJsonAsync("/api/v1/jobs/cut0ff/retry", new { backupId = new string('a', 32), secrets = new { backupKey = key } });
+        Assert.Equal(HttpStatusCode.NotFound, named.StatusCode);
+    }
 }

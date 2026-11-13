@@ -10915,6 +10915,12 @@
                 "$ref": "#/components/schemas/ProvisionSecretsRequest"
               }
             ]
+          },
+          "backupId": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },

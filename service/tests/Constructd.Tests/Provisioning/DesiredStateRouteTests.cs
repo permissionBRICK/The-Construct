@@ -87,4 +87,17 @@ public sealed class DesiredStateRouteTests
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
         Assert.Contains("desired-state-missing", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task A_row_without_the_creation_time_counts_only_when_written_after_the_vm_was_created()
+    {
+        await using var h = await ProvisionHarness.StartAsync();
+        var vm = (await h.App.Vms.GetAsync(ProvisionHarness.Vm, default))!;
+        var store = h.App.Service<IVmDesiredStateSource>();
+        var settings = new VmDesiredState(["p"], new ProvisionSettings());
+        await store.SetDesiredAsync(vm.Name, new StoredDesiredState(settings, new string('a', 64), vm.Created.AddDays(-1), "carol"), default);
+        Assert.Null((await (await h.Client.GetAsync(Url)).ReadAsync<VmDesiredStateResponse>()).Desired);
+        await store.SetDesiredAsync(vm.Name, new StoredDesiredState(settings, new string('a', 64), vm.Created.AddMinutes(1), "alice"), default);
+        Assert.Equal(["p"], (await (await h.Client.GetAsync(Url)).ReadAsync<VmDesiredStateResponse>()).Desired!.Projects);
+    }
 }

@@ -127,7 +127,9 @@ public static partial class ProvisionEndpoints
         {
             backupId = failed.Result is null ? null : JsonSerializer.SerializeToElement(failed.Result, ApiJson.Options) is { ValueKind: JsonValueKind.Object } result
                 && result.TryGetProperty("backupId", out var value) ? value.GetString() : null;
-            if (!BackupScript.IsBackupId(backupId)) return CodedProblems.Create(409, "not-retryable", "The failed restore does not name its backup.");
+            // A restore cut off before it ran (an engine restart) has no result; the caller names the backup again.
+            backupId ??= request?.BackupId;
+            if (!BackupScript.IsBackupId(backupId)) return CodedProblems.Validation("backupId", "The failed restore does not name its backup; send it in 'backupId'.");
             if (!BackupJobKey.IsIdentity(request?.Secrets?.BackupKey))
                 return CodedProblems.Validation("secrets.backupKey", "A restore needs the backup's key (AGE-SECRET-KEY-1...).");
         }

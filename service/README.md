@@ -361,7 +361,7 @@ The same route starts the two other jobs of a VM's life:
 
 `POST /jobs/{id}/retry` (`{secrets?}`) starts the same kind of job again for the same VM with its stored settings
 and the engine's installed commit: a failed `provision`, `reinstall` or `restore` (a restore with its backup's key in
-`secrets.backupKey` again) → `202 {jobId, kind, replayed}`. Other kinds answer `409 not-retryable`, a job that did not
+`secrets.backupKey` again, and in `backupId` when the failed restore recorded none because a restart cut it off before it ran) → `202 {jobId, kind, replayed}`. Other kinds answer `409 not-retryable`, a job that did not
 fail `409 job-not-failed`, a job of an earlier VM under the name `409 vm-changed`, and a job with a later
 provision, reinstall or restore on the VM after it `409 job-superseded`. The retry's request id is `retry:<id>`, so a
 second click answers the retry already started. The rules below hold for a retry as for any repeated job.
