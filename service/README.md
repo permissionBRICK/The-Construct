@@ -521,7 +521,8 @@ release commit the host does not run; admins only) and `update.finished` (a host
 `data` is `{seq, type, id, vm}`, and the SSE `id` is `seq`. A caller hears only of what it may read: its
 own VMs and backups, jobs it owns or initiated, finished host updates; an admin hears of everything.
 Without `since`, or when the events after it are gone (more than 1000 behind, or an earlier run of the
-engine), the stream starts with `reset {seq}`: reload, then resume from that `seq`. Guest reports, host
+engine), the stream starts with `reset {seq}`: reload, then resume from that `seq`. A stream ends after
+five minutes and the client resumes with its cursor, so who may hear of what is judged again. Guest reports, host
 observations and leases arrive too often to be announced; they are read with the VM.
 
 Current job kinds are `create-vm`, `remove-vm`, `parent-cascade-delete`, `child-create`,

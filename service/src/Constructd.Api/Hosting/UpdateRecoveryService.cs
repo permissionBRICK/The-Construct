@@ -126,7 +126,8 @@ public sealed class UpdateRecoveryService(HostUpdateJob work,IHostUpdateStore st
                         var ended=job with {State=row.State==HostUpdateState.Succeeded ? JobState.Succeeded : JobState.Failed,
                             Finished=clock.UtcNow,Result=row,Phase=row.Phase,Error=row.State==HostUpdateState.Succeeded ? null : row.Error ?? "update-rolled-back"};
                         await jobs.UpsertAsync(ended,ct);
-                        services.GetRequiredService<Constructd.Core.Services.ChangeFeed>().Job("job.ended",ended);
+                        // A job that had ended already (it hands over to the updater, or a restart failed it) changed, it did not end again.
+                        services.GetRequiredService<Constructd.Core.Services.ChangeFeed>().Job(job.State is JobState.Queued or JobState.Running ? "job.ended" : "job.progress",ended);
                     }
                 }
             }

@@ -31,13 +31,18 @@ public sealed class EngineStreams(AgentEvents events, Func<string, HttpClient?> 
     /// <summary>Follows every engine not followed yet, and wakes the ones waiting to retry (a credential may have arrived).</summary>
     public void Sync()
     {
-        foreach (var engine in engines())
+        // One follower per engine: two Syncs at once (two changes on different threads) must not both start one.
+        lock (_following)
         {
-            _following.GetOrAdd(engine, id => Task.Run(async () =>
+            foreach (var engine in engines())
             {
-                try { await FollowAsync(id).ConfigureAwait(false); }
-                finally { _following.TryRemove(id, out _); }
-            }));
+                if (_following.ContainsKey(engine)) continue;
+                _following[engine] = Task.Run(async () =>
+                {
+                    try { await FollowAsync(engine).ConfigureAwait(false); }
+                    finally { lock (_following) _following.TryRemove(engine, out _); }
+                });
+            }
         }
 
         Interlocked.Exchange(ref _wake, new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)).TrySetResult();

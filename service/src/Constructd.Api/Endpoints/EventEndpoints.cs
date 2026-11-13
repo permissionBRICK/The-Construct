@@ -31,8 +31,14 @@ public static class EventEndpoints
         return api;
     }
 
-    /// <summary>The keepalive comment's interval; tests shorten it.</summary>
-    internal static TimeSpan KeepAlive { get; set; } = TimeSpan.FromSeconds(15);
+    /// <summary>The keepalive comment's interval.</summary>
+    private static readonly TimeSpan KeepAlive = TimeSpan.FromSeconds(15);
+
+    /// <summary>
+    /// A stream ends after this long and the client resumes with its cursor, nothing lost: who may hear
+    /// of what is judged at connect, so a revoked device or a demoted admin stops hearing within this time.
+    /// </summary>
+    private static readonly TimeSpan Lifetime = TimeSpan.FromMinutes(5);
 
     private static async Task EventsAsync(HttpContext http, ChangeFeed feed, long? since)
     {
@@ -42,7 +48,9 @@ public static class EventEndpoints
         response.ContentType = "text/event-stream";
         response.Headers.CacheControl = "no-cache";
         response.Headers["X-Accel-Buffering"] = "no";
-        var ct = http.RequestAborted;
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(http.RequestAborted);
+        lifetime.CancelAfter(Lifetime);
+        var ct = lifetime.Token;
         try
         {
             await response.WriteAsync(": connected\n\n", ct);
@@ -71,7 +79,7 @@ public static class EventEndpoints
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            // The client went away.
+            // The client went away, or the stream's lifetime ended: the client connects again with its cursor.
         }
     }
 
