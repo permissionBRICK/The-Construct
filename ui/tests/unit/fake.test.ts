@@ -182,3 +182,16 @@ describe('FakeBackend', () => {
     expect(be.snapshot().upgrade).toBeNull();
   });
 });
+
+describe('Windows guests', () => {
+  it('assigns a free key and activates', () => {
+    const be = new FakeBackend({ timers: false });
+    be.assignWinKey('orchard', 'reed', 'k2');
+    let h = be.snapshot().hosts.find(x => x.id === 'orchard')!;
+    expect(h.winGuests.find(g => g.name === 'reed')!.keyId).toBe('k2');
+    expect(h.winKeys.find(k => k.id === 'k2')!.held).toBe(true);
+    be.activateWindows('orchard', 'reed');
+    h = be.snapshot().hosts.find(x => x.id === 'orchard')!;
+    expect(h.winGuests.find(g => g.name === 'reed')!.activation).toBe('activated');
+  });
+});

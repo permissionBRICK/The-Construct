@@ -576,6 +576,18 @@ export class FakeBackend implements Backend {
 
   removeWinKey(hostId: string, id: string) { this.hostSet(hostId, x => { x.winKeys = x.winKeys.filter(k => k.id !== id || k.held); }); }
 
+  assignWinKey(hostId: string, guest: string, keyId: string) {
+    this.hostSet(hostId, x => {
+      const g = x.winGuests.find(y => y.name === guest), k = x.winKeys.find(y => y.id === keyId);
+      if (!g || !k) return;
+      g.keyId = keyId; k.held = true;
+    }, `Key assigned to ${guest}`);
+  }
+
+  activateWindows(hostId: string, guest: string) {
+    this.hostSet(hostId, x => { const g = x.winGuests.find(y => y.name === guest); if (g?.keyId) g.activation = 'activated'; }, `Activating ${guest}`);
+  }
+
   cancelHostJob(hostId: string, jobId: string) { this.hostSet(hostId, x => { const j = x.jobs.find(y => y.id === jobId); if (j) { j.state = 'failed'; j.phase = 'cancelled'; } }, 'Cancelled'); }
   retryHostJob(hostId: string, jobId: string) { this.hostSet(hostId, x => { const j = x.jobs.find(y => y.id === jobId); if (j) { j.state = 'done'; j.phase = 'done'; } }, 'Done'); }
 

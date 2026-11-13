@@ -294,6 +294,16 @@ function HMedia({ h }: { h: Host }) {
           <Btn sm icon="plus" disabled={key.trim().length < 5} onClick={() => { be.addWinKey(h.id, { product: prod, edition: ed, kind, key }); setKey(''); }}>Add key</Btn>
         </div>
       </Sec>
+      <Sec title="Windows guests">
+        <Table cols={[{ h: 'VM' }, { h: 'Stage', cls: 'x' }, { h: 'Activation' }, { h: 'Key', cls: 'x m' }, { h: '', cls: 'e' }]}
+          rows={h.winGuests.map(g => {
+            const k = h.winKeys.find(x => x.id === g.keyId);
+            const free = h.winKeys.filter(x => !x.held);
+            return [g.name, g.stage, <span class={g.activation === 'activated' ? 'okc' : 'badc'}>{g.activation}</span>, k ? k.partial.slice(-5) : '–',
+              k ? (g.activation !== 'activated' ? <Btn sm onClick={() => be.activateWindows(h.id, g.name)}>Activate again</Btn> : '')
+                : free.length ? <span class="confirm">{free.map(x => <Btn sm onClick={() => be.assignWinKey(h.id, g.name, x.id)}>{x.edition} {x.partial.slice(-5)}</Btn>)}</span> : ''];
+          })} />
+      </Sec>
     </>
   );
 }

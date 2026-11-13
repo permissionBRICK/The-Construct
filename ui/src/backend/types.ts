@@ -159,6 +159,7 @@ export interface AuditEntry { at: string; actor: string; action: string; target:
 export interface ConfigSection { name: string; json: string; updated: string }
 export interface Certificate { subject: string; validUntil: string; daysLeft: number; sha256: string; issuer: string }
 export interface WinKey { id: string; product: string; edition: string; kind: 'Retail' | 'MAK' | 'KMS'; partial: string; used: string; held: boolean }
+export interface WinGuest { name: string; stage: string; activation: 'activated' | 'grace' | 'not activated'; keyId: string | null }
 export interface HostUpdate { at: string; from: string; to: string; state: 'done' | 'rolled back' | 'running'; by: string }
 
 export interface Host {
@@ -180,6 +181,7 @@ export interface Host {
   media: HostMedia[];
   isos: { name: string; current: boolean; size: string }[];
   winKeys: WinKey[];
+  winGuests: WinGuest[];
   jobs: HostJob[];
   audit: AuditEntry[];
   usage: { window: 'today' | 'month' | 'all'; byUser: { user: string; vms: number; tokens: string; cost: string }[]; byVm: { vm: string; owner: string; tokens: string; cost: string }[] };
@@ -314,6 +316,8 @@ export interface Backend {
   acquireWindows(hostId: string, product: string, edition: string, language: string): void;
   addWinKey(hostId: string, key: Omit<WinKey, 'id' | 'partial' | 'used' | 'held'> & { key: string }): void;
   removeWinKey(hostId: string, id: string): void;
+  assignWinKey(hostId: string, guest: string, keyId: string): void;
+  activateWindows(hostId: string, guest: string): void;
   cancelHostJob(hostId: string, jobId: string): void;
   retryHostJob(hostId: string, jobId: string): void;
   setUsageWindow(hostId: string, window: Host['usage']['window']): void;

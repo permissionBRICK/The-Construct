@@ -33,6 +33,7 @@ const SHOTS: [Surf, string, string, string?][] = [
   ['win', 'revoked', 'revoked', 'revoke/d2'],
   ['win', 'host-users', 'handout', 'host/orchard/users'],
   ['win', 'host-vms', 'calm', 'host/orchard/vms'],
+  ['win', 'host-media', 'calm', 'host/orchard/media'],
   ['win', 'construct-update', 'update', 'app'],
   ['win', 'create-vm', 'calm', 'create'],
   ['win', 'upgrade-code', 'upgrade-code'],

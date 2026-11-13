@@ -39,7 +39,7 @@ const user = (name: string, role: 'admin' | 'user', primaries: number, children:
 const emptyAdmin = {
   health: { hypervisor: 'ok', database: 'ok', media: 'ok', inventory: 'ok' },
   capacity: { mode: 'observe' as const, ram: [0, 0] as [number, number], cpu: [0, 0] as [number, number], disk: [0, 0] as [number, number] },
-  users: [], vms: [], media: [], isos: [], winKeys: [], jobs: [], audit: [],
+  users: [], vms: [], media: [], isos: [], winKeys: [], winGuests: [], jobs: [], audit: [],
   usage: { window: 'month' as const, byUser: [], byVm: [] }, config: [], cert: null, updates: [], updating: false,
 };
 
@@ -70,6 +70,10 @@ function orchard(): Host {
     winKeys: [
       { id: 'k1', product: 'Windows 11', edition: 'Pro', kind: 'Retail', partial: '•••••-•••••-•••••-•••••-7QK2X', used: '1 / 5', held: true },
       { id: 'k2', product: 'Server 2025', edition: 'Standard', kind: 'KMS', partial: '•••••-•••••-•••••-•••••-M4R8P', used: '0', held: false },
+    ],
+    winGuests: [
+      { name: 'harbor-win', stage: 'installed', activation: 'activated', keyId: 'k1' },
+      { name: 'reed', stage: 'installed', activation: 'grace', keyId: null },
     ],
     jobs: [
       { id: 'j-4411', kind: 'provision', vm: 'harbor', owner: 'alex', state: 'done', phase: 'done', created: 'Today 09:12' },
