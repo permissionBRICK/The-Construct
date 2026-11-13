@@ -1,4 +1,4 @@
-import type { Job, State, Vm } from '../backend/types';
+import type { Host, Job, State, Vm } from '../backend/types';
 
 export type Dot = 'on' | 'off' | 'busy' | 'bad';
 
@@ -56,12 +56,21 @@ export function mainAction(state: State, vm: Vm): MainAction {
 
 /** The version this VM would move to with Update, or null. */
 export function vmUpdateTarget(state: State, vm: Vm): string | null {
+  if (vm.updateTo !== undefined) return vm.updateTo;
   const host = state.hosts.find(h => h.id === vm.hostId);
   if (!host) return null;
   // The VM follows its host. A host this user administers moves to the device's release on the same channel.
   let target = host.version;
   if (host.admin && host.channel === state.prefs.channel && state.release && newer(state.release, host.version)) target = state.release;
   return newer(target, vm.version) ? target : null;
+}
+
+/** The release a host this user administers moves to with Update, or null. A host that reports its own offer
+    (`updateTo`) uses that; otherwise this device's release on the same channel. */
+export function hostUpdateTarget(state: State, host: Host): string | null {
+  if (!host.admin) return null;
+  if (host.updateTo !== undefined) return host.updateTo;
+  return host.channel === state.prefs.channel && state.release && newer(state.release, host.version) ? state.release : null;
 }
 
 /** Semver-ish compare of dotted numbers. */

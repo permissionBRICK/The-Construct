@@ -407,9 +407,9 @@ export class FakeBackend implements Backend {
     this.set(d => { const v = this.vm(d, vmId); v.backupSchedule = { ...v.backupSchedule, ...schedule }; });
   }
 
-  createVm(req: CreateVmRequest) {
+  createVm(req: CreateVmRequest): string | null {
     const name = req.name.trim();
-    if (!name || this.s.vms.some(v => v.name === name)) return;
+    if (!name || this.s.vms.some(v => v.name === name)) return null;
     let hostId = 'pc';
     if (req.where === 'remote') {
       const addr = (req.hostAddress ?? '').trim();
@@ -427,6 +427,7 @@ export class FakeBackend implements Backend {
       h.vms.push({ name, owner: 'alex', role: 'primary', power: 'off', cpuPct: 0, memGb: 0, memMaxGb: 8, diskGb: 0, cpus: 4, network: 'default', address: '–', lease: 'no expiry', shared: false, tokensToday: '0' });
     });
     this.startJob(name, 'create');
+    return name;
   }
 
   /* --- vault --- */
@@ -488,6 +489,9 @@ export class FakeBackend implements Backend {
   }
 
   cancelPairing() { this.set(d => { d.pairing = null; }); }
+
+  /** The fake shows the words on this device and invents the other side, so there is no code to enter. */
+  enterPairingCode() { /* not part of the fake's pairing */ }
 
   revokeDevice(deviceId: string) {
     const dev = this.s.devices.find(x => x.id === deviceId);
@@ -671,6 +675,10 @@ export class FakeBackend implements Backend {
     }
     if (u.step === 'done') this.set(d => { d.upgrade = null; });
   }
+
+  /** The fake starts as a device that is set up already. */
+  firstRunStart() { /* no first run in the fake */ }
+  firstRunNext() { /* no first run in the fake */ }
 }
 
 const UPDATE_STEPS = ['Download', 'This device', 'Host', 'Reprovision'];

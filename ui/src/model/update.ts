@@ -1,5 +1,5 @@
 import type { Part, State } from '../backend/types';
-import { newer, vmUpdateTarget } from './vm';
+import { hostUpdateTarget, newer, vmUpdateTarget } from './vm';
 
 /** Everything the user owns and what Update does to each: this device, the hosts they administer, their own
     VMs. A host they do not administer, or on another channel, is listed and left alone. */
@@ -7,9 +7,10 @@ export function updateParts(state: State): Part[] {
   const rel = state.release;
   const parts: Part[] = [{ name: 'This device', version: state.version, to: rel && newer(rel, state.version) ? rel : null, note: null }];
   for (const h of state.hosts) {
-    if (h.channel !== state.prefs.channel) parts.push({ name: h.name, version: h.version, to: null, note: 'channel' });
+    if (h.updateTo !== undefined) parts.push({ name: h.name, version: h.version, to: hostUpdateTarget(state, h), note: null });
+    else if (h.channel !== state.prefs.channel) parts.push({ name: h.name, version: h.version, to: null, note: 'channel' });
     else if (!h.admin) parts.push({ name: h.name, version: h.version, to: null, note: rel && newer(rel, h.version) ? 'admin' : null });
-    else parts.push({ name: h.name, version: h.version, to: rel && newer(rel, h.version) ? rel : null, note: null });
+    else parts.push({ name: h.name, version: h.version, to: hostUpdateTarget(state, h), note: null });
   }
   for (const v of state.vms) {
     const host = state.hosts.find(h => h.id === v.hostId);

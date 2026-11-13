@@ -5,7 +5,7 @@ import { updateDue } from '../model/update';
 import { section, VM_PAGES, type Page, type Route } from '../model/route';
 import { Icon, type IconName } from './icons';
 import { Btn, Dot, Pip } from './kit';
-import { useApp } from './ctx';
+import { na, useApp } from './ctx';
 import { JobBlock, PowerBtn, ReinstallConfirm, Tiles, VaultCard, VaultCards } from './blocks';
 import { PageView } from './pages';
 
@@ -46,10 +46,10 @@ export function Stack({ footer }: { footer: boolean }) {
     <div class="stack">
       <VaultCards />
       <div class="hd"><VmMenu /><span class="host">{host?.name}</span><PowerBtn vm={vm} /></div>
-      <Btn kind="pri" icon="open" onClick={() => be.open(vm.id, 't3')}>T3 Code</Btn>
+      <Btn kind="pri" icon="open" onClick={() => be.open(vm.id, 't3')} disabled={na(s, 'open')}>T3 Code</Btn>
       <div class="two">
-        <Btn icon="code" onClick={() => be.open(vm.id, 'vscode')}>VS Code</Btn>
-        <Btn icon="term" onClick={() => be.open(vm.id, 'ssh')}>SSH</Btn>
+        <Btn icon="code" onClick={() => be.open(vm.id, 'vscode')} disabled={na(s, 'open')}>VS Code</Btn>
+        <Btn icon="term" onClick={() => be.open(vm.id, 'ssh')} disabled={na(s, 'open')}>SSH</Btn>
       </div>
       {job ? <JobBlock job={job} vm={vm} /> : wipe ? <ReinstallConfirm vm={vm} onCancel={() => setWipe(false)} /> : <Tiles vm={vm} onReinstall={() => setWipe(true)} />}
       {footer && (
@@ -73,6 +73,8 @@ function NoVm() {
 }
 
 export function PopOut() {
+  const { s } = useApp();
+  if (s.firstRun) return <div class="pop"><PageView /></div>;
   return <div class="pop"><Stack footer /></div>;
 }
 
@@ -121,7 +123,7 @@ function VmTabs() {
 
 export function Window() {
   const { s } = useApp();
-  if (s.upgrade) return <div class="dlgwrap"><PageView /></div>;
+  if (s.upgrade || s.firstRun) return <div class="dlgwrap"><PageView /></div>;
   return (
     <div class="shell">
       <Side />
@@ -133,7 +135,7 @@ export function Window() {
 
 export function Phone() {
   const { s, route, go, vm } = useApp();
-  if (s.upgrade) return <div class="phn"><PageView /></div>;
+  if (s.upgrade || s.firstRun) return <div class="phn"><PageView /></div>;
   const at = section(route.page);
   const g = at === 'vault' || at === 'hosts' || at === 'app' ? at : 'home';
   const t = (id: Page, label: string, icon: IconName, pip?: boolean) => (

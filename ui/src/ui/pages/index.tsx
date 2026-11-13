@@ -3,11 +3,12 @@ import { VaultCards } from '../blocks';
 import { Backups, Connections, Overview, Project, ProjectFile, Projects, Settings } from './vm';
 import { Access, Devices, History, Pair, Revoke, Secrets } from './vault';
 import { HostPage, Hosts } from './hosts';
-import { Construct, CreateVm, Upgrade } from './app';
+import { Construct, CreateVm, FirstRun, Upgrade } from './app';
 
 /** The page for the current route. VM pages need a VM; without one, the create screen stands in. */
 export function PageView() {
   const { s, route, vm } = useApp();
+  if (s.firstRun) return <FirstRun />;
   if (s.upgrade) return <Upgrade />;
   const p = route.page;
   const asks = p !== 'home' && s.vaultRequests.length > 0 ? <div class="pg asks"><VaultCards /></div> : null;
