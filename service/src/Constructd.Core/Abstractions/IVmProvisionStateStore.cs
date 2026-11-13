@@ -12,6 +12,9 @@ public interface IVmDesiredStateSource
     Task<StoredDesiredState?> GetDesiredAsync(string vmName, CancellationToken ct);
 
     Task SetDesiredAsync(string vmName, StoredDesiredState desired, CancellationToken ct);
+
+    /// <summary>The VM is deleted: its desired and applied state go, so a new VM of the same name starts without them.</summary>
+    Task RemoveAsync(string vmName, CancellationToken ct);
 }
 
 /// <summary>What the guest reported after the last provision run (the <c>vm-applied</c> record).</summary>

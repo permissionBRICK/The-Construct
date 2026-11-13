@@ -55,6 +55,34 @@ public sealed class ProvisionJobTests
         Assert.False(status.HardwareChanged);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_deleted_vms_stored_settings_go_with_it(bool sqlite)
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "construct-provision-delete-" + Guid.NewGuid().ToString("n"));
+        try
+        {
+            await using var h = await ProvisionHarness.StartAsync(databasePath: sqlite ? Path.Combine(directory, "constructd.db") : null);
+            Assert.Equal(JobState.Succeeded, (await h.RunAsync("click-1")).State);
+            var desired = h.App.Service<IVmDesiredStateSource>();
+            var applied = h.App.Service<IVmAppliedStateStore>();
+            Assert.NotNull(await desired.GetDesiredAsync(ProvisionHarness.Vm, default));
+
+            var deleted = await h.Client.DeleteAsync($"/api/v1/vms/{ProvisionHarness.Vm}");
+            Assert.Equal(HttpStatusCode.Accepted, deleted.StatusCode);
+            var job = await h.Client.WaitForJobAsync((await deleted.ReadAsync<JobAcceptedResponse>()).JobId);
+            Assert.Equal(JobState.Succeeded, job.State);
+
+            Assert.Null(await desired.GetDesiredAsync(ProvisionHarness.Vm, default));
+            Assert.Null(await applied.GetAppliedAsync(ProvisionHarness.Vm, default));
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, true);
+        }
+    }
+
     [Fact]
     public async Task A_reprovision_needs_no_client_settings_and_a_change_shows_as_pending()
     {

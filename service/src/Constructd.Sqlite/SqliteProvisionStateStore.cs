@@ -11,6 +11,13 @@ public sealed class SqliteProvisionStateStore(SqliteDatabase database) : IVmDesi
     public Task SetDesiredAsync(string vmName, StoredDesiredState desired, CancellationToken ct) =>
         WriteAsync(vmName, "desired_json", WireJson.Serialize(desired)!, ct);
 
+    public async Task RemoveAsync(string vmName, CancellationToken ct)
+    {
+        await using var c = await database.OpenAsync(ct); await using var cmd = c.CreateCommand();
+        cmd.CommandText = "DELETE FROM vm_provision_state WHERE vm=@vm"; cmd.With("@vm", vmName);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
     public async Task<VmAppliedState?> GetAppliedAsync(string vmName, CancellationToken ct) =>
         WireJson.Read<VmAppliedState>(await ReadAsync(vmName, "applied_json", ct));
 

@@ -19,6 +19,13 @@ public sealed class InMemoryProvisionStateStore : IVmDesiredStateSource, IVmAppl
         return Task.CompletedTask;
     }
 
+    public Task RemoveAsync(string vmName, CancellationToken ct)
+    {
+        _desired.TryRemove(vmName, out _);
+        _applied.TryRemove(vmName, out _);
+        return Task.CompletedTask;
+    }
+
     public Task<VmAppliedState?> GetAppliedAsync(string vmName, CancellationToken ct) =>
         Task.FromResult(_applied.TryGetValue(vmName, out var value) ? value : null);
 
