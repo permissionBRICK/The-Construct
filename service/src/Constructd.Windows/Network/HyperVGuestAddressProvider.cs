@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 using Constructd.Core.Abstractions;
 using Constructd.Core.Configuration;
 using Constructd.Core.Domain;
+using Constructd.Windows.HyperV;
 using Constructd.Windows.Internal;
 using Microsoft.Extensions.Logging;
 namespace Constructd.Windows.Network;
@@ -24,12 +25,11 @@ public sealed class HyperVGuestAddressProvider(IProcessRunner runner, Constructd
         try
         {
             var managed = (await vms.ListAsync(null, ct)).Where(v => !v.Deleting && v.State != VmState.Absent && (v.Kind == VmKind.Primary || v.Incarnation is not null)).ToArray();
-            var root = ArgumentGuard.WindowsPath(options.ScriptsDir, "Constructd:ScriptsDir").TrimEnd('\\', '/');
             var script = $$"""
                 $ErrorActionPreference = 'Stop'
                 $ProgressPreference = 'SilentlyContinue'
                 try {
-                    . {{PowerShellLiteral.Quote(root + @"\drivers\hyperv-local\HyperVLocal.ChildVm.ps1")}}
+                    {{HyperVScripts.DotSource(HyperVScripts.ChildVm)}}
                     $data = [Console]::In.ReadToEnd() | ConvertFrom-Json
                     $value = Get-ConstructVmAddresses -VmRequests @($data.vms)
                     @{ ok = $true; value = $value } | ConvertTo-Json -Compress -Depth 12

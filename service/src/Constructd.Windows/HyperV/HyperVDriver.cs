@@ -31,27 +31,36 @@ public sealed class HypervisorOperationException(string operation, string vmName
 }
 
 /// <summary>
-/// <see cref="IHypervisorDriver"/> on top of the repo's PowerShell driver contract
-/// (<c>docs/drivers.md</c>): every operation runs
+/// <see cref="IHypervisorDriver"/> on top of the PowerShell driver contract (<c>docs/drivers.md</c>):
+/// every operation runs
 /// <c>powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand …</c>, and the
-/// script dot-sources <c>drivers\Load-ConstructDriver.ps1</c> and calls the contract function.
-///
-/// The service therefore shares one implementation with the local install instead of reimplementing
-/// Hyper-V against raw cmdlets — which is the whole point of the driver extraction (plan §4.2, B4).
+/// script dot-sources the driver's own <c>hyperv\HyperV.Driver.ps1</c> (<see cref="HyperVScripts"/>)
+/// and calls the contract function there.
 /// </summary>
-public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver, IVmNestedDriver
+public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver, IVmNestedDriver, IVmFactsDriver
 {
+    public async Task<HypervisorVmFacts?> GetFactsAsync(string name, CancellationToken ct)
+    {
+        var value = await RunAsync("vm-facts", name, HyperVScript.GetFacts(name), ShortTimeout, null, ct);
+        if (value.ValueKind != JsonValueKind.Object) return null;
+        string? Text(string key) => value.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+        long Number(string key) => value.TryGetProperty(key, out var v) && v.TryGetInt64(out var n) ? n : 0;
+        if (Text("Id") is not { Length: > 0 } id) throw Fail("vm-facts", name, "the driver reported no VM id");
+        return new HypervisorVmFacts(id, MapState(Text("State")), (int)Number("Cpu"), Number("MemoryBytes"), Number("DiskBytes"),
+            Text("BiosGuid") is { Length: > 0 } bios ? bios : null);
+    }
+
     public async Task<bool> GetNestedAsync(string name, CancellationToken ct) =>
-        (await RunAsync("get-nested", name, HyperVScript.GetNested(_options.ScriptsDir, name), ShortTimeout, null, ct)).GetBoolean();
+        (await RunAsync("get-nested", name, HyperVScript.GetNested(name), ShortTimeout, null, ct)).GetBoolean();
 
     public async Task SetNestedAsync(string name, bool enabled, CancellationToken ct) =>
-        await RunAsync("set-nested", name, HyperVScript.SetNested(_options.ScriptsDir, name, enabled), ShortTimeout, null, ct);
+        await RunAsync("set-nested", name, HyperVScript.SetNested(name, enabled), ShortTimeout, null, ct);
 
     public async Task SetMemoryAsync(string name, int ramGb, CancellationToken ct) =>
-        await RunAsync("set-memory", name, HyperVScript.SetMemory(_options.ScriptsDir, name, ramGb), ShortTimeout, null, ct);
+        await RunAsync("set-memory", name, HyperVScript.SetMemory(name, ramGb), ShortTimeout, null, ct);
 
     public async Task SetCpuCountAsync(string name, int cpus, CancellationToken ct) =>
-        await RunAsync("set-cpu", name, HyperVScript.SetCpuCount(_options.ScriptsDir, name, cpus), ShortTimeout, null, ct);
+        await RunAsync("set-cpu", name, HyperVScript.SetCpuCount(name, cpus), ShortTimeout, null, ct);
     /// <summary>Enough for a create with a fresh VHD, well short of leaving a hung process forever.</summary>
     private static readonly TimeSpan CreateTimeout = TimeSpan.FromMinutes(30);
 
@@ -103,7 +112,7 @@ public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDri
                     var value = Task.Run(() => RunAsync(
                         "capabilities",
                         vmName: string.Empty,
-                        HyperVScript.GetCapabilities(_options.ScriptsDir),
+                        HyperVScript.GetCapabilities(),
                         ShortTimeout,
                         progress: null,
                         CancellationToken.None)).GetAwaiter().GetResult();
@@ -143,7 +152,6 @@ public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDri
         ArgumentNullException.ThrowIfNull(descriptor);
 
         var script = HyperVScript.CreateVm(
-            _options.ScriptsDir,
             descriptor,
             _options.SwitchName,
             VhdPathFor(descriptor.Name));
@@ -156,7 +164,7 @@ public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDri
         await RunAsync(
             "remove-vm",
             name,
-            HyperVScript.RemoveVm(_options.ScriptsDir, name),
+            HyperVScript.RemoveVm(name),
             RemoveTimeout,
             progress,
             cancellationToken).ConfigureAwait(false);
@@ -165,7 +173,7 @@ public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDri
         await RunAsync(
             "start-vm",
             name,
-            HyperVScript.StartVm(_options.ScriptsDir, name),
+            HyperVScript.StartVm(name),
             ShortTimeout,
             progress: null,
             cancellationToken).ConfigureAwait(false);
@@ -174,7 +182,7 @@ public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDri
         await RunAsync(
             "stop-vm",
             name,
-            HyperVScript.StopVm(_options.ScriptsDir, name),
+            HyperVScript.StopVm(name),
             ShortTimeout,
             progress: null,
             cancellationToken).ConfigureAwait(false);
@@ -183,7 +191,7 @@ public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDri
         await RunAsync(
             "save-vm",
             name,
-            HyperVScript.SaveVm(_options.ScriptsDir, name),
+            HyperVScript.SaveVm(name),
             ShortTimeout,
             progress: null,
             cancellationToken).ConfigureAwait(false);
@@ -193,7 +201,7 @@ public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDri
         var value = await RunAsync(
             "get-state",
             name,
-            HyperVScript.GetState(_options.ScriptsDir, name),
+            HyperVScript.GetState(name),
             ShortTimeout,
             progress: null,
             cancellationToken).ConfigureAwait(false);
@@ -220,7 +228,7 @@ public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDri
         var value = await RunAsync(
             "get-endpoint",
             name,
-            HyperVScript.GetEndpoint(_options.ScriptsDir, name),
+            HyperVScript.GetEndpoint(name),
             ShortTimeout,
             progress: null,
             cancellationToken).ConfigureAwait(false);
@@ -251,7 +259,7 @@ public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDri
         var value = await RunAsync(
             "wait-reachable",
             name,
-            HyperVScript.WaitReachable(_options.ScriptsDir, name, seconds),
+            HyperVScript.WaitReachable(name, seconds),
             // The script is meant to sit there for the whole wait; the process timeout is the wait plus
             // the driver's settle window and a margin, so only a genuinely stuck child is killed.
             timeout + TimeSpan.FromMinutes(5),
@@ -265,7 +273,7 @@ public sealed class HyperVDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDri
         await RunAsync(
             "detach-media",
             name,
-            HyperVScript.DetachInstallMedia(_options.ScriptsDir, name),
+            HyperVScript.DetachInstallMedia(name),
             ShortTimeout,
             progress: null,
             cancellationToken).ConfigureAwait(false);

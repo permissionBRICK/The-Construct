@@ -173,7 +173,9 @@ public abstract class IsoBuilderBase : IIsoBuilder, IIsoMediaBuilder, IDisposabl
     {
         var name = vmName;
 
-        var scriptsDir = ArgumentGuard.WindowsPath(_options.ScriptsDir, "Constructd:ScriptsDir").TrimEnd('\\', '/');
+        // Only the defaults below read it: an install that names the builder and the key (every
+        // installer does) needs no scripts directory.
+        var scriptsDir = _options.ScriptsDir.TrimEnd('\\', '/');
         var cacheDir = ArgumentGuard.WindowsPath(_options.Iso.CacheDir, "Constructd:Iso:CacheDir").TrimEnd('\\', '/');
         var user = ArgumentGuard.EnvironmentValue(seedUser, "Constructd:Iso:SeedUser");
         var password = ArgumentGuard.EnvironmentValue(seedPassword, "seed password");
@@ -250,8 +252,10 @@ public abstract class IsoBuilderBase : IIsoBuilder, IIsoMediaBuilder, IDisposabl
 
     public string? CurrentBuilderSha256()
     {
-        if (string.IsNullOrWhiteSpace(_options.ScriptsDir)) return null;
-        var path = GetBuilderPath(_options.ScriptsDir.TrimEnd('\\', '/'));
+        string path;
+        // No configured builder and no scripts directory to find it in: nothing to compare.
+        try { path = GetBuilderPath(_options.ScriptsDir.TrimEnd('\\', '/')); }
+        catch (InvalidPlatformArgumentException) { return null; }
         return _files.FileExists(path) ? _files.ComputeSha256(path) : null;
     }
 

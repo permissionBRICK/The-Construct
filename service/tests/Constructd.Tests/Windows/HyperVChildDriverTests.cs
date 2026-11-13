@@ -19,7 +19,7 @@ public sealed class HyperVChildDriverTests
         var caps = new FakeChildVmDriver(hypervisor).Capabilities;
         var runner = new Constructd.Fakes.RecordingProcessRunner { Default = Ok(null) };
         runner.Respond(Ok(caps));
-        return (new(runner, new ConstructdOptions { ScriptsDir = @"C:\Construct", VmStorageRoot = @"C:\VMs" }, hypervisor), runner);
+        return (new(runner, new ConstructdOptions { VmStorageRoot = @"C:\VMs" }, hypervisor), runner);
     }
     private static ProcessResult Ok(object? value) => new(0, JsonSerializer.Serialize(new { ok = true, value }, Json), "", false);
     private static string Script(RecordedProcess call) => Encoding.Unicode.GetString(Convert.FromBase64String(call.Arguments[5]));
@@ -27,7 +27,7 @@ public sealed class HyperVChildDriverTests
     public async Task Windows_key_is_only_in_stdin_with_immutable_identity()
     {
         var runner = new RecordingProcessRunner { Default = Ok(null) };
-        var driver = new HyperVChildDriver(runner, new ConstructdOptions { ScriptsDir = @"C:\Construct" }, new FakeHypervisorDriver());
+        var driver = new HyperVChildDriver(runner, new ConstructdOptions(), new FakeHypervisorDriver());
         var id = Guid.NewGuid().ToString(); const string key = "ABCDE-FGHIJ-KLMNO-PQRST-UVWXY";
         await driver.DeliverWindowsKeyAsync("child", id, key, default);
         var call = Assert.Single(runner.Calls);
@@ -41,7 +41,7 @@ public sealed class HyperVChildDriverTests
     public async Task Parking_deletes_tenant_state_and_imports_baseline_in_separate_processes()
     {
         var runner = new RecordingProcessRunner { Default = Ok(null) };
-        var driver = new HyperVChildDriver(runner, new ConstructdOptions { ScriptsDir = @"C:\Construct", VmStorageRoot = @"C:\VMs" }, new FakeHypervisorDriver());
+        var driver = new HyperVChildDriver(runner, new ConstructdOptions { VmStorageRoot = @"C:\VMs" }, new FakeHypervisorDriver());
         await driver.ParkWindowsAsync("child", Guid.NewGuid().ToString(), default);
         Assert.Equal(2, runner.Calls.Count);
         Assert.Contains("Clear-ConstructLicenseAllocation", Script(runner.Calls[0]));
@@ -56,7 +56,7 @@ public sealed class HyperVChildDriverTests
     public async Task SafeDriverCodesCrossTheEnvelope(string code)
     {
         var runner = new RecordingProcessRunner().RespondStdout(JsonSerializer.Serialize(new { ok = false, code }));
-        var driver = new HyperVChildDriver(runner, new ConstructdOptions { ScriptsDir = @"C:\Construct", VmStorageRoot = @"C:\VMs" }, new FakeHypervisorDriver());
+        var driver = new HyperVChildDriver(runner, new ConstructdOptions { VmStorageRoot = @"C:\VMs" }, new FakeHypervisorDriver());
         var error = await Assert.ThrowsAsync<ChildValidationException>(() => driver.RemoveAsync("child", null, default));
         Assert.Equal(code, error.Code);
         Assert.Contains("-ccontains $code", Script(Assert.Single(runner.Calls)));
@@ -65,7 +65,7 @@ public sealed class HyperVChildDriverTests
     public async Task UnknownDriverCodeCannotExposeDependencyText()
     {
         var runner = new RecordingProcessRunner().RespondStdout("{\"ok\":false,\"code\":\"sentinel-secret\"}");
-        var driver = new HyperVChildDriver(runner, new ConstructdOptions { ScriptsDir = @"C:\Construct", VmStorageRoot = @"C:\VMs" }, new FakeHypervisorDriver());
+        var driver = new HyperVChildDriver(runner, new ConstructdOptions { VmStorageRoot = @"C:\VMs" }, new FakeHypervisorDriver());
         var error = await Assert.ThrowsAsync<HypervisorOperationException>(() => driver.RemoveAsync("child", null, default));
         Assert.DoesNotContain("sentinel-secret", error.ToString());
     }
@@ -78,7 +78,10 @@ public sealed class HyperVChildDriverTests
         Assert.Equal("powershell.exe", call.FileName);
         Assert.Equal(new[] { "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand" }, call.Arguments.Take(5));
         Assert.Equal(6, call.Arguments.Count);
-        Assert.Contains("-Include ChildVm", Script(call));
+        // The three scripts the loader's "-Include ChildVm" used to load, now from the service package.
+        foreach (var file in new[] { "HyperV.Driver.ps1", "HyperV.ChildVm.ps1", "HyperV.WindowsLicense.ps1" })
+            Assert.Contains(". '" + Path.Combine(AppContext.BaseDirectory, "hyperv", file) + "'", Script(call));
+        Assert.DoesNotContain("Load-ConstructDriver", Script(call));
         Assert.Contains("New-ConstructChildVm -Descriptor $inputData", Script(call));
         Assert.DoesNotContain("answer.iso", string.Join(" ", call.Arguments));
         Assert.DoesNotContain("Wait-ConstructVmReachable", Script(call));
@@ -178,7 +181,7 @@ public sealed class HyperVChildDriverTests
     {
         var placement = new ChildStoragePlacement(expected, @"C:\", @"E:\");
         var runner = new RecordingProcessRunner { Default = Ok(placement) };
-        var driver = new HyperVChildDriver(runner, new ConstructdOptions { ScriptsDir = @"C:\Construct", VmStorageRoot = root ?? "" }, new FakeHypervisorDriver());
+        var driver = new HyperVChildDriver(runner, new ConstructdOptions { VmStorageRoot = root ?? "" }, new FakeHypervisorDriver());
         Assert.Equal(placement, await driver.ResolvePrimaryStorageAsync("primary", default));
         var call = Assert.Single(runner.Calls);
         Assert.Equal(6, call.Arguments.Count); Assert.Contains("Get-ConstructChildStorage", Script(call));

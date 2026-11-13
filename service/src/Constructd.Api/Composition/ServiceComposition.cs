@@ -181,6 +181,7 @@ public static class ServiceComposition
         services.AddSingleton<IVmCpuDriver>(sp => sp.GetRequiredService<FakeHypervisorDriver>());
         services.AddSingleton<IVmMemoryDriver>(sp => sp.GetRequiredService<FakeHypervisorDriver>());
         services.AddSingleton<IVmMemoryFloorDriver>(sp => sp.GetRequiredService<FakeHypervisorDriver>());
+        services.AddSingleton<IVmFactsDriver>(sp => sp.GetRequiredService<FakeHypervisorDriver>());
 
         services.AddSingleton<FakeIsoBuilder>();
         services.AddSingleton<IIsoBuilder>(sp => sp.GetRequiredService<FakeIsoBuilder>());
@@ -250,6 +251,16 @@ public static class ServiceComposition
                 "already exist and answer SSH, set Constructd:Backend=external.");
         }
 
+        return services.AddHyperVPlatform(options);
+    }
+
+    /// <summary>
+    /// The Hyper-V platform's registrations, without the operating-system check in front of them, so a
+    /// test can compose them off Windows. Needs no Construct checkout: the driver's PowerShell ships in
+    /// the service package (<see cref="HyperVScripts"/>).
+    /// </summary>
+    public static IServiceCollection AddHyperVPlatform(this IServiceCollection services, ConstructdOptions options)
+    {
         ValidatePlatformOptions(options);
 
         services.AddSingleton<IProcessRunner, ProcessRunner>();
@@ -262,6 +273,7 @@ public static class ServiceComposition
         services.AddSingleton<IHypervisorDriver, HyperVDriver>();
         services.AddSingleton<IVmCpuDriver>(sp => (HyperVDriver)sp.GetRequiredService<IHypervisorDriver>());
         services.AddSingleton<IVmMemoryDriver>(sp => (HyperVDriver)sp.GetRequiredService<IHypervisorDriver>());
+        services.AddSingleton<IVmFactsDriver>(sp => (HyperVDriver)sp.GetRequiredService<IHypervisorDriver>());
         services.AddSingleton<IPortForwardManager, NetshPortForwardManager>();
 
         // Held while VMs run so the host does not sleep under them; the container disposes it at
@@ -344,7 +356,7 @@ public static class ServiceComposition
 
     /// <summary>
     /// Fails at startup on a misconfiguration that would otherwise surface as a failed VM creation
-    /// twenty minutes in: the checkout the service invokes has to actually be a Construct checkout.
+    /// twenty minutes in: an unimplemented ISO mode, or a service package without the driver's scripts.
     /// </summary>
     private static void ValidatePlatformOptions(ConstructdOptions options)
     {
@@ -353,24 +365,12 @@ public static class ServiceComposition
             throw new InvalidOperationException(UnimplementedModeMessage(options.Iso.Mode));
         }
 
-        if (string.IsNullOrWhiteSpace(options.ScriptsDir))
+        foreach (var script in HyperVScripts.All)
         {
-            throw new InvalidOperationException(
-                "Constructd:ScriptsDir is not set. It must point at the Construct checkout the service " +
-                "invokes (the one holding drivers\\, lib\\ and bin\\).");
-        }
-
-        foreach (var required in new[]
-                 {
-                     Path.Combine(options.ScriptsDir, "drivers", "Load-ConstructDriver.ps1"),
-                     Path.Combine(options.ScriptsDir, "lib", "AgentVm.Common.ps1"),
-                     Path.Combine(options.ScriptsDir, "bin", "build-autoinstall-iso.sh"),
-                 })
-        {
-            if (!File.Exists(required))
+            if (!File.Exists(HyperVScripts.PathOf(script)))
             {
                 throw new InvalidOperationException(
-                    $"Constructd:ScriptsDir does not look like a Construct checkout: {required} is missing.");
+                    $"The service package is incomplete: the Hyper-V driver script {HyperVScripts.PathOf(script)} is missing. Reinstall the host package.");
             }
         }
     }

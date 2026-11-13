@@ -43,12 +43,11 @@ public sealed class HyperVInventory(IProcessRunner runner, ConstructdOptions opt
                 if (path is not null) ArgumentGuard.WindowsPath(path, "capacity artifact");
                 artifacts.Add(new { row.Artifact, Path = path, row.Volume, IsMedia = isMedia });
             }
-            var root = ArgumentGuard.WindowsPath(options.ScriptsDir, "Constructd:ScriptsDir").TrimEnd('\\', '/');
             var script = $$"""
                 $ErrorActionPreference = 'Stop'
                 $ProgressPreference = 'SilentlyContinue'
                 try {
-                    . {{PowerShellLiteral.Quote(root + @"\drivers\hyperv-local\HyperVLocal.ChildVm.ps1")}}
+                    {{HyperVScripts.DotSource(HyperVScripts.ChildVm)}}
                     $inputData = [Console]::In.ReadToEnd() | ConvertFrom-Json
                     $value = Get-ConstructHostInventory -Artifacts @($inputData.artifacts)
                     @{ ok = $true; value = $value } | ConvertTo-Json -Compress -Depth 12
