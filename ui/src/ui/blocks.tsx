@@ -2,33 +2,36 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Job, VaultRequest, Vm } from '../backend/types';
 import { failedTitle, jobWord, mainAction } from '../model/vm';
 import { Icon } from './icons';
-import { Bar, Btn, Field, Pip, Switch, Tag, UpTag } from './kit';
+import { Bar, Btn, Confirm, Field, Pip, Switch, Tag, UpTag } from './kit';
 import { copy, na, useApp } from './ctx';
 
 /* The blocks that sit on the stack, in the pop-out, the window's overview and the phone. */
 
-/** A vault request: the only thing in the product that asks for attention. Yellow. */
+/** A vault request: the only thing in the product that asks for attention. Yellow. The VM and host are named as
+    the engine that holds the request names them; the agent's own words are marked as the agent's. A typed
+    value lives only in this card's field and is emptied when the card answers. */
 export function VaultCard({ r, onDone }: { r: VaultRequest; onDone?: () => void }) {
   const { be, s } = useApp();
-  const host = s.hosts.find(h => h.id === s.vms.find(v => v.id === r.vmId)?.hostId)?.name;
   const [value, setValue] = useState('');
-  const done = () => onDone?.();
+  const done = () => { setValue(''); onDone?.(); };
+  const save = () => { if (value) { be.enterSecret(r.id, value); done(); } };
+  const span = r.span && !na(s, 'approval-span') ? ` ${r.span}` : '';
   return (
     <div class="blk warn ask" role="alertdialog" aria-label={`Vault request for ${r.secret}`}>
-      <div class="bh"><Icon n="key" /><b>{r.secret}</b><span>{r.vmName}{host && ` · ${host}`}</span></div>
-      <div class="msg"><Tag>agent</Tag> <span class="quote">{r.reason}</span></div>
+      <div class="bh"><Icon n="key" /><b>{r.secret}</b><span>{r.vmName} · {r.hostName}</span></div>
+      {r.reason && <div class="msg"><Tag>agent</Tag> <span class="quote">{r.reason}</span></div>}
       {r.kind === 'enter' ? (
         <>
-          <Field type="password" value={value} onInput={setValue} label="Value" placeholder="Value" onEnter={() => { if (value) { be.enterSecret(r.id, value); done(); } }} />
+          <Field type="password" value={value} onInput={setValue} label={`Value of ${r.secret}`} placeholder="Value" onEnter={save} />
           <div class="two">
-            <Btn onClick={() => { be.enterSecret(r.id, null); done(); }}>Skip</Btn>
-            <Btn kind="pri" disabled={!value} onClick={() => { be.enterSecret(r.id, value); done(); }}>Save</Btn>
+            <Btn onClick={() => { be.enterSecret(r.id, null); done(); }}>Decline</Btn>
+            <Btn kind="pri" disabled={!value} onClick={save}>Save</Btn>
           </div>
         </>
       ) : (
         <div class="two">
           <Btn onClick={() => { be.answerLease(r.id, false); done(); }}>Deny</Btn>
-          <Btn kind="pri" onClick={() => { be.answerLease(r.id, true); done(); }}>Allow {r.span}</Btn>
+          <Btn kind="pri" onClick={() => { be.answerLease(r.id, true); done(); }}>{r.action || 'Allow'}{span}</Btn>
         </div>
       )}
     </div>
@@ -88,7 +91,9 @@ export function JobBlock({ job, vm }: { job: Job; vm: Vm }) {
         {(log || !job.repair) && <LogView job={job} />}
         {job.repair && <Repair job={job} />}
         <div class="two">
-          <Btn icon="retry" onClick={() => be.retryJob(job.id)}>Retry</Btn>
+          {job.kind === 'reinstall'
+            ? <Confirm label="Retry" icon="retry" verb="Reinstall again" sm={false} onYes={() => be.retryJob(job.id)} />
+            : <Btn icon="retry" onClick={() => be.retryJob(job.id)}>Retry</Btn>}
           <Btn onClick={() => be.dismissJob(job.id)}>Close</Btn>
         </div>
       </div>

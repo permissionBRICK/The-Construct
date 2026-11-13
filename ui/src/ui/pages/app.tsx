@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'preact/hooks';
-import type { FirstRunRequest, Scheme, ThemeMode } from '../../backend/types';
+import type { FirstRunRequest, HostProbe, Scheme, ThemeMode } from '../../backend/types';
 import { updateDue, updateParts } from '../../model/update';
 import { SCHEME_ORDER, SCHEMES } from '../../model/tokens';
 import { Icon } from '../icons';
@@ -84,6 +84,32 @@ function Reveal() {
   );
 }
 
+/** A host's certificate fingerprint as the agent read it, to compare with the one its admin sees, before the
+    host is added. */
+function PinConfirm({ probe, onYes, onNo }: { probe: HostProbe; onYes: () => void; onNo: () => void }) {
+  return (
+    <div class="blk pin" role="group" aria-label="Host fingerprint">
+      <div class="bh"><Icon n="shield" /><b class="m">{probe.url}</b></div>
+      <code class="m sel fp">{probe.pin.match(/.{1,4}/g)?.join(' ')}</code>
+      <div class="two"><Btn onClick={onNo}>Cancel</Btn><Btn kind="pri" onClick={onYes}>It matches</Btn></div>
+    </div>
+  );
+}
+
+/** Probing a host and holding what it presented until the user confirms it; a new address starts over. */
+function usePin() {
+  const { be } = useApp();
+  const [probe, setProbe] = useState<HostProbe | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const check = (address: string, then: (p: HostProbe) => void) => {
+    setBusy(true); setErr('');
+    void be.probeHost(address).then(p => { setBusy(false); then(p); }, (e: Error) => { setBusy(false); setErr(e.message); });
+  };
+  const reset = () => { setProbe(null); setErr(''); };
+  return { probe, setProbe, busy, err, check, reset };
+}
+
 export function CreateVm() {
   const { s, be, go, selectVm, surf } = useApp();
   const [where, setWhere] = useState<'local' | 'remote'>('local');
@@ -91,13 +117,19 @@ export function CreateVm() {
   const [addr, setAddr] = useState('');
   const [signIn, setSignIn] = useState<'windows' | 'token'>(na(s, 'windows-sign-in') ? 'token' : 'windows');
   const [token, setToken] = useState('');
+  const pin = usePin();
   const taken = s.vms.some(v => v.name === name.trim());
   const valid = /^[a-z][a-z0-9-]{1,30}$/.test(name.trim()) && !taken && (where === 'local' || (addr.trim() && (signIn === 'windows' || token.trim())));
-  const create = () => {
-    if (!valid) return;
-    const id = be.createVm({ where, name: name.trim(), hostAddress: addr.trim(), signIn, token: token.trim() });
+  const send = (confirmed?: string) => {
+    const id = be.createVm({ where, name: name.trim(), hostAddress: addr.trim(), signIn, token: token.trim(), pin: confirmed });
     if (id) selectVm(id);
     go({ page: 'home' });
+  };
+  // A remote host is added only with the fingerprint the user confirmed; a known one needs no confirm.
+  const create = () => {
+    if (!valid || pin.busy) return;
+    if (where === 'local') { send(); return; }
+    pin.check(addr.trim(), p => { if (p.known && !token.trim()) send(); else pin.setProbe(p); });
   };
   return (
     <Page>
@@ -108,12 +140,15 @@ export function CreateVm() {
         {taken && <span class="badc">Taken</span>}
         {where === 'remote' && (
           <>
-            <label class="lab">Host address<Field value={addr} onInput={setAddr} label="Host address" placeholder="https://host:8443" mono wide /></label>
+            <label class="lab">Host address<Field value={addr} onInput={v => { setAddr(v); pin.reset(); }} label="Host address" placeholder="https://host:8443" mono wide /></label>
             {!na(s, 'windows-sign-in') && <Seg label="Sign-in" opts={['windows', 'token'] as const} labels={{ windows: 'Windows sign-in', token: 'Token' }} value={signIn} onChange={setSignIn} />}
             {signIn === 'token' && <Field type="password" value={token} onInput={setToken} label="Token" placeholder="Token" mono wide />}
           </>
         )}
-        <Btn kind="pri" icon="plus" disabled={!valid} onClick={create}>Create</Btn>
+        {pin.err && <span class="badc">{pin.err}</span>}
+        {where === 'remote' && pin.probe
+          ? <PinConfirm probe={pin.probe} onNo={pin.reset} onYes={() => { const p = pin.probe!; pin.reset(); send(p.pin); }} />
+          : <Btn kind="pri" icon="plus" disabled={!valid || pin.busy} onClick={create}>Create</Btn>}
       </div>
     </Page>
   );
@@ -192,6 +227,7 @@ export function FirstRun() {
   const [account, setAccount] = useState('');
   const [code, setCode] = useState('');
   const [stored, setStored] = useState(false);
+  const pin = usePin();
   if (!f) return null;
   const at = f.step === 'code' ? 1 : 0;
   const top = (
@@ -221,12 +257,18 @@ export function FirstRun() {
     </div>
   );
   const valid = address.trim() && deviceName.trim() && (how !== 'setup' || token.trim()) && (how !== 'recover' || (account.trim() && code.trim()));
-  const go = () => { if (valid && !f.busy) be.firstRunStart({ how, address, deviceName, token, account, code }); };
+  const start = (confirmed?: string) => be.firstRunStart({ how, address, deviceName, token, account, code, pin: confirmed });
+  // The engine on this machine is trusted as found; another host only with the fingerprint the user confirmed.
+  const go = () => {
+    if (!valid || f.busy || pin.busy) return;
+    if (f.localAddress && address.trim() === f.localAddress) { start(); return; }
+    pin.check(address.trim(), p => { if (p.known && how !== 'setup') start(); else pin.setProbe(p); });
+  };
   return (
     <div class="solo">{top}<h3>This device</h3>
       <div class="blk form">
         <Seg label="How" opts={['setup', 'pair', 'recover'] as const} labels={{ setup: 'New account', pair: 'Pair with a device', recover: 'Recovery code' }} value={how} onChange={setHow} />
-        <label class="lab">Host address<Field value={address} onInput={setAddress} label="Host address" placeholder="https://host:8443" mono wide /></label>
+        <label class="lab">Host address<Field value={address} onInput={v => { setAddress(v); pin.reset(); }} label="Host address" placeholder="https://host:8443" mono wide /></label>
         <label class="lab">Device name<Field value={deviceName} onInput={setDeviceName} label="Device name" placeholder="Device name" wide /></label>
         {how === 'setup' && <label class="lab">Token<Field type="password" value={token} onInput={setToken} label="Token" placeholder="Token" mono wide /></label>}
         {how === 'recover' && (
@@ -235,8 +277,10 @@ export function FirstRun() {
             <label class="lab">Recovery code<Field type="password" value={code} onInput={setCode} label="Recovery code" placeholder="XXXX-XXXX-…" mono wide onEnter={go} /></label>
           </>
         )}
-        {f.problem && <span class="badc">{f.problem}</span>}
-        <Btn kind="pri" icon="right" disabled={!valid || f.busy} onClick={go}>{f.busy ? 'Working' : 'Continue'}</Btn>
+        {(f.problem || pin.err) && <span class="badc">{pin.err || f.problem}</span>}
+        {pin.probe
+          ? <PinConfirm probe={pin.probe} onNo={pin.reset} onYes={() => { const p = pin.probe!; pin.reset(); start(p.pin); }} />
+          : <Btn kind="pri" icon="right" disabled={!valid || f.busy || pin.busy} onClick={go}>{f.busy ? 'Working' : 'Continue'}</Btn>}
       </div>
     </div>
   );
