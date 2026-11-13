@@ -96,11 +96,17 @@ def publish(output, channel='stable', notes_file=None):
             current = json.loads(text).get('commit')
     promote = should_promote(commit, current, ancestor, branch_head)
     existing = api('/releases/tags/' + tag)
+    channel_manifest = output / 'manifest.json'
     if existing and not existing['draft']:
         # Retries never overwrite already-published bits for a commit.
         names = {asset['name'] for asset in existing['assets']}
         if not all(p.name in names for p in assets):
             raise ValueError('Published release is incomplete; cannot rewrite an immutable release')
+        if channel == 'nightly':
+            # The channel must point at the hashes that were published, not at this rebuild's.
+            (output / 'published').mkdir(exist_ok=True)
+            channel_manifest = output / 'published' / 'manifest.json'
+            gh('download', tag, '-p', 'manifest.json', '-D', str(output / 'published'), '--clobber')
     else:
         if not existing:
             if channel == 'stable':
@@ -119,7 +125,7 @@ def publish(output, channel='stable', notes_file=None):
         if not channel_release:
             gh('create', CHANNEL_TAG, '--prerelease', '--latest=false', '--target', commit, '--title', 'Nightly channel',
                '--notes', 'manifest.json here is the newest nightly build. See docs/release-flow.md.')
-        gh('upload', CHANNEL_TAG, '--clobber', str(output / 'manifest.json'))
+        gh('upload', CHANNEL_TAG, '--clobber', str(channel_manifest))
     print(f'Published {tag}; channel={channel}; current={promote}')
 
 

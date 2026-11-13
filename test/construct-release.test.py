@@ -261,6 +261,24 @@ class NightlyPublishTests(unittest.TestCase):
         commands, _ = self.publish(older, lambda a, b: (a, b) == (older, 'a' * 40))
         self.assertEqual([c[2] for c in commands if 'channel-nightly' in c], ['upload'])
 
+    def test_rerun_of_a_published_nightly_points_the_channel_at_the_published_manifest(self):
+        commit = 'a' * 40
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory); names = fixture(output, commit)
+            manifest = json.loads((output / 'manifest.json').read_text()); manifest.update(channel='nightly', version='1.0.0+' + commit)
+            (output / 'manifest.json').write_text(json.dumps(manifest))
+            published = dict(tag_name='host-' + commit, draft=False, assets=[dict(name=name) for name in names])
+            api = lambda path: published if path == '/releases/tags/host-' + commit else None
+            with patch.dict(os.environ, GITHUB_SHA=commit, GITHUB_REPOSITORY='owner/repo', GITHUB_REF_NAME='nightly'), \
+                 patch.object(publisher, 'api', side_effect=api), \
+                 patch.object(publisher.subprocess, 'check_output', return_value=commit + '\trefs/heads/nightly'), \
+                 patch.object(publisher.subprocess, 'run') as run:
+                publisher.publish(output, 'nightly')
+            commands = [call.args[0] for call in run.call_args_list]
+            self.assertEqual(commands[0], ['gh', 'release', 'download', 'host-' + commit, '-p', 'manifest.json', '-D', str(output / 'published'), '--clobber'])
+            self.assertFalse(any(c[2] == 'upload' and c[3] == 'host-' + commit for c in commands))
+            self.assertEqual(commands[-1], ['gh', 'release', 'upload', 'channel-nightly', '--clobber', str(output / 'published' / 'manifest.json')])
+
     def test_channel_mismatch_is_refused(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory); fixture(output, 'a' * 40)
