@@ -8,8 +8,11 @@ namespace Constructd.Api.Jobs;
 /// <summary>A user's update setting (12.1): reprovision my VMs after this host updated itself.</summary>
 public sealed record UserUpdateSettings(bool AutoReprovision = false);
 
-/// <summary>VMs that asked to be reprovisioned once the named host update succeeded.</summary>
-public sealed record UpdateFollowers(IReadOnlyList<string> Vms);
+/// <summary>
+/// VMs that asked to be reprovisioned once the named host update succeeded. <paramref name="Owner"/> is the user they
+/// belonged to when they asked: a VM of that name owned by anybody else by then is not touched.
+/// </summary>
+public sealed record UpdateFollowers(IReadOnlyList<string> Vms, string? Owner = null);
 
 /// <summary>The last host update whose VMs were reprovisioned.</summary>
 public sealed record UpdateFollowed(string UpdateId);
@@ -83,8 +86,10 @@ public sealed class VmUpdates(IVmRepository vms, IUserStore users, IJobStore job
         var list = new List<Vm>();
         foreach (var user in await users.ListAsync(ct))
             if ((await SettingsAsync(user.Name, ct)).AutoReprovision) list.AddRange(await PrimariesAsync(user.Name, ct));
-        foreach (var name in (await config.GetAsync<UpdateFollowers>(FollowersKey(succeeded.Id), ct))?.Vms ?? [])
-            if (await vms.GetAsync(name, ct) is { Kind: VmKind.Primary, Deleting: false } vm) list.Add(vm);
+        var followers = await config.GetAsync<UpdateFollowers>(FollowersKey(succeeded.Id), ct);
+        foreach (var name in followers?.Vms ?? [])
+            if (await vms.GetAsync(name, ct) is { Kind: VmKind.Primary, Deleting: false } vm &&
+                (followers!.Owner is null || Ownership.SameName(vm.Owner, followers.Owner))) list.Add(vm);
         return list.Count == 0 ? [] : Start(list, "system");
     }
 }

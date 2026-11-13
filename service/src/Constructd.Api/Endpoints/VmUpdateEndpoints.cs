@@ -90,13 +90,15 @@ public static class VmUpdateEndpoints
         if (vm is null) return denied!;
         try
         {
-            // An admin's VM: the host's own update first; the host reprovisions this VM once it succeeded.
+            // An admin's VM: the host's own update first; once it succeeded the host reprovisions this VM and the
+            // owner's other VMs on this host (S28: everything the user owns), never another user's.
             if (await OwnerIsAdminAsync(vm, users, ct))
             {
+                var follow = (await updates.PrimariesAsync(vm.Owner, ct)).Select(v => v.Name).Where(n => !Ownership.SameName(n, vm.Name)).Prepend(vm.Name).ToArray();
                 await work.Acceptance.WaitAsync(ct);
                 try
                 {
-                    if (await work.RunAsync(http.User.Actor(), ct, [vm.Name]) is { } started)
+                    if (await work.RunAsync(http.User.Actor(), ct, follow, vm.Owner) is { } started)
                         return Results.Accepted("/api/v1/jobs/" + started.JobId, new VmUpdateResponse(null, started.UpdateId, started.JobId));
                 }
                 finally { work.Acceptance.Release(); }
