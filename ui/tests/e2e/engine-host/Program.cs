@@ -142,7 +142,9 @@ sealed class E2eEngine(string directory) : WebApplicationFactory<Program>
 /// wrapped for every recipient; <c>verify</c> and <c>restore</c> check the key on stdin. It starts with one
 /// recipient standing for the user's device; once the test names the account in <c>account</c>, the account's
 /// backup key <c>B</c> from the store is a recipient too, so a device can open a stored backup. The provision
-/// script fails once with a critical exit when the test leaves <c>fail-next</c> beside the database.
+/// script fails once with a critical exit when the test leaves <c>fail-next</c> beside the database, and once in
+/// one step (which the repair agent takes) with <c>fail-step</c>. The repair agent is the engine's fake-mode
+/// <c>FakeGuestSessionRunner</c>: it asks once, and the first reply fixes the cause.
 /// </summary>
 sealed partial class ScriptedGuest(string engineUrl, string directory, IServiceProvider services) : ISshRunner
 {
@@ -163,6 +165,14 @@ sealed partial class ScriptedGuest(string engineUrl, string directory, IServiceP
         if (inner.Contains("construct-backup.sh", StringComparison.Ordinal))
             return await BackupAsync(inner, standardInput, lines, ct);
         string[] output = [];
+        if (command.Contains("bin/provision.sh", StringComparison.Ordinal) && !command.Contains("PROVISION_PHASE", StringComparison.Ordinal)
+            && File.Exists(Path.Combine(directory, "fail-step")))
+        {
+            // One step fails as provision.sh reports it (exit 3, an error line): the engine hands it to the repair agent.
+            File.Delete(Path.Combine(directory, "fail-step"));
+            foreach (var line in new[] { "apt-get: could not get lock", "===CONSTRUCT-PROVISION-RESULT===", "errors=1", "error=Installing tools|100|/var/log/construct/tools.log", "===END-CONSTRUCT-PROVISION-RESULT===" }) lines?.Report(line);
+            return 3;
+        }
         if (command.Contains("bin/provision.sh", StringComparison.Ordinal) && !command.Contains("PROVISION_PHASE", StringComparison.Ordinal)
             && File.Exists(Path.Combine(directory, "fail-next")))
         {
