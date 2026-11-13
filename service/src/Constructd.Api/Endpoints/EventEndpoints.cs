@@ -83,8 +83,12 @@ public static class EventEndpoints
         }
     }
 
-    /// <summary>The same rule as reading the thing itself: an admin, the owner, or a job's (user) initiator.</summary>
+    /// <summary>
+    /// The same rule as reading the thing itself: an admin, the owner, or a job's (user) initiator. A vault
+    /// request's change goes to its owner's account only, as the vault routes do (an admin gets no other user's vault).
+    /// </summary>
     public static bool Visible(ClaimsPrincipal user, Change change) =>
+        change.OwnerOnly ? Ownership.SameName(user.NameOrEmpty(), change.Owner) :
         user.IsAdmin() || change.Everyone || Ownership.SameName(user.NameOrEmpty(), change.Owner) ||
         change.Initiator?.StartsWith("vm:", StringComparison.OrdinalIgnoreCase) == false && Ownership.SameName(user.Actor(), change.Initiator);
 

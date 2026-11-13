@@ -160,6 +160,7 @@
         "tags": [
           "agent"
         ],
+        "description": "Adds an engine with the pin the user confirmed. The user's sign-in there is userToken, or, with windowsSignIn, the signed-in Windows user where the engine offers Negotiate (Windows only; 501 not-available elsewhere).",
         "operationId": "AddEngine",
         "requestBody": {
           "content": {
@@ -715,6 +716,79 @@
         }
       }
     },
+    "/api/engines/{engine}/vms/{vm}/backups/{backup}/restore": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "description": "Restores a stored backup into the running VM: the backup's key is unwrapped here with the account's backup key and goes only to the engine's restore job. Follow the job through the proxy.",
+        "operationId": "RestoreBackup",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "vm",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "backup",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/RestoreRequest"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreStarted"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/devices/{id}/secrets": {
       "get": {
         "tags": [
@@ -1067,7 +1141,7 @@
         "tags": [
           "vault"
         ],
-        "description": "allow or deny. On a locked engine an allow first unlocks the VM that asked.",
+        "description": "allow or deny; an allow of a lease request may carry ttlSeconds, the duration the user chose (60 to 86400). On a locked engine an allow first unlocks the VM that asked.",
         "operationId": "DecideVaultApproval",
         "parameters": [
           {
@@ -1097,6 +1171,48 @@
           },
           "required": true
         },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/leases/{engine}/{id}": {
+      "delete": {
+        "tags": [
+          "vault"
+        ],
+        "description": "Ends a lease before its time, at that engine; the VM's copy is scrubbed as on expiry.",
+        "operationId": "EndVaultLease",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "204": {
             "description": "No Content"
@@ -2182,6 +2298,10 @@
               "string"
             ],
             "x-construct-secret": true
+          },
+          "windowsSignIn": {
+            "type": "boolean",
+            "default": false
           }
         }
       },
@@ -2267,6 +2387,13 @@
         "properties": {
           "decision": {
             "type": "string"
+          },
+          "ttlSeconds": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
           }
         }
       },
@@ -2881,6 +3008,32 @@
           }
         }
       },
+      "RestoreRequest": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "RestoreStarted": {
+        "required": [
+          "jobId",
+          "replayed"
+        ],
+        "type": "object",
+        "properties": {
+          "jobId": {
+            "type": "string"
+          },
+          "replayed": {
+            "type": "boolean"
+          }
+        }
+      },
       "RevocationEngine": {
         "required": [
           "id",
@@ -3016,6 +3169,7 @@
         "required": [
           "engine",
           "engineName",
+          "id",
           "vm",
           "name",
           "usesLeft",
@@ -3027,6 +3181,9 @@
             "type": "string"
           },
           "engineName": {
+            "type": "string"
+          },
+          "id": {
             "type": "string"
           },
           "vm": {
@@ -3404,6 +3561,20 @@
           "deadline": {
             "type": "integer",
             "format": "int64"
+          },
+          "uses": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          },
+          "ttlSeconds": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
           }
         }
       },

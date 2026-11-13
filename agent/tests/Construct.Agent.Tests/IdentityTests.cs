@@ -98,7 +98,19 @@ public sealed class IdentityTests
         await desktop.GetAsync($"api/engines/{engineId}/api/v1/vms");
         var devices = (await desktop.GetAsync("api/devices")).AsArray();
         Assert.Equal(["desktop", "laptop"], devices.Select(d => d!["name"]!.GetValue<string>()).Order());
+
+        // Both devices registered their SSH key at the engine when they enrolled, each under its own id.
+        var registered = SshKeys(engine);
+        Assert.Equal(await SshKeyAsync(laptop), registered[(await laptop.GetAsync("api/state"))["device"]!["id"]!.GetValue<string>()]);
+        Assert.Equal(await SshKeyAsync(desktop), registered[paired["device"]!["id"]!.GetValue<string>()]);
     }
+
+    private static Dictionary<string, string> SshKeys(EngineHost engine) =>
+        Microsoft.Extensions.DependencyInjection.ServiceProviderServiceExtensions.GetRequiredService<Constructd.Sync.Participation.EngineKeyStore>(engine.Services)
+            .DeviceSshKeys("alice").ToDictionary(k => k.DeviceId, k => k.PublicKey);
+
+    private static async Task<string> SshKeyAsync(TestAgent agent) =>
+        string.Join(' ', (await agent.GetAsync("api/device/ssh-key"))["publicKey"]!.GetValue<string>().Split(' ').Take(2));
 
     [Fact]
     public async Task A_fresh_agent_recovers_the_account_with_the_code()
@@ -125,6 +137,7 @@ public sealed class IdentityTests
         Assert.True(state["engines"]![0]!["enrolled"]!.GetValue<bool>());
         await fresh.GetAsync($"api/engines/{engineId}/api/v1/vms");
         Assert.DoesNotContain(code.Replace("-", ""), fresh.StateFileText());
+        Assert.Equal(await SshKeyAsync(fresh), SshKeys(engine)[device["id"]!.GetValue<string>()]);
     }
 
     [Fact]

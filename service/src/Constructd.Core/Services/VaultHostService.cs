@@ -36,8 +36,14 @@ public sealed record VaultSyncView(long Revision, string? Mode, string? KeyCheck
 /// whether a device granted this engine <c>K</c>.
 /// </summary>
 public sealed partial class VaultHostService(IVaultStore store, IVmRepository vms, IHypervisorDriver driver,
-    IVaultKeyProtector protector, IClock clock, IVaultRecords? records = null) : IVaultUnlocks
+    IVaultKeyProtector protector, IClock clock, IVaultRecords? records = null, ChangeFeed? changes = null) : IVaultUnlocks
 {
+    /// <summary>Change types of vault requests on the engine's stream (owner's account only): filed, and answered or gone.</summary>
+    public const string ApprovalAdded = "vault.approval.added", ApprovalEnded = "vault.approval.ended",
+        EntryRequestAdded = "vault.entry-request.added", EntryRequestEnded = "vault.entry-request.ended";
+
+    private void Notify(string type, string id, string vm, string owner) => changes?.Publish(type, id, vm, owner, ownerOnly: true);
+
     public static readonly TimeSpan DefaultTtl = TimeSpan.FromHours(1), OnceTtl = TimeSpan.FromMinutes(10),
         ReleaseDelay = TimeSpan.FromSeconds(5), ExhaustedGrace = TimeSpan.FromMinutes(1), RetryDelay = TimeSpan.FromMinutes(5),
         DefaultWait = TimeSpan.FromMinutes(10), MaxWait = TimeSpan.FromHours(24), PickupGrace = TimeSpan.FromMinutes(2),

@@ -219,7 +219,7 @@ public sealed partial class DeviceAgent
         foreach (var (engine, body) in await FromEnginesAsync("api/v1/vault/leases", ct).ConfigureAwait(false))
         foreach (var lease in body["leases"] as JsonArray ?? [])
         {
-            leases.Add(new SecretLeaseView(engine.Id, engine.Name, Str(lease, "vm"), Str(lease, "name"),
+            leases.Add(new SecretLeaseView(engine.Id, engine.Name, Str(lease, "id"), Str(lease, "vm"), Str(lease, "name"),
                 lease?["usesLeft"] is JsonValue uses && uses.TryGetValue<int>(out var left) ? left : null, Long(lease, "expiresAt")));
         }
 
@@ -236,7 +236,7 @@ public sealed partial class DeviceAgent
         {
             approvals.Add(new VaultApprovalItem(engine.Id, engine.Name, Str(a, "id"), Str(a, "vm"), Str(a, "op"), Str(a, "title"), Str(a, "message"),
                 Str(a, "action"), (a?["names"] as JsonArray ?? []).Select(n => n?.GetValue<string>() ?? "").ToArray(), Str(a, "reason"), Str(a, "source"),
-                Long(a, "createdAt"), Long(a, "deadline")));
+                Long(a, "createdAt"), Long(a, "deadline"), Int(a, "uses"), Int(a, "ttlSeconds")));
         }
 
         return new VaultApprovalsView(approvals.OrderBy(a => a.CreatedAt).ToArray(), Unanswered(answered));
@@ -246,8 +246,11 @@ public sealed partial class DeviceAgent
     /// Allows or denies one approval. On an engine in <c>locked</c> mode an allow first unlocks the VM that asked, so
     /// the request it allows can be served: in <c>locked</c> mode a VM waits for a device (8.2).
     /// </summary>
-    public async Task DecideApprovalAsync(string engineId, string id, bool allow, CancellationToken ct)
+    /// <param name="ttlSeconds">With an allow of a lease request: the duration the user chose (1 minute to 24 hours); null keeps the VM's.</param>
+    public async Task DecideApprovalAsync(string engineId, string id, bool allow, CancellationToken ct, int? ttlSeconds = null)
     {
+        if (ttlSeconds is { } chosen && (!allow || chosen < 60 || chosen > 86400))
+            throw new AgentFailure(400, "invalid-duration", "A duration goes with an allow and is 1 minute to 24 hours.");
         var entry = Find(engineId) ?? throw NoEngine();
         if (allow)
         {
@@ -260,7 +263,15 @@ public sealed partial class DeviceAgent
             }
         }
 
-        await EngineSendAsync(entry, HttpMethod.Post, $"api/v1/vault/approvals/{Uri.EscapeDataString(id)}", new { decision = allow ? "approve" : "deny" }, ct).ConfigureAwait(false);
+        await EngineSendAsync(entry, HttpMethod.Post, $"api/v1/vault/approvals/{Uri.EscapeDataString(id)}",
+            ttlSeconds is null ? new { decision = allow ? "approve" : "deny" } : new { decision = "approve", ttlSeconds }, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Ends a lease before its time (the engine scrubs the value from the VM as on expiry).</summary>
+    public async Task EndLeaseAsync(string engineId, string id, CancellationToken ct)
+    {
+        var entry = Find(engineId) ?? throw NoEngine();
+        await EngineSendAsync(entry, HttpMethod.Delete, $"api/v1/vault/leases/{Uri.EscapeDataString(id)}", null, ct).ConfigureAwait(false);
     }
 
     /// <summary>Requests from agents to enter a secret (10.3), from every engine, oldest first.</summary>
@@ -399,6 +410,9 @@ public sealed partial class DeviceAgent
     private static string Str(JsonNode? node, string key) =>
         node?[key] is JsonValue v && v.TryGetValue<string>(out var s) ? s : "";
 
+    private static int? Int(JsonNode? node, string key) =>
+        node?[key] is JsonValue v && v.TryGetValue<int>(out var i) ? i : null;
+
     private static long Long(JsonNode? node, string key) =>
         node?[key] is JsonValue v && v.TryGetValue<long>(out var l) ? l : 0;
 
@@ -429,7 +443,8 @@ public sealed record SecretProvenanceView(string Kind, string? Vm, string? Engin
 public sealed record SecretView(string Name, string Description, bool HasUsername, bool AutoApprove, bool Readable, long UpdatedAt, string UpdatedBy,
     SecretProvenanceView Provenance, IReadOnlyList<SecretLeaseView> Leases);
 
-public sealed record SecretLeaseView(string Engine, string EngineName, string Vm, string Name, int? UsesLeft, long ExpiresAt);
+/// <param name="Id">The engine's lease id: <c>DELETE /api/vault/leases/{engine}/{id}</c> ends it.</param>
+public sealed record SecretLeaseView(string Engine, string EngineName, string Id, string Vm, string Name, int? UsesLeft, long ExpiresAt);
 
 public sealed record SecretSummary(string Name, string Description);
 
@@ -446,13 +461,16 @@ public sealed record AutoApproveRequest(bool On);
 
 public sealed record EntryInput([property: ConstructSecret] string Value, string? Username = null);
 
+/// <param name="Uses">The uses the VM asked for (null: any number until the lease ends).</param>
+/// <param name="TtlSeconds">The lease duration the VM asked for (null: the engine's default, one hour); the user may choose another when allowing.</param>
 public sealed record VaultApprovalItem(string Engine, string EngineName, string Id, string Vm, string Op, string Title, string Message, string Action,
-    IReadOnlyList<string> Names, string Reason, string Source, long CreatedAt, long Deadline);
+    IReadOnlyList<string> Names, string Reason, string Source, long CreatedAt, long Deadline, int? Uses = null, int? TtlSeconds = null);
 
 /// <param name="Unreachable">Engines that did not answer: their requests are not in the list.</param>
 public sealed record VaultApprovalsView(IReadOnlyList<VaultApprovalItem> Approvals, IReadOnlyList<string> Unreachable);
 
-public sealed record ApprovalDecision(string Decision);
+/// <param name="TtlSeconds">With <c>allow</c> on a lease request: the lease duration the user chose (60 to 86400 seconds).</param>
+public sealed record ApprovalDecision(string Decision, int? TtlSeconds = null);
 
 /// <param name="Description">Written by the agent that asked: shown as its plain text.</param>
 public sealed record VaultEntryRequestItem(string Engine, string EngineName, string Id, string Vm, string Name, string Description, string Reason,

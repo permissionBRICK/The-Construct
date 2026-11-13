@@ -151,17 +151,16 @@ public sealed class VmLinks : IAsyncDisposable
             VmAddress? address = null;
             if (state == "running")
             {
-                if (local && _platform.DirectAddresses) address = new(name + ".mshome.net", 22, "direct");
-                else
+                try
                 {
-                    try
-                    {
-                        var endpoint = await _engines.GetAsync(engine.Id, $"vms/{Uri.EscapeDataString(name)}/endpoint", ct).ConfigureAwait(false);
-                        if (endpoint?["sshHost"]?.GetValue<string>() is { Length: > 0 } host && endpoint["sshPort"]?.GetValue<int>() is int port)
-                            address = new(host, port, "forwarded");
-                    }
-                    catch (AgentFailure) { /* no endpoint yet: no link this round */ }
+                    // The engine says how SSH is reached (7.2): its own machine dials the VM's direct address where the driver knows one.
+                    var endpoint = await _engines.GetAsync(engine.Id, $"vms/{Uri.EscapeDataString(name)}/endpoint", ct).ConfigureAwait(false);
+                    if (local && endpoint?["direct"] is JsonObject direct && Text(direct, "host") is { Length: > 0 } directHost && direct["port"]?.GetValue<int>() is int directPort)
+                        address = new(directHost, directPort, "direct");
+                    else if (endpoint?["sshHost"]?.GetValue<string>() is { Length: > 0 } host && endpoint["sshPort"]?.GetValue<int>() is int port)
+                        address = new(host, port, "forwarded");
                 }
+                catch (AgentFailure) { /* no endpoint yet: no link this round */ }
             }
 
             // A host service's forward listens on IPv4 only (SshArgs); a literal IPv6 endpoint is dialled as it is.

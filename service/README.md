@@ -147,7 +147,7 @@ that 202 as an `ApiException<JobAcceptedResponse>`.
 | `DELETE /vms/{name}` | owner/admin | → `202 {jobId}`; accepting it fences the VM (see below) and the job removes the VM, its forwards and its SSH port. |
 | `POST /vms/{name}/power` | owner/admin | `{action: start\|stop\|save}`, synchronous, returns the new state. `save` needs the driver's suspend capability. |
 | `GET /vms/{name}/state` | owner/admin | Live state from the driver (and refreshes the registry). |
-| `GET /vms/{name}/endpoint` | owner/admin | `{sshHost, sshPort, publicHost}` — the service host plus the allocated forward, and the name this VM's **web** forwards are advertised under (`PublicHostPattern`, else `PublicHost`; SSH is always dialled on `sshHost`). Until that forward exists the call answers `409`: the VM sits on the host's own switch (`SwitchName`, `Default Switch` unless configured) and has no client-dialable address yet. |
+| `GET /vms/{name}/endpoint` | owner/admin | `{sshHost, sshPort, publicHost, forwarded: {host, port}, direct?: {host, port}}`: `forwarded` is `sshHost:sshPort`, how every client dials; `direct`, where the driver reports one, is the VM's own address, reachable from the engine's machine (design 7.2). `sshHost, sshPort, publicHost` — the service host plus the allocated forward, and the name this VM's **web** forwards are advertised under (`PublicHostPattern`, else `PublicHost`; SSH is always dialled on `sshHost`). Until that forward exists the call answers `409`: the VM sits on the host's own switch (`SwitchName`, `Default Switch` unless configured) and has no client-dialable address yet. |
 | `GET /vms/{name}/forwards` | owner/admin **or that VM's own token** | Lists forwards, each with its client ack inline (see below). |
 | `POST /vms/{name}/forwards` | owner/admin **or that VM's own token** | `{vmPort, label, target}` → `{id, publicPort?, url?}`. `target` defaults to `client`. |
 | `DELETE /vms/{name}/forwards/{id}` | owner/admin **or that VM's own token** | Removes one forward. |
@@ -295,6 +295,7 @@ gate: the resource policy is evaluated again inside every handler.
 | Console | `GET /vms/{name}/console/capabilities`; `POST /vms/{name}/console/sessions`; `POST /vms/{name}/console/sessions/{sid}/renew`; `DELETE /vms/{name}/console/sessions/{sid}`; `GET /vms/{name}/console/sessions/{sid}/screenshot`; `POST .../{sid}/keyboard`; `POST .../{sid}/mouse` | Current VM operator; session remains bound to its creating principal and is re-authorized on every call. |
 | Host updates | `GET /host/updates/status`; `POST /host/updates/check`; `POST /host/updates/stage`; `POST /host/updates/apply`; `POST /host/updates/cancel`; `POST /host/updates/resolve` | Admin. Apply (including resume) and resolve are the only narrowly maintenance-exempt mutations. |
 | Updates (12.1) | `POST /host/updates/run`; `POST /host/vms/reprovision`; `POST /me/vms/reprovision`; `GET`, `PUT /me/updates`; `GET`, `POST /vms/{name}/update` | Run and every-VM reprovision: Admin. My VMs and my setting: the calling user, their own VMs only. The VM route: that primary's own token or its owner, never another user's VM; when the owner is an admin and a host release is out, it runs the host update and, once that succeeded, reprovisions every primary that owner has on the host (a VM that changed owner meanwhile is skipped). See *Updates*. |
+| Devices (8.1) | `GET /engine`; `POST /devices/enroll`; `DELETE /devices/{id}`; `PUT /engine/grants`; `GET /sync/records/{id}`; `PUT /device/ssh-key` | Enrol: anonymous with the device key's proof. The rest: the caller's own account; records and the SSH key only with a device token, the key always the calling device's. See *Device SSH keys on VMs*. |
 | Key vault | `GET`, `PUT /vault/entries`; `PUT /vault/settings`; `POST /vms/{name}/vault/unlock`; `GET /vault/leases`; `DELETE /vault/leases/{id}`; `GET`, `POST /vault/devices`; `DELETE /vault/devices/{id}`; `GET /vault/activity` | The caller's own vault only (an admin gets no access to other users' vaults); unlock: owner of a running primary. |
 | Key vault approvals | `GET /vault/approvals`; `POST /vault/approvals/{id}`; `GET /vault/files`; `POST /vault/files/{id}`; `GET /vault/device` | The owner or one of their paired devices (`VaultDevice`); `/vault/device` is device-only. |
 | Key vault guest | `POST /vms/{name}/vault/requests`; `GET /vms/{name}/vault/requests/{id}?wait=`; `GET /vms/{name}/vault/scrubs`; `POST /vms/{name}/vault/scrubs/{id}` | That primary VM's own token; a child answers `403 vault-child`. |
@@ -381,6 +382,19 @@ and a reinstall whose restore started never deletes the VM again; both say what 
 records (`reinstall:<vm>`, `restore:<vm>` in the host config store) hold backup ids, a fingerprint and
 times, never a key.
 
+### Device SSH keys on VMs
+
+A device reaches its user's VMs over SSH (forwards, notifications, open actions). It registers one
+OpenSSH public key with `PUT /device/ssh-key {publicKey}` (device token only; a new key replaces the
+device's old one). For every account that granted this engine `D`, the engine keeps the keys of the
+account's active devices in `/root/.ssh/authorized_keys` of each primary VM the account owns: root,
+because the device's alias and tunnels connect as root, as the old client's did. Each line ends in
+`construct-device:<device id>`; a write replaces exactly those lines and keeps every other line. The
+engine writes at the end of each provision (before the reboot), when a device registers or is revoked
+here, when the profile sync loop reads a revocation from the device records, and at the next heartbeat
+of a VM it could not reach then. What was written where is kept in memory: after a restart every
+running VM is written once more.
+
 ### Key vault on hosted VMs
 
 The contract is [docs/plans/key-vault-hosted.md](../docs/plans/key-vault-hosted.md); the user guide
@@ -396,7 +410,8 @@ state (checked every 30 s), the deletion fence and restart. Before the Companion
 Guests post the spool contract's request document; answers that need no user come back at once
 (`200`), the rest as `202 {id}` to long-poll (`?wait=` up to 25 s: `200` answer, `204` pending, `404`
 unknown or already picked up). Pending approvals live in memory; the first answer wins (`409
-already-decided`). Leases, pending scrubs, scrub jobs and file decisions are durable; agent logs are
+already-decided`). An approve of a lease request may carry `ttlSeconds` (60 to 86400), the duration the user chose; the lease then
+lasts that long instead of what the VM asked for. Leases, pending scrubs, scrub jobs and file decisions are durable; agent logs are
 redacted without asking and every other hit waits in `GET /vault/files`. The heartbeat reply
 carries `"vaultScrub": true` while a scrub job can be delivered to that VM (with the config-backup
 fields below when those are due too), and is `204` when nothing is due.
@@ -536,7 +551,10 @@ finished job, after which the stream ends.
 its id, never the state, and a client re-reads what it shows: `vm.created`, `vm.changed`, `vm.power`
 (the power state changed), `vm.deleted` (id = the VM's name); `job.started`, `job.progress` (at most once
 a second per job), `job.ended`; `backup.added`, `backup.removed`; `update.offered` (a channel offers a
-release commit the host does not run; admins only) and `update.finished` (a host update reached its end).
+release commit the host does not run; admins only), `update.finished` (a host update reached its end);
+`vault.approval.added`, `vault.approval.ended`, `vault.entry-request.added`, `vault.entry-request.ended`
+(a vault approval or a `construct secret ask` was filed; it was answered, declined, expired or its VM went;
+id = the request's id). Vault events go to the owner's account only, never to an admin of another account.
 `data` is `{seq, type, id, vm}`, and the SSE `id` is `seq`. A caller hears only of what it may read: its
 own VMs and backups, jobs it owns or initiated, finished host updates; an admin hears of everything.
 Without `since`, or when the events after it are gone (more than 1000 behind, or an earlier run of the

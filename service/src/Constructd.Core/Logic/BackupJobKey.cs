@@ -58,32 +58,7 @@ public static partial class BackupJobKey
         if (string.IsNullOrEmpty(keysJson)) return null;
         using var rsa = RSA.Create();
         rsa.ImportFromPem(privatePem);
-        var fingerprint = Fingerprint(rsa.ExportSubjectPublicKeyInfo());
-        try
-        {
-            using var doc = JsonDocument.Parse(keysJson);
-            var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object
-                || !root.TryGetProperty("format", out var format) || format.GetString() != "construct-backup-keys/1"
-                || !root.TryGetProperty("backupId", out var id) || id.GetString() != backupId
-                || !root.TryGetProperty("recipients", out var recipients) || recipients.ValueKind != JsonValueKind.Array)
-                return null;
-            foreach (var recipient in recipients.EnumerateArray())
-            {
-                if (recipient.ValueKind != JsonValueKind.Object
-                    || !recipient.TryGetProperty("fingerprint", out var fp) || fp.GetString() != fingerprint
-                    || !recipient.TryGetProperty("wrapped", out var wrapped) || wrapped.GetString() is not { } text)
-                    continue;
-                var plain = Encoding.ASCII.GetString(rsa.Decrypt(Convert.FromBase64String(text), RSAEncryptionPadding.OaepSHA256));
-                return IsIdentity(plain) ? plain : null;
-            }
-        }
-        catch (Exception ex) when (ex is JsonException or FormatException or CryptographicException or InvalidOperationException)
-        {
-            return null;
-        }
-
-        return null;
+        return Construct.Keys.BackupKeyFile.Unwrap(keysJson, backupId, rsa);
     }
 
     /// <summary>Whether the keys file names a recipient besides <paramref name="jobFingerprint"/>.</summary>

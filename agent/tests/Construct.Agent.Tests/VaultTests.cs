@@ -125,6 +125,76 @@ public sealed class VaultTests
     }
 
     [Fact]
+    public async Task An_approval_shows_the_uses_and_duration_asked_grants_the_duration_chosen_and_its_lease_can_be_ended()
+    {
+        using var engine = new EngineHost();
+        var (laptop, engineId) = await SetUpAsync(engine, "available");
+        await using var _ = laptop;
+        await laptop.PostAsync("api/vault/secrets", new { name = "db", description = "Database", value = "db_pw_123456" });
+        var vm = await CreateVmAsync(laptop, engine, engineId);
+
+        var request = await SubmitAsync(engine, vm, new { v = 1, op = "request", names = new[] { "db" }, uses = 3, ttl = 7200 });
+        var approval = Assert.Single((await laptop.GetAsync("api/vault/approvals"))["approvals"]!.AsArray())!;
+        Assert.Equal(3, approval["uses"]!.GetValue<int>());
+        Assert.Equal(7200, approval["ttlSeconds"]!.GetValue<int>());
+
+        await laptop.PostAsync($"api/vault/approvals/{engineId}/{request.PendingId}", new { decision = "deny", ttlSeconds = 600 }, HttpStatusCode.BadRequest);
+        await laptop.PostAsync($"api/vault/approvals/{engineId}/{request.PendingId}", new { decision = "allow", ttlSeconds = 10 }, HttpStatusCode.BadRequest);
+        var before = DateTimeOffset.UtcNow;
+        await laptop.PostAsync($"api/vault/approvals/{engineId}/{request.PendingId}", new { decision = "allow", ttlSeconds = 600 }, HttpStatusCode.NoContent);
+
+        var lease = Assert.Single(Assert.Single((await laptop.GetAsync("api/vault/secrets")).AsArray())!["leases"]!.AsArray())!;
+        Assert.Equal(3, lease["usesLeft"]!.GetValue<int>());
+        Assert.InRange(lease["expiresAt"]!.GetValue<long>(), before.AddSeconds(590).ToUnixTimeMilliseconds(), DateTimeOffset.UtcNow.AddSeconds(601).ToUnixTimeMilliseconds());
+        var leaseId = lease["id"]!.GetValue<string>();
+        Assert.NotEmpty(leaseId);
+
+        using (var ended = await laptop.Api.DeleteAsync($"api/vault/leases/{engineId}/{leaseId}"))
+            Assert.Equal(HttpStatusCode.NoContent, ended.StatusCode);
+        Assert.Empty(Assert.Single((await laptop.GetAsync("api/vault/secrets")).AsArray())!["leases"]!.AsArray());
+        using (var again = await laptop.Api.DeleteAsync($"api/vault/leases/{engineId}/{leaseId}"))
+            Assert.Equal(HttpStatusCode.NotFound, again.StatusCode);
+    }
+
+    [Fact]
+    public async Task New_and_answered_vault_requests_reach_the_events_without_polling()
+    {
+        using var engine = new EngineHost();
+        var (laptop, engineId) = await SetUpAsync(engine, "available");
+        await using var _ = laptop;
+        await laptop.PostAsync("api/vault/secrets", new { name = "db", description = "Database", value = "db_pw_123456" });
+        var vm = await CreateVmAsync(laptop, engine, engineId);
+
+        var request = await SubmitAsync(engine, vm, new { v = 1, op = "request", names = new[] { "db" } });
+        await EventAsync(laptop, "vault.approval.added", request.PendingId!);
+        await laptop.PostAsync($"api/vault/approvals/{engineId}/{request.PendingId}", new { decision = "deny" }, HttpStatusCode.NoContent);
+        await EventAsync(laptop, "vault.approval.ended", request.PendingId!);
+
+        var ask = await SubmitAsync(engine, vm, new { v = 1, op = "ask", names = new[] { "jira" }, description = "Jira token" });
+        var askId = ask.Response!["requestId"]!.GetValue<string>();
+        var added = await EventAsync(laptop, "vault.entry-request.added", askId);
+        Assert.Equal(engineId, added.Engine);
+        Assert.Equal(vm.Name, added.Data!["vm"]!.GetValue<string>());
+        await laptop.PostAsync($"api/vault/entry-requests/{engineId}/{askId}/decline", null, HttpStatusCode.NoContent);
+        await EventAsync(laptop, "vault.entry-request.ended", askId);
+    }
+
+    private static async Task<Events.AgentEvent> EventAsync(TestAgent agent, string type, string id)
+    {
+        var until = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+        while (true)
+        {
+            using (var subscription = agent.Host.Agent.Events.Subscribe(0))
+            {
+                if (subscription.Replay.FirstOrDefault(e => e.Type == type && e.Data?["id"]?.GetValue<string>() == id) is { } found) return found;
+            }
+
+            Assert.True(DateTime.UtcNow < until, $"no {type} event for {id}");
+            await Task.Delay(100);
+        }
+    }
+
+    [Fact]
     public async Task Switching_the_mode_grants_or_withdraws_K_and_an_allow_on_a_locked_engine_unlocks_the_VM()
     {
         using var engine = new EngineHost();

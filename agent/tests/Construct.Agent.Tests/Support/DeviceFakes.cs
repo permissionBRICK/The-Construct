@@ -25,7 +25,6 @@ public sealed class FakePlatform : IDevicePlatform, IAgentLauncher, IDisposable
 
     public string SshExecutable => "ssh";
 
-    public bool DirectAddresses { get; init; }
 
     public IToastRaiser? Notifications { get; init; }
 

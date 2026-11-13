@@ -68,6 +68,9 @@ public sealed class EngineEntry
     /// <summary>The user's sign-in at the engine (an API token), protected; kept until a device token replaces it.</summary>
     public string? UserToken { get; set; }
 
+    /// <summary>The user signs in at the engine as the Windows user (Negotiate) until a device token replaces it.</summary>
+    public bool WindowsSignIn { get; set; }
+
     /// <summary>The engine's id from an address (<see cref="Id"/>).</summary>
     public static string IdFor(string url) =>
         Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(url.ToLowerInvariant())))[..12].ToLowerInvariant();

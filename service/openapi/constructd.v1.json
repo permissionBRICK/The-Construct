@@ -5694,6 +5694,39 @@
         }
       }
     },
+    "/api/v1/device/ssh-key": {
+      "put": {
+        "tags": [
+          "EngineParticipationEndpoints"
+        ],
+        "operationId": "PutDeviceSshKey",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceSshKeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/engine/grants": {
       "put": {
         "tags": [
@@ -9285,6 +9318,17 @@
           }
         }
       },
+      "DeviceSshKeyRequest": {
+        "required": [
+          "publicKey"
+        ],
+        "type": "object",
+        "properties": {
+          "publicKey": {
+            "type": "string"
+          }
+        }
+      },
       "DriverCapabilities": {
         "required": [
           "checkpoints",
@@ -9430,6 +9474,26 @@
           },
           "publicHost": {
             "type": "string"
+          },
+          "forwarded": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SshAddress"
+              }
+            ]
+          },
+          "direct": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SshAddress"
+              }
+            ]
           }
         }
       },
@@ -13048,6 +13112,22 @@
           }
         }
       },
+      "SshAddress": {
+        "required": [
+          "host",
+          "port"
+        ],
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
       "StoredRecord": {
         "required": [
           "id",
@@ -14234,6 +14314,13 @@
               "null",
               "string"
             ]
+          },
+          "ttlSeconds": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
           }
         }
       },

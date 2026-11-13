@@ -44,7 +44,10 @@ public static class AgentRoutes
             .WithDescription("The solo engine on this machine on loopback; 204 when none answers.");
 
         api.MapPost("/engines", async (DeviceAgent agent, [FromBody] AddEngineRequest request, CancellationToken ct) =>
-            TypedResults.Ok(await agent.AddEngineAsync(request.Address, request.Pin, request.Name, request.UserToken, ct))).WithName("AddEngine");
+            TypedResults.Ok(request.WindowsSignIn
+                ? await agent.AddEngineWithWindowsAsync(request.Address, request.Pin, request.Name, request.UserToken, ct)
+                : await agent.AddEngineAsync(request.Address, request.Pin, request.Name, request.UserToken, ct))).WithName("AddEngine")
+            .WithDescription("Adds an engine with the pin the user confirmed. The user's sign-in there is userToken, or, with windowsSignIn, the signed-in Windows user where the engine offers Negotiate (Windows only; 501 not-available elsewhere).");
 
         api.MapDelete("/engines/{id}", async (DeviceAgent agent, string id, CancellationToken ct) =>
         {
@@ -157,7 +160,8 @@ public sealed record ProbeRequest(string Address);
 
 /// <param name="Pin">The pin ProbeEngine returned and the user confirmed.</param>
 /// <param name="UserToken">The user's sign-in at the engine (an API token), when this device has no device token there.</param>
-public sealed record AddEngineRequest(string Address, string Pin, string? Name = null, [property: ConstructSecret] string? UserToken = null);
+/// <param name="WindowsSignIn">Sign in as the Windows user instead of with <paramref name="UserToken"/>.</param>
+public sealed record AddEngineRequest(string Address, string Pin, string? Name = null, [property: ConstructSecret] string? UserToken = null, bool WindowsSignIn = false);
 
 public sealed record ConnectEngineRequest(string? VaultMode = null);
 

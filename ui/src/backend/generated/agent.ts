@@ -79,6 +79,7 @@ export interface paths {
         };
         get: operations["ListEngines"];
         put?: never;
+        /** @description Adds an engine with the pin the user confirmed. The user's sign-in there is userToken, or, with windowsSignIn, the signed-in Windows user where the engine offers Negotiate (Windows only; 501 not-available elsewhere). */
         post: operations["AddEngine"];
         delete?: never;
         options?: never;
@@ -284,6 +285,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/engines/{engine}/vms/{vm}/backups/{backup}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Restores a stored backup into the running VM: the backup's key is unwrapped here with the account's backup key and goes only to the engine's restore job. Follow the job through the proxy. */
+        post: operations["RestoreBackup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/devices/{id}/secrets": {
         parameters: {
             query?: never;
@@ -411,9 +429,26 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description allow or deny. On a locked engine an allow first unlocks the VM that asked. */
+        /** @description allow or deny; an allow of a lease request may carry ttlSeconds, the duration the user chose (60 to 86400). On a locked engine an allow first unlocks the VM that asked. */
         post: operations["DecideVaultApproval"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/vault/leases/{engine}/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Ends a lease before its time, at that engine; the VM's copy is scrubbed as on expiry. */
+        delete: operations["EndVaultLease"];
         options?: never;
         head?: never;
         patch?: never;
@@ -764,6 +799,8 @@ export interface components {
             pin: string;
             name?: null | string;
             userToken?: null | string;
+            /** @default false */
+            windowsSignIn: boolean;
         };
         AgentHealth: {
             status: string;
@@ -786,6 +823,8 @@ export interface components {
         };
         ApprovalDecision: {
             decision: string;
+            /** Format: int32 */
+            ttlSeconds?: null | number;
         };
         ApprovePairingRequest: {
             publicKey: string;
@@ -930,6 +969,13 @@ export interface components {
         RecoveryCodeResponse: {
             recoveryCode: string;
         };
+        RestoreRequest: {
+            requestId?: null | string;
+        };
+        RestoreStarted: {
+            jobId: string;
+            replayed: boolean;
+        };
         RevocationEngine: {
             id: string;
             name: string;
@@ -965,6 +1011,7 @@ export interface components {
         SecretLeaseView: {
             engine: string;
             engineName: string;
+            id: string;
             vm: string;
             name: string;
             /** Format: int32 */
@@ -1057,6 +1104,10 @@ export interface components {
             createdAt: number;
             /** Format: int64 */
             deadline: number;
+            /** Format: int32 */
+            uses?: null | number;
+            /** Format: int32 */
+            ttlSeconds?: null | number;
         };
         VaultApprovalsView: {
             approvals: components["schemas"]["VaultApprovalItem"][];
@@ -1729,6 +1780,43 @@ export interface operations {
             };
         };
     };
+    RestoreBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine: string;
+                vm: string;
+                backup: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": null | components["schemas"]["RestoreRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoreStarted"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
     SecretsReadableByDevice: {
         parameters: {
             query?: never;
@@ -2023,6 +2111,36 @@ export interface operations {
                 "application/json": components["schemas"]["ApprovalDecision"];
             };
         };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    EndVaultLease: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description No Content */
             204: {

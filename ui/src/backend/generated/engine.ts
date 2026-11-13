@@ -2032,6 +2032,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/device/ssh-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["PutDeviceSshKey"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/engine/grants": {
         parameters: {
             query?: never;
@@ -4286,6 +4302,9 @@ export interface components {
         DeviceEnrollResponse: {
             token: string;
         };
+        DeviceSshKeyRequest: {
+            publicKey: string;
+        };
         DriverCapabilities: {
             checkpoints: boolean;
             suspend: boolean;
@@ -4329,6 +4348,8 @@ export interface components {
             /** Format: int32 */
             sshPort: number;
             publicHost: string;
+            forwarded?: null | components["schemas"]["SshAddress"];
+            direct?: null | components["schemas"]["SshAddress"];
         };
         EngineGrant: {
             name: string;
@@ -5207,6 +5228,11 @@ export interface components {
         SourceEnsureRequest: {
             commit: null | string;
         };
+        SshAddress: {
+            host: string;
+            /** Format: int32 */
+            port: number;
+        };
         StoredRecord: {
             id: string;
             kind: string;
@@ -5522,6 +5548,8 @@ export interface components {
         };
         VaultEndpointsDecisionRequest: {
             decision: null | string;
+            /** Format: int32 */
+            ttlSeconds?: null | number;
         };
         VaultEndpointsDeviceRequest: {
             label: null | string;
@@ -10287,6 +10315,37 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    PutDeviceSshKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeviceSshKeyRequest"];
+            };
+        };
         responses: {
             /** @description No Content */
             204: {

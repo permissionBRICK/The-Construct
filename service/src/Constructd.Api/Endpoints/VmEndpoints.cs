@@ -331,7 +331,19 @@ public static class VmEndpoints
         var vm = lookup.Vm!;
         if (vm.Kind == VmKind.Child) return CodedProblems.Create(409, "no-endpoint", "Children have no primary SSH endpoint.");
         var endpoint = await network.EndpointAsync(vm, cancellationToken);
-        if (endpoint is not null) return TypedResults.Ok(EndpointResponse.From(endpoint));
+        if (endpoint is not null)
+        {
+            // The driver's own endpoint is the VM's address on the engine's machine (Hyper-V's switch, a bridge).
+            Constructd.Core.Domain.Endpoint? direct = null;
+            try { direct = await http.RequestServices.GetRequiredService<IHypervisorDriver>().GetEndpointAsync(vm.Name, cancellationToken); }
+            catch (Exception ex) when (ex is not OperationCanceledException) { /* no direct address this time */ }
+            return TypedResults.Ok(EndpointResponse.From(endpoint) with
+            {
+                Forwarded = new SshAddress(endpoint.SshHost, endpoint.SshPort),
+                Direct = direct is { SshHost.Length: > 0 } ? new SshAddress(direct.SshHost, direct.SshPort) : null,
+            });
+        }
+
         return (await network.CurrentAsync(vm, cancellationToken)).Mode == "direct"
             ? CodedProblems.Create(409, "no-address", "The guest has not reported an address yet.")
             : Problems.UnavailableYet($"VM '{vm.Name}' has no ssh forward yet; wait for its creation job to finish.");

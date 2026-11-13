@@ -174,6 +174,10 @@ public static class IdleEndpoints
             due["conflicts"] = conflicts.Select(ProfileEndpoints.ToNotice).ToList();
         }
 
+        // The SSH keys of the owner's devices, when this VM missed a change.
+        await http.RequestServices.GetRequiredService<Constructd.Api.Devices.DeviceSshKeys>()
+            .HeartbeatAsync(lookup.Vm!, cancellationToken).ConfigureAwait(false);
+
         return due.Count == 0 ? Results.NoContent() : Results.Ok(due);
     }
 }

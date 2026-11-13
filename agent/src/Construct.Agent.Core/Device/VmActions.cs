@@ -88,13 +88,14 @@ public sealed class VmActions(VmLinks links, IDevicePlatform platform)
             "grep -E '^(SMB_SHARE|SMB_USER|SMB_PASSWORD|SMB_SHARE_NAME)=' /etc/construct/config.env || true", TimeSpan.FromSeconds(20), ct).ConfigureAwait(false);
         if (result.Code != 0) throw new AgentFailure(502, "vm-unreachable", "The VM did not answer over SSH.");
         var values = ParseConfig(result.Stdout);
-        var unc = Unc(vm, values.GetValueOrDefault("SMB_SHARE_NAME") is { Length: > 0 } name ? name : "repo");
+        var unc = Unc(links.Target(engine, vm).Address?.Host ?? vm, values.GetValueOrDefault("SMB_SHARE_NAME") is { Length: > 0 } name ? name : "repo");
         var user = values.GetValueOrDefault("SMB_USER") is { Length: > 0 } u ? u : "dev";
         var password = values.GetValueOrDefault("SMB_SHARE") == "false" ? null : values.GetValueOrDefault("SMB_PASSWORD") is { Length: > 0 } p ? p : null;
         return (unc, user, password);
     }
 
-    private static string Unc(string vm, string share) => $@"\\{vm}.mshome.net\{share}";
+    /// <summary>The share on the VM's direct address, as the engine named it (7.2).</summary>
+    private static string Unc(string host, string share) => $@"\\{host}\{share}";
 
     /// <summary><c>KEY=value</c> lines of config.env, with config-set.sh's single quotes undone.</summary>
     public static Dictionary<string, string> ParseConfig(string text)

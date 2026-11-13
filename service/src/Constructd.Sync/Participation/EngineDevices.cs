@@ -139,6 +139,13 @@ public sealed class EngineDevices(
         finally { _lock.Release(); }
     }
 
+    /// <summary>The ids of the account's active devices, as last read; the records are read when none were yet.</summary>
+    public async Task<IReadOnlySet<string>> ActiveAsync(string account, CancellationToken ct)
+    {
+        var devices = _devices.TryGetValue(account, out var known) ? known : await RefreshAsync(account, ct).ConfigureAwait(false);
+        return devices.Where(d => d.Value.Status == DeviceRecordValue.Active).Select(d => d.Key).ToHashSet(StringComparer.Ordinal);
+    }
+
     /// <summary>The device a token and proof stand for, or null.</summary>
     public async Task<(string Account, string DeviceId)?> AuthenticateAsync(string token, string? proof, CancellationToken ct)
     {

@@ -103,7 +103,7 @@ CONSTRUCT_AGENT_UPDATE_OPENAPI=1 dotnet test agent/Construct.Agent.slnx --filter
 | `POST /api/shutdown` | Stops the agent (repair uses it) |
 | `POST /api/engines/probe {address}` | Connects without any credential and returns `{url, pin, status}` for the user to confirm |
 | `GET /api/engines/local` | The same for the solo engine on `https://127.0.0.1:7462`; 204 when none answers |
-| `POST /api/engines {address, pin, name?, userToken?}` | Adds the engine with the confirmed pin. `userToken` is the user's sign-in there, needed until this device is enrolled. When the device is registered, the engine is also written as an `engine` record, granted `D` and enrolled. |
+| `POST /api/engines {address, pin, name?, userToken?, windowsSignIn?}` | Adds the engine with the confirmed pin. `userToken` is the user's sign-in there, needed until this device is enrolled; with `windowsSignIn` the signed-in Windows user signs in instead (Negotiate, Windows only, `501 not-available` elsewhere; `409 no-windows-sign-in` when the engine's challenge, read without a credential over the pinned connection, does not offer it). Either sign-in is dropped once the device holds a device token there. When the device is registered, the engine is also written as an `engine` record, granted `D` and enrolled. |
 | `DELETE /api/engines/{id}` | Removes it (not the engine that holds the store) |
 | `POST /api/engines/{id}/connect {vaultMode?}` | Grants `D`, and `K` when `vaultMode` is `available`; enrols this device |
 | `/api/engines/{id}/api/v1/...` | The proxy, below |
@@ -124,8 +124,10 @@ CONSTRUCT_AGENT_UPDATE_OPENAPI=1 dotnet test agent/Construct.Agent.slnx --filter
 | `POST /api/vault/secrets/{name}/reveal` | `{name, username, value}`: the only route that returns a value |
 | `PUT /api/vault/secrets/{name}/auto-approve {on}` | Switches auto-approve |
 | `GET /api/vault/history` | Every write of every secret, newest first, with its provenance (VM, approving or entering device, request id) |
-| `GET /api/vault/approvals`, `POST /api/vault/approvals/{engine}/{id} {decision: allow\|deny}` | The engines' pending approvals; on a `locked` engine an allow first unlocks the VM that asked |
+| `GET /api/vault/approvals`, `POST /api/vault/approvals/{engine}/{id} {decision: allow\|deny, ttlSeconds?}` | The engines' pending approvals with the `uses` and `ttlSeconds` the VM asked for; an allow of a lease request may carry the duration the user chose (60 to 86400 s), which the lease gets. On a `locked` engine an allow first unlocks the VM that asked |
+| `DELETE /api/vault/leases/{engine}/{id}` | Ends a lease early (the lease views carry `id`); the engine scrubs the value as on expiry |
 | `GET /api/vault/entry-requests`, `POST /api/vault/entry-requests/{engine}/{id} {value, username?}`, `POST …/decline` | `construct secret ask`: the user enters the value, sealed here with `K`; created only while the name is free, never auto-approved, no lease |
+| `POST /api/engines/{engine}/vms/{vm}/backups/{backup}/restore {requestId?}` | Restores a stored backup into the running VM: reads its keys file from the engine, unwraps the backup's key with the account's `B` here and starts the engine's `restore` job with it in the job's secrets. `409 backup-key-not-held` when `B` does not open it. Answers `{jobId, replayed}`; follow the job through the proxy |
 | `GET/PUT /api/vault/engines/{engine}/mode {mode}` | An engine's vault mode and whether it holds `K`; `available` grants `K`, `locked` withdraws it |
 | `POST /api/vault/engines/{engine}/vms/{vm}/unlock` | Hands a running VM on a `locked` engine `K` until it stops |
 
@@ -138,8 +140,8 @@ behind an agent route is reported as 403, never 401, so 401 always means the age
 |---|---|
 | `GET /api/device/features` | `{platform, notifications, microphone, share, startWithOs, shell}`: what this device can do |
 | `GET`, `PUT /api/device/settings {channel?, autoUpdate?, startWithOs?}` | The release channel (`stable`, `nightly`, an https manifest URL), automatic updates (off by default), start with the OS (`null` where not available) |
-| `GET /api/device/ssh-key` | The device's SSH public key (`~/.ssh/construct_ed25519`, created on first use); a VM must authorize it |
-| `GET /api/connections`, `POST /api/connections/refresh` | The user's own primary VMs on every engine: state, the address this device dials (`direct` for a VM on this PC's engine on Windows, else the engine's `forwarded` endpoint), local forwards, the microphone |
+| `GET /api/device/ssh-key` | The device's SSH public key (`~/.ssh/construct_ed25519`, created on first use). The agent registers it at every engine it enrols at (and again on connect); the engine authorizes it on the user's VMs |
+| `GET /api/connections`, `POST /api/connections/refresh` | The user's own primary VMs on every engine: state, the address this device dials (the engine's `direct` address for a VM on this PC's engine, where it names one, else its `forwarded` endpoint), local forwards, the microphone |
 | `DELETE /api/connections/{engine}/{vm}/forwards/{id}` | Closes a local forward (also at the engine) |
 | `PUT /api/connections/{engine}/{vm}/mic {on}` | Microphone passthrough; kept for the VM's next start |
 | `PUT`, `DELETE /api/connections/{engine}/{vm}/ssh-config` | The VM's `Host` alias in `~/.ssh/config` and VS Code's `remote.SSH.remotePlatform` entry |
@@ -202,7 +204,7 @@ API is rewritten to the proxy path; a fixed `Content-Length` is kept; `Set-Cooki
 |---|---|
 | `agent` | The agent's state changed (engines, device); reload `GET /api/state` |
 | `pairing` | A pairing on this device changed state |
-| `vm.created`, `vm.changed`, `vm.power`, `vm.deleted`, `job.started`, `job.progress`, `job.ended`, `backup.added`, `backup.removed`, `update.offered`, `update.finished` | An engine's change, from its own stream (`GET /api/v1/events`): `data` is `{id, vm?}`, never the state; re-read the thing through the proxy. Jobs started elsewhere arrive too. |
+| `vm.created`, `vm.changed`, `vm.power`, `vm.deleted`, `job.started`, `job.progress`, `job.ended`, `backup.added`, `backup.removed`, `update.offered`, `update.finished`, `vault.approval.added`, `vault.approval.ended`, `vault.entry-request.added`, `vault.entry-request.ended` | An engine's change, from its own stream (`GET /api/v1/events`): `data` is `{id, vm?}`, never the state; re-read the thing through the proxy (a vault event: `GET /api/vault/approvals` or `/api/vault/entry-requests`). Jobs started elsewhere arrive too. |
 | `engine.reset` | The agent (re)started following that engine and may have missed its changes; reload what you show from it |
 | `job.lost` | After a reset, a job the agent saw start can no longer be read |
 | `reset` | The events after `since` are gone (more than 1000 behind, or an earlier run); reload the state |

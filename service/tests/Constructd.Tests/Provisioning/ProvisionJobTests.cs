@@ -55,6 +55,22 @@ public sealed class ProvisionJobTests
         Assert.False(status.HardwareChanged);
     }
 
+    [Fact]
+    public async Task For_an_account_with_devices_the_run_writes_the_device_keys_before_the_reboot()
+    {
+        await using var h = await ProvisionHarness.StartAsync();
+        var engine = h.App.Service<Constructd.Sync.Participation.EngineKeyStore>();
+        using var keys = Construct.Keys.AccountKeys.Create();
+        foreach (var grant in Construct.Keys.EngineGrants.For(keys, engine.HostKey.PublicKey, engine.EngineId, "alice", "locked")) engine.PutGrant("alice", grant);
+
+        var job = await h.RunAsync("click-keys");
+        Assert.Equal(JobState.Succeeded, job.State);
+        var commands = h.Ssh.Commands.ToList();
+        var write = commands.FindIndex(c => c.Contains(Constructd.Api.Devices.DeviceSshKeys.Done, StringComparison.Ordinal));
+        Assert.True(write >= 0, "the device keys were written");
+        Assert.True(write < commands.FindIndex(c => c.Contains("sleep 3; reboot", StringComparison.Ordinal)));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

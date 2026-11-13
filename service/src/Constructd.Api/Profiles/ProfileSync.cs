@@ -76,6 +76,7 @@ public sealed class ProfileSync : IDisposable
     private readonly IProvisionTargets _targets;
     private readonly ISshRunner _ssh;
     private readonly ILogger<ProfileSync> _log;
+    private readonly Constructd.Api.Devices.DeviceSshKeys _deviceKeys;
     private readonly string _directory;
     private readonly bool _inMemory;
 
@@ -87,8 +88,10 @@ public sealed class ProfileSync : IDisposable
     private readonly object _create = new();
 
     public ProfileSync(EngineKeyStore keys, IRecordKeyProvider recordKeys, EngineStores stores, EngineDevices devices, IVmRepository vms,
-        IVmDesiredStateSource desired, IProvisionTargets targets, ISshRunner ssh, ConstructdOptions options, ILogger<ProfileSync> log)
+        IVmDesiredStateSource desired, IProvisionTargets targets, ISshRunner ssh, ConstructdOptions options, ILogger<ProfileSync> log,
+        Constructd.Api.Devices.DeviceSshKeys deviceKeys)
     {
+        _deviceKeys = deviceKeys;
         _keys = keys;
         _recordKeys = recordKeys;
         _stores = stores;
@@ -199,6 +202,9 @@ public sealed class ProfileSync : IDisposable
         {
             _log.LogInformation("The device records of account {Account} could not be read: {Reason}", account, ex.Message);
         }
+
+        // The keys of the account's active devices on its VMs (a revocation takes one off).
+        await _deviceKeys.SyncAccountAsync(account, ct);
 
         // From the replica, store reachable or not: restores and what arrived earlier.
         foreach (var vm in vms) await WriteBackAsync(vm, replica, ct);

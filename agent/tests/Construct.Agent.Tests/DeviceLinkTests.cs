@@ -153,18 +153,22 @@ public sealed class DeviceLinkTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task On_this_pcs_engine_a_vm_is_dialled_at_its_own_address_where_the_platform_says_so()
+    public async Task On_this_pcs_engine_a_vm_is_dialled_at_the_direct_address_the_engine_names()
     {
-        var engines = new FakeEngines().Add("local", "https://127.0.0.1:7462")
-            .On("local", "GET whoami", """{"name":"alice"}""")
-            .On("local", "GET vms", """[{"name":"work","owner":"alice","kind":"primary","state":"running"}]""")
-            .On("local", "GET vms/work/forwards", "[]").On("local", "GET vms/work/forwards?via=work", "[]");
-        await using var device = new FakeDevice(_directory + "-local", engines, new FakePlatform { DirectAddresses = true });
+        var engines = new FakeEngines().Add("local", "https://127.0.0.1:7462").Add("remote", "https://pc.example:7462");
+        foreach (var (engine, vm) in new[] { ("local", "work"), ("remote", "far") })
+            engines.On(engine, "GET whoami", """{"name":"alice"}""")
+                .On(engine, "GET vms", $$"""[{"name":"{{vm}}","owner":"alice","kind":"primary","state":"running"}]""")
+                .On(engine, $"GET vms/{vm}/endpoint", $$$"""{"sshHost":"pc.example","sshPort":2201,"publicHost":"pc.example","forwarded":{"host":"pc.example","port":2201},"direct":{"host":"{{{vm}}}.mshome.net","port":22}}""")
+                .On(engine, $"GET vms/{vm}/forwards", "[]").On(engine, $"GET vms/{vm}/forwards?via={vm}", "[]");
+        await using var device = new FakeDevice(_directory + "-local", engines, new FakePlatform());
 
         await device.Links.RefreshAsync(CancellationToken.None);
 
-        Assert.Equal(new VmAddress("work.mshome.net", 22, "direct"), device.Links.Connections().Single().Address);
-        Assert.DoesNotContain("GET vms/work/endpoint", engines.CallsTo("local"));
+        // On the engine's own machine the direct address; from elsewhere the forward.
+        var connections = device.Links.Connections();
+        Assert.Equal(new VmAddress("work.mshome.net", 22, "direct"), connections.Single(c => c.Engine == "local").Address);
+        Assert.Equal(new VmAddress("pc.example", 2201, "forwarded"), connections.Single(c => c.Engine == "remote").Address);
     }
 
     [Fact]
