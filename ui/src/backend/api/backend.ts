@@ -199,7 +199,7 @@ export class ApiBackend implements Backend {
   private async load() {
     try {
       const [health, st] = await Promise.all([ok(this.agent.GET('/api/health')), ok(this.agent.GET('/api/state'))]);
-      this.emit({ version: health.version, device: { name: st.device.name ?? '' } });
+      this.emit({ version: health.version.split('+')[0], device: { name: st.device.name ?? '' } });
       if (!st.device.registered) {
         if (!this.s.firstRun) {
           let local: string | null = null;
@@ -375,7 +375,7 @@ export class ApiBackend implements Backend {
     return {
       id: engine,
       name: sl.view.name,
-      kind: '–',
+      kind: '',
       version: hostVersion(sl.health),
       channel: u?.channel ?? '–',
       admin,

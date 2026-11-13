@@ -263,7 +263,7 @@ export function Settings({ vm }: { vm: Vm }) {
           <Row l="Ubuntu"><Seg label="Ubuntu" opts={['22.04', '24.04'] as const} value={st.disk.ubuntu as '24.04'} onChange={v => save({ disk: { ubuntu: v } })} /></Row></>}
         </Sec>
         <Sec title="When idle">
-          <Row l={<>After <span class="d">min</span></>}><Seg label="Idle after" opts={[15, 30, 60] as const} value={st.idle.afterMin as 30} onChange={v => save({ idle: { afterMin: v } })} /></Row>
+          <Row l={<>After <span class="d">min</span></>}><Seg label="Idle after" opts={withValue([15, 30, 60], st.idle.afterMin)} value={st.idle.afterMin} onChange={v => save({ idle: { afterMin: v } })} /></Row>
           <Row l="Then"><Seg label="Then" opts={['save', 'shutdown', 'never'] as const} labels={{ save: 'Save', shutdown: 'Shut down', never: 'Never' }} value={st.idle.then} onChange={v => save({ idle: { then: v } })} /></Row>
         </Sec>
       </>
