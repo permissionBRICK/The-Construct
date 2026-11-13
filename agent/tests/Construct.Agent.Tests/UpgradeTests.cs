@@ -236,6 +236,43 @@ public sealed class UpgradeTests
     }
 
     [Fact]
+    public async Task A_backup_made_for_the_old_PC_key_restores_with_the_key_the_converter_kept()
+    {
+        await using var rig = await UpgradeRig.CreateAsync(SingleVm);
+        await rig.EngineStepAsync();
+        await rig.SetupAsync();
+        Assert.Equal("converted", (await rig.ConvertAsync())["stage"]!.GetValue<string>());
+        var engine = rig.Agent.Host.Upgrade.Bridge.Read().LocalEngine!;
+
+        // A backup from before the move: its key wrapped only for the old PC key (and a recipient nobody holds).
+        const string identity = "AGE-SECRET-KEY-1QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ";
+        using var old = System.Security.Cryptography.RSA.Create();
+        old.ImportFromPem(rig.Fixture.BackupPublicPem);
+        var id = Guid.NewGuid().ToString("n");
+        var keys = new JsonObject
+        {
+            ["format"] = "construct-backup-keys/1", ["backupId"] = id, ["createdAt"] = "2026-10-01T10:00:00Z",
+            ["recipients"] = new JsonArray(
+                new JsonObject { ["fingerprint"] = new string('0', 64), ["label"] = "other", ["wrapped"] = Convert.ToBase64String(new byte[384]) },
+                new JsonObject
+                {
+                    ["fingerprint"] = rig.Fingerprint, ["label"] = "Construct",
+                    ["wrapped"] = Convert.ToBase64String(old.Encrypt(System.Text.Encoding.ASCII.GetBytes(identity), System.Security.Cryptography.RSAEncryptionPadding.OaepSHA256)),
+                }),
+        }.ToJsonString();
+        var now = DateTimeOffset.UtcNow;
+        await rig.Local.Services.GetRequiredService<IBackupStore>().InsertAsync(
+            new ConfigBackup(id, "alice", "agent-vm", "manual", BackupStates.Complete, now, now, 10, new string('a', 64), null, keys), CancellationToken.None);
+
+        var started = await rig.Agent.PostAsync($"api/engines/{engine}/vms/agent-vm/backups/{id}/restore", new JsonObject { ["requestId"] = "old" });
+        Assert.DoesNotContain(identity, started.ToJsonString());
+        var job = await rig.Agent.GetAsync($"api/engines/{engine}/api/v1/jobs/{started["jobId"]!.GetValue<string>()}");
+        Assert.Equal("restore", job["kind"]!.GetValue<string>());
+        Assert.DoesNotContain(identity, job.ToJsonString());
+        Assert.DoesNotContain(identity, rig.Agent.StateFileText());
+    }
+
+    [Fact]
     public async Task The_cli_converts_in_process_and_reports_each_item()
     {
         await using var rig = await UpgradeRig.CreateAsync(SingleVm);

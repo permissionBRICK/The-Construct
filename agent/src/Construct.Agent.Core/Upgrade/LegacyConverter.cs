@@ -329,7 +329,7 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
                 fingerprint = fp;
                 try
                 {
-                    var id = "setting:legacy-backup-key:" + fp;
+                    var id = DeviceAgent.LegacyBackupKeyPrefix + fp;
                     if (await agent.RecordExistsAsync(id, ct).ConfigureAwait(false)) return ("skipped", "Kept already.");
                     var context = "legacy-backup-key:" + fp;
                     var (epoch, wrapped) = await agent.WrapUnderRootAsync(pkcs8, context, ct).ConfigureAwait(false);

@@ -157,10 +157,13 @@ public sealed class LegacyFixture : IDisposable
         var path = Path.Combine(Root, "backup", "pc-key.dpapi");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllBytes(path, Protection.Protect(Encoding.UTF8.GetBytes(rsa.ToXmlString(true))));
+        BackupPublicPem = rsa.ExportSubjectPublicKeyInfoPem();
         return BackupFingerprint = Convert.ToHexStringLower(SHA256.HashData(rsa.ExportSubjectPublicKeyInfo()));
     }
 
     public string? BackupFingerprint { get; private set; }
+
+    public string? BackupPublicPem { get; private set; }
 
     /// <summary>The config repository: <c>main</c> with the profiles, then a VM branch with an unmerged edit.</summary>
     public void ConfigRepo(IReadOnlyDictionary<string, string> main, string? branch = null, IReadOnlyDictionary<string, string?>? branchFiles = null,
