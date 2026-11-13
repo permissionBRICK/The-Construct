@@ -87,6 +87,7 @@ if [[ "$group" == service || "$group" == all ]]; then
   bash test/export-config.test.sh
   bash test/restore-config.test.sh
   bash test/idle-report.test.sh
+  bash test/construct-project.test.sh
   pwsh -NoProfile -File test/backup-keys.test.ps1
   pwsh -NoProfile -File test/backup-actions.test.ps1
   node extension/test/t3code.test.js

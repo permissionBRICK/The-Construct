@@ -18,6 +18,8 @@ REPORTER="${ROOT}/bin/construct-idle-report.sh"
 PROVISION="${ROOT}/bin/provision.sh"
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
+# No projects folder unless a scenario makes one: the report then carries no digest.
+export PROJECTS_STORE="${tmp}/no-projects"
 
 pass=0
 fail=0

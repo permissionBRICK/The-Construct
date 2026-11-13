@@ -1182,6 +1182,10 @@ install_construct_cli() {
   install -m 0755 "${REPO_DIR}/bin/construct-backup.sh" "${bin_dir}/construct-backup.sh" || return 1
   install -m 0755 "${REPO_DIR}/bin/construct-config.sh" "${bin_dir}/construct-config.sh" || return 1
   install -m 0755 "${REPO_DIR}/bin/construct-idle-report.sh" "${bin_dir}/construct-idle-report.sh" || return 1
+  # `construct project` on a VM with a host service (docs/config-sync.md, "The new stack").
+  install -m 0755 "${REPO_DIR}/bin/construct-project.sh" "${bin_dir}/construct-project.sh" || return 1
+  install -d -m 0755 "${bin_dir}/lib" || return 1
+  install -m 0644 "${REPO_DIR}/bin/lib/construct-api.sh" "${bin_dir}/lib/construct-api.sh" || return 1
   # Forward spool (docs/expose.md): root-owned 0755, deliberately NOT 1777 like
   # the notification spool -- a request opens a port on the user's PC.
   install -d -m 0755 "${forwards_dir}" "${forwards_dir}/requests" \

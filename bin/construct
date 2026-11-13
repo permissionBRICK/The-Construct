@@ -6,6 +6,8 @@
 #   construct project delete <name>               delete a profile on the next sync
 #   construct project get <name>                   print a stored profile
 #   construct project list                         list stored profile names
+#   construct project conflicts [--fetch]          open profile conflicts (host service only)
+#   construct project resolve <id> [--file <path>] resolve one (host service only)
 #   construct notify <message> [--title …]         desktop notification on the host
 #   construct expose <port> [--label …]            port forward + the link to open
 #   construct vm <command> [args]                    manage delegated child VMs
@@ -26,6 +28,7 @@
 #   2  validation error (set)
 #   3  reserved name (set/delete)
 #   4  node not available (set requires node for schema validation)
+#   6  project: the edit is in conflict with a change made elsewhere (host service)
 #   5  notification queue full (notify)
 #   6  expose: no Construct client attached (the request stays queued)
 #   7  expose: refused by the host service (host forwards disabled, cap reached)
@@ -65,6 +68,10 @@ Project commands:
   get  <name>                   Print the stored profile to stdout.
   delete <name>                 Remove a profile from the VM and host on next sync.
   list                          List stored profile names.
+  conflicts [--fetch]           Open conflicts between this VM's profile edits and
+                                changes made elsewhere (VMs with a host service);
+                                --fetch writes base, ours and theirs to files.
+  resolve <id> [--file <path>]  Send the resolved profile for a conflict.
 
 notify — raise a desktop notification on the Windows host:
   -t, --title <text>            Headline (default: the VM's hostname)
@@ -252,12 +259,28 @@ case "$1" in
     exit $?
     ;;
   help|--help|-h) usage; exit 0 ;;
-  *) die "Unknown command: $1 (try: construct project set|get|delete|list, construct notify, construct systemprompt)" ;;
+  *) die "Unknown command: $1 (try: construct project set|get|delete|list|conflicts|resolve, construct notify, construct systemprompt)" ;;
 esac
 
 if [[ $# -lt 1 ]]; then usage >&2; exit 1; fi
 
 subcmd="$1"; shift
+
+# With a host service, set and delete go through it (design 9.3): it merges the
+# edit with what changed elsewhere and answers with the result. When it cannot be
+# reached (exit 8) they fall back to the file and the deletion marker, which the
+# host picks up from the folder later.
+via_service() {
+  local impl
+  impl="$(find_helper construct-project.sh)" || return 8
+  bash "${impl}" "$@"
+}
+
+service_configured() {
+  local cfg="${CONFIG_FILE:-/etc/construct/config.env}"
+  [[ -n "${CONSTRUCT_SERVICE_URL:-}" ]] && return 0
+  [[ -f "${cfg}" ]] && grep -Eq "^CONSTRUCT_SERVICE_URL=.+" "${cfg}"
+}
 
 case "${subcmd}" in
   # ---------- set -------------------------------------------------------------
@@ -289,15 +312,32 @@ case "${subcmd}" in
 
     # Forward --file <path> or stdin to the node helper.
     args=("${name}")
+    input=""
     while [[ $# -gt 0 ]]; do
       case "$1" in
-        --file) shift; [[ $# -gt 0 ]] || die "--file requires a path"; args+=("--file" "$1") ;;
+        --file) shift; [[ $# -gt 0 ]] || die "--file requires a path"; args+=("--file" "$1"); input="$1" ;;
         *) die "Unknown option: $1" ;;
       esac
       shift
     done
 
-    PROJECTS_STORE="${PROJECTS_STORE}" exec node "${project_set}" "${args[@]}"
+    if service_configured; then
+      # Validate here first, then send; stdin is kept in a file for the fallback.
+      if [[ -z "${input}" ]]; then
+        input="$(mktemp)"; trap 'rm -f "${input}"' EXIT
+        cat >"${input}"
+        args+=("--file" "${input}")
+      fi
+      check_store="$(mktemp -d)"
+      PROJECTS_STORE="${check_store}" node "${project_set}" "${args[@]}" >/dev/null || { rc=$?; rm -rf "${check_store}"; exit "${rc}"; }
+      rm -rf "${check_store}"
+      rc=0; via_service set "${name}" --file "${input}" || rc=$?
+      [[ "${rc}" -eq 8 ]] || exit "${rc}"
+      printf 'The host service could not be reached; saving locally, the host picks it up later.\n' >&2
+    fi
+
+    rc=0; PROJECTS_STORE="${PROJECTS_STORE}" node "${project_set}" "${args[@]}" || rc=$?
+    exit "${rc}"
     ;;
 
   # ---------- delete ----------------------------------------------------------
@@ -311,6 +351,11 @@ case "${subcmd}" in
     case "${name,,}" in
       default|project.schema) printf '"%s" is a reserved name\n' "$name" >&2; exit 3 ;;
     esac
+    if service_configured; then
+      rc=0; via_service delete "${name}" || rc=$?
+      [[ "${rc}" -eq 8 ]] || exit "${rc}"
+      printf 'The host service could not be reached; marking the deletion for the host.\n' >&2
+    fi
     file="${PROJECTS_STORE}/${name}.json"
     if [[ ! -f "$file" ]]; then printf 'Profile file was already absent: %s\n' "$name"; fi
     mkdir -p "${PROJECTS_STORE}/.deleted"
@@ -341,7 +386,34 @@ case "${subcmd}" in
     shopt -u nullglob
     ;;
 
+  # ---------- conflicts / resolve (host service) -------------------------------
+  conflicts)
+    service_configured || die "construct project conflicts: this VM has no host service; profile conflicts are resolved on the host"
+    rc=0; via_service conflicts "$@" || rc=$?
+    exit "${rc}"
+    ;;
+
+  resolve)
+    service_configured || die "construct project resolve: this VM has no host service"
+    if [[ $# -lt 1 ]]; then die "Usage: construct project resolve <conflict-id> [--file <path>]"; fi
+    id="$1"; shift
+    input=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --file) shift; [[ $# -gt 0 ]] || die "--file requires a path"; input="$1" ;;
+        *) die "Unknown option: $1" ;;
+      esac
+      shift
+    done
+    if [[ -z "${input}" ]]; then
+      input="$(mktemp)"; trap 'rm -f "${input}"' EXIT
+      cat >"${input}"
+    fi
+    rc=0; via_service resolve "${id}" --file "${input}" || rc=$?
+    exit "${rc}"
+    ;;
+
   *)
-    die "Unknown subcommand: ${subcmd} (try: set, get, delete, list)"
+    die "Unknown subcommand: ${subcmd} (try: set, get, delete, list, conflicts, resolve)"
     ;;
 esac
