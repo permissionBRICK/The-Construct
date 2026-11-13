@@ -322,4 +322,60 @@ public sealed class ProfileSyncTests
             Assert.Equal([h.EngineId], entry.AcknowledgedBy);
         }
     }
+
+    [Fact]
+    public async Task A_file_changed_back_while_its_edit_waits_in_the_outbox_keeps_the_change_back()
+    {
+        using var directory = new TempDirectory();
+        await using var a = await ProfileSyncHarness.StartRemoteAsync("token-a");
+        await using var store = new StandaloneStoreFixture(directory.Path, ("token-a", ParticipantKind.Engine, a.EngineId));
+        a.RemoteStores.Server = store.Handler;
+        a.Grant(AccountKeys.Create());
+        using var vm = await a.VmAsync("vma", "web");
+        var created = await vm.PutProfileAsync(Vm("vma"), Web, null);
+        a.Guests.Apply("vma", "web", created);
+
+        a.RemoteStores.Down = true;
+        var queued = await vm.PutProfileAsync(Vm("vma"), Web.Replace("\"20\"", "\"22\""), created.Revision);
+        Assert.Equal("queued", queued.Status);
+        a.Guests.Apply("vma", "web", queued);
+
+        // The agent changes its mind and writes the old content back by hand.
+        a.Guests.Edit("vma", "web", Web);
+        await a.HeartbeatAsync(vm, "vma");
+        await a.SyncAsync();
+
+        a.RemoteStores.Down = false;
+        await a.SyncAsync();
+        await a.SyncAsync();
+        Assert.Equal("20", a.Guests.Profile("vma", "web")!["sdks"]!["node"]!.GetValue<string>());
+        var stored = await store.Store.GetAsync(ProfileSyncHarness.User, "profile:web", default);
+        Assert.True(stored!.Revision > created.Revision);
+    }
+
+    [Fact]
+    public async Task The_same_conflicting_edit_from_two_VMs_reaches_both()
+    {
+        await using var h = await ProfileSyncHarness.StartAsync();
+        using var device = h.DeviceClient(h.Laptop!);
+        using var one = await h.VmAsync("one", "web");
+        using var two = await h.VmAsync("two", "web");
+        var created = await device.PutProfileAsync("/api/v1/profiles/web", Web, null);
+        await h.SyncAsync();
+
+        var first = await one.PutProfileAsync(Vm("one"), Web.Replace("\"20\"", "\"18\""), created.Revision);
+        Assert.Equal("written", first.Status);
+        h.Guests.Down.Add("one");
+        h.Guests.Down.Add("two");
+        await device.PutProfileAsync("/api/v1/profiles/web", Web.Replace("\"20\"", "\"22\""), first.Revision);
+
+        // Both VMs make the same edit on the same stale revision.
+        var a = await one.PutProfileAsync(Vm("one"), Web.Replace("\"20\"", "\"16\""), first.Revision);
+        var b = await two.PutProfileAsync(Vm("two"), Web.Replace("\"20\"", "\"16\""), first.Revision);
+        Assert.Equal("conflict", a.Status);
+        Assert.Equal(a.ConflictId, b.ConflictId);
+        h.Guests.Down.Clear();
+        Assert.Equal(a.ConflictId, Assert.Single(await h.HeartbeatAsync(one, "one"))!["id"]!.GetValue<string>());
+        Assert.Equal(a.ConflictId, Assert.Single(await h.HeartbeatAsync(two, "two"))!["id"]!.GetValue<string>());
+    }
 }

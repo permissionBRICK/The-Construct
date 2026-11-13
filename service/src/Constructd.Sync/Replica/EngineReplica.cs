@@ -491,6 +491,27 @@ public sealed class EngineReplica : IDisposable
         var envelope = new RecordEnvelope(conflictId, RecordKinds.Conflict, epoch, Actor, 0, NewWriteId(), false);
         var outcome = await _store.WriteAsync(new RecordWrite(envelope.Id, envelope.Kind, envelope.Epoch, envelope.Actor, 0, envelope.WriteId, false,
             RecordSealer.Seal(key, envelope, payload)), ct);
+
+        // The same conflict, computed again from another writer's identical edit: add that writer's
+        // origins, so the conflict reaches it too. A closed one stays closed.
+        for (var attempt = 0; attempt < 5 && outcome is WriteOutcome.Stale { Conflict.Current: { Deleted: false } existing }; attempt++)
+        {
+            var existingPayload = await OpenAsync(existing, ct);
+            var existingValue = RecordPayload.ValueOf(existingPayload) as JsonObject;
+            var ours = value["identities"]?["ours"]?["origins"] as JsonArray ?? [];
+            var known = existingValue?["identities"]?["ours"]?["origins"] as JsonArray;
+            if (existingValue is null || known is null) break;
+            var added = ours.Select(o => o?.GetValue<string>() ?? "").Where(o => o.Length > 0 && !known.Any(k => k?.GetValue<string>() == o)).ToList();
+            if (added.Count == 0) break;
+            var merged = existingValue.DeepClone().AsObject();
+            var mergedOrigins = (JsonArray)merged["identities"]!["ours"]!["origins"]!;
+            foreach (var origin in added) mergedOrigins.Add(origin);
+            var mergedPayload = RecordPayload.Rewrite(existingPayload, merged, RecordPayload.OriginsOf(existingPayload).Concat(added), _supported);
+            var update = Sealed(key, conflictId, RecordKinds.Conflict, epoch, existing.Revision, false, mergedPayload);
+            outcome = await _store.WriteAsync(update.Write, ct);
+            if (outcome is WriteOutcome.Accepted) payload = mergedPayload;
+        }
+
         if (outcome is WriteOutcome.Accepted accepted) Upsert(null, accepted.Record, payload);
         return outcome;
     }

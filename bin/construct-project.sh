@@ -68,8 +68,18 @@ refused() {
 
 # Writes what an answer says into the store: the file (or its removal) and the
 # revision, and clears a deletion marker.
+# The file's state when the request was sent (see `apply`).
+file_state() { sha256sum "${PROJECTS_STORE}/$1.json" 2>/dev/null | cut -d ' ' -f 1 || true; }
+SENT_STATE=""
+
 apply() {
   local name="$1" answer="$2" revision tmp
+  # Somebody changed the file while the request ran: keep that change (and the
+  # old .rev, so the host reads it as an edit on what it was based on).
+  if [[ "$(file_state "${name}")" != "${SENT_STATE}" ]]; then
+    printf 'construct project: %s changed meanwhile; keeping that change, the host picks it up.\n' "${name}" >&2
+    return 0
+  fi
   mkdir -p "${PROJECTS_STORE}/.state"
   if [[ "$(jq -r '.file == null' "${answer}")" == true ]]; then
     rm -f -- "${PROJECTS_STORE}/${name}.json"
@@ -100,6 +110,7 @@ cmd_set() {
   read_json "${file}"
   rev="$(rev_of "${name}")"
   jq -c --arg rev "${rev}" '{profile: ., baseRevision: (if $rev == "" then null else ($rev | tonumber) end)}' "${file}" >"${body}"
+  SENT_STATE="$(file_state "${name}")"
   api PUT "$(vm_path)/profiles/$(urlencode "${name}")" "${body}" "${answer}"
   if unreachable "${answer}"; then exit "${EXIT_UNREACHABLE}"; fi
   [[ "${API_STATUS}" == 200 ]] || refused "${answer}"
@@ -115,6 +126,7 @@ cmd_delete() {
   local name="$1" rev query="" answer="${API_WORK}/answer"
   rev="$(rev_of "${name}")"
   [[ -n "${rev}" ]] && query="?baseRevision=${rev}"
+  SENT_STATE="$(file_state "${name}")"
   api DELETE "$(vm_path)/profiles/$(urlencode "${name}")${query}" "" "${answer}"
   if unreachable "${answer}"; then exit "${EXIT_UNREACHABLE}"; fi
   [[ "${API_STATUS}" == 200 ]] || refused "${answer}"
@@ -214,6 +226,7 @@ cmd_resolve() {
   name="$(jq -r '.name // ""' "${file}")"
   [[ -n "${name}" ]] || { printf 'construct project: the resolved profile has no name\n' >&2; exit "${EXIT_INVALID}"; }
   jq -c '{profile: .}' "${file}" >"${body}"
+  SENT_STATE="$(file_state "${name}")"
   api POST "$(vm_path)/profile-conflicts/$(urlencode "${id}")/resolve" "${body}" "${answer}"
   if unreachable "${answer}"; then printf 'construct project: the host service could not be reached; resolve again later\n' >&2; exit "${EXIT_UNREACHABLE}"; fi
   [[ "${API_STATUS}" == 200 ]] || refused "${answer}"

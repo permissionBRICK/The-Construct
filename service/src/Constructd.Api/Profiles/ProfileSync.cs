@@ -396,6 +396,14 @@ public sealed class ProfileSync : IDisposable
                 var id = EngineReplica.ProfileId(entry.Name);
                 var (found, baseValue) = entry.Revision is > 0 ? await replica.ValueAtAsync(id, entry.Revision.Value, ct) : (false, null);
 
+                // While an earlier edit of this VM waits in the outbox, the VM's base is that edit, not
+                // the store revision: a file changed back to the revision's content is a change too.
+                if (known is { Content: { } held } && known.Revision == entry.Revision && entry.Revision is > 0
+                    && await replica.HasPendingAsync(id, ct) && Parse(Encoding.UTF8.GetBytes(held)) is { } pending)
+                {
+                    (found, baseValue) = (true, pending);
+                }
+
                 if (entry.File is { } file)
                 {
                     if (Parse(file) is not { } profile || ProfileRules.Validate(profile).Count > 0 || ProfileRules.Text(profile["name"]) != entry.Name)
@@ -490,8 +498,10 @@ public sealed class ProfileSync : IDisposable
 
             foreach (var (write, content) in writes)
             {
-                if (result.Done.TryGetValue(write.Name, out var fingerprint))
-                    States.Set(vm.Name, new VmProfileState(write.Name, write.Revision, content, fingerprint));
+                // The fingerprint of what was written, not of what the folder holds a moment later: an
+                // edit in between then reads as a change.
+                if (result.Done.ContainsKey(write.Name))
+                    States.Set(vm.Name, new VmProfileState(write.Name, write.Revision, content, VmProfileFolder.Fingerprint(write.Revision, write.Content, false)));
             }
 
             if (result.Skipped.Count > 0)
