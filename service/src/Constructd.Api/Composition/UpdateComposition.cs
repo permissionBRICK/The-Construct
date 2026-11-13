@@ -37,6 +37,8 @@ public static class UpdateComposition
         services.AddSingleton<IMaintenanceGate,InMemoryMaintenanceGate>();
         services.AddSingleton<PackageStager>();services.AddSingleton<HostUpdateJob>();
         services.AddSingleton<UpdateRecoveryService>();services.AddHostedService(sp=>sp.GetRequiredService<UpdateRecoveryService>());
+        services.AddSingleton<VmUpdates>();
+        services.AddSingleton<HostAutoUpdateService>();services.AddHostedService(sp=>sp.GetRequiredService<HostAutoUpdateService>());
         return services;
     }
 }

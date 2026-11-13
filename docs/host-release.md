@@ -111,6 +111,45 @@ ISO and media cache roots remain outside that code-file list, including custom
 paths outside the data directory. Health and rollback rules are
 unchanged.
 
+## Updating a host in one action
+
+The new stack updates a host with one admin action, `POST /api/v1/host/updates/run`
+(design 12.1). It reads the manifest of the host's channel (`updates.channel`: `stable`,
+`nightly` or a manifest URL, see [Release flow](release-flow.md)), answers `up-to-date`
+when the host already runs that commit, and otherwise starts one job: download the host
+package the manifest names and check its SHA-256 (the hash in `packages` must equal the
+release keys of the same manifest), wait for running jobs, and hand off to the updater,
+which copies the database into `<DataDir>/updates/backup-<updateId>/`, swaps the files,
+restarts the service and checks its health. When the new version does not come up, the
+updater puts the previous files back and starts the service again.
+
+The database is never restored automatically on this path (the handoff carries
+`restoreDatabase: false`). The copy stays in the backup directory; `GET
+/api/v1/host/updates/status` names it as `databaseCopy`. **Known risk:** when the new
+version migrated the database and then failed its health check, the previous version may
+refuse to start on the migrated database. The admin then restores the copy by hand: stop
+the service, copy `constructd.db` (and `-wal`/`-shm` when present) from the backup over the
+database at `Constructd:DatabasePath`, start the service. `last-update.json` in
+`<DataDir>/updates` records what the updater did.
+
+`GET /api/v1/host/updates/status` also answers `version` (this build), `channel`, `auto`
+and `available` (the channel's release when the host does not run it, read at most every
+15 minutes; `availableError` when the channel could not be read). The state and error of
+the last run are `current.state` and `current.error`, as before.
+
+With the host setting `updates.auto` (`PUT /api/v1/host/config`, off by default) the host
+checks its channel once an hour and runs the same action by itself when a release it does
+not run is out. A release whose update already failed on this host is not tried again by
+itself; run it by hand after fixing the cause.
+
+After an update succeeded, the host reprovisions, one after the other, the VMs of users who
+turned on `autoReprovision` (`PUT /api/v1/me/updates`) and the VM that asked for the update
+through its token. See [the service README](../service/README.md#updates) for the VM routes.
+
+The old routes (`check`, `stage`, `apply`, `cancel`, `resolve`) and everything below about
+them stay as they are for old clients, including the automatic database restore of a
+breaking release on rollback. A later block removes them.
+
 Host updates use GitHub Releases over HTTPS, matching the other Construct update paths.
 No signing keys or signing secrets are required on hosts, development VMs or CI.
 Production downloads use the host-local `Constructd:HostAdmin:Updates:Repository`

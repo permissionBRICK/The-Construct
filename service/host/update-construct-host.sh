@@ -217,6 +217,9 @@ def remove_stale(old, new):
             get_update_target(file['path']).unlink(missing_ok=True)
 
 def get_update_rollback_mode():
+    # The one-action update (POST /host/updates/run) writes restoreDatabase=false: it puts the files back
+    # and keeps the database copy for a manual restore. Handoffs without the key restore as before.
+    if h.get('restoreDatabase', True) is False: return 'binary'
     db = m['database']
     return 'database' if db['minReadableBy'] > h['previousSchemaVersion'] or db['breakingMigrations'] else 'binary'
 
