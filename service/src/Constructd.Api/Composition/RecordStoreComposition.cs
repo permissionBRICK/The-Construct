@@ -6,6 +6,7 @@ using Constructd.Store.Identity;
 using Constructd.Store.Records;
 using Constructd.Sync.Participation;
 using Constructd.Sync.Sealing;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Constructd.Api.Composition;
 
@@ -30,20 +31,16 @@ public static class RecordStoreComposition
         services.AddSingleton(_ => EngineStoreIdentity.Load(sqlite ? Path.Combine(directory, EngineStoreIdentity.FileName) : null));
         services.AddSingleton(sp => new EngineKeyStore(sqlite ? Path.Combine(directory, EngineKeysFileName) : ":memory:", sp.GetRequiredService<EngineStoreIdentity>().Id));
         services.AddSingleton<IRecordKeyProvider>(sp => new GrantedRecordKeyProvider(sp.GetRequiredService<EngineKeyStore>()));
+        services.TryAddSingleton<StoreHttpHandler>();
+        services.AddSingleton<EngineStores>();
         services.AddSingleton(sp =>
         {
-            var identity = sp.GetRequiredService<EngineStoreIdentity>();
-            var store = sp.GetRequiredService<RecordStore>();
-            var storeDirectory = sp.GetRequiredService<StoreDirectory>();
+            var stores = sp.GetRequiredService<EngineStores>();
             return new EngineDevices(
                 sp.GetRequiredService<EngineKeyStore>(),
                 sp.GetRequiredService<IRecordKeyProvider>(),
-                account => identity.Client(store, account),
-                (account, deviceId, _) =>
-                {
-                    storeDirectory.Acknowledge(account, deviceId, identity.Id);
-                    return Task.CompletedTask;
-                },
+                stores.For,
+                stores.AcknowledgeAsync,
                 sp.GetService<TimeProvider>());
         });
         return services;
@@ -85,5 +82,63 @@ public sealed class EngineStoreIdentity(string id)
         var id = Guid.NewGuid().ToString("n");
         File.WriteAllText(path, id);
         return new EngineStoreIdentity(id);
+    }
+}
+
+/// <summary>The handler the HTTP clients of stores elsewhere use; the tests put an in-process server behind it.</summary>
+public class StoreHttpHandler
+{
+    public virtual HttpMessageHandler Create() => new SocketsHttpHandler();
+}
+
+/// <summary>
+/// The store each account syncs against (9.2): the one named for it in <c>Constructd:Sync:Stores</c>
+/// (a URL and the participant token that store issued this engine), else this engine's own, called
+/// in process as this engine.
+/// </summary>
+public sealed class EngineStores(RecordStore store, StoreDirectory directory, EngineStoreIdentity identity, ConstructdOptions options, StoreHttpHandler handler)
+{
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, IStoreClient> _clients = new(StringComparer.Ordinal);
+
+    public IStoreClient For(string account) => _clients.GetOrAdd(account, a => Remote(a) is { } remote
+        ? new HttpStoreClient(Http(remote))
+        : identity.Client(store, a));
+
+    /// <summary>Tells the account's store that this engine applied a device's revocation (8.4).</summary>
+    public async Task AcknowledgeAsync(string account, string deviceId, CancellationToken ct)
+    {
+        if (Remote(account) is not { } remote)
+        {
+            directory.Acknowledge(account, deviceId, identity.Id);
+            return;
+        }
+
+        using var http = Http(remote);
+        HttpResponseMessage response;
+        try
+        {
+            response = await http.PostAsync("devices/" + Uri.EscapeDataString(deviceId) + "/acknowledge", null, ct);
+        }
+        catch (HttpRequestException ex)
+        {
+            throw new StoreUnavailableException("The store is not reachable.", ex);
+        }
+
+        using (response)
+        {
+            // 409: the store does not list that device as revoked (yet); the next read tries again.
+            if (!response.IsSuccessStatusCode && (int)response.StatusCode != 409)
+                throw new StoreUnavailableException($"The store answered {(int)response.StatusCode} to the acknowledgement.");
+        }
+    }
+
+    private RemoteStoreOptions? Remote(string account) =>
+        options.Sync.Stores.FirstOrDefault(s => string.Equals(s.Account, account, StringComparison.Ordinal) && s.Url.Length > 0);
+
+    private HttpClient Http(RemoteStoreOptions remote)
+    {
+        var http = new HttpClient(handler.Create()) { BaseAddress = new Uri(remote.Url.TrimEnd('/') + "/api/v1/store/") };
+        http.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", remote.Token);
+        return http;
     }
 }

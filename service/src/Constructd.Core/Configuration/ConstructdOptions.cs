@@ -15,6 +15,8 @@ public sealed class ConstructdOptions
     /// <summary>Installed VAMT PowerShell module manifest. Required for proxy activation.</summary>
     public string VamtModulePath { get; set; } = string.Empty;
     public HostAdminOptions HostAdmin { get; set; } = new();
+    /// <summary>Profile sync: which accounts use a store elsewhere instead of this engine's own.</summary>
+    public SyncOptions Sync { get; set; } = new();
 
     public const string SectionName = "Constructd";
 

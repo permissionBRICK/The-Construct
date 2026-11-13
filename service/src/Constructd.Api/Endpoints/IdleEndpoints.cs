@@ -165,6 +165,15 @@ public static class IdleEndpoints
             due["backupTrigger"] = backup.Trigger!;
         }
 
+        // Profile sync (design 9.3, 9.6): a changed projects digest has the engine read the folder;
+        // open conflicts this VM's edits are part of go to its agent.
+        var conflicts = await http.RequestServices.GetRequiredService<Constructd.Api.Profiles.ProfileSync>()
+            .HeartbeatAsync(lookup.Vm!, request.ProjectsDigest, cancellationToken).ConfigureAwait(false);
+        if (conflicts.Count > 0)
+        {
+            due["conflicts"] = conflicts.Select(ProfileEndpoints.ToNotice).ToList();
+        }
+
         return due.Count == 0 ? Results.NoContent() : Results.Ok(due);
     }
 }

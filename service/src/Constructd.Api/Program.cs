@@ -79,6 +79,7 @@ builder.Services.AddConstructdServices(options);
 builder.Services.AddConstructdAuthentication(options);
 builder.Services.AddConstructdAuthorization();
 builder.Services.AddConstructdRecordStore(options);
+builder.Services.AddProfileSync();
 
 // One loop, two responsibilities: the idle evaluation (§4.7) and the host power reconcile (§4.13)
 // both ride on the same tick, so either one being wanted is reason enough to run it. Turning idle
@@ -167,7 +168,8 @@ app.MapGroup("/api/v1")
     .MapNetworkEndpoints()
     .MapVaultEndpoints()
     .MapHttpsEndpoints()
-    .MapEngineParticipationEndpoints();
+    .MapEngineParticipationEndpoints()
+    .MapProfileEndpoints();
 
 // The store authenticates its own callers from the tokens it issued (8.1), not from the sign-in:
 // anonymous for the authorization middleware, refused by the store unless a route says otherwise.
