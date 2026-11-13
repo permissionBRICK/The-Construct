@@ -103,7 +103,7 @@ CONSTRUCT_AGENT_UPDATE_OPENAPI=1 dotnet test agent/Construct.Agent.slnx --filter
 | `POST /api/shutdown` | Stops the agent (repair uses it) |
 | `POST /api/engines/probe {address}` | Connects without any credential and returns `{url, pin, status}` for the user to confirm |
 | `GET /api/engines/local` | The same for the solo engine on `https://127.0.0.1:7462`; 204 when none answers |
-| `POST /api/engines {address, pin, name?, userToken?}` | Adds the engine with the confirmed pin. `userToken` is the user's sign-in there, needed until this device is enrolled. When the device is registered, the engine is also written as an `engine` record, granted `D` and enrolled. |
+| `POST /api/engines {address, pin, name?, userToken?, windowsSignIn?}` | Adds the engine with the confirmed pin. `userToken` is the user's sign-in there, needed until this device is enrolled; with `windowsSignIn` the signed-in Windows user signs in instead (Negotiate, Windows only, `501 not-available` elsewhere; `409 no-windows-sign-in` when the engine's challenge, read without a credential over the pinned connection, does not offer it). Either sign-in is dropped once the device holds a device token there. When the device is registered, the engine is also written as an `engine` record, granted `D` and enrolled. |
 | `DELETE /api/engines/{id}` | Removes it (not the engine that holds the store) |
 | `POST /api/engines/{id}/connect {vaultMode?}` | Grants `D`, and `K` when `vaultMode` is `available`; enrols this device |
 | `/api/engines/{id}/api/v1/...` | The proxy, below |

@@ -37,14 +37,16 @@ public sealed partial class DeviceAgent
             RequireUnregistered();
             ValidateName(deviceName);
             var engine = Find(engineId) ?? throw NoEngine();
-            var userToken = Reveal(engine.UserToken) ?? throw new AgentFailure(409, "not-signed-in", "The first device signs in at the engine with the user's token.");
+            var userToken = Reveal(engine.UserToken);
+            if (userToken is null && !engine.WindowsSignIn) throw new AgentFailure(409, "not-signed-in", "The first device signs in at the engine with the user's token or Windows sign-in.");
 
             // A setup cut short (the agent stopped, an answer lost) is taken up again where it stopped:
             // the store registered this device and may hold the wraps of the U sealed here already.
             if (!_state.SetupPending)
             {
-                using var signedIn = AnonymousStore(engine);
-                signedIn.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", userToken);
+                // The user's token, else the Windows sign-in on the pinned connection.
+                using var signedIn = new HttpClient(Handler(engine)) { BaseAddress = new Uri(new Uri(engine.Url), "api/v1/store/"), Timeout = TimeSpan.FromSeconds(30) };
+                if (userToken is not null) signedIn.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", userToken);
                 var publicKey = _key.PublicKey.ToString();
                 using var response = await signedIn.PostAsJsonAsync("devices",
                     new EnrollRequest(publicKey, deviceName, RequestProof.Create(_key, ProofSubjects.Enroll(publicKey), Time.GetUtcNow())), StoreJson.Options, ct).ConfigureAwait(false);

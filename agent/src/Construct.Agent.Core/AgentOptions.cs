@@ -28,6 +28,9 @@ public sealed class AgentOptions
 
     public TimeProvider Time { get; init; } = TimeProvider.System;
 
+    /// <summary>Signing in at an engine as the Windows user (Negotiate); null where the platform has none (Linux).</summary>
+    public Engines.IWindowsSignIn? WindowsSignIn { get; init; } = OperatingSystem.IsWindows() ? new Engines.NegotiateSignIn() : null;
+
     /// <summary>The device's OS parts (5.1); null picks the Linux one. The Windows shell passes its own.</summary>
     public Device.IDevicePlatform? Platform { get; init; }
 

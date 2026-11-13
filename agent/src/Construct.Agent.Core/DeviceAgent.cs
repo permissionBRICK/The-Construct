@@ -82,7 +82,7 @@ public sealed partial class DeviceAgent : IDisposable
     }
 
     private EngineView View(EngineEntry e) =>
-        new(e.Id, e.Name, e.Url, e.Pin, e.EngineId, e.DeviceToken is not null, e.UserToken is not null, e.Id == _state.StoreEngine);
+        new(e.Id, e.Name, e.Url, e.Pin, e.EngineId, e.DeviceToken is not null, e.UserToken is not null || e.WindowsSignIn, e.Id == _state.StoreEngine);
 
     // ---- engines (4) ----
 
@@ -127,7 +127,76 @@ public sealed partial class DeviceAgent : IDisposable
                 // Adding a known engine again takes the newly confirmed pin (a renewed certificate).
                 entry.Pin = pin.ToUpperInvariant();
                 if (name is { Length: > 0 }) entry.Name = name;
-                if (userToken is { Length: > 0 }) entry.UserToken = Hide(userToken);
+                if (userToken is { Length: > 0 }) { entry.UserToken = Hide(userToken); entry.WindowsSignIn = false; }
+                Save();
+            }
+
+            Forget(entry.Id);
+            if (_state.Registered) await ConnectLockedAsync(entry, vaultMode: null, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+
+        Changed();
+        return View(entry);
+    }
+
+    /// <summary>
+    /// Adds an engine with the pin the user confirmed, signed in as the Windows user (Negotiate) instead of a token.
+    /// Every request goes over the pinned connection: the engine's challenge is read without any credential, and the
+    /// sign-in answers only an engine presenting that certificate. The sign-in is dropped once the device enrols there.
+    /// </summary>
+    public async Task<EngineView> AddEngineWithWindowsAsync(string address, string pin, string? name, string? userToken, CancellationToken ct)
+    {
+        if (userToken is { Length: > 0 }) throw new AgentFailure(400, "invalid-request", "Either a token or the Windows sign-in.");
+        var signIn = _options.WindowsSignIn ?? throw new AgentFailure(501, "not-available", "Windows sign-in is available on Windows only.");
+        var url = Normalized(EngineHttp.ParseAddress(address));
+        if (pin.Length != 64 || !pin.All(Uri.IsHexDigit)) throw new AgentFailure(400, "invalid-pin", "A pin is the certificate's SHA-256 in hex.");
+
+        // Does the engine offer it? Its challenge, read without a credential.
+        using (var anonymous = new HttpClient(EngineHttp.Pinned(pin)) { BaseAddress = new Uri(url), Timeout = TimeSpan.FromSeconds(30) })
+        {
+            HttpResponseMessage challenge;
+            try { challenge = await anonymous.GetAsync("api/v1/whoami", ct).ConfigureAwait(false); }
+            catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException && !ct.IsCancellationRequested)
+            { throw new AgentFailure(502, "engine-unreachable", "The engine did not answer over the confirmed certificate."); }
+            using (challenge)
+            {
+                if (challenge.StatusCode != System.Net.HttpStatusCode.Unauthorized ||
+                    !challenge.Headers.WwwAuthenticate.Any(h => string.Equals(h.Scheme, signIn.Scheme, StringComparison.OrdinalIgnoreCase)))
+                    throw new AgentFailure(409, "no-windows-sign-in", "This engine does not offer Windows sign-in; add it with a token.");
+            }
+        }
+
+        // Signed in as this Windows user, is the user known there?
+        using (var signedIn = new HttpClient(signIn.Apply(EngineHttp.Pinned(pin))) { BaseAddress = new Uri(url), Timeout = TimeSpan.FromSeconds(30) })
+        {
+            System.Text.Json.Nodes.JsonNode? whoami;
+            try
+            {
+                using var response = await signedIn.GetAsync("api/v1/whoami", ct).ConfigureAwait(false);
+                if (!response.IsSuccessStatusCode) throw new AgentFailure(403, "sign-in-refused", "The engine did not accept this Windows user.");
+                whoami = System.Text.Json.Nodes.JsonNode.Parse(await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false));
+            }
+            catch (Exception ex) when (ex is HttpRequestException or System.Text.Json.JsonException or TaskCanceledException && !ct.IsCancellationRequested)
+            { throw new AgentFailure(502, "engine-unreachable", "The engine did not answer the sign-in."); }
+            if (whoami?["known"]?.GetValue<bool>() != true) throw new AgentFailure(403, "not-enrolled", "This Windows user is not a user of that engine; ask its admin.");
+        }
+
+        EngineEntry entry;
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            lock (_state)
+            {
+                entry = Find(EngineEntry.IdFor(url)) ?? new EngineEntry { Id = EngineEntry.IdFor(url), Url = url, Pin = pin.ToUpperInvariant(), Name = name ?? new Uri(url).Host };
+                if (!_state.Engines.Contains(entry)) _state.Engines.Add(entry);
+                entry.Pin = pin.ToUpperInvariant();
+                if (name is { Length: > 0 }) entry.Name = name;
+                entry.UserToken = null;
+                entry.WindowsSignIn = entry.DeviceToken is null;
                 Save();
             }
 
@@ -264,8 +333,12 @@ public sealed partial class DeviceAgent : IDisposable
             {
                 entry.DeviceToken = Hide(answer.Token);
                 entry.UserToken = null;
+                entry.WindowsSignIn = false;
                 Save();
             }
+
+            // The cached connection may answer challenges as the Windows user; the device token replaces it.
+            Forget(entry.Id);
 
             await RegisterSshKeyLockedAsync(entry, ct).ConfigureAwait(false);
             return true;
@@ -450,7 +523,13 @@ public sealed partial class DeviceAgent : IDisposable
 
     /// <summary>The pinned connection to an engine, without credentials (one per engine, reused).</summary>
     private HttpClient Client(EngineEntry entry) =>
-        _clients.GetOrAdd(entry.Id, _ => EngineHttp.Client(new Uri(entry.Url), entry.Pin, Timeout.InfiniteTimeSpan));
+        _clients.GetOrAdd(entry.Id, _ => new HttpClient(Handler(entry)) { BaseAddress = new Uri(entry.Url), Timeout = Timeout.InfiniteTimeSpan });
+
+    /// <summary>The pinned handler; it answers a sign-in challenge as the Windows user only while that is the engine's sign-in.</summary>
+    private HttpMessageHandler Handler(EngineEntry entry) =>
+        entry.WindowsSignIn && entry.DeviceToken is null && _options.WindowsSignIn is { } signIn
+            ? signIn.Apply(EngineHttp.Pinned(entry.Pin))
+            : EngineHttp.Pinned(entry.Pin);
 
     private void Forget(string id)
     {
@@ -478,10 +557,10 @@ public sealed partial class DeviceAgent : IDisposable
 
     /// <summary>A pinned client to an engine that stamps this device's credential on every request.</summary>
     private HttpClient? EngineClientFor(string engineId) =>
-        Find(engineId) is { } entry ? new HttpClient(new StampingHandler(this, engineId) { InnerHandler = EngineHttp.Pinned(entry.Pin) }) { BaseAddress = new Uri(entry.Url), Timeout = Timeout.InfiniteTimeSpan } : null;
+        Find(engineId) is { } entry ? new HttpClient(new StampingHandler(this, engineId) { InnerHandler = Handler(entry) }) { BaseAddress = new Uri(entry.Url), Timeout = Timeout.InfiniteTimeSpan } : null;
 
     private ConstructdClient EngineApi(EngineEntry entry) =>
-        new(new HttpClient(new StampingHandler(this, entry.Id) { InnerHandler = EngineHttp.Pinned(entry.Pin) }) { BaseAddress = new Uri(entry.Url), Timeout = TimeSpan.FromSeconds(30) });
+        new(new HttpClient(new StampingHandler(this, entry.Id) { InnerHandler = Handler(entry) }) { BaseAddress = new Uri(entry.Url), Timeout = TimeSpan.FromSeconds(30) });
 
     /// <summary>The store with this device's store token and proof.</summary>
     private HttpClient StoreHttp()

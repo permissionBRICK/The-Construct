@@ -160,6 +160,7 @@
         "tags": [
           "agent"
         ],
+        "description": "Adds an engine with the pin the user confirmed. The user's sign-in there is userToken, or, with windowsSignIn, the signed-in Windows user where the engine offers Negotiate (Windows only; 501 not-available elsewhere).",
         "operationId": "AddEngine",
         "requestBody": {
           "content": {
@@ -2297,6 +2298,10 @@
               "string"
             ],
             "x-construct-secret": true
+          },
+          "windowsSignIn": {
+            "type": "boolean",
+            "default": false
           }
         }
       },
