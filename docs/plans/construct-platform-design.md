@@ -321,8 +321,8 @@ flowchart TB
 ```
 
 A device talks to every engine hosting one of its user's VMs and to one store; an engine talks to
-the store of each user it hosts; engines never talk to each other. The PC's engine listens on
-loopback until the user starts pairing a second device (8.3).
+the store of each user it hosts; engines never talk to each other. The PC's engine is reachable from this PC and from its own VMs, and from the network only once
+the user starts pairing a second device (8.3).
 
 ### 5.3 The solo install
 
@@ -333,7 +333,8 @@ loopback until the user starts pairing a second device (8.3).
 | ISO build | Native tool, no WSL. |
 | Footprint | About 100 MB disk, 60 to 120 MB RAM idle; REQUIRED (phase 1b): measured. |
 | Loopback auth | The installer issues the user's token into the device token store (the host installer already issues the first admin token, `docs/remote-host.md:124-131`). |
-| Laptop reach | LAN listener switched on by the pairing step; pin travels in the grant. |
+| Reach from the VM | A local VM is service-managed like any other: its heartbeat, backups, vault requests and profile sync go to the engine. The installer adds one firewall rule that allows the engine's port on the VM switch only; the guest addresses the PC by its name on that switch. Nothing is open to the LAN. |
+| Laptop reach | A second firewall rule for the private network, switched on by the pairing step; the pin travels in the grant. |
 | Repair without the API | `construct-agent repair` restarts, re-applies the staged package or re-runs the installer from the local cache. |
 
 First run: one installer, one elevation prompt, tray icon, the setup dialog with the recovery code
