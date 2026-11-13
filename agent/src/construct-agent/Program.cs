@@ -109,7 +109,8 @@ switch (command)
 
         await using var host = started!;
         Console.WriteLine($"construct-agent {options.Version} on {host.BaseUrl} (device {host.Agent.DeviceId}); token in {options.EndpointPath}");
-        using var stop = new CancellationTokenSource();
+        // Not disposed: ProcessExit fires after Main returns, and a throw there would exit non-zero (the systemd unit restarts on failure).
+        var stop = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) =>
         {
             e.Cancel = true;
