@@ -1578,6 +1578,18 @@ record_timestamps() {
     printf '%s\n' "${kept}" >"${MARKER_FILE}" || return
     note "    CONSTRUCT_COMMIT removed (this Construct could not resolve its own commit)"
   fi
+  # What the host engine provisioned with (design 7.5): the source payload's sha256, the hash of
+  # the settings and profiles it applied, and its release channel. Written only when the engine
+  # gives them; a run without them (the PowerShell path) leaves the file as it was.
+  if [[ "${CONSTRUCT_PAYLOAD_HASH:-}" =~ ^[0-9a-f]{64}$ ]]; then
+    mark CONSTRUCT_PAYLOAD_HASH "${CONSTRUCT_PAYLOAD_HASH}" || return
+  fi
+  if [[ "${CONSTRUCT_DESIRED_HASH:-}" =~ ^[0-9a-f]{64}$ ]]; then
+    mark CONSTRUCT_DESIRED_HASH "${CONSTRUCT_DESIRED_HASH}" || return
+  fi
+  if [[ "${CONSTRUCT_CHANNEL:-}" =~ ^[A-Za-z0-9._/-]{1,64}$ ]]; then
+    mark CONSTRUCT_CHANNEL "${CONSTRUCT_CHANNEL}" || return
+  fi
   chmod 0644 "${MARKER_FILE}"
 }
 run_step optional "Recording provisioning timestamps" record_timestamps

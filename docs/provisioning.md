@@ -81,7 +81,10 @@ provisioning command, log and `config.env` are unchanged by their existence:
 
 | Param | Reaches the guest as | Meaning |
 |---|---|---|
-| `-ServiceUrl` | `CONSTRUCT_SERVICE_URL` | The `constructd` base URL. Non-empty is what switches the guest into remote mode (service-backed `construct expose`, idle heartbeat timer). |
+| `-ServiceUrl` | `CONSTRUCT_PAYLOAD_HASH` | *(empty)* | Set by the host engine: the sha256 of the source archive it provisioned with. Recorded in `/etc/construct/provisioned.env` when given |
+| `CONSTRUCT_DESIRED_HASH` | *(empty)* | Set by the host engine: the hash of the settings and profile selection it applied. Recorded in `provisioned.env` when given |
+| `CONSTRUCT_CHANNEL` | *(empty)* | Set by the host engine: its release channel. Recorded in `provisioned.env` when given |
+| `CONSTRUCT_SERVICE_URL` | The `constructd` base URL. Non-empty is what switches the guest into remote mode (service-backed `construct expose`, idle heartbeat timer). |
 | `-InstanceName` | `CONSTRUCT_INSTANCE_NAME` | This VM's name on that service — the `{name}` in `/api/v1/vms/{name}/…`. |
 | `-VmTokenB64` | `CONSTRUCT_VM_TOKEN_B64` | The VM-scoped token (base64), written by `provision.sh` to `/etc/construct/vm-token` (mode `0600`). |
 | `-SourceMode` | client only (default `auto`) | `auto` fetches the released commit and uploads local changes as an overlay, up to 5,000 files / 64 MiB uncompressed, falling back to the full tar if unavailable or refused; `cache` sends the commit without local changes and fails on cache errors; `upload` uses the original tar. Ignored for local transport; `-IncludeGit` selects upload. |
