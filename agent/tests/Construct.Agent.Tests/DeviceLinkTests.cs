@@ -153,6 +153,44 @@ public sealed class DeviceLinkTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task T3_desktop_gets_a_pairing_link_for_its_own_vm_with_the_administrative_scopes_and_nothing_opens()
+    {
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        var ssh = _device.Transports["e1/work"];
+        var actions = new VmActions(_device.Links, _device.Platform);
+        string? script = null;
+        ssh.ScriptHandler = (text, _) =>
+        {
+            script = text;
+            return Task.FromResult(new ProcessResult(0, "CONSTRUCT_PAIRING_SCOPES=administrative\n" +
+                """{"pairUrl":"https://host.example:2300/pair#token=one","links":[{"kind":"proxy","pairUrl":"https://t3.example:8443/pair#token=two"},{"kind":"forwarded","pairUrl":"https://host.example:2300/pair#token=one"}]}"""));
+        };
+
+        var link = await actions.T3PairingAsync("e1", "work", CancellationToken.None);
+
+        Assert.Equal("https://host.example:2300/pair#token=one", link.PairUrl);
+        Assert.Equal("administrative", link.Scopes);
+        Assert.Equal(["proxy", "forwarded"], link.Links.Select(l => l.Kind));
+        Assert.Empty(_device.Platform.Opened);
+        Assert.Contains("--label 'construct-t3-desktop-work' $extra", script, StringComparison.Ordinal);
+        // The script parses as bash.
+        var check = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("bash", "-n") { RedirectStandardInput = true, RedirectStandardError = true })!;
+        await check.StandardInput.WriteAsync(script);
+        check.StandardInput.Close();
+        await check.WaitForExitAsync();
+        Assert.True(check.ExitCode == 0, await check.StandardError.ReadToEndAsync());
+        Assert.Contains("--scopes administrative", script, StringComparison.Ordinal);
+        Assert.Contains("t3pair()", script, StringComparison.Ordinal);
+
+        // A stock T3 without --scopes; then a VM whose T3 is missing; another user's VM is never asked.
+        ssh.ScriptHandler = (_, _) => Task.FromResult(new ProcessResult(0, """{"pairUrl":"http://work.mshome.net:5177/pair#token=x"}"""));
+        Assert.Equal("standard", (await actions.T3PairingAsync("e1", "work", CancellationToken.None)).Scopes);
+        ssh.ScriptHandler = (_, _) => Task.FromResult(new ProcessResult(2));
+        Assert.Equal("t3-not-installed", (await Assert.ThrowsAsync<AgentFailure>(() => actions.T3PairingAsync("e1", "work", CancellationToken.None))).Code);
+        Assert.Equal(404, (await Assert.ThrowsAsync<AgentFailure>(() => actions.T3PairingAsync("e1", "theirs", CancellationToken.None))).Status);
+    }
+
+    [Fact]
     public async Task On_this_pcs_engine_a_vm_is_dialled_at_the_direct_address_the_engine_names()
     {
         var engines = new FakeEngines().Add("local", "https://127.0.0.1:7462").Add("remote", "https://pc.example:7462");

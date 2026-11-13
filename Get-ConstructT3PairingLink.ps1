@@ -6,13 +6,17 @@
 .DESCRIPTION
     A shim kept for T3 Code Desktop and scripts that start it: the device agent owns the
     VMs now. Until the one-time upgrade is converted it answers "finish the upgrade in
-    the Construct window". After that it asks the agent to open the VM's T3 Code pairing
-    link (POST /api/connections/{engine}/{vm}/open {what: t3}); the agent opens the link
-    in the browser and never hands its one-time token to a script.
+    the Construct window". After that it asks the agent for the VM's pairing link
+    (POST /api/connections/{engine}/{vm}/t3-pairing, with the agent's token), which mints
+    it on the VM as this script did: ten minutes, the administrative scopes where the
+    VM's T3 offers them. -Ttl and -Scopes are accepted and ignored (their defaults are
+    what the agent uses); the SSH parameters are ignored, the agent knows the VM.
 
     Output is ONE JSON line on stdout, as before:
+        {"ok":true,"instance":"<name>","pairUrl":"https://...","links":[...],"scopes":"administrative"|"standard"}
         {"ok":false,"instance":"<name>","error":"<why>"}
-    Exit code 1 (no link is printed any more).
+    Exit code 0 when a link was minted, 1 otherwise. The link carries a one-time token;
+    it goes to stdout only.
 #>
 [CmdletBinding()]
 param(
@@ -36,8 +40,13 @@ function Write-Result([string]$Why) {
 $target = Resolve-ConstructAgentVm -Name $name
 if ($target.Error) { Write-Result $target.Error }
 try {
-    Invoke-ConstructAgentApi -Endpoint $target.Endpoint -Method Post -Path ("/api/connections/{0}/{1}/open" -f $target.Engine, $target.Vm) -Body @{ what = 't3' } | Out-Null
+    $pairing = Invoke-ConstructAgentApi -Endpoint $target.Endpoint -Method Post -Path ("/api/connections/{0}/{1}/t3-pairing" -f $target.Engine, $target.Vm)
 } catch {
-    Write-Result 'The Construct agent could not open T3 Code for this VM.'
+    Write-Result 'The Construct agent could not get a T3 Code pairing link for this VM (is it running, with T3 Code?).'
 }
-Write-Result 'The Construct agent opened the pairing link in the browser.'
+if (-not $pairing -or -not [string]$pairing.pairUrl) { Write-Result 'The Construct agent returned no pairing link.' }
+$links = @($pairing.links | ForEach-Object { [pscustomobject][ordered]@{ kind = [string]$_.kind; pairUrl = [string]$_.pairUrl } })
+[Console]::Out.WriteLine(([pscustomobject][ordered]@{
+    ok = $true; instance = $name; pairUrl = [string]$pairing.pairUrl; links = $links; scopes = [string]$pairing.scopes
+} | ConvertTo-Json -Compress -Depth 3))
+exit 0

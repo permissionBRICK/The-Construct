@@ -177,6 +177,7 @@ Then `stage: converted`, and only then the old backup keys come off the VMs, thr
 | `PUT /api/connections/{engine}/{vm}/mic {on}` | Microphone passthrough; kept for the VM's next start |
 | `PUT`, `DELETE /api/connections/{engine}/{vm}/ssh-config` | The VM's `Host` alias in `~/.ssh/config` and VS Code's `remote.SSH.remotePlatform` entry |
 | `POST /api/connections/{engine}/{vm}/open {what: t3\|vscode\|ssh}` | T3 Code's pairing link in the browser, VS Code Remote-SSH, an SSH terminal |
+| `POST /api/connections/{engine}/{vm}/t3-pairing` | A one-time T3 Code pairing link for T3 Desktop on one of the user's own running VMs, minted on the VM as the old `Get-ConstructT3PairingLink.ps1` did (label `construct-t3-desktop[-<vm>]`, ten minutes, the administrative scopes where the VM's T3 offers them): `{pairUrl, links: [{kind, pairUrl}], scopes}`. The link carries a one-time token; it is in this answer only, never in a log or a message. The shim `Get-ConstructT3PairingLink.ps1` prints it in its old one-line format |
 | `GET`, `POST`, `DELETE /api/connections/{engine}/{vm}/share` | The workspace share of a VM on this PC on a drive letter (Windows) |
 | `GET /api/update`, `POST /api/update/check`, `POST /api/update/install` | Version, channel, the version on offer; install it when idle |
 | `GET`, `POST /api/update/everything` | "Update everything": the parts and their state |

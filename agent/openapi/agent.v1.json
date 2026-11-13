@@ -2136,6 +2136,55 @@
         }
       }
     },
+    "/api/connections/{engine}/{vm}/t3-pairing": {
+      "post": {
+        "tags": [
+          "device"
+        ],
+        "description": "A one-time T3 Code pairing link for T3 Desktop on one of the user's own running VMs (`pairUrl`, `links`, `scopes`). The link carries a one-time token: it is in this answer only.",
+        "operationId": "CreateT3PairingLink",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "vm",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/T3PairingLink"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/connections/{engine}/{vm}/share": {
       "get": {
         "tags": [
@@ -3585,6 +3634,43 @@
         "properties": {
           "on": {
             "type": "boolean"
+          }
+        }
+      },
+      "T3PairingLink": {
+        "required": [
+          "pairUrl",
+          "links",
+          "scopes"
+        ],
+        "type": "object",
+        "properties": {
+          "pairUrl": {
+            "type": "string"
+          },
+          "links": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/T3PairingLinkEntry"
+            }
+          },
+          "scopes": {
+            "type": "string"
+          }
+        }
+      },
+      "T3PairingLinkEntry": {
+        "required": [
+          "kind",
+          "pairUrl"
+        ],
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "pairUrl": {
+            "type": "string"
           }
         }
       },

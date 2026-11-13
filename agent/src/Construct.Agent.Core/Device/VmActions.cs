@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Construct.Companion.Core;
 using Construct.Companion.Core.State;
 
 namespace Construct.Agent.Device;
@@ -6,6 +7,14 @@ namespace Construct.Agent.Device;
 public sealed record OpenResult(string What, string Alias, string? Kind = null);
 
 public sealed record ShareView(string Unc, string? Letter);
+
+/// <summary>
+/// A one-time T3 Code pairing link for T3 Desktop (11.4): <c>pairUrl</c> (the forwarded one), every link the VM
+/// offers in its order, and the scope set it carries (<c>administrative</c> on Construct's T3 build, else <c>standard</c>).
+/// </summary>
+public sealed record T3PairingLink(string PairUrl, IReadOnlyList<T3PairingLinkEntry> Links, string Scopes);
+
+public sealed record T3PairingLinkEntry(string Kind, string PairUrl);
 
 /// <summary>
 /// The "open" actions of a VM (11.2: T3 Code, VS Code, an SSH terminal) and its workspace share, as the
@@ -48,6 +57,72 @@ public sealed class VmActions(VmLinks links, IDevicePlatform platform)
                 throw new AgentFailure(400, "invalid-request", "Open takes t3, vscode or ssh.");
         }
     }
+
+    /// <summary>
+    /// Mints a pairing link for T3 Desktop on one of the user's own running VMs, as <c>Get-ConstructT3PairingLink.ps1</c>
+    /// did over SSH: the label names the VM (<c>construct-t3-desktop</c> for the default one), ten minutes, the
+    /// administrative scopes where the VM's T3 offers them. The link carries a one-time token: it is returned to the
+    /// caller only, never logged or put into a message.
+    /// </summary>
+    public async Task<T3PairingLink> T3PairingAsync(string engine, string vm, CancellationToken ct)
+    {
+        links.Target(engine, vm);
+        if (!System.Text.RegularExpressions.Regex.IsMatch(vm, "^[a-z0-9][a-z0-9-]{0,62}$")) throw new AgentFailure(400, "invalid-request", "Not a VM name.");
+        var ssh = links.Transport(engine, vm);
+        var label = vm == "agent-vm" ? "construct-t3-desktop" : "construct-t3-desktop-" + vm;
+        var pairing = await ssh.RunRemoteScriptAsync(DesktopPairingScript(label), TimeSpan.FromSeconds(90), ct).ConfigureAwait(false);
+        switch (pairing.Code)
+        {
+            case 0:
+                break;
+            case 2:
+                throw new AgentFailure(409, "t3-not-installed", "T3 Code is not installed on the VM.");
+            case 7:
+                throw new AgentFailure(409, "t3-forward-not-ready", "T3 Code's port forward is not ready yet; try again in a moment.");
+            default:
+                throw new AgentFailure(502, "t3-no-link", "T3 Code did not return a pairing link.");
+        }
+
+        var stdout = pairing.Stdout ?? "";
+        var scopes = System.Text.RegularExpressions.Regex.Match(stdout, @"(?m)^CONSTRUCT_PAIRING_SCOPES=(administrative|standard)\s*$") is { Success: true } m ? m.Groups[1].Value : "standard";
+        var json = System.Text.RegularExpressions.Regex.Replace(stdout, @"(?m)^CONSTRUCT_PAIRING_SCOPES=\w+\s*$", "").Trim();
+        var offered = T3Code.ExtractPairLinks(json).Select(l => new T3PairingLinkEntry(l.Kind, l.PairUrl)).ToList();
+        var url = offered.FirstOrDefault(l => l.Kind == "forwarded")?.PairUrl ?? T3Code.ExtractPairUrl(json);
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
+            throw new AgentFailure(502, "t3-no-link", "T3 Code did not return a pairing link.");
+        return new T3PairingLink(url, offered, scopes);
+    }
+
+    /// <summary>The old Desktop script's guest side (<c>Get-ConstructT3PairingLink.ps1</c> before the agent), with the shared pairing helper.</summary>
+    private static string DesktopPairingScript(string label) => """
+        set -uo pipefail
+        CONFIG_FILE=/etc/construct/config.env
+        cfgget() {
+          _v="$(sed -n "s/^$1=//p" "$CONFIG_FILE" 2>/dev/null | head -1)"
+          case "$_v" in
+            "'"*"'") _v="${_v#\'}"; _v="${_v%\'}"; _v="${_v//\'\\\'\'/\'}" ;;
+          esac
+          printf '%s' "$_v"
+        }
+        command -v t3 >/dev/null 2>&1 || { echo "t3 is not installed on the VM" >&2; exit 2; }
+        T3CODE_PORT="$(cfgget T3CODE_PORT)"; T3CODE_PORT="${T3CODE_PORT:-5177}"
+        ext="$(cfgget CONSTRUCT_EXTERNAL_HOST)"
+
+        """ + GuestScripts.Render("construct-t3-pairing-base") + """
+
+        base="$(t3base "${ext:-$(hostname).mshome.net}")" || exit 7
+        scopes=standard
+        extra=""
+        if t3 auth pairing create --help 2>&1 | grep -q -- '--scopes'; then
+          scopes=administrative; extra="--scopes administrative"
+        fi
+        out="$(t3pair "$base" --json --ttl 10m --label '
+        """ + label + """
+        ' $extra --log-level none)" || exit 3
+        printf 'CONSTRUCT_PAIRING_SCOPES=%s\n' "$scopes"
+        printf '%s\n' "$out"
+
+        """;
 
     public async Task<ShareView> ShareAsync(string engine, string vm, CancellationToken ct)
     {
