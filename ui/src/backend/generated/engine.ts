@@ -548,6 +548,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/vms/{name}/agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["GetVmAgents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/jobs": {
         parameters: {
             query?: never;
@@ -606,6 +622,38 @@ export interface paths {
         };
         get: operations["GetVmProvisionStatus"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["RetryJob"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/vms/{name}/desired": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["GetVmDesiredState"];
+        put: operations["SetVmDesiredState"];
         post?: never;
         delete?: never;
         options?: never;
@@ -716,33 +764,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description OK */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-                /** @description An error, as a Problem document. */
-                default: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/problem+json": components["schemas"]["Problem"];
-                    };
-                };
-            };
-        };
+        get: operations["HostIsoCatalog"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2743,33 +2765,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description OK */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-                /** @description An error, as a Problem document. */
-                default: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/problem+json": components["schemas"]["Problem"];
-                    };
-                };
-            };
-        };
+        get: operations["HostWindows"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4038,6 +4034,42 @@ export interface components {
         BackupRequestRequest: {
             trigger: null | string;
         };
+        BackupsConfig: {
+            /** @default true */
+            enabled: boolean;
+            /**
+             * Format: int32
+             * @default 24
+             */
+            intervalHours: number;
+            /**
+             * Format: int32
+             * @default 4
+             */
+            keep: number;
+            /**
+             * Format: int32
+             * @default 10
+             */
+            maxKeep: number;
+            /**
+             * Format: int32
+             * @default 14
+             */
+            pinDays: number;
+            /**
+             * Format: int32
+             * @default 14
+             */
+            retainDeletedDays: number;
+            /**
+             * Format: int64
+             * @default 5368709120
+             */
+            minFreeBytes: number;
+            /** Format: int64 */
+            maxBytesPerVm?: null | number;
+        };
         BackupSettingsResponse: {
             /** Format: int32 */
             intervalHours: null | number;
@@ -4104,6 +4136,21 @@ export interface components {
         BootDevice: "installMedia" | "auxiliaryMedia" | "disk" | "network";
         /** @enum {string} */
         CapabilityLevel: "unsupported" | "conditional" | "supported";
+        CapacityConfig: {
+            mode: components["schemas"]["CapacityMode"];
+            /** Format: int64 */
+            ramHeadroomBytes: null | number;
+            /** Format: int64 */
+            storageHeadroomBytes: number;
+            /** Format: int32 */
+            cpuBudget: null | number;
+            /** Format: int32 */
+            maxVcpusPerVm: null | number;
+            /** Format: int32 */
+            reconcileSeconds: number;
+            /** Format: int32 */
+            orphanReservationTimeoutSeconds: number;
+        };
         /** @enum {string} */
         CapacityMode: "observe" | "enforce";
         ChangeEventResponse: {
@@ -4191,6 +4238,7 @@ export interface components {
             /** Format: int32 */
             diskGb: null | number;
             opts: null | components["schemas"]["CreateVmOptions"];
+            desired?: null | components["schemas"]["VmDesiredState"];
         };
         CurrentOperationResponse: {
             jobId: string;
@@ -4339,6 +4387,10 @@ export interface components {
         GuestAddressFamily: "ipv4" | "ipv6";
         /** @enum {string} */
         GuestAddressSource: "kvp" | "dhcp" | "unknown" | "guestAgent";
+        GuestAgentRequest: {
+            tool: null | string;
+            version: null | string;
+        };
         GuestReport: {
             constructCommit: null | string;
             /** Format: date-time */
@@ -4383,17 +4435,86 @@ export interface components {
             /** Format: date-time */
             installedAt?: null | string;
         };
+        HostActiveJobResponse: {
+            id: string;
+            kind: string;
+            vmName: null | string;
+            owner: string;
+            initiator: null | string;
+            phase: null | string;
+            /** Format: date-time */
+            created: string;
+        };
         HostCapabilitiesResponse: {
             backend: string;
+            kind: components["schemas"]["HostKind"];
             capabilities: components["schemas"]["BackendCapabilities"];
             nested: components["schemas"]["HostNestedCapabilities"];
             policy: components["schemas"]["HostPolicyResponse"];
+        };
+        HostCapacitySummary: {
+            /** Format: int64 */
+            epoch: number;
+            /** Format: date-time */
+            observedAt: string;
+            complete: boolean;
+            ram: components["schemas"]["HostRamSummary"];
+            cpu: components["schemas"]["HostCpuSummary"];
+            volumes: components["schemas"]["VolumeCapacity"][];
+        };
+        HostConfigResponse: {
+            capacity: components["schemas"]["CapacityConfig"] & components["schemas"]["HostConfigSectionMeta"];
+            usage: components["schemas"]["UsageConfig"] & components["schemas"]["HostConfigSectionMeta"];
+            memoryPressure: components["schemas"]["MemoryPressureConfig"] & components["schemas"]["HostConfigSectionMeta"];
+            userDefaults: components["schemas"]["UserDefaultsConfig"] & components["schemas"]["HostConfigSectionMeta"];
+            userCaps: components["schemas"]["UserCapsConfig"] & components["schemas"]["HostConfigSectionMeta"];
+            lifecycle: components["schemas"]["LifecycleConfig"] & components["schemas"]["HostConfigSectionMeta"];
+            media: components["schemas"]["MediaConfig"] & components["schemas"]["HostConfigSectionMeta"];
+            network: components["schemas"]["NetworkConfig"] & components["schemas"]["HostConfigSectionMeta"];
+            virtualization: components["schemas"]["VirtualizationConfig"] & components["schemas"]["HostConfigSectionMeta"];
+            updates: components["schemas"]["UpdatesConfig"] & components["schemas"]["HostConfigSectionMeta"];
+            vault: components["schemas"]["VaultConfig"] & components["schemas"]["HostConfigSectionMeta"];
+            https: components["schemas"]["HttpsConfig"] & components["schemas"]["HostConfigSectionMeta"];
+            backups: components["schemas"]["BackupsConfig"] & components["schemas"]["HostConfigSectionMeta"];
+        };
+        HostConfigSectionMeta: {
+            /**
+             * @description default: the section was never stored; stored: an admin saved it.
+             * @enum {string}
+             */
+            source: "default" | "stored";
+            /** Format: date-time */
+            updatedAt: null | string;
+        };
+        HostCpuSummary: {
+            /** Format: int32 */
+            logical: number;
+            /** Format: int32 */
+            budget: null | number;
+            /** Format: int32 */
+            active: number;
+            /** Format: int32 */
+            available: null | number;
+        };
+        HostHealthResponse: {
+            hypervisor: string;
+            database: string;
+            media: string;
+            inventory: string;
         };
         HostHttpsPolicy: {
             available: boolean;
             /** Format: int32 */
             sharedPort: null | number;
             mainAddress: boolean;
+        };
+        /** @enum {string} */
+        HostKind: "hyperv" | "proxmox" | "external";
+        HostMaintenanceResponse: {
+            phase: components["schemas"]["MaintenanceState"];
+            /** Format: date-time */
+            since: null | string;
+            updateId: null | string;
         };
         HostNestedCapabilities: {
             available: boolean;
@@ -4420,20 +4541,92 @@ export interface components {
             memoryPressure: components["schemas"]["MemoryPressureConfig"];
             https: components["schemas"]["HostHttpsPolicy"];
         };
+        HostRamAdmission: {
+            enforced: boolean;
+            /** Format: int64 */
+            lineBytes: number;
+            /** Format: int64 */
+            availableBytes: number;
+        };
+        HostRamSummary: {
+            /** Format: int64 */
+            totalBytes: number;
+            /** Format: int64 */
+            headroomBytes: number;
+            /** Format: int64 */
+            reservedBytes: number;
+            /** Format: int64 */
+            unmanagedBytes: number;
+            /** Format: int64 */
+            physicalFreeBytes: number;
+            /** Format: int64 */
+            availableBytes: number;
+            /** Format: int64 */
+            usedBytes: null | number;
+            /** Format: int64 */
+            vmResidentBytes: null | number;
+            /** Format: int64 */
+            hostOwnBytes: null | number;
+            /** Format: int64 */
+            committedBytes: number;
+            admission: components["schemas"]["HostRamAdmission"];
+            swap: null | components["schemas"]["HostSwapSummary"];
+        };
+        HostStatusResponse: {
+            version: components["schemas"]["InstalledRelease"];
+            health: components["schemas"]["HostHealthResponse"];
+            capacity: components["schemas"]["HostCapacitySummary"];
+            capacityMode: components["schemas"]["CapacityMode"];
+            memoryPressure: components["schemas"]["MemoryPressureStatus"];
+            maintenance: components["schemas"]["HostMaintenanceResponse"];
+            activeJobs: components["schemas"]["HostActiveJobResponse"][];
+            /** Format: int32 */
+            leaseOverdueCount: number;
+            /** Format: int32 */
+            unmanagedVmCount: number;
+        };
+        HostSwapSummary: {
+            /** Format: int64 */
+            totalBytes: number;
+            /** Format: int64 */
+            usedBytes: number;
+        };
+        HostUpdateHistoryEntry: {
+            updateId: string;
+            commit: string;
+            state: components["schemas"]["HostUpdateState"];
+            phase: null | string;
+            phases: components["schemas"]["HostUpdatePhase"][];
+            /** Format: date-time */
+            started: string;
+            /** Format: date-time */
+            finished: null | string;
+            error: null | string;
+            blockingJobs: string[];
+        };
         HostUpdateOfferResponse: {
             version: string;
             commit: string;
+        };
+        HostUpdatePhase: {
+            name: string;
+            /** Format: date-time */
+            at: string;
+            outcome: null | string;
+            error: null | string;
         };
         HostUpdateRunResponse: {
             state: string;
             jobId: null | string;
             updateId: null | string;
         };
+        /** @enum {string} */
+        HostUpdateState: "checking" | "staged" | "stageFailed" | "draining" | "handedOff" | "applying" | "succeeded" | "applyFailed" | "rolledBack" | "rolledBackWithDatabase" | "recoveryFailed" | "interrupted" | "cancelled" | "resolvedByAdmin";
         HostUpdateStatusResponse: {
             supportsAutoApply: boolean;
             installed: components["schemas"]["InstalledRelease"];
-            current: unknown;
-            history: unknown[];
+            current: null | components["schemas"]["HostUpdateHistoryEntry"];
+            history: components["schemas"]["HostUpdateHistoryEntry"][];
             recoveryRecord: null | components["schemas"]["RecoveryRecord"];
             latestKnown: unknown;
             version: string;
@@ -4442,6 +4635,11 @@ export interface components {
             available: null | components["schemas"]["HostUpdateOfferResponse"];
             availableError: null | string;
             databaseCopy: null | string;
+        };
+        HostWindowsResponse: {
+            keys: components["schemas"]["WindowsKeyInfo"][];
+            guests: components["schemas"]["WindowsGuestStatus"][];
+            machines: components["schemas"]["WindowsLicenseMachine"][];
         };
         HttpsAvailabilityResult: {
             available: boolean;
@@ -4526,6 +4724,41 @@ export interface components {
             installedAt: null | string;
             source: string;
         };
+        /** @enum {string} */
+        IsoBuildMode: "prebuilt" | "perVm" | "native" | "inGuest" | "hypervisorHost";
+        IsoCatalogCurrent: {
+            fileName: string;
+            /** Format: int64 */
+            sizeBytes: number;
+            /** Format: date-time */
+            builtAt: null | string;
+            sourceSha256: null | string;
+            bootstrapKeyFingerprint: null | string;
+            hostnameSource: null | string;
+        };
+        IsoCatalogItem: {
+            fileName: string;
+            /** Format: int64 */
+            sizeBytes: number;
+            isCurrent: boolean;
+            /** Format: date-time */
+            builtAt: null | string;
+            sidecarReadable: boolean;
+        };
+        IsoCatalogResponse: {
+            mode: components["schemas"]["IsoBuildMode"];
+            source: components["schemas"]["IsoCatalogSource"];
+            current: null | components["schemas"]["IsoCatalogCurrent"];
+            entries: components["schemas"]["IsoCatalogItem"][];
+        };
+        IsoCatalogSource: {
+            path: null | string;
+            url: null | string;
+            sha256Configured: boolean;
+            present: boolean;
+            /** Format: int64 */
+            sizeBytes: null | number;
+        };
         JobAcceptedResponse: {
             jobId: string;
         };
@@ -4558,6 +4791,10 @@ export interface components {
             operationKey?: null | string;
             phase?: null | string;
         };
+        JobRetryRequest: {
+            secrets?: null | components["schemas"]["ProvisionSecretsRequest"];
+            backupId?: null | string;
+        };
         JobStartAnswer: {
             jobId: null | string;
             replayed?: null | boolean;
@@ -4583,8 +4820,31 @@ export interface components {
         };
         /** @enum {string} */
         LeaseState: "inactive" | "active" | "unlimited" | "expired" | "overdue";
+        LifecycleConfig: {
+            /** Format: int32 */
+            gracefulShutdownTimeoutSeconds: number;
+            /** Format: int32 */
+            leaseTickSeconds: number;
+            /** Format: int32 */
+            leaseRetrySeconds: number;
+        };
         /** @enum {string} */
         MaintenanceState: "open" | "draining" | "maintenance";
+        MediaConfig: {
+            /** Format: int64 */
+            maxBytes: number;
+            /** Format: int32 */
+            maxItemsPerUser: number;
+            /** Format: int32 */
+            uploadChunkBytes: number;
+            /** Format: int32 */
+            uploadTtlHours: number;
+            /** Format: int32 */
+            acquireTimeoutMinutes: number;
+            allowHttp: boolean;
+            /** Format: int32 */
+            unreferencedTtlHours: null | number;
+        };
         MediaEndpointsAcquireWindowsRequest: {
             windows: string;
             /** @default pro */
@@ -4633,6 +4893,12 @@ export interface components {
         MediaSource: "url" | "upload";
         /** @enum {string} */
         MediaState: "pending" | "transferring" | "ready" | "failed" | "deleting";
+        MemoryPressureAction: {
+            vmName: string;
+            /** Format: date-time */
+            at: string;
+            reason: string;
+        };
         MemoryPressureConfig: {
             /** @default true */
             enabled: boolean;
@@ -4662,6 +4928,14 @@ export interface components {
              */
             cooldownMinutesAfterSave: number;
         };
+        MemoryPressureStatus: {
+            enabled: boolean;
+            state: string;
+            lastAction: null | components["schemas"]["MemoryPressureAction"];
+            /** Format: double */
+            usedPercent?: null | number;
+            detail?: null | string;
+        };
         NetworkCapabilities: {
             clientForward: components["schemas"]["CapabilityLevel"];
             hostForwardPrimary: components["schemas"]["CapabilityLevel"];
@@ -4669,6 +4943,14 @@ export interface components {
             directAddressReporting: components["schemas"]["CapabilityLevel"];
             addressVerification: components["schemas"]["CapabilityLevel"];
             isolation: components["schemas"]["CapabilityLevel"];
+        };
+        NetworkConfig: {
+            hostForwardsEnabled: boolean;
+            directAddressReporting: boolean;
+            /** @default relayed */
+            defaultMode: string;
+            /** @default false */
+            ownerMaySwitchMode: boolean;
         };
         PairingApproval: {
             /** Format: byte */
@@ -4953,6 +5235,7 @@ export interface components {
             /** Format: date-time */
             generatedAt: null | string;
             days: null | components["schemas"]["TokenUsageDayRequest"][];
+            agents?: null | components["schemas"]["GuestAgentRequest"][];
         };
         TokenUsageSummary: {
             window: string;
@@ -5013,6 +5296,23 @@ export interface components {
             /** @default false */
             autoApply: boolean;
         };
+        UpdatesConfig: {
+            repository: string;
+            channel: string;
+            /** Format: int32 */
+            drainTimeoutMinutes: number;
+            /** Format: int32 */
+            healthTimeoutSeconds: number;
+            /** @default false */
+            auto: boolean;
+        };
+        UsageConfig: {
+            /**
+             * Format: int32
+             * @default 400
+             */
+            retentionDays: number;
+        };
         UserAllowance: {
             allowChildCreation: null | boolean;
             /** Format: int32 */
@@ -5031,6 +5331,37 @@ export interface components {
         UserAllowanceResponse: {
             stored: components["schemas"]["UserAllowance"];
             effective: components["schemas"]["EffectiveAllowanceResponse"];
+        };
+        UserCapsConfig: {
+            /** Format: int32 */
+            maxRetainedChildren: null | number;
+            /** Format: int32 */
+            cpuBudget: null | number;
+            /** Format: int64 */
+            ramBudgetBytes: null | number;
+            /** Format: int64 */
+            storageBudgetBytes: null | number;
+            /** Format: int64 */
+            maxChildLifetimeSeconds: null | number;
+            allowNeverLifetime: null | boolean;
+            allowSharing: null | boolean;
+        };
+        UserDefaultsConfig: {
+            /** Format: int32 */
+            maxPrimaries: number;
+            allowChildCreation: boolean;
+            /** Format: int32 */
+            maxRetainedChildren: number;
+            /** Format: int32 */
+            cpuBudget: null | number;
+            /** Format: int64 */
+            ramBudgetBytes: null | number;
+            /** Format: int64 */
+            storageBudgetBytes: null | number;
+            /** Format: int64 */
+            maxChildLifetimeSeconds: null | number;
+            allowNeverLifetime: boolean;
+            allowSharing: boolean;
         };
         UserDetailResponse: {
             name: string;
@@ -5123,6 +5454,9 @@ export interface components {
             secrets: components["schemas"]["VaultPromptSecret"][];
             facts: components["schemas"]["VaultPromptFact"][];
             note: null | string;
+        };
+        VaultConfig: {
+            webUrl?: null | string;
         };
         VaultDevicePairedResponse: {
             id: string;
@@ -5275,6 +5609,27 @@ export interface components {
             /** Format: int32 */
             applied: number;
         };
+        VirtualizationConfig: {
+            nestedDefault: boolean;
+            nestedSelectable: boolean;
+            /**
+             * Format: int64
+             * @default 6442450944
+             */
+            minimumRamBytes: null | number;
+        };
+        VmAgentResponse: {
+            tool: string;
+            name: string;
+            version: string;
+            latest: null | string;
+            updateAvailable: boolean;
+        };
+        VmAgentsResponse: {
+            /** Format: date-time */
+            reportedAt: null | string;
+            agents: components["schemas"]["VmAgentResponse"][];
+        };
         VmAppliedState: {
             commit: null | string;
             payloadHash: null | string;
@@ -5319,10 +5674,22 @@ export interface components {
             maximumRamGb: number;
             /** Format: int32 */
             recommendedRamGb: number;
+            /**
+             * Format: int32
+             * @default 50
+             */
+            recommendedDiskGb: number;
         };
         VmDesiredState: {
             projects: string[];
             settings: components["schemas"]["ProvisionSettings"];
+        };
+        VmDesiredStateResponse: {
+            desired: null | components["schemas"]["VmDesiredState"];
+            hash: null | string;
+            /** Format: date-time */
+            updatedAt: null | string;
+            updatedBy: null | string;
         };
         VmIdentityResponse: {
             vmName: string;
@@ -5516,6 +5883,19 @@ export interface components {
             appliedCommit: null | string;
             hostUpdate: null | components["schemas"]["HostUpdateOfferResponse"];
         };
+        VolumeCapacity: {
+            root: string;
+            /** Format: int64 */
+            totalBytes: number;
+            /** Format: int64 */
+            freeBytes: number;
+            /** Format: int64 */
+            headroomBytes: number;
+            /** Format: int64 */
+            growthReservedBytes: number;
+            /** Format: int64 */
+            availableBytes: number;
+        };
         WhoAmIResponse: {
             name: string;
             kind: string;
@@ -5529,6 +5909,51 @@ export interface components {
             effective?: null | components["schemas"]["EffectiveAllowanceResponse"];
             apiFeatures?: null | string[];
         };
+        WindowsActivationOperation: {
+            id: string;
+            allocationId: string;
+            mode: string;
+            stage: string;
+            error?: null | string;
+        };
+        WindowsGuestStatus: {
+            vmName: string;
+            incarnation: string;
+            product: string;
+            edition: string;
+            /** @default installing */
+            stage: string;
+            /** @default not-activated */
+            activation: string;
+            partialKey?: null | string;
+            /** @default false */
+            guestReported: boolean;
+            keyId?: null | string;
+            /** @default false */
+            released: boolean;
+            /** Format: double */
+            uptime?: null | number;
+            /** @default false */
+            installEjected: boolean;
+            /** @default false */
+            auxiliaryEjected: boolean;
+            /** @default false */
+            attempted: boolean;
+            /** @default false */
+            kms: boolean;
+            error?: null | string;
+            /** Format: date-time */
+            deliveredAt?: null | string;
+            /** @default  */
+            hostId: string;
+            /** @default false */
+            evaluation: boolean;
+            license?: null | components["schemas"]["WindowsLicenseObservation"];
+            allocationId?: null | string;
+            hardware?: null | components["schemas"]["ChildHardware"];
+            operation?: null | components["schemas"]["WindowsActivationOperation"];
+            machineId?: null | string;
+        };
         WindowsImage: {
             product: string;
             edition: string;
@@ -5538,6 +5963,20 @@ export interface components {
             build: string;
             /** @default false */
             evaluation: boolean;
+        };
+        WindowsKeyInfo: {
+            id: string;
+            product: string;
+            edition: string;
+            kind: string;
+            partialKey: string;
+            /** Format: int32 */
+            budget: null | number;
+            /** Format: int32 */
+            used: number;
+            notes: string;
+            /** @default  */
+            hostId: string;
         };
         WindowsLicenseEndpointsAddKeyRequest: {
             product: string;
@@ -5555,6 +5994,39 @@ export interface components {
         WindowsLicenseEndpointsReactivateRequest: {
             incarnation: string;
             operationId: string;
+        };
+        WindowsLicenseMachine: {
+            id: string;
+            keyId: string;
+            hostId: string;
+            incarnation: string;
+            hardware: components["schemas"]["ChildHardware"];
+            state: string;
+            vmName: null | string;
+            allocationId: null | string;
+            previousNames: string[];
+            /** @default false */
+            hasConfirmationId: boolean;
+            /**
+             * Format: int32
+             * @default 0
+             */
+            reuses: number;
+        };
+        WindowsLicenseObservation: {
+            /** Format: date-time */
+            observedAt: string;
+            activationId?: null | string;
+            partialKey?: null | string;
+            channel?: null | string;
+            /** Format: int32 */
+            status?: null | number;
+            /** Format: uint32 */
+            reason?: null | number;
+            /** Format: int32 */
+            graceMinutes?: null | number;
+            /** Format: date-time */
+            evaluationEnd?: null | string;
         };
         WindowsMedia: {
             product: string;
@@ -7321,6 +7793,37 @@ export interface operations {
             };
         };
     };
+    GetVmAgents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VmAgentsResponse"];
+                };
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     ListJobs: {
         parameters: {
             query?: never;
@@ -7447,6 +7950,107 @@ export interface operations {
             };
         };
     };
+    RetryJob: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": null | components["schemas"]["JobRetryRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VmJobAcceptedResponse"];
+                };
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    GetVmDesiredState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VmDesiredStateResponse"];
+                };
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    SetVmDesiredState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VmDesiredState"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VmDesiredStateResponse"];
+                };
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
     Health: {
         parameters: {
             query?: never;
@@ -7490,7 +8094,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["HostStatusResponse"];
+                };
             };
             /** @description An error, as a Problem document. */
             default: {
@@ -7546,7 +8152,9 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["HostConfigResponse"];
+                };
             };
             /** @description An error, as a Problem document. */
             default: {
@@ -7674,6 +8282,35 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    HostIsoCatalog: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IsoCatalogResponse"];
+                };
             };
             /** @description An error, as a Problem document. */
             default: {
@@ -10304,6 +10941,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobAcceptedResponse"];
+                };
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    HostWindows: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HostWindowsResponse"];
                 };
             };
             /** @description An error, as a Problem document. */
