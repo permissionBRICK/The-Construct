@@ -339,10 +339,14 @@ The same route starts the two other jobs of a VM's life:
   with `construct backup recipients add`, opens the host's `pre-reinstall` request and runs
   `construct backup create`, then unwraps the backup's key with its private half and has the VM
   `verify` it), `delete` (the hypervisor VM only: record, forwards and settings stay), `create` (the
-  same CPU, memory, disk and nested setting through the driver, a new VM token, and the old host key of
-  the address removed from `ssh/known_hosts`, the only place that replaces one), then the provision
+  same CPU, memory, disk and nested setting through the driver and a new VM token), then the provision
   steps with the stored settings and a `restore` step (`construct backup restore --from-host`, the key
-  on stdin) before the project commands. The backup is wrapped for the user's keys as before; the
+  on stdin) before the project commands. The backup carries the VM's SSH host keys and the restore puts
+  them back (S29), so the key stored in `ssh/known_hosts` stays: from the create to the restore the job
+  trusts the new VM's key from a file of its own (`known_hosts.reinstall-<job>`), after it the stored one
+  again. A backup without host keys (an older one), or a job that fails past the create, removes the
+  stored key of the address, so the next connection learns the key the VM presents; a provision job
+  never replaces one. A `restore` job whose backup changed the VM's host keys removes it as well. The backup is wrapped for the user's keys as before; the
   job's own recipient is removed again after the restore, and from the old VM when the job fails
   before the delete. Nothing is deleted without a verified, host-requested (pinned) backup. Needs
   backups enabled on the host; an external machine is refused.

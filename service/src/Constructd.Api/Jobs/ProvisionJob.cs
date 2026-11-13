@@ -30,8 +30,10 @@ public sealed record ProvisionRun(
 /// <summary>
 /// A backup to restore after <c>provision.sh</c> and before the project commands (the PowerShell's
 /// <c>-RestoreHostBackupId</c>). Its key is <see cref="ProvisionJob.BackupKeySecret"/> in the bag.
+/// <paramref name="KnownHosts"/>: in a reinstall, the engine's own known_hosts file, which still holds
+/// the VM's key from before; until the restore the run trusts the new VM's key from a file of the job.
 /// </summary>
-public sealed record ProvisionRestore(string BackupId);
+public sealed record ProvisionRestore(string BackupId, string? KnownHosts = null);
 
 /// <summary>
 /// The <c>provision</c> job (design 7.3): the guest steps of <c>Provision-AgentVM.ps1</c>, run by the
@@ -244,6 +246,22 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
 
         context.Report("restore", "running", $"backup {restore.BackupId} restored");
 
+        // The backup's SSH host keys came back (S29): in a reinstall the stored key from before is right
+        // again and the job's own file goes out of use. A backup without host keys (an older one) leaves the
+        // new VM's key, which then replaces the stored one. A restore into the running VM that changed its
+        // keys makes the stored one wrong: the next connection learns the restored one.
+        var hostKeys = BackupScript.HostKeys(result.Lines);
+        if (restore.KnownHosts is { } stored)
+        {
+            var back = context.Run.Target with { KnownHostsFile = stored };
+            if (!hostKeys.Replaced && !hostKeys.Kept) await ProvisionTargets.ForgetAsync(back, CancellationToken.None);
+            context.Run = context.Run with { Target = back };
+        }
+        else if (hostKeys.Replaced)
+        {
+            await ProvisionTargets.ForgetAsync(context.Run.Target, CancellationToken.None);
+        }
+
         // A backup made for a reinstall carries that job's recipient in its recipient list, and the
         // restore brings it back: it comes off again, whichever job restores the backup.
         var listed = await RootCommandAsync(context with { Quiet = true }, "restore", BackupScript.RecipientsList, ShortTimeout);
@@ -397,6 +415,9 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
 
     private sealed record Context(ProvisionRun Run, IProgress<string> Progress)
     {
+        /// <summary>The run; its target changes when a restore brought the VM's host keys back.</summary>
+        public ProvisionRun Run { get; set; } = Run;
+
         public string Step { get; set; } = "source";
         public bool Quiet { get; init; }
         public JobSecretBag Secrets => Run.Secrets;

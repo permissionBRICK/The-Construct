@@ -464,6 +464,74 @@ if [[ -n "${t3_state_restore}" ]]; then
   fi
 fi
 
+# ── SSH host keys ────────────────────────────────────────────────────────────
+# The saved /etc/ssh/ssh_host_* make a reinstalled VM the same machine to every
+# client (known_hosts stays valid). They replace this VM's host keys only when
+# they differ; sshd then checks its configuration with them and is restarted, so
+# new connections present them. A check that fails puts the previous keys back
+# and leaves sshd alone, so a broken backup cannot lock anyone out. An older
+# backup has no host keys and changes nothing here. The connection running this
+# restore survives the restart (sshd restarts only its listener).
+SSH_HOST_KEY_DIR="${SSH_HOST_KEY_DIR:-/etc/ssh}"
+ssh_keys_restore=""
+if [[ -n "${archive_restore}" ]]; then
+  grep -Eq '^(\./)?etc/ssh/ssh_host_[^/]+$' "${archive_list}" && ssh_keys_restore=1 || true
+elif compgen -G "${BACKUP_DIR}/etc/ssh/ssh_host_*" >/dev/null 2>&1; then
+  ssh_keys_restore=1
+fi
+if [[ -n "${ssh_keys_restore}" ]]; then
+  _ssh_stage="$(mktemp -d /tmp/construct-restore-ssh.XXXXXX)"
+  _ssh_ok=1
+  if [[ -n "${archive_restore}" ]]; then
+    tar -xf "${BACKUP_TGZ}" -C "${_ssh_stage}" "$(grep -Eom1 '^(\./)?etc/ssh/' "${archive_list}")" 2>/dev/null || _ssh_ok=""
+  else
+    mkdir -p "${_ssh_stage}/etc/ssh" && cp -a "${BACKUP_DIR}"/etc/ssh/ssh_host_* "${_ssh_stage}/etc/ssh/" || _ssh_ok=""
+  fi
+  _ssh_saved="${_ssh_stage}/etc/ssh"
+  _ssh_changed=""
+  if [[ -n "${_ssh_ok}" ]] && compgen -G "${_ssh_saved}/ssh_host_*" >/dev/null 2>&1; then
+    # Changed: another set of key files, or any of them with other content.
+    if [[ "$(cd "${_ssh_saved}" && ls -1 ssh_host_* | sort || true)" != "$(cd "${SSH_HOST_KEY_DIR}" 2>/dev/null && ls -1 ssh_host_* 2>/dev/null | sort || true)" ]]; then
+      _ssh_changed=1
+    else
+      for _hk in "${_ssh_saved}"/ssh_host_*; do
+        cmp -s "${_hk}" "${SSH_HOST_KEY_DIR}/$(basename "${_hk}")" || _ssh_changed=1
+      done
+    fi
+  else
+    _ssh_ok=""
+  fi
+  if [[ -z "${_ssh_ok}" || ! -w "${SSH_HOST_KEY_DIR}" ]]; then
+    err "restoring the SSH host keys failed; this VM keeps its new host keys"
+  elif [[ -z "${_ssh_changed}" ]]; then
+    log "SSH host keys already match the backup"
+  else
+    _ssh_previous="${_ssh_stage}/previous"
+    mkdir -p "${_ssh_previous}"
+    cp -a "${SSH_HOST_KEY_DIR}"/ssh_host_* "${_ssh_previous}/" 2>/dev/null || true
+    rm -f "${SSH_HOST_KEY_DIR}"/ssh_host_*
+    _ssh_installed=1
+    _ssh_owner=()
+    [[ "${EUID}" -eq 0 ]] && _ssh_owner=(-o 0 -g 0)
+    for _hk in "${_ssh_saved}"/ssh_host_*; do
+      case "${_hk}" in
+        *.pub) install -m 644 "${_ssh_owner[@]}" "${_hk}" "${SSH_HOST_KEY_DIR}/" || _ssh_installed="" ;;
+        *)     install -m 600 "${_ssh_owner[@]}" "${_hk}" "${SSH_HOST_KEY_DIR}/" || _ssh_installed="" ;;
+      esac
+    done
+    if [[ -z "${_ssh_installed}" ]] || { command -v sshd >/dev/null 2>&1 && ! sshd -t >/dev/null 2>&1; }; then
+      rm -f "${SSH_HOST_KEY_DIR}"/ssh_host_*
+      cp -a "${_ssh_previous}"/ssh_host_* "${SSH_HOST_KEY_DIR}/" 2>/dev/null || true
+      err "the saved SSH host keys could not be installed or sshd refused them; this VM keeps its new host keys"
+    else
+      systemctl try-restart ssh.service 2>/dev/null || systemctl try-restart sshd.service 2>/dev/null \
+        || err "sshd could not be restarted; it presents the restored host keys after the next reboot"
+      log "restored SSH host keys"
+    fi
+  fi
+  rm -rf "${_ssh_stage}"
+fi
+
 if [[ -f "${BACKUP_DIR}/backup-info.json" ]]; then
   log "backup metadata: $(tr -d '\n' <"${BACKUP_DIR}/backup-info.json")"
 fi

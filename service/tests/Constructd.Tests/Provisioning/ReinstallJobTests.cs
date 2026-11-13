@@ -139,6 +139,67 @@ public sealed class ReinstallJobTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_reinstall_whose_restore_brings_the_host_keys_back_keeps_the_stored_key()
+    {
+        var guest = new FakeBackupGuest { RestoreHostKeys = "restored SSH host keys" };
+        var h = await HostAsync(guest);
+        var vm = (await h.App.Vms.GetAsync(ProvisionHarness.Vm, default))!;
+        var target = (await h.App.Service<IProvisionTargets>().ResolveAsync(vm, default))!;
+        var known = target.KnownHostsFile!;
+        await File.WriteAllTextAsync(known, $"{target.Host} ssh-ed25519 AAAAold\nother.test ssh-ed25519 AAAAkeep\n");
+
+        var job = await ReinstallAsync(h, "reinstall-1");
+
+        Assert.True(job.State == JobState.Succeeded, job.Error);
+        Assert.Equal($"{target.Host} ssh-ed25519 AAAAold\nother.test ssh-ed25519 AAAAkeep\n", await File.ReadAllTextAsync(known));
+        // Between the create and the restore the new VM was trusted from the job's own file; after it, from the stored one.
+        var calls = guest.Calls.ToList();
+        var restoreAt = calls.FindIndex(c => c.Command.Contains(" restore --from-host", StringComparison.Ordinal));
+        var provisionAt = calls.FindIndex(c => c.Command.Contains("bin/provision.sh", StringComparison.Ordinal));
+        Assert.All(calls[provisionAt..(restoreAt + 1)], c => Assert.Equal(known + ".reinstall-" + job.Id, c.Target.KnownHostsFile));
+        Assert.All(calls[(restoreAt + 1)..], c => Assert.Equal(known, c.Target.KnownHostsFile));
+        Assert.Contains(calls[(restoreAt + 1)..], c => c.Command.Contains("PROVISION_PHASE", StringComparison.Ordinal));
+        Assert.False(File.Exists(known + ".reinstall-" + job.Id));
+    }
+
+    [Fact]
+    public async Task A_reinstall_that_fails_after_the_create_lets_the_next_connection_learn_the_key()
+    {
+        var guest = new FakeBackupGuest { Provision = _ => (1, ["boom"]), RestoreHostKeys = "restored SSH host keys" };
+        var h = await HostAsync(guest);
+        var vm = (await h.App.Vms.GetAsync(ProvisionHarness.Vm, default))!;
+        var target = (await h.App.Service<IProvisionTargets>().ResolveAsync(vm, default))!;
+        var known = target.KnownHostsFile!;
+        await File.WriteAllTextAsync(known, $"{target.Host} ssh-ed25519 AAAAold\nother.test ssh-ed25519 AAAAkeep\n");
+
+        var job = await ReinstallAsync(h, "reinstall-1");
+
+        Assert.Equal(JobState.Failed, job.State);
+        Assert.Equal("other.test ssh-ed25519 AAAAkeep\n", await File.ReadAllTextAsync(known));
+        Assert.False(File.Exists(known + ".reinstall-" + job.Id));
+    }
+
+    [Fact]
+    public async Task A_restore_job_that_changed_the_host_keys_lets_the_next_connection_learn_them()
+    {
+        var guest = new FakeBackupGuest();
+        var h = await HostAsync(guest);
+        Assert.Equal(JobState.Succeeded, (await ReinstallAsync(h, "reinstall-1")).State);
+        var backup = Assert.Single(guest.Made.Keys);
+        var vm = (await h.App.Vms.GetAsync(ProvisionHarness.Vm, default))!;
+        var target = (await h.App.Service<IProvisionTargets>().ResolveAsync(vm, default))!;
+        await File.WriteAllTextAsync(target.KnownHostsFile!, $"{target.Host} ssh-ed25519 AAAAnow\n");
+
+        guest.RestoreHostKeys = "SSH host keys already match the backup";
+        Assert.Equal(JobState.Succeeded, (await RestoreAsync(h, "restore-1", backup, guest.Made[backup].Key)).State);
+        Assert.Equal($"{target.Host} ssh-ed25519 AAAAnow\n", await File.ReadAllTextAsync(target.KnownHostsFile!));
+
+        guest.RestoreHostKeys = "restored SSH host keys";
+        Assert.Equal(JobState.Succeeded, (await RestoreAsync(h, "restore-2", backup, guest.Made[backup].Key)).State);
+        Assert.Equal("", await File.ReadAllTextAsync(target.KnownHostsFile!));
+    }
+
+    [Fact]
     public async Task A_provision_never_replaces_a_stored_host_key()
     {
         var guest = new FakeBackupGuest();
