@@ -16,8 +16,14 @@ public static class StoreEndpoints
     /// <summary>How long a feed request waits for a change at most.</summary>
     public static readonly TimeSpan MaxWait = TimeSpan.FromSeconds(30);
 
-    public static IEndpointRouteBuilder MapRecordStore(this IEndpointRouteBuilder routes)
+    /// <param name="mutation">
+    /// Called for each route that changes the store, with an action name (<c>store.write</c>,
+    /// <c>store.delete</c>, <c>store.batch</c>, <c>store.import</c>); constructd marks them auditable.
+    /// </param>
+    public static IEndpointRouteBuilder MapRecordStore(this IEndpointRouteBuilder routes, Action<RouteHandlerBuilder, string>? mutation = null)
     {
+        mutation ??= (_, _) => { };
+
         routes.MapGet("/records", async (HttpContext http, RecordStore store, long? since, int? wait, int? limit, CancellationToken ct) =>
         {
             if (Principal(http) is not { } principal) return Unauthorized(http);
@@ -37,13 +43,13 @@ public static class StoreEndpoints
             return Json(await store.HistoryAsync(principal.Account, id, limit ?? RecordStore.HistoryVersions, ct));
         });
 
-        routes.MapPut("/records/{id}", (HttpContext http, RecordStore store, string id, [FromBody] RecordWrite write, CancellationToken ct) =>
-            WriteOneAsync(http, store, id, write, deletion: false, ct));
+        mutation(routes.MapPut("/records/{id}", (HttpContext http, RecordStore store, string id, [FromBody] RecordWrite write, CancellationToken ct) =>
+            WriteOneAsync(http, store, id, write, deletion: false, ct)), "store.write");
 
-        routes.MapDelete("/records/{id}", (HttpContext http, RecordStore store, string id, [FromBody] RecordWrite write, CancellationToken ct) =>
-            WriteOneAsync(http, store, id, write, deletion: true, ct));
+        mutation(routes.MapDelete("/records/{id}", (HttpContext http, RecordStore store, string id, [FromBody] RecordWrite write, CancellationToken ct) =>
+            WriteOneAsync(http, store, id, write, deletion: true, ct)), "store.delete");
 
-        routes.MapPost("/records/batch", async (HttpContext http, RecordStore store, [FromBody] BatchRequest batch, CancellationToken ct) =>
+        mutation(routes.MapPost("/records/batch", async (HttpContext http, RecordStore store, [FromBody] BatchRequest batch, CancellationToken ct) =>
         {
             if (Principal(http) is not { } principal) return Unauthorized(http);
             return await store.BatchAsync(principal, batch.Writes ?? [], ct) switch
@@ -53,7 +59,7 @@ public static class StoreEndpoints
                 BatchOutcome.Refused refused => Error(refused.Status, refused.Code, refused.Message),
                 _ => throw new InvalidOperationException(),
             };
-        });
+        }), "store.batch");
 
         routes.MapGet("/epochs", async (HttpContext http, RecordStore store, CancellationToken ct) =>
         {
@@ -67,13 +73,13 @@ public static class StoreEndpoints
             return Json(await store.ExportAsync(principal.Account, ct));
         });
 
-        routes.MapPost("/import", async (HttpContext http, RecordStore store, [FromBody] StoreExport export, CancellationToken ct) =>
+        mutation(routes.MapPost("/import", async (HttpContext http, RecordStore store, [FromBody] StoreExport export, CancellationToken ct) =>
         {
             if (Principal(http) is not { Kind: ParticipantKind.Device } principal) return DevicesOnly(http);
             return await store.ImportAsync(principal.Account, export, ct)
                 ? Results.NoContent()
                 : Error(409, "store-not-empty", "An import goes into an account that has no records yet.");
-        });
+        }), "store.import");
 
         return routes;
     }

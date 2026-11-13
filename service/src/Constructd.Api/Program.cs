@@ -164,7 +164,7 @@ app.MapGroup("/api/v1")
     .MapVaultEndpoints()
     .MapHttpsEndpoints();
 
-app.MapGroup("/api/v1/store").RequireAuthorization(Policies.User).MapRecordStore();
+app.MapGroup("/api/v1/store").RequireAuthorization(Policies.User).MapRecordStore((route, action) => route.Audited(action, "id"));
 
 // The key vault's phone pages: anonymous static files outside /api/v1.
 app.MapVaultWebEndpoints();
