@@ -2511,6 +2511,136 @@
         }
       }
     },
+    "/api/v1/vms/{name}/adopt": {
+      "post": {
+        "tags": [
+          "LocalAdoptionEndpoints"
+        ],
+        "operationId": "AdoptLocalVm",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/LocalAdoptionEndpointsAdoptLocalVmRequest"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStartAnswer"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/host/lan-access": {
+      "get": {
+        "tags": [
+          "LanAccessEndpoints"
+        ],
+        "operationId": "GetLanAccess",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LanAccessEndpointsLanAccessResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "LanAccessEndpoints"
+        ],
+        "operationId": "SetLanAccess",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/LanAccessEndpointsLanAccessRequest"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LanAccessEndpointsLanAccessResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/health": {
       "get": {
         "tags": [
@@ -10268,6 +10398,31 @@
       "JsonObject": {
         "type": "object"
       },
+      "LanAccessEndpointsLanAccessRequest": {
+        "required": [
+          "enabled"
+        ],
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": [
+              "null",
+              "boolean"
+            ]
+          }
+        }
+      },
+      "LanAccessEndpointsLanAccessResponse": {
+        "required": [
+          "enabled"
+        ],
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
       "LeaseResponse": {
         "required": [
           "requested",
@@ -10332,6 +10487,42 @@
           "overdue"
         ],
         "type": "string"
+      },
+      "LocalAdoptionEndpointsAdoptLocalVmRequest": {
+        "required": [
+          "settings",
+          "instanceState",
+          "sshPrivateKey"
+        ],
+        "type": "object",
+        "properties": {
+          "settings": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            ]
+          },
+          "instanceState": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            ]
+          },
+          "sshPrivateKey": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
       },
       "MaintenanceState": {
         "enum": [
@@ -14396,6 +14587,12 @@
     },
     {
       "name": "ProvisionEndpoints"
+    },
+    {
+      "name": "LocalAdoptionEndpoints"
+    },
+    {
+      "name": "LanAccessEndpoints"
     },
     {
       "name": "IsoCatalogEndpoints"

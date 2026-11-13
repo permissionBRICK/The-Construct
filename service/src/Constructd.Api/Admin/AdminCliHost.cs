@@ -42,6 +42,8 @@ public static class AdminCliHost
             .SetMinimumLevel(LogLevel.Warning));
 
         services.AddConstructdStores(options);
+        // The desired state per VM and the SSH runner: what "vms adopt-local" writes and dials with.
+        services.AddProvisioning(options);
 
         if (!options.Fake && OperatingSystem.IsWindows())
         {

@@ -27,6 +27,12 @@ public sealed class ConstructdOptions
     public bool Fake { get; set; }
 
     /// <summary>
+    /// A single PC's own engine (design 5.3), written by <c>Install-ConstructHost.ps1 -Solo</c>. Its port
+    /// is open to the PC's own VMs only, until LAN access is switched on (<c>/api/v1/host/lan-access</c>).
+    /// </summary>
+    public bool Solo { get; set; }
+
+    /// <summary>
     /// Where users, tokens, VMs, jobs and the audit trail live: <c>Sqlite</c> (the default) or
     /// <c>Memory</c>. Fake mode defaults to <c>Memory</c>; combining <c>Fake</c> with <c>Sqlite</c>
     /// is a useful development and test mode — real persistence, no Hyper-V.

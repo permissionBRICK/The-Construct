@@ -7,6 +7,7 @@ using Constructd.Sqlite;
 using Constructd.Windows.Forwards;
 using Constructd.Windows.HyperV;
 using Constructd.Windows.Iso;
+using Constructd.Windows.Network;
 using Constructd.Windows.Power;
 using Constructd.Windows.Process;
 
@@ -182,6 +183,8 @@ public static class ServiceComposition
         services.AddSingleton<IVmMemoryDriver>(sp => sp.GetRequiredService<FakeHypervisorDriver>());
         services.AddSingleton<IVmMemoryFloorDriver>(sp => sp.GetRequiredService<FakeHypervisorDriver>());
         services.AddSingleton<IVmFactsDriver>(sp => sp.GetRequiredService<FakeHypervisorDriver>());
+        services.AddSingleton<InMemoryLanAccess>();
+        services.AddSingleton<ILanAccess>(sp => sp.GetRequiredService<InMemoryLanAccess>());
 
         services.AddSingleton<FakeIsoBuilder>();
         services.AddSingleton<IIsoBuilder>(sp => sp.GetRequiredService<FakeIsoBuilder>());
@@ -275,6 +278,7 @@ public static class ServiceComposition
         services.AddSingleton<IVmMemoryDriver>(sp => (HyperVDriver)sp.GetRequiredService<IHypervisorDriver>());
         services.AddSingleton<IVmFactsDriver>(sp => (HyperVDriver)sp.GetRequiredService<IHypervisorDriver>());
         services.AddSingleton<IPortForwardManager, NetshPortForwardManager>();
+        services.AddSingleton<ILanAccess, FirewallLanAccess>();
 
         // Held while VMs run so the host does not sleep under them; the container disposes it at
         // shutdown, which clears the request.

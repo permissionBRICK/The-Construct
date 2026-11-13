@@ -34,6 +34,15 @@
     <EmbeddedResource Include="VaultWeb/*" LogicalName="VaultWeb.%(Filename)%(Extension)" />
   </ItemGroup>
 
+  <ItemGroup Condition="'$(RuntimeIdentifier)' == '' or $(RuntimeIdentifier.StartsWith('win'))">
+    <!--
+      What adopting a VM the old client made writes into the guest (Jobs/LocalVmAdoption.cs): the
+      enrollment script and the helpers it installs, copied to guest\ next to the service.
+    -->
+    <None Include="../../../bin/adopt-host.py;../../../bin/construct;../../../bin/construct-vm.sh;../../../bin/construct-expose.sh;../../../bin/construct-secret.sh;../../../bin/construct-config.sh;../../../bin/construct-idle-report.sh;../../../bin/construct-backup.sh"
+          Link="guest/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <!-- Kerberos/NTLM; registered only when running on Windows (see Auth/AuthenticationSetup.cs). -->
     <PackageReference Include="Microsoft.AspNetCore.Authentication.Negotiate" Version="10.0.11" />
