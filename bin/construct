@@ -291,12 +291,17 @@ case "${subcmd}" in
 
     # 'set' delegates to project-set.js which requires node for the shared
     # validateProfile / canonicalProfileJson from extension/src/projects.js.
-    if ! command -v node >/dev/null 2>&1; then
+    # With a host service the engine validates, so node is needed only to check
+    # early and for the fallback.
+    no_node() {
       printf '%s\n' "node is not installed on this VM." >&2
       printf '%s\n' "Edit the file directly: \${PROJECTS_STORE}/${name}.json" >&2
       printf '%s\n' "The host sync tick validates direct edits on the next cycle." >&2
       exit 4
-    fi
+    }
+    have_node=true
+    command -v node >/dev/null 2>&1 || have_node=false
+    if [[ "${have_node}" == false ]] && ! service_configured; then no_node; fi
 
     # Locate project-set.js: next to this script in the repo checkout (works
     # both from /opt/construct/repo/bin and from a dev checkout).
@@ -306,7 +311,7 @@ case "${subcmd}" in
       # Fall back to the canonical repo location.
       project_set="${CONSTRUCT_REPO_DIR}/bin/project-set.js"
     fi
-    if [[ ! -f "${project_set}" ]]; then
+    if [[ ! -f "${project_set}" ]] && [[ "${have_node}" == true ]]; then
       die "project-set.js not found (looked in ${script_dir} and ${CONSTRUCT_REPO_DIR}/bin)"
     fi
 
@@ -328,11 +333,14 @@ case "${subcmd}" in
         cat >"${input}"
         args+=("--file" "${input}")
       fi
-      check_store="$(mktemp -d)"
-      PROJECTS_STORE="${check_store}" node "${project_set}" "${args[@]}" >/dev/null || { rc=$?; rm -rf "${check_store}"; exit "${rc}"; }
-      rm -rf "${check_store}"
+      if [[ "${have_node}" == true ]]; then
+        check_store="$(mktemp -d)"
+        PROJECTS_STORE="${check_store}" node "${project_set}" "${args[@]}" >/dev/null || { rc=$?; rm -rf "${check_store}"; exit "${rc}"; }
+        rm -rf "${check_store}"
+      fi
       rc=0; via_service set "${name}" --file "${input}" || rc=$?
       [[ "${rc}" -eq 8 ]] || exit "${rc}"
+      [[ "${have_node}" == true ]] || no_node
       printf 'The host service could not be reached; saving locally, the host picks it up later.\n' >&2
     fi
 
