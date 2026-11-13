@@ -363,13 +363,13 @@ $mkDir = Join-Path ([System.IO.Path]::GetTempPath()) ("cs-marker-" + [guid]::New
 New-Item -ItemType Directory -Path $mkDir -Force | Out-Null
 try {
     # A successful fetch records the SHA.
-    $sha1 = Set-ConstructInstalledMarker -Root $mkDir -Repo "permissionBRICK/The-Construct" -Ref "main" `
+    $sha1 = Save-ConstructInstalledMarker -Root $mkDir -Repo "permissionBRICK/The-Construct" -Ref "main" `
         -CommitFetcher { param($r,$f) "abc1234def" }
     ok "marker: successful fetch returns the sha" ($sha1 -eq "abc1234def")
     ok "marker: successful fetch records installedCommit" ((Read-ConstructSettings -Dir $mkDir).installedCommit -eq "abc1234def")
 
     # A FAILED fetch (fetcher throws) must PRESERVE the prior installedCommit, not blank it.
-    $sha2 = Set-ConstructInstalledMarker -Root $mkDir -Repo "permissionBRICK/The-Construct" -Ref "main" `
+    $sha2 = Save-ConstructInstalledMarker -Root $mkDir -Repo "permissionBRICK/The-Construct" -Ref "main" `
         -CommitFetcher { param($r,$f) throw "network down" }
     ok "marker: failed fetch returns empty" ($sha2 -eq "")
     ok "marker: failed fetch PRESERVES the prior installedCommit (no clobber)" (
@@ -379,7 +379,7 @@ try {
         (Read-ConstructSettings -Dir $mkDir).constructRef -eq "main")
 
     # An EMPTY-string sha (fetcher returns "") is likewise treated as no-fetch.
-    $null = Set-ConstructInstalledMarker -Root $mkDir -Repo "permissionBRICK/The-Construct" -Ref "main" `
+    $null = Save-ConstructInstalledMarker -Root $mkDir -Repo "permissionBRICK/The-Construct" -Ref "main" `
         -CommitFetcher { param($r,$f) "" }
     ok "marker: empty-string fetch also preserves the prior commit" (
         (Read-ConstructSettings -Dir $mkDir).installedCommit -eq "abc1234def")
@@ -387,7 +387,7 @@ try {
     # ATOMIC TUPLE: a repo/ref SWITCH with a FAILED fetch must NOT pair the new
     # repo/ref with the OLD commit (that would 404 the compare -> hidden banner).
     # The whole prior tuple (A) is preserved; the new B repo/ref are NOT written.
-    $null = Set-ConstructInstalledMarker -Root $mkDir -Repo "someone/a-fork" -Ref "dev" `
+    $null = Save-ConstructInstalledMarker -Root $mkDir -Repo "someone/a-fork" -Ref "dev" `
         -CommitFetcher { param($r,$f) throw "network down" }
     $sw = Read-ConstructSettings -Dir $mkDir
     ok "marker: switch+failed fetch keeps the old commit" ($sw.installedCommit -eq "abc1234def")
@@ -396,7 +396,7 @@ try {
     ok "marker: switch+failed fetch never pairs new repo with old commit" (
         -not (($sw.constructRepo -eq "someone/a-fork") -and ($sw.installedCommit -eq "abc1234def")))
     # A later SUCCESSFUL fetch for the switched source writes the full new tuple atomically.
-    $null = Set-ConstructInstalledMarker -Root $mkDir -Repo "someone/a-fork" -Ref "dev" `
+    $null = Save-ConstructInstalledMarker -Root $mkDir -Repo "someone/a-fork" -Ref "dev" `
         -CommitFetcher { param($r,$f) "beef5678" }
     $sw2 = Read-ConstructSettings -Dir $mkDir
     ok "marker: successful switch writes the full new tuple" (
@@ -404,12 +404,12 @@ try {
 
     # A source archive identifies itself even offline; an explicit downloaded commit wins.
     Set-Content -LiteralPath (Join-Path $mkDir '.construct-revision') -Value ('a' * 40)
-    $localSha = Set-ConstructInstalledMarker -Root $mkDir -Repo 'owner/repo' -Ref 'main'
+    $localSha = Save-ConstructInstalledMarker -Root $mkDir -Repo 'owner/repo' -Ref 'main'
     ok 'marker: archive revision is read without remote lookup' ($localSha -eq ('a' * 40))
-    $pinnedSha = Set-ConstructInstalledMarker -Root $mkDir -Repo 'owner/repo' -Ref 'main' -Commit ('b' * 40) -CommitFetcher { throw 'must not fetch HEAD' }
+    $pinnedSha = Save-ConstructInstalledMarker -Root $mkDir -Repo 'owner/repo' -Ref 'main' -Commit ('b' * 40) -CommitFetcher { throw 'must not fetch HEAD' }
     ok 'marker: explicit downloaded revision wins without HEAD request' ($pinnedSha -eq ('b' * 40))
     Set-Content -LiteralPath (Join-Path $mkDir '.construct-revision') -Value '$Format:%H$'
-    $null = Set-ConstructInstalledMarker -Root $mkDir -Repo 'owner/repo' -Ref 'main'
+    $null = Save-ConstructInstalledMarker -Root $mkDir -Repo 'owner/repo' -Ref 'main'
     ok 'marker: unexpanded archive placeholder preserves previous marker' ((Read-ConstructSettings -Dir $mkDir).installedCommit -eq ('b' * 40))
 
     # First-ever install with a failed fetch: no prior value, so installedCommit stays
@@ -417,7 +417,7 @@ try {
     $mkDir2 = Join-Path ([System.IO.Path]::GetTempPath()) ("cs-marker2-" + [guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Path $mkDir2 -Force | Out-Null
     try {
-        $null = Set-ConstructInstalledMarker -Root $mkDir2 -Repo "permissionBRICK/The-Construct" -Ref "main" `
+        $null = Save-ConstructInstalledMarker -Root $mkDir2 -Repo "permissionBRICK/The-Construct" -Ref "main" `
             -CommitFetcher { param($r,$f) throw "offline" }
         $s2 = Read-ConstructSettings -Dir $mkDir2
         ok "marker: first install + failed fetch leaves no phantom commit" (-not $s2.installedCommit)
@@ -1097,26 +1097,7 @@ ok "Provision-AgentVM.ps1: the CA handoff reads the VM status file and imports b
     $provSrc -match 'Import-Certificate -FilePath')
 ok "Provision-AgentVM.ps1: the CA handoff never fails the provision" (
     $provSrc -match "(?s)T3CODE_HTTPS_READY=yes.*?catch \{\s*Write-Warning")
-$updT3Src = Get-Content -LiteralPath (Join-Path $here "..\Update-T3Code.ps1") -Raw
-ok "Update-T3Code.ps1: forwards t3codeHttps only when set and supported" (
-    $updT3Src -match "settings\.t3codeHttps" -and
-    $updT3Src -match "Parameters\.ContainsKey\('T3CodeHttps'\)")
-# B12: the per-VM state each script reads and writes is keyed by ONE resolution point --
-# built on the instance B11's name-only targeting already resolved -- so a second VM never
-# replays the first VM's toggles, and B11's successors have a single line to re-point.
-ok "Update-T3Code.ps1: has ONE instance-resolution point" (
-    $updT3Src -match "(?m)^function Get-ConstructStateInstanceName \{" -and
-    $updT3Src -match "(?m)^\`$instanceName = Get-ConstructStateInstanceName")
-ok "Update-T3Code.ps1: it prefers B11's -InstanceName, then the alias, then the default" (
-    $updT3Src -match "if \(\`$InstanceName\) \{ return .\`$InstanceName..Trim\(\)\.ToLowerInvariant\(\) \}" -and
-    $updT3Src -match "if \(\`$HostAlias\)    \{ return .\`$HostAlias..Trim\(\)\.ToLowerInvariant\(\) \}" -and
-    $updT3Src -match "return 'agent-vm'")
-ok "Update-T3Code.ps1: reads that instance's state, not the checkout's file" (
-    $updT3Src -match "Read-ConstructInstanceState -Name \`$name -Dir \`$dir")
-ok "Update-T3Code.ps1: loads the state library in a CHILD scope" (
-    $updT3Src -match "AgentVm\.InstanceState\.ps1" -and $updT3Src -match "&\s*\{")
-ok "Update-T3Code.ps1: still degrades to the single-file read without the library" (
-    $updT3Src -match "\.construct-settings\.json")
+# Update-T3Code.ps1 is a shim onto the device agent now (test/agent-bootstrap.test.ps1).
 # B12: the provisioned marker is keyed by the instance the run provisioned.
 $provSrc = Get-Content -LiteralPath (Join-Path $here "..\Provision-AgentVM.ps1") -Raw
 ok "Provision-AgentVM.ps1: has ONE instance-resolution point" (
@@ -1284,24 +1265,7 @@ ok "Auto-Install.ps1: a chosen vCPU count sizes the LOCAL VM too" ($autoSrc -mat
 ok "Create-AgentVM.ps1: a hand-run create records its size (not under -Auto, which Auto-Install already recorded)" (
     $createSrc -match '(?s)if \(-not \$Auto\) \{.*?Save-ConstructVmSpec -Dir \$PSScriptRoot -InstanceName \$specInstance')
 
-# ── Get-ConstructT3PairingLink.ps1: the Desktop app's auto-link mints links through it ──
-$plSrc = Get-Content -LiteralPath (Join-Path $here "..\Get-ConstructT3PairingLink.ps1") -Raw
-ok "pairing link: never prompts, pauses or draws a screen (the Desktop runs it hidden)" (
-    $plSrc -notmatch 'Read-Host' -and $plSrc -notmatch 'Invoke-Tui' -and $plSrc -notmatch 'Show-ConstructHeader' -and
-    $plSrc -notmatch '(?i)press enter' -and $plSrc -notmatch 'Start-Sleep')
-ok "pairing link: stdout is ONE JSON line, success and failure alike" (
-    $plSrc -match '\[Console\]::Out\.WriteLine\(\(\[pscustomobject\]\$ordered \| ConvertTo-Json -Compress' -and
-    $plSrc -match 'Write-Result @\{ ok = \$false; instance = \$script:ResolvedName; error = \$why \}' -and
-    $plSrc -match 'Write-Result @\{ ok = \$true; instance = \$script:ResolvedName; pairUrl = \$pairUrl; links = @\(\$pairing.links\); scopes = \$scopesUsed \}')
-ok "pairing link: asks the VM's t3 for the ADMINISTRATIVE scopes when its build has the flag, standard otherwise" (
-    $plSrc -match "grep -q -- '--scopes'" -and $plSrc -match 'extra="--scopes administrative"' -and $plSrc -match 'scopes=standard')
-ok "pairing link: the VM decides the origin (public base URL first), the label names the instance" (
-    $plSrc -match 'T3CODE_PUBLIC_BASE_URL' -and $plSrc -match 'CONSTRUCT_EXTERNAL_HOST' -and
-    $plSrc -match 'construct-t3-desktop-\$\(\$script:ResolvedName\)')
-ok "pairing link: the script rides to the VM base64-encoded (no CRLF, no quoting on the command line)" (
-    $plSrc -match 'ToBase64String' -and $plSrc -match "base64 -d \| bash")
-ok "pairing link: the same SSH conventions as Get-AgentUsage.ps1 (key file first, alias fallback, batch mode)" (
-    $plSrc -match 'IdentitiesOnly=yes' -and $plSrc -match 'BatchMode=yes' -and $plSrc -match 'StrictHostKeyChecking=accept-new')
+# Get-ConstructT3PairingLink.ps1 is a shim onto the device agent now (test/agent-bootstrap.test.ps1).
 
 # The SMB drive letter.
 $taken = @('C', 'D', 'Z', 'Y')

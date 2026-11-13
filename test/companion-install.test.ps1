@@ -193,16 +193,10 @@ try {
         Assert (-not $errors) "Parse $relative"
         Assert (@($tokens | Where-Object { $_.Kind.ToString() -in @('QuestionQuestion','QuestionQuestionEquals','QuestionDot') }).Count -eq 0 -and $null -eq $ast.Find({param($n) $n.GetType().Name -eq 'TernaryExpressionAst'},$true)) "PS 5.1 syntax $relative"
     }
-    # Hook stays non-fatal and passes the opt-out even if installation fails.
+    # The hook installs no Companion any more: the device agent takes its place (design 13.2).
     & {
-        function Install-ConstructCompanion { param($ScriptsDir,[switch]$SkipCompanion) $script:hookSkip=[bool]$SkipCompanion; Throw-ConstructCompanionError 'A previous Companion installation needs recovery; see docs/companion.md.' }
-        $warnings=@()
-        Invoke-ConstructCompanionInstallHook -ScriptsDir $repo -SkipCompanion -WarningVariable warnings -WarningAction SilentlyContinue
-        Assert ($script:hookSkip -and $warnings.Count -eq 1 -and $warnings[0].Message.Contains('A previous Companion installation needs recovery; see docs/companion.md.')) 'Hook forwards skip and preserves the safe failure reason'
-        function Install-ConstructCompanion { param($ScriptsDir,[switch]$SkipCompanion) throw 'dependency-credential-sentinel' }
-        $warnings=@()
-        Invoke-ConstructCompanionInstallHook -ScriptsDir $repo -WarningVariable warnings -WarningAction SilentlyContinue
-        Assert ($warnings.Count -eq 1 -and -not $warnings[0].Message.Contains('dependency-credential-sentinel')) 'Hook does not disclose arbitrary dependency errors'
+        function Install-ConstructCompanion { throw 'the hook must not install the Companion' }
+        Assert ((Invoke-ConstructCompanionInstallHook -ScriptsDir $repo 6>$null) -eq 'unchanged') 'Hook reports unchanged and installs nothing'
     }
     # Release selection excludes drafts/prereleases, sorts publish time, and paginates.
     $originalJson=$seams.Json

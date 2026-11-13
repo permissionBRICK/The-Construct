@@ -67,12 +67,18 @@ if ($ManifestFault -ne 'yes') {
     if ($copies.Count -ne 1 -or $copies[0].FullName -ne $manifest) { throw 'Manifest must live outside the checkout.' }
 } elseif (-not (Test-Path $manifestDir -PathType Leaf)) { throw 'Manifest fault fixture changed.' }
 '@
-    foreach ($entry in @('install.ps1', 'Update-Construct.ps1')) {
+    # install.ps1 and Update-Construct.ps1 install the device agent now (test/agent-bootstrap.test.ps1); the
+    # release-verifying download lives on in the old updater, which is what still runs on an old install.
+    $old = Join-Path $taskDir 'old'
+    [IO.Directory]::CreateDirectory((Join-Path $old 'lib')) | Out-Null
+    Copy-Item (Join-Path $repoRoot 'test/fixtures/legacy-updaters/Update-Construct.class-f.ps1') (Join-Path $old 'Update-Construct.ps1')
+    Copy-Item (Join-Path $repoRoot 'test/fixtures/legacy-updaters/AgentVm.LifecycleRun.ps1') (Join-Path $old 'lib/AgentVm.LifecycleRun.ps1')
+    foreach ($entry in @('old/Update-Construct.ps1')) {
         foreach ($scenario in @(@('no','no'),@('yes','no'),@('no','yes'))) {
             $corrupt=$scenario[0];$manifestFault=$scenario[1]
             $installed = Join-Path $taskDir 'installed'
             if (Test-Path $installed) { Remove-Item $installed }
-            & pwsh -NoProfile -NonInteractive -File $harness (Join-Path $repoRoot $entry) $corrupt $manifestFault *> (Join-Path $taskDir 'output.log')
+            & pwsh -NoProfile -NonInteractive -File $harness (Join-Path $taskDir $entry) $corrupt $manifestFault *> (Join-Path $taskDir 'output.log')
             $code = $LASTEXITCODE
             if ($corrupt -eq 'no') {
                 if ($code -ne 0 -or -not (Test-Path $installed)) { Get-Content (Join-Path $taskDir 'output.log'); throw "$entry failed valid release." }

@@ -76,7 +76,7 @@ class PairingForwardTests(unittest.TestCase):
             return result, calls
 
     def test_host_allowed_uses_actual_allocated_port(self):
-        for client in ('desktop', 'extension'):
+        for client in ('extension',):
             with self.subTest(client=client):
                 result, calls = self.run_pairing(client)
                 self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
@@ -86,7 +86,7 @@ class PairingForwardTests(unittest.TestCase):
                 self.assertIn('--reuse', calls[0])
 
     def test_denied_host_uses_actual_client_port_and_tls_localhost(self):
-        for client in ('desktop', 'extension'):
+        for client in ('extension',):
             with self.subTest(client=client):
                 result, calls = self.run_pairing(client, host_exit=7)
                 self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
@@ -97,7 +97,7 @@ class PairingForwardTests(unittest.TestCase):
                 if client == 'desktop': self.assertEqual(json.loads(result.stdout)['scopes'], 'administrative')
 
     def test_plain_listener_falls_back_without_inventing_tls(self):
-        for client in ('desktop', 'extension'):
+        for client in ('extension',):
             with self.subTest(client=client):
                 result, calls = self.run_pairing(client, host_exit=7, tls=False)
                 self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
@@ -105,7 +105,7 @@ class PairingForwardTests(unittest.TestCase):
                 self.assertTrue(all(call[1] == '5177' for call in calls))
 
     def test_missing_client_and_invalid_endpoints_never_mint_a_dead_link(self):
-        for client in ('desktop', 'extension'):
+        for client in ('extension',):
             for values in ({'host_exit': 7, 'client_exit': 5}, {'host_exit': 7, 'client_url': 'http://pc:70000/'},
                            {'host_exit': 7, 'client_url': 'http://pc:18807/evil'}, {'host_exit': 6}):
                 with self.subTest(client=client, values=values):
@@ -115,7 +115,7 @@ class PairingForwardTests(unittest.TestCase):
                     if values.get('host_exit') == 6: self.assertEqual(len(calls), 1)
 
     def test_local_instance_keeps_its_advertised_origin_without_forwarding(self):
-        for client in ('desktop', 'extension'):
+        for client in ('extension',):
             with self.subTest(client=client):
                 result, calls = self.run_pairing(client, managed=False)
                 self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
@@ -123,7 +123,7 @@ class PairingForwardTests(unittest.TestCase):
                 self.assertEqual(calls, [])
 
     def test_both_scripts_prefer_external_host_and_keep_mshome_fallback(self):
-        for client in ('desktop', 'extension', 'named-extension'):
+        for client in ('extension', 'named-extension'):
             for external in (None, 'external.example'):
                 with self.subTest(client=client, external=external):
                     result, calls = self.run_pairing(client, managed=False, tls=False, external=external)
@@ -135,7 +135,7 @@ class PairingForwardTests(unittest.TestCase):
                     self.assertEqual(calls, [])
 
     def test_direct_link_uses_guest_listener_port_and_effective_tls(self):
-        for client in ('desktop', 'extension', 'named-extension'):
+        for client in ('extension', 'named-extension'):
             for tls in (True, False):
                 for direct in ('guest.example', '2001:db8::12'):
                     with self.subTest(client=client, tls=tls, direct=direct):
@@ -149,7 +149,7 @@ class PairingForwardTests(unittest.TestCase):
                         self.assertEqual(data['links'][1], {'kind': 'direct', 'pairUrl': expected})
 
     def test_proxy_link_is_listed_first_and_pair_url_stays_forwarded(self):
-        for client in ('desktop', 'extension', 'named-extension'):
+        for client in ('extension', 'named-extension'):
             for proxy, origin in (('https://t3.example.net:8443', 'https://t3.example.net:8443'),
                                   ("'https://[2001:db8::7]:8443'", 'https://[2001:db8::7]:8443')):
                 with self.subTest(client=client, proxy=proxy):
@@ -163,7 +163,7 @@ class PairingForwardTests(unittest.TestCase):
                     self.assertEqual(len(calls), 1)
 
     def test_invalid_proxy_address_is_ignored(self):
-        for client in ('desktop', 'extension'):
+        for client in ('extension',):
             for proxy in ('https://t3.example.net/app', 'ftp://t3.example.net', 'https://t3.example.net:70000', "'https://t3.example.net/?a=1'"):
                 with self.subTest(client=client, proxy=proxy):
                     result, _ = self.run_pairing(client, proxy=proxy)

@@ -497,31 +497,10 @@ function Test-ConstructCompanionElevated {
 }
 
 function Invoke-ConstructCompanionInstallHook {
+    # The Construct device agent replaces the Companion (docs/plans/construct-platform-design.md 13.2): the
+    # updater's marker step has stopped the Companion and started the agent, so there is nothing to install.
     [CmdletBinding()]
     param([string]$ScriptsDir,[switch]$SkipCompanion,[switch]$SkipWhenElevated)
-    # An elevated reprovision is the installer's own child; the non-elevated client pre-step owns the Companion.
-    if (-not $SkipCompanion -and $SkipWhenElevated -and (Test-ConstructCompanionElevated)) { return }
-    try {
-        $outcome = Install-ConstructCompanion -ScriptsDir $ScriptsDir -SkipCompanion:$SkipCompanion
-        switch ([string]$outcome) {
-            'installed' { Write-Host '==> Construct Companion installed and started.' -ForegroundColor Green }
-            'unchanged' {
-                $build=''
-                try {
-                    if (Get-Command Get-ConstructCompanionPaths -ErrorAction SilentlyContinue) {
-                        $current=[string](Read-ConstructCompanionJson (Join-Path (Get-ConstructCompanionPaths).install 'install.json')).commit
-                        if ($current -cmatch '^[0-9a-f]{40}$') { $build=' (build '+$current.Substring(0,7)+': no Companion change since)' }
-                    }
-                } catch { $build='' }
-                Write-Host ('==> Construct Companion already current'+$build+'.') -ForegroundColor DarkGray
-            }
-            'skipped'   { Write-Host '==> Construct Companion skipped.' -ForegroundColor DarkGray }
-            default     { if ($outcome) { Write-Host ('==> Construct Companion: ' + $outcome) -ForegroundColor DarkGray } }
-        }
-    }
-    catch {
-        $reason='An unexpected dependency failure occurred. Retry Install-ConstructCompanion in a non-elevated PowerShell window for diagnostics.'
-        if ($_.Exception.Data['constructCompanionDiagnostic']) { $reason=$_.Exception.Message }
-        Write-Warning ('Companion installation failed (continuing VM/extension installation): '+$reason)
-    }
+    Write-Host '==> Construct Companion: unchanged (the Construct agent takes its place).' -ForegroundColor DarkGray
+    return 'unchanged'
 }

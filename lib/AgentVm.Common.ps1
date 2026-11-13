@@ -2995,6 +2995,30 @@ function Resolve-MarkerSource {
     }
 }
 function Set-ConstructInstalledMarker {
+    <#
+        The upgrade hook (docs/plans/construct-platform-design.md 13.2). The old
+        Update-Construct.ps1 calls this from the downloaded release after the extension
+        install; in this release it moves the install to the Construct device agent:
+        install.ps1 from -Root asks a running Companion to quit (its own /v1/quit),
+        installs the agent package for this user without elevation and starts it, and
+        starts the Companion again when anything fails. Only then is the marker advanced.
+        A failure throws, so the old updater reports "fail" and its button can retry.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [Parameter(Mandatory)][string]$Repo,
+        [Parameter(Mandatory)][string]$Ref,
+        [scriptblock]$CommitFetcher,
+        [string]$Commit = ""
+    )
+    $installer = Join-Path $Root 'install.ps1'
+    if (-not (Test-Path -LiteralPath $installer)) { throw "install.ps1 is missing from $Root; the Construct agent cannot be installed." }
+    & $installer -Repo $Repo -Ref $Ref
+    return (Save-ConstructInstalledMarker @PSBoundParameters)
+}
+
+function Save-ConstructInstalledMarker {
     <# Record the actual installed source, never the current remote HEAD. Preserve
        the complete prior tuple if no source revision can be established. Archives
        expand .construct-revision via git export-subst; checkouts use git HEAD.

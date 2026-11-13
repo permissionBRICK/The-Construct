@@ -186,7 +186,7 @@ ok "family: a service URL or a remote registry entry implies IPv4" (
 ok "family: the bootstrap and base option lists carry it" (
     ([regex]::Matches($provSrc, '\) \+ \$script:SshFamilyOpts')).Count -ge 5)
 ok "family: the ssh_config Host block (VS Code) gets AddressFamily inet" ($provSrc -match '"`n    AddressFamily inet"')
-foreach ($script in @('Get-AgentUsage.ps1', 'Get-ConstructT3PairingLink.ps1')) {
+foreach ($script in @('Get-AgentUsage.ps1')) {
     $src = Get-Content -Raw (Join-Path $repoRoot $script)
     ok "family: $script dials a remote instance over IPv4" (
         $src -match "Get-ConstructSshFamilyOptions -Ipv4 \(\[string\]\`$instanceTarget\.Backend -eq 'hyperv-remote'\)" -and

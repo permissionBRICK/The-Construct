@@ -989,7 +989,7 @@ if (-not $SkipCreateVm -and $Action -ne 'remove-instance') {
                 $mk = if (Get-Command Resolve-MarkerSource -ErrorAction SilentlyContinue) {
                     Resolve-MarkerSource -Repo $Repo -Ref $Ref -RepoSupplied ($PSBoundParameters.ContainsKey('Repo')) -RefSupplied ($PSBoundParameters.ContainsKey('Ref')) -ExistingRepo $exR -ExistingRef $exF
                 } else { @{ Repo = $Repo; Ref = $Ref } }
-                Set-ConstructInstalledMarker -Root $PSScriptRoot -Repo $mk.Repo -Ref $mk.Ref | Out-Null
+                Save-ConstructInstalledMarker -Root $PSScriptRoot -Repo $mk.Repo -Ref $mk.Ref | Out-Null
             }
             # NOTE: ffmpeg (for mic passthrough) is installed at the END of provisioning
             # (Provision-AgentVM.ps1), not here — winget can be slow and this pre-step runs
