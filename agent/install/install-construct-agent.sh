@@ -81,7 +81,9 @@ import json, os, sys
 path, current, previous = sys.argv[1:4]
 fd = os.open(path + '.tmp', os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
 with os.fdopen(fd, 'w') as f:
-    json.dump({'current': current, 'previous': (previous if previous and previous != current else None), 'pending': False}, f, indent=2)
+    previous = previous if previous and previous != current else None
+    # With a previous version the new one is on trial: its first start self-tests and goes back when it fails (12.2).
+    json.dump({'current': current, 'previous': previous, 'pending': previous is not None}, f, indent=2)
 os.replace(path + '.tmp', path)
 PY
 

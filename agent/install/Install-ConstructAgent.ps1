@@ -77,7 +77,8 @@ try {
     $previous = $null
     if (Test-Path -LiteralPath $installPath) { try { $previous = (Get-Content -Raw -LiteralPath $installPath | ConvertFrom-Json).current } catch { } }
     if ($previous -eq $Version) { $previous = $null }
-    $state = [ordered]@{ current = $Version; previous = $previous; pending = $false } | ConvertTo-Json
+    # With a previous version the new one is on trial: its first start self-tests and goes back when it fails (12.2).
+    $state = [ordered]@{ current = $Version; previous = $previous; pending = [bool]$previous } | ConvertTo-Json
     [IO.File]::WriteAllText($installPath, $state, (New-Object Text.UTF8Encoding($false)))
 
     $exe = Join-Path $target 'construct-agent.exe'

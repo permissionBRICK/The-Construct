@@ -25,7 +25,7 @@ bash agent/install/install-construct-agent.sh --package "$work/agent.zip" --vers
 python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s=={"current":"1.0.0+aaaa","previous":None,"pending":False}, s' "$agent/install.json"
 
 bash agent/install/install-construct-agent.sh --package "$work/agent.zip" --version "1.1.0+bbbb" --no-start >/dev/null
-python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s=={"current":"1.1.0+bbbb","previous":"1.0.0+aaaa","pending":False}, s' "$agent/install.json"
+python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); assert s=={"current":"1.1.0+bbbb","previous":"1.0.0+aaaa","pending":True}, s' "$agent/install.json"
 
 if bash agent/install/install-construct-agent.sh --package "$work/agent.zip" --no-start >/dev/null 2>&1; then fail "a package without a version was installed"; fi
 if bash agent/install/install-construct-agent.sh --channel http://plain.example/manifest.json --no-start >/dev/null 2>&1; then fail "a plain http channel was accepted"; fi

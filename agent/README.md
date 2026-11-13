@@ -161,7 +161,7 @@ microphone is armed when it was on. A VM that stops loses its link; an engine th
 keeps its links until it answers. Another user's VM is never linked or asked about.
 
 **SSH config.** The block whose `Host` line names exactly the alias is replaced and every other
-line is kept as written (a `Match` line also ends a block); the file keeps its line endings and
+line is kept as written (a `Match` line, and `Host=name`, also end a block; a key path with a space is quoted); the file keeps its line endings and
 mode, a symbolic link is written through. The block names the key an existing block named (an
 install moved over keeps its key), else the device key. VS Code's settings are left alone when they
 are not plain JSON (comments).
@@ -173,7 +173,8 @@ and no "update everything" runs, writes `install.json` (new version current and 
 one previous), starts the new version and stops. The new version passes its self-test when its API
 answers its own health route; it then clears `pending` and removes older versions. When it fails,
 it writes the previous version back as current and starts it. Under the systemd unit the unit is
-pointed at the new version and restarted; on Windows the Run value follows the new executable. An
+pointed at the new version and restarted; on Windows the Run value follows the new executable. The
+install scripts mark a version installed over another one pending as well, so it self-tests too. An
 agent not running from `versions/` (a development build) does not update itself.
 
 **Update everything.** For each engine: when the user is its admin and it offers an update, `POST

@@ -285,7 +285,15 @@ public sealed class VmLinks : IAsyncDisposable
 
     private async Task EnableMicAsync(Link link, CancellationToken ct)
     {
-        if (_platform.Microphone is not { } microphone || link.Transport is null || link.Audio is not null) return;
+        if (_platform.Microphone is not { } microphone || link.Transport is null) return;
+        if (link.Audio is { } current)
+        {
+            if (current.Status.Enabled) return;
+            // A session whose tunnel dropped is replaced, as the Companion re-armed it.
+            link.Audio = null;
+            await current.DisposeAsync().ConfigureAwait(false);
+        }
+
         _capture ??= new SharedAudioCapture(microphone);
         var audio = new AudioSession(link.Transport, _processes, _audioServers, _capture, _ => Changed());
         link.MicError = null;

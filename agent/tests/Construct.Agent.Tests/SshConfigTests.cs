@@ -82,6 +82,29 @@ public sealed class SshConfigTests : IDisposable
     }
 
     [Fact]
+    public void A_host_line_written_with_an_equals_sign_ends_the_block_too()
+    {
+        Config = "Host work\n    User old\nHost=other\n    User keep\nHost = third\n    User keep3\n";
+
+        _ssh.WriteAlias("work", "h", 22, ipv4: false);
+
+        Assert.StartsWith("Host=other\n    User keep\nHost = third\n    User keep3\n\nHost work\n", Config, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_key_path_with_a_space_is_quoted_and_read_back()
+    {
+        var key = Path.Combine(_ssh.SshDirectory, "my key");
+        File.WriteAllText(key, "key");
+        Config = $"Host work\n    IdentityFile \"{key}\"\n";
+
+        _ssh.WriteAlias("work", "h", 22, ipv4: false);
+
+        Assert.Contains($"    IdentityFile \"{key}\"\n", Config, StringComparison.Ordinal);
+        Assert.Equal(key, _ssh.KeyFor("work"));
+    }
+
+    [Fact]
     public void A_pattern_or_odd_alias_is_refused()
     {
         Assert.Equal(400, Assert.Throws<AgentFailure>(() => _ssh.WriteAlias("a b", "h", 22, false)).Status);

@@ -46,8 +46,9 @@ internal static class Program
 
         using var mutex = new Mutex(false, MutexName);
         var state = install.Read();
-        // The version an update just switched to waits for the previous one to let go.
-        var primary = Acquire(mutex, state.Pending && running is not null && running == state.Current ? TimeSpan.FromSeconds(30) : TimeSpan.Zero);
+        // The version an update just switched to waits for the previous one to let go, and so does a background
+        // start (the way back after a failed self-test starts the previous version while the failed one still exits).
+        var primary = Acquire(mutex, background || state.Pending && running is not null && running == state.Current ? TimeSpan.FromSeconds(30) : TimeSpan.Zero);
         if (!primary)
         {
             if (!background) HandOver(platformOptions);

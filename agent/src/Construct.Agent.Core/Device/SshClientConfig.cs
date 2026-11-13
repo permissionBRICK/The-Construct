@@ -18,7 +18,9 @@ public static partial class SshConfigText
 {
     public static string Block(string alias, string host, int port, string user, string identityFile, bool ipv4, string newline)
     {
-        var lines = new List<string> { $"Host {alias}", $"    HostName {host}", $"    User {user}", $"    IdentityFile {identityFile}", "    IdentitiesOnly yes" };
+        // A path with a space (a Windows profile "C:\Users\Jane Doe") is quoted, or ssh rejects the whole file.
+        var identity = identityFile.Any(char.IsWhiteSpace) ? $"\"{identityFile}\"" : identityFile;
+        var lines = new List<string> { $"Host {alias}", $"    HostName {host}", $"    User {user}", $"    IdentityFile {identity}", "    IdentitiesOnly yes" };
         if (port != 22) lines.Add($"    Port {port}");
         if (ipv4) lines.Add("    AddressFamily inet");
         return string.Join(newline, lines);
@@ -95,7 +97,7 @@ public static partial class SshConfigText
     private static bool IsOurs(Match header, string alias)
     {
         if (!header.Groups[1].Value.Equals("Host", StringComparison.OrdinalIgnoreCase)) return false;
-        var patterns = header.Groups[2].Value.Trim().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        var patterns = header.Groups[3].Value.Trim().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
         return patterns.Length == 1 && patterns[0].Equals(alias, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -108,10 +110,11 @@ public static partial class SshConfigText
         for (var i = 0; i < count; i++) yield return parts[i];
     }
 
-    [GeneratedRegex(@"^\s*(Host|Match)\s+(.+?)\s*$", RegexOptions.IgnoreCase)]
+    // ssh_config also takes "Host=name" and "Host = name".
+    [GeneratedRegex(@"^\s*(Host|Match)(\s*=\s*|\s+)(.+?)\s*$", RegexOptions.IgnoreCase)]
     private static partial Regex Boundary();
 
-    [GeneratedRegex(@"^\s*IdentityFile\s+(.+?)\s*$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^\s*IdentityFile(?:\s*=\s*|\s+)(.+?)\s*$", RegexOptions.IgnoreCase)]
     private static partial Regex IdentityLine();
 }
 
