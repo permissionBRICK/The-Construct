@@ -5,7 +5,21 @@ public static class BackupTriggers
     public const string Scheduled = "scheduled";
     public const string Manual = "manual";
     public const string PreReinstall = "pre-reinstall";
+    /// <summary>The trigger stored for a slot upload, whatever label the VM sent.</summary>
+    public const string Slot = "slot";
+    /// <summary>The labels a VM may send; the host decides what its upload counts as (docs/plans/construct-platform-design.md 10.2).</summary>
     public static bool IsValid(string? trigger) => trigger is Scheduled or Manual or PreReinstall;
+}
+
+/// <summary>
+/// Who asked for a backup (docs/plans/construct-platform-design.md 10.2). A host-requested backup consumed an
+/// open host request; a slot upload is one the host did not ask for. Rows stored before this mark existed
+/// have none and count as host-requested.
+/// </summary>
+public static class BackupOrigins
+{
+    public const string Host = "host";
+    public const string Slot = "slot";
 }
 
 public static class BackupStates
@@ -30,9 +44,12 @@ public sealed record ConfigBackup(
     long? SizeBytes = null,
     string? Sha256 = null,
     DateTimeOffset? PinnedUntil = null,
-    string? KeysJson = null)
+    string? KeysJson = null,
+    string? Origin = null,
+    long? FileCount = null)
 {
     public bool IsOpen => State == BackupStates.Open;
+    public bool IsSlot => Origin == BackupOrigins.Slot;
     public bool IsComplete => State == BackupStates.Complete;
     public bool IsPinned(DateTimeOffset now) => PinnedUntil is { } until && until > now;
 }
@@ -42,7 +59,10 @@ public sealed record BackupFailure(DateTimeOffset At, string Trigger, string Rea
 
 /// <summary>
 /// Per <em>(owner, VM name)</em>: the owner's overrides (null = the host default) and the backup
-/// status the heartbeat schedule and the status route read.
+/// status the heartbeat schedule and the status route read. <see cref="RequestPendingAt"/> and
+/// <see cref="RequestTrigger"/> are the host's one open request (null trigger: a manual request stored
+/// before the trigger was kept); <see cref="SlotLastAt"/> is when the VM last opened a slot session,
+/// which is not schedule state.
 /// </summary>
 public sealed record BackupVmState(
     string Owner,
@@ -54,4 +74,6 @@ public sealed record BackupVmState(
     BackupFailure? LastFailure = null,
     DateTimeOffset? FailingSince = null,
     DateTimeOffset? RequestPendingAt = null,
-    DateTimeOffset? VmMissingSince = null);
+    DateTimeOffset? VmMissingSince = null,
+    string? RequestTrigger = null,
+    DateTimeOffset? SlotLastAt = null);

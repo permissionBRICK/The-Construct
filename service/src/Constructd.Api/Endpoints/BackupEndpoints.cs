@@ -9,6 +9,8 @@ using Constructd.Core.Abstractions;
 using Constructd.Core.Domain;
 using Constructd.Core.Logic;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.OpenApi;
+using Microsoft.OpenApi;
 using Microsoft.Net.Http.Headers;
 
 namespace Constructd.Api.Endpoints;
@@ -18,6 +20,11 @@ namespace Constructd.Api.Endpoints;
 /// token; the owner (or an admin) lists, downloads, deletes, requests a backup and sets the per-VM
 /// schedule. Backups belong to <em>(owner, VM name)</em>, so a reinstalled VM of the same owner and
 /// name sees its predecessor's. The host only ever holds ciphertext and wrapped keys.
+/// <para>
+/// The guardrail of docs/plans/construct-platform-design.md 10.2: an upload counts as host-requested only
+/// when it consumes the host's open request; any other is the VM's slot. A VM token deletes, pins and
+/// unpins nothing; deleting the protected backup takes the user's explicit <c>?confirm=true</c>.
+/// </para>
 /// </summary>
 public static partial class BackupEndpoints
 {
@@ -26,21 +33,49 @@ public static partial class BackupEndpoints
 
     public static RouteGroupBuilder MapBackupEndpoints(this RouteGroupBuilder api)
     {
-        api.MapPost(Root, CreateAsync).RequireAuthorization(Policies.VmToken).Audited("backup.create").WithName("CreateBackup");
-        api.MapPut(Item + "/keys", PutKeysAsync).RequireAuthorization(Policies.VmToken).Audited("backup.keys").WithName("PutBackupKeys");
-        api.MapPut(Item + "/content", UploadAsync).RequireAuthorization(Policies.VmToken).Audited("backup.upload").WithName("UploadBackup");
+        api.MapPost(Root, CreateAsync).RequireAuthorization(Policies.VmToken).Audited("backup.create").WithName("CreateBackup")
+            .Produces<BackupCreatedResponse>(StatusCodes.Status201Created);
+        api.MapPut(Item + "/keys", PutKeysAsync).RequireAuthorization(Policies.VmToken).Audited("backup.keys").WithName("PutBackupKeys")
+            .DocumentBody("application/json", new OpenApiSchema { Type = JsonSchemaType.Object, Description = "The keys file (construct-backup-keys/1)." })
+            .Produces(StatusCodes.Status204NoContent);
+        api.MapPut(Item + "/content", UploadAsync).RequireAuthorization(Policies.VmToken).Audited("backup.upload").WithName("UploadBackup")
+            .DocumentBody("application/octet-stream", new OpenApiSchema { Type = JsonSchemaType.String, Format = "binary" })
+            .Produces<BackupUploadedResponse>();
         api.MapDelete(Item, DeleteAsync).RequireAuthorization(Policies.VmScoped).Audited("backup.delete").WithName("DeleteBackup").Produces(StatusCodes.Status204NoContent);
-        api.MapPost(Root + "/report", ReportAsync).RequireAuthorization(Policies.VmToken).Audited("backup.report").WithName("ReportBackup");
-        api.MapPost(Item + "/restored", RestoredAsync).RequireAuthorization(Policies.VmToken).Audited("backup.restored").WithName("BackupRestored");
+        api.MapPost(Root + "/report", ReportAsync).RequireAuthorization(Policies.VmToken).Audited("backup.report").WithName("ReportBackup")
+            .Produces(StatusCodes.Status204NoContent);
+        api.MapPost(Item + "/restored", RestoredAsync).RequireAuthorization(Policies.VmToken).Audited("backup.restored").WithName("BackupRestored")
+            .Produces(StatusCodes.Status204NoContent);
+        api.MapPost(Item + "/pin", PinAsync).RequireAuthorization(Policies.User).Audited("backup.pin").WithName("PinBackup")
+            .Produces(StatusCodes.Status204NoContent);
+        api.MapDelete(Item + "/pin", UnpinAsync).RequireAuthorization(Policies.User).Audited("backup.unpin").WithName("UnpinBackup")
+            .Produces(StatusCodes.Status204NoContent);
         api.MapGet(Root, ListAsync).RequireAuthorization(Policies.VmScoped).WithName("ListBackups").Produces<BackupListResponse>();
-        api.MapGet(Item + "/content", DownloadAsync).RequireAuthorization(Policies.VmScoped).WithName("DownloadBackup");
-        api.MapGet(Item + "/keys", GetKeysAsync).RequireAuthorization(Policies.VmScoped).WithName("GetBackupKeys");
+        api.MapGet(Item + "/content", DownloadAsync).RequireAuthorization(Policies.VmScoped).WithName("DownloadBackup")
+            .Produces<Stream>(StatusCodes.Status200OK, "application/octet-stream");
+        api.MapGet(Item + "/keys", GetKeysAsync).RequireAuthorization(Policies.VmScoped).WithName("GetBackupKeys")
+            .Produces<JsonElement>(StatusCodes.Status200OK, "application/json");
         api.MapGet(Root + "/status", StatusAsync).RequireAuthorization(Policies.VmScoped).WithName("GetBackupStatus").Produces<BackupStatusResponse>();
         api.MapPost(Root + "/request", RequestAsync).RequireAuthorization(Policies.User).Audited("backup.request").WithName("RequestBackup").Produces<BackupRequestedResponse>(StatusCodes.Status202Accepted);
         api.MapGet(Root + "/settings", GetSettingsAsync).RequireAuthorization(Policies.User).WithName("GetBackupSettings").Produces<BackupSettingsResponse>();
         api.MapPut(Root + "/settings", PutSettingsAsync).RequireAuthorization(Policies.User).Audited("backup.settings").WithName("PutBackupSettings").Produces<BackupSettingsResponse>();
         return api;
     }
+
+    /// <summary>
+    /// Documents a body the handler reads itself. Only the OpenAPI document changes: <c>Accepts</c> would also make
+    /// routing refuse other content types, which the guest's routes never did.
+    /// </summary>
+    private static RouteHandlerBuilder DocumentBody(this RouteHandlerBuilder route, string contentType, OpenApiSchema schema) =>
+        route.AddOpenApiOperationTransformer((operation, _, _) =>
+        {
+            operation.RequestBody = new OpenApiRequestBody
+            {
+                Required = true,
+                Content = new Dictionary<string, OpenApiMediaType> { [contentType] = new() { Schema = schema } },
+            };
+            return Task.CompletedTask;
+        });
 
     [GeneratedRegex("^[a-z0-9][a-z0-9-]{0,63}$", RegexOptions.CultureInvariant)]
     private static partial Regex ReasonPattern();
@@ -76,6 +111,20 @@ public static partial class BackupEndpoints
 
     // ── the guest ───────────────────────────────────────────────────────────────
 
+    /// <summary>What a backup counts as in the list: <c>slot</c>, or the host's request it answered.</summary>
+    internal static string Kind(ConfigBackup backup) => backup.IsSlot ? BackupTriggers.Slot : backup.Trigger switch
+    {
+        BackupTriggers.Scheduled => BackupTriggers.Scheduled,
+        BackupTriggers.PreReinstall => BackupTriggers.PreReinstall,
+        _ => "requested",
+    };
+
+    /// <summary>
+    /// Opens an upload session. While the host has a request open, the first create consumes it: the session
+    /// is host-requested with the request's trigger, whatever the VM sent, and an open slot session is
+    /// cancelled. Any other create is the VM's slot: one open session, at most one per 30 minutes, within
+    /// <see cref="BackupCoordinator.SlotMaxBytes"/>, and it touches no schedule state.
+    /// </summary>
     private static async Task<IResult> CreateAsync(string name, BackupCreateRequest? request, HttpContext http, IVmRepository vms,
         IAuthorizationService authorization, BackupCoordinator backups, IMaintenanceGate maintenance, IClock clock, CancellationToken ct)
     {
@@ -88,39 +137,64 @@ public static partial class BackupEndpoints
         if (!BackupTriggers.IsValid(request?.Trigger)) return CodedProblems.Validation("trigger", "Expected scheduled, manual or pre-reinstall.");
         if (request!.EstimatedBytes is not long estimate || estimate < 0)
             return CodedProblems.Validation("estimatedBytes", "Expected a non-negative number of bytes.");
+        if (request.FileCount is < 0) return CodedProblems.Validation("fileCount", "Expected a non-negative number of files.");
         var host = await backups.ConfigAsync(ct);
         if (!host.Enabled) return Fail(http, 403, "backups-disabled", "Config backups are disabled on this host.");
 
         var store = backups.Store;
         await using var held = await backups.LockAsync(vm.Owner, vm.Name, ct);
         var now = clock.UtcNow;
+        foreach (var stale in (await store.ListAsync(vm.Owner, vm.Name, ct)).Where(b => backups.IsStale(b, now)).ToList())
+            await backups.DeleteLockedAsync(stale, ct);
         var existing = await store.ListAsync(vm.Owner, vm.Name, ct);
-        foreach (var stale in existing.Where(b => backups.IsStale(b, now)).ToList()) await backups.DeleteLockedAsync(stale, ct);
-        if (existing.Any(b => b.IsOpen && now - b.CreatedAt < BackupSchedule.StaleSession || backups.IsUploading(b.Id)))
-            return Fail(http, 409, "backup-in-progress", "Another backup of this VM is in progress.");
-
-        // Trying to open a session is the attempt, and it answers a pending request either way.
         var state = await store.GetVmAsync(vm.Owner, vm.Name, ct) ?? new BackupVmState(vm.Owner, vm.Name);
-        await store.SaveVmAsync(state with { LastAttemptAt = now, RequestPendingAt = null }, ct);
+        var requested = BackupSchedule.RequestPending(state, now);
+        string trigger;
+        if (requested)
+        {
+            if (existing.Any(b => !b.IsSlot && (b.IsOpen || backups.IsUploading(b.Id))))
+                return Fail(http, 409, "backup-in-progress", "Another backup of this VM is in progress.");
+            // The host's request wins over the VM's own upload.
+            foreach (var slot in existing.Where(b => b.IsSlot && b.IsOpen).ToList()) await backups.DeleteLockedAsync(slot, ct);
+            trigger = state.RequestTrigger ?? BackupTriggers.Manual;
+            // Trying to open a session is the attempt, and it consumes the request either way.
+            await store.SaveVmAsync(state with { LastAttemptAt = now, RequestPendingAt = null, RequestTrigger = null }, ct);
+        }
+        else
+        {
+            if (existing.Any(b => b.IsOpen || backups.IsUploading(b.Id)))
+                return Fail(http, 409, "backup-in-progress", "Another backup of this VM is in progress.");
+            if (state.SlotLastAt is { } last && now - last < BackupSchedule.SlotInterval)
+                return Fail(http, 429, "slot-too-soon", "This VM's own backups are limited to one per 30 minutes.",
+                    new() { ["retryAfterSeconds"] = (long)Math.Ceiling((last + BackupSchedule.SlotInterval - now).TotalSeconds) });
+            trigger = BackupTriggers.Slot;
+        }
+        var slotUpload = !requested;
 
-        var complete = existing.Where(b => b.IsComplete).OrderByDescending(b => b.CreatedAt).ToList();
-        var stored = complete.Sum(b => b.SizeBytes ?? 0);
+        var complete = existing.Where(b => b.IsComplete && b.IsSlot == slotUpload).OrderByDescending(b => b.CreatedAt).ToList();
+        var stored = BackupCoordinator.StoredBytes(existing, slotUpload);
         var expected = Math.Max(estimate, complete.FirstOrDefault()?.SizeBytes ?? 0);
         var free = backups.Files.FreeBytes();
         var need = (long)Math.Min(long.MaxValue, Math.Ceiling(expected * 1.2m));
         if (free - (decimal)need < host.MinFreeBytes)
             return Fail(http, 507, "host-disk-space", "The host does not have enough free space for this backup.",
                 new() { ["freeBytes"] = free, ["needBytes"] = need, ["minFreeBytes"] = host.MinFreeBytes });
-        if (host.MaxBytesPerVm is long quota && stored + (decimal)expected > quota)
+        if (slotUpload && expected > backups.SlotMaxBytes)
+            return Fail(http, 507, "backup-quota", "This backup would exceed the VM's own backup slot on the host.",
+                new() { ["estimatedBytes"] = expected, ["slotMaxBytes"] = backups.SlotMaxBytes });
+        if (!slotUpload && stored + (decimal)expected > BackupSchedule.Quota(host))
             return Fail(http, 507, "backup-quota", "This backup would exceed the VM's backup quota on the host.",
-                new() { ["storedBytes"] = stored, ["estimatedBytes"] = expected, ["maxBytesPerVm"] = quota });
+                new() { ["storedBytes"] = stored, ["estimatedBytes"] = expected, ["maxBytesPerVm"] = BackupSchedule.Quota(host) });
+        if (slotUpload) await store.SaveVmAsync(state with { SlotLastAt = now }, ct);
 
         var id = Guid.NewGuid().ToString("n");
-        await store.InsertAsync(new ConfigBackup(id, vm.Owner, vm.Name, request.Trigger!, BackupStates.Open, now), ct);
-        var maxBytes = BackupCoordinator.MaxBytes(host, free, stored);
+        var backup = new ConfigBackup(id, vm.Owner, vm.Name, trigger, BackupStates.Open, now,
+            Origin: slotUpload ? BackupOrigins.Slot : BackupOrigins.Host, FileCount: request.FileCount);
+        await store.InsertAsync(backup, ct);
+        var maxBytes = backups.MaxBytes(host, slotUpload, free, stored);
         CodedProblems.Audit(http, "backup.create", vm.Owner, target: id,
-            extra: $"trigger={request.Trigger}, estimatedBytes={estimate}, maxBytes={maxBytes}");
-        return TypedResults.Created((string?)null, new { id, maxBytes });
+            extra: $"trigger={trigger}, sent={request.Trigger}, estimatedBytes={estimate}, maxBytes={maxBytes}");
+        return TypedResults.Created((string?)null, new BackupCreatedResponse(id, maxBytes, Kind(backup)));
     }
 
     private static async Task<IResult> PutKeysAsync(string name, string id, HttpContext http, IVmRepository vms,
@@ -177,7 +251,7 @@ public static partial class BackupEndpoints
     }
 
     private static async Task<IResult> ReportAsync(string name, BackupReportRequest? request, HttpContext http, IVmRepository vms,
-        IAuthorizationService authorization, BackupCoordinator backups, CancellationToken ct)
+        IAuthorizationService authorization, BackupCoordinator backups, IClock clock, CancellationToken ct)
     {
         var (vm, failure) = await VmAsync(name, Policies.VmSelfOrOwnerOrAdmin, http, vms, authorization, ct);
         if (vm is null) return failure!;
@@ -195,8 +269,29 @@ public static partial class BackupEndpoints
             CodedProblems.Audit(http, "backup.report", vm.Owner, extra: $"result=enrolled, cleared={(cleared ? "no-recipients" : "nothing")}");
             return Results.NoContent();
         }
-        await backups.RecordFailureLockedAsync(vm.Owner, vm.Name, request.Trigger!, reason, request.Detail, ct);
-        CodedProblems.Audit(http, "backup.report", vm.Owner, extra: $"trigger={request.Trigger}, result={request.Result}, reason={reason}");
+        // A report counts for the schedule only while it answers the host: an open request (it is the attempt,
+        // and consumes the request), or the host-requested attempt just made whose failure is not yet known
+        // (recorded without moving the attempt). Anything else is about the VM's slot and is not schedule state.
+        var now = clock.UtcNow;
+        var state = await backups.Store.GetVmAsync(vm.Owner, vm.Name, ct);
+        string recorded;
+        if (BackupSchedule.RequestPending(state, now))
+        {
+            await backups.RecordFailureLockedAsync(vm.Owner, vm.Name, request.Trigger!, reason, request.Detail, ct);
+            recorded = "request";
+        }
+        else if (state is { LastAttemptAt: { } attempt } && now - attempt < BackupSchedule.StaleSession &&
+                 !(state.LastSuccessAt >= attempt) && !(state.LastFailure?.At >= attempt))
+        {
+            await backups.Store.SaveVmAsync(state with
+            {
+                LastFailure = new BackupFailure(now, request.Trigger!, reason, request.Detail),
+                FailingSince = state.FailingSince ?? now,
+            }, ct);
+            recorded = "attempt";
+        }
+        else recorded = "ignored";
+        CodedProblems.Audit(http, "backup.report", vm.Owner, extra: $"trigger={request.Trigger}, result={request.Result}, reason={reason}, recorded={recorded}");
         return Results.NoContent();
     }
 
@@ -208,15 +303,49 @@ public static partial class BackupEndpoints
         await using var held = await backups.LockAsync(vm.Owner, vm.Name, ct);
         var backup = await backups.Store.GetAsync(id, ct);
         if (backup is null || !BackupCoordinator.Belongs(backup, vm) || !backup.IsComplete) return NotFound(http);
-        await backups.Store.UnpinAsync(id, ct);
+        // Recorded only: a VM token never unpins (docs/plans/construct-platform-design.md 10.1). The pin of a
+        // pre-reinstall backup runs out by itself, or the user releases it.
         CodedProblems.Audit(http, "backup.restored", vm.Owner, target: id);
+        return Results.NoContent();
+    }
+
+    // ── the owner: pins ─────────────────────────────────────────────────────────
+
+    /// <summary>The user pins a complete host-requested backup for the host's <c>pinDays</c> from now.</summary>
+    private static async Task<IResult> PinAsync(string name, string id, HttpContext http, IVmRepository vms,
+        IAuthorizationService authorization, BackupCoordinator backups, IClock clock, CancellationToken ct)
+    {
+        var (vm, failure) = await VmAsync(name, Policies.VmOwnerOrAdmin, http, vms, authorization, ct);
+        if (vm is null) return failure!;
+        var host = await backups.ConfigAsync(ct);
+        await using var held = await backups.LockAsync(vm.Owner, vm.Name, ct);
+        var backup = await backups.Store.GetAsync(id, ct);
+        if (backup is null || !BackupCoordinator.Belongs(backup, vm) || !backup.IsComplete) return NotFound(http);
+        if (backup.IsSlot) return Fail(http, 409, "backup-is-slot", "The VM's own slot backup is replaced by its next upload and cannot be pinned.");
+        var until = clock.UtcNow.AddDays(host.PinDays);
+        await backups.Store.SetPinAsync(id, until, ct);
+        CodedProblems.Audit(http, "backup.pin", vm.Owner, target: id, extra: $"until={until:O}");
+        return Results.NoContent();
+    }
+
+    private static async Task<IResult> UnpinAsync(string name, string id, HttpContext http, IVmRepository vms,
+        IAuthorizationService authorization, BackupCoordinator backups, CancellationToken ct)
+    {
+        var (vm, failure) = await VmAsync(name, Policies.VmOwnerOrAdmin, http, vms, authorization, ct);
+        if (vm is null) return failure!;
+        await using var held = await backups.LockAsync(vm.Owner, vm.Name, ct);
+        var backup = await backups.Store.GetAsync(id, ct);
+        if (backup is null || !BackupCoordinator.Belongs(backup, vm) || !backup.IsComplete) return NotFound(http);
+        await backups.Store.SetPinAsync(id, null, ct);
+        CodedProblems.Audit(http, "backup.unpin", vm.Owner, target: id);
         return Results.NoContent();
     }
 
     // ── the guest or the owner ──────────────────────────────────────────────────
 
-    private static async Task<IResult> DeleteAsync(string name, string id, HttpContext http, IVmRepository vms,
-        IAuthorizationService authorization, BackupCoordinator backups, CancellationToken ct)
+    /// <param name="confirm">The user's explicit confirmation, needed to delete the protected backup.</param>
+    private static async Task<IResult> DeleteAsync(string name, string id, bool? confirm, HttpContext http, IVmRepository vms,
+        IAuthorizationService authorization, BackupCoordinator backups, IClock clock, CancellationToken ct)
     {
         var (vm, failure) = await VmAsync(name, Policies.VmSelfOrOwnerOrAdmin, http, vms, authorization, ct);
         if (vm is null) return failure!;
@@ -224,6 +353,9 @@ public static partial class BackupEndpoints
         var backup = await backups.Store.GetAsync(id, ct);
         // The guest may only abandon its own open session; the owner may delete any backup of the VM.
         if (backup is null || !BackupCoordinator.Belongs(backup, vm) || http.User.IsVmToken() && !backup.IsOpen) return NotFound(http);
+        if (confirm != true && backup.IsComplete &&
+            BackupRotation.Protected(await backups.Store.ListAsync(vm.Owner, vm.Name, ct), clock.UtcNow, backups.MinHorizonDays)?.Id == id)
+            return Fail(http, 409, "backup-protected", "This is the backup the retention rule keeps; delete it with ?confirm=true.");
         await backups.DeleteLockedAsync(backup, ct);
         CodedProblems.Audit(http, "backup.delete", vm.Owner, target: id, extra: $"state={backup.State}, sizeBytes={backup.SizeBytes ?? 0}");
         return Results.NoContent();
@@ -235,9 +367,12 @@ public static partial class BackupEndpoints
         var (vm, failure) = await VmAsync(name, Policies.VmSelfOrOwnerOrAdmin, http, vms, authorization, ct);
         if (vm is null) return failure!;
         var now = clock.UtcNow;
-        var list = (await backups.Store.ListAsync(vm.Owner, vm.Name, ct)).Where(b => b.IsComplete).OrderByDescending(b => b.CreatedAt);
+        var all = await backups.Store.ListAsync(vm.Owner, vm.Name, ct);
+        var protectedId = BackupRotation.Protected(all, now, backups.MinHorizonDays)?.Id;
+        var list = all.Where(b => b.IsComplete).OrderByDescending(b => b.CreatedAt);
         return Results.Ok(new BackupListResponse([.. list.Select(b => new BackupSummaryResponse(
-            b.Id, b.CreatedAt, b.Trigger, b.SizeBytes, b.Sha256, b.IsPinned(now) ? b.PinnedUntil : null))]));
+            b.Id, b.CreatedAt, b.Trigger, b.SizeBytes, b.Sha256, b.IsPinned(now) ? b.PinnedUntil : null,
+            Kind(b), b.IsPinned(now), b.Id == protectedId, b.FileCount))]));
     }
 
     private static async Task<IResult> DownloadAsync(string name, string id, HttpContext http, IVmRepository vms,
@@ -285,19 +420,25 @@ public static partial class BackupEndpoints
 
     // ── the owner ───────────────────────────────────────────────────────────────
 
-    private static async Task<IResult> RequestAsync(string name, HttpContext http, IVmRepository vms,
-        IAuthorizationService authorization, BackupCoordinator backups, IClock clock, CancellationToken ct)
+    /// <summary>
+    /// The user asks for a backup: the host opens its request (replacing an open one), the heartbeat asks
+    /// the VM, and the VM's next create consumes it. A <c>pre-reinstall</c> request pins the backup it gets.
+    /// </summary>
+    private static async Task<IResult> RequestAsync(string name, BackupRequestRequest? request, HttpContext http, IVmRepository vms,
+        IAuthorizationService authorization, BackupCoordinator backups, CancellationToken ct)
     {
         var (vm, failure) = await VmAsync(name, Policies.VmOwnerOrAdmin, http, vms, authorization, ct);
         if (vm is null) return failure!;
         if (ApiHelpers.FenceDeleting(vm) is { } fenced) return fenced;
+        var trigger = request?.Trigger ?? BackupTriggers.Manual;
+        if (trigger is not (BackupTriggers.Manual or BackupTriggers.PreReinstall))
+            return CodedProblems.Validation("trigger", "Expected manual or pre-reinstall.");
         var host = await backups.ConfigAsync(ct);
         if (!host.Enabled) return Fail(http, 403, "backups-disabled", "Config backups are disabled on this host.");
         await using var held = await backups.LockAsync(vm.Owner, vm.Name, ct);
-        var state = await backups.Store.GetVmAsync(vm.Owner, vm.Name, ct) ?? new BackupVmState(vm.Owner, vm.Name);
-        await backups.Store.SaveVmAsync(state with { RequestPendingAt = clock.UtcNow }, ct);
-        CodedProblems.Audit(http, "backup.request", vm.Owner, target: vm.Name);
-        return Results.Accepted(null, new BackupRequestedResponse(true));
+        await backups.OpenRequestLockedAsync(vm.Owner, vm.Name, trigger, ct);
+        CodedProblems.Audit(http, "backup.request", vm.Owner, target: vm.Name, extra: $"trigger={trigger}");
+        return Results.Accepted(null, new BackupRequestedResponse(true, trigger));
     }
 
     private static async Task<IResult> GetSettingsAsync(string name, HttpContext http, IVmRepository vms,

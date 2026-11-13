@@ -108,12 +108,25 @@ public sealed record VaultFilesResponse(IReadOnlyList<Constructd.Core.Services.V
 
 public sealed record BackupListResponse(IReadOnlyList<BackupSummaryResponse> Backups);
 
-public sealed record BackupSummaryResponse(string Id, DateTimeOffset CreatedAt, string Trigger, long? SizeBytes, string? Sha256, DateTimeOffset? PinnedUntil);
+/// <param name="Trigger">The stored trigger: <c>scheduled</c>, <c>manual</c>, <c>pre-reinstall</c> or <c>slot</c>.</param>
+/// <param name="Kind"><c>slot</c> (the VM's own upload), <c>scheduled</c>, <c>requested</c> or <c>pre-reinstall</c> (host-requested).</param>
+/// <param name="Pinned">Pinned now (<c>pinnedUntil</c> in the future).</param>
+/// <param name="Protected">The backup the retention rule keeps; deleting it needs <c>?confirm=true</c>.</param>
+/// <param name="FileCount">How many files the export holds, when the guest said.</param>
+public sealed record BackupSummaryResponse(string Id, DateTimeOffset CreatedAt, string Trigger, long? SizeBytes, string? Sha256, DateTimeOffset? PinnedUntil,
+    string Kind, bool Pinned, bool Protected, long? FileCount);
+
+/// <summary><c>POST /vms/{name}/backups</c>: the session opened, what it counts as and the most it may hold.</summary>
+public sealed record BackupCreatedResponse(string Id, long MaxBytes, string Kind);
+
+/// <summary><c>PUT /vms/{name}/backups/{id}/content</c>: the stored payload.</summary>
+public sealed record BackupUploadedResponse(string Id, long SizeBytes, string Sha256, DateTimeOffset CreatedAt, string Kind);
 
 public sealed record BackupStatusResponse(bool Enabled, DateTimeOffset? LastAttemptAt, DateTimeOffset? LastSuccessAt, BackupFailure? LastFailure,
     DateTimeOffset? FailingSince, bool RequestPending, int Count, long TotalBytes, DateTimeOffset? NextDueAt);
 
-public sealed record BackupRequestedResponse(bool RequestPending);
+/// <param name="Trigger">The open request's trigger: <c>manual</c> or <c>pre-reinstall</c>.</param>
+public sealed record BackupRequestedResponse(bool RequestPending, string Trigger);
 
 /// <param name="IntervalHours">The VM's own override; null = the host default.</param>
 /// <param name="Keep">The VM's own override; null = the host default.</param>

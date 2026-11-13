@@ -6,7 +6,7 @@ using Microsoft.Data.Sqlite;
 
 namespace Constructd.Tests.Backups;
 
-/// <summary>The SQLite store (migration M880) and the in-memory fake behave alike.</summary>
+/// <summary>The SQLite store (migrations M880 and M881) and the in-memory fake behave alike.</summary>
 public sealed class BackupStoreTests : IDisposable
 {
     private readonly string _directory = Path.Combine(Path.GetTempPath(), "constructd-backup-store-" + Guid.NewGuid().ToString("n"));
@@ -27,7 +27,8 @@ public sealed class BackupStoreTests : IDisposable
     public async Task Sessions_complete_unpin_and_delete_by_their_state(bool sqlite)
     {
         var store = Store(sqlite);
-        var first = new ConfigBackup(new string('1', 32), "Alice", "dev", BackupTriggers.PreReinstall, BackupStates.Open, T0);
+        var first = new ConfigBackup(new string('1', 32), "Alice", "dev", BackupTriggers.PreReinstall, BackupStates.Open, T0,
+            Origin: BackupOrigins.Host, FileCount: 42);
         var second = new ConfigBackup(new string('2', 32), "alice", "DEV", BackupTriggers.Scheduled, BackupStates.Open, T0.AddHours(1));
         var other = new ConfigBackup(new string('3', 32), "bob", "dev", BackupTriggers.Manual, BackupStates.Open, T0.AddHours(2));
         foreach (var backup in new[] { first, second, other }) await store.InsertAsync(backup, default);
@@ -47,9 +48,13 @@ public sealed class BackupStoreTests : IDisposable
             PinnedUntil = T0.AddDays(14), KeysJson = "{\"k\":1}",
         }, stored);
 
-        Assert.True(await store.UnpinAsync(first.Id, default));
+        Assert.True(await store.SetPinAsync(first.Id, null, default));
         Assert.Null((await store.GetAsync(first.Id, default))!.PinnedUntil);
-        Assert.False(await store.UnpinAsync(second.Id, default));
+        Assert.True(await store.SetPinAsync(first.Id, T0.AddDays(3), default));
+        Assert.Equal(T0.AddDays(3), (await store.GetAsync(first.Id, default))!.PinnedUntil);
+        Assert.False(await store.SetPinAsync(second.Id, T0, default));
+        // A row without a mark (stored before slots existed) reads back without one.
+        Assert.Null((await store.GetAsync(second.Id, default))!.Origin);
 
         Assert.True(await store.DeleteAsync(second.Id, default));
         Assert.False(await store.DeleteAsync(second.Id, default));
@@ -64,7 +69,7 @@ public sealed class BackupStoreTests : IDisposable
         var store = Store(sqlite);
         Assert.Null(await store.GetVmAsync("alice", "dev", default));
         var state = new BackupVmState("alice", "dev", 12, 3, T0, T0.AddMinutes(1), new BackupFailure(T0, "manual", "export-failed", "tar exited 2"),
-            T0, T0.AddMinutes(2), T0.AddMinutes(3));
+            T0, T0.AddMinutes(2), T0.AddMinutes(3), BackupTriggers.PreReinstall, T0.AddMinutes(4));
         await store.SaveVmAsync(state, default);
         Assert.Equal(state, await store.GetVmAsync("ALICE", "Dev", default));
 

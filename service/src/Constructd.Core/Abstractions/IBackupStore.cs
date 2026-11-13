@@ -25,8 +25,8 @@ public interface IBackupStore
     /// <summary>Marks an open session complete; false when it is not open.</summary>
     Task<bool> CompleteAsync(string id, DateTimeOffset completedAt, long sizeBytes, string sha256, DateTimeOffset? pinnedUntil, CancellationToken ct);
 
-    /// <summary>Clears the pin of a complete backup; false when there is none.</summary>
-    Task<bool> UnpinAsync(string id, CancellationToken ct);
+    /// <summary>Sets (or with null clears) the pin of a complete backup; false when there is none.</summary>
+    Task<bool> SetPinAsync(string id, DateTimeOffset? pinnedUntil, CancellationToken ct);
 
     Task<bool> DeleteAsync(string id, CancellationToken ct);
 

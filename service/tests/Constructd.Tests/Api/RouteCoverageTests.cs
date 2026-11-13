@@ -162,6 +162,8 @@ public class RouteCoverageTests
         "DELETE /api/v1/vms/{name}/backups/{id:regex(^[0-9a-f]{{32}}$)}",
         "POST /api/v1/vms/{name}/backups/report",
         "POST /api/v1/vms/{name}/backups/{id:regex(^[0-9a-f]{{32}}$)}/restored",
+        "POST /api/v1/vms/{name}/backups/{id:regex(^[0-9a-f]{{32}}$)}/pin",
+        "DELETE /api/v1/vms/{name}/backups/{id:regex(^[0-9a-f]{{32}}$)}/pin",
         "GET /api/v1/vms/{name}/backups",
         "GET /api/v1/vms/{name}/backups/{id:regex(^[0-9a-f]{{32}}$)}/content",
         "GET /api/v1/vms/{name}/backups/{id:regex(^[0-9a-f]{{32}}$)}/keys",
