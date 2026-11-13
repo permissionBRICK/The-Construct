@@ -7,9 +7,11 @@ import { fileURLToPath } from 'node:url';
 
 /* The UI on the real API: the engine (constructd in fake mode, with a scripted guest so a provision job runs
    to its end) and two device agents, each serving the built bundle. One browser drives both: first-run setup
-   on the first device after confirming the host's fingerprint, a VM created through the UI, a reprovision to
-   its end, a secret added and revealed, the VM asking for it through the engine's guest routes and the card
-   allowing it, a profile edited and saved, a reinstall to its end, then the second device paired. */
+   on the first device after confirming the host's fingerprint, a VM created through the UI with its settings
+   and provisioned by the engine alone, a setting changed and the dot on Reprovision, a reprovision to its end,
+   a failed reprovision retried, a secret added and revealed, the VM asking for it through the engine's guest
+   routes and the card allowing it, a profile edited and saved, a reinstall to its end, a restore of the backup
+   it left, then the second device paired. */
 
 const ui = fileURLToPath(new URL('../..', import.meta.url));
 const repo = join(ui, '..');
@@ -84,28 +86,60 @@ test('first run, a VM, a reprovision and a second device on the real API', async
   await expect(pa.getByRole('heading', { name: 'Recovery code' })).toBeVisible();
   const groups = await pa.locator('.codebox span').allTextContents();
   expect(groups.length).toBeGreaterThan(3);
+  // The scripted guest enrols the account's backup key from the store, as a VM of this account would.
+  writeFileSync(join(engine.dir, 'account'), (await pa.locator('.solo .rv .sel').textContent())!.trim());
   await pa.getByLabel('I stored it').check();
   await pa.getByRole('button', { name: 'Continue' }).click();
 
   // No VM yet: the create screen. The engine on loopback is this PC's.
   await expect(pa.getByRole('heading', { name: 'New VM' })).toBeVisible();
   await expect(pa.locator('.codebox')).toHaveCount(0);
+  const sent: { method: string; url: string; body: string | null }[] = [];
+  pa.on('request', r => { if (r.method() !== 'GET') sent.push({ method: r.method(), url: r.url(), body: r.postData() }); });
   await pa.getByLabel('Name').fill('alpha');
   await pa.getByRole('button', { name: 'Create' }).click();
 
-  // The home screen shows the VM; it is created, then provisioned by the engine.
+  // The home screen shows the VM; one request created it with its settings and the engine provisions it.
   await expect(pa.locator('.vp h1')).toHaveText('alpha');
   await expect(pa.locator('.vtab', { hasText: 'alpha' })).toBeVisible();
-  await expect(pa.getByRole('status')).toHaveText('Reprovisioned alpha', { timeout: 90000 });
+  await expect(pa.getByRole('status')).toHaveText('Created alpha', { timeout: 90000 });
   await expect(pa.locator('.blk.job')).toHaveCount(0);
+  const created = sent.filter(r => /\/api\/v1\/vms$/.test(new URL(r.url).pathname));
+  expect(created.length).toBe(1);
+  expect(JSON.parse(created[0].body!)).toMatchObject({ name: 'alpha', desired: { projects: [], settings: {} } });
+  expect(sent.filter(r => /\/vms\/alpha\/jobs$/.test(new URL(r.url).pathname))).toEqual([]);
+  const admin = await request.newContext({ baseURL: engine.url, ignoreHTTPSErrors: true, extraHTTPHeaders: { Authorization: `Bearer ${engine.token}` } });
+  const status = async () => (await (await admin.get('/api/v1/vms/alpha/provision-status')).json()) as { settingsChanged: boolean; applied: { jobId: string } | null };
+  expect((await status()).applied).not.toBeNull();
+  await expect(pa.locator('.vp2 .pip')).toHaveCount(0);
 
-  // A reprovision started from the UI runs to its end.
+  // A setting changed on the Services tab is stored for the next reprovision; the dot shows on Reprovision.
+  await pa.goto(`${a.base}/#/settings/svc`);
+  await pa.getByRole('switch', { name: 'VS Code tunnel' }).click();
+  await expect(pa.getByRole('status')).toHaveText('Saved, applies at the next reprovision');
+  expect((await (await admin.get('/api/v1/vms/alpha/desired')).json()).desired.settings.vsCodeTunnel).toBe('true');
+  expect((await status()).settingsChanged).toBe(true);
+  await pa.goto(`${a.base}/#/home`);
+  await expect(pa.locator('.vp2 .pip')).toHaveCount(1);
+
+  // A reprovision started from the UI runs to its end and applies the change: the dot goes.
   await pa.getByRole('button', { name: 'Reprovision' }).click();
   await expect(pa.locator('.blk.job')).toBeVisible();
   await expect(pa.locator('.blk.job .bh b')).toHaveText('Reprovisioning');
   await expect(pa.getByRole('status')).toHaveText('Reprovisioned alpha', { timeout: 90000 });
   await expect(pa.locator('.blk.job')).toHaveCount(0);
   await expect(pa.locator('.ey')).toContainText('Running');
+  await expect(pa.locator('.vp2 .pip')).toHaveCount(0);
+
+  // A reprovision that fails shows its step; Retry goes through the engine's retry route and runs to its end.
+  writeFileSync(join(engine.dir, 'fail-next'), '');
+  await pa.getByRole('button', { name: 'Reprovision' }).click();
+  await expect(pa.locator('.blk.bad.job .bh b')).toHaveText('Reprovision failed', { timeout: 90000 });
+  const before = sent.length;
+  await pa.locator('.blk.bad.job').getByRole('button', { name: 'Retry' }).click();
+  await expect(pa.getByRole('status')).toHaveText('Reprovisioned alpha', { timeout: 90000 });
+  await expect(pa.locator('.blk.job')).toHaveCount(0);
+  expect(sent.slice(before).map(r => new URL(r.url).pathname).filter(p => p.includes('/jobs'))).toEqual([expect.stringMatching(/\/api\/v1\/jobs\/[^/]+\/retry$/)]);
 
   // A secret added in the vault and revealed for a moment.
   await pa.goto(`${a.base}/#/vault`);
@@ -123,7 +157,6 @@ test('first run, a VM, a reprovision and a second device on the real API', async
 
   // The VM asks for it through the engine's guest route with its own token; the card names the VM and marks
   // the agent's words; Approve answers it and the VM's poll gets the answer.
-  const admin = await request.newContext({ baseURL: engine.url, ignoreHTTPSErrors: true, extraHTTPHeaders: { Authorization: `Bearer ${engine.token}` } });
   const issued = await admin.post('/api/v1/vms/alpha/token', { data: {} });
   expect(issued.status()).toBe(200);
   const vmToken = (await issued.json()).vmToken as string;
@@ -174,6 +207,15 @@ test('first run, a VM, a reprovision and a second device on the real API', async
   await expect(pa.locator('.blk.job .bh b')).toHaveText('Reinstalling');
   await expect(pa.getByRole('status')).toHaveText('Reinstalled alpha', { timeout: 120000 });
   await expect(pa.locator('.blk.job')).toHaveCount(0);
+
+  // The backup the reinstall left is restored from the Backups page after a confirm in place; the agent opens
+  // its key with the account's key and the engine's restore job runs to its end.
+  await pa.goto(`${a.base}/#/backups`);
+  const backup = pa.locator('tr', { hasText: 'Before reinstall' }).first();
+  await backup.getByRole('button', { name: 'Restore' }).click();
+  await expect(backup.getByRole('button', { name: 'Cancel' })).toBeVisible();
+  await backup.locator('.confirm').getByRole('button', { name: 'Restore' }).click();
+  await expect(pa.getByRole('status')).toHaveText('Restored alpha', { timeout: 90000 });
   await admin.dispose();
   await guest.dispose();
 

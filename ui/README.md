@@ -39,16 +39,34 @@ npm run test:e2e       # after a build: the real engine (fake mode) and two devi
 end-to-end test (`tests/e2e/`) builds `tests/e2e/engine-host`, a console host that runs the engine as
 the agent's tests do, with a scripted SSH guest so provision and reinstall jobs run to their end (it answers
 `construct backup` through the engine's backup routes), and the agent; it drives the first run with the host's
-fingerprint, creating a VM, a reprovision, a secret added and revealed, a VM's vault request allowed from its
-card, a profile edited and saved, a reinstall, and pairing a second device in headless Chromium.
+fingerprint, creating a VM with its settings (the engine provisions it; the page sends no provision), a setting
+changed and the dot on Reprovision, a reprovision, a failed reprovision retried through the engine's retry route
+(the scripted guest fails once when the test leaves `fail-next` in the engine's directory), a secret added and
+revealed, a VM's vault request allowed from its card, a profile edited and saved, a reinstall, a restore of the
+backup it left through the agent's restore route, and pairing a second device in headless Chromium. Nothing in
+the product enrols the account's backup key on a VM yet; the scripted guest adds it from the store once the test
+names the account, so the device can open the backup.
 
 ## Live changes
 
 `ApiBackend` follows the agent's merged event stream. An engine's event names what changed, never the state:
 a job event re-reads that job, a backup event that VM's backups, a VM, update or `engine.reset` event the
-engine. A job the page saw end stays ended whatever an older read says. What has no event is read on a slow
-poll: once a minute for usage, guest reports, host administration, profiles and secrets, every ten seconds
-for pending vault requests, on which a VM waits.
+engine, a vault approval or entry-request event the pending vault requests. The agent's own `update` event
+re-reads this device's update and the "update everything" run, `connections` this device's links to the VMs.
+A job the page saw end stays ended whatever an older read says. What has no event is read once a minute:
+usage, guest reports (coding agents), host administration, profiles, secrets, and the vault requests of an
+engine that was not reachable.
+
+## Settings, jobs, updates
+
+A VM's Services and Identity settings and its profiles are its desired state on its engine
+(`GET`/`PUT /vms/{name}/desired`): a save reads the document, changes the named fields and stores it whole, so
+fields this page does not show stay as they are. Nothing runs on the VM; the engine's `provision-status` then
+reports the change and Reprovision shows the dot. Memory and CPU keep their own routes and the inline "restart
+now or later". Creating a VM is one request with the settings; the engine provisions it in the same job. A failed
+provision or reinstall is retried through `POST /jobs/{id}/retry`; a restore needs its backup's key, which only a
+device opens, so it starts again through the agent's restore route. Update runs the agent's "update everything"
+and shows each part's state; "only this VM" is the engine's VM update route.
 
 ## Secrets, profiles, hosts
 
@@ -63,14 +81,18 @@ this machine is added only after the user confirmed the certificate fingerprint 
 ## What the API does not offer yet
 
 `State.na` lists the parts `ApiBackend` cannot serve; each screen shows such a part as not available
-and its action sends nothing. They are the repair agent's chat, forwards, sharing and the microphone,
-switching a profile on or off for a VM, coding agents, the VM services and identity settings, the disk,
-checkpoints and start-with-host settings, the VM password, restore (no agent route releases a backup's key),
-opening T3 Code, VS Code, SSH, the log and consoles (the shell's job), rotating a VM token (its one-time value
-has no place yet), retrying a host job, taking back a lease, choosing an approval's time span, this device's
-own update and channel, start with the OS and notifications, Windows sign-in, and saving or printing the
-recovery code. A failed provision or reinstall is retried by starting the same job again (the engine has no
-retry route yet); a reinstall asks again first.
+and its action sends nothing. They are the repair agent's chat, sharing VS Code web, updating a VM's coding
+agents, the T3 proxy URL and the chat history kept in backups (neither is in the desired state), the disk,
+checkpoints and start-with-host settings, the VM password, the log and consoles, rotating a VM token (its
+one-time value has no place yet), the notifications switch, Windows sign-in, and saving or printing the
+recovery code.
+
+## Desktop shell
+
+In the Windows shell the page runs in WebView2 with `?surf=pop|win|alone`. Closing the pop-out or the lone vault
+card (its buttons, or Escape) posts `{type: 'close'}`, and opening the window posts `{type: 'openWindow', route}`,
+both through `window.chrome.webview.postMessage` and only when that object exists (`src/ui/shell.ts`). In a
+browser the pop-out opens the window by navigating, and close does nothing.
 
 ## Parameters of `index.html`
 
