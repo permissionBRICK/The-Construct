@@ -88,16 +88,17 @@ child="" run_dir=""
 teardown() {
   local rc=$?
   trap - EXIT INT TERM
-  if [[ -n "${child}" ]] && construct vm inspect "${child}" --json >/dev/null 2>&1; then
+  if [[ -n "${child}" ]]; then
     if [[ "${keep}" == true ]]; then
       log "keeping ${child}; delete it with: construct vm media release ${child}; construct vm delete ${child} --yes"
     else
       stage "teardown"
-      construct vm media release "${child}" --json >/dev/null 2>&1 || log "media release failed for ${child} (the delete collects it)"
-      if ! construct vm delete "${child}" --yes --json >/dev/null; then
-        log "COULD NOT DELETE ${child}; delete it by hand: construct vm delete ${child} --yes"
-        rc=1
-      fi
+      construct vm media release "${child}" --json >/dev/null 2>&1 || true
+      construct vm delete "${child}" --yes --json >/dev/null
+      case $? in
+        0|3) ;;  # deleted, or never created (not found)
+        *) log "COULD NOT DELETE ${child}; delete it by hand: construct vm delete ${child} --yes"; rc=1 ;;
+      esac
     fi
   fi
   if [[ -n "${run_dir}" ]]; then print_timings >"${run_dir}/timings.txt"; cat "${run_dir}/timings.txt" >&2; fi
@@ -229,7 +230,7 @@ log "install media ${media_id}"
 stage "create"
 primary="$(construct vm identity --json | jq -r '.vmName // empty')" || true
 [[ -n "${primary}" ]] || incomplete "this machine is not a primary with a host service"
-child="${primary}-rig-$(date +%m%d%H%M)"
+child="${primary}-rig-$(date +%m%d%H%M%S)-$(od -An -N2 -tx1 /dev/urandom | tr -d ' \n')"
 run_dir="${RUNS}/${child}"
 mkdir -p "${run_dir}"
 log "creating ${child} (${variant}), run directory ${run_dir}"
@@ -278,15 +279,18 @@ result="$(sed 's/\x1b\[[0-9;]*[A-Za-z]//g; s/\r$//' "${run_dir}/provision.log" |
 printf '%s\n' "${result}" >"${run_dir}/result.txt"
 errors="$(sed -n 's/^errors=//p' <<<"${result}")"
 grep '^error=' <<<"${result}" >&2
-[[ -n "${result}" && "${errors}" =~ ^[0-9]+$ ]] || fail "no valid result sentinel (exit ${provision_rc})"
+[[ "$(tail -1 <<<"${result}")" == "===END-CONSTRUCT-PROVISION-RESULT===" && "${errors}" =~ ^[0-9]+$ &&
+   "$(grep -c '^error=' <<<"${result}")" -eq "${errors}" ]] || fail "no valid result sentinel (exit ${provision_rc})"
 [[ ${provision_rc} -eq 0 && ${errors} -eq 0 ]] || fail "provisioning reported ${errors} failed step(s), exit ${provision_rc}"
 
 stage "reboot"
 # The bootstrap path of Provision-AgentVM.ps1 ends with a reboot; the manifest is
 # taken after it so unit states are those of a booted, provisioned guest.
+boot_id="$(gssh cat /proc/sys/kernel/random/boot_id)" || fail "could not read the boot id"
 gssh "sudo -n systemctl reboot" >/dev/null 2>&1 || true
 sleep 20
 wait_for_ssh 900 || fail "no SSH on ${child} after the reboot"
+[[ "$(gssh cat /proc/sys/kernel/random/boot_id)" != "${boot_id}" ]] || fail "${child} did not reboot"
 
 stage "manifest"
 gssh "sudo -n bash -s" <"${REPO}/bin/construct-manifest.sh" >"${run_dir}/manifest.txt" 2>"${run_dir}/manifest.err" ||
