@@ -257,7 +257,9 @@ export class ApiBackend implements Backend {
         else this.slices.set(e.id, newSlice(e));
       }
       this.compose();
-      await Promise.all([this.loadDevices(), ...st.engines.map(e => this.refreshEngine(e.id)), this.loadVault(), this.loadProfiles(), this.loadDevice(), this.loadConnections()]);
+      await Promise.all([this.loadDevices(), ...st.engines.map(e => this.refreshEngine(e.id)), this.loadVault(), this.loadProfiles(),
+        // The share is read only where this device can map one: its features first.
+        this.loadDevice().then(() => this.loadConnections())]);
       // After the VMs, so a request names the VM the screens know.
       await this.loadRequests();
     } catch (e) {
