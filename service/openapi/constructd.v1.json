@@ -8297,6 +8297,16 @@
                 "$ref": "#/components/schemas/CreateVmOptions"
               }
             ]
+          },
+          "desired": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VmDesiredState"
+              }
+            ]
           }
         }
       },

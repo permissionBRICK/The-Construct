@@ -118,7 +118,7 @@ public static partial class ProvisionEndpoints
     }
 
     /// <summary>Only what reaches a shell needs a pattern; every other value is single-quoted there.</summary>
-    private static string? Validate(VmDesiredState? desired)
+    internal static string? Validate(VmDesiredState? desired)
     {
         if (desired is null) return null;
         if (desired.Settings is null) return "desired.settings";

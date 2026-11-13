@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using Constructd.Core.Domain;
 using Constructd.Core.Logic;
 
@@ -203,7 +204,9 @@ public sealed record JobProgressResponse(DateTimeOffset At, string Text, string?
 /// <see cref="Endpoint"/>) plus <see cref="VmToken"/>, which is filled in on the retrieval that
 /// consumes the job's one-time secret and is <c>null</c> on every later one.
 /// </summary>
-public sealed record VmCreateResultResponse(string Name, EndpointResponse Endpoint, string? VmToken);
+/// <param name="Provision">The first provision, when the create request carried settings; left out otherwise.</param>
+public sealed record VmCreateResultResponse(string Name, EndpointResponse Endpoint, string? VmToken,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ProvisionJobResult? Provision = null);
 
 public sealed record JobResponse(
     string Id,
@@ -246,7 +249,7 @@ public sealed record JobResponse(
 
         if (job.Result is VmCreateResult create)
         {
-            return new VmCreateResultResponse(create.Name, EndpointResponse.From(create.Endpoint), vmToken);
+            return new VmCreateResultResponse(create.Name, EndpointResponse.From(create.Endpoint), vmToken, create.Provision);
         }
 
         // Read back from a store: a JSON object without the token.

@@ -18,8 +18,8 @@ public interface IProvisionTargets
 
     /// <summary>
     /// Drops the stored host key of <paramref name="target"/>'s address from the engine's known-hosts
-    /// file, so the next connection accepts the new one. Only a reinstall calls this, after it created
-    /// the VM again: everywhere else a changed host key stays a failure.
+    /// file, so the next connection accepts the new one. Only a job that just created the VM (a reinstall, or a
+    /// create that provisions) calls this: everywhere else a changed host key stays a failure.
     /// </summary>
     Task ForgetHostKeyAsync(SshTarget target, CancellationToken ct);
 }
@@ -120,6 +120,48 @@ public sealed class ProvisionJobs(IJobStore jobs, IJobQueryStore history, IPersi
         finally { _submit.Release(); }
     }
 
+    /// <summary>The Construct commit a provision uses (<paramref name="requested"/>, else the engine's installed one), or why there is none.</summary>
+    public string SourceCommit(string? requested)
+    {
+        var commit = requested ?? release.Installed.Commit;
+        if (!SourceZipRules.ValidCommit(commit))
+            throw new ProvisionRequestException(409, "source-commit-unknown", "The engine does not know which Construct commit to provision; name one in 'commit'.");
+        if (!options.HostAdmin.Source.Enabled)
+            throw new ProvisionRequestException(409, "unsupported-capability", "The source cache is disabled on this host.");
+        return commit;
+    }
+
+    /// <summary>
+    /// The first provision of a VM, run inside the create job that just built it (the create request carried
+    /// settings), so it does not depend on a client staying open. The settings are stored first, so a failed run
+    /// is retried with a <c>provision</c> job. The new VM token reaches the guest as a provision secret. The caller
+    /// holds the VM's operation gate. Throws <see cref="JobFailureException"/> with the provision result when it fails.
+    /// </summary>
+    public async Task<ProvisionJobResult> ProvisionCreatedAsync(string jobId, Vm vm, VmDesiredState given, string actor, string vmToken,
+        IProgress<string> progress, CancellationToken ct)
+    {
+        var state = new StoredDesiredState(given, ProvisionScript.DesiredHash(given), clock.UtcNow, actor, vm.Created);
+        await desired.SetDesiredAsync(vm.Name, state, ct);
+        string commit;
+        try { commit = SourceCommit(null); }
+        catch (ProvisionRequestException ex) { throw Refused("source", ex.Code, ex.Message); }
+        var target = await targets.ResolveAsync(vm, ct) ?? throw Refused("copy", "vm-endpoint-unknown", "The VM has no SSH endpoint the engine can dial.");
+        // A new VM: whatever key an earlier machine at its address had is not this one's.
+        await targets.ForgetHostKeyAsync(target, ct);
+        var channel = HostUpdateTrust.Apply(await config.GetAsync<UpdatesConfig>("updates", ct) ?? HostAdminDefaults.Updates, options).Channel;
+        var bag = new JobSecretBag();
+        bag.Set(ProvisionScript.VmTokenVariable, Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(vmToken)));
+        var outcome = await job.RunAsync(new ProvisionRun(jobId, vm, target, commit, state, channel, false, options.Iso.SeedUser,
+            target.IsRoot ? targets.BootstrapPublicKey() : null, bag), progress, ct);
+        return (ProvisionJobResult)outcome.Result!;
+
+        JobFailureException Refused(string step, string code, string message)
+        {
+            progress.Report($"{step}: failed: {message}");
+            return new JobFailureException($"{code}: {message}", new ProvisionJobResult("", "", state.Hash, null, false, step, code, [], [], false, null));
+        }
+    }
+
     private async Task<Job> StartAsync(Vm vm, string actor, ProvisionSubmission request, CancellationToken ct)
     {
         if (request.Kind == JobKinds.Restore) return await StartRestoreAsync(vm, actor, request, ct);
@@ -131,11 +173,7 @@ public sealed class ProvisionJobs(IJobStore jobs, IJobQueryStore history, IPersi
                 throw new ProvisionRequestException(409, "backups-disabled", "A reinstall keeps the VM's config in a host backup, and config backups are disabled on this host.");
         }
 
-        var commit = request.Commit ?? release.Installed.Commit;
-        if (!SourceZipRules.ValidCommit(commit))
-            throw new ProvisionRequestException(409, "source-commit-unknown", "The engine does not know which Construct commit to provision; name one in 'commit'.");
-        if (!options.HostAdmin.Source.Enabled)
-            throw new ProvisionRequestException(409, "unsupported-capability", "The source cache is disabled on this host.");
+        var commit = SourceCommit(request.Commit);
 
         StoredDesiredState state;
         if (request.Desired is { } given)

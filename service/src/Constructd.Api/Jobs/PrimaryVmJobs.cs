@@ -8,9 +8,31 @@ public sealed class PrimaryVmJobs(IServiceScopeFactory scopes, IVmOperationGate 
     ICapacityLedger capacity, IHypervisorInventory inventory, IAdmissionStore admission)
 {
     public async Task<JobOutcome> CreateAsync(Job job, Vm admitted, VmDescriptor descriptor,
-        IReadOnlyList<string> reservationIds, bool redownload, IProgress<string> progress, CancellationToken ct)
+        IReadOnlyList<string> reservationIds, bool redownload, IProgress<string> progress, CancellationToken ct, VmDesiredState? desired = null)
     {
         await using var gate = await gates.AcquireAsync(admitted.Name, job.Id, ct);
+        var created = await BuildAsync(job, admitted, descriptor, reservationIds, redownload, progress, ct);
+        if (desired is null || created is not { Result: VmCreateResult result, OneTimeSecret: { } token }) return created;
+
+        // The first provision, under the same gate. A failure leaves the VM in place (the capacity stays held)
+        // and fails the job with the provision's result; a provision job retries it with the stored settings.
+        var vm = await vms.GetAsync(admitted.Name, CancellationToken.None) ?? throw new LifecycleException("vm-deleting");
+        await using var scope = scopes.CreateAsyncScope();
+        try
+        {
+            var provision = await scope.ServiceProvider.GetRequiredService<ProvisionJobs>()
+                .ProvisionCreatedAsync(job.Id, vm, desired, job.Initiator ?? admitted.Owner, token, progress, ct);
+            return created with { Result = result with { Provision = provision } };
+        }
+        catch (JobFailureException ex)
+        {
+            throw new JobFailureException(ex.Message, result with { Provision = ex.Result as ProvisionJobResult });
+        }
+    }
+
+    private async Task<JobOutcome> BuildAsync(Job job, Vm admitted, VmDescriptor descriptor,
+        IReadOnlyList<string> reservationIds, bool redownload, IProgress<string> progress, CancellationToken ct)
+    {
         try
         {
             await capacity.ExtendAsync(reservationIds, TimeSpan.FromHours(2), ct);

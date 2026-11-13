@@ -141,7 +141,7 @@ that 202 as an `ApiException<JobAcceptedResponse>`.
 | `POST /users/{name}/tokens` | admin | Issues an API token `{label}`; the plaintext is in the response **once** and is never stored or logged. |
 | `GET /audit` | admin | Audit trail, newest first, `?limit=`. |
 | `GET /vms` | user or primary token | Owned VMs (token: its primary and children); all for admin. Optional `kind=primary|child|all`, `parent`, and admin-only `owner` filters. |
-| `POST /vms` | user | `{name, cpu?, ramGb, diskGb, opts:{nested?, automaticCheckpoints?, idlePolicy?}}` → `202 {jobId, nested, nestedFromHostDefault, ignoredOptions}`. `nested` is the effective value; unsupported explicitly enabled options appear in `ignoredOptions`. Omit `cpu` by default to use all host logical CPUs within the supported maximum, host per-VM limit and remaining host/user CPU budgets. Name uniqueness and the quota are enforced by the insert itself. |
+| `POST /vms` | user | `{name, cpu?, ramGb, diskGb, opts:{nested?, automaticCheckpoints?, idlePolicy?}, desired?}` → `202 {jobId, nested, nestedFromHostDefault, ignoredOptions}`. With `desired` (`{projects[], settings}`, as on a provision job) the create job stores them as the VM's settings and provisions the VM once it is reachable; the job then succeeds only when that provision did, and its result carries `provision` (the provision job's result). `nested` is the effective value; unsupported explicitly enabled options appear in `ignoredOptions`. Omit `cpu` by default to use all host logical CPUs within the supported maximum, host per-VM limit and remaining host/user CPU budgets. Name uniqueness and the quota are enforced by the insert itself. |
 | `GET /vms/{name}` | owner/admin | The VM including its `publicHost`, forwards and host-administration metadata. Never exposes the VM token hash. |
 | `DELETE /vms/{name}` | owner/admin | → `202 {jobId}`; accepting it fences the VM (see below) and the job removes the VM, its forwards and its SSH port. |
 | `POST /vms/{name}/power` | owner/admin | `{action: start\|stop\|save}`, synchronous, returns the new state. `save` needs the driver's suspend capability. |
@@ -532,6 +532,11 @@ data: {"id":"…","kind":"create-vm","state":"succeeded",
 The VM creation job is the hybrid split of plan §4.4: build the ISO → create the VM → wait for SSH →
 detach the install media → allocate the SSH forward → issue the VM-scoped token. The client then runs
 `Provision-AgentVM.ps1` against the returned endpoint, so user secrets never transit here.
+A create request with `desired` adds one step: the engine provisions the new VM itself, as a `provision` job would
+(the new VM token reaches the guest as a provision secret, the stale host key of its address is dropped), so nothing
+depends on a client staying open. A failed provision fails the create job with `result.provision` (failed step, code,
+fix prompt) and leaves the VM and its stored settings in place; a `provision` job runs it again. The token of a
+failed job is not handed out.
 
 **The VM-scoped token is a one-time secret.** The wire shape is
 `result: {name, endpoint, vmToken}`, but only the first two are durable: the stored job result carries

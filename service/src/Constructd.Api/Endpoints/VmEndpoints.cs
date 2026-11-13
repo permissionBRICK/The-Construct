@@ -101,6 +101,13 @@ public static class VmEndpoints
             return Problems.BadRequest($"'diskGb' must be between {MinDiskGb} and {MaxDiskGb}.");
         }
 
+        if (request.Desired is not null)
+        {
+            if (ProvisionEndpoints.Validate(request.Desired) is { } field) return CodedProblems.Validation(field, "Invalid value.");
+            try { http.RequestServices.GetRequiredService<ProvisionJobs>().SourceCommit(null); }
+            catch (ProvisionRequestException ex) { return CodedProblems.Create(ex.Status, ex.Code, ex.Message); }
+        }
+
         var policy = IdlePolicyRules.Default(options.Idle);
         if (request.Opts?.IdlePolicy is { } requested)
         {
