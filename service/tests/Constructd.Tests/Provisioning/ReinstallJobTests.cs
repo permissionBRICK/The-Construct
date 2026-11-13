@@ -306,6 +306,75 @@ public sealed class ReinstallJobTests : IAsyncDisposable
         Assert.Equal(1, guest.Commands.Count(c => c.Contains(" create --trigger", StringComparison.Ordinal)));
     }
 
+    private static async Task<HttpResponseMessage> RetryAsync(ProvisionHarness h, string jobId, object? body = null)
+    {
+        JobRetryTests.Installed(h);
+        return await h.Client.PostJsonAsync($"/api/v1/jobs/{jobId}/retry", body ?? new { });
+    }
+
+    [Fact]
+    public async Task Retrying_a_reinstall_that_failed_after_the_delete_uses_the_same_backup_once()
+    {
+        var guest = new FakeBackupGuest { Provision = _ => (1, ["boom"]) };
+        var h = await HostAsync(guest);
+        var first = await ReinstallAsync(h, "reinstall-1");
+        var failed = Result<ReinstallJobResult>(first);
+        Assert.True(failed.VmDeleted);
+
+        guest.Provision = _ => (0, FakeSshRunner.Clean);
+        var response = await RetryAsync(h, first.Id);
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        var accepted = await response.ReadAsync<VmJobAcceptedResponse>();
+        Assert.Equal(JobKinds.Reinstall, accepted.Kind);
+        var retry = await h.Client.WaitForJobAsync(accepted.JobId);
+        Assert.True(retry.State == JobState.Succeeded, retry.Error);
+        Assert.Equal(failed.BackupId, Result<ReinstallJobResult>(retry).BackupId);
+        Assert.Equal(1, guest.Commands.Count(c => c.Contains(" create --trigger", StringComparison.Ordinal)));
+
+        // A second click answers the retry it started; nothing runs again.
+        var creates = h.App.Driver.Calls.Count(c => c.StartsWith("create:", StringComparison.Ordinal));
+        var again = await (await RetryAsync(h, first.Id)).ReadAsync<VmJobAcceptedResponse>();
+        Assert.True(again.Replayed);
+        Assert.Equal(accepted.JobId, again.JobId);
+        Assert.Equal(creates, h.App.Driver.Calls.Count(c => c.StartsWith("create:", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task Retrying_a_reinstall_whose_restore_started_never_deletes_the_VM_again()
+    {
+        var guest = new FakeBackupGuest { RestoreExit = 10 };
+        var h = await HostAsync(guest);
+        var first = await ReinstallAsync(h, "reinstall-1");
+        Assert.Equal("restore", Result<ReinstallJobResult>(first).FailedStep);
+
+        guest.RestoreExit = 0;
+        var creates = h.App.Driver.Calls.Count(c => c.StartsWith("create:", StringComparison.Ordinal));
+        var retry = await h.Client.WaitForJobAsync((await (await RetryAsync(h, first.Id)).ReadAsync<VmJobAcceptedResponse>()).JobId);
+        Assert.Equal("restore-already-ran", Result<ReinstallJobResult>(retry).Code);
+        Assert.Equal(creates, h.App.Driver.Calls.Count(c => c.StartsWith("create:", StringComparison.Ordinal)));
+        Assert.Empty(guest.Restored);
+    }
+
+    [Fact]
+    public async Task Retrying_a_restore_needs_the_key_again_and_restores_the_same_backup()
+    {
+        var guest = new FakeBackupGuest();
+        var h = await HostAsync(guest);
+        var id = await MakeBackupAsync(h, guest);
+        var wrong = await RestoreAsync(h, "restore-1", id, "AGE-SECRET-KEY-1WRONG");
+        Assert.Equal(JobState.Failed, wrong.State);
+
+        var noKey = await RetryAsync(h, wrong.Id);
+        Assert.Equal(HttpStatusCode.BadRequest, noKey.StatusCode);
+        Assert.Contains("secrets.backupKey", await noKey.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+
+        var response = await RetryAsync(h, wrong.Id, new { secrets = new { backupKey = guest.Made[id].Key } });
+        var retry = await h.Client.WaitForJobAsync((await response.ReadAsync<VmJobAcceptedResponse>()).JobId);
+        Assert.True(retry.State == JobState.Succeeded, retry.Error);
+        Assert.Equal(id, Result<RestoreJobResult>(retry).BackupId);
+        Assert.Equal([id], guest.Restored);
+    }
+
     [Fact]
     public async Task A_restore_that_failed_halfway_is_not_run_again_by_a_retry()
     {

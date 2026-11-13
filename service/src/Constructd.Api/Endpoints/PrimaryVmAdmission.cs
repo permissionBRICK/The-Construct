@@ -88,7 +88,7 @@ public static class PrimaryVmAdmission
             try
             {
                 await services.GetRequiredService<IPersistedJobRunner>().StartPersistedAsync(job, handle,
-                    (progress, token) => worker.CreateAsync(job, vm, descriptor, result.ReservationIds, request.Opts?.Redownload == true, progress, token), CancellationToken.None);
+                    (progress, token) => worker.CreateAsync(job, vm, descriptor, result.ReservationIds, request.Opts?.Redownload == true, progress, token, request.Desired), CancellationToken.None);
                 handle = null;
             }
             catch { await admission.MarkStartFailedAsync(id, "Primary job could not start.", CancellationToken.None); return LifecycleEndpoints.Problem("job-start-failed", 500); }

@@ -23,7 +23,9 @@ public sealed record JobReplayedResponse(string? JobId, bool Replayed);
 
 public sealed record JobCancelResponse(string JobId, bool Cancelled);
 
-public sealed record VmDefaultsResponse(int HostLogicalCpus, int MaximumCpus, int RecommendedCpus, int MaximumRamGb, int RecommendedRamGb);
+/// <param name="RecommendedDiskGb">The disk size a create without <c>diskGb</c> gets (the cap of a disk that grows on demand).</param>
+public sealed record VmDefaultsResponse(int HostLogicalCpus, int MaximumCpus, int RecommendedCpus, int MaximumRamGb, int RecommendedRamGb,
+    int RecommendedDiskGb = Constructd.Api.Endpoints.VmEndpoints.DefaultDiskGb);
 
 /// <param name="AppliesOn">Always <c>next-stop-start</c>.</param>
 public sealed record VmCpuResponse(int CurrentCpus, int DesiredCpus, bool Pending, int? HostLogicalCpus, int? MaximumCpus,
@@ -49,7 +51,8 @@ public sealed record UserAllowanceResponse(UserAllowance Stored, EffectiveAllowa
 /// <summary>A user's API token as listed; the secret itself is never shown again.</summary>
 public sealed record UserTokenSummaryResponse(string Id, string Label, DateTimeOffset Created, DateTimeOffset? LastUsed);
 
-public sealed record HostCapabilitiesResponse(string Backend, BackendCapabilities Capabilities, HostNestedCapabilities Nested, HostPolicyResponse Policy);
+/// <param name="Kind">The host's platform, typed (<paramref name="Backend"/> is the child driver's own name for it).</param>
+public sealed record HostCapabilitiesResponse(string Backend, HostKind Kind, BackendCapabilities Capabilities, HostNestedCapabilities Nested, HostPolicyResponse Policy);
 
 public sealed record HostNestedCapabilities(bool Available, bool Default, bool Selectable);
 

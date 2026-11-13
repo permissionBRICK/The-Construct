@@ -54,6 +54,23 @@ public static class OpenApiContract
                         Type = JsonSchemaType.Boolean | JsonSchemaType.Null,
                         Description = "true or false sets it, null clears it, absent keeps it.",
                     };
+                // GET /host/config writes each section's fields with the section's source and updatedAt beside them.
+                if (document.Components.Schemas.TryGetValue(nameof(Contracts.HostConfigResponse), out var config) && config.Properties is { } sections)
+                {
+                    document.Components.Schemas["HostConfigSectionMeta"] = new OpenApiSchema
+                    {
+                        Type = JsonSchemaType.Object,
+                        Required = new HashSet<string> { "source", "updatedAt" },
+                        Properties = new Dictionary<string, IOpenApiSchema>
+                        {
+                            ["source"] = new OpenApiSchema { Type = JsonSchemaType.String, Enum = [JsonValue.Create("default")!, JsonValue.Create("stored")!],
+                                Description = "default: the section was never stored; stored: an admin saved it." },
+                            ["updatedAt"] = new OpenApiSchema { Type = JsonSchemaType.String | JsonSchemaType.Null, Format = "date-time" },
+                        },
+                    };
+                    foreach (var name in sections.Keys.ToArray())
+                        sections[name] = new OpenApiSchema { AllOf = [sections[name], new OpenApiSchemaReference("HostConfigSectionMeta")] };
+                }
                 return Task.CompletedTask;
             });
             options.AddOperationTransformer((operation, _, _) =>

@@ -179,4 +179,31 @@ public sealed class VmUpdateTests
         await WaitForJobsAsync(h.App, "rootbox", 2);
         Assert.Single(await ProvisionJobsAsync(h.App, ProvisionHarness.Vm));
     }
+
+    [Fact]
+    public async Task An_admins_vm_update_has_all_of_that_admins_vms_follow_the_host_update_and_nobody_elses()
+    {
+        await using var h = await StartAsync();
+        var (admin, token) = await AddVmAsync(h, "root", "rootbox", Role.Admin);
+        await admin.CreateVmAsync("rootb2");
+        Assert.Equal(HttpStatusCode.OK, (await admin.PutJsonAsync("/api/v1/vms/rootb2/desired", ProvisionHarness.Desired())).StatusCode);
+        await OfferNewerHostReleaseAsync(h.App);
+        using var vm = h.App.CreateVmTokenClient(token);
+
+        var answer = await (await vm.PostAsync("/api/v1/vms/rootbox/update", null)).ReadAsync<VmUpdateResponse>();
+        await admin.WaitForJobAsync(answer.HostJobId!);
+        var followers = (await h.App.Service<IHostConfigStore>().GetAsync<UpdateFollowers>(VmUpdates.FollowersKey(answer.HostUpdateId!), default))!;
+        Assert.Equal(["rootbox", "rootb2"], followers.Vms);
+        Assert.Equal("root", followers.Owner);
+
+        // A follower that changed hands before the update finished is not touched.
+        await h.App.Service<IHostConfigStore>().SetAsync(VmUpdates.FollowersKey(answer.HostUpdateId!),
+            followers with { Vms = [.. followers.Vms, ProvisionHarness.Vm] }, "test", default);
+        var row = (await h.App.Service<IHostUpdateStore>().GetAsync(answer.HostUpdateId!, default))! with { State = HostUpdateState.Succeeded, Commit = ProvisionHarness.Commit };
+        await h.App.Service<IHostUpdateStore>().UpsertAsync(row, default);
+        await h.App.Service<HostAutoUpdateService>().TickAsync(default);
+        await WaitForJobsAsync(h.App, "rootbox", 2);
+        await WaitForJobsAsync(h.App, "rootb2", 1);
+        Assert.Single(await ProvisionJobsAsync(h.App, ProvisionHarness.Vm));
+    }
 }

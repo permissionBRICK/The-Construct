@@ -63,7 +63,10 @@ public static class JobKinds
 /// Result of a <see cref="JobKinds.CreateVm"/> job. It is durable and carries no secret; the
 /// VM-scoped token is handed out exactly once through the job's one-time secret channel.
 /// </summary>
-public sealed record VmCreateResult(string Name, Endpoint Endpoint);
+/// <param name="Provision">The first provision, when the create request carried settings; null (and left out) otherwise.</param>
+public sealed record VmCreateResult(string Name, Endpoint Endpoint,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    ProvisionJobResult? Provision = null);
 
 /// <summary>
 /// What a job body returns: a durable, secret-free <paramref name="Result"/>, plus at most one

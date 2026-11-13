@@ -10,7 +10,12 @@ public sealed record CreateUserRequest(string? Name, string? Role, int? MaxVms, 
 
 public sealed record CreateTokenRequest(string? Label);
 
-public sealed record CreateVmRequest(string? Name, int? Cpu, int? RamGb, int? DiskGb, CreateVmOptions? Opts);
+/// <param name="Desired">
+/// The VM's provision settings. With them the create job also provisions the VM once it is reachable, as a
+/// <c>provision</c> job would, and stores them as the VM's settings; without them the VM is only built.
+/// </param>
+public sealed record CreateVmRequest(string? Name, int? Cpu, int? RamGb, int? DiskGb, CreateVmOptions? Opts,
+    VmDesiredState? Desired = null);
 
 /// <param name="Nested">Expose virtualization extensions to the guest.</param>
 /// <param name="AutomaticCheckpoints">Hyper-V automatic checkpoints (capability-gated).</param>

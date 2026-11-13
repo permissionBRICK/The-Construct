@@ -180,8 +180,8 @@ public sealed class HostUpdateJob(IHostUpdateStore store, IReleaseSource source,
     /// previous files back; the database copy is kept for a manual restore and never restored by itself
     /// (<see cref="UpdateHandoff.RestoreDatabase"/>). Returns null when the host already runs the channel's release.
     /// </summary>
-    /// <param name="follow">VMs to reprovision after the update succeeded (<see cref="VmUpdates.FollowAsync"/>).</param>
-    public async Task<HostUpdateStarted?> RunAsync(string actor,CancellationToken ct,IReadOnlyList<string>? follow=null)
+    /// <param name="follow">VMs to reprovision after the update succeeded (<see cref="VmUpdates.FollowAsync"/>), all owned by <paramref name="followOwner"/>.</param>
+    public async Task<HostUpdateStarted?> RunAsync(string actor,CancellationToken ct,IReadOnlyList<string>? follow=null,string? followOwner=null)
     {
         var offer=await ReadChannelAsync(ct);
         if(offer.Release.Commit==release.Installed.Commit) return null;
@@ -190,7 +190,7 @@ public sealed class HostUpdateJob(IHostUpdateStore store, IReleaseSource source,
         if(gate.State!=MaintenanceState.Open) throw new UpdateException("maintenance");
         var id=Guid.NewGuid().ToString("n");
         var row=new HostUpdateRecord(id,offer.Release.Commit,offer.Release.Tag,null,HostUpdateState.Checking,"check",[],clock.UtcNow,null,null,release.Installed.Commit,actor,[]);
-        if(follow is {Count: > 0}) await config.SetAsync(VmUpdates.FollowersKey(id),new UpdateFollowers(follow),actor,ct);
+        if(follow is {Count: > 0}) await config.SetAsync(VmUpdates.FollowersKey(id),new UpdateFollowers(follow,followOwner),actor,ct);
         await StartJobAsync(row,"run",async(jobId,p,token)=>
         {
             var draining=false;var handedOff=false;

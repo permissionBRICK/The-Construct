@@ -141,7 +141,7 @@ that 202 as an `ApiException<JobAcceptedResponse>`.
 | `POST /users/{name}/tokens` | admin | Issues an API token `{label}`; the plaintext is in the response **once** and is never stored or logged. |
 | `GET /audit` | admin | Audit trail, newest first, `?limit=`. |
 | `GET /vms` | user or primary token | Owned VMs (token: its primary and children); all for admin. Optional `kind=primary|child|all`, `parent`, and admin-only `owner` filters. |
-| `POST /vms` | user | `{name, cpu?, ramGb, diskGb, opts:{nested?, automaticCheckpoints?, idlePolicy?}}` → `202 {jobId, nested, nestedFromHostDefault, ignoredOptions}`. `nested` is the effective value; unsupported explicitly enabled options appear in `ignoredOptions`. Omit `cpu` by default to use all host logical CPUs within the supported maximum, host per-VM limit and remaining host/user CPU budgets. Name uniqueness and the quota are enforced by the insert itself. |
+| `POST /vms` | user | `{name, cpu?, ramGb, diskGb?, opts:{nested?, automaticCheckpoints?, idlePolicy?}, desired?}` → `202 {jobId, nested, nestedFromHostDefault, ignoredOptions}`. With `desired` (`{projects[], settings}`, as on a provision job) the create job stores them as the VM's settings and provisions the VM once it is reachable; the job then succeeds only when that provision did, and its result carries `provision` (the provision job's result). `nested` is the effective value; unsupported explicitly enabled options appear in `ignoredOptions`. Omit `cpu` by default to use all host logical CPUs within the supported maximum, host per-VM limit and remaining host/user CPU budgets. Name uniqueness and the quota are enforced by the insert itself. |
 | `GET /vms/{name}` | owner/admin | The VM including its `publicHost`, forwards and host-administration metadata. Never exposes the VM token hash. |
 | `DELETE /vms/{name}` | owner/admin | → `202 {jobId}`; accepting it fences the VM (see below) and the job removes the VM, its forwards and its SSH port. |
 | `POST /vms/{name}/power` | owner/admin | `{action: start\|stop\|save}`, synchronous, returns the new state. `save` needs the driver's suspend capability. |
@@ -174,7 +174,8 @@ Memory replies contain `currentRamGb`, `desiredRamGb`, `pending`, `maximumRamGb`
 `recommendedRamGb` and `appliesOn: "next-stop-start"`. CPU uses corresponding
 `currentCpus`/`desiredCpus`/`maximumCpus` fields. Inventory includes nullable
 `pendingCpu` and `pendingRamGb`. `/vm-defaults` supplies recommended/maximum CPU
-and RAM for a new VM (`recommendedRamGb = min(8, maximumRamGb)`). Feature discovery advertises `primary-cpu` and `primary-memory`.
+and RAM for a new VM (`recommendedRamGb = min(8, maximumRamGb)`) and `recommendedDiskGb` (50, the size a
+`POST /vms` without `diskGb` gets: the cap of a disk that grows on demand). Feature discovery advertises `primary-cpu` and `primary-memory`.
 
 Saving reserves no RAM and does not alter the running guest. Both settings are durable,
 bound to the VM creation identity, and applied CPU then RAM at confirmed Off before
@@ -235,7 +236,7 @@ See [the settings contract](../docs/plans/host-vm-settings.md) for dialog/partia
 |---|---|---|
 | `GET /health` | anonymous | Status, schema versions and feature names; authenticated callers also receive installed commit/version. |
 | `GET /host/status` | admin | Installed release, health, capacity snapshot, maintenance phase, active jobs and overdue leases. Incomplete capacity is reported honestly until its backend lands. |
-| `GET /host/capabilities` | user or primary token | Backend capabilities and current host policy. Unavailable adapters report `unsupported`. |
+| `GET /host/capabilities` | user or primary token | Backend capabilities and current host policy. Unavailable adapters report `unsupported`. `kind` is the host's platform: `hyperv`, `proxmox` or `external`. |
 | `GET` / `PUT /host/config` | admin | Read defaults/stored sections; atomically validate and replace supplied sections, optionally comparing each `expectedUpdatedAt`. |
 | `GET /users`, `GET /users/{name}` | admin | Enabled state, allowances, effective policy, VM counts and token count; no hashes. |
 | `PUT /users/{name}` | admin | Patch `role`, `enabled`, `maxVms`, `allowHostForwards`. Self-demotion/disable and removal of the last enabled admin are refused. |
@@ -284,15 +285,15 @@ gate: the resource policy is evaluated again inside every handler.
 | Primary lifecycle | `POST /vms`; `POST /vms/{name}/power`; `DELETE /vms/{name}` | Enrolled user for create/power; owner/Admin for delete. Primary delete uses the cascade preview/token flow when children exist; the confirmation may carry `keep: "shared"` to leave shared children in place (a reinstall). |
 | Primary identity | `GET /vms/{name}/identity`; `POST /vms/{name}/guest-report`; `POST`, `DELETE /vms/{name}/token`; `GET`, `PUT`, `DELETE /vms/{name}/overrides` | Self/owner/Admin for identity/report; owner/Admin user credential for token rotation; Admin for overrides. |
 | Idle policy/activity | `GET`, `PUT /vms/{name}/idle-policy`; `POST /vms/{name}/activity` | Owner/Admin user credential for policy; the matching VM token or owner/Admin for activity. |
-| Token usage | `POST /vms/{name}/usage`; `GET /host/usage`; `GET /vms/{name}/usage` | Matching VM token or owner/Admin for intake; enrolled users read their own usage, admins read all. |
+| Token usage | `POST /vms/{name}/usage`; `GET /host/usage`; `GET /vms/{name}/usage`; `GET /vms/{name}/agents` | Matching VM token or owner/Admin for intake; enrolled users read their own usage, admins read all. |
 | Child lifecycle | `POST /vms/{parent}/children`; `POST /vms/{name}/lifecycle`; `POST /vms/{name}/lease`; `PUT /vms/{name}/sharing`; `PUT /vms/{name}/hardware`; `PUT /vms/{name}/media`; `DELETE /vms/{name}` | Parent delegate creates; operator lifecycle; owner/Admin-only lease, sharing, configuration and deletion. Shared callers cannot delete or configure. |
 | Addresses/forwards | `GET /vms/{name}/addresses`; `GET`, `POST /vms/{name}/forwards`; `DELETE /vms/{name}/forwards/{id}`; `POST /vms/{name}/forwards/{id}/ack` | Existing self/owner rules for a primary; child relationship rules for a child. Ack always requires a user credential and, for a child, the owner of the `via` primary or Admin. |
-| Jobs | `GET /jobs`; `GET /jobs/{id}`; `GET /jobs/{id}/events`; `POST /jobs/{id}/cancel` | Owner/initiator or Admin. Event streams replay progress and phase history, then one terminal state. |
-| Provisioning | `POST /vms/{name}/jobs` (`provision`, `reinstall`, `restore`); `GET /vms/{name}/provision-status` | Owner/Admin user credential, primaries only. See *Provisioning from the engine*. |
+| Jobs | `GET /jobs`; `GET /jobs/{id}`; `GET /jobs/{id}/events`; `POST /jobs/{id}/cancel`; `POST /jobs/{id}/retry` | Owner/initiator or Admin; retry: the VM's owner or an Admin, user credentials. Event streams replay progress and phase history, then one terminal state. |
+| Provisioning | `POST /vms/{name}/jobs` (`provision`, `reinstall`, `restore`); `GET /vms/{name}/provision-status`; `GET`, `PUT /vms/{name}/desired` | Owner/Admin user credential, primaries only. See *Provisioning from the engine*. |
 | Media | `GET /media`; `POST /media/acquire`; `POST /media/uploads`; `GET /media/uploads/{id}`; `PUT /media/uploads/{id}/chunks/{index}`; `POST /media/uploads/{id}/complete`; `DELETE /media/uploads/{id}`; `GET /media/{id}`; `GET /media/{id}/references`; `DELETE /media/{id}`; `POST /media/cleanup` | Owner primary/user or Admin; a shared operator gets only reduced metadata for attached media. Cleanup is Admin-only. |
 | Console | `GET /vms/{name}/console/capabilities`; `POST /vms/{name}/console/sessions`; `POST /vms/{name}/console/sessions/{sid}/renew`; `DELETE /vms/{name}/console/sessions/{sid}`; `GET /vms/{name}/console/sessions/{sid}/screenshot`; `POST .../{sid}/keyboard`; `POST .../{sid}/mouse` | Current VM operator; session remains bound to its creating principal and is re-authorized on every call. |
 | Host updates | `GET /host/updates/status`; `POST /host/updates/check`; `POST /host/updates/stage`; `POST /host/updates/apply`; `POST /host/updates/cancel`; `POST /host/updates/resolve` | Admin. Apply (including resume) and resolve are the only narrowly maintenance-exempt mutations. |
-| Updates (12.1) | `POST /host/updates/run`; `POST /host/vms/reprovision`; `POST /me/vms/reprovision`; `GET`, `PUT /me/updates`; `GET`, `POST /vms/{name}/update` | Run and every-VM reprovision: Admin. My VMs and my setting: the calling user, their own VMs only. The VM route: that primary's own token or its owner, never another user's VM. See *Updates*. |
+| Updates (12.1) | `POST /host/updates/run`; `POST /host/vms/reprovision`; `POST /me/vms/reprovision`; `GET`, `PUT /me/updates`; `GET`, `POST /vms/{name}/update` | Run and every-VM reprovision: Admin. My VMs and my setting: the calling user, their own VMs only. The VM route: that primary's own token or its owner, never another user's VM; when the owner is an admin and a host release is out, it runs the host update and, once that succeeded, reprovisions every primary that owner has on the host (a VM that changed owner meanwhile is skipped). See *Updates*. |
 | Key vault | `GET`, `PUT /vault/entries`; `PUT /vault/settings`; `POST /vms/{name}/vault/unlock`; `GET /vault/leases`; `DELETE /vault/leases/{id}`; `GET`, `POST /vault/devices`; `DELETE /vault/devices/{id}`; `GET /vault/activity` | The caller's own vault only (an admin gets no access to other users' vaults); unlock: owner of a running primary. |
 | Key vault approvals | `GET /vault/approvals`; `POST /vault/approvals/{id}`; `GET /vault/files`; `POST /vault/files/{id}`; `GET /vault/device` | The owner or one of their paired devices (`VaultDevice`); `/vault/device` is device-only. |
 | Key vault guest | `POST /vms/{name}/vault/requests`; `GET /vms/{name}/vault/requests/{id}?wait=`; `GET /vms/{name}/vault/scrubs`; `POST /vms/{name}/vault/scrubs/{id}` | That primary VM's own token; a child answers `403 vault-child`. |
@@ -301,6 +302,11 @@ gate: the resource policy is evaluated again inside every handler.
 
 There is deliberately no child-media content download route and no interactive-video
 console route.
+
+`/host/status`, `/host/config`, `/host/windows`, the update history in `/host/updates/status` and
+`/host/iso-catalog` answer typed records in the contract (`HostStatusResponse`, `HostConfigResponse`,
+`HostWindowsResponse`, `HostUpdateHistoryEntry`, `IsoCatalogResponse`) with the JSON they always wrote;
+`HostWireShapeTests` pins every property path against `tests/Constructd.Tests/Api/host-wire-shape.txt`.
 
 ### Provisioning from the engine
 
@@ -332,6 +338,11 @@ the bootstrap key next to `Iso:BootstrapPublicKeyPath`, accepting new host keys 
 beside the database. `GET /vms/{name}/provision-status` answers `settingsChanged`, `newerPayload` and
 `hardwareChanged` (design 7.5) with what each is computed from.
 
+`GET /vms/{name}/desired` answers the stored settings `{desired: {projects[], settings}, hash, updatedAt, updatedBy}`
+(all null before any are stored); `PUT` with `{projects[], settings}` stores them and changes nothing in the VM, so
+`settingsChanged` turns true until a provision ran with them. Stored settings belong to the VM they were stored for:
+a VM created again under the name (by anyone) starts without them.
+
 The same route starts the two other jobs of a VM's life:
 
 - `{kind: "reinstall", requestId, commit?, desired?, freshImage?}` rebuilds the VM with no device online
@@ -352,6 +363,13 @@ The same route starts the two other jobs of a VM's life:
   backups enabled on the host; an external machine is refused.
 - `{kind: "restore", requestId, backupId, secrets: {backupKey}}` restores a stored backup into the
   running VM; `backupKey` is the backup's key a device unwrapped. Step: `restore`.
+
+`POST /jobs/{id}/retry` (`{secrets?}`) starts the same kind of job again for the same VM with its stored settings
+and the engine's installed commit: a failed `provision`, `reinstall` or `restore` (a restore with its backup's key in
+`secrets.backupKey` again, and in `backupId` when the failed restore recorded none because a restart cut it off before it ran) → `202 {jobId, kind, replayed}`. Other kinds answer `409 not-retryable`, a job that did not
+fail `409 job-not-failed`, a job of an earlier VM under the name `409 vm-changed`, and a job with a later
+provision, reinstall or restore on the VM after it `409 job-superseded`. The retry's request id is `retry:<id>`, so a
+second click answers the retry already started. The rules below hold for a retry as for any repeated job.
 
 Retries: the job key's private half lives in the job's memory only. After a reinstall failed past the
 delete it stays in memory for an hour, and a retry starts at `create` with the same backup and key; a
@@ -544,6 +562,11 @@ data: {"id":"…","kind":"create-vm","state":"succeeded",
 The VM creation job is the hybrid split of plan §4.4: build the ISO → create the VM → wait for SSH →
 detach the install media → allocate the SSH forward → issue the VM-scoped token. The client then runs
 `Provision-AgentVM.ps1` against the returned endpoint, so user secrets never transit here.
+A create request with `desired` adds one step: the engine provisions the new VM itself, as a `provision` job would
+(the new VM token reaches the guest as a provision secret, the stale host key of its address is dropped), so nothing
+depends on a client staying open. A failed provision fails the create job with `result.provision` (failed step, code,
+fix prompt) and leaves the VM and its stored settings in place; a `provision` job runs it again. The token of a
+failed job is not handed out.
 
 **The VM-scoped token is a one-time secret.** The wire shape is
 `result: {name, endpoint, vmToken}`, but only the first two are durable: the stored job result carries
@@ -580,6 +603,14 @@ names of at most 128 characters. Token counts are non-negative signed 64-bit
 integers. Costs must fit a non-negative signed 64-bit micro-dollar value; fractions
 smaller than one micro-dollar are truncated. Invalid batches write nothing.
 Successful telemetry does not enter the audit log; refused and failed requests do.
+
+The usage report also carries the VM's coding agents, `agents: [{tool, version}]` (`claude`, `codex`, `opencode`,
+`t3`; the first semver of each CLI's `--version`), and the guest posts it with `days: []` when only agents changed.
+The engine keeps the last list per VM (bound to the VM's creation time, in the host config store). `GET
+/vms/{name}/agents` (owner/Admin) answers `{reportedAt, agents: [{tool, name, version, latest, updateAvailable}]}`;
+`latest` is read where the old panel read it (npm for Claude Code and T3 Code, honouring the VM's T3 channel,
+GitHub releases for Codex and OpenCode), cached for six hours and null when unreachable. A report without `agents`
+leaves the stored list alone.
 
 Usage reads return `{window, generatedAt, totals:{tokens,costUsd}, byUser, byVm}`.
 User rows include `user`, `tokens`, `costUsd`, `vms`, `lastReportedAt` and `tools`.

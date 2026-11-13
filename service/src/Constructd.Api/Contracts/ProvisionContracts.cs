@@ -59,3 +59,30 @@ public sealed record ProvisionStatusResponse(
     VmAppliedState? Applied,
     int? PendingCpu,
     int? PendingRamGb);
+
+/// <summary>
+/// <c>GET</c>/<c>PUT /vms/{name}/desired</c>: the VM's stored settings, which every provision job uses unless its
+/// request carries its own. All fields are null while none are stored. <paramref name="Hash"/> is the value
+/// <c>provision-status</c> compares with what the guest was last provisioned with.
+/// </summary>
+public sealed record VmDesiredStateResponse(VmDesiredState? Desired, string? Hash, DateTimeOffset? UpdatedAt, string? UpdatedBy)
+{
+    public static VmDesiredStateResponse From(StoredDesiredState? stored) =>
+        new(stored?.Desired, stored?.Hash, stored?.UpdatedAt, stored?.UpdatedBy);
+}
+
+/// <summary>
+/// <c>POST /jobs/{id}/retry</c>. Optional: the secrets the job needs again, as on <c>POST /vms/{name}/jobs</c>
+/// (a restore's <c>backupKey</c> is required, the rest as before). <paramref name="BackupId"/>: only for a restore whose
+/// failed job recorded no backup (cut off by a restart before it ran); otherwise the failed job's backup is used.
+/// </summary>
+public sealed record JobRetryRequest(ProvisionSecretsRequest? Secrets = null, string? BackupId = null);
+
+/// <summary>One coding agent of a VM. <paramref name="Latest"/> is the newest release where it is published (null when unknown).</summary>
+public sealed record VmAgentResponse(string Tool, string Name, string Version, string? Latest, bool UpdateAvailable);
+
+/// <summary>
+/// <c>GET /vms/{name}/agents</c>: the coding agents the VM last reported (with its token-usage report) and whether a
+/// newer release is out. <paramref name="ReportedAt"/> is null and the list empty while the VM has reported none.
+/// </summary>
+public sealed record VmAgentsResponse(DateTimeOffset? ReportedAt, IReadOnlyList<VmAgentResponse> Agents);

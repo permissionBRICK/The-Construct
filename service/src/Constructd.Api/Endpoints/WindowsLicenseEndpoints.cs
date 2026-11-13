@@ -19,7 +19,8 @@ public static class WindowsLicenseEndpoints
             try { return await next(context); }
             catch (ChildValidationException e) { return CodedProblems.Create(e.Code == "validation" ? 400 : 409, e.Code, e.Message, e.Field); }
         });
-        group.MapGet("", async (WindowsLicenseStore store, CancellationToken ct) => { var s = await store.SnapshotAsync(ct); return Results.Ok(new { keys = s.Keys, guests = s.Guests, machines = await store.MachinesAsync(ct) }); });
+        group.MapGet("", async (WindowsLicenseStore store, CancellationToken ct) => { var s = await store.SnapshotAsync(ct); return Results.Ok(new Contracts.HostWindowsResponse(s.Keys, s.Guests, await store.MachinesAsync(ct))); })
+            .Produces<Contracts.HostWindowsResponse>().WithName("HostWindows");
         group.MapPost("/keys", async (AddKeyRequest input, WindowsLicenseStore store, HttpContext http, CancellationToken ct) =>
             Results.Ok(await store.AddAsync(input.Product, input.Edition, input.Kind, input.Key, input.Budget, input.Notes, http.User.Actor(), ct))).Audited("windows-key.add");
         group.MapDelete("/keys/{id}", async (string id, WindowsLicenseStore store, IChildVmDriver driver, IMaintenanceGate maintenance, HttpContext http, CancellationToken ct) =>

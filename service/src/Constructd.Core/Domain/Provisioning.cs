@@ -62,8 +62,13 @@ public sealed record ProvisionSettings
 /// </summary>
 public sealed record VmDesiredState(IReadOnlyList<string> Projects, ProvisionSettings Settings);
 
-/// <summary>A stored desired state with its canonical hash (<c>CONSTRUCT_DESIRED_HASH</c>).</summary>
-public sealed record StoredDesiredState(VmDesiredState Desired, string Hash, DateTimeOffset UpdatedAt, string UpdatedBy);
+/// <summary>
+/// A stored desired state with its canonical hash (<c>CONSTRUCT_DESIRED_HASH</c>). <paramref name="VmCreated"/> is the
+/// creation time of the VM it was stored for: the settings of an earlier VM under the same name are not this VM's
+/// (null on rows written before it was recorded).
+/// </summary>
+public sealed record StoredDesiredState(VmDesiredState Desired, string Hash, DateTimeOffset UpdatedAt, string UpdatedBy,
+    DateTimeOffset? VmCreated = null);
 
 /// <summary>
 /// What the guest says it was provisioned with, read from <c>/etc/construct/provisioned.env</c> after

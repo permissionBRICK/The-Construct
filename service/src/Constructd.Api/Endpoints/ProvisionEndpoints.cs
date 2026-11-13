@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Constructd.Api.Auth;
 using Constructd.Api.Contracts;
@@ -23,6 +24,12 @@ public static partial class ProvisionEndpoints
             .Accepts<VmJobRequest>("application/json").Produces<VmJobAcceptedResponse>(StatusCodes.Status202Accepted).WithName("StartVmJob");
         api.MapGet("/vms/{name}/provision-status", StatusAsync).RequireAuthorization(Policies.User)
             .Produces<ProvisionStatusResponse>().WithName("GetVmProvisionStatus");
+        api.MapPost("/jobs/{id}/retry", RetryAsync).RequireAuthorization(Policies.User).Audited("job.retry")
+            .Accepts<JobRetryRequest>("application/json").Produces<VmJobAcceptedResponse>(StatusCodes.Status202Accepted).WithName("RetryJob");
+        api.MapGet("/vms/{name}/desired", GetDesiredAsync).RequireAuthorization(Policies.User)
+            .Produces<VmDesiredStateResponse>().WithName("GetVmDesiredState");
+        api.MapPut("/vms/{name}/desired", SetDesiredAsync).RequireAuthorization(Policies.User).Audited("vm.desired")
+            .Accepts<VmDesiredState>("application/json").Produces<VmDesiredStateResponse>().WithName("SetVmDesiredState");
         return api;
     }
 
@@ -53,22 +60,31 @@ public static partial class ProvisionEndpoints
         if (request.RequestId is null || !RequestIdPattern().IsMatch(request.RequestId)) return CodedProblems.Validation("requestId", "Expected 1-128 letters, digits, '.', '_', ':' or '-'.");
         if (request.Commit is not null && !SourceZipRules.ValidCommit(request.Commit)) return CodedProblems.Validation("commit", "Expected 40 lowercase hex digits.");
         if (Validate(request.Desired) is { } field) return CodedProblems.Validation(field, "Invalid value.");
-        var secrets = request.Secrets ?? new ProvisionSecretsRequest();
-        foreach (var (field2, value) in new[] { ("secrets.vmTokenB64", secrets.VmTokenB64), ("secrets.gitCloneCredentialsB64", secrets.GitCloneCredentialsB64), ("secrets.serveWebTokenB64", secrets.ServeWebTokenB64) })
-            if (value is not null && !Base64Pattern().IsMatch(value)) return CodedProblems.Validation(field2, "Expected base64.");
-        if (secrets.SudoPassword is { } pw && pw.Any(c => c is '\n' or '\r' or '\0')) return CodedProblems.Validation("secrets.sudoPassword", "Expected one line.");
+        if (SecretBag(request.Secrets, request.Kind == JobKinds.Restore, out var bag) is { } invalid) return invalid;
+        return await StartAsync(vm, http, provisioning, new ProvisionSubmission(request.RequestId, request.Commit, request.Desired,
+            request.DeferProjectCommands == true, bag, request.Kind, request.Kind == JobKinds.Restore ? request.BackupId : null, request.FreshImage == true), ct);
+    }
 
-        var bag = new JobSecretBag();
+    private static IResult? SecretBag(ProvisionSecretsRequest? secrets, bool restore, out JobSecretBag bag)
+    {
+        bag = new JobSecretBag();
+        secrets ??= new ProvisionSecretsRequest();
+        foreach (var (field, value) in new[] { ("secrets.vmTokenB64", secrets.VmTokenB64), ("secrets.gitCloneCredentialsB64", secrets.GitCloneCredentialsB64), ("secrets.serveWebTokenB64", secrets.ServeWebTokenB64) })
+            if (value is not null && !Base64Pattern().IsMatch(value)) return CodedProblems.Validation(field, "Expected base64.");
+        if (secrets.SudoPassword is { } pw && pw.Any(c => c is '\n' or '\r' or '\0')) return CodedProblems.Validation("secrets.sudoPassword", "Expected one line.");
         bag.Set(ProvisionScript.VmTokenVariable, secrets.VmTokenB64);
         bag.Set(ProvisionScript.CloneCredentialsVariable, secrets.GitCloneCredentialsB64);
         bag.Set(ProvisionScript.ServeWebTokenVariable, secrets.ServeWebTokenB64);
         bag.Set(ProvisionJob.SudoPasswordSecret, secrets.SudoPassword, base64: false);
-        if (request.Kind == JobKinds.Restore) bag.Set(ProvisionJob.BackupKeySecret, secrets.BackupKey, base64: false);
+        if (restore) bag.Set(ProvisionJob.BackupKeySecret, secrets.BackupKey, base64: false);
+        return null;
+    }
+
+    private static async Task<IResult> StartAsync(Vm vm, HttpContext http, ProvisionJobs provisioning, ProvisionSubmission submission, CancellationToken ct)
+    {
         try
         {
-            var (job, replayed) = await provisioning.SubmitAsync(vm, http.User.Actor(),
-                new ProvisionSubmission(request.RequestId, request.Commit, request.Desired, request.DeferProjectCommands == true, bag,
-                    request.Kind, request.Kind == JobKinds.Restore ? request.BackupId : null, request.FreshImage == true), ct);
+            var (job, replayed) = await provisioning.SubmitAsync(vm, http.User.Actor(), submission, ct);
             CodedProblems.Audit(http, "vm.provision", vm.Owner, target: vm.Name, extra: $"kind={job.Kind}; job={job.Id}; replayed={replayed}");
             return Results.Accepted("/api/v1/jobs/" + job.Id, new VmJobAcceptedResponse(job.Id, job.Kind, replayed));
         }
@@ -79,8 +95,84 @@ public static partial class ProvisionEndpoints
         }
     }
 
+    /// <summary>
+    /// <c>POST /jobs/{id}/retry</c> (design 7.1): the same kind of job again for the same VM with its stored settings,
+    /// for a failed <c>provision</c>, <c>reinstall</c> or <c>restore</c>. The job's own steps keep the reinstall and
+    /// restore rules (the original backup, no restore run twice over the VM). Only the VM's latest such job can be
+    /// retried, and once: a repeat answers the retry it started (<c>replayed</c>). A restore is sent its backup's key again.
+    /// </summary>
+    private static async Task<IResult> RetryAsync(string id, JobRetryRequest? request, HttpContext http, IJobQueryStore history,
+        IVmRepository vms, ProvisionJobs provisioning, CancellationToken ct)
+    {
+        var all = await history.ListAsync(ct);
+        var failed = all.FirstOrDefault(j => j.Id == id);
+        if (failed is null) return Problems.NotFound("Unknown job.");
+        if (!http.User.IsAdmin() && !Ownership.SameName(http.User.NameOrEmpty(), failed.Owner)) return Problems.Forbidden("Job access refused.");
+        if (failed.Kind is not (JobKinds.Provision or JobKinds.Reinstall or JobKinds.Restore) || failed.VmName is null)
+            return CodedProblems.Create(409, "not-retryable", $"A {failed.Kind} job cannot be retried.");
+        if (failed.State != JobState.Failed) return CodedProblems.Create(409, "job-not-failed", "Only a failed job can be retried.");
+        var vm = await vms.GetAsync(failed.VmName, ct);
+        if (vm is null) return Problems.NotFound("Unknown VM.");
+        // The same VM: one created again under the name, by anybody, is not the one the job ran on.
+        if (!Ownership.SameName(vm.Owner, failed.Owner) || vm.Created > failed.Created)
+            return CodedProblems.Create(409, "vm-changed", "The VM this job ran on no longer exists.");
+        if (await LifecycleEndpoints.AuthorizeAsync(vm, http, true, ct) is { } denied) return denied;
+
+        var requestId = "retry:" + failed.Id;
+        if (all.Any(j => j.Kind is JobKinds.Provision or JobKinds.Reinstall or JobKinds.Restore && j.Created > failed.Created
+                && j.OperationKey != requestId && Ownership.SameName(j.VmName, vm.Name) && Ownership.SameName(j.Owner, vm.Owner)))
+            return CodedProblems.Create(409, "job-superseded", "A later job ran on this VM; only the latest one can be retried.");
+        string? backupId = null;
+        if (failed.Kind == JobKinds.Restore)
+        {
+            backupId = failed.Result is null ? null : JsonSerializer.SerializeToElement(failed.Result, ApiJson.Options) is { ValueKind: JsonValueKind.Object } result
+                && result.TryGetProperty("backupId", out var value) ? value.GetString() : null;
+            // A restore cut off before it ran (an engine restart) has no result; the caller names the backup again.
+            backupId ??= request?.BackupId;
+            if (!BackupScript.IsBackupId(backupId)) return CodedProblems.Validation("backupId", "The failed restore does not name its backup; send it in 'backupId'.");
+            if (!BackupJobKey.IsIdentity(request?.Secrets?.BackupKey))
+                return CodedProblems.Validation("secrets.backupKey", "A restore needs the backup's key (AGE-SECRET-KEY-1...).");
+        }
+        if (SecretBag(request?.Secrets, failed.Kind == JobKinds.Restore, out var bag) is { } invalid) return invalid;
+        return await StartAsync(vm, http, provisioning, new ProvisionSubmission(requestId, null, null, false, bag, failed.Kind, backupId), ct);
+    }
+
+    private static async Task<(Vm? Vm, IResult? Denied)> PrimaryAsync(string name, HttpContext http, IVmRepository vms, CancellationToken ct)
+    {
+        var vm = await vms.GetAsync(name, ct);
+        if (vm is null) return (null, Problems.NotFound("Unknown VM."));
+        if (await LifecycleEndpoints.AuthorizeAsync(vm, http, true, ct) is { } denied) return (null, denied);
+        if (vm.Kind != VmKind.Primary) return (null, LifecycleEndpoints.Problem("not-a-primary"));
+        return (vm, null);
+    }
+
+    /// <summary><c>GET /vms/{name}/desired</c>: the settings the next provision uses; all null before any are stored.</summary>
+    private static async Task<IResult> GetDesiredAsync(string name, HttpContext http, IVmRepository vms, IVmDesiredStateSource desired, CancellationToken ct)
+    {
+        var (vm, denied) = await PrimaryAsync(name, http, vms, ct);
+        if (vm is null) return denied!;
+        return Results.Ok(VmDesiredStateResponse.From(await desired.GetDesiredForAsync(vm, ct)));
+    }
+
+    /// <summary>
+    /// <c>PUT /vms/{name}/desired</c>: stores the settings for the next provision and changes nothing in the VM;
+    /// <c>provision-status</c> then reports that a change waits (design 7.5).
+    /// </summary>
+    private static async Task<IResult> SetDesiredAsync(string name, VmDesiredState body, HttpContext http, IVmRepository vms,
+        IVmDesiredStateSource desired, IClock clock, CancellationToken ct)
+    {
+        var (vm, denied) = await PrimaryAsync(name, http, vms, ct);
+        if (vm is null) return denied!;
+        if (vm.Deleting) return LifecycleEndpoints.Problem("vm-deleting");
+        if (Validate(body) is { } field) return CodedProblems.Validation(field["desired.".Length..], "Invalid value.");
+        var state = new StoredDesiredState(body, ProvisionScript.DesiredHash(body), clock.UtcNow, http.User.Actor(), vm.Created);
+        await desired.SetDesiredAsync(vm.Name, state, ct);
+        http.SetAuditDetail("hash=" + state.Hash[..12]);
+        return Results.Ok(VmDesiredStateResponse.From(state));
+    }
+
     /// <summary>Only what reaches a shell needs a pattern; every other value is single-quoted there.</summary>
-    private static string? Validate(VmDesiredState? desired)
+    internal static string? Validate(VmDesiredState? desired)
     {
         if (desired is null) return null;
         if (desired.Settings is null) return "desired.settings";
@@ -98,7 +190,7 @@ public static partial class ProvisionEndpoints
         if (vm is null) return Problems.NotFound("Unknown VM.");
         if (await LifecycleEndpoints.AuthorizeAsync(vm, http, true, ct) is { } denied) return denied;
         if (vm.Kind != VmKind.Primary) return LifecycleEndpoints.Problem("not-a-primary");
-        var want = await desired.GetDesiredAsync(vm.Name, ct);
+        var want = await desired.GetDesiredForAsync(vm, ct);
         var have = await applied.GetAppliedAsync(vm.Name, ct);
         var available = SourceZipRules.ValidCommit(release.Installed.Commit) ? release.Installed.Commit : null;
         var cpuSetting = await cpu.GetAsync(vm, ct);
@@ -106,7 +198,8 @@ public static partial class ProvisionEndpoints
         int? pendingCpu = cpuSetting is not null && cpuSetting.Cpus != vm.Cpu ? cpuSetting.Cpus : null;
         int? pendingRam = memorySetting is not null && memorySetting.RamGb != vm.RamGb ? memorySetting.RamGb : null;
         return Results.Ok(new ProvisionStatusResponse(
-            SettingsChanged: want is not null && have is not null && want.Hash != have.DesiredHash,
+            // Stored settings the guest has not been provisioned with yet wait too, also before the first run.
+            SettingsChanged: want is not null && want.Hash != have?.DesiredHash,
             NewerPayload: available is not null && have?.Commit is { } commit && !string.Equals(commit, available, StringComparison.OrdinalIgnoreCase),
             HardwareChanged: pendingCpu is not null || pendingRam is not null,
             want?.Hash, available, have, pendingCpu, pendingRam));

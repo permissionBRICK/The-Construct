@@ -2388,6 +2388,46 @@
         }
       }
     },
+    "/api/v1/vms/{name}/agents": {
+      "get": {
+        "tags": [
+          "TokenUsageEndpoints"
+        ],
+        "operationId": "GetVmAgents",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VmAgentsResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/jobs": {
       "get": {
         "tags": [
@@ -2552,6 +2592,150 @@
         }
       }
     },
+    "/api/v1/jobs/{id}/retry": {
+      "post": {
+        "tags": [
+          "ProvisionEndpoints"
+        ],
+        "operationId": "RetryJob",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/JobRetryRequest"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VmJobAcceptedResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vms/{name}/desired": {
+      "get": {
+        "tags": [
+          "ProvisionEndpoints"
+        ],
+        "operationId": "GetVmDesiredState",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VmDesiredStateResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "ProvisionEndpoints"
+        ],
+        "operationId": "SetVmDesiredState",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VmDesiredState"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VmDesiredStateResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/health": {
       "get": {
         "tags": [
@@ -2590,7 +2774,14 @@
         "operationId": "HostStatus",
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostStatusResponse"
+                }
+              }
+            }
           },
           "default": {
             "description": "An error, as a Problem document.",
@@ -2643,7 +2834,14 @@
         "operationId": "HostConfig",
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostConfigResponse"
+                }
+              }
+            }
           },
           "default": {
             "description": "An error, as a Problem document.",
@@ -2823,9 +3021,17 @@
         "tags": [
           "IsoCatalogEndpoints"
         ],
+        "operationId": "HostIsoCatalog",
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IsoCatalogResponse"
+                }
+              }
+            }
           },
           "default": {
             "description": "An error, as a Problem document.",
@@ -6689,9 +6895,17 @@
         "tags": [
           "Constructd.Api"
         ],
+        "operationId": "HostWindows",
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostWindowsResponse"
+                }
+              }
+            }
           },
           "default": {
             "description": "An error, as a Problem document.",
@@ -8092,6 +8306,52 @@
           }
         }
       },
+      "BackupsConfig": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "intervalHours": {
+            "type": "integer",
+            "format": "int32",
+            "default": 24
+          },
+          "keep": {
+            "type": "integer",
+            "format": "int32",
+            "default": 4
+          },
+          "maxKeep": {
+            "type": "integer",
+            "format": "int32",
+            "default": 10
+          },
+          "pinDays": {
+            "type": "integer",
+            "format": "int32",
+            "default": 14
+          },
+          "retainDeletedDays": {
+            "type": "integer",
+            "format": "int32",
+            "default": 14
+          },
+          "minFreeBytes": {
+            "type": "integer",
+            "format": "int64",
+            "default": 5368709120
+          },
+          "maxBytesPerVm": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int64"
+          }
+        }
+      },
       "BackupSettingsResponse": {
         "required": [
           "intervalHours",
@@ -8351,6 +8611,56 @@
           "supported"
         ],
         "type": "string"
+      },
+      "CapacityConfig": {
+        "required": [
+          "mode",
+          "ramHeadroomBytes",
+          "storageHeadroomBytes",
+          "cpuBudget",
+          "maxVcpusPerVm",
+          "reconcileSeconds",
+          "orphanReservationTimeoutSeconds"
+        ],
+        "type": "object",
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/CapacityMode"
+          },
+          "ramHeadroomBytes": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int64"
+          },
+          "storageHeadroomBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "cpuBudget": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          },
+          "maxVcpusPerVm": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          },
+          "reconcileSeconds": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "orphanReservationTimeoutSeconds": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
       },
       "CapacityMode": {
         "enum": [
@@ -8769,6 +9079,16 @@
               },
               {
                 "$ref": "#/components/schemas/CreateVmOptions"
+              }
+            ]
+          },
+          "desired": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VmDesiredState"
               }
             ]
           }
@@ -9353,6 +9673,27 @@
         ],
         "type": "string"
       },
+      "GuestAgentRequest": {
+        "required": [
+          "tool",
+          "version"
+        ],
+        "type": "object",
+        "properties": {
+          "tool": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "version": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
       "GuestReport": {
         "required": [
           "constructCommit",
@@ -9549,9 +9890,55 @@
           }
         }
       },
+      "HostActiveJobResponse": {
+        "required": [
+          "id",
+          "kind",
+          "vmName",
+          "owner",
+          "initiator",
+          "phase",
+          "created"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "vmName": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "owner": {
+            "type": "string"
+          },
+          "initiator": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "phase": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "created": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
       "HostCapabilitiesResponse": {
         "required": [
           "backend",
+          "kind",
           "capabilities",
           "nested",
           "policy"
@@ -9561,6 +9948,9 @@
           "backend": {
             "type": "string"
           },
+          "kind": {
+            "$ref": "#/components/schemas/HostKind"
+          },
           "capabilities": {
             "$ref": "#/components/schemas/BackendCapabilities"
           },
@@ -9569,6 +9959,272 @@
           },
           "policy": {
             "$ref": "#/components/schemas/HostPolicyResponse"
+          }
+        }
+      },
+      "HostCapacitySummary": {
+        "required": [
+          "epoch",
+          "observedAt",
+          "complete",
+          "ram",
+          "cpu",
+          "volumes"
+        ],
+        "type": "object",
+        "properties": {
+          "epoch": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "observedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "complete": {
+            "type": "boolean"
+          },
+          "ram": {
+            "$ref": "#/components/schemas/HostRamSummary"
+          },
+          "cpu": {
+            "$ref": "#/components/schemas/HostCpuSummary"
+          },
+          "volumes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VolumeCapacity"
+            }
+          }
+        }
+      },
+      "HostConfigResponse": {
+        "required": [
+          "capacity",
+          "usage",
+          "memoryPressure",
+          "userDefaults",
+          "userCaps",
+          "lifecycle",
+          "media",
+          "network",
+          "virtualization",
+          "updates",
+          "vault",
+          "https",
+          "backups"
+        ],
+        "type": "object",
+        "properties": {
+          "capacity": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CapacityConfig"
+              },
+              {
+                "$ref": "#/components/schemas/HostConfigSectionMeta"
+              }
+            ]
+          },
+          "usage": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UsageConfig"
+              },
+              {
+                "$ref": "#/components/schemas/HostConfigSectionMeta"
+              }
+            ]
+          },
+          "memoryPressure": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MemoryPressureConfig"
+              },
+              {
+                "$ref": "#/components/schemas/HostConfigSectionMeta"
+              }
+            ]
+          },
+          "userDefaults": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UserDefaultsConfig"
+              },
+              {
+                "$ref": "#/components/schemas/HostConfigSectionMeta"
+              }
+            ]
+          },
+          "userCaps": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UserCapsConfig"
+              },
+              {
+                "$ref": "#/components/schemas/HostConfigSectionMeta"
+              }
+            ]
+          },
+          "lifecycle": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LifecycleConfig"
+              },
+              {
+                "$ref": "#/components/schemas/HostConfigSectionMeta"
+              }
+            ]
+          },
+          "media": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MediaConfig"
+              },
+              {
+                "$ref": "#/components/schemas/HostConfigSectionMeta"
+              }
+            ]
+          },
+          "network": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NetworkConfig"
+              },
+              {
+                "$ref": "#/components/schemas/HostConfigSectionMeta"
+              }
+            ]
+          },
+          "virtualization": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/VirtualizationConfig"
+              },
+              {
+                "$ref": "#/components/schemas/HostConfigSectionMeta"
+              }
+            ]
+          },
+          "updates": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UpdatesConfig"
+              },
+              {
+                "$ref": "#/components/schemas/HostConfigSectionMeta"
+              }
+            ]
+          },
+          "vault": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/VaultConfig"
+              },
+              {
+                "$ref": "#/components/schemas/HostConfigSectionMeta"
+              }
+            ]
+          },
+          "https": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HttpsConfig"
+              },
+              {
+                "$ref": "#/components/schemas/HostConfigSectionMeta"
+              }
+            ]
+          },
+          "backups": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BackupsConfig"
+              },
+              {
+                "$ref": "#/components/schemas/HostConfigSectionMeta"
+              }
+            ]
+          }
+        }
+      },
+      "HostConfigSectionMeta": {
+        "required": [
+          "source",
+          "updatedAt"
+        ],
+        "type": "object",
+        "properties": {
+          "source": {
+            "enum": [
+              "default",
+              "stored"
+            ],
+            "type": "string",
+            "description": "default: the section was never stored; stored: an admin saved it."
+          },
+          "updatedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "HostCpuSummary": {
+        "required": [
+          "logical",
+          "budget",
+          "active",
+          "available"
+        ],
+        "type": "object",
+        "properties": {
+          "logical": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "budget": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          },
+          "active": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "available": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          }
+        }
+      },
+      "HostHealthResponse": {
+        "required": [
+          "hypervisor",
+          "database",
+          "media",
+          "inventory"
+        ],
+        "type": "object",
+        "properties": {
+          "hypervisor": {
+            "type": "string"
+          },
+          "database": {
+            "type": "string"
+          },
+          "media": {
+            "type": "string"
+          },
+          "inventory": {
+            "type": "string"
           }
         }
       },
@@ -9592,6 +10248,40 @@
           },
           "mainAddress": {
             "type": "boolean"
+          }
+        }
+      },
+      "HostKind": {
+        "enum": [
+          "hyperv",
+          "proxmox",
+          "external"
+        ],
+        "type": "string"
+      },
+      "HostMaintenanceResponse": {
+        "required": [
+          "phase",
+          "since",
+          "updateId"
+        ],
+        "type": "object",
+        "properties": {
+          "phase": {
+            "$ref": "#/components/schemas/MaintenanceState"
+          },
+          "since": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "updateId": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -9698,6 +10388,233 @@
           }
         }
       },
+      "HostRamAdmission": {
+        "required": [
+          "enforced",
+          "lineBytes",
+          "availableBytes"
+        ],
+        "type": "object",
+        "properties": {
+          "enforced": {
+            "type": "boolean"
+          },
+          "lineBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "availableBytes": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "HostRamSummary": {
+        "required": [
+          "totalBytes",
+          "headroomBytes",
+          "reservedBytes",
+          "unmanagedBytes",
+          "physicalFreeBytes",
+          "availableBytes",
+          "usedBytes",
+          "vmResidentBytes",
+          "hostOwnBytes",
+          "committedBytes",
+          "admission",
+          "swap"
+        ],
+        "type": "object",
+        "properties": {
+          "totalBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "headroomBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "reservedBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "unmanagedBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "physicalFreeBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "availableBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "usedBytes": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int64"
+          },
+          "vmResidentBytes": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int64"
+          },
+          "hostOwnBytes": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int64"
+          },
+          "committedBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "admission": {
+            "$ref": "#/components/schemas/HostRamAdmission"
+          },
+          "swap": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/HostSwapSummary"
+              }
+            ]
+          }
+        }
+      },
+      "HostStatusResponse": {
+        "required": [
+          "version",
+          "health",
+          "capacity",
+          "capacityMode",
+          "memoryPressure",
+          "maintenance",
+          "activeJobs",
+          "leaseOverdueCount",
+          "unmanagedVmCount"
+        ],
+        "type": "object",
+        "properties": {
+          "version": {
+            "$ref": "#/components/schemas/InstalledRelease"
+          },
+          "health": {
+            "$ref": "#/components/schemas/HostHealthResponse"
+          },
+          "capacity": {
+            "$ref": "#/components/schemas/HostCapacitySummary"
+          },
+          "capacityMode": {
+            "$ref": "#/components/schemas/CapacityMode"
+          },
+          "memoryPressure": {
+            "$ref": "#/components/schemas/MemoryPressureStatus"
+          },
+          "maintenance": {
+            "$ref": "#/components/schemas/HostMaintenanceResponse"
+          },
+          "activeJobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HostActiveJobResponse"
+            }
+          },
+          "leaseOverdueCount": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "unmanagedVmCount": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "HostSwapSummary": {
+        "required": [
+          "totalBytes",
+          "usedBytes"
+        ],
+        "type": "object",
+        "properties": {
+          "totalBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "usedBytes": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "HostUpdateHistoryEntry": {
+        "required": [
+          "updateId",
+          "commit",
+          "state",
+          "phase",
+          "phases",
+          "started",
+          "finished",
+          "error",
+          "blockingJobs"
+        ],
+        "type": "object",
+        "properties": {
+          "updateId": {
+            "type": "string"
+          },
+          "commit": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/HostUpdateState"
+          },
+          "phase": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "phases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HostUpdatePhase"
+            }
+          },
+          "started": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "finished": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "error": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "blockingJobs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "HostUpdateOfferResponse": {
         "required": [
           "version",
@@ -9710,6 +10627,36 @@
           },
           "commit": {
             "type": "string"
+          }
+        }
+      },
+      "HostUpdatePhase": {
+        "required": [
+          "name",
+          "at",
+          "outcome",
+          "error"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "outcome": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "error": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -9738,6 +10685,25 @@
           }
         }
       },
+      "HostUpdateState": {
+        "enum": [
+          "checking",
+          "staged",
+          "stageFailed",
+          "draining",
+          "handedOff",
+          "applying",
+          "succeeded",
+          "applyFailed",
+          "rolledBack",
+          "rolledBackWithDatabase",
+          "recoveryFailed",
+          "interrupted",
+          "cancelled",
+          "resolvedByAdmin"
+        ],
+        "type": "string"
+      },
       "HostUpdateStatusResponse": {
         "required": [
           "supportsAutoApply",
@@ -9761,9 +10727,21 @@
           "installed": {
             "$ref": "#/components/schemas/InstalledRelease"
           },
-          "current": { },
+          "current": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/HostUpdateHistoryEntry"
+              }
+            ]
+          },
           "history": {
-            "type": "array"
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HostUpdateHistoryEntry"
+            }
           },
           "recoveryRecord": {
             "oneOf": [
@@ -9806,6 +10784,34 @@
               "null",
               "string"
             ]
+          }
+        }
+      },
+      "HostWindowsResponse": {
+        "required": [
+          "keys",
+          "guests",
+          "machines"
+        ],
+        "type": "object",
+        "properties": {
+          "keys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WindowsKeyInfo"
+            }
+          },
+          "guests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WindowsGuestStatus"
+            }
+          },
+          "machines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WindowsLicenseMachine"
+            }
           }
         }
       },
@@ -10168,6 +11174,163 @@
           }
         }
       },
+      "IsoBuildMode": {
+        "enum": [
+          "prebuilt",
+          "perVm",
+          "native",
+          "inGuest",
+          "hypervisorHost"
+        ],
+        "type": "string"
+      },
+      "IsoCatalogCurrent": {
+        "required": [
+          "fileName",
+          "sizeBytes",
+          "builtAt",
+          "sourceSha256",
+          "bootstrapKeyFingerprint",
+          "hostnameSource"
+        ],
+        "type": "object",
+        "properties": {
+          "fileName": {
+            "type": "string"
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "builtAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "sourceSha256": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "bootstrapKeyFingerprint": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "hostnameSource": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "IsoCatalogItem": {
+        "required": [
+          "fileName",
+          "sizeBytes",
+          "isCurrent",
+          "builtAt",
+          "sidecarReadable"
+        ],
+        "type": "object",
+        "properties": {
+          "fileName": {
+            "type": "string"
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "isCurrent": {
+            "type": "boolean"
+          },
+          "builtAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "sidecarReadable": {
+            "type": "boolean"
+          }
+        }
+      },
+      "IsoCatalogResponse": {
+        "required": [
+          "mode",
+          "source",
+          "current",
+          "entries"
+        ],
+        "type": "object",
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/IsoBuildMode"
+          },
+          "source": {
+            "$ref": "#/components/schemas/IsoCatalogSource"
+          },
+          "current": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/IsoCatalogCurrent"
+              }
+            ]
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IsoCatalogItem"
+            }
+          }
+        }
+      },
+      "IsoCatalogSource": {
+        "required": [
+          "path",
+          "url",
+          "sha256Configured",
+          "present",
+          "sizeBytes"
+        ],
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "url": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "sha256Configured": {
+            "type": "boolean"
+          },
+          "present": {
+            "type": "boolean"
+          },
+          "sizeBytes": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int64"
+          }
+        }
+      },
       "JobAcceptedResponse": {
         "required": [
           "jobId"
@@ -10302,6 +11465,27 @@
           }
         }
       },
+      "JobRetryRequest": {
+        "type": "object",
+        "properties": {
+          "secrets": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProvisionSecretsRequest"
+              }
+            ]
+          },
+          "backupId": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
       "JobStartAnswer": {
         "required": [
           "jobId"
@@ -10402,6 +11586,28 @@
         ],
         "type": "string"
       },
+      "LifecycleConfig": {
+        "required": [
+          "gracefulShutdownTimeoutSeconds",
+          "leaseTickSeconds",
+          "leaseRetrySeconds"
+        ],
+        "type": "object",
+        "properties": {
+          "gracefulShutdownTimeoutSeconds": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "leaseTickSeconds": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "leaseRetrySeconds": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
       "MaintenanceState": {
         "enum": [
           "open",
@@ -10409,6 +11615,50 @@
           "maintenance"
         ],
         "type": "string"
+      },
+      "MediaConfig": {
+        "required": [
+          "maxBytes",
+          "maxItemsPerUser",
+          "uploadChunkBytes",
+          "uploadTtlHours",
+          "acquireTimeoutMinutes",
+          "allowHttp",
+          "unreferencedTtlHours"
+        ],
+        "type": "object",
+        "properties": {
+          "maxBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "maxItemsPerUser": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "uploadChunkBytes": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "uploadTtlHours": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "acquireTimeoutMinutes": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "allowHttp": {
+            "type": "boolean"
+          },
+          "unreferencedTtlHours": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          }
+        }
       },
       "MediaEndpointsAcquireWindowsRequest": {
         "required": [
@@ -10599,6 +11849,26 @@
         ],
         "type": "string"
       },
+      "MemoryPressureAction": {
+        "required": [
+          "vmName",
+          "at",
+          "reason"
+        ],
+        "type": "object",
+        "properties": {
+          "vmName": {
+            "type": "string"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
       "MemoryPressureConfig": {
         "type": "object",
         "properties": {
@@ -10633,6 +11903,45 @@
           }
         }
       },
+      "MemoryPressureStatus": {
+        "required": [
+          "enabled",
+          "state",
+          "lastAction"
+        ],
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "state": {
+            "type": "string"
+          },
+          "lastAction": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MemoryPressureAction"
+              }
+            ]
+          },
+          "usedPercent": {
+            "type": [
+              "null",
+              "number"
+            ],
+            "format": "double"
+          },
+          "detail": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
       "NetworkCapabilities": {
         "required": [
           "clientForward",
@@ -10661,6 +11970,29 @@
           },
           "isolation": {
             "$ref": "#/components/schemas/CapabilityLevel"
+          }
+        }
+      },
+      "NetworkConfig": {
+        "required": [
+          "hostForwardsEnabled",
+          "directAddressReporting"
+        ],
+        "type": "object",
+        "properties": {
+          "hostForwardsEnabled": {
+            "type": "boolean"
+          },
+          "directAddressReporting": {
+            "type": "boolean"
+          },
+          "defaultMode": {
+            "type": "string",
+            "default": "relayed"
+          },
+          "ownerMaySwitchMode": {
+            "type": "boolean",
+            "default": false
           }
         }
       },
@@ -11802,6 +13134,15 @@
             "items": {
               "$ref": "#/components/schemas/TokenUsageDayRequest"
             }
+          },
+          "agents": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/GuestAgentRequest"
+            }
           }
         }
       },
@@ -12018,6 +13359,45 @@
           }
         }
       },
+      "UpdatesConfig": {
+        "required": [
+          "repository",
+          "channel",
+          "drainTimeoutMinutes",
+          "healthTimeoutSeconds"
+        ],
+        "type": "object",
+        "properties": {
+          "repository": {
+            "type": "string"
+          },
+          "channel": {
+            "type": "string"
+          },
+          "drainTimeoutMinutes": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "healthTimeoutSeconds": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "auto": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "UsageConfig": {
+        "type": "object",
+        "properties": {
+          "retentionDays": {
+            "type": "integer",
+            "format": "int32",
+            "default": 400
+          }
+        }
+      },
       "UserAllowance": {
         "required": [
           "allowChildCreation",
@@ -12098,6 +13478,128 @@
           },
           "effective": {
             "$ref": "#/components/schemas/EffectiveAllowanceResponse"
+          }
+        }
+      },
+      "UserCapsConfig": {
+        "required": [
+          "maxRetainedChildren",
+          "cpuBudget",
+          "ramBudgetBytes",
+          "storageBudgetBytes",
+          "maxChildLifetimeSeconds",
+          "allowNeverLifetime",
+          "allowSharing"
+        ],
+        "type": "object",
+        "properties": {
+          "maxRetainedChildren": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          },
+          "cpuBudget": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          },
+          "ramBudgetBytes": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int64"
+          },
+          "storageBudgetBytes": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int64"
+          },
+          "maxChildLifetimeSeconds": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int64"
+          },
+          "allowNeverLifetime": {
+            "type": [
+              "null",
+              "boolean"
+            ]
+          },
+          "allowSharing": {
+            "type": [
+              "null",
+              "boolean"
+            ]
+          }
+        }
+      },
+      "UserDefaultsConfig": {
+        "required": [
+          "maxPrimaries",
+          "allowChildCreation",
+          "maxRetainedChildren",
+          "cpuBudget",
+          "ramBudgetBytes",
+          "storageBudgetBytes",
+          "maxChildLifetimeSeconds",
+          "allowNeverLifetime",
+          "allowSharing"
+        ],
+        "type": "object",
+        "properties": {
+          "maxPrimaries": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "allowChildCreation": {
+            "type": "boolean"
+          },
+          "maxRetainedChildren": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "cpuBudget": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          },
+          "ramBudgetBytes": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int64"
+          },
+          "storageBudgetBytes": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int64"
+          },
+          "maxChildLifetimeSeconds": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int64"
+          },
+          "allowNeverLifetime": {
+            "type": "boolean"
+          },
+          "allowSharing": {
+            "type": "boolean"
           }
         }
       },
@@ -12438,6 +13940,17 @@
             }
           },
           "note": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "VaultConfig": {
+        "type": "object",
+        "properties": {
+          "webUrl": {
             "type": [
               "null",
               "string"
@@ -13106,6 +14619,81 @@
           }
         }
       },
+      "VirtualizationConfig": {
+        "required": [
+          "nestedDefault",
+          "nestedSelectable"
+        ],
+        "type": "object",
+        "properties": {
+          "nestedDefault": {
+            "type": "boolean"
+          },
+          "nestedSelectable": {
+            "type": "boolean"
+          },
+          "minimumRamBytes": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int64",
+            "default": 6442450944
+          }
+        }
+      },
+      "VmAgentResponse": {
+        "required": [
+          "tool",
+          "name",
+          "version",
+          "latest",
+          "updateAvailable"
+        ],
+        "type": "object",
+        "properties": {
+          "tool": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "latest": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "updateAvailable": {
+            "type": "boolean"
+          }
+        }
+      },
+      "VmAgentsResponse": {
+        "required": [
+          "reportedAt",
+          "agents"
+        ],
+        "type": "object",
+        "properties": {
+          "reportedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "agents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VmAgentResponse"
+            }
+          }
+        }
+      },
       "VmAppliedState": {
         "required": [
           "commit",
@@ -13281,6 +14869,11 @@
           "recommendedRamGb": {
             "type": "integer",
             "format": "int32"
+          },
+          "recommendedDiskGb": {
+            "type": "integer",
+            "format": "int32",
+            "default": 50
           }
         }
       },
@@ -13299,6 +14892,46 @@
           },
           "settings": {
             "$ref": "#/components/schemas/ProvisionSettings"
+          }
+        }
+      },
+      "VmDesiredStateResponse": {
+        "required": [
+          "desired",
+          "hash",
+          "updatedAt",
+          "updatedBy"
+        ],
+        "type": "object",
+        "properties": {
+          "desired": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VmDesiredState"
+              }
+            ]
+          },
+          "hash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "updatedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "updatedBy": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -14194,6 +15827,42 @@
           }
         }
       },
+      "VolumeCapacity": {
+        "required": [
+          "root",
+          "totalBytes",
+          "freeBytes",
+          "headroomBytes",
+          "growthReservedBytes",
+          "availableBytes"
+        ],
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "string"
+          },
+          "totalBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "freeBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "headroomBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "growthReservedBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "availableBytes": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "WhoAmIResponse": {
         "required": [
           "name",
@@ -14268,6 +15937,172 @@
           }
         }
       },
+      "WindowsActivationOperation": {
+        "required": [
+          "id",
+          "allocationId",
+          "mode",
+          "stage"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "allocationId": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string"
+          },
+          "error": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "WindowsGuestStatus": {
+        "required": [
+          "vmName",
+          "incarnation",
+          "product",
+          "edition"
+        ],
+        "type": "object",
+        "properties": {
+          "vmName": {
+            "type": "string"
+          },
+          "incarnation": {
+            "type": "string"
+          },
+          "product": {
+            "type": "string"
+          },
+          "edition": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string",
+            "default": "installing"
+          },
+          "activation": {
+            "type": "string",
+            "default": "not-activated"
+          },
+          "partialKey": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "guestReported": {
+            "type": "boolean",
+            "default": false
+          },
+          "keyId": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "released": {
+            "type": "boolean",
+            "default": false
+          },
+          "uptime": {
+            "type": [
+              "null",
+              "number"
+            ],
+            "format": "double"
+          },
+          "installEjected": {
+            "type": "boolean",
+            "default": false
+          },
+          "auxiliaryEjected": {
+            "type": "boolean",
+            "default": false
+          },
+          "attempted": {
+            "type": "boolean",
+            "default": false
+          },
+          "kms": {
+            "type": "boolean",
+            "default": false
+          },
+          "error": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "deliveredAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "hostId": {
+            "type": "string",
+            "default": ""
+          },
+          "evaluation": {
+            "type": "boolean",
+            "default": false
+          },
+          "license": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WindowsLicenseObservation"
+              }
+            ]
+          },
+          "allocationId": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "hardware": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ChildHardware"
+              }
+            ]
+          },
+          "operation": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WindowsActivationOperation"
+              }
+            ]
+          },
+          "machineId": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
       "WindowsImage": {
         "required": [
           "product",
@@ -14297,6 +16132,54 @@
           "evaluation": {
             "type": "boolean",
             "default": false
+          }
+        }
+      },
+      "WindowsKeyInfo": {
+        "required": [
+          "id",
+          "product",
+          "edition",
+          "kind",
+          "partialKey",
+          "budget",
+          "used",
+          "notes"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "product": {
+            "type": "string"
+          },
+          "edition": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "partialKey": {
+            "type": "string"
+          },
+          "budget": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          },
+          "used": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "hostId": {
+            "type": "string",
+            "default": ""
           }
         }
       },
@@ -14363,6 +16246,125 @@
           },
           "operationId": {
             "type": "string"
+          }
+        }
+      },
+      "WindowsLicenseMachine": {
+        "required": [
+          "id",
+          "keyId",
+          "hostId",
+          "incarnation",
+          "hardware",
+          "state",
+          "vmName",
+          "allocationId",
+          "previousNames"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "keyId": {
+            "type": "string"
+          },
+          "hostId": {
+            "type": "string"
+          },
+          "incarnation": {
+            "type": "string"
+          },
+          "hardware": {
+            "$ref": "#/components/schemas/ChildHardware"
+          },
+          "state": {
+            "type": "string"
+          },
+          "vmName": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "allocationId": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "previousNames": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "hasConfirmationId": {
+            "type": "boolean",
+            "default": false
+          },
+          "reuses": {
+            "type": "integer",
+            "format": "int32",
+            "default": 0
+          }
+        }
+      },
+      "WindowsLicenseObservation": {
+        "required": [
+          "observedAt"
+        ],
+        "type": "object",
+        "properties": {
+          "observedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "activationId": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "partialKey": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "channel": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "status": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          },
+          "reason": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "uint32"
+          },
+          "graceMinutes": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          },
+          "evaluationEnd": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
           }
         }
       },
