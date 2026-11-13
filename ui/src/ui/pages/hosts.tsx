@@ -160,7 +160,7 @@ function HostVmSettings({ h, v, kids, onClose }: { h: Host; v: HostVm; kids: Hos
   const act = (a: Parameters<typeof be.hostVmAction>[2]) => be.hostVmAction(h.id, v.name, a);
   return (
     <Sec title={v.name} right={<Btn sm icon="x" title="Close" onClick={onClose} />}>
-      <Row l="Network"><Seg label="Network" opts={['default', 'relayed', 'direct'] as const} labels={{ default: 'Host default', relayed: 'Relayed', direct: 'Direct' }} value={net} onChange={setNet} /></Row>
+      {v.role === 'primary' && <Row l="Network"><Seg label="Network" opts={['default', 'relayed', 'direct'] as const} labels={{ default: 'Host default', relayed: 'Relayed', direct: 'Direct' }} value={net} onChange={setNet} /></Row>}
       <Row l="vCPUs"><Field value={cpus} onInput={setCpus} label="vCPUs" mono /></Row>
       <Row l={<>Memory <span class="d">GB</span></>}><Field value={mem} onInput={setMem} label="Memory" mono /></Row>
       <Row l="Address"><span class="m">{v.address}</span></Row>

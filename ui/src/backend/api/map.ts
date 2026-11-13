@@ -195,7 +195,8 @@ export function toHostVm(r: VmResponse): HostVm {
     network: mode === 'relayed' || mode === 'direct' ? mode : 'default',
     address: r.observed?.addresses?.[0]?.address ?? r.publicHost,
     lease: r.lease?.expiresAt ? when(r.lease.expiresAt) : 'no expiry',
-    shared: r.shared,
+    // `shared` is the caller's access to someone else's VM; the VM's own setting is its sharing scope.
+    shared: r.sharing === 'host',
     tokensToday: String(r.tokenUsage?.today.tokens ?? 0),
   };
 }
@@ -300,22 +301,31 @@ export function toStatus(st: Loose | null): Pick<Host, 'health' | 'capacity'> {
   };
 }
 
+/** Host update states (HostUpdateState, camelCase) while an update is under way. */
+const UPDATE_RUNNING = new Set(['checking', 'staged', 'draining', 'handedOff', 'applying']);
+export const updateRunning = (row: unknown) => !!row && UPDATE_RUNNING.has(str((row as Loose).state));
+
+/** The status route's history rows: `{updateId, commit, state, phase, started, finished, error}`. */
 export function toUpdates(u: HostUpdateStatus): HostUpdate[] {
-  return (u.history as Loose[]).map(x => ({
-    at: when(str(x.startedAt ?? x.at ?? x.finishedAt)),
-    from: str(x.fromVersion ?? x.previousVersion ?? shortCommit(str(x.previousCommit))),
-    to: str(x.toVersion ?? x.version ?? shortCommit(str(x.commit))),
-    state: x.outcome === 'rolled-back' || x.outcome === 'rolledBack' ? 'rolled back' : x.outcome ? 'done' : 'running',
-    by: str(x.actor ?? x.by),
-  }));
+  return (u.history as Loose[]).map(x => {
+    const st = str(x.state);
+    return {
+      at: when(str(x.started)),
+      from: '–',
+      to: shortCommit(str(x.commit)),
+      state: st === 'succeeded' ? 'done' : st.startsWith('rolledBack') ? 'rolled back' : UPDATE_RUNNING.has(st) ? 'running' : 'failed',
+      by: '–',
+    };
+  });
 }
 
 /** `GET /host/windows` is not typed in the contract; the records are WindowsKeyInfo and WindowsGuestStatus. */
 export function toWindows(w: Loose | null): { winKeys: WinKey[]; winGuests: (WinGuest & { incarnation: string })[] } {
   const keys = (Array.isArray(w?.keys) ? w!.keys : []) as Loose[];
-  const guests = (Array.isArray(w?.guests) ? w!.guests : []) as Loose[];
+  // A released guest is an earlier incarnation of a VM that was deleted; it holds no key and takes no action.
+  const guests = ((Array.isArray(w?.guests) ? w!.guests : []) as Loose[]).filter(g => g.released !== true);
   const held = new Set(guests.map(g => str(g.keyId)).filter(Boolean));
-  const kind = (k: string): WinKey['kind'] => (k.toUpperCase() === 'MAK' ? 'MAK' : k.toUpperCase() === 'KMS' ? 'KMS' : 'Retail');
+  const kind = (k: string): WinKey['kind'] => (/mak/i.test(k) ? 'MAK' : /kms/i.test(k) ? 'KMS' : 'Retail');
   return {
     winKeys: keys.map(k => ({ id: str(k.id), product: str(k.product), edition: str(k.edition), kind: kind(str(k.kind)), partial: str(k.partialKey), used: str(k.used), held: held.has(str(k.id)) })),
     winGuests: guests.map(g => ({

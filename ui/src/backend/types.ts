@@ -173,7 +173,7 @@ export interface ConfigSection { name: string; json: string; updated: string }
 export interface Certificate { subject: string; validUntil: string; daysLeft: number; sha256: string; issuer: string }
 export interface WinKey { id: string; product: string; edition: string; kind: 'Retail' | 'MAK' | 'KMS'; partial: string; used: string; held: boolean }
 export interface WinGuest { name: string; stage: string; activation: 'activated' | 'grace' | 'not activated'; keyId: string | null }
-export interface HostUpdate { at: string; from: string; to: string; state: 'done' | 'rolled back' | 'running'; by: string }
+export interface HostUpdate { at: string; from: string; to: string; state: 'done' | 'rolled back' | 'running' | 'failed'; by: string }
 
 export interface Host {
   id: string;

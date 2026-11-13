@@ -6,7 +6,7 @@ import type {
 } from '../types';
 import { followEvents, type AgentEventData } from './events';
 import {
-  allowanceOf, codeGroups, hostVersion, jobKey, problemText, splitJobKey, toCert, toConfig, toDevice, toHostJob, toHostUser, toHostVm, toJob,
+  updateRunning, allowanceOf, codeGroups, hostVersion, jobKey, problemText, splitJobKey, toCert, toConfig, toDevice, toHostJob, toHostUser, toHostVm, toJob,
   toMedia, toStatus, toUpdates, toUsage, toVm, toWindows, vmKey,
   type AuditEntry, type EngineView, type Health, type HostUpdateStatus, type HttpsStatus, type JobResponse, type MediaItem, type TokenSummary,
   type UsageSummary, type UserDetail, type VmParts, type VmResponse, type WhoAmI,
@@ -58,7 +58,7 @@ interface Slice {
 }
 
 class ApiError extends Error {
-  constructor(message: string, readonly status: number, readonly code: string | null) { super(message); }
+  constructor(message: string, readonly status: number, readonly code: string | null, readonly body: Loose | null = null) { super(message); }
 }
 
 /** The data of an openapi-fetch call, or an ApiError with the problem's text. */
@@ -66,7 +66,7 @@ async function ok<T>(p: Promise<{ data?: T; error?: unknown; response: Response 
   const r = await p;
   if (!r.response.ok) {
     const e = r.error as Loose | undefined;
-    throw new ApiError(problemText(e, `${r.response.status} ${r.response.statusText}`.trim()), r.response.status, typeof e?.code === 'string' ? e.code : null);
+    throw new ApiError(problemText(e, `${r.response.status} ${r.response.statusText}`.trim()), r.response.status, typeof e?.code === 'string' ? e.code : null, e ?? null);
   }
   return r.data as T;
 }
@@ -396,7 +396,7 @@ export class ApiBackend implements Backend {
       config: a?.config ?? [],
       cert: a?.https ? toCert(a.https, new Date()) : null,
       updates: u ? toUpdates(u) : [],
-      updating: !!u?.current,
+      updating: updateRunning(u?.current),
       updateTo: admin ? (u?.available && u.available.commit !== u.installed.commit ? u.available.version : null) : null,
       problem: sl.problem,
     };
@@ -512,8 +512,13 @@ export class ApiBackend implements Backend {
       for (const [engine, sl] of this.slices) {
         const h = this.s.hosts.find(x => x.id === engine);
         const c = this.engine(engine);
-        if (h?.admin && h.updateTo) {
-          await this.run(async () => { const r = await ok(c.POST('/api/v1/host/updates/run')); void r; }, `Updating ${h.name}`, engine);
+        const mine = this.s.vms.filter(v => v.hostId === engine);
+        if (h?.admin && h.updateTo && mine.length) {
+          // The host updates first and reprovisions the VM named here after it succeeded. The engine takes
+          // one follower per request, so the user's other VMs on this host update with the next click.
+          await this.run(() => ok(c.POST('/api/v1/vms/{name}/update', { params: { path: { name: mine[0].name } } })), `Updating ${h.name}, then ${mine[0].name}`, engine);
+        } else if (h?.admin && h.updateTo) {
+          await this.run(() => ok(c.POST('/api/v1/host/updates/run')), `Updating ${h.name}`, engine);
         } else if (this.s.vms.some(v => v.hostId === engine && v.updateTo)) {
           await this.run(() => ok(c.POST('/api/v1/me/vms/reprovision')), `Updating your VMs on ${sl.view.name}`, engine);
         }
@@ -767,7 +772,21 @@ export class ApiBackend implements Backend {
         this.hostAct(hostId, c => ok(c.POST('/api/v1/vms/{name}/lifecycle', { ...path, body: { action, ...(action === 'start' && hv?.role === 'child' ? { lifetime: '12h' } : {}) } as never })),
           action === 'start' ? `Starting ${vm}` : action === 'restart' ? `Restarting ${vm}` : `Shutting down ${vm}`);
         return;
-      case 'delete': this.hostAct(hostId, c => ok(c.DELETE('/api/v1/vms/{name}', path)), `Deleting ${vm}`); return;
+      case 'delete': {
+        // A primary with children: the screen listed them and the admin typed the name. The engine answers with
+        // its own list and a token; the delete goes ahead only when that list is the one the admin confirmed.
+        const kids = new Set(this.s.hosts.find(h => h.id === hostId)?.vms.filter(v => v.parent === vm).map(v => v.name) ?? []);
+        this.hostAct(hostId, async c => {
+          try { await ok(c.DELETE('/api/v1/vms/{name}', path)); } catch (e) {
+            if (!(e instanceof ApiError) || e.code !== 'cascade-confirmation-required' || typeof e.body?.cascadeToken !== 'string') throw e;
+            const listed = (Array.isArray(e.body.children) ? e.body.children : []) as unknown[];
+            const names = listed.map(x => (typeof x === 'string' ? x : String((x as Loose)?.name ?? (x as Loose)?.vmName ?? '')));
+            if (names.length !== kids.size || names.some(n => !kids.has(n))) throw new Error(`The child VMs of ${vm} changed; look again`);
+            await ok(c.DELETE('/api/v1/vms/{name}', { ...path, body: { cascade: { token: e.body.cascadeToken } } } as never));
+          }
+        }, `Deleting ${vm}`);
+        return;
+      }
       case 'toggle-shared': this.hostAct(hostId, c => ok(c.PUT('/api/v1/vms/{name}/sharing', { ...path, body: { scope: hv?.shared ? 'private' : 'host' } as never })), 'Saved'); return;
       case 'renew-lease': this.hostAct(hostId, c => ok(c.POST('/api/v1/vms/{name}/lease', { ...path, body: {} as never })), 'Lifetime restarted'); return;
     }
@@ -785,7 +804,7 @@ export class ApiBackend implements Backend {
         if (patch.cpus !== undefined && patch.cpus !== hv.cpus) await ok(c.PUT('/api/v1/vms/{name}/cpu', { ...path, body: { cpus: patch.cpus } }));
         if (patch.memMaxGb !== undefined && patch.memMaxGb !== hv.memMaxGb) await ok(c.PUT('/api/v1/vms/{name}/memory', { ...path, body: { ramGb: patch.memMaxGb } }));
       }
-      if (patch.network !== undefined && patch.network !== hv.network) await ok(c.PUT('/api/v1/vms/{name}/network', { ...path, body: { mode: patch.network === 'default' ? null : patch.network } as never }));
+      if (hv.role === 'primary' && patch.network !== undefined && patch.network !== hv.network) await ok(c.PUT('/api/v1/vms/{name}/network', { ...path, body: { mode: patch.network === 'default' ? null : patch.network } as never }));
     }, 'Saved, applies at the next restart');
   }
 

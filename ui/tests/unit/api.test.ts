@@ -243,7 +243,7 @@ describe('ApiBackend', () => {
       return { status: 202, json: { jobId: 'u1', hostUpdateId: null, hostJobId: null } };
     });
     on('GET', `/api/engines/${E2}/api/v1/jobs/u1`, { json: job('u1', 'harbor', 'running') });
-    on('POST', `/api/engines/${E1}/api/v1/host/updates/run`, { status: 202, json: { state: 'started', jobId: 'h1', updateId: 'x' } });
+    on('POST', `/api/engines/${E1}/api/v1/vms/atlas/update`, { status: 202, json: { jobId: null, hostUpdateId: 'x', hostJobId: 'h1' } });
     on('POST', `/api/engines/${E2}/api/v1/me/vms/reprovision`, { status: 202, json: { vms: ['harbor'] } });
     await be.start();
     be.updateVm('harbor');
@@ -252,7 +252,7 @@ describe('ApiBackend', () => {
     be.updateEverything();
     await settle();
     expect(posts(calls).map(c => c.path)).toEqual([
-      `/api/engines/${E2}/api/v1/vms/harbor/update`, `/api/engines/${E1}/api/v1/host/updates/run`, `/api/engines/${E2}/api/v1/me/vms/reprovision`,
+      `/api/engines/${E2}/api/v1/vms/harbor/update`, `/api/engines/${E1}/api/v1/vms/atlas/update`, `/api/engines/${E2}/api/v1/me/vms/reprovision`,
     ]);
   });
 
@@ -372,6 +372,46 @@ describe('ApiBackend', () => {
     expect(be.snapshot().handout).toEqual({ hostId: E1, user: 'kai', address: 'https://orchard.test:8443', token: 'cst_secret' });
     be.closeHandout();
     expect(be.snapshot().handout).toBeNull();
+  });
+});
+
+describe('ApiBackend host administration', () => {
+  it('reads update rows, sharing and Windows guests as the engine reports them', async () => {
+    const { be, on } = world();
+    const p = `/api/engines/${E1}/api/v1`;
+    const row = (state: string) => ({ updateId: state, commit: 'e'.repeat(40), state, phase: null, phases: [], started: '2026-11-10T10:00:00Z', finished: null, error: null, blockingJobs: [] });
+    on('GET', `${p}/host/updates/status`, { json: { supportsAutoApply: true, installed: { commit: 'c'.repeat(40), packageVersion: '3.1.0', installedAt: null, source: 'x' },
+      current: row('succeeded'), history: [row('succeeded'), row('rolledBack'), row('applyFailed'), row('draining')], recoveryRecord: null, latestKnown: null, version: '3.1.0', channel: 'main', auto: false, available: null, availableError: null, databaseCopy: null } });
+    on('GET', `${p}/vms`, { json: [vmResponse('atlas', 'alex'), vmResponse('kid', 'kai', { kind: 'child', parent: 'x', sharing: 'host', shared: false })] });
+    on('GET', `${p}/host/windows`, { json: { keys: [{ id: 'k1', product: 'Windows 11', edition: 'Pro', kind: 'kms-client', partialKey: 'ABCDE', used: 1 }], machines: [],
+      guests: [{ vmName: 'win', incarnation: 'old', keyId: 'k1', released: true, stage: 'done', activation: 'activated' }, { vmName: 'win', incarnation: 'new', keyId: null, stage: 'installing', activation: 'not-activated' }] } });
+    await be.start();
+    const h = be.snapshot().hosts[0];
+    expect(h.updating).toBe(false);
+    expect(h.updates.map(u => u.state)).toEqual(['done', 'rolled back', 'failed', 'running']);
+    expect(h.vms.find(v => v.name === 'kid')!.shared).toBe(true);
+    expect(h.winGuests).toEqual([{ name: 'win', stage: 'installing', activation: 'not activated', keyId: null, incarnation: 'new' }]);
+    expect(h.winKeys[0]).toMatchObject({ kind: 'KMS', held: false });
+  });
+
+  it('deletes a primary with children only when the engine lists the children the admin confirmed', async () => {
+    const { be, calls, on, settle } = world();
+    const p = `/api/engines/${E1}/api/v1`;
+    on('GET', `${p}/vms`, { json: [vmResponse('atlas', 'alex'), vmResponse('kid', 'alex', { kind: 'child', parent: 'atlas' })] });
+    on('DELETE', `${p}/vms/atlas`, body => body
+      ? { status: 202, json: { jobId: 'd1' } }
+      : { status: 409, json: { title: 'cascade-confirmation-required', status: 409, code: 'cascade-confirmation-required', children: [{ name: 'kid' }], cascadeToken: 'tok' } });
+    await be.start();
+    be.hostVmAction(E1, 'atlas', 'delete');
+    await settle();
+    expect(calls.filter(c => c.method === 'DELETE').map(c => c.body)).toEqual([undefined, { cascade: { token: 'tok' } }]);
+    on('DELETE', `${p}/vms/atlas`, body => body ? { status: 202, json: { jobId: 'd1' } }
+      : { status: 409, json: { title: 'x', status: 409, code: 'cascade-confirmation-required', children: [{ name: 'kid' }, { name: 'other' }], cascadeToken: 'tok' } });
+    const before = calls.filter(c => c.method === 'DELETE').length;
+    be.hostVmAction(E1, 'atlas', 'delete');
+    await settle();
+    expect(calls.filter(c => c.method === 'DELETE').length).toBe(before + 1);
+    expect(be.snapshot().notice?.text).toContain('changed');
   });
 });
 
