@@ -405,8 +405,9 @@ public sealed class ProfileSync : IDisposable
                     }
 
                     var current = await replica.GetAsync(id, ct);
+                    // Unchanged since its revision, or (no known base) already what the store holds.
                     var clean = found ? ProfileRules.Equivalent(profile, baseValue)
-                        : entry.Revision is null && current is { Deleted: false } && ProfileRules.Equivalent(profile, current.Value);
+                        : current is { Deleted: false } && ProfileRules.Equivalent(profile, current.Value);
                     if (!clean) await QueueAsync(replica, entry.Name, profile, found ? entry.Revision!.Value : 0, found ? baseValue : null, origin, vm, ct);
                     States.Set(vm.Name, new VmProfileState(entry.Name, entry.Revision, Encoding.UTF8.GetString(file), entry.Fingerprint));
                 }

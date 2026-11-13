@@ -277,16 +277,14 @@ public sealed class EngineReplica : IDisposable
         finally { _lock.Release(); }
     }
 
-    /// <summary>The outcome of a submitted entry; <see cref="SubmitOutcome.Queued"/> while it waits in the outbox.</summary>
+    /// <summary>
+    /// The outcome of a submitted entry, asked once after a push: <see cref="SubmitOutcome.Queued"/>
+    /// while it waits in the outbox (it is then no longer tracked; the write-back delivers its result).
+    /// </summary>
     public SubmitOutcome TakeOutcome(long seq)
     {
-        if (_outcomes.TryRemove(seq, out var outcome))
-        {
-            _tracked.TryRemove(seq, out _);
-            return outcome;
-        }
-
-        return new SubmitOutcome.Queued();
+        _tracked.TryRemove(seq, out _);
+        return _outcomes.TryRemove(seq, out var outcome) ? outcome : new SubmitOutcome.Queued();
     }
 
     private void Track(long seq, SubmitOutcome outcome)

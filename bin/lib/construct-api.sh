@@ -37,6 +37,7 @@ cfg_resolve() {
 
 SERVICE_URL="$(cfg_resolve "${CONSTRUCT_SERVICE_URL:-}" CONSTRUCT_SERVICE_URL "")"
 SERVICE_URL="${SERVICE_URL%/}"
+# shellcheck disable=SC2034 # used by the scripts that source this
 INSTANCE_NAME="$(cfg_resolve "${CONSTRUCT_INSTANCE_NAME:-}" CONSTRUCT_INSTANCE_NAME \
   "$(hostname 2>/dev/null | tr '[:upper:]' '[:lower:]' || echo vm)")"
 CA_FILE="$(cfg_resolve "${CONSTRUCT_SERVICE_CA_FILE:-}" CONSTRUCT_SERVICE_CA_FILE "")"
@@ -73,6 +74,7 @@ api() {
   API_STATUS="$("${CURL}" "${args[@]}" "${SERVICE_URL}${path}" </dev/null 2>"${API_WORK}/stderr" || true)"
   API_STATUS="${API_STATUS:0:3}"
   [[ "${API_STATUS}" =~ ^[0-9]{3}$ ]] || API_STATUS="000"
+  # shellcheck disable=SC2034 # for the caller's messages
   API_ERROR="$(head -n 1 "${API_WORK}/stderr" 2>/dev/null | tr '\000-\037\177' ' ' | head -c 200 || true)"
 }
 
