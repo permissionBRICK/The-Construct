@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Construct.Agent.Core/Construct.Agent.Core.csproj" />
+    <Project Path="src/construct-agent/construct-agent.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Construct.Agent.Tests/Construct.Agent.Tests.csproj" />
+  </Folder>
+</Solution>
