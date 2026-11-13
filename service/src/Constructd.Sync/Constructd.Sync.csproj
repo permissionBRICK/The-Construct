@@ -16,6 +16,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Constructd.Store\Constructd.Store.csproj" />
+    <ProjectReference Include="..\Construct.Keys\Construct.Keys.csproj" />
   </ItemGroup>
 
 </Project>

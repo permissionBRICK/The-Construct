@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <!--
+    Identity and keys (docs/plans/construct-platform-design.md 8.1 to 8.5, 8.7): participant key
+    pairs, the root key U and the keys wrapped under it, pairing grants, the recovery code and request
+    proofs. Platform-independent, framework primitives only (System.Security.Cryptography), no
+    reference to the service, so the device agent, the engine and the tests all use the same code.
+  -->
+
+</Project>

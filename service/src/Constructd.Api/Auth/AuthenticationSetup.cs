@@ -30,6 +30,9 @@ public static class AuthenticationSetup
         {
             scheme.ForwardDefaultSelector = context =>
             {
+                // A device token decides whatever else the request carries (8.1).
+                if (DeviceAuthenticationHandler.Presented(context.Request)) return DeviceAuthenticationHandler.SchemeName;
+
                 var authScheme = AuthorizationHeader.SchemeOf(context.Request);
                 if (string.Equals(authScheme, UpdateHandoffAuthenticationHandler.SchemeName, StringComparison.OrdinalIgnoreCase)) return UpdateHandoffAuthenticationHandler.SchemeName;
 
@@ -70,6 +73,9 @@ public static class AuthenticationSetup
 
         builder.AddScheme<AuthenticationSchemeOptions, VmTokenAuthenticationHandler>(
             ConstructdSchemes.VmToken, displayName: "VM-scoped token", configureOptions: null);
+
+        builder.AddScheme<AuthenticationSchemeOptions, DeviceAuthenticationHandler>(
+            DeviceAuthenticationHandler.SchemeName, displayName: "Device", configureOptions: null);
 
         builder.AddScheme<AuthenticationSchemeOptions, VaultDeviceAuthenticationHandler>(
             ConstructdSchemes.VaultDevice, displayName: "Key vault device", configureOptions: null);

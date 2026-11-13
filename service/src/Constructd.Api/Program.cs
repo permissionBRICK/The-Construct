@@ -165,9 +165,12 @@ app.MapGroup("/api/v1")
     .MapUpdateEndpoints()
     .MapNetworkEndpoints()
     .MapVaultEndpoints()
-    .MapHttpsEndpoints();
+    .MapHttpsEndpoints()
+    .MapEngineParticipationEndpoints();
 
-app.MapGroup("/api/v1/store").RequireAuthorization(Policies.User).MapRecordStore((route, action) => route.Audited(action, "id"));
+// The store authenticates its own callers from the tokens it issued (8.1), not from the sign-in:
+// anonymous for the authorization middleware, refused by the store unless a route says otherwise.
+app.MapGroup("/api/v1/store").AllowAnonymous().MapRecordStore((route, action) => route.Audited(action, "id"));
 
 // The key vault's phone pages: anonymous static files outside /api/v1.
 app.MapVaultWebEndpoints();

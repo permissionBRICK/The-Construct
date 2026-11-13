@@ -29,6 +29,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Constructd.Sync", "src\Cons
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Constructd.Store.Host", "src\Constructd.Store.Host\Constructd.Store.Host.csproj", "{169CF175-49C3-4E71-BFC4-EA499A9B8EDB}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Construct.Keys", "src\Construct.Keys\Construct.Keys.csproj", "{D35A5B20-36E6-4C7F-A3D7-9838DFCF83A2}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -171,6 +173,18 @@ Global
 		{169CF175-49C3-4E71-BFC4-EA499A9B8EDB}.Release|x64.Build.0 = Release|Any CPU
 		{169CF175-49C3-4E71-BFC4-EA499A9B8EDB}.Release|x86.ActiveCfg = Release|Any CPU
 		{169CF175-49C3-4E71-BFC4-EA499A9B8EDB}.Release|x86.Build.0 = Release|Any CPU
+		{D35A5B20-36E6-4C7F-A3D7-9838DFCF83A2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D35A5B20-36E6-4C7F-A3D7-9838DFCF83A2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D35A5B20-36E6-4C7F-A3D7-9838DFCF83A2}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{D35A5B20-36E6-4C7F-A3D7-9838DFCF83A2}.Debug|x64.Build.0 = Debug|Any CPU
+		{D35A5B20-36E6-4C7F-A3D7-9838DFCF83A2}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{D35A5B20-36E6-4C7F-A3D7-9838DFCF83A2}.Debug|x86.Build.0 = Debug|Any CPU
+		{D35A5B20-36E6-4C7F-A3D7-9838DFCF83A2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D35A5B20-36E6-4C7F-A3D7-9838DFCF83A2}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D35A5B20-36E6-4C7F-A3D7-9838DFCF83A2}.Release|x64.ActiveCfg = Release|Any CPU
+		{D35A5B20-36E6-4C7F-A3D7-9838DFCF83A2}.Release|x64.Build.0 = Release|Any CPU
+		{D35A5B20-36E6-4C7F-A3D7-9838DFCF83A2}.Release|x86.ActiveCfg = Release|Any CPU
+		{D35A5B20-36E6-4C7F-A3D7-9838DFCF83A2}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -187,5 +201,6 @@ Global
 		{C2A3D007-E15B-4CEA-B610-2AD6AC4FD466} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{7CC82336-7CB9-4037-993C-81CECCBADE58} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{169CF175-49C3-4E71-BFC4-EA499A9B8EDB} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
+		{D35A5B20-36E6-4C7F-A3D7-9838DFCF83A2} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 EndGlobal
