@@ -85,6 +85,14 @@ public static class ProfileRules
         return result;
     }
 
+    /// <summary>Two profiles with the same canonical form (null is the absent profile).</summary>
+    public static bool Equivalent(JsonNode? a, JsonNode? b) => (a, b) switch
+    {
+        (null, null) => true,
+        (JsonObject x, JsonObject y) => JsonNode.DeepEquals(Finish(Normalize(x)), Finish(Normalize(y))),
+        _ => false,
+    };
+
     // ---- checks ---------------------------------------------------------------------------------
 
     /// <summary>The checks a profile write passes (schema and the write-path rules).</summary>
@@ -187,7 +195,7 @@ public static class ProfileRules
 
     internal static bool Str(JsonNode? n) => n is JsonValue v && v.GetValueKind() == JsonValueKind.String && v.GetValue<string>().Trim().Length > 0;
 
-    internal static string Text(JsonNode? n) => n is JsonValue v && v.GetValueKind() == JsonValueKind.String ? v.GetValue<string>() : n?.ToJsonString() ?? "";
+    public static string Text(JsonNode? n) => n is JsonValue v && v.GetValueKind() == JsonValueKind.String ? v.GetValue<string>() : n?.ToJsonString() ?? "";
 
     private static bool StringValue(JsonNode? n) => n is JsonValue v && v.GetValueKind() == JsonValueKind.String;
 

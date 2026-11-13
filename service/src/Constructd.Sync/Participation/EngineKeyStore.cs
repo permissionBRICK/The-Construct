@@ -86,6 +86,19 @@ public sealed class EngineKeyStore : IDisposable
         return sealedBytes is null ? null : EngineGrants.Open(HostKey, EngineId, account, new EngineGrant(name, epoch, sealedBytes));
     }
 
+    /// <summary>The accounts some device granted <paramref name="name"/> to: the ones this engine takes part in.</summary>
+    public IReadOnlyList<string> Accounts(string name)
+    {
+        lock (_lock)
+        {
+            using var command = Command("SELECT DISTINCT account FROM engine_grants WHERE name = $n ORDER BY account", ("$n", name));
+            using var reader = command.ExecuteReader();
+            var result = new List<string>();
+            while (reader.Read()) result.Add(reader.GetString(0));
+            return result;
+        }
+    }
+
     // ---- device tokens ----------------------------------------------------------------------------
 
     public string IssueDeviceToken(string account, string deviceId)

@@ -22,6 +22,22 @@ public sealed record ConflictView(string Id, long Revision, string ProfileId, lo
 /// <summary>What a push did.</summary>
 public sealed record PushResult(int Sent, int Merged, IReadOnlyList<string> ConflictIds, IReadOnlyList<string> Failed);
 
+/// <summary>Where one submitted edit ended (<see cref="EngineReplica.SubmitAsync"/>).</summary>
+public abstract record SubmitOutcome
+{
+    /// <summary>Still in the outbox: the store was not reached.</summary>
+    public sealed record Queued : SubmitOutcome;
+
+    /// <summary>The record is at <paramref name="Revision"/>: the edit, merged or not, or nothing left to write.</summary>
+    public sealed record Written(long Revision) : SubmitOutcome;
+
+    /// <summary>The merge could not resolve it: a conflict record holds the edit.</summary>
+    public sealed record Conflict(string ConflictId) : SubmitOutcome;
+
+    /// <summary>The store refused it; it stays queued and is retried at every push.</summary>
+    public sealed record Failed(string Reason) : SubmitOutcome;
+}
+
 /// <summary>The outcome of a resolve.</summary>
 public abstract record ResolveOutcome
 {
@@ -69,6 +85,13 @@ public sealed class EngineReplica : IDisposable
     private readonly IRecordKeyProvider _keys;
     private readonly int _supported;
 
+    // Outcomes of submitted entries, kept until the submitter takes them (SubmitAsync).
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, SubmitOutcome> _outcomes = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<long, bool> _tracked = new();
+
+    /// <summary>How many revisions of each profile the replica keeps as bases for its VMs' edits.</summary>
+    public const int HistoryRevisions = 20;
+
     public EngineReplica(string databasePath, string account, string engineId, IStoreClient store, IRecordKeyProvider keys, int supportedPayloadVersion = RecordPayload.CurrentVersion)
     {
         _account = account;
@@ -92,6 +115,9 @@ public sealed class EngineReplica : IDisposable
                 seq INTEGER PRIMARY KEY AUTOINCREMENT, account TEXT NOT NULL, id TEXT NOT NULL, kind TEXT NOT NULL,
                 write_id TEXT NOT NULL, base_revision INTEGER, base_value TEXT, value TEXT, deleted INTEGER NOT NULL,
                 origins TEXT NOT NULL, failed TEXT);
+            CREATE TABLE IF NOT EXISTS profile_history (
+                account TEXT NOT NULL, id TEXT NOT NULL, revision INTEGER NOT NULL, deleted INTEGER NOT NULL, value TEXT,
+                PRIMARY KEY (account, id, revision));
             """);
     }
 
@@ -153,6 +179,40 @@ public sealed class EngineReplica : IDisposable
         finally { _lock.Release(); }
     }
 
+    /// <summary>The current records of one kind, decrypted.</summary>
+    public async Task<IReadOnlyList<ReplicaRecord>> RecordsAsync(string kind, CancellationToken ct = default)
+    {
+        await _lock.WaitAsync(ct);
+        try { return Replicas($"SELECT {ReplicaColumns} FROM replica WHERE account = $a AND kind = $k ORDER BY id", ("$a", _account), ("$k", kind)); }
+        finally { _lock.Release(); }
+    }
+
+    /// <summary>
+    /// A profile's value at a revision this replica saw (the last <see cref="HistoryRevisions"/>):
+    /// the base of an edit a VM made on that revision. A deletion is found with a null value.
+    /// </summary>
+    public async Task<(bool Found, JsonNode? Value)> ValueAtAsync(string id, long revision, CancellationToken ct = default)
+    {
+        await _lock.WaitAsync(ct);
+        try
+        {
+            using var command = Command(null, "SELECT deleted, value FROM profile_history WHERE account = $a AND id = $id AND revision = $r",
+                ("$a", _account), ("$id", id), ("$r", revision));
+            using var reader = command.ExecuteReader();
+            if (!reader.Read()) return (false, null);
+            return (true, reader.GetInt64(0) != 0 || reader.IsDBNull(1) ? null : JsonNode.Parse(reader.GetString(1)));
+        }
+        finally { _lock.Release(); }
+    }
+
+    /// <summary>True while the outbox holds an edit of this record.</summary>
+    public async Task<bool> HasPendingAsync(string id, CancellationToken ct = default)
+    {
+        await _lock.WaitAsync(ct);
+        try { return Convert.ToInt64(Scalar("SELECT COUNT(*) FROM outbox WHERE account = $a AND id = $id", ("$a", _account), ("$id", id)), CultureInfo.InvariantCulture) > 0; }
+        finally { _lock.Release(); }
+    }
+
     // ---- local writes ---------------------------------------------------------------------------
 
     /// <summary>
@@ -171,6 +231,68 @@ public sealed class EngineReplica : IDisposable
     /// <summary>Queues the deletion of a profile (an explicit delete; 9.5).</summary>
     public Task DeleteProfileAsync(string name, string? origin, CancellationToken ct = default) =>
         EnqueueAsync(ProfileId(name), null, deleted: true, origin, ct);
+
+    /// <summary>
+    /// Queues an edit a VM or device made on a revision it saw (9.3): <paramref name="baseRevision"/>
+    /// with its content <paramref name="baseValue"/>, or 0 and null when the writer has no usable
+    /// base. Then the store decides: on its current revision the edit is written as it is, on a
+    /// newer one it is merged with that base, and without a base every field the two sides disagree
+    /// on is a conflict, never an overwrite. A null <paramref name="profile"/> deletes. Returns the
+    /// outbox entry, whose outcome <see cref="TakeOutcome"/> gives after a push; null when there is
+    /// nothing to write (a deletion of a profile that does not exist here).
+    /// </summary>
+    public async Task<long?> SubmitAsync(string name, JsonObject? profile, long baseRevision, JsonNode? baseValue, string origin, CancellationToken ct = default)
+    {
+        JsonObject? normalized = null;
+        if (profile is not null)
+        {
+            var problems = ProfileRules.Validate(profile);
+            if (problems.Count > 0) throw new InvalidProfileException(problems);
+            if (ProfileRules.Text(profile["name"]) != name)
+                throw new InvalidProfileException([new ProfileProblem("name", "The profile's name is not the name it is written under.")]);
+            normalized = ProfileRules.Finish(ProfileRules.Normalize(profile));
+        }
+
+        var id = ProfileId(name);
+        await _lock.WaitAsync(ct);
+        try
+        {
+            var replica = Replica(id);
+            var version = RecordPayload.VersionOf(replica?.Payload);
+            if (version > _supported) throw new PayloadTooNewException(version, _supported);
+            var (local, _) = LocalValue(id);
+            if (profile is null && local is null && replica is not { Deleted: false }) return null;
+
+            using var tx = _db.BeginTransaction();
+            Exec(tx, "INSERT INTO outbox (account, id, kind, write_id, base_revision, base_value, value, deleted, origins) VALUES ($a, $id, $k, $w, $br, $bv, $v, $d, $o)",
+                ("$a", _account), ("$id", id), ("$k", RecordKinds.Profile), ("$w", NewWriteId()), ("$br", Math.Max(0, baseRevision)),
+                ("$bv", baseRevision > 0 ? baseValue?.ToJsonString() : null), ("$v", normalized?.ToJsonString()), ("$d", profile is null ? 1 : 0),
+                ("$o", Origins([origin])));
+            long seq;
+            using (var last = Command(tx, "SELECT last_insert_rowid()")) seq = Convert.ToInt64(last.ExecuteScalar(), CultureInfo.InvariantCulture);
+            tx.Commit();
+            _tracked[seq] = true;
+            return seq;
+        }
+        finally { _lock.Release(); }
+    }
+
+    /// <summary>The outcome of a submitted entry; <see cref="SubmitOutcome.Queued"/> while it waits in the outbox.</summary>
+    public SubmitOutcome TakeOutcome(long seq)
+    {
+        if (_outcomes.TryRemove(seq, out var outcome))
+        {
+            _tracked.TryRemove(seq, out _);
+            return outcome;
+        }
+
+        return new SubmitOutcome.Queued();
+    }
+
+    private void Track(long seq, SubmitOutcome outcome)
+    {
+        if (_tracked.ContainsKey(seq)) _outcomes[seq] = outcome;
+    }
 
     private async Task EnqueueAsync(string id, JsonObject? value, bool deleted, string? origin, CancellationToken ct)
     {
@@ -229,10 +351,11 @@ public sealed class EngineReplica : IDisposable
                 var step = await SendAsync(entry, epoch, key, ct);
                 switch (step)
                 {
-                    case Step.Sent: sent++; break;
+                    case Step.Sent s: sent++; Track(entry.Seq, new SubmitOutcome.Written(s.Revision)); break;
                     case Step.Merged: merged++; break;
-                    case Step.Conflict c: conflicts.Add(c.ConflictId); break;
-                    case Step.Failed f: failed.Add(f.Reason); break;
+                    case Step.Dropped: Track(entry.Seq, new SubmitOutcome.Written(Replica(entry.Id)?.Revision ?? 0)); break;
+                    case Step.Conflict c: conflicts.Add(c.ConflictId); Track(entry.Seq, new SubmitOutcome.Conflict(c.ConflictId)); break;
+                    case Step.Failed f: failed.Add(f.Reason); Track(entry.Seq, new SubmitOutcome.Failed(f.Reason)); break;
                 }
             }
 
@@ -243,7 +366,7 @@ public sealed class EngineReplica : IDisposable
 
     private abstract record Step
     {
-        public sealed record Sent : Step;
+        public sealed record Sent(long Revision) : Step;
         public sealed record Merged : Step;
         public sealed record Dropped : Step;
         public sealed record Conflict(string ConflictId) : Step;
@@ -293,7 +416,7 @@ public sealed class EngineReplica : IDisposable
                     tx.Commit();
                 }
 
-                return new Step.Sent();
+                return new Step.Sent(accepted.Record.Revision);
 
             case WriteOutcome.Stale stale:
                 if (stale.Conflict.Current is not { } current)
@@ -623,6 +746,14 @@ public sealed class EngineReplica : IDisposable
             """,
             ("$a", _account), ("$id", record.Id), ("$k", record.Kind), ("$r", record.Revision), ("$d", record.Deleted ? 1 : 0),
             ("$dr", record.DeletedRevision), ("$actor", record.Actor), ("$p", record.Deleted ? null : payload?.ToJsonString()));
+        if (record.Kind != RecordKinds.Profile) return;
+        Exec(tx, "INSERT OR IGNORE INTO profile_history (account, id, revision, deleted, value) VALUES ($a, $id, $r, $d, $v)",
+            ("$a", _account), ("$id", record.Id), ("$r", record.Revision), ("$d", record.Deleted ? 1 : 0),
+            ("$v", record.Deleted ? null : RecordPayload.ValueOf(payload)?.ToJsonString()));
+        Exec(tx, """
+            DELETE FROM profile_history WHERE account = $a AND id = $id AND revision NOT IN (
+                SELECT revision FROM profile_history WHERE account = $a AND id = $id ORDER BY revision DESC LIMIT $keep)
+            """, ("$a", _account), ("$id", record.Id), ("$keep", HistoryRevisions));
     }
 
     /// <summary>Opens a stored record's payload; a tombstone or a record without payload has none.</summary>
