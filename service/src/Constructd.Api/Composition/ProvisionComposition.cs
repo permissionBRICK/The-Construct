@@ -33,7 +33,10 @@ public static class ProvisionComposition
         // Its own process runner: fake mode registers a recording one for the platform calls.
         services.AddSingleton<ISshRunner>(_ => new SystemSshRunner(new ProcessRunner()));
         services.AddSingleton<IProvisionTargets, ProvisionTargets>();
+        services.AddSingleton<RecoveryMarks>();
+        services.AddSingleton<ReinstallKeys>();
         services.AddSingleton<ProvisionJob>();
+        services.AddSingleton<ReinstallJob>();
         services.AddSingleton<ProvisionJobs>();
         return services;
     }

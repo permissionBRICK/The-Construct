@@ -287,7 +287,7 @@ gate: the resource policy is evaluated again inside every handler.
 | Child lifecycle | `POST /vms/{parent}/children`; `POST /vms/{name}/lifecycle`; `POST /vms/{name}/lease`; `PUT /vms/{name}/sharing`; `PUT /vms/{name}/hardware`; `PUT /vms/{name}/media`; `DELETE /vms/{name}` | Parent delegate creates; operator lifecycle; owner/Admin-only lease, sharing, configuration and deletion. Shared callers cannot delete or configure. |
 | Addresses/forwards | `GET /vms/{name}/addresses`; `GET`, `POST /vms/{name}/forwards`; `DELETE /vms/{name}/forwards/{id}`; `POST /vms/{name}/forwards/{id}/ack` | Existing self/owner rules for a primary; child relationship rules for a child. Ack always requires a user credential and, for a child, the owner of the `via` primary or Admin. |
 | Jobs | `GET /jobs`; `GET /jobs/{id}`; `GET /jobs/{id}/events`; `POST /jobs/{id}/cancel` | Owner/initiator or Admin. Event streams replay progress and phase history, then one terminal state. |
-| Provisioning | `POST /vms/{name}/jobs`; `GET /vms/{name}/provision-status` | Owner/Admin user credential, primaries only. See *Provisioning from the engine*. |
+| Provisioning | `POST /vms/{name}/jobs` (`provision`, `reinstall`, `restore`); `GET /vms/{name}/provision-status` | Owner/Admin user credential, primaries only. See *Provisioning from the engine*. |
 | Media | `GET /media`; `POST /media/acquire`; `POST /media/uploads`; `GET /media/uploads/{id}`; `PUT /media/uploads/{id}/chunks/{index}`; `POST /media/uploads/{id}/complete`; `DELETE /media/uploads/{id}`; `GET /media/{id}`; `GET /media/{id}/references`; `DELETE /media/{id}`; `POST /media/cleanup` | Owner primary/user or Admin; a shared operator gets only reduced metadata for attached media. Cleanup is Admin-only. |
 | Console | `GET /vms/{name}/console/capabilities`; `POST /vms/{name}/console/sessions`; `POST /vms/{name}/console/sessions/{sid}/renew`; `DELETE /vms/{name}/console/sessions/{sid}`; `GET /vms/{name}/console/sessions/{sid}/screenshot`; `POST .../{sid}/keyboard`; `POST .../{sid}/mouse` | Current VM operator; session remains bound to its creating principal and is re-authorized on every call. |
 | Host updates | `GET /host/updates/status`; `POST /host/updates/check`; `POST /host/updates/stage`; `POST /host/updates/apply`; `POST /host/updates/cancel`; `POST /host/updates/resolve` | Admin. Apply (including resume) and resolve are the only narrowly maintenance-exempt mutations. |
@@ -309,7 +309,7 @@ turns the cached release source (`commit`, default the engine's installed commit
 archive, uploads and unpacks it, runs `bin/provision.sh` with the PowerShell's environment for the same
 settings, parses the result block, runs the deferred project phase when asked, reads
 `/etc/construct/provisioned.env`, and applies the PowerShell's reboot rule. Steps: `source`, `copy`,
-`provision`, `project-commands`, `applied`, `finish`; progress lines carry `{step, state, percent?}`
+`provision`, `restore` (only with a backup to restore), `project-commands`, `applied`, `finish`; progress lines carry `{step, state, percent?}`
 and the job's `phase` is the step it is in.
 
 - `requestId` identifies the click: the same id returns the job it started (`replayed: true`). One
@@ -330,6 +330,32 @@ The engine connects as the seed user (`Iso:SeedUser`, or the configured user of 
 the bootstrap key next to `Iso:BootstrapPublicKeyPath`, accepting new host keys into `ssh/known_hosts`
 beside the database. `GET /vms/{name}/provision-status` answers `settingsChanged`, `newerPayload` and
 `hardwareChanged` (design 7.5) with what each is computed from.
+
+The same route starts the two other jobs of a VM's life:
+
+- `{kind: "reinstall", requestId, commit?, desired?, freshImage?}` rebuilds the VM with no device online
+  (design 10.2, S29). Steps: `backup` (the job makes an RSA key pair, enrols its public half on the VM
+  with `construct backup recipients add`, opens the host's `pre-reinstall` request and runs
+  `construct backup create`, then unwraps the backup's key with its private half and has the VM
+  `verify` it), `delete` (the hypervisor VM only: record, forwards and settings stay), `create` (the
+  same CPU, memory, disk and nested setting through the driver, a new VM token, and the old host key of
+  the address removed from `ssh/known_hosts`, the only place that replaces one), then the provision
+  steps with the stored settings and a `restore` step (`construct backup restore --from-host`, the key
+  on stdin) before the project commands. The backup is wrapped for the user's keys as before; the
+  job's own recipient is removed again after the restore, and from the old VM when the job fails
+  before the delete. Nothing is deleted without a verified, host-requested (pinned) backup. Needs
+  backups enabled on the host; an external machine is refused.
+- `{kind: "restore", requestId, backupId, secrets: {backupKey}}` restores a stored backup into the
+  running VM; `backupKey` is the backup's key a device unwrapped. Step: `restore`.
+
+Retries: the job key's private half lives in the job's memory only. After a reinstall failed past the
+delete it stays in memory for an hour, and a retry starts at `create` with the same backup and key; a
+retry after an engine restart rebuilds and provisions the VM and fails with `restore-needs-device`,
+naming the backup a device restores with a `restore` job. A restore is recorded before the guest
+starts it: a restore of the same backup that did not finish is not run again (`restore-already-ran`),
+and a reinstall whose restore started never deletes the VM again; both say what to do by hand. These
+records (`reinstall:<vm>`, `restore:<vm>` in the host config store) hold backup ids, a fingerprint and
+times, never a key.
 
 ### Key vault on hosted VMs
 

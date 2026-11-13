@@ -137,7 +137,7 @@ public sealed class ProvisionDurabilityTests
     /// The process layer under the real <see cref="SystemSshRunner"/>: records every argument vector
     /// and stdin, and answers through the scripted guest.
     /// </summary>
-    private sealed class GuestProcesses(FakeSshRunner guest) : IProcessRunner
+    internal sealed class GuestProcesses(FakeSshRunner guest) : IProcessRunner
     {
         public System.Collections.Concurrent.ConcurrentQueue<Fakes.RecordedProcess> Calls { get; } = new();
 

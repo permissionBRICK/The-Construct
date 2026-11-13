@@ -25,14 +25,9 @@ public static class VmJobs
     {
         await using var scope = scopes.CreateAsyncScope();
         var services = scope.ServiceProvider;
-        var options = services.GetRequiredService<ConstructdOptions>();
-        var isoBuilder = services.GetRequiredService<IIsoBuilder>();
-        var driver = services.GetRequiredService<IHypervisorDriver>();
-        var forwards = services.GetRequiredService<IPortForwardManager>();
         var vms = services.GetRequiredService<IVmRepository>();
         var audit = services.GetRequiredService<IAuditLog>();
         var clock = services.GetRequiredService<IClock>();
-        var network = services.GetRequiredService<VmNetworkSettings>();
 
         var name = descriptor.Name;
 
@@ -43,61 +38,8 @@ public static class VmJobs
         try
         {
             var initial = await vms.GetAsync(name, cancellationToken) ?? throw new LifecycleException("vm-deleting");
-            await network.InitializeAsync(initial, cancellationToken);
-            // Seed credentials exist only for the unattended install; the client's provisioning run
-            // replaces them. Generated per VM, never persisted, never logged.
-            var seedPassword = TokenHasher.GenerateSecret();
-
-            var isoPath = await isoBuilder.BuildAsync(
-                name,
-                options.Iso.SeedUser,
-                seedPassword,
-                options.Iso.BootstrapPublicKeyPath,
-                progress,
-                cancellationToken, redownload).ConfigureAwait(false);
-
-            vmMayExist = true;
-            await driver.CreateVmAsync(descriptor with { IsoPath = isoPath }, progress, cancellationToken)
-                .ConfigureAwait(false);
-
-            var timeout = TimeSpan.FromMinutes(Math.Max(1, options.VmReachableTimeoutMinutes));
-            var reachable = await driver.WaitReachableAsync(name, timeout, progress, cancellationToken)
-                .ConfigureAwait(false);
-
-            if (!reachable)
-            {
-                throw new VmNotReachableException(name, timeout);
-            }
-
-            await driver.DetachInstallMediaAsync(name, cancellationToken).ConfigureAwait(false);
-            progress.Report("install media detached");
-
-            // Set on the running VM, so the first boot and provisioning keep all of its RAM.
-            await services.GetRequiredService<PrimaryMemoryFloor>().TryApplyAsync(initial, cancellationToken).ConfigureAwait(false);
-
-            int? port = null;
-            if ((await network.CurrentAsync(initial, cancellationToken)).Mode != "direct")
-            {
-                port = await forwards.AllocateSshForwardAsync(name, cancellationToken).ConfigureAwait(false);
-                progress.Report($"ssh forward allocated on {options.PublicHost}:{port}");
-            }
-
-            // Issued after the forward so a failure earlier never leaves a live token behind. This
-            // also writes the hash onto the VM record, hence the re-read below.
-            var vmToken = await scope.ServiceProvider.GetRequiredService<IVmTokenIssuer>()
-                .IssueVmTokenAsync(name, VmTokenKind.Primary, cancellationToken).ConfigureAwait(false);
-            progress.Report("vm-scoped token issued (handed out once, to the first retrieval of this job)");
-
-            var state = await driver.GetStateAsync(name, cancellationToken).ConfigureAwait(false);
-            var vm = await vms.GetAsync(name, cancellationToken).ConfigureAwait(false);
-            if (vm is not null)
-            {
-                await vms.UpdateAsync(vm with { SshForwardPort = port, State = state }, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-
-            var endpoint = await network.EndpointAsync(vm! with { SshForwardPort = port }, cancellationToken)
-                ?? throw new LifecycleException("no-address");
+            var (endpoint, vmToken) = await BuildMachineAsync(services, descriptor, initial, redownload, () => vmMayExist = true,
+                progress, cancellationToken).ConfigureAwait(false);
             await AuditAsync(audit, clock, actor, "vm.create.completed", name, AuditOutcome.Success,
                 $"endpoint={endpoint.SshHost}:{endpoint.SshPort}", cancellationToken).ConfigureAwait(false);
 
@@ -126,6 +68,82 @@ public static class VmJobs
                 CancellationToken.None).ConfigureAwait(false);
             throw;
         }
+    }
+
+    /// <summary>
+    /// The machine part of a creation, shared by <c>create-vm</c> and a <c>reinstall</c>: install media,
+    /// the hypervisor VM, reachability, the memory floor, the SSH forward (an existing one is adopted)
+    /// and a new VM-scoped token, written onto the registry record. <paramref name="mayExist"/> is
+    /// called the moment the hypervisor may have a VM under the name. Returns the endpoint and the
+    /// token's plaintext, which the caller hands on once and never stores.
+    /// </summary>
+    public static async Task<(Constructd.Core.Domain.Endpoint Endpoint, string VmToken)> BuildMachineAsync(IServiceProvider services, VmDescriptor descriptor,
+        Vm initial, bool redownload, Action mayExist, IProgress<string> progress, CancellationToken cancellationToken)
+    {
+        var options = services.GetRequiredService<ConstructdOptions>();
+        var isoBuilder = services.GetRequiredService<IIsoBuilder>();
+        var driver = services.GetRequiredService<IHypervisorDriver>();
+        var forwards = services.GetRequiredService<IPortForwardManager>();
+        var vms = services.GetRequiredService<IVmRepository>();
+        var network = services.GetRequiredService<VmNetworkSettings>();
+        var name = descriptor.Name;
+
+        await network.InitializeAsync(initial, cancellationToken);
+        // Seed credentials exist only for the unattended install; the client's provisioning run
+        // replaces them. Generated per VM, never persisted, never logged.
+        var seedPassword = TokenHasher.GenerateSecret();
+
+        var isoPath = await isoBuilder.BuildAsync(
+            name,
+            options.Iso.SeedUser,
+            seedPassword,
+            options.Iso.BootstrapPublicKeyPath,
+            progress,
+            cancellationToken, redownload).ConfigureAwait(false);
+
+        mayExist();
+        await driver.CreateVmAsync(descriptor with { IsoPath = isoPath }, progress, cancellationToken)
+            .ConfigureAwait(false);
+
+        var timeout = TimeSpan.FromMinutes(Math.Max(1, options.VmReachableTimeoutMinutes));
+        var reachable = await driver.WaitReachableAsync(name, timeout, progress, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (!reachable)
+        {
+            throw new VmNotReachableException(name, timeout);
+        }
+
+        await driver.DetachInstallMediaAsync(name, cancellationToken).ConfigureAwait(false);
+        progress.Report("install media detached");
+
+        // Set on the running VM, so the first boot and provisioning keep all of its RAM.
+        await services.GetRequiredService<PrimaryMemoryFloor>().TryApplyAsync(initial, cancellationToken).ConfigureAwait(false);
+
+        int? port = null;
+        if ((await network.CurrentAsync(initial, cancellationToken)).Mode != "direct")
+        {
+            port = await forwards.AllocateSshForwardAsync(name, cancellationToken).ConfigureAwait(false);
+            progress.Report($"ssh forward allocated on {options.PublicHost}:{port}");
+        }
+
+        // Issued after the forward so a failure earlier never leaves a live token behind. This
+        // also writes the hash onto the VM record, hence the re-read below.
+        var vmToken = await services.GetRequiredService<IVmTokenIssuer>()
+            .IssueVmTokenAsync(name, VmTokenKind.Primary, cancellationToken).ConfigureAwait(false);
+        progress.Report("vm-scoped token issued (handed out once, to the first retrieval of this job)");
+
+        var state = await driver.GetStateAsync(name, cancellationToken).ConfigureAwait(false);
+        var vm = await vms.GetAsync(name, cancellationToken).ConfigureAwait(false);
+        if (vm is not null)
+        {
+            await vms.UpdateAsync(vm with { SshForwardPort = port, State = state }, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        var endpoint = await network.EndpointAsync(vm! with { SshForwardPort = port }, cancellationToken)
+            ?? throw new LifecycleException("no-address");
+        return (endpoint, vmToken);
     }
 
     /// <summary>

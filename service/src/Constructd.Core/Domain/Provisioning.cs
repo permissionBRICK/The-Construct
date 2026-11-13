@@ -98,3 +98,17 @@ public sealed record ProvisionJobResult(
     IReadOnlyList<string> FixPrompt,
     bool Rebooted,
     VmAppliedState? Applied);
+
+/// <summary>
+/// The durable result of a <see cref="JobKinds.Restore"/> job: which backup, and where it stopped. No secret.
+/// </summary>
+public sealed record RestoreJobResult(string BackupId, bool Succeeded, string? FailedStep, string? Code, string? Message);
+
+/// <summary>
+/// The durable result of a <see cref="JobKinds.Reinstall"/> job. <paramref name="BackupId"/> is the
+/// pre-reinstall backup it relies on (kept on the host whatever happens); <paramref name="VmDeleted"/>
+/// whether the old VM is gone; <paramref name="Restored"/> whether the backup is back in the new one;
+/// <paramref name="Provision"/> the provisioning part, once it ran. No secret.
+/// </summary>
+public sealed record ReinstallJobResult(string? BackupId, bool Succeeded, string? FailedStep, string? Code, string? Message,
+    bool VmDeleted, bool Restored, ProvisionJobResult? Provision);
