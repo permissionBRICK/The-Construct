@@ -12,7 +12,7 @@ namespace Constructd.Tests.Store;
 /// Two engines and one stand-alone store over HTTP (C.4), the conflict protocol (C.5) and the
 /// payload-version rules (9.8).
 /// </summary>
-public sealed class EngineReplicaTests : IAsyncDisposable
+public sealed class EngineReplicaTests : IAsyncLifetime
 {
     private readonly TempDirectory _directory = new();
     private readonly StandaloneStoreFixture _store;
@@ -28,7 +28,9 @@ public sealed class EngineReplicaTests : IAsyncDisposable
         _keys = new FileRecordKeyProvider(_directory.File("keys"));
     }
 
-    public async ValueTask DisposeAsync()
+    public Task InitializeAsync() => Task.CompletedTask;
+
+    public async Task DisposeAsync()
     {
         foreach (var replica in _replicas) replica.Dispose();
         await _store.DisposeAsync();
