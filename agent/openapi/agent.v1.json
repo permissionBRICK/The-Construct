@@ -714,6 +714,660 @@
           }
         }
       }
+    },
+    "/api/devices/{id}/secrets": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "description": "Every secret a device could read (all of the account's), to rotate at their source when it is revoked.",
+        "operationId": "SecretsReadableByDevice",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SecretSummary"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/secrets": {
+      "get": {
+        "tags": [
+          "vault"
+        ],
+        "description": "Names, descriptions, the sealed auto-approve flag, leases on every engine reached and who wrote each; never a value.",
+        "operationId": "ListSecrets",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SecretView"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "vault"
+        ],
+        "description": "A new secret under a free name; 409 exists otherwise.",
+        "operationId": "AddSecret",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SecretInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/secrets/{name}": {
+      "patch": {
+        "tags": [
+          "vault"
+        ],
+        "description": "Replaces the description, username or value; null keeps a field. A new value ends the leases on the old one at every engine.",
+        "operationId": "ChangeSecret",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SecretChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "vault"
+        ],
+        "operationId": "DeleteSecret",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/secrets/{name}/reveal": {
+      "post": {
+        "tags": [
+          "vault"
+        ],
+        "description": "The one route that returns a value, for the user who asked to see it.",
+        "operationId": "RevealSecret",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretValue"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/secrets/{name}/auto-approve": {
+      "put": {
+        "tags": [
+          "vault"
+        ],
+        "operationId": "SetSecretAutoApprove",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutoApproveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/history": {
+      "get": {
+        "tags": [
+          "vault"
+        ],
+        "description": "Every write of every secret, newest first, with its provenance (a VM, the approving or entering device, the request id).",
+        "operationId": "SecretHistory",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SecretHistoryItem"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/approvals": {
+      "get": {
+        "tags": [
+          "vault"
+        ],
+        "operationId": "ListVaultApprovals",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultApprovalsView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/approvals/{engine}/{id}": {
+      "post": {
+        "tags": [
+          "vault"
+        ],
+        "description": "allow or deny. On a locked engine an allow first unlocks the VM that asked.",
+        "operationId": "DecideVaultApproval",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalDecision"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/entry-requests": {
+      "get": {
+        "tags": [
+          "vault"
+        ],
+        "description": "Agents asking the user to enter a secret (construct secret ask). Description and reason are the agent's text.",
+        "operationId": "ListEntryRequests",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultEntryRequestsView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/entry-requests/{engine}/{id}": {
+      "post": {
+        "tags": [
+          "vault"
+        ],
+        "description": "Creates the secret only while its name is free (409 exists, nothing overwritten); it needs approval for every use and grants no lease.",
+        "operationId": "EnterSecret",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EntryInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/entry-requests/{engine}/{id}/decline": {
+      "post": {
+        "tags": [
+          "vault"
+        ],
+        "operationId": "DeclineEntryRequest",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/engines/{engine}/mode": {
+      "get": {
+        "tags": [
+          "vault"
+        ],
+        "operationId": "GetVaultMode",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultModeView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "vault"
+        ],
+        "description": "available grants the engine K; locked withdraws it (VMs a device unlocked keep it until they stop).",
+        "operationId": "SetVaultMode",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VaultModeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultModeView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/engines/{engine}/vms/{vm}/unlock": {
+      "post": {
+        "tags": [
+          "vault"
+        ],
+        "description": "Gives a running VM on a locked engine K until it stops.",
+        "operationId": "UnlockVmVault",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "vm",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -820,6 +1474,17 @@
           }
         }
       },
+      "ApprovalDecision": {
+        "required": [
+          "decision"
+        ],
+        "type": "object",
+        "properties": {
+          "decision": {
+            "type": "string"
+          }
+        }
+      },
       "ApprovePairingRequest": {
         "required": [
           "publicKey"
@@ -828,6 +1493,17 @@
         "properties": {
           "publicKey": {
             "type": "string"
+          }
+        }
+      },
+      "AutoApproveRequest": {
+        "required": [
+          "on"
+        ],
+        "type": "object",
+        "properties": {
+          "on": {
+            "type": "boolean"
           }
         }
       },
@@ -992,6 +1668,24 @@
           }
         }
       },
+      "EntryInput": {
+        "required": [
+          "value"
+        ],
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "x-construct-secret": true
+          },
+          "username": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
       "PairingRequestView": {
         "required": [
           "pairingId",
@@ -1149,6 +1843,257 @@
           }
         }
       },
+      "SecretChange": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "username": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "value": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "x-construct-secret": true
+          }
+        }
+      },
+      "SecretHistoryItem": {
+        "required": [
+          "name",
+          "action",
+          "revision",
+          "at",
+          "actor",
+          "provenance"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "provenance": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SecretProvenanceView"
+              }
+            ]
+          }
+        }
+      },
+      "SecretInput": {
+        "required": [
+          "name",
+          "description",
+          "value"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string",
+            "x-construct-secret": true
+          },
+          "username": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "autoApprove": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "SecretLeaseView": {
+        "required": [
+          "engine",
+          "engineName",
+          "vm",
+          "name",
+          "usesLeft",
+          "expiresAt"
+        ],
+        "type": "object",
+        "properties": {
+          "engine": {
+            "type": "string"
+          },
+          "engineName": {
+            "type": "string"
+          },
+          "vm": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "usesLeft": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          },
+          "expiresAt": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "SecretProvenanceView": {
+        "required": [
+          "kind",
+          "vm",
+          "engine",
+          "device",
+          "requestId"
+        ],
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "vm": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "engine": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "device": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "requestId": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "SecretSummary": {
+        "required": [
+          "name",
+          "description"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      },
+      "SecretValue": {
+        "required": [
+          "name",
+          "username",
+          "value"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string",
+            "x-construct-secret": true
+          }
+        }
+      },
+      "SecretView": {
+        "required": [
+          "name",
+          "description",
+          "hasUsername",
+          "autoApprove",
+          "readable",
+          "updatedAt",
+          "updatedBy",
+          "provenance",
+          "leases"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "hasUsername": {
+            "type": "boolean"
+          },
+          "autoApprove": {
+            "type": "boolean"
+          },
+          "readable": {
+            "type": "boolean"
+          },
+          "updatedAt": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "updatedBy": {
+            "type": "string"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/SecretProvenanceView"
+          },
+          "leases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SecretLeaseView"
+            }
+          }
+        }
+      },
       "SetupRequest": {
         "required": [
           "engine",
@@ -1184,12 +2129,214 @@
             "type": "string"
           }
         }
+      },
+      "VaultApprovalItem": {
+        "required": [
+          "engine",
+          "engineName",
+          "id",
+          "vm",
+          "op",
+          "title",
+          "message",
+          "action",
+          "names",
+          "reason",
+          "source",
+          "createdAt",
+          "deadline"
+        ],
+        "type": "object",
+        "properties": {
+          "engine": {
+            "type": "string"
+          },
+          "engineName": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "vm": {
+            "type": "string"
+          },
+          "op": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reason": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "deadline": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "VaultApprovalsView": {
+        "required": [
+          "approvals",
+          "unreachable"
+        ],
+        "type": "object",
+        "properties": {
+          "approvals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VaultApprovalItem"
+            }
+          },
+          "unreachable": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "VaultEntryRequestItem": {
+        "required": [
+          "engine",
+          "engineName",
+          "id",
+          "vm",
+          "name",
+          "description",
+          "reason",
+          "source",
+          "createdAt",
+          "expiresAt"
+        ],
+        "type": "object",
+        "properties": {
+          "engine": {
+            "type": "string"
+          },
+          "engineName": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "vm": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "expiresAt": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "VaultEntryRequestsView": {
+        "required": [
+          "requests",
+          "unreachable"
+        ],
+        "type": "object",
+        "properties": {
+          "requests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VaultEntryRequestItem"
+            }
+          },
+          "unreachable": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "VaultModeRequest": {
+        "required": [
+          "mode"
+        ],
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string"
+          }
+        }
+      },
+      "VaultModeView": {
+        "required": [
+          "engine",
+          "mode",
+          "holdsKey",
+          "records",
+          "unlockedVms"
+        ],
+        "type": "object",
+        "properties": {
+          "engine": {
+            "type": "string"
+          },
+          "mode": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "holdsKey": {
+            "type": "boolean"
+          },
+          "records": {
+            "type": "boolean"
+          },
+          "unlockedVms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
       }
     }
   },
   "tags": [
     {
       "name": "agent"
+    },
+    {
+      "name": "vault"
     }
   ]
 }

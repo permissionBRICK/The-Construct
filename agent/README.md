@@ -6,8 +6,8 @@ its user works with, and serves the UI. It owns no VM logic: every lifecycle act
 engine, which the UI makes through the agent's proxy.
 
 This is the platform-independent core and the Linux console host. The Windows shell (tray, WebView2
-window, installer), forwards, notifications, the microphone, SSH client config, the vault's device
-side and self-update come in later blocks.
+window, installer), forwards, notifications, the microphone, SSH client config and self-update come in
+later blocks.
 
 ## Layout
 
@@ -94,6 +94,18 @@ CONSTRUCT_AGENT_UPDATE_OPENAPI=1 dotnet test agent/Construct.Agent.slnx --filter
 | `POST /api/pairing/requests/{id}/approve {publicKey}` | Approves for the key whose words the user compared |
 | `GET /api/devices` | The account's devices |
 | `DELETE /api/devices/{id}` | Revokes a device at the store, in its record and at every engine reached; answers which engines confirmed |
+| `GET /api/devices/{id}/secrets` | Every secret that device could read (all of the account's), to rotate at their source after a revocation |
+| `GET /api/vault/secrets` | Names, descriptions, the auto-approve flag sealed with `K`, leases on every engine reached and the provenance of the last write; never a value |
+| `POST /api/vault/secrets {name, description, value, username?, autoApprove?}` | A new secret under a free name (`409 exists` otherwise) |
+| `PATCH /api/vault/secrets/{name} {description?, username?, value?}` | Changes what is given; a new value ends the leases on the old one at every engine |
+| `DELETE /api/vault/secrets/{name}` | Deletes it |
+| `POST /api/vault/secrets/{name}/reveal` | `{name, username, value}`: the only route that returns a value |
+| `PUT /api/vault/secrets/{name}/auto-approve {on}` | Switches auto-approve |
+| `GET /api/vault/history` | Every write of every secret, newest first, with its provenance (VM, approving or entering device, request id) |
+| `GET /api/vault/approvals`, `POST /api/vault/approvals/{engine}/{id} {decision: allow\|deny}` | The engines' pending approvals; on a `locked` engine an allow first unlocks the VM that asked |
+| `GET /api/vault/entry-requests`, `POST /api/vault/entry-requests/{engine}/{id} {value, username?}`, `POST …/decline` | `construct secret ask`: the user enters the value, sealed here with `K`; created only while the name is free, never auto-approved, no lease |
+| `GET/PUT /api/vault/engines/{engine}/mode {mode}` | An engine's vault mode and whether it holds `K`; `available` grants `K`, `locked` withdraws it |
+| `POST /api/vault/engines/{engine}/vms/{vm}/unlock` | Hands a running VM on a `locked` engine `K` until it stops |
 
 Errors are `application/problem+json` `{title, status, code}`. A refusal by the store or an engine
 behind an agent route is reported as 403, never 401, so 401 always means the agent's own token.
