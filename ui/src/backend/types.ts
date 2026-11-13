@@ -1,0 +1,332 @@
+/* The contract between the screens and whatever serves them. The screens read one immutable `State`
+   snapshot, re-render when `subscribe` reports a change, and call the actions. Nothing here knows about
+   transport; a later block implements this interface over the real API. */
+
+export type Power = 'on' | 'off' | 'starting' | 'stopping';
+export type Open = 't3' | 'vscode' | 'ssh';
+export type ThemeMode = 'auto' | 'light' | 'dark';
+export type Scheme = 'green' | 'blue' | 'copper' | 'mono';
+export type Channel = 'stable' | 'nightly';
+
+export interface Usage {
+  cpuPct: number;
+  memUsedGb: number;
+  diskUsedGb: number;
+}
+
+/** Settings of one VM. `hw` applies on restart, `disk` on reinstall, `services` and `identity` on reprovision. */
+export interface VmSettings {
+  hw: { memGb: number; cpus: number; checkpoints: boolean; startWithHost: boolean };
+  disk: { diskGb: number; ubuntu: string };
+  idle: { afterMin: number; then: 'save' | 'shutdown' | 'never' };
+  services: { t3Web: boolean; vscodeWeb: boolean; vscodeTunnel: boolean; smb: boolean; mic: boolean; claudeLive: boolean; opencodeWatcher: boolean; t3ProxyUrl: string };
+  identity: { gitName: string; gitEmail: string; keepCredentials: boolean; historyDays: '30' | '90' | 'all' };
+}
+
+export interface Agent { name: string; version: string; latest: string; installed: boolean }
+export interface ChildVm { name: string; os: string; left: string; power: Power }
+export interface Forward { port: number; label: string; to: 'This device' | 'LAN'; url: string }
+export interface Backup { id: string; at: string; kind: 'Scheduled' | 'Before reinstall' | 'Manual' | 'Slot'; size: string; pinned: boolean }
+
+export interface Vm {
+  id: string;
+  name: string;
+  hostId: string;
+  power: Power;
+  address: string;
+  os: string;
+  installed: string;
+  reprovisioned: string;
+  /** Construct version of the VM's guest payload. */
+  version: string;
+  /** What changed since the last reprovision (a project or a settings group); null when nothing waits. */
+  changeWaits: string | null;
+  settings: VmSettings;
+  /** Hardware the VM runs with now; differs from `settings.hw` while a restart is pending. */
+  appliedHw: { memGb: number; cpus: number };
+  usage: Usage;
+  memTotalGb: number;
+  diskTotalGb: number;
+  agents: Agent[];
+  children: ChildVm[];
+  projectsOn: string[];
+  forwards: Forward[];
+  sharing: { vscodeWeb: boolean; smb: boolean; mic: boolean };
+  backups: Backup[];
+  backupSchedule: { everyH: 6 | 12 | 24; keep: 5 | 10 | 20 };
+}
+
+export interface Profile {
+  name: string;
+  repos: { url: string; directory: string }[];
+  sdks: Record<string, string>;
+  mcp: { name: string; type: string; command: string; args: string[] }[];
+  hostPackages: string[];
+  provisionCommands: string[];
+  forwards: { port: number; label: string }[];
+}
+
+export type JobKind = 'reprovision' | 'reinstall' | 'update' | 'restore' | 'create';
+export type JobState = 'running' | 'failed' | 'done' | 'stopped';
+
+export interface RepairMessage { from: 'agent' | 'user'; text: string }
+export interface Repair {
+  agent: string;
+  /** working: it acts on its own; asking: it waits for a reply; done: it fixed the cause; gave-up: the user takes over. */
+  state: 'working' | 'asking' | 'done' | 'gave-up';
+  messages: RepairMessage[];
+  /** Set when the agent runs as a T3 Code thread, which can be opened there instead. */
+  t3Thread: boolean;
+}
+
+export interface Job {
+  id: string;
+  vmId: string;
+  kind: JobKind;
+  state: JobState;
+  step: string;
+  stepIndex: number;
+  stepCount: number;
+  pct: number;
+  log: string[];
+  error: string | null;
+  /** For an update: from and to version. */
+  from?: string;
+  to?: string;
+  /** The repair agent, started when the job failed. Null when the VM cannot run an agent. */
+  repair: Repair | null;
+}
+
+/** An agent on a VM asks for something only the user can give: a lease of a secret, or a new secret's value. */
+export interface VaultRequest {
+  id: string;
+  kind: 'lease' | 'enter';
+  secret: string;
+  vmId: string;
+  vmName: string;
+  /** For a lease: why the agent needs it. For enter: the agent's description, shown as written by the agent. */
+  reason: string;
+  span: string;
+}
+
+export interface Secret { name: string; note: string; usedBy: string[]; last: string; auto: boolean }
+export interface Lease { id: string; secret: string; vmName: string; reason: string; left: string }
+export interface Device { id: string; name: string; kind: 'PC' | 'Laptop' | 'Phone'; added: string; seen: string; me: boolean; revoked: boolean }
+export interface VaultEvent { at: string; vmName: string; secret: string; event: string }
+
+export type Pairing =
+  | { state: 'showing'; words: string[]; expiresInS: number }
+  | { state: 'confirm'; words: string[]; deviceName: string }
+  | { state: 'done'; deviceName: string };
+
+export interface Revocation { deviceId: string; deviceName: string; confirmed: number; total: number; rotate: { secret: string; last: string; done: boolean }[] }
+
+/* Host administration */
+export interface HostUser {
+  name: string;
+  role: 'admin' | 'user';
+  enabled: boolean;
+  maxVms: number;
+  hostForwards: 'default' | 'allowed' | 'refused';
+  httpsForwards: boolean;
+  nested: 'inherit' | 'on' | 'off';
+  allowance: { childVms: boolean; maxChildren: number; cpu: number | null; ramGb: number | null; diskGb: number | null; maxLifetime: string; neverLifetime: boolean; sharing: boolean };
+  primaries: number;
+  children: number;
+  tokensMonth: string;
+  tokens: { id: string; label: string; created: string; lastUsed: string }[];
+}
+export interface HostVm {
+  name: string;
+  owner: string;
+  role: 'primary' | 'child';
+  parent?: string;
+  power: Power;
+  cpuPct: number;
+  memGb: number;
+  memMaxGb: number;
+  diskGb: number;
+  cpus: number;
+  network: 'default' | 'relayed' | 'direct';
+  address: string;
+  lease: string;
+  shared: boolean;
+  tokensToday: string;
+}
+export interface HostMedia { name: string; owner: string; role: string; state: string; size: string; refs: number; created: string }
+export interface HostJob { id: string; kind: string; vm: string; owner: string; state: 'running' | 'failed' | 'done'; phase: string; created: string }
+export interface AuditEntry { at: string; actor: string; action: string; target: string }
+export interface ConfigSection { name: string; json: string; updated: string }
+export interface Certificate { subject: string; validUntil: string; daysLeft: number; sha256: string; issuer: string }
+export interface WinKey { id: string; product: string; edition: string; kind: 'Retail' | 'MAK' | 'KMS'; partial: string; used: string; held: boolean }
+export interface HostUpdate { at: string; from: string; to: string; state: 'done' | 'rolled back' | 'running'; by: string }
+
+export interface Host {
+  id: string;
+  name: string;
+  kind: 'Hyper-V' | 'Proxmox';
+  version: string;
+  channel: Channel;
+  /** The current user administers this host. Only then are the fields below filled. */
+  admin: boolean;
+  address: string;
+  /** Sign-in a new user's client uses here. */
+  signIn: 'windows' | 'token';
+  vmCount: number;
+  health: { hypervisor: string; database: string; media: string; inventory: string };
+  capacity: { mode: 'observe' | 'enforce'; ram: [number, number]; cpu: [number, number]; disk: [number, number] };
+  users: HostUser[];
+  vms: HostVm[];
+  media: HostMedia[];
+  isos: { name: string; current: boolean; size: string }[];
+  winKeys: WinKey[];
+  jobs: HostJob[];
+  audit: AuditEntry[];
+  usage: { window: 'today' | 'month' | 'all'; byUser: { user: string; vms: number; tokens: string; cost: string }[]; byVm: { vm: string; owner: string; tokens: string; cost: string }[] };
+  config: ConfigSection[];
+  cert: Certificate | null;
+  updates: HostUpdate[];
+  /** Set while the host's own update runs. */
+  updating: boolean;
+}
+
+/** Shown once after adding a user: what that user's client needs. */
+export interface NewUserHandout { hostId: string; user: string; address: string; token: string | null }
+
+export interface Part { name: string; version: string; to: string | null; note: 'admin' | 'channel' | null }
+
+export interface Prefs {
+  channel: Channel;
+  theme: ThemeMode;
+  scheme: Scheme;
+  autoUpdate: boolean;
+  startWithOs: boolean;
+  notifications: boolean;
+}
+
+export type UpgradeStep = 'intro' | 'code' | 'convert' | 'done';
+export interface Upgrade {
+  step: UpgradeStep;
+  code: string[];
+  items: { name: string; state: 'done' | 'running' | 'waiting'; count: string; pct: number }[];
+}
+
+export interface State {
+  device: { name: string };
+  version: string;
+  /** A newer release on this device's channel, or null. */
+  release: string | null;
+  vms: Vm[];
+  hosts: Host[];
+  projects: Profile[];
+  sync: { when: string; remote: string; rev: string };
+  jobs: Job[];
+  vaultRequests: VaultRequest[];
+  secrets: Secret[];
+  leases: Lease[];
+  devices: Device[];
+  history: VaultEvent[];
+  pairing: Pairing | null;
+  revocation: Revocation | null;
+  handout: NewUserHandout | null;
+  prefs: Prefs;
+  upgrade: Upgrade | null;
+  /** A short message from the last action, shown as a toast. Each new one has a new id. */
+  notice: { id: number; text: string } | null;
+}
+
+export type SettingsPatch = { [K in keyof VmSettings]?: Partial<VmSettings[K]> };
+
+export interface CreateVmRequest {
+  where: 'local' | 'remote';
+  name: string;
+  hostAddress?: string;
+  signIn?: 'windows' | 'token';
+  token?: string;
+}
+
+export interface Backend {
+  snapshot(): State;
+  /** Calls `fn` after every change; returns the unsubscribe function. */
+  subscribe(fn: () => void): () => void;
+
+  /* VM */
+  open(vmId: string, what: Open): void;
+  /** Open a forwarded port in the browser. */
+  openForward(vmId: string, port: number): void;
+  openChildConsole(vmId: string, child: string): void;
+  setVmPassword(vmId: string, password: string): void;
+  power(vmId: string, on: boolean): void;
+  restart(vmId: string): void;
+  reprovision(vmId: string): void;
+  reinstall(vmId: string, freshImage: boolean): void;
+  /** Updates everything the user owns: this device, hosts they administer, their own VMs. */
+  updateEverything(): void;
+  /** The secondary choice: update only this VM's payload and reprovision it. */
+  updateVm(vmId: string): void;
+  stopJob(jobId: string): void;
+  retryJob(jobId: string): void;
+  replyRepair(jobId: string, text: string): void;
+  dismissJob(jobId: string): void;
+  /** Hardware changes ask restart now or later; `when` says which. Other groups save at once. */
+  saveSettings(vmId: string, patch: SettingsPatch, when?: 'now' | 'later'): void;
+  updateAgents(vmId: string): void;
+  setProjectOn(vmId: string, project: string, on: boolean): void;
+  saveProfile(profile: Profile): void;
+  addProject(name: string): void;
+  syncProjects(): void;
+  closeForward(vmId: string, port: number): void;
+  setSharing(vmId: string, key: keyof Vm['sharing'], on: boolean): void;
+  backupNow(vmId: string): void;
+  restoreBackup(vmId: string, backupId: string): void;
+  pinBackup(vmId: string, backupId: string, pinned: boolean): void;
+  setBackupSchedule(vmId: string, schedule: Partial<Vm['backupSchedule']>): void;
+  createVm(req: CreateVmRequest): void;
+
+  /* Key vault */
+  answerLease(requestId: string, allow: boolean): void;
+  /** `value` null declines the request. */
+  enterSecret(requestId: string, value: string | null): void;
+  addSecret(name: string, note: string, value: string): void;
+  deleteSecret(name: string): void;
+  setAutoApprove(name: string, on: boolean): void;
+  takeBack(leaseId: string): void;
+  startPairing(): void;
+  confirmPairing(accept: boolean): void;
+  cancelPairing(): void;
+  revokeDevice(deviceId: string): void;
+  markRotated(secret: string): void;
+  closeRevocation(): void;
+
+  /* Hosts */
+  updateHost(hostId: string): void;
+  updateHostVms(hostId: string): void;
+  addUser(hostId: string, user: { name: string; role: 'admin' | 'user'; maxVms: number; hostForwards: HostUser['hostForwards'] }): void;
+  saveUser(hostId: string, user: HostUser): void;
+  removeUser(hostId: string, name: string): void;
+  issueToken(hostId: string, user: string, label: string): void;
+  revokeToken(hostId: string, user: string, tokenId: string): void;
+  closeHandout(): void;
+  hostVmAction(hostId: string, vm: string, action: 'start' | 'restart' | 'shutdown' | 'delete' | 'console' | 'rotate-token' | 'toggle-shared' | 'renew-lease'): void;
+  saveHostVm(hostId: string, vm: string, patch: Partial<Pick<HostVm, 'cpus' | 'memMaxGb' | 'network'>>): void;
+  deleteMedia(hostId: string, name: string): void;
+  cleanupMedia(hostId: string): void;
+  acquireWindows(hostId: string, product: string, edition: string, language: string): void;
+  addWinKey(hostId: string, key: Omit<WinKey, 'id' | 'partial' | 'used' | 'held'> & { key: string }): void;
+  removeWinKey(hostId: string, id: string): void;
+  cancelHostJob(hostId: string, jobId: string): void;
+  retryHostJob(hostId: string, jobId: string): void;
+  setUsageWindow(hostId: string, window: Host['usage']['window']): void;
+  /** Returns an error message for invalid JSON, else null. */
+  saveConfig(hostId: string, section: string, json: string): string | null;
+  installCertificate(hostId: string, pem: string): void;
+  removeCertificate(hostId: string): void;
+
+  /* This device and Construct */
+  setPrefs(patch: Partial<Prefs>): void;
+  showRecoveryCode(): string[];
+  /** Hand the recovery code to the shell: a file picker for saving, or the print dialog. */
+  exportRecoveryCode(how: 'file' | 'print'): void;
+  openLog(): void;
+  upgradeNext(): void;
+}

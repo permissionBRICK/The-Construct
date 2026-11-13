@@ -1,0 +1,29 @@
+/* The preview frame only. Not part of the app. */
+body { background: #E6E8EA; color: #15181B; font: 13px/1.4 system-ui, sans-serif; }
+.pv { min-height: 100%; }
+.pv-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 16px; background: #FFF; border-bottom: 1px solid #D5D9DD; position: sticky; top: 0; z-index: 40; }
+.pv-sp { flex: 1; }
+.pv-seg { display: inline-flex; border: 1px solid #D5D9DD; border-radius: 6px; overflow: hidden; }
+.pv-seg button, .pv-btn { border: 0; background: #F4F5F6; padding: 5px 10px; cursor: pointer; font: inherit; color: #4A525A; }
+.pv-seg button[aria-pressed="true"] { background: #15181B; color: #FFF; }
+.pv-btn { border: 1px solid #D5D9DD; border-radius: 6px; }
+.pv-btn:hover { background: #E8EAEC; }
+.pv-top select { font: inherit; padding: 3px 4px; }
+.pv-stage { display: flex; justify-content: center; align-items: flex-start; padding: 24px 12px; }
+.pv-desk { position: relative; width: min(100%, 760px); height: 700px; background: #C9CDD4; border-radius: 6px; display: flex; flex-direction: column; justify-content: flex-end; align-items: flex-end; overflow: hidden; }
+.pv-pop { width: 380px; max-width: calc(100% - 24px); max-height: 612px; overflow: auto; margin: 0 12px 10px 0; box-shadow: 0 18px 50px rgba(0,0,0,.32), 0 0 0 1px rgba(0,0,0,.18); display: flex; }
+.pv-pop > .app { height: auto; flex: 1; }
+.pv-pop.alone { box-shadow: none; overflow: visible; }
+.pv-pop.alone .blk { box-shadow: 0 18px 50px rgba(0,0,0,.32); }
+.pv-task { align-self: stretch; height: 44px; background: #F4F5F7; border-top: 1px solid #D3D6DC; display: flex; align-items: center; justify-content: flex-end; gap: 14px; padding: 0 16px; color: #5A616D; font-size: 12px; flex: none; }
+.pv-task i { width: 14px; height: 14px; border-radius: 3px; background: #D3D6DC; display: block; }
+.pv-tray { width: 22px; height: 22px; border-radius: 5px; background: #14171C; margin-right: 86px; }
+.pv-win { width: 1080px; max-width: 100%; border-radius: 8px; overflow: hidden; box-shadow: 0 18px 50px rgba(0,0,0,.28), 0 0 0 1px rgba(0,0,0,.2); }
+.pv-bar { height: 32px; display: flex; align-items: center; padding: 0 12px; font-size: 12px; color: #5A616D; background: #F4F5F7; border-bottom: 1px solid #D3D6DC; }
+.pv-win .pv-in { height: 680px; }
+.pv-phone { width: 398px; max-width: 100%; border: 4px solid #1A1C20; border-radius: 30px; overflow: hidden; background: #1A1C20; box-shadow: 0 18px 50px rgba(0,0,0,.28); }
+.pv-phone .pv-in { height: 780px; border-radius: 26px; overflow: hidden; }
+.pv-in, .pv-pop { position: relative; }
+.pv-in > .app { height: 100%; }
+.pv-in .toast, .pv-pop .toast { position: absolute; }
+@media (max-width: 480px) { .pv-phone { border: 0; border-radius: 0; width: 100%; } .pv-phone .pv-in { border-radius: 0; } .pv-stage { padding: 0; } }

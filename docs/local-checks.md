@@ -26,7 +26,8 @@ bash test/run-local-checks.sh panel
 bash test/run-local-checks.sh t3
 bash test/run-local-checks.sh service
 bash test/run-local-checks.sh companion
-# Or run all four groups:
+bash test/run-local-checks.sh ui
+# Or run all groups:
 bash test/run-local-checks.sh all
 ```
 
@@ -37,6 +38,7 @@ merges and release preparation, not for ordinary changes.
 |---|---|
 | `companion/**`, `test/fixtures/companion-parity/**` | `companion` |
 | `extension/src/**`, `extension/media/**` | `panel`, plus `companion` when it ports the changed module |
+| `ui/**` | `ui` |
 | T3, pairing, updates | `t3` |
 | `service/**`, `drivers/**`, `lib/**`, `bin/**` | `service` |
 | Installers | Companion PowerShell suites plus `pwsh -NoProfile -File test/feature-set.test.ps1` and the touched script's own tests |
@@ -44,6 +46,10 @@ merges and release preparation, not for ordinary changes.
 The `companion` group builds with warnings as errors, runs Companion .NET tests,
 Node parity and Companion suites, the three Companion PowerShell suites, and the
 first-install feature-set suite. It is included in `all`; the Companion workflow only publishes its Windows deliverable.
+
+The `ui` group runs the client UI's unit tests (vitest), builds its static bundle
+and compares its screenshots in headless Chromium (Playwright). After an intended
+visual change, refresh the pictures with `npm run test:screens:update` in `ui/`.
 
 The panel defaults to the native theme; set `UI_SMOKE_THEME=classic` or `terminal`
 to check another theme. These runners group the former workflow checks; other
