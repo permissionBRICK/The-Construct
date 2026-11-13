@@ -26,6 +26,7 @@
     <ProjectReference Include="..\..\src\Constructd.Client\Constructd.Client.csproj" />
     <ProjectReference Include="..\..\src\Constructd.Store\Constructd.Store.csproj" />
     <ProjectReference Include="..\..\src\Constructd.Sync\Constructd.Sync.csproj" />
+    <ProjectReference Include="..\..\src\Construct.Keys\Construct.Keys.csproj" />
   </ItemGroup>
 
   <ItemGroup>
