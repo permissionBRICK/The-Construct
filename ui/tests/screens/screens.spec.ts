@@ -29,6 +29,7 @@ const SHOTS: [Surf, string, string, string?][] = [
   ['win', 'settings-restart', 'restart', 'settings'],
   ['win', 'vault', 'calm', 'vault'],
   ['win', 'devices', 'calm', 'devices'],
+  ['win', 'backups', 'calm', 'backups'],
   ['win', 'pair', 'pair-confirm', 'pair'],
   ['win', 'revoked', 'revoked', 'revoke/d2'],
   ['win', 'host-users', 'handout', 'host/orchard/users'],
@@ -108,4 +109,12 @@ test('no native dialogs open', async ({ page }) => {
   await page.getByRole('button', { name: 'Revoke' }).first().click();
   await expect(page.getByText('Revoked', { exact: true })).toBeVisible();
   expect(dialogs).toBe(0);
+});
+
+test('a hardware draft stays with its VM', async ({ page }) => {
+  await open(page, 'win', 'calm', 'light', 'settings');
+  await page.getByRole('radiogroup', { name: 'Memory' }).getByRole('radio', { name: '32' }).click();
+  await expect(page.getByRole('button', { name: 'Later' })).toBeVisible();
+  await page.getByRole('button', { name: /pebble/ }).click();
+  await expect(page.getByRole('button', { name: 'Later' })).toHaveCount(0);
 });

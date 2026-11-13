@@ -108,7 +108,11 @@ export function Revoke() {
   return (
     <Page>
       <Head title={r.deviceName} back={back} />
-      <div class="blk bad"><div class="bh"><Icon n="check" /><b>Revoked</b><span>{r.confirmed} of {r.total} hosts confirmed</span></div></div>
+      <div class="blk bad"><div class="bh"><Icon n="check" /><b>Revoked</b><span>{r.hosts.filter(h => h.confirmed).length} of {r.hosts.length} hosts confirmed</span></div></div>
+      <Sec title="Hosts">
+        <Table cols={[{ h: 'Host' }, { h: 'State', cls: 'e' }]}
+          rows={r.hosts.map(h => [h.name, h.confirmed ? <span class="okc">confirmed</span> : <span class="badc">serves it until it syncs</span>])} />
+      </Sec>
       <Sec title="Rotate">
         <Table cols={[{ h: 'Secret', cls: 'm' }, { h: 'Last used', cls: 'x' }, { h: '', cls: 'e' }]}
           rows={r.rotate.map(x => [x.secret, x.last, <Btn sm kind={x.done ? '' : 'pri'} icon={x.done ? 'check' : undefined} onClick={() => be.markRotated(x.secret)}>{x.done ? 'Rotated' : 'Mark rotated'}</Btn>])} />

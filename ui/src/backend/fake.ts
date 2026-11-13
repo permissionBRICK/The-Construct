@@ -91,7 +91,7 @@ export class FakeBackend implements Backend {
       case 'update': d.release = NEXT_RELEASE; break;
       case 'changed': this.vm(d, 'atlas').changeWaits = 'webshop'; break;
       case 'lease': d.vaultRequests.push({ id: 'r1', kind: 'lease', secret: 'forge-token', vmId: 'atlas', vmName: 'atlas', reason: 'Push the release', span: '2 h' }); break;
-      case 'enter': d.vaultRequests.push({ id: 'r2', kind: 'enter', secret: 'staging-db', vmId: 'atlas', vmName: 'atlas', reason: 'Password of the staging database', span: '' }); break;
+      case 'enter': d.vaultRequests.push({ id: 'r2', kind: 'enter', secret: 'payments-sandbox', vmId: 'atlas', vmName: 'atlas', reason: 'API key of the payments sandbox', span: '' }); break;
       case 'job': d.jobs.push(this.newJob('atlas', 'reprovision', 3, 62)); break;
       case 'failed': case 'repair': {
         const j = this.newJob('atlas', 'reprovision', 3, 48);
@@ -114,7 +114,7 @@ export class FakeBackend implements Backend {
       case 'revoked': {
         const dev = d.devices.find(x => x.id === 'd2')!;
         dev.revoked = true;
-        d.revocation = { deviceId: 'd2', deviceName: dev.name, confirmed: 1, total: 2, rotate: ROTATE.map(r => ({ ...r, done: false })) };
+        d.revocation = { deviceId: 'd2', deviceName: dev.name, hosts: d.hosts.map((h, i) => ({ name: h.name, confirmed: i !== 1 })), rotate: ROTATE.map(r => ({ ...r, done: false })) };
         d.revocation.rotate[0].done = true;
         break;
       }
@@ -137,7 +137,7 @@ export class FakeBackend implements Backend {
   demo(what: Demo) {
     switch (what) {
       case 'lease': return this.set(d => { d.vaultRequests.push({ id: 'r' + this.seq++, kind: 'lease', secret: 'forge-token', vmId: 'atlas', vmName: 'atlas', reason: 'Push the release', span: '2 h' }); });
-      case 'enter': return this.set(d => { d.vaultRequests.push({ id: 'r' + this.seq++, kind: 'enter', secret: 'staging-db', vmId: 'harbor', vmName: 'harbor', reason: 'Password of the staging database', span: '' }); });
+      case 'enter': return this.set(d => { d.vaultRequests.push({ id: 'r' + this.seq++, kind: 'enter', secret: 'payments-sandbox', vmId: 'harbor', vmName: 'harbor', reason: 'API key of the payments sandbox', span: '' }); });
       case 'release': return this.set(d => { d.release = NEXT_RELEASE; });
       case 'fail-next': this.failNext = true; return this.set(() => {}, 'The next job fails');
       case 'change': return this.set(d => { this.vm(d, 'atlas').changeWaits = 'webshop'; });
@@ -161,8 +161,8 @@ export class FakeBackend implements Backend {
     j.repair = { agent: 'Claude Code', state: 'working', messages: [{ from: 'agent', text: REPAIR_SCRIPT[0] }], t3Thread: true };
   }
 
-  private startJob(vmId: string, kind: JobKind, extra?: Partial<Job>) {
-    if (activeJob(this.s, vmId)?.state === 'running') return;
+  private startJob(vmId: string, kind: JobKind, extra?: Partial<Job>): string | null {
+    if (activeJob(this.s, vmId)?.state === 'running') return null;
     const j = { ...this.newJob(vmId, kind), ...extra };
     const fail = this.failNext;
     this.failNext = false;
@@ -171,6 +171,21 @@ export class FakeBackend implements Backend {
       d.jobs.push(j);
     });
     this.advance(j.id, fail);
+    return j.id;
+  }
+
+  /* Jobs that run one after the other (Update everything, Update all VMs on a host). A queued job waits
+     while its VM is busy with another job. */
+  private queue: { vmId: string; kind: JobKind; extra?: Partial<Job> }[] = [];
+  private queuedRunning: string | null = null;
+  private drain() {
+    const cur = this.queuedRunning && this.s.jobs.find(j => j.id === this.queuedRunning);
+    if (cur && cur.state === 'running') return;
+    this.queuedRunning = null;
+    const i = this.queue.findIndex(q => activeJob(this.s, q.vmId)?.state !== 'running');
+    if (i < 0) return;
+    const [q] = this.queue.splice(i, 1);
+    this.queuedRunning = this.startJob(q.vmId, q.kind, q.extra);
   }
 
   private advance(jobId: string, fail: boolean) {
@@ -194,14 +209,14 @@ export class FakeBackend implements Backend {
       });
       const after = this.s.jobs.find(x => x.id === jobId);
       if (after?.state === 'running') this.advance(jobId, fail);
-      else if (after?.state === 'failed') this.repairScript(jobId);
+      else if (after?.state === 'failed') { this.repairScript(jobId); this.drain(); }
       else if (after?.state === 'done') this.onDone(after);
     });
   }
 
   private updateStep(d: Draft, j: Job) {
     // device first, then hosts, then the VM
-    if (j.step === 'This device' && j.to) d.version = j.to;
+    if (j.step === 'This device' && j.to && j.scope !== 'vm') d.version = j.to;
     if (j.step === 'Host') { const v = this.vm(d, j.vmId); const h = this.host(d, v.hostId); if (h.admin && j.to && newer(j.to, h.version)) h.version = j.to; }
   }
 
@@ -213,20 +228,15 @@ export class FakeBackend implements Backend {
     v.reprovisioned = 'just now';
     v.changeWaits = null;
     if (j.kind === 'update' && j.to) v.version = j.to;
-    if (j.kind === 'create') v.power = 'on';
+    if (j.kind === 'create') { v.power = 'on'; const hv = d.hosts.find(h => h.id === v.hostId)?.vms.find(x => x.name === v.name); if (hv) hv.power = 'on'; }
     if (d.release && !updateParts(d).some(p => p.to)) d.release = null;
   }
 
   private onDone(j: Job) {
     const verb = { reprovision: 'Reprovisioned', reinstall: 'Reinstalled', update: 'Updated', restore: 'Restored', create: 'Created' }[j.kind];
     this.set(() => {}, `${verb} ${this.vmName(j.vmId)}`);
-    // the update runs the user's VMs one after the other
-    if (j.kind === 'update' && this.queue.length) {
-      const next = this.queue.shift()!;
-      this.startJob(next.vmId, 'update', { from: next.from, to: next.to });
-    }
+    this.drain();
   }
-  private queue: { vmId: string; from: string; to: string }[] = [];
 
   private repairScript(jobId: string) {
     const say = (i: number, then?: () => void) => this.after(3, () => {
@@ -254,7 +264,13 @@ export class FakeBackend implements Backend {
 
   power(vmId: string, on: boolean) {
     this.set(d => { this.vm(d, vmId).power = on ? 'starting' : 'stopping'; });
-    const done = () => this.set(d => { const v = this.vm(d, vmId); v.power = on ? 'on' : 'off'; if (!on) v.usage.cpuPct = 0; }, `${this.vmName(vmId)} ${on ? 'runs' : 'is off'}`);
+    const done = () => this.set(d => {
+      const v = this.vm(d, vmId);
+      v.power = on ? 'on' : 'off';
+      if (!on) v.usage.cpuPct = 0;
+      const hv = d.hosts.find(h => h.id === v.hostId)?.vms.find(x => x.name === v.name);
+      if (hv) hv.power = v.power;
+    }, `${this.vmName(vmId)} ${on ? 'runs' : 'is off'}`);
     if (this.timers) this.after(3, done); else done();
   }
 
@@ -276,8 +292,8 @@ export class FakeBackend implements Backend {
       if (newer(to, d.version) && !due.length) d.version = to;
       for (const h of d.hosts) if (h.admin && h.channel === d.prefs.channel && newer(to, h.version) && !d.vms.some(v => v.hostId === h.id)) h.version = to;
     }, 'Updating everything');
-    this.queue = due.slice(1);
-    if (due[0]) this.startJob(due[0].vmId, 'update', { from: due[0].from, to: due[0].to });
+    this.queue.push(...due.map(x => ({ vmId: x.vmId, kind: 'update' as const, extra: { from: x.from, to: x.to, scope: 'all' as const } })));
+    if (due.length) this.drain();
     else this.set(d => { if (!updateParts(d).some(p => p.to)) d.release = null; });
   }
 
@@ -285,11 +301,12 @@ export class FakeBackend implements Backend {
     const v = this.s.vms.find(x => x.id === vmId);
     const to = v && vmUpdateTarget(this.s, v);
     if (!v || !to) return;
-    this.startJob(vmId, 'update', { from: v.version, to });
+    this.startJob(vmId, 'update', { from: v.version, to, scope: 'vm' });
   }
 
   stopJob(jobId: string) {
     this.set(d => { const j = this.job(d, jobId); if (j) j.state = 'stopped'; }, 'Stopped');
+    this.drain();
   }
 
   retryJob(jobId: string) {
@@ -370,7 +387,11 @@ export class FakeBackend implements Backend {
   }
 
   backupNow(vmId: string) {
-    this.set(d => { this.vm(d, vmId).backups.unshift({ id: 'b' + this.seq++, at: 'Just now', kind: 'Manual', size: '415 MB', pinned: false }); }, 'Backed up');
+    this.set(d => { this.vm(d, vmId).backups.unshift({ id: 'b' + this.seq++, at: 'Just now', kind: 'Requested', size: '415 MB', files: 48230, pinned: false, protected: false }); }, 'Backed up');
+  }
+
+  deleteBackup(vmId: string, backupId: string) {
+    this.set(d => { const v = this.vm(d, vmId); v.backups = v.backups.filter(b => b.id !== backupId); }, 'Backup deleted');
   }
 
   restoreBackup(vmId: string, backupId: string) {
@@ -399,7 +420,12 @@ export class FakeBackend implements Backend {
         this.set(d => { d.hosts.push({ ...structuredClone(d.hosts.find(h => h.id === 'lab')!), id: hostId, name: hn, address: addr, channel: d.prefs.channel, version: d.version, vmCount: 0 }); });
       }
     }
-    this.set(d => { d.vms.push(newVm(name, hostId, `${name}.example.net`)); });
+    this.set(d => {
+      d.vms.push(newVm(name, hostId, `${name}.example.net`));
+      const h = this.host(d, hostId);
+      h.vmCount += 1;
+      h.vms.push({ name, owner: 'alex', role: 'primary', power: 'off', cpuPct: 0, memGb: 0, memMaxGb: 8, diskGb: 0, cpus: 4, network: 'default', address: '–', lease: 'no expiry', shared: false, tokensToday: '0' });
+    });
     this.startJob(name, 'create');
   }
 
@@ -468,9 +494,9 @@ export class FakeBackend implements Backend {
     if (!dev || dev.me) return;
     this.set(d => {
       d.devices.find(x => x.id === deviceId)!.revoked = true;
-      d.revocation = { deviceId, deviceName: dev.name, confirmed: 1, total: 2, rotate: ROTATE.map(r => ({ ...r, done: false })) };
+      d.revocation = { deviceId, deviceName: dev.name, hosts: d.hosts.map((h, i) => ({ name: h.name, confirmed: i === 0 })), rotate: ROTATE.map(r => ({ ...r, done: false })) };
     }, `${dev.name} revoked`);
-    this.after(4, () => this.set(d => { if (d.revocation?.deviceId === deviceId) d.revocation.confirmed = d.revocation.total; }));
+    this.after(4, () => this.set(d => { if (d.revocation?.deviceId === deviceId) for (const h of d.revocation.hosts) h.confirmed = true; }));
   }
 
   markRotated(secret: string) { this.set(d => { const r = d.revocation?.rotate.find(x => x.secret === secret); if (r) r.done = !r.done; }); }
@@ -498,8 +524,16 @@ export class FakeBackend implements Backend {
   updateHostVms(hostId: string) {
     const h = this.s.hosts.find(x => x.id === hostId);
     if (!h) return;
-    this.set(() => {}, `Reprovisioning every VM on ${h.name}, one after the other`);
-    for (const v of this.s.vms.filter(x => x.hostId === hostId)) { this.reprovision(v.id); break; }
+    const own = new Set(this.s.vms.filter(x => x.hostId === hostId).map(v => v.name));
+    const others = h.vms.filter(v => !own.has(v.name) && v.role === 'primary').map(v => v.name);
+    // other users' VMs run as host jobs; the user's own VMs show their job on their own pages
+    const ids = others.map(() => 'j-' + this.seq++);
+    this.hostSet(hostId, x => { others.forEach((vm, i) => x.jobs.unshift({ id: ids[i], kind: 'reprovision', vm, owner: x.vms.find(v => v.name === vm)!.owner, state: 'running', phase: 'queued', created: 'now' })); },
+      `Reprovisioning every VM on ${h.name}, one after the other`);
+    const finish = () => this.hostSet(hostId, x => { for (const j of x.jobs) if (ids.includes(j.id)) { j.state = 'done'; j.phase = 'done'; } });
+    if (this.timers) this.after(8, finish); else finish();
+    this.queue.push(...this.s.vms.filter(x => x.hostId === hostId).map(v => ({ vmId: v.id, kind: 'reprovision' as const })));
+    this.drain();
   }
 
   addUser(hostId: string, u: { name: string; role: 'admin' | 'user'; maxVms: number; hostForwards: HostUser['hostForwards'] }) {
@@ -519,7 +553,8 @@ export class FakeBackend implements Backend {
   }
 
   saveUser(hostId: string, u: HostUser) {
-    this.hostSet(hostId, x => { const i = x.users.findIndex(y => y.name === u.name); if (i >= 0) x.users[i] = u; }, 'Saved');
+    // tokens have their own actions; a save never brings back a revoked one or drops a new one
+    this.hostSet(hostId, x => { const i = x.users.findIndex(y => y.name === u.name); if (i >= 0) x.users[i] = { ...u, tokens: x.users[i].tokens }; }, 'Saved');
   }
 
   removeUser(hostId: string, name: string) {
@@ -544,12 +579,19 @@ export class FakeBackend implements Backend {
 
   hostVmAction(hostId: string, vm: string, action: 'start' | 'restart' | 'shutdown' | 'delete' | 'console' | 'rotate-token' | 'toggle-shared' | 'renew-lease') {
     const notes: Record<typeof action, string> = { start: `Starting ${vm}`, restart: `Restarting ${vm}`, shutdown: `Shutting down ${vm}`, delete: `Deleting ${vm}`, console: `Console of ${vm} opens`, 'rotate-token': `New token for ${vm}`, 'toggle-shared': 'Saved', 'renew-lease': 'Lifetime restarted' };
-    this.hostSet(hostId, x => {
+    this.hostSet(hostId, (x, d) => {
       const v = x.vms.find(y => y.name === vm);
       if (!v) return;
-      if (action === 'start' || action === 'restart') v.power = 'on';
-      if (action === 'shutdown') { v.power = 'off'; v.cpuPct = 0; v.memGb = 0; }
-      if (action === 'delete') x.vms = x.vms.filter(y => y.name !== vm && y.parent !== vm);
+      // the same VM as seen in the user's own VM list
+      const mine = d.vms.find(y => y.hostId === hostId && y.name === vm);
+      const parent = v.parent ? d.vms.find(y => y.hostId === hostId && y.name === v.parent) : undefined;
+      if (action === 'start' || action === 'restart') { v.power = 'on'; if (mine) mine.power = 'on'; }
+      if (action === 'shutdown') { v.power = 'off'; v.cpuPct = 0; v.memGb = 0; if (mine) { mine.power = 'off'; mine.usage.cpuPct = 0; } }
+      if (action === 'delete') {
+        x.vms = x.vms.filter(y => y.name !== vm && y.parent !== vm);
+        if (mine) { d.vms = d.vms.filter(y => y !== mine); d.jobs = d.jobs.filter(j => j.vmId !== mine.id); }
+        if (parent) parent.children = parent.children.filter(c => c.name !== vm);
+      }
       if (action === 'toggle-shared') v.shared = !v.shared;
       if (action === 'renew-lease') v.lease = '12 h';
       if (action !== 'console') x.audit.unshift({ at: 'now', actor: 'alex', action: 'vm.' + action, target: vm });

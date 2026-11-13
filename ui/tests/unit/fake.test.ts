@@ -69,17 +69,16 @@ describe('FakeBackend', () => {
     expect(s.history[0].event).toBe('Allowed 2 h');
   });
 
-  it('saves an entered secret only if the name is free', () => {
+  it('saves an entered secret, never auto-approved, and overwrites nothing', () => {
     const be = new FakeBackend({ scene: 'enter', timers: false });
     const r = be.snapshot().vaultRequests[0];
-    be.enterSecret(r.id, 'hunter22');   // staging-db exists in the sample vault
-    expect(be.snapshot().secrets.filter(x => x.name === 'staging-db')).toHaveLength(1);
+    be.enterSecret(r.id, 'sk-test-1');
+    expect(be.snapshot().secrets.find(x => x.name === r.secret)?.auto).toBe(false);
+    expect(be.snapshot().notice?.text).toBe('Saved in the vault');
+    be.demo('enter');   // the same name again: it exists now
+    be.enterSecret(be.snapshot().vaultRequests[0].id, 'other');
+    expect(be.snapshot().secrets.filter(x => x.name === r.secret)).toHaveLength(1);
     expect(be.snapshot().notice?.text).toMatch(/already exists/);
-    be.demo('enter');
-    be.deleteSecret('staging-db');
-    const r2 = be.snapshot().vaultRequests[0];
-    be.enterSecret(r2.id, 'v');
-    expect(be.snapshot().secrets.find(x => x.name === 'staging-db')?.auto).toBe(false);
   });
 
   it('updates everything the user owns, VMs one after the other', () => {
@@ -95,14 +94,61 @@ describe('FakeBackend', () => {
     expect(s.release).toBeNull();
   });
 
-  it('updates only one VM when asked', () => {
+  it('updates only one VM when asked, leaving this device alone', () => {
     const be = new FakeBackend({ scene: 'update', tick: 10 });
     be.updateVm('harbor');
     run(5000);
     const s = be.snapshot();
     expect(s.vms.find(v => v.id === 'harbor')!.version).toBe('2.5.0');
     expect(s.vms.find(v => v.id === 'atlas')!.version).toBe('2.4.0');
+    expect(s.version).toBe('2.4.0');
     expect(s.release).toBe('2.5.0');
+  });
+
+  it('starts Update everything after a job that already runs', () => {
+    const be = new FakeBackend({ tick: 10 });
+    be.reprovision('atlas');
+    be.demo('release');
+    be.updateEverything();
+    run(10000);
+    const s = be.snapshot();
+    expect(s.vms.filter(v => v.hostId !== 'lab').every(v => v.version === '2.5.0')).toBe(true);
+    expect(s.release).toBeNull();
+  });
+
+  it('reprovisions every VM on a host, other users\' as host jobs', () => {
+    const be = new FakeBackend({ tick: 10 });
+    be.updateHostVms('orchard');
+    expect(be.snapshot().hosts.find(h => h.id === 'orchard')!.jobs.filter(j => j.state === 'running').map(j => j.vm)).toEqual(['moss']);
+    expect(activeJob(be.snapshot(), 'harbor')?.kind).toBe('reprovision');
+    run(2000);
+    expect(be.snapshot().hosts.find(h => h.id === 'orchard')!.jobs.every(j => j.state !== 'running')).toBe(true);
+  });
+
+  it('keeps host administration and the VM list in step', () => {
+    const be = new FakeBackend({ timers: false });
+    be.hostVmAction('orchard', 'harbor', 'shutdown');
+    expect(be.snapshot().vms.find(v => v.id === 'harbor')!.power).toBe('off');
+    be.hostVmAction('orchard', 'harbor', 'delete');
+    expect(be.snapshot().vms.find(v => v.id === 'harbor')).toBeUndefined();
+    be.createVm({ where: 'local', name: 'quill' });
+    expect(be.snapshot().hosts.find(h => h.id === 'pc')!.vms.some(v => v.name === 'quill')).toBe(true);
+  });
+
+  it('keeps tokens when a user is saved', () => {
+    const be = new FakeBackend({ timers: false });
+    const stale = structuredClone(be.snapshot().hosts.find(h => h.id === 'orchard')!.users[0]);
+    be.revokeToken('orchard', 'alex', stale.tokens[0].id);
+    be.saveUser('orchard', { ...stale, maxVms: 6 });
+    const u = be.snapshot().hosts.find(h => h.id === 'orchard')!.users[0];
+    expect(u.maxVms).toBe(6);
+    expect(u.tokens).toHaveLength(0);
+  });
+
+  it('deletes a backup', () => {
+    const be = new FakeBackend({ timers: false });
+    be.deleteBackup('atlas', 'b1');
+    expect(be.snapshot().vms[0].backups.some(b => b.id === 'b1')).toBe(false);
   });
 
   it('asks restart now or later for hardware, and marks reprovision changes', () => {
@@ -134,9 +180,9 @@ describe('FakeBackend', () => {
     be.revokeDevice('d1');   // this device: refused
     expect(be.snapshot().revocation).toBeNull();
     be.revokeDevice('d2');
-    expect(be.snapshot().revocation).toMatchObject({ confirmed: 1, total: 2 });
+    expect(be.snapshot().revocation!.hosts.map(h => h.confirmed)).toEqual([true, false, false]);
     run(100);
-    expect(be.snapshot().revocation?.confirmed).toBe(2);
+    expect(be.snapshot().revocation!.hosts.every(h => h.confirmed)).toBe(true);
     be.markRotated('forge-token');
     expect(be.snapshot().revocation?.rotate[0].done).toBe(true);
   });

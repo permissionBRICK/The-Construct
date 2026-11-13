@@ -21,7 +21,7 @@ export function PageView() {
       case 'file': return <ProjectFile vm={vm!} name={route.arg} />;
       case 'connections': return <Connections vm={vm!} />;
       case 'backups': return <Backups vm={vm!} />;
-      case 'settings': return <Settings vm={vm!} />;
+      case 'settings': return <Settings key={vm!.id} vm={vm!} />;
       case 'vault': return <Secrets />;
       case 'access': return <Access />;
       case 'devices': return <Devices />;

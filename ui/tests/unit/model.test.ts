@@ -6,6 +6,7 @@ import { applies, applyPatch, hwChange } from '../../src/model/settings';
 import { formatRoute, parseRoute, section } from '../../src/model/route';
 import { contrast, cssVars, SCHEME_ORDER, SCHEMES } from '../../src/model/tokens';
 import type { Job } from '../../src/backend/types';
+import { profileError } from '../../src/model/profile';
 
 const job = (p: Partial<Job>): Job => ({ id: 'j', vmId: 'atlas', kind: 'reprovision', state: 'running', step: 's', stepIndex: 0, stepCount: 3, pct: 0, log: [], error: null, repair: null, ...p });
 
@@ -145,5 +146,16 @@ describe('tokens', () => {
       expect(contrast(t.warn, t.warnbg), `${k} ${m} warn`).toBeGreaterThan(4.5);
       expect(contrast(t.sidefg, t.side), `${k} ${m} sidebar`).toBeGreaterThan(7);
     }
+  });
+});
+
+describe('profile shape', () => {
+  it('accepts the sample profiles and names what is wrong', () => {
+    for (const p of sampleState().projects) expect(profileError(p)).toBeNull();
+    expect(profileError({ name: 'webshop' })).toMatch(/repos/);
+    expect(profileError([])).toMatch(/object/);
+    const p = structuredClone(sampleState().projects[0]);
+    (p.forwards as unknown[]).push({ port: '80', label: 'x' });
+    expect(profileError(p)).toMatch(/forwards/);
   });
 });

@@ -26,7 +26,8 @@ export interface VmSettings {
 export interface Agent { name: string; version: string; latest: string; installed: boolean }
 export interface ChildVm { name: string; os: string; left: string; power: Power }
 export interface Forward { port: number; label: string; to: 'This device' | 'LAN'; url: string }
-export interface Backup { id: string; at: string; kind: 'Scheduled' | 'Before reinstall' | 'Manual' | 'Slot'; size: string; pinned: boolean }
+/** `protected`: kept by the retention rule whatever `keep` says (the newest host-requested backup past the horizon). */
+export interface Backup { id: string; at: string; kind: 'Scheduled' | 'Requested' | 'Before reinstall' | 'Slot'; size: string; files: number; pinned: boolean; protected: boolean }
 
 export interface Vm {
   id: string;
@@ -93,6 +94,8 @@ export interface Job {
   /** For an update: from and to version. */
   from?: string;
   to?: string;
+  /** For an update: 'all' was started by Update everything, 'vm' by "only this VM" (this device stays). */
+  scope?: 'all' | 'vm';
   /** The repair agent, started when the job failed. Null when the VM cannot run an agent. */
   repair: Repair | null;
 }
@@ -119,7 +122,8 @@ export type Pairing =
   | { state: 'confirm'; words: string[]; deviceName: string }
   | { state: 'done'; deviceName: string };
 
-export interface Revocation { deviceId: string; deviceName: string; confirmed: number; total: number; rotate: { secret: string; last: string; done: boolean }[] }
+/** `hosts`: every engine that served the device; one not yet confirmed keeps serving it until it syncs. */
+export interface Revocation { deviceId: string; deviceName: string; hosts: { name: string; confirmed: boolean }[]; rotate: { secret: string; last: string; done: boolean }[] }
 
 /* Host administration */
 export interface HostUser {
@@ -281,6 +285,7 @@ export interface Backend {
   setSharing(vmId: string, key: keyof Vm['sharing'], on: boolean): void;
   backupNow(vmId: string): void;
   restoreBackup(vmId: string, backupId: string): void;
+  deleteBackup(vmId: string, backupId: string): void;
   pinBackup(vmId: string, backupId: string, pinned: boolean): void;
   setBackupSchedule(vmId: string, schedule: Partial<Vm['backupSchedule']>): void;
   createVm(req: CreateVmRequest): void;

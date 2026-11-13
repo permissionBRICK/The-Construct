@@ -2,6 +2,7 @@ import { useState } from 'preact/hooks';
 import type { Profile, SettingsPatch, Vm, VmSettings } from '../../backend/types';
 import { activeJob, vmDot, vmWord, newer } from '../../model/vm';
 import { groupApplies, hwChange } from '../../model/settings';
+import { profileError } from '../../model/profile';
 import { Icon } from '../icons';
 import { Btn, Confirm, Copyable, Dot, Field, Head, KV, Page, Row, Sec, Seg, Switch, Table, Tabs, Tag, UpTag } from '../kit';
 import { copy, useApp } from '../ctx';
@@ -156,6 +157,8 @@ export function ProjectFile({ vm, name }: { vm: Vm; name?: string }) {
   const save = () => {
     try {
       const o = JSON.parse(edit!) as Profile;
+      const bad = profileError(o);
+      if (bad) throw new Error(bad);
       if (o.name !== p.name) throw new Error('The name cannot change here');
       be.saveProfile(o);
       setEdit(null); setErr('');
@@ -205,10 +208,11 @@ export function Backups({ vm }: { vm: Vm }) {
         <Row l="Keep"><Seg label="Keep" opts={[5, 10, 20] as const} value={vm.backupSchedule.keep} onChange={v => be.setBackupSchedule(vm.id, { keep: v })} /></Row>
       </Sec>
       <Sec>
-        <Table cols={[{ h: 'When' }, { h: 'Kind', cls: 'x' }, { h: 'Size', cls: 'x m' }, { h: '', cls: 'e' }]}
-          rows={vm.backups.map(b => [b.at, b.kind, b.size, <>
+        <Table cols={[{ h: 'When' }, { h: 'Kind', cls: 'x' }, { h: 'Size', cls: 'x m' }, { h: 'Files', cls: 'x m' }, { h: '', cls: 'e' }]}
+          rows={vm.backups.map(b => [<>{b.at}{b.protected && <> <Tag>protected</Tag></>}</>, b.kind, b.size, b.files.toLocaleString('en-US'), <>
             <button type="button" class={`lk ${b.pinned ? 'on' : ''}`} aria-pressed={b.pinned} title="Protect" aria-label="Protect" onClick={() => be.pinBackup(vm.id, b.id, !b.pinned)}><Icon n="lock" /></button>{' '}
-            <Confirm label="Restore" danger={false} onYes={() => be.restoreBackup(vm.id, b.id)} />
+            <Confirm label="Restore" danger={false} onYes={() => be.restoreBackup(vm.id, b.id)} />{' '}
+            <Confirm label="Delete" icon="trash" verb={b.protected ? 'Delete protected' : 'Delete'} onYes={() => be.deleteBackup(vm.id, b.id)} />
           </>])} />
       </Sec>
     </Page>

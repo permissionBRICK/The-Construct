@@ -2,20 +2,21 @@ import { useEffect, useRef, useState } from 'preact/hooks';
 import type { Job, VaultRequest, Vm } from '../backend/types';
 import { failedTitle, jobWord, mainAction } from '../model/vm';
 import { Icon } from './icons';
-import { Bar, Btn, Field, Pip, Switch, UpTag } from './kit';
+import { Bar, Btn, Field, Pip, Switch, Tag, UpTag } from './kit';
 import { copy, useApp } from './ctx';
 
 /* The blocks that sit on the stack, in the pop-out, the window's overview and the phone. */
 
 /** A vault request: the only thing in the product that asks for attention. Yellow. */
 export function VaultCard({ r, onDone }: { r: VaultRequest; onDone?: () => void }) {
-  const { be } = useApp();
+  const { be, s } = useApp();
+  const host = s.hosts.find(h => h.id === s.vms.find(v => v.id === r.vmId)?.hostId)?.name;
   const [value, setValue] = useState('');
   const done = () => onDone?.();
   return (
     <div class="blk warn ask" role="alertdialog" aria-label={`Vault request for ${r.secret}`}>
-      <div class="bh"><Icon n="key" /><b>{r.secret}</b><span>{r.vmName}</span></div>
-      <div class="msg quote">{r.reason}</div>
+      <div class="bh"><Icon n="key" /><b>{r.secret}</b><span>{r.vmName}{host && ` · ${host}`}</span></div>
+      <div class="msg"><Tag>agent</Tag> <span class="quote">{r.reason}</span></div>
       {r.kind === 'enter' ? (
         <>
           <Field type="password" value={value} onInput={setValue} label="Value" placeholder="Value" onEnter={() => { if (value) { be.enterSecret(r.id, value); done(); } }} />

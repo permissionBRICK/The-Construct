@@ -68,8 +68,9 @@ html[data-surf="alone"] body { background: transparent; }
 .app .blk.bad .bh > svg { color: var(--bad); }
 .app .blk.ok .bh > svg { color: var(--ok); }
 .app .msg { color: var(--dim); }
-.app .msg.quote::before { content: "\201C"; }
-.app .msg.quote::after { content: "\201D"; }
+.app .quote::before { content: "\201C"; }
+.app .quote::after { content: "\201D"; }
+.app .msg .tg { vertical-align: 1px; }
 .app .bar { height: 6px; background: var(--ln); border-radius: 3px; overflow: hidden; }
 .app .bar i { display: block; height: 100%; background: var(--pri); transition: width .4s; }
 .app .bf { display: flex; align-items: center; gap: 8px; color: var(--dim); }
