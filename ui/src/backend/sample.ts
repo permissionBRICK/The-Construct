@@ -78,6 +78,7 @@ function orchard(): Host {
     jobs: [
       { id: 'j-4411', kind: 'provision', vm: 'harbor', owner: 'alex', state: 'done', phase: 'done', created: 'Today 09:12' },
       { id: 'j-4410', kind: 'delete-child', vm: 'reed-old', owner: 'sam', state: 'failed', phase: 'disk busy', created: 'Yesterday 17:40' },
+      { id: 'j-4408', kind: 'provision', vm: 'reed', owner: 'sam', state: 'failed', phase: 'provision', created: 'Yesterday 16:02', retry: true },
       { id: 'j-4409', kind: 'media-cleanup', vm: '–', owner: 'host', state: 'done', phase: 'done', created: 'Yesterday 03:00' },
     ],
     audit: [
@@ -118,7 +119,7 @@ function orchard(): Host {
 
 export function sampleState(): State {
   return {
-    device: { name: 'Workbench' },
+    device: { name: 'Workbench', sshKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIK3rX8b2fQ7wLmN4pV9cTz1hJ6sYdE0gUa5oRiK8nWq construct-device', can: { mic: true, share: true, startWithOs: true } },
     version: '2.4.0',
     release: null,
     vms: [
@@ -127,10 +128,11 @@ export function sampleState(): State {
         settings: settings(16, 8),
         children: [{ name: 'win-test', os: 'Windows 11', left: '5 h 20 m', power: 'on' }],
         projectsOn: ['webshop', 'toolkit'],
+        link: { alias: 'atlas', sshConfig: 'written', share: null },
         forwards: [
-          { port: 5173, label: 'vite dev', to: 'This device', url: 'localhost:5173' },
-          { port: 8080, label: 'api', to: 'This device', url: 'localhost:8080' },
-          { port: 8000, label: 'VS Code web', to: 'LAN', url: 'atlas.example.net:8000' },
+          { id: 'f1', port: 5173, label: 'vite dev', to: 'This device', url: 'localhost:5173', closable: true },
+          { id: 'f2', port: 8080, label: 'api', to: 'This device', url: 'localhost:8080', closable: true },
+          { id: 'f3', port: 8000, label: 'VS Code web', to: 'LAN', url: 'atlas.example.net:8000' },
         ],
         backups: [
           { id: 'b4', at: 'Today 03:00', kind: 'Scheduled', size: '412 MB', files: 48210, pinned: false, protected: false },
@@ -150,6 +152,7 @@ export function sampleState(): State {
       {
         id: 'pc', name: 'This PC', kind: 'Hyper-V', version: '2.4.0', channel: 'stable', admin: true, address: 'https://192.0.2.10:8443', signIn: 'windows', vmCount: 2,
         ...emptyAdmin,
+        lan: false,
         capacity: { mode: 'observe', ram: [24, 64], cpu: [12, 16], disk: [0.3, 1] },
         vms: [
           { name: 'atlas', owner: 'alex', role: 'primary', power: 'on', cpuPct: 12, memGb: 6.2, memMaxGb: 16, diskGb: 48, cpus: 8, network: 'default', address: '192.0.2.11', lease: 'no expiry', shared: false, tokensToday: '0.8 M' },

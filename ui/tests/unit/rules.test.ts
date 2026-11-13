@@ -22,6 +22,9 @@ describe('rules', () => {
       expect(t, f).not.toMatch(/[?&]token=|agent-token=\$\{/);
     }
   });
+  it('posts messages only to the desktop shell\'s WebView2 host object', () => {
+    for (const [f, t] of src) if (/postMessage\s*\(/.test(t)) expect(f, f).toMatch(/[\\/]ui[\\/]shell\.ts$/);
+  });
   it('loads no fonts or scripts from a CDN', () => {
     for (const [f, t] of src) expect(t, f).not.toMatch(/https?:\/\/(fonts\.googleapis|fonts\.gstatic|cdn)/);
   });

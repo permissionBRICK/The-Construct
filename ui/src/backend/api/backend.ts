@@ -8,8 +8,10 @@ import { followEvents, type AgentEventData } from './events';
 import {
   updateRunning, allowanceOf, codeGroups, hostVersion, jobKey, problemText, splitJobKey, toCert, toConfig, toDevice, toHostJob, toHostUser, toHostVm, toJob,
   toMedia, toStatus, toUpdates, toUsage, toVm, toWindows, vmKey, toSecret, toLeases, toVaultEvent, toApproval, toEntryRequest, toProfile, splitRequestKey, VM_JOB_KINDS,
+  settingsFields, withDesired, toLink, toEverything, hostKind, toIsos,
   type DeviceItem, type ProfileResponse, type AuditEntry, type EngineView, type Health, type HostUpdateStatus, type HttpsStatus, type JobResponse, type MediaItem, type TokenSummary,
-  type UsageSummary, type UserDetail, type VmParts, type VmResponse, type WhoAmI,
+  type UsageSummary, type UserDetail, type VmParts, type VmResponse, type WhoAmI, type HostStatus, type HostConfig, type HostWindows, type HostCapabilities, type IsoCatalog,
+  type ConnectionView, type ProvisionSettings,
 } from './map';
 
 /* The real backend: the device agent's local API and, through its proxy, every engine the user works with.
@@ -22,21 +24,19 @@ type Loose = Record<string, unknown>;
 
 /** What this backend cannot serve yet; the screens show these parts as not available. */
 export const API_GAPS: Feature[] = [
-  'repair-chat', 'forwards', 'sharing', 'agents', 'open', 'console', 'vm-password', 'vm-services', 'vm-disk', 'vm-boot',
-  'restore', 'device-update', 'channel', 'os-prefs', 'windows-sign-in', 'export-code', 'code-reveal', 'vm-token', 'host-retry',
-  'take-back', 'project-on', 'approval-span',
+  'repair-chat', 'sharing', 'console', 'vm-password', 'vm-disk', 'vm-boot', 'windows-sign-in', 'export-code', 'code-reveal', 'vm-token',
+  'agent-update', 'notifications', 'log', 'vm-history', 't3-proxy',
 ];
 
 const NA = 'Not available yet';
-const DEFAULT_DISK_GB = 50;
 const PREFS_KEY = 'construct.prefs';
 const DISMISSED_KEY = 'construct.dismissed';
 
-interface Started { kind: JobKind; from?: string; to?: string; freshImage?: boolean }
+interface Started { kind: JobKind; from?: string; to?: string; freshImage?: boolean; backupId?: string }
 
 interface AdminData {
   users: HostUser[];
-  status: Loose | null;
+  status: HostStatus | null;
   updates: HostUpdateStatus | null;
   media: MediaItem[];
   audit: AuditEntry[];
@@ -44,6 +44,9 @@ interface AdminData {
   config: Host['config'];
   https: HttpsStatus | null;
   windows: ReturnType<typeof toWindows>;
+  isos: Host['isos'];
+  /** A solo host's LAN switch; undefined on any other host. */
+  lan: boolean | undefined;
 }
 
 interface Slice {
@@ -61,8 +64,14 @@ interface Slice {
   admin: AdminData | null;
   autoReprovision: boolean | null;
   usageWindow: Host['usage']['window'];
+  kind: string;
   problem: string | null;
 }
+
+const newSlice = (view: EngineView): Slice => ({
+  view, me: null, health: null, all: [], mine: [], parts: new Map(), jobs: [], ended: new Map(), lost: new Set(), admin: null, autoReprovision: null,
+  usageWindow: 'month', kind: '', problem: null,
+});
 
 class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly code: string | null, readonly body: Loose | null = null) { super(message); }
@@ -105,8 +114,6 @@ export interface ApiOptions {
   /** Milliseconds between reads of what the event stream does not announce (usage, guest reports, host
       administration, profiles, secrets); 0 turns polling off (tests). Default one minute. */
   pollMs?: number;
-  /** Milliseconds between reads of the pending vault requests, which have no event. Default 10 s, off with `pollMs: 0`. */
-  vaultPollMs?: number;
   /** false: do not follow `/api/events` (tests drive `onEvent`). */
   events?: boolean;
 }
@@ -121,15 +128,12 @@ export class ApiBackend implements Backend {
   private dismissed = new Set<string>(store.get<string[]>(DISMISSED_KEY, []));
   /** Jobs this UI started, with the kind it shows them as, the version an update goes from and to, and how a reinstall was asked for. */
   private started = new Map<string, Started>();
-  /** create-vm jobs after which the VM is provisioned. */
-  private provisionAfter = new Set<string>();
   private transit = new Map<string, { power: Vm['power']; until: number }>();
   private approving: { id: string; publicKey: string; name: string } | null = null;
   private refreshing = new Map<string, Promise<void>>();
   private again = new Set<string>();
   private stopEvents: (() => void) | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
-  private vaultTimer: ReturnType<typeof setTimeout> | null = null;
   private fetchImpl: typeof fetch;
   /** The engine that holds the store: profiles are read and written there. */
   private storeEngine: string | null = null;
@@ -137,7 +141,10 @@ export class ApiBackend implements Backend {
   private registered = false;
   /** Vault requests answered here; a read that was under way does not bring them back. */
   private answeredKeys = new Set<string>();
-
+  /** This device's links to the user's VMs, keyed `engine/vm`, with the share where the device maps one. */
+  private links = new Map<string, { c: ConnectionView; share: { letter: string | null } | null }>();
+  private linkProblem: string | null = null;
+  private deviceAutoUpdate = false;
   constructor(private opts: ApiOptions) {
     this.fetchImpl = opts.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
     const headers = { Authorization: `Bearer ${opts.token}` };
@@ -147,7 +154,7 @@ export class ApiBackend implements Backend {
       device: { name: '' }, version: '', release: null, vms: [], hosts: [], projects: [], sync: { when: '–', remote: '', rev: '' }, jobs: [],
       vaultRequests: [], secrets: [], leases: [], devices: [], history: [], vaultModes: [], problems: {}, pairing: null, revocation: null, handout: null,
       prefs: { channel: 'stable', theme: p.theme ?? 'auto', scheme: p.scheme ?? 'green', autoUpdate: false, startWithOs: false, notifications: false },
-      upgrade: null, notice: null, na: API_GAPS, firstRun: null,
+      upgrade: null, notice: null, na: API_GAPS, firstRun: null, everything: null,
     };
   }
 
@@ -164,13 +171,11 @@ export class ApiBackend implements Backend {
     }
     await this.load();
     this.schedule();
-    this.scheduleVault();
   }
 
   dispose() {
     this.stopEvents?.();
     if (this.timer) clearTimeout(this.timer);
-    if (this.vaultTimer) clearTimeout(this.vaultTimer);
     this.subs.clear();
   }
 
@@ -201,14 +206,6 @@ export class ApiBackend implements Backend {
     if (!ms) return;
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => { void this.refreshAll().finally(() => this.schedule()); }, ms);
-  }
-
-  /** Vault requests have no event; a VM waits on them, so they are read more often. */
-  private scheduleVault() {
-    const ms = this.opts.pollMs === 0 && this.opts.vaultPollMs === undefined ? 0 : this.opts.vaultPollMs ?? 10000;
-    if (!ms) return;
-    if (this.vaultTimer) clearTimeout(this.vaultTimer);
-    this.vaultTimer = setTimeout(() => { void this.loadRequests().finally(() => this.scheduleVault()); }, ms);
   }
 
   /** Runs an action; its error becomes the notice. */
@@ -257,10 +254,10 @@ export class ApiBackend implements Backend {
       for (const e of st.engines) {
         const sl = this.slices.get(e.id);
         if (sl) sl.view = e;
-        else this.slices.set(e.id, { view: e, me: null, health: null, all: [], mine: [], parts: new Map(), jobs: [], ended: new Map(), lost: new Set(), admin: null, autoReprovision: null, usageWindow: 'month', problem: null });
+        else this.slices.set(e.id, newSlice(e));
       }
       this.compose();
-      await Promise.all([this.loadDevices(), ...st.engines.map(e => this.refreshEngine(e.id)), this.loadVault(), this.loadProfiles()]);
+      await Promise.all([this.loadDevices(), ...st.engines.map(e => this.refreshEngine(e.id)), this.loadVault(), this.loadProfiles(), this.loadDevice(), this.loadConnections()]);
       // After the VMs, so a request names the VM the screens know.
       await this.loadRequests();
     } catch (e) {
@@ -277,7 +274,52 @@ export class ApiBackend implements Backend {
   }
 
   private async refreshAll() {
-    await Promise.all([this.loadDevices(), ...[...this.slices.keys()].map(id => this.refreshEngine(id)), this.loadVault(), this.loadProfiles()]);
+    // Vault requests arrive as events; the slow read catches an engine that was not reachable when one was filed.
+    await Promise.all([this.loadDevices(), ...[...this.slices.keys()].map(id => this.refreshEngine(id)), this.loadVault(), this.loadProfiles(), this.loadRequests(), this.loadConnections()]);
+  }
+
+  /** This device: its version on offer, channel, automatic updates, start with the OS, its SSH key, what it can do. */
+  private async loadDevice() {
+    const [upd, set, feat, key, every] = await Promise.allSettled([
+      ok(this.agent.GET('/api/update')), ok(this.agent.GET('/api/device/settings')), ok(this.agent.GET('/api/device/features')),
+      ok(this.agent.GET('/api/device/ssh-key')), ok(this.agent.GET('/api/update/everything')),
+    ]);
+    const device = { ...this.s.device };
+    const prefs = { ...this.s.prefs };
+    let release = this.s.release;
+    if (upd.status === 'fulfilled') release = upd.value.available ?? null;
+    if (set.status === 'fulfilled') {
+      prefs.channel = set.value.channel as Prefs['channel'];
+      prefs.startWithOs = !!set.value.startWithOs;
+      this.deviceAutoUpdate = set.value.autoUpdate;
+    }
+    if (feat.status === 'fulfilled') device.can = { mic: feat.value.microphone, share: feat.value.share, startWithOs: feat.value.startWithOs };
+    if (key.status === 'fulfilled') device.sshKey = key.value.publicKey;
+    const everything = every.status === 'fulfilled' && every.value.parts.length ? toEverything(every.value) : this.s.everything ?? null;
+    this.emit({ device, prefs, release, everything });
+    this.compose();
+  }
+
+  /** This device's links to the user's VMs: forwards, the microphone, the SSH alias, and the share where it maps one. */
+  private async loadConnections() {
+    if (!this.registered) return;
+    try {
+      const list = await ok(this.agent.GET('/api/connections'));
+      const canShare = this.s.device.can?.share ?? false;
+      const next = new Map<string, { c: ConnectionView; share: { letter: string | null } | null }>();
+      await Promise.all(list.map(async c => {
+        let share: { letter: string | null } | null = null;
+        if (canShare) {
+          try { share = await ok(this.agent.GET('/api/connections/{engine}/{vm}/share', { params: { path: { engine: c.engine, vm: c.vm } } })); } catch { share = null; }
+        }
+        next.set(vmKey(c.engine, c.vm.toLowerCase()), { c, share });
+      }));
+      this.links = next;
+      this.linkProblem = null;
+    } catch (e) {
+      this.linkProblem = errText(e);
+    }
+    this.compose();
   }
 
   private problem(key: keyof State['problems'], text: string | null) {
@@ -399,39 +441,51 @@ export class ApiBackend implements Backend {
     sl.mine = sl.all.filter(v => v.kind !== 'child' && v.owner.toLowerCase() === me && !v.deleting);
     await Promise.all(sl.mine.map(async v => {
       const path = { params: { path: { name: v.name } } };
-      const [status, update, backups, settings] = await Promise.allSettled([
+      const [status, update, backups, settings, desired, agents] = await Promise.allSettled([
         ok(c.GET('/api/v1/vms/{name}/provision-status', path)), ok(c.GET('/api/v1/vms/{name}/update', path)),
         ok(c.GET('/api/v1/vms/{name}/backups', path)), ok(c.GET('/api/v1/vms/{name}/backups/settings', path)),
+        ok(c.GET('/api/v1/vms/{name}/desired', path)), ok(c.GET('/api/v1/vms/{name}/agents', path)),
       ]);
       const old = sl.parts.get(v.name) ?? {};
       const problems: Vm['problems'] = {};
       if (status.status === 'rejected') problems.status = errText(status.reason);
       if (backups.status === 'rejected') problems.backups = errText(backups.reason);
+      if (desired.status === 'rejected') problems.settings = errText(desired.reason);
+      if (agents.status === 'rejected') problems.agents = errText(agents.reason);
       sl.parts.set(v.name, {
         status: status.status === 'fulfilled' ? status.value : old.status,
         update: update.status === 'fulfilled' ? update.value : old.update,
         backups: backups.status === 'fulfilled' ? backups.value.backups : old.backups,
         backupSettings: settings.status === 'fulfilled' ? settings.value : old.backupSettings,
+        desired: desired.status === 'fulfilled' ? desired.value : old.desired,
+        agents: agents.status === 'fulfilled' ? agents.value : old.agents,
         problems,
       });
     }));
+    if (!sl.kind) {
+      try { sl.kind = hostKind(await ok(c.GET('/api/v1/host/capabilities')) as HostCapabilities); } catch { /* shown without its kind */ }
+    }
     sl.admin = sl.me.role === 'admin' ? await this.readAdmin(c, sl) : null;
     this.compose();
   }
 
   private async readAdmin(c: EngineClient, sl: Slice): Promise<AdminData> {
     const prev = sl.admin;
-    const [users, status, updates, media, audit, usage, config, https, windows] = await Promise.allSettled([
+    const [users, status, updates, media, audit, usage, config, https, windows, isos] = await Promise.allSettled([
       ok(c.GET('/api/v1/users')),
-      ok(c.GET('/api/v1/host/status')) as Promise<unknown>,
+      ok(c.GET('/api/v1/host/status')) as Promise<HostStatus>,
       ok(c.GET('/api/v1/host/updates/status')),
       ok(c.GET('/api/v1/media')),
       ok(c.GET('/api/v1/audit', { params: { query: { limit: 100 } } })),
       ok(c.GET('/api/v1/host/usage', { params: { query: { window: sl.usageWindow } } })),
-      ok(c.GET('/api/v1/host/config')) as Promise<unknown>,
+      ok(c.GET('/api/v1/host/config')) as Promise<HostConfig>,
       ok(c.GET('/api/v1/host/https')),
-      ok(c.GET('/api/v1/host/windows')) as Promise<unknown>,
+      ok(c.GET('/api/v1/host/windows')) as Promise<HostWindows>,
+      ok(c.GET('/api/v1/host/iso-catalog')) as Promise<IsoCatalog>,
     ]);
+    // Only a solo install's engine has the LAN switch; any other answers 409.
+    let lan: boolean | undefined;
+    try { lan = (await ok(c.GET('/api/v1/host/lan-access'))).enabled; } catch { lan = undefined; }
     let hostUsers = prev?.users ?? [];
     if (users.status === 'fulfilled') {
       hostUsers = await Promise.all((users.value as UserDetail[]).map(async u => {
@@ -440,18 +494,20 @@ export class ApiBackend implements Backend {
         return toHostUser(u, tokens);
       }));
     }
-    const failed = [users, status, updates, media, audit, usage, config, https, windows].find(r => r.status === 'rejected') as PromiseRejectedResult | undefined;
+    const failed = [users, status, updates, media, audit, usage, config, https, windows, isos].find(r => r.status === 'rejected') as PromiseRejectedResult | undefined;
     if (failed && !sl.problem) sl.problem = errText(failed.reason);
     return {
       users: hostUsers,
-      status: status.status === 'fulfilled' ? (status.value as Loose) : prev?.status ?? null,
+      status: status.status === 'fulfilled' ? status.value : prev?.status ?? null,
       updates: updates.status === 'fulfilled' ? updates.value : prev?.updates ?? null,
       media: media.status === 'fulfilled' ? media.value : prev?.media ?? [],
       audit: audit.status === 'fulfilled' ? audit.value : prev?.audit ?? [],
       usage: usage.status === 'fulfilled' ? toUsage(usage.value as UsageSummary, sl.usageWindow) : prev?.usage ?? { window: sl.usageWindow, byUser: [], byVm: [] },
-      config: config.status === 'fulfilled' ? toConfig(config.value as Loose) : prev?.config ?? [],
+      config: config.status === 'fulfilled' ? toConfig(config.value) : prev?.config ?? [],
       https: https.status === 'fulfilled' ? https.value : prev?.https ?? null,
-      windows: windows.status === 'fulfilled' ? toWindows(windows.value as Loose) : prev?.windows ?? { winKeys: [], winGuests: [] },
+      windows: windows.status === 'fulfilled' ? toWindows(windows.value) : prev?.windows ?? { winKeys: [], winGuests: [] },
+      isos: isos.status === 'fulfilled' ? toIsos(isos.value) : prev?.isos ?? [],
+      lan,
     };
   }
 
@@ -468,6 +524,14 @@ export class ApiBackend implements Backend {
       for (const r of sl.mine) {
         const id = names.get(r.name) === 1 ? r.name : vmKey(engine, r.name);
         const v = toVm(id, engine, r, sl.all, hv, sl.parts.get(r.name) ?? {});
+        const link = this.links.get(vmKey(engine, r.name.toLowerCase()));
+        if (link) {
+          const l = toLink(link.c, link.share);
+          v.forwards = l.forwards;
+          v.link = l.link;
+          v.sharing = { ...v.sharing, mic: l.mic, smb: l.smb };
+        }
+        if (this.linkProblem) v.problems = { ...v.problems, connection: this.linkProblem };
         const t = this.transit.get(id);
         if (t && t.until > now && v.power !== (t.power === 'starting' ? 'on' : 'off')) v.power = t.power;
         else this.transit.delete(id);
@@ -488,7 +552,8 @@ export class ApiBackend implements Backend {
     const auto = [...this.slices.values()].map(s => s.autoReprovision).filter(x => x !== null);
     this.emit({
       vms, hosts, jobs: jobs.map(({ at: _at, ...j }) => j),
-      prefs: { ...this.s.prefs, autoUpdate: auto.length > 0 && auto.every(Boolean) },
+      // On only when this device and every engine update by themselves; the switch sets all of them.
+      prefs: { ...this.s.prefs, autoUpdate: this.deviceAutoUpdate && auto.every(Boolean) },
     });
   }
 
@@ -500,7 +565,7 @@ export class ApiBackend implements Backend {
     return {
       id: engine,
       name: sl.view.name,
-      kind: '',
+      kind: sl.kind,
       version: hostVersion(sl.health),
       channel: u?.channel ?? '–',
       admin,
@@ -512,7 +577,7 @@ export class ApiBackend implements Backend {
       users: a?.users ?? [],
       vms: admin ? sl.all.map(toHostVm) : [],
       media: (a?.media ?? []).map(toMedia),
-      isos: [],
+      isos: a?.isos ?? [],
       winKeys: a?.windows.winKeys ?? [],
       winGuests: a?.windows.winGuests ?? [],
       jobs: admin ? sl.jobs.map(toHostJob).reverse() : [],
@@ -524,6 +589,7 @@ export class ApiBackend implements Backend {
       updating: updateRunning(u?.current),
       updateTo: admin ? (u?.available && u.available.commit !== u.installed.commit ? u.available.version : null) : null,
       problem: sl.problem,
+      ...(a?.lan !== undefined ? { lan: a.lan } : {}),
     };
   }
 
@@ -537,6 +603,12 @@ export class ApiBackend implements Backend {
     const id = typeof data?.id === 'string' ? data.id : null;
     switch (type) {
       case 'agent': case 'reset': void this.load(); return;
+      case 'update': void this.loadDevice(); return;
+      case 'connections': void this.loadConnections(); return;
+      case 'vault.approval.added': case 'vault.approval.ended': case 'vault.entry-request.added': case 'vault.entry-request.ended':
+        void this.loadRequests();
+        if (type.endsWith('ended')) void this.loadVault();
+        return;
       case 'pairing': return this.onPairing(data);
       case 'job.started': case 'job.progress': case 'job.ended':
         if (engine && id && this.slices.has(engine)) void this.readJob(engine, id);
@@ -551,7 +623,10 @@ export class ApiBackend implements Backend {
         if (engine && id) this.slices.get(engine)?.lost.add(id);
         if (engine && this.slices.has(engine)) void this.refreshEngine(engine);
         return;
-      case 'engine.reset': case 'vm.created': case 'vm.changed': case 'vm.power': case 'vm.deleted': case 'update.offered': case 'update.finished':
+      case 'engine.reset':
+        if (engine && this.slices.has(engine)) { void this.refreshEngine(engine); void this.loadRequests(); }
+        return;
+      case 'vm.created': case 'vm.changed': case 'vm.power': case 'vm.deleted': case 'update.offered': case 'update.finished':
         if (engine && this.slices.has(engine)) void this.refreshEngine(engine);
         return;
     }
@@ -601,7 +676,6 @@ export class ApiBackend implements Backend {
     if (!ended(job)) return;
     const verb = { reprovision: 'Reprovisioned', reinstall: 'Reinstalled', update: 'Updated', restore: 'Restored', create: 'Created' }[this.started.get(key)?.kind ?? (job.kind === 'create-vm' ? 'create' : 'reprovision')];
     if (job.state === 'succeeded' && job.vmName) this.note(`${verb} ${job.vmName}`);
-    if (this.provisionAfter.delete(key) && job.state === 'succeeded' && job.vmName) void this.provision(engine, job.vmName);
   }
 
   private onPairing(p: Loose | null) {
@@ -640,8 +714,21 @@ export class ApiBackend implements Backend {
     });
   }
 
-  open(_vmId: string, _what: Open) { this.note(NA); }
-  openForward(..._: unknown[]) { this.note(NA); }
+  /** T3 Code, VS Code or an SSH terminal on this device, through the agent. */
+  open(vmId: string, what: Open) {
+    const ref = this.vmRef(vmId);
+    if (!ref) return;
+    void this.run(() => ok(this.agent.POST('/api/connections/{engine}/{vm}/open', { params: { path: { engine: ref.engine, vm: ref.name } }, body: { what } })),
+      `${{ t3: 'T3 Code', vscode: 'VS Code', ssh: 'SSH' }[what]} opens`);
+  }
+
+  /** A forward's link in the browser. */
+  openForward(vmId: string, port: number) {
+    const f = this.vmRef(vmId)?.vm.forwards.find(x => x.port === port);
+    if (!f?.url) return;
+    const url = /^https?:\/\//.test(f.url) ? f.url : `http://${f.url}`;
+    try { window.open(url, '_blank', 'noopener'); } catch { /* no window here */ }
+  }
   openChildConsole(..._: unknown[]) { this.note(NA); }
   setVmPassword(..._: unknown[]) { this.note(NA); }
 
@@ -673,23 +760,13 @@ export class ApiBackend implements Backend {
     if (ref) void this.vmJob(ref.engine, ref.name, 'reinstall', { freshImage }, { kind: 'reinstall', freshImage });
   }
 
+  /** The agent's "update everything": each host the user administers, then the user's VMs on each host, then this
+      device, each through its own updater; the parts and their state arrive with the `update` event. */
   updateEverything() {
-    void (async () => {
-      for (const [engine, sl] of this.slices) {
-        const h = this.s.hosts.find(x => x.id === engine);
-        const c = this.engine(engine);
-        const mine = this.s.vms.filter(v => v.hostId === engine);
-        if (h?.admin && h.updateTo && mine.length) {
-          // The host updates first and reprovisions the VM named here after it succeeded. The engine takes
-          // one follower per request, so the user's other VMs on this host update with the next click.
-          await this.run(() => ok(c.POST('/api/v1/vms/{name}/update', { params: { path: { name: mine[0].name } } })), `Updating ${h.name}, then ${mine[0].name}`, engine);
-        } else if (h?.admin && h.updateTo) {
-          await this.run(() => ok(c.POST('/api/v1/host/updates/run')), `Updating ${h.name}`, engine);
-        } else if (this.s.vms.some(v => v.hostId === engine && v.updateTo)) {
-          await this.run(() => ok(c.POST('/api/v1/me/vms/reprovision')), `Updating your VMs on ${sl.view.name}`, engine);
-        }
-      }
-    })();
+    void this.run(async () => {
+      const r = await ok(this.agent.POST('/api/update/everything'));
+      this.emit({ everything: toEverything(r) });
+    }, 'Updating everything');
   }
 
   updateVm(vmId: string) {
@@ -707,18 +784,29 @@ export class ApiBackend implements Backend {
     void this.run(() => ok(this.engine(engine).POST('/api/v1/jobs/{id}/cancel', { params: { path: { id } } })), 'Stopping', engine);
   }
 
-  /** The engine has no retry route yet: the same job kind starts again (a reinstall with how it was asked for). */
+  /** A failed provision or reinstall through the engine's retry route; a restore needs its backup's key again,
+      so it starts once more through the agent's restore route; a failed create provisions the VM it left. */
   retryJob(key: string) {
     const job = this.s.jobs.find(j => j.id === key);
     const ref = job && this.vmRef(job.vmId);
     if (!job || !ref) return;
-    if (job.kind === 'restore') { this.note(NA); return; }
-    if (job.kind === 'reinstall') {
-      const freshImage = this.started.get(key)?.freshImage ?? false;
-      void this.vmJob(ref.engine, ref.name, 'reinstall', { freshImage }, { kind: 'reinstall', freshImage });
+    const [engine, id] = splitJobKey(key);
+    if (engine !== ref.engine) return;
+    const raw = this.slices.get(engine)?.jobs.find(j => j.id === id);
+    if (!raw) return;
+    if (raw.kind === 'restore') {
+      const result = raw.result as Loose | null;
+      const backupId = this.started.get(key)?.backupId ?? (typeof result?.backupId === 'string' ? result.backupId : null);
+      if (!backupId) { this.note('This restore does not name its backup; start it again from Backups'); return; }
+      void this.restore(ref.engine, ref.name, backupId);
       return;
     }
-    void this.provision(ref.engine, ref.name);
+    if (raw.kind === 'create-vm') { void this.provision(ref.engine, ref.name); return; }
+    const st = this.started.get(key);
+    void this.run(async () => {
+      const r = await ok(this.engine(engine).POST('/api/v1/jobs/{id}/retry', { params: { path: { id } }, body: {} }));
+      await this.track(engine, r.jobId, st ? { ...st, backupId: undefined } : undefined);
+    }, undefined, engine);
   }
 
   replyRepair(..._: unknown[]) { this.note(NA); }
@@ -734,7 +822,13 @@ export class ApiBackend implements Backend {
     if (!ref) return;
     const c = this.engine(ref.engine);
     const path = { params: { path: { name: ref.name } } };
-    if (patch.services || patch.identity || patch.disk || patch.hw?.checkpoints !== undefined || patch.hw?.startWithHost !== undefined) { this.note(NA); return; }
+    if (patch.disk || patch.hw?.checkpoints !== undefined || patch.hw?.startWithHost !== undefined) { this.note(NA); return; }
+    if (patch.services?.t3ProxyUrl !== undefined || patch.identity?.historyDays !== undefined) { this.note(NA); return; }
+    if (patch.services || patch.identity) {
+      // Stored for the next reprovision; the VM itself stays as it is until then (7.5).
+      void this.run(() => this.changeDesired(ref.engine, ref.name, settingsFields(patch)), 'Saved, applies at the next reprovision', ref.engine);
+      return;
+    }
     void this.run(async () => {
       if (patch.hw?.memGb !== undefined) await ok(c.PUT('/api/v1/vms/{name}/memory', { ...path, body: { ramGb: patch.hw.memGb } }));
       if (patch.hw?.cpus !== undefined) await ok(c.PUT('/api/v1/vms/{name}/cpu', { ...path, body: { cpus: patch.hw.cpus } }));
@@ -746,9 +840,27 @@ export class ApiBackend implements Backend {
     }, patch.hw ? (when === 'now' ? `Restarting ${ref.name}` : 'Saved, applies at the next restart') : 'Saved', ref.engine);
   }
 
+  /** Reads the VM's desired state from its engine, changes the named fields (and the projects), and stores it whole,
+      so fields this page does not show are kept as the engine holds them. */
+  private async changeDesired(engine: string, name: string, fields: Partial<ProvisionSettings>, projects?: (current: string[]) => string[]) {
+    const c = this.engine(engine);
+    const path = { params: { path: { name } } };
+    const now = await ok(c.GET('/api/v1/vms/{name}/desired', path));
+    const next = withDesired(now.desired, fields, projects?.(now.desired?.projects ?? []));
+    await ok(c.PUT('/api/v1/vms/{name}/desired', { ...path, body: next }));
+  }
+
   updateAgents(..._: unknown[]) { this.note(NA); }
-  /** No route sets a VM's profiles outside a provision job's whole desired state. */
-  setProjectOn(..._: unknown[]) { this.note(NA); }
+
+  /** A profile switched on or off for one VM: part of its desired state, applied at the next reprovision. */
+  setProjectOn(vmId: string, project: string, on: boolean) {
+    const ref = this.vmRef(vmId);
+    if (!ref) return;
+    void this.run(() => this.changeDesired(ref.engine, ref.name, {}, cur => {
+      const rest = cur.filter(p => p !== project);
+      return on ? [...rest, project] : rest;
+    }), on ? `${project} on ${ref.name} at the next reprovision` : `${project} off ${ref.name} at the next reprovision`, ref.engine);
+  }
 
   /** Through the device route, with the revision the editor read: the engine merges a newer one per field or
       opens a conflict for an agent; it never overwrites it. */
@@ -777,8 +889,33 @@ export class ApiBackend implements Backend {
   }
 
   syncProjects() { void this.loadProfiles(); }
-  closeForward(..._: unknown[]) { this.note(NA); }
-  setSharing(..._: unknown[]) { this.note(NA); }
+
+  closeForward(vmId: string, forwardId: string) {
+    const ref = this.vmRef(vmId);
+    if (!ref || !ref.vm.forwards.some(f => f.id === forwardId && f.closable)) return;
+    void this.run(() => ok(this.agent.DELETE('/api/connections/{engine}/{vm}/forwards/{id}', { params: { path: { engine: ref.engine, vm: ref.name, id: forwardId } } })), 'Closed')
+      .then(() => this.loadConnections());
+  }
+
+  /** The microphone and the share through this device's agent; VS Code web has no route. */
+  setSharing(vmId: string, key: keyof Vm['sharing'], on: boolean) {
+    const ref = this.vmRef(vmId);
+    if (!ref) return;
+    const path = { params: { path: { engine: ref.engine, vm: ref.name } } };
+    if (key === 'mic') void this.run(() => ok(this.agent.PUT('/api/connections/{engine}/{vm}/mic', { ...path, body: { on } }))).then(() => this.loadConnections());
+    else if (key === 'smb') void this.run(() => ok(on ? this.agent.POST('/api/connections/{engine}/{vm}/share', path) : this.agent.DELETE('/api/connections/{engine}/{vm}/share', path)))
+      .then(() => this.loadConnections());
+    else this.note(NA);
+  }
+
+  /** The VM's `Host` alias in this device's SSH config: written again, or removed. */
+  setSshAlias(vmId: string, on: boolean) {
+    const ref = this.vmRef(vmId);
+    if (!ref) return;
+    const path = { params: { path: { engine: ref.engine, vm: ref.name } } };
+    void this.run(() => ok(on ? this.agent.PUT('/api/connections/{engine}/{vm}/ssh-config', path) : this.agent.DELETE('/api/connections/{engine}/{vm}/ssh-config', path)),
+      on ? 'Alias written' : 'Alias removed').then(() => this.loadConnections());
+  }
 
   backupNow(vmId: string) {
     const ref = this.vmRef(vmId);
@@ -787,7 +924,21 @@ export class ApiBackend implements Backend {
       'Backup requested; the VM sends it at its next check-in', ref.engine);
   }
 
-  restoreBackup(..._: unknown[]) { this.note(NA); }
+  /** The screen asked in place first. The agent opens the backup's key with the account's key and starts the restore. */
+  restoreBackup(vmId: string, backupId: string) {
+    const ref = this.vmRef(vmId);
+    if (!ref || !ref.vm.backups.some(b => b.id === backupId)) return;
+    void this.restore(ref.engine, ref.name, backupId);
+  }
+
+  private restore(engine: string, vm: string, backupId: string) {
+    return this.run(async () => {
+      const r = await ok(this.agent.POST('/api/engines/{engine}/vms/{vm}/backups/{backup}/restore', {
+        params: { path: { engine, vm, backup: backupId } }, body: { requestId: crypto.randomUUID() },
+      }));
+      await this.track(engine, r.jobId, { kind: 'restore', backupId });
+    }, undefined, engine);
+  }
 
   deleteBackup(vmId: string, backupId: string) {
     const ref = this.vmRef(vmId);
@@ -822,12 +973,11 @@ export class ApiBackend implements Backend {
     if (req.where === 'remote' && req.signIn !== 'token') { this.note(NA); return null; }
     void this.run(async () => {
       const engine = req.where === 'local' ? await this.localEngine() : await this.addEngine(req.hostAddress ?? '', req.token ?? null, req.pin ?? null);
-      // The engine takes the defaults for CPU and the rest; RAM comes from its recommendation, the disk from
-      // today's default (Create-AgentVM.ps1), as the engine has none.
+      // One request: the engine creates the VM with its recommended size and provisions it with these settings
+      // (none chosen yet: the guest's defaults; Settings changes them later).
       const c = this.engine(engine);
       const d = await ok(c.GET('/api/v1/vm-defaults'));
-      const r = await ok(c.POST('/api/v1/vms', { body: { name, ramGb: d.recommendedRamGb, diskGb: DEFAULT_DISK_GB } as never }));
-      this.provisionAfter.add(jobKey(engine, r.jobId));
+      const r = await ok(c.POST('/api/v1/vms', { body: { name, ramGb: d.recommendedRamGb, diskGb: d.recommendedDiskGb, desired: { projects: [], settings: {} } } as never }));
       await this.refreshEngine(engine);
       await this.track(engine, r.jobId, { kind: 'create' });
     });
@@ -854,10 +1004,8 @@ export class ApiBackend implements Backend {
     if (p.known && !token) return p.known;
     if (!pin) throw new Error('Confirm the host\'s fingerprint first');
     if (pin.toUpperCase() !== p.pin.toUpperCase()) throw new Error('The host now presents a different certificate than the one you confirmed');
-    const added = await ok(this.agent.POST('/api/engines', { body: { address: p.url, pin, userToken: token } }));
-    if (!this.slices.has(added.id)) {
-      this.slices.set(added.id, { view: added, me: null, health: null, all: [], mine: [], parts: new Map(), jobs: [], ended: new Map(), lost: new Set(), admin: null, autoReprovision: null, usageWindow: 'month', problem: null });
-    }
+    const added = await ok(this.agent.POST('/api/engines', { body: { address: p.url, pin, userToken: token, windowsSignIn: false } }));
+    if (!this.slices.has(added.id)) this.slices.set(added.id, newSlice(added));
     return added.id;
   }
 
@@ -873,10 +1021,12 @@ export class ApiBackend implements Backend {
     return { engine, id, r };
   }
 
-  answerLease(key: string, allow: boolean) {
+  /** `ttlSeconds`: the span the user picked; without it the engine keeps the span the VM asked for. */
+  answerLease(key: string, allow: boolean, ttlSeconds?: number) {
     const a = this.answer(key);
     if (!a) return;
-    void this.run(() => ok(this.agent.POST('/api/vault/approvals/{engine}/{id}', { params: { path: { engine: a.engine, id: a.id } }, body: { decision: allow ? 'allow' : 'deny' } })),
+    const ttl = allow && ttlSeconds !== undefined ? { ttlSeconds } : {};
+    void this.run(() => ok(this.agent.POST('/api/vault/approvals/{engine}/{id}', { params: { path: { engine: a.engine, id: a.id } }, body: { decision: allow ? 'allow' : 'deny', ...ttl } })),
       allow ? `Allowed ${a.r.vmName}` : `Denied ${a.r.vmName}`).then(done => this.answeredWith(key, done));
   }
 
@@ -935,7 +1085,12 @@ export class ApiBackend implements Backend {
     void this.run(() => ok(this.agent.PUT('/api/vault/engines/{engine}/mode', { params: { path: { engine: hostId } }, body: { mode } })), 'Saved').then(() => this.loadVault());
   }
 
-  takeBack(..._: unknown[]) { this.note(NA); }
+  /** Ends a lease at the engine that holds it; the VM loses the value at its next check. */
+  takeBack(leaseId: string) {
+    if (!this.s.leases.some(l => l.id === leaseId)) return;
+    const [engine, id] = splitRequestKey(leaseId);
+    void this.run(() => ok(this.agent.DELETE('/api/vault/leases/{engine}/{id}', { params: { path: { engine, id } } })), 'Taken back').then(() => this.loadVault());
+  }
 
   /* --- devices: pairing approves a new device by the code it shows --- */
 
@@ -1020,6 +1175,11 @@ export class ApiBackend implements Backend {
 
   updateHostVms(hostId: string) {
     this.hostAct(hostId, c => ok(c.POST('/api/v1/host/vms/reprovision')), 'Reprovisioning every VM on this host, one after the other');
+  }
+
+  setLanAccess(hostId: string, on: boolean) {
+    if (this.s.hosts.find(h => h.id === hostId)?.lan === undefined) return;
+    this.hostAct(hostId, c => ok(c.PUT('/api/v1/host/lan-access', { body: { enabled: on } })), on ? 'Reachable on the LAN' : 'This PC only');
   }
 
   addUser(hostId: string, u: { name: string; role: 'admin' | 'user'; maxVms: number; hostForwards: HostUser['hostForwards'] }) {
@@ -1144,7 +1304,11 @@ export class ApiBackend implements Backend {
     this.hostAct(hostId, c => ok(c.POST('/api/v1/jobs/{id}/cancel', { params: { path: { id: jobId } } })), 'Cancelling');
   }
 
-  retryHostJob(..._: unknown[]) { this.note(NA); }
+  /** A failed provision or reinstall on the host's Operations page; the engine retries it with the VM's stored settings. */
+  retryHostJob(hostId: string, jobId: string) {
+    if (!this.s.hosts.find(h => h.id === hostId)?.jobs.some(j => j.id === jobId && j.retry)) return;
+    this.hostAct(hostId, c => ok(c.POST('/api/v1/jobs/{id}/retry', { params: { path: { id: jobId } }, body: {} })), 'Retrying');
+  }
 
   setUsageWindow(hostId: string, window: Host['usage']['window']) {
     const sl = this.slices.get(hostId);
@@ -1176,9 +1340,16 @@ export class ApiBackend implements Backend {
     this.emit({ prefs });
     store.set(PREFS_KEY, { theme: prefs.theme, scheme: prefs.scheme });
     if (patch.autoUpdate !== undefined) {
+      // This device updates itself, and each engine reprovisions the user's VMs after a release.
+      this.deviceAutoUpdate = patch.autoUpdate;
+      void this.run(() => ok(this.agent.PUT('/api/device/settings', { body: { autoUpdate: patch.autoUpdate } }))).then(() => this.loadDevice());
       for (const id of this.slices.keys()) void this.run(() => ok(this.engine(id).PUT('/api/v1/me/updates', { body: { autoReprovision: patch.autoUpdate! } })), undefined, id);
     }
-    if (patch.channel !== undefined || patch.startWithOs !== undefined || patch.notifications !== undefined) this.note(NA);
+    if (patch.channel !== undefined || patch.startWithOs !== undefined) {
+      const body = { ...(patch.channel !== undefined ? { channel: patch.channel } : {}), ...(patch.startWithOs !== undefined ? { startWithOs: patch.startWithOs } : {}) };
+      void this.run(() => ok(this.agent.PUT('/api/device/settings', { body })), 'Saved').then(() => this.loadDevice());
+    }
+    if (patch.notifications !== undefined) this.note(NA);
   }
 
   /** A new recovery code; the old one stops working. The agent never shows a code twice. */

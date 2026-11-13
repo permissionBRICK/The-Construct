@@ -5,6 +5,7 @@ import { SCHEME_ORDER, SCHEMES } from '../../model/tokens';
 import { Icon } from '../icons';
 import { Btn, Confirm, Copyable, Field, Head, KV, Page, Row, Sec, Seg, Switch, Table, Tag } from '../kit';
 import { copy, na, useApp } from '../ctx';
+import { EverythingBlock } from '../blocks';
 
 /* Construct: the one Update, the parts it covers, preferences, this device. Then creating a VM and the
    one-time upgrade dialog. */
@@ -17,18 +18,21 @@ export function Construct() {
   return (
     <Page>
       <Head title="Construct" back={surf === 'phone' ? () => go({ page: 'home' }) : undefined} />
-      {due && (
+      {due && !s.everything?.running && (
         <div class="blk row upd">
           <div class="bh grow"><b class="m">{s.version} → {to}</b></div>
           <Btn kind="pri" icon="up" onClick={() => be.updateEverything()}>Update</Btn>
         </div>
       )}
+      {s.everything && <EverythingBlock e={s.everything} />}
       <Sec>
         <Table cols={[{ h: 'Part' }, { h: 'Version', cls: 'm' }, { h: 'After', cls: 'e m' }]}
           rows={parts.map(p => [p.name, p.version, p.to ? <span class="warnc">{p.to}</span> : p.note === 'admin' ? <Tag>by its admin</Tag> : p.note === 'channel' ? <Tag>other channel</Tag> : '–'])} />
       </Sec>
       <Sec title="Preferences">
-        <Row l="Channel">{na(s, 'channel') ? <span class="d">Not available yet</span> : <Seg label="Channel" opts={['stable', 'nightly'] as const} labels={{ stable: 'Stable', nightly: 'Nightly' }} value={s.prefs.channel} onChange={channel => be.setPrefs({ channel })} />}</Row>
+        <Row l="Channel">{na(s, 'channel') ? <span class="d">Not available yet</span> : s.prefs.channel === 'stable' || s.prefs.channel === 'nightly'
+          ? <Seg label="Channel" opts={['stable', 'nightly'] as const} labels={{ stable: 'Stable', nightly: 'Nightly' }} value={s.prefs.channel} onChange={channel => be.setPrefs({ channel })} />
+          : <code class="m">{s.prefs.channel}</code>}</Row>
         <Row l="Automatic updates"><Switch on={s.prefs.autoUpdate} onChange={autoUpdate => be.setPrefs({ autoUpdate })} label="Automatic updates" /></Row>
         <Row l="Theme"><Seg<ThemeMode> label="Theme" opts={['auto', 'light', 'dark']} labels={{ auto: 'Auto', light: 'Light', dark: 'Dark' }} value={s.prefs.theme} onChange={theme => be.setPrefs({ theme })} /></Row>
         <Row l="Colours">
@@ -36,17 +40,29 @@ export function Construct() {
             {SCHEME_ORDER.map(k => <SchemeSwatch k={k} on={s.prefs.scheme === k} onPick={() => be.setPrefs({ scheme: k })} />)}
           </span>
         </Row>
-        {!na(s, 'os-prefs') && <>
-          <Row l="Start with Windows"><Switch on={s.prefs.startWithOs} onChange={startWithOs => be.setPrefs({ startWithOs })} label="Start with Windows" /></Row>
-          <Row l="Notifications"><Switch on={s.prefs.notifications} onChange={notifications => be.setPrefs({ notifications })} label="Notifications" /></Row>
-        </>}
+        {!na(s, 'os-prefs') && (!s.device.can || s.device.can.startWithOs) && <Row l="Start with Windows"><Switch on={s.prefs.startWithOs} onChange={startWithOs => be.setPrefs({ startWithOs })} label="Start with Windows" /></Row>}
+        {!na(s, 'notifications') && <Row l="Notifications"><Switch on={s.prefs.notifications} onChange={notifications => be.setPrefs({ notifications })} label="Notifications" /></Row>}
       </Sec>
       <Sec title="This device">
         <KV k="Name">{s.device.name}</KV>
+        <KV k="Version">{s.version}</KV>
+        {s.device.sshKey && <SshKey text={s.device.sshKey} />}
         <Row l="Recovery code"><Reveal /></Row>
-        <Row l="Log"><Btn sm icon="log" onClick={() => be.openLog()} disabled={na(s, 'open')}>Open</Btn></Row>
+        <Row l="Log"><Btn sm icon="log" onClick={() => be.openLog()} disabled={na(s, 'log')}>Open</Btn></Row>
       </Sec>
     </Page>
+  );
+}
+
+/** This device's SSH public key, which its engines authorize on the user's VMs; wrapped, with copy. */
+function SshKey({ text }: { text: string }) {
+  const { toast } = useApp();
+  return (
+    <div class="line key">
+      <span>SSH key</span>
+      <code class="grow sel brk">{text}</code>
+      <Btn sm icon="copy" onClick={() => { copy(text); toast('Copied'); }}>Copy</Btn>
+    </div>
   );
 }
 

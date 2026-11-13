@@ -69,6 +69,22 @@ describe('FakeBackend', () => {
     expect(s.history[0].event).toBe('Allowed 2 h');
   });
 
+  it('allows a lease for the span the user chose', () => {
+    const be = new FakeBackend({ scene: 'lease', timers: false });
+    be.answerLease(be.snapshot().vaultRequests[0].id, true, 900);
+    expect(be.snapshot().history[0].event).toBe('Allowed 15 min');
+  });
+
+  it('closes only a forward this device opened, and switches LAN access on a solo host', () => {
+    const be = new FakeBackend({ timers: false });
+    be.closeForward('atlas', 'f3');
+    be.closeForward('atlas', 'f1');
+    expect(be.snapshot().vms.find(v => v.id === 'atlas')!.forwards.map(f => f.id)).toEqual(['f2', 'f3']);
+    be.setLanAccess('pc', true);
+    be.setLanAccess('orchard', true);
+    expect(be.snapshot().hosts.map(h => [h.id, h.lan])).toEqual([['pc', true], ['orchard', undefined], ['lab', undefined]]);
+  });
+
   it('saves an entered secret, never auto-approved, and overwrites nothing', () => {
     const be = new FakeBackend({ scene: 'enter', timers: false });
     const r = be.snapshot().vaultRequests[0];
@@ -92,6 +108,9 @@ describe('FakeBackend', () => {
     expect(s.hosts.find(h => h.id === 'lab')!.version).toBe('2.6.0');   // other channel, not admin
     expect(s.vms.filter(v => v.hostId !== 'lab').every(v => v.version === '2.5.0')).toBe(true);
     expect(s.release).toBeNull();
+    expect(s.everything?.running).toBe(false);
+    expect(s.everything?.parts.find(p => p.name === 'lab')).toMatchObject({ part: 'engine', state: 'skipped' });
+    expect(s.everything?.parts.filter(p => p.part === 'vms').every(p => p.state === 'done')).toBe(true);
   });
 
   it('updates only one VM when asked, leaving this device alone', () => {
