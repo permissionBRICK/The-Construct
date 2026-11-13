@@ -4537,6 +4537,182 @@
         }
       }
     },
+    "/api/v1/engine": {
+      "get": {
+        "tags": [
+          "Constructd.Api"
+        ],
+        "operationId": "GetEngineIdentity",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineIdentityResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/devices/enroll": {
+      "post": {
+        "tags": [
+          "EngineParticipationEndpoints"
+        ],
+        "operationId": "EnrollDevice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceEnrollRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceEnrollResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/devices/{id}": {
+      "delete": {
+        "tags": [
+          "EngineParticipationEndpoints"
+        ],
+        "operationId": "RevokeDevice",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/engine/grants": {
+      "put": {
+        "tags": [
+          "EngineParticipationEndpoints"
+        ],
+        "operationId": "PutEngineGrants",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EngineGrantsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sync/records/{id}": {
+      "get": {
+        "tags": [
+          "EngineParticipationEndpoints"
+        ],
+        "operationId": "ReadSyncRecord",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncRecordResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/jobs/{id}/cancel": {
       "post": {
         "tags": [
@@ -5781,6 +5957,404 @@
         }
       }
     },
+    "/api/v1/store/devices": {
+      "post": {
+        "tags": [
+          "Constructd.Api"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrollRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Constructd.Api"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/store/devices/{id}": {
+      "delete": {
+        "tags": [
+          "Constructd.Api"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/store/devices/{id}/acknowledge": {
+      "post": {
+        "tags": [
+          "Constructd.Api"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/store/engines": {
+      "post": {
+        "tags": [
+          "Constructd.Api"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EngineRegistration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/store/keys": {
+      "get": {
+        "tags": [
+          "Constructd.Api"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Constructd.Api"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WrappedKeys"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/store/recovery": {
+      "put": {
+        "tags": [
+          "Constructd.Api"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecoverySetup"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Constructd.Api"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecoveryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/store/pairing": {
+      "post": {
+        "tags": [
+          "Constructd.Api"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/store/pairing/{id}": {
+      "get": {
+        "tags": [
+          "Constructd.Api"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Constructd.Api"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairingApproval"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/store/pairing/{id}/grant": {
+      "get": {
+        "tags": [
+          "Constructd.Api"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/vault": {
       "get": {
         "tags": [
@@ -6896,6 +7470,38 @@
           }
         }
       },
+      "DeviceEnrollRequest": {
+        "required": [
+          "account",
+          "deviceId",
+          "proof"
+        ],
+        "type": "object",
+        "properties": {
+          "account": {
+            "type": "string"
+          },
+          "deviceId": {
+            "type": "string"
+          },
+          "proof": {
+            "type": "string",
+            "x-construct-secret": true
+          }
+        }
+      },
+      "DeviceEnrollResponse": {
+        "required": [
+          "token"
+        ],
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "x-construct-secret": true
+          }
+        }
+      },
       "DriverCapabilities": {
         "required": [
           "checkpoints",
@@ -7041,6 +7647,109 @@
           },
           "publicHost": {
             "type": "string"
+          }
+        }
+      },
+      "EngineGrant": {
+        "required": [
+          "name",
+          "epoch",
+          "sealed"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "epoch": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "sealed": {
+            "type": "string",
+            "format": "byte"
+          }
+        }
+      },
+      "EngineGrantsRequest": {
+        "required": [
+          "grants"
+        ],
+        "type": "object",
+        "properties": {
+          "grants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EngineGrant"
+            },
+            "x-construct-secret": true
+          }
+        }
+      },
+      "EngineIdentityResponse": {
+        "required": [
+          "engineId",
+          "hostPublicKey"
+        ],
+        "type": "object",
+        "properties": {
+          "engineId": {
+            "type": "string"
+          },
+          "hostPublicKey": {
+            "type": "string"
+          }
+        }
+      },
+      "EngineRegistration": {
+        "required": [
+          "engineId",
+          "hostPublicKey"
+        ],
+        "type": "object",
+        "properties": {
+          "engineId": {
+            "type": "string"
+          },
+          "hostPublicKey": {
+            "type": "string"
+          }
+        }
+      },
+      "EnrollRequest": {
+        "required": [
+          "publicKey",
+          "name",
+          "proof"
+        ],
+        "type": "object",
+        "properties": {
+          "publicKey": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "proof": {
+            "type": "string"
+          },
+          "account": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "setupCode": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "enrollToken": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -8134,6 +8843,7 @@
         "type": "string"
       },
       "JsonElement": { },
+      "JsonNode": { },
       "LeaseResponse": {
         "required": [
           "requested",
@@ -8461,6 +9171,38 @@
           }
         }
       },
+      "PairingApproval": {
+        "required": [
+          "grant",
+          "signature"
+        ],
+        "type": "object",
+        "properties": {
+          "grant": {
+            "type": "string",
+            "format": "byte"
+          },
+          "signature": {
+            "type": "string",
+            "format": "byte"
+          }
+        }
+      },
+      "PairingRequest": {
+        "required": [
+          "publicKey",
+          "name"
+        ],
+        "type": "object",
+        "properties": {
+          "publicKey": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "PowerRequest": {
         "required": [
           "action"
@@ -8657,12 +9399,61 @@
           }
         }
       },
+      "RecoveryRequest": {
+        "required": [
+          "account",
+          "secret"
+        ],
+        "type": "object",
+        "properties": {
+          "account": {
+            "type": "string"
+          },
+          "secret": {
+            "type": "string",
+            "format": "byte"
+          }
+        }
+      },
+      "RecoverySetup": {
+        "required": [
+          "verifier",
+          "wrap"
+        ],
+        "type": "object",
+        "properties": {
+          "verifier": {
+            "type": "string",
+            "format": "byte"
+          },
+          "wrap": {
+            "$ref": "#/components/schemas/RootSeal"
+          }
+        }
+      },
       "Role": {
         "enum": [
           "user",
           "admin"
         ],
         "type": "string"
+      },
+      "RootSeal": {
+        "required": [
+          "epoch",
+          "sealed"
+        ],
+        "type": "object",
+        "properties": {
+          "epoch": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "sealed": {
+            "type": "string",
+            "format": "byte"
+          }
+        }
       },
       "SecureBootTemplate": {
         "enum": [
@@ -8780,6 +9571,41 @@
             "items": {
               "$ref": "#/components/schemas/StoredRecord"
             }
+          }
+        }
+      },
+      "SyncRecordResponse": {
+        "required": [
+          "id",
+          "kind",
+          "actor",
+          "revision",
+          "value"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "value": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/JsonNode"
+              }
+            ]
           }
         }
       },
@@ -11114,6 +11940,38 @@
             ]
           }
         }
+      },
+      "WrappedKeys": {
+        "required": [
+          "epoch",
+          "vault",
+          "records",
+          "backup",
+          "backupPublic"
+        ],
+        "type": "object",
+        "properties": {
+          "epoch": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "vault": {
+            "type": "string",
+            "format": "byte"
+          },
+          "records": {
+            "type": "string",
+            "format": "byte"
+          },
+          "backup": {
+            "type": "string",
+            "format": "byte"
+          },
+          "backupPublic": {
+            "type": "string",
+            "format": "byte"
+          }
+        }
       }
     }
   },
@@ -11177,6 +12035,9 @@
     },
     {
       "name": "HttpsEndpoints"
+    },
+    {
+      "name": "EngineParticipationEndpoints"
     },
     {
       "name": "ConsoleEndpoints"

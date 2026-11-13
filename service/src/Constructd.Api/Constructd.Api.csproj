@@ -25,6 +25,8 @@
     <ProjectReference Include="..\Constructd.Proxmox\Constructd.Proxmox.csproj" />
     <!-- The record store, mounted under /api/v1/store (Composition/RecordStoreComposition.cs). -->
     <ProjectReference Include="..\Constructd.Store\Constructd.Store.csproj" />
+    <!-- Devices, grants and the engine side of sync (Composition/RecordStoreComposition.cs). -->
+    <ProjectReference Include="..\Constructd.Sync\Constructd.Sync.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -21,17 +21,29 @@ public sealed class StoreRoutesTests
         return request;
     }
 
+    private static readonly Uri ConstructdStore = new("http://localhost/api/v1/store/");
+
+    private static async Task<TestDevice> DeviceOfAsync(TestApp app, string user)
+    {
+        using var signedIn = await app.CreateUserClientAsync(user);
+        signedIn.BaseAddress = ConstructdStore;
+        var device = new TestDevice(user + "-laptop", () => app.Server.CreateHandler(), ConstructdStore);
+        Assert.Equal(HttpStatusCode.OK, (await device.EnrollAsync(signedIn)).StatusCode);
+        return device;
+    }
+
     [Fact]
-    public async Task In_constructd_a_signed_in_user_is_that_users_device()
+    public async Task In_constructd_the_signed_in_user_registers_a_device_that_writes_as_itself()
     {
         using var app = new TestApp();
-        using var alice = await app.CreateUserClientAsync("alice");
-        var device = StorePrincipal.Device("alice", "alice");
+        using var laptop = await DeviceOfAsync(app, "alice");
+        using var alice = laptop.Store();
+        var device = StorePrincipal.Device("alice", laptop.Id);
 
         var created = await alice.SendAsync(Put(Write(device, "setting:theme", "setting", 0), "\"0\""));
         Assert.Equal(HttpStatusCode.OK, created.StatusCode);
         var record = (await created.Content.ReadFromJsonAsync<StoredRecord>(StoreJson.Options))!;
-        Assert.Equal("device:alice", record.Actor);
+        Assert.Equal("device:" + laptop.Id, record.Actor);
         Assert.Equal(Opaque, record.Ciphertext);
 
         // If-Match is required and must be the envelope's base.
@@ -47,14 +59,17 @@ public sealed class StoreRoutesTests
         Assert.Equal(HttpStatusCode.Forbidden, (await alice.SendAsync(Put(Write(device, "profile:a", "profile", 0), "0"))).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await alice.SendAsync(Put(Write(StorePrincipal.Device("alice", "bob"), "setting:x", "setting", 0), "0"))).StatusCode);
 
-        // Accounts are separate: bob does not see alice's records.
-        using var bob = await app.CreateUserClientAsync("bob");
+        // Accounts are separate: bob's device does not see alice's records.
+        using var bobDevice = await DeviceOfAsync(app, "bob");
+        using var bob = bobDevice.Store();
         Assert.Equal(HttpStatusCode.NotFound, (await bob.GetAsync("/api/v1/store/records/setting%3Atheme")).StatusCode);
         var feed = (await alice.GetFromJsonAsync<FeedPage>("/api/v1/store/records?since=0", StoreJson.Options))!;
         Assert.Single(feed.Records);
 
-        // Not a participant: anonymous callers and VM tokens.
+        // Not a participant: anonymous callers, and a user signed in without a device token.
         Assert.Equal(HttpStatusCode.Unauthorized, (await app.CreateAnonymousClient().GetAsync("/api/v1/store/records")).StatusCode);
+        using var signedIn = await app.CreateTokenClientAsync("alice");
+        Assert.Equal(HttpStatusCode.Forbidden, (await signedIn.GetAsync("/api/v1/store/records")).StatusCode);
 
         // The engine writes in process as engine:<id>.
         var identity = app.Service<EngineStoreIdentity>();
@@ -70,8 +85,9 @@ public sealed class StoreRoutesTests
         using var directory = new TempDirectory();
         using (var app = TestApp.WithSqlite(directory.File("constructd.db")))
         {
-            using var alice = await app.CreateUserClientAsync("alice");
-            var device = StorePrincipal.Device("alice", "alice");
+            using var laptop = await DeviceOfAsync(app, "alice");
+            using var alice = laptop.Store();
+            var device = StorePrincipal.Device("alice", laptop.Id);
             Assert.Equal(HttpStatusCode.OK, (await alice.SendAsync(Put(Write(device, "setting:a", "setting", 0), "0"))).StatusCode);
             var id = app.Service<EngineStoreIdentity>().Id;
             Assert.Equal(id, File.ReadAllText(directory.File(EngineStoreIdentity.FileName)));
@@ -100,6 +116,8 @@ public sealed class StoreRoutesTests
 
         Assert.Equal(HttpStatusCode.Unauthorized, (await store.Http(null).GetAsync("records")).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await store.Http("wrong").GetAsync("records")).StatusCode);
+        // A configured device is ignored: its token would not be bound to a key.
+        Assert.Equal(HttpStatusCode.Unauthorized, (await store.Http("device-token").GetAsync("records")).StatusCode);
 
         var engine = store.Client("engine-token");
         var principal = StorePrincipal.Engine(StandaloneStoreFixture.Account, "e1");
@@ -116,7 +134,13 @@ public sealed class StoreRoutesTests
         Assert.Equal(403, refused.Status);
 
         // Export and import are for devices.
-        using var device = store.Http("device-token");
+        using var laptop = new TestDevice("laptop", store.Handler, StandaloneStoreFixture.Base);
+        using (var anonymous = laptop.Anonymous())
+        {
+            Assert.Equal(HttpStatusCode.OK, (await laptop.EnrollAsync(anonymous, StandaloneStoreFixture.Account, store.SetupCode)).StatusCode);
+        }
+
+        using var device = laptop.Store();
         Assert.Equal(HttpStatusCode.Forbidden, (await store.Http("engine-token").GetAsync("export")).StatusCode);
         var export = (await device.GetFromJsonAsync<StoreExport>("export", StoreJson.Options))!;
         Assert.Equal(2, export.Records.Count);
