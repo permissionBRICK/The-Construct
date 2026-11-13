@@ -28,7 +28,8 @@ bash test/run-local-checks.sh service
 bash test/run-local-checks.sh companion
 bash test/run-local-checks.sh release
 bash test/run-local-checks.sh ui
-# Or run every group:
+bash test/run-local-checks.sh guest
+# Or run every group except guest:
 bash test/run-local-checks.sh all
 # Or the groups of the paths changed since the base branch (origin/nightly, origin/rework or
 # origin/main, whichever exists first; or name one):
@@ -54,6 +55,16 @@ stays within one directory and `**` crosses directories. A row without a group s
 | `docs/**`, `*.md`, `assets/**` | |
 
 For installers, also run the touched script's own tests.
+
+The `guest` group runs the guest rig (`test/e2e/guest-rig.sh quick`). It is not part
+of `all` and `--changed` never selects it; run it by name when guest-facing paths change
+(`bin/provision.sh` and what it runs, `bootstrap.sh`, `bin/build-autoinstall-iso.sh`). It needs a primary VM that may create children (`construct vm identity`),
+creates one Ubuntu child on the host (3 GB RAM, 2 cores, 25 GB disk, 4-hour lifetime),
+provisions it with this checkout, checks the result sentinel and exit code, saves the
+guest manifest and deletes the child. The first run downloads the Ubuntu ISO, builds the
+autoinstall ISO and uploads it to the host; later runs reuse both. A host that refuses
+the child ends the group with `incomplete: required verification not run` and exit 2.
+`bash test/e2e/guest-rig.sh --help` lists the `full` variant, `--keep` and `--compare`.
 
 The `companion` group builds with warnings as errors, runs Companion .NET tests,
 Node parity and Companion suites, the three Companion PowerShell suites, and the

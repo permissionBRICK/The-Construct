@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 # A configured guest environment must not alter host-side fixtures or tests.
 unset CONSTRUCT_SERVICE_URL CONSTRUCT_SERVICE_CA_FILE CONSTRUCT_EXTERNAL_HOST CONSTRUCT_EXTERNAL_SSH_PORT CONSTRUCT_INSTANCE_NAME CONSTRUCT_T3_VOICE_INPUT
-usage='Usage: bash test/run-local-checks.sh [panel|t3|service|companion|release|ui|all | --changed [<base>]]'
+usage='Usage: bash test/run-local-checks.sh [panel|t3|service|companion|release|ui|guest|all | --changed [<base>]]'
 group="${1:-all}"
 if [[ "$group" == --changed ]]; then
   # Touched paths since the merge base with <base> (default: the first of origin/nightly,
@@ -23,7 +23,7 @@ if [[ "$group" == --changed ]]; then
   for selected in $groups; do bash "$0" "$selected"; done
   exit 0
 fi
-case "$group" in panel|t3|service|companion|release|ui|all) ;; *) echo "$usage" >&2; exit 2 ;; esac
+case "$group" in panel|t3|service|companion|release|ui|guest|all) ;; *) echo "$usage" >&2; exit 2 ;; esac
 if [[ "$group" == panel || "$group" == all ]]; then
   node extension/test/guest-console.test.js
   node extension/test/console.test.js
@@ -126,4 +126,10 @@ fi
 if [[ "$group" == ui || "$group" == all ]]; then
   # The new client UI: unit tests, the static bundle, screenshots in headless Chromium.
   (cd ui && npm install --no-audit --no-fund && npm test && npm run build && npx playwright test)
+fi
+
+# Not part of `all`: it creates a real child VM on the host and takes about half an
+# hour. Run it when guest-facing paths change (docs/local-checks.md).
+if [[ "$group" == guest ]]; then
+  bash test/e2e/guest-rig.sh quick
 fi
