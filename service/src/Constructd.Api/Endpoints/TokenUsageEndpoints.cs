@@ -15,8 +15,8 @@ public static class TokenUsageEndpoints
         api.MapPost("/vms/{name}/usage", PostAsync)
             .RequireAuthorization(Policies.VmScoped)
             .Audited("vm.usage", auditSuccess: false).WithName("PostTokenUsage");
-        api.MapGet("/host/usage", HostAsync).RequireAuthorization(Policies.User).WithName("GetHostTokenUsage");
-        api.MapGet("/vms/{name}/usage", VmAsync).RequireAuthorization(Policies.User).WithName("GetVmTokenUsage");
+        api.MapGet("/host/usage", HostAsync).RequireAuthorization(Policies.User).WithName("GetHostTokenUsage").Produces<TokenUsageSummary>();
+        api.MapGet("/vms/{name}/usage", VmAsync).RequireAuthorization(Policies.User).WithName("GetVmTokenUsage").Produces<TokenUsageSummary>();
         return api;
     }
 

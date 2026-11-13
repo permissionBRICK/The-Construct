@@ -32,7 +32,7 @@ public sealed record UserResponse(string Name, Role Role, int MaxVms, bool Allow
 }
 
 /// <param name="Token">The plaintext secret — returned exactly once, never stored, never logged.</param>
-public sealed record TokenIssuedResponse(string Id, string Label, string Token, DateTimeOffset Created);
+public sealed record TokenIssuedResponse(string Id, string Label, [property: Infrastructure.ConstructSecret] string Token, DateTimeOffset Created);
 
 public sealed record IdlePolicyResponse(int TimeoutMinutes, IdleAction Action, int MaxTimeoutMinutes, bool Clamped, bool ForceEnabled = false);
 

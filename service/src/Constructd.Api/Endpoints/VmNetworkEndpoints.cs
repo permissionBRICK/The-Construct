@@ -12,9 +12,9 @@ public static class VmNetworkEndpoints
     public static RouteGroupBuilder MapVmNetworkEndpoints(this RouteGroupBuilder api)
     {
         api.MapGet("/vms/{name}/network", (string name, HttpContext http, CancellationToken ct) => ReadOrSave(name, null, http, ct))
-            .RequireAuthorization(Policies.User);
+            .RequireAuthorization(Policies.User).Produces<VmNetworkSettings.View>().WithName("GetVmNetwork");
         api.MapPut("/vms/{name}/network", (string name, JsonElement request, HttpContext http, CancellationToken ct) => ReadOrSave(name, request, http, ct))
-            .RequireAuthorization(Policies.User).Audited("vm.network");
+            .RequireAuthorization(Policies.User).Audited("vm.network").Produces<VmNetworkSettings.View>().WithName("SetVmNetwork");
         return api;
     }
 

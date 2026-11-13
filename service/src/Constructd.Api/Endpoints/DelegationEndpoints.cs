@@ -13,15 +13,15 @@ public static class DelegationEndpoints
 {
     public static RouteGroupBuilder MapDelegationEndpoints(this RouteGroupBuilder api)
     {
-        api.MapGet("/vms/{name}/identity", IdentityAsync).RequireAuthorization(Policies.VmScoped).WithName("VmIdentity");
+        api.MapGet("/vms/{name}/identity", IdentityAsync).RequireAuthorization(Policies.VmScoped).WithName("VmIdentity").Produces<VmIdentityResponse>();
         api.MapPost("/vms/{name}/guest-report", ReportAsync).RequireAuthorization(Policies.VmScoped).Audited("vm.guest-report").WithName("VmGuestReport");
-        api.MapPost("/vms/{name}/token", RotateAsync).RequireAuthorization(Policies.User).Audited("vm.token.rotate").WithName("RotateVmToken");
-        api.MapDelete("/vms/{name}/token", RevokeAsync).RequireAuthorization(Policies.User).Audited("vm.token.revoke").WithName("RevokeVmToken");
-        api.MapGet("/vms/{name}/overrides", OverridesAsync).RequireAuthorization(Policies.Admin).WithName("GetVmOverrides");
-        api.MapPut("/vms/{name}/overrides", SetOverridesAsync).RequireAuthorization(Policies.Admin).Audited("vm.overrides").WithName("SetVmOverrides");
-        api.MapDelete("/vms/{name}/overrides", RemoveOverridesAsync).RequireAuthorization(Policies.Admin).Audited("vm.overrides").WithName("RemoveVmOverrides");
-        api.MapGet("/vms/{name}/children", ChildrenAsync).RequireAuthorization(Policies.UserOrPrimaryToken).WithName("ListChildren");
-        api.MapGet("/vms/shared", SharedAsync).RequireAuthorization(Policies.UserOrPrimaryToken).WithName("ListSharedVms");
+        api.MapPost("/vms/{name}/token", RotateAsync).RequireAuthorization(Policies.User).Audited("vm.token.rotate").WithName("RotateVmToken").Produces<VmTokenIssuedResponse>();
+        api.MapDelete("/vms/{name}/token", RevokeAsync).RequireAuthorization(Policies.User).Audited("vm.token.revoke").WithName("RevokeVmToken").Produces(StatusCodes.Status204NoContent);
+        api.MapGet("/vms/{name}/overrides", OverridesAsync).RequireAuthorization(Policies.Admin).WithName("GetVmOverrides").Produces<VmOverridesResponse>();
+        api.MapPut("/vms/{name}/overrides", SetOverridesAsync).RequireAuthorization(Policies.Admin).Audited("vm.overrides").WithName("SetVmOverrides").Produces<VmOverridesResponse>();
+        api.MapDelete("/vms/{name}/overrides", RemoveOverridesAsync).RequireAuthorization(Policies.Admin).Audited("vm.overrides").WithName("RemoveVmOverrides").Produces(StatusCodes.Status204NoContent);
+        api.MapGet("/vms/{name}/children", ChildrenAsync).RequireAuthorization(Policies.UserOrPrimaryToken).WithName("ListChildren").Produces<IReadOnlyList<VmResponse>>();
+        api.MapGet("/vms/shared", SharedAsync).RequireAuthorization(Policies.UserOrPrimaryToken).WithName("ListSharedVms").Produces<IReadOnlyList<VmResponse>>();
         api.MapGet("/vms/{name}/capabilities", VmCapabilitiesAsync).RequireAuthorization(Policies.UserOrPrimaryToken).WithName("VmCapabilities");
         return api;
     }
@@ -31,18 +31,16 @@ public static class DelegationEndpoints
         var lookup = await ApiHelpers.ResolveVmAsync(http, vms, authorization, name, Policies.VmSelfOrOwnerOrAdmin, ct);
         if (!lookup.Ok) return lookup.Failure!; var vm = lookup.Vm!;
         var legacy = http.User.IsVmToken() && !http.User.IsPrimaryToken();
-        return Results.Ok(new
-        {
-            vmName = vm.Name,
-            vm.Kind,
-            tokenKind = http.User.IsVmToken() ? (VmTokenKind?)vm.TokenKind : null,
-            vm.Owner,
-            vm.Parent,
-            delegation = legacy || vm.Kind != VmKind.Primary ? null : await HostAdminEndpoints.EffectiveAsync(vm.Owner, vm.Name, policy, ct),
-            serviceCommit = release.Installed.Commit,
-            apiFeatures = release.ApiFeatures,
-            capacityMode = (await HostAdminEndpoints.CapacityConfigAsync(config, options, ct)).Mode
-        });
+        return Results.Ok(new VmIdentityResponse(
+            VmName: vm.Name,
+            Kind: vm.Kind,
+            TokenKind: http.User.IsVmToken() ? (VmTokenKind?)vm.TokenKind : null,
+            Owner: vm.Owner,
+            Parent: vm.Parent,
+            Delegation: legacy || vm.Kind != VmKind.Primary ? null : await HostAdminEndpoints.EffectiveAsync(vm.Owner, vm.Name, policy, ct),
+            ServiceCommit: release.Installed.Commit,
+            ApiFeatures: release.ApiFeatures,
+            CapacityMode: (await HostAdminEndpoints.CapacityConfigAsync(config, options, ct)).Mode));
     }
     private static async Task<IResult> ReportAsync(string name, GuestReportRequest request, HttpContext http, IVmRepository vms,
         IVmDelegationRepository reports, IAuthorizationService authorization, IClock clock, CancellationToken ct)
@@ -82,7 +80,7 @@ public static class DelegationEndpoints
         var token = await tokens.IssueVmTokenAsync(name, kind, ct); sessions.RemoveForPrincipal("vm:" + vm.Name);
         CodedProblems.Audit(http, "vm.token.rotate", vm.Owner, target: vm.Name, extra: "kind=" + kind.ToString().ToLowerInvariant());
         http.Response.Headers.CacheControl = "no-store";
-        return Results.Ok(new { vmToken = token, kind, issuedAt = clock.UtcNow });
+        return Results.Ok(new VmTokenIssuedResponse(token, kind, clock.UtcNow));
     }
     private static async Task<IResult> RevokeAsync(string name, HttpContext http, IVmRepository vms, IAuthorizationService authorization, IVmTokenIssuer tokens, IConsoleSessionStore sessions, CancellationToken ct)
     {
@@ -98,7 +96,7 @@ public static class DelegationEndpoints
     {
         var vm = await vms.GetAsync(name, ct); if (vm is null) return Problems.NotFound("Unknown VM.");
         if (vm.Kind != VmKind.Primary) return CodedProblems.Create(409, "not-a-primary", "Overrides apply to primaries.");
-        return Results.Ok(new { stored = await store.GetOverrideAsync(name, ct), effective = await HostAdminEndpoints.EffectiveAsync(vm.Owner, name, policy, ct) });
+        return Results.Ok(new VmOverridesResponse(await store.GetOverrideAsync(name, ct), await HostAdminEndpoints.EffectiveAsync(vm.Owner, name, policy, ct)));
     }
     private static async Task<IResult> SetOverridesAsync(string name, VmOverrideRequest request, HttpContext http, IVmRepository vms, IVmDelegationRepository store,
         IDelegationPolicy policy, IClock clock, IVmOperationGate gate, CancellationToken ct)

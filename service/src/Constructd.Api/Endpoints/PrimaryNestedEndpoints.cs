@@ -1,3 +1,4 @@
+using Constructd.Api.Contracts;
 using Constructd.Api.Auth;
 using Constructd.Api.Infrastructure;
 using Constructd.Api.Jobs;
@@ -14,9 +15,9 @@ public static class PrimaryNestedEndpoints
     public static RouteGroupBuilder MapPrimaryNestedEndpoints(this RouteGroupBuilder api)
     {
         api.MapGet("/vms/{name}/nested", (string name, HttpContext http, CancellationToken ct) => ReadOrSave(name, null, http, ct))
-            .RequireAuthorization(Policies.User);
+            .RequireAuthorization(Policies.User).Produces<VmNestedResponse>().WithName("GetVmNested");
         api.MapPut("/vms/{name}/nested", (string name, Request request, HttpContext http, CancellationToken ct) => ReadOrSave(name, request, http, ct))
-            .RequireAuthorization(Policies.User).Audited("vm.nested");
+            .RequireAuthorization(Policies.User).Audited("vm.nested").Produces<VmNestedResponse>().WithName("SetVmNested");
         return api;
     }
 
@@ -38,8 +39,8 @@ public static class PrimaryNestedEndpoints
         {
             var current = await driver.GetNestedAsync(currentVm.Name, ct);
             var desired = (await settings.GetAsync(currentVm, ct))?.Enabled ?? current;
-            return Results.Ok(new { current, desired, pending = current != desired, available = hypervisor.NestedAvailable,
-                selectable, appliesOn = "next-stop-start" });
+            return Results.Ok(new VmNestedResponse(current, desired, current != desired, hypervisor.NestedAvailable,
+                selectable, "next-stop-start"));
         }
         if (request is null) return await Read(vm);
         if (request.Enabled is not bool enabled) return CodedProblems.Validation("enabled", "A boolean is required.");

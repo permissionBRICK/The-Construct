@@ -1,3 +1,4 @@
+using Constructd.Api.Contracts;
 using System.Text.Json;
 using Constructd.Api.Auth;
 using Constructd.Api.Infrastructure;
@@ -14,7 +15,7 @@ public static class CascadeEndpoints
     {
         var s = http.RequestServices; var delegation = s.GetRequiredService<IVmDelegationRepository>();
         var clock = s.GetRequiredService<IClock>(); var gate = s.GetRequiredService<IVmOperationGate>();
-        if (await LifecycleEndpoints.LiveAsync(parent, s, ct)) return Results.Ok(new { jobId = parent.CurrentJobId, replayed = true });
+        if (await LifecycleEndpoints.LiveAsync(parent, s, ct)) return Results.Ok(new JobReplayedResponse(parent.CurrentJobId, true));
         string? token = null; var keepShared = false;
         if (http.Request.ContentLength > 0 || http.Request.Headers.TransferEncoding.Count > 0)
         {
@@ -92,7 +93,7 @@ public static class CascadeEndpoints
                 return LifecycleEndpoints.Problem("job-start-failed", 500);
             }
             CodedProblems.Audit(http, "vm.delete", parent.Owner, parent.Name, parent.Name, "job=" + id + ", cascade=" + (children.Count - kept.Count) + (keepShared ? ", keep=shared" : ""));
-            return Results.Accepted("/api/v1/jobs/" + id, new { jobId = id });
+            return Results.Accepted("/api/v1/jobs/" + id, new JobAcceptedResponse(id));
         }
         finally { foreach (var held in childGates.AsEnumerable().Reverse()) await held.DisposeAsync(); maintenance?.Dispose(); }
     }

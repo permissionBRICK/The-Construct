@@ -72,6 +72,8 @@ builder.Services.ConfigureHttpJsonOptions(json =>
 });
 
 builder.Services.AddProblemDetails();
+// The API contract document (service/openapi/constructd.v1.json); generated, not served.
+builder.Services.AddConstructdOpenApi();
 builder.Services.AddConstructdServices(options);
 builder.Services.AddConstructdAuthentication(options);
 builder.Services.AddConstructdAuthorization();

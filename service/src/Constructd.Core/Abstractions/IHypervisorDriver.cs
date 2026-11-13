@@ -72,7 +72,8 @@ public sealed record DriverConsole
 }
 
 /// <summary>Capability flags of a driver (plan §4.2).</summary>
-public sealed record DriverCapabilities(bool Checkpoints, bool Suspend, DriverConsole Console);
+/// <param name="Power">False when the service cannot start or stop the VM (the external-endpoint driver).</param>
+public sealed record DriverCapabilities(bool Checkpoints, bool Suspend, DriverConsole Console, bool Power = true);
 
 /// <summary>
 /// The hypervisor seam. This mirrors the PowerShell driver contract of plan §4.2
