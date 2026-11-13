@@ -223,6 +223,11 @@ public static class VmEndpoints
 
         http.SetAuditDetail($"action={action}");
 
+        if (!driver.Capabilities.Power)
+        {
+            return LifecycleEndpoints.Problem("unsupported-on-host");
+        }
+
         if (action == "save" && !driver.Capabilities.Suspend)
         {
             return Problems.Conflict("This host's driver cannot suspend VMs.");

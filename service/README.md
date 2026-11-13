@@ -1380,6 +1380,25 @@ its SSH forward plus every host forward. Only established rows count: the portpr
 `Listen`, and a closed session lingers in `TimeWait` for minutes, so counting either would mean a VM is
 never idle. A client tunnel rides the VM's SSH connection, so it is seen on the SSH forward (§4.6).
 
+## The external-endpoint platform
+
+`Constructd:Backend = external` manages VMs that already exist and answer SSH; the service runs on
+any OS, without Hyper-V, Proxmox or `--fake` (`Composition/ExternalComposition.cs`). Each VM is
+listed in configuration:
+
+```json
+"Constructd": { "Backend": "external",
+  "External": { "Vms": { "rig": { "SshHost": "192.0.2.10", "SshPort": 22, "User": "construct" } } } }
+```
+
+`POST /vms` with a listed name registers it (no install media; the job waits for SSH, allocates the
+relayed SSH port and issues the VM token as usual); `DELETE /vms/{name}` unregisters it and leaves the
+machine alone. A name that is not listed fails the creation job with `external-vm-not-configured`.
+Power routes (`/power`, `/lifecycle`) answer `409 unsupported-on-host`; the state is `running` while
+SSH accepts connections and `unknown` otherwise. Forwards are the in-process TCP relays of the Proxmox
+platform. Children, media, consoles, host updates, CPU/RAM/nested changes and the capacity inventory
+are unsupported, and `apiFeatures` says so. Adding a VM to the list needs a restart.
+
 ## The Proxmox platform
 
 `Constructd:Backend = proxmox` composes the service for a Proxmox VE node it runs ON (as root, so

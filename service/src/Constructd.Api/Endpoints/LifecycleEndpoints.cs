@@ -61,6 +61,7 @@ public static class LifecycleEndpoints
         {
             var request = body.Deserialize<Request>(ApiJson.Options) ?? new();
             if (request.Action is not ("start" or "shutdown" or "restart" or "save")) return CodedProblems.Validation("action", "Expected start, shutdown, restart or save.");
+            if (!s.GetRequiredService<IHypervisorDriver>().Capabilities.Power) return Problem("unsupported-on-host");
             if (vm.Kind == VmKind.Primary && request.Lifetime is not null) return CodedProblems.Validation("lifetime", "Primaries have no lease.");
             long? seconds = null;
             if (request.Action == "start" && vm.Kind == VmKind.Child)

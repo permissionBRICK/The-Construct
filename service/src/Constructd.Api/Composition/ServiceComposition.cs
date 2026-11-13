@@ -232,6 +232,12 @@ public static class ServiceComposition
             return services.AddProxmoxPlatform(options);
         }
 
+        // Existing VMs reachable over SSH; any OS (ExternalComposition).
+        if (options.IsExternal)
+        {
+            return services.AddExternalPlatform(options);
+        }
+
         if (!OperatingSystem.IsWindows())
         {
             throw new InvalidOperationException(
@@ -239,7 +245,8 @@ public static class ServiceComposition
                 "the portproxy forward manager need Windows, and this process is running on " +
                 $"{Environment.OSVersion.Platform}. Start the service with --fake (or " +
                 "Constructd:Fake=true); persistence works in both modes. On a Proxmox VE node, set " +
-                "Constructd:Backend=proxmox (service/host/install-construct-host.sh does).");
+                "Constructd:Backend=proxmox (service/host/install-construct-host.sh does); for VMs that " +
+                "already exist and answer SSH, set Constructd:Backend=external.");
         }
 
         ValidatePlatformOptions(options);

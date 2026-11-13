@@ -6580,6 +6580,10 @@
           },
           "console": {
             "$ref": "#/components/schemas/DriverConsole"
+          },
+          "power": {
+            "type": "boolean",
+            "default": true
           }
         }
       },
