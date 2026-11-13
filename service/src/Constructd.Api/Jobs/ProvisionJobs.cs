@@ -58,12 +58,11 @@ public sealed record ProvisionSubmission(string RequestId, string? Commit, VmDes
 /// one lifecycle job per VM (the VM's operation gate is held for the whole run), the desired state
 /// saved before the run so a retry or a reprovision needs no client.
 /// </summary>
-public sealed class ProvisionJobs(IJobStore jobs, IPersistedJobRunner runner, IVmOperationGate gates,
+public sealed class ProvisionJobs(IJobStore jobs, IJobQueryStore history, IPersistedJobRunner runner, IVmOperationGate gates,
     IMaintenanceGate maintenance, IVmDesiredStateSource desired, IProvisionTargets targets, IReleaseInfo release,
     IHostConfigStore config, ConstructdOptions options, ProvisionJob job, IClock clock)
 {
-    // owner|vm|requestId → job id, for this process's lifetime. A restart fails the running job
-    // anyway, and the client then retries with a new request id.
+    // owner|vm|requestId → job id, the fast path; the stored jobs are the fallback.
     private readonly ConcurrentDictionary<string, string> _requests = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _submit = new(1, 1);
 
@@ -73,7 +72,11 @@ public sealed class ProvisionJobs(IJobStore jobs, IPersistedJobRunner runner, IV
         await _submit.WaitAsync(ct);
         try
         {
-            if (_requests.TryGetValue(key, out var existingId) && await jobs.GetAsync(existingId, ct) is { } existing)
+            // The request id is stored with the job, so a repeat after a restart finds it too.
+            var existing = _requests.TryGetValue(key, out var existingId) ? await jobs.GetAsync(existingId, ct) : null;
+            existing ??= (await history.ListAsync(ct)).FirstOrDefault(j => j.Kind == JobKinds.Provision && j.OperationKey == request.RequestId
+                && Ownership.SameName(j.VmName, vm.Name) && Ownership.SameName(j.Owner, vm.Owner));
+            if (existing is not null)
             {
                 request.Secrets.Clear();
                 return (existing, true);

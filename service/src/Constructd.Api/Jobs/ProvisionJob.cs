@@ -137,6 +137,13 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
             context.Report("source", "failed", ex.Code);
             throw new JobFailureException("source-unavailable: " + ex.Code, Result(run, payloadHash, errors, "source", "source-unavailable", false, null));
         }
+        catch (Exception ex) when (ex is not OperationCanceledException and not JobFailureException)
+        {
+            // An SSH timeout, a store failure: the step and what the guest reported so far stay in the result.
+            var safe = context.Secrets.Redact(SafeError.Describe(ex));
+            context.Report(context.Step, "failed", safe);
+            throw new JobFailureException($"{context.Step}-failed: {safe}", Result(run, payloadHash, errors, context.Step, context.Step + "-failed", false, null));
+        }
         finally
         {
             if (tarPath is not null) try { File.Delete(tarPath); } catch (IOException) { } catch (UnauthorizedAccessException) { }
@@ -272,12 +279,17 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
         public void Done(string line) => Report(Step, "succeeded", line);
 
         /// <summary>Collects every guest line (cleaned) and reports it unless the call is quiet.</summary>
-        public IProgress<string> LineSink(List<string>? collect = null) => new LineProgress(raw =>
+        public IProgress<string> LineSink(List<string>? collect = null)
         {
-            var line = ProvisionScript.CleanLine(raw);
-            collect?.Add(line);
-            if (!Quiet) Report(Step, "running", line);
-        });
+            // Secrets the guest makes itself and prints are not in the bag; this call's filter drops them.
+            var filter = new GuestOutputFilter();
+            return new LineProgress(raw =>
+            {
+                var line = ProvisionScript.CleanLine(raw);
+                collect?.Add(line);
+                if (!Quiet && filter.Pass(line) is { } shown) Report(Step, "running", shown);
+            });
+        }
     }
 
     /// <summary>A synchronous sink: <see cref="Progress{T}"/> would post to the pool and reorder lines.</summary>

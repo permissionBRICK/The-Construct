@@ -19,13 +19,14 @@ public sealed class JobSecretBag
     private readonly List<string> _forms = [];
     private readonly Lock _gate = new();
 
-    public void Set(string name, string? value)
+    /// <param name="base64">The value is base64: its decoded text is masked too.</param>
+    public void Set(string name, string? value, bool base64 = true)
     {
         if (string.IsNullOrEmpty(value)) return;
         lock (_gate)
         {
             _values[name] = value;
-            AddForms(value);
+            AddForms(value, base64);
             _forms.Sort((a, b) => b.Length.CompareTo(a.Length));
         }
     }
@@ -63,13 +64,13 @@ public sealed class JobSecretBag
         }
     }
 
-    private void AddForms(string value)
+    private void AddForms(string value, bool base64)
     {
-        // Short fragments would mask ordinary words in the log; a secret is never that short.
-        void Add(string form) { if (form.Length >= 4 && !_forms.Contains(form)) _forms.Add(form); }
+        // Every form, however short: a short secret masks ordinary words in the log, which is the lesser harm.
+        void Add(string form) { if (form.Length > 0 && !_forms.Contains(form)) _forms.Add(form); }
         Add(value);
         Add(Convert.ToBase64String(Encoding.UTF8.GetBytes(value)));
-        if (!TryDecodeBase64(value, out var decoded)) return;
+        if (!base64 || !TryDecodeBase64(value, out var decoded)) return;
         Add(decoded);
         foreach (var line in decoded.Split('\n'))
         {

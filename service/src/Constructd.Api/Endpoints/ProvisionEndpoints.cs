@@ -58,7 +58,7 @@ public static partial class ProvisionEndpoints
         bag.Set(ProvisionScript.VmTokenVariable, secrets.VmTokenB64);
         bag.Set(ProvisionScript.CloneCredentialsVariable, secrets.GitCloneCredentialsB64);
         bag.Set(ProvisionScript.ServeWebTokenVariable, secrets.ServeWebTokenB64);
-        bag.Set(ProvisionJob.SudoPasswordSecret, secrets.SudoPassword);
+        bag.Set(ProvisionJob.SudoPasswordSecret, secrets.SudoPassword, base64: false);
         try
         {
             var (job, replayed) = await provisioning.SubmitAsync(vm, http.User.Actor(),

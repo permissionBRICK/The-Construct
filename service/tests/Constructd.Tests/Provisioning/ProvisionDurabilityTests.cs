@@ -51,6 +51,12 @@ public sealed class ProvisionDurabilityTests
                 Assert.Equal(step, interrupted.Phase);
                 Assert.Contains("interrupted", interrupted.Error, StringComparison.Ordinal);
 
+                // The same click again finds the stored job instead of starting a second run.
+                var repeat = await (await second.PostAsync("click-1", defer: defer)).ReadAsync<VmJobAcceptedResponse>();
+                Assert.Equal(jobId, repeat.JobId);
+                Assert.True(repeat.Replayed);
+                Assert.Empty(second.Ssh.Calls);
+
                 // Retry: a new click, no settings from the client — the engine kept them.
                 var response = await second.Client.PostJsonAsync($"/api/v1/vms/{ProvisionHarness.Vm}/jobs",
                     new { kind = "provision", requestId = "click-2", commit = ProvisionHarness.Commit, deferProjectCommands = defer });

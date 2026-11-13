@@ -279,3 +279,40 @@ public static partial class ProvisionScript
     public static string DesiredHash(VmDesiredState desired) =>
         Convert.ToHexStringLower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(desired, CanonicalJson)));
 }
+
+/// <summary>
+/// Drops the secrets the guest generates and prints during a run, which no bag can know: the root
+/// private key <c>setup-root-ssh-key.sh</c> prints for the PC, and the serve-web <c>?tkn=</c> token
+/// <c>install-vscode.sh</c> prints. One instance per command, since a key spans lines.
+/// </summary>
+public sealed partial class GuestOutputFilter
+{
+    private bool _inKey;
+
+    [GeneratedRegex(@"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")]
+    private static partial Regex KeyStart();
+
+    [GeneratedRegex(@"-----END [A-Z0-9 ]*PRIVATE KEY-----")]
+    private static partial Regex KeyEnd();
+
+    [GeneratedRegex(@"(tkn=)[^\s&#]+")]
+    private static partial Regex Token();
+
+    /// <summary>The line as it may be stored, or null to drop it.</summary>
+    public string? Pass(string line)
+    {
+        if (_inKey)
+        {
+            if (KeyEnd().IsMatch(line)) _inKey = false;
+            return null;
+        }
+
+        if (KeyStart().IsMatch(line))
+        {
+            _inKey = !KeyEnd().IsMatch(line);
+            return "[private key not shown]";
+        }
+
+        return Token().Replace(line, "$1[secret]");
+    }
+}

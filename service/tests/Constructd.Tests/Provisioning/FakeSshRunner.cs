@@ -14,7 +14,7 @@ public sealed record SshCall(SshTarget Target, string Command, string? StandardI
 /// <c>provisioned.env</c> the way <c>provision.sh</c> writes it (from the variables in the command),
 /// and can hold a step until the test releases it.
 /// </summary>
-public sealed partial class FakeSshRunner : ISshRunner
+public partial class FakeSshRunner : ISshRunner
 {
     public ConcurrentQueue<SshCall> Calls { get; } = new();
     public List<string> CopiedTarEntries { get; } = [];
@@ -40,7 +40,7 @@ public sealed partial class FakeSshRunner : ISshRunner
 
     public IEnumerable<string> Commands => Calls.Select(c => c.Command);
 
-    public async Task<int> RunAsync(SshTarget target, string command, string? standardInput, IProgress<string>? lines, TimeSpan timeout, CancellationToken ct)
+    public virtual async Task<int> RunAsync(SshTarget target, string command, string? standardInput, IProgress<string>? lines, TimeSpan timeout, CancellationToken ct)
     {
         var call = new SshCall(target, command, standardInput);
         Calls.Enqueue(call);

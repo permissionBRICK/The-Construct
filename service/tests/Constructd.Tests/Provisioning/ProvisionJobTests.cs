@@ -28,7 +28,7 @@ public sealed class ProvisionJobTests
         Assert.True(result.Rebooted); // the bootstrap path (not root) always reboots, as the PowerShell does
 
         // Every step reported, in order, with structured progress.
-        var steps = job.Progress.Where(p => p.State == "running" && p.Text == $"{p.Step}: running").Select(p => p.Step).ToArray();
+        var steps = job.Progress.Where(p => p.State == "running" && p.Text == $"{p.Step}: running").Select(p => p.Step!).ToArray();
         Assert.Equal(["source", "copy", "provision", "project-commands", "applied", "finish"], steps);
         Assert.Contains(job.Progress, p => p.Step == "provision" && p.Text == "installing...");
         Assert.Contains(job.Progress, p => p.Step == "project-commands" && p.State == "skipped");
@@ -148,6 +148,27 @@ public sealed class ProvisionJobTests
         Assert.Equal("project-commands", FakeSshRunner.Variable(phase, "PROVISION_PHASE"));
         Assert.Equal("true", FakeSshRunner.Variable(phase, "CHECKOUT_PROJECTS"));
         Assert.Equal(new ProvisionStepError(ProvisionScript.ProjectCommandsTitle, 7, ""), Assert.Single(ProvisionHarness.Result(job).FailedSteps));
+    }
+
+    [Fact]
+    public async Task An_ssh_failure_after_reported_errors_keeps_the_step_and_the_failed_steps()
+    {
+        var ssh = new ThrowingOnMarker { Provision = _ => (3, FakeSshRunner.WithErrors(("Installing SDKs", 2, "/l.log"))) };
+        await using var h = await ProvisionHarness.StartAsync(ssh);
+        var job = await h.RunAsync("click-1");
+        Assert.Equal(JobState.Failed, job.State);
+        var result = ProvisionHarness.Result(job);
+        Assert.Equal("applied", result.FailedStep);
+        Assert.Equal("Installing SDKs", Assert.Single(result.FailedSteps).Title);
+        Assert.NotEmpty(result.FixPrompt);
+    }
+
+    private sealed class ThrowingOnMarker : FakeSshRunner
+    {
+        public override Task<int> RunAsync(SshTarget target, string command, string? standardInput, IProgress<string>? lines, TimeSpan timeout, CancellationToken ct) =>
+            command.Contains("provisioned.env", StringComparison.Ordinal)
+                ? throw new Constructd.Core.Services.SshRunnerException("ssh timed out.")
+                : base.RunAsync(target, command, standardInput, lines, timeout, ct);
     }
 
     [Fact]
