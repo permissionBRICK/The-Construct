@@ -28,6 +28,7 @@ bash test/run-local-checks.sh service
 bash test/run-local-checks.sh companion
 bash test/run-local-checks.sh release
 bash test/run-local-checks.sh ui
+bash test/run-local-checks.sh agent
 bash test/run-local-checks.sh guest
 # Or run every group except guest:
 bash test/run-local-checks.sh all
@@ -51,6 +52,7 @@ stays within one directory and `**` crosses directories. A row without a group s
 | `extension/src/updates.js`, `extension/src/t3code*`, `bin/*t3*`, `test/t3-*` | `t3` |
 | `service/**`, `drivers/**`, `lib/**`, `bin/**`, `console-viewer/**` | `service` |
 | `ui/**` | `ui` |
+| `agent/**`, `service/src/Construct.Keys/**`, `service/src/Constructd.Store/**`, `service/src/Constructd.Sync/**`, `service/src/Constructd.Api/**`, `service/openapi/**` | `agent` |
 | `scripts/**`, `.github/**`, `VERSION`, `test/release.test.py`, `test/construct-release.test.py`, `test/run-local-checks.sh`, `test/helpers/changed-groups.py`, `docs/local-checks.md`, `service/src/Constructd.Core/Logic/ReleaseChannel.cs`, `service/tests/Constructd.Tests/Updates/ReleaseChannelTests.cs` | `release` |
 | `docs/**`, `*.md`, `assets/**` | |
 
@@ -99,6 +101,11 @@ bash test/e2e/guest-rig.sh --backend local down
 The `companion` group builds with warnings as errors, runs Companion .NET tests,
 Node parity and Companion suites, the three Companion PowerShell suites, and the
 first-install feature-set suite. It is included in `all`; the Companion workflow only publishes its Windows deliverable.
+
+The `agent` group builds the device agent with warnings as errors and runs its tests: several
+agents in process against the real engine in fake mode on a loopback HTTPS port (setup, pairing,
+recovery, the proxy, revocation, the event stream, the local API's token and origin rules, repair,
+and the OpenAPI drift check). It needs only the .NET 10 SDK.
 
 The `ui` group runs the client UI's unit tests (vitest), builds its static bundle
 and compares its screenshots in headless Chromium (Playwright). After an intended
