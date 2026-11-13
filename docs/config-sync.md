@@ -870,3 +870,102 @@ the installer explains that no profiles could be read from it on the PC. The
 remote link is retained for later sync. Project checkout can independently use
 the VM's existing credentials; the panel reports clone failures when those are
 missing. See [provisioning](provisioning.md#git-credential-preflight).
+
+## The new stack: profiles through the engine
+
+> **Status: built on the rework branch** (design:
+> [`plans/construct-platform-design.md`](plans/construct-platform-design.md) 9.3, 9.6). Everything
+> above describes the old clients, which keep working unchanged. In the new stack there is no
+> git repository: a profile is a `profile` record in the account's record store, and the host
+> service ("engine") is the only party that merges.
+
+### The engine's loop
+
+For every account a device granted the engine the record key `D`, the engine keeps a replica of
+the account's records with an outbox (`sync/replica-*.db` next to its database). The account syncs
+against the engine's own store, or against a store elsewhere when `Constructd:Sync:Stores` names
+one for it (`Account`, `Url`, and the participant `Token` that store issued; the store knows that
+token as the engine id `GET /api/v1/engine` shows). One loop runs every 15 seconds and whenever an
+edit is queued. Per account it:
+
+1. reads the projects folder of every running VM whose heartbeat digest changed (below);
+2. pushes the outbox and pulls the feed; an edit that meets a newer revision is merged per field
+   (design 9.6), what does not merge becomes a `conflict` record;
+3. re-reads the `device` records, so a device revoked while the engine was not reached loses its
+   token here and the engine acknowledges the revocation to the store;
+4. writes changed profiles into each running VM that holds or selects them.
+
+### What the VM keeps
+
+The VM keeps today's folder, `/opt/construct/projects/<name>.json`, and next to it the revision of
+the store it last saw of each profile, `/opt/construct/projects/.state/<name>.rev`. That revision
+is the base of the VM's next edit. `.deleted/<name>` keeps its meaning as the marker of a deletion
+that could not be sent yet.
+
+### Edits from a VM
+
+`construct project set|delete` on a VM with a host service (`CONSTRUCT_SERVICE_URL`) calls
+`PUT|DELETE /api/v1/vms/{vm}/profiles/{profile}` with the VM token and the revision in `.rev`
+(`bin/construct-project.sh`). The engine looks up that revision's content, queues the edit with
+it, pushes at once and answers:
+
+| `status` | Meaning | The VM then |
+|---|---|---|
+| `written` | the profile is at `revision`, with `file` (null: deleted); merged with what changed elsewhere if needed | writes `file` and `revision`, clears a marker |
+| `queued` | the store was not reachable; the edit waits in the engine's outbox | writes `file`, keeps its `.rev` |
+| `conflict` | the edit is held in conflict `conflictId` | leaves the file alone; exit 6 |
+
+A write without a usable base (no `.rev`, or a revision the engine no longer knows) is sent with
+none: if the profile exists and differs, every differing field is a conflict, never an overwrite.
+An edit or deletion based on a revision from before a deletion is a conflict, also after the name
+was created again. When the engine itself cannot be reached, `set` writes the file and `delete`
+the marker, as before; the folder read below picks them up.
+
+Direct edits stay first-class. The heartbeat carries `projectsDigest`, a digest of the profile
+files, the `.rev` files and the markers. When it changes, the engine reads the folder over SSH (a
+port of `Read-ConstructVmStore`) and compares each name with what it last saw there:
+
+- a changed, valid file is an edit on the revision in its `.rev`; an invalid one is skipped and
+  logged until it is valid;
+- a marker is a deletion on that revision; the only other way to delete is `construct project delete`;
+- a missing file is restored. When every file is gone the engine logs it (the mass-deletion
+  guard) and restores them all.
+
+### Writing back
+
+The engine writes a profile into a VM's folder when the VM holds or selects it and its store
+revision is newer than what the VM has. The write is guarded, as §6's write-back guard: it
+applies only when the name's state in the folder (its `.rev`, the file's hash and the marker) is
+still what the engine last saw; otherwise the VM changed it meanwhile, the write is skipped and
+the folder is read again, so the VM's change is merged rather than overwritten. A profile with an
+edit still queued, or with an open conflict that VM's edit is part of, waits. A write changes the
+folder's digest; the next read finds the state the engine wrote and sends nothing back.
+
+### Conflicts
+
+The heartbeat reply carries `conflicts` (`id`, `profile`, `fields`) for the open conflicts the
+VM's edits are part of. The guest starts `construct project conflicts --start` once per conflict:
+it fetches each conflict to `.state/conflicts/<id>.json` (`base`, `ours`, `theirs`, and `merged`,
+every other field already merged) and starts an agent with
+[`config/profile-conflict-prompt.md`](../config/profile-conflict-prompt.md), in a T3 Code thread
+(`t3 thread start <profile> -`) when T3 Code is installed, otherwise the installed agent on its
+own. The agent sends its resolution with `construct project resolve <id> --file <path>`: the
+engine writes the profile on its current revision and closes the conflict in one batch. A second
+resolver finds the conflict closed (`closed`); a profile that changed meanwhile gives a new
+conflict (`recomputed`).
+
+### Devices
+
+Devices never merge (design S9). A device submits an edit to an engine with its device token,
+`PUT|DELETE /api/v1/profiles/{profile}` and the revision it read, and gets the same answers. It
+reads `GET /api/v1/profiles`, `GET /api/v1/profiles/{profile}` and the open conflicts,
+`GET /api/v1/profile-conflicts`, and can resolve one with `POST /api/v1/profile-conflicts/{id}/resolve`.
+
+### Not covered
+
+- Two VMs on one engine are told about the same conflict when both edits are in it; both agents
+  may try, and the second finds it closed.
+- A profile the VM neither holds nor selects is not written into it; selecting it takes effect at
+  the next pass.
+- The engine trusts the store's TLS through the system's certificates; there is no pin for a store
+  elsewhere yet.
