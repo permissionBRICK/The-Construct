@@ -104,5 +104,6 @@ public sealed class ProvisionGuestE2ETests
     {
         public Task<SshTarget?> ResolveAsync(Vm vm, CancellationToken ct) => Task.FromResult<SshTarget?>(target);
         public string? BootstrapPublicKey() => null;
+        public Task ForgetHostKeyAsync(SshTarget target, CancellationToken ct) => Task.CompletedTask;
     }
 }

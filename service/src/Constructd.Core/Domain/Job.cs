@@ -55,6 +55,8 @@ public static class JobKinds
     public const string CreateVm = "create-vm";
     public const string RemoveVm = "remove-vm";
     public const string Provision = "provision";
+    public const string Reinstall = "reinstall";
+    public const string Restore = "restore";
 }
 
 /// <summary>

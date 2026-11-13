@@ -21,21 +21,27 @@ internal sealed class ProvisionHarness : IAsyncDisposable
     public TestApp App { get; }
     public FakeSshRunner Ssh { get; }
     public HttpClient Client { get; private set; } = null!;
+    /// <summary>The VM token the create job handed out (null without a VM).</summary>
+    public string? VmToken { get; private set; }
 
     private ProvisionHarness(TestApp app, FakeSshRunner ssh) { App = app; Ssh = ssh; }
 
     public static async Task<ProvisionHarness> StartAsync(FakeSshRunner? ssh = null, string? databasePath = null, bool createVm = true,
-        IDictionary<string, string?>? settings = null, ISshRunner? runner = null)
+        IDictionary<string, string?>? settings = null, ISshRunner? runner = null, Action<IServiceCollection>? configure = null)
     {
         ssh ??= new FakeSshRunner();
-        void Configure(IServiceCollection services) => services.AddSingleton(runner ?? ssh);
+        void Configure(IServiceCollection services)
+        {
+            services.AddSingleton(runner ?? ssh);
+            configure?.Invoke(services);
+        }
         var app = databasePath is null ? new TestApp(settings, Configure) : TestApp.WithSqlite(databasePath, settings, Configure);
         var harness = new ProvisionHarness(app, ssh);
         AddSource(app);
         if (createVm)
         {
             harness.Client = await app.CreateUserClientAsync("alice");
-            await harness.Client.CreateVmAsync(Vm);
+            harness.VmToken = (await harness.Client.CreateVmAsync(Vm)).VmTokenOrNull();
         }
         else
         {

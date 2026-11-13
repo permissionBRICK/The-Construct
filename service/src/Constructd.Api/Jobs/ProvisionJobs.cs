@@ -1,3 +1,4 @@
+using Constructd.Api.Backups;
 using System.Collections.Concurrent;
 using Constructd.Core.Abstractions;
 using Constructd.Core.Configuration;
@@ -14,6 +15,13 @@ public interface IProvisionTargets
 
     /// <summary>The committed bootstrap public key, or null when the engine has none.</summary>
     string? BootstrapPublicKey();
+
+    /// <summary>
+    /// Drops the stored host key of <paramref name="target"/>'s address from the engine's known-hosts
+    /// file, so the next connection accepts the new one. Only a reinstall calls this, after it created
+    /// the VM again: everywhere else a changed host key stays a failure.
+    /// </summary>
+    Task ForgetHostKeyAsync(SshTarget target, CancellationToken ct);
 }
 
 /// <summary>
@@ -40,6 +48,17 @@ public sealed class ProvisionTargets(IHypervisorDriver driver, ConstructdOptions
         var pub = options.Iso.BootstrapPublicKeyPath;
         return pub.Length > 0 && File.Exists(pub) ? File.ReadAllText(pub).Trim() : null;
     }
+
+    public async Task ForgetHostKeyAsync(SshTarget target, CancellationToken ct)
+    {
+        if (target.KnownHostsFile is not { Length: > 0 } file || !File.Exists(file)) return;
+        var text = await File.ReadAllTextAsync(file, ct);
+        var kept = KnownHosts.Remove(text, target.Host, target.Port);
+        if (kept == text) return;
+        var temp = file + ".tmp";
+        await File.WriteAllTextAsync(temp, kept, ct);
+        File.Move(temp, file, overwrite: true);
+    }
 }
 
 /// <summary>Why a provision request was refused before a job existed.</summary>
@@ -50,17 +69,23 @@ public sealed class ProvisionRequestException(int status, string code, string me
     public string? JobId { get; } = jobId;
 }
 
-/// <summary>What a provision request carries after validation (secrets already in their bag).</summary>
-public sealed record ProvisionSubmission(string RequestId, string? Commit, VmDesiredState? Desired, bool DeferProjectCommands, JobSecretBag Secrets);
+/// <summary>
+/// What a job request carries after validation (secrets already in their bag). <paramref name="Kind"/> is
+/// <c>provision</c>, <c>reinstall</c> (<paramref name="FreshImage"/>: new install media) or <c>restore</c>
+/// (<paramref name="BackupId"/>, its key in the bag).
+/// </summary>
+public sealed record ProvisionSubmission(string RequestId, string? Commit, VmDesiredState? Desired, bool DeferProjectCommands, JobSecretBag Secrets,
+    string Kind = JobKinds.Provision, string? BackupId = null, bool FreshImage = false);
 
 /// <summary>
-/// Accepts <c>provision</c> jobs (design 7.1): a repeated <c>requestId</c> returns the job it started,
+/// Accepts <c>provision</c>, <c>reinstall</c> and <c>restore</c> jobs (design 7.1): a repeated <c>requestId</c> returns the job it started,
 /// one lifecycle job per VM (the VM's operation gate is held for the whole run), the desired state
 /// saved before the run so a retry or a reprovision needs no client.
 /// </summary>
 public sealed class ProvisionJobs(IJobStore jobs, IJobQueryStore history, IPersistedJobRunner runner, IVmOperationGate gates,
     IMaintenanceGate maintenance, IVmDesiredStateSource desired, IProvisionTargets targets, IReleaseInfo release,
-    IHostConfigStore config, ConstructdOptions options, ProvisionJob job, IClock clock)
+    IHostConfigStore config, ConstructdOptions options, ProvisionJob job, ReinstallJob reinstall, IHypervisorDriver driver,
+    BackupCoordinator backups, IClock clock)
 {
     // owner|vm|requestId → job id, the fast path; the stored jobs are the fallback.
     private readonly ConcurrentDictionary<string, string> _requests = new(StringComparer.OrdinalIgnoreCase);
@@ -74,7 +99,8 @@ public sealed class ProvisionJobs(IJobStore jobs, IJobQueryStore history, IPersi
         {
             // The request id is stored with the job, so a repeat after a restart finds it too.
             var existing = _requests.TryGetValue(key, out var existingId) ? await jobs.GetAsync(existingId, ct) : null;
-            existing ??= (await history.ListAsync(ct)).FirstOrDefault(j => j.Kind == JobKinds.Provision && j.OperationKey == request.RequestId
+            existing ??= (await history.ListAsync(ct)).FirstOrDefault(j => j.Kind is JobKinds.Provision or JobKinds.Reinstall or JobKinds.Restore
+                && j.OperationKey == request.RequestId
                 && Ownership.SameName(j.VmName, vm.Name) && Ownership.SameName(j.Owner, vm.Owner));
             if (existing is not null)
             {
@@ -96,6 +122,15 @@ public sealed class ProvisionJobs(IJobStore jobs, IJobQueryStore history, IPersi
 
     private async Task<Job> StartAsync(Vm vm, string actor, ProvisionSubmission request, CancellationToken ct)
     {
+        if (request.Kind == JobKinds.Restore) return await StartRestoreAsync(vm, actor, request, ct);
+        if (request.Kind == JobKinds.Reinstall)
+        {
+            if (driver is ExternalEndpointDriver)
+                throw new ProvisionRequestException(409, "unsupported-capability", "An external machine cannot be reinstalled by the engine.");
+            if (!(await backups.ConfigAsync(ct)).Enabled)
+                throw new ProvisionRequestException(409, "backups-disabled", "A reinstall keeps the VM's config in a host backup, and config backups are disabled on this host.");
+        }
+
         var commit = request.Commit ?? release.Installed.Commit;
         if (!SourceZipRules.ValidCommit(commit))
             throw new ProvisionRequestException(409, "source-commit-unknown", "The engine does not know which Construct commit to provision; name one in 'commit'.");
@@ -113,6 +148,55 @@ public sealed class ProvisionJobs(IJobStore jobs, IJobQueryStore history, IPersi
                 ?? throw new ProvisionRequestException(409, "desired-state-missing", "No settings are stored for this VM yet; send 'desired' once.");
         }
 
+        // A reinstall finds its VM itself: a retry after the delete has none to dial yet.
+        var target = request.Kind == JobKinds.Reinstall ? null : await targets.ResolveAsync(vm, ct)
+            ?? throw new ProvisionRequestException(409, "vm-endpoint-unknown", "The VM has no SSH endpoint the engine can dial.");
+
+        var id = Guid.NewGuid().ToString("n");
+        var operation = await gates.TryAcquireAsync(vm.Name, id, ct);
+        if (operation is null)
+        {
+            gates.IsHeld(vm.Name, out var holder);
+            throw new ProvisionRequestException(409, "operation-in-progress", "Another operation runs on this VM.", holder);
+        }
+
+        IDisposable? handle = new GateHandle(operation, null);
+        try
+        {
+            if (vm.CurrentJobId is { } current && await jobs.GetAsync(current, ct) is { State: JobState.Queued or JobState.Running })
+                throw new ProvisionRequestException(409, "operation-in-progress", "Another job runs on this VM.", current);
+            var entered = maintenance.TryEnter("mutation:" + request.Kind, id, vm.Name)
+                ?? throw new ProvisionRequestException(503, "maintenance", "The host is in maintenance.");
+            handle = new GateHandle(operation, entered);
+
+            // Saved before the run: a retry, or a reprovision with no client, uses the same settings.
+            if (request.Desired is not null) await desired.SetDesiredAsync(vm.Name, state, ct);
+            var channel = HostUpdateTrust.Apply(await config.GetAsync<UpdatesConfig>("updates", ct) ?? HostAdminDefaults.Updates, options).Channel;
+            var queued = new Job(id, request.Kind, vm.Name, vm.Owner, JobState.Queued, [], null, null, clock.UtcNow, null,
+                actor, request.RequestId, request.Kind == JobKinds.Reinstall ? ReinstallJob.Steps[0] : ProvisionJob.Steps[0]);
+            await jobs.UpsertAsync(queued, ct);
+            Func<IProgress<string>, CancellationToken, Task<JobOutcome>> work = request.Kind == JobKinds.Reinstall
+                ? (progress, token) => reinstall.RunAsync(new ReinstallRun(id, vm, commit, state, channel, options.Iso.SeedUser, request.FreshImage,
+                    request.Secrets), progress, token)
+                : (progress, token) => job.RunAsync(new ProvisionRun(id, vm, target!, commit, state, channel, request.DeferProjectCommands,
+                    options.Iso.SeedUser, target!.IsRoot ? targets.BootstrapPublicKey() : null, request.Secrets), progress, token);
+            await runner.StartPersistedAsync(queued, handle, work, CancellationToken.None);
+            handle = null;
+            return queued;
+        }
+        finally { handle?.Dispose(); }
+    }
+
+    /// <summary>
+    /// A <c>restore</c> job: a stored backup of this VM into the running VM. The key comes from a device in
+    /// the request's secrets; nothing else of the VM's settings is needed.
+    /// </summary>
+    private async Task<Job> StartRestoreAsync(Vm vm, string actor, ProvisionSubmission request, CancellationToken ct)
+    {
+        var backupId = request.BackupId ?? throw new ProvisionRequestException(400, "validation", "A restore names its backup.");
+        var backup = await backups.Store.GetAsync(backupId, ct);
+        if (backup is null || !BackupCoordinator.Belongs(backup, vm) || !backup.IsComplete)
+            throw new ProvisionRequestException(404, "not-found", "No such complete backup of this VM.");
         var target = await targets.ResolveAsync(vm, ct)
             ?? throw new ProvisionRequestException(409, "vm-endpoint-unknown", "The VM has no SSH endpoint the engine can dial.");
 
@@ -129,19 +213,16 @@ public sealed class ProvisionJobs(IJobStore jobs, IJobQueryStore history, IPersi
         {
             if (vm.CurrentJobId is { } current && await jobs.GetAsync(current, ct) is { State: JobState.Queued or JobState.Running })
                 throw new ProvisionRequestException(409, "operation-in-progress", "Another job runs on this VM.", current);
-            var entered = maintenance.TryEnter("mutation:" + JobKinds.Provision, id, vm.Name)
+            var entered = maintenance.TryEnter("mutation:" + JobKinds.Restore, id, vm.Name)
                 ?? throw new ProvisionRequestException(503, "maintenance", "The host is in maintenance.");
             handle = new GateHandle(operation, entered);
-
-            // Saved before the run: a retry, or a reprovision with no client, uses the same settings.
-            if (request.Desired is not null) await desired.SetDesiredAsync(vm.Name, state, ct);
-            var channel = HostUpdateTrust.Apply(await config.GetAsync<UpdatesConfig>("updates", ct) ?? HostAdminDefaults.Updates, options).Channel;
-            var queued = new Job(id, JobKinds.Provision, vm.Name, vm.Owner, JobState.Queued, [], null, null, clock.UtcNow, null,
-                actor, request.RequestId, ProvisionJob.Steps[0]);
+            var queued = new Job(id, JobKinds.Restore, vm.Name, vm.Owner, JobState.Queued, [], null, null, clock.UtcNow, null,
+                actor, request.RequestId, "restore");
             await jobs.UpsertAsync(queued, ct);
-            var run = new ProvisionRun(id, vm, target, commit, state, channel, request.DeferProjectCommands,
-                options.Iso.SeedUser, target.IsRoot ? targets.BootstrapPublicKey() : null, request.Secrets);
-            await runner.StartPersistedAsync(queued, handle, (progress, token) => job.RunAsync(run, progress, token), CancellationToken.None);
+            // A restore uses no source and no settings: the run carries the VM, its address and the backup.
+            var run = new ProvisionRun(id, vm, target, "", null!, null, false, options.Iso.SeedUser, null, request.Secrets,
+                new ProvisionRestore(backupId));
+            await runner.StartPersistedAsync(queued, handle, (progress, token) => job.RestoreOnlyAsync(run, progress, token), CancellationToken.None);
             handle = null;
             return queued;
         }

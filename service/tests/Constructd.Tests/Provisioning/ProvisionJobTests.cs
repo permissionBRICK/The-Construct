@@ -245,7 +245,7 @@ public sealed class ProvisionJobTests
         await using var h = await ProvisionHarness.StartAsync();
         foreach (var body in new object[]
         {
-            new { kind = "reinstall", requestId = "a", desired = ProvisionHarness.Desired() },
+            new { kind = "rebuild", requestId = "a", desired = ProvisionHarness.Desired() },
             new { kind = "provision", requestId = "bad id", desired = ProvisionHarness.Desired() },
             new { kind = "provision", requestId = "a", commit = "main", desired = ProvisionHarness.Desired() },
             new { kind = "provision", requestId = "a", desired = new { projects = new[] { "a,b" }, settings = new { } } },

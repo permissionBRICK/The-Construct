@@ -12,7 +12,7 @@ namespace Constructd.Api.Endpoints;
 
 /// <summary>
 /// Provisioning from the engine (design 7.3, 7.5): <c>POST /vms/{name}/jobs</c> starts a
-/// <c>provision</c> job, <c>GET /vms/{name}/provision-status</c> answers what waits for the next one.
+/// <c>provision</c>, <c>reinstall</c> or <c>restore</c> job, <c>GET /vms/{name}/provision-status</c> answers what waits for the next one.
 /// Owner or admin, user credentials, primaries only.
 /// </summary>
 public static partial class ProvisionEndpoints
@@ -45,7 +45,11 @@ public static partial class ProvisionEndpoints
         if (vm is null) return Problems.NotFound("Unknown VM.");
         if (await LifecycleEndpoints.AuthorizeAsync(vm, http, true, ct) is { } denied) return denied;
         if (vm.Kind != VmKind.Primary) return LifecycleEndpoints.Problem("not-a-primary");
-        if (request.Kind != JobKinds.Provision) return CodedProblems.Validation("kind", "Expected 'provision'.");
+        if (request.Kind is not (JobKinds.Provision or JobKinds.Reinstall or JobKinds.Restore))
+            return CodedProblems.Validation("kind", "Expected 'provision', 'reinstall' or 'restore'.");
+        if (request.Kind == JobKinds.Restore && !BackupScript.IsBackupId(request.BackupId)) return CodedProblems.Validation("backupId", "Expected 32 lowercase hex digits.");
+        if (request.Kind == JobKinds.Restore && !BackupJobKey.IsIdentity(request.Secrets?.BackupKey))
+            return CodedProblems.Validation("secrets.backupKey", "A restore needs the backup's key (AGE-SECRET-KEY-1...).");
         if (request.RequestId is null || !RequestIdPattern().IsMatch(request.RequestId)) return CodedProblems.Validation("requestId", "Expected 1-128 letters, digits, '.', '_', ':' or '-'.");
         if (request.Commit is not null && !SourceZipRules.ValidCommit(request.Commit)) return CodedProblems.Validation("commit", "Expected 40 lowercase hex digits.");
         if (Validate(request.Desired) is { } field) return CodedProblems.Validation(field, "Invalid value.");
@@ -59,11 +63,13 @@ public static partial class ProvisionEndpoints
         bag.Set(ProvisionScript.CloneCredentialsVariable, secrets.GitCloneCredentialsB64);
         bag.Set(ProvisionScript.ServeWebTokenVariable, secrets.ServeWebTokenB64);
         bag.Set(ProvisionJob.SudoPasswordSecret, secrets.SudoPassword, base64: false);
+        if (request.Kind == JobKinds.Restore) bag.Set(ProvisionJob.BackupKeySecret, secrets.BackupKey, base64: false);
         try
         {
             var (job, replayed) = await provisioning.SubmitAsync(vm, http.User.Actor(),
-                new ProvisionSubmission(request.RequestId, request.Commit, request.Desired, request.DeferProjectCommands == true, bag), ct);
-            CodedProblems.Audit(http, "vm.provision", vm.Owner, target: vm.Name, extra: $"job={job.Id}; replayed={replayed}");
+                new ProvisionSubmission(request.RequestId, request.Commit, request.Desired, request.DeferProjectCommands == true, bag,
+                    request.Kind, request.Kind == JobKinds.Restore ? request.BackupId : null, request.FreshImage == true), ct);
+            CodedProblems.Audit(http, "vm.provision", vm.Owner, target: vm.Name, extra: $"kind={job.Kind}; job={job.Id}; replayed={replayed}");
             return Results.Accepted("/api/v1/jobs/" + job.Id, new VmJobAcceptedResponse(job.Id, job.Kind, replayed));
         }
         catch (ProvisionRequestException ex)

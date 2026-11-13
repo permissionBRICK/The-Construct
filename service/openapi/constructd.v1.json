@@ -9000,6 +9000,13 @@
               "string"
             ],
             "x-construct-secret": true
+          },
+          "backupKey": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "x-construct-secret": true
           }
         }
       },
@@ -11011,6 +11018,18 @@
               {
                 "$ref": "#/components/schemas/ProvisionSecretsRequest"
               }
+            ]
+          },
+          "backupId": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "freshImage": {
+            "type": [
+              "null",
+              "boolean"
             ]
           }
         }

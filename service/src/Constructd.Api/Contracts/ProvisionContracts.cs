@@ -11,14 +11,20 @@ namespace Constructd.Api.Contracts;
 /// <param name="GitCloneCredentialsB64"><c>GIT_CLONE_CREDENTIALS_B64</c>: verified clone credentials.</param>
 /// <param name="ServeWebTokenB64"><c>VSCODE_SERVE_WEB_TOKEN_B64</c>: a saved serve-web token to keep.</param>
 /// <param name="SudoPassword">The connecting user's sudo password, when that user is not root and sudo asks for one.</param>
+/// <param name="BackupKey">A <c>restore</c> job's backup key <c>E</c> (<c>AGE-SECRET-KEY-1…</c>), unwrapped by a device.</param>
 public sealed record ProvisionSecretsRequest(
     [property: ConstructSecret] string? VmTokenB64 = null,
     [property: ConstructSecret] string? GitCloneCredentialsB64 = null,
     [property: ConstructSecret] string? ServeWebTokenB64 = null,
-    [property: ConstructSecret] string? SudoPassword = null);
+    [property: ConstructSecret] string? SudoPassword = null,
+    [property: ConstructSecret] string? BackupKey = null);
 
 /// <summary>
-/// <c>POST /vms/{name}/jobs</c>. <paramref name="Kind"/> is <c>provision</c>. <paramref name="RequestId"/>
+/// <c>POST /vms/{name}/jobs</c>. <paramref name="Kind"/> is <c>provision</c>, <c>reinstall</c> or <c>restore</c>.
+/// A <c>reinstall</c> backs the VM up to its host, deletes and re-creates it with the settings it had
+/// (<paramref name="FreshImage"/>: with new install media), provisions it with the stored settings and
+/// restores the backup, all without a device. A <c>restore</c> restores the stored backup
+/// <paramref name="BackupId"/> into the running VM; its key comes in <c>secrets.backupKey</c>. <paramref name="RequestId"/>
 /// identifies the click: a repeat returns the job it started. <paramref name="Desired"/> replaces the
 /// VM's stored settings; without it the stored ones are used. <paramref name="Commit"/> pins the
 /// Construct source; the default is the engine's installed commit. <paramref name="DeferProjectCommands"/>
@@ -30,7 +36,9 @@ public sealed record VmJobRequest(
     string? Commit = null,
     VmDesiredState? Desired = null,
     bool? DeferProjectCommands = null,
-    ProvisionSecretsRequest? Secrets = null);
+    ProvisionSecretsRequest? Secrets = null,
+    string? BackupId = null,
+    bool? FreshImage = null);
 
 /// <summary>The accepted job. <paramref name="Replayed"/> is true when the request id was seen before.</summary>
 public sealed record VmJobAcceptedResponse(string JobId, string Kind, bool Replayed);

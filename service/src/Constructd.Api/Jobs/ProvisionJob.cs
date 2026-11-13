@@ -24,13 +24,21 @@ public sealed record ProvisionRun(
     bool DeferProjectCommands,
     string DefaultSeedUser,
     string? BootstrapPublicKey,
-    JobSecretBag Secrets);
+    JobSecretBag Secrets,
+    ProvisionRestore? Restore = null);
+
+/// <summary>
+/// A backup to restore after <c>provision.sh</c> and before the project commands (the PowerShell's
+/// <c>-RestoreHostBackupId</c>). Its key is <see cref="ProvisionJob.BackupKeySecret"/> in the bag.
+/// </summary>
+public sealed record ProvisionRestore(string BackupId);
 
 /// <summary>
 /// The <c>provision</c> job (design 7.3): the guest steps of <c>Provision-AgentVM.ps1</c>, run by the
 /// engine. Steps, in order: <c>source</c> (the cached release source as the PowerShell's archive),
 /// <c>copy</c> (upload and unpack), <c>provision</c> (<c>bin/provision.sh</c> with the PowerShell's
 /// environment), <c>project-commands</c> (the deferred phase, only when the run deferred it),
+/// <c>restore</c> (only with a backup to restore: <c>construct backup restore</c>, the key on stdin),
 /// <c>applied</c> (read <c>/etc/construct/provisioned.env</c>), <c>finish</c> (the PowerShell's reboot
 /// rule). Each step is safe to run again, so a failed job is retried from the start.
 ///
@@ -39,14 +47,16 @@ public sealed record ProvisionRun(
 /// reported, so nothing that is stored can hold one.
 /// </summary>
 public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmAppliedStateStore applied,
-    IPersistedJobRunner phases, IClock clock)
+    IPersistedJobRunner phases, RecoveryMarks marks, IClock clock)
 {
-    public static readonly string[] Steps = ["source", "copy", "provision", "project-commands", "applied", "finish"];
+    public static readonly string[] Steps = ["source", "copy", "provision", "restore", "project-commands", "applied", "finish"];
     private static readonly TimeSpan ShortTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan ProvisionTimeout = TimeSpan.FromHours(4);
     private static readonly string[] SecretVariables =
         [ProvisionScript.VmTokenVariable, ProvisionScript.CloneCredentialsVariable, ProvisionScript.ServeWebTokenVariable];
     public const string SudoPasswordSecret = "sudoPassword";
+    /// <summary>The backup key <c>E</c> (<c>AGE-SECRET-KEY-1…</c>) of the backup a run restores.</summary>
+    public const string BackupKeySecret = "backupKey";
 
     public async Task<JobOutcome> RunAsync(ProvisionRun run, IProgress<string> progress, CancellationToken cancel)
     {
@@ -91,6 +101,13 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
             if (main.ExitCode == 0 && result.ErrorCount != 0)
                 throw new ProvisionStepException("provision", "provision-result-inconsistent", $"provision.sh exited 0 but reported {result.ErrorCount} failure(s).");
             context.Done(errors.Count == 0 ? "provisioning finished cleanly" : $"provisioning reached the end with {errors.Count} error(s)");
+
+            // ── restore ──────────────────────────────────────────────────────────────
+            if (run.Restore is { } restore)
+            {
+                await BeginAsync(context, "restore", cancel);
+                await RestoreStepAsync(context, restore);
+            }
 
             // ── project-commands ─────────────────────────────────────────────────────
             await BeginAsync(context, "project-commands", cancel);
@@ -154,6 +171,117 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
             e with { Title = run.Secrets.Redact(e.Title), LogPath = run.Secrets.Redact(e.LogPath) };
     }
 
+    /// <summary>
+    /// The <c>restore</c> job (design 7.1): one chosen stored backup into the running VM, as the
+    /// client's <c>backup-restore</c> action does. The key came from a device, in the bag.
+    /// </summary>
+    public async Task<JobOutcome> RestoreOnlyAsync(ProvisionRun run, IProgress<string> progress, CancellationToken cancel)
+    {
+        var context = new Context(run, progress) { Step = "restore" };
+        var restore = run.Restore ?? throw new InvalidOperationException("A restore run names its backup.");
+        try
+        {
+            await BeginAsync(context, "restore", cancel);
+            await RestoreStepAsync(context, restore);
+            return new JobOutcome(new RestoreJobResult(restore.BackupId, true, null, null, null));
+        }
+        catch (ProvisionStepException ex)
+        {
+            var safe = context.Secrets.Redact(ex.Message);
+            context.Report(ex.Step, "failed", safe);
+            throw new JobFailureException(safe, new RestoreJobResult(restore.BackupId, false, ex.Step, ex.Code, safe));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not JobFailureException)
+        {
+            var safe = context.Secrets.Redact(SafeError.Describe(ex));
+            context.Report(context.Step, "failed", safe);
+            throw new JobFailureException($"restore-failed: {safe}", new RestoreJobResult(restore.BackupId, false, context.Step, "restore-failed", safe));
+        }
+        finally { run.Secrets.Clear(); }
+    }
+
+    /// <summary>
+    /// <c>construct backup restore --from-host ID</c> with the key as the first line of stdin: the guest
+    /// downloads, decrypts and restores the backup, brings back its profiles, serve-web token and
+    /// recipients, and tells the host. Run at most once over a VM (design 7.1): the start is recorded
+    /// before the guest begins, and a restore of the same backup that started and never finished is
+    /// not run again, because the VM may hold data written since. Only an exit that says the restore
+    /// never touched the VM (a key, transfer or lock failure) clears the record.
+    /// </summary>
+    private async Task RestoreStepAsync(Context context, ProvisionRestore restore)
+    {
+        var run = context.Run;
+        var key = run.Secrets.Get(BackupKeySecret);
+        if (!BackupJobKey.IsIdentity(key))
+            throw new ProvisionStepException("restore", "secret-missing", $"{BackupKeySecret}: the key of backup {restore.BackupId} is needed to restore it; a device that can open the backup supplies it.");
+        var earlier = await marks.GetRestoreAsync(run.Vm, CancellationToken.None);
+        if (earlier is { CompletedAt: null } && earlier.BackupId == restore.BackupId)
+            throw new ProvisionStepException("restore", "restore-already-ran", ManualRestore(restore.BackupId, earlier.StartedAt));
+
+        await marks.SetRestoreAsync(run.Vm, new RecoveryMarks.Restore(run.Vm.Created, restore.BackupId, run.JobId, clock.UtcNow, null), CancellationToken.None);
+        GuestRun result;
+        try
+        {
+            result = await RootCommandAsync(context, "restore", BackupScript.Restore(restore.BackupId), ProvisionTimeout, key + "\n");
+        }
+        catch (ProvisionStepException ex) when (ex.Code == "secret-missing")
+        {
+            // sudo refused before anything ran.
+            await marks.SetRestoreAsync(run.Vm, null, CancellationToken.None);
+            throw;
+        }
+
+        if (result.ExitCode != 0)
+        {
+            var untouched = BackupScript.RestoreLeftVmUntouched(result.ExitCode);
+            if (untouched) await marks.SetRestoreAsync(run.Vm, null, CancellationToken.None);
+            throw new ProvisionStepException("restore", "restore-failed", untouched
+                ? $"restoring backup {restore.BackupId} failed before it changed the VM: {BackupScript.ExitMessage(result.ExitCode)}. The backup stays on the host; the restore can be run again."
+                : $"restoring backup {restore.BackupId} failed: {BackupScript.ExitMessage(result.ExitCode)}; the guest's log is /var/log/construct/restore-config.log. "
+                  + "The VM may be partly restored, so the engine does not run this restore again by itself.");
+        }
+
+        await marks.SetRestoreAsync(run.Vm, new RecoveryMarks.Restore(run.Vm.Created, restore.BackupId, run.JobId, clock.UtcNow, clock.UtcNow), CancellationToken.None);
+        context.Done($"backup {restore.BackupId} restored");
+
+        // A backup made for a reinstall carries that job's recipient in its recipient list, and the
+        // restore brings it back: it comes off again, whichever job restores the backup.
+        var listed = await RootCommandAsync(context with { Quiet = true }, "restore", BackupScript.RecipientsList, ShortTimeout);
+        var jobKeys = listed.ExitCode == 0 ? BackupScript.JobRecipients(listed.Lines) : null;
+        if (jobKeys is null)
+            throw new ProvisionStepException("restore", "recipient-remove-failed",
+                $"the backup is restored, but the VM's backup recipients could not be read (exit {listed.ExitCode}); remove any recipient labelled "
+                + $"'{BackupJobKey.Label}' with: sudo construct backup recipients remove FINGERPRINT.");
+        foreach (var fingerprint in jobKeys)
+        {
+            var removed = await RootCommandAsync(context, "restore", BackupScript.RecipientsRemove(fingerprint), ShortTimeout);
+            if (removed.ExitCode != 0)
+                throw new ProvisionStepException("restore", "recipient-remove-failed",
+                    $"the backup is restored, but a reinstall job's backup key {fingerprint} could not be removed from the VM (exit {removed.ExitCode}); "
+                    + $"remove it with: sudo construct backup recipients remove {fingerprint}.");
+            context.Report("restore", "running", $"removed the reinstall job's backup key {fingerprint[..16]}... from the VM");
+        }
+    }
+
+    /// <summary>What a person does when a restore started before and may have changed the VM.</summary>
+    public static string ManualRestore(string backupId, DateTimeOffset startedAt) =>
+        $"backup {backupId} was already being restored into this VM ({startedAt:u}) and that run did not finish. "
+        + "It is not restored again automatically: the VM may hold data written since. Save what is needed from the VM, "
+        + $"then restore it by hand on the VM (sudo construct backup restore --from-host {backupId}, with the key a device unwraps: "
+        + $"Provision-AgentVM.ps1 -Action backup-restore -BackupId {backupId}).";
+
+    /// <summary>One root command on the guest for another job's step (a reinstall's backup steps), with this job's redaction.</summary>
+    public async Task<(int ExitCode, IReadOnlyList<string> Lines)> RunGuestAsync(ProvisionRun run, IProgress<string> progress, string step,
+        string command, string? input = null)
+    {
+        var result = await RootCommandAsync(new Context(run, progress) { Step = step }, step, command, ProvisionTimeout, input);
+        return (result.ExitCode, result.Lines);
+    }
+
+    /// <summary>Reports a step state for another job, through this job's redaction.</summary>
+    public static void Report(ProvisionRun run, IProgress<string> progress, string step, string state, string? line) =>
+        new Context(run, progress).Report(step, state, line);
+
     private static ProvisionEnvInput EnvInput(ProvisionRun run, string payloadHash) => new(
         run.Vm.Name, run.Desired.Desired, run.DefaultSeedUser, run.Commit, run.Target.IsRoot, run.DeferProjectCommands,
         SecretVariables.Where(run.Secrets.Has).ToHashSet(StringComparer.Ordinal), payloadHash, run.Desired.Hash, run.Channel);
@@ -199,13 +327,15 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
         return await RootCommandAsync(context, step, ProvisionScript.WithSecrets(secretFile, command), ProvisionTimeout);
     }
 
-    private async Task<GuestRun> RootCommandAsync(Context context, string step, string command, TimeSpan timeout)
+    /// <param name="input">More stdin for the command itself, after the sudo password (a key, one line).</param>
+    private async Task<GuestRun> RootCommandAsync(Context context, string step, string command, TimeSpan timeout, string? input = null)
     {
         var sudoPassword = context.Run.Target.IsRoot ? null : context.Run.Secrets.Get(SudoPasswordSecret);
         var lines = new List<string>();
         var sink = context.LineSink(lines);
+        var stdin = (sudoPassword is null ? "" : sudoPassword + "\n") + input;
         var exit = await ssh.RunAsync(context.Run.Target, ProvisionScript.AsRoot(command, context.Run.Target.IsRoot, sudoPassword is not null),
-            sudoPassword is null ? null : sudoPassword + "\n", sink, timeout, CancellationToken.None);
+            stdin.Length == 0 ? null : stdin, sink, timeout, CancellationToken.None);
         if (exit != 0 && sudoPassword is null && !context.Run.Target.IsRoot && lines.Any(l => l.Contains("sudo: a password is required", StringComparison.Ordinal)))
             throw new ProvisionStepException(step, "secret-missing", $"{SudoPasswordSecret}: {context.Run.Target.User} needs a password for sudo on this guest.");
         if (exit == 255 && !lines.Any(l => l == ProvisionScript.ResultStart))
@@ -213,9 +343,9 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
         return new(exit, lines);
     }
 
-    private async Task<GuestRun> RootAsync(Context context, string step, string command, bool required)
+    private async Task<GuestRun> RootAsync(Context context, string step, string command, bool required, string? input = null)
     {
-        var run = await RootCommandAsync(context, step, command, ShortTimeout);
+        var run = await RootCommandAsync(context, step, command, ShortTimeout, input);
         if (required && run.ExitCode != 0)
             throw new ProvisionStepException(step, step + "-failed", $"a guest command of this step failed (exit {run.ExitCode}).");
         return run;
