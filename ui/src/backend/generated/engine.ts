@@ -4538,6 +4538,7 @@ export interface components {
             gitCloneCredentialsB64?: null | string;
             serveWebTokenB64?: null | string;
             sudoPassword?: null | string;
+            backupKey?: null | string;
         };
         ProvisionSettings: {
             aiTools?: null | string;
@@ -5068,6 +5069,8 @@ export interface components {
             desired?: null | components["schemas"]["VmDesiredState"];
             deferProjectCommands?: null | boolean;
             secrets?: null | components["schemas"]["ProvisionSecretsRequest"];
+            backupId?: null | string;
+            freshImage?: null | boolean;
         };
         /**
          * @default primary
