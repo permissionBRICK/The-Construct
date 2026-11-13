@@ -31,8 +31,11 @@ namespace Constructd.Api.Devices;
 /// remembered in memory only: after a restart every running VM is written once more.
 /// </summary>
 public sealed partial class DeviceSshKeys(EngineKeyStore keys, EngineDevices devices, IVmRepository vms, IProvisionTargets targets,
-    ISshRunner ssh, ILogger<DeviceSshKeys> log)
+    ISshRunner ssh, ILogger<DeviceSshKeys> log, IHostApplicationLifetime lifetime)
 {
+    // Background writes end with the engine.
+    private CancellationToken Stopping => lifetime.ApplicationStopping;
+
     /// <summary>The comment that marks a line as the engine's.</summary>
     public const string Marker = "construct-device:";
 
@@ -90,7 +93,7 @@ public sealed partial class DeviceSshKeys(EngineKeyStore keys, EngineDevices dev
     }
 
     /// <summary>The account's devices changed (a registration, a revocation): its VMs are written in the background.</summary>
-    public void Changed(string account) => _ = Task.Run(() => SyncAccountAsync(account, CancellationToken.None));
+    public void Changed(string account) => _ = Task.Run(() => SyncAccountAsync(account, Stopping));
 
     /// <summary>The key lines for the account's VMs: the keys of its active devices, marked.</summary>
     public async Task<IReadOnlyList<string>> LinesAsync(string owner, CancellationToken ct)
@@ -193,10 +196,11 @@ public sealed partial class DeviceSshKeys(EngineKeyStore keys, EngineDevices dev
         if (!_running.TryAdd(Slot(vm), true)) return;
         _ = Task.Run(async () =>
         {
-            try { await WriteAsync(vm, CancellationToken.None).ConfigureAwait(false); }
+            try { await WriteAsync(vm, Stopping).ConfigureAwait(false); }
+            catch (OperationCanceledException) { }
             catch (Exception ex) { log.LogWarning("Device keys were not written into {Vm}: {Reason}", vm.Name, ex.Message); }
             finally { _running.TryRemove(Slot(vm), out _); }
-        }, CancellationToken.None);
+        }, Stopping);
     }
 
     /// <summary>Writes the account's current keys into one VM over the engine's SSH; true when it was written.</summary>

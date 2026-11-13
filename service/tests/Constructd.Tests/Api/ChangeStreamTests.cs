@@ -114,6 +114,13 @@ public class ChangeStreamTests
         Assert.True(EventEndpoints.Visible(User("carol"), initiated));
         Assert.False(EventEndpoints.Visible(User("vm:vm1"), initiated with { Initiator = "vm:vm1" }));
 
+        // A vault request: its owner's account only, not an admin, not an initiator.
+        var vault = new Change(4, VaultHostService.ApprovalAdded, "p1", "vm1", "bob", Initiator: "carol", OwnerOnly: true);
+        Assert.True(EventEndpoints.Visible(User("Bob"), vault));
+        Assert.False(EventEndpoints.Visible(User("root", admin: true), vault));
+        Assert.False(EventEndpoints.Visible(User("carol"), vault));
+        Assert.False(EventEndpoints.Visible(User("carol"), vault with { Everyone = true }));
+
         var offer = new Change(3, "update.offered", "abc", null, null);
         Assert.False(EventEndpoints.Visible(User("bob"), offer));
         Assert.True(EventEndpoints.Visible(User("bob"), offer with { Type = "update.finished", Everyone = true }));
@@ -133,6 +140,22 @@ public class ChangeStreamTests
         var backups = seen.Where(c => c.Type.StartsWith("backup.", StringComparison.Ordinal)).ToArray();
         Assert.Equal(["backup.added", "backup.removed"], backups.Select(c => c.Type));
         Assert.All(backups, c => Assert.Equal((id, "dev", "alice"), (c.Id, c.Vm, c.Owner)));
+    }
+
+    [Fact]
+    public async Task Vault_requests_are_announced_to_their_owner_when_filed_and_when_answered()
+    {
+        using var h = await Constructd.Tests.Vault.VaultHarness.CreateAsync();
+        await h.PutEntriesAsync(h.Entry("db", "pw-123456", "admin"));
+        using var changes = h.App.Service<ChangeFeed>().Subscribe(null);
+        var approval = await h.PendingAsync(h.Request("request", ["db"], new { uses = 1 }));
+        Assert.Equal(HttpStatusCode.NoContent, await h.DecideAsync(approval, "deny"));
+
+        var seen = new List<Change>();
+        while (changes.Live.TryRead(out var change)) seen.Add(change);
+        var vault = seen.Where(c => c.Type.StartsWith("vault.", StringComparison.Ordinal)).ToArray();
+        Assert.Equal([VaultHostService.ApprovalAdded, VaultHostService.ApprovalEnded], vault.Select(c => c.Type));
+        Assert.All(vault, c => Assert.Equal((approval, "dev", "bob", true), (c.Id, c.Vm, c.Owner, c.OwnerOnly)));
     }
 
     private sealed record Event(long Seq, string Type, string? Id, string? Vm);

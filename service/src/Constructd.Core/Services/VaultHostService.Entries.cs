@@ -49,6 +49,7 @@ public sealed partial class VaultHostService
             {
                 asked = new EntryRequest(NewId(), vm.Owner, vm.Name, name, request.Description, request.Reason, request.Source, now, now + EntryRequestLifetime);
                 entryRequests[asked.Id] = asked;
+                Notify(EntryRequestAdded, asked.Id, asked.Vm, asked.Owner);
             }
         }
         var response = VaultProtocol.Response(request.Id, "ok", "Requested.");
@@ -121,7 +122,8 @@ public sealed partial class VaultHostService
                 if (await SaveAsync(state, entry, BaseOf(entries, request.Name), provenance, [VmOrigin(request.Vm), device], ct).ConfigureAwait(false)) break;
                 if (attempt >= MaxWriteAttempts) throw KeptChanging(request.Name);
             }
-            lock (pendingGate) entryRequests.Remove(request.Id);
+            lock (pendingGate)
+                if (entryRequests.Remove(request.Id)) Notify(EntryRequestEnded, request.Id, request.Vm, request.Owner);
             await RecordAsync(owner, request.Vm, $"Entered {request.Name} on the VM's request; it needs approval for every use.", false, ct).ConfigureAwait(false);
         }
         finally { gate.Release(); }
@@ -137,7 +139,7 @@ public sealed partial class VaultHostService
         {
             ExpireEntryRequestsLocked(clock.UtcNow);
             if (!entryRequests.TryGetValue(id, out var request) || !Ownership.SameName(request.Owner, owner)) throw NotFound("No such entry request.");
-            if (remove) entryRequests.Remove(id);
+            if (remove && entryRequests.Remove(id)) Notify(EntryRequestEnded, request.Id, request.Vm, request.Owner);
             return request;
         }
     }
@@ -149,13 +151,15 @@ public sealed partial class VaultHostService
 
     private void ExpireEntryRequestsLocked(DateTimeOffset now)
     {
-        foreach (var request in entryRequests.Values.Where(r => r.ExpiresAt <= now).ToArray()) entryRequests.Remove(request.Id);
+        foreach (var request in entryRequests.Values.Where(r => r.ExpiresAt <= now).ToArray())
+            if (entryRequests.Remove(request.Id)) Notify(EntryRequestEnded, request.Id, request.Vm, request.Owner);
     }
 
     // A VM that goes away takes its entry requests with it.
     private void CancelEntryRequests(string vmName)
     {
         lock (pendingGate)
-            foreach (var request in entryRequests.Values.Where(r => Ownership.SameName(r.Vm, vmName)).ToArray()) entryRequests.Remove(request.Id);
+            foreach (var request in entryRequests.Values.Where(r => Ownership.SameName(r.Vm, vmName)).ToArray())
+                if (entryRequests.Remove(request.Id)) Notify(EntryRequestEnded, request.Id, request.Vm, request.Owner);
     }
 }

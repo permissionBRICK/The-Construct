@@ -7,9 +7,10 @@ namespace Constructd.Core.Services;
 /// One change on the engine's stream (<c>GET /events</c>, design 6.1): what changed and its id, never
 /// the state itself; a client re-reads what it shows. <paramref name="Owner"/>,
 /// <paramref name="Initiator"/> and <paramref name="Everyone"/> say who may hear of it: the owner of
-/// the VM or job, the job's initiator, every signed-in user; admins hear of everything.
+/// the VM or job, the job's initiator, every signed-in user; admins hear of everything except a change
+/// marked <paramref name="OwnerOnly"/> (a vault request), which only the owner's account hears of.
 /// </summary>
-public sealed record Change(long Seq, string Type, string Id, string? Vm, string? Owner, string? Initiator = null, bool Everyone = false);
+public sealed record Change(long Seq, string Type, string Id, string? Vm, string? Owner, string? Initiator = null, bool Everyone = false, bool OwnerOnly = false);
 
 /// <summary>
 /// The engine's change stream in memory: the last <see cref="Capacity"/> changes, numbered, so a client
@@ -27,11 +28,11 @@ public sealed class ChangeFeed
     // first change and reads as a gap, never as a valid point to resume from.
     private long _last = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() * 1000;
 
-    public Change Publish(string type, string id, string? vm, string? owner, string? initiator = null, bool everyone = false)
+    public Change Publish(string type, string id, string? vm, string? owner, string? initiator = null, bool everyone = false, bool ownerOnly = false)
     {
         lock (_lock)
         {
-            var item = new Change(++_last, type, id, vm, owner, initiator, everyone);
+            var item = new Change(++_last, type, id, vm, owner, initiator, everyone, ownerOnly);
             _recent.Enqueue(item);
             if (_recent.Count > Capacity) _recent.Dequeue();
             foreach (var subscriber in _subscribers) subscriber.Writer.TryWrite(item);

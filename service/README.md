@@ -532,7 +532,10 @@ finished job, after which the stream ends.
 its id, never the state, and a client re-reads what it shows: `vm.created`, `vm.changed`, `vm.power`
 (the power state changed), `vm.deleted` (id = the VM's name); `job.started`, `job.progress` (at most once
 a second per job), `job.ended`; `backup.added`, `backup.removed`; `update.offered` (a channel offers a
-release commit the host does not run; admins only) and `update.finished` (a host update reached its end).
+release commit the host does not run; admins only), `update.finished` (a host update reached its end);
+`vault.approval.added`, `vault.approval.ended`, `vault.entry-request.added`, `vault.entry-request.ended`
+(a vault approval or a `construct secret ask` was filed; it was answered, declined, expired or its VM went;
+id = the request's id). Vault events go to the owner's account only, never to an admin of another account.
 `data` is `{seq, type, id, vm}`, and the SSE `id` is `seq`. A caller hears only of what it may read: its
 own VMs and backups, jobs it owns or initiated, finished host updates; an admin hears of everything.
 Without `since`, or when the events after it are gone (more than 1000 behind, or an earlier run of the

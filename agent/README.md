@@ -204,7 +204,7 @@ API is rewritten to the proxy path; a fixed `Content-Length` is kept; `Set-Cooki
 |---|---|
 | `agent` | The agent's state changed (engines, device); reload `GET /api/state` |
 | `pairing` | A pairing on this device changed state |
-| `vm.created`, `vm.changed`, `vm.power`, `vm.deleted`, `job.started`, `job.progress`, `job.ended`, `backup.added`, `backup.removed`, `update.offered`, `update.finished` | An engine's change, from its own stream (`GET /api/v1/events`): `data` is `{id, vm?}`, never the state; re-read the thing through the proxy. Jobs started elsewhere arrive too. |
+| `vm.created`, `vm.changed`, `vm.power`, `vm.deleted`, `job.started`, `job.progress`, `job.ended`, `backup.added`, `backup.removed`, `update.offered`, `update.finished`, `vault.approval.added`, `vault.approval.ended`, `vault.entry-request.added`, `vault.entry-request.ended` | An engine's change, from its own stream (`GET /api/v1/events`): `data` is `{id, vm?}`, never the state; re-read the thing through the proxy (a vault event: `GET /api/vault/approvals` or `/api/vault/entry-requests`). Jobs started elsewhere arrive too. |
 | `engine.reset` | The agent (re)started following that engine and may have missed its changes; reload what you show from it |
 | `job.lost` | After a reset, a job the agent saw start can no longer be read |
 | `reset` | The events after `since` are gone (more than 1000 behind, or an earlier run); reload the state |

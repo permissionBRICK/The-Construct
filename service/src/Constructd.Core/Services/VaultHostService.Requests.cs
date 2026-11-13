@@ -359,6 +359,7 @@ public sealed partial class VaultHostService
                 return new(VaultProtocol.Response(request.Id, "error", "Too many requests from this VM are waiting for an answer."), null);
             var record = new Pending(NewId(), vm.Owner, vm.Name, request, prompt, names, uses, ttlSeconds, now, deadline) { Auto = auto ?? [] };
             pending[record.Id] = record;
+            Notify(ApprovalAdded, record.Id, record.Vm, record.Owner);
             return new(null, record.Id);
         }
     }
@@ -399,6 +400,7 @@ public sealed partial class VaultHostService
                     throw new VaultProblemException(400, "validation", "Only a lease request takes a duration.");
                 record.State = approve ? PendingState.Approved : PendingState.Denied;
                 record.ChosenTtlSeconds = approve ? ttlSeconds : null;
+                Notify(ApprovalEnded, record.Id, record.Vm, record.Owner);
                 record.DecidedAt = clock.UtcNow;
                 record.Approver = approver ?? "user:" + owner;
             }
@@ -537,6 +539,7 @@ public sealed partial class VaultHostService
             if (record.State == PendingState.Pending && record.Deadline <= now)
             {
                 record.State = PendingState.TimedOut; record.DecidedAt = now;
+                Notify(ApprovalEnded, record.Id, record.Vm, record.Owner);
                 record.Response = Refused(record.Request, true, record.Auto); record.Ready = true;
                 record.Done.TrySetResult();
             }
@@ -553,6 +556,7 @@ public sealed partial class VaultHostService
                 pending.Remove(record.Id);
                 if (record.State != PendingState.Pending) continue;
                 record.State = PendingState.Denied; record.DecidedAt = clock.UtcNow;
+                Notify(ApprovalEnded, record.Id, record.Vm, record.Owner);
                 record.Response = VaultProtocol.Response(record.Request.Id, "denied", message); record.Ready = true;
                 record.Done.TrySetResult();
             }
