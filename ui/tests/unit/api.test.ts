@@ -305,6 +305,22 @@ describe('ApiBackend', () => {
     expect(JSON.stringify(be.snapshot())).not.toContain('EFGH');
   });
 
+  it('keeps the first run until the recovery code was shown, when the agent reports the new identity first', async () => {
+    const { be, on, settle } = world({ registered: false, engines: [] });
+    on('POST', '/api/engines/probe', { json: { url: 'https://orchard.test:8443', pin: 'P', status: 'ok', known: null } });
+    on('POST', '/api/engines', { json: { id: E1, name: 'orchard', url: 'https://orchard.test:8443', pin: 'P', engineId: null, enrolled: false, signedIn: true, store: false } });
+    on('POST', '/api/device/setup', () => {
+      on('GET', '/api/state', { json: { device: { id: 'd1', name: 'laptop', account: 'acct1', registered: true, storeEngine: E1, protection: 'file', protectionWeak: true }, engines: [], pairing: null } });
+      be.onEvent('agent', { seq: 1, type: 'agent', engine: null, data: null });
+      return { json: { recoveryCode: 'ABCD-EFGH' } };
+    });
+    await be.start();
+    be.firstRunStart({ how: 'setup', address: 'https://orchard.test:8443', deviceName: 'laptop', token: 't' });
+    await settle();
+    await settle();
+    expect(be.snapshot().firstRun).toMatchObject({ step: 'code', code: ['ABCD', 'EFGH'] });
+  });
+
   it('pairs as a new device and closes the first run when the pairing is done', async () => {
     const { be, calls, on, settle } = world({ registered: false, engines: [] });
     on('POST', '/api/engines/probe', { json: { url: 'https://orchard.test:8443', pin: 'P', status: 'ok', known: E1 } });
@@ -323,6 +339,7 @@ describe('ApiBackend', () => {
     const { be, calls, on, settle } = world();
     on('POST', '/api/engines/probe', { json: { url: 'https://lab.test:8443', pin: 'P2', status: 'ok', known: null } });
     on('POST', '/api/engines', { json: { id: E2, name: 'lab', url: 'https://lab.test:8443', pin: 'P2', engineId: null, enrolled: true, signedIn: true, store: false } });
+    on('GET', `/api/engines/${E2}/api/v1/vm-defaults`, { json: { hostLogicalCpus: 8, maximumCpus: 8, recommendedCpus: 8, maximumRamGb: 16, recommendedRamGb: 8 } });
     on('POST', `/api/engines/${E2}/api/v1/vms`, { status: 202, json: { jobId: 'c1', nested: false, nestedFromHostDefault: true, ignoredOptions: [] } });
     on('GET', `/api/engines/${E2}/api/v1/whoami`, { json: { name: 'alex', kind: 'user', scheme: 'Device', known: true, role: 'user' } });
     on('GET', `/api/engines/${E2}/api/v1/vms`, { json: [vmResponse('quill', 'alex')] });
@@ -339,7 +356,7 @@ describe('ApiBackend', () => {
     expect(posts(calls).map(c => [c.path, c.body])).toEqual([
       ['/api/engines/probe', { address: 'https://lab.test:8443' }],
       ['/api/engines', { address: 'https://lab.test:8443', pin: 'P2', userToken: 'tok' }],
-      [`/api/engines/${E2}/api/v1/vms`, { name: 'quill' }],
+      [`/api/engines/${E2}/api/v1/vms`, { name: 'quill', ramGb: 8, diskGb: 50 }],
       [`/api/engines/${E2}/api/v1/vms/quill/jobs`, expect.objectContaining({ kind: 'provision' })],
     ]);
   });

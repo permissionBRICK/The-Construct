@@ -2,3 +2,5 @@ node_modules/
 dist/
 test-results/
 playwright-report/
+tests/e2e/engine-host/bin/
+tests/e2e/engine-host/obj/

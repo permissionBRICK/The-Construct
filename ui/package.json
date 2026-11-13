@@ -11,7 +11,8 @@
     "test:screens": "playwright test",
     "test:screens:update": "playwright test --update-snapshots=all",
     "typecheck": "tsc --noEmit",
-    "gen:api": "openapi-typescript ../agent/openapi/agent.v1.json -o src/backend/generated/agent.ts && openapi-typescript ../service/openapi/constructd.v1.json -o src/backend/generated/engine.ts"
+    "gen:api": "openapi-typescript ../agent/openapi/agent.v1.json -o src/backend/generated/agent.ts && openapi-typescript ../service/openapi/constructd.v1.json -o src/backend/generated/engine.ts",
+    "test:e2e": "dotnet build tests/e2e/engine-host -c Release -v q -nologo && dotnet build ../agent/src/construct-agent -c Release -v q -nologo && playwright test -c playwright.e2e.config.ts"
   },
   "dependencies": {
     "openapi-fetch": "^0.14.1",

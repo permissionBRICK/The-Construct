@@ -52,7 +52,7 @@ stays within one directory and `**` crosses directories. A row without a group s
 | `extension/src/updates.js`, `extension/src/t3code*`, `bin/*t3*`, `test/t3-*` | `t3` |
 | `service/**`, `drivers/**`, `lib/**`, `bin/**`, `console-viewer/**` | `service` |
 | `ui/**` | `ui` |
-| `agent/**`, `service/src/Construct.Keys/**`, `service/src/Constructd.Store/**`, `service/src/Constructd.Sync/**`, `service/src/Constructd.Api/**`, `service/openapi/**` | `agent` |
+| `agent/**`, `service/src/Construct.Keys/**`, `service/src/Constructd.Store/**`, `service/src/Constructd.Sync/**`, `service/src/Constructd.Api/**`, `service/openapi/**` | `agent`, `ui` |
 | `scripts/**`, `.github/**`, `VERSION`, `test/release.test.py`, `test/construct-release.test.py`, `test/run-local-checks.sh`, `test/helpers/changed-groups.py`, `docs/local-checks.md`, `service/src/Constructd.Core/Logic/ReleaseChannel.cs`, `service/tests/Constructd.Tests/Updates/ReleaseChannelTests.cs` | `release` |
 | `docs/**`, `*.md`, `assets/**` | |
 

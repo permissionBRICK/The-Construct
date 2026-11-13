@@ -27,6 +27,7 @@ export const API_GAPS: Feature[] = [
 ];
 
 const NA = 'Not available yet';
+const DEFAULT_DISK_GB = 50;
 const PREFS_KEY = 'construct.prefs';
 const DISMISSED_KEY = 'construct.dismissed';
 
@@ -211,7 +212,9 @@ export class ApiBackend implements Backend {
         }
         return;
       }
-      if (this.s.firstRun && this.s.firstRun.step !== 'code') this.emit({ firstRun: null });
+      // The agent reports the new identity before setup answers with the code: the first run stays while a
+      // step runs and while the code is on screen.
+      if (this.s.firstRun && !this.s.firstRun.busy && this.s.firstRun.step !== 'code') this.emit({ firstRun: null });
       for (const id of [...this.slices.keys()]) if (!st.engines.some(e => e.id === id)) this.slices.delete(id);
       for (const e of st.engines) {
         const sl = this.slices.get(e.id);
@@ -233,7 +236,7 @@ export class ApiBackend implements Backend {
   }
 
   private async refreshAll() {
-    await Promise.all([...this.slices.keys()].map(id => this.refreshEngine(id)));
+    await Promise.all([this.loadDevices(), ...[...this.slices.keys()].map(id => this.refreshEngine(id))]);
   }
 
   /** Reads one engine; a second call while one runs makes it read once more afterwards. */
@@ -476,9 +479,9 @@ export class ApiBackend implements Backend {
   }
 
   open(_vmId: string, _what: Open) { this.note(NA); }
-  openForward() { this.note(NA); }
-  openChildConsole() { this.note(NA); }
-  setVmPassword() { this.note(NA); }
+  openForward(..._: unknown[]) { this.note(NA); }
+  openChildConsole(..._: unknown[]) { this.note(NA); }
+  setVmPassword(..._: unknown[]) { this.note(NA); }
 
   power(vmId: string, on: boolean) {
     const ref = this.vmRef(vmId);
@@ -502,7 +505,7 @@ export class ApiBackend implements Backend {
     if (ref) void this.provision(ref.engine, ref.name);
   }
 
-  reinstall() { this.note(NA); }
+  reinstall(..._: unknown[]) { this.note(NA); }
 
   updateEverything() {
     void (async () => {
@@ -539,7 +542,7 @@ export class ApiBackend implements Backend {
     if (ref) void this.provision(ref.engine, ref.name);
   }
 
-  replyRepair() { this.note(NA); }
+  replyRepair(..._: unknown[]) { this.note(NA); }
 
   dismissJob(key: string) {
     this.dismissed.add(key);
@@ -564,13 +567,13 @@ export class ApiBackend implements Backend {
     }, patch.hw ? (when === 'now' ? `Restarting ${ref.name}` : 'Saved, applies at the next restart') : 'Saved', ref.engine);
   }
 
-  updateAgents() { this.note(NA); }
-  setProjectOn() { this.note(NA); }
+  updateAgents(..._: unknown[]) { this.note(NA); }
+  setProjectOn(..._: unknown[]) { this.note(NA); }
   saveProfile(_p: Profile) { this.note(NA); }
-  addProject() { this.note(NA); }
-  syncProjects() { this.note(NA); }
-  closeForward() { this.note(NA); }
-  setSharing() { this.note(NA); }
+  addProject(..._: unknown[]) { this.note(NA); }
+  syncProjects(..._: unknown[]) { this.note(NA); }
+  closeForward(..._: unknown[]) { this.note(NA); }
+  setSharing(..._: unknown[]) { this.note(NA); }
 
   backupNow(vmId: string) {
     const ref = this.vmRef(vmId);
@@ -579,7 +582,7 @@ export class ApiBackend implements Backend {
       'Backup requested; the VM sends it at its next check-in', ref.engine);
   }
 
-  restoreBackup() { this.note(NA); }
+  restoreBackup(..._: unknown[]) { this.note(NA); }
 
   deleteBackup(vmId: string, backupId: string) {
     const ref = this.vmRef(vmId);
@@ -614,7 +617,11 @@ export class ApiBackend implements Backend {
     if (req.where === 'remote' && req.signIn !== 'token') { this.note(NA); return null; }
     void this.run(async () => {
       const engine = req.where === 'local' ? await this.localEngine() : await this.addEngine(req.hostAddress ?? '', req.token ?? null);
-      const r = await ok(this.engine(engine).POST('/api/v1/vms', { body: { name } as never }));
+      // The engine takes the defaults for CPU and the rest; RAM comes from its recommendation, the disk from
+      // today's default (Create-AgentVM.ps1), as the engine has none.
+      const c = this.engine(engine);
+      const d = await ok(c.GET('/api/v1/vm-defaults'));
+      const r = await ok(c.POST('/api/v1/vms', { body: { name, ramGb: d.recommendedRamGb, diskGb: DEFAULT_DISK_GB } as never }));
       this.provisionAfter.add(jobKey(engine, r.jobId));
       await this.refreshEngine(engine);
       await this.track(engine, r.jobId, { kind: 'create' });
@@ -643,12 +650,12 @@ export class ApiBackend implements Backend {
 
   /* --- key vault (not on records yet) --- */
 
-  answerLease() { this.note(NA); }
-  enterSecret() { this.note(NA); }
-  addSecret() { this.note(NA); }
-  deleteSecret() { this.note(NA); }
-  setAutoApprove() { this.note(NA); }
-  takeBack() { this.note(NA); }
+  answerLease(..._: unknown[]) { this.note(NA); }
+  enterSecret(..._: unknown[]) { this.note(NA); }
+  addSecret(..._: unknown[]) { this.note(NA); }
+  deleteSecret(..._: unknown[]) { this.note(NA); }
+  setAutoApprove(..._: unknown[]) { this.note(NA); }
+  takeBack(..._: unknown[]) { this.note(NA); }
 
   /* --- devices: pairing approves a new device by the code it shows --- */
 
@@ -817,7 +824,7 @@ export class ApiBackend implements Backend {
     this.hostAct(hostId, c => ok(c.POST('/api/v1/jobs/{id}/cancel', { params: { path: { id: jobId } } })), 'Cancelling');
   }
 
-  retryHostJob() { this.note(NA); }
+  retryHostJob(..._: unknown[]) { this.note(NA); }
 
   setUsageWindow(hostId: string, window: Host['usage']['window']) {
     const sl = this.slices.get(hostId);
@@ -860,8 +867,8 @@ export class ApiBackend implements Backend {
     return codeGroups(r.recoveryCode);
   }
 
-  exportRecoveryCode() { this.note(NA); }
-  openLog() { this.note(NA); }
+  exportRecoveryCode(..._: unknown[]) { this.note(NA); }
+  openLog(..._: unknown[]) { this.note(NA); }
   upgradeNext() { /* the one-time upgrade from the old stack is not part of this backend */ }
 
   /* --- first run --- */
@@ -869,7 +876,7 @@ export class ApiBackend implements Backend {
   firstRunStart(req: FirstRunRequest) {
     const fr = this.s.firstRun;
     if (!fr || fr.busy) return;
-    const set = (p: Partial<NonNullable<State['firstRun']>>) => { if (this.s.firstRun) this.emit({ firstRun: { ...this.s.firstRun, ...p } }); };
+    const set = (p: Partial<NonNullable<State['firstRun']>>) => this.emit({ firstRun: { ...(this.s.firstRun ?? fr), ...p } });
     set({ busy: true, problem: null });
     void (async () => {
       try {
