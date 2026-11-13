@@ -495,14 +495,9 @@ public sealed partial class DeviceAgent : IDisposable
         catch (HttpRequestException ex) { throw new AgentFailure(502, "engine-unreachable", ex.Message); }
     }
 
-    /// <remarks>
-    /// The engine's contract declares no 204 for PutEngineGrants and RevokeDevice, so the generated
-    /// client reports their 204 as an ApiException; it is the success it is.
-    /// </remarks>
     private static async Task Call(Func<Task> call)
     {
         try { await call().ConfigureAwait(false); }
-        catch (ApiException ex) when (ex.StatusCode == 204) { }
         catch (ApiException ex) { throw Failure(ex); }
         catch (HttpRequestException ex) { throw new AgentFailure(502, "engine-unreachable", ex.Message); }
     }
