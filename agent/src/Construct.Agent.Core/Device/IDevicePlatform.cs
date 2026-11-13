@@ -21,12 +21,6 @@ public interface IDevicePlatform
     /// <summary>The <c>ssh</c> client to run.</summary>
     string SshExecutable { get; }
 
-    /// <summary>
-    /// True where a VM on the engine of this very machine is dialled at its own address
-    /// (<c>&lt;name&gt;.mshome.net:22</c>, Hyper-V's default switch) rather than the engine's forward (7.2).
-    /// </summary>
-    bool DirectAddresses { get; }
-
     /// <summary>Desktop notifications, or null.</summary>
     IToastRaiser? Notifications { get; }
 

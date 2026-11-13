@@ -176,7 +176,11 @@ public sealed record VmResponse(
 /// <paramref name="SshHost"/> unless the host runs a <c>Constructd:PublicHostPattern</c>; SSH is
 /// dialled on <paramref name="SshHost"/>:<paramref name="SshPort"/> either way.
 /// </param>
-public sealed record EndpointResponse(string SshHost, int SshPort, string PublicHost)
+/// <param name="Forwarded">On <c>GET /vms/{name}/endpoint</c>: the address every client dials (the engine's relay port, or the VM's own address in direct network mode); the same as <paramref name="SshHost"/>:<paramref name="SshPort"/>.</param>
+/// <param name="Direct">On <c>GET /vms/{name}/endpoint</c>, where the driver knows it: the VM's own address and port, reachable from the engine's machine (design 7.2).</param>
+public sealed record EndpointResponse(string SshHost, int SshPort, string PublicHost,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] SshAddress? Forwarded = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] SshAddress? Direct = null)
 {
     /// <summary>
     /// An endpoint with no public host — a driver-reported one, or a creation result stored by a
@@ -187,6 +191,9 @@ public sealed record EndpointResponse(string SshHost, int SshPort, string Public
         new(endpoint.SshHost, endpoint.SshPort,
             string.IsNullOrWhiteSpace(endpoint.PublicHost) ? endpoint.SshHost : endpoint.PublicHost);
 }
+
+/// <summary>Where a client dials a VM's SSH.</summary>
+public sealed record SshAddress(string Host, int Port);
 
 public sealed record VmStateResponse(VmState State);
 

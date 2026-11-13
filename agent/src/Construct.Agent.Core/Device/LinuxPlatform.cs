@@ -32,7 +32,6 @@ public sealed class LinuxPlatform : IDevicePlatform, IAgentLauncher
 
     public string SshExecutable { get; }
 
-    public bool DirectAddresses => false;
 
     public IToastRaiser? Notifications { get; }
 

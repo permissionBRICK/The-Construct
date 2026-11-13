@@ -9024,6 +9024,26 @@
           },
           "publicHost": {
             "type": "string"
+          },
+          "forwarded": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SshAddress"
+              }
+            ]
+          },
+          "direct": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SshAddress"
+              }
+            ]
           }
         }
       },
@@ -11566,6 +11586,22 @@
               "null",
               "string"
             ]
+          }
+        }
+      },
+      "SshAddress": {
+        "required": [
+          "host",
+          "port"
+        ],
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32"
           }
         }
       },

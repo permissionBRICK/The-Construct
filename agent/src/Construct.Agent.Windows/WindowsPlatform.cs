@@ -41,7 +41,6 @@ internal sealed partial class WindowsPlatform : IDevicePlatform, IAgentLauncher
 
     public string SshExecutable { get; }
 
-    public bool DirectAddresses => true;
 
     public IToastRaiser? Notifications { get; }
 
