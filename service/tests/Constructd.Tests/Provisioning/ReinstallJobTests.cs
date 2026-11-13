@@ -188,6 +188,37 @@ public sealed class ReinstallJobTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task A_VM_whose_backup_only_the_job_key_opens_is_not_deleted()
+    {
+        var guest = new FakeBackupGuest();
+        var h = await HostAsync(guest);
+        guest.Recipients.Clear();
+        var job = await ReinstallAsync(h, "reinstall-1");
+        Assert.Equal("backup-no-device-key", Result<ReinstallJobResult>(job).Code);
+        Assert.DoesNotContain(h.App.Driver.Calls, c => c.StartsWith("remove:", StringComparison.Ordinal));
+        Assert.Empty(guest.Recipients);
+    }
+
+    [Fact]
+    public async Task A_restore_whose_job_key_cleanup_failed_is_not_run_again()
+    {
+        var guest = new FakeBackupGuest { RemoveExit = 1 };
+        var h = await HostAsync(guest);
+        var first = await ReinstallAsync(h, "reinstall-1");
+        var result = Result<ReinstallJobResult>(first);
+        Assert.Equal("recipient-remove-failed", result.Code);
+        var id = result.BackupId!;
+        Assert.Equal([id], guest.Restored);
+
+        guest.RemoveExit = 0;
+        var again = await RestoreAsync(h, "restore-1", id, guest.Made[id].Key);
+        Assert.Equal("restore-already-ran", Result<RestoreJobResult>(again).Code);
+        var retry = await ReinstallAsync(h, "reinstall-2", desired: false);
+        Assert.Equal("restore-already-ran", Result<ReinstallJobResult>(retry).Code);
+        Assert.Equal([id], guest.Restored);
+    }
+
+    [Fact]
     public async Task A_failure_after_the_delete_is_retried_from_create_with_the_same_backup_and_key()
     {
         var guest = new FakeBackupGuest { Provision = _ => (1, ["boom"]) };

@@ -201,6 +201,9 @@ public sealed class ReinstallJob(ProvisionJob provision, IProvisionTargets targe
         // An earlier attempt that ended before the delete without removing its key (the engine died).
         if (earlier?.Fingerprint is { } stale)
         {
+            // Until it is off the VM, this attempt carries it: a failure keeps it on record for the next one.
+            state.Fingerprint = stale;
+            state.RecipientAdded = true;
             var removed = await provision.RunGuestAsync(guest, progress, "backup", BackupScript.RecipientsRemove(stale));
             if (removed.ExitCode != 0)
                 throw Fail("backup", "recipient-remove-failed", $"the backup key {stale} of an earlier reinstall could not be removed from the VM (exit {removed.ExitCode}).");
@@ -234,6 +237,9 @@ public sealed class ReinstallJob(ProvisionJob provision, IProvisionTargets targe
         var backup = await backups.Store.GetAsync(id, CancellationToken.None);
         if (backup is null || !BackupCoordinator.Belongs(backup, vm) || !backup.IsComplete || backup.IsSlot || backup.Trigger != BackupTriggers.PreReinstall)
             throw Fail("backup", "backup-not-protected", $"backup {id} is not stored as this VM's pre-reinstall backup; the VM is not deleted.");
+        // The job's key dies with the engine: the backup must open with a key a device holds too.
+        if (!BackupJobKey.HasOtherRecipient(backup.KeysJson, fingerprint))
+            throw Fail("backup", "backup-no-device-key", $"backup {id} is readable only with the job's key, because no device's backup key is enrolled on the VM; the VM is not deleted.");
         var key = BackupJobKey.Unwrap(backup.KeysJson, id, privatePem)
             ?? throw Fail("backup", "backup-key-unreadable", $"backup {id} does not open with the job's key; the VM is not deleted.");
         run.Secrets.Set(ProvisionJob.BackupKeySecret, key, base64: false);
@@ -268,7 +274,9 @@ public sealed class ReinstallJob(ProvisionJob provision, IProvisionTargets targe
         await phases.SetPhaseAsync(run.JobId, "backup", CancellationToken.None);
         if (mark.BackupId is null)
             throw Fail("backup", "backup-missing", "an earlier attempt deleted the VM without a backup id on record; nothing is restored automatically.");
-        if (await marks.GetRestoreAsync(vm, CancellationToken.None) is { } restore && restore.BackupId == mark.BackupId)
+        // Any restore into the new VM since the delete: the VM may hold restored and newer data.
+        if (await marks.GetRestoreAsync(vm, CancellationToken.None) is { } restore
+            && (restore.BackupId == mark.BackupId || restore.StartedAt >= mark.DeletedAt))
             throw Fail("restore", "restore-already-ran",
                 $"backup {mark.BackupId} was already restored (or partly restored) into the new VM ({restore.StartedAt:u}); the VM is not deleted again. "
                 + "Reprovision it (a provision job) to finish, and save anything needed from it before restoring by hand.");

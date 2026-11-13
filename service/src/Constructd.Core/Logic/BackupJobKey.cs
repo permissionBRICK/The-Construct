@@ -86,6 +86,20 @@ public static partial class BackupJobKey
         return null;
     }
 
+    /// <summary>Whether the keys file names a recipient besides <paramref name="jobFingerprint"/>.</summary>
+    public static bool HasOtherRecipient(string? keysJson, string jobFingerprint)
+    {
+        if (string.IsNullOrEmpty(keysJson)) return false;
+        try
+        {
+            using var doc = JsonDocument.Parse(keysJson);
+            return doc.RootElement.TryGetProperty("recipients", out var recipients) && recipients.ValueKind == JsonValueKind.Array
+                && recipients.EnumerateArray().Any(r => r.ValueKind == JsonValueKind.Object && r.TryGetProperty("fingerprint", out var fp)
+                    && fp.ValueKind == JsonValueKind.String && fp.GetString() != jobFingerprint && r.TryGetProperty("wrapped", out _));
+        }
+        catch (JsonException) { return false; }
+    }
+
     /// <summary>Wraps <paramref name="identity"/> for a public key, as the guest does (tests stand in for the guest with it).</summary>
     public static string Wrap(string identity, string publicPem)
     {

@@ -204,8 +204,8 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
     /// <c>construct backup restore --from-host ID</c> with the key as the first line of stdin: the guest
     /// downloads, decrypts and restores the backup, brings back its profiles, serve-web token and
     /// recipients, and tells the host. Run at most once over a VM (design 7.1): the start is recorded
-    /// before the guest begins, and a restore of the same backup that started and never finished is
-    /// not run again, because the VM may hold data written since. Only an exit that says the restore
+    /// before the guest begins, and while a restore that started has not finished (its job recipient
+    /// removed included), no restore runs over the VM, because it may hold data written since. Only an exit that says the restore
     /// never touched the VM (a key, transfer or lock failure) clears the record.
     /// </summary>
     private async Task RestoreStepAsync(Context context, ProvisionRestore restore)
@@ -215,10 +215,11 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
         if (!BackupJobKey.IsIdentity(key))
             throw new ProvisionStepException("restore", "secret-missing", $"{BackupKeySecret}: the key of backup {restore.BackupId} is needed to restore it; a device that can open the backup supplies it.");
         var earlier = await marks.GetRestoreAsync(run.Vm, CancellationToken.None);
-        if (earlier is { CompletedAt: null } && earlier.BackupId == restore.BackupId)
-            throw new ProvisionStepException("restore", "restore-already-ran", ManualRestore(restore.BackupId, earlier.StartedAt));
+        if (earlier is { CompletedAt: null })
+            throw new ProvisionStepException("restore", "restore-already-ran", ManualRestore(earlier.BackupId, earlier.StartedAt));
 
-        await marks.SetRestoreAsync(run.Vm, new RecoveryMarks.Restore(run.Vm.Created, restore.BackupId, run.JobId, clock.UtcNow, null), CancellationToken.None);
+        var started = clock.UtcNow;
+        await marks.SetRestoreAsync(run.Vm, new RecoveryMarks.Restore(run.Vm.Created, restore.BackupId, run.JobId, started, null), CancellationToken.None);
         GuestRun result;
         try
         {
@@ -241,8 +242,7 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
                   + "The VM may be partly restored, so the engine does not run this restore again by itself.");
         }
 
-        await marks.SetRestoreAsync(run.Vm, new RecoveryMarks.Restore(run.Vm.Created, restore.BackupId, run.JobId, clock.UtcNow, clock.UtcNow), CancellationToken.None);
-        context.Done($"backup {restore.BackupId} restored");
+        context.Report("restore", "running", $"backup {restore.BackupId} restored");
 
         // A backup made for a reinstall carries that job's recipient in its recipient list, and the
         // restore brings it back: it comes off again, whichever job restores the backup.
@@ -261,6 +261,10 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
                     + $"remove it with: sudo construct backup recipients remove {fingerprint}.");
             context.Report("restore", "running", $"removed the reinstall job's backup key {fingerprint[..16]}... from the VM");
         }
+
+        // Finished only now: a run that stopped before this point is never restored over again.
+        await marks.SetRestoreAsync(run.Vm, new RecoveryMarks.Restore(run.Vm.Created, restore.BackupId, run.JobId, started, clock.UtcNow), CancellationToken.None);
+        context.Done($"backup {restore.BackupId} restored");
     }
 
     /// <summary>What a person does when a restore started before and may have changed the VM.</summary>
