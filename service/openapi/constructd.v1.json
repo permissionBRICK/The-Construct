@@ -431,7 +431,17 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/VmCreateAcceptedResponse"
+                  "$ref": "#/components/schemas/VmCreateAnswer"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VmCreateAnswer"
                 }
               }
             }
@@ -509,7 +519,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JobAcceptedResponse"
+                  "$ref": "#/components/schemas/JobStartAnswer"
                 }
               }
             }
@@ -519,7 +529,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JobReplayedResponse"
+                  "$ref": "#/components/schemas/JobStartAnswer"
                 }
               }
             }
@@ -7698,24 +7708,6 @@
           }
         }
       },
-      "JobReplayedResponse": {
-        "required": [
-          "jobId",
-          "replayed"
-        ],
-        "type": "object",
-        "properties": {
-          "jobId": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
-          "replayed": {
-            "type": "boolean"
-          }
-        }
-      },
       "JobResponse": {
         "required": [
           "id",
@@ -7785,6 +7777,26 @@
             "type": [
               "null",
               "string"
+            ]
+          }
+        }
+      },
+      "JobStartAnswer": {
+        "required": [
+          "jobId"
+        ],
+        "type": "object",
+        "properties": {
+          "jobId": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "replayed": {
+            "type": [
+              "null",
+              "boolean"
             ]
           }
         }
@@ -8922,7 +8934,11 @@
             ]
           },
           "allowNested": {
-            "$ref": "#/components/schemas/JsonElement"
+            "type": [
+              "null",
+              "boolean"
+            ],
+            "description": "true or false sets it, null clears it, absent keeps it."
           }
         }
       },
@@ -9639,7 +9655,7 @@
           }
         }
       },
-      "VmCreateAcceptedResponse": {
+      "VmCreateAnswer": {
         "required": [
           "jobId",
           "nested",
@@ -9662,6 +9678,12 @@
             "items": {
               "type": "string"
             }
+          },
+          "replayed": {
+            "type": [
+              "null",
+              "boolean"
+            ]
           }
         }
       },

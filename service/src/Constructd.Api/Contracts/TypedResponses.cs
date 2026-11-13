@@ -10,6 +10,14 @@ namespace Constructd.Api.Contracts;
 /// <summary><c>POST /vms</c>: the creation job was accepted.</summary>
 public sealed record VmCreateAcceptedResponse(string JobId, bool Nested, bool NestedFromHostDefault, IReadOnlyList<string> IgnoredOptions);
 
+/// <summary>The contract's shape of a VM create answer: 202 for a new job, 200 with <c>replayed</c> for a
+/// repeated request with the same operation key. Only describes the two answers; nothing serializes it.</summary>
+public sealed record VmCreateAnswer(string JobId, bool Nested, bool NestedFromHostDefault, IReadOnlyList<string> IgnoredOptions, bool? Replayed = null);
+
+/// <summary>The contract's shape of a job start: 202 for a new job, 200 with <c>replayed</c> when the job
+/// was already running. Only describes the two answers; nothing serializes it.</summary>
+public sealed record JobStartAnswer(string? JobId, bool? Replayed = null);
+
 /// <summary>A repeated request found the job it started earlier still running.</summary>
 public sealed record JobReplayedResponse(string? JobId, bool Replayed);
 

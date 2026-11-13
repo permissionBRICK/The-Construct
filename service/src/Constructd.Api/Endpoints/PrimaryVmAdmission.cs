@@ -3,6 +3,7 @@ using Constructd.Api.Auth;
 using Constructd.Api.Contracts;
 using Constructd.Api.Infrastructure;
 using Constructd.Core.Abstractions;
+using Constructd.Core.Configuration;
 using Constructd.Core.Domain;
 using Constructd.Core.Logic;
 using Constructd.Api.Jobs;
@@ -39,7 +40,8 @@ public static class PrimaryVmAdmission
             return observed == VmState.Unknown ? LifecycleEndpoints.Problem("vm-state-unknown") :
                 Problems.Conflict($"A VM named '{vm.Name}' already exists on this host.");
         }
-        if (request.Cpu is null)
+        // An external VM is only registered: this host has no inventory to recommend a count from.
+        if (request.Cpu is null && !services.GetRequiredService<ConstructdOptions>().IsExternal)
         {
             try
             {

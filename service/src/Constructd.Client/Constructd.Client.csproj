@@ -3,7 +3,8 @@
   <!--
     The typed C# client of constructd, generated at build time by NSwag from the committed contract
     (service/openapi/constructd.v1.json) into obj/. Regenerate the contract and rebuild, and the client
-    follows. The only hand-written file, ConstructdClient.Json.cs, sets the enum format.
+    follows. The only hand-written file, ConstructdClient.Json.cs, sets the enum format and leaves unset
+    values out of requests.
   -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>

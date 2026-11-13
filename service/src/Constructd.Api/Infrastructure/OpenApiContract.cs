@@ -47,6 +47,13 @@ public static class OpenApiContract
                 document.Components ??= new OpenApiComponents();
                 document.Components.Schemas ??= new Dictionary<string, IOpenApiSchema>();
                 document.Components.Schemas[ProblemSchema] = Problem();
+                // A JsonElement in the record (absent keeps, null clears); on the wire it is a boolean or null.
+                if (document.Components.Schemas.TryGetValue(nameof(Contracts.UserUpdateRequest), out var update) && update.Properties is { } properties)
+                    properties["allowNested"] = new OpenApiSchema
+                    {
+                        Type = JsonSchemaType.Boolean | JsonSchemaType.Null,
+                        Description = "true or false sets it, null clears it, absent keeps it.",
+                    };
                 return Task.CompletedTask;
             });
             options.AddOperationTransformer((operation, _, _) =>

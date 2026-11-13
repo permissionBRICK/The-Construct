@@ -54,6 +54,17 @@ public sealed class ExternalEndpointTests : IDisposable
     }
 
     [Fact]
+    public async Task Registers_a_vm_without_a_cpu_count()
+    {
+        using var app = App();
+        var client = await app.CreateUserClientAsync("alice");
+        var response = await client.PostJsonAsync("/api/v1/vms", new { name = "rig", ramGb = 1, diskGb = 8 });
+        Assert.True(response.StatusCode == HttpStatusCode.Accepted, await response.Content.ReadAsStringAsync());
+        var job = await client.WaitForJobAsync((await response.ReadAsync<JobAcceptedResponse>()).JobId);
+        Assert.True(job.State == JobState.Succeeded, job.Error);
+    }
+
+    [Fact]
     public async Task Starts_without_fake_mode_and_registers_reaches_and_unregisters_a_listed_vm()
     {
         using var app = App();

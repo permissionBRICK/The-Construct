@@ -26,13 +26,13 @@ public static class VmEndpoints
             .RequireAuthorization(Policies.UserOrPrimaryToken).WithName("ListVms").Produces<IReadOnlyList<VmResponse>>();
 
         api.MapPost("/vms", CreateAsync)
-            .RequireAuthorization(Policies.User).Audited("vm.create").WithName("CreateVm").Produces<VmCreateAcceptedResponse>(StatusCodes.Status202Accepted);
+            .RequireAuthorization(Policies.User).Audited("vm.create").WithName("CreateVm").Produces<VmCreateAnswer>(StatusCodes.Status202Accepted).Produces<VmCreateAnswer>();
 
         api.MapGet("/vms/{name}", GetAsync)
             .RequireAuthorization(Policies.UserOrPrimaryToken).WithName("GetVm").Produces<VmResponse>();
 
         api.MapDelete("/vms/{name}", DeleteAsync)
-            .RequireAuthorization(Policies.UserOrPrimaryToken).Audited("vm.delete").WithName("DeleteVm").Produces<JobAcceptedResponse>(StatusCodes.Status202Accepted).Produces<JobReplayedResponse>();
+            .RequireAuthorization(Policies.UserOrPrimaryToken).Audited("vm.delete").WithName("DeleteVm").Produces<JobStartAnswer>(StatusCodes.Status202Accepted).Produces<JobStartAnswer>();
 
         api.MapPost("/vms/{name}/power", PowerAsync)
             .RequireAuthorization(Policies.User).Audited("vm.power").WithName("PowerVm").Produces<VmStateResponse>();

@@ -42,6 +42,25 @@ public class GeneratedClientTests
         Assert.Equal(VmState.Running, (await client.GetVmStateAsync("smoke")).State);
         Assert.Equal(2, (await client.GetVmCpuAsync("smoke")).CurrentCpus);
 
+        // A repeated create with the same operation key is a success (200, replayed), not an error.
+        http.DefaultRequestHeaders.Add("X-Construct-Operation-Key", "smoke-key-0001");
+        var keyed = await client.CreateVmAsync(new CreateVmRequest { Name = "smoke2", Cpu = 1, RamGb = 2, DiskGb = 16 });
+        var again = await client.CreateVmAsync(new CreateVmRequest { Name = "smoke2", Cpu = 1, RamGb = 2, DiskGb = 16 });
+        http.DefaultRequestHeaders.Remove("X-Construct-Operation-Key");
+        Assert.Null(keyed.Replayed);
+        Assert.True(again.Replayed);
+        Assert.Equal(keyed.JobId, again.JobId);
+
+        // An update that names one field leaves the others alone, the nested override included.
+        await client.CreateUserAsync(new CreateUserRequest { Name = "bob", Role = "user", MaxVms = 1, AllowNested = true });
+        var updated = await client.UpdateUserAsync("bob", new UserUpdateRequest { MaxVms = 2 });
+        Assert.True(updated.AllowNested);
+        Assert.True((await client.UpdateUserAsync("bob", new UserUpdateRequest { AllowNested = false })).AllowNested == false);
+
+        // A delete answers 202 with its job.
+        var deleted = await client.DeleteVmAsync("smoke");
+        Assert.False(string.IsNullOrEmpty(deleted.JobId));
+
         var token = await client.IssueUserTokenAsync("alice", new CreateTokenRequest { Label = "smoke" });
         Assert.False(string.IsNullOrEmpty(token.Token));
 
