@@ -130,9 +130,7 @@ fi
 
 if [[ "$group" == agent || "$group" == all ]]; then
   # The device agent: agents in process against the real engine (fake mode) on loopback HTTPS.
-  # NU1903 stays a warning: it is the advisory on the service's Negotiate package, which the tests
-  # reach through the engine they start.
-  dotnet build agent/Construct.Agent.slnx -warnaserror -warnnotaserror:NU1903
+  dotnet build agent/Construct.Agent.slnx -warnaserror
   dotnet test agent/Construct.Agent.slnx --no-build
 fi
 
