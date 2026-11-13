@@ -264,6 +264,8 @@ public static class ServiceComposition
     /// test can compose them off Windows. Needs no Construct checkout: the driver's PowerShell ships in
     /// the service package (<see cref="HyperVScripts"/>).
     /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Interoperability", "CA1416:Validate platform compatibility",
+        Justification = "Only registers the Windows services; the caller checks the OS, and a test composes them off Windows without resolving them.")]
     public static IServiceCollection AddHyperVPlatform(this IServiceCollection services, ConstructdOptions options)
     {
         ValidatePlatformOptions(options);
