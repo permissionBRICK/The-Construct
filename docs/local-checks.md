@@ -26,20 +26,32 @@ bash test/run-local-checks.sh panel
 bash test/run-local-checks.sh t3
 bash test/run-local-checks.sh service
 bash test/run-local-checks.sh companion
-# Or run all four groups:
+bash test/run-local-checks.sh release
+# Or run every group:
 bash test/run-local-checks.sh all
+# Or the groups of the paths changed since the base branch (origin/nightly, origin/rework or
+# origin/main, whichever exists first; or name one):
+bash test/run-local-checks.sh --changed [<base>]
 ```
 
 Run only the checks for the features a change affects. Use `all` for integration
 merges and release preparation, not for ordinary changes.
 
-| Change area | Checks |
+`--changed` maps each touched path (committed since the merge base, uncommitted or untracked)
+to groups by the table below, which `test/helpers/changed-groups.py` reads. A path matching
+several rows selects all their groups. A path matching no row selects `all`. In a pattern `*`
+stays within one directory and `**` crosses directories. A row without a group selects nothing.
+
+| Path | Groups |
 |---|---|
-| `companion/**`, `test/fixtures/companion-parity/**` | `companion` |
-| `extension/src/**`, `extension/media/**` | `panel`, plus `companion` when it ports the changed module |
-| T3, pairing, updates | `t3` |
-| `service/**`, `drivers/**`, `lib/**`, `bin/**` | `service` |
-| Installers | Companion PowerShell suites plus `pwsh -NoProfile -File test/feature-set.test.ps1` and the touched script's own tests |
+| `companion/**`, `test/fixtures/companion-parity/**`, `test/companion-*`, `test/feature-set.test.ps1`, `Install-ConstructCompanion.ps1`, `Auto-Install.ps1`, `install.ps1`, `Update-Construct.ps1` | `companion` |
+| `extension/src/**`, `extension/media/**`, `extension/vm/**`, `extension/test/**` | `panel`, `companion` |
+| `extension/src/updates.js`, `extension/src/t3code*`, `bin/*t3*`, `test/t3-*` | `t3` |
+| `service/**`, `drivers/**`, `lib/**`, `bin/**`, `console-viewer/**` | `service` |
+| `scripts/**`, `.github/**`, `VERSION`, `test/release.test.py`, `test/construct-release.test.py`, `test/run-local-checks.sh`, `test/helpers/changed-groups.py`, `docs/local-checks.md`, `service/src/Constructd.Core/Logic/ReleaseChannel.cs`, `service/tests/Constructd.Tests/Updates/ReleaseChannelTests.cs` | `release` |
+| `docs/**`, `*.md`, `assets/**` | |
+
+For installers, also run the touched script's own tests.
 
 The `companion` group builds with warnings as errors, runs Companion .NET tests,
 Node parity and Companion suites, the three Companion PowerShell suites, and the
