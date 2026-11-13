@@ -368,10 +368,10 @@ nothing about a backup refers to the `vms` row, so it survives the VM's deletion
 advertises `config-backups` on both platforms.
 
 **Trigger.** `POST /vms/{name}/activity` answers `200` with only the fields that are true, else `204`:
-`{"vaultScrub": true, "backupDue": true, "backupTrigger": "scheduled"|"manual"}`. A backup is due
-(primaries only) when the host has backups enabled and is not draining for maintenance, no upload
-session of the VM is open, and either an
-owner's request is pending (less than an hour old; due even when the VM is busy), or the effective
+`{"vaultScrub": true, "backupDue": true, "backupTrigger": "scheduled"|"manual"|"pre-reinstall"}`. A backup is due
+(primaries only) when the host has backups enabled and is not draining for maintenance, no
+host-requested upload session of the VM is open (a slot session never holds it back), and either the
+host's request is open (less than an hour old; due even when the VM is busy), or the effective
 interval is above 0, the last success is at least one interval old (no success yet: due since the VM
 was created) and the last attempt at least `min(interval, 6 h)` old. A due scheduled backup waits for
 a heartbeat without work in progress until it has been due for six hours; an open SSH connection
@@ -379,24 +379,39 @@ alone (`reasons: ["ssh-session"]`, e.g. the client's notification watch) does no
 (`BackupSchedule.BusyForBackup`). The rule is
 `Core/Logic/BackupSchedule.cs`; the guest decides nothing on its own.
 
+**Host request and slot** (docs/plans/construct-platform-design.md 10.2). The host keeps one open
+request per VM (`request_pending_at`, `request_trigger`), valid one hour: a due scheduled backup opens
+it in the heartbeat reply, `POST …/backups/request` opens it for the owner (`manual` or
+`pre-reinstall`). The first `POST …/backups` while it is open consumes it: the session is
+host-requested (`origin` `host`) with the request's trigger whatever the VM sent, and an open slot
+session is cancelled. Any other `POST …/backups` is a slot upload (`origin` `slot`, trigger `slot`):
+one open session per VM, at most one opened per 30 minutes (`429 slot-too-soon` with
+`retryAfterSeconds`), an open slot session nothing uploads into expires after 30 minutes, and a
+complete one replaces the previous slot content. Slot uploads never touch `lastAttemptAt`,
+`lastSuccessAt`, the failure streak or the request. A report counts for the schedule only while a
+request is open (it is the attempt and consumes the request), or once for the host-requested attempt
+just made (less than two hours old, without a result yet; the attempt time stays); any other report
+is accepted and ignored. Rows from before migration 881 have no `origin` and count as host-requested.
+
 | Route | Caller | Request → reply |
 |---|---|---|
-| `POST /vms/{name}/backups` | VM | `{"trigger":"scheduled"\|"manual"\|"pre-reinstall","estimatedBytes"}` → `201 {"id","maxBytes"}`; `403 backups-disabled`; `409 backup-in-progress`; `507 host-disk-space` / `backup-quota`; `503 maintenance` while the host drains. Opening (or being refused for space) sets `lastAttemptAt` and clears a pending request. |
+| `POST /vms/{name}/backups` | VM | `{"trigger":"scheduled"\|"manual"\|"pre-reinstall","estimatedBytes","fileCount"?}` → `201 {"id","maxBytes","kind"}`; `403 backups-disabled`; `409 backup-in-progress`; `429 slot-too-soon`; `507 host-disk-space` / `backup-quota`; `503 maintenance` while the host drains. `trigger` is only checked for form: the host decides (see above). Consuming the request (even when refused for space) sets `lastAttemptAt`. |
 | `PUT /vms/{name}/backups/{id}/keys` | VM | The keys JSON (≤ 64 KiB, `format` `construct-backup-keys/1`, `backupId` = `{id}`, 1–32 recipients with a 64-hex `fingerprint`, a label matching `^[A-Za-z0-9._ -]{1,64}$` and base64 `wrapped`) → `204`; `400 validation` (with `field`); `409 backup-not-open`. Stored as sent. |
-| `PUT /vms/{name}/backups/{id}/content` | VM | `application/octet-stream`, with a length or chunked → `200 {"id","sizeBytes","sha256","createdAt"}`; `409 backup-keys-missing` / `backup-not-open`; `413 backup-too-large`; `507 host-disk-space`. Any failure removes the partial file, closes the session and records the failure. |
-| `DELETE /vms/{name}/backups/{id}` | VM (its own open session) / owner, Admin (any) | `204`; `404`. Deleting a session under a running upload cancels the upload. |
-| `POST /vms/{name}/backups/report` | VM | `{"trigger","result":"skipped"\|"failed"\|"enrolled","reason","detail"}` (reason: lowercase code such as `vm-disk-space`, `no-recipients`, `export-failed`, `upload-failed`, `host-refused`, `verify-failed`; detail ≤ 500 characters) → `204`. `skipped`/`failed` record the attempt and the failure, start the failure streak and clear a pending request. `enrolled` (the guest enrolled a PC key) clears a `no-recipients` failure, its streak and the attempt time, so the next heartbeat asks for a backup again; any other failure stays. |
-| `POST /vms/{name}/backups/{id}/restored` | VM | → `204` (clears `pinnedUntil`); `404`. |
-| `GET /vms/{name}/backups` | VM, owner, Admin | `{"backups":[{"id","createdAt","trigger","sizeBytes","sha256","pinnedUntil"}]}`: complete backups, newest first; `pinnedUntil` is null once a pin has passed. |
+| `PUT /vms/{name}/backups/{id}/content` | VM | `application/octet-stream`, with a length or chunked → `200 {"id","sizeBytes","sha256","createdAt","kind"}`; `409 backup-keys-missing` / `backup-not-open`; `413 backup-too-large`; `507 host-disk-space`. Any failure removes the partial file and closes the session; a host-requested session records the failure (not as a new attempt, and a request opened since stays open). |
+| `DELETE /vms/{name}/backups/{id}[?confirm=true]` | VM (its own open session) / owner, Admin (any) | `204`; `404`; `409 backup-protected` for the protected backup without `confirm=true`. Deleting a session under a running upload cancels the upload. |
+| `POST`, `DELETE /vms/{name}/backups/{id}/pin` | owner, Admin | Pins a complete host-requested backup for `pinDays` from now (`409 backup-is-slot` for the slot) / releases a pin → `204`; `404`. |
+| `POST /vms/{name}/backups/report` | VM | `{"trigger","result":"skipped"\|"failed"\|"enrolled","reason","detail"}` (reason: lowercase code such as `vm-disk-space`, `no-recipients`, `export-failed`, `upload-failed`, `host-refused`, `verify-failed`; detail ≤ 500 characters) → `204`. `skipped`/`failed` count only as described under *Host request and slot*: with an open request they record the attempt and the failure, start the failure streak and consume the request. `enrolled` (the guest enrolled a PC key) clears a `no-recipients` failure, its streak and the attempt time, so the next heartbeat asks for a backup again; any other failure stays. |
+| `POST /vms/{name}/backups/{id}/restored` | VM | → `204` (audited only; a VM token never unpins); `404`. |
+| `GET /vms/{name}/backups` | VM, owner, Admin | `{"backups":[{"id","createdAt","trigger","sizeBytes","sha256","pinnedUntil","kind","pinned","protected","fileCount"}]}`: complete backups, newest first; `pinnedUntil` is null once a pin has passed; `kind` is `slot`, `scheduled`, `requested` or `pre-reinstall`; `fileCount` is null unless the guest sent one. |
 | `GET /vms/{name}/backups/{id}/content` | VM, owner, Admin | The payload with `Content-Length` and `ETag: "<sha256>"`. |
 | `GET /vms/{name}/backups/{id}/keys` | VM, owner, Admin | The keys JSON. |
 | `GET /vms/{name}/backups/status` | VM, owner, Admin | `{"enabled","lastAttemptAt","lastSuccessAt","lastFailure":{"at","trigger","reason","detail"}\|null,"failingSince","requestPending","count","totalBytes","nextDueAt"}`. `failingSince` is set by the first failure or skip after a success and cleared by a success; `nextDueAt` is null when scheduling is off. |
-| `POST /vms/{name}/backups/request` | owner, Admin | → `202 {"requestPending":true}`; `403 backups-disabled`. |
+| `POST /vms/{name}/backups/request` | owner, Admin | Optional `{"trigger":"manual"\|"pre-reinstall"}` (default `manual`) → `202 {"requestPending":true,"trigger"}`; `403 backups-disabled`. Replaces an open request. |
 | `GET` / `PUT /vms/{name}/backups/settings` | owner, Admin | `{"intervalHours":null\|0..720,"keep":null\|1..maxKeep}` → `{"intervalHours","keep","effective":{"enabled","intervalHours","keep"},"host":{"enabled","intervalHours","keep","maxKeep"}}`; `400 validation`. `null` is the host default; `intervalHours: 0` turns scheduled backups off for the VM (manual and pre-reinstall still work). A host interval of 0 turns them off for every VM. |
 
 `{id}` is 32 lowercase hex (route constraint `{id:regex(^[0-9a-f]{{32}}$)}`). Mutating routes are
 audited as `backup.create`, `backup.keys`, `backup.upload`, `backup.delete`, `backup.report`,
-`backup.restored`, `backup.request` and `backup.settings`, with ids, sizes and reason codes, never
+`backup.restored`, `backup.pin`, `backup.unpin`, `backup.request` and `backup.settings`, with ids, sizes and reason codes, never
 content or the guest's free-text detail.
 
 **Storage.** `Constructd:Backups:RootDir` (default `backups` next to the database; the installers set
@@ -404,21 +419,30 @@ content or the guest's free-text detail.
 media directory; both updaters treat it as preserved data). Payloads live at
 `<root>/<first 16 hex of sha256(lowercase owner)>/<lowercase vm>/<id>.age`, `<id>.age.partial` while
 uploading; no directory on the way may be a link. Keys files and state live in the `backups` and
-`backup_vms` tables (migration 880). The upload is streamed, never buffered: the request lifts the
+`backup_vms` tables (migrations 880 and 881). The upload is streamed, never buffered: the request lifts the
 server's body limit for itself, hashes and counts while writing, stops at `maxBytes` and re-checks
 the free space every 64 MiB, and holds a non-mutation maintenance handle (`backup-upload`) so an
 update drains it rather than cutting it off. Opening a session requires
-`free − max(estimatedBytes, last size of the VM) × 1.2 ≥ minFreeBytes` and, with a quota,
-`stored total + max(estimatedBytes, last size) ≤ maxBytesPerVm`; `maxBytes` is
-`min(free − minFreeBytes, maxBytesPerVm − stored total)`. A quota therefore has to leave room for one
-more backup than are kept, because old backups are removed only after a new one is complete.
+`free − max(estimatedBytes, last size of its kind) × 1.2 ≥ minFreeBytes`. Two budgets per VM, so
+neither uses the other's space: a host-requested session needs
+`stored host-requested total + max(estimatedBytes, last size) ≤ quota` (`maxBytesPerVm`, 20 GiB when
+null) and gets `maxBytes = min(free − minFreeBytes, quota − stored host-requested total)`; a slot session
+needs `max(estimatedBytes, last slot size) ≤ slotMaxBytes` and gets `min(free − minFreeBytes,
+slotMaxBytes)`, so the slot holds at most twice that while a new one is staged. The budgets are
+accounting, not reserved disk. A quota has to leave room for one more backup than are kept, plus the
+protected one, because old backups are removed only after a new one is complete
+(`(minHorizonDays / intervalDays + keep + 1) × typical size` is safe).
 
-**Rotation** (`Core/Logic/BackupRotation.cs`, after every completed backup and hourly). Pinned
-backups (`pinnedUntil` in the future) stay and do not count. Of the rest the union of these stays:
+**Rotation** (`Core/Logic/BackupRotation.cs`, after every completed host-requested backup and
+hourly). Only host-requested backups rotate. Pinned backups (`pinnedUntil` in the future) stay and do
+not count. Of the rest the union of these stays:
 `keep` 1 the newest; 2 the newest and the newest created before the start of the current week; ≥ 3
 the `keep − 2` newest, the newest before the week start and the newest before the month start (weeks
 start Monday 00:00 UTC, months on the 1st 00:00 UTC). When slots coincide, the next newest backups fill the free places.
-A `pre-reinstall` backup is pinned for `pinDays` after its creation; `POST …/restored` unpins it.
+Whatever `keep` says, the protected backup stays: the newest complete host-requested backup at least
+`minHorizonDays` old, and until one is that old, the oldest; when the slots above do not keep it, it is
+kept on top of them. A host-requested `pre-reinstall` backup is pinned for `pinDays` after its creation;
+the owner releases a pin with `DELETE …/pin`.
 
 **Cleanup** (`BackupCleanupService`, hourly, skipped during maintenance): rotation for every pair;
 open sessions older than two hours that nothing is uploading into are deleted, as are partial files
@@ -437,7 +461,10 @@ older than `retainDeletedDays` all its backups and its state are deleted.
 | `pinDays` | `14` | 1–365 | How long a `pre-reinstall` backup is pinned. |
 | `retainDeletedDays` | `14` | 0–3650 | How long backups outlive their VM. |
 | `minFreeBytes` | `5368709120` (5 GiB) | ≥ 0 | Free space the host keeps on the backup file system. |
-| `maxBytesPerVm` | `null` | null or ≥ 64 MiB | Optional cap on the stored total of one VM. |
+| `maxBytesPerVm` | `null` | null or ≥ 64 MiB | The quota of one VM's host-requested backups and their staging; null is 20 GiB. |
+
+Service settings (`Constructd:Backups:…` in `appsettings.json`): `SlotMaxBytes` (2 GiB), the largest
+slot upload, and `MinHorizonDays` (30), the retention horizon.
 
 ### Jobs, the event stream and the one-time secret
 

@@ -486,6 +486,12 @@ public sealed class BackupsOptions
     /// <summary>Directory for the encrypted backup payloads. Empty: <c>backups</c> next to the database.</summary>
     public string? RootDir { get; set; }
 
+    /// <summary>The largest slot upload of one VM; the slot may hold as much again while a new one is staged.</summary>
+    public long SlotMaxBytes { get; set; } = 2L << 30;
+
+    /// <summary>The retention horizon: the newest host-requested backup at least this old is never rotated out.</summary>
+    public int MinHorizonDays { get; set; } = 30;
+
     /// <summary>The backup directory in effect.</summary>
     public string ResolveRootDir(string databasePath) =>
         Path.TrimEndingDirectorySeparator(Path.GetFullPath(!string.IsNullOrWhiteSpace(RootDir) ? RootDir

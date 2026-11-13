@@ -13,6 +13,11 @@ namespace Constructd.Core.Logic;
 /// </list>
 /// Weeks start Monday 00:00 UTC, months on the 1st 00:00 UTC. When slots coincide, the next newest
 /// backups fill the free places, so <c>keep</c> backups remain whenever that many exist.
+/// <para>
+/// Only host-requested backups rotate; a VM's slot is replaced by its next slot upload instead. Whatever
+/// <c>keep</c> says, the <see cref="Protected"/> backup stays (docs/plans/construct-platform-design.md 10.2):
+/// when the slots above do not keep it, it is kept on top of them, so rotation may keep one more than <c>keep</c>.
+/// </para>
 /// </summary>
 public static class BackupRotation
 {
@@ -29,12 +34,27 @@ public static class BackupRotation
         return new DateTimeOffset(utc.Year, utc.Month, 1, 0, 0, 0, TimeSpan.Zero);
     }
 
-    /// <summary>The ids rotation deletes, newest first. Open sessions are never candidates.</summary>
-    public static IReadOnlyList<string> Expired(IEnumerable<ConfigBackup> backups, int keep, DateTimeOffset now)
+    /// <summary>
+    /// The backup the retention rule protects: the newest complete host-requested backup at least
+    /// <paramref name="minHorizonDays"/> old, and until one is that old, the oldest. Null when there is none.
+    /// </summary>
+    public static ConfigBackup? Protected(IEnumerable<ConfigBackup> backups, DateTimeOffset now, int minHorizonDays)
+    {
+        ArgumentNullException.ThrowIfNull(backups);
+        var host = backups.Where(b => b.IsComplete && !b.IsSlot)
+            .OrderByDescending(b => b.CreatedAt).ThenByDescending(b => b.Id, StringComparer.Ordinal).ToList();
+        var horizon = now - TimeSpan.FromDays(Math.Max(0, minHorizonDays));
+        return host.FirstOrDefault(b => b.CreatedAt <= horizon) ?? host.LastOrDefault();
+    }
+
+    /// <summary>The ids rotation deletes, newest first. Open sessions and slot uploads are never candidates.</summary>
+    public static IReadOnlyList<string> Expired(IEnumerable<ConfigBackup> backups, int keep, DateTimeOffset now, int minHorizonDays)
     {
         ArgumentNullException.ThrowIfNull(backups);
         keep = Math.Max(1, keep);
-        var candidates = backups.Where(b => b.IsComplete && !b.IsPinned(now))
+        var all = backups.ToList();
+        var protectedId = Protected(all, now, minHorizonDays)?.Id;
+        var candidates = all.Where(b => b.IsComplete && !b.IsSlot && !b.IsPinned(now))
             .OrderByDescending(b => b.CreatedAt).ThenByDescending(b => b.Id, StringComparer.Ordinal).ToList();
         var kept = new HashSet<string>(candidates.Take(keep >= 3 ? keep - 2 : 1).Select(b => b.Id), StringComparer.Ordinal);
         if (keep >= 2 && candidates.FirstOrDefault(b => b.CreatedAt < WeekStart(now)) is { } week) kept.Add(week.Id);
@@ -44,6 +64,8 @@ public static class BackupRotation
             if (kept.Count >= keep) break;
             kept.Add(next.Id);
         }
+        // The retention rule: kept on top of the slots when they do not keep it already.
+        if (protectedId is not null) kept.Add(protectedId);
         return candidates.Where(b => !kept.Contains(b.Id)).Select(b => b.Id).ToList();
     }
 }

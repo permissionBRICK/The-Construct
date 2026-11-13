@@ -1581,8 +1581,15 @@
           }
         },
         "responses": {
-          "200": {
-            "description": "OK"
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupCreatedResponse"
+                }
+              }
+            }
           },
           "default": {
             "description": "An error, as a Problem document.",
@@ -1660,9 +1667,20 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "The keys file (construct-backup-keys/1)."
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
-          "200": {
-            "description": "OK"
+          "204": {
+            "description": "No Content"
           },
           "default": {
             "description": "An error, as a Problem document.",
@@ -1702,7 +1720,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonElement"
+                }
+              }
+            }
           },
           "default": {
             "description": "An error, as a Problem document.",
@@ -1742,9 +1767,27 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackupUploadedResponse"
+                }
+              }
+            }
           },
           "default": {
             "description": "An error, as a Problem document.",
@@ -1784,7 +1827,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/Stream"
+                }
+              }
+            }
           },
           "default": {
             "description": "An error, as a Problem document.",
@@ -1821,6 +1871,13 @@
             "schema": {
               "pattern": "^[0-9a-f]{32}$",
               "type": "string"
+            }
+          },
+          {
+            "name": "confirm",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
             }
           }
         ],
@@ -1874,8 +1931,8 @@
           }
         },
         "responses": {
-          "200": {
-            "description": "OK"
+          "204": {
+            "description": "No Content"
           },
           "default": {
             "description": "An error, as a Problem document.",
@@ -1916,8 +1973,90 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "OK"
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vms/{name}/backups/{id}/pin": {
+      "post": {
+        "tags": [
+          "BackupEndpoints"
+        ],
+        "operationId": "PinBackup",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{32}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "BackupEndpoints"
+        ],
+        "operationId": "UnpinBackup",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{32}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
           },
           "default": {
             "description": "An error, as a Problem document.",
@@ -1988,6 +2127,22 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/BackupRequestRequest"
+                  }
+                ]
+              }
+            }
+          }
+        },
         "responses": {
           "202": {
             "description": "Accepted",
@@ -6196,6 +6351,26 @@
           }
         }
       },
+      "BackupCreatedResponse": {
+        "required": [
+          "id",
+          "maxBytes",
+          "kind"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "maxBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "kind": {
+            "type": "string"
+          }
+        }
+      },
       "BackupCreateRequest": {
         "required": [
           "trigger",
@@ -6210,6 +6385,13 @@
             ]
           },
           "estimatedBytes": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int64"
+          },
+          "fileCount": {
             "type": [
               "null",
               "integer"
@@ -6343,12 +6525,30 @@
       },
       "BackupRequestedResponse": {
         "required": [
-          "requestPending"
+          "requestPending",
+          "trigger"
         ],
         "type": "object",
         "properties": {
           "requestPending": {
             "type": "boolean"
+          },
+          "trigger": {
+            "type": "string"
+          }
+        }
+      },
+      "BackupRequestRequest": {
+        "required": [
+          "trigger"
+        ],
+        "type": "object",
+        "properties": {
+          "trigger": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -6458,7 +6658,11 @@
           "trigger",
           "sizeBytes",
           "sha256",
-          "pinnedUntil"
+          "pinnedUntil",
+          "kind",
+          "pinned",
+          "protected",
+          "fileCount"
         ],
         "type": "object",
         "properties": {
@@ -6491,6 +6695,51 @@
               "string"
             ],
             "format": "date-time"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "pinned": {
+            "type": "boolean"
+          },
+          "protected": {
+            "type": "boolean"
+          },
+          "fileCount": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "BackupUploadedResponse": {
+        "required": [
+          "id",
+          "sizeBytes",
+          "sha256",
+          "createdAt",
+          "kind"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "kind": {
+            "type": "string"
           }
         }
       },
@@ -9164,6 +9413,10 @@
             }
           }
         }
+      },
+      "Stream": {
+        "type": "string",
+        "format": "binary"
       },
       "TokenIssuedResponse": {
         "required": [

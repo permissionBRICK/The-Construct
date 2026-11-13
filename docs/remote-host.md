@@ -609,11 +609,25 @@ starting. A reinstall from the client backs the VM up to the host first (`pre-re
 restores that backup into the new VM, so the backup never passes through the PC. A saved or
 stopped VM sends no heartbeat and gets no backup, which is fine: it has not changed.
 
-**How many.** Per VM four backups by default, spread over time: the newest ones, the newest
-taken before this week began (Monday 00:00 UTC) and the newest taken before this month began.
-Old backups are removed only after a new one is complete. A `pre-reinstall` backup is pinned
-for 14 days, or until a restore from it succeeded, so the reinstalled VM's first scheduled
-backups cannot rotate it out.
+**Who asked.** The host remembers that it asked: one open request per VM, valid for an hour.
+The VM's next upload while a request is open is a host-requested backup with the host's label
+(`scheduled`, `requested` or `pre-reinstall`), whatever the VM said. Any other upload, for
+example `construct backup create` run inside the VM, goes to the VM's own **slot**: one per VM,
+replaced by its next slot upload once that one is complete, at most one every 30 minutes and at
+most 2 GiB. Slot uploads never change the schedule. This keeps a VM that has been taken over from
+pushing good backups out with junk: it can neither delete, pin or unpin a backup, nor make its
+own uploads count as host-requested. (A reinstall started by a client that runs
+`construct backup create --trigger pre-reinstall` over SSH, as the current clients do, stores
+that backup in the slot, unpinned; the restore still finds it by its id.)
+
+**How many.** Per VM four host-requested backups by default, spread over time: the newest ones,
+the newest taken before this week began (Monday 00:00 UTC) and the newest taken before this month
+began. Old backups are removed only after a new one is complete. Whatever that number, the newest
+host-requested backup at least 30 days old is never rotated out, and until one is that old, the
+oldest is not; this **protected** backup can be deleted only with an explicit confirmation. A
+host-requested `pre-reinstall` backup is pinned for 14 days, so the reinstalled VM's first
+scheduled backups cannot rotate it out; the owner can pin any host-requested backup and release a
+pin. Backups stored before this rule existed count as host-requested.
 
 **Per VM.** The owner can set the interval (0 turns scheduled backups off for that VM; manual
 and pre-reinstall backups still work) and the number kept, up to the host's maximum, in the
@@ -635,7 +649,9 @@ backups from another PC.
 
 The admin sets the host defaults in Host Administration's Configuration tab (section
 `backups`: on/off, interval, number kept and its maximum, pin days, days kept after a VM is
-deleted, the free-space reserve and an optional per-VM size limit). The routes and settings are
+deleted, the free-space reserve and the per-VM quota of host-requested backups, 20 GiB when not
+set). The slot size and the 30-day horizon are service settings
+(`Constructd:Backups:SlotMaxBytes`, `Constructd:Backups:MinHorizonDays`). The routes and settings are
 listed in [`service/README.md`](../service/README.md#config-backups).
 
 ---
