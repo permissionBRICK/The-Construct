@@ -1073,6 +1073,30 @@ describe('ApiBackend repair agent', () => {
     expect(calls.slice(before).map(c => c.path)).toEqual([`/api/engines/${E2}/api/v1/vms/harbor/repair`]);
   });
 
+  it('forgets sessions when the engine restarts, and keeps an ended session ended against a late start answer', async () => {
+    const { be, on, settle } = world();
+    on('GET', `${P}/jobs`, { json: [failed()] });
+    on('GET', `${P}/vms/atlas/repair`, { json: session({ state: 'waiting', lines: [line(1, 'text', 'Which?')] }) });
+    await be.start();
+    await settle();
+    expect(activeJob(be.snapshot(), 'atlas')!.repair!.state).toBe('asking');
+    on('GET', `${P}/vms/atlas/repair`, { status: 404, json: { title: 'none', status: 404, code: 'no-repair' } });
+    be.onEvent('engine.reset', { seq: 20, type: 'engine.reset', engine: E1, data: null });
+    await settle();
+    await settle();
+    expect(activeJob(be.snapshot(), 'atlas')).toMatchObject({ repair: null, canRepair: true });
+    // An answer that still says working (a start's, sent before the end) arrives after the end was read.
+    const ended = session({ state: 'ended', outcome: 'error', lines: [line(1, 'end', 'agent failed', 'error')] });
+    on('GET', `${P}/vms/atlas/repair/s1`, { json: ended });
+    be.onEvent('repair.ended', { seq: 21, type: 'repair.ended', engine: E1, data: { id: 's1', vm: 'atlas' } });
+    await settle();
+    expect(activeJob(be.snapshot(), 'atlas')!.repair).toMatchObject({ state: 'gave-up', outcome: 'Not fixed' });
+    on('POST', `${P}/vms/atlas/repair`, { status: 202, json: session({ state: 'working', lines: [] }) });
+    be.startRepair(activeJob(be.snapshot(), 'atlas')!.id);
+    await settle();
+    expect(activeJob(be.snapshot(), 'atlas')!.repair!.state).toBe('gave-up');
+  });
+
   it('follows the session the host started meanwhile instead of starting a second', async () => {
     const { be, calls, on, settle } = world();
     on('GET', `${P}/jobs`, { json: [failed()] });

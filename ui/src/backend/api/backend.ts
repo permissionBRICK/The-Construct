@@ -710,7 +710,14 @@ export class ApiBackend implements Backend {
         if (engine && this.slices.has(engine)) void this.refreshEngine(engine);
         return;
       case 'engine.reset':
-        if (engine && this.slices.has(engine)) { void this.refreshEngine(engine); void this.loadRequests(); }
+        if (engine && this.slices.has(engine)) {
+          // An engine restart ends every repair session: forget them, and ask each failed job's VM again.
+          const sl = this.slices.get(engine)!;
+          sl.repairs.clear();
+          sl.repairChecked.clear();
+          void this.refreshEngine(engine);
+          void this.loadRequests();
+        }
         return;
       case 'vm.created': case 'vm.changed': case 'vm.power': case 'vm.deleted': case 'update.offered': case 'update.finished':
         if (engine && this.slices.has(engine)) void this.refreshEngine(engine);
@@ -873,7 +880,9 @@ export class ApiBackend implements Backend {
     if (known && known.sess.id !== r.id && known.sess.started > r.started) return;
     const same = known?.sess.id === r.id;
     const kept = same ? [...known!.lines, ...lines.filter(l => l.seq > known!.last)] : lines;
-    sl.repairs.set(key, { sess, lines: kept, last: kept.at(-1)?.seq ?? (same ? known!.last : 0) });
+    // A late answer read before the session ended (a start's own answer) does not bring an ended session back.
+    const keep = same && known!.sess.state === 'ended' && sess.state !== 'ended' ? known!.sess : sess;
+    sl.repairs.set(key, { sess: keep, lines: kept, last: kept.at(-1)?.seq ?? (same ? known!.last : 0) });
   }
 
   /** The failed job behind a key and the session that belongs to it, all from the one engine and VM the job names. */
