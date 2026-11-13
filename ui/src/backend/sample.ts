@@ -208,6 +208,8 @@ export function sampleState(): State {
     prefs: { channel: 'stable', theme: 'auto', scheme: 'green', autoUpdate: false, startWithOs: true, notifications: true },
     upgrade: null,
     notice: null,
+    na: [],
+    firstRun: null,
   };
 }
 

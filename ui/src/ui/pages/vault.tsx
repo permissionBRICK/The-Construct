@@ -1,7 +1,7 @@
 import { useState } from 'preact/hooks';
 import { QrSquare, Icon } from '../icons';
-import { Btn, Confirm, Field, Head, Page, Sec, Switch, Table, Tabs, Tag } from '../kit';
-import { useApp } from '../ctx';
+import { Btn, Confirm, Field, Head, NotYet, Page, Sec, Switch, Table, Tabs, Tag } from '../kit';
+import { na, useApp } from '../ctx';
 import type { Page as P } from '../../model/route';
 
 /* The key vault: secrets, access (leases), devices with pairing and revocation, history. */
@@ -19,8 +19,9 @@ export function Secrets() {
   const add = () => { be.addSecret(n, note, val); setAdding(false); setN(''); setNote(''); setVal(''); };
   return (
     <Page>
-      <Head title="Key vault" acts={<Btn sm icon="plus" onClick={() => setAdding(!adding)}>Add</Btn>} />
+      <Head title="Key vault" acts={!na(s, 'vault') && <Btn sm icon="plus" onClick={() => setAdding(!adding)}>Add</Btn>} />
       <VaultTabs cur="vault" />
+      {na(s, 'vault') && <NotYet />}
       {adding && (
         <div class="blk form">
           <div class="fr"><Field value={n} onInput={setN} label="Name" placeholder="name" mono /><Field value={note} onInput={setNote} label="Note" placeholder="Note" /></div>
@@ -28,12 +29,12 @@ export function Secrets() {
           <div class="bf">{taken ? <span class="badc">Exists already</span> : <span />}<Btn sm onClick={() => setAdding(false)}>Cancel</Btn><Btn sm kind="pri" disabled={!n.trim() || !val || taken} onClick={add}>Save</Btn></div>
         </div>
       )}
-      <Sec>
+      {!na(s, 'vault') && <Sec>
         <Table cols={[{ h: 'Secret', cls: 'm' }, { h: 'Note', cls: 'x' }, { h: 'In use', cls: 'x' }, { h: 'Last', cls: 'x' }, { h: 'Auto' }, { h: '', cls: 'e' }]}
           rows={s.secrets.map(x => [x.name, x.note, x.usedBy.join(', ') || '–', x.last,
             <Switch on={x.auto} onChange={v => be.setAutoApprove(x.name, v)} label={`Auto-approve ${x.name}`} />,
             <Confirm label="Delete" onYes={() => be.deleteSecret(x.name)} />])} />
-      </Sec>
+      </Sec>}
     </Page>
   );
 }
@@ -44,10 +45,10 @@ export function Access() {
     <Page>
       <Head title="Key vault" />
       <VaultTabs cur="access" />
-      <Sec>
+      {na(s, 'vault') ? <NotYet /> : <Sec>
         <Table cols={[{ h: 'Secret', cls: 'm' }, { h: 'VM' }, { h: 'Reason', cls: 'x' }, { h: 'Left', cls: 'm' }, { h: '', cls: 'e' }]}
           rows={s.leases.map(l => [l.secret, l.vmName, l.reason, l.left, <Btn sm onClick={() => be.takeBack(l.id)}>Take back</Btn>])} />
-      </Sec>
+      </Sec>}
     </Page>
   );
 }
@@ -63,9 +64,9 @@ export function Devices() {
           rows={s.devices.map(d => [d.name, d.kind, d.added, d.revoked ? '–' : d.seen,
             d.me ? <Tag>this</Tag> : d.revoked ? <Tag>revoked</Tag> : <Confirm label="Revoke" onYes={() => { be.revokeDevice(d.id); go({ page: 'revoke', arg: d.id }); }} />])} />
       </Sec>
-      <Sec title="Hosts with a copy">
+      {!na(s, 'vault') && <Sec title="Hosts with a copy">
         <Table cols={[{ h: 'Host' }, { h: 'State', cls: 'e' }]} rows={s.hosts.map(h => [h.name, 'in sync'])} />
-      </Sec>
+      </Sec>}
     </Page>
   );
 }
@@ -75,11 +76,19 @@ const mmss = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, 
 export function Pair() {
   const { s, be, go } = useApp();
   const p = s.pairing;
+  const [code, setCode] = useState('');
   const back = () => { be.cancelPairing(); go({ page: 'devices' }); };
   return (
     <Page>
       <Head title="Pair a device" back={back} />
       {!p && <div class="line"><Btn kind="pri" icon="plus" onClick={() => be.startPairing()}>Start</Btn></div>}
+      {p?.state === 'code' && (
+        <div class="blk form narrow">
+          <Field value={code} onInput={setCode} label="Code from the new device" placeholder="Code from the new device" mono wide onEnter={() => be.enterPairingCode(code)} />
+          {p.problem && <span class="badc">{p.problem}</span>}
+          <Btn kind="pri" icon="right" disabled={!code.trim()} onClick={() => be.enterPairingCode(code)}>Next</Btn>
+        </div>
+      )}
       {p?.state === 'showing' && (
         <>
           <div class="qrbox"><QrSquare seed={p.words.join('')} /><div class="words">{p.words.map(w => <span>{w}</span>)}</div></div>
@@ -113,10 +122,10 @@ export function Revoke() {
         <Table cols={[{ h: 'Host' }, { h: 'State', cls: 'e' }]}
           rows={r.hosts.map(h => [h.name, h.confirmed ? <span class="okc">confirmed</span> : <span class="badc">serves it until it syncs</span>])} />
       </Sec>
-      <Sec title="Rotate">
+      {!na(s, 'vault') && <Sec title="Rotate">
         <Table cols={[{ h: 'Secret', cls: 'm' }, { h: 'Last used', cls: 'x' }, { h: '', cls: 'e' }]}
           rows={r.rotate.map(x => [x.secret, x.last, <Btn sm kind={x.done ? '' : 'pri'} icon={x.done ? 'check' : undefined} onClick={() => be.markRotated(x.secret)}>{x.done ? 'Rotated' : 'Mark rotated'}</Btn>])} />
-      </Sec>
+      </Sec>}
     </Page>
   );
 }
@@ -127,9 +136,9 @@ export function History() {
     <Page>
       <Head title="Key vault" />
       <VaultTabs cur="history" />
-      <Sec>
+      {na(s, 'vault') ? <NotYet /> : <Sec>
         <Table cols={[{ h: 'Time', cls: 'm' }, { h: 'VM' }, { h: 'Secret', cls: 'm' }, { h: 'Event', cls: 'x' }]} rows={s.history.map(h => [h.at, h.vmName, h.secret, h.event])} />
-      </Sec>
+      </Sec>}
     </Page>
   );
 }

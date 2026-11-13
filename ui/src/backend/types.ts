@@ -1,6 +1,6 @@
 /* The contract between the screens and whatever serves them. The screens read one immutable `State`
    snapshot, re-render when `subscribe` reports a change, and call the actions. Nothing here knows about
-   transport; a later block implements this interface over the real API. */
+   transport: `FakeBackend` serves invented data, `ApiBackend` the device agent and the engines behind it. */
 
 export type Power = 'on' | 'off' | 'starting' | 'stopping';
 export type Open = 't3' | 'vscode' | 'ssh';
@@ -8,10 +8,11 @@ export type ThemeMode = 'auto' | 'light' | 'dark';
 export type Scheme = 'green' | 'blue' | 'copper' | 'mono';
 export type Channel = 'stable' | 'nightly';
 
+/** null: the engine did not report it. */
 export interface Usage {
-  cpuPct: number;
-  memUsedGb: number;
-  diskUsedGb: number;
+  cpuPct: number | null;
+  memUsedGb: number | null;
+  diskUsedGb: number | null;
 }
 
 /** Settings of one VM. `hw` applies on restart, `disk` on reinstall, `services` and `identity` on reprovision. */
@@ -27,7 +28,7 @@ export interface Agent { name: string; version: string; latest: string; installe
 export interface ChildVm { name: string; os: string; left: string; power: Power }
 export interface Forward { port: number; label: string; to: 'This device' | 'LAN'; url: string }
 /** `protected`: kept by the retention rule whatever `keep` says (the newest host-requested backup past the horizon). */
-export interface Backup { id: string; at: string; kind: 'Scheduled' | 'Requested' | 'Before reinstall' | 'Slot'; size: string; files: number; pinned: boolean; protected: boolean }
+export interface Backup { id: string; at: string; kind: 'Scheduled' | 'Requested' | 'Before reinstall' | 'Slot'; size: string; files: number | null; pinned: boolean; protected: boolean }
 
 export interface Vm {
   id: string;
@@ -35,6 +36,8 @@ export interface Vm {
   hostId: string;
   power: Power;
   address: string;
+  /** The SSH port on `address`, when it is not 22. */
+  sshPort?: number | null;
   os: string;
   installed: string;
   reprovisioned: string;
@@ -54,7 +57,11 @@ export interface Vm {
   forwards: Forward[];
   sharing: { vscodeWeb: boolean; smb: boolean; mic: boolean };
   backups: Backup[];
-  backupSchedule: { everyH: 6 | 12 | 24; keep: 5 | 10 | 20 };
+  backupSchedule: { everyH: number; keep: number };
+  /** The version Update moves this VM to, as its engine reports it. Undefined: derived from the host and the release. */
+  updateTo?: string | null;
+  /** Parts of this VM's pages whose route failed, with the error; the rest of the page shows what it has. */
+  problems?: Partial<Record<'backups' | 'status', string>>;
 }
 
 export interface Profile {
@@ -114,10 +121,12 @@ export interface VaultRequest {
 
 export interface Secret { name: string; note: string; usedBy: string[]; last: string; auto: boolean }
 export interface Lease { id: string; secret: string; vmName: string; reason: string; left: string }
-export interface Device { id: string; name: string; kind: 'PC' | 'Laptop' | 'Phone'; added: string; seen: string; me: boolean; revoked: boolean }
+export interface Device { id: string; name: string; kind: string; added: string; seen: string; me: boolean; revoked: boolean }
 export interface VaultEvent { at: string; vmName: string; secret: string; event: string }
 
 export type Pairing =
+  /** This device approves: the user enters the code the new device shows. */
+  | { state: 'code'; problem?: string }
   | { state: 'showing'; words: string[]; expiresInS: number }
   | { state: 'confirm'; words: string[]; deviceName: string }
   | { state: 'done'; deviceName: string };
@@ -164,14 +173,15 @@ export interface ConfigSection { name: string; json: string; updated: string }
 export interface Certificate { subject: string; validUntil: string; daysLeft: number; sha256: string; issuer: string }
 export interface WinKey { id: string; product: string; edition: string; kind: 'Retail' | 'MAK' | 'KMS'; partial: string; used: string; held: boolean }
 export interface WinGuest { name: string; stage: string; activation: 'activated' | 'grace' | 'not activated'; keyId: string | null }
-export interface HostUpdate { at: string; from: string; to: string; state: 'done' | 'rolled back' | 'running'; by: string }
+export interface HostUpdate { at: string; from: string; to: string; state: 'done' | 'rolled back' | 'running' | 'failed'; by: string }
 
 export interface Host {
   id: string;
   name: string;
-  kind: 'Hyper-V' | 'Proxmox';
+  kind: string;
   version: string;
-  channel: Channel;
+  /** The host's own update channel, as it names it. */
+  channel: string;
   /** The current user administers this host. Only then are the fields below filled. */
   admin: boolean;
   address: string;
@@ -194,6 +204,10 @@ export interface Host {
   updates: HostUpdate[];
   /** Set while the host's own update runs. */
   updating: boolean;
+  /** The release this host's own updater offers. Undefined: derived from this device's release. */
+  updateTo?: string | null;
+  /** Set when the engine could not be read; the host's pages show what they have and this. */
+  problem?: string | null;
 }
 
 /** Shown once after adding a user: what that user's client needs. */
@@ -215,6 +229,39 @@ export interface Upgrade {
   step: UpgradeStep;
   code: string[];
   items: { name: string; state: 'done' | 'running' | 'waiting'; count: string; pct: number }[];
+}
+
+/** Parts of the product the backend cannot serve yet. The screens show such a part as not available. */
+export type Feature =
+  | 'vault' | 'repair-chat' | 'forwards' | 'sharing' | 'projects' | 'agents' | 'open' | 'console'
+  | 'vm-password' | 'vm-services' | 'vm-disk' | 'vm-boot' | 'reinstall' | 'restore' | 'device-update'
+  | 'channel' | 'os-prefs' | 'windows-sign-in' | 'export-code' | 'code-reveal' | 'vm-token' | 'host-retry';
+
+/** First run of a device with no identity yet (11.6): set up the account, pair, or recover; then create a VM. */
+export interface FirstRun {
+  step: 'start' | 'code' | 'pairing';
+  /** The engine the agent found on this machine, offered as the address. */
+  localAddress: string | null;
+  /** While a call runs. */
+  busy: boolean;
+  problem: string | null;
+  /** Step `code`: the recovery code, shown once; gone after Continue. */
+  code: string[] | null;
+  /** Step `code`: the account the code recovers. */
+  account?: string | null;
+  /** Step `pairing`: the code the approving device enters, and the words both show. */
+  pairing: { code: string; words: string[]; expiresAt: string } | null;
+}
+
+export interface FirstRunRequest {
+  how: 'setup' | 'pair' | 'recover';
+  address: string;
+  deviceName: string;
+  /** setup: the user's sign-in at the engine. */
+  token?: string;
+  /** recover: the account and the recovery code. */
+  account?: string;
+  code?: string;
 }
 
 export interface State {
@@ -239,6 +286,10 @@ export interface State {
   upgrade: Upgrade | null;
   /** A short message from the last action, shown as a toast. Each new one has a new id. */
   notice: { id: number; text: string } | null;
+  /** Parts not available from this backend. */
+  na: Feature[];
+  /** Set while this device has no identity: the first-run screen stands in for everything else. */
+  firstRun: FirstRun | null;
 }
 
 export type SettingsPatch = { [K in keyof VmSettings]?: Partial<VmSettings[K]> };
@@ -288,7 +339,8 @@ export interface Backend {
   deleteBackup(vmId: string, backupId: string): void;
   pinBackup(vmId: string, backupId: string, pinned: boolean): void;
   setBackupSchedule(vmId: string, schedule: Partial<Vm['backupSchedule']>): void;
-  createVm(req: CreateVmRequest): void;
+  /** Returns the new VM's id, or null when nothing was started. */
+  createVm(req: CreateVmRequest): string | null;
 
   /* Key vault */
   answerLease(requestId: string, allow: boolean): void;
@@ -299,6 +351,8 @@ export interface Backend {
   setAutoApprove(name: string, on: boolean): void;
   takeBack(leaseId: string): void;
   startPairing(): void;
+  /** On the approving device: the code the new device shows. */
+  enterPairingCode(code: string): void;
   confirmPairing(accept: boolean): void;
   cancelPairing(): void;
   revokeDevice(deviceId: string): void;
@@ -333,9 +387,14 @@ export interface Backend {
 
   /* This device and Construct */
   setPrefs(patch: Partial<Prefs>): void;
-  showRecoveryCode(): string[];
+  /** The recovery code to show in place. A backend with `code-reveal` in `na` issues a new one instead. */
+  showRecoveryCode(): string[] | Promise<string[]>;
   /** Hand the recovery code to the shell: a file picker for saving, or the print dialog. */
   exportRecoveryCode(how: 'file' | 'print'): void;
   openLog(): void;
   upgradeNext(): void;
+  /** First run: set up, pair or recover. */
+  firstRunStart(req: FirstRunRequest): void;
+  /** First run: the recovery code is stored, or the pairing is cancelled; go on. */
+  firstRunNext(): void;
 }

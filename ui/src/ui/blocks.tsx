@@ -3,7 +3,7 @@ import type { Job, VaultRequest, Vm } from '../backend/types';
 import { failedTitle, jobWord, mainAction } from '../model/vm';
 import { Icon } from './icons';
 import { Bar, Btn, Field, Pip, Switch, Tag, UpTag } from './kit';
-import { copy, useApp } from './ctx';
+import { copy, na, useApp } from './ctx';
 
 /* The blocks that sit on the stack, in the pop-out, the window's overview and the phone. */
 
@@ -153,7 +153,7 @@ export function Tiles({ vm, onReinstall }: { vm: Vm; onReinstall: () => void }) 
           <Icon n="repro" /><span>Reprovision</span>{a.waits && <Pip />}
         </button>
       )}
-      <button type="button" class="b tile" onClick={onReinstall}><Icon n="wipe" /><span>Reinstall</span></button>
+      <button type="button" class="b tile" onClick={onReinstall} disabled={na(s, 'reinstall')}><Icon n="wipe" /><span>Reinstall</span></button>
     </div>
   );
 }
@@ -174,7 +174,7 @@ export function ActionButtons({ vm, busy, onReinstall }: { vm: Vm; busy: boolean
           <Icon n="repro" />Reprovision{a.waits && !busy && <Pip />}
         </button>
       )}
-      <Btn icon="wipe" onClick={onReinstall} disabled={busy}>Reinstall</Btn>
+      <Btn icon="wipe" onClick={onReinstall} disabled={busy || na(s, 'reinstall')}>Reinstall</Btn>
     </>
   );
 }

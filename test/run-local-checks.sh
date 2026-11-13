@@ -124,8 +124,9 @@ if [[ "$group" == release || "$group" == all ]]; then
 fi
 
 if [[ "$group" == ui || "$group" == all ]]; then
-  # The new client UI: unit tests, the static bundle, screenshots in headless Chromium.
-  (cd ui && npm install --no-audit --no-fund && npm test && npm run build && npx playwright test)
+  # The new client UI: unit tests (with the generated clients' drift check), the static bundle, screenshots in
+  # headless Chromium, then the bundle on the real device agents and engine (fake mode) end to end.
+  (cd ui && npm install --no-audit --no-fund && npm test && npm run build && npx playwright test && npm run test:e2e)
 fi
 
 if [[ "$group" == agent || "$group" == all ]]; then

@@ -1,6 +1,6 @@
 import { createContext } from 'preact';
 import { useContext } from 'preact/hooks';
-import type { Backend, State, Vm } from '../backend/types';
+import type { Backend, Feature, State, Vm } from '../backend/types';
 import type { Route } from '../model/route';
 
 export type Surface = 'pop' | 'win' | 'phone' | 'alone';
@@ -27,6 +27,9 @@ export interface Ctx {
 
 export const AppCtx = createContext<Ctx>(null as unknown as Ctx);
 export const useApp = () => useContext(AppCtx);
+
+/** The backend cannot serve this part yet. */
+export const na = (s: State, f: Feature) => s.na.includes(f);
 
 /** Copy to the clipboard; ignored where the page has no clipboard access. */
 export function copy(text: string) {

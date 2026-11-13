@@ -102,6 +102,9 @@ export function Head({ title, back, acts }: { title: ComponentChildren; back?: (
   );
 }
 
+/** A part the backend cannot serve yet, in place of its content. */
+export const NotYet = () => <div class="line d">Not available yet</div>;
+
 export const Page = ({ children }: { children: ComponentChildren }) => <section class="pg">{children}</section>;
 
 export const Meter = ({ pct }: { pct: number }) => <span class="meter"><i style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} /></span>;

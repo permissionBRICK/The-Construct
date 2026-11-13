@@ -13,8 +13,14 @@ describe('rules', () => {
   it('uses no native dialogs', () => {
     for (const [f, t] of src) expect(t, f).not.toMatch(/\b(window\.)?(alert|confirm|prompt)\s*\(/);
   });
-  it('has no network code', () => {
-    for (const [f, t] of src) expect(t, f).not.toMatch(/\bfetch\s*\(|XMLHttpRequest|WebSocket|EventSource/);
+  it('has network code only in the API backend', () => {
+    for (const [f, t] of src) if (!/[\\/]backend[\\/](api|generated)[\\/]/.test(f)) expect(t, f).not.toMatch(/\bfetch\s*\(|XMLHttpRequest|WebSocket|EventSource|openapi-fetch/);
+  });
+  it('never puts the agent token into a URL or a log', () => {
+    for (const [f, t] of src) {
+      expect(t, f).not.toMatch(/console\.(log|info|warn|error|debug)\s*\(/);
+      expect(t, f).not.toMatch(/[?&]token=|agent-token=\$\{/);
+    }
   });
   it('loads no fonts or scripts from a CDN', () => {
     for (const [f, t] of src) expect(t, f).not.toMatch(/https?:\/\/(fonts\.googleapis|fonts\.gstatic|cdn)/);

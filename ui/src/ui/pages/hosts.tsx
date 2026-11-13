@@ -1,9 +1,9 @@
 import { useState } from 'preact/hooks';
 import type { Host, HostUser, HostVm } from '../../backend/types';
-import { newer } from '../../model/vm';
+import { hostUpdateTarget } from '../../model/vm';
 import { Icon } from '../icons';
 import { Btn, Confirm, Copyable, Dot, Field, Head, KV, Meter, Page, Row, Sec, Seg, Switch, Table, Tabs, Tag, UpTag } from '../kit';
-import { useApp } from '../ctx';
+import { na, useApp } from '../ctx';
 
 /* Hosts: the list, and host administration for hosts the user administers. Every feature of today's host
    administration, as simple pages with tables: overview with capacity and the one Update button, VMs, users
@@ -16,7 +16,7 @@ export function Hosts() {
       <Head title="Hosts" back={surf === 'phone' ? undefined : undefined} />
       <Sec>
         <Table cols={[{ h: 'Host' }, { h: 'Kind', cls: 'x' }, { h: 'Version', cls: 'm' }, { h: 'Channel', cls: 'x' }, { h: 'Role', cls: 'x' }, { h: 'VMs', cls: 'e' }]}
-          rows={s.hosts.map(h => [h.name, h.kind, <>{h.version}{h.admin && h.channel === s.prefs.channel && s.release && newer(s.release, h.version) && <> <UpTag v={s.release} /></>}</>, h.channel, h.admin ? 'admin' : 'user', h.vmCount])}
+          rows={s.hosts.map(h => { const to = hostUpdateTarget(s, h); return [<>{h.name}{h.problem && <> <span class="badc">{h.problem}</span></>}</>, h.kind, <>{h.version}{to && <> <UpTag v={to} /></>}</>, h.channel, h.admin ? 'admin' : 'user', h.vmCount]; })}
           onRow={i => go({ page: 'host', arg: s.hosts[i].id })} />
       </Sec>
     </Page>
@@ -31,10 +31,12 @@ export function HostPage({ id }: { id?: string }) {
   const h = s.hosts.find(x => x.id === id);
   if (!h) return <Page><Head title="Hosts" back={() => go({ page: 'hosts' })} /></Page>;
   const back = () => go({ page: 'hosts' });
+  const problem = h.problem ? <div class="line badc">{h.problem}</div> : null;
   if (!h.admin) {
     return (
       <Page>
         <Head title={h.name} back={back} />
+        {problem}
         <Sec>
           <KV k="Kind">{h.kind}</KV>
           <KV k="Version"><span class="m">{h.version}</span></KV>
@@ -50,6 +52,7 @@ export function HostPage({ id }: { id?: string }) {
   return (
     <Page>
       <Head title={h.name} back={back} acts={<UpdateHost h={h} />} />
+      {problem}
       <Tabs items={HTABS} value={tab} onChange={t => go({ page: 'host', arg: h.id, tab: t })} />
       <View h={h} />
     </Page>
@@ -60,7 +63,7 @@ export function HostPage({ id }: { id?: string }) {
 function UpdateHost({ h }: { h: Host }) {
   const { s, be } = useApp();
   if (h.updating) return <Tag warn>updating</Tag>;
-  const to = s.release && h.channel === s.prefs.channel && newer(s.release, h.version) ? s.release : null;
+  const to = hostUpdateTarget(s, h);
   if (!to) return null;
   return <Btn sm kind="amber" icon="up" onClick={() => be.updateHost(h.id)}>Update to {to}</Btn>;
 }
@@ -104,7 +107,7 @@ function HOverview({ h }: { h: Host }) {
 }
 
 function HVms({ h }: { h: Host }) {
-  const { be } = useApp();
+  const { s, be } = useApp();
   const [open, setOpen] = useState<string | null>(null);
   const act = (vm: string, a: Parameters<typeof be.hostVmAction>[2]) => be.hostVmAction(h.id, vm, a);
   const rows = h.vms.map(v => {
@@ -116,7 +119,7 @@ function HVms({ h }: { h: Host }) {
       <span class="m">{v.cpus} · {v.memGb}/{v.memMaxGb} GB · {v.diskGb} GB</span>,
       <span class="m">{v.lease}</span>,
       <span class="acts">
-        <Btn sm onClick={() => act(v.name, 'console')}>Console</Btn>
+        <Btn sm onClick={() => act(v.name, 'console')} disabled={na(s, 'console')}>Console</Btn>
         {on ? <Confirm label="Shut down" onYes={() => act(v.name, 'shutdown')} /> : <Btn sm onClick={() => act(v.name, 'start')}>Start</Btn>}
         <Btn sm icon="set" title="Settings" onClick={() => setOpen(open === v.name ? null : v.name)} />
       </span>,
@@ -150,20 +153,20 @@ function DeleteVm({ v, kids, onYes }: { v: HostVm; kids: HostVm[]; onYes: () => 
 }
 
 function HostVmSettings({ h, v, kids, onClose }: { h: Host; v: HostVm; kids: HostVm[]; onClose: () => void }) {
-  const { be } = useApp();
+  const { s, be } = useApp();
   const [cpus, setCpus] = useState(String(v.cpus));
   const [mem, setMem] = useState(String(v.memMaxGb));
   const [net, setNet] = useState(v.network);
   const act = (a: Parameters<typeof be.hostVmAction>[2]) => be.hostVmAction(h.id, v.name, a);
   return (
     <Sec title={v.name} right={<Btn sm icon="x" title="Close" onClick={onClose} />}>
-      <Row l="Network"><Seg label="Network" opts={['default', 'relayed', 'direct'] as const} labels={{ default: 'Host default', relayed: 'Relayed', direct: 'Direct' }} value={net} onChange={setNet} /></Row>
+      {v.role === 'primary' && <Row l="Network"><Seg label="Network" opts={['default', 'relayed', 'direct'] as const} labels={{ default: 'Host default', relayed: 'Relayed', direct: 'Direct' }} value={net} onChange={setNet} /></Row>}
       <Row l="vCPUs"><Field value={cpus} onInput={setCpus} label="vCPUs" mono /></Row>
       <Row l={<>Memory <span class="d">GB</span></>}><Field value={mem} onInput={setMem} label="Memory" mono /></Row>
       <Row l="Address"><span class="m">{v.address}</span></Row>
       {v.role === 'child' && <Row l={<>Lifetime <span class="d m">{v.lease}</span></>}><Btn sm onClick={() => act('renew-lease')}>Restart countdown</Btn></Row>}
       {v.role === 'child' && <Row l="Shared"><Switch on={v.shared} onChange={() => act('toggle-shared')} label="Shared" /></Row>}
-      {v.role === 'primary' && <Row l="VM token"><Confirm label="Rotate" onYes={() => act('rotate-token')} /></Row>}
+      {v.role === 'primary' && <Row l="VM token"><Confirm label="Rotate" disabled={na(s, 'vm-token')} onYes={() => act('rotate-token')} /></Row>}
       {v.power === 'on' && <Row l="Restart"><Confirm label="Restart" danger={false} onYes={() => act('restart')} /></Row>}
       <Row l="Delete"><DeleteVm v={v} kids={kids} onYes={() => { act('delete'); onClose(); }} /></Row>
       <div class="bf pad"><span /><Btn sm onClick={onClose}>Cancel</Btn><Btn sm kind="pri" onClick={() => { be.saveHostVm(h.id, v.name, { cpus: +cpus || v.cpus, memMaxGb: +mem || v.memMaxGb, network: net }); onClose(); }}>Apply</Btn></div>
@@ -309,13 +312,13 @@ function HMedia({ h }: { h: Host }) {
 }
 
 function HOps({ h }: { h: Host }) {
-  const { be } = useApp();
+  const { s, be } = useApp();
   return (
     <>
       <Sec title="Jobs">
         <Table cols={[{ h: 'Job', cls: 'm' }, { h: 'Kind' }, { h: 'VM', cls: 'x' }, { h: 'Owner', cls: 'x' }, { h: 'State' }, { h: 'Phase', cls: 'x' }, { h: 'Created', cls: 'x' }, { h: '', cls: 'e' }]}
           rows={h.jobs.map(j => [j.id, j.kind, j.vm, j.owner, <span class={j.state === 'failed' ? 'badc' : ''}>{j.state}</span>, j.phase, j.created,
-            j.state === 'running' ? <Confirm label="Cancel" onYes={() => be.cancelHostJob(h.id, j.id)} /> : j.state === 'failed' ? <Btn sm icon="retry" onClick={() => be.retryHostJob(h.id, j.id)}>Retry</Btn> : ''])} />
+            j.state === 'running' ? <Confirm label="Cancel" onYes={() => be.cancelHostJob(h.id, j.id)} /> : j.state === 'failed' && !na(s, 'host-retry') ? <Btn sm icon="retry" onClick={() => be.retryHostJob(h.id, j.id)}>Retry</Btn> : ''])} />
       </Sec>
       <Sec title="Audit">
         <Table cols={[{ h: 'At' }, { h: 'Actor' }, { h: 'Action', cls: 'm' }, { h: 'Target', cls: 'e' }]} rows={h.audit.map(a => [a.at, a.actor, a.action, a.target])} />

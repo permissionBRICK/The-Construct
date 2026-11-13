@@ -1,11 +1,11 @@
 import { useState } from 'preact/hooks';
 import type { Profile, SettingsPatch, Vm, VmSettings } from '../../backend/types';
-import { activeJob, vmDot, vmWord, newer } from '../../model/vm';
+import { activeJob, vmDot, vmWord, newer, vmUpdateTarget } from '../../model/vm';
 import { groupApplies, hwChange } from '../../model/settings';
 import { profileError } from '../../model/profile';
 import { Icon } from '../icons';
-import { Btn, Confirm, Copyable, Dot, Field, Head, KV, Page, Row, Sec, Seg, Switch, Table, Tabs, Tag, UpTag } from '../kit';
-import { copy, useApp } from '../ctx';
+import { Btn, Confirm, Copyable, Dot, Field, Head, KV, NotYet, Page, Row, Sec, Seg, Switch, Table, Tabs, Tag, UpTag } from '../kit';
+import { copy, na, useApp } from '../ctx';
 import { ActionButtons, JobBlock, PowerBtn, ReinstallConfirm, VaultCards } from '../blocks';
 
 /* Pages of one VM: overview, projects (list, one project, its file), connections, backups, settings. */
@@ -21,11 +21,12 @@ export function Overview({ vm }: { vm: Vm }) {
   const job = activeJob(s, vm.id);
   const host = s.hosts.find(h => h.id === vm.hostId);
   const outdated = vm.agents.some(a => newer(a.latest, a.version));
-  const vmUp = s.release && newer(s.release, vm.version) ? s.release : null;
+  const vmUp = vmUpdateTarget(s, vm);
+  const big = (n: number | null) => (n === null ? '–' : String(n));
   const use = [
-    { k: 'CPU', big: String(vm.usage.cpuPct), u: '%', p: vm.usage.cpuPct },
-    { k: 'Memory', big: String(vm.usage.memUsedGb), u: `of ${vm.memTotalGb} GB`, p: (vm.usage.memUsedGb / vm.memTotalGb) * 100 },
-    { k: 'Disk', big: String(vm.usage.diskUsedGb), u: `of ${vm.diskTotalGb} GB`, p: (vm.usage.diskUsedGb / vm.diskTotalGb) * 100 },
+    { k: 'CPU', big: big(vm.usage.cpuPct), u: '%', p: vm.usage.cpuPct ?? 0 },
+    { k: 'Memory', big: big(vm.usage.memUsedGb), u: `of ${vm.memTotalGb} GB`, p: ((vm.usage.memUsedGb ?? 0) / vm.memTotalGb) * 100 },
+    { k: 'Disk', big: big(vm.usage.diskUsedGb), u: `of ${vm.diskTotalGb} GB`, p: ((vm.usage.diskUsedGb ?? 0) / vm.diskTotalGb) * 100 },
   ];
   return (
     <Page>
@@ -35,14 +36,14 @@ export function Overview({ vm }: { vm: Vm }) {
           <div class="vpn">
             <div class="ey"><Dot s={vmDot(vm, job)} />{vmWord(vm, job)} · {host?.name} {host?.kind}</div>
             <h1>{vm.name}</h1>
-            <span class="d m">{vm.address} · {vm.os.split(' ').slice(0, 2).join(' ')}</span>
+            <span class="d m">{vm.address}{vm.os && ` · ${vm.os.split(' ').slice(0, 2).join(' ')}`}</span>
           </div>
           <PowerBtn vm={vm} />
         </div>
         <div class="vp2">
-          <Btn kind="pri" icon="open" onClick={() => be.open(vm.id, 't3')}>T3 Code</Btn>
-          <Btn icon="code" onClick={() => be.open(vm.id, 'vscode')}>VS Code</Btn>
-          <Btn icon="term" onClick={() => be.open(vm.id, 'ssh')}>SSH</Btn>
+          <Btn kind="pri" icon="open" onClick={() => be.open(vm.id, 't3')} disabled={na(s, 'open')}>T3 Code</Btn>
+          <Btn icon="code" onClick={() => be.open(vm.id, 'vscode')} disabled={na(s, 'open')}>VS Code</Btn>
+          <Btn icon="term" onClick={() => be.open(vm.id, 'ssh')} disabled={na(s, 'open')}>SSH</Btn>
           <span class="grow" />
           <ActionButtons vm={vm} busy={job?.state === 'running'} onReinstall={() => setWipe(true)} />
         </div>
@@ -56,11 +57,11 @@ export function Overview({ vm }: { vm: Vm }) {
       </div>
       <div class="g2">
         <Sec title="Coding agents" right={outdated && <Btn sm onClick={() => be.updateAgents(vm.id)}>Update all</Btn>}>
-          <Table cols={[{ h: 'Agent' }, { h: 'Version', cls: 'e m' }]} rows={vm.agents.filter(a => a.installed).map(a => [a.name, <>{a.version}{newer(a.latest, a.version) && <> <Tag warn>→ {a.latest}</Tag></>}</>])} />
+          {na(s, 'agents') ? <NotYet /> : <Table cols={[{ h: 'Agent' }, { h: 'Version', cls: 'e m' }]} rows={vm.agents.filter(a => a.installed).map(a => [a.name, <>{a.version}{newer(a.latest, a.version) && <> <Tag warn>→ {a.latest}</Tag></>}</>])} />}
         </Sec>
         <Sec title="Child VMs">
           <Table cols={[{ h: 'Name' }, { h: 'System', cls: 'x' }, { h: 'Left', cls: 'm' }, { h: '', cls: 'e' }]}
-            rows={vm.children.map(c => [<><Dot s={c.power === 'on' ? 'on' : 'off'} />{c.name}</>, c.os, c.left, <Btn sm onClick={() => be.openChildConsole(vm.id, c.name)}>Console</Btn>])} />
+            rows={vm.children.map(c => [<><Dot s={c.power === 'on' ? 'on' : 'off'} />{c.name}</>, c.os, c.left, <Btn sm onClick={() => be.openChildConsole(vm.id, c.name)} disabled={na(s, 'console')}>Console</Btn>])} />
         </Sec>
       </div>
     </Page>
@@ -72,6 +73,7 @@ export function Projects({ vm }: { vm: Vm }) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
   const add = () => { be.addProject(name); setName(''); setAdding(false); };
+  if (na(s, 'projects')) return <Page><Head title="Projects" back={useBack()} /><NotYet /></Page>;
   return (
     <Page>
       <Head title="Projects" back={useBack()} acts={<><Btn sm icon="repro" onClick={() => be.syncProjects()}>Sync</Btn><Btn sm icon="plus" onClick={() => setAdding(!adding)}>Add</Btn></>} />
@@ -180,38 +182,41 @@ export function ProjectFile({ vm, name }: { vm: Vm; name?: string }) {
 }
 
 export function Connections({ vm }: { vm: Vm }) {
-  const { be } = useApp();
+  const { s, be } = useApp();
   return (
     <Page>
       <Head title="Connections" back={useBack()} />
       <Sec title="Forwards">
-        <Table cols={[{ h: 'Port', cls: 'm' }, { h: 'Label' }, { h: 'To', cls: 'x' }, { h: 'Link', cls: 'x m' }, { h: '', cls: 'e' }]}
-          rows={vm.forwards.map(f => [f.port, f.label, f.to, f.url, <><Btn sm icon="open" onClick={() => be.openForward(vm.id, f.port)}>Open</Btn> <Btn sm onClick={() => be.closeForward(vm.id, f.port)}>Close</Btn></>])} />
+        {na(s, 'forwards') ? <NotYet /> : <Table cols={[{ h: 'Port', cls: 'm' }, { h: 'Label' }, { h: 'To', cls: 'x' }, { h: 'Link', cls: 'x m' }, { h: '', cls: 'e' }]}
+          rows={vm.forwards.map(f => [f.port, f.label, f.to, f.url, <><Btn sm icon="open" onClick={() => be.openForward(vm.id, f.port)}>Open</Btn> <Btn sm onClick={() => be.closeForward(vm.id, f.port)}>Close</Btn></>])} />}
       </Sec>
-      <Sec title="SSH"><Copyable text={`ssh root@${vm.address}`} /></Sec>
-      <Sec title="Sharing">
+      <Sec title="SSH"><Copyable text={`ssh ${vm.sshPort && vm.sshPort !== 22 ? `-p ${vm.sshPort} ` : ''}root@${vm.address}`} /></Sec>
+      <Sec title="Sharing">{na(s, 'sharing') ? <NotYet /> : <>
         <Row l={<>VS Code web <span class="d m">:8000</span></>}><Switch on={vm.sharing.vscodeWeb} onChange={v => be.setSharing(vm.id, 'vscodeWeb', v)} label="VS Code web" /></Row>
         <Row l={<>SMB share <span class="d m">Z:</span></>}><Switch on={vm.sharing.smb} onChange={v => be.setSharing(vm.id, 'smb', v)} label="SMB share" /></Row>
         <Row l="Microphone"><Switch on={vm.sharing.mic} onChange={v => be.setSharing(vm.id, 'mic', v)} label="Microphone" /></Row>
-      </Sec>
+      </>}</Sec>
     </Page>
   );
 }
 
+const withValue = (opts: readonly number[], v: number) => (opts.includes(v) || !v ? opts : [...opts, v].sort((a, b) => a - b));
+
 export function Backups({ vm }: { vm: Vm }) {
-  const { be } = useApp();
+  const { s, be } = useApp();
   return (
     <Page>
       <Head title="Backups" back={useBack()} acts={<Btn sm icon="plus" onClick={() => be.backupNow(vm.id)}>Back up now</Btn>} />
       <Sec title="Schedule">
-        <Row l="Every"><Seg label="Every" opts={[6, 12, 24] as const} labels={{ 6: '6 h', 12: '12 h', 24: '24 h' }} value={vm.backupSchedule.everyH} onChange={v => be.setBackupSchedule(vm.id, { everyH: v })} /></Row>
-        <Row l="Keep"><Seg label="Keep" opts={[5, 10, 20] as const} value={vm.backupSchedule.keep} onChange={v => be.setBackupSchedule(vm.id, { keep: v })} /></Row>
+        <Row l="Every"><Seg label="Every" opts={withValue([6, 12, 24], vm.backupSchedule.everyH)} labels={{ [vm.backupSchedule.everyH]: `${vm.backupSchedule.everyH} h`, 6: '6 h', 12: '12 h', 24: '24 h' }} value={vm.backupSchedule.everyH} onChange={v => be.setBackupSchedule(vm.id, { everyH: v })} /></Row>
+        <Row l="Keep"><Seg label="Keep" opts={withValue([5, 10, 20], vm.backupSchedule.keep)} value={vm.backupSchedule.keep} onChange={v => be.setBackupSchedule(vm.id, { keep: v })} /></Row>
       </Sec>
+      {vm.problems?.backups && <div class="line badc">{vm.problems.backups}</div>}
       <Sec>
         <Table cols={[{ h: 'When' }, { h: 'Kind', cls: 'x' }, { h: 'Size', cls: 'x m' }, { h: 'Files', cls: 'x m' }, { h: '', cls: 'e' }]}
-          rows={vm.backups.map(b => [<>{b.at}{b.protected && <> <Tag>protected</Tag></>}</>, b.kind, b.size, b.files.toLocaleString('en-US'), <>
+          rows={vm.backups.map(b => [<>{b.at}{b.protected && <> <Tag>protected</Tag></>}</>, b.kind, b.size, b.files === null ? '–' : b.files.toLocaleString('en-US'), <>
             <button type="button" class={`lk ${b.pinned ? 'on' : ''}`} aria-pressed={b.pinned} title="Protect" aria-label="Protect" onClick={() => be.pinBackup(vm.id, b.id, !b.pinned)}><Icon n="lock" /></button>{' '}
-            <Confirm label="Restore" danger={false} onYes={() => be.restoreBackup(vm.id, b.id)} />{' '}
+            <Confirm label="Restore" danger={false} disabled={na(s, 'restore')} onYes={() => be.restoreBackup(vm.id, b.id)} />{' '}
             <Confirm label="Delete" icon="trash" verb={b.protected ? 'Delete protected' : 'Delete'} onYes={() => be.deleteBackup(vm.id, b.id)} />
           </>])} />
       </Sec>
@@ -222,7 +227,7 @@ export function Backups({ vm }: { vm: Vm }) {
 type Tab = 'res' | 'svc' | 'id' | 'agents';
 
 export function Settings({ vm }: { vm: Vm }) {
-  const { be, route, go } = useApp();
+  const { s, be, route, go } = useApp();
   const tab = (route.arg as Tab) || 'res';
   const [hw, setHw] = useState<{ memGb: number; cpus: number } | null>(null);
   const st = vm.settings;
@@ -238,8 +243,8 @@ export function Settings({ vm }: { vm: Vm }) {
     res: () => (
       <>
         <Sec title="Hardware" right={tag('hw')}>
-          <Row l={<>Memory <span class="d">GB</span></>}><Seg label="Memory" opts={[8, 16, 32, 64] as const} value={wantHw.memGb as 8} onChange={v => setHw({ ...wantHw, memGb: v })} /></Row>
-          <Row l="vCPUs"><Seg label="vCPUs" opts={[2, 4, 8, 16] as const} value={wantHw.cpus as 8} onChange={v => setHw({ ...wantHw, cpus: v })} /></Row>
+          <Row l={<>Memory <span class="d">GB</span></>}><Seg label="Memory" opts={withValue([8, 16, 32, 64], wantHw.memGb)} value={wantHw.memGb} onChange={v => setHw({ ...wantHw, memGb: v })} /></Row>
+          <Row l="vCPUs"><Seg label="vCPUs" opts={withValue([2, 4, 8, 16], wantHw.cpus)} value={wantHw.cpus} onChange={v => setHw({ ...wantHw, cpus: v })} /></Row>
           {draft && (
             <div class="blk warn row restart">
               <b class="grow">{draft}</b>
@@ -248,20 +253,22 @@ export function Settings({ vm }: { vm: Vm }) {
               <Btn sm kind="pri" icon="power" onClick={() => { be.saveSettings(vm.id, { hw: hw! }, 'now'); setHw(null); }}>Restart now</Btn>
             </div>
           )}
+          {na(s, 'vm-boot') ? null : <>
           <Row l="Checkpoints"><Switch on={st.hw.checkpoints} onChange={v => save({ hw: { checkpoints: v } })} label="Checkpoints" /></Row>
           <Row l="Start with host"><Switch on={st.hw.startWithHost} onChange={v => save({ hw: { startWithHost: v } })} label="Start with host" /></Row>
+          </>}
         </Sec>
         <Sec title="Disk and system" right={tag('disk')}>
-          <Row l={<>Disk <span class="d">GB</span></>}><Seg label="Disk" opts={[60, 120, 240] as const} value={st.disk.diskGb as 120} onChange={v => save({ disk: { diskGb: v } })} /></Row>
-          <Row l="Ubuntu"><Seg label="Ubuntu" opts={['22.04', '24.04'] as const} value={st.disk.ubuntu as '24.04'} onChange={v => save({ disk: { ubuntu: v } })} /></Row>
+          {na(s, 'vm-disk') ? <NotYet /> : <><Row l={<>Disk <span class="d">GB</span></>}><Seg label="Disk" opts={[60, 120, 240] as const} value={st.disk.diskGb as 120} onChange={v => save({ disk: { diskGb: v } })} /></Row>
+          <Row l="Ubuntu"><Seg label="Ubuntu" opts={['22.04', '24.04'] as const} value={st.disk.ubuntu as '24.04'} onChange={v => save({ disk: { ubuntu: v } })} /></Row></>}
         </Sec>
         <Sec title="When idle">
-          <Row l={<>After <span class="d">min</span></>}><Seg label="Idle after" opts={[15, 30, 60] as const} value={st.idle.afterMin as 30} onChange={v => save({ idle: { afterMin: v } })} /></Row>
+          <Row l={<>After <span class="d">min</span></>}><Seg label="Idle after" opts={withValue([15, 30, 60], st.idle.afterMin)} value={st.idle.afterMin} onChange={v => save({ idle: { afterMin: v } })} /></Row>
           <Row l="Then"><Seg label="Then" opts={['save', 'shutdown', 'never'] as const} labels={{ save: 'Save', shutdown: 'Shut down', never: 'Never' }} value={st.idle.then} onChange={v => save({ idle: { then: v } })} /></Row>
         </Sec>
       </>
     ),
-    svc: () => (
+    svc: () => na(s, 'vm-services') ? <Sec title="Services"><NotYet /></Sec> : (
       <Sec title="Services" right={tag('services')}>
         <Row l={<>T3 Code web <span class="d m">:5178</span></>}><Switch on={st.services.t3Web} onChange={v => svc('t3Web', v)} label="T3 Code web" /></Row>
         <Row l={<>VS Code web <span class="d m">:8000</span></>}><Switch on={st.services.vscodeWeb} onChange={v => svc('vscodeWeb', v)} label="VS Code web" /></Row>
@@ -273,7 +280,7 @@ export function Settings({ vm }: { vm: Vm }) {
         <Row l="T3 proxy URL">{inp('T3 proxy URL', st.services.t3ProxyUrl, v => svc('t3ProxyUrl', v))}</Row>
       </Sec>
     ),
-    id: () => (
+    id: () => na(s, 'vm-services') ? <Sec title="Git"><NotYet /></Sec> : (
       <>
         <Sec title="Git" right={tag('identity')}>
           <Row l="Name">{inp('Git name', st.identity.gitName, v => save({ identity: { gitName: v } }))}</Row>
@@ -286,7 +293,7 @@ export function Settings({ vm }: { vm: Vm }) {
         </Sec>
       </>
     ),
-    agents: () => (
+    agents: () => na(s, 'agents') ? <Sec title="Coding agents"><NotYet /></Sec> : (
       <Sec title="Coding agents" right={vm.agents.some(a => newer(a.latest, a.version)) && <Btn sm onClick={() => be.updateAgents(vm.id)}>Update all</Btn>}>
         <Table cols={[{ h: 'Agent' }, { h: 'Version', cls: 'm' }, { h: 'Latest', cls: 'x m' }, { h: 'Installed', cls: 'e' }]}
           rows={vm.agents.map(a => [a.name, a.version, newer(a.latest, a.version) ? <Tag warn>{a.latest}</Tag> : a.latest, <Switch on={a.installed} onChange={() => {}} label={`${a.name} installed`} disabled />])} />

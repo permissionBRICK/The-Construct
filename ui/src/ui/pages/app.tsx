@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'preact/hooks';
-import type { Scheme, ThemeMode } from '../../backend/types';
+import type { FirstRunRequest, Scheme, ThemeMode } from '../../backend/types';
 import { updateDue, updateParts } from '../../model/update';
 import { SCHEME_ORDER, SCHEMES } from '../../model/tokens';
 import { Icon } from '../icons';
-import { Btn, Field, Head, KV, Page, Row, Sec, Seg, Switch, Table, Tag } from '../kit';
-import { copy, useApp } from '../ctx';
+import { Btn, Confirm, Copyable, Field, Head, KV, Page, Row, Sec, Seg, Switch, Table, Tag } from '../kit';
+import { copy, na, useApp } from '../ctx';
 
 /* Construct: the one Update, the parts it covers, preferences, this device. Then creating a VM and the
    one-time upgrade dialog. */
@@ -28,7 +28,7 @@ export function Construct() {
           rows={parts.map(p => [p.name, p.version, p.to ? <span class="warnc">{p.to}</span> : p.note === 'admin' ? <Tag>by its admin</Tag> : p.note === 'channel' ? <Tag>other channel</Tag> : '–'])} />
       </Sec>
       <Sec title="Preferences">
-        <Row l="Channel"><Seg label="Channel" opts={['stable', 'nightly'] as const} labels={{ stable: 'Stable', nightly: 'Nightly' }} value={s.prefs.channel} onChange={channel => be.setPrefs({ channel })} /></Row>
+        <Row l="Channel">{na(s, 'channel') ? <span class="d">Not available yet</span> : <Seg label="Channel" opts={['stable', 'nightly'] as const} labels={{ stable: 'Stable', nightly: 'Nightly' }} value={s.prefs.channel} onChange={channel => be.setPrefs({ channel })} />}</Row>
         <Row l="Automatic updates"><Switch on={s.prefs.autoUpdate} onChange={autoUpdate => be.setPrefs({ autoUpdate })} label="Automatic updates" /></Row>
         <Row l="Theme"><Seg<ThemeMode> label="Theme" opts={['auto', 'light', 'dark']} labels={{ auto: 'Auto', light: 'Light', dark: 'Dark' }} value={s.prefs.theme} onChange={theme => be.setPrefs({ theme })} /></Row>
         <Row l="Colours">
@@ -36,13 +36,15 @@ export function Construct() {
             {SCHEME_ORDER.map(k => <SchemeSwatch k={k} on={s.prefs.scheme === k} onPick={() => be.setPrefs({ scheme: k })} />)}
           </span>
         </Row>
-        <Row l="Start with Windows"><Switch on={s.prefs.startWithOs} onChange={startWithOs => be.setPrefs({ startWithOs })} label="Start with Windows" /></Row>
-        <Row l="Notifications"><Switch on={s.prefs.notifications} onChange={notifications => be.setPrefs({ notifications })} label="Notifications" /></Row>
+        {!na(s, 'os-prefs') && <>
+          <Row l="Start with Windows"><Switch on={s.prefs.startWithOs} onChange={startWithOs => be.setPrefs({ startWithOs })} label="Start with Windows" /></Row>
+          <Row l="Notifications"><Switch on={s.prefs.notifications} onChange={notifications => be.setPrefs({ notifications })} label="Notifications" /></Row>
+        </>}
       </Sec>
       <Sec title="This device">
         <KV k="Name">{s.device.name}</KV>
         <Row l="Recovery code"><Reveal /></Row>
-        <Row l="Log"><Btn sm icon="log" onClick={() => be.openLog()}>Open</Btn></Row>
+        <Row l="Log"><Btn sm icon="log" onClick={() => be.openLog()} disabled={na(s, 'open')}>Open</Btn></Row>
       </Sec>
     </Page>
   );
@@ -57,9 +59,10 @@ function SchemeSwatch({ k, on, onPick }: { k: Scheme; on: boolean; onPick: () =>
   );
 }
 
-/** The recovery code shown in place for a minute, with copy. */
+/** The recovery code shown in place for a minute, with copy. Where the backend cannot show the code again
+    (`code-reveal`), the button makes a new one after a confirm in place; the old one stops working. */
 function Reveal() {
-  const { be, toast } = useApp();
+  const { s, be, toast } = useApp();
   const [code, setCode] = useState<string[] | null>(null);
   const [left, setLeft] = useState(0);
   useEffect(() => {
@@ -67,7 +70,10 @@ function Reveal() {
     const t = setInterval(() => setLeft(l => { if (l <= 1) { setCode(null); return 0; } return l - 1; }), 1000);
     return () => clearInterval(t);
   }, [code]);
-  if (!code) return <Btn sm onClick={() => { setCode(be.showRecoveryCode()); setLeft(60); }}>Show</Btn>;
+  const show = () => {
+    void Promise.resolve(be.showRecoveryCode()).then(c => { setCode(c); setLeft(60); }, (e: Error) => toast(e.message));
+  };
+  if (!code) return na(s, 'code-reveal') ? <Confirm label="New code" danger={false} onYes={show} /> : <Btn sm onClick={show}>Show</Btn>;
   return (
     <span class="confirm">
       <code class="m">{code.join(' ')}</code>
@@ -83,14 +89,14 @@ export function CreateVm() {
   const [where, setWhere] = useState<'local' | 'remote'>('local');
   const [name, setName] = useState('');
   const [addr, setAddr] = useState('');
-  const [signIn, setSignIn] = useState<'windows' | 'token'>('windows');
+  const [signIn, setSignIn] = useState<'windows' | 'token'>(na(s, 'windows-sign-in') ? 'token' : 'windows');
   const [token, setToken] = useState('');
   const taken = s.vms.some(v => v.name === name.trim());
   const valid = /^[a-z][a-z0-9-]{1,30}$/.test(name.trim()) && !taken && (where === 'local' || (addr.trim() && (signIn === 'windows' || token.trim())));
   const create = () => {
     if (!valid) return;
-    be.createVm({ where, name: name.trim(), hostAddress: addr.trim(), signIn, token: token.trim() });
-    selectVm(name.trim());
+    const id = be.createVm({ where, name: name.trim(), hostAddress: addr.trim(), signIn, token: token.trim() });
+    if (id) selectVm(id);
     go({ page: 'home' });
   };
   return (
@@ -103,7 +109,7 @@ export function CreateVm() {
         {where === 'remote' && (
           <>
             <label class="lab">Host address<Field value={addr} onInput={setAddr} label="Host address" placeholder="https://host:8443" mono wide /></label>
-            <Seg label="Sign-in" opts={['windows', 'token'] as const} labels={{ windows: 'Windows sign-in', token: 'Token' }} value={signIn} onChange={setSignIn} />
+            {!na(s, 'windows-sign-in') && <Seg label="Sign-in" opts={['windows', 'token'] as const} labels={{ windows: 'Windows sign-in', token: 'Token' }} value={signIn} onChange={setSignIn} />}
             {signIn === 'token' && <Field type="password" value={token} onInput={setToken} label="Token" placeholder="Token" mono wide />}
           </>
         )}
@@ -148,8 +154,8 @@ export function Upgrade() {
       <div class="codebox">{u.code.map(c => <span>{c}</span>)}</div>
       <div class="three">
         <Btn icon="copy" onClick={() => { copy(u.code.join(' ')); toast('Copied'); }}>Copy</Btn>
-        <Btn icon="save" onClick={() => be.exportRecoveryCode('file')}>Save</Btn>
-        <Btn icon="print" onClick={() => be.exportRecoveryCode('print')}>Print</Btn>
+        <Btn icon="save" onClick={() => be.exportRecoveryCode('file')} disabled={na(s, 'export-code')}>Save</Btn>
+        <Btn icon="print" onClick={() => be.exportRecoveryCode('print')} disabled={na(s, 'export-code')}>Print</Btn>
       </div>
       <label class="bf check"><input type="checkbox" checked={stored} onChange={e => setStored(e.currentTarget.checked)} /><span>I stored it</span></label>
       <Btn kind="pri" disabled={!stored} onClick={() => be.upgradeNext()}>Continue</Btn>
@@ -168,6 +174,70 @@ export function Upgrade() {
     <div class="solo">{top}<h3>Ready</h3>
       <div class="wz">{s.vms.map(v => <div class="wl"><i class={`dot ${v.power === 'on' ? 'on' : ''}`} /><b>{v.name}</b><span class="d">{s.hosts.find(h => h.id === v.hostId)?.name}</span><span class="rv">{v.power === 'on' ? 'Running' : 'Off'}</span></div>)}</div>
       <div class="wft"><span class="d"><Icon n="check" />{s.vms.length} VMs, {s.projects.length} projects, {s.secrets.length} secrets</span><Btn kind="pri" icon="open" onClick={() => be.upgradeNext()}>Open Construct</Btn></div>
+    </div>
+  );
+}
+
+const FR_STEPS: [string, string][] = [['start', 'Sign in'], ['code', 'Recovery code'], ['done', 'Done']];
+
+/** First run of a device without an identity (11.6): a new account with its recovery code, pairing with a
+    device that has one, or recovery with the code. Creating the first VM follows on the normal screens. */
+export function FirstRun() {
+  const { s, be, toast } = useApp();
+  const f = s.firstRun;
+  const [how, setHow] = useState<FirstRunRequest['how']>('setup');
+  const [address, setAddress] = useState(f?.localAddress ?? '');
+  const [deviceName, setDeviceName] = useState('');
+  const [token, setToken] = useState('');
+  const [account, setAccount] = useState('');
+  const [code, setCode] = useState('');
+  const [stored, setStored] = useState(false);
+  if (!f) return null;
+  const at = f.step === 'code' ? 1 : 0;
+  const top = (
+    <>
+      <span class="brand"><Icon n="cube" />The Construct</span>
+      <ol class="steps">{FR_STEPS.map((x, i) => <li class={i < at ? 'ok' : i === at ? 'on' : ''}>{x[1]}</li>)}</ol>
+    </>
+  );
+  if (f.step === 'code' && f.code) return (
+    <div class="solo">{top}<h3>Recovery code</h3>
+      <div class="codebox">{f.code.map(c => <span>{c}</span>)}</div>
+      {f.account && <KV k="Account"><span class="m sel">{f.account}</span></KV>}
+      <div class="three">
+        <Btn icon="copy" onClick={() => { copy(f.code!.join('-')); toast('Copied'); }}>Copy</Btn>
+        <Btn icon="save" onClick={() => be.exportRecoveryCode('file')} disabled={na(s, 'export-code')}>Save</Btn>
+        <Btn icon="print" onClick={() => be.exportRecoveryCode('print')} disabled={na(s, 'export-code')}>Print</Btn>
+      </div>
+      <label class="bf check"><input type="checkbox" checked={stored} onChange={e => setStored(e.currentTarget.checked)} /><span>I stored it</span></label>
+      <Btn kind="pri" disabled={!stored} onClick={() => be.firstRunNext()}>Continue</Btn>
+    </div>
+  );
+  if (f.step === 'pairing' && f.pairing) return (
+    <div class="solo">{top}<h3>Pair with your other device</h3>
+      <div class="wz"><div class="cap">Code</div><Copyable text={f.pairing.code} /></div>
+      <div class="words row">{f.pairing.words.map(w => <span>{w}</span>)}</div>
+      <div class="wft"><span class="d"><Icon n="repro" />Waiting for the other device</span><Btn onClick={() => be.firstRunNext()}>Cancel</Btn></div>
+    </div>
+  );
+  const valid = address.trim() && deviceName.trim() && (how !== 'setup' || token.trim()) && (how !== 'recover' || (account.trim() && code.trim()));
+  const go = () => { if (valid && !f.busy) be.firstRunStart({ how, address, deviceName, token, account, code }); };
+  return (
+    <div class="solo">{top}<h3>This device</h3>
+      <div class="blk form">
+        <Seg label="How" opts={['setup', 'pair', 'recover'] as const} labels={{ setup: 'New account', pair: 'Pair with a device', recover: 'Recovery code' }} value={how} onChange={setHow} />
+        <label class="lab">Host address<Field value={address} onInput={setAddress} label="Host address" placeholder="https://host:8443" mono wide /></label>
+        <label class="lab">Device name<Field value={deviceName} onInput={setDeviceName} label="Device name" placeholder="Device name" wide /></label>
+        {how === 'setup' && <label class="lab">Token<Field type="password" value={token} onInput={setToken} label="Token" placeholder="Token" mono wide /></label>}
+        {how === 'recover' && (
+          <>
+            <label class="lab">Account<Field value={account} onInput={setAccount} label="Account" placeholder="Account" mono wide /></label>
+            <label class="lab">Recovery code<Field type="password" value={code} onInput={setCode} label="Recovery code" placeholder="XXXX-XXXX-…" mono wide onEnter={go} /></label>
+          </>
+        )}
+        {f.problem && <span class="badc">{f.problem}</span>}
+        <Btn kind="pri" icon="right" disabled={!valid || f.busy} onClick={go}>{f.busy ? 'Working' : 'Continue'}</Btn>
+      </div>
     </div>
   );
 }
