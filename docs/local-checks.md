@@ -75,7 +75,7 @@ The rig has two backends:
 - `--backend local` runs the guest under QEMU/KVM on this machine
   (`apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils`, read-write
   `/dev/kvm`): the Ubuntu cloud image (checksum verified, about 600 MB), first booted once
-  and kept as a prepared disk (about 1 GB more), then a throw-away overlay per run with a
+  and kept as a prepared disk (about 60 MB more), then a throw-away overlay per run with a
   NoCloud seed carrying a key made for the run, and SSH forwarded to a port on
   `127.0.0.1`. `quick` gets 2 GB of memory, `full` 3 GB; when that much (plus 512 MB) is
   not available the run ends with `incomplete` and exit 2. The QEMU process is stopped
