@@ -12,6 +12,10 @@ spec = importlib.util.spec_from_file_location('release', Path(__file__).parents[
 release = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release)
 
+groups_spec = importlib.util.spec_from_file_location('changed_groups', Path(__file__).parent / 'helpers/changed-groups.py')
+changed_groups = importlib.util.module_from_spec(groups_spec)
+groups_spec.loader.exec_module(changed_groups)
+
 ENV = dict(os.environ, GIT_AUTHOR_NAME='t', GIT_AUTHOR_EMAIL='t@example.invalid', GIT_COMMITTER_NAME='t',
            GIT_COMMITTER_EMAIL='t@example.invalid', GIT_CONFIG_GLOBAL='/dev/null', GIT_CONFIG_NOSYSTEM='1')
 
@@ -167,6 +171,29 @@ class ReleaseTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             release.verify(self.root, self.github, run=lambda *a, **k: SimpleNamespace(returncode=0))
         self.assertEqual(len(self.github.statuses), 2)
+
+
+class ChangedGroupsTests(unittest.TestCase):
+    rows = changed_groups.table((Path(__file__).parents[1] / 'docs/local-checks.md').read_text())
+
+    def groups(self, *paths):
+        return changed_groups.groups(paths, self.rows)
+
+    def test_paths_map_to_the_groups_of_every_matching_row(self):
+        self.assertEqual(self.groups('scripts/release.py'), ['release'])
+        self.assertEqual(self.groups('companion/src/App.cs', 'lib/AgentVm.Common.ps1'), ['companion', 'service'])
+        self.assertEqual(self.groups('extension/src/updates.js'), ['companion', 'panel', 't3'])
+        self.assertEqual(self.groups('service/src/Constructd.Core/Logic/ReleaseChannel.cs'), ['release', 'service'])
+
+    def test_documentation_selects_nothing_and_an_unknown_path_selects_all(self):
+        self.assertEqual(self.groups('docs/host-release.md', 'README.md'), [])
+        self.assertEqual(self.groups('docs/x.md', 'test/oom-guard.test.sh'), ['all'])
+
+    def test_a_single_star_stays_within_a_directory(self):
+        self.assertEqual(self.groups('assets/icons/x.md'), [])
+        self.assertEqual(self.groups('extension/README.md'), ['all'])
+        self.assertTrue(changed_groups.pattern('bin/*t3*').match('bin/install-t3.sh'))
+        self.assertFalse(changed_groups.pattern('bin/*t3*').match('bin/lib/t3.sh'))
 
 
 if __name__ == '__main__':

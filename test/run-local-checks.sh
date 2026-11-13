@@ -4,8 +4,26 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 # A configured guest environment must not alter host-side fixtures or tests.
 unset CONSTRUCT_SERVICE_URL CONSTRUCT_SERVICE_CA_FILE CONSTRUCT_EXTERNAL_HOST CONSTRUCT_EXTERNAL_SSH_PORT CONSTRUCT_INSTANCE_NAME CONSTRUCT_T3_VOICE_INPUT
+usage='Usage: bash test/run-local-checks.sh [panel|t3|service|companion|release|all | --changed [<base>]]'
 group="${1:-all}"
-case "$group" in panel|t3|service|companion|all) ;; *) echo 'Usage: bash test/run-local-checks.sh [panel|t3|service|companion|all]' >&2; exit 2 ;; esac
+if [[ "$group" == --changed ]]; then
+  # Touched paths since the merge base with <base> (default: the first of origin/nightly,
+  # origin/rework, origin/main that exists), committed or not, mapped by docs/local-checks.md.
+  base="${2:-}"
+  if [[ -z "$base" ]]; then
+    for candidate in origin/nightly origin/rework origin/main; do
+      if git rev-parse --verify --quiet "$candidate" >/dev/null; then base="$candidate"; break; fi
+    done
+  fi
+  [[ -n "$base" ]] || { echo 'No base branch found; pass one: --changed <base>' >&2; exit 2; }
+  fork="$(git merge-base "$base" HEAD)"
+  groups="$( { git diff --name-only "$fork"; git ls-files --others --exclude-standard; } | python3 test/helpers/changed-groups.py)"
+  if [[ -z "$groups" ]]; then echo "No checks for the changes since $base."; exit 0; fi
+  echo "Changed since $base: $(echo $groups)"
+  for selected in $groups; do bash "$0" "$selected"; done
+  exit 0
+fi
+case "$group" in panel|t3|service|companion|release|all) ;; *) echo "$usage" >&2; exit 2 ;; esac
 if [[ "$group" == panel || "$group" == all ]]; then
   node extension/test/guest-console.test.js
   node extension/test/console.test.js
@@ -94,4 +112,11 @@ if [[ "$group" == companion || "$group" == all ]]; then
   pwsh -NoProfile -File test/feature-set.test.ps1
   pwsh -NoProfile -File test/companion-entrypoints.test.ps1
   pwsh -NoProfile -File test/companion-package.test.ps1
+fi
+
+if [[ "$group" == release || "$group" == all ]]; then
+  # Release tooling and channel resolution (docs/release-flow.md).
+  python3 test/release.test.py
+  python3 test/construct-release.test.py
+  dotnet test service/tests/Constructd.Tests -c Release --filter 'FullyQualifiedName~ReleaseChannelTests'
 fi
