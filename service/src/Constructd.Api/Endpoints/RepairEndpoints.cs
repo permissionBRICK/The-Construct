@@ -28,7 +28,8 @@ public static class RepairEndpoints
             .WithDescription("Starts the repair agent on the VM's latest failed provision, reinstall or restore. 409: `no-failed-job`, `not-repairable`, `repair-running` (with `sessionId`), `operation-in-progress`, `vm-endpoint-unknown`.");
         api.MapGet("/vms/{name}/repair/{id}", GetAsync).RequireAuthorization(Policies.User)
             .Produces<RepairSessionResponse>().WithName("GetVmRepairSession");
-        api.MapPost("/vms/{name}/repair/{id}/reply", ReplyAsync).RequireAuthorization(Policies.User)
+        // Audited as an action on the VM; the text is never part of the record.
+        api.MapPost("/vms/{name}/repair/{id}/reply", ReplyAsync).RequireAuthorization(Policies.User).Audited("vm.repair.reply")
             .Accepts<RepairReplyRequest>("application/json").Produces(StatusCodes.Status204NoContent).WithName("ReplyVmRepair")
             .WithDescription("Sends one message to the agent, which continues the same conversation. 409 `repair-ended` when the session is over.");
         api.MapDelete("/vms/{name}/repair/{id}", EndAsync).RequireAuthorization(Policies.User).Audited("vm.repair.end")

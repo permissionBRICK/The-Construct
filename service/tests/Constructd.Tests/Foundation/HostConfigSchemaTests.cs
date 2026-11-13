@@ -8,12 +8,15 @@ public sealed class HostConfigSchemaTests
     /// <summary>Settings of the new stack the old clients' forms (frozen, design 15) do not show; a PUT may omit them.</summary>
     private static readonly string[] NewStackOnly = ["updates.auto"];
 
+    /// <summary>Whole sections of the new stack the old clients' forms do not show (the repair agent, design 11.5).</summary>
+    private static readonly string[] NewStackSections = ["repair"];
+
     [Fact]
     public void FormFixtureCoversRecordsAndDefaults()
     {
         using var fixture = JsonDocument.Parse(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "hostadmin-config-schema.json")));
         var sections = fixture.RootElement.EnumerateArray().ToArray();
-        Assert.Equal(HostConfigValidation.Defaults.Keys.Order(), sections.Select(s => s.GetProperty("key").GetString()).Order());
+        Assert.Equal(HostConfigValidation.Defaults.Keys.Except(NewStackSections).Order(), sections.Select(s => s.GetProperty("key").GetString()).Order());
         foreach (var section in sections)
         {
             var defaults = HostConfigValidation.Defaults[section.GetProperty("key").GetString()!];
