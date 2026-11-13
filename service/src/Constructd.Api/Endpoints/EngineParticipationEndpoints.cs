@@ -91,7 +91,8 @@ public static class EngineParticipationEndpoints
     /// <summary>Enrols the account's backup key on one of the caller's own VMs.</summary>
     private static async Task<IResult> AddRecipientAsync(string name, HttpContext http, IVmRepository vms, Constructd.Api.Devices.AccountBackupKeys backupKeys, CancellationToken ct)
     {
-        if (await OwnVmAsync(name, http, vms, ct) is not { } vm) return Refused(404, "not-found", "No such VM of yours, or not asked with a device token.");
+        if (!http.User.HasClaim(c => c.Type == DeviceAuthenticationHandler.DeviceClaim)) return Refused(403, "devices-only", "A device asks with its device token.");
+        if (await OwnVmAsync(name, http, vms, ct) is not { } vm) return Refused(404, "not-found", "No such VM of yours.");
         if (backupKeys.Of(vm.Owner) is not { } key) return Refused(409, "no-backup-key", "No device has registered the account's backup key here.");
         return await backupKeys.AddAsync(vm, ct) == 0
             ? TypedResults.Ok(new BackupRecipientResponse(key.Fingerprint))
@@ -102,7 +103,8 @@ public static class EngineParticipationEndpoints
     private static async Task<IResult> RemoveRecipientAsync(string name, string fingerprint, HttpContext http, IVmRepository vms,
         Constructd.Api.Devices.AccountBackupKeys backupKeys, CancellationToken ct)
     {
-        if (await OwnVmAsync(name, http, vms, ct) is not { } vm) return Refused(404, "not-found", "No such VM of yours, or not asked with a device token.");
+        if (!http.User.HasClaim(c => c.Type == DeviceAuthenticationHandler.DeviceClaim)) return Refused(403, "devices-only", "A device asks with its device token.");
+        if (await OwnVmAsync(name, http, vms, ct) is not { } vm) return Refused(404, "not-found", "No such VM of yours.");
         if (!Constructd.Core.Logic.BackupJobKey.IsFingerprint(fingerprint)) return Refused(400, "invalid-fingerprint", "A fingerprint is 64 lowercase hex digits.");
         return await backupKeys.RemoveAsync(vm, fingerprint, ct) switch
         {

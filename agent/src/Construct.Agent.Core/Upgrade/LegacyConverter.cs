@@ -378,6 +378,11 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
                         await engines.PostAsync(engine, $"vms/{Uri.EscapeDataString(instance.Name)}/backup-recipients", null, ct).ConfigureAwait(false);
                         return ("done", "Enrolled through the engine.");
                     }
+                    catch (AgentFailure failure) when (!instance.Local && failure.Status == 404)
+                    {
+                        // The host runs no VM of this user under that name: never over SSH around its refusal.
+                        return ("skipped", "The host does not list this VM as yours; its backup recipients are left alone.");
+                    }
                     catch (AgentFailure)
                     {
                         // The engine does not run this VM yet, or does not reach it: the old client's way.
@@ -417,6 +422,10 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
                         catch (AgentFailure failure) when (failure.Status == 409)
                         {
                             return ("pending", "The engine keeps the old key until the account's key is on the VM; a later run retries.");
+                        }
+                        catch (AgentFailure failure) when (!instance.Local && failure.Status == 404)
+                        {
+                            return ("skipped", "The host does not list this VM as yours; its backup recipients are left alone.");
                         }
                         catch (AgentFailure)
                         {

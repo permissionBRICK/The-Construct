@@ -403,7 +403,8 @@ once with `PUT /device/backup-key {publicKey}` (device token only; an RSA key of
 PEM; kept in clear in `engine-keys.db`, it is public), as the agent does at every enrolment and
 connect. The engine enrols it (label `construct-account`, the key on stdin) at the end of each
 provision, before the reboot, and at the end of each adoption; a failure there is a line in the job's
-output, not a failure. A device of the VM's owner (no admin override) asks for it with `POST
+output, not a failure. A device of the VM's owner (no admin override; `403 devices-only` without a device token, `404` for a VM
+that is not the caller's) asks for it with `POST
 /vms/{name}/backup-recipients` (`{fingerprint}`; `409 no-backup-key` before a key is registered, `502
 vm-unreachable`) and removes another recipient, an old per-PC key, with `DELETE
 /vms/{name}/backup-recipients/{fingerprint}`. The engine removes one only while the account's key is

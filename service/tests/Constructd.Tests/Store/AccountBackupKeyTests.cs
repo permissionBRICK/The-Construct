@@ -87,7 +87,7 @@ public sealed class AccountBackupKeyTests
         Assert.Equal(HttpStatusCode.NotFound, (await laptop.PostAsync("/api/v1/vms/vmb/backup-recipients", null)).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await laptop.DeleteAsync($"/api/v1/vms/vmb/backup-recipients/{old}")).StatusCode);
         // The user's own sign-in without a device token, even on the user's own VM.
-        Assert.Equal(HttpStatusCode.NotFound, (await h.Alice.PostAsync("/api/v1/vms/vma/backup-recipients", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await h.Alice.PostAsync("/api/v1/vms/vma/backup-recipients", null)).StatusCode);
         Assert.DoesNotContain(h.Guests.BackupCalls, c => c.Vm == "vmb");
         Assert.Equal([old], h.Guests.BackupRecipients["vmb"]);
     }

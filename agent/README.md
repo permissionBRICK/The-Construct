@@ -161,7 +161,7 @@ conflict (branch ours, main theirs); the upstream links into `legacy-upstream.js
 (only when the account's `K` is the old key); each old backup private key wrapped under `U` into a
 `setting` record `setting:legacy-backup-key:<fingerprint>`; the account's `B.pub` onto every VM, through the engine that runs it
 (`POST /vms/{name}/backup-recipients`), over SSH with the old client's key only for a VM no engine reaches yet (a local VM
-before its adoption); last, each local VM adopted by the engine (`POST /vms/{name}/adopt`, which enrols `B.pub` as well).
+before its adoption, a host where this device holds no device token); never for a VM a host answers is not the user's; last, each local VM adopted by the engine (`POST /vms/{name}/adopt`, which enrols `B.pub` as well).
 Then `stage: converted`, and only then the old backup keys come off the VMs, through the engine (`DELETE
 /vms/{name}/backup-recipients/{fingerprint}`, refused while `B.pub` is not on the VM) or, for a VM no engine runs, over SSH. Open vault leases and pending cleanups are not carried over: a VM asks again.
 
