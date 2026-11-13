@@ -72,6 +72,30 @@ public sealed class GitHubReleaseSource(HttpClient client, long maxSourceBytes =
         { throw new UpdateException("release-source-invalid-metadata", "GitHub returned an invalid release manifest."); }
     }
 
+    public async Task<ChannelRelease> GetChannelReleaseAsync(Uri manifestUrl, string repository, bool github, CancellationToken ct)
+    {
+        if (manifestUrl.Scheme != Uri.UriSchemeHttps || !Regex.IsMatch(repository, @"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"))
+            throw new UpdateException("release-source-invalid-metadata");
+        try
+        {
+            using var response = await OpenAsync(manifestUrl, HttpMethod.Get, "channel manifest", ct);
+            await using var input = await response.Content.ReadAsStreamAsync(ct);
+            using var bytes = new MemoryStream();
+            var buffer = new byte[8192]; int read;
+            while ((read = await input.ReadAsync(buffer, ct)) > 0)
+            {
+                if (bytes.Length + read > 1024 * 1024) throw new UpdateException("release-source-invalid-metadata");
+                bytes.Write(buffer, 0, read);
+            }
+            var release = ChannelReleases.Parse(bytes.ToArray(), manifestUrl, repository, github);
+            foreach (var asset in release.Release.Assets) _allowed[asset.Url] = asset.SizeBytes;
+            return release;
+        }
+        catch (HttpRequestException ex) { throw NetworkFailure(ex, "channel manifest"); }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        { throw new UpdateException("release-source-timeout", "Timed out retrieving the channel manifest."); }
+    }
+
     public async Task<SourceAssetDescriptor> GetSourceAssetAsync(string repository, string commit, CancellationToken ct)
     {
         if (!SourceZipRules.ValidCommit(commit) || !Regex.IsMatch(repository, "\\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\\z"))

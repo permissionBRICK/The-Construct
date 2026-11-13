@@ -3774,7 +3774,54 @@
         "operationId": "HostUpdateStatus",
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostUpdateStatusResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/host/updates/run": {
+      "post": {
+        "tags": [
+          "UpdateEndpoints"
+        ],
+        "operationId": "HostUpdateRun",
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostUpdateRunResponse"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostUpdateRunResponse"
+                }
+              }
+            }
           },
           "default": {
             "description": "An error, as a Problem document.",
@@ -3940,6 +3987,212 @@
         "responses": {
           "200": {
             "description": "OK"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/me/updates": {
+      "get": {
+        "tags": [
+          "VmUpdateEndpoints"
+        ],
+        "operationId": "GetMyUpdateSettings",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserUpdateSettingsBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "VmUpdateEndpoints"
+        ],
+        "operationId": "SetMyUpdateSettings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserUpdateSettingsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserUpdateSettingsBody"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/me/vms/reprovision": {
+      "post": {
+        "tags": [
+          "VmUpdateEndpoints"
+        ],
+        "operationId": "ReprovisionMyVms",
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VmReprovisionResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/host/vms/reprovision": {
+      "post": {
+        "tags": [
+          "VmUpdateEndpoints"
+        ],
+        "operationId": "ReprovisionAllVms",
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VmReprovisionResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vms/{name}/update": {
+      "get": {
+        "tags": [
+          "VmUpdateEndpoints"
+        ],
+        "operationId": "GetVmUpdate",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VmUpdateStatusResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "VmUpdateEndpoints"
+        ],
+        "operationId": "UpdateVm",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VmUpdateResponse"
+                }
+              }
+            }
           },
           "default": {
             "description": "An error, as a Problem document.",
@@ -7995,6 +8248,117 @@
           }
         }
       },
+      "HostUpdateOfferResponse": {
+        "required": [
+          "version",
+          "commit"
+        ],
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "string"
+          },
+          "commit": {
+            "type": "string"
+          }
+        }
+      },
+      "HostUpdateRunResponse": {
+        "required": [
+          "state",
+          "jobId",
+          "updateId"
+        ],
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string"
+          },
+          "jobId": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "updateId": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "HostUpdateStatusResponse": {
+        "required": [
+          "supportsAutoApply",
+          "installed",
+          "current",
+          "history",
+          "recoveryRecord",
+          "latestKnown",
+          "version",
+          "channel",
+          "auto",
+          "available",
+          "availableError",
+          "databaseCopy"
+        ],
+        "type": "object",
+        "properties": {
+          "supportsAutoApply": {
+            "type": "boolean"
+          },
+          "installed": {
+            "$ref": "#/components/schemas/InstalledRelease"
+          },
+          "current": { },
+          "history": {
+            "type": "array"
+          },
+          "recoveryRecord": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RecoveryRecord"
+              }
+            ]
+          },
+          "latestKnown": { },
+          "version": {
+            "type": "string"
+          },
+          "channel": {
+            "type": "string"
+          },
+          "auto": {
+            "type": "boolean"
+          },
+          "available": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/HostUpdateOfferResponse"
+              }
+            ]
+          },
+          "availableError": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "databaseCopy": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
       "HttpsAvailabilityResult": {
         "required": [
           "available",
@@ -8324,6 +8688,33 @@
           "forceEnabled": {
             "type": "boolean",
             "default": false
+          }
+        }
+      },
+      "InstalledRelease": {
+        "required": [
+          "commit",
+          "packageVersion",
+          "installedAt",
+          "source"
+        ],
+        "type": "object",
+        "properties": {
+          "commit": {
+            "type": "string"
+          },
+          "packageVersion": {
+            "type": "string"
+          },
+          "installedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "source": {
+            "type": "string"
           }
         }
       },
@@ -9288,6 +9679,76 @@
           }
         }
       },
+      "RecoveryRecord": {
+        "required": [
+          "updateId",
+          "commit",
+          "previousCommit",
+          "phase",
+          "phaseAt",
+          "outcome",
+          "error",
+          "backupPath",
+          "backupComplete",
+          "replaceStarted",
+          "stagedPath",
+          "healthAttempts",
+          "manualSteps"
+        ],
+        "type": "object",
+        "properties": {
+          "updateId": {
+            "type": "string"
+          },
+          "commit": {
+            "type": "string"
+          },
+          "previousCommit": {
+            "type": "string"
+          },
+          "phase": {
+            "type": "string"
+          },
+          "phaseAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "outcome": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "error": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "backupPath": {
+            "type": "string"
+          },
+          "backupComplete": {
+            "type": "boolean"
+          },
+          "replaceStarted": {
+            "type": "boolean"
+          },
+          "stagedPath": {
+            "type": "string"
+          },
+          "healthAttempts": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "manualSteps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "Role": {
         "enum": [
           "user",
@@ -10030,6 +10491,17 @@
               "boolean"
             ],
             "description": "true or false sets it, null clears it, absent keeps it."
+          }
+        }
+      },
+      "UserUpdateSettingsBody": {
+        "required": [
+          "autoReprovision"
+        ],
+        "type": "object",
+        "properties": {
+          "autoReprovision": {
+            "type": "boolean"
           }
         }
       },
@@ -11293,6 +11765,20 @@
           }
         }
       },
+      "VmReprovisionResponse": {
+        "required": [
+          "vms"
+        ],
+        "type": "object",
+        "properties": {
+          "vms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "VmReservationsResponse": {
         "required": [
           "ramBytes",
@@ -11688,6 +12174,70 @@
           }
         }
       },
+      "VmUpdateResponse": {
+        "required": [
+          "jobId",
+          "hostUpdateId",
+          "hostJobId"
+        ],
+        "type": "object",
+        "properties": {
+          "jobId": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "hostUpdateId": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "hostJobId": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "VmUpdateStatusResponse": {
+        "required": [
+          "newerPayload",
+          "availableCommit",
+          "appliedCommit",
+          "hostUpdate"
+        ],
+        "type": "object",
+        "properties": {
+          "newerPayload": {
+            "type": "boolean"
+          },
+          "availableCommit": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "appliedCommit": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "hostUpdate": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/HostUpdateOfferResponse"
+              }
+            ]
+          }
+        }
+      },
       "WhoAmIResponse": {
         "required": [
           "name",
@@ -11948,6 +12498,9 @@
     },
     {
       "name": "UpdateEndpoints"
+    },
+    {
+      "name": "VmUpdateEndpoints"
     },
     {
       "name": "NetworkEndpoints"

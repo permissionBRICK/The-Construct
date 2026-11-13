@@ -27,6 +27,15 @@ public sealed class FakeReleaseSource : IReleaseSource
         Assets[asset.Url] = await File.ReadAllBytesAsync(Path.Combine(dir, "construct-source-" + commit + ".zip"), ct);
         return asset;
     }
+    /// <summary>Channel manifests by URL; their packages are served from <see cref="Assets"/>.</summary>
+    public Dictionary<Uri, byte[]> ChannelManifests { get; } = [];
+    public Task<ChannelRelease> GetChannelReleaseAsync(Uri manifestUrl, string repository, bool github, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (FailDownloads || !ChannelManifests.TryGetValue(manifestUrl, out var bytes)) throw new UpdateException("release-source-unreachable");
+        Assets[manifestUrl] = bytes;
+        return Task.FromResult(ChannelReleases.Parse(bytes, manifestUrl, repository, github));
+    }
     public List<ReleaseAsset> Downloads { get; } = [];
     public bool FailDownloads { get; set; }
     public Task<IReadOnlyList<ReleaseDescriptor>> ListHostReleasesAsync(string repository, CancellationToken ct, string? releaseTag = null)
