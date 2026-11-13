@@ -194,6 +194,18 @@ public sealed class RunUpdateTests : IDisposable
     }
 
     [Fact]
+    public async Task Auto_setting_is_a_host_config_field_old_forms_may_omit()
+    {
+        using var app = App();
+        using var admin = await app.CreateUserClientAsync("admin", Role.Admin);
+        var section = new { repository = "permissionBRICK/The-Construct", channel = "main", drainTimeoutMinutes = 60, healthTimeoutSeconds = 120 };
+        Assert.Equal(HttpStatusCode.OK, (await admin.PutAsJsonAsync("/api/v1/host/config", new { updates = section })).StatusCode);
+        Assert.False((await app.Service<IHostConfigStore>().GetAsync<UpdatesConfig>("updates", default))!.Auto);
+        Assert.Equal(HttpStatusCode.OK, (await admin.PutAsJsonAsync("/api/v1/host/config", new { updates = new { section.repository, section.channel, section.drainTimeoutMinutes, section.healthTimeoutSeconds, auto = true } })).StatusCode);
+        Assert.True((await app.Service<IHostConfigStore>().GetAsync<UpdatesConfig>("updates", default))!.Auto);
+    }
+
+    [Fact]
     public async Task Automatic_update_runs_only_when_switched_on_and_not_again_after_a_failure()
     {
         using var app = App();

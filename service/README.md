@@ -288,6 +288,7 @@ gate: the resource policy is evaluated again inside every handler.
 | Media | `GET /media`; `POST /media/acquire`; `POST /media/uploads`; `GET /media/uploads/{id}`; `PUT /media/uploads/{id}/chunks/{index}`; `POST /media/uploads/{id}/complete`; `DELETE /media/uploads/{id}`; `GET /media/{id}`; `GET /media/{id}/references`; `DELETE /media/{id}`; `POST /media/cleanup` | Owner primary/user or Admin; a shared operator gets only reduced metadata for attached media. Cleanup is Admin-only. |
 | Console | `GET /vms/{name}/console/capabilities`; `POST /vms/{name}/console/sessions`; `POST /vms/{name}/console/sessions/{sid}/renew`; `DELETE /vms/{name}/console/sessions/{sid}`; `GET /vms/{name}/console/sessions/{sid}/screenshot`; `POST .../{sid}/keyboard`; `POST .../{sid}/mouse` | Current VM operator; session remains bound to its creating principal and is re-authorized on every call. |
 | Host updates | `GET /host/updates/status`; `POST /host/updates/check`; `POST /host/updates/stage`; `POST /host/updates/apply`; `POST /host/updates/cancel`; `POST /host/updates/resolve` | Admin. Apply (including resume) and resolve are the only narrowly maintenance-exempt mutations. |
+| Updates (12.1) | `POST /host/updates/run`; `POST /host/vms/reprovision`; `POST /me/vms/reprovision`; `GET`, `PUT /me/updates`; `GET`, `POST /vms/{name}/update` | Run and every-VM reprovision: Admin. My VMs and my setting: the calling user, their own VMs only. The VM route: that primary's own token or its owner, never another user's VM. See *Updates*. |
 | Key vault | `GET`, `PUT /vault/entries`; `PUT /vault/settings`; `POST /vms/{name}/vault/unlock`; `GET /vault/leases`; `DELETE /vault/leases/{id}`; `GET`, `POST /vault/devices`; `DELETE /vault/devices/{id}`; `GET /vault/activity` | The caller's own vault only (an admin gets no access to other users' vaults); unlock: owner of a running primary. |
 | Key vault approvals | `GET /vault/approvals`; `POST /vault/approvals/{id}`; `GET /vault/files`; `POST /vault/files/{id}`; `GET /vault/device` | The owner or one of their paired devices (`VaultDevice`); `/vault/device` is device-only. |
 | Key vault guest | `POST /vms/{name}/vault/requests`; `GET /vms/{name}/vault/requests/{id}?wait=`; `GET /vms/{name}/vault/scrubs`; `POST /vms/{name}/vault/scrubs/{id}` | That primary VM's own token; a child answers `403 vault-child`. |
@@ -2226,6 +2227,37 @@ Final cleanup readback used `Get-WmiObject` in `root\virtualization\v2`,
 reported **probeGuidInstances:0**. The failed probe is neither registered nor
 represented by a matching artifact under the default Hyper-V configuration root.
 ## Host release updates
+
+### Updates
+
+One action updates a host (design 12.1): `POST /host/updates/run` (admin) reads the manifest of
+the host's channel (`updates.channel` through `ReleaseChannel`) and answers `200 {state: "up-to-date"}`
+or `202 {state: "started", jobId, updateId}`. The job stages the package with `PackageStager`
+(download, SHA-256 against the channel manifest, file coverage), waits for running jobs, and hands
+off to the updater with `restoreDatabase: false`: the updater copies the database, swaps the files,
+restarts and checks health, and puts the previous files back when the new version does not come up.
+It never restores the database; the copy stays for a manual restore ([host releases](../docs/host-release.md#updating-a-host-in-one-action)).
+Errors: `409` with the update codes below (`update-in-progress`, `drain-timeout`, …), `502` for
+`release-source-*`, `503 maintenance`. `GET /host/updates/status` adds `version`, `channel`, `auto`,
+`available` (`{version, commit}` or null), `availableError` and `databaseCopy` to its old answer.
+With the host setting `updates.auto` (default off) the host runs the same action once an hour when
+its channel offers a release it does not run, but not again for a release that already failed here.
+
+VMs follow with the existing `provision` job and their stored settings, one VM after the other:
+
+| Route | Who | What |
+|---|---|---|
+| `POST /me/vms/reprovision` | an enrolled user | The caller's own primaries on this host. `202 {vms}`; each VM gets a `provision` job. |
+| `POST /host/vms/reprovision` | admin | Every primary on this host. |
+| `GET`, `PUT /me/updates` | an enrolled user | `{autoReprovision}` (default false): after this host updated itself, it reprovisions the user's VMs. |
+| `GET /vms/{name}/update` | that primary's token or its owner | `{newerPayload, availableCommit, appliedCommit, hostUpdate}`; `hostUpdate` (`{version, commit}`) only when the VM's owner is an admin of this host and a host release is out. |
+| `POST /vms/{name}/update` | that primary's token or its owner | Starts the VM's reprovision (`{jobId}`). When the owner is an admin and a host release is out, runs the host's update instead (`{hostUpdateId, hostJobId}`) and reprovisions this VM once that update succeeded. |
+
+A VM that cannot start its job (stopped, no stored settings, another job running) is skipped and
+logged; a service restart ends a running sequence. Nothing here reprovisions another user's VM
+except the admin's every-VM route.
+
+### The release protocol of the old routes
 
 The Admin-only `/api/v1/host/updates/{check,stage,apply,cancel,resolve}` POST routes and
 `GET /api/v1/host/updates/status` implement the `main` release protocol. Status
