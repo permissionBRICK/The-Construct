@@ -1,6 +1,6 @@
 # The Construct platform: client-side refactor (phase 0 design)
 
-Status: phase-0 design, revision 12, 2026-11-09. Factual claims were verified against the
+Status: phase-0 design, revision 13, 2026-11-13. Factual claims were verified against the
 repository at commit `d399476`. Nothing in this document is implemented. It replaces the
 client-side parts of [modular-remote-architecture.md](modular-remote-architecture.md) and the
 Companion decisions named in section 3; the guest contract and the host service stay in force.
@@ -13,7 +13,11 @@ and Proxmox clusters (section 18). Revision 8 settles the remaining questions of
 Revision 9 answers the fourth independent review, which read revision 8, and revision 10 answers
 its re-check (Appendix B). Revision 11 is a simplification pass the owner asked for (S24): eight mechanisms replaced by
 simpler ones, with the remaining risk named. It answers the two findings left open by the re-check
-of revision 10 that way. Revision 12 answers the final review pass of revision 11 (eight findings, Appendix B);
+of revision 10 that way. Revision 12 answers the final review pass of revision 11 (eight findings, Appendix B). Revision 13
+folds in the owner's decisions of 2026-11-13 after he chose the client design (S25 to S31): a
+repair agent in place of job questions and the help chat, no list of pending changes, one Update
+for everything, reinstall without a device, a simple create flow, and how the work is carried
+out (15). Revision 13 has not been reviewed;
 revisions 1 to 3 were, and revision 4 answers the third review. Revision 5 folded
 in the owner's first page comments (tool-set changes with opencode 2, the help assistant, the T3
 coupling overhaul, and the resume helper retired because T3 continues interrupted runs itself).
@@ -39,10 +43,10 @@ protocol requirements by phase.
 | Staging before stable | A nightly channel every change lands on first, a stable channel fed only by release PRs, agent-assisted selective promotion (section 12A). |
 | Agents manage the system; deliberate guardrails only | Policy matrix for VM tokens (section 10): vault approvals, backups the VM cannot destroy, device-only operations. |
 | Many clients, VMs and hosts | Per-device keys, pairing approved by a device, encrypted records with compare-and-swap revisions (sections 8, 9). |
-| One UI, no native dialogs, one pending element | The UI is an API client; prompts are job questions; the engine computes pending changes (7.5, 11). |
+| One UI that stays out of the way | The UI is an API client. Only the key vault asks for attention; jobs ask nothing; a change that waits shows as one yellow dot (7.5, 11). |
 | Failures confined to their operation | Read endpoints never fail because of an unrelated subsystem (6.3). |
 | Testable at every layer, by change area | Section 14: checks selected by change area, end-to-end runs on test VMs created on demand, a scheduled nightly run. |
-| Know how many installs exist, without personal data | Anonymous install statistics from hosts (5.5). |
+| Know how many installs exist, without personal data | Deferred to later work with the public server (5.5, S31). |
 | A host that is easy to set up, and hosts that form a cluster | Later work: host setup media and Proxmox clusters (section 18). |
 
 ## 2. Today's system, verified
@@ -174,7 +178,7 @@ Facts the design depends on:
 
 ## 3. Settled decisions
 
-SETTLED (owner, 2026-11-09; S9 to S24 from the plan walkthrough the same day), with risk notes.
+SETTLED (owner, 2026-11-09; S9 to S24 from the plan walkthrough the same day; S25 to S31 on 2026-11-13), with risk notes.
 
 | # | Decision | Risk notes |
 |---|---|---|
@@ -184,7 +188,7 @@ SETTLED (owner, 2026-11-09; S9 to S24 from the plan walkthrough the same day), w
 | S4 | A solo install runs the host service; the hostless path goes. | The engine is essential for local use; the agent's repair CLI must work without the engine API (REQUIRED, phase 1b). |
 | S5 | Store: by default the host's service; separately hostable; data arrives encrypted. | Default store shares the host's failure domain; recovery needs keys, store database and backup payloads (8.5). |
 | S6 | Auth stays pluggable. | None. |
-| S7 | Conflicts resolved inside a VM by an agent; headless and UI fallbacks. | Schema validity is not semantic safety; 10.4 is the control. |
+| S7 | Conflicts are resolved inside a VM by an agent. If it cannot, the conflicting profile opens in VS Code's merge editor (9.6). Profiles are always merged as decoded JSON, never as text. | Schema validity is not semantic safety. |
 | S8 | VM-triggered backups get one slot; rotation slots are host-authorized. | A host's request proves authorization, not clean content; retention protects only within the declared horizon (10.2). |
 | S9 | Engines are the only mergers. Devices hold the keys, read through an engine and write their own record kinds online (9.1, 9.2). | A device cannot edit while its store is unreachable. |
 | S10 | Profiles merge per field (9.6). | When two sides append to `provisionCommands`, both sets are kept in a fixed order; nobody checks that the combined order makes sense. |
@@ -194,7 +198,7 @@ SETTLED (owner, 2026-11-09; S9 to S24 from the plan walkthrough the same day), w
 | S14 | End-to-end tests run on VMs created on demand on the host. Full runs happen at night and before a stable release; during development the Windows VM runs only when Windows-specific code changed (12A.4, 14). | A regression in an expensive lane is found the next morning, not at the PR. |
 | S15 | The store also ships as a container; a public instance may follow as a closed, possibly paid service (5.4). Hosts report install statistics: install count, versions, token totals, nothing personal (5.5). | A public service first needs the integrity and rotation work deferred in 17.5 and S16. |
 | S16 | The first release revokes a device or host by deleting its tokens and does not re-key. Key rotation is built together with the public store (8.4). | A revoked party that still holds the keys can read later ciphertext if it gets at a store's disk or a backup file. |
-| S17 | Install statistics are on by default, shown in the setup dialog with their exact content and one switch (5.5). | None. |
+| S17 | Superseded by S31: install statistics are not part of the first release. | None. |
 | S18 | The Linux device agent is part of the merge; the macOS agent follows it (15). | A Linux PC is a client of a host elsewhere until the QEMU driver exists (phase 6). |
 | S19 | The review hold for profile changes written by a VM is not built for the first release (10.4). | A compromised VM can still change a profile that other VMs provision from, as today. |
 | S20 | Every module updates by itself under its own stored policy: device agent, engine and T3 Desktop. A VM's guest payload updates through its engine, which is there whenever the VM runs. No update needs a device or a VM to be present (12.1). | Modules run different versions for a while; `apiFeatures` and the skew window cover that (6.1, 12.2). |
@@ -202,6 +206,13 @@ SETTLED (owner, 2026-11-09; S9 to S24 from the plan walkthrough the same day), w
 | S22 | opencode 2 ships on `main` now, as its own release ahead of the rework (4.2). | None for the rework: its comparison (13.3) is made afterwards. |
 | S23 | Proxmox clusters get one engine per cluster; the investigation settles the details (18.2). | See 18.2. |
 | S24 | Simplicity over machinery. Where a rare failure can be handled by a retry or by hand, the design names the risk and adds no mechanism. Applied in revision 11 to the host update, the one-time upgrade, job recovery, backup requests, guest changes, the store, version skew and manifest signing (Appendix B). | An upgrade or job that fails halfway needs a retry or help by hand; a host update never rolls its database back by itself; manifests are not signed until the public service exists. |
+| S25 | The client is built to the design the owner chose on 2026-11-13 (11.2): a tray pop-out with one VM as a stack of large actions, a window with VM tabs and a sidebar, the same stack on the phone. Colour schemes are selectable: green (default), blue, copper and slate, black and white. | None. |
+| S26 | Jobs ask the user nothing. When a provision, reinstall or restore fails, a repair agent starts on the VM and the user can reply to it in a plain chat (11.5). The only prompts in the product are vault requests. | An agent that guesses wrong repairs the wrong thing; the job log shows what it did. |
+| S27 | No list of pending changes. A change that waits for the next reprovision shows as a yellow dot on Reprovision; a CPU or memory change asks "restart now or later" (7.5). | None. |
+| S28 | One Update action updates everything the user owns: this device, the hosts they administer and their own VMs. Updating one VM is the secondary choice. Other users' VMs are never touched, and a host is updated only by its admin. Automatic updates on release are a setting, off by default (12.1). | A reprovision interrupts work outside T3 Code, which nothing resumes; T3 Code is away for about ten seconds, longer in a reinstall. |
+| S29 | A host can reprovision and reinstall a VM without any device being online. For a reinstall it opens that one backup itself and restores secrets, keys and pairing, so the VM stays paired. The locked vault stays as it is (10.2). | Changes the earlier answer to 17.2 for this one case; the host runs the VM and can read its disk anyway. |
+| S30 | Creating a VM is one short flow: local or remote, and for remote the pasted host address. Host administration keeps every feature of today in the new style, shows a new user what their client needs, and updates in one click (11.6, 11.7). | None. |
+| S31 | Install statistics (5.5) are left out of the first release. | The project does not learn its install count until then. |
 
 ## 4. Compatibility invariants
 
@@ -231,7 +242,7 @@ An inventory, not a permission list.
 | `construct manifest` | 13.3 | 2b (before that, the rig runs the manifest script from the test tree over SSH without installing it) | Read-only reporting |
 | `provisioned.env` gains `CONSTRUCT_PAYLOAD_HASH`, `CONSTRUCT_DESIRED_HASH`, `CONSTRUCT_CHANNEL` | 7.5, 12A | 2b | Marker keys beside `CONSTRUCT_COMMIT` |
 | `construct-t3-resume.py` and its unit retire. T3 continues a run cut off by a server restart itself (`continueThreadsAfterServerUpdate`, default on, about 3 s after the server is back, at most 3 continuations per chain), and the helper speaks only the removed v1 HTTP API, so it already does nothing on current T3. The helper also mints the T3 API token `/etc/construct/t3-resume-token`, which the T3 registration check reads (`bin/install-ai-tools.sh:939`); that minting moves into the installer. Two differences from the helper are accepted or checked: T3 does not message a thread that was idle with background watchers, and T3 resumes when its server is back, which today is in the middle of a run, so the barrier the helper had moves into provisioning (see below the table) | 9.6 | 3b | Removal of a helper that no longer acts; the resume behaviour comes from T3 |
-| Help prompt file in `config/` for the help assistant | 11.5 | 4 | New prompt file, no package; uses the installed `t3` CLI |
+| Repair prompt file in `config/` for the repair agent | 11.5 | 4 | New prompt file, no package; today's autofix prompt, moved into the guest |
 | `construct secret ask <name>`: files a request for a secret the user then enters on a device (working name) | 10.3 | 3b | New subcommand of the existing `construct secret` CLI, no package |
 
 T3 barrier (REQUIRED, phase 3b), replacing the resume helper's wait for the end of provisioning.
@@ -252,7 +263,7 @@ thread database (`bin/restore-config.sh:208`) before the deferred project comman
 ### 4.2 Tool-set changes
 
 A change to the installed tool or tweak set is an ordinary PR, labelled so the release notes name
-it. Existing VMs get it as a `reprovision` entry in the pending element (7.5, 12.1), with a note
+it. Existing VMs get it at their next update or reprovision (7.5, 12.1), with a note
 for any state, config or session format the old tool left behind.
 
 First entry: **opencode 2** (current 2.2.6; the 1.x line ends at 1.19.5, which `opencode-ai` on npm
@@ -340,16 +351,10 @@ SETTLED as a direction (owner, 2026-11-09, S15); details PROPOSED.
 
 ### 5.5 Install statistics
 
-SETTLED as a direction (owner, 2026-11-09, S15 and S17): the number of installs, their versions
-and their token use, and no personal data. Field list PROPOSED.
-
-| Element | Design |
-|---|---|
-| Sender | Each engine, once a day, to the statistics endpoint of the project's public server. Devices and VMs send nothing. |
-| Content | A random install id created at install and derived from nothing, the Construct version, the channel, the driver (`hyperv` or `proxmox`), the number of VMs, and token totals per tool and day from the usage data hosts already keep (2.4). |
-| Never sent | User, host, VM, project, repository or profile names; paths; addresses; prompts; cost figures. |
-| Server | Stores each report without the sender's IP address and counts distinct install ids per version. |
-| Control | The setup dialog (11.6) shows the exact JSON. One host setting switches it off; `statistics.url` points it at another server, as with an own update server. It is on by default (S17). |
+Not part of the first release (S31, owner 2026-11-13). The earlier sketch stays for later work: each
+engine reports once a day a random install id, its version, channel, driver, number of VMs and
+token totals to the project's public server, which does not exist yet; no names, paths or
+addresses; one switch.
 
 ## 6. One API contract
 
@@ -393,7 +398,7 @@ run again.
 | Progress | Structured `{step, state, line?, percent?}`; SSE. |
 | Cancellation | At step boundaries. |
 | Concurrency | Per-VM exclusion for lifecycle jobs; host-wide only for host update and ISO builds. |
-| Questions | `{jobId, questionId, kind, choices, expiresAt}` via `/events`, answered via `POST /jobs/{id}/answers`; secret answers go to the bag. |
+| Questions | None (S26). A job that needs a secret raises a vault request (10.3); every other choice takes its default and is written to the job log. A failed job starts the repair agent (11.5). |
 
 Required of every retry, and not deferred: it keeps the original recovery backup, and it never
 silently overwrites data created since the previous attempt. Where a destructive retry cannot
@@ -434,8 +439,8 @@ sequenceDiagram
   participant G as guest
   UI->>E: POST /vms/{n}/jobs {kind: provision, requestId, desired}
   E->>E: resolve source (channel source cache, pinned commit)
-  E->>D: question: secrets needed (git credential hosts, restore key for backup X)
-  D->>E: POST /jobs/{id}/answers {secrets}   (TLS; RAM bag)
+  E->>D: vault request: git credentials (when not auto-approved)
+  D->>E: approve   (TLS; RAM bag)
   E->>G: scp source zip; env ... bash provision.sh
   G-->>E: ===CONSTRUCT-PROVISION-RESULT=== errors=N
   E->>G: construct backup fetch (key on stdin); restore-config.sh
@@ -464,12 +469,19 @@ pattern); buffers zeroed on release; crash dumps and pagefile are the declared r
 retention job plus five minutes or until restart. REQUIRED (phase 2b): the persisted-artefact grep
 test on success and failure paths including encoded forms (Appendix C.2).
 
-### 7.5 Desired state and the pending element
+### 7.5 Desired state and what waits
 
 Desired state per VM (a `vm-desired` record) and applied state (a `vm-applied` record, from
-`provisioned.env`). A static table maps each setting to `instant`, `restart`, `reprovision` or
-`reinstall`. `GET /vms/{n}/pending` returns the diff grouped by cost with the one resolving job,
-including "channel changed" and "guest payload changed" entries. One element per VM, one button.
+`provisioned.env`). There is no list of pending changes (S27). The engine reports three facts per
+VM, and the UI shows each in one place:
+
+| Fact | Shown as |
+|---|---|
+| A profile or setting changed that applies at the next reprovision | A yellow dot on Reprovision |
+| A newer Construct is out | The Reprovision action becomes Update with the version in yellow (12.1) |
+| CPU or memory changed | On save, one inline choice: restart now or later |
+
+Settings that apply at once are saved and applied without a sign.
 
 ## 8. Identity and keys
 
@@ -565,10 +577,10 @@ With the public store, the target contract (details REQUIRED before it opens, Ap
   `D` and `B.priv` stay wrapped under the current `U` for reading retained data.
 - Device revocation: tokens deleted at once, record marked, rotation started automatically.
 - Engine revocation: participant token deleted at once, rotation started; its VMs appear in the
-  pending element as "host no longer trusted".
+  UI as "host no longer trusted".
 - Backup recipients: after activation, every engine runs `recipients remove <old B>` and
-  `recipients add <new B>` on each VM it reaches; a VM not reached stays listed in the pending
-  element as "still encrypting backups to a revoked key" until it is.
+  `recipients add <new B>` on each VM it reaches; a VM not reached stays marked
+  as "still encrypting backups to a revoked key" until it is.
 
 The guarantee that protocol enforces, and the only one promised (17.8): after activation, a
 revoked party can read no new record and no new backup of a VM whose recipients were updated; it
@@ -763,9 +775,13 @@ agent in a VM, a headless agent or the user, writes the profile with `If-Match` 
 revision and closes the conflict in one `POST /records/batch`. If the profile changed meanwhile,
 the batch fails and the conflict is computed again. There are no claims: two resolvers at once are
 possible and harmless, because the second batch fails and its writer finds the conflict closed.
-`origins` of every contributing actor are preserved through merges. Delivery per the S7 setting:
-`vm-agent` (heartbeat `conflicts`, `construct project conflicts --fetch`, `t3 thread start
-<project> -` with the shipped prompt, `construct project resolve`), `headless-agent`, `ui`.
+`origins` of every contributing actor are preserved through merges. Delivery, without a
+setting (S7, revision 13): the VM's agent gets the conflict (heartbeat `conflicts`, `construct
+project conflicts --fetch`, `t3 thread start <project> -` with the shipped prompt, `construct
+project resolve`) and asks the user in that thread when it is unsure; without T3 Code the same
+prompt runs in Claude Code directly. If the agent gives up, the device agent opens the profile in
+VS Code's three-way merge editor (base, ours, theirs) and saving resolves it. There is no conflict
+screen in the client.
 
 ### 9.7 Company upstream repos and vault records
 
@@ -812,6 +828,13 @@ formula: `(minHorizonDays / intervalDays + keep + 1) × typical backup size`, th
 staging room for the next upload; with daily backups and `keep = 6`, 20 GiB fits a typical backup
 of about 550 MB (37 backups).
 
+Reinstall without a device (S29, owner 2026-11-13). A stored backup stays readable only with a
+device's key. A reinstall is the exception: the engine creates a key for the job, the VM encrypts
+its pre-reinstall backup to that key as well as to the user's, and the engine restores from it
+into the fresh VM and then discards the key. Secrets, SSH host keys, the VM token, T3 pairing and
+agent logins come back, so the VM stays paired and no device has to be online. A reprovision needs
+no backup at all. The locked vault keeps today's behaviour.
+
 ### 10.3 Devices and approvals
 
 Approvals stay with devices. New kinds (secret release in locked mode, pairing, trusting an
@@ -854,17 +877,25 @@ sent.
 | `ProtectedTokenStore` over `IDataProtection` (plus Keychain, libsecret) | `HostState` script discovery, path literals |
 | `AudioSession`, tray model | `IPrompts` (67 sites), `WebViewDocument` shim |
 
-### 11.2 UI, independent of direction A, B or C
+### 11.2 The UI
 
-One TypeScript application over `/events` and the generated client; the three directions are
-layouts over the same components; framework Preact or Svelte; served by agent, engine and VS Code
-webview. The owner picks the layout before phase 4; screenshot tests cover that layout only.
+One TypeScript application (Preact) over `/events` and the generated client, served by the agent,
+the engine and the VS Code webview. SETTLED (S25, owner 2026-11-13): it follows the design he chose
+after four redesign rounds. The mockup is kept outside this repository; in words:
+
+| Surface | Design |
+|---|---|
+| Tray pop-out | One VM at a time, chosen from a name menu: its state, Open (T3 Code, VS Code, SSH) and a stack of large actions with Reprovision and Reinstall at the centre. Key vault and Control panel in the footer. A vault request appears as a yellow card on top; with Construct closed, that card alone pops from the tray. |
+| Window | VMs as tabs on top, a dark sidebar (Projects, Connections, Backups, Settings per VM; Key vault, Hosts, Construct below), technical pages with tables: project list and the profile JSON, settings in tabs, the vault with secrets, access, devices and history. |
+| Phone and browser | The pop-out's stack, then the pages, with a bottom tab bar. |
+| Rules | Only the vault asks for attention. No counters, no attention queue, no chat in the middle, no grouping by host, no forwards on the overview, no subtitle under a title. Yellow means an update or a change that waits. |
+| Colours | Schemes selectable beside light and dark: green on black (default), blue, copper and slate, black and white. |
 
 ### 11.3 No native dialogs
 
 | Today | New |
 |---|---|
-| `Confirm` (28), `Input` (17), `Pick` (13) | Job questions inline in the progress element |
+| `Confirm` (28), `Input` (17), `Pick` (13) | Inline confirms where the action was clicked (reinstall, delete, restart now or later); inputs become fields on their page; picks take a default (S26) |
 | `ShowSecretOnce` (2) | Reveal element with copy and timer |
 | `DecideFiles` (1) | List with per-row choice |
 | `SaveFile`, `OpenFile` (6) | Export and import jobs with one OS file picker (the only native element kept) |
@@ -888,26 +919,28 @@ runtime patchers; an agent repairs anchors when upstream moves. T3 Desktop reach
 | Concern | Design |
 |---|---|
 | Transport | T3 Desktop is a client of the device agent's local API (6.2): generated TypeScript client, the agent's loopback token file, the same footing as the tray window and the extension. |
-| Actions | Update, T3 update, pairing link, panel, settings, open VM: typed agent routes and jobs; progress over SSE; prompts as job questions. No scripts, exe flags or result files. |
+| Actions | Update, T3 update, pairing link, panel, settings, open VM: typed agent routes and jobs; progress over SSE; no prompts. No scripts, exe flags or result files. |
 | Approvals | T3 Desktop takes pending approvals from the agent's `/events`. The T3 server in the VM keeps reading `vault-pending` for its web UI; that guest file stays, but it is no longer T3 Desktop's contract. |
 | Capabilities | `apiFeatures` both ways, so a T3 build and an agent each know what the other supports. |
 | Patch size | The Desktop part of the patch set shrinks to one integration module against the generated client, imported anchor-free (the existing import transform); one upstream issue asks whether T3 would accept an extension point instead. |
 | Deprecation | Scripts, exe flags and `vault-pending` for Desktop stay for T3 builds without the client; the shims log use; they retire with the old routes once the release manifest's minimum T3 build has the client. |
 | Phasing | T3 builds with the client are released before the merge, so the minimum T3 build at the merge has it. The shims serve T3 builds that lag and retire in 6. |
 
-### 11.5 Help assistant
+### 11.5 Repair agent
 
-PROPOSED, following the owner's direction of 2026-11-09. The user opens help from the UI when
-something breaks or looks wrong and asks questions in a chat element.
+SETTLED (S26, owner 2026-11-13), replacing the help assistant of earlier revisions. It is today's
+console autofix (`bin/construct-agent-fix.sh`, `docs/provisioning.md` "When provisioning steps
+fail") moved into the client.
 
 | Element | Design |
 |---|---|
-| Where it runs | In the affected VM, as a T3 thread started with `t3 thread start <project> -` and a help prompt shipped in `config/` (the same path as conflict delivery, 9.6). T3 Code streams the thread's output into the client UI. |
-| What it may look at | The VM's own Construct copy, its logs and markers (`provisioned.env`). If it needs to, it can clone the Construct source from GitHub at the installed `CONSTRUCT_COMMIT` to analyse it. |
-| Outcome 1: local fix | Fixes the local deployment, not Construct: project provisioning commands first, then project configuration and other local setup, which covers most provisioning failures. Profile changes go through `construct project set`, so they become VM-origin profile records like any other (9.3, 10.4). This design defines no path for locally patched Construct copies. |
-| Outcome 2: issue / outcome 3: fix PR | For a Construct defect the agent proposes an upstream issue or a fix PR and asks the user before doing either. It proceeds only with the user's own GitHub credentials available in the VM: local git credentials, the GitHub CLI or a vault entry. Without usable credentials it tells the user an issue or PR seems appropriate and leaves filing to them. |
-| Policy | No special guardrails and no special permissions: the VM token gains nothing (10.1 unchanged). Construct issues no bot accounts or access tokens for filing; how the user manages their credentials is up to them. Upstream filing is not a setting: the agent suggests it, and the user decides each time. |
-| When T3 cannot run | A VM whose provisioning failed before T3 was installed, or that is unreachable, cannot host the thread. The UI then shows the failed job's log and problems with a copy button. No second VM is used. |
+| When | A provision, reinstall or restore fails. The failed job shows the step, the log and Retry, and starts the repair agent. |
+| What runs | An agent on the VM with the fix prompt: a T3 Code thread where T3 Code works, otherwise Claude Code, Codex or OpenCode directly, whichever the VM has, without permission prompts, as today. |
+| What it does | It fixes the cause on its own where it can, then the job is retried. It stops and asks in plain text only when several valid fixes exist, when a fix has a trade-off, or when the cause looks like a Construct bug; then it offers to file an issue or a fix PR with the user's own credentials found on the VM. |
+| The UI | The agent's output under the failed job and one reply box. A T3 Code thread can be opened in T3 Code instead. |
+| No question or plan tools | The agent runs with its question and plan-mode tools switched off, so it can only ask in text and wait. Claude Code has a switch for that (`--disallowedTools`) and a mode without a terminal (`--print` with streamed input and output); for Codex and OpenCode the block that builds this checks what they offer. |
+| Permissions | None to grant. A vault request is the only prompt it can cause, and it is rare here. |
+| When the VM cannot run an agent | The UI shows the failed job's log with a copy button. |
 
 ### 11.6 First run and the one-time upgrade dialog
 
@@ -919,8 +952,7 @@ first screen, in two variants.
 | 1. Host side | The installer has already installed the engine with its one admin prompt. | "This is a new Construct", with a few lines on what changed. One admin prompt installs the engine when this PC has a local VM. |
 | 2. Recovery code | Shown once with save as file, print and copy; the user confirms they stored it (8.5). The vault key is created here. | The same. It comes before conversion because the records are sealed under `U`. The existing vault key moves under `U`, so the code now restores the vault; an install without a vault gets one. |
 | 3. Conversion | Not needed. | The dialog asks the user to close VS Code and waits until it is closed, then the converter (13.1) runs with progress per item (13.2). VMs keep running. |
-| 4. Statistics | The notice of 5.5 with the exact content and the switch. | The same. |
-| 5. Done | "Create your VM". | The converted VMs with their pending entries; reprovisions wait for a confirmation. |
+| 4. Done | "Create your VM" (below). | The converted VMs. |
 
 The rest of the UI stays closed until step 3 is done. A failed step shows its error with a retry
 and resumes there after a restart. A second device does not see this dialog; it is paired (8.3).
@@ -929,6 +961,21 @@ nothing, and step 3 converts that user's profiles, vault and backup keys, which 
 read. If that host has not been upgraded yet, the dialog says so before step 3 and offers the host
 update when the user is its admin (13.2).
 
+Creating a VM (S30). One screen: local or remote. Local needs a name and takes defaults for
+everything else, which Settings can change later. Remote needs the host's address, pasted, and the
+sign-in the host uses (Windows sign-in, or a token). The job that follows asks nothing.
+
+### 11.7 Host administration
+
+SETTLED (S30, owner 2026-11-13): every feature of today's host administration is kept (users, limits,
+tokens, VMs with console, media, capacity, host configuration, backups), built into the new style
+directly, simple pages with tables. Two changes:
+
+| Change | Design |
+|---|---|
+| Adding a user | After the admin adds a user, the page shows what that user's client needs: the host address to paste and, where the host uses tokens, the token once, with a copy button. |
+| Updating the host | One Update button (12.1), in place of today's four stages. |
+
 ## 12. Updates
 
 ### 12.1 One click, whole chain
@@ -936,10 +983,11 @@ update when the user is its admin (13.2).
 | Step | Design |
 |---|---|
 | Authority | Each module follows its own stored policy and checks its package against the SHA-256 in the channel manifest, fetched over HTTPS as today (12A.2): a device its channel policy (12A), an engine its admin's `updates.channel` and `updates.auto`, T3 Desktop its T3 channel. A device never installs on an engine against that policy; "update everything" asks each engine to run its own updater. Hosts on another channel are shown, not updated. |
-| Update everything | One button asks each module to run its own update and shows each one's state. There is no stored plan. |
+| Update | One action updates everything the user owns (S28): this device, the hosts they administer and their own VMs, each through its own updater, in that order where several are due. The pop-out's Reprovision becomes Update when a release is out; "only this VM" is its secondary choice. A user who does not administer a host gets that host's release when its admin updates it. Other users' VMs are never touched; an admin has a separate "update all VMs on this host". There is no stored plan. |
 | Engine | One action, `POST /host/updates/run` (revision 11, replacing today's separate check, stage, apply, cancel and resolve actions, `UpdateEndpoints.cs:18`): wait for running jobs, download the package and check its hash, copy the database, swap the files, restart, check health. If the new version does not come up, the previous files are put back and the service started again. The database copy is kept for a manual restore and is never restored automatically; if a migration already changed the database and the old version cannot start on it (`SqliteMigrationRunner.cs:23`), the admin restores that copy by hand. The old actions stay as routes for old clients until phase 6. |
 | Agent | Updates itself when idle. |
-| VMs | `CONSTRUCT_PAYLOAD_HASH` and `CONSTRUCT_CHANNEL` compared with the engine's channel release; differences become `reprovision` entries; run sequentially per host on confirmation or with `updates.autoReprovision`. |
+| Automatic | A setting, off by default: when a release is out on the chosen channel, each module updates by itself and the user's VMs are reprovisioned. |
+| VMs | `CONSTRUCT_PAYLOAD_HASH` and `CONSTRUCT_CHANNEL` are compared with the engine's channel release. Update reprovisions the user's VMs one after the other per host, without waiting for them to be idle: T3 Code resumes its threads (4.1). The engine can reprovision or reinstall a VM with no device online (S29, 10.2). |
 | Independence | SETTLED (owner, 2026-11-09, S20): the device agent, each engine and T3 Desktop each fetch and apply their own package without a live peer. A VM's guest payload updates through its engine (source cache and provision job), which is there whenever the VM runs, and the VM may start that itself (10.1). The button above only starts updates that are due together; it is never a precondition. T3 Desktop finds its own build from the T3 channel without asking a VM, and when a VM's reprovision moves its T3 server to a newer build, T3 Desktop moves to the matching build on its own. Versions that differ in between are covered by `apiFeatures` (6.1) and the skew window (12.2). REQUIRED (phase 3c): update tests with each peer offline: an agent with no engine reachable, an engine with no device, T3 Desktop with no VM. |
 
 ### 12.2 Rollback and version skew
@@ -1039,7 +1087,7 @@ store and `bridge.json`; never modifies the old files.
 | `config\` `main` | `profile`, `upstream` and `upstream-applied` records |
 | `config\` `vm`, `vm-<name>` branches with unmerged commits; conflicted trees | `conflict` records (branch content as ours, main as theirs, git merge base as base) |
 | `companion\settings.json`, `hosts.json`, VS Code `construct.*` | `setting`, `engine` records |
-| `backup\pc-key.*` | Legacy private key wrapped under `U` for history; the legacy public key is removed from every reachable VM once conversion has committed (13.2), and `B.pub` enrolled before that; unreachable VMs are listed in the pending element until updated |
+| `backup\pc-key.*` | Legacy private key wrapped under `U` for history; the legacy public key is removed from every reachable VM once conversion has committed (13.2), and `B.pub` enrolled before that; unreachable VMs are updated when they are next reached |
 | `vault.dat` | `secret` records sealed with the existing `K`; tombstones; per-host mode; leases migrate with `instance`, `name`, `usesLeft`, `expiresAt` and the value needing cleanup, and keep today's termination-to-scrub lifecycle on exhaustion, expiry, revocation or interruption (`VaultService.cs:423`); pending cleanups become engine scrub jobs, dropped with a log line when the instance no longer exists |
 | `~\.ssh`, `remote.SSH.remotePlatform`, certificate stores | Device agent, unchanged content |
 | `lifecycle-running.json`, result files | Gone |
@@ -1175,19 +1223,28 @@ every REQUIRED marker, names a work package on the branch, not a release.
 | Merge gates | Every REQUIRED test of the first release green (the review hold of 10.4 and the rotation contract of 8.4 are deferred and excluded); the full matrix (12A.4) green; the migration test on class E and F; T3 builds with the agent client released (11.4); the owner's installs running the branch, including one shared host with a second user. |
 | The merge | One PR from the branch into `main`, released as 2.0.0 in two steps: the host release first, the known shared hosts upgraded by their admin, then the client release (13.2). The last source archive of the old stack is published as a pinned release asset for the way back (13.2). Then `nightly` is created from `main`, becomes the default branch, and 12A applies. |
 
+How the work is carried out (owner, 2026-11-13):
+
+| Rule | Design |
+|---|---|
+| Developers | Each block is built by a developer agent on Claude Opus in its own worktree; simple blocks may use a smaller setup. One orchestrating session assigns blocks, merges them into the branch and keeps this document current. |
+| Review | After each block, one review round by a second model (GPT Sol). The developer agent reads the findings and applies only those that change the outcome within the block's scope; nitpicks and additions outside the scope are rejected with a line each (S24). |
+| Verification | As much as possible before the owner tests: unit and integration tests, the guest rig, and a Windows guest VM created with the host's tools. |
+| First test by the owner | The branch is pushed with a PR that is not merged. The owner moves one PC and its local VM to the branch and tests there. |
+
 | Phase | Delivers | Depends on | Exit criteria |
 |---|---|---|---|
 | 0 | This document; open questions answered | | Owner sign-off |
 | R | Release tooling for the new stack (12A): workflows on the branch publishing prereleases, channel manifests, `release.py`, SemVer, one channel helper per language, host `updates.channel`, `--changed` and the `release` check group. The repository cutover (default branch, rulesets) waits for the merge | 0 | A prerelease from the branch installs on a test install and updates it |
 | 1a | Typed routes for client paths; committed OpenAPI; generated clients for the new agent and UI; external-endpoint driver; the rig on a child created on demand (14.2), running the manifest script from the test tree | R | Rig green against PowerShell provisioning, which becomes the baseline; drift test |
 | 1b | Self-contained Hyper-V driver; solo engine install and adoption; agent repair CLI; footprint measured; nested option for children and the Windows lane (14.3) | 1a | A Windows child runs the solo engine with a Hyper-V guest; `ScriptsDir` not required |
-| 2a | Provision, reinstall, restore jobs with questions and the step model; guest payload unchanged; process-kill tests | 1b | Equivalence comparison (13.3) passes |
-| 2b | Secrets boundary tests; `construct-api.sh`; `construct manifest` installed; payload hashes; pending element data; unattended Proxmox child setup | 2a | No secret in persisted artefacts; pending from guest markers |
+| 2a | Provision, reinstall, restore jobs that are run again on failure (7.1); guest payload unchanged; process-kill tests | 1b | Equivalence comparison (13.3) passes |
+| 2b | Secrets boundary tests; `construct-api.sh`; `construct manifest` installed; payload hashes; the facts of 7.5; unattended Proxmox child setup | 2a | No secret in persisted artefacts; pending from guest markers |
 | 2c | Host-requested backups, slot, budgets, retention rule | 2a | Appendix C.6 tests |
 | 3a | Store, envelope, engine replica, CAS, feed, payload versions; device key pair, `U`, `D`, kind-level write table, per-field merge; engine `D` grant; `project set` through the engine; export job; store container image (5.4) | 2b | Partition and outbox tests; the store suite green against the container |
 | 3b | Pairing, recovery code (8.5), revocation by token deletion with the exposed-secret list (8.4), `B` and `K` under `U`, vault onto records, secret entry on request (10.3), conflict protocol, agent delivery, resume helper retired (4.1) | 3a | N devices, two engines suite |
 | 3c | Device agent replacing the Companion; converter; upgrade hook (13.2); thin extension; script shims; agent routes for T3 Desktop (11.4) | 3b | Migration test on a class E and a class F install |
-| 4 | New UI bundle; no native dialogs; first-run and upgrade dialog (11.6); help assistant (11.5); install statistics (5.5) | 3c, layout chosen | 67 prompt sites gone; screenshots green |
+| 4 | The UI of 11.2 with its colour schemes; no native dialogs; create flow, first-run and upgrade dialog (11.6); host administration (11.7); repair agent (11.5) | 3c | 67 prompt sites gone; screenshots green |
 | 5a | Linux device agent, client only: platform adapters (secret store, notifications, tray, SSH client config), packaging | 4 | Adapter suite green on the development VM; part of the merge (S18) |
 | M | The merge, under the rules above | All of the above | Merge gates |
 | 5b | macOS device agent, client only | M | Adapter suite; manual testing until a Mac or a hosted runner exists (17.15) |
@@ -1208,7 +1265,7 @@ every REQUIRED marker, names a work package on the branch, not a release.
    review and the byte-identity check are the controls.
 7. Test VMs depend on host capacity and on the nested option for children; `incomplete` rather
    than green skips.
-8. T3 CLI drift; the conflict flow and the help assistant (11.5) depend on one `t3` command. The T3
+8. T3 CLI drift; the conflict flow and the repair agent (11.5) depend on one `t3` command. The T3
    overhaul (11.4) needs a matching change in the T3 builds repository on both channels.
 9. Always-on service footprint; measured in 1b.
 10. Scope and one large merge: nothing reaches users until everything works, and `main` drifts
@@ -1223,7 +1280,7 @@ every REQUIRED marker, names a work package on the branch, not a release.
 | # | Question | Recommended answer |
 |---|---|---|
 | 1 | Compromise horizon and storage budget (10.2) | Settled (owner, 2026-11-09): `minHorizonDays = 30`; quota by the formula, default 20 GiB; slot 2 GiB with its own budget |
-| 2 | Hosts never decrypt stored backups without a per-job device release? | Settled (owner, 2026-11-09): yes |
+| 2 | Hosts never decrypt stored backups without a per-job device release? | Settled: yes for stored backups; a reinstall opens its own backup with a key made for the job (S29) |
 | 3 | Independent `K`, `D`, `B` under `U` on devices; engines get `D` always, `K` by vault mode (8.2) | Settled (owner, 2026-11-09): confirmed |
 | 4 | Locked vault leaves sync and jobs available? | Settled (owner, 2026-11-09): yes; only secret values lock |
 | 5 | Store trusted for integrity and membership without writer signatures (8.6)? | Settled (owner, 2026-11-09): yes for self-hosted and the default; signatures before a public store |
@@ -1244,11 +1301,12 @@ every REQUIRED marker, names a work package on the branch, not a release.
 | 20 | T3 Desktop as a client of the agent API with a deprecation window for the scripts (11.4)? | Settled (owner, 2026-11-09): yes; T3 builds adopt it on nightly first |
 | 21 | When does opencode 2 ship (4.2)? Nothing in it depends on the rework: the work is the installer switch, the background plugin port and the monitor patch port in the T3 builds repository | Settled (owner, 2026-11-09): on `main` now, as its own release ahead of the rework (S22) |
 | 22 | Build key rotation (8.4) for the first release, or with the public store (5.4)? | Settled (S16): with the public store |
-| 23 | Install statistics on by default, or opt-in (5.5)? | Settled (S17): on by default |
+| 23 | Install statistics on by default, or opt-in (5.5)? | Superseded (S31): not in the first release |
 | 24 | Are the macOS and Linux agents (phase 5) part of the merge (15)? | Settled (S18): Linux is, the Mac follows |
 | 25 | Once the resume helper retires (4.1), a thread that was idle with background watchers gets no message after a reprovision. Accept? | Settled: accepted |
 | 26 | Proxmox clusters: one engine per cluster, or one per node (18.2)? | Settled (owner, 2026-11-09): one engine per cluster (S23); details after the investigation |
 | 27 | Failure recovery of jobs in detail, above all reinstall and restore (7.1) | Open for the implementation phase, at the owner's request |
+| 28 | Which switches Codex and OpenCode offer to run without their question and plan tools (11.5) | Checked when the repair agent is built |
 
 ## 18. Later work
 
