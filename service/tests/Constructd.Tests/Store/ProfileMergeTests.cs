@@ -92,6 +92,22 @@ public sealed class ProfileMergeTests
     }
 
     [Fact]
+    public void A_first_repository_changed_on_one_side_is_a_conflict_when_the_other_side_changed_anything()
+    {
+        // Ours moves the profile to another first repository, theirs changes a command that runs in
+        // the old one: merged, theirs' command would silently run somewhere else.
+        var result = Merge("""
+            "repos":[{"url":"u/a"}],"provisionCommands":["build"]
+            """, """
+            "repos":[{"url":"u/b"}],"provisionCommands":["build"]
+            """, """
+            "repos":[{"url":"u/a"}],"provisionCommands":["test"]
+            """);
+        Assert.Equal(["repos"], result.Conflicts);
+        Assert.Equal("""["test"]""", Field(result, "provisionCommands"));
+    }
+
+    [Fact]
     public void Repos_with_the_same_effective_directory_are_a_conflict_beyond_existing_duplicates()
     {
         // Ours adds git@x:org/tool.git, theirs adds https://x/org/tool: both check out into "tool".
@@ -336,6 +352,31 @@ public sealed class ProfileMergeTests
             """);
         Clean(result);
         Assert.Equal("""["a2","b","d","e"]""", Field(result, "provisionCommands"));
+    }
+
+    [Fact]
+    public void Adjacent_commands_changed_on_different_sides_both_apply()
+    {
+        var result = Merge("""
+            "provisionCommands":["a","b"]
+            """, """
+            "provisionCommands":["a2","b"]
+            """, """
+            "provisionCommands":["a","b2"]
+            """);
+        Clean(result);
+        Assert.Equal("""["a2","b2"]""", Field(result, "provisionCommands"));
+
+        // A removal next to an insertion of the other side.
+        result = Merge("""
+            "provisionCommands":["a","b","c"]
+            """, """
+            "provisionCommands":["a","c"]
+            """, """
+            "provisionCommands":["a","b","x","c"]
+            """);
+        Clean(result);
+        Assert.Equal("""["a","x","c"]""", Field(result, "provisionCommands"));
     }
 
     [Fact]

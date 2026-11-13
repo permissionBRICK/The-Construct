@@ -27,7 +27,6 @@ public static class ProfileMerge
 
         var merged = new JsonObject();
         var conflicts = new List<string>();
-        var bothChanged = new HashSet<string>(StringComparer.Ordinal);
 
         var fields = o.Select(p => p.Key).Concat(t.Select(p => p.Key)).Concat(b?.Select(p => p.Key) ?? []).Distinct(StringComparer.Ordinal).ToList();
         foreach (var field in fields)
@@ -39,7 +38,6 @@ public static class ProfileMerge
             if (b is not null && Same(ov, bv)) { Set(merged, field, tv); continue; }
             if (b is not null && Same(tv, bv)) { Set(merged, field, ov); continue; }
 
-            bothChanged.Add(field);
             if (b is null) { conflicts.Add(field); Set(merged, field, tv); continue; }
 
             switch (field)
@@ -71,7 +69,7 @@ public static class ProfileMerge
             }
         }
 
-        Check(merged, o, t, bothChanged, conflicts);
+        Check(merged, o, t, conflicts);
         return new ProfileMergeResult(ProfileRules.Finish(merged), conflicts.Distinct(StringComparer.Ordinal).ToList());
     }
 
@@ -253,47 +251,78 @@ public static class ProfileMerge
         merged[field] = new JsonArray(result.Select(k => JsonNode.Parse(k)).ToArray());
     }
 
+    /// <summary>
+    /// The three-way merge of an ordered list, item by item: each side's changes are hunks over the
+    /// base (a replaced range, or an insertion at a point). Hunks of the two sides that do not touch
+    /// both apply, adjacent ones included; insertions at the same point keep ours, then theirs, an
+    /// identical one once; an identical hunk applies once; any other overlap is a conflict (null).
+    /// </summary>
     internal static List<string>? Diff3(List<string> b, List<string> o, List<string> t)
     {
-        var mo = Lcs(b, o);
-        var mt = Lcs(b, t);
+        var ours = Hunks(b, o);
+        var theirs = Hunks(b, t);
         var result = new List<string>();
-        int bi = 0, oi = 0, ti = 0;
-        while (true)
+        int pos = 0, i = 0, j = 0;
+        void Apply(Hunk h)
         {
-            if (bi < b.Count && mo[bi] == oi && mt[bi] == ti)
+            result.AddRange(b[pos..h.Start]);
+            result.AddRange(h.Items);
+            pos = h.End;
+        }
+
+        while (i < ours.Count || j < theirs.Count)
+        {
+            var oh = i < ours.Count ? ours[i] : null;
+            var th = j < theirs.Count ? theirs[j] : null;
+            if (oh is not null && th is not null && Touch(oh, th))
             {
-                result.Add(b[bi]);
-                bi++; oi++; ti++;
+                if (oh.Start == th.Start && oh.End == th.End && oh.Items.SequenceEqual(th.Items, StringComparer.Ordinal)) Apply(oh);
+                else if (oh.Start == oh.End && th.Start == th.End) Apply(oh with { Items = Insertions(oh.Items, th.Items) });
+                else return null;
+                i++;
+                j++;
                 continue;
             }
 
-            // The next base item both sides kept: everything before it is one changed chunk.
-            var next = bi;
-            while (next < b.Count && (mo[next] < 0 || mt[next] < 0)) next++;
-            var (oNext, tNext) = next < b.Count ? (mo[next], mt[next]) : (o.Count, t.Count);
-            var chunk = ResolveChunk(b[bi..next], o[oi..oNext], t[ti..tNext]);
-            if (chunk is null) return null;
-            result.AddRange(chunk);
-            (bi, oi, ti) = (next, oNext, tNext);
-            if (bi >= b.Count) return result;
+            // The hunk that comes first; at the same point an insertion goes before a replaced range.
+            var takeOurs = th is null || (oh is not null && (oh.Start, oh.End - oh.Start > 0 ? 1 : 0).CompareTo((th.Start, th.End - th.Start > 0 ? 1 : 0)) <= 0);
+            if (takeOurs) { Apply(oh!); i++; }
+            else { Apply(th!); j++; }
         }
+
+        result.AddRange(b[pos..]);
+        return result;
     }
 
-    private static List<string>? ResolveChunk(List<string> b, List<string> o, List<string> t)
-    {
-        if (o.SequenceEqual(b)) return t;
-        if (t.SequenceEqual(b)) return o;
-        if (o.SequenceEqual(t)) return o;
-        if (b.Count == 0) return Insertions(o, t);
+    private sealed record Hunk(int Start, int End, List<string> Items);
 
-        // A side that kept the base items in one piece only inserted around them.
-        var oAround = Around(o, b);
-        var tAround = Around(t, b);
-        if (oAround is { } oa && tAround is { } ta) return [.. Insertions(oa.Before, ta.Before), .. b, .. Insertions(oa.After, ta.After)];
-        if (tAround is { } tOnly) return [.. tOnly.Before, .. o, .. tOnly.After];
-        if (oAround is { } oOnly) return [.. oOnly.Before, .. t, .. oOnly.After];
-        return null;
+    /// <summary>Two hunks change the same base items, or one inserts strictly inside the other's range, or both insert at one point.</summary>
+    private static bool Touch(Hunk x, Hunk y)
+    {
+        var xi = x.Start == x.End;
+        var yi = y.Start == y.End;
+        if (xi && yi) return x.Start == y.Start;
+        if (xi) return y.Start < x.Start && x.Start < y.End;
+        if (yi) return x.Start < y.Start && y.Start < x.End;
+        return x.Start < y.End && y.Start < x.End;
+    }
+
+    /// <summary>A side's changes against the base, from the longest common subsequence.</summary>
+    private static List<Hunk> Hunks(List<string> b, List<string> side)
+    {
+        var map = Lcs(b, side);
+        var hunks = new List<Hunk>();
+        int bi = 0, si = 0;
+        while (true)
+        {
+            var next = bi;
+            while (next < b.Count && map[next] < 0) next++;
+            var sNext = next < b.Count ? map[next] : side.Count;
+            if (next > bi || sNext > si) hunks.Add(new Hunk(bi, next, side[si..sNext]));
+            if (next >= b.Count) return hunks;
+            bi = next + 1;
+            si = sNext + 1;
+        }
     }
 
     /// <summary>Both sides inserted here: ours first, then theirs, an identical insertion once.</summary>
@@ -308,17 +337,6 @@ public static class ProfileMerge
         }
 
         return result;
-    }
-
-    private static (List<string> Before, List<string> After)? Around(List<string> side, List<string> b)
-    {
-        for (var start = 0; start + b.Count <= side.Count; start++)
-        {
-            if (side.Skip(start).Take(b.Count).SequenceEqual(b, StringComparer.Ordinal))
-                return (side[..start], side[(start + b.Count)..]);
-        }
-
-        return null;
     }
 
     /// <summary>For each base index, the index it matches in <paramref name="other"/> (longest common subsequence), or -1.</summary>
@@ -345,7 +363,7 @@ public static class ProfileMerge
 
     // ---- checks after the merge -----------------------------------------------------------------
 
-    private static void Check(JsonObject merged, JsonObject o, JsonObject t, HashSet<string> bothChanged, List<string> conflicts)
+    private static void Check(JsonObject merged, JsonObject o, JsonObject t, List<string> conflicts)
     {
         void Fail(string field)
         {
@@ -353,8 +371,9 @@ public static class ProfileMerge
             Set(merged, field, t[field]);
         }
 
-        // The first repository sets the working directory of the commands.
-        if (bothChanged.Contains("repos") && !conflicts.Contains("repos"))
+        // The first repository sets the working directory of the commands: whenever the two sides
+        // are merged, the merged first repository must be the first repository of both.
+        if (!conflicts.Contains("repos"))
         {
             var first = (merged["repos"] as JsonArray)?.FirstOrDefault();
             if (!Same(first, (o["repos"] as JsonArray)?.FirstOrDefault()) || !Same(first, (t["repos"] as JsonArray)?.FirstOrDefault())) Fail("repos");

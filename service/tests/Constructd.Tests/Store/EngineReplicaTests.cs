@@ -271,6 +271,64 @@ public sealed class EngineReplicaTests : IAsyncDisposable
         Assert.Equal("""["a","b"]""", Commands(await StoredProfileAsync()));
     }
 
+    [Fact]
+    public async Task A_deletion_based_on_a_revision_before_a_deletion_and_recreation_is_a_conflict()
+    {
+        var (one, linkOne) = Engine("e1");
+        var (two, _) = Engine("e2");
+        await one.WriteProfileAsync(Profile("\"provisionCommands\":[\"a\"]"), null);
+        await one.SyncAsync();
+        await two.SyncAsync();
+
+        linkOne.Partitioned = true;
+        await one.DeleteProfileAsync("web", null);
+        await two.DeleteProfileAsync("web", null);
+        await two.SyncAsync();
+        // Created again with the very same content.
+        await two.WriteProfileAsync(Profile("\"provisionCommands\":[\"a\"]"), null);
+        await two.SyncAsync();
+
+        linkOne.Partitioned = false;
+        Assert.Single((await one.SyncAsync()).ConflictIds);
+        Assert.False((await _store.Store.GetAsync(StandaloneStoreFixture.Account, EngineReplica.ProfileId("web"), default))!.Deleted);
+    }
+
+    [Fact]
+    public async Task A_refused_edit_is_kept_and_goes_through_once_the_engine_understands_the_payload()
+    {
+        var file = _directory.File("replica-upgrade.db");
+        var link = new PartitionableClient(_store.Client("engine-1"));
+        var v1 = new EngineReplica(file, StandaloneStoreFixture.Account, "e1", link, _keys, supportedPayloadVersion: 1);
+        var (newer, _) = Engine("e2", supported: 2);
+        await v1.WriteProfileAsync(Profile("\"provisionCommands\":[\"a\"]"), null);
+        await v1.SyncAsync();
+        await newer.SyncAsync();
+
+        link.Partitioned = true;
+        await v1.WriteProfileAsync(Profile("\"provisionCommands\":[\"a\",\"one\"]"), null);
+        await v1.WriteProfileAsync(Profile("\"provisionCommands\":[\"a\",\"one\",\"two\"]"), null);
+        await newer.WriteProfileAsync(Profile("\"provisionCommands\":[\"a\"],\"hostPackages\":[\"x\"]"), null);
+        await newer.SyncAsync();
+        link.Partitioned = false;
+
+        // Every push reports the refusal again; nothing is dropped.
+        Assert.Single((await v1.PushAsync()).Failed);
+        Assert.Single((await v1.PushAsync()).Failed);
+        Assert.Equal(2, await v1.PendingAsync());
+        Assert.Equal("""["a","one","two"]""", Commands(await v1.ReadAsync(EngineReplica.ProfileId("web"))));
+        v1.Dispose();
+
+        // The engine is updated: the same file, a build that understands version 2.
+        var v2 = new EngineReplica(file, StandaloneStoreFixture.Account, "e1", link, _keys, supportedPayloadVersion: 2);
+        _replicas.Add(v2);
+        var pushed = await v2.SyncAsync();
+        Assert.Empty(pushed.Failed);
+        Assert.Equal(0, await v2.PendingAsync());
+        var stored = await StoredProfileAsync();
+        Assert.Equal("""["a","one","two"]""", Commands(stored));
+        Assert.Equal("""["x"]""", stored["hostPackages"]!.ToJsonString());
+    }
+
     // ---- C.5 ---------------------------------------------------------------------------------------
 
     /// <summary>Engine one and two edit the same command differently while one is partitioned.</summary>
@@ -433,6 +491,23 @@ public sealed class EngineReplicaTests : IAsyncDisposable
         var stored = await StoredProfileAsync();
         Assert.Equal("""["npm ci"]""", Commands(stored));
         Assert.Equal("""{"node":"22"}""", stored["sdks"]!.ToJsonString());
+    }
+
+    [Fact]
+    public async Task A_resolve_carried_over_a_newer_profile_keeps_its_origins()
+    {
+        var (one, two, conflict) = await ConflictAsync();
+        await one.SyncAsync();
+        var changed = (JsonObject)(await one.ReadAsync(EngineReplica.ProfileId("web")))!.DeepClone();
+        changed["sdks"] = new JsonObject { ["node"] = "22" };
+        await one.WriteProfileAsync(changed, "vm:c");
+        await one.SyncAsync();
+
+        var resolved = (JsonObject)conflict.Value["merged"]!.DeepClone();
+        resolved["provisionCommands"] = new JsonArray("npm ci");
+        Assert.IsType<ResolveOutcome.Resolved>(await two.ResolveAsync(conflict.Id, resolved, "vm:b"));
+        var record = await _store.Store.GetAsync(StandaloneStoreFixture.Account, EngineReplica.ProfileId("web"), default);
+        Assert.Equal(["vm:a", "vm:b", "vm:c"], RecordPayload.OriginsOf(await OpenAsync(_keys, record!)).Order());
     }
 
     [Fact]

@@ -133,7 +133,7 @@ public sealed class EngineReplica : IDisposable
     public async Task<int> PendingAsync(CancellationToken ct = default)
     {
         await _lock.WaitAsync(ct);
-        try { return Convert.ToInt32(Scalar("SELECT COUNT(*) FROM outbox WHERE account = $a AND failed IS NULL", ("$a", _account)), CultureInfo.InvariantCulture); }
+        try { return Convert.ToInt32(Scalar("SELECT COUNT(*) FROM outbox WHERE account = $a", ("$a", _account)), CultureInfo.InvariantCulture); }
         finally { _lock.Release(); }
     }
 
@@ -211,6 +211,11 @@ public sealed class EngineReplica : IDisposable
             int sent = 0, merged = 0;
             var conflicts = new List<string>();
             var failed = new List<string>();
+
+            // A refusal holds an entry, and the edits queued after it for the same record, back for
+            // this push only: every push tries again (a newer build may understand the payload by
+            // then), so an acknowledged edit is never dropped.
+            Exec(null, "UPDATE outbox SET failed = NULL WHERE account = $a", ("$a", _account));
             long epoch = 0;
             byte[] key = [];
             while (NextEntry() is { } entry)
@@ -316,10 +321,12 @@ public sealed class EngineReplica : IDisposable
             return Fail(entry, new PayloadTooNewException(RecordPayload.VersionOf(theirs.Payload), _supported).Message);
 
         var origins = entry.Origins.Concat(RecordPayload.OriginsOf(theirs.Payload)).ToList();
+        var baseRevision = entry.BaseRevision ?? 0;
+        var deletedSinceBase = theirs.DeletedRevision is { } deletedAt && deletedAt > baseRevision && entry.BaseValue is not null;
         if (entry.Deleted)
         {
             if (theirs.Deleted) return Drop(entry);
-            if (ProfileMerge.Same(theirs.Value, entry.BaseValue))
+            if (!deletedSinceBase && ProfileMerge.Same(theirs.Value, entry.BaseValue))
             {
                 // Theirs did not change the content: the deletion still holds.
                 Rebase(entry with { Origins = origins }, theirs.Revision, theirs.Value);
@@ -331,8 +338,7 @@ public sealed class EngineReplica : IDisposable
 
         // 9.5: an edit of a deleted profile, or one based on a revision before a deletion, is a
         // conflict, also when the name was created again since.
-        var baseRevision = entry.BaseRevision ?? 0;
-        if (theirs.Deleted || (theirs.DeletedRevision is { } deletedAt && deletedAt > baseRevision && entry.BaseValue is not null))
+        if (theirs.Deleted || deletedSinceBase)
             return await ConflictAsync(entry, theirs, null, ["deleted"], epoch, key, ct);
 
         var result = ProfileMerge.Merge(entry.BaseValue as JsonObject, (JsonObject)entry.Value!, (JsonObject)theirs.Value!);
@@ -444,7 +450,7 @@ public sealed class EngineReplica : IDisposable
                 }
 
                 var profileWrite = Sealed(key, conflict.ProfileId, RecordKinds.Profile, epoch, profile?.Revision ?? 0, false,
-                    RecordPayload.Rewrite(profile is { Deleted: false } ? currentPayload : null, resolved, origins, _supported));
+                    RecordPayload.Rewrite(profile is { Deleted: false } ? currentPayload : null, resolved, origins.Concat(RecordPayload.OriginsOf(currentPayload)), _supported));
                 var close = Sealed(key, conflictId, RecordKinds.Conflict, epoch, conflictRecord.Revision, true, RecordPayload.Rewrite(null, null, origins, _supported));
 
                 switch (await _store.BatchAsync([profileWrite.Write, close.Write], ct))
@@ -580,7 +586,7 @@ public sealed class EngineReplica : IDisposable
 
     private (JsonNode? Value, bool Pending) LocalValue(string id)
     {
-        using var command = Command(null, "SELECT value, deleted FROM outbox WHERE account = $a AND id = $id AND failed IS NULL ORDER BY seq DESC LIMIT 1", ("$a", _account), ("$id", id));
+        using var command = Command(null, "SELECT value, deleted FROM outbox WHERE account = $a AND id = $id ORDER BY seq DESC LIMIT 1", ("$a", _account), ("$id", id));
         using var reader = command.ExecuteReader();
         if (reader.Read()) return (reader.GetInt64(1) != 0 || reader.IsDBNull(0) ? null : JsonNode.Parse(reader.GetString(0)), true);
         return (Replica(id)?.Value?.DeepClone(), false);
