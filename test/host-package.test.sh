@@ -8,6 +8,12 @@ head -c 131072 /dev/urandom > "$task_dir/publish/Constructd.Api.exe"
 printf '{}\n' > "$task_dir/publish/appsettings.json"
 mkdir "$task_dir/fdd"
 head -c 4096 /dev/urandom > "$task_dir/fdd/Constructd.Api.exe"
+# What a win-x64 publish carries besides the executable: the Hyper-V driver and the adoption's guest files.
+for dir in publish fdd; do
+  mkdir -p "$task_dir/$dir/hyperv" "$task_dir/$dir/guest"
+  cp service/src/Constructd.Windows/HyperV/Scripts/*.ps1 "$task_dir/$dir/hyperv/"
+  cp bin/adopt-host.py bin/construct "$task_dir/$dir/guest/"
+done
 printf '%s' '{"runtimeOptions":{"frameworks":[{"name":"Microsoft.NETCore.App","version":"10.0.0"},{"name":"Microsoft.AspNetCore.App","version":"10.0.0"}]}}' > "$task_dir/fdd/Constructd.Api.runtimeconfig.json"
 mkdir "$task_dir/linux"
 head -c 65536 /dev/urandom > "$task_dir/linux/Constructd.Api"
@@ -43,6 +49,12 @@ for prefix in ('payload','frameworkDependent'):
             assert hashlib.sha256(z.read(path)).hexdigest()==sha;checks+=1
         assert files[m['updaterPath']]==m['updaterSha256'];checks+=1
         assert z.read('scripts/config/iso-builder.json')==pathlib.Path('config/iso-builder.json').read_bytes();checks+=1
+        for name in ('HyperV.Driver.ps1','HyperV.ChildVm.ps1','HyperV.WindowsLicense.ps1'):
+            assert z.read('service/hyperv/'+name)==pathlib.Path('service/src/Constructd.Windows/HyperV/Scripts/'+name).read_bytes();checks+=1
+        assert z.read('service/guest/adopt-host.py')==pathlib.Path('bin/adopt-host.py').read_bytes();checks+=1
+        # The Windows host needs no client driver or VM scripts; its installer and updater keep theirs.
+        assert not any(p.startswith(('scripts/drivers/','scripts/Create-AgentVM.ps1','scripts/Provision-AgentVM.ps1')) for p in files);checks+=1
+        assert {'scripts/service/host/Install-ConstructHost.ps1','scripts/lib/Construct.Iso.ps1','scripts/lib/AgentVm.Common.ps1','scripts/bin/adopt-host.py'} <= set(files);checks+=1
         assert not any('appsettings.Production.json' in p or '/keys/' in p for p in files);checks+=1
 linux=root/m['linuxAsset']
 assert m['linuxAsset']=='construct-host-'+sys.argv[2][:7]+'-linux-x64.zip';checks+=1
@@ -50,6 +62,8 @@ assert linux.stat().st_size==m['linuxSizeBytes'];checks+=1
 assert hashlib.sha256(linux.read_bytes()).hexdigest()==m['linuxSha256'];checks+=1
 with zipfile.ZipFile(linux) as z:
     assert {'service/Constructd.Api','scripts/bin/provision.sh','updater/update-construct-host.sh'} <= set(z.namelist());checks+=1
+    # The Proxmox package is as before: its checkout keeps the client scripts.
+    assert {'scripts/drivers/Load-ConstructDriver.ps1','scripts/Provision-AgentVM.ps1'} <= set(z.namelist());checks+=1
     sums=z.read('SHA256SUMS')
     assert hashlib.sha256(sums).hexdigest()==m['linuxSumsSha256'];checks+=1
     files=dict((line[66:],line[:64]) for line in sums.decode().splitlines())

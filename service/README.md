@@ -96,10 +96,11 @@ on. Fake mode can be combined with `Constructd:Persistence=Sqlite` (fake hypervi
 which is how the persistence tests drive the API.
 
 Without fake mode the service needs Windows, and off Windows it refuses to start rather than coming up
-half-wired. On Windows it also validates at startup that `Constructd:ScriptsDir` really is a Construct
-checkout (it must contain `drivers\Load-ConstructDriver.ps1`, `lib\AgentVm.Common.ps1` and
-`bin\build-autoinstall-iso.sh`) — a misconfiguration that would otherwise surface as a VM creation
-failing twenty minutes in. The SQLite stores are real in both modes.
+half-wired. On Windows it needs no Construct checkout: the Hyper-V driver's PowerShell ships in the
+service package (`hyperv\HyperV.*.ps1` next to the executable, from
+`src/Constructd.Windows/HyperV/Scripts`), and the service checks at startup that those files are there
+— an incomplete package would otherwise surface as a VM creation failing twenty minutes in. The
+SQLite stores are real in both modes.
 
 A quick local session:
 
@@ -844,7 +845,8 @@ Bound from the `Constructd` section of `appsettings.json`, from environment vari
 | `CertPath` / `CertPassword` | – | PFX for TLS. |
 | `CertThumbprint` | – | Certificate from `LocalMachine\My` (what the client pins at enrollment). |
 | `PreviousCertPath` / `PreviousCertPassword` / `PreviousCertThumbprint` | – | The certificate the host presented before a rename of its public host. It stays in service for handshakes without SNI (address-based URLs) and for names the current certificate does not own alone, so clients that pinned it keep working; see [docs/proxmox-host.md](../docs/proxmox-host.md#renaming-the-host). The updater's loopback health check pins it while it is set (on Windows from `PreviousCertThumbprint`, as for `CertThumbprint`). |
-| `ScriptsDir` | – | The Construct checkout the service invokes (`drivers\`, `lib\`, `bin\`). Validated at startup. |
+| `ScriptsDir` | – | The installer's scripts (the host package's `scripts\`), which the host updater refreshes. The Windows service itself reads nothing from it; on Proxmox it holds `bin/provision.sh`. |
+| `Solo` | `false` | A single PC's own engine, written by `Install-ConstructHost.ps1 -Solo`; enables `GET/PUT /api/v1/host/lan-access`. |
 | `WslDistro` | `Ubuntu` | WSL distro used for the ISO build. Empty uses WSL's default distro (no `-d`). |
 | `PublicHost` | `localhost` | LAN name/IP that endpoints and forwards are advertised on, and what the API certificate is bound to. |
 | `PublicHostPattern` | – (empty) | Per-VM host name template, e.g. `{name}.vpn.example`. With a wildcard DNS record pointing at this host, every VM gets its OWN name, so two VMs' web UIs are separate origins (browsers scope cookies by host, not by port). `{name}` must appear exactly once and the pattern must render to a valid DNS name for every VM name — checked at startup. Empty = every VM is advertised on `PublicHost`. The certificate is unaffected. |
@@ -1634,7 +1636,7 @@ Run it again after publishing a new build: it updates binaries, settings and the
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `-ScriptsDir` | *(required)* | The Construct checkout the service invokes. Verified to contain `drivers\`, `lib\` and `bin\`. |
+| `-ScriptsDir` | *(required)* | The installer's own scripts (`lib\`, `config\`, `service\host\`): the host package's `scripts\` or a checkout. The service needs nothing from it. |
 | `-PublishDir` | *(required)* | Where the published executable is. |
 | `-ListenUrl` | `https://0.0.0.0:7462` | The port from this URL is the one opened in the firewall. |
 | `-PublicHost` | `$env:COMPUTERNAME` | What clients dial and the certificate is bound to. |
@@ -1655,6 +1657,38 @@ Run it again after publishing a new build: it updates binaries, settings and the
 | `-KeepHostAwake` | *(ask)* | Set this host's AC sleep, hibernate and unattended-sleep timeouts to *never*. Not given: an interactive run asks, an unattended one (no console input, or `-WhatIf`) leaves the power plan alone. |
 | `-SkipPowerSettings` | off | Do not read or change the power plan at all — no report, no prompt. |
 | `-NoStart` | off | Register the service but do not start it. |
+| `-Solo` | off | This PC's own engine; see *Solo install* below. |
+| `-TokenFile` | – | With `-Solo` (required): where the admin token is written, readable by `-AdminUser` only. |
+| `-BootstrapKeyPath` | – | With `-Solo`: the old client's `keys\bootstrap_ed25519`, taken over with its `.pub`; otherwise a pair is generated once. |
+
+### Solo install
+
+`-Solo` is what the client installer runs, with its one elevation, on a PC whose only host is itself
+(design 5.3). It differs from a shared host in five places:
+
+- **Who reaches it.** The service listens on the API port as usual, but the installer opens one firewall
+  rule only, `Construct constructd guests`: inbound TCP on the API port on `vEthernet (<switch>)`, the
+  Default Switch's host interface. This PC reaches it over loopback and its VMs over the switch; the LAN
+  does not. No rule is created for the forward ranges. For pairing a second device the device agent
+  switches LAN access on (`PUT /api/v1/host/lan-access {"enabled":true}`), which adds one more rule,
+  `ConstructEngineLan`, for the private profile. The uninstaller removes both.
+- **Its name.** `-PublicHost` becomes `<computer>.mshome.net`, the PC's name on the Default Switch, which
+  follows the switch's address across reboots. The certificate is bound to it and the VMs' service URL
+  uses it.
+- **Who signs in.** `-AdminUser` defaults to the user who started the installer (captured before the
+  elevation). Their admin token goes into `-TokenFile` as JSON (`url` = `https://127.0.0.1:<port>`,
+  `user`, `token`, `certificateSha256`), created with an ACL that names that user alone. Kerberos is off
+  (`Negotiate:Enabled=false`).
+- **The bootstrap key** lives in `<DataDir>\keys`, owned by LocalSystem.
+- **The PC's power plan** is not read or changed, and the service does not hold the PC awake while its
+  VM runs (`Power:KeepHostAwake=false`), as the old local install did not.
+
+A VM the old client made on this PC is adopted without being rebuilt:
+`constructd admin vms adopt-local <name> --owner <user> --settings <.construct-settings.json>
+[--instance-state <instances\name.json>] --ssh-key <the client's key for root>`, or the job
+`POST /api/v1/vms/{name}/adopt` with the files' content. The engine reads CPU, memory and disk from
+Hyper-V, stores the old client's settings as the VM's desired state, checks that the guest's firmware id
+is this VM's, and switches the guest to the engine with `bin/adopt-host.py`; the VM keeps running.
 
 **The certificate's identity is the one value that has to leave the machine** — clients pin it at
 enrollment — so the installer prints it prominently at the end, next to the admin token. A
