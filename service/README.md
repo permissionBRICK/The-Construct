@@ -287,7 +287,7 @@ gate: the resource policy is evaluated again inside every handler.
 | Child lifecycle | `POST /vms/{parent}/children`; `POST /vms/{name}/lifecycle`; `POST /vms/{name}/lease`; `PUT /vms/{name}/sharing`; `PUT /vms/{name}/hardware`; `PUT /vms/{name}/media`; `DELETE /vms/{name}` | Parent delegate creates; operator lifecycle; owner/Admin-only lease, sharing, configuration and deletion. Shared callers cannot delete or configure. |
 | Addresses/forwards | `GET /vms/{name}/addresses`; `GET`, `POST /vms/{name}/forwards`; `DELETE /vms/{name}/forwards/{id}`; `POST /vms/{name}/forwards/{id}/ack` | Existing self/owner rules for a primary; child relationship rules for a child. Ack always requires a user credential and, for a child, the owner of the `via` primary or Admin. |
 | Jobs | `GET /jobs`; `GET /jobs/{id}`; `GET /jobs/{id}/events`; `POST /jobs/{id}/cancel` | Owner/initiator or Admin. Event streams replay progress and phase history, then one terminal state. |
-| Provisioning | `POST /vms/{name}/jobs` (`provision`, `reinstall`, `restore`); `GET /vms/{name}/provision-status` | Owner/Admin user credential, primaries only. See *Provisioning from the engine*. |
+| Provisioning | `POST /vms/{name}/jobs` (`provision`, `reinstall`, `restore`); `GET /vms/{name}/provision-status`; `GET`, `PUT /vms/{name}/desired` | Owner/Admin user credential, primaries only. See *Provisioning from the engine*. |
 | Media | `GET /media`; `POST /media/acquire`; `POST /media/uploads`; `GET /media/uploads/{id}`; `PUT /media/uploads/{id}/chunks/{index}`; `POST /media/uploads/{id}/complete`; `DELETE /media/uploads/{id}`; `GET /media/{id}`; `GET /media/{id}/references`; `DELETE /media/{id}`; `POST /media/cleanup` | Owner primary/user or Admin; a shared operator gets only reduced metadata for attached media. Cleanup is Admin-only. |
 | Console | `GET /vms/{name}/console/capabilities`; `POST /vms/{name}/console/sessions`; `POST /vms/{name}/console/sessions/{sid}/renew`; `DELETE /vms/{name}/console/sessions/{sid}`; `GET /vms/{name}/console/sessions/{sid}/screenshot`; `POST .../{sid}/keyboard`; `POST .../{sid}/mouse` | Current VM operator; session remains bound to its creating principal and is re-authorized on every call. |
 | Host updates | `GET /host/updates/status`; `POST /host/updates/check`; `POST /host/updates/stage`; `POST /host/updates/apply`; `POST /host/updates/cancel`; `POST /host/updates/resolve` | Admin. Apply (including resume) and resolve are the only narrowly maintenance-exempt mutations. |
@@ -330,6 +330,11 @@ The engine connects as the seed user (`Iso:SeedUser`, or the configured user of 
 the bootstrap key next to `Iso:BootstrapPublicKeyPath`, accepting new host keys into `ssh/known_hosts`
 beside the database. `GET /vms/{name}/provision-status` answers `settingsChanged`, `newerPayload` and
 `hardwareChanged` (design 7.5) with what each is computed from.
+
+`GET /vms/{name}/desired` answers the stored settings `{desired: {projects[], settings}, hash, updatedAt, updatedBy}`
+(all null before any are stored); `PUT` with `{projects[], settings}` stores them and changes nothing in the VM, so
+`settingsChanged` turns true until a provision ran with them. Stored settings belong to the VM they were stored for:
+a VM created again under the name (by anyone) starts without them.
 
 The same route starts the two other jobs of a VM's life:
 

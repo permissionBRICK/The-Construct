@@ -140,11 +140,11 @@ public sealed class ProvisionJobs(IJobStore jobs, IJobQueryStore history, IPersi
         StoredDesiredState state;
         if (request.Desired is { } given)
         {
-            state = new StoredDesiredState(given, ProvisionScript.DesiredHash(given), clock.UtcNow, actor);
+            state = new StoredDesiredState(given, ProvisionScript.DesiredHash(given), clock.UtcNow, actor, vm.Created);
         }
         else
         {
-            state = await desired.GetDesiredAsync(vm.Name, ct)
+            state = await desired.GetDesiredForAsync(vm, ct)
                 ?? throw new ProvisionRequestException(409, "desired-state-missing", "No settings are stored for this VM yet; send 'desired' once.");
         }
 

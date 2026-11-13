@@ -23,6 +23,10 @@ public static partial class ProvisionEndpoints
             .Accepts<VmJobRequest>("application/json").Produces<VmJobAcceptedResponse>(StatusCodes.Status202Accepted).WithName("StartVmJob");
         api.MapGet("/vms/{name}/provision-status", StatusAsync).RequireAuthorization(Policies.User)
             .Produces<ProvisionStatusResponse>().WithName("GetVmProvisionStatus");
+        api.MapGet("/vms/{name}/desired", GetDesiredAsync).RequireAuthorization(Policies.User)
+            .Produces<VmDesiredStateResponse>().WithName("GetVmDesiredState");
+        api.MapPut("/vms/{name}/desired", SetDesiredAsync).RequireAuthorization(Policies.User).Audited("vm.desired")
+            .Accepts<VmDesiredState>("application/json").Produces<VmDesiredStateResponse>().WithName("SetVmDesiredState");
         return api;
     }
 
@@ -79,6 +83,40 @@ public static partial class ProvisionEndpoints
         }
     }
 
+    private static async Task<(Vm? Vm, IResult? Denied)> PrimaryAsync(string name, HttpContext http, IVmRepository vms, CancellationToken ct)
+    {
+        var vm = await vms.GetAsync(name, ct);
+        if (vm is null) return (null, Problems.NotFound("Unknown VM."));
+        if (await LifecycleEndpoints.AuthorizeAsync(vm, http, true, ct) is { } denied) return (null, denied);
+        if (vm.Kind != VmKind.Primary) return (null, LifecycleEndpoints.Problem("not-a-primary"));
+        return (vm, null);
+    }
+
+    /// <summary><c>GET /vms/{name}/desired</c>: the settings the next provision uses; all null before any are stored.</summary>
+    private static async Task<IResult> GetDesiredAsync(string name, HttpContext http, IVmRepository vms, IVmDesiredStateSource desired, CancellationToken ct)
+    {
+        var (vm, denied) = await PrimaryAsync(name, http, vms, ct);
+        if (vm is null) return denied!;
+        return Results.Ok(VmDesiredStateResponse.From(await desired.GetDesiredForAsync(vm, ct)));
+    }
+
+    /// <summary>
+    /// <c>PUT /vms/{name}/desired</c>: stores the settings for the next provision and changes nothing in the VM;
+    /// <c>provision-status</c> then reports that a change waits (design 7.5).
+    /// </summary>
+    private static async Task<IResult> SetDesiredAsync(string name, VmDesiredState body, HttpContext http, IVmRepository vms,
+        IVmDesiredStateSource desired, IClock clock, CancellationToken ct)
+    {
+        var (vm, denied) = await PrimaryAsync(name, http, vms, ct);
+        if (vm is null) return denied!;
+        if (vm.Deleting) return LifecycleEndpoints.Problem("vm-deleting");
+        if (Validate(body) is { } field) return CodedProblems.Validation(field["desired.".Length..], "Invalid value.");
+        var state = new StoredDesiredState(body, ProvisionScript.DesiredHash(body), clock.UtcNow, http.User.Actor(), vm.Created);
+        await desired.SetDesiredAsync(vm.Name, state, ct);
+        http.SetAuditDetail("hash=" + state.Hash[..12]);
+        return Results.Ok(VmDesiredStateResponse.From(state));
+    }
+
     /// <summary>Only what reaches a shell needs a pattern; every other value is single-quoted there.</summary>
     private static string? Validate(VmDesiredState? desired)
     {
@@ -98,7 +136,7 @@ public static partial class ProvisionEndpoints
         if (vm is null) return Problems.NotFound("Unknown VM.");
         if (await LifecycleEndpoints.AuthorizeAsync(vm, http, true, ct) is { } denied) return denied;
         if (vm.Kind != VmKind.Primary) return LifecycleEndpoints.Problem("not-a-primary");
-        var want = await desired.GetDesiredAsync(vm.Name, ct);
+        var want = await desired.GetDesiredForAsync(vm, ct);
         var have = await applied.GetAppliedAsync(vm.Name, ct);
         var available = SourceZipRules.ValidCommit(release.Installed.Commit) ? release.Installed.Commit : null;
         var cpuSetting = await cpu.GetAsync(vm, ct);
@@ -106,7 +144,8 @@ public static partial class ProvisionEndpoints
         int? pendingCpu = cpuSetting is not null && cpuSetting.Cpus != vm.Cpu ? cpuSetting.Cpus : null;
         int? pendingRam = memorySetting is not null && memorySetting.RamGb != vm.RamGb ? memorySetting.RamGb : null;
         return Results.Ok(new ProvisionStatusResponse(
-            SettingsChanged: want is not null && have is not null && want.Hash != have.DesiredHash,
+            // Stored settings the guest has not been provisioned with yet wait too, also before the first run.
+            SettingsChanged: want is not null && want.Hash != have?.DesiredHash,
             NewerPayload: available is not null && have?.Commit is { } commit && !string.Equals(commit, available, StringComparison.OrdinalIgnoreCase),
             HardwareChanged: pendingCpu is not null || pendingRam is not null,
             want?.Hash, available, have, pendingCpu, pendingRam));

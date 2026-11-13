@@ -59,3 +59,14 @@ public sealed record ProvisionStatusResponse(
     VmAppliedState? Applied,
     int? PendingCpu,
     int? PendingRamGb);
+
+/// <summary>
+/// <c>GET</c>/<c>PUT /vms/{name}/desired</c>: the VM's stored settings, which every provision job uses unless its
+/// request carries its own. All fields are null while none are stored. <paramref name="Hash"/> is the value
+/// <c>provision-status</c> compares with what the guest was last provisioned with.
+/// </summary>
+public sealed record VmDesiredStateResponse(VmDesiredState? Desired, string? Hash, DateTimeOffset? UpdatedAt, string? UpdatedBy)
+{
+    public static VmDesiredStateResponse From(StoredDesiredState? stored) =>
+        new(stored?.Desired, stored?.Hash, stored?.UpdatedAt, stored?.UpdatedBy);
+}

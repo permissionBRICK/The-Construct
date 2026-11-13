@@ -14,6 +14,13 @@ public interface IVmDesiredStateSource
     Task SetDesiredAsync(string vmName, StoredDesiredState desired, CancellationToken ct);
 }
 
+public static class VmDesiredStateSourceExtensions
+{
+    /// <summary>The stored settings of this VM, or null when none are stored or they belong to an earlier VM of the name.</summary>
+    public static async Task<StoredDesiredState?> GetDesiredForAsync(this IVmDesiredStateSource source, Vm vm, CancellationToken ct) =>
+        await source.GetDesiredAsync(vm.Name, ct) is { } stored && (stored.VmCreated is null || stored.VmCreated == vm.Created) ? stored : null;
+}
+
 /// <summary>What the guest reported after the last provision run (the <c>vm-applied</c> record).</summary>
 public interface IVmAppliedStateStore
 {
