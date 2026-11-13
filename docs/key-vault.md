@@ -88,6 +88,7 @@ $ construct secret release github-token staging-db
 | `delete <name>` | yes | Removes a secret from the vault. |
 | `auto-approve <name> on` | yes | Switches auto-approve on. |
 | `auto-approve <name> off` | no | Switches it off: requests need your approval again. |
+| `ask <name> --description … [--reason …]` | no (you enter the value) | Hosted VMs whose vault your devices keep: asks you to enter a secret the vault does not hold. You paste the value on a device; it is created only if the name is still free, needs your approval for every use and is never auto-approved. `list` shows the name as `requested` until then; the request lapses after a day. |
 
 `get` prints the value exactly, with no newline added. Values never appear on a command line:
 `add` reads stdin, and every value travels between the VM and the Companion only on stdin
