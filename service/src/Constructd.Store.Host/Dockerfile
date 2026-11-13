@@ -3,6 +3,7 @@
 # Build from service/:  docker build -f src/Constructd.Store.Host/Dockerfile .
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
+COPY src/Construct.Keys/ src/Construct.Keys/
 COPY src/Constructd.Store/ src/Constructd.Store/
 COPY src/Constructd.Store.Host/ src/Constructd.Store.Host/
 RUN dotnet publish src/Constructd.Store.Host/Constructd.Store.Host.csproj -c Release -o /out

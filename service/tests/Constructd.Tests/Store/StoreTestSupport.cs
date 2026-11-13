@@ -6,6 +6,7 @@ using Constructd.Sync.Sealing;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Constructd.Tests.Store;
 
@@ -60,6 +61,11 @@ public sealed class StandaloneStoreFixture : IAsyncDisposable
     private readonly WebApplication _app;
 
     public StandaloneStoreFixture(string directory, params (string Token, ParticipantKind Kind, string Id)[] participants)
+        : this(directory, null, participants)
+    {
+    }
+
+    public StandaloneStoreFixture(string directory, TimeProvider? time, params (string Token, ParticipantKind Kind, string Id)[] participants)
     {
         var settings = new List<string> { $"--Store:DatabasePath={Path.Combine(directory, "store.db")}" };
         for (var i = 0; i < participants.Length; i++)
@@ -70,11 +76,23 @@ public sealed class StandaloneStoreFixture : IAsyncDisposable
             settings.Add($"--Store:Participants:{i}:Id={participants[i].Id}");
         }
 
-        _app = StandaloneStore.Build([.. settings], builder => builder.WebHost.UseTestServer());
+        _app = StandaloneStore.Build([.. settings], builder =>
+        {
+            builder.WebHost.UseTestServer();
+            if (time is not null) builder.Services.AddSingleton(time);
+        });
         _app.StartAsync().GetAwaiter().GetResult();
     }
 
     public RecordStore Store => (RecordStore)_app.Services.GetService(typeof(RecordStore))!;
+
+    /// <summary>The setup code the store printed at start.</summary>
+    public string? SetupCode => ((StoreSetup)_app.Services.GetService(typeof(StoreSetup))!).Code;
+
+    /// <summary>The in-process server, for clients with their own handlers (device credentials).</summary>
+    public HttpMessageHandler Handler() => _app.GetTestServer().CreateHandler();
+
+    public static readonly Uri Base = new("http://localhost/api/v1/store/");
 
     public HttpClient Http(string? token)
     {

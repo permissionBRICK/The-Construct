@@ -11,7 +11,7 @@ namespace Constructd.Store.Http;
 /// The store's routes (9.2), the same in constructd (under <c>/api/v1/store</c>) and in the
 /// stand-alone host. Who the caller is comes from <see cref="IStorePrincipalResolver"/>.
 /// </summary>
-public static class StoreEndpoints
+public static partial class StoreEndpoints
 {
     /// <summary>How long a feed request waits for a change at most.</summary>
     public static readonly TimeSpan MaxWait = TimeSpan.FromSeconds(30);
@@ -81,6 +81,7 @@ public static class StoreEndpoints
                 : Error(409, "store-not-empty", "An import goes into an account that has no records yet.");
         }), "store.import");
 
+        MapIdentity(routes, mutation);
         return routes;
     }
 
