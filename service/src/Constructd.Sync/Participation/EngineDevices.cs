@@ -71,10 +71,21 @@ public sealed class EngineDevices(
     private readonly ConcurrentDictionary<string, IReadOnlyDictionary<string, DeviceRecordValue>> _devices = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<(string, string), bool> _acknowledged = new();
 
+    // Reads of the device records, and enrolment's check-then-issue, run one at a time: an older
+    // snapshot never replaces a newer one, and no token is issued after a read that saw the device revoked.
+    private readonly SemaphoreSlim _lock = new(1, 1);
+
     public string EngineId => keys.EngineId;
 
     /// <summary>Reads the account's <c>device</c> records from the store and applies revocations.</summary>
     public async Task<IReadOnlyDictionary<string, DeviceRecordValue>> RefreshAsync(string account, CancellationToken ct)
+    {
+        await _lock.WaitAsync(ct).ConfigureAwait(false);
+        try { return await RefreshLockedAsync(account, ct).ConfigureAwait(false); }
+        finally { _lock.Release(); }
+    }
+
+    private async Task<IReadOnlyDictionary<string, DeviceRecordValue>> RefreshLockedAsync(string account, CancellationToken ct)
     {
         var store = storeFor(account);
         var found = new Dictionary<string, DeviceRecordValue>(StringComparer.Ordinal);
@@ -117,10 +128,15 @@ public sealed class EngineDevices(
     /// </summary>
     public async Task<string?> EnrollAsync(string account, string deviceId, string? proof, CancellationToken ct)
     {
-        var devices = await RefreshAsync(account, ct).ConfigureAwait(false);
-        if (!devices.TryGetValue(deviceId, out var device) || device.Status != DeviceRecordValue.Active) return null;
-        if (!RequestProof.Verify(ParticipantPublicKey.Parse(device.PublicKey), ProofSubjects.EngineEnroll(EngineId, account, deviceId), proof, _time.GetUtcNow())) return null;
-        return keys.IssueDeviceToken(account, deviceId);
+        await _lock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var devices = await RefreshLockedAsync(account, ct).ConfigureAwait(false);
+            if (!devices.TryGetValue(deviceId, out var device) || device.Status != DeviceRecordValue.Active) return null;
+            if (!RequestProof.Verify(ParticipantPublicKey.Parse(device.PublicKey), ProofSubjects.EngineEnroll(EngineId, account, deviceId), proof, _time.GetUtcNow())) return null;
+            return keys.IssueDeviceToken(account, deviceId);
+        }
+        finally { _lock.Release(); }
     }
 
     /// <summary>The device a token and proof stand for, or null.</summary>

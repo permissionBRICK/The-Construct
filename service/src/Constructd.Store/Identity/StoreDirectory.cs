@@ -300,15 +300,19 @@ public sealed class StoreDirectory : IDisposable
     /// <summary>
     /// The one redemption of an approved pairing: marks it redeemed, registers the device in the
     /// approver's account and issues its store token. Null when the pairing is gone, expired, not
-    /// approved, already redeemed, or the device is already registered.
+    /// approved, already redeemed, its approver has been revoked since, or the device is already registered.
     /// </summary>
     public string? Redeem(string id)
     {
         lock (_lock)
         {
             using var tx = _connection.BeginTransaction();
-            using var find = Command("SELECT public_key, name, account FROM store_pairings WHERE id = $id AND account IS NOT NULL AND redeemed = 0 AND expires_at >= $now",
-                ("$id", id), ("$now", Stamp(Now)));
+            // The approver must still be active: revoking a device also voids the grants it approved.
+            using var find = Command("""
+                SELECT p.public_key, p.name, p.account FROM store_pairings p
+                JOIN store_devices d ON d.account = p.account AND d.id = p.approver_id AND d.status = 'active'
+                WHERE p.id = $id AND p.redeemed = 0 AND p.expires_at >= $now
+                """, ("$id", id), ("$now", Stamp(Now)));
             find.Transaction = tx;
             string key, name, account;
             using (var reader = find.ExecuteReader())

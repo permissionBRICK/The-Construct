@@ -160,6 +160,23 @@ public sealed class IdentityTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Revoking_the_approver_voids_the_grant_it_approved()
+    {
+        var first = await FirstDeviceAsync();
+        var second = await PairedDeviceAsync(first, "desktop");
+        var third = Device("tablet");
+        var (pairingId, _) = await third.StartPairingAsync();
+        Assert.Equal(HttpStatusCode.NoContent, (await second.ApproveAsync(pairingId)).Response.StatusCode);
+
+        using (var store = first.Store())
+        {
+            Assert.Equal(HttpStatusCode.NoContent, (await store.DeleteAsync("devices/" + second.Id)).StatusCode);
+        }
+
+        Assert.Equal(HttpStatusCode.Gone, (await third.RedeemAsync(pairingId)).StatusCode);
+    }
+
+    [Fact]
     public async Task A_pairing_expires_after_ten_minutes()
     {
         var first = await FirstDeviceAsync();
