@@ -152,19 +152,20 @@ public sealed class BackupCoordinator(IBackupStore store, IBackupFiles files, IH
         return expired.Count;
     }
 
-    /// <summary>Records a skipped or failed run: the first one after a success starts the failure streak.</summary>
-    public async Task RecordFailureLockedAsync(string owner, string vm, string trigger, string reason, string? detail, CancellationToken ct)
+    /// <summary>
+    /// Records a skipped or failed run: the first one after a success starts the failure streak. With
+    /// <paramref name="answersRequest"/> the run answered the open request: it is the attempt and consumes the
+    /// request. Without it (an upload whose session already consumed its request at create), the attempt time
+    /// and a request opened since stay as they are.
+    /// </summary>
+    public async Task RecordFailureLockedAsync(string owner, string vm, string trigger, string reason, string? detail, bool answersRequest,
+        CancellationToken ct)
     {
         var now = clock.UtcNow;
         var state = await store.GetVmAsync(owner, vm, ct).ConfigureAwait(false) ?? new BackupVmState(owner, vm);
-        await store.SaveVmAsync(state with
-        {
-            LastAttemptAt = now,
-            LastFailure = new BackupFailure(now, trigger, reason, detail),
-            FailingSince = state.FailingSince ?? now,
-            RequestPendingAt = null,
-            RequestTrigger = null,
-        }, ct).ConfigureAwait(false);
+        state = state with { LastFailure = new BackupFailure(now, trigger, reason, detail), FailingSince = state.FailingSince ?? now };
+        if (answersRequest) state = state with { LastAttemptAt = now, RequestPendingAt = null, RequestTrigger = null };
+        await store.SaveVmAsync(state, ct).ConfigureAwait(false);
     }
 
     /// <summary>

@@ -277,7 +277,7 @@ public static partial class BackupEndpoints
         string recorded;
         if (BackupSchedule.RequestPending(state, now))
         {
-            await backups.RecordFailureLockedAsync(vm.Owner, vm.Name, request.Trigger!, reason, request.Detail, ct);
+            await backups.RecordFailureLockedAsync(vm.Owner, vm.Name, request.Trigger!, reason, request.Detail, answersRequest: true, ct);
             recorded = "request";
         }
         else if (state is { LastAttemptAt: { } attempt } && now - attempt < BackupSchedule.StaleSession &&

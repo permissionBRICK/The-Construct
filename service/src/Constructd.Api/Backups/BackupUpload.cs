@@ -163,7 +163,7 @@ internal sealed class BackupUpload(HttpContext http, Vm vm, ConfigBackup backup,
         // A slot upload's failure is not schedule state.
         if (failure.Reason is not null && current is not null && !backup.IsSlot)
             await backups.RecordFailureLockedAsync(vm.Owner, vm.Name, backup.Trigger, failure.Reason,
-                failure.Reason == "host-refused" ? failure.Code : null, CancellationToken.None);
+                failure.Reason == "host-refused" ? failure.Code : null, answersRequest: false, CancellationToken.None);
         try { _files.PruneDirectory(vm.Owner, vm.Name); }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }

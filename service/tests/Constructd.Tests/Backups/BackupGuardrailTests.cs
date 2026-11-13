@@ -310,6 +310,25 @@ public sealed class BackupGuardrailTests
     }
 
     [Fact]
+    public async Task A_failed_upload_does_not_consume_a_request_opened_after_its_session()
+    {
+        using var h = await BackupHarness.CreateAsync();
+        var id = await h.OpenIdAsync("scheduled");
+        var attempt = h.App.Clock.UtcNow;
+        h.App.Clock.Advance(TimeSpan.FromMinutes(5));
+        await h.RequestAsync("pre-reinstall");
+        // The older session fails (no keys): its failure is recorded, the newer request stays open.
+        Assert.Equal(HttpStatusCode.Conflict, (await h.UploadAsync(id, [1])).Status);
+        var view = await StatusAsync(h);
+        Assert.Equal("backup-keys-missing", view["lastFailure"]!["detail"]!.GetValue<string>());
+        Assert.Equal(attempt, view["lastAttemptAt"]!.GetValue<DateTimeOffset>());
+        Assert.True(view["requestPending"]!.GetValue<bool>());
+        var (status, opened) = await h.OpenAsync("manual", requested: false);
+        Assert.Equal(HttpStatusCode.Created, status);
+        Assert.Equal("pre-reinstall", opened["kind"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task The_heartbeat_opens_the_request_once_and_a_busy_vm_gets_none()
     {
         using var h = await BackupHarness.CreateAsync();
