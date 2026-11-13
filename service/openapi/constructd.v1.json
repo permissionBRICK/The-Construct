@@ -2511,6 +2511,62 @@
         }
       }
     },
+    "/api/v1/jobs/{id}/retry": {
+      "post": {
+        "tags": [
+          "ProvisionEndpoints"
+        ],
+        "operationId": "RetryJob",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/JobRetryRequest"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VmJobAcceptedResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/vms/{name}/desired": {
       "get": {
         "tags": [
@@ -9834,6 +9890,21 @@
             "type": [
               "null",
               "string"
+            ]
+          }
+        }
+      },
+      "JobRetryRequest": {
+        "type": "object",
+        "properties": {
+          "secrets": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProvisionSecretsRequest"
+              }
             ]
           }
         }

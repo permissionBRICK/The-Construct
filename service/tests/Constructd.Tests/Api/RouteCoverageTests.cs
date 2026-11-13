@@ -154,6 +154,7 @@ public class RouteCoverageTests
         "GET /api/v1/host/usage",
         "GET /api/v1/jobs",
         "POST /api/v1/jobs/{id}/cancel",
+        "POST /api/v1/jobs/{id}/retry",
         "POST /api/v1/vms/{name}/lifecycle",
         "POST /api/v1/vms/{name}/lease",
         "PUT /api/v1/vms/{name}/sharing",

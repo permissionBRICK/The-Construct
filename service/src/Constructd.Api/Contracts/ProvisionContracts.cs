@@ -70,3 +70,10 @@ public sealed record VmDesiredStateResponse(VmDesiredState? Desired, string? Has
     public static VmDesiredStateResponse From(StoredDesiredState? stored) =>
         new(stored?.Desired, stored?.Hash, stored?.UpdatedAt, stored?.UpdatedBy);
 }
+
+/// <summary>
+/// <c>POST /jobs/{id}/retry</c>. Optional: the secrets the job needs again, as on <c>POST /vms/{name}/jobs</c>
+/// (a restore's <c>backupKey</c> is required, the rest as before).
+/// </summary>
+public sealed record JobRetryRequest(ProvisionSecretsRequest? Secrets = null);
+

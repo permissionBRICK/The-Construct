@@ -286,7 +286,7 @@ gate: the resource policy is evaluated again inside every handler.
 | Token usage | `POST /vms/{name}/usage`; `GET /host/usage`; `GET /vms/{name}/usage` | Matching VM token or owner/Admin for intake; enrolled users read their own usage, admins read all. |
 | Child lifecycle | `POST /vms/{parent}/children`; `POST /vms/{name}/lifecycle`; `POST /vms/{name}/lease`; `PUT /vms/{name}/sharing`; `PUT /vms/{name}/hardware`; `PUT /vms/{name}/media`; `DELETE /vms/{name}` | Parent delegate creates; operator lifecycle; owner/Admin-only lease, sharing, configuration and deletion. Shared callers cannot delete or configure. |
 | Addresses/forwards | `GET /vms/{name}/addresses`; `GET`, `POST /vms/{name}/forwards`; `DELETE /vms/{name}/forwards/{id}`; `POST /vms/{name}/forwards/{id}/ack` | Existing self/owner rules for a primary; child relationship rules for a child. Ack always requires a user credential and, for a child, the owner of the `via` primary or Admin. |
-| Jobs | `GET /jobs`; `GET /jobs/{id}`; `GET /jobs/{id}/events`; `POST /jobs/{id}/cancel` | Owner/initiator or Admin. Event streams replay progress and phase history, then one terminal state. |
+| Jobs | `GET /jobs`; `GET /jobs/{id}`; `GET /jobs/{id}/events`; `POST /jobs/{id}/cancel`; `POST /jobs/{id}/retry` | Owner/initiator or Admin; retry: the VM's owner or an Admin, user credentials. Event streams replay progress and phase history, then one terminal state. |
 | Provisioning | `POST /vms/{name}/jobs` (`provision`, `reinstall`, `restore`); `GET /vms/{name}/provision-status`; `GET`, `PUT /vms/{name}/desired` | Owner/Admin user credential, primaries only. See *Provisioning from the engine*. |
 | Media | `GET /media`; `POST /media/acquire`; `POST /media/uploads`; `GET /media/uploads/{id}`; `PUT /media/uploads/{id}/chunks/{index}`; `POST /media/uploads/{id}/complete`; `DELETE /media/uploads/{id}`; `GET /media/{id}`; `GET /media/{id}/references`; `DELETE /media/{id}`; `POST /media/cleanup` | Owner primary/user or Admin; a shared operator gets only reduced metadata for attached media. Cleanup is Admin-only. |
 | Console | `GET /vms/{name}/console/capabilities`; `POST /vms/{name}/console/sessions`; `POST /vms/{name}/console/sessions/{sid}/renew`; `DELETE /vms/{name}/console/sessions/{sid}`; `GET /vms/{name}/console/sessions/{sid}/screenshot`; `POST .../{sid}/keyboard`; `POST .../{sid}/mouse` | Current VM operator; session remains bound to its creating principal and is re-authorized on every call. |
@@ -352,6 +352,13 @@ The same route starts the two other jobs of a VM's life:
   backups enabled on the host; an external machine is refused.
 - `{kind: "restore", requestId, backupId, secrets: {backupKey}}` restores a stored backup into the
   running VM; `backupKey` is the backup's key a device unwrapped. Step: `restore`.
+
+`POST /jobs/{id}/retry` (`{secrets?}`) starts the same kind of job again for the same VM with its stored settings
+and the engine's installed commit: a failed `provision`, `reinstall` or `restore` (a restore with its backup's key in
+`secrets.backupKey` again) → `202 {jobId, kind, replayed}`. Other kinds answer `409 not-retryable`, a job that did not
+fail `409 job-not-failed`, a job of an earlier VM under the name `409 vm-changed`, and a job with a later
+provision, reinstall or restore on the VM after it `409 job-superseded`. The retry's request id is `retry:<id>`, so a
+second click answers the retry already started. The rules below hold for a retry as for any repeated job.
 
 Retries: the job key's private half lives in the job's memory only. After a reinstall failed past the
 delete it stays in memory for an hour, and a retry starts at `create` with the same backup and key; a
