@@ -33,6 +33,16 @@ public static class TlsComposition
         https.ServerCertificateSelector = (_, serverName) => TlsCertificateSelection.Choose(serverName, current, previous);
     }
 
+    /// <summary>
+    /// The certificate the API presents, as PEM (public part only), or null when none is configured.
+    /// A guest pins it to verify the engine (<c>bin/adopt-host.py</c>).
+    /// </summary>
+    public static string? CurrentCertificatePem(ConstructdOptions options)
+    {
+        using var current = Load(options.CertPath, options.CertPassword, options.CertThumbprint, "Constructd:CertPath");
+        return current?.ExportCertificatePem();
+    }
+
     private static X509Certificate2? Load(string? path, string? password, string? thumbprint, string setting)
     {
         if (!string.IsNullOrWhiteSpace(path))

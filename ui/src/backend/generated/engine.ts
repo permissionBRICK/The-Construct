@@ -661,6 +661,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/vms/{name}/adopt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["AdoptLocalVm"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/host/lan-access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["GetLanAccess"];
+        put: operations["SetLanAccess"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/health": {
         parameters: {
             query?: never;
@@ -4804,6 +4836,12 @@ export interface components {
         JsonElement: unknown;
         JsonNode: unknown;
         JsonObject: Record<string, never>;
+        LanAccessEndpointsLanAccessRequest: {
+            enabled: null | boolean;
+        };
+        LanAccessEndpointsLanAccessResponse: {
+            enabled: boolean;
+        };
         LeaseResponse: {
             requested: string;
             /** Format: date-time */
@@ -4827,6 +4865,11 @@ export interface components {
             leaseTickSeconds: number;
             /** Format: int32 */
             leaseRetrySeconds: number;
+        };
+        LocalAdoptionEndpointsAdoptLocalVmRequest: {
+            settings: null | components["schemas"]["JsonObject"];
+            instanceState: null | components["schemas"]["JsonObject"];
+            sshPrivateKey: null | string;
         };
         /** @enum {string} */
         MaintenanceState: "open" | "draining" | "maintenance";
@@ -8038,6 +8081,103 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VmDesiredStateResponse"];
+                };
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    AdoptLocalVm: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": null | components["schemas"]["LocalAdoptionEndpointsAdoptLocalVmRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobStartAnswer"];
+                };
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    GetLanAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LanAccessEndpointsLanAccessResponse"];
+                };
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    SetLanAccess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": null | components["schemas"]["LanAccessEndpointsLanAccessRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LanAccessEndpointsLanAccessResponse"];
                 };
             };
             /** @description An error, as a Problem document. */

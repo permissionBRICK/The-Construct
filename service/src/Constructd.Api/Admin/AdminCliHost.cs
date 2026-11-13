@@ -42,6 +42,8 @@ public static class AdminCliHost
             .SetMinimumLevel(LogLevel.Warning));
 
         services.AddConstructdStores(options);
+        // The desired state per VM and the SSH runner: what "vms adopt-local" writes and dials with.
+        services.AddProvisioning(options);
 
         if (!options.Fake && OperatingSystem.IsWindows())
         {
@@ -51,7 +53,7 @@ public static class AdminCliHost
             }
             catch (InvalidOperationException)
             {
-                // A misconfigured ScriptsDir must not stop an admin from adding a user; the one verb
+                // An incomplete platform must not stop an admin from adding a user; the one verb
                 // that needs the platform reports its absence itself.
             }
         }

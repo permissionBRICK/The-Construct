@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-. "$PSScriptRoot/../../../../drivers/hyperv-local/HyperVLocal.ChildVm.ps1"
+. "$PSScriptRoot/../../../src/Constructd.Windows/HyperV/Scripts/HyperV.ChildVm.ps1"
 $script:checks = 0
 function Check($condition, $message) {
     if (-not $condition) { throw $message }; $script:checks++

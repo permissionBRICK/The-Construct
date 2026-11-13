@@ -110,7 +110,7 @@ public sealed partial class HyperVChildDriver(IProcessRunner processes, Construc
     private static HypervisorOperationException Fail(string operation) => new("child-" + operation, "");
     private async Task<JsonElement> RunAsync(string operation, string function, string arguments, object input, CancellationToken ct, TimeSpan? timeout = null)
     {
-        var script = HyperVChildScript.Build(options.ScriptsDir, function, arguments);
+        var script = HyperVChildScript.Build(function, arguments);
         ProcessResult result;
         try
         {

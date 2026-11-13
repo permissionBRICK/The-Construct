@@ -900,7 +900,7 @@ ok "...against the ACTIVE scheme, through powercfg's own alias" ($installText -m
 # The seam the tests above mock is the one the installer really fills, with its own runner.
 ok "the report and the setter both get the real powercfg runner" (
     ([regex]::Matches($installText, '-Query \$\{function:Invoke-ConstructPowercfg\}')).Count -eq 2)
-ok "-SkipPowerSettings skips the whole step" ($installText -match 'if \(\$SkipPowerSettings\)')
+ok "-SkipPowerSettings (and -Solo) skips the whole step" ($installText -match 'if \(\$SkipPowerSettings -or \$Solo\)')
 ok "an explicit -KeepHostAwake decides instead of the prompt" (
     $installText -match '\$PSBoundParameters\.ContainsKey\("KeepHostAwake"\)')
 ok "an unattended run leaves the power plan alone" (

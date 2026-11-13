@@ -3,9 +3,9 @@ using System.Diagnostics;
 namespace Constructd.Tests.Windows;
 
 /// <summary>
-/// Runs <c>service/tests/host-installer.test.ps1</c> as part of <c>dotnet test</c>, so the installer's
-/// parser check and parameter contract are covered by the same command as everything else rather than
-/// by a script somebody has to remember.
+/// Runs the PowerShell tests of the host side (<c>service/tests/host-installer.test.ps1</c>, the
+/// installer's solo mode and the Hyper-V driver's own scripts) as part of <c>dotnet test</c>, so they are
+/// covered by the same command as everything else rather than by a script somebody has to remember.
 ///
 /// The PowerShell test does the asserting; this only reports its outcome. Where <c>pwsh</c> is not
 /// installed the test passes with a note — the file is still there to run by hand, and the alternative
@@ -13,10 +13,13 @@ namespace Constructd.Tests.Windows;
 /// </summary>
 public sealed class HostInstallerTests
 {
-    [Fact]
-    public void The_host_installer_scripts_parse_and_keep_their_parameter_contract()
+    [Theory]
+    [InlineData("service/tests/host-installer.test.ps1")]
+    [InlineData("service/tests/host-installer-solo.test.ps1")]
+    [InlineData("service/tests/hyperv-scripts.test.ps1")]
+    public void The_host_side_powershell_tests_pass(string relativePath)
     {
-        var script = FindRepoFile("service/tests/host-installer.test.ps1");
+        var script = FindRepoFile(relativePath);
         Assert.True(File.Exists(script), $"Installer test script not found at {script}.");
 
         var pwsh = FindPwsh();
@@ -39,9 +42,9 @@ public sealed class HostInstallerTests
 
         using var process = Process.Start(startInfo)!;
         var output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
-        Assert.True(process.WaitForExit(120_000), "The installer test script did not finish within two minutes.");
+        Assert.True(process.WaitForExit(120_000), $"{relativePath} did not finish within two minutes.");
 
-        Assert.True(process.ExitCode == 0, $"host-installer.test.ps1 failed:{Environment.NewLine}{output}");
+        Assert.True(process.ExitCode == 0, $"{relativePath} failed:{Environment.NewLine}{output}");
         Assert.Contains("0 failed", output, StringComparison.Ordinal);
     }
 

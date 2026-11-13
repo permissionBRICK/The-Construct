@@ -9,8 +9,17 @@ namespace Constructd.Fakes;
 /// so the API, the creation job and the idle engine can be tested on Linux. The real driver (B7)
 /// implements the same interface by invoking PowerShell.
 /// </summary>
-public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver, IGuestNetworkConfigurator, IVmNestedDriver, IVmMemoryFloorDriver
+public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver, IVmMemoryDriver, IGuestNetworkConfigurator, IVmNestedDriver, IVmMemoryFloorDriver, IVmFactsDriver
 {
+    /// <summary>What <see cref="GetFactsAsync"/> reports for a VM the fake did not create (an existing VM to adopt).</summary>
+    public ConcurrentDictionary<string, HypervisorVmFacts> Facts { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public Task<HypervisorVmFacts?> GetFactsAsync(string name, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        Calls.Enqueue($"facts:{name}");
+        return Task.FromResult(Facts.TryGetValue(name, out var facts) ? facts with { State = StateOf(name) } : null);
+    }
+
     public Exception? NetworkFailure { get; set; }
     public Task ConfigureNetworkAsync(string name, string? address, string? gateway, IReadOnlyList<string>? dns, CancellationToken ct)
     {
