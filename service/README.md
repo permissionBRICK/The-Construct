@@ -291,6 +291,7 @@ gate: the resource policy is evaluated again inside every handler.
 | Addresses/forwards | `GET /vms/{name}/addresses`; `GET`, `POST /vms/{name}/forwards`; `DELETE /vms/{name}/forwards/{id}`; `POST /vms/{name}/forwards/{id}/ack` | Existing self/owner rules for a primary; child relationship rules for a child. Ack always requires a user credential and, for a child, the owner of the `via` primary or Admin. |
 | Jobs | `GET /jobs`; `GET /jobs/{id}`; `GET /jobs/{id}/events`; `POST /jobs/{id}/cancel`; `POST /jobs/{id}/retry` | Owner/initiator or Admin; retry: the VM's owner or an Admin, user credentials. Event streams replay progress and phase history, then one terminal state. |
 | Provisioning | `POST /vms/{name}/jobs` (`provision`, `reinstall`, `restore`); `GET /vms/{name}/provision-status`; `GET`, `PUT /vms/{name}/desired` | Owner/Admin user credential, primaries only. See *Provisioning from the engine*. |
+| Repair agent | `GET`, `POST /vms/{name}/repair`; `GET /vms/{name}/repair/{id}`; `POST /vms/{name}/repair/{id}/reply`; `DELETE /vms/{name}/repair/{id}` | Owner/Admin user credential, primaries only; a VM token cannot read or steer its own repair. See *The repair agent*. |
 | Media | `GET /media`; `POST /media/acquire`; `POST /media/uploads`; `GET /media/uploads/{id}`; `PUT /media/uploads/{id}/chunks/{index}`; `POST /media/uploads/{id}/complete`; `DELETE /media/uploads/{id}`; `GET /media/{id}`; `GET /media/{id}/references`; `DELETE /media/{id}`; `POST /media/cleanup` | Owner primary/user or Admin; a shared operator gets only reduced metadata for attached media. Cleanup is Admin-only. |
 | Console | `GET /vms/{name}/console/capabilities`; `POST /vms/{name}/console/sessions`; `POST /vms/{name}/console/sessions/{sid}/renew`; `DELETE /vms/{name}/console/sessions/{sid}`; `GET /vms/{name}/console/sessions/{sid}/screenshot`; `POST .../{sid}/keyboard`; `POST .../{sid}/mouse` | Current VM operator; session remains bound to its creating principal and is re-authorized on every call. |
 | Host updates | `GET /host/updates/status`; `POST /host/updates/check`; `POST /host/updates/stage`; `POST /host/updates/apply`; `POST /host/updates/cancel`; `POST /host/updates/resolve` | Admin. Apply (including resume) and resolve are the only narrowly maintenance-exempt mutations. |
@@ -380,6 +381,37 @@ starts it: a restore of the same backup that did not finish is not run again (`r
 and a reinstall whose restore started never deletes the VM again; both say what to do by hand. These
 records (`reinstall:<vm>`, `restore:<vm>` in the host config store) hold backup ids, a fingerprint and
 times, never a key.
+
+### The repair agent
+
+When a `provision`, `reinstall` or `restore` job fails in a guest step (a provision or reinstall with
+`failedSteps`, a restore whose guest side failed), the engine starts the repair agent on the VM (design 11.5,
+S26) unless the host setting `repair.auto` (`PUT /host/config`, default `true`) is off. It runs
+`bin/construct-repair-agent.sh` as root over SSH with the job's part of the prompt (the `fixPrompt`, the end of
+the job's log); the script adds `config/repair-prompt.md`, runs Claude Code, Codex or OpenCode without
+question or plan tools (or a T3 Code thread when T3 Code runs on the VM) and reports JSON lines. When the
+failed run rebooted the VM, the repair waits up to five minutes for SSH first.
+
+- `GET /vms/{name}/repair?after=SEQ` answers the VM's latest session: `state` (`working`, `waiting` for a
+  reply, `ended`), `outcome` (`fixed`, `stopped`, `superseded`, `error`), the agent (`agent`, `via`, and
+  `thread`, `link` for T3 Code), and its kept `lines` after `SEQ` (the last 400: `start`, `note`, `text`,
+  `tool`, `error`, `turn`, `end`, `reply`, `retry`, `log`). `GET /vms/{name}/repair/{id}` reads one session.
+- `POST /vms/{name}/repair` starts one for the VM's latest failed lifecycle job (`409 no-failed-job`,
+  `not-repairable`, `repair-running`, `operation-in-progress`).
+- `POST /vms/{name}/repair/{id}/reply` `{text}` writes one line to the agent's stdin; the agent continues the
+  same conversation. `409 repair-ended` once it is over. The text never reaches a command line.
+- `DELETE /vms/{name}/repair/{id}` ends it: stdin closes, the connection goes, and
+  `construct-repair-agent.sh --stop` ends the agent's process group on the VM.
+- The change stream announces `repair.started`, `repair.output` (at most once a second) and `repair.ended`
+  with the session id and the VM, to the VM's owner and admins.
+
+One session per VM. A job that takes the VM's operation gate (a provision, a power action, a hardware change,
+a delete) ends the repair first and waits until its processes on the VM are gone (`outcome: superseded`);
+background passes that only look at the VM do not. When the agent ends saying it fixed the cause, the engine
+retries the failed job once by the retry route's rules (`retryJobId`, or `retryRefused` with the reason: a
+restore needs its backup's key from a device), and a retry that fails starts no second repair; a repair by
+hand still can. The output can hold what the VM holds: it lives in the engine's memory only, never in the
+database or a log, and an engine restart ends every session.
 
 ### Key vault on hosted VMs
 
