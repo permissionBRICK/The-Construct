@@ -100,6 +100,23 @@ class CompanionPlanTests(unittest.TestCase):
             self.assertEqual(result['packages'], {key: {'asset': result[key + 'Asset'], 'sha256': result[key + 'Sha256']}
                                                   for key in ('payload', 'frameworkDependent', 'source')})
 
+    def test_package_lists_the_device_agents_packages_with_their_hashes(self):
+        with tempfile.TemporaryDirectory() as out:
+            output = Path(out); commit = self.companion
+            manifest = dict(commit=commit, repository='owner/repo', releaseTag='host-' + commit)
+            for key, name in [('payload', f'construct-host-{commit[:7]}-win-x64.zip'), ('frameworkDependent', f'construct-host-{commit[:7]}-win-x64-fdd.zip')]:
+                data = key.encode(); (output / name).write_bytes(data)
+                manifest.update({key + 'Asset': name, key + 'SizeBytes': len(data), key + 'Sha256': hashlib.sha256(data).hexdigest()})
+            (output / 'manifest.json').write_text(json.dumps(manifest)); (output / 'SHA256SUMS').write_text('')
+            for runtime in ('win-x64', 'linux-x64'):
+                (output / f'construct-agent-{commit[:7]}-{runtime}.zip').write_bytes(runtime.encode())
+            packager.package(self.root, output, commit, 'owner/repo', channel='nightly', version='1.2.3')
+            result = json.loads((output / 'manifest.json').read_text())
+            self.assertEqual(result['packages']['agentWindows'], {'asset': f'construct-agent-{commit[:7]}-win-x64.zip', 'sha256': hashlib.sha256(b'win-x64').hexdigest()})
+            self.assertEqual(result['packages']['agentLinux'], {'asset': f'construct-agent-{commit[:7]}-linux-x64.zip', 'sha256': hashlib.sha256(b'linux-x64').hexdigest()})
+            self.assertEqual(result['agentLinuxSizeBytes'], len(b'linux-x64'))
+            self.assertIn(f'construct-agent-{commit[:7]}-linux-x64.zip', (output / 'SHA256SUMS').read_text())
+
 
 class ReleaseTests(unittest.TestCase):
     def test_malformed_companion_pointer_is_refused(self):

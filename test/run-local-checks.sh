@@ -134,8 +134,11 @@ if [[ "$group" == agent || "$group" == all ]]; then
   # The device agent: agents in process against the real engine (fake mode) on loopback HTTPS.
   # NU1903 stays a warning: it is the advisory on the service's Negotiate package, which the tests
   # reach through the engine they start.
+  # The Windows shell (agent/src/Construct.Agent.Windows) is in the solution and builds here with Windows targeting.
   dotnet build agent/Construct.Agent.slnx -warnaserror -warnnotaserror:NU1903
   dotnet test agent/Construct.Agent.slnx --no-build
+  bash test/agent-install.test.sh
+  pwsh -NoProfile -Command '$null = [ScriptBlock]::Create((Get-Content -Raw agent/install/Install-ConstructAgent.ps1))'
 fi
 
 # Not part of `all`: it creates a real child VM on the host and takes about half an

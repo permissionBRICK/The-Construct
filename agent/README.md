@@ -5,9 +5,10 @@ Every desktop device runs one agent as a user process (plan `docs/plans/construc
 its user works with, and serves the UI. It owns no VM logic: every lifecycle action is a call to an
 engine, which the UI makes through the agent's proxy.
 
-This is the platform-independent core and the Linux console host. The Windows shell (tray, WebView2
-window, installer), forwards, notifications, the microphone, SSH client config and self-update come in
-later blocks.
+The core is platform-independent; the Linux console host and the Windows tray app wrap it. Beside
+identity and the engines it does what only a device can (5.1, 7.2): local forwards to the user's VMs,
+`construct notify` as desktop notifications, microphone passthrough, the SSH alias per VM, open actions,
+the workspace share of a VM on this PC, start with the OS, and updating itself (12.1).
 
 ## Layout
 
@@ -20,13 +21,23 @@ later blocks.
 | `src/Construct.Agent.Core/Events/` | The `/api/events` buffer and the job watcher |
 | `src/Construct.Agent.Core/Http/` | The local API: guard, routes, engine proxy, OpenAPI |
 | `src/Construct.Agent.Core/Repair.cs` | `construct-agent repair` |
-| `src/construct-agent/` | The console host |
+| `src/Construct.Agent.Core/Device/` | The device features: VM links (forwards, notifications, microphone), the SSH config, open actions, the platform seam (`IDevicePlatform`) and the Linux platform |
+| `src/Construct.Agent.Core/Device/Runtime/` | Moved unchanged from the Companion's host: SSH supervisor, process runner, SSH transport, port reservations, loopback audio server |
+| `src/Construct.Agent.Core/Update/` | Self-update (`install.json`, `versions/`), "update everything" |
+| `src/Construct.Agent.Core/Http/DeviceRoutes.cs` | The device routes |
+| `src/construct-agent/` | The console host (Linux) |
+| `src/Construct.Agent.Windows/` | The Windows tray app: tray, WebView2 surfaces, single instance, DPAPI, toasts, WASAPI, `net use`, the Run value |
+| `install/` | Per-user install scripts: `install-construct-agent.sh` (Linux), `Install-ConstructAgent.ps1` (Windows) |
 | `openapi/agent.v1.json` | The local API's contract, generated; a test fails on drift |
 | `tests/Construct.Agent.Tests/` | Agents in process against the real engine (fake mode) on a loopback HTTPS port |
 
 It references the service's `Construct.Keys` (keys, pairing, recovery, proofs), `Constructd.Store`
 (the store's wire contract), `Constructd.Sync` (sealing records with `D`) and `Constructd.Client`
-(the engine's generated client). It does not reference the Companion.
+(the engine's generated client). From the Companion it references `Construct.Companion.Core`
+unchanged (the forward planner and forwarder, the notifier and its parsing, the audio session,
+`SshArgs`, `T3Code` and the guest scripts these run) and, in the Windows app,
+`Construct.Companion.Windows` (WASAPI capture, WinRT toasts, the registry, DPI). The tests use
+`Construct.Companion.Fakes`.
 
 ## Commands
 
@@ -36,7 +47,14 @@ dotnet test agent/Construct.Agent.slnx
 dotnet run --project agent/src/construct-agent -- run       # foreground; the default
 dotnet run --project agent/src/construct-agent -- open      # starts it if needed, opens the UI
 dotnet run --project agent/src/construct-agent -- repair    # report and restart, no engine needed
+dotnet run --project agent/src/construct-agent -- autostart on|off   # the systemd user unit
+python3 scripts/package-agent.py --output DIR --commit SHA --version X.Y.Z   # both packages
 ```
+
+On Windows the app is `construct-agent.exe` (`agent/src/Construct.Agent.Windows`): no argument opens
+the window, `--background` starts in the tray only (the Run value uses it), a `construct://` link (a
+notification's click) or a second start opens the window of the running one, `repair` and `version`
+print to the console that started them. It builds on Linux with Windows targeting.
 
 `--data-dir DIR` (or `CONSTRUCT_AGENT_HOME`) moves the agent's directory, by default
 `$XDG_DATA_HOME/construct-agent` or `~/.local/share/construct-agent`. `--ui DIR` (or
@@ -51,6 +69,10 @@ first `ui/dist` above it.
 | `protection.key` (0600) | Only with the file protection: the key that protects the secrets in `state.json`. |
 | `endpoint.json` (0600) | The token file: port, token, pid, start time, version. A new token every start; deleted at stop. |
 | `open.html` (0600) | Written by `open`: a page that sends the browser to the UI with the token. |
+| `device.json` (0600) | The device's settings: release channel, automatic updates, the VMs with the microphone on. |
+| `install.json` (0600) | The installed versions: `current`, `previous` and `pending` (12.2). |
+| `versions/<version>/` | One unpacked package per version; the current and the previous one are kept. |
+| `webview2/`, `shell.log`, `construct.png` | Windows only: the WebView2 profile, the tray app's error log, the toast icon. |
 
 The directory is 0700. Protection: on first start the agent keeps its protection key in the user's
 keyring through libsecret (`secret-tool`) when a session bus offers one; otherwise in
@@ -109,6 +131,56 @@ CONSTRUCT_AGENT_UPDATE_OPENAPI=1 dotnet test agent/Construct.Agent.slnx --filter
 
 Errors are `application/problem+json` `{title, status, code}`. A refusal by the store or an engine
 behind an agent route is reported as 403, never 401, so 401 always means the agent's own token.
+
+### Device routes
+
+| Route | What it does |
+|---|---|
+| `GET /api/device/features` | `{platform, notifications, microphone, share, startWithOs, shell}`: what this device can do |
+| `GET`, `PUT /api/device/settings {channel?, autoUpdate?, startWithOs?}` | The release channel (`stable`, `nightly`, an https manifest URL), automatic updates (off by default), start with the OS (`null` where not available) |
+| `GET /api/device/ssh-key` | The device's SSH public key (`~/.ssh/construct_ed25519`, created on first use); a VM must authorize it |
+| `GET /api/connections`, `POST /api/connections/refresh` | The user's own primary VMs on every engine: state, the address this device dials (`direct` for a VM on this PC's engine on Windows, else the engine's `forwarded` endpoint), local forwards, the microphone |
+| `DELETE /api/connections/{engine}/{vm}/forwards/{id}` | Closes a local forward (also at the engine) |
+| `PUT /api/connections/{engine}/{vm}/mic {on}` | Microphone passthrough; kept for the VM's next start |
+| `PUT`, `DELETE /api/connections/{engine}/{vm}/ssh-config` | The VM's `Host` alias in `~/.ssh/config` and VS Code's `remote.SSH.remotePlatform` entry |
+| `POST /api/connections/{engine}/{vm}/open {what: t3\|vscode\|ssh}` | T3 Code's pairing link in the browser, VS Code Remote-SSH, an SSH terminal |
+| `GET`, `POST`, `DELETE /api/connections/{engine}/{vm}/share` | The workspace share of a VM on this PC on a drive letter (Windows) |
+| `GET /api/update`, `POST /api/update/check`, `POST /api/update/install` | Version, channel, the version on offer; install it when idle |
+| `GET`, `POST /api/update/everything` | "Update everything": the parts and their state |
+| `POST /api/shell/open {surface, route?}` | Shows the tray app's `pop`, `win` or `alone` surface (a second start hands over this way) |
+
+A feature the platform lacks answers `501 not-available`. Linux has notifications (`notify-send`),
+links (`xdg-open`), a terminal (`x-terminal-emulator`) and start with the session (a systemd user
+unit); no microphone and no share.
+
+**VM links.** Every 30 seconds the agent reads `whoami` and `vms` from each engine. Each running
+primary VM the user owns gets a link: the SSH alias is written when it differs, the Companion's
+forwarder follows the engine's forward list for the VM (tunnels bound to `127.0.0.1` only, acked
+with their port), its notifier turns `construct notify` lines into notifications, and the
+microphone is armed when it was on. A VM that stops loses its link; an engine that does not answer
+keeps its links until it answers. Another user's VM is never linked or asked about.
+
+**SSH config.** The block whose `Host` line names exactly the alias is replaced and every other
+line is kept as written (a `Match` line also ends a block); the file keeps its line endings and
+mode, a symbolic link is written through. The block names the key an existing block named (an
+install moved over keeps its key), else the device key. VS Code's settings are left alone when they
+are not plain JSON (comments).
+
+**Updates.** The agent reads its channel's manifest a minute after start and every six hours, and
+offers its package (`agentWindows`, `agentLinux`) when the version differs. Installing downloads it,
+compares its SHA-256 with the manifest's, unpacks it into `versions/<version>/` and, when no pairing
+and no "update everything" runs, writes `install.json` (new version current and pending, the running
+one previous), starts the new version and stops. The new version passes its self-test when its API
+answers its own health route; it then clears `pending` and removes older versions. When it fails,
+it writes the previous version back as current and starts it. Under the systemd unit the unit is
+pointed at the new version and restarted; on Windows the Run value follows the new executable. An
+agent not running from `versions/` (a development build) does not update itself.
+
+**Update everything.** For each engine: when the user is its admin and it offers an update, `POST
+/host/updates/run`, then its job is followed through the engine's restart; then `POST
+/me/vms/reprovision`, which the engine scopes to the caller's own VMs. A host update that fails
+leaves that host's VMs alone. Last, this device installs its own update. The parts live in memory
+only; nothing is stored.
 
 ### The engine proxy
 
