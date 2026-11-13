@@ -115,8 +115,11 @@ HTTPS (available on this VM's host):
                         certificate: phones, browsers and other machines open the
                         printed https:// link without a warning. Implies --to host.
                         Hand the user exactly the link it prints.
-      --upstream-tls    With --https: the port itself already speaks TLS
-                        (detected when not given).
+      --upstream-plain  With --https, one of these two is required: the port
+      --upstream-tls    serves plain HTTP (a dev server, most apps), or it
+                        speaks TLS itself. The host connects exactly that way and
+                        never guesses; if the port changes, run this again with
+                        --reuse and the forward is replaced.
 USAGE
   if [[ -n "${named_address}" ]]; then
     printf '      --name <name>     With --https: the forward'"'"'s own address, %s
@@ -694,9 +697,14 @@ remote_find_forward() {
 # service already has one. Result in FOUND_FORWARD; returns 1 when there is none.
 # Like remote_find_forward it is NOT called in a command substitution, so an API
 # failure ends the command with the right exit code instead of reading as "none".
+# An HTTPS forward also has to say the same about its port (upstreamTls; a host that
+# omits it means plain): one that says otherwise is not reused but left in
+# STALE_FORWARD for remote_get_or_create to replace.
 remote_find_by_port() {
-  local want_port="$1" want_target="$2" object is_https
+  local want_port="$1" want_target="$2" object is_https has_tls want_tls=false
   FOUND_FORWARD=""
+  STALE_FORWARD=""
+  [[ "${UPSTREAM}" == "tls" ]] && want_tls=true
   api_call GET "$(forwards_path)"
   api_ok || api_fail "list the forwards of ${INSTANCE_NAME}"
   api_body_is array || api_unreadable "$(forwards_path)"
@@ -708,6 +716,14 @@ remote_find_by_port() {
     [[ "$(json_field "${object}" https)" == "true" ]] && is_https=true
     [[ "${is_https}" == "${HTTPS}" ]] || continue
     if [[ -n "${NAME}" && "$(json_field "${object}" name)" != "${NAME}" ]]; then continue; fi
+    if [[ "${HTTPS}" == "true" ]]; then
+      has_tls=false
+      [[ "$(json_field "${object}" upstreamTls)" == "true" ]] && has_tls=true
+      if [[ "${has_tls}" != "${want_tls}" ]]; then
+        [[ -n "${STALE_FORWARD}" ]] || STALE_FORWARD="${object}"
+        continue
+      fi
+    fi
     FOUND_FORWARD="${object}"
     return 0
   done < <(json_objects "${API_BODY}")
@@ -719,7 +735,7 @@ https_fields() {
   [[ "${HTTPS}" == "true" ]] || return 0
   printf ',"https":true'
   if [[ "${MAIN}" == "true" ]]; then printf ',"main":true'; fi
-  if [[ "${UPSTREAM_TLS}" == "true" ]]; then printf ',"upstreamTls":true'; fi
+  if [[ "${UPSTREAM}" == "tls" ]]; then printf ',"upstreamTls":true'; else printf ',"upstreamTls":false'; fi
   if [[ -n "${NAME}" ]]; then printf ',"name":"%s"' "$(json_escape "${NAME}")"; fi
   if [[ "${REPLACE_MAIN}" == "true" ]]; then printf ',"replaceMain":true'; fi
 }
@@ -729,12 +745,27 @@ https_fields() {
 # service has no upsert, so the lookup is here. Result in FOUND_FORWARD. With
 # --https-if-available a host without a certificate gets the plain forward instead.
 remote_get_or_create() {
-  local port="$1" label="$2" target="$3"
-  if [[ "${REUSE}" == "true" ]] && remote_find_by_port "${port}" "${target}"; then return 0; fi
+  local port="$1" label="$2" target="$3" stale_id
+  if [[ "${REUSE}" == "true" ]]; then
+    if remote_find_by_port "${port}" "${target}"; then return 0; fi
+    # The port's HTTPS forward says the other thing about the port: close it first, so
+    # its name and main address are free for the forward that replaces it.
+    if [[ -n "${STALE_FORWARD}" ]]; then
+      stale_id="$(json_field "${STALE_FORWARD}" id)"
+      is_safe_id "${stale_id}" || api_unreadable "$(forwards_path)"
+      api_call DELETE "$(forwards_path)/${stale_id}"
+      [[ "${API_STATUS}" == "404" ]] || api_ok || api_fail "close forward ${stale_id}"
+      if [[ "${UPSTREAM}" == "tls" ]]; then
+        printf 'construct expose: replaced forward %s: port %s now speaks TLS\n' "${stale_id}" "${port}" >&2
+      else
+        printf 'construct expose: replaced forward %s: port %s now serves plain HTTP\n' "${stale_id}" "${port}" >&2
+      fi
+    fi
+  fi
   api_call POST "$(forwards_path)" \
     "{\"vmPort\":${port},\"label\":\"$(json_escape "${label}")\",\"target\":\"${target}\"$(https_fields)}"
   if [[ "${HTTPS_IF_AVAILABLE}" == "true" && "${API_STATUS}" =~ ^40[39]$ && "${API_BODY}" == *'"https-unavailable"'* ]]; then
-    HTTPS=false; MAIN=false; UPSTREAM_TLS=false; HTTPS_IF_AVAILABLE=false; NAME=""; REPLACE_MAIN=false
+    HTTPS=false; MAIN=false; UPSTREAM=""; HTTPS_IF_AVAILABLE=false; NAME=""; REPLACE_MAIN=false
     remote_get_or_create "${port}" "${label}" "${target}"
     return 0
   fi
@@ -861,7 +892,7 @@ REUSE=false
 HTTPS=false
 HTTPS_IF_AVAILABLE=false
 MAIN=false
-UPSTREAM_TLS=false
+UPSTREAM=""
 NAME=""
 REPLACE_MAIN=false
 
@@ -877,7 +908,11 @@ while [[ $# -gt 0 ]]; do
     --https) HTTPS=true ;;
     --https-if-available) HTTPS=true; HTTPS_IF_AVAILABLE=true ;;
     --main) MAIN=true ;;
-    --upstream-tls) UPSTREAM_TLS=true ;;
+    --upstream-tls|--upstream-plain)
+      want="${1#--upstream-}"
+      [[ -z "${UPSTREAM}" || "${UPSTREAM}" == "${want}" ]] || die "--upstream-tls and --upstream-plain exclude each other"
+      UPSTREAM="${want}"
+      ;;
     --name) shift; [[ $# -gt 0 && -n "$1" ]] || die "--name requires a value"; NAME="${1,,}" ;;
     --replace-main) REPLACE_MAIN=true ;;
     --) shift; if [[ $# -gt 0 ]]; then port="$1"; shift; fi; break ;;
@@ -894,8 +929,10 @@ if [[ "${HTTPS}" == "true" ]]; then
   # The host terminates the TLS, so an HTTPS forward is a host forward.
   [[ -z "${target}" || "${target}" == "host" ]] || die "--https is served by the host: it cannot be combined with --to ${target}"
   target="host"
-elif [[ "${MAIN}" == "true" || "${UPSTREAM_TLS}" == "true" || -n "${NAME}" || "${REPLACE_MAIN}" == "true" ]]; then
-  die "--main, --upstream-tls, --name and --replace-main need --https"
+  # Stated, never detected: the host connects to the port exactly as told.
+  [[ -n "${UPSTREAM}" ]] || die "--https needs --upstream-plain (the port serves plain HTTP) or --upstream-tls (it speaks TLS itself)"
+elif [[ "${MAIN}" == "true" || -n "${UPSTREAM}" || -n "${NAME}" || "${REPLACE_MAIN}" == "true" ]]; then
+  die "--main, --upstream-plain, --upstream-tls, --name and --replace-main need --https"
 fi
 [[ "${REPLACE_MAIN}" != "true" || "${MAIN}" == "true" ]] || die "--replace-main needs --main"
 if [[ -n "${NAME}" && ! "${NAME}" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ ]]; then

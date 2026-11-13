@@ -302,6 +302,23 @@ ok("reserved: default.json (with extension) is NOT the base name", !projects.isR
   ok("validate: forwards unknown target rejected (case-sensitive)",
     eq(fw([{ port: 1, to: "lan" }, { port: 2, to: "Host" }]).errors, ['forwards[0].to must be "client" or "host"', 'forwards[1].to must be "client" or "host"']));
   ok("validate: forwards unknown key rejected", eq(fw([{ port: 1, target: "host" }]).errors, ['forwards[0] unknown key "target"']));
+  ok("validate: HTTPS forwards that say what the port speaks pass",
+    fw([{ port: 5173, https: true, upstreamTls: false }, { port: 5174, https: true, to: "host", name: "app", upstreamTls: true }, { port: 5175, https: false }]).ok);
+  ok("validate: an HTTPS forward must say what its port speaks",
+    eq(fw([{ port: 1, https: true }]).errors,
+      ['forwards[0].upstreamTls is required with "https": true: false when the port serves plain HTTP, true when it speaks TLS itself']));
+  ok("validate: forwards https/upstreamTls must be booleans",
+    eq(fw([{ port: 1, https: "true" }, { port: 2, https: true, upstreamTls: 1 }]).errors,
+      ["forwards[0].https must be true or false", "forwards[1].upstreamTls must be true or false"]));
+  ok("validate: an HTTPS forward cannot go to the client",
+    eq(fw([{ port: 1, https: true, upstreamTls: false, to: "client" }]).errors, ['forwards[0].to must be "host" or left out: the host serves an HTTPS forward']));
+  ok("validate: name and upstreamTls (even false) need https",
+    eq(fw([{ port: 1, name: "app" }, { port: 2, https: false, upstreamTls: true }, { port: 3, upstreamTls: false }]).errors,
+      ['forwards[0].name needs "https": true', 'forwards[1].upstreamTls needs "https": true', 'forwards[2].upstreamTls needs "https": true']));
+  const badName = "forwards[0].name must be one DNS label: up to 63 lowercase letters, digits and hyphens, starting and ending with a letter or digit";
+  ok("validate: forwards name must be one DNS label",
+    ["App", "-a", "a-", "a_b", "a.b", "", "a\n", "a".repeat(64), 5, null].every((name) => eq(fw([{ port: 1, https: true, upstreamTls: false, name }]).errors, [badName])));
+  ok("validate: forwards name of 63 characters passes", fw([{ port: 1, https: true, upstreamTls: false, name: "a".repeat(63) }]).ok);
 })();
 
 // ── sanitizeForwards (coercive) ───────────────────────────────────────────────
@@ -312,6 +329,14 @@ ok("reserved: default.json (with extension) is NOT the base name", !projects.isR
       [{ port: 5173, to: "client" }, { port: 9000, to: "host", label: " api " }]));
   ok("forwards: bad port or unknown target drops the entry (never downgraded to client)",
     eq(projects.sanitizeForwards([{ port: 0 }, { port: 1, to: "lan" }, "x", { port: 2 }]), [{ port: 2, to: "client" }]));
+  ok("forwards: https makes to host, key order port,to,https,upstreamTls,name,label",
+    eq(JSON.stringify(projects.sanitizeForwards([{ label: "app", upstreamTls: true, name: "app", https: true, port: 5173 }])),
+      '[{"port":5173,"to":"host","https":true,"upstreamTls":true,"name":"app","label":"app"}]'));
+  ok("forwards: upstreamTls false is kept on an HTTPS entry, dropped on a plain one; a bad name is dropped",
+    eq(projects.sanitizeForwards([{ port: 1, https: false, name: "app", upstreamTls: true }, { port: 2, https: true, name: "Bad", upstreamTls: false }]),
+      [{ port: 1, to: "client" }, { port: 2, to: "host", https: true, upstreamTls: false }]));
+  ok("forwards: an HTTPS entry to the client or without a boolean upstreamTls is dropped, never guessed",
+    eq(projects.sanitizeForwards([{ port: 3, https: true, upstreamTls: false, to: "client" }, { port: 4, https: true }, { port: 5, https: true, upstreamTls: "true" }]), []));
 })();
 
 // ── canonicalProfileJson (config-sync §6 canonical byte form) ─────────────────

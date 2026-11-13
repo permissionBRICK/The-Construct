@@ -344,23 +344,41 @@
     return String(text || "").split("\n").map((s) => s.trim()).filter(Boolean);
   }
 
-  // forwards[] <-> "port [client|host] [label]" lines. The target is always written
-  // out, so a label that starts with "client"/"host" cannot be misread on save.
+  // forwards[] <-> "port [client|host|https+plain[:name]|https+tls[:name]] [label]"
+  // lines. The target is always written out, so a label that starts with
+  // "client"/"host" cannot be misread on save. An HTTPS forward (to: host) states
+  // what its port speaks, "+plain" or "+tls" (upstreamTls), and ":name" its name,
+  // all in one token so the label after it stays free text.
+  function forwardTarget(f) {
+    if (f.https !== true) return f.to === "host" ? "host" : "client";
+    return "https+" + (f.upstreamTls === true ? "tls" : "plain") + (typeof f.name === "string" && f.name ? ":" + f.name : "");
+  }
   function forwardsToText(forwards) {
     return (Array.isArray(forwards) ? forwards : []).filter((f) => f && typeof f === "object").map((f) =>
-      [String(f.port), f.to === "host" ? "host" : "client", typeof f.label === "string" ? f.label.trim() : ""]
+      [String(f.port), forwardTarget(f), typeof f.label === "string" ? f.label.trim() : ""]
         .filter(Boolean).join(" ")).join("\n");
   }
+  // -> { forwards, bad }: `bad` lists the lines whose https token does not say
+  // what the port speaks (or names it wrongly). Those block the save: never guessed.
   function textToForwards(text) {
     const out = [];
+    const bad = [];
     String(text || "").split("\n").forEach((line) => {
-      const m = /^(\d{1,5})(?:\s+(client|host)(?=\s|$))?(?:\s+(.*))?$/.exec(line.trim());
+      const m = /^(\d{1,5})(?:\s+(client|host|https(?:[+:]\S*)?)(?=\s|$))?(?:\s+(.*))?$/.exec(line.trim());
       if (!m || Number(m[1]) < 1 || Number(m[1]) > 65535) return;
       const entry = { port: Number(m[1]), to: m[2] || "client" };
+      if (m[2] && m[2].startsWith("https")) {
+        const h = /^https\+(plain|tls)(?::([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))?$/.exec(m[2]);
+        if (!h) { bad.push(line.trim()); return; }
+        entry.to = "host";
+        entry.https = true;
+        entry.upstreamTls = h[1] === "tls";
+        if (h[2]) entry.name = h[2];
+      }
       if (m[3] && m[3].trim()) entry.label = m[3].trim();
       out.push(entry);
     });
-    return out;
+    return { forwards: out, bad };
   }
 
   function populateModal(name, profile) {
@@ -384,11 +402,13 @@
     setTa("pmProvision", (Array.isArray(profile.provisionCommands) ? profile.provisionCommands : []).join("\n"));
     setTa("pmForwards", forwardsToText(profile.forwards));
     const err = $("pmMcpErr"); if (err) err.hidden = true;
+    const fwErr = $("pmForwardsErr"); if (fwErr) fwErr.hidden = true;
     openModal(true);
   }
 
-  // Gather the modal into a profile object. Returns null (and shows the MCP error)
-  // when the MCP JSON doesn't parse — the only hard-stop; everything else is lenient.
+  // Gather the modal into a profile object. Returns null (and shows the error) when
+  // the MCP JSON doesn't parse or an https forward line does not say what its port
+  // speaks — the hard stops; everything else is lenient.
   function gatherProfile() {
     const repos = [];
     document.querySelectorAll("#pmRepos .pm-repo").forEach((row) => {
@@ -411,6 +431,13 @@
         return null;
       }
     }
+    const parsedForwards = textToForwards($("pmForwards") && $("pmForwards").value);
+    const fwErr = $("pmForwardsErr");
+    if (fwErr) fwErr.hidden = parsedForwards.bad.length === 0;
+    if (parsedForwards.bad.length) {
+      const which = $("pmForwardsBad"); if (which) which.textContent = parsedForwards.bad.join(", ");
+      return null;
+    }
     const out = {
       name: editName,
       repos: repos,
@@ -418,7 +445,7 @@
       mcp: mcp,
       hostPackages: linesToArray($("pmHostPkgs") && $("pmHostPkgs").value),
       provisionCommands: linesToArray($("pmProvision") && $("pmProvision").value),
-      forwards: textToForwards($("pmForwards") && $("pmForwards").value),
+      forwards: parsedForwards.forwards,
     };
     // Preserve the un-edited tests block so a save doesn't drop it.
     if (editTests) out.tests = editTests;

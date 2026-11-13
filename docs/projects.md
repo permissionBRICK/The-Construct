@@ -250,7 +250,8 @@ carries them over. A forward that should come back is declared in a profile:
   "provisionCommands": ["systemctl enable --now customer-portal"],
   "forwards": [
     { "port": 3000, "label": "customer portal" },
-    { "port": 9000, "label": "webhook receiver", "to": "host" }
+    { "port": 9000, "label": "webhook receiver", "to": "host" },
+    { "port": 3001, "label": "portal (https)", "https": true, "upstreamTls": false, "name": "portal" }
   ]
 }
 ```
@@ -260,20 +261,31 @@ carries them over. A forward that should come back is declared in a profile:
 | `port` | The port inside the VM, 1–65535 (required). |
 | `label` | Optional; shown in `construct expose --list` and the Construct client. |
 | `to` | `client` (default): a tunnel to the user's PC. `host`: a port on the host's LAN address, subject to the host service's host-forward permission. |
+| `https` | Optional, `true`: an [HTTPS forward](https-forwards.md) with the host's certificate. It is a host forward, so `to` is `host` or left out. |
+| `upstreamTls` | **Required** with `https`, not allowed without: `false` when the port serves plain HTTP (`--upstream-plain`), `true` when it speaks TLS itself (`--upstream-tls`). The host connects exactly that way and never guesses. |
+| `name` | Optional, with `https` only: the forward's name on the shared HTTPS port (`construct expose --name`), one DNS label of lowercase letters, digits and hyphens. The default is the port. |
 
 `bin/project-forwards.sh` runs on every provision, after the
 [provisioning commands](#provisioning-commands), and requests each entry with
-`construct expose <port> --to <to> --label <label> --reuse --wait 0`:
+`construct expose <port> --to <to> --label <label> --reuse --wait 0`
+(an `https` entry adds `--https-if-available`, `--upstream-plain` or `--upstream-tls`, and `--name`):
 
 - **Get-or-create.** `--reuse` keeps an existing forward for the same port and target, so a
   reprovision opens nothing twice and an agent may already have exposed the port by hand.
-  A port listed by several selected profiles with the same target is requested once.
+  A port listed by several selected profiles with the same target is requested once. An HTTPS
+  forward whose `upstreamTls` changed in the profile is replaced on the next provision.
 - **Never blocks.** A client forward nobody has picked up yet is queued and opens as soon as
   the user's Construct client connects; provisioning does not wait for it.
 - **Failures warn.** A refused or failed request is logged and the remaining entries still
   run, as with the provisioning commands.
 - **Additive.** Removing an entry does not close a forward that is open now; close it with
   `construct expose --close <port>`. The next reinstall drops it for good.
+- **HTTPS where the host offers it.** An `https` entry asks the way provisioning asks for
+  T3 Code: an HTTPS forward where the host has a certificate for the VM and lets its owner
+  use HTTPS forwards, a plain host forward everywhere else (a local install, a host without
+  a certificate), with a note in the provisioning log. A shared profile therefore works on
+  every VM. Once the host offers HTTPS, the next provision adds the HTTPS forward next to
+  the plain one, which stays open until it is closed.
 
 Because `to` defaults to `client` rather than to the VM's `CONSTRUCT_EXPOSE_DEFAULT_TARGET`,
 a shared profile opens the same kind of forward on every VM. The canonical form therefore

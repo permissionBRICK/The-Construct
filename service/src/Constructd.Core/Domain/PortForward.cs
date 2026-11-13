@@ -26,7 +26,8 @@ namespace Constructd.Core.Domain;
 /// </param>
 /// <param name="UpstreamTls">
 /// Whether the VM port itself speaks TLS (the host then connects with TLS and does not verify the guest's
-/// certificate). Null: detected on the first connection and remembered for a while.
+/// certificate) or plain HTTP. Every HTTPS forward states it; the host never probes. Null only on non-HTTPS
+/// forwards and on HTTPS forwards stored before it was required, which are plain HTTP.
 /// </param>
 /// <param name="HttpsName">
 /// The HTTPS forward's own name: the shared HTTPS port serves it as <c>&lt;vm&gt;-&lt;name&gt;</c> under the host's
@@ -48,7 +49,7 @@ public sealed record PortForward(
     string? HttpsName = null);
 
 /// <summary>What makes a host forward an HTTPS forward (docs/https-forwards.md).</summary>
-public sealed record HttpsForwardOptions(bool Main = false, bool? UpstreamTls = null, string? Name = null);
+public sealed record HttpsForwardOptions(bool Main, bool UpstreamTls, string? Name = null);
 
 /// <summary>
 /// The client half of a forward: the extension opened <see cref="LocalPort"/> on the user's PC, or
