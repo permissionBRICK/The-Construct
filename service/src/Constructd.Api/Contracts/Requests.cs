@@ -36,7 +36,8 @@ public sealed record ForwardAckRequest(string? Status, int? LocalPort, string? H
 
 public sealed record IdlePolicyRequest(int? TimeoutMinutes, string? Action);
 
-public sealed record ActivityRequest(bool? Busy, IReadOnlyList<string>? Reasons);
+/// <param name="ProjectsDigest">A digest of the VM's projects folder; when it changes the engine reads the folder (design 9.3).</param>
+public sealed record ActivityRequest(bool? Busy, IReadOnlyList<string>? Reasons, string? ProjectsDigest = null);
 
 /// <summary>Optional confirmation shape reserved for the child-lifecycle implementation.</summary>
 public sealed record DeleteVmRequest(CascadeConfirmation? Cascade = null);
