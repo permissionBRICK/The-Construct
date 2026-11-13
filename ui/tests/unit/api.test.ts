@@ -112,7 +112,9 @@ describe('ApiBackend', () => {
     expect(lab.vms).toEqual([]);
     expect(updateParts(s).filter(p => p.to).map(p => p.name).sort()).toEqual(['harbor', 'orchard']);
     expect(s.devices.map(d => [d.name, d.me])).toEqual([['laptop', true], ['phone', false]]);
-    expect(s.na).toContain('vault');
+    expect(s.na).not.toContain('vault');
+    expect(s.na).not.toContain('reinstall');
+    expect(s.na).toContain('restore');
   });
 
   it('keeps an engine that fails to its own host and shows the others', async () => {
@@ -163,19 +165,23 @@ describe('ApiBackend', () => {
     expect(j).toMatchObject({ kind: 'reprovision', state: 'running' });
   });
 
-  it('follows job progress and the end from the agent\'s events', async () => {
+  it('follows job progress and the end from the agent\'s events, reading the job again each time', async () => {
     const { be, on, settle } = world();
     on('POST', `/api/engines/${E1}/api/v1/vms/atlas/jobs`, { status: 202, json: { jobId: 'j1', kind: 'provision', replayed: false } });
     on('GET', `/api/engines/${E1}/api/v1/jobs/j1`, { json: job('j1', 'atlas', 'queued') });
     await be.start();
     be.reprovision('atlas');
     await settle();
-    be.onEvent('job.progress', { seq: 1, type: 'job.progress', engine: E1, data: { jobId: 'j1', line: { at: '', text: 'copying', step: 'copy', state: 'running', percent: 30 } } });
-    let j = activeJob(be.snapshot(), 'atlas')!;
+    on('GET', `/api/engines/${E1}/api/v1/jobs/j1`, { json: job('j1', 'atlas', 'running', 'provision', [{ at: '', text: 'copying', step: 'copy', state: 'running', percent: 30 }]) });
+    be.onEvent('job.progress', { seq: 1, type: 'job.progress', engine: E1, data: { id: 'j1', vm: 'atlas' } });
+    await settle();
+    const j = activeJob(be.snapshot(), 'atlas')!;
     expect(j).toMatchObject({ state: 'running', step: 'Copying', stepIndex: 1, pct: 30 });
     expect(j.log).toEqual(['copying']);
+    on('GET', `/api/engines/${E1}/api/v1/jobs/j1`, { json: job('j1', 'atlas', 'succeeded') });
     on('GET', `/api/engines/${E1}/api/v1/jobs`, { json: [job('j1', 'atlas', 'succeeded')] });
-    be.onEvent('job.state', { seq: 2, type: 'job.state', engine: E1, data: { jobId: 'j1', job: job('j1', 'atlas', 'succeeded') } });
+    be.onEvent('job.ended', { seq: 2, type: 'job.ended', engine: E1, data: { id: 'j1', vm: 'atlas' } });
+    await settle();
     expect(activeJob(be.snapshot(), 'atlas')).toBeNull();
     expect(be.snapshot().jobs.at(-1)).toMatchObject({ state: 'done', pct: 100 });
     expect(be.snapshot().notice?.text).toBe('Reprovisioned atlas');
@@ -213,10 +219,10 @@ describe('ApiBackend', () => {
     const { be, calls, settle } = world();
     await be.start();
     const before = calls.length;
-    be.reinstall('atlas', false);
-    expect(be.snapshot().notice?.text).toBe('Not available yet');
-    be.addSecret('x', '', 'v');
     be.restoreBackup('atlas', 'c'.repeat(32));
+    expect(be.snapshot().notice?.text).toBe('Not available yet');
+    be.takeBack('x');
+    be.setProjectOn('atlas', 'webshop', true);
     be.saveSettings('atlas', { services: { smb: true } });
     await settle();
     expect(calls.length).toBe(before);
@@ -291,10 +297,10 @@ describe('ApiBackend', () => {
     await be.start();
     expect(be.snapshot().firstRun).toMatchObject({ step: 'start', localAddress: 'https://127.0.0.1:7462' });
     expect(be.snapshot().vms).toEqual([]);
+    // The engine on this machine needs no confirmed fingerprint: the agent's own probe of it is taken.
     be.firstRunStart({ how: 'setup', address: 'https://127.0.0.1:7462', deviceName: 'laptop', token: 'user-token' });
     await settle();
     expect(posts(calls).map(c => [c.path, c.body])).toEqual([
-      ['/api/engines/probe', { address: 'https://127.0.0.1:7462' }],
       ['/api/engines', { address: 'https://127.0.0.1:7462', pin: 'P1', userToken: 'user-token' }],
       ['/api/device/setup', { engine: E1, deviceName: 'laptop' }],
     ]);
@@ -315,7 +321,7 @@ describe('ApiBackend', () => {
       return { json: { recoveryCode: 'ABCD-EFGH' } };
     });
     await be.start();
-    be.firstRunStart({ how: 'setup', address: 'https://orchard.test:8443', deviceName: 'laptop', token: 't' });
+    be.firstRunStart({ how: 'setup', address: 'https://orchard.test:8443', deviceName: 'laptop', token: 't', pin: 'P' });
     await settle();
     await settle();
     expect(be.snapshot().firstRun).toMatchObject({ step: 'code', code: ['ABCD', 'EFGH'] });
@@ -348,14 +354,15 @@ describe('ApiBackend', () => {
     on('GET', `/api/engines/${E2}/api/v1/jobs/p1`, { json: job('p1', 'quill', 'running') });
     await be.start();
     expect(be.createVm({ where: 'remote', name: 'quill', hostAddress: 'https://lab.test:8443', signIn: 'windows' })).toBeNull();
-    expect(be.createVm({ where: 'remote', name: 'quill', hostAddress: 'https://lab.test:8443', signIn: 'token', token: 'tok' })).toBe('quill');
+    expect(be.createVm({ where: 'remote', name: 'quill', hostAddress: 'https://lab.test:8443', signIn: 'token', token: 'tok', pin: 'p2' })).toBe('quill');
     await settle();
     expect(activeJob(be.snapshot(), 'quill')).toMatchObject({ kind: 'create', state: 'running' });
-    be.onEvent('job.state', { seq: 4, type: 'job.state', engine: E2, data: { jobId: 'c1', job: job('c1', 'quill', 'succeeded', 'create-vm') } });
+    on('GET', `/api/engines/${E2}/api/v1/jobs/c1`, { json: job('c1', 'quill', 'succeeded', 'create-vm') });
+    be.onEvent('job.ended', { seq: 4, type: 'job.ended', engine: E2, data: { id: 'c1', vm: 'quill' } });
     await settle();
     expect(posts(calls).map(c => [c.path, c.body])).toEqual([
       ['/api/engines/probe', { address: 'https://lab.test:8443' }],
-      ['/api/engines', { address: 'https://lab.test:8443', pin: 'P2', userToken: 'tok' }],
+      ['/api/engines', { address: 'https://lab.test:8443', pin: 'p2', userToken: 'tok' }],
       [`/api/engines/${E2}/api/v1/vms`, { name: 'quill', ramGb: 8, diskGb: 50 }],
       [`/api/engines/${E2}/api/v1/vms/quill/jobs`, expect.objectContaining({ kind: 'provision' })],
     ]);
@@ -422,5 +429,286 @@ describe('SseParser', () => {
     p.feed(': connected\n\nid: 5\nevent: job.progress\ndata: {"a"');
     p.feed(':1}\n\nevent: reset\r\ndata: {"seq":9}\r\n\r\n');
     expect(got).toEqual([['job.progress', '{"a":1}', '5'], ['reset', '{"seq":9}', null]]);
+  });
+});
+
+describe('ApiBackend key vault', () => {
+  const secret = (name: string, extra: Record<string, unknown> = {}) => ({
+    name, description: `note of ${name}`, hasUsername: false, autoApprove: false, readable: true, updatedAt: Date.parse('2026-11-13T10:00:00Z'), updatedBy: 'laptop',
+    provenance: { kind: 'device', vm: null, engine: null, device: 'd1', requestId: null }, leases: [], ...extra,
+  });
+  const approval = (engine: string, id: string, vm: string, extra: Record<string, unknown> = {}) => ({
+    engine, engineName: engine === E1 ? 'orchard' : 'lab', id, vm, op: 'request', title: 'Key vault — access request', message: 'The VM asks', action: 'Approve',
+    names: ['db'], reason: 'run the migration', source: `root@${vm}`, createdAt: 1, deadline: 2, ...extra,
+  });
+
+  function vaultWorld(engines?: { id: string; name: string; url: string }[]) {
+    const w = world(engines ? { engines } : {});
+    w.on('GET', '/api/vault/secrets', { json: [secret('db', { leases: [{ engine: E1, engineName: 'orchard', vm: 'atlas', name: 'db', usesLeft: null, expiresAt: Date.now() + 3 * 3600e3 }] }), secret('npm', { autoApprove: true })] });
+    w.on('GET', '/api/vault/history', { json: [{ name: 'db', action: 'added', revision: 1, at: '2026-11-13T10:00:00Z', actor: 'device:d1', provenance: { kind: 'device', vm: null, engine: null, device: 'd1', requestId: null } }] });
+    w.on('GET', '/api/vault/approvals', { json: { approvals: [], unreachable: [] } });
+    w.on('GET', '/api/vault/entry-requests', { json: { requests: [], unreachable: [] } });
+    for (const e of engines ?? [{ id: E1 }]) w.on('GET', `/api/vault/engines/${e.id}/mode`, { json: { engine: e.id, mode: 'locked', holdsKey: false, records: true, unlockedVms: [] } });
+    return w;
+  }
+
+  it('lists secrets, leases, history and each host\'s mode, never a value', async () => {
+    const { be } = vaultWorld();
+    await be.start();
+    const s = be.snapshot();
+    expect(s.secrets.map(x => [x.name, x.note, x.usedBy, x.auto])).toEqual([['db', 'note of db', ['atlas'], false], ['npm', 'note of npm', [], true]]);
+    expect(s.leases).toEqual([expect.objectContaining({ secret: 'db', vmName: 'atlas · orchard', left: '3 h' })]);
+    expect(s.history).toEqual([{ at: '2026-11-13 10:00', vmName: 'laptop', secret: 'db', event: 'Added' }]);
+    expect(s.vaultModes).toEqual([{ hostId: E1, hostName: 'orchard', mode: 'locked' }]);
+  });
+
+  it('adds, replaces, reveals, deletes and switches auto-approve through the agent; a value stays out of the state', async () => {
+    const { be, calls, on, settle } = vaultWorld();
+    on('POST', '/api/vault/secrets', { json: secret('api') });
+    on('PATCH', '/api/vault/secrets/db', { json: secret('db') });
+    on('POST', '/api/vault/secrets/db/reveal', { json: { name: 'db', username: '', value: 'hunter2-value' } });
+    on('DELETE', '/api/vault/secrets/npm', { status: 204 });
+    on('PUT', '/api/vault/secrets/db/auto-approve', { status: 204 });
+    await be.start();
+    be.addSecret(' api ', 'the api', 'typed-value-1');
+    be.replaceSecret('db', 'typed-value-2');
+    expect(await be.revealSecret('db')).toBe('hunter2-value');
+    be.deleteSecret('npm');
+    be.setAutoApprove('db', true);
+    await settle();
+    const sent = posts(calls).map(c => [c.method, c.path, c.body]);
+    expect(sent.length).toBe(5);
+    expect(sent).toEqual(expect.arrayContaining([
+      ['POST', '/api/vault/secrets', { name: 'api', description: 'the api', value: 'typed-value-1', autoApprove: false }],
+      ['PATCH', '/api/vault/secrets/db', { value: 'typed-value-2' }],
+      ['POST', '/api/vault/secrets/db/reveal', undefined],
+      ['DELETE', '/api/vault/secrets/npm', undefined],
+      ['PUT', '/api/vault/secrets/db/auto-approve', { on: true }],
+    ]));
+    const all = JSON.stringify(be.snapshot());
+    for (const v of ['hunter2-value', 'typed-value-1', 'typed-value-2']) expect(all).not.toContain(v);
+  });
+
+  it('shows each request with the VM and host its engine names, the agent\'s words apart, and answers it at that engine', async () => {
+    const two = [{ id: E1, name: 'orchard', url: 'https://orchard.test:8443' }, { id: E2, name: 'lab', url: 'https://lab.test:8443' }];
+    const { be, calls, on, settle } = vaultWorld(two);
+    on('GET', '/api/vault/approvals', { json: { approvals: [approval(E2, 'a1', 'harbor'), approval(E1, 'a1', 'atlas', { action: 'Allow once' })], unreachable: [] } });
+    on('GET', '/api/vault/entry-requests', { json: { requests: [{ engine: E1, engineName: 'orchard', id: 'e1', vm: 'atlas', name: 'stripe', description: 'Stripe test key', reason: 'for the checkout tests', source: 'root@atlas', createdAt: 3, expiresAt: 4 }], unreachable: [] } });
+    on('POST', `/api/vault/approvals/${E2}/a1`, { status: 204 });
+    await be.start();
+    const r = be.snapshot().vaultRequests;
+    expect(r.map(x => [x.id, x.kind, x.vmName, x.hostName, x.vmId, x.reason, x.action])).toEqual([
+      [`${E2}/a1`, 'lease', 'harbor', 'lab', 'harbor', 'run the migration', 'Approve'],
+      [`${E1}/a1`, 'lease', 'atlas', 'orchard', 'atlas', 'run the migration', 'Allow once'],
+      [`${E1}/e1`, 'enter', 'atlas', 'orchard', 'atlas', 'Stripe test key — for the checkout tests', undefined],
+    ]);
+    // The same id on two engines: the answer goes to the engine of the card that was clicked.
+    be.answerLease(`${E2}/a1`, true);
+    expect(be.snapshot().vaultRequests.map(x => x.id)).toEqual([`${E1}/a1`, `${E1}/e1`]);
+    await settle();
+    expect(posts(calls).map(c => [c.path, c.body])).toEqual([[`/api/vault/approvals/${E2}/a1`, { decision: 'allow' }]]);
+    // A read that still lists it does not bring the answered card back.
+    expect(be.snapshot().vaultRequests.map(x => x.id)).toEqual([`${E1}/a1`, `${E1}/e1`]);
+  });
+
+  it('brings a card back when its answer failed', async () => {
+    const { be, on, settle } = vaultWorld();
+    on('GET', '/api/vault/approvals', { json: { approvals: [approval(E1, 'a1', 'atlas')], unreachable: [] } });
+    on('POST', `/api/vault/approvals/${E1}/a1`, { status: 502, json: { title: 'engine-unreachable', status: 502, code: 'engine-unreachable' } });
+    await be.start();
+    be.answerLease(`${E1}/a1`, false);
+    expect(be.snapshot().vaultRequests).toEqual([]);
+    await settle();
+    expect(be.snapshot().vaultRequests.map(x => x.id)).toEqual([`${E1}/a1`]);
+    expect(be.snapshot().notice?.text).toBe('engine-unreachable');
+  });
+
+  it('saves an entered value at the engine that asked, overwrites nothing, and declines', async () => {
+    const { be, calls, on, settle } = vaultWorld();
+    const req = (id: string) => ({ engine: E1, engineName: 'orchard', id, vm: 'atlas', name: 'stripe', description: 'd', reason: '', source: '', createdAt: 1, expiresAt: 2 });
+    on('GET', '/api/vault/entry-requests', { json: { requests: [req('e1'), req('e2'), req('e3')], unreachable: [] } });
+    on('POST', `/api/vault/entry-requests/${E1}/e1`, { status: 204 });
+    on('POST', `/api/vault/entry-requests/${E1}/e2`, { status: 409, json: { title: 'exists', status: 409, code: 'exists' } });
+    on('POST', `/api/vault/entry-requests/${E1}/e3/decline`, { status: 204 });
+    await be.start();
+    be.enterSecret(`${E1}/e1`, 'pasted-value-1');
+    await settle();
+    expect(be.snapshot().notice?.text).toBe('Saved stripe');
+    be.enterSecret(`${E1}/e2`, 'pasted-value-2');
+    await settle();
+    expect(be.snapshot().notice?.text).toBe('stripe exists already; nothing was overwritten');
+    be.enterSecret(`${E1}/e3`, null);
+    await settle();
+    expect(posts(calls).map(c => [c.path, c.body])).toEqual([
+      [`/api/vault/entry-requests/${E1}/e1`, { value: 'pasted-value-1' }],
+      [`/api/vault/entry-requests/${E1}/e2`, { value: 'pasted-value-2' }],
+      [`/api/vault/entry-requests/${E1}/e3/decline`, undefined],
+    ]);
+    expect(JSON.stringify(be.snapshot())).not.toContain('pasted-value');
+  });
+
+  it('keeps the requests of an engine that did not answer and says which', async () => {
+    const two = [{ id: E1, name: 'orchard', url: 'https://orchard.test:8443' }, { id: E2, name: 'lab', url: 'https://lab.test:8443' }];
+    const { be, on } = vaultWorld(two);
+    on('GET', '/api/vault/approvals', { json: { approvals: [approval(E1, 'a1', 'atlas'), approval(E2, 'a2', 'harbor')], unreachable: [] } });
+    await be.start();
+    on('GET', '/api/vault/approvals', { json: { approvals: [], unreachable: [E2] } });
+    be.onEvent('agent', { seq: 1, type: 'agent', engine: null, data: null });
+    await new Promise(r => setTimeout(r, 30));
+    expect(be.snapshot().vaultRequests.map(x => x.id)).toEqual([`${E2}/a2`]);
+    expect(be.snapshot().problems.requests).toBe('Not reachable: lab');
+  });
+
+  it('sets a host\'s vault mode and lists what a revoked device could read', async () => {
+    const { be, calls, on, settle } = vaultWorld();
+    on('PUT', `/api/vault/engines/${E1}/mode`, { json: { engine: E1, mode: 'available', holdsKey: true, records: true, unlockedVms: [] } });
+    on('GET', '/api/devices', { json: [{ id: 'd1', name: 'laptop', me: true, revoked: false, added: '2026-11-01T00:00:00Z', acknowledgedBy: [] }, { id: 'd2', name: 'phone', me: false, revoked: true, added: '2026-11-02T00:00:00Z', acknowledgedBy: ['x'] }] });
+    on('GET', '/api/devices/d2/secrets', { json: [{ name: 'db', description: '' }, { name: 'npm', description: '' }] });
+    await be.start();
+    be.setVaultMode(E1, 'available');
+    be.openRevocation('d2');
+    await settle();
+    expect(posts(calls).map(c => [c.path, c.body])).toEqual([[`/api/vault/engines/${E1}/mode`, { mode: 'available' }]]);
+    const r = be.snapshot().revocation!;
+    expect(r.hosts).toEqual([{ name: 'orchard', confirmed: true }]);
+    expect(r.rotate.map(x => [x.secret, x.done])).toEqual([['db', false], ['npm', false]]);
+    be.markRotated('db');
+    expect(be.snapshot().revocation!.rotate[0].done).toBe(true);
+  });
+});
+
+describe('ApiBackend profiles', () => {
+  const doc = (name: string) => ({ name, repos: [{ url: 'https://example.test/r.git' }], sdks: {}, mcp: [], hostPackages: [], provisionCommands: [], tests: {} });
+  function profileWorld() {
+    const w = world();
+    const p = `/api/engines/${E1}/api/v1`;
+    w.on('GET', `${p}/profiles`, { json: [{ name: 'web', revision: 4 }, { name: 'tools', revision: 2 }] });
+    w.on('GET', `${p}/profiles/web`, { json: { name: 'web', revision: 4, profile: doc('web') } });
+    w.on('GET', `${p}/profiles/tools`, { json: { name: 'tools', revision: 2, profile: { ...doc('tools'), extra: 1 } } });
+    w.on('GET', `${p}/profile-conflicts`, { json: [{ id: 'c1', profile: 'tools', profileRevision: 2, fields: ['repos'], base: null, ours: null, theirs: null, merged: null }] });
+    return { ...w, p };
+  }
+
+  it('reads profiles from the store\'s engine, keeps the document and marks an open conflict', async () => {
+    const { be } = profileWorld();
+    await be.start();
+    const s = be.snapshot();
+    expect(s.projects.map(x => [x.name, x.revision, x.conflict, x.repos.length])).toEqual([['tools', 2, true, 1], ['web', 4, false, 1]]);
+    expect(s.projects[0].doc).toMatchObject({ extra: 1 });
+    expect(s.sync.remote).toBe('orchard');
+  });
+
+  it('saves with the revision the editor read; the engine\'s answer decides what the page says', async () => {
+    const { be, calls, on, p } = profileWorld();
+    await be.start();
+    on('PUT', `${p}/profiles/web`, { json: { status: 'written', revision: 5, file: '', conflictId: null, fields: null } });
+    expect(await be.saveProfile('web', doc('web'), 3)).toEqual({ ok: true, text: 'Saved' });
+    expect(posts(calls).at(-1)).toMatchObject({ method: 'PUT', path: `${p}/profiles/web`, body: { profile: doc('web'), baseRevision: 3 } });
+    on('PUT', `${p}/profiles/web`, { json: { status: 'conflict', revision: null, file: null, conflictId: 'c2', fields: ['repos'] } });
+    expect(await be.saveProfile('web', doc('web'), 4)).toEqual({ ok: false, changed: true, text: 'web changed meanwhile; an agent is resolving this' });
+    on('PUT', `${p}/profiles/web`, { status: 409, json: { title: 'refused-by-store', status: 409, code: 'refused-by-store' } });
+    on('GET', `${p}/profiles`, { json: [{ name: 'web', revision: 6 }] });
+    on('GET', `${p}/profiles/web`, { json: { name: 'web', revision: 6, profile: doc('web') } });
+    expect(await be.saveProfile('web', doc('web'), 4)).toEqual({ ok: false, changed: true, text: 'web changed meanwhile; this is the current version' });
+    expect(be.snapshot().projects.find(x => x.name === 'web')!.revision).toBe(6);
+    on('PUT', `${p}/profiles/web`, { status: 400, json: { title: 'invalid-profile', status: 400, code: 'invalid-profile', detail: 'repos[0].url is missing' } });
+    expect(await be.saveProfile('web', doc('web'), 6)).toEqual({ ok: false, changed: false, text: 'repos[0].url is missing' });
+  });
+
+  it('keeps a failing profile route to the projects page', async () => {
+    const { be, on, p } = profileWorld();
+    on('GET', `${p}/profiles`, { status: 403, json: { title: 'devices-only', status: 403, code: 'devices-only' } });
+    await be.start();
+    expect(be.snapshot().problems.projects).toBe('devices-only');
+    expect(be.snapshot().vms.length).toBe(1);
+  });
+});
+
+describe('ApiBackend events and jobs', () => {
+  it('re-reads only the VM\'s backups after a backup event, and the engine after a VM change', async () => {
+    const { be, calls, settle } = world();
+    await be.start();
+    const before = calls.length;
+    be.onEvent('backup.added', { seq: 1, type: 'backup.added', engine: E1, data: { id: 'b1', vm: 'atlas' } });
+    await settle();
+    expect(calls.slice(before).map(c => c.path)).toEqual([`/api/engines/${E1}/api/v1/vms/atlas/backups`]);
+    const mid = calls.length;
+    be.onEvent('vm.power', { seq: 2, type: 'vm.power', engine: E1, data: { id: 'atlas', vm: 'atlas' } });
+    await settle();
+    expect(calls.slice(mid).map(c => c.path)).toContain(`/api/engines/${E1}/api/v1/vms`);
+  });
+
+  it('never shows a job as running again after it ended', async () => {
+    const { be, on, settle } = world();
+    on('POST', `/api/engines/${E1}/api/v1/vms/atlas/jobs`, { status: 202, json: { jobId: 'j1', kind: 'provision', replayed: false } });
+    on('GET', `/api/engines/${E1}/api/v1/jobs/j1`, { json: job('j1', 'atlas', 'running') });
+    await be.start();
+    be.reprovision('atlas');
+    await settle();
+    on('GET', `/api/engines/${E1}/api/v1/jobs/j1`, { json: job('j1', 'atlas', 'failed') });
+    be.onEvent('job.ended', { seq: 3, type: 'job.ended', engine: E1, data: { id: 'j1', vm: 'atlas' } });
+    await settle();
+    // A late progress read and a stale list still say running.
+    on('GET', `/api/engines/${E1}/api/v1/jobs/j1`, { json: job('j1', 'atlas', 'running') });
+    on('GET', `/api/engines/${E1}/api/v1/jobs`, { json: [job('j1', 'atlas', 'running')] });
+    be.onEvent('job.progress', { seq: 2, type: 'job.progress', engine: E1, data: { id: 'j1', vm: 'atlas' } });
+    be.onEvent('engine.reset', { seq: 4, type: 'engine.reset', engine: E1, data: null });
+    await settle();
+    expect(activeJob(be.snapshot(), 'atlas')).toMatchObject({ state: 'failed' });
+  });
+
+  it('starts a reinstall with the fresh-image switch, shows its failed step, and retries the same reinstall', async () => {
+    const { be, calls, on, settle } = world();
+    on('POST', `/api/engines/${E1}/api/v1/vms/atlas/jobs`, { status: 202, json: { jobId: 'r1', kind: 'reinstall', replayed: false } });
+    on('GET', `/api/engines/${E1}/api/v1/jobs/r1`, { json: job('r1', 'atlas', 'running', 'reinstall', [{ at: '', text: 'backing up', step: 'backup', state: 'running', percent: null }]) });
+    await be.start();
+    be.reinstall('atlas', true);
+    await settle();
+    expect(be.snapshot().notice).toBeNull();
+    expect(posts(calls)[0].body).toMatchObject({ kind: 'reinstall', freshImage: true });
+    expect(activeJob(be.snapshot(), 'atlas')).toMatchObject({ kind: 'reinstall', state: 'running', step: 'Backing up', stepIndex: 0, stepCount: 10 });
+    on('GET', `/api/engines/${E1}/api/v1/jobs/r1`, { json: { ...job('r1', 'atlas', 'failed', 'reinstall', [{ at: '', text: 'apt locked', step: 'provision', state: 'failed', percent: null }]), result: { failedStep: 'create' }, error: 'driver-failed' } });
+    be.onEvent('job.ended', { seq: 5, type: 'job.ended', engine: E1, data: { id: 'r1', vm: 'atlas' } });
+    await settle();
+    const j = activeJob(be.snapshot(), 'atlas')!;
+    expect(j).toMatchObject({ kind: 'reinstall', state: 'failed', step: 'Creating', error: 'driver-failed', log: ['apt locked'] });
+    be.retryJob(j.id);
+    await settle();
+    const p = posts(calls);
+    expect(p.length).toBe(2);
+    expect(p[1].body).toMatchObject({ kind: 'reinstall', freshImage: true });
+    expect((p[1].body as { requestId: string }).requestId).not.toBe((p[0].body as { requestId: string }).requestId);
+  });
+});
+
+describe('ApiBackend host fingerprint', () => {
+  it('adds a remote host only with the fingerprint the user confirmed', async () => {
+    const { be, calls, on, settle } = world();
+    on('POST', '/api/engines/probe', { json: { url: 'https://lab.test:8443', pin: 'AA11', status: 'ok', known: null } });
+    await be.start();
+    expect(await be.probeHost(' lab.test:8443 ')).toEqual({ url: 'https://lab.test:8443', pin: 'AA11', known: false });
+    be.createVm({ where: 'remote', name: 'quill', hostAddress: 'https://lab.test:8443', signIn: 'token', token: 'tok' });
+    await settle();
+    expect(be.snapshot().notice?.text).toMatch(/fingerprint/);
+    be.createVm({ where: 'remote', name: 'quill', hostAddress: 'https://lab.test:8443', signIn: 'token', token: 'tok', pin: 'BB22' });
+    await settle();
+    expect(be.snapshot().notice?.text).toMatch(/different certificate/);
+    expect(calls.some(c => c.method === 'POST' && c.path === '/api/engines')).toBe(false);
+  });
+});
+
+describe('ApiBackend lost jobs', () => {
+  it('does not bring back a job the agent reported lost when an older read arrives', async () => {
+    const { be, on, settle } = world();
+    on('POST', `/api/engines/${E1}/api/v1/vms/atlas/jobs`, { status: 202, json: { jobId: 'j1', kind: 'provision', replayed: false } });
+    on('GET', `/api/engines/${E1}/api/v1/jobs/j1`, { json: job('j1', 'atlas', 'running') });
+    await be.start();
+    be.reprovision('atlas');
+    await settle();
+    expect(activeJob(be.snapshot(), 'atlas')).toMatchObject({ state: 'running' });
+    be.onEvent('job.lost', { seq: 6, type: 'job.lost', engine: E1, data: { id: 'j1' } });
+    be.onEvent('job.progress', { seq: 5, type: 'job.progress', engine: E1, data: { id: 'j1', vm: 'atlas' } });
+    await settle();
+    expect(activeJob(be.snapshot(), 'atlas')).toBeNull();
   });
 });

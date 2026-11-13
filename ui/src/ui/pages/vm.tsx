@@ -80,13 +80,14 @@ export function Projects({ vm }: { vm: Vm }) {
       {adding && (
         <div class="line"><Field value={name} onInput={setName} label="Project name" placeholder="name" mono onEnter={add} /><Btn sm onClick={() => setAdding(false)}>Cancel</Btn><Btn sm kind="pri" onClick={add} disabled={!name.trim()}>Add</Btn></div>
       )}
-      <div class="line"><span>Synced {s.sync.when}</span><code>{s.sync.remote}</code><code>{s.sync.rev}</code></div>
+      <div class="line"><span>Synced {s.sync.when}</span><code>{s.sync.remote}</code>{s.sync.rev && <code>{s.sync.rev}</code>}</div>
+      {s.problems.projects && <div class="line badc">{s.problems.projects}</div>}
       <Sec>
         <Table
-          cols={[{ h: 'Project' }, { h: 'Repos', cls: 'x m' }, { h: 'SDKs', cls: 'x m' }, { h: 'MCP', cls: 'x m' }, { h: `On ${vm.name}`, cls: 'e' }]}
+          cols={[{ h: 'Project' }, { h: 'Repos', cls: 'x m' }, { h: 'SDKs', cls: 'x m' }, { h: 'MCP', cls: 'x m' }, { h: na(s, 'project-on') ? '' : `On ${vm.name}`, cls: 'e' }]}
           rows={s.projects.map(p => [
-            p.name, p.repos.length, Object.entries(p.sdks).map(e => e.join(' ')).join(', ') || '–', p.mcp.length || '–',
-            <span onClick={e => e.stopPropagation()}><Switch on={vm.projectsOn.includes(p.name)} onChange={on => be.setProjectOn(vm.id, p.name, on)} label={`${p.name} on ${vm.name}`} /></span>,
+            <>{p.name}{p.conflict && <> <Tag>an agent is resolving this</Tag></>}</>, p.repos.length, Object.entries(p.sdks).map(e => e.join(' ')).join(', ') || '–', p.mcp.length || '–',
+            na(s, 'project-on') ? '' : <span onClick={e => e.stopPropagation()}><Switch on={vm.projectsOn.includes(p.name)} onChange={on => be.setProjectOn(vm.id, p.name, on)} label={`${p.name} on ${vm.name}`} /></span>,
           ])}
           onRow={i => go({ page: 'project', arg: s.projects[i].name })}
         />
@@ -96,13 +97,21 @@ export function Projects({ vm }: { vm: Vm }) {
 }
 
 function ProjHead({ p, vm, cur }: { p: Profile; vm: Vm; cur: 'project' | 'file' }) {
-  const { be, go } = useApp();
+  const { s, be, go } = useApp();
   return (
     <>
-      <Head title={p.name} back={() => go({ page: 'projects' })} acts={<><span class="d">On {vm.name}</span><Switch on={vm.projectsOn.includes(p.name)} onChange={on => be.setProjectOn(vm.id, p.name, on)} label={`${p.name} on ${vm.name}`} /></>} />
+      <Head title={p.name} back={() => go({ page: 'projects' })} acts={na(s, 'project-on') ? undefined : <><span class="d">On {vm.name}</span><Switch on={vm.projectsOn.includes(p.name)} onChange={on => be.setProjectOn(vm.id, p.name, on)} label={`${p.name} on ${vm.name}`} /></>} />
+      {p.conflict && <div class="line"><Tag>an agent is resolving this</Tag></div>}
       <Tabs items={[['project', 'Overview'], ['file', 'File']]} value={cur} onChange={t => go({ page: t, arg: p.name })} />
     </>
   );
+}
+
+/** The profile as its file holds it: the store's document, else the view without the backend's own fields. */
+function profileText(p: Profile): string {
+  if (p.doc) return JSON.stringify(p.doc, null, 2);
+  const { revision: _r, conflict: _c, doc: _d, ...rest } = p;
+  return JSON.stringify(rest, null, 2);
 }
 
 export function Project({ vm, name }: { vm: Vm; name?: string }) {
@@ -152,30 +161,39 @@ function JsonView({ text }: { text: string }) {
 export function ProjectFile({ vm, name }: { vm: Vm; name?: string }) {
   const { s, be, toast } = useApp();
   const p = s.projects.find(x => x.name === name) ?? s.projects[0];
-  const [edit, setEdit] = useState<string | null>(null);
+  // The editor keeps the revision it was opened at; the save names it.
+  const [edit, setEdit] = useState<{ text: string; revision: number | undefined } | null>(null);
   const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
   if (!p) return null;
-  const text = JSON.stringify(p, null, 2);
+  const text = profileText(p);
   const save = () => {
+    if (!edit || busy) return;
+    let o: Profile;
     try {
-      const o = JSON.parse(edit!) as Profile;
+      o = JSON.parse(edit.text) as Profile;
       const bad = profileError(o);
       if (bad) throw new Error(bad);
       if (o.name !== p.name) throw new Error('The name cannot change here');
-      be.saveProfile(o);
-      setEdit(null); setErr('');
-    } catch (e) { setErr((e as Error).message); }
+    } catch (e) { setErr((e as Error).message); return; }
+    setBusy(true);
+    void be.saveProfile(p.name, o as unknown as Record<string, unknown>, edit.revision).then(r => {
+      setBusy(false);
+      if (r.ok) { setEdit(null); setErr(''); toast(r.text); }
+      else if (r.changed) { setEdit(null); setErr(r.text); }
+      else setErr(r.text);
+    });
   };
   return (
     <Page>
       <ProjHead p={p} vm={vm} cur="file" />
       <div class="line">
         <code class="grow">/opt/construct/projects/{p.name}.json</code>
-        {edit === null ? <><Btn sm icon="copy" onClick={() => { copy(text); toast('Copied'); }}>Copy</Btn><Btn sm icon="edit" onClick={() => setEdit(text)}>Edit</Btn></> : <><Btn sm onClick={() => { setEdit(null); setErr(''); }}>Cancel</Btn><Btn sm kind="pri" onClick={save}>Save</Btn></>}
+        {edit === null ? <><Btn sm icon="copy" onClick={() => { copy(text); toast('Copied'); }}>Copy</Btn><Btn sm icon="edit" onClick={() => { setErr(''); setEdit({ text, revision: p.revision }); }}>Edit</Btn></> : <><Btn sm onClick={() => { setEdit(null); setErr(''); }}>Cancel</Btn><Btn sm kind="pri" disabled={busy} onClick={save}>Save</Btn></>}
       </div>
       {err && <div class="blk bad row"><Icon n="x" /><span>{err}</span></div>}
       {edit === null ? <JsonView text={text} /> : (
-        <textarea class="code edit" spellcheck={false} aria-label="Profile JSON" value={edit} onInput={e => setEdit(e.currentTarget.value)} rows={Math.max(12, edit.split('\n').length + 1)} />
+        <textarea class="code edit" spellcheck={false} aria-label="Profile JSON" value={edit.text} onInput={e => setEdit({ ...edit, text: e.currentTarget.value })} rows={Math.max(12, edit.text.split('\n').length + 1)} />
       )}
     </Page>
   );
@@ -216,8 +234,8 @@ export function Backups({ vm }: { vm: Vm }) {
         <Table cols={[{ h: 'When' }, { h: 'Kind', cls: 'x' }, { h: 'Size', cls: 'x m' }, { h: 'Files', cls: 'x m' }, { h: '', cls: 'e' }]}
           rows={vm.backups.map(b => [<>{b.at}{b.protected && <> <Tag>protected</Tag></>}</>, b.kind, b.size, b.files === null ? '–' : b.files.toLocaleString('en-US'), <>
             <button type="button" class={`lk ${b.pinned ? 'on' : ''}`} aria-pressed={b.pinned} title="Protect" aria-label="Protect" onClick={() => be.pinBackup(vm.id, b.id, !b.pinned)}><Icon n="lock" /></button>{' '}
-            <Confirm label="Restore" danger={false} disabled={na(s, 'restore')} onYes={() => be.restoreBackup(vm.id, b.id)} />{' '}
-            <Confirm label="Delete" icon="trash" verb={b.protected ? 'Delete protected' : 'Delete'} onYes={() => be.deleteBackup(vm.id, b.id)} />
+            <Confirm key={`restore-${b.id}`} label="Restore" danger={false} disabled={na(s, 'restore')} onYes={() => be.restoreBackup(vm.id, b.id)} />{' '}
+            <Confirm key={`delete-${b.id}`} label="Delete" icon="trash" verb={b.protected ? 'Delete protected' : 'Delete'} onYes={() => be.deleteBackup(vm.id, b.id)} />
           </>])} />
       </Sec>
     </Page>

@@ -1,6 +1,6 @@
 import type { components as E } from '../generated/engine';
 import type { components as A } from '../generated/agent';
-import type { Backup, Device, Host, HostJob, HostUpdate, HostUser, HostVm, Job, JobKind, Power, Vm, WinGuest, WinKey } from '../types';
+import type { Backup, Device, Host, HostJob, HostUpdate, HostUser, HostVm, Job, JobKind, Lease, Power, Profile, Secret, VaultEvent, VaultRequest, Vm, WinGuest, WinKey } from '../types';
 
 /* From what the agent and the engines report to the pieces of `State`. Pure functions, no I/O: each takes
    the responses it needs and leaves out what they do not say. */
@@ -23,6 +23,11 @@ export type HttpsStatus = E['schemas']['HttpsStatusResponse'];
 export type HostUpdateStatus = E['schemas']['HostUpdateStatusResponse'];
 export type EngineView = A['schemas']['EngineView'];
 export type DeviceItem = A['schemas']['DeviceListItem'];
+export type SecretView = A['schemas']['SecretView'];
+export type SecretHistoryItem = A['schemas']['SecretHistoryItem'];
+export type ApprovalItem = A['schemas']['VaultApprovalItem'];
+export type EntryRequestItem = A['schemas']['VaultEntryRequestItem'];
+export type ProfileResponse = E['schemas']['ProfileResponse'];
 
 /** `2026-11-13T19:18:40.85+00:00` → `2026-11-13 19:18` (UTC, as the engine stores it). */
 export function when(iso: string | null | undefined): string {
@@ -129,12 +134,17 @@ export function toBackup(b: BackupSummary): Backup {
   };
 }
 
-/** The provision job's steps (ProvisionJob.Steps) in the words the UI shows. */
+/** The steps of the provision, reinstall and restore jobs (ProvisionJob.Steps, ReinstallJob.Steps) in the words the UI shows. */
 const PROVISION_STEPS: [string, string][] = [
-  ['source', 'Source'], ['copy', 'Copying'], ['provision', 'Provisioning'], ['project-commands', 'Project commands'], ['applied', 'Checking'], ['finish', 'Finishing'],
+  ['source', 'Source'], ['copy', 'Copying'], ['provision', 'Provisioning'], ['restore', 'Restoring'], ['project-commands', 'Project commands'], ['applied', 'Checking'], ['finish', 'Finishing'],
 ];
+const REINSTALL_STEPS: [string, string][] = [['backup', 'Backing up'], ['delete', 'Deleting'], ['create', 'Creating'], ...PROVISION_STEPS];
+const RESTORE_STEPS: [string, string][] = [['restore', 'Restoring']];
+const STEPS: Record<string, [string, string][]> = { provision: PROVISION_STEPS, reinstall: REINSTALL_STEPS, restore: RESTORE_STEPS };
 
-const JOB_KINDS: Record<string, JobKind> = { provision: 'reprovision', 'create-vm': 'create' };
+const JOB_KINDS: Record<string, JobKind> = { provision: 'reprovision', 'create-vm': 'create', reinstall: 'reinstall', restore: 'restore' };
+/** Engine job kinds the VM pages show. */
+export const VM_JOB_KINDS = Object.keys(JOB_KINDS);
 
 /** A job of one of the user's VMs, or null for kinds the VM pages do not show. `as` overrides the kind for a
     job this UI started as an update. */
@@ -144,12 +154,15 @@ export function toJob(key: string, vmId: string, j: JobResponse, as?: JobKind): 
   const state: Job['state'] = j.state === 'succeeded' ? 'done' : j.state === 'failed' ? 'failed' : j.state === 'cancelled' ? 'stopped' : 'running';
   const withStep = [...j.progress].reverse().find(p => p.step);
   const pctLine = [...j.progress].reverse().find(p => p.percent !== null && p.percent !== undefined);
+  const failed = state === 'failed' ? failedStepOf(j.result) : null;
   let step: string, stepIndex: number, stepCount: number, pct: number;
-  if (j.kind === 'provision') {
-    const at = Math.max(0, PROVISION_STEPS.findIndex(s => s[0] === (withStep?.step ?? j.phase ?? 'source')));
-    step = PROVISION_STEPS[at][1];
+  const steps = STEPS[j.kind];
+  if (steps) {
+    const name = failed ?? withStep?.step ?? j.phase ?? steps[0][0];
+    const at = Math.max(0, steps.findIndex(s => s[0] === name));
+    step = steps[at][1];
     stepIndex = at;
-    stepCount = PROVISION_STEPS.length;
+    stepCount = steps.length;
     pct = pctLine?.percent ?? Math.round((at / stepCount) * 100);
   } else {
     step = j.phase ?? j.progress.at(-1)?.text ?? '';
@@ -164,6 +177,12 @@ export function toJob(key: string, vmId: string, j: JobResponse, as?: JobKind): 
     error: j.error ?? null,
     repair: null,
   };
+}
+
+/** The step a failed job names in its result (`failedStep`), if any. */
+function failedStepOf(result: unknown): string | null {
+  const r = result as Record<string, unknown> | null;
+  return r && typeof r === 'object' && typeof r.failedStep === 'string' ? r.failedStep : null;
 }
 
 export function toHostJob(j: JobResponse): HostJob {
@@ -355,3 +374,82 @@ export function problemText(e: unknown, fallback = 'Failed'): string {
 
 /** `ABCD-EFGH-...` or `ABCD EFGH ...` → the groups. */
 export const codeGroups = (code: string) => code.split(/[\s-]+/).filter(Boolean);
+
+/* --- the key vault --- */
+
+/** A request's key in the state: the engine that holds it and its id there. */
+export const requestKey = (engine: string, id: string) => `${engine}/${id}`;
+export function splitRequestKey(key: string): [string, string] {
+  const i = key.indexOf('/');
+  return [key.slice(0, i), key.slice(i + 1)];
+}
+
+/** Unix milliseconds → `2026-11-13 19:18`. */
+const whenMs = (ms: number) => when(new Date(ms).toISOString());
+
+/** Time left until `ms`, in the largest unit: `5 h`, `12 min`. */
+export function left(ms: number, now: number): string {
+  const s = Math.max(0, Math.round((ms - now) / 1000));
+  if (s >= 2 * 86400) return `${Math.round(s / 86400)} d`;
+  if (s >= 2 * 3600) return `${Math.round(s / 3600)} h`;
+  return `${Math.max(1, Math.round(s / 60))} min`;
+}
+
+export function toSecret(v: SecretView): Secret {
+  return { name: v.name, note: v.description, usedBy: [...new Set(v.leases.map(l => l.vm))], last: whenMs(v.updatedAt), auto: v.autoApprove };
+}
+
+/** Leases have no id the agent can end, so they carry engine, VM and secret. */
+export function toLeases(views: SecretView[], now: number): Lease[] {
+  return views.flatMap(v => v.leases.map(l => ({
+    id: `${l.engine}/${l.vm}/${l.name}`, secret: l.name, vmName: `${l.vm} · ${l.engineName}`, reason: '',
+    left: l.usesLeft !== null && l.usesLeft !== undefined ? `${l.usesLeft} uses` : left(l.expiresAt, now),
+  })));
+}
+
+const ACTIONS: Record<string, string> = { added: 'Added', changed: 'Changed', deleted: 'Deleted' };
+
+export function toVaultEvent(h: SecretHistoryItem, devices: Device[]): VaultEvent {
+  const p = h.provenance;
+  const by = p?.vm ?? (p?.device ? devices.find(d => d.id === p.device)?.name ?? p.device : null) ?? h.actor;
+  return { at: when(h.at), vmName: by, secret: h.name, event: ACTIONS[h.action] ?? h.action };
+}
+
+/** An approval: the engine's own words (the action) apart from the agent's (the reason). */
+export function toApproval(a: ApprovalItem, vmId: string): VaultRequest {
+  return {
+    id: requestKey(a.engine, a.id), kind: 'lease', secret: a.names.join(', '), vmId, vmName: a.vm, hostName: a.engineName,
+    reason: a.reason, span: '', action: a.action,
+  };
+}
+
+/** A request to enter a secret: the description and the reason are the agent's. */
+export function toEntryRequest(r: EntryRequestItem, vmId: string): VaultRequest {
+  const words = [r.description, r.reason].filter(x => x && x.trim()).join(' — ');
+  return { id: requestKey(r.engine, r.id), kind: 'enter', secret: r.name, vmId, vmName: r.vm, hostName: r.engineName, reason: words, span: '' };
+}
+
+/* --- profiles --- */
+
+const arr = (v: unknown) => (Array.isArray(v) ? v : []);
+
+/** A profile document as the screens show it; `doc` keeps the document itself for the editor. */
+export function toProfile(r: ProfileResponse, conflict: boolean): Profile {
+  const d = (r.profile ?? {}) as Loose;
+  const sdks = d.sdks && typeof d.sdks === 'object' && !Array.isArray(d.sdks) ? d.sdks as Loose : {};
+  return {
+    name: r.name,
+    revision: r.revision,
+    conflict,
+    doc: d,
+    repos: arr(d.repos).map(x => ({ url: str((x as Loose)?.url), directory: str((x as Loose)?.directory) })),
+    sdks: Object.fromEntries(Object.entries(sdks).map(([k, v]) => [k, Array.isArray(v) ? v.join(' ') : str(v)])),
+    mcp: arr(d.mcp).map(x => {
+      const m = (x ?? {}) as Loose;
+      return { name: str(m.name), type: str(m.type), command: str(m.command ?? m.url), args: arr(m.args).map(str) };
+    }),
+    hostPackages: arr(d.hostPackages).map(str),
+    provisionCommands: arr(d.provisionCommands).map(str),
+    forwards: arr(d.forwards).map(x => ({ port: Number((x as Loose)?.port) || 0, label: str((x as Loose)?.label) })),
+  };
+}

@@ -1,4 +1,4 @@
-import type { Backend, CreateVmRequest, Host, HostUser, Job, JobKind, Prefs, Profile, SettingsPatch, State, Vm } from './types';
+import type { Backend, CreateVmRequest, Host, HostProbe, HostUser, Job, JobKind, Prefs, Profile, ProfileSave, SettingsPatch, State, Vm } from './types';
 import { NEXT_RELEASE, PAIR_WORDS, RECOVERY_CODE, REINSTALL_STEPS, REPROVISION_STEPS, sampleState } from './sample';
 import { activeJob, newer, vmUpdateTarget } from '../model/vm';
 import { applies, applyPatch } from '../model/settings';
@@ -11,11 +11,11 @@ import { updateParts } from '../model/update';
    own, so a scene stays exactly as it is. */
 
 export type Scene =
-  | 'calm' | 'update' | 'changed' | 'lease' | 'enter' | 'job' | 'failed' | 'repair' | 'updating' | 'restart'
+  | 'calm' | 'update' | 'changed' | 'lease' | 'enter' | 'job' | 'failed' | 'failed-reinstall' | 'repair' | 'updating' | 'restart'
   | 'pairing' | 'pair-confirm' | 'revoked' | 'handout' | 'creating'
   | 'upgrade-intro' | 'upgrade-code' | 'upgrade-convert' | 'upgrade-done';
 
-export const SCENES: Scene[] = ['calm', 'update', 'changed', 'lease', 'enter', 'job', 'failed', 'repair', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'upgrade-intro', 'upgrade-code', 'upgrade-convert', 'upgrade-done'];
+export const SCENES: Scene[] = ['calm', 'update', 'changed', 'lease', 'enter', 'job', 'failed', 'failed-reinstall', 'repair', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'upgrade-intro', 'upgrade-code', 'upgrade-convert', 'upgrade-done'];
 
 /** Things the preview frame can make happen, beside the user's own actions. */
 export type Demo = 'lease' | 'enter' | 'release' | 'fail-next' | 'change';
@@ -90,14 +90,21 @@ export class FakeBackend implements Backend {
       case 'calm': break;
       case 'update': d.release = NEXT_RELEASE; break;
       case 'changed': this.vm(d, 'atlas').changeWaits = 'webshop'; break;
-      case 'lease': d.vaultRequests.push({ id: 'r1', kind: 'lease', secret: 'forge-token', vmId: 'atlas', vmName: 'atlas', reason: 'Push the release', span: '2 h' }); break;
-      case 'enter': d.vaultRequests.push({ id: 'r2', kind: 'enter', secret: 'payments-sandbox', vmId: 'atlas', vmName: 'atlas', reason: 'API key of the payments sandbox', span: '' }); break;
+      case 'lease': d.vaultRequests.push({ id: 'r1', kind: 'lease', secret: 'forge-token', vmId: 'atlas', vmName: 'atlas', hostName: 'This PC', reason: 'Push the release', span: '2 h' }); break;
+      case 'enter': d.vaultRequests.push({ id: 'r2', kind: 'enter', secret: 'payments-sandbox', vmId: 'atlas', vmName: 'atlas', hostName: 'This PC', reason: 'API key of the payments sandbox', span: '' }); break;
       case 'job': d.jobs.push(this.newJob('atlas', 'reprovision', 3, 62)); break;
       case 'failed': case 'repair': {
         const j = this.newJob('atlas', 'reprovision', 3, 48);
         this.failJob(j);
         if (scene === 'failed') j.repair!.messages = j.repair!.messages.slice(0, 1);
         else { j.repair!.messages.push(...REPAIR_SCRIPT.slice(1, 4).map(text => ({ from: 'agent' as const, text }))); j.repair!.state = 'asking'; }
+        d.jobs.push(j);
+        break;
+      }
+      case 'failed-reinstall': {
+        const j = this.newJob('atlas', 'reinstall', 2, 30);
+        this.failJob(j);
+        j.repair = null;
         d.jobs.push(j);
         break;
       }
@@ -136,8 +143,8 @@ export class FakeBackend implements Backend {
   /** Preview frame triggers. */
   demo(what: Demo) {
     switch (what) {
-      case 'lease': return this.set(d => { d.vaultRequests.push({ id: 'r' + this.seq++, kind: 'lease', secret: 'forge-token', vmId: 'atlas', vmName: 'atlas', reason: 'Push the release', span: '2 h' }); });
-      case 'enter': return this.set(d => { d.vaultRequests.push({ id: 'r' + this.seq++, kind: 'enter', secret: 'payments-sandbox', vmId: 'harbor', vmName: 'harbor', reason: 'API key of the payments sandbox', span: '' }); });
+      case 'lease': return this.set(d => { d.vaultRequests.push({ id: 'r' + this.seq++, kind: 'lease', secret: 'forge-token', vmId: 'atlas', vmName: 'atlas', hostName: 'This PC', reason: 'Push the release', span: '2 h' }); });
+      case 'enter': return this.set(d => { d.vaultRequests.push({ id: 'r' + this.seq++, kind: 'enter', secret: 'payments-sandbox', vmId: 'harbor', vmName: 'harbor', hostName: 'orchard', reason: 'API key of the payments sandbox', span: '' }); });
       case 'release': return this.set(d => { d.release = NEXT_RELEASE; });
       case 'fail-next': this.failNext = true; return this.set(() => {}, 'The next job fails');
       case 'change': return this.set(d => { this.vm(d, 'atlas').changeWaits = 'webshop'; });
@@ -362,12 +369,16 @@ export class FakeBackend implements Backend {
     });
   }
 
-  saveProfile(p: Profile) {
+  async saveProfile(name: string, doc: Record<string, unknown>, revision: number | undefined): Promise<ProfileSave> {
+    const cur = this.s.projects.find(x => x.name === name);
+    if (cur && revision !== undefined && (cur.revision ?? 0) !== revision) return { ok: false, changed: true, text: `${name} changed meanwhile; this is the current version` };
+    const p = { ...(doc as unknown as Profile), name, revision: (cur?.revision ?? 0) + 1, doc: undefined };
     this.set(d => {
-      const i = d.projects.findIndex(x => x.name === p.name);
+      const i = d.projects.findIndex(x => x.name === name);
       if (i >= 0) d.projects[i] = p; else d.projects.push(p);
-      for (const v of d.vms) if (v.projectsOn.includes(p.name)) v.changeWaits = p.name;
-    }, 'Saved');
+      for (const v of d.vms) if (v.projectsOn.includes(name)) v.changeWaits = name;
+    });
+    return { ok: true, text: 'Saved' };
   }
 
   addProject(name: string) {
@@ -430,6 +441,10 @@ export class FakeBackend implements Backend {
     return name;
   }
 
+  async probeHost(address: string): Promise<HostProbe> {
+    return { url: address.trim(), pin: '4F1C9A22D07B3E615A8C0F9471B2DE5536A0C7E19F84B3260D5E7A1C9B04E07B', known: false };
+  }
+
   /* --- vault --- */
 
   answerLease(requestId: string, allow: boolean) {
@@ -461,7 +476,19 @@ export class FakeBackend implements Backend {
     this.set(d => { d.secrets.push({ name: n, note: note.trim(), usedBy: [], last: '–', auto: false }); }, 'Saved in the vault');
   }
 
+  replaceSecret(name: string, value: string) {
+    if (!value || !this.s.secrets.some(x => x.name === name)) return;
+    this.set(d => { d.leases = d.leases.filter(l => l.secret !== name); }, `Replaced ${name}`);
+  }
+
+  /** An invented value; the fake keeps none. */
+  async revealSecret(name: string): Promise<string> { return `${name}-sample-value`; }
+
   deleteSecret(name: string) { this.set(d => { d.secrets = d.secrets.filter(x => x.name !== name); }, `Deleted ${name}`); }
+
+  setVaultMode(hostId: string, mode: 'available' | 'locked') {
+    this.set(d => { const m = d.vaultModes.find(x => x.hostId === hostId); if (m) m.mode = mode; }, 'Saved');
+  }
 
   setAutoApprove(name: string, on: boolean) { this.set(d => { const x = d.secrets.find(s => s.name === name); if (x) x.auto = on; }); }
 
@@ -501,6 +528,12 @@ export class FakeBackend implements Backend {
       d.revocation = { deviceId, deviceName: dev.name, hosts: d.hosts.map((h, i) => ({ name: h.name, confirmed: i === 0 })), rotate: ROTATE.map(r => ({ ...r, done: false })) };
     }, `${dev.name} revoked`);
     this.after(4, () => this.set(d => { if (d.revocation?.deviceId === deviceId) for (const h of d.revocation.hosts) h.confirmed = true; }));
+  }
+
+  openRevocation(deviceId: string) {
+    const dev = this.s.devices.find(x => x.id === deviceId);
+    if (!dev?.revoked || this.s.revocation?.deviceId === deviceId) return;
+    this.set(d => { d.revocation = { deviceId, deviceName: dev.name, hosts: d.hosts.map(h => ({ name: h.name, confirmed: true })), rotate: ROTATE.map(r => ({ ...r, done: false })) }; });
   }
 
   markRotated(secret: string) { this.set(d => { const r = d.revocation?.rotate.find(x => x.secret === secret); if (r) r.done = !r.done; }); }

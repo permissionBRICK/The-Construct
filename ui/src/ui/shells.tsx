@@ -82,7 +82,7 @@ export function PopOut() {
 export function Alone() {
   const { s, shell } = useApp();
   const r = s.vaultRequests[0];
-  return <div class="alone">{r ? <VaultCard r={r} onDone={() => shell.close()} /> : null}</div>;
+  return <div class="alone">{r ? <VaultCard key={r.id} r={r} onDone={() => shell.close()} /> : null}</div>;
 }
 
 function Side() {

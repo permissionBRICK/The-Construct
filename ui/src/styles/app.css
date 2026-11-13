@@ -302,3 +302,9 @@ html[data-surf="alone"] body { background: transparent; }
 .app.s-phone .qrbox { grid-template-columns: 1fr; }
 
 @media (prefers-reduced-motion: reduce) { .app * { animation: none !important; transition: none !important; } }
+
+/* The host fingerprint to confirm, a revealed secret, the actions of a secret's row. */
+.app .blk.pin .fp { font-size: 14px; line-height: 1.6; word-spacing: 4px; overflow-wrap: anywhere; }
+.app code.reveal { max-width: 260px; overflow-wrap: anywhere; }
+.app .acts { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.app .two > .confirm { display: grid; grid-template-columns: 1fr 1fr; gap: inherit; }

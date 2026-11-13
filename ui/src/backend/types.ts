@@ -66,6 +66,12 @@ export interface Vm {
 
 export interface Profile {
   name: string;
+  /** The store's revision this was read at; a save names it so a newer revision is merged, not overwritten. */
+  revision?: number;
+  /** An open conflict names this profile: an agent in a VM resolves it (S7). */
+  conflict?: boolean;
+  /** The profile document as the store holds it, with fields this view does not know. */
+  doc?: Record<string, unknown>;
   repos: { url: string; directory: string }[];
   sdks: Record<string, string>;
   mcp: { name: string; type: string; command: string; args: string[] }[];
@@ -113,13 +119,20 @@ export interface VaultRequest {
   kind: 'lease' | 'enter';
   secret: string;
   vmId: string;
+  /** The VM and the host as the engine that filed the request names them. */
   vmName: string;
-  /** For a lease: why the agent needs it. For enter: the agent's description, shown as written by the agent. */
+  hostName: string;
+  /** The agent's own words: for a lease why it needs it, for enter its description and reason. Shown marked as the agent's. */
   reason: string;
+  /** The span the approval covers, when the backend knows it. */
   span: string;
+  /** The word on the allow button, from the engine (Approve, Allow once, Delete, ...); empty: Allow. */
+  action?: string;
 }
 
 export interface Secret { name: string; note: string; usedBy: string[]; last: string; auto: boolean }
+/** A host's vault mode: `available` holds the vault key and serves approved requests; `locked` waits for a device. */
+export interface VaultMode { hostId: string; hostName: string; mode: 'available' | 'locked' | null; problem?: string | null }
 export interface Lease { id: string; secret: string; vmName: string; reason: string; left: string }
 export interface Device { id: string; name: string; kind: string; added: string; seen: string; me: boolean; revoked: boolean }
 export interface VaultEvent { at: string; vmName: string; secret: string; event: string }
@@ -235,7 +248,8 @@ export interface Upgrade {
 export type Feature =
   | 'vault' | 'repair-chat' | 'forwards' | 'sharing' | 'projects' | 'agents' | 'open' | 'console'
   | 'vm-password' | 'vm-services' | 'vm-disk' | 'vm-boot' | 'reinstall' | 'restore' | 'device-update'
-  | 'channel' | 'os-prefs' | 'windows-sign-in' | 'export-code' | 'code-reveal' | 'vm-token' | 'host-retry';
+  | 'channel' | 'os-prefs' | 'windows-sign-in' | 'export-code' | 'code-reveal' | 'vm-token' | 'host-retry'
+  | 'take-back' | 'project-on' | 'approval-span';
 
 /** First run of a device with no identity yet (11.6): set up the account, pair, or recover; then create a VM. */
 export interface FirstRun {
@@ -262,6 +276,8 @@ export interface FirstRunRequest {
   /** recover: the account and the recovery code. */
   account?: string;
   code?: string;
+  /** The fingerprint the user confirmed for `address`; not needed for this machine's own engine. */
+  pin?: string;
 }
 
 export interface State {
@@ -279,6 +295,10 @@ export interface State {
   leases: Lease[];
   devices: Device[];
   history: VaultEvent[];
+  /** The vault mode of each host; empty where the backend has none. */
+  vaultModes: VaultMode[];
+  /** Parts of the vault and projects whose route failed, with the error; each shows on its own page. */
+  problems: Partial<Record<'secrets' | 'requests' | 'history' | 'projects', string>>;
   pairing: Pairing | null;
   revocation: Revocation | null;
   handout: NewUserHandout | null;
@@ -300,7 +320,20 @@ export interface CreateVmRequest {
   hostAddress?: string;
   signIn?: 'windows' | 'token';
   token?: string;
+  /** remote: the certificate fingerprint the user confirmed for `hostAddress` (from `probeHost`). */
+  pin?: string;
 }
+
+/** What a host presents before it is added: its address as the agent reads it and its certificate's fingerprint. */
+export interface HostProbe {
+  url: string;
+  pin: string;
+  /** Already added; nothing to confirm. */
+  known: boolean;
+}
+
+/** How a profile save ended. */
+export type ProfileSave = { ok: true; text: string } | { ok: false; changed: boolean; text: string };
 
 export interface Backend {
   snapshot(): State;
@@ -329,7 +362,8 @@ export interface Backend {
   saveSettings(vmId: string, patch: SettingsPatch, when?: 'now' | 'later'): void;
   updateAgents(vmId: string): void;
   setProjectOn(vmId: string, project: string, on: boolean): void;
-  saveProfile(profile: Profile): void;
+  /** Saves a profile document; `revision` is the one the editor read. Changed: the profile was reloaded. */
+  saveProfile(name: string, doc: Record<string, unknown>, revision: number | undefined): Promise<ProfileSave>;
   addProject(name: string): void;
   syncProjects(): void;
   closeForward(vmId: string, port: number): void;
@@ -341,13 +375,20 @@ export interface Backend {
   setBackupSchedule(vmId: string, schedule: Partial<Vm['backupSchedule']>): void;
   /** Returns the new VM's id, or null when nothing was started. */
   createVm(req: CreateVmRequest): string | null;
+  /** Reads the certificate a host presents, for the user to confirm before it is added. */
+  probeHost(address: string): Promise<HostProbe>;
 
   /* Key vault */
   answerLease(requestId: string, allow: boolean): void;
   /** `value` null declines the request. */
   enterSecret(requestId: string, value: string | null): void;
   addSecret(name: string, note: string, value: string): void;
+  /** A new value for an existing secret. */
+  replaceSecret(name: string, value: string): void;
+  /** The value, for the page to show for a moment; the backend keeps no copy. */
+  revealSecret(name: string): Promise<string>;
   deleteSecret(name: string): void;
+  setVaultMode(hostId: string, mode: 'available' | 'locked'): void;
   setAutoApprove(name: string, on: boolean): void;
   takeBack(leaseId: string): void;
   startPairing(): void;
@@ -356,6 +397,8 @@ export interface Backend {
   confirmPairing(accept: boolean): void;
   cancelPairing(): void;
   revokeDevice(deviceId: string): void;
+  /** The page of a revoked device: the secrets it could read, to rotate. */
+  openRevocation(deviceId: string): void;
   markRotated(secret: string): void;
   closeRevocation(): void;
 

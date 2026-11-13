@@ -202,6 +202,8 @@ export function sampleState(): State {
       { at: '11:20', vmName: 'atlas', secret: 'forge-token', event: 'Released, scrubbed' },
       { at: '09:02', vmName: 'harbor', secret: 'mail-api', event: 'Auto' },
     ],
+    vaultModes: [{ hostId: 'pc', hostName: 'This PC', mode: 'available' }, { hostId: 'orchard', hostName: 'orchard', mode: 'locked' }],
+    problems: {},
     pairing: null,
     revocation: null,
     handout: null,
