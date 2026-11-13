@@ -6,6 +6,7 @@ using Constructd.Api.Hosting;
 using Constructd.Api.Https;
 using Constructd.Api.Infrastructure;
 using Constructd.Core.Configuration;
+using Constructd.Store.Http;
 
 // ---- Admin CLI -----------------------------------------------------------------------------
 // `constructd admin …` is the same executable in command-line mode: it works the stores directly,
@@ -75,6 +76,7 @@ builder.Services.AddProblemDetails();
 builder.Services.AddConstructdServices(options);
 builder.Services.AddConstructdAuthentication(options);
 builder.Services.AddConstructdAuthorization();
+builder.Services.AddConstructdRecordStore(options);
 
 // One loop, two responsibilities: the idle evaluation (§4.7) and the host power reconcile (§4.13)
 // both ride on the same tick, so either one being wanted is reason enough to run it. Turning idle
@@ -161,6 +163,8 @@ app.MapGroup("/api/v1")
     .MapNetworkEndpoints()
     .MapVaultEndpoints()
     .MapHttpsEndpoints();
+
+app.MapGroup("/api/v1/store").RequireAuthorization(Policies.User).MapRecordStore();
 
 // The key vault's phone pages: anonymous static files outside /api/v1.
 app.MapVaultWebEndpoints();
