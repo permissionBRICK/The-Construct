@@ -14,7 +14,7 @@ namespace Constructd.Core.Logic;
 public sealed record RepairLine(long Seq, DateTimeOffset At, string Kind, string? Text, string? Outcome = null);
 
 /// <summary>What a <c>start</c> line says about the agent.</summary>
-public sealed record RepairAgentInfo(string? Agent, string? Via, string? Thread, string? Link);
+public sealed record RepairAgentInfo(string? Agent, string? Via);
 
 /// <summary>
 /// The guest side of the repair agent (<c>bin/construct-repair-agent.sh</c>): its commands, the
@@ -150,7 +150,7 @@ public static partial class RepairScript
             using var doc = JsonDocument.Parse(ProvisionScript.CleanLine(raw));
             var root = doc.RootElement;
             return root.ValueKind == JsonValueKind.Object && Text(root, "type") == "start"
-                ? new(Text(root, "agent"), Text(root, "via"), Text(root, "thread"), Text(root, "link"))
+                ? new(Text(root, "agent"), Text(root, "via"))
                 : null;
         }
         catch (JsonException) { return null; }

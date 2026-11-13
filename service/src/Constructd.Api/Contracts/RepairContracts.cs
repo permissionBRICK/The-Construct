@@ -21,18 +21,17 @@ public sealed record RepairLineResponse(long Seq, DateTimeOffset At, string Kind
 /// A repair session (design 11.5): the agent on the VM working on a failed job. <paramref name="State"/>:
 /// <c>working</c>, <c>waiting</c> (for a reply) or <c>ended</c>; then <paramref name="Outcome"/> is <c>fixed</c>,
 /// <c>stopped</c> (the user ended it), <c>superseded</c> (a job on the VM ended it) or <c>error</c>.
-/// <paramref name="Via"/> is <c>direct</c> or <c>t3</c>; a T3 Code thread has <paramref name="Thread"/> and
-/// <paramref name="Link"/>. After a fix the engine retries the job once: <paramref name="RetryJobId"/>, or
+/// <paramref name="Agent"/> is <c>claude</c>, <c>codex</c> or <c>opencode</c>; <paramref name="Via"/> is <c>direct</c>. After a fix the engine retries the job once: <paramref name="RetryJobId"/>, or
 /// <paramref name="RetryRefused"/> with the reason. <paramref name="Lines"/> are the kept lines after the
 /// requested <c>after</c> (the last 400 at most). Nothing of a session survives an engine restart.
 /// </summary>
 public sealed record RepairSessionResponse(string Id, string Vm, string JobId, string JobKind, string State, string? Outcome,
-    bool Automatic, DateTimeOffset Started, DateTimeOffset? Ended, string? Agent, string? Via, string? Thread, string? Link,
+    bool Automatic, DateTimeOffset Started, DateTimeOffset? Ended, string? Agent, string? Via,
     string? RetryJobId, string? RetryRefused, IReadOnlyList<RepairLineResponse> Lines)
 {
     public static RepairSessionResponse From(RepairSession s, long after) => new(s.Id, s.Vm, s.JobId, s.JobKind,
         s.State switch { RepairState.Working => "working", RepairState.Waiting => "waiting", _ => "ended" }, s.Outcome, s.Automatic,
-        s.Started, s.Ended, s.Agent?.Agent, s.Agent?.Via, s.Agent?.Thread, s.Agent?.Link, s.RetryJobId, s.RetryRefused,
+        s.Started, s.Ended, s.Agent?.Agent, s.Agent?.Via, s.RetryJobId, s.RetryRefused,
         [.. s.LinesAfter(after).Select(RepairLineResponse.From)]);
 }
 

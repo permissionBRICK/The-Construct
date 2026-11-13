@@ -21,7 +21,6 @@
 #
 # stdout, one JSON object per line:
 #   {"type":"start","agent":"claude","via":"direct"}       which agent runs, and how
-#   {"type":"start","agent":"t3","via":"t3","thread":ID,"link":URL}
 #   {"type":"note","text":...}         something this script says (a fallback, a hint)
 #   {"type":"text","text":...}         what the agent says
 #   {"type":"tool","text":...}         one short line per action of the agent
@@ -33,9 +32,9 @@
 # turn that is not "fixed" the script waits for a reply; after "fixed" it ends.
 #
 # Which agent: --agent, else the first of Claude Code and then the tools AI_TOOLS names
-# (/etc/construct/config.env) that is installed. When T3 Code runs on the VM, the repair
-# starts as a T3 Code thread instead, so the user can open it there; when that fails, the
-# agent runs directly and the stream says so.
+# (/etc/construct/config.env) that is installed. It runs directly, not as a T3 Code thread:
+# the t3 CLI can neither stop a thread nor switch off its question tools, so a repair that
+# was ended could go on beside the job that ended it.
 #
 # Exit status: 0 when the agent ended with "fixed", 3 when it ended otherwise, 2 for a
 # usage error, 127 when no agent is installed.
@@ -46,7 +45,6 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PROMPT_FILE="${CONSTRUCT_REPAIR_PROMPT_FILE:-${REPO_DIR}/config/repair-prompt.md}"
 CONFIG_FILE="${CONSTRUCT_CONFIG_FILE:-/etc/construct/config.env}"
 RUN_DIR="${CONSTRUCT_REPAIR_RUN_DIR:-/run/construct/repair}"
-T3_POLL_SECONDS="${CONSTRUCT_REPAIR_T3_POLL:-2}"
 
 # The tools that would let the agent ask through a dialog or switch to a plan mode instead
 # of asking in text. Claude Code takes their names; Codex has a switch per tool; OpenCode
@@ -138,21 +136,52 @@ done
 PGID="$$"
 printf '%s\n' "${PGID}" >"${RUN_DIR}/${session}.pid"
 work="$(mktemp -d)"
+keep_pid=0
 cleanup() {
   rm -rf "${work}"
+  [ "${keep_pid}" = 0 ] && [ "$(cat "${RUN_DIR}/${session}.pid" 2>/dev/null)" = "${PGID}" ] && rm -f "${RUN_DIR}/${session}.pid"
+}
+
+# Ends every other process of the session's group: TERM, up to five seconds, then KILL for any
+# that stayed; the pid file goes only then, so a --stop until that point still finds the group.
+# The group's members other than this process, without forking (a subshell would count).
+group_others() {
+  local proc pid pgrp rest
+  others=()
+  for proc in /proc/[0-9]*; do
+    pid="${proc#/proc/}"
+    [ "${pid}" = "${BASHPID}" ] && continue
+    # /proc/PID/stat: pid (comm) state ppid pgrp ...; comm may hold spaces, so cut after ") ".
+    IFS= read -r rest <"${proc}/stat" 2>/dev/null || continue
+    rest="${rest##*) }"
+    read -r _ _ pgrp _ <<<"${rest}"
+    [ "${pgrp}" = "${PGID}" ] && others+=("${pid}")
+  done
+}
+
+end_group() {
+  local others=()
+  trap '' TERM
+  kill -TERM -- "-${PGID}" 2>/dev/null
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    group_others
+    [ "${#others[@]}" -gt 0 ] || break
+    sleep 0.5
+  done
+  [ "${#others[@]}" -gt 0 ] && kill -KILL "${others[@]}" 2>/dev/null
   [ "$(cat "${RUN_DIR}/${session}.pid" 2>/dev/null)" = "${PGID}" ] && rm -f "${RUN_DIR}/${session}.pid"
 }
 trap cleanup EXIT
-trap 'exit 143' TERM INT HUP
+# Ended by a signal: whoever sent it removes the pid file once the whole group is gone.
+trap 'keep_pid=1; exit 143' TERM INT HUP
 
 # Ends the session: the end line, then the whole process group (this shell included).
 finish() {
   local outcome="$1" text="${2-}"
   jq -nc --arg outcome "${outcome}" --arg text "${text}" '{type:"end",outcome:$outcome,text:$text}'
-  cleanup
+  rm -rf "${work}"
   trap - EXIT
-  trap '' TERM
-  kill -TERM -- "-${PGID}" 2>/dev/null
+  end_group
   if [ "${outcome}" = fixed ]; then exit 0; else exit 3; fi
 }
 
@@ -195,7 +224,7 @@ start_reader() {
       fi
     done
     jq -nc '{type:"end",outcome:"stopped",text:"The session was ended."}'
-    kill -TERM -- "-${PGID}" 2>/dev/null
+    end_group
   ) &
 }
 
@@ -331,73 +360,6 @@ run_opencode() {
   done
 }
 
-# ---- T3 Code: a thread in the workspace project, followed through `t3 thread show`.
-t3_running() {
-  command -v t3 >/dev/null 2>&1 && systemctl is-active --quiet t3code-serve 2>/dev/null
-}
-
-# Follows one run of the thread until it ends: prints each assistant message once (the
-# newest only when the run is over, since it may still grow), then the turn line.
-t3_follow() {
-  local thread="$1" run="$2" before="$3" shown=0 asked=0 state messages count active latest pending text last=""
-  while :; do
-    sleep "${T3_POLL_SECONDS}"
-    state="$(t3 thread show --json --messages 50 "${thread}" 2>/dev/null)" || continue
-    active="$(jq -r '.thread.activeRunId // ""' <<<"${state}")"
-    latest="$(jq -r '.thread.latestRunId // ""' <<<"${state}")"
-    pending="$(jq -r '.thread.pendingRequestCount // 0' <<<"${state}")"
-    [ -z "${run}" ] && [ -n "${latest}" ] && [ "${latest}" != "${before}" ] && run="${latest}"
-    [ -n "${run}" ] || continue
-    messages="$(jq -c --arg run "${run}" '[.messages[]? | select(.role == "assistant" and .runId == $run) | .text]' <<<"${state}")"
-    count="$(jq 'length' <<<"${messages}")"
-    local done=0
-    [ "${active}" != "${run}" ] && [ "${latest}" = "${run}" ] && done=1
-    local upto=$((done == 1 ? count : count - 1))
-    while [ "${shown}" -lt "${upto}" ]; do
-      text="$(jq -r --argjson i "${shown}" '.[$i]' <<<"${messages}")"
-      last="${text}"
-      emit text "$(strip_status "${text}")"
-      shown=$((shown + 1))
-    done
-    if [ "${pending}" -gt 0 ] && [ "${asked}" = 0 ]; then
-      asked=1
-      emit note "The agent waits for an answer in T3 Code; answer it there, or reply here."
-    fi
-    if [ "${done}" = 1 ]; then
-      after_turn "${last}"
-      return 0
-    fi
-  done
-}
-
-run_t3() {
-  local launched thread run link before
-  launched="$(cd "${WORKSPACE}" && printf '%s' "${prompt}" | t3 thread start --json --title "Construct repair" "${WORKSPACE}" - 2>"${work}/t3-err")" ||
-    launched=""
-  if [ -z "${launched}" ] && t3 project add "${WORKSPACE}" >/dev/null 2>&1; then
-    launched="$(cd "${WORKSPACE}" && printf '%s' "${prompt}" | t3 thread start --json --title "Construct repair" "${WORKSPACE}" - 2>"${work}/t3-err")" ||
-      launched=""
-  fi
-  thread="$(jq -r '.threadId // empty' <<<"${launched}" 2>/dev/null)"
-  [ -n "${thread}" ] || return 1
-  run="$(jq -r '.runId // empty' <<<"${launched}")"
-  link="$(t3 thread show --json --messages 0 "${thread}" 2>/dev/null | jq -r '.thread.link // empty' 2>/dev/null)"
-  jq -nc --arg thread "${thread}" --arg link "${link}" '{type:"start",agent:"t3",via:"t3",thread:$thread,link:$link}'
-  emit note "The repair runs as a T3 Code thread${link:+: ${link}}. You can follow and answer it there too."
-  start_reader queue
-  t3_follow "${thread}" "${run}" ""
-  while :; do
-    local message sent
-    message="$(next_reply)" || finish stopped "The session was ended."
-    before="$(t3 thread show --json --messages 0 "${thread}" 2>/dev/null | jq -r '.thread.latestRunId // ""' 2>/dev/null)"
-    if ! sent="$(printf '%s' "${message}" | t3 thread send --json "${thread}" - 2>"${work}/t3-err")"; then
-      emit error "The reply did not reach T3 Code: $(tail -n 2 "${work}/t3-err" | tr '\n' ' ')"
-      continue
-    fi
-    t3_follow "${thread}" "$(jq -r '.runId // empty' <<<"${sent}" 2>/dev/null)" "${before}"
-  done
-}
-
 # ---- Which agent.
 pick_agent() {
   local tools tool order=(claude)
@@ -421,10 +383,6 @@ WORKSPACE="${WORKSPACE_ROOT:-$(cfg_value WORKSPACE_ROOT)}"
 WORKSPACE="${WORKSPACE:-/root/repos}"
 [ -d "${WORKSPACE}" ] || WORKSPACE="${HOME:-/root}"
 
-if [ -z "${agent}" ] && t3_running; then
-  run_t3
-  emit note "T3 Code could not start the thread ($(tail -n 1 "${work}/t3-err" 2>/dev/null)); the agent runs directly instead."
-fi
 if [ -z "${agent}" ] && ! agent="$(pick_agent)"; then
   jq -nc '{type:"end",outcome:"error",text:"No AI coding agent (Claude Code, Codex or OpenCode) is installed on this VM."}'
   exit 127

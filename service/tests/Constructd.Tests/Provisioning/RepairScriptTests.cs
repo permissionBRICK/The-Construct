@@ -60,7 +60,6 @@ public sealed class RepairScriptTests
         Assert.Equal("log", RepairScript.Parse("{broken", 5, at).Kind);
         var big = RepairScript.Parse(JsonSerializer.Serialize(new { type = "text", text = new string('x', 100_000) }), 6, at);
         Assert.Equal(RepairScript.MaxText + 3, big.Text!.Length);
-        Assert.Equal(new RepairAgentInfo("t3", "t3", "th", "https://l"),
-            RepairScript.AgentInfo("{\"type\":\"start\",\"agent\":\"t3\",\"via\":\"t3\",\"thread\":\"th\",\"link\":\"https://l\"}"));
+        Assert.Equal(new RepairAgentInfo("codex", "direct"), RepairScript.AgentInfo("{\"type\":\"start\",\"agent\":\"codex\",\"via\":\"direct\"}"));
     }
 }

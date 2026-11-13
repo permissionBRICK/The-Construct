@@ -389,12 +389,12 @@ When a `provision`, `reinstall` or `restore` job fails in a guest step (a provis
 S26) unless the host setting `repair.auto` (`PUT /host/config`, default `true`) is off. It runs
 `bin/construct-repair-agent.sh` as root over SSH with the job's part of the prompt (the `fixPrompt`, the end of
 the job's log); the script adds `config/repair-prompt.md`, runs Claude Code, Codex or OpenCode without
-question or plan tools (or a T3 Code thread when T3 Code runs on the VM) and reports JSON lines. When the
+question or plan tools and reports JSON lines (not as a T3 Code thread: the `t3` CLI can neither stop a thread
+nor switch off its question tools). When the
 failed run rebooted the VM, the repair waits up to five minutes for SSH first.
 
 - `GET /vms/{name}/repair?after=SEQ` answers the VM's latest session: `state` (`working`, `waiting` for a
-  reply, `ended`), `outcome` (`fixed`, `stopped`, `superseded`, `error`), the agent (`agent`, `via`, and
-  `thread`, `link` for T3 Code), and its kept `lines` after `SEQ` (the last 400: `start`, `note`, `text`,
+  reply, `ended`), `outcome` (`fixed`, `stopped`, `superseded`, `error`), the agent (`agent`, `via`), and its kept `lines` after `SEQ` (the last 400: `start`, `note`, `text`,
   `tool`, `error`, `turn`, `end`, `reply`, `retry`, `log`). `GET /vms/{name}/repair/{id}` reads one session.
 - `POST /vms/{name}/repair` starts one for the VM's latest failed lifecycle job (`409 no-failed-job`,
   `not-repairable`, `repair-running`, `operation-in-progress`).

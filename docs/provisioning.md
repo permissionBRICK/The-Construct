@@ -148,8 +148,8 @@ error) shows no prompt and no menu.
 On a host that provisions VMs itself (the engine), no one has to be at a console: the engine starts
 the same kind of agent on the VM by itself with `bin/construct-repair-agent.sh`, the headless
 counterpart of `construct-agent-fix.sh`. It reads the prompt in `config/repair-prompt.md` plus what
-failed, runs Claude Code (or Codex, or OpenCode, in the order `AI_TOOLS` names them; a T3 Code thread
-when T3 Code runs) without question, plan or permission prompts, and reports what the agent says and
+failed, runs Claude Code (or Codex, or OpenCode, in the order `AI_TOOLS` names them) without
+question, plan or permission prompts, and reports what the agent says and
 does as JSON lines. The agent fixes what it can and asks in plain text only for a real choice, a
 trade-off or a suspected Construct bug; the user answers in the client under the failed job. When it
 says the cause is fixed, the engine runs the job again once. See `service/README.md`, *The repair agent*.

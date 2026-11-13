@@ -13309,8 +13309,6 @@
           "ended",
           "agent",
           "via",
-          "thread",
-          "link",
           "retryJobId",
           "retryRefused",
           "lines"
@@ -13359,18 +13357,6 @@
             ]
           },
           "via": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
-          "thread": {
-            "type": [
-              "null",
-              "string"
-            ]
-          },
-          "link": {
             "type": [
               "null",
               "string"

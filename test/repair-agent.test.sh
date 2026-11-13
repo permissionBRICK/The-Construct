@@ -2,7 +2,7 @@
 # Tests for bin/construct-repair-agent.sh, the repair agent without a terminal (design
 # 11.5). Stub claude/codex/opencode/t3 binaries stand in for the agents: they record how
 # they were called and what reached them, and answer with the agent's own JSON events.
-# No real agent runs.
+# No real agent runs. A t3 stub records any call: the repair never uses T3 Code.
 # Run: bash test/repair-agent.test.sh
 
 set -u
@@ -28,9 +28,8 @@ ok() {
 
 stubs="${tmp}/stubs"
 mkdir -p "${stubs}" "${tmp}/repos" "${tmp}/run"
-export CALLS="${tmp}/calls" SEEN="${tmp}/seen" T3STATE="${tmp}/t3state"
+export CALLS="${tmp}/calls" SEEN="${tmp}/seen" T3CALLS="${tmp}/t3calls"
 export CONSTRUCT_REPAIR_RUN_DIR="${tmp}/run" CONSTRUCT_CONFIG_FILE="${tmp}/config.env" WORKSPACE_ROOT="${tmp}/repos"
-export CONSTRUCT_REPAIR_T3_POLL=0.2
 printf "AI_TOOLS='opencode,claude-code,codex'\n" >"${CONSTRUCT_CONFIG_FILE}"
 
 # Claude Code: one process; each stdin line is a user message. The first gets a question,
@@ -42,6 +41,7 @@ echo "$$" >"${CALLS}.pid"
 n=0
 while IFS= read -r line; do
   printf '%s\n' "${line}" >>"${SEEN}"
+  [ -n "${CLAUDE_STUBBORN:-}" ] && { ( trap '' TERM; echo "${BASHPID}" >"${CALLS}.stubborn"; while :; do sleep 1; done ) & }
   [ -n "${CLAUDE_HANG:-}" ] && { sleep 300; continue; }
   n=$((n + 1))
   echo '{"type":"system","subtype":"init","session_id":"s"}'
@@ -79,28 +79,9 @@ echo '{"type":"tool_use","sessionID":"ses_1","part":{"tool":"bash","state":{"inp
 printf '{"type":"text","sessionID":"ses_1","part":{"text":"%s"}}\n' "${text}"
 EOF
 
-# T3 Code: start prints the thread and run; show answers from the state file; send
-# records the message and starts run r2. T3_FAIL makes start fail.
 cat >"${stubs}/t3" <<'EOF'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >>"${CALLS}"
-case "$1 $2" in
-  "thread start")
-    [ -n "${T3_FAIL:-}" ] && { echo "no project" >&2; exit 1; }
-    cat >>"${SEEN}"; echo >>"${SEEN}"
-    echo '[{"role":"assistant","runId":"r1","text":"Looking."},{"role":"assistant","runId":"r1","text":"Which one?\nREPAIR-STATUS: question"}]' >"${T3STATE}"
-    echo '{"threadId":"th-1","projectId":"p","runId":"r1"}' ;;
-  "thread send")
-    cat >>"${SEEN}"; echo >>"${SEEN}"
-    jq -c '. + [{"role":"user","runId":"r2","text":"x"},{"role":"assistant","runId":"r2","text":"Fixed.\nREPAIR-STATUS: fixed"}]' "${T3STATE}" >"${T3STATE}.new"
-    mv "${T3STATE}.new" "${T3STATE}"
-    echo '{"threadId":"th-1","runId":"r2","delivery":"sent"}' ;;
-  "thread show")
-    latest="$(jq -r 'map(.runId) | last // ""' "${T3STATE}" 2>/dev/null)"
-    jq -c --arg latest "${latest}" '{thread:{threadId:"th-1",link:"https://t3.example/th-1",activeRunId:null,latestRunId:$latest,pendingRequestCount:0},messages:.}' "${T3STATE}" 2>/dev/null ||
-      echo '{"thread":{"threadId":"th-1","link":"https://t3.example/th-1","activeRunId":null,"latestRunId":null},"messages":[]}' ;;
-  "project add") exit 0 ;;
-esac
+printf '%s\n' "$*" >>"${T3CALLS}"
 EOF
 cat >"${stubs}/systemctl" <<'EOF'
 #!/usr/bin/env bash
@@ -178,22 +159,10 @@ ok "question and plan tools denied, permissions auto" bash -c 'grep -q "\"questi
 ok "the reply continues the session" bash -c 'sed -n "/^---$/,\$p" "$1" | tr "\n" " " | grep -q -- "--session ses_1"' _ "${CALLS}"
 ok "the reply reached opencode on stdin, not argv" bash -c 'grep -qF "Take option A" "$1" && ! grep -qF "Take option A" "$2"' _ "${SEEN}" "${CALLS}"
 
-echo "T3 Code"
-T3_ACTIVE=1 run "$(only t3 claude)" 4
-ok "every stdout line is JSON" all_json
-ok "start names the thread and its link" [ "$(count '.type=="start" and .via=="t3" and .thread=="th-1" and .link=="https://t3.example/th-1"')" = 1 ]
-ok "the stream says it lives in T3 Code" [ "$(count '.type=="note" and (.text | test("T3 Code thread"))')" = 1 ]
-ok "both messages of the first run, once each" [ "$(count '.type=="text"')" = 3 ]
-ok "question, then fixed" [ "$(jq -sr '[.[] | select(.type=="turn") | .outcome] | join(",")' "${out}")" = "question,fixed" ]
-ok "the thread starts in the workspace with the prompt on stdin" bash -c 'grep -q "^thread start --json --title Construct repair .*/repos -$" "$1" && grep -q "REPAIR-STATUS" "$2"' _ "${CALLS}" "${SEEN}"
-ok "the reply goes by t3 thread send on stdin" bash -c 'grep -qx "thread send --json th-1 -" "$1" && grep -qF "Take option A" "$2"' _ "${CALLS}" "${SEEN}"
-ok "claude did not run" [ "$(count '.agent=="claude"')" = 0 ]
-
-echo "T3 Code fallback"
-T3_ACTIVE=1 T3_FAIL=1 run "$(only t3 claude)" 3
-ok "says it falls back" [ "$(count '.type=="note" and (.text | test("runs directly"))')" = 1 ]
-ok "then claude runs" [ "$(count '.type=="start" and .agent=="claude"')" = 1 ]
-ok "and ends fixed" [ "$(jq -sr 'last | .outcome' "${out}")" = fixed ]
+echo "T3 Code is not used"
+T3_ACTIVE=1 run "$(only t3 claude)" 3
+ok "claude runs directly although T3 Code runs" [ "$(count '.type=="start" and .agent=="claude" and .via=="direct"')" = 1 ]
+ok "no thread was started" bash -c '! grep -q "^thread" "$1" 2>/dev/null' _ "${T3CALLS}"
 
 echo "The end of stdin ends the session"
 rm -f "${CALLS}" "${SEEN}" "${CALLS}.pid"
@@ -202,6 +171,15 @@ ok "ends stopped" [ "$(jq -sr 'last | .type + ":" + .outcome' "${out}")" = "end:
 sleep 0.5
 ok "the agent is gone" bash -c '! kill -0 "$(cat "$1")" 2>/dev/null' _ "${CALLS}.pid"
 ok "the pid file is gone" [ ! -e "${CONSTRUCT_REPAIR_RUN_DIR}/sess2.pid" ]
+
+echo "A process that ignores TERM is killed too"
+rm -f "${CALLS}" "${SEEN}" "${CALLS}.pid" "${CALLS}.stubborn"
+( sleep 2 ) | CLAUDE_STUBBORN=1 CLAUDE_HANG=1 PATH="$(only claude):/usr/bin:/bin" timeout 30 bash "${SCRIPT}" --session sess5 --prompt-b64 "${prompt_b64}" >"${out}" 2>/dev/null
+# The reader waits up to five seconds for TERM before it sends KILL.
+for _ in $(seq 80); do [ -e "${CONSTRUCT_REPAIR_RUN_DIR}/sess5.pid" ] || break; sleep 0.1; done
+ok "ends stopped" [ "$(jq -sr 'last | .outcome' "${out}")" = stopped ]
+ok "the TERM-ignoring child is gone" bash -c '[ -s "$1" ] && ! kill -0 "$(cat "$1")" 2>/dev/null' _ "${CALLS}.stubborn"
+ok "the pid file is gone" [ ! -e "${CONSTRUCT_REPAIR_RUN_DIR}/sess5.pid" ]
 
 echo "--stop ends a running session"
 rm -f "${CALLS}" "${SEEN}" "${CALLS}.pid"

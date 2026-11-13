@@ -301,7 +301,7 @@ public sealed class RepairSessions(IServiceProvider services, InMemoryVmOperatio
             await StopOnGuestAsync(session);
         }
 
-        // FollowAsync finishes the session when the connection ends; this covers a session that never had one.
+        // Over only now, after the stop on the VM (FollowAsync leaves an ended-on-request session to this).
         Finish(session, session.EndRequested ?? outcome);
     }
 
@@ -349,12 +349,12 @@ public sealed class RepairSessions(IServiceProvider services, InMemoryVmOperatio
             outcome = session.EndRequested ?? (end?.Outcome is "fixed" ? "fixed" : end?.Outcome is "stopped" ? "stopped" : "error");
         }
 
-        if (!requested)
-        {
-            await guest.DisposeAsync();
-            // The connection may have gone while the agent still runs: make sure it is gone too.
-            await StopOnGuestAsync(session);
-        }
+        // Ended on request: EndAsync stops the agent on the VM and only then marks the session over, so a
+        // job that comes through the gate meanwhile still waits for that stop.
+        if (requested) return;
+        await guest.DisposeAsync();
+        // The connection may have gone while the agent still runs: make sure it is gone too.
+        await StopOnGuestAsync(session);
 
         if (outcome == "fixed")
         {
@@ -365,7 +365,7 @@ public sealed class RepairSessions(IServiceProvider services, InMemoryVmOperatio
             }
 
             if (session.Retrying) await RetryAsync(session);
-            else outcome = session.EndRequested!;
+            else return;
         }
 
         Finish(session, outcome);
