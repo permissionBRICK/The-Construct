@@ -166,7 +166,7 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
         }
 
         if (!repo.IsGit) _notes.Add("The config folder is no git repository (or git is missing): VM branches were not looked at.");
-        foreach (var change in repo.UnmergedChanges())
+        foreach (var change in repo.UnmergedChanges(legacy.Instances().Select(i => i.ConfigBranch)))
         {
             await ItemAsync($"branch:{change.Branch}:{change.Profile}", $"Unmerged change to {change.Profile} on {change.Branch}", async () =>
             {
@@ -189,26 +189,25 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
     private async Task<string> BranchChangeAsync(string store, string name, JsonObject? @base, JsonObject? ours, JsonObject? theirs, CancellationToken ct)
     {
         var current = await ProfileAsync(store, name, ct).ConfigureAwait(false);
-        if (current is null && theirs is null)
-            return ours is null ? "Nothing to carry over." : Status(await PutProfileAsync(store, name, ours, null, ct).ConfigureAwait(false));
-        if (current is null || !JsonNode.DeepEquals(current.Value.Profile, theirs))
+        // A run cut short right after it wrote the merge base leaves the base in the store: main goes back on top.
+        if (current is not null && @base is not null && theirs is not null && JsonNode.DeepEquals(current.Value.Profile, @base) && !JsonNode.DeepEquals(@base, theirs))
         {
-            // The store first holds what main holds (a run cut short in the middle left something else).
-            if (theirs is null) await DeleteProfileAsync(store, name, current!.Value.Revision, ct).ConfigureAwait(false);
-            else await PutProfileAsync(store, name, theirs, current?.Revision, ct).ConfigureAwait(false);
+            await PutProfileAsync(store, name, theirs, current.Value.Revision, ct).ConfigureAwait(false);
             current = await ProfileAsync(store, name, ct).ConfigureAwait(false);
         }
 
-        var mainRevision = current?.Revision;
-        long? baseRevision = mainRevision;
-        if (@base is not null && !JsonNode.DeepEquals(@base, theirs) && mainRevision is not null)
-        {
-            baseRevision = Revision(await PutProfileAsync(store, name, @base, mainRevision, ct).ConfigureAwait(false));
-            await PutProfileAsync(store, name, theirs!, baseRevision, ct).ConfigureAwait(false);
-        }
-        else if (@base is null && mainRevision is not null)
+        // "Theirs" is what the store holds now: main, plus what an earlier VM branch merged into it.
+        if (current is null)
+            return ours is null ? "Nothing to carry over." : Status(await PutProfileAsync(store, name, ours, null, ct).ConfigureAwait(false));
+        long? baseRevision = current.Value.Revision;
+        if (@base is null)
         {
             baseRevision = null;
+        }
+        else if (!JsonNode.DeepEquals(@base, current.Value.Profile))
+        {
+            baseRevision = Revision(await PutProfileAsync(store, name, @base, current.Value.Revision, ct).ConfigureAwait(false));
+            await PutProfileAsync(store, name, current.Value.Profile, baseRevision, ct).ConfigureAwait(false);
         }
 
         var answer = ours is null
@@ -401,7 +400,8 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
             await ItemAsync("vm:" + instance.Name, "VM " + instance.Name, async () =>
             {
                 if (localEngine is null) return ("failed", "No engine on this PC: install it first (the dialog's first step).");
-                if (await ExistsAsync(localEngine, instance.Name, ct).ConfigureAwait(false)) return ("skipped", "The engine manages it already.");
+                // No check for the VM at the engine: a failed adoption leaves it registered with its guest not yet
+                // switched, and the adoption job resumes the same VM. Only an adoption that succeeded is done.
                 var keyFile = legacy.KeyFile(instance);
                 if (!File.Exists(keyFile)) return ("failed", "The old client's SSH key for this VM is missing (~/.ssh).");
                 var body = new JsonObject
@@ -425,12 +425,6 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
                 return state == "succeeded" ? ("done", "Switched over to the engine; it kept running.") : ("failed", $"The adoption job ended {state}; see the job's log, then retry.");
             }).ConfigureAwait(false);
         }
-    }
-
-    private async Task<bool> ExistsAsync(string engine, string vm, CancellationToken ct)
-    {
-        try { return await engines.GetAsync(engine, "vms/" + vm, ct).ConfigureAwait(false) is not null; }
-        catch (AgentFailure failure) when (failure.Status == 404) { return false; }
     }
 
     private async Task<string> WaitForJobAsync(string engine, string job, CancellationToken ct)

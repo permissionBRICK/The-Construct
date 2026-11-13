@@ -129,6 +129,10 @@ public sealed class LegacyState
             return [new LegacyInstance(DefaultInstance, true, "agent-vm.mshome.net", 22, "agent_vm_ed25519", "vm", null, settings, null)];
 
         var list = new List<LegacyInstance>();
+        // The old registry always synthesizes the default VM unless an entry `"agent-vm": null` removes it; it is
+        // taken here when this PC shows it had one (its root key from provisioning is in ~/.ssh).
+        if (!entries.ContainsKey(DefaultInstance) && File.Exists(Path.Combine(Home, ".ssh", "agent_vm_ed25519")))
+            list.Add(new LegacyInstance(DefaultInstance, true, "agent-vm.mshome.net", 22, "agent_vm_ed25519", "vm", null, settings, null));
         foreach (var (name, node) in entries.OrderBy(e => e.Key, StringComparer.Ordinal))
         {
             if (node is not JsonObject raw || !NameRule.IsMatch(name) || name.StartsWith("construct-", StringComparison.OrdinalIgnoreCase)) continue;
@@ -148,7 +152,7 @@ public sealed class LegacyState
             list.Add(new LegacyInstance(name, local, host, port, keyName, branch, service is null ? null : NormalizeUrl(service), local ? settings : null, state));
         }
 
-        return list;
+        return list.OrderBy(i => i.Name, StringComparer.Ordinal).ToArray();
     }
 
     // ---- remote hosts ----
@@ -223,7 +227,7 @@ public sealed class LegacyState
 
             var secrets = new List<LegacySecret>();
             foreach (var s in (root["secrets"] as JsonArray ?? []).OfType<JsonObject>())
-                if (Text(s, "name") is { } name && Text(s, "secret") is { } value)
+                if (Text(s, "name") is { } name && s["secret"] is JsonValue sv && sv.TryGetValue<string>(out var value) && value.Length > 0)
                     secrets.Add(new LegacySecret(name, Text(s, "description") ?? "", Text(s, "username"), value, s["autoApprove"] is JsonValue a && a.TryGetValue<bool>(out var on) && on));
             return new LegacyVault(key, secrets, (root["leases"] as JsonArray)?.Count ?? 0, (root["cleanups"] as JsonArray)?.Count ?? 0);
         }

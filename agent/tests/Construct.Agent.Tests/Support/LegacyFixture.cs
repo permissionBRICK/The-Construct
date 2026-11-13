@@ -58,6 +58,9 @@ public sealed class AdoptableGuest : ISshRunner
 
     public List<string> Commands { get; } = [];
 
+    /// <summary>How many switch-overs fail (exit 1) before one succeeds.</summary>
+    public int FailSwitches { get; set; }
+
     public Task<int> RunAsync(SshTarget target, string command, string? standardInput, IProgress<string>? lines, TimeSpan timeout, CancellationToken ct)
     {
         lock (Commands) Commands.Add(command);
@@ -65,6 +68,13 @@ public sealed class AdoptableGuest : ISshRunner
         {
             lines?.Report("0123456789abcdef0123456789abcdef");
             lines?.Report(Firmware);
+            return Task.FromResult(0);
+        }
+
+        if (FailSwitches > 0)
+        {
+            FailSwitches--;
+            return Task.FromResult(1);
         }
 
         return Task.FromResult(0);
@@ -177,6 +187,17 @@ public sealed class LegacyFixture : IDisposable
         foreach (var (file, text) in mainAfter) Write(Path.Combine(repo, file), text);
         Git(repo, "add", "-A");
         Git(repo, "commit", "-q", "-m", "main edit");
+    }
+
+    /// <summary>A further branch off main with its own edits (a second VM).</summary>
+    public void Branch(string branch, IReadOnlyDictionary<string, string> files)
+    {
+        var repo = Path.Combine(Root, "config");
+        Git(repo, "checkout", "-q", "-b", branch, "main");
+        foreach (var (file, text) in files) Write(Path.Combine(repo, file), text);
+        Git(repo, "add", "-A");
+        Git(repo, "commit", "-q", "-m", branch + " edit");
+        Git(repo, "checkout", "-q", "main");
     }
 
     private static void Git(string repo, params string[] args)

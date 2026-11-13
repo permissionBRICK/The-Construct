@@ -115,7 +115,7 @@ public sealed class UpgradeService : IDisposable
         var repo = new LegacyConfigRepo(legacy.ConfigRepository);
         return new UpgradeFound(legacy.InstallFolder, legacy.OtherInstallFolders, instances.Where(i => i.Local).Select(i => i.Name).ToArray(),
             instances.Where(i => !i.Local).Select(i => i.Name).ToArray(), legacy.Hosts().Select(h => h.Url).ToArray(),
-            repo.Exists ? repo.Profiles().Keys.ToArray() : [], repo.Exists ? repo.UnmergedChanges().Count : 0, legacy.HasVault,
+            repo.Exists ? repo.Profiles().Keys.ToArray() : [], repo.Exists ? repo.UnmergedChanges(instances.Select(i => i.ConfigBranch)).Count : 0, legacy.HasVault,
             legacy.BackupKeyFiles().Count, repo.Exists && repo.UpstreamFiles().Count > 0, legacy.Channel());
     }
 

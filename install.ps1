@@ -60,10 +60,18 @@ function Stop-ConstructOldCompanion {
     $stateDir = Join-Path $localAppData 'The-Construct\companion'
     $endpointPath = Join-Path $stateDir 'endpoint.json'
     $stopped = $false
+    $endpoint = $null
     if (Test-Path -LiteralPath $endpointPath) {
-        $endpoint = $null
         try { $endpoint = Get-Content -Raw -LiteralPath $endpointPath | ConvertFrom-Json } catch { $endpoint = $null }
-        if ($endpoint -and $endpoint.pid -and (Get-Process -Id ([int]$endpoint.pid) -ErrorAction SilentlyContinue)) {
+    }
+    # Checked before anything quits: a Companion of this Windows session that its endpoint does not name.
+    # (Another user's Companion in another session is left alone and does not count.)
+    $session = $null
+    try { $session = (Get-Process -Id $PID).SessionId } catch { $session = $null }
+    $others = @(Get-Process -Name 'ConstructCompanion' -ErrorAction SilentlyContinue | Where-Object { $_.SessionId -eq $session -and (-not $endpoint -or $_.Id -ne [int]$endpoint.pid) })
+    if ($others.Count -gt 0) { throw 'The Construct Companion is still running; close it from its tray menu and try again.' }
+    if ($endpoint) {
+        if ($endpoint.pid -and (Get-Process -Id ([int]$endpoint.pid) -ErrorAction SilentlyContinue)) {
             try {
                 Invoke-RestMethod -UseBasicParsing -Method Post -Uri ("http://127.0.0.1:{0}/v1/quit" -f [int]$endpoint.port) `
                     -Headers @{ Authorization = ('Bearer ' + $endpoint.token) } -ContentType 'application/json' -Body '{"reason":"update"}' -TimeoutSec 5 -MaximumRedirection 0 | Out-Null
@@ -75,9 +83,6 @@ function Stop-ConstructOldCompanion {
             if (Get-Process -Id ([int]$endpoint.pid) -ErrorAction SilentlyContinue) { throw 'The Construct Companion did not quit; close it from its tray menu and try again.' }
             $stopped = $true
         }
-    }
-    if (@(Get-Process -Name 'ConstructCompanion' -ErrorAction SilentlyContinue).Count -gt 0) {
-        throw 'The Construct Companion is still running; close it from its tray menu and try again.'
     }
     return $stopped
 }

@@ -98,10 +98,10 @@ public sealed class UpgradeTests
             f.SshKey("construct_far_ed25519");
             f.Instances(new JsonObject
             {
-                ["version"] = 1, ["defaultInstance"] = "agent-vm",
+                // No "agent-vm" entry: the old registry synthesizes the default VM, and so does the converter.
+                ["version"] = 1, ["defaultInstance"] = "work",
                 ["instances"] = new JsonObject
                 {
-                    ["agent-vm"] = new JsonObject(),
                     ["work"] = new JsonObject { ["backend"] = "hyperv-local" },
                     ["far"] = new JsonObject
                     {
@@ -191,6 +191,48 @@ public sealed class UpgradeTests
         Assert.Equal("failed", failed["state"]!.GetValue<string>());
         Assert.Contains("not the old one", failed["message"]!.GetValue<string>(), StringComparison.Ordinal);
         Assert.Empty((await rig.Agent.GetAsync("api/vault/secrets")).AsArray());
+    }
+
+    [Fact]
+    public async Task Edges_arrive_two_branches_merge_a_custom_branch_a_folder_edit_and_a_failed_switch_over_is_retried()
+    {
+        await using var rig = await UpgradeRig.CreateAsync(f =>
+        {
+            SingleVm(f);
+            f.SshKey("construct_work_ed25519");
+            f.Instances(new JsonObject
+            {
+                ["version"] = 1,
+                ["instances"] = new JsonObject { ["agent-vm"] = new JsonObject(), ["work"] = new JsonObject { ["configBranch"] = "WORK" } },
+            });
+            // A second VM changed another field of web; the custom branch WORK added a profile.
+            f.Branch("vm-other", new Dictionary<string, string> { ["projects/web.json"] =
+                """{"name":"web","repos":[{"url":"https://example.test/web.git"}],"provisionCommands":["yarn install"],"hostPackages":["jq"]}""" });
+            f.Branch("WORK", new Dictionary<string, string> { ["projects/fromwork.json"] = """{"name":"fromwork","repos":[]}""" });
+            // Edited in the folder before the old client's next sync tick.
+            f.Write(Path.Combine("The-Construct", "config", "projects", "api.json"), """{"name":"api","repos":[{"url":"https://example.test/api-new.git"}]}""");
+            f.Vault([("github", "ghp_Fixture_Secret_1", "octo"), ("auto-npm", "npm_Fixture_Secret_2", null), ("spaced", " pass word ", null)]);
+        }, vms: ["agent-vm", "work"]);
+        var before = rig.Fixture.Digests();
+        rig.Guest.FailSwitches = 1;
+        await rig.EngineStepAsync();
+        await rig.SetupAsync();
+
+        var first = await rig.ConvertAsync();
+        Assert.NotEqual("converted", first["stage"]!.GetValue<string>());
+        Assert.Single(first["items"]!.AsArray(), i => i!["state"]!.GetValue<string>() == "failed");
+        // The retry resumes the VM the failed adoption left registered.
+        var second = await rig.ConvertAsync();
+        Assert.Equal("converted", second["stage"]!.GetValue<string>());
+
+        var engine = rig.Agent.Host.Upgrade.Bridge.Read().LocalEngine!;
+        var web = (await rig.Agent.GetAsync($"api/engines/{engine}/api/v1/profiles/web"))["profile"]!;
+        Assert.Equal("jq", web["hostPackages"]![0]!.GetValue<string>());
+        await rig.Agent.GetAsync($"api/engines/{engine}/api/v1/profiles/fromwork");
+        Assert.Equal("https://example.test/api-new.git", (await rig.Agent.GetAsync($"api/engines/{engine}/api/v1/profiles/api"))["profile"]!["repos"]![0]!["url"]!.GetValue<string>());
+        Assert.Equal(" pass word ", (await rig.Agent.PostAsync("api/vault/secrets/spaced/reveal", null))["value"]!.GetValue<string>());
+        Assert.NotNull(await rig.Local.Services.GetRequiredService<IVmRepository>().GetAsync("work", CancellationToken.None));
+        Assert.Equal(before, rig.Fixture.Digests());
     }
 
     [Fact]
