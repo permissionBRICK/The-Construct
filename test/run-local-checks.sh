@@ -17,7 +17,7 @@ if [[ "$group" == --changed ]]; then
   fi
   [[ -n "$base" ]] || { echo 'No base branch found; pass one: --changed <base>' >&2; exit 2; }
   fork="$(git merge-base "$base" HEAD)"
-  groups="$( { git diff --name-only "$fork"; git ls-files --others --exclude-standard; } | python3 test/helpers/changed-groups.py)"
+  groups="$( { git diff --name-only --no-renames "$fork"; git ls-files --others --exclude-standard; } | python3 test/helpers/changed-groups.py)"
   if [[ -z "$groups" ]]; then echo "No checks for the changes since $base."; exit 0; fi
   echo "Changed since $base: $(echo $groups)"
   for selected in $groups; do bash "$0" "$selected"; done
@@ -115,8 +115,10 @@ if [[ "$group" == companion || "$group" == all ]]; then
 fi
 
 if [[ "$group" == release || "$group" == all ]]; then
-  # Release tooling and channel resolution (docs/release-flow.md).
+  # Release tooling, channel resolution and the updater tests (docs/release-flow.md).
   python3 test/release.test.py
   python3 test/construct-release.test.py
-  dotnet test service/tests/Constructd.Tests -c Release --filter 'FullyQualifiedName~ReleaseChannelTests'
+  dotnet test service/tests/Constructd.Tests -c Release --filter 'FullyQualifiedName~Constructd.Tests.Updates'
+  pwsh -NoProfile -File service/tests/host-updater.test.ps1
+  bash service/tests/host-updater.test.sh
 fi
