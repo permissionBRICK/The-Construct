@@ -141,7 +141,7 @@ that 202 as an `ApiException<JobAcceptedResponse>`.
 | `POST /users/{name}/tokens` | admin | Issues an API token `{label}`; the plaintext is in the response **once** and is never stored or logged. |
 | `GET /audit` | admin | Audit trail, newest first, `?limit=`. |
 | `GET /vms` | user or primary token | Owned VMs (token: its primary and children); all for admin. Optional `kind=primary|child|all`, `parent`, and admin-only `owner` filters. |
-| `POST /vms` | user | `{name, cpu?, ramGb, diskGb, opts:{nested?, automaticCheckpoints?, idlePolicy?}, desired?}` → `202 {jobId, nested, nestedFromHostDefault, ignoredOptions}`. With `desired` (`{projects[], settings}`, as on a provision job) the create job stores them as the VM's settings and provisions the VM once it is reachable; the job then succeeds only when that provision did, and its result carries `provision` (the provision job's result). `nested` is the effective value; unsupported explicitly enabled options appear in `ignoredOptions`. Omit `cpu` by default to use all host logical CPUs within the supported maximum, host per-VM limit and remaining host/user CPU budgets. Name uniqueness and the quota are enforced by the insert itself. |
+| `POST /vms` | user | `{name, cpu?, ramGb, diskGb?, opts:{nested?, automaticCheckpoints?, idlePolicy?}, desired?}` → `202 {jobId, nested, nestedFromHostDefault, ignoredOptions}`. With `desired` (`{projects[], settings}`, as on a provision job) the create job stores them as the VM's settings and provisions the VM once it is reachable; the job then succeeds only when that provision did, and its result carries `provision` (the provision job's result). `nested` is the effective value; unsupported explicitly enabled options appear in `ignoredOptions`. Omit `cpu` by default to use all host logical CPUs within the supported maximum, host per-VM limit and remaining host/user CPU budgets. Name uniqueness and the quota are enforced by the insert itself. |
 | `GET /vms/{name}` | owner/admin | The VM including its `publicHost`, forwards and host-administration metadata. Never exposes the VM token hash. |
 | `DELETE /vms/{name}` | owner/admin | → `202 {jobId}`; accepting it fences the VM (see below) and the job removes the VM, its forwards and its SSH port. |
 | `POST /vms/{name}/power` | owner/admin | `{action: start\|stop\|save}`, synchronous, returns the new state. `save` needs the driver's suspend capability. |
@@ -173,7 +173,8 @@ Memory replies contain `currentRamGb`, `desiredRamGb`, `pending`, `maximumRamGb`
 `recommendedRamGb` and `appliesOn: "next-stop-start"`. CPU uses corresponding
 `currentCpus`/`desiredCpus`/`maximumCpus` fields. Inventory includes nullable
 `pendingCpu` and `pendingRamGb`. `/vm-defaults` supplies recommended/maximum CPU
-and RAM for a new VM (`recommendedRamGb = min(8, maximumRamGb)`). Feature discovery advertises `primary-cpu` and `primary-memory`.
+and RAM for a new VM (`recommendedRamGb = min(8, maximumRamGb)`) and `recommendedDiskGb` (50, the size a
+`POST /vms` without `diskGb` gets: the cap of a disk that grows on demand). Feature discovery advertises `primary-cpu` and `primary-memory`.
 
 Saving reserves no RAM and does not alter the running guest. Both settings are durable,
 bound to the VM creation identity, and applied CPU then RAM at confirmed Off before

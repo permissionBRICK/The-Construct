@@ -19,6 +19,8 @@ public static class VmEndpoints
     private const int MaxRamGb = 1024;
     private const int MinDiskGb = 8;
     private const int MaxDiskGb = 8192;
+    /// <summary>The disk a create without <c>diskGb</c> gets: the old clients' default, a cap the disk grows to on demand.</summary>
+    public const int DefaultDiskGb = 50;
 
     public static RouteGroupBuilder MapVmEndpoints(this RouteGroupBuilder api)
     {
@@ -96,7 +98,8 @@ public static class VmEndpoints
             return Problems.BadRequest($"'ramGb' must be between {MinRamGb} and {MaxRamGb}.");
         }
 
-        if (request.DiskGb is not int diskGb || diskGb is < MinDiskGb or > MaxDiskGb)
+        var diskGb = request.DiskGb ?? DefaultDiskGb;
+        if (diskGb is < MinDiskGb or > MaxDiskGb)
         {
             return Problems.BadRequest($"'diskGb' must be between {MinDiskGb} and {MaxDiskGb}.");
         }

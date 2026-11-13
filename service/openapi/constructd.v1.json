@@ -12810,6 +12810,11 @@
           "recommendedRamGb": {
             "type": "integer",
             "format": "int32"
+          },
+          "recommendedDiskGb": {
+            "type": "integer",
+            "format": "int32",
+            "default": 50
           }
         }
       },

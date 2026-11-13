@@ -23,7 +23,9 @@ public sealed record JobReplayedResponse(string? JobId, bool Replayed);
 
 public sealed record JobCancelResponse(string JobId, bool Cancelled);
 
-public sealed record VmDefaultsResponse(int HostLogicalCpus, int MaximumCpus, int RecommendedCpus, int MaximumRamGb, int RecommendedRamGb);
+/// <param name="RecommendedDiskGb">The disk size a create without <c>diskGb</c> gets (the cap of a disk that grows on demand).</param>
+public sealed record VmDefaultsResponse(int HostLogicalCpus, int MaximumCpus, int RecommendedCpus, int MaximumRamGb, int RecommendedRamGb,
+    int RecommendedDiskGb = Constructd.Api.Endpoints.VmEndpoints.DefaultDiskGb);
 
 /// <param name="AppliesOn">Always <c>next-stop-start</c>.</param>
 public sealed record VmCpuResponse(int CurrentCpus, int DesiredCpus, bool Pending, int? HostLogicalCpus, int? MaximumCpus,
