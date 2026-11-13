@@ -122,8 +122,12 @@ public sealed class UpdateRecoveryService(HostUpdateJob work,IHostUpdateStore st
                     var link=await config.GetAsync<UpdateJobLink>("update-job:"+row.Id,ct);
                     var job=link is null ? null : await jobs.GetAsync(link.JobId,ct);
                     if(job is not null && (job.State is JobState.Queued or JobState.Running || job.Error=="interrupted by a service restart" || job.Phase!=row.Phase))
-                        await jobs.UpsertAsync(job with {State=row.State==HostUpdateState.Succeeded ? JobState.Succeeded : JobState.Failed,
-                            Finished=clock.UtcNow,Result=row,Phase=row.Phase,Error=row.State==HostUpdateState.Succeeded ? null : row.Error ?? "update-rolled-back"},ct);
+                    {
+                        var ended=job with {State=row.State==HostUpdateState.Succeeded ? JobState.Succeeded : JobState.Failed,
+                            Finished=clock.UtcNow,Result=row,Phase=row.Phase,Error=row.State==HostUpdateState.Succeeded ? null : row.Error ?? "update-rolled-back"};
+                        await jobs.UpsertAsync(ended,ct);
+                        services.GetRequiredService<Constructd.Core.Services.ChangeFeed>().Job("job.ended",ended);
+                    }
                 }
             }
             else await FreezeAsync(h.UpdateId,ct);

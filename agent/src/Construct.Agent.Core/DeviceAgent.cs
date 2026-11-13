@@ -57,12 +57,13 @@ public sealed partial class DeviceAgent : IDisposable
         }
 
         Events = new AgentEvents();
-        Jobs = new JobWatcher(Events, EngineClientFor, _stopping.Token);
+        Streams = new EngineStreams(Events, EngineClientFor, () => Engines().Select(e => e.Id), _stopping.Token);
     }
 
     public AgentEvents Events { get; }
 
-    public JobWatcher Jobs { get; }
+    /// <summary>The engines' change streams on <see cref="Events"/>; the host starts them (<see cref="EngineStreams.Sync"/>).</summary>
+    public EngineStreams Streams { get; }
 
     public string DeviceId => _key.PublicKey.Id;
 
@@ -415,7 +416,11 @@ public sealed partial class DeviceAgent : IDisposable
         lock (_state) StateFile.Save(_options.StatePath, _state);
     }
 
-    private void Changed() => Events.Publish("agent");
+    private void Changed()
+    {
+        Events.Publish("agent");
+        Streams.Sync();
+    }
 
     /// <summary>The pinned connection to an engine, without credentials (one per engine, reused).</summary>
     private HttpClient Client(EngineEntry entry) =>

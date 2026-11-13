@@ -2421,6 +2421,47 @@
         }
       }
     },
+    "/api/v1/events": {
+      "get": {
+        "tags": [
+          "EventEndpoints"
+        ],
+        "description": "Server-sent events from `since` on (the `id` of the last event seen). Without `since`, or when the events after it are gone (too far behind, or an earlier run of the engine), the stream starts with `reset`: reload what you show, then continue from its `seq`.",
+        "operationId": "GetEvents",
+        "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeEventResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/vms/{name}/jobs": {
       "post": {
         "tags": [
@@ -7645,6 +7686,34 @@
           "enforce"
         ],
         "type": "string"
+      },
+      "ChangeEventResponse": {
+        "required": [
+          "seq",
+          "type"
+        ],
+        "type": "object",
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "type": {
+            "type": "string"
+          },
+          "id": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "vm": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
       },
       "ChildAction": {
         "enum": [
@@ -13351,6 +13420,9 @@
     },
     {
       "name": "JobEndpoints"
+    },
+    {
+      "name": "EventEndpoints"
     },
     {
       "name": "ProvisionEndpoints"

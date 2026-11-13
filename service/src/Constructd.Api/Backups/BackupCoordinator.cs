@@ -15,8 +15,11 @@ namespace Constructd.Api.Backups;
 /// slot (docs/plans/construct-platform-design.md 10.2).
 /// </summary>
 public sealed class BackupCoordinator(IBackupStore store, IBackupFiles files, IHostConfigStore config, IClock clock,
-    IMaintenanceGate maintenance, ConstructdOptions options, ILogger<BackupCoordinator> logger)
+    IMaintenanceGate maintenance, ConstructdOptions options, ILogger<BackupCoordinator> logger, ChangeFeed changes)
 {
+    /// <summary>The engine's change stream: <c>backup.added</c> and <c>backup.removed</c>.</summary>
+    public ChangeFeed Changes => changes;
+
     private readonly InMemoryVmOperationGate _locks = new();
     private readonly ConcurrentDictionary<string, CancellationTokenSource> _uploads = new(StringComparer.Ordinal);
 
@@ -135,7 +138,8 @@ public sealed class BackupCoordinator(IBackupStore store, IBackupFiles files, IH
             }
         }
 
-        await store.DeleteAsync(backup.Id, ct).ConfigureAwait(false);
+        if (await store.DeleteAsync(backup.Id, ct).ConfigureAwait(false) && backup.IsComplete)
+            changes.Publish("backup.removed", backup.Id, backup.Vm, backup.Owner);
         TryPrune(backup.Owner, backup.Vm);
     }
 

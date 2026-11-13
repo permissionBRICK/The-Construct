@@ -61,11 +61,11 @@ public static class HostAdminComposition
         services.AddConsolePlatform(options);
         services.AddUpdatePlatform(options);
         services.AddNetworkPlatform(options);
-        if (options.EffectivePersistence == PersistenceMode.Memory)
-        {
-            services.AddSingleton<IAdmissionStore, InMemoryAdmissionStore>();
-        }
-        else services.AddSingleton<IAdmissionStore, SqliteAdmissionStore>();
+        if (options.EffectivePersistence == PersistenceMode.Memory) services.AddSingleton<InMemoryAdmissionStore>();
+        else services.AddSingleton<SqliteAdmissionStore>();
+        services.AddSingleton<IAdmissionStore>(sp => new ChangeReportingAdmissionStore(options.EffectivePersistence == PersistenceMode.Memory
+            ? sp.GetRequiredService<InMemoryAdmissionStore>() : sp.GetRequiredService<SqliteAdmissionStore>(),
+            sp.GetRequiredService<IVmRepository>(), sp.GetRequiredService<ChangeFeed>()));
         services.AddSingleton<IPersistedJobRunner>(sp => (IPersistedJobRunner)sp.GetRequiredService<IJobEngine>());
         return services;
     }

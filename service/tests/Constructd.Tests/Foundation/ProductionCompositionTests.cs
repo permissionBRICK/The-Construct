@@ -49,11 +49,11 @@ public sealed class ProductionCompositionTests
             foreach (var type in required) Assert.NotNull(provider.GetRequiredService(type));
             if (persistence == PersistenceMode.Memory)
             {
-                Assert.IsType<InMemoryAdmissionStore>(provider.GetRequiredService<IAdmissionStore>());
+                Assert.IsType<InMemoryAdmissionStore>(provider.GetRequiredService<InMemoryAdmissionStore>());
                 return;
             }
-            Assert.IsType<SqliteAdmissionStore>(provider.GetRequiredService<IAdmissionStore>());
-            Assert.IsType<SqliteVmRepository>(provider.GetRequiredService<IVmRepository>());
+            Assert.IsType<SqliteAdmissionStore>(provider.GetRequiredService<SqliteAdmissionStore>());
+            Assert.IsType<SqliteVmRepository>(provider.GetRequiredService<SqliteVmRepository>());
             Assert.IsType<SqliteHostConfigStore>(provider.GetRequiredService<IHostConfigStore>());
             Assert.IsType<Constructd.Sqlite.SqliteCapacityLedger>(provider.GetRequiredService<ICapacityLedger>());
             Assert.IsType<Constructd.Windows.HyperV.HyperVChildDriver>(provider.GetRequiredService<IChildVmDriver>());

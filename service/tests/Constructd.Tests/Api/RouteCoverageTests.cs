@@ -160,6 +160,7 @@ public class RouteCoverageTests
         "POST /api/v1/vms/{name}/media/release",
         "GET /api/v1/jobs/{id}",
         "GET /api/v1/jobs/{id}/events",
+        "GET /api/v1/events",
         "GET /api/v1/vault/entries",
         "PUT /api/v1/vault/entries",
         "PUT /api/v1/vault/settings",

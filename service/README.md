@@ -163,6 +163,7 @@ that 202 as an `ApiException<JobAcceptedResponse>`.
 | `DELETE /host/source-cache/{commit}` | admin | `202 {jobId}`; `409 source-pinned` unless `?force=true`, `409 source-in-use` during download. |
 | `GET /jobs/{id}` | job submitter/admin | Job state, progress lines, result, error. The first retrieval of a succeeded creation job also gets `result.vmToken`. |
 | `GET /jobs/{id}/events` | job submitter/admin | `text/event-stream`. |
+| `GET /events?since=` | enrolled user or device | `text/event-stream` of changes, see below. |
 
 ### Primary VM settings
 
@@ -507,6 +508,17 @@ Long operations answer `202 {jobId}` plus a `Location` header. `GET /jobs/{id}/e
 `event: progress` per line — replaying the lines already recorded, so a client that attaches late (or
 reconnects) still sees the whole log — and then exactly one terminal `event: state` carrying the
 finished job, after which the stream ends.
+
+`GET /events?since=` is the engine's change stream (design 6.1). Each event names what changed and
+its id, never the state, and a client re-reads what it shows: `vm.created`, `vm.changed`, `vm.power`
+(the power state changed), `vm.deleted` (id = the VM's name); `job.started`, `job.progress` (at most once
+a second per job), `job.ended`; `backup.added`, `backup.removed`; `update.offered` (a channel offers a
+release commit the host does not run; admins only) and `update.finished` (a host update reached its end).
+`data` is `{seq, type, id, vm}`, and the SSE `id` is `seq`. A caller hears only of what it may read: its
+own VMs and backups, jobs it owns or initiated, finished host updates; an admin hears of everything.
+Without `since`, or when the events after it are gone (more than 1000 behind, or an earlier run of the
+engine), the stream starts with `reset {seq}`: reload, then resume from that `seq`. Guest reports, host
+observations and leases arrive too often to be announced; they are read with the VM.
 
 Current job kinds are `create-vm`, `remove-vm`, `parent-cascade-delete`, `child-create`,
 `child-delete`, `vm-shutdown`, `vm-restart`, `media-acquire`, `media-verify`,

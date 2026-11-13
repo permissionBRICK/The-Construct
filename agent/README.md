@@ -117,13 +117,15 @@ API is rewritten to the proxy path; a fixed `Content-Length` is kept; `Set-Cooki
 |---|---|
 | `agent` | The agent's state changed (engines, device); reload `GET /api/state` |
 | `pairing` | A pairing on this device changed state |
-| `job.progress`, `job.phase`, `job.state` | A job an engine accepted through the proxy (`202` with a job `Location`, or with `{jobId}` in the body): its lines, its phase, its end, exactly once |
-| `job.lost` | The engine no longer shows that job |
+| `vm.created`, `vm.changed`, `vm.power`, `vm.deleted`, `job.started`, `job.progress`, `job.ended`, `backup.added`, `backup.removed`, `update.offered`, `update.finished` | An engine's change, from its own stream (`GET /api/v1/events`): `data` is `{id, vm?}`, never the state; re-read the thing through the proxy. Jobs started elsewhere arrive too. |
+| `engine.reset` | The agent (re)started following that engine and may have missed its changes; reload what you show from it |
+| `job.lost` | After a reset, a job the agent saw start can no longer be read |
 | `reset` | The events after `since` are gone (more than 1000 behind, or an earlier run); reload the state |
 
-The agent follows a job's own stream on the engine and reattaches after a drop, skipping the lines
-it has passed on; the end is published once. Engines have no change stream of their own yet, so
-other engine changes are not on this stream.
+The agent follows each engine's change stream and resumes after a drop from the last event it passed
+on. When the engine has lost that point (it restarted, or the agent fell too far behind) the agent
+reads every job it saw start and not end once. A job's end (`job.ended`, or `job.lost`) is published
+exactly once. A job's output lines are on the engine's per-job stream (`/api/engines/{id}/api/v1/jobs/{job}/events`).
 
 ## Repair
 

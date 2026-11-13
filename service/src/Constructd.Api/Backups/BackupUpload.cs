@@ -75,6 +75,7 @@ internal sealed class BackupUpload(HttpContext http, Vm vm, ConfigBackup backup,
             DateTimeOffset? pinned = !backup.IsSlot && backup.Trigger == BackupTriggers.PreReinstall ? backup.CreatedAt.AddDays(host.PinDays) : null;
             await _store.CompleteAsync(backup.Id, completedAt, _received, sha256!, pinned, CancellationToken.None);
             backups.EndUpload(backup.Id, upload);
+            backups.Changes.Publish("backup.added", backup.Id, vm.Name, vm.Owner);
             if (backup.IsSlot)
             {
                 // The new slot content is verified and complete: the previous one goes.

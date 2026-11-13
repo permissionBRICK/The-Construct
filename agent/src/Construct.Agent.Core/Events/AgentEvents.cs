@@ -5,12 +5,12 @@ namespace Construct.Agent.Events;
 
 /// <summary>One change the UI hears about on <c>/api/events</c>.</summary>
 /// <param name="Seq">Increasing, also across runs of the agent; the UI resumes with <c>?since=</c>.</param>
-/// <param name="Type"><c>agent</c> (the agent's own state changed), <c>pairing</c>, <c>job.progress</c>, <c>job.phase</c>, <c>job.state</c>.</param>
+/// <param name="Type"><c>agent</c> (the agent's own state changed), <c>pairing</c>, an engine's change (<c>vm.*</c>, <c>job.*</c>, <c>backup.*</c>, <c>update.*</c>), <c>engine.reset</c>, <c>job.lost</c>.</param>
 /// <param name="Engine">The agent's engine id for engine events.</param>
 public sealed record AgentEvent(long Seq, string Type, string? Engine, JsonNode? Data);
 
 /// <summary>
-/// The one event stream (6.2): the agent's own changes and the engines' job events, numbered in one
+/// The one event stream (6.2): the agent's own changes and the engines' changes, numbered in one
 /// sequence. The last <see cref="Capacity"/> events are kept so a UI that reconnects gets what it
 /// missed; one that fell further behind is told to reload (a gap), never left with a silent hole.
 /// </summary>
