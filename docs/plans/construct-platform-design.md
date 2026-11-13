@@ -457,7 +457,7 @@ engine generates the per-VM key at create time.
 
 | Secret | New source | To the guest | Engine persists |
 |---|---|---|---|
-| Git clone credentials | Vault entries of kind `git-credential` with host pattern; locked mode asks a device | `env` prefix | Sealed entry only |
+| Git clone credentials | The device's own git credential helper, added by the device agent to a job started from a device (one checked credential per repo host); a job without a device uses what the VM kept | staged file on stdin | nothing |
 | Agent auth, memory, chat logs, `~/.secrets`, T3 state | A device unwraps one backup key `E` and answers the job | stdin | `E` in the bag only |
 | VM token | Engine issues | stdin | hash |
 | serve-web and T3 tokens | Generated in the guest | n/a | nothing |
