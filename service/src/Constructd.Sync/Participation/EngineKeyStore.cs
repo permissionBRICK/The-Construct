@@ -38,6 +38,7 @@ public sealed class EngineKeyStore : IDisposable
             CREATE TABLE IF NOT EXISTS engine_device_tokens (hash BLOB PRIMARY KEY, account TEXT NOT NULL, device_id TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS engine_device_ssh_keys (account TEXT NOT NULL, device_id TEXT NOT NULL, public_key TEXT NOT NULL,
                 PRIMARY KEY (account, device_id));
+            CREATE TABLE IF NOT EXISTS engine_backup_keys (account TEXT NOT NULL COLLATE NOCASE PRIMARY KEY, public_key TEXT NOT NULL);
             """);
 
         using var read = Command("SELECT private_key FROM engine_host_key WHERE one = 1");
@@ -182,6 +183,28 @@ public sealed class EngineKeyStore : IDisposable
             var keys = new List<(string, string)>();
             while (reader.Read()) keys.Add((reader.GetString(0), reader.GetString(1)));
             return keys;
+        }
+    }
+
+    // ---- the account's backup key ----------------------------------------------------------------
+
+    /// <summary>The account's <c>B.pub</c> (8.2) as a device registered it; public, so kept in clear.</summary>
+    public void PutBackupKey(string account, string publicKeyPem)
+    {
+        lock (_lock)
+        {
+            Run("INSERT INTO engine_backup_keys (account, public_key) VALUES ($a, $k) ON CONFLICT (account) DO UPDATE SET public_key = $k",
+                ("$a", account), ("$k", publicKeyPem));
+        }
+    }
+
+    /// <summary>The account's <c>B.pub</c>, or null when no device registered it here. Account names compare without case.</summary>
+    public string? BackupKey(string account)
+    {
+        lock (_lock)
+        {
+            using var command = Command("SELECT public_key FROM engine_backup_keys WHERE account = $a", ("$a", account));
+            return command.ExecuteScalar() as string;
         }
     }
 

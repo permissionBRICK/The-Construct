@@ -71,8 +71,11 @@ public sealed class UpgradeTests
         await rig.AssertArrivedAsync();
         Assert.Contains(view["notes"]!.AsArray(), n => n!.GetValue<string>().Contains("leases end", StringComparison.Ordinal));
         Assert.Contains(view["notes"]!.AsArray(), n => n!.GetValue<string>().Contains("legacy-upstream.json", StringComparison.Ordinal));
-        Assert.Equal(["agent-vm:construct backup recipients add --label construct-account", "agent-vm:construct backup recipients remove " + rig.Fingerprint],
-            rig.Platform.VmCalls.Select(c => c.Instance + ":" + c.Command));
+        // Before its adoption no engine runs the VM: the account key goes on over the old client's SSH. The adoption
+        // enrols it as well; after it the old key comes off through the engine, which checked the account key is there.
+        Assert.Equal(["agent-vm:construct backup recipients add --label construct-account"], rig.Platform.VmCalls.Select(c => c.Instance + ":" + c.Command));
+        var accountFingerprint = System.Security.Cryptography.SHA256.HashData(PemSpki(await rig.Agent.Host.Agent.BackupPublicKeyAsync(CancellationToken.None)));
+        Assert.Equal([Convert.ToHexStringLower(accountFingerprint)], rig.Guest.Recipients);
 
         // A second run changes nothing: no record written, no VM touched, no job started.
         var snapshot = await rig.SnapshotAsync();
@@ -133,9 +136,12 @@ public sealed class UpgradeTests
         var state = await rig.Agent.GetAsync("api/state");
         var added = state["engines"]!.AsArray().Single(e => e!["url"]!.GetValue<string>() == remote.Url)!;
         Assert.True(added["enrolled"]!.GetValue<bool>() || added["signedIn"]!.GetValue<bool>());
-        // The account key reached every VM, then the old key came off each.
+        // The account key reached every VM, then the old key came off each: from the adopted VMs through this PC's
+        // engine, from the one the shared host does not run under that name over the old client's SSH.
         Assert.Equal(["agent-vm", "far", "work"], rig.Platform.VmCalls.Where(c => c.Command.Contains("add")).Select(c => c.Instance).Order());
-        Assert.Equal(3, rig.Platform.VmCalls.Count(c => c.Command.Contains("remove")));
+        Assert.Equal(["far"], rig.Platform.VmCalls.Where(c => c.Command.Contains("remove")).Select(c => c.Instance));
+        Assert.DoesNotContain(rig.Fingerprint!, rig.Guest.Recipients);
+        Assert.Contains(view["items"]!.AsArray(), i => i!["id"]!.GetValue<string>() == $"unrecipient:work:{rig.Fingerprint}" && i["state"]!.GetValue<string>() == "done");
 
         var snapshot = await rig.SnapshotAsync();
         await rig.ConvertAsync();
@@ -272,6 +278,13 @@ public sealed class UpgradeTests
         Assert.DoesNotContain(identity, rig.Agent.StateFileText());
     }
 
+    private static byte[] PemSpki(string pem)
+    {
+        using var rsa = System.Security.Cryptography.RSA.Create();
+        rsa.ImportFromPem(pem);
+        return rsa.ExportSubjectPublicKeyInfo();
+    }
+
     [Fact]
     public async Task The_cli_converts_in_process_and_reports_each_item()
     {
@@ -319,6 +332,7 @@ internal sealed class UpgradeRig : IAsyncDisposable
         var fixture = new LegacyFixture();
         build(fixture);
         var guest = new AdoptableGuest();
+        if (fixture.BackupFingerprint is { } old) guest.Recipients.Add(old); // the old client enrolled its PC key
         var local = new EngineHost(services => services.AddSingleton<ISshRunner>(guest));
         var driver = local.Services.GetRequiredService<FakeHypervisorDriver>();
         foreach (var vm in vms ?? ["agent-vm"])

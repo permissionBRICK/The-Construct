@@ -32,6 +32,15 @@ public static class EngineParticipationEndpoints
         api.MapPut("/device/ssh-key", PutSshKey)
             .RequireAuthorization(Policies.User).Audited("engine.device.ssh-key").WithName("PutDeviceSshKey").Produces(StatusCodes.Status204NoContent);
 
+        api.MapPut("/device/backup-key", PutBackupKey)
+            .RequireAuthorization(Policies.User).Audited("engine.device.backup-key").WithName("PutAccountBackupKey").Produces(StatusCodes.Status204NoContent);
+
+        api.MapPost("/vms/{name}/backup-recipients", AddRecipientAsync)
+            .RequireAuthorization(Policies.User).Audited("vm.backup-recipient.add").WithName("AddVmBackupRecipient").Produces<BackupRecipientResponse>();
+
+        api.MapDelete("/vms/{name}/backup-recipients/{fingerprint}", RemoveRecipientAsync)
+            .RequireAuthorization(Policies.User).Audited("vm.backup-recipient.remove").WithName("RemoveVmBackupRecipient").Produces(StatusCodes.Status204NoContent);
+
         api.MapPut("/engine/grants", PutGrants)
             .RequireAuthorization(Policies.User).Audited("engine.grants").WithName("PutEngineGrants").Produces(StatusCodes.Status204NoContent);
 
@@ -66,6 +75,51 @@ public static class EngineParticipationEndpoints
             return Refused(400, "invalid-key", "One OpenSSH public key line.");
         deviceKeys.Register(http.User.NameOrEmpty(), device, key);
         return TypedResults.NoContent();
+    }
+
+    /// <summary>A device registers its account's <c>B.pub</c> (public; <c>B</c>'s private half never comes here).</summary>
+    private static IResult PutBackupKey([FromBody] AccountBackupKeyRequest request, HttpContext http, Constructd.Api.Devices.AccountBackupKeys backupKeys)
+    {
+        if (!http.User.HasClaim(c => c.Type == DeviceAuthenticationHandler.DeviceClaim))
+            return Refused(403, "devices-only", "A device registers the account's backup key with its device token.");
+        if (Constructd.Api.Devices.AccountBackupKeys.Normalize(request.PublicKey) is not { } pem)
+            return Refused(400, "invalid-key", "One RSA public key of at least 3072 bits, as PEM.");
+        backupKeys.Register(http.User.NameOrEmpty(), pem);
+        return TypedResults.NoContent();
+    }
+
+    /// <summary>Enrols the account's backup key on one of the caller's own VMs.</summary>
+    private static async Task<IResult> AddRecipientAsync(string name, HttpContext http, IVmRepository vms, Constructd.Api.Devices.AccountBackupKeys backupKeys, CancellationToken ct)
+    {
+        if (await OwnVmAsync(name, http, vms, ct) is not { } vm) return Refused(404, "not-found", "No such VM of yours, or not asked with a device token.");
+        if (backupKeys.Of(vm.Owner) is not { } key) return Refused(409, "no-backup-key", "No device has registered the account's backup key here.");
+        return await backupKeys.AddAsync(vm, ct) == 0
+            ? TypedResults.Ok(new BackupRecipientResponse(key.Fingerprint))
+            : Refused(502, "vm-unreachable", "The VM was not reached or refused the key.");
+    }
+
+    /// <summary>Removes another recipient from one of the caller's own VMs, only while the account's key is enrolled there.</summary>
+    private static async Task<IResult> RemoveRecipientAsync(string name, string fingerprint, HttpContext http, IVmRepository vms,
+        Constructd.Api.Devices.AccountBackupKeys backupKeys, CancellationToken ct)
+    {
+        if (await OwnVmAsync(name, http, vms, ct) is not { } vm) return Refused(404, "not-found", "No such VM of yours, or not asked with a device token.");
+        if (!Constructd.Core.Logic.BackupJobKey.IsFingerprint(fingerprint)) return Refused(400, "invalid-fingerprint", "A fingerprint is 64 lowercase hex digits.");
+        return await backupKeys.RemoveAsync(vm, fingerprint, ct) switch
+        {
+            Constructd.Api.Devices.AccountBackupKeys.RemoveOutcome.Removed => TypedResults.NoContent(),
+            Constructd.Api.Devices.AccountBackupKeys.RemoveOutcome.NoAccountKey => Refused(409, "no-backup-key", "No device has registered the account's backup key here."),
+            Constructd.Api.Devices.AccountBackupKeys.RemoveOutcome.AccountKey => Refused(409, "account-key", "The account's own backup key stays on its VMs."),
+            Constructd.Api.Devices.AccountBackupKeys.RemoveOutcome.AccountKeyMissing => Refused(409, "account-key-not-enrolled",
+                "The account's backup key is not enrolled on this VM; enrol it first, so the VM keeps a recipient a device holds."),
+            _ => Refused(502, "vm-unreachable", "The VM was not reached or refused."),
+        };
+    }
+
+    /// <summary>The VM when the caller is a device of its owner; null otherwise (no admin override: these are the owner's keys).</summary>
+    private static async Task<Constructd.Core.Domain.Vm?> OwnVmAsync(string name, HttpContext http, IVmRepository vms, CancellationToken ct)
+    {
+        if (!http.User.HasClaim(c => c.Type == DeviceAuthenticationHandler.DeviceClaim)) return null;
+        return await vms.GetAsync(name, ct) is { Deleting: false } vm && Constructd.Core.Logic.Ownership.SameName(vm.Owner, http.User.NameOrEmpty()) ? vm : null;
     }
 
     private static async Task<IResult> RevokeAsync(string id, HttpContext http, EngineDevices devices, Constructd.Api.Devices.DeviceSshKeys deviceKeys, CancellationToken ct)

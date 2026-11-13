@@ -45,13 +45,13 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
         await UpstreamAsync(legacy, ct).ConfigureAwait(false);
         await SecretsAsync(legacy, ct).ConfigureAwait(false);
         var legacyKeys = await BackupKeysAsync(legacy, ct).ConfigureAwait(false);
-        await RecipientsAsync(legacy, instances, ct).ConfigureAwait(false);
+        await RecipientsAsync(legacy, instances, start.LocalEngine, ct).ConfigureAwait(false);
         await LocalVmsAsync(legacy, instances, start.LocalEngine, ct).ConfigureAwait(false);
 
         var complete = _items.All(i => i.State is not "failed");
         if (complete && bridge.Read().Stage != BridgeState.Converted)
             bridge.Update(b => b with { Stage = BridgeState.Converted, ConvertedAt = DateTimeOffset.UtcNow });
-        if (bridge.Read().Stage == BridgeState.Converted) await RemoveLegacyRecipientsAsync(legacy, instances, legacyKeys, ct).ConfigureAwait(false);
+        if (bridge.Read().Stage == BridgeState.Converted) await RemoveLegacyRecipientsAsync(legacy, instances, legacyKeys, start.LocalEngine, ct).ConfigureAwait(false);
         bridge.Update(b => b with { Items = _items.ToArray(), Notes = _notes.Distinct().ToArray() });
         return complete;
     }
@@ -357,8 +357,12 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
         return fingerprints;
     }
 
-    /// <summary>The account's <c>B.pub</c> enrolled on every VM reached, before any old key comes off (13.2). A VM not reached is retried by a later run.</summary>
-    private async Task RecipientsAsync(LegacyState legacy, IReadOnlyList<LegacyInstance> instances, CancellationToken ct)
+    /// <summary>
+    /// The account's <c>B.pub</c> enrolled on every VM reached, before any old key comes off (13.2): through the engine
+    /// that runs the VM (<c>POST /vms/{name}/backup-recipients</c>); over SSH with the old client's key only for a VM no
+    /// engine reaches yet (a local VM before its adoption, a host not added). A VM not reached is retried by a later run.
+    /// </summary>
+    private async Task RecipientsAsync(LegacyState legacy, IReadOnlyList<LegacyInstance> instances, string? localEngine, CancellationToken ct)
     {
         if (legacy.BackupKeyFiles().Count == 0) return;
         foreach (var instance in instances)
@@ -366,6 +370,20 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
             await ItemAsync("recipient:" + instance.Name, $"Account backup key on {instance.Name}", async () =>
             {
                 var pem = await agent.BackupPublicPemAsync(ct).ConfigureAwait(false);
+                if (EngineOf(instance, localEngine) is { } engine)
+                {
+                    try
+                    {
+                        await engines.SendAsync(engine, HttpMethod.Put, "device/backup-key", new JsonObject { ["publicKey"] = pem }, ct).ConfigureAwait(false);
+                        await engines.PostAsync(engine, $"vms/{Uri.EscapeDataString(instance.Name)}/backup-recipients", null, ct).ConfigureAwait(false);
+                        return ("done", "Enrolled through the engine.");
+                    }
+                    catch (AgentFailure)
+                    {
+                        // The engine does not run this VM yet, or does not reach it: the old client's way.
+                    }
+                }
+
                 var result = await platform.RunOnVmAsync(Target(legacy, instance), ["construct", "backup", "recipients", "add", "--label", RecipientLabel],
                     Encoding.ASCII.GetBytes(pem), ct).ConfigureAwait(false);
                 return result.Exit == 0 ? ("done", "Enrolled.") : ("pending", $"The VM was not reached or refused (exit {result.Exit}); a later run retries.");
@@ -373,8 +391,12 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
         }
     }
 
-    /// <summary>After <c>converted</c>: the old public keys come off every VM the account key reached.</summary>
-    private async Task RemoveLegacyRecipientsAsync(LegacyState legacy, IReadOnlyList<LegacyInstance> instances, IReadOnlyList<string> fingerprints, CancellationToken ct)
+    /// <summary>
+    /// After <c>converted</c>: the old public keys come off every VM the account key reached. Through the engine, which
+    /// removes one only while the account's key is enrolled there; over SSH only for a VM no engine runs or reaches.
+    /// </summary>
+    private async Task RemoveLegacyRecipientsAsync(LegacyState legacy, IReadOnlyList<LegacyInstance> instances, IReadOnlyList<string> fingerprints,
+        string? localEngine, CancellationToken ct)
     {
         foreach (var instance in instances.Where(i => _done.Contains("recipient:" + i.Name)))
         {
@@ -382,12 +404,36 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
             {
                 await ItemAsync($"unrecipient:{instance.Name}:{fp}", $"Old backup key off {instance.Name}", async () =>
                 {
+                    if (EngineOf(instance, localEngine) is { } engine)
+                    {
+                        try
+                        {
+                            var pem = await agent.BackupPublicPemAsync(ct).ConfigureAwait(false);
+                            await engines.SendAsync(engine, HttpMethod.Put, "device/backup-key", new JsonObject { ["publicKey"] = pem }, ct).ConfigureAwait(false);
+                            await engines.SendAsync(engine, HttpMethod.Delete, $"vms/{Uri.EscapeDataString(instance.Name)}/backup-recipients/{fp}", null, ct)
+                                .ConfigureAwait(false);
+                            return ("done", "Removed through the engine.");
+                        }
+                        catch (AgentFailure failure) when (failure.Status == 409)
+                        {
+                            return ("pending", "The engine keeps the old key until the account's key is on the VM; a later run retries.");
+                        }
+                        catch (AgentFailure)
+                        {
+                            // Not run or not reached by the engine: the old client's way.
+                        }
+                    }
+
                     var result = await platform.RunOnVmAsync(Target(legacy, instance), ["construct", "backup", "recipients", "remove", fp], null, ct).ConfigureAwait(false);
                     return result.Exit == 0 ? ("done", "Removed.") : ("pending", $"The VM was not reached (exit {result.Exit}); a later run retries.");
                 }).ConfigureAwait(false);
             }
         }
     }
+
+    /// <summary>The engine that runs <paramref name="instance"/> at this device: this PC's for a local VM, its host's for a remote one.</summary>
+    private string? EngineOf(LegacyInstance instance, string? localEngine) =>
+        instance.Local ? localEngine : instance.ServiceUrl is { Length: > 0 } url ? agent.EngineIdFor(url) : null;
 
     private static LegacyVmTarget Target(LegacyState legacy, LegacyInstance instance) => new(instance.Name, instance.SshHost, instance.SshPort, legacy.KeyFile(instance));
 

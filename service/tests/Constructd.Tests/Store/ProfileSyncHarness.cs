@@ -10,6 +10,7 @@ using Constructd.Api.Jobs;
 using Constructd.Api.Profiles;
 using Constructd.Core.Abstractions;
 using Constructd.Core.Domain;
+using Constructd.Core.Logic;
 using Constructd.Sync.Participation;
 using Constructd.Tests.Support;
 using Microsoft.Extensions.DependencyInjection;
@@ -86,8 +87,31 @@ public sealed class FolderGuests : ISshRunner, IProvisionTargets, IDisposable
 
     public string? BootstrapPublicKey() => null;
 
+    /// <summary>Each VM's backup recipients by fingerprint, as <c>construct backup recipients</c> keeps them.</summary>
+    public Dictionary<string, HashSet<string>> BackupRecipients { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>The <c>construct backup recipients</c> commands the engine ran, with their stdin.</summary>
+    public List<(string Vm, string Command, string? Input)> BackupCalls { get; } = [];
+
     public async Task<int> RunAsync(SshTarget target, string command, string? standardInput, IProgress<string>? lines, TimeSpan timeout, CancellationToken ct)
     {
+        if (command.Contains("construct-backup.sh recipients ", StringComparison.Ordinal))
+        {
+            lock (BackupCalls) BackupCalls.Add((target.Host, command, standardInput));
+            if (Down.Contains(target.Host)) return 255;
+            lock (BackupRecipients)
+            {
+                var set = BackupRecipients.TryGetValue(target.Host, out var known) ? known : BackupRecipients[target.Host] = [];
+                if (command.Contains("recipients add", StringComparison.Ordinal))
+                    set.Add(BackupJobKey.PublicFingerprint(standardInput ?? "") ?? throw new InvalidOperationException("not a public key"));
+                else if (command.Contains("recipients list", StringComparison.Ordinal))
+                    lines?.Report(new JsonArray(set.Select(fp => (JsonNode)new JsonObject { ["fingerprint"] = fp, ["label"] = "PC" }).ToArray()).ToJsonString());
+                else set.RemoveWhere(fp => command.Contains("recipients remove " + fp, StringComparison.Ordinal));
+            }
+
+            return 0;
+        }
+
         Assert.Equal("bash -s", command);
         lock (Scripts) Scripts.Add(standardInput ?? "");
         if (Down.Contains(target.Host)) return 255;

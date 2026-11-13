@@ -49,7 +49,8 @@ public sealed record ProvisionRestore(string BackupId, string? KnownHosts = null
 /// reported, so nothing that is stored can hold one.
 /// </summary>
 public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmAppliedStateStore applied,
-    IPersistedJobRunner phases, RecoveryMarks marks, IClock clock, Constructd.Api.Devices.DeviceSshKeys deviceKeys)
+    IPersistedJobRunner phases, RecoveryMarks marks, IClock clock, Constructd.Api.Devices.DeviceSshKeys deviceKeys,
+    Constructd.Api.Devices.AccountBackupKeys backupKeys)
 {
     public static readonly string[] Steps = ["source", "copy", "provision", "restore", "project-commands", "applied", "finish"];
     private static readonly TimeSpan ShortTimeout = TimeSpan.FromMinutes(5);
@@ -140,6 +141,7 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
             // ── finish ───────────────────────────────────────────────────────────────
             await BeginAsync(context, "finish", cancel);
             await WriteDeviceKeysAsync(context, run);
+            await EnrolBackupKeyAsync(context, run);
             var rebooted = await FinishAsync(context, run, seedUser);
             context.Done(rebooted ? "the VM reboots in a few seconds" : "the VM keeps running");
 
@@ -408,6 +410,25 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
                 return false; // Unreachable or no sudo: the heartbeat writes them.
             }
         }, CancellationToken.None);
+    }
+
+    /// <summary>
+    /// The account's backup key <c>B.pub</c> as a backup recipient, so a new or reinstalled VM encrypts its backups to
+    /// the account from the start. Not required: a VM without it is enrolled by a device later.
+    /// </summary>
+    private async Task EnrolBackupKeyAsync(Context context, ProvisionRun run)
+    {
+        if (backupKeys.Of(run.Vm.Owner) is not { } key) return;
+        try
+        {
+            var added = await RootCommandAsync(context with { Quiet = true }, "finish",
+                BackupScript.RecipientsAdd(Constructd.Api.Devices.AccountBackupKeys.Label), ShortTimeout, key.Pem);
+            context.Line(added.ExitCode == 0 ? "the account's backup key is enrolled" : $"the account's backup key was not enrolled (exit {added.ExitCode})");
+        }
+        catch (ProvisionStepException)
+        {
+            context.Line("the account's backup key was not enrolled (no SSH or sudo)");
+        }
     }
 
     /// <summary>

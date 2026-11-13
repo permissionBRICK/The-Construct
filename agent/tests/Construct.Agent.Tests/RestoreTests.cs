@@ -45,6 +45,8 @@ public sealed class RestoreTests
         await CreateVmAsync(laptop, engineId);
 
         var publicPem = await laptop.Host.Agent.BackupPublicKeyAsync(CancellationToken.None);
+        // The device registered the account's B.pub at the engine when it enrolled, so the engine enrols it on the VMs.
+        Assert.Equal(publicPem, engine.Services.GetRequiredService<Constructd.Sync.Participation.EngineKeyStore>().BackupKey("alice"));
         var good = await StoreBackupAsync(engine, publicPem);
         using var other = RSA.Create(3072);
         var foreign = await StoreBackupAsync(engine, other.ExportSubjectPublicKeyInfoPem());

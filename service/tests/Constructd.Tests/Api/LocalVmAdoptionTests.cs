@@ -237,6 +237,32 @@ public sealed class LocalVmAdoptionTests : IDisposable
     }
 
     [Fact]
+    public async Task The_adoption_enrols_the_accounts_backup_key_a_device_registered()
+    {
+        var guest = new FakeGuest();
+        using var app = new TestApp(new Dictionary<string, string?>
+        {
+            ["Constructd:CertPath"] = CertPath, ["Constructd:PublicHost"] = "pc.mshome.net",
+        }, services => services.AddSingleton<ISshRunner>(guest));
+        var admin = await app.CreateUserClientAsync("alice", Role.Admin);
+        app.Driver.Facts["agent-vm"] = new HypervisorVmFacts(_vmId, VmState.Running, 4, 8L << 30, 100L << 30, Firmware);
+        app.Driver.SetState("agent-vm", VmState.Running);
+        using var b = RSA.Create(3072);
+        var pem = b.ExportSubjectPublicKeyInfoPem();
+        app.Service<Constructd.Sync.Participation.EngineKeyStore>().PutBackupKey("alice", pem);
+
+        var response = await admin.PostAsJsonAsync("/api/v1/vms/agent-vm/adopt",
+            new { settings = JsonNode.Parse(File.ReadAllText(SettingsPath)), sshPrivateKey = File.ReadAllText(KeyPath) });
+        var job = await admin.WaitForJobAsync(JsonDocument.Parse(await response.Content.ReadAsStringAsync()).RootElement.GetProperty("jobId").GetString()!);
+
+        Assert.Equal(JobState.Succeeded, job.State);
+        var add = Assert.Single(guest.Calls, c => c.Command.Contains("recipients add", StringComparison.Ordinal));
+        Assert.Equal(pem, add.StandardInput);
+        Assert.DoesNotContain("PUBLIC KEY", add.Command, StringComparison.Ordinal);
+        Assert.Contains(job.Progress, line => line.Text == "The account's backup key is enrolled");
+    }
+
+    [Fact]
     public void Settings_the_old_client_never_stored_stay_the_engines_defaults()
     {
         var desired = LegacyClientSettings.ToDesired(JsonNode.Parse("""{"t3codeChannel":"beta","smbShare":"yes","projects":[" a ","a",3]}""") as JsonObject, null);

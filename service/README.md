@@ -295,7 +295,7 @@ gate: the resource policy is evaluated again inside every handler.
 | Console | `GET /vms/{name}/console/capabilities`; `POST /vms/{name}/console/sessions`; `POST /vms/{name}/console/sessions/{sid}/renew`; `DELETE /vms/{name}/console/sessions/{sid}`; `GET /vms/{name}/console/sessions/{sid}/screenshot`; `POST .../{sid}/keyboard`; `POST .../{sid}/mouse` | Current VM operator; session remains bound to its creating principal and is re-authorized on every call. |
 | Host updates | `GET /host/updates/status`; `POST /host/updates/check`; `POST /host/updates/stage`; `POST /host/updates/apply`; `POST /host/updates/cancel`; `POST /host/updates/resolve` | Admin. Apply (including resume) and resolve are the only narrowly maintenance-exempt mutations. |
 | Updates (12.1) | `POST /host/updates/run`; `POST /host/vms/reprovision`; `POST /me/vms/reprovision`; `GET`, `PUT /me/updates`; `GET`, `POST /vms/{name}/update` | Run and every-VM reprovision: Admin. My VMs and my setting: the calling user, their own VMs only. The VM route: that primary's own token or its owner, never another user's VM; when the owner is an admin and a host release is out, it runs the host update and, once that succeeded, reprovisions every primary that owner has on the host (a VM that changed owner meanwhile is skipped). See *Updates*. |
-| Devices (8.1) | `GET /engine`; `POST /devices/enroll`; `DELETE /devices/{id}`; `PUT /engine/grants`; `GET /sync/records/{id}`; `PUT /device/ssh-key` | Enrol: anonymous with the device key's proof. The rest: the caller's own account; records and the SSH key only with a device token, the key always the calling device's. See *Device SSH keys on VMs*. |
+| Devices (8.1) | `GET /engine`; `POST /devices/enroll`; `DELETE /devices/{id}`; `PUT /engine/grants`; `GET /sync/records/{id}`; `PUT /device/ssh-key`; `PUT /device/backup-key`; `POST /vms/{name}/backup-recipients`; `DELETE /vms/{name}/backup-recipients/{fingerprint}` | Enrol: anonymous with the device key's proof. The rest: the caller's own account; records, the SSH key and the backup key only with a device token, the SSH key always the calling device's, the recipients only on the caller's own VMs. See *Device SSH keys on VMs* and *The account's backup key on VMs*. |
 | Key vault | `GET`, `PUT /vault/entries`; `PUT /vault/settings`; `POST /vms/{name}/vault/unlock`; `GET /vault/leases`; `DELETE /vault/leases/{id}`; `GET`, `POST /vault/devices`; `DELETE /vault/devices/{id}`; `GET /vault/activity` | The caller's own vault only (an admin gets no access to other users' vaults); unlock: owner of a running primary. |
 | Key vault approvals | `GET /vault/approvals`; `POST /vault/approvals/{id}`; `GET /vault/files`; `POST /vault/files/{id}`; `GET /vault/device` | The owner or one of their paired devices (`VaultDevice`); `/vault/device` is device-only. |
 | Key vault guest | `POST /vms/{name}/vault/requests`; `GET /vms/{name}/vault/requests/{id}?wait=`; `GET /vms/{name}/vault/scrubs`; `POST /vms/{name}/vault/scrubs/{id}` | That primary VM's own token; a child answers `403 vault-child`. |
@@ -394,6 +394,21 @@ engine writes at the end of each provision (before the reboot), when a device re
 here, when the profile sync loop reads a revocation from the device records, and at the next heartbeat
 of a VM it could not reach then. What was written where is kept in memory: after a restart every
 running VM is written once more.
+
+### The account's backup key on VMs
+
+A VM encrypts its backups to the recipients enrolled on it (`construct backup recipients`). The
+account's recipient is `B.pub` (plan 8.2); its private half stays on devices. A device registers it
+once with `PUT /device/backup-key {publicKey}` (device token only; an RSA key of at least 3072 bits as
+PEM; kept in clear in `engine-keys.db`, it is public), as the agent does at every enrolment and
+connect. The engine enrols it (label `construct-account`, the key on stdin) at the end of each
+provision, before the reboot, and at the end of each adoption; a failure there is a line in the job's
+output, not a failure. A device of the VM's owner (no admin override) asks for it with `POST
+/vms/{name}/backup-recipients` (`{fingerprint}`; `409 no-backup-key` before a key is registered, `502
+vm-unreachable`) and removes another recipient, an old per-PC key, with `DELETE
+/vms/{name}/backup-recipients/{fingerprint}`. The engine removes one only while the account's key is
+listed on that VM (`409 account-key-not-enrolled` otherwise) and never the account's own key (`409
+account-key`), so a VM always keeps a recipient a device holds.
 
 ### Key vault on hosted VMs
 

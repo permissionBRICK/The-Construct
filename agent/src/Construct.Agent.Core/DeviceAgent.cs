@@ -303,6 +303,7 @@ public sealed partial class DeviceAgent : IDisposable
     /// </summary>
     private async Task RegisterSshKeyLockedAsync(EngineEntry entry, CancellationToken ct)
     {
+        await RegisterBackupKeyLockedAsync(entry, ct).ConfigureAwait(false);
         if (SshPublicKey is not { } read || entry.DeviceToken is null) return;
         try
         {
@@ -310,6 +311,25 @@ public sealed partial class DeviceAgent : IDisposable
             await EngineApi(entry).PutDeviceSshKeyAsync(new DeviceSshKeyRequest { PublicKey = key }, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is AgentFailure or ApiException or HttpRequestException)
+        {
+        }
+    }
+
+    /// <summary>
+    /// Registers the account's backup recipient <c>B.pub</c> (public) at an engine where this device holds a device
+    /// token, so the engine enrols it on the account's VMs at each provision and adoption. A failure is retried at the
+    /// next enrolment or connect.
+    /// </summary>
+    private async Task RegisterBackupKeyLockedAsync(EngineEntry entry, CancellationToken ct)
+    {
+        if (entry.DeviceToken is null || _state.RootSeal is null) return;
+        try
+        {
+            var keys = await OpenKeysAsync(ct).ConfigureAwait(false);
+            await EngineApi(entry).PutAccountBackupKeyAsync(new AccountBackupKeyRequest { PublicKey = keys.Backup.ExportSubjectPublicKeyInfoPem() }, ct)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is AgentFailure or ApiException or HttpRequestException or CryptographicException or InvalidOperationException)
         {
         }
     }

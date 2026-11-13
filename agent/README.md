@@ -159,10 +159,11 @@ repository's `main` profiles through the store engine's `PUT /profiles/{name}`; 
 change as that VM's write with the merge base as its base, so the engine merges per field and opens a
 conflict (branch ours, main theirs); the upstream links into `legacy-upstream.json`; the vault's secrets
 (only when the account's `K` is the old key); each old backup private key wrapped under `U` into a
-`setting` record `setting:legacy-backup-key:<fingerprint>`; the account's `B.pub` onto every VM it reaches
-over SSH with the old client's key (`construct backup recipients add`); last, each local VM adopted by the
-engine (`POST /vms/{name}/adopt`). Then `stage: converted`, and only then the old backup keys come off the
-VMs. Open vault leases and pending cleanups are not carried over: a VM asks again.
+`setting` record `setting:legacy-backup-key:<fingerprint>`; the account's `B.pub` onto every VM, through the engine that runs it
+(`POST /vms/{name}/backup-recipients`), over SSH with the old client's key only for a VM no engine reaches yet (a local VM
+before its adoption); last, each local VM adopted by the engine (`POST /vms/{name}/adopt`, which enrols `B.pub` as well).
+Then `stage: converted`, and only then the old backup keys come off the VMs, through the engine (`DELETE
+/vms/{name}/backup-recipients/{fingerprint}`, refused while `B.pub` is not on the VM) or, for a VM no engine runs, over SSH. Open vault leases and pending cleanups are not carried over: a VM asks again.
 
 ### Device routes
 
@@ -170,7 +171,7 @@ VMs. Open vault leases and pending cleanups are not carried over: a VM asks agai
 |---|---|
 | `GET /api/device/features` | `{platform, notifications, microphone, share, startWithOs, shell}`: what this device can do |
 | `GET`, `PUT /api/device/settings {channel?, autoUpdate?, startWithOs?}` | The release channel (`stable`, `nightly`, an https manifest URL), automatic updates (off by default), start with the OS (`null` where not available) |
-| `GET /api/device/ssh-key` | The device's SSH public key (`~/.ssh/construct_ed25519`, created on first use). The agent registers it at every engine it enrols at (and again on connect); the engine authorizes it on the user's VMs |
+| `GET /api/device/ssh-key` | The device's SSH public key (`~/.ssh/construct_ed25519`, created on first use). The agent registers it at every engine it enrols at (and again on connect); the engine authorizes it on the user's VMs. With it the agent registers the account's `B.pub`, which the engine enrols on the user's VMs |
 | `GET /api/connections`, `POST /api/connections/refresh` | The user's own primary VMs on every engine: state, the address this device dials (the engine's `direct` address for a VM on this PC's engine, where it names one, else its `forwarded` endpoint), local forwards, the microphone |
 | `DELETE /api/connections/{engine}/{vm}/forwards/{id}` | Closes a local forward (also at the engine) |
 | `PUT /api/connections/{engine}/{vm}/mic {on}` | Microphone passthrough; kept for the VM's next start |

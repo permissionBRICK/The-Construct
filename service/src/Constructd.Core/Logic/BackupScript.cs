@@ -27,7 +27,13 @@ public static partial class BackupScript
     /// The fingerprints labelled <see cref="BackupJobKey.Label"/> in the JSON array <c>recipients list</c>
     /// prints, or null when no such array is in the output.
     /// </summary>
-    public static IReadOnlyList<string>? JobRecipients(IEnumerable<string> lines)
+    public static IReadOnlyList<string>? JobRecipients(IEnumerable<string> lines) => RecipientsListed(lines, BackupJobKey.Label);
+
+    /// <summary>
+    /// The fingerprints in the JSON array <c>recipients list</c> prints, only those with <paramref name="label"/>
+    /// when given; null when no such array is in the output.
+    /// </summary>
+    public static IReadOnlyList<string>? RecipientsListed(IEnumerable<string> lines, string? label = null)
     {
         foreach (var raw in lines.Reverse())
         {
@@ -39,7 +45,7 @@ public static partial class BackupScript
                 if (doc.RootElement.ValueKind != JsonValueKind.Array) continue;
                 return doc.RootElement.EnumerateArray()
                     .Where(r => r.ValueKind == JsonValueKind.Object
-                        && r.TryGetProperty("label", out var label) && label.ValueKind == JsonValueKind.String && label.GetString() == BackupJobKey.Label
+                        && (label is null || r.TryGetProperty("label", out var named) && named.ValueKind == JsonValueKind.String && named.GetString() == label)
                         && r.TryGetProperty("fingerprint", out var fp) && fp.ValueKind == JsonValueKind.String && BackupJobKey.IsFingerprint(fp.GetString()))
                     .Select(r => r.GetProperty("fingerprint").GetString()!)
                     .ToList();

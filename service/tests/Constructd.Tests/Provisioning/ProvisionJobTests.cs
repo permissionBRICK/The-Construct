@@ -71,6 +71,25 @@ public sealed class ProvisionJobTests
         Assert.True(write < commands.FindIndex(c => c.Contains("sleep 3; reboot", StringComparison.Ordinal)));
     }
 
+    [Fact]
+    public async Task The_run_enrols_the_accounts_backup_key_before_the_reboot_with_the_key_on_stdin_only()
+    {
+        await using var h = await ProvisionHarness.StartAsync();
+        using var b = System.Security.Cryptography.RSA.Create(3072);
+        var pem = b.ExportSubjectPublicKeyInfoPem();
+        h.App.Service<Constructd.Sync.Participation.EngineKeyStore>().PutBackupKey("Alice", pem);
+
+        var job = await h.RunAsync("click-backup-key");
+        Assert.Equal(JobState.Succeeded, job.State);
+        var calls = h.Ssh.Calls.ToList();
+        var add = calls.FindIndex(c => c.Command.Contains("construct-backup.sh recipients add --label", StringComparison.Ordinal)
+            && c.Command.Contains(Constructd.Api.Devices.AccountBackupKeys.Label, StringComparison.Ordinal));
+        Assert.True(add >= 0, "the account's backup key was enrolled");
+        Assert.Contains(pem, calls[add].StandardInput, StringComparison.Ordinal);
+        Assert.True(add < calls.FindIndex(c => c.Command.Contains("sleep 3; reboot", StringComparison.Ordinal)));
+        Assert.Contains(job.Progress, p => p.Text == "the account's backup key is enrolled");
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
