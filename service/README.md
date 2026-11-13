@@ -52,11 +52,14 @@ service/
     Infrastructure/         JSON contract, problem details, centralized auditing
     Contracts/              request/response DTOs — the wire contract
   src/Constructd.Fakes/     in-memory implementation of every interface
-  src/Constructd.Store/     the record store (encrypted records, revisions, feed; plan 9.2), mounted
-                            under /api/v1/store and runnable alone
+  src/Construct.Keys/       identity and keys (plan 8): device and host key pairs, U and the keys
+                            wrapped under it, pairing grants, the recovery code, request proofs
+  src/Constructd.Store/     the record store (encrypted records, revisions, feed; plan 9.2) and its
+                            directory (devices, pairing, recovery; plan 8), mounted under
+                            /api/v1/store and runnable alone
   src/Constructd.Store.Host/ the stand-alone store host and its Dockerfile (plan 5.4)
   src/Constructd.Sync/      the participant side: sealing with D, the profile merge (plan 9.6),
-                            the engine's replica and outbox
+                            the engine's replica and outbox, devices and granted keys (plan 8.7)
   host/                     Install-ConstructHost.ps1 / Uninstall-ConstructHost.ps1 (PS 5.1)
   tests/Constructd.Tests/   xunit: Core unit tests, SQLite persistence tests, API integration tests,
                             Windows platform tests (command lines, parsers, reconciliation)

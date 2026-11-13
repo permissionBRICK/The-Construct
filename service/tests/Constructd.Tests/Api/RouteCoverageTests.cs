@@ -61,6 +61,24 @@ public class RouteCoverageTests
         "GET /api/v1/store/epochs",
         "GET /api/v1/store/export",
         "POST /api/v1/store/import",
+        "POST /api/v1/store/devices",
+        "GET /api/v1/store/devices",
+        "DELETE /api/v1/store/devices/{id}",
+        "POST /api/v1/store/devices/{id}/acknowledge",
+        "POST /api/v1/store/engines",
+        "GET /api/v1/store/keys",
+        "PUT /api/v1/store/keys",
+        "PUT /api/v1/store/recovery",
+        "POST /api/v1/store/recovery",
+        "POST /api/v1/store/pairing",
+        "GET /api/v1/store/pairing/{id}",
+        "PUT /api/v1/store/pairing/{id}",
+        "GET /api/v1/store/pairing/{id}/grant",
+        "GET /api/v1/engine",
+        "POST /api/v1/devices/enroll",
+        "DELETE /api/v1/devices/{id}",
+        "PUT /api/v1/engine/grants",
+        "GET /api/v1/sync/records/{id}",
         "GET /api/v1/health",
         "GET /api/v1/host/status",
         "GET /api/v1/host/iso-catalog",
@@ -172,7 +190,20 @@ public class RouteCoverageTests
     ];
 
     // The key vault's phone pages: anonymous static files, outside /api/v1.
-    private static readonly string[] AnonymousRoutes = ["GET /api/v1/health", "GET /vault/", "GET /vault/pair", "GET /vault/vault.js", "GET /vault/vault.css"];
+    /// <summary>Routes open to anyone: they answer an anonymous request with something other than a challenge.</summary>
+    private static readonly string[] OpenRoutes =
+    [
+        "GET /api/v1/health", "GET /vault/", "GET /vault/pair", "GET /vault/vault.js", "GET /vault/vault.css",
+        // Device registration, recovery and pairing: the credential is a code, a key proof or nothing (plan 8.3, 8.5).
+        "POST /api/v1/store/devices", "POST /api/v1/store/recovery", "POST /api/v1/store/pairing", "GET /api/v1/store/pairing/{id}/grant",
+        "POST /api/v1/devices/enroll",
+    ];
+
+    /// <summary>
+    /// Routes without an authorization policy: the open ones and the store's, which resolves its own
+    /// callers from the tokens it issued and challenges an anonymous caller itself.
+    /// </summary>
+    private static readonly string[] AnonymousRoutes = [.. OpenRoutes.Concat(ExpectedRoutes.Where(r => r.Contains(" /api/v1/store/", StringComparison.Ordinal))).Distinct()];
 
     private static List<(string Route, RouteEndpoint Endpoint)> Routes(TestApp app) =>
         app.Services.GetRequiredService<EndpointDataSource>().Endpoints
@@ -187,7 +218,7 @@ public class RouteCoverageTests
     public async Task EveryProtectedRouteChallengesAnonymousRequests()
     {
         using var app = new TestApp(); using var anonymous = app.CreateAnonymousClient();
-        foreach (var route in Routes(app).Where(r => !AnonymousRoutes.Contains(r.Route)))
+        foreach (var route in Routes(app).Where(r => !OpenRoutes.Contains(r.Route)))
         {
             var parts = route.Route.Split(' ', 2);
             // A parameter may carry a regex constraint with escaped braces ({{ }}); it gets a value that matches.
