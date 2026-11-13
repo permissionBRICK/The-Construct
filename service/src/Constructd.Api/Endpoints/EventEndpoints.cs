@@ -11,8 +11,9 @@ namespace Constructd.Api.Endpoints;
 /// One change on <c>GET /events</c>: its sequence number (also the SSE <c>id</c>), what changed
 /// (<c>vm.created</c>, <c>vm.changed</c>, <c>vm.power</c>, <c>vm.deleted</c>, <c>job.started</c>,
 /// <c>job.progress</c>, <c>job.ended</c>, <c>backup.added</c>, <c>backup.removed</c>,
-/// <c>update.offered</c>, <c>update.finished</c>, or <c>reset</c>) and the id of the thing (the VM's
-/// name, the job's, backup's or update's id, a release commit for an offer), with the VM it belongs to.
+/// <c>update.offered</c>, <c>update.finished</c>, <c>repair.started</c>, <c>repair.output</c>, <c>repair.ended</c>,
+/// or <c>reset</c>) and the id of the thing (the VM's name, the job's, backup's, update's or repair session's id,
+/// a release commit for an offer), with the VM it belongs to. A repair is announced to the VM's owner and admins only.
 /// </summary>
 public sealed record ChangeEventResponse(long Seq, string Type, string? Id = null, string? Vm = null);
 

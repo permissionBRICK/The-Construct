@@ -661,6 +661,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/vms/{name}/repair": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The VM's latest repair session with its lines after `after` (a line's `seq`); 404 `no-repair` when none ran since the engine started. */
+        get: operations["GetVmRepair"];
+        put?: never;
+        /** @description Starts the repair agent on the VM's latest failed provision, reinstall or restore. 409: `no-failed-job`, `not-repairable`, `repair-running` (with `sessionId`), `operation-in-progress`, `vm-endpoint-unknown`. */
+        post: operations["StartVmRepair"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/vms/{name}/repair/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["GetVmRepairSession"];
+        put?: never;
+        post?: never;
+        /** @description Ends the session and the agent's processes on the VM. Ending an ended session does nothing. */
+        delete: operations["EndVmRepair"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/vms/{name}/repair/{id}/reply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Sends one message to the agent, which continues the same conversation. 409 `repair-ended` when the session is over. */
+        post: operations["ReplyVmRepair"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/vms/{name}/adopt": {
         parameters: {
             query?: never;
@@ -4529,6 +4581,7 @@ export interface components {
             vault: components["schemas"]["VaultConfig"] & components["schemas"]["HostConfigSectionMeta"];
             https: components["schemas"]["HttpsConfig"] & components["schemas"]["HostConfigSectionMeta"];
             backups: components["schemas"]["BackupsConfig"] & components["schemas"]["HostConfigSectionMeta"];
+            repair: components["schemas"]["RepairConfig"] & components["schemas"]["HostConfigSectionMeta"];
         };
         HostConfigSectionMeta: {
             /**
@@ -5209,6 +5262,40 @@ export interface components {
             /** Format: byte */
             verifier: string;
             wrap: components["schemas"]["RootSeal"];
+        };
+        RepairConfig: {
+            /** @default true */
+            auto: boolean;
+        };
+        RepairLineResponse: {
+            /** Format: int64 */
+            seq: number;
+            /** Format: date-time */
+            at: string;
+            kind: string;
+            text: null | string;
+            outcome: null | string;
+        };
+        RepairReplyRequest: {
+            text: string;
+        };
+        RepairSessionResponse: {
+            id: string;
+            vm: string;
+            jobId: string;
+            jobKind: string;
+            state: string;
+            outcome: null | string;
+            automatic: boolean;
+            /** Format: date-time */
+            started: string;
+            /** Format: date-time */
+            ended: null | string;
+            agent: null | string;
+            via: null | string;
+            retryJobId: null | string;
+            retryRefused: null | string;
+            lines: components["schemas"]["RepairLineResponse"][];
         };
         /** @enum {string} */
         Role: "user" | "admin";
@@ -8110,6 +8197,168 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["VmDesiredStateResponse"];
                 };
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    GetVmRepair: {
+        parameters: {
+            query?: {
+                after?: number;
+            };
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepairSessionResponse"];
+                };
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    StartVmRepair: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepairSessionResponse"];
+                };
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    GetVmRepairSession: {
+        parameters: {
+            query?: {
+                after?: number;
+            };
+            header?: never;
+            path: {
+                name: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepairSessionResponse"];
+                };
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    EndVmRepair: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    ReplyVmRepair: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RepairReplyRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description An error, as a Problem document. */
             default: {

@@ -16,6 +16,7 @@ public static class HostAdminDefaults
     public static VaultConfig Vault { get; } = new();
     public static HttpsConfig Https { get; } = new();
     public static BackupsConfig Backups { get; } = new();
+    public static RepairConfig Repair { get; } = new();
 }
 
 public sealed class HostAdminOptions
