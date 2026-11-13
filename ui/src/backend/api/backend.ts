@@ -2,13 +2,13 @@ import createClient, { type Client } from 'openapi-fetch';
 import type { paths as AgentPaths } from '../generated/agent';
 import type { paths as EnginePaths } from '../generated/engine';
 import type {
-  Backend, CreateVmRequest, Feature, FirstRunRequest, Host, HostUser, HostVm, Job, JobKind, Open, Prefs, Profile, SettingsPatch, State, Vm, WinKey,
+  Backend, CreateVmRequest, Feature, FirstRunRequest, Host, HostProbe, HostUser, HostVm, Job, JobKind, Open, Prefs, ProfileSave, SettingsPatch, State, VaultMode, VaultRequest, Vm, WinKey,
 } from '../types';
 import { followEvents, type AgentEventData } from './events';
 import {
   updateRunning, allowanceOf, codeGroups, hostVersion, jobKey, problemText, splitJobKey, toCert, toConfig, toDevice, toHostJob, toHostUser, toHostVm, toJob,
-  toMedia, toStatus, toUpdates, toUsage, toVm, toWindows, vmKey,
-  type AuditEntry, type EngineView, type Health, type HostUpdateStatus, type HttpsStatus, type JobResponse, type MediaItem, type TokenSummary,
+  toMedia, toStatus, toUpdates, toUsage, toVm, toWindows, vmKey, toSecret, toLeases, toVaultEvent, toApproval, toEntryRequest, toProfile, splitRequestKey, VM_JOB_KINDS,
+  type DeviceItem, type ProfileResponse, type AuditEntry, type EngineView, type Health, type HostUpdateStatus, type HttpsStatus, type JobResponse, type MediaItem, type TokenSummary,
   type UsageSummary, type UserDetail, type VmParts, type VmResponse, type WhoAmI,
 } from './map';
 
@@ -22,14 +22,17 @@ type Loose = Record<string, unknown>;
 
 /** What this backend cannot serve yet; the screens show these parts as not available. */
 export const API_GAPS: Feature[] = [
-  'vault', 'repair-chat', 'forwards', 'sharing', 'projects', 'agents', 'open', 'console', 'vm-password', 'vm-services', 'vm-disk', 'vm-boot',
-  'reinstall', 'restore', 'device-update', 'channel', 'os-prefs', 'windows-sign-in', 'export-code', 'code-reveal', 'vm-token', 'host-retry',
+  'repair-chat', 'forwards', 'sharing', 'agents', 'open', 'console', 'vm-password', 'vm-services', 'vm-disk', 'vm-boot',
+  'restore', 'device-update', 'channel', 'os-prefs', 'windows-sign-in', 'export-code', 'code-reveal', 'vm-token', 'host-retry',
+  'take-back', 'project-on', 'approval-span',
 ];
 
 const NA = 'Not available yet';
 const DEFAULT_DISK_GB = 50;
 const PREFS_KEY = 'construct.prefs';
 const DISMISSED_KEY = 'construct.dismissed';
+
+interface Started { kind: JobKind; from?: string; to?: string; freshImage?: boolean }
 
 interface AdminData {
   users: HostUser[];
@@ -51,6 +54,8 @@ interface Slice {
   mine: VmResponse[];
   parts: Map<string, VmParts>;
   jobs: JobResponse[];
+  /** Jobs this page saw end, by id. */
+  ended: Map<string, JobResponse>;
   admin: AdminData | null;
   autoReprovision: boolean | null;
   usageWindow: Host['usage']['window'];
@@ -77,6 +82,16 @@ const store = {
   set(k: string, v: unknown) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* storage off */ } },
 };
 
+const ended = (j: JobResponse) => j.state === 'succeeded' || j.state === 'failed' || j.state === 'cancelled';
+
+/** The engine's job list, but a job this page saw end stays ended and listed (a list read before the end may
+    arrive after the event). */
+function mergeJobs(seen: Map<string, JobResponse>, read: JobResponse[]): JobResponse[] {
+  const out = read.map(j => (!ended(j) && seen.has(j.id) ? seen.get(j.id)! : j));
+  for (const [id, j] of seen) if (!out.some(x => x.id === id)) out.push(j);
+  return out;
+}
+
 const LOOPBACK = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?\/?$/i;
 
 export interface ApiOptions {
@@ -85,8 +100,11 @@ export interface ApiOptions {
   /** The agent's token from the URL fragment; sent only as a header. */
   token: string;
   fetch?: typeof fetch;
-  /** Milliseconds between refreshes of the engines while nothing runs; 0 turns polling off (tests). */
+  /** Milliseconds between reads of what the event stream does not announce (usage, guest reports, host
+      administration, profiles, secrets); 0 turns polling off (tests). Default one minute. */
   pollMs?: number;
+  /** Milliseconds between reads of the pending vault requests, which have no event. Default 10 s, off with `pollMs: 0`. */
+  vaultPollMs?: number;
   /** false: do not follow `/api/events` (tests drive `onEvent`). */
   events?: boolean;
 }
@@ -99,8 +117,8 @@ export class ApiBackend implements Backend {
   private slices = new Map<string, Slice>();
   private seq = 1;
   private dismissed = new Set<string>(store.get<string[]>(DISMISSED_KEY, []));
-  /** Jobs this UI started, with the kind it shows them as and the version an update goes from and to. */
-  private started = new Map<string, { kind: JobKind; from?: string; to?: string }>();
+  /** Jobs this UI started, with the kind it shows them as, the version an update goes from and to, and how a reinstall was asked for. */
+  private started = new Map<string, Started>();
   /** create-vm jobs after which the VM is provisioned. */
   private provisionAfter = new Set<string>();
   private transit = new Map<string, { power: Vm['power']; until: number }>();
@@ -109,7 +127,14 @@ export class ApiBackend implements Backend {
   private again = new Set<string>();
   private stopEvents: (() => void) | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private vaultTimer: ReturnType<typeof setTimeout> | null = null;
   private fetchImpl: typeof fetch;
+  /** The engine that holds the store: profiles are read and written there. */
+  private storeEngine: string | null = null;
+  private deviceItems: DeviceItem[] = [];
+  private registered = false;
+  /** Vault requests answered here; a read that was under way does not bring them back. */
+  private answeredKeys = new Set<string>();
 
   constructor(private opts: ApiOptions) {
     this.fetchImpl = opts.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
@@ -118,7 +143,7 @@ export class ApiBackend implements Backend {
     const p = store.get<Partial<Prefs>>(PREFS_KEY, {});
     this.s = {
       device: { name: '' }, version: '', release: null, vms: [], hosts: [], projects: [], sync: { when: '–', remote: '', rev: '' }, jobs: [],
-      vaultRequests: [], secrets: [], leases: [], devices: [], history: [], pairing: null, revocation: null, handout: null,
+      vaultRequests: [], secrets: [], leases: [], devices: [], history: [], vaultModes: [], problems: {}, pairing: null, revocation: null, handout: null,
       prefs: { channel: 'stable', theme: p.theme ?? 'auto', scheme: p.scheme ?? 'green', autoUpdate: false, startWithOs: false, notifications: false },
       upgrade: null, notice: null, na: API_GAPS, firstRun: null,
     };
@@ -137,11 +162,13 @@ export class ApiBackend implements Backend {
     }
     await this.load();
     this.schedule();
+    this.scheduleVault();
   }
 
   dispose() {
     this.stopEvents?.();
     if (this.timer) clearTimeout(this.timer);
+    if (this.vaultTimer) clearTimeout(this.vaultTimer);
     this.subs.clear();
   }
 
@@ -166,13 +193,20 @@ export class ApiBackend implements Backend {
     return c;
   }
 
+  /** The slow poll: jobs, VMs, backups and updates arrive as events; this reads what has none. */
   private schedule() {
-    const ms = this.opts.pollMs ?? 30000;
+    const ms = this.opts.pollMs ?? 60000;
     if (!ms) return;
     if (this.timer) clearTimeout(this.timer);
-    // While a job runs that the agent does not follow (one started by a chain), look more often.
-    const busy = this.s.jobs.some(j => j.state === 'running');
-    this.timer = setTimeout(() => { void this.refreshAll().finally(() => this.schedule()); }, busy ? Math.min(ms, 5000) : ms);
+    this.timer = setTimeout(() => { void this.refreshAll().finally(() => this.schedule()); }, ms);
+  }
+
+  /** Vault requests have no event; a VM waits on them, so they are read more often. */
+  private scheduleVault() {
+    const ms = this.opts.pollMs === 0 && this.opts.vaultPollMs === undefined ? 0 : this.opts.vaultPollMs ?? 10000;
+    if (!ms) return;
+    if (this.vaultTimer) clearTimeout(this.vaultTimer);
+    this.vaultTimer = setTimeout(() => { void this.loadRequests().finally(() => this.scheduleVault()); }, ms);
   }
 
   /** Runs an action; its error becomes the notice. */
@@ -200,6 +234,8 @@ export class ApiBackend implements Backend {
     try {
       const [health, st] = await Promise.all([ok(this.agent.GET('/api/health')), ok(this.agent.GET('/api/state'))]);
       this.emit({ version: health.version.split('+')[0], device: { name: st.device.name ?? '' } });
+      this.registered = st.device.registered;
+      this.storeEngine = st.device.storeEngine;
       if (!st.device.registered) {
         if (!this.s.firstRun) {
           let local: string | null = null;
@@ -219,10 +255,12 @@ export class ApiBackend implements Backend {
       for (const e of st.engines) {
         const sl = this.slices.get(e.id);
         if (sl) sl.view = e;
-        else this.slices.set(e.id, { view: e, me: null, health: null, all: [], mine: [], parts: new Map(), jobs: [], admin: null, autoReprovision: null, usageWindow: 'month', problem: null });
+        else this.slices.set(e.id, { view: e, me: null, health: null, all: [], mine: [], parts: new Map(), jobs: [], ended: new Map(), admin: null, autoReprovision: null, usageWindow: 'month', problem: null });
       }
       this.compose();
-      await Promise.all([this.loadDevices(), ...st.engines.map(e => this.refreshEngine(e.id))]);
+      await Promise.all([this.loadDevices(), ...st.engines.map(e => this.refreshEngine(e.id)), this.loadVault(), this.loadProfiles()]);
+      // After the VMs, so a request names the VM the screens know.
+      await this.loadRequests();
     } catch (e) {
       this.note(errText(e));
     }
@@ -231,12 +269,97 @@ export class ApiBackend implements Backend {
   private async loadDevices() {
     try {
       const list = await ok(this.agent.GET('/api/devices'));
+      this.deviceItems = list;
       this.emit({ devices: list.map(toDevice) });
     } catch { /* the devices table keeps what it had */ }
   }
 
   private async refreshAll() {
-    await Promise.all([this.loadDevices(), ...[...this.slices.keys()].map(id => this.refreshEngine(id))]);
+    await Promise.all([this.loadDevices(), ...[...this.slices.keys()].map(id => this.refreshEngine(id)), this.loadVault(), this.loadProfiles()]);
+  }
+
+  private problem(key: keyof State['problems'], text: string | null) {
+    const problems = { ...this.s.problems };
+    if (text) problems[key] = text; else delete problems[key];
+    this.emit({ problems });
+  }
+
+  /** Secrets, their leases and history, and each host's vault mode. Values never come here. */
+  private async loadVault() {
+    if (!this.registered) return;
+    const [secrets, history] = await Promise.allSettled([ok(this.agent.GET('/api/vault/secrets')), ok(this.agent.GET('/api/vault/history'))]);
+    if (secrets.status === 'fulfilled') {
+      this.emit({ secrets: secrets.value.map(toSecret), leases: toLeases(secrets.value, Date.now()) });
+      this.problem('secrets', null);
+    } else this.problem('secrets', errText(secrets.reason));
+    if (history.status === 'fulfilled') {
+      this.emit({ history: history.value.map(h => toVaultEvent(h, this.s.devices)) });
+      this.problem('history', null);
+    } else this.problem('history', errText(history.reason));
+    const modes = await Promise.all([...this.slices.values()].map(async sl => {
+      try {
+        const m = await ok(this.agent.GET('/api/vault/engines/{engine}/mode', { params: { path: { engine: sl.view.id } } }));
+        return { hostId: sl.view.id, hostName: sl.view.name, mode: m.mode === 'available' || m.mode === 'locked' ? m.mode : null } as VaultMode;
+      } catch (e) {
+        return { hostId: sl.view.id, hostName: sl.view.name, mode: null, problem: errText(e) } as VaultMode;
+      }
+    }));
+    this.emit({ vaultModes: modes });
+  }
+
+  /** The VM id the state uses for a VM an engine names. */
+  private vmIdOf(engine: string, name: string): string {
+    return this.s.vms.find(v => v.hostId === engine && v.name.toLowerCase() === name.toLowerCase())?.id ?? '';
+  }
+
+  /** The pending approvals and entry requests of every engine; an engine that does not answer keeps its own. */
+  private async loadRequests() {
+    if (!this.registered) return;
+    const [approvals, entries] = await Promise.allSettled([ok(this.agent.GET('/api/vault/approvals')), ok(this.agent.GET('/api/vault/entry-requests'))]);
+    const unreachable = new Set<string>();
+    const fresh: VaultRequest[] = [];
+    const failed: string[] = [];
+    if (approvals.status === 'fulfilled') {
+      approvals.value.unreachable.forEach(e => unreachable.add(e));
+      fresh.push(...approvals.value.approvals.map(a => toApproval(a, this.vmIdOf(a.engine, a.vm))));
+    } else failed.push(errText(approvals.reason));
+    if (entries.status === 'fulfilled') {
+      entries.value.unreachable.forEach(e => unreachable.add(e));
+      fresh.push(...entries.value.requests.map(r => toEntryRequest(r, this.vmIdOf(r.engine, r.vm))));
+    } else failed.push(errText(entries.reason));
+    // A route that failed, or an engine that did not answer, keeps the requests it had.
+    const keep = this.s.vaultRequests.filter(r => {
+      const [engine] = splitRequestKey(r.id);
+      return unreachable.has(engine) || (r.kind === 'lease' ? approvals.status === 'rejected' : entries.status === 'rejected');
+    });
+    const ids = new Set(fresh.map(r => r.id));
+    this.emit({ vaultRequests: [...keep.filter(r => !ids.has(r.id) && !this.answeredKeys.has(r.id)), ...fresh.filter(r => !this.answeredKeys.has(r.id))] });
+    const names = [...unreachable].map(id => this.slices.get(id)?.view.name ?? id);
+    this.problem('requests', failed[0] ?? (names.length ? `Not reachable: ${names.join(', ')}` : null));
+  }
+
+  /** The engine profiles are read from and written to: the store's, else the first one. */
+  private profileEngine(): string | null {
+    if (this.storeEngine && this.slices.has(this.storeEngine)) return this.storeEngine;
+    return this.slices.keys().next().value ?? null;
+  }
+
+  private async loadProfiles() {
+    const engine = this.profileEngine();
+    if (!engine || !this.registered) return;
+    const c = this.engine(engine);
+    try {
+      const [list, conflicts] = await Promise.all([ok(c.GET('/api/v1/profiles')), ok(c.GET('/api/v1/profile-conflicts')).catch(() => [])]);
+      const open = new Set(conflicts.map(x => x.profile));
+      const docs = await Promise.all(list.map(async p => {
+        try { return await ok(c.GET('/api/v1/profiles/{profile}', { params: { path: { profile: p.name } } })); } catch { return null; }
+      }));
+      const projects = docs.filter((d): d is ProfileResponse => d !== null).map(d => toProfile(d, open.has(d.name))).sort((a, b) => a.name.localeCompare(b.name));
+      this.emit({ projects, sync: { when: new Date().toISOString().slice(11, 16), remote: this.slices.get(engine)?.view.name ?? '', rev: '' } });
+      this.problem('projects', null);
+    } catch (e) {
+      this.problem('projects', errText(e));
+    }
   }
 
   /** Reads one engine; a second call while one runs makes it read once more afterwards. */
@@ -268,7 +391,7 @@ export class ApiBackend implements Backend {
     sl.problem = null;
     if (health.status === 'fulfilled') sl.health = health.value;
     if (vms.status === 'fulfilled') sl.all = vms.value; else sl.problem = errText(vms.reason);
-    if (jobs.status === 'fulfilled') sl.jobs = jobs.value;
+    if (jobs.status === 'fulfilled') sl.jobs = mergeJobs(sl.ended, jobs.value);
     if (upd.status === 'fulfilled') sl.autoReprovision = upd.value.autoReprovision;
     const me = sl.me.name.toLowerCase();
     sl.mine = sl.all.filter(v => v.kind !== 'child' && v.owner.toLowerCase() === me && !v.deleting);
@@ -348,7 +471,7 @@ export class ApiBackend implements Backend {
         else this.transit.delete(id);
         vms.push(v);
         // The newest VM job of this VM decides what its pages show.
-        const own = sl.jobs.filter(j => j.vmName?.toLowerCase() === r.name.toLowerCase() && (j.kind === 'provision' || j.kind === 'create-vm'));
+        const own = sl.jobs.filter(j => j.vmName?.toLowerCase() === r.name.toLowerCase() && VM_JOB_KINDS.includes(j.kind));
         const newest = own.sort((a, b) => a.created.localeCompare(b.created)).at(-1);
         if (newest) {
           const key = jobKey(engine, newest.id);
@@ -404,39 +527,72 @@ export class ApiBackend implements Backend {
 
   /* --- events --- */
 
-  /** One event from `/api/events`. Public for tests. */
+  /** One event from `/api/events`. Public for tests. An engine's change names what changed, never the state:
+      the thing is read again through the proxy. */
   onEvent(type: string, ev: AgentEventData | null) {
     const data = (ev?.data ?? null) as Loose | null;
     const engine = ev?.engine ?? null;
+    const id = typeof data?.id === 'string' ? data.id : null;
     switch (type) {
       case 'agent': case 'reset': void this.load(); return;
       case 'pairing': return this.onPairing(data);
-      case 'job.progress': case 'job.phase': case 'job.state': case 'job.lost': {
-        const sl = engine ? this.slices.get(engine) : undefined;
-        const id = typeof data?.jobId === 'string' ? data.jobId : null;
-        if (!sl || !engine || !id) return;
-        const i = sl.jobs.findIndex(j => j.id === id);
-        if (type === 'job.progress' && i >= 0 && data?.line && typeof data.line === 'object') {
-          sl.jobs[i] = { ...sl.jobs[i], state: sl.jobs[i].state === 'queued' ? 'running' : sl.jobs[i].state, progress: [...sl.jobs[i].progress, data.line as JobResponse['progress'][number]] };
-        } else if (type === 'job.phase' && i >= 0) {
-          sl.jobs[i] = { ...sl.jobs[i], phase: typeof data?.phase === 'string' ? data.phase : sl.jobs[i].phase };
-        } else if (type === 'job.state' && data?.job && typeof data.job === 'object') {
-          const job = data.job as JobResponse;
-          if (i >= 0) sl.jobs[i] = job; else sl.jobs.push(job);
-          this.jobEnded(engine, job);
-          void this.refreshEngine(engine);
-        } else if (type === 'job.lost' || i < 0) {
-          void this.refreshEngine(engine);
-        }
-        this.compose();
+      case 'job.started': case 'job.progress': case 'job.ended':
+        if (engine && id && this.slices.has(engine)) void this.readJob(engine, id);
+        return;
+      case 'backup.added': case 'backup.removed': {
+        const vm = typeof data?.vm === 'string' ? data.vm : null;
+        if (engine && vm && this.slices.has(engine)) void this.readBackups(engine, vm);
+        else if (engine && this.slices.has(engine)) void this.refreshEngine(engine);
         return;
       }
+      case 'engine.reset': case 'job.lost': case 'vm.created': case 'vm.changed': case 'vm.power': case 'vm.deleted': case 'update.offered': case 'update.finished':
+        if (engine && this.slices.has(engine)) void this.refreshEngine(engine);
+        return;
     }
+  }
+
+  /** Reads one job after an event about it. A job that ended stays ended whatever an older read says. */
+  private async readJob(engine: string, id: string) {
+    const sl = this.slices.get(engine);
+    if (!sl) return;
+    let job: JobResponse;
+    try {
+      job = await ok(this.engine(engine).GET('/api/v1/jobs/{id}', { params: { path: { id } } }));
+    } catch {
+      void this.refreshEngine(engine);
+      return;
+    }
+    const known = sl.ended.get(id);
+    if (known && !ended(job)) return;
+    const i = sl.jobs.findIndex(j => j.id === id);
+    if (i >= 0) sl.jobs[i] = job; else sl.jobs.push(job);
+    if (ended(job)) sl.ended.set(id, job);
+    this.compose();
+    if (ended(job) && !known) {
+      this.jobEnded(engine, job);
+      void this.refreshEngine(engine);
+    }
+  }
+
+  /** Reads one VM's backups after a backup event. */
+  private async readBackups(engine: string, vm: string) {
+    const sl = this.slices.get(engine);
+    const own = sl?.mine.find(v => v.name.toLowerCase() === vm.toLowerCase());
+    if (!sl || !own) return;
+    const parts = sl.parts.get(own.name) ?? {};
+    try {
+      const r = await ok(this.engine(engine).GET('/api/v1/vms/{name}/backups', { params: { path: { name: own.name } } }));
+      const { backups: _b, ...problems } = parts.problems ?? {};
+      sl.parts.set(own.name, { ...parts, backups: r.backups, problems });
+    } catch (e) {
+      sl.parts.set(own.name, { ...parts, problems: { ...parts.problems, backups: errText(e) } });
+    }
+    this.compose();
   }
 
   private jobEnded(engine: string, job: JobResponse) {
     const key = jobKey(engine, job.id);
-    if (job.state !== 'succeeded' && job.state !== 'failed' && job.state !== 'cancelled') return;
+    if (!ended(job)) return;
     const verb = { reprovision: 'Reprovisioned', reinstall: 'Reinstalled', update: 'Updated', restore: 'Restored', create: 'Created' }[this.started.get(key)?.kind ?? (job.kind === 'create-vm' ? 'create' : 'reprovision')];
     if (job.state === 'succeeded' && job.vmName) this.note(`${verb} ${job.vmName}`);
     if (this.provisionAfter.delete(key) && job.state === 'succeeded' && job.vmName) void this.provision(engine, job.vmName);
@@ -451,23 +607,23 @@ export class ApiBackend implements Backend {
 
   /* --- jobs --- */
 
-  private async track(engine: string, jobId: string | null | undefined, as?: { kind: JobKind; from?: string; to?: string }) {
+  /** Follows a job this UI started; its progress and end arrive as events. */
+  private async track(engine: string, jobId: string | null | undefined, as?: Started) {
     if (!jobId) return;
     if (as) this.started.set(jobKey(engine, jobId), as);
-    const sl = this.slices.get(engine);
-    try {
-      const job = await ok(this.engine(engine).GET('/api/v1/jobs/{id}', { params: { path: { id: jobId } } }));
-      if (sl) { const i = sl.jobs.findIndex(j => j.id === jobId); if (i >= 0) sl.jobs[i] = job; else sl.jobs.push(job); }
-      this.compose();
-      this.schedule();
-    } catch { void this.refreshEngine(engine); }
+    await this.readJob(engine, jobId);
   }
 
   /** A provision job; the first one of a VM sends the engine's defaults as its settings. */
-  private async provision(engine: string, name: string, as?: { kind: JobKind; from?: string; to?: string }) {
+  private provision(engine: string, name: string, as?: Started) {
+    return this.vmJob(engine, name, 'provision', {}, as);
+  }
+
+  /** A provision or reinstall job of a primary. Without stored settings (the first job) the engine's defaults go along. */
+  private async vmJob(engine: string, name: string, kind: 'provision' | 'reinstall', extra: Loose, as?: Started) {
     const c = this.engine(engine);
     const path = { params: { path: { name } } };
-    const post = (desired?: object) => ok(c.POST('/api/v1/vms/{name}/jobs', { ...path, body: { kind: 'provision', requestId: crypto.randomUUID(), ...(desired ? { desired } : {}) } as never }));
+    const post = (desired?: object) => ok(c.POST('/api/v1/vms/{name}/jobs', { ...path, body: { kind, requestId: crypto.randomUUID(), ...extra, ...(desired ? { desired } : {}) } as never }));
     await this.run(async () => {
       let r;
       try { r = await post(); } catch (e) {
@@ -505,7 +661,11 @@ export class ApiBackend implements Backend {
     if (ref) void this.provision(ref.engine, ref.name);
   }
 
-  reinstall(..._: unknown[]) { this.note(NA); }
+  /** The screen asked in place first: Wipe, with the fresh-image switch. */
+  reinstall(vmId: string, freshImage: boolean) {
+    const ref = this.vmRef(vmId);
+    if (ref) void this.vmJob(ref.engine, ref.name, 'reinstall', { freshImage }, { kind: 'reinstall', freshImage });
+  }
 
   updateEverything() {
     void (async () => {
@@ -541,10 +701,18 @@ export class ApiBackend implements Backend {
     void this.run(() => ok(this.engine(engine).POST('/api/v1/jobs/{id}/cancel', { params: { path: { id } } })), 'Stopping', engine);
   }
 
+  /** The engine has no retry route yet: the same job kind starts again (a reinstall with how it was asked for). */
   retryJob(key: string) {
     const job = this.s.jobs.find(j => j.id === key);
     const ref = job && this.vmRef(job.vmId);
-    if (ref) void this.provision(ref.engine, ref.name);
+    if (!job || !ref) return;
+    if (job.kind === 'restore') { this.note(NA); return; }
+    if (job.kind === 'reinstall') {
+      const freshImage = this.started.get(key)?.freshImage ?? false;
+      void this.vmJob(ref.engine, ref.name, 'reinstall', { freshImage }, { kind: 'reinstall', freshImage });
+      return;
+    }
+    void this.provision(ref.engine, ref.name);
   }
 
   replyRepair(..._: unknown[]) { this.note(NA); }
@@ -573,10 +741,36 @@ export class ApiBackend implements Backend {
   }
 
   updateAgents(..._: unknown[]) { this.note(NA); }
+  /** No route sets a VM's profiles outside a provision job's whole desired state. */
   setProjectOn(..._: unknown[]) { this.note(NA); }
-  saveProfile(_p: Profile) { this.note(NA); }
-  addProject(..._: unknown[]) { this.note(NA); }
-  syncProjects(..._: unknown[]) { this.note(NA); }
+
+  /** Through the device route, with the revision the editor read: the engine merges a newer one per field or
+      opens a conflict for an agent; it never overwrites it. */
+  async saveProfile(name: string, doc: Record<string, unknown>, revision: number | undefined): Promise<ProfileSave> {
+    const engine = this.profileEngine();
+    if (!engine) return { ok: false, changed: false, text: 'No host to save it on' };
+    try {
+      const r = await ok(this.engine(engine).PUT('/api/v1/profiles/{profile}', { params: { path: { profile: name } }, body: { profile: doc as never, baseRevision: revision ?? null } }));
+      await this.loadProfiles();
+      if (r.status === 'conflict') return { ok: false, changed: true, text: `${name} changed meanwhile; an agent is resolving this` };
+      return { ok: true, text: r.status === 'queued' ? 'Saved; it reaches the store when the store answers' : 'Saved' };
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409 && e.code === 'refused-by-store') {
+        await this.loadProfiles();
+        return { ok: false, changed: true, text: `${name} changed meanwhile; this is the current version` };
+      }
+      return { ok: false, changed: false, text: errText(e) };
+    }
+  }
+
+  addProject(name: string) {
+    const n = name.trim();
+    if (!n) return;
+    if (this.s.projects.some(p => p.name === n)) { this.note(`${n} exists already`); return; }
+    void this.saveProfile(n, { name: n }, undefined).then(r => this.note(r.ok ? `Added ${n}` : r.text));
+  }
+
+  syncProjects() { void this.loadProfiles(); }
   closeForward(..._: unknown[]) { this.note(NA); }
   setSharing(..._: unknown[]) { this.note(NA); }
 
@@ -621,7 +815,7 @@ export class ApiBackend implements Backend {
     if (!name) return null;
     if (req.where === 'remote' && req.signIn !== 'token') { this.note(NA); return null; }
     void this.run(async () => {
-      const engine = req.where === 'local' ? await this.localEngine() : await this.addEngine(req.hostAddress ?? '', req.token ?? null);
+      const engine = req.where === 'local' ? await this.localEngine() : await this.addEngine(req.hostAddress ?? '', req.token ?? null, req.pin ?? null);
       // The engine takes the defaults for CPU and the rest; RAM comes from its recommendation, the disk from
       // today's default (Create-AgentVM.ps1), as the engine has none.
       const c = this.engine(engine);
@@ -639,27 +833,102 @@ export class ApiBackend implements Backend {
     for (const [id, sl] of this.slices) if (LOOPBACK.test(sl.view.url)) return id;
     const r = await this.agent.GET('/api/engines/local');
     if (r.response.status !== 200 || !r.data) throw new Error('No Construct engine runs on this PC');
-    return this.addEngine(r.data.url, null, r.data);
+    return this.addEngine(r.data.url, null, r.data.pin, r.data);
   }
 
-  /** Adds an engine by address with the pin it shows now (trust on first use), or finds it when known. */
-  private async addEngine(address: string, token: string | null, probed?: { url: string; pin: string; known: string | null }): Promise<string> {
-    const p = probed ?? await ok(this.agent.POST('/api/engines/probe', { body: { address } }));
+  async probeHost(address: string): Promise<HostProbe> {
+    const p = await ok(this.agent.POST('/api/engines/probe', { body: { address: address.trim() } }));
+    return { url: p.url, pin: p.pin, known: !!p.known };
+  }
+
+  /** Adds an engine with the pin the user confirmed (the engine on this machine needs none: `local`), or finds
+      it when known. The agent connects only to the certificate the pin names. */
+  private async addEngine(address: string, token: string | null, pin: string | null, local?: { url: string; pin: string; known: string | null }): Promise<string> {
+    const p = local ?? await ok(this.agent.POST('/api/engines/probe', { body: { address } }));
     if (p.known && !token) return p.known;
-    const added = await ok(this.agent.POST('/api/engines', { body: { address: p.url, pin: p.pin, userToken: token } }));
+    if (!pin) throw new Error('Confirm the host\'s fingerprint first');
+    if (pin.toUpperCase() !== p.pin.toUpperCase()) throw new Error('The host now presents a different certificate than the one you confirmed');
+    const added = await ok(this.agent.POST('/api/engines', { body: { address: p.url, pin, userToken: token } }));
     if (!this.slices.has(added.id)) {
-      this.slices.set(added.id, { view: added, me: null, health: null, all: [], mine: [], parts: new Map(), jobs: [], admin: null, autoReprovision: null, usageWindow: 'month', problem: null });
+      this.slices.set(added.id, { view: added, me: null, health: null, all: [], mine: [], parts: new Map(), jobs: [], ended: new Map(), admin: null, autoReprovision: null, usageWindow: 'month', problem: null });
     }
     return added.id;
   }
 
-  /* --- key vault (not on records yet) --- */
+  /* --- key vault: the agent seals and opens; a value passes through here only on its way, never into the state --- */
 
-  answerLease(..._: unknown[]) { this.note(NA); }
-  enterSecret(..._: unknown[]) { this.note(NA); }
-  addSecret(..._: unknown[]) { this.note(NA); }
-  deleteSecret(..._: unknown[]) { this.note(NA); }
-  setAutoApprove(..._: unknown[]) { this.note(NA); }
+  /** Takes a request off the screen at once; it is answered at the engine that holds it. */
+  private answer(key: string): { engine: string; id: string; r: VaultRequest } | null {
+    const r = this.s.vaultRequests.find(x => x.id === key);
+    if (!r) return null;
+    this.answeredKeys.add(key);
+    this.emit({ vaultRequests: this.s.vaultRequests.filter(x => x.id !== key) });
+    const [engine, id] = splitRequestKey(key);
+    return { engine, id, r };
+  }
+
+  answerLease(key: string, allow: boolean) {
+    const a = this.answer(key);
+    if (!a) return;
+    void this.run(() => ok(this.agent.POST('/api/vault/approvals/{engine}/{id}', { params: { path: { engine: a.engine, id: a.id } }, body: { decision: allow ? 'allow' : 'deny' } })),
+      allow ? `Allowed ${a.r.vmName}` : `Denied ${a.r.vmName}`).then(done => this.answeredWith(key, done));
+  }
+
+  /** After an answer: a request whose answer failed comes back, if the engine still holds it. */
+  private async answeredWith(key: string, done: boolean) {
+    if (!done) { this.answeredKeys.delete(key); await this.loadRequests(); }
+    await this.loadVault();
+  }
+
+  enterSecret(key: string, value: string | null) {
+    const a = this.answer(key);
+    if (!a) return;
+    const path = { params: { path: { engine: a.engine, id: a.id } } };
+    if (value === null) {
+      void this.run(() => ok(this.agent.POST('/api/vault/entry-requests/{engine}/{id}/decline', path)), 'Declined').then(done => this.answeredWith(key, done));
+      return;
+    }
+    void (async () => {
+      let done = true;
+      try {
+        await ok(this.agent.POST('/api/vault/entry-requests/{engine}/{id}', { ...path, body: { value } }));
+        this.note(`Saved ${a.r.secret}`);
+      } catch (e) {
+        // A name taken meanwhile ends the request at the engine; anything else leaves it to answer again.
+        const exists = e instanceof ApiError && e.code === 'exists';
+        done = exists;
+        this.note(exists ? `${a.r.secret} exists already; nothing was overwritten` : errText(e));
+      }
+      await this.answeredWith(key, done);
+    })();
+  }
+
+  addSecret(name: string, note: string, value: string) {
+    void this.run(() => ok(this.agent.POST('/api/vault/secrets', { body: { name: name.trim(), description: note, value, autoApprove: false } })), `Added ${name.trim()}`)
+      .then(() => this.loadVault());
+  }
+
+  replaceSecret(name: string, value: string) {
+    void this.run(() => ok(this.agent.PATCH('/api/vault/secrets/{name}', { params: { path: { name } }, body: { value } })), `Replaced ${name}`).then(() => this.loadVault());
+  }
+
+  async revealSecret(name: string): Promise<string> {
+    return (await ok(this.agent.POST('/api/vault/secrets/{name}/reveal', { params: { path: { name } } }))).value;
+  }
+
+  deleteSecret(name: string) {
+    void this.run(() => ok(this.agent.DELETE('/api/vault/secrets/{name}', { params: { path: { name } } })), `Deleted ${name}`).then(() => this.loadVault());
+  }
+
+  setAutoApprove(name: string, on: boolean) {
+    void this.run(() => ok(this.agent.PUT('/api/vault/secrets/{name}/auto-approve', { params: { path: { name } }, body: { on } }))).then(() => this.loadVault());
+  }
+
+  setVaultMode(hostId: string, mode: 'available' | 'locked') {
+    if (!this.slices.has(hostId)) return;
+    void this.run(() => ok(this.agent.PUT('/api/vault/engines/{engine}/mode', { params: { path: { engine: hostId } }, body: { mode } })), 'Saved').then(() => this.loadVault());
+  }
+
   takeBack(..._: unknown[]) { this.note(NA); }
 
   /* --- devices: pairing approves a new device by the code it shows --- */
@@ -699,11 +968,37 @@ export class ApiBackend implements Backend {
     void this.run(async () => {
       const r = await ok(this.agent.DELETE('/api/devices/{id}', { params: { path: { id: deviceId } } }));
       this.emit({ revocation: { deviceId, deviceName: dev.name, hosts: r.engines.map(e => ({ name: e.name, confirmed: e.confirmed })), rotate: [] } });
-      await this.loadDevices();
+      await Promise.all([this.loadDevices(), this.loadRotate(deviceId)]);
     }, `${dev.name} revoked`);
   }
 
-  markRotated() { /* the vault is not on records yet */ }
+  /** A revoked device's page opened from the list: the engines that acknowledged it and the secrets to rotate. */
+  openRevocation(deviceId: string) {
+    if (this.s.revocation?.deviceId === deviceId) return;
+    const dev = this.deviceItems.find(d => d.id === deviceId);
+    if (!dev || !dev.revoked) return;
+    const hosts = [...this.slices.values()].map(sl => ({ name: sl.view.name, confirmed: !!sl.view.engineId && dev.acknowledgedBy.includes(sl.view.engineId) }));
+    this.emit({ revocation: { deviceId, deviceName: dev.name, hosts, rotate: [] } });
+    void this.loadRotate(deviceId);
+  }
+
+  /** Every secret the device could read, to rotate at its source. */
+  private async loadRotate(deviceId: string) {
+    try {
+      const list = await ok(this.agent.GET('/api/devices/{id}/secrets', { params: { path: { id: deviceId } } }));
+      const r = this.s.revocation;
+      if (r?.deviceId !== deviceId) return;
+      this.emit({ revocation: { ...r, rotate: list.map(x => ({ secret: x.name, last: this.s.secrets.find(y => y.name === x.name)?.last ?? '–', done: false })) } });
+    } catch (e) {
+      this.note(errText(e));
+    }
+  }
+
+  /** A mark for this page only: rotating happens at the secret's source. */
+  markRotated(secret: string) {
+    const r = this.s.revocation;
+    if (r) this.emit({ revocation: { ...r, rotate: r.rotate.map(x => (x.secret === secret ? { ...x, done: !x.done } : x)) } });
+  }
   closeRevocation() { this.emit({ revocation: null }); }
 
   /* --- hosts --- */
@@ -899,7 +1194,15 @@ export class ApiBackend implements Backend {
     set({ busy: true, problem: null });
     void (async () => {
       try {
-        const engine = await this.addEngine(req.address.trim(), req.how === 'setup' ? (req.token ?? '').trim() || null : null);
+        const token = req.how === 'setup' ? (req.token ?? '').trim() || null : null;
+        const address = req.address.trim();
+        // The engine on this machine is trusted as found; any other only with the fingerprint the user confirmed.
+        let engine: string;
+        if (fr.localAddress && address === fr.localAddress) {
+          const local = await this.agent.GET('/api/engines/local');
+          if (local.response.status !== 200 || !local.data) throw new Error('No Construct engine runs on this PC');
+          engine = await this.addEngine(local.data.url, token, local.data.pin, local.data);
+        } else engine = await this.addEngine(address, token, req.pin ?? null);
         const deviceName = req.deviceName.trim();
         if (req.how === 'setup') {
           const r = await ok(this.agent.POST('/api/device/setup', { body: { engine, deviceName } }));
