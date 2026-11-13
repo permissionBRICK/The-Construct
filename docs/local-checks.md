@@ -58,12 +58,42 @@ For installers, also run the touched script's own tests.
 
 The `guest` group runs the guest rig (`test/e2e/guest-rig.sh quick`). It is not part
 of `all` and `--changed` never selects it; run it by name when guest-facing paths change
-(`bin/provision.sh` and what it runs, `bootstrap.sh`, `bin/build-autoinstall-iso.sh`). It needs a primary VM that may create children (`construct vm identity`),
-creates one Ubuntu child on the host (3 GB RAM, 2 cores, 25 GB disk, 4-hour lifetime),
-provisions it with this checkout, checks the result sentinel and exit code, saves the
-guest manifest and deletes the child. The first run downloads the Ubuntu ISO, builds the
-autoinstall ISO and uploads it to the host; later runs reuse both. A host that refuses
-the child ends the group with `incomplete: required verification not run` and exit 2.
+(`bin/provision.sh` and what it runs, `bootstrap.sh`, `bin/build-autoinstall-iso.sh`). It
+provisions an Ubuntu guest with this checkout the way `Provision-AgentVM.ps1` does, checks
+the result sentinel and exit code, reboots the guest, saves the guest manifest and removes
+the guest. Run artefacts (provisioning log, manifest, timings) go to
+`~/.local/state/construct-guest-rig/runs`, downloads to `~/.cache/construct-guest-rig`.
+The rig has two backends:
+
+- `--backend child` (the default) needs a primary VM that may create children
+  (`construct vm identity`). It creates one Ubuntu child on the host (3 GB RAM, 2 cores,
+  25 GB disk, 4-hour lifetime) from an autoinstall ISO and deletes it at the end. The
+  first run downloads the Ubuntu ISO, builds the autoinstall ISO and uploads it to the
+  host; later runs reuse both, but every run pays one unattended install. A host that
+  refuses the child ends the group with `incomplete: required verification not run` and
+  exit 2. The primary must be able to reach its children over the network.
+- `--backend local` runs the guest under QEMU/KVM on this machine
+  (`apt-get install -y qemu-system-x86 qemu-utils cloud-image-utils`, read-write
+  `/dev/kvm`): the Ubuntu cloud image (checksum verified, about 600 MB), first booted once
+  and kept as a prepared disk (about 1 GB more), then a throw-away overlay per run with a
+  NoCloud seed carrying a key made for the run, and SSH forwarded to a port on
+  `127.0.0.1`. `quick` gets 2 GB of memory, `full` 3 GB; when that much (plus 512 MB) is
+  not available the run ends with `incomplete` and exit 2. The QEMU process is stopped
+  at the end of every run, also on failure. The cloud image is not the installer's
+  minimal server, so its manifest differs from a child's in the base packages.
+
+For other tests that provision the guest themselves, `--backend local up [quick|full]`
+starts a clean guest and prints `export` lines for `CONSTRUCT_E2E_SSH_HOST`,
+`CONSTRUCT_E2E_SSH_PORT`, `CONSTRUCT_E2E_SSH_USER` and `CONSTRUCT_E2E_SSH_KEY` (the seed
+user is `agent` with password `agent`, as on the autoinstall ISO);
+`--backend local down` stops it and removes its disk and key:
+
+```sh
+eval "$(bash test/e2e/guest-rig.sh --backend local up)"
+# ... ssh -i "$CONSTRUCT_E2E_SSH_KEY" -p "$CONSTRUCT_E2E_SSH_PORT" "$CONSTRUCT_E2E_SSH_USER@$CONSTRUCT_E2E_SSH_HOST"
+bash test/e2e/guest-rig.sh --backend local down
+```
+
 `bash test/e2e/guest-rig.sh --help` lists the `full` variant, `--keep` and `--compare`.
 
 The `companion` group builds with warnings as errors, runs Companion .NET tests,
