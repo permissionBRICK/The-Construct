@@ -2266,6 +2266,96 @@
         }
       }
     },
+    "/api/v1/vms/{name}/jobs": {
+      "post": {
+        "tags": [
+          "ProvisionEndpoints"
+        ],
+        "operationId": "StartVmJob",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VmJobRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VmJobAcceptedResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vms/{name}/provision-status": {
+      "get": {
+        "tags": [
+          "ProvisionEndpoints"
+        ],
+        "operationId": "GetVmProvisionStatus",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisionStatusResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/health": {
       "get": {
         "tags": [
@@ -7705,6 +7795,25 @@
           },
           "text": {
             "type": "string"
+          },
+          "step": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "state": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "percent": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
           }
         }
       },
@@ -8289,6 +8398,279 @@
           }
         },
         "description": "An RFC 9457 problem document. Routes may add further members."
+      },
+      "ProvisionSecretsRequest": {
+        "type": "object",
+        "properties": {
+          "vmTokenB64": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "x-construct-secret": true
+          },
+          "gitCloneCredentialsB64": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "x-construct-secret": true
+          },
+          "serveWebTokenB64": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "x-construct-secret": true
+          },
+          "sudoPassword": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "x-construct-secret": true
+          }
+        }
+      },
+      "ProvisionSettings": {
+        "type": "object",
+        "properties": {
+          "aiTools": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "seedUser": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "agentName": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "claudeUser": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "gitUserName": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "gitEmail": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "gitCredentialStore": {
+            "type": [
+              "null",
+              "boolean"
+            ]
+          },
+          "gitCloneSkipHostsB64": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "checkoutProjects": {
+            "type": [
+              "null",
+              "boolean"
+            ]
+          },
+          "vsCodeServer": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "vsCodeServeWeb": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "vsCodeTunnel": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "vsCodeClientCommit": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "smbShare": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "claudePartialStreaming": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "micPassthrough": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "openCodeBackgroundWatcher": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "t3Code": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "t3CodeChannel": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "t3CodeBuildSource": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "t3CodePatched": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "t3CodeAutoApprove": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "t3CodeHttps": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "dockerRegistryMirrors": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "externalHost": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "externalSshPort": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          },
+          "serviceUrl": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "serviceCaB64": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "instanceName": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "ProvisionStatusResponse": {
+        "required": [
+          "settingsChanged",
+          "newerPayload",
+          "hardwareChanged",
+          "desiredHash",
+          "availableCommit",
+          "applied",
+          "pendingCpu",
+          "pendingRamGb"
+        ],
+        "type": "object",
+        "properties": {
+          "settingsChanged": {
+            "type": "boolean"
+          },
+          "newerPayload": {
+            "type": "boolean"
+          },
+          "hardwareChanged": {
+            "type": "boolean"
+          },
+          "desiredHash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "availableCommit": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "applied": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VmAppliedState"
+              }
+            ]
+          },
+          "pendingCpu": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          },
+          "pendingRamGb": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          }
+        }
       },
       "Role": {
         "enum": [
@@ -9599,6 +9981,64 @@
           }
         }
       },
+      "VmAppliedState": {
+        "required": [
+          "commit",
+          "payloadHash",
+          "desiredHash",
+          "channel",
+          "installedAt",
+          "reprovisionedAt",
+          "readAt",
+          "jobId"
+        ],
+        "type": "object",
+        "properties": {
+          "commit": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "payloadHash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "desiredHash": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "channel": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "installedAt": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "reprovisionedAt": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "readAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "jobId": {
+            "type": "string"
+          }
+        }
+      },
       "VmCpuResponse": {
         "required": [
           "currentCpus",
@@ -9719,6 +10159,24 @@
           }
         }
       },
+      "VmDesiredState": {
+        "required": [
+          "projects",
+          "settings"
+        ],
+        "type": "object",
+        "properties": {
+          "projects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "settings": {
+            "$ref": "#/components/schemas/ProvisionSettings"
+          }
+        }
+      },
       "VmIdentityResponse": {
         "required": [
           "vmName",
@@ -9779,6 +10237,72 @@
           },
           "capacityMode": {
             "$ref": "#/components/schemas/CapacityMode"
+          }
+        }
+      },
+      "VmJobAcceptedResponse": {
+        "required": [
+          "jobId",
+          "kind",
+          "replayed"
+        ],
+        "type": "object",
+        "properties": {
+          "jobId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "replayed": {
+            "type": "boolean"
+          }
+        }
+      },
+      "VmJobRequest": {
+        "required": [
+          "kind",
+          "requestId"
+        ],
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "commit": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "desired": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VmDesiredState"
+              }
+            ]
+          },
+          "deferProjectCommands": {
+            "type": [
+              "null",
+              "boolean"
+            ]
+          },
+          "secrets": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProvisionSecretsRequest"
+              }
+            ]
           }
         }
       },
@@ -10691,6 +11215,9 @@
     },
     {
       "name": "JobEndpoints"
+    },
+    {
+      "name": "ProvisionEndpoints"
     },
     {
       "name": "IsoCatalogEndpoints"

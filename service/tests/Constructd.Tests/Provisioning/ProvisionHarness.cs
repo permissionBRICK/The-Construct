@@ -24,11 +24,12 @@ internal sealed class ProvisionHarness : IAsyncDisposable
 
     private ProvisionHarness(TestApp app, FakeSshRunner ssh) { App = app; Ssh = ssh; }
 
-    public static async Task<ProvisionHarness> StartAsync(FakeSshRunner? ssh = null, string? databasePath = null, bool createVm = true)
+    public static async Task<ProvisionHarness> StartAsync(FakeSshRunner? ssh = null, string? databasePath = null, bool createVm = true,
+        IDictionary<string, string?>? settings = null, ISshRunner? runner = null)
     {
         ssh ??= new FakeSshRunner();
-        void Configure(IServiceCollection services) => services.AddSingleton<ISshRunner>(ssh);
-        var app = databasePath is null ? new TestApp(configureServices: Configure) : TestApp.WithSqlite(databasePath, configureServices: Configure);
+        void Configure(IServiceCollection services) => services.AddSingleton(runner ?? ssh);
+        var app = databasePath is null ? new TestApp(settings, Configure) : TestApp.WithSqlite(databasePath, settings, Configure);
         var harness = new ProvisionHarness(app, ssh);
         AddSource(app);
         if (createVm)

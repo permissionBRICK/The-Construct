@@ -279,6 +279,7 @@ gate: the resource policy is evaluated again inside every handler.
 | Child lifecycle | `POST /vms/{parent}/children`; `POST /vms/{name}/lifecycle`; `POST /vms/{name}/lease`; `PUT /vms/{name}/sharing`; `PUT /vms/{name}/hardware`; `PUT /vms/{name}/media`; `DELETE /vms/{name}` | Parent delegate creates; operator lifecycle; owner/Admin-only lease, sharing, configuration and deletion. Shared callers cannot delete or configure. |
 | Addresses/forwards | `GET /vms/{name}/addresses`; `GET`, `POST /vms/{name}/forwards`; `DELETE /vms/{name}/forwards/{id}`; `POST /vms/{name}/forwards/{id}/ack` | Existing self/owner rules for a primary; child relationship rules for a child. Ack always requires a user credential and, for a child, the owner of the `via` primary or Admin. |
 | Jobs | `GET /jobs`; `GET /jobs/{id}`; `GET /jobs/{id}/events`; `POST /jobs/{id}/cancel` | Owner/initiator or Admin. Event streams replay progress and phase history, then one terminal state. |
+| Provisioning | `POST /vms/{name}/jobs`; `GET /vms/{name}/provision-status` | Owner/Admin user credential, primaries only. See *Provisioning from the engine*. |
 | Media | `GET /media`; `POST /media/acquire`; `POST /media/uploads`; `GET /media/uploads/{id}`; `PUT /media/uploads/{id}/chunks/{index}`; `POST /media/uploads/{id}/complete`; `DELETE /media/uploads/{id}`; `GET /media/{id}`; `GET /media/{id}/references`; `DELETE /media/{id}`; `POST /media/cleanup` | Owner primary/user or Admin; a shared operator gets only reduced metadata for attached media. Cleanup is Admin-only. |
 | Console | `GET /vms/{name}/console/capabilities`; `POST /vms/{name}/console/sessions`; `POST /vms/{name}/console/sessions/{sid}/renew`; `DELETE /vms/{name}/console/sessions/{sid}`; `GET /vms/{name}/console/sessions/{sid}/screenshot`; `POST .../{sid}/keyboard`; `POST .../{sid}/mouse` | Current VM operator; session remains bound to its creating principal and is re-authorized on every call. |
 | Host updates | `GET /host/updates/status`; `POST /host/updates/check`; `POST /host/updates/stage`; `POST /host/updates/apply`; `POST /host/updates/cancel`; `POST /host/updates/resolve` | Admin. Apply (including resume) and resolve are the only narrowly maintenance-exempt mutations. |
@@ -290,6 +291,36 @@ gate: the resource policy is evaluated again inside every handler.
 
 There is deliberately no child-media content download route and no interactive-video
 console route.
+
+### Provisioning from the engine
+
+`POST /vms/{name}/jobs` with `{kind: "provision", requestId, commit?, desired?, deferProjectCommands?, secrets?}`
+answers `202 {jobId, kind, replayed}`. The job does on the guest what `Provision-AgentVM.ps1` does: it
+turns the cached release source (`commit`, default the engine's installed commit) into the PowerShell's
+archive, uploads and unpacks it, runs `bin/provision.sh` with the PowerShell's environment for the same
+settings, parses the result block, runs the deferred project phase when asked, reads
+`/etc/construct/provisioned.env`, and applies the PowerShell's reboot rule. Steps: `source`, `copy`,
+`provision`, `project-commands`, `applied`, `finish`; progress lines carry `{step, state, percent?}`
+and the job's `phase` is the step it is in.
+
+- `requestId` identifies the click: the same id returns the job it started (`replayed: true`). One
+  job per VM: a second provision or a lifecycle job answers `409 operation-in-progress`.
+- `desired` (`{projects[], settings}`) replaces the VM's stored settings; without it the stored ones
+  are used, so a retry or a reprovision needs no client (`409 desired-state-missing` before the first).
+- `secrets` (`vmTokenB64`, `gitCloneCredentialsB64`, `serveWebTokenB64`, `sudoPassword`) live in the
+  job's memory only. They reach the guest on SSH stdin, into a 0600 file the root shell sources and
+  removes; they are never in an argument, and every progress line, error and result is filtered for
+  them before it is stored. A retried job is sent them again. A sudo that wants a password the job
+  was not given fails the step with `secret-missing`.
+- Cancellation (`POST /jobs/{id}/cancel`) takes effect at the next step boundary. A job cut off by a
+  restart is failed with the step it reached; running it again starts from the beginning.
+- A failed job's `result` has `failedStep`, `code`, the guest's `failedSteps` and the `fixPrompt` for
+  the repair agent (the PowerShell's autofix prompt).
+
+The engine connects as the seed user (`Iso:SeedUser`, or the configured user of an external VM) with
+the bootstrap key next to `Iso:BootstrapPublicKeyPath`, accepting new host keys into `ssh/known_hosts`
+beside the database. `GET /vms/{name}/provision-status` answers `settingsChanged`, `newerPayload` and
+`hardwareChanged` (design 7.5) with what each is computed from.
 
 ### Key vault on hosted VMs
 
