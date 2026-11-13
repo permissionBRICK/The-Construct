@@ -13,7 +13,7 @@ namespace Constructd.Api.Jobs;
 public sealed class HostUpdateJob(IHostUpdateStore store, IReleaseSource source, IUpdateStager stager, PackageStager checker,
     IUpdaterLauncher launcher, IHostLock hostLock, IMaintenanceGate gate, IHostConfigStore config,
     IReleaseInfo release, ConstructdOptions options, IClock clock, IJobStore jobs, IPersistedJobRunner runner,
-    IJobEngine engine, IAuditLog audit, IHostUpdateAdmission admission)
+    IJobEngine engine, IAuditLog audit, IHostUpdateAdmission admission, Constructd.Core.Services.ChangeFeed changes)
 {
     public DateTimeOffset LaunchDeadline { get; private set; }
     public bool LaunchInProgress { get; private set; }
@@ -25,6 +25,9 @@ public sealed class HostUpdateJob(IHostUpdateStore store, IReleaseSource source,
         row = row with { State=state, Phase=phase, Error=error, Phases=[..row.Phases,new(phase,clock.UtcNow,null,error)],
             Finished=state is HostUpdateState.Checking or HostUpdateState.Staged or HostUpdateState.Draining or HostUpdateState.HandedOff or HostUpdateState.Applying or HostUpdateState.Interrupted ? null : clock.UtcNow };
         await store.UpsertAsync(row,CancellationToken.None);
+        // The host runs another version now (or stays on its own): every user's VMs may have an update on offer.
+        if(state is HostUpdateState.Succeeded or HostUpdateState.RolledBack or HostUpdateState.RolledBackWithDatabase or HostUpdateState.ApplyFailed or HostUpdateState.ResolvedByAdmin)
+            changes.Publish("update.finished",row.Id,null,null,everyone:true);
         await audit.AppendAsync(new(clock.UtcNow,row.Actor,"host.update.phase",row.Id,error is null ? AuditOutcome.Success : AuditOutcome.Failure,
             $"op={row.Id}, initiator={row.Actor}, phase={phase}, state={state}"),CancellationToken.None);
         return row;
@@ -160,7 +163,11 @@ public sealed class HostUpdateJob(IHostUpdateStore store, IReleaseSource source,
         var settings=await checker.SettingsAsync(ct);
         var url=ReleaseChannel.ManifestUrl(settings.Channel,settings.Repository) ?? throw new UpdateException("release-source-invalid-metadata");
         var offer=await source.GetChannelReleaseAsync(url,settings.Repository,settings.Channel is "stable" or "main" or "nightly",ct);
+        var previous=_offer;
         _offer=new(settings.Channel,offer.Channel.Version,offer.Release.Commit,clock.UtcNow);
+        // A host update is an admin's to run: only admins hear of a new offer.
+        if(offer.Release.Commit!=release.Installed.Commit && (previous?.Commit!=offer.Release.Commit || previous?.Channel!=settings.Channel))
+            changes.Publish("update.offered",offer.Release.Commit,null,null);
         return offer;
     }
     /// <summary>What the channel offered when it was last read, if that was for the current channel and recent.</summary>

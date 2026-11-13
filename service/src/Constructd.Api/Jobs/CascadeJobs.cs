@@ -7,7 +7,7 @@ namespace Constructd.Api.Jobs;
 public sealed class CascadeJobs(IVmRepository vms, IVmDelegationRepository delegation, IHypervisorDriver driver,
     IChildVmDriver childDriver, ChildDeleteJob children, IVmOperationGate gates, IPortForwardManager forwards,
     ICapacityLedger capacity, IMediaStore media, INetworkPolicyReconciler network,
-    IPersistedJobRunner runner, IAuditLog audit, IClock clock, IServiceScopeFactory scopes)
+    IPersistedJobRunner runner, IAuditLog audit, IClock clock, IServiceScopeFactory scopes, IVmDesiredStateSource provisionState)
 {
     public async Task<JobOutcome> RunAsync(Job job, Vm parent, CascadePreview preview, IProgress<string> progress, CancellationToken ct)
     {
@@ -66,6 +66,7 @@ public sealed class CascadeJobs(IVmRepository vms, IVmDelegationRepository deleg
             var reservations = (await capacity.SnapshotAsync(false, ct)).Reservations.Where(r => Ownership.SameName(r.VmName, parent.Name)).Select(r => r.Id).ToArray();
             await capacity.ReleaseAsync(reservations, VmState.Absent, "primary artifacts confirmed removed", ct);
             await vms.RemoveAsync(parent.Name, ct);
+            await provisionState.RemoveAsync(parent.Name, ct);
             await delegation.SaveCascadePreviewAsync(saved with { State = CascadeState.Completed, Outcomes = outcomes }, ct);
             await Phase("done");
             await Audit(true);

@@ -64,6 +64,27 @@ public static partial class BackupScript
     /// <summary>The exit codes of <c>construct backup</c> after which a restore has not touched the VM: usage, keys, host, transfer, decryption, lock.</summary>
     public static bool RestoreLeftVmUntouched(int exitCode) => exitCode is >= 2 and <= 9;
 
+    /// <summary>
+    /// What <c>restore-config.sh</c> did with the backup's SSH host keys, by the line it printed:
+    /// <c>Replaced</c> (the VM presents the backup's keys now, other ones than before), <c>Kept</c> (the
+    /// VM had them already), or neither (the backup carried none, or they could not be put in place;
+    /// the VM keeps its own).
+    /// </summary>
+    public static (bool Replaced, bool Kept) HostKeys(IEnumerable<string> lines)
+    {
+        bool replaced = false, kept = false;
+        foreach (var line in lines)
+        {
+            switch (line.Trim())
+            {
+                case "restored SSH host keys": replaced = true; break;
+                case "SSH host keys already match the backup": kept = true; break;
+            }
+        }
+
+        return (replaced, kept);
+    }
+
     /// <summary>What a <c>construct backup</c> exit code means (<c>Get-ConstructBackupExitMessage</c>).</summary>
     public static string ExitMessage(int exitCode) => exitCode switch
     {

@@ -49,7 +49,10 @@ public sealed class ProvisionTargets(IHypervisorDriver driver, ConstructdOptions
         return pub.Length > 0 && File.Exists(pub) ? File.ReadAllText(pub).Trim() : null;
     }
 
-    public async Task ForgetHostKeyAsync(SshTarget target, CancellationToken ct)
+    public Task ForgetHostKeyAsync(SshTarget target, CancellationToken ct) => ForgetAsync(target, ct);
+
+    /// <summary>Removes the stored host key of the target's address from its known_hosts file; the next connection learns the key the VM presents.</summary>
+    public static async Task ForgetAsync(SshTarget target, CancellationToken ct)
     {
         if (target.KnownHostsFile is not { Length: > 0 } file || !File.Exists(file)) return;
         var text = await File.ReadAllTextAsync(file, ct);

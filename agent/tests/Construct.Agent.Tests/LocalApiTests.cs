@@ -119,7 +119,7 @@ public sealed class LocalApiTests
     }
 
     [Fact]
-    public async Task The_event_stream_delivers_an_engine_jobs_progress_and_its_end_once()
+    public async Task The_event_stream_carries_the_engines_changes_and_a_jobs_end_once()
     {
         using var engine = new EngineHost();
         var signIn = await engine.AddUserAsync("alice");
@@ -130,47 +130,54 @@ public sealed class LocalApiTests
         using var stream = await laptop.Api.GetAsync("api/events", HttpCompletionOption.ResponseHeadersRead);
         Assert.Equal("text/event-stream", stream.Content.Headers.ContentType!.MediaType);
         var reader = new StreamReader(await stream.Content.ReadAsStreamAsync());
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        var events = ReadEventsAsync(reader, timeout.Token).GetAsyncEnumerator(timeout.Token);
+        // The agent follows the engine's stream from the start: its reset comes first (now or replayed).
+        using (var connected = await laptop.Api.GetAsync("api/events?since=0", HttpCompletionOption.ResponseHeadersRead))
+        {
+            var early = ReadEventsAsync(new StreamReader(await connected.Content.ReadAsStreamAsync()), timeout.Token).GetAsyncEnumerator(timeout.Token);
+            while (await early.MoveNextAsync() && !(early.Current.Type == "engine.reset" && early.Current.Data?["engine"]?.GetValue<string>() == engineId))
+            {
+            }
+        }
 
         using var created = await laptop.Api.PostAsJsonAsync($"api/engines/{engineId}/api/v1/vms", new { name = "work-vm", cpu = 2, ramGb = 4, diskGb = 40 });
         Assert.True(created.StatusCode == HttpStatusCode.Accepted, await created.Content.ReadAsStringAsync());
         var jobId = JsonNode.Parse(await created.Content.ReadAsStringAsync())!["jobId"]!.GetValue<string>();
         Assert.Equal($"/api/engines/{engineId}/api/v1/jobs/{jobId}", created.Headers.Location!.OriginalString);
 
-        var progress = 0;
-        var ends = 0;
-        string? terminal = null;
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
-        var events = ReadEventsAsync(reader, timeout.Token).GetAsyncEnumerator(timeout.Token);
-        while (terminal is null && await events.MoveNextAsync())
+        var seen = new List<string>();
+        while (!seen.Contains("job.ended") && await events.MoveNextAsync())
         {
             var (type, data) = events.Current;
-            if (data?["data"]?["jobId"]?.GetValue<string>() != jobId) continue;
-            Assert.Equal(engineId, data["engine"]!.GetValue<string>());
-            if (type == "job.progress") progress++;
-            if (type == "job.state")
-            {
-                ends++;
-                terminal = data["data"]!["job"]!["state"]!.GetValue<string>();
-            }
+            if (data?["engine"]?.GetValue<string>() != engineId) continue;
+            Assert.Equal(type, data["type"]!.GetValue<string>());
+            var id = data["data"]?["id"]?.GetValue<string>();
+            if (type.StartsWith("job.", StringComparison.Ordinal) && id == jobId) seen.Add(type);
+            if (type == "vm.created") Assert.Equal("work-vm", id);
+            if (type.StartsWith("vm.", StringComparison.Ordinal)) seen.Add(type);
         }
 
-        Assert.True(progress > 0, "No progress line arrived.");
-        Assert.Equal("succeeded", terminal);
+        // The engine's own stream brought the job (started, its end once) and the VM it created.
+        Assert.Equal("job.started", seen.First(t => t.StartsWith("job.", StringComparison.Ordinal)));
+        Assert.Contains("vm.created", seen);
+        var job = await (await laptop.Api.GetAsync($"api/engines/{engineId}/api/v1/jobs/{jobId}")).Content.ReadFromJsonAsync<JsonObject>();
+        Assert.Equal("succeeded", job!["state"]!.GetValue<string>());
 
-        // A UI that reconnects from the start gets the same job events once more, in order, and no second end.
+        // A UI that reconnects from the start gets the same events once more, in order, and no second end.
         using var replay = await laptop.Api.GetAsync("api/events?since=0", HttpCompletionOption.ResponseHeadersRead);
         var replayed = ReadEventsAsync(new StreamReader(await replay.Content.ReadAsStreamAsync()), CancellationToken.None).GetAsyncEnumerator();
-        var replayedProgress = 0;
-        while (await replayed.MoveNextAsync())
+        var again = new List<string>();
+        while (!again.Contains("job.ended") && await replayed.MoveNextAsync())
         {
             var (type, data) = replayed.Current;
-            if (data?["data"]?["jobId"]?.GetValue<string>() != jobId) continue;
-            if (type == "job.progress") replayedProgress++;
-            if (type == "job.state") break;
+            if (data?["engine"]?.GetValue<string>() != engineId) continue;
+            var id = data["data"]?["id"]?.GetValue<string>();
+            if ((type.StartsWith("job.", StringComparison.Ordinal) && id == jobId) || type.StartsWith("vm.", StringComparison.Ordinal)) again.Add(type);
         }
 
-        Assert.Equal(progress, replayedProgress);
-        Assert.Equal(1, ends);
+        Assert.Equal(seen, again);
+        Assert.Single(seen, t => t == "job.ended");
     }
 
     private static async IAsyncEnumerable<(string Type, JsonNode? Data)> ReadEventsAsync(StreamReader reader, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)

@@ -27,10 +27,10 @@ public static class EngineParticipationEndpoints
             .AllowAnonymous().Audited("engine.device.enroll").WithName("EnrollDevice").Produces<DeviceEnrollResponse>();
 
         api.MapDelete("/devices/{id}", RevokeAsync)
-            .RequireAuthorization(Policies.User).Audited("engine.device.revoke", "id").WithName("RevokeDevice");
+            .RequireAuthorization(Policies.User).Audited("engine.device.revoke", "id").WithName("RevokeDevice").Produces(StatusCodes.Status204NoContent);
 
         api.MapPut("/engine/grants", PutGrants)
-            .RequireAuthorization(Policies.User).Audited("engine.grants").WithName("PutEngineGrants");
+            .RequireAuthorization(Policies.User).Audited("engine.grants").WithName("PutEngineGrants").Produces(StatusCodes.Status204NoContent);
 
         api.MapGet("/sync/records/{id}", ReadRecordAsync)
             .RequireAuthorization(Policies.User).WithName("ReadSyncRecord").Produces<SyncRecordResponse>();

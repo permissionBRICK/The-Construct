@@ -39,6 +39,9 @@ public sealed class FakeBackupGuest : FakeSshRunner
     public int RestoreExit { get; set; }
     public int RemoveExit { get; set; }
 
+    /// <summary>What <c>restore-config.sh</c> prints about the SSH host keys (none: the backup carries none).</summary>
+    public string? RestoreHostKeys { get; set; }
+
     /// <summary>Takes the current incarnation as this guest's own (a host restarted around a VM that survived).</summary>
     public void Adopt() => _seen = Incarnation?.Invoke();
 
@@ -105,6 +108,7 @@ public sealed class FakeBackupGuest : FakeSshRunner
                 if (!Made.TryGetValue(args[2], out var backup) || backup.Key != key) return 8;
                 Restored.Add(args[2]);
                 foreach (var (fp, recipient) in backup.Recipients) Recipients.TryAdd(fp, recipient);
+                if (RestoreHostKeys is { } said) lines?.Report("  " + said);
                 lines?.Report($"construct backup: backup {args[2]} restored");
                 return 0;
             }

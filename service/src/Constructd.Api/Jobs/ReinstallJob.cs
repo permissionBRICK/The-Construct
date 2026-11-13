@@ -26,8 +26,10 @@ public sealed record ReinstallRun(
 /// <c>construct backup create</c>, which consumes it (so the backup is host-requested and pinned); the
 /// job unwraps the backup's key with its private half and has the VM verify the backup with it.</item>
 /// <item><c>delete</c>: the hypervisor VM goes; its registry record, forwards and settings stay.</item>
-/// <item><c>create</c>: the same VM again through the driver (<see cref="VmJobs.BuildMachineAsync"/>), a
-/// new VM token, and the engine forgets the old host key of the address.</item>
+/// <item><c>create</c>: the same VM again through the driver (<see cref="VmJobs.BuildMachineAsync"/>) and
+/// a new VM token. Until the restore brings the VM's SSH host keys back, the run trusts the new VM's key
+/// from a known_hosts file of its own; the stored key of the address stays and is right again after the
+/// restore. A backup without host keys, or a failure past the create, makes the stored key go.</item>
 /// <item>the <c>provision</c> job's own steps with the stored settings, a <c>restore</c> of the backup
 /// after <c>provision.sh</c>, which also removes the job's recipient (it comes back with the backup) from the
 /// new VM, and the project
@@ -65,7 +67,12 @@ public sealed class ReinstallJob(ProvisionJob provision, IProvisionTargets targe
         /// <summary>The run the guest commands go through: its bag redacts every line they print; no target until one is resolved.</summary>
         public ProvisionRun Guest = null!;
         public ProvisionJobResult? Provision;
+        /// <summary>The new VM's address with the engine's own known_hosts file, while the run trusts its key from the job's file.</summary>
+        public SshTarget? StoredHostKey;
     }
+
+    /// <summary>The known_hosts file the run uses between the create and the restore.</summary>
+    private static string WindowKnownHosts(string stored, string jobId) => stored + ".reinstall-" + jobId;
 
     public async Task<JobOutcome> RunAsync(ReinstallRun run, IProgress<string> progress, CancellationToken cancel)
     {
@@ -110,15 +117,26 @@ public sealed class ReinstallJob(ProvisionJob provision, IProvisionTargets targe
             current = await vms.GetAsync(vm.Name, CancellationToken.None) ?? throw Fail("create", "vm-deleting", "The VM's record is gone.");
             var target = await targets.ResolveAsync(current, CancellationToken.None)
                 ?? throw Fail("create", "vm-endpoint-unknown", "The new VM has no SSH endpoint the engine can dial.");
-            // The rebuilt VM has a new host key; this is the one place that replaces the stored one.
-            await targets.ForgetHostKeyAsync(target, CancellationToken.None);
+            if (state.PrivatePem is not null && target.KnownHostsFile is { Length: > 0 } stored)
+            {
+                // The rebuilt VM has a new host key until the restore brings its own back: the run trusts it
+                // from a file of this job, and the stored key stays for after the restore (ProvisionRestore).
+                state.StoredHostKey = target;
+                target = target with { KnownHostsFile = WindowKnownHosts(stored, run.JobId) };
+                File.Delete(target.KnownHostsFile);
+            }
+            else
+            {
+                // No restore follows: the new key replaces the stored one.
+                await targets.ForgetHostKeyAsync(target, CancellationToken.None);
+            }
             ProvisionJob.Report(guest, progress, "create", "succeeded", $"VM {vm.Name} created again at {target.Host}:{target.Port}");
 
             // ── provision, restore, project commands ─────────────────────────────────
             ProvisionRestore? restore = null;
             if (state.PrivatePem is not null)
             {
-                restore = new ProvisionRestore(state.BackupId!);
+                restore = new ProvisionRestore(state.BackupId!, state.StoredHostKey?.KnownHostsFile);
                 if (run.Secrets.Get(ProvisionJob.BackupKeySecret) is null)
                 {
                     var backup = await backups.Store.GetAsync(state.BackupId!, CancellationToken.None);
@@ -179,6 +197,13 @@ public sealed class ReinstallJob(ProvisionJob provision, IProvisionTargets targe
         }
         finally
         {
+            if (state.StoredHostKey is { } stored)
+            {
+                File.Delete(WindowKnownHosts(stored.KnownHostsFile!, run.JobId));
+                // Failed past the create: whichever key the VM presents now, the next connection learns it.
+                if (!succeeded) await targets.ForgetHostKeyAsync(stored, CancellationToken.None);
+            }
+
             if (!succeeded) await AfterFailureAsync(run, state, progress);
             else keys.Drop(vm.Name);
             run.Secrets.Clear();

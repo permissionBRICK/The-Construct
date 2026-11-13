@@ -73,7 +73,7 @@ public static class ServiceComposition
                 // rendered form would carry the dependency's message, stack trace and Data with it.
                 (job, error) => logger.LogError(
                     "Job {JobId} ({Kind}) for {Vm} failed: {Error}.",
-                    job.Id, job.Kind, job.VmName ?? "-", error), sp.GetRequiredService<IMaintenanceGate>());
+                    job.Id, job.Kind, job.VmName ?? "-", error), sp.GetRequiredService<IMaintenanceGate>(), sp.GetRequiredService<ChangeFeed>());
         });
         services.AddSingleton<IJobEngine>(sp => sp.GetRequiredService<InProcessJobEngine>());
 
@@ -114,6 +114,7 @@ public static class ServiceComposition
         ArgumentNullException.ThrowIfNull(options);
 
         services.AddSingleton<IClock, SystemClock>();
+        services.AddSingleton<ChangeFeed>();
 
         if (options.EffectivePersistence == PersistenceMode.Sqlite)
         {
@@ -138,7 +139,8 @@ public static class ServiceComposition
         });
 
         services.AddSingleton<IUserStore, SqliteUserStore>();
-        services.AddSingleton<IVmRepository, SqliteVmRepository>();
+        services.AddSingleton<SqliteVmRepository>();
+        services.AddSingleton<IVmRepository>(sp => new ChangeReportingVmRepository(sp.GetRequiredService<SqliteVmRepository>(), sp.GetRequiredService<ChangeFeed>()));
         services.AddSingleton<ITokenUsageStore, SqliteTokenUsageStore>();
         services.AddSingleton<IAuditLog, SqliteAuditLog>();
         services.AddSingleton<IJobStore, SqliteJobStore>();
@@ -157,7 +159,7 @@ public static class ServiceComposition
         services.AddSingleton<IUserStore>(sp => sp.GetRequiredService<InMemoryUserStore>());
 
         services.AddSingleton<InMemoryVmRepository>();
-        services.AddSingleton<IVmRepository>(sp => sp.GetRequiredService<InMemoryVmRepository>());
+        services.AddSingleton<IVmRepository>(sp => new ChangeReportingVmRepository(sp.GetRequiredService<InMemoryVmRepository>(), sp.GetRequiredService<ChangeFeed>()));
         services.AddSingleton<ITokenUsageStore>(sp => sp.GetRequiredService<InMemoryVmRepository>());
 
         services.AddSingleton<InMemoryAuditLog>();

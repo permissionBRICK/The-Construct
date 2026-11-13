@@ -69,6 +69,7 @@ public sealed class AgentHost : IAsyncDisposable
         app.Lifetime.ApplicationStarted.Register(() =>
         {
             if (options.PublishEndpoint) new EndpointFile(1, host.Port, token, Environment.ProcessId, startedAt, options.Version).Write(options.EndpointPath);
+            agent.Streams.Sync();
         });
         app.Lifetime.ApplicationStopping.Register(() =>
         {

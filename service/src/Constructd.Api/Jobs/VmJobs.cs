@@ -227,6 +227,8 @@ public static class VmJobs
 
             if (beforeRegistryRemoval is not null) await beforeRegistryRemoval(cancellationToken).ConfigureAwait(false);
             await vms.RemoveAsync(name, cancellationToken).ConfigureAwait(false);
+            // Only now the VM is gone; a reinstall deletes the hypervisor VM only and keeps them.
+            await services.GetRequiredService<IVmDesiredStateSource>().RemoveAsync(name, cancellationToken).ConfigureAwait(false);
             progress.Report($"vm {name} removed");
 
             await AuditAsync(audit, clock, actor, "vm.delete.completed", name, AuditOutcome.Success,

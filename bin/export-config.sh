@@ -50,6 +50,10 @@
 #                                       WORKSPACE_ROOT whose remote isn't already
 #                                       covered by an existing project profile.
 #
+# The SSH host keys (INCLUDE_AUTH) also live outside home: /etc/ssh/ssh_host_*
+# ride at etc/ssh/ so a reinstalled VM keeps them (SSH_HOST_KEY_DIR overrides
+# the directory, for tests).
+#
 # One captured secret lives OUTSIDE home: the VS Code serve-web connection token
 # (INCLUDE_AUTH) at ${VSCODE_SERVE_WEB_TOKEN_FILE} (default
 # /etc/construct/vscode-serve-web.token). It rides in the tarball at
@@ -321,6 +325,27 @@ if [[ "${INCLUDE_AUTH}" == "true" ]]; then
     cp -a --reflink=auto "${tls_dir}" "${STAGE}/etc/construct/tls"
     printf 'etc/construct/tls\n' >>"${MANIFEST}"
     log "+ etc/construct/tls (T3 HTTPS local CA)"
+  fi
+fi
+
+# ── SSH host keys ────────────────────────────────────────────────────────────
+# /etc/ssh/ssh_host_* make this VM the same machine to every client: a reinstall
+# that brings them back leaves every known_hosts entry valid. Private keys, so
+# gated on INCLUDE_AUTH; root-only files, so an export run by another user skips
+# them. restore-config.sh puts them back and restarts sshd when they changed.
+if [[ "${INCLUDE_AUTH}" == "true" ]]; then
+  ssh_key_dir="${SSH_HOST_KEY_DIR:-/etc/ssh}"
+  if compgen -G "${ssh_key_dir}/ssh_host_*" >/dev/null 2>&1; then
+    ssh_keys_readable=1
+    for _hk in "${ssh_key_dir}"/ssh_host_*; do [[ -r "${_hk}" ]] || ssh_keys_readable=""; done
+    if [[ -n "${ssh_keys_readable}" ]]; then
+      mkdir -p "${STAGE}/etc/ssh"
+      cp -a "${ssh_key_dir}"/ssh_host_* "${STAGE}/etc/ssh/"
+      printf 'etc/ssh\n' >>"${MANIFEST}"
+      log "+ etc/ssh/ssh_host_* (SSH host keys)"
+    else
+      log "- etc/ssh/ssh_host_* not readable by this user; host keys not saved"
+    fi
   fi
 fi
 

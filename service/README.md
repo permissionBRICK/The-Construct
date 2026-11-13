@@ -163,6 +163,7 @@ that 202 as an `ApiException<JobAcceptedResponse>`.
 | `DELETE /host/source-cache/{commit}` | admin | `202 {jobId}`; `409 source-pinned` unless `?force=true`, `409 source-in-use` during download. |
 | `GET /jobs/{id}` | job submitter/admin | Job state, progress lines, result, error. The first retrieval of a succeeded creation job also gets `result.vmToken`. |
 | `GET /jobs/{id}/events` | job submitter/admin | `text/event-stream`. |
+| `GET /events?since=` | enrolled user or device | `text/event-stream` of changes, see below. |
 
 ### Primary VM settings
 
@@ -338,10 +339,14 @@ The same route starts the two other jobs of a VM's life:
   with `construct backup recipients add`, opens the host's `pre-reinstall` request and runs
   `construct backup create`, then unwraps the backup's key with its private half and has the VM
   `verify` it), `delete` (the hypervisor VM only: record, forwards and settings stay), `create` (the
-  same CPU, memory, disk and nested setting through the driver, a new VM token, and the old host key of
-  the address removed from `ssh/known_hosts`, the only place that replaces one), then the provision
+  same CPU, memory, disk and nested setting through the driver and a new VM token), then the provision
   steps with the stored settings and a `restore` step (`construct backup restore --from-host`, the key
-  on stdin) before the project commands. The backup is wrapped for the user's keys as before; the
+  on stdin) before the project commands. The backup carries the VM's SSH host keys and the restore puts
+  them back (S29), so the key stored in `ssh/known_hosts` stays: from the create to the restore the job
+  trusts the new VM's key from a file of its own (`known_hosts.reinstall-<job>`), after it the stored one
+  again. A backup without host keys (an older one), or a job that fails past the create, removes the
+  stored key of the address, so the next connection learns the key the VM presents; a provision job
+  never replaces one. A `restore` job whose backup changed the VM's host keys removes it as well. The backup is wrapped for the user's keys as before; the
   job's own recipient is removed again after the restore, and from the old VM when the job fails
   before the delete. Nothing is deleted without a verified, host-requested (pinned) backup. Needs
   backups enabled on the host; an external machine is refused.
@@ -507,6 +512,18 @@ Long operations answer `202 {jobId}` plus a `Location` header. `GET /jobs/{id}/e
 `event: progress` per line — replaying the lines already recorded, so a client that attaches late (or
 reconnects) still sees the whole log — and then exactly one terminal `event: state` carrying the
 finished job, after which the stream ends.
+
+`GET /events?since=` is the engine's change stream (design 6.1). Each event names what changed and
+its id, never the state, and a client re-reads what it shows: `vm.created`, `vm.changed`, `vm.power`
+(the power state changed), `vm.deleted` (id = the VM's name); `job.started`, `job.progress` (at most once
+a second per job), `job.ended`; `backup.added`, `backup.removed`; `update.offered` (a channel offers a
+release commit the host does not run; admins only) and `update.finished` (a host update reached its end).
+`data` is `{seq, type, id, vm}`, and the SSE `id` is `seq`. A caller hears only of what it may read: its
+own VMs and backups, jobs it owns or initiated, finished host updates; an admin hears of everything.
+Without `since`, or when the events after it are gone (more than 1000 behind, or an earlier run of the
+engine), the stream starts with `reset {seq}`: reload, then resume from that `seq`. A stream ends after
+five minutes and the client resumes with its cursor, so who may hear of what is judged again. Guest reports, host
+observations and leases arrive too often to be announced; they are read with the VM.
 
 Current job kinds are `create-vm`, `remove-vm`, `parent-cascade-delete`, `child-create`,
 `child-delete`, `vm-shutdown`, `vm-restart`, `media-acquire`, `media-verify`,
