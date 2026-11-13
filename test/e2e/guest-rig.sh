@@ -89,7 +89,7 @@ incomplete() { log "$*"; echo "incomplete: required verification not run" >&2; e
 if [[ "${backend}" == child ]]; then
   tools=(construct curl jq ssh scp xorriso git sha256sum)
 else
-  tools=(qemu-system-x86_64 qemu-img cloud-localds setpriv curl ssh scp ssh-keygen git sha256sum)
+  tools=(qemu-system-x86_64 qemu-img cloud-localds setpriv flock curl ssh scp ssh-keygen git sha256sum)
   [[ -r /dev/kvm && -w /dev/kvm ]] || fail "/dev/kvm is missing or not usable"
 fi
 for tool in "${tools[@]}"; do
@@ -337,7 +337,7 @@ local_start() {
          -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:${port}-:22" -device virtio-net-pci,netdev=net0
          -display none -serial "file:${dir}/console.log" -pidfile "${dir}/qemu.pid")
     if [[ "${persistent}" == true ]]; then
-      "${cmd[@]}" -daemonize 2>"${dir}/qemu.err" && { printf '%s\n' "${port}" >"${dir}/port"; return 0; }
+      "${cmd[@]}" -daemonize 2>"${dir}/qemu.err" 9>&- && { printf '%s\n' "${port}" >"${dir}/port"; return 0; }
     else
       setpriv --pdeathsig KILL -- "${cmd[@]}" 2>"${dir}/qemu.err" &
       pid=$!
@@ -426,6 +426,12 @@ local_prepared() {
 # Brings a clean guest up in DIR and waits for SSH; sets qemu_dir, address, SSH_OPTS.
 local_up() {
   local dir="$1" persistent="$2" img prepared
+  # One guest outlives the rig at a time: hold a lock from this check until the
+  # rig exits, after it has recorded the guest for `down`.
+  if [[ "${persistent}" == true ]]; then
+    exec 9>"${LOCAL_CURRENT}.lock"
+    flock -n 9 || fail "another rig is bringing up a local guest to keep; try again when it is done"
+  fi
   if [[ "${persistent}" == true && -f "${LOCAL_CURRENT}" ]] && local_alive "$(cat "${LOCAL_CURRENT}")"; then
     fail "a local guest is already up ($(cat "${LOCAL_CURRENT}")); stop it with: bash test/e2e/guest-rig.sh --backend local down"
   fi
