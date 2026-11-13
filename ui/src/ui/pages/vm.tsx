@@ -234,8 +234,8 @@ export function Backups({ vm }: { vm: Vm }) {
         <Table cols={[{ h: 'When' }, { h: 'Kind', cls: 'x' }, { h: 'Size', cls: 'x m' }, { h: 'Files', cls: 'x m' }, { h: '', cls: 'e' }]}
           rows={vm.backups.map(b => [<>{b.at}{b.protected && <> <Tag>protected</Tag></>}</>, b.kind, b.size, b.files === null ? '–' : b.files.toLocaleString('en-US'), <>
             <button type="button" class={`lk ${b.pinned ? 'on' : ''}`} aria-pressed={b.pinned} title="Protect" aria-label="Protect" onClick={() => be.pinBackup(vm.id, b.id, !b.pinned)}><Icon n="lock" /></button>{' '}
-            <Confirm label="Restore" danger={false} disabled={na(s, 'restore')} onYes={() => be.restoreBackup(vm.id, b.id)} />{' '}
-            <Confirm label="Delete" icon="trash" verb={b.protected ? 'Delete protected' : 'Delete'} onYes={() => be.deleteBackup(vm.id, b.id)} />
+            <Confirm key={`restore-${b.id}`} label="Restore" danger={false} disabled={na(s, 'restore')} onYes={() => be.restoreBackup(vm.id, b.id)} />{' '}
+            <Confirm key={`delete-${b.id}`} label="Delete" icon="trash" verb={b.protected ? 'Delete protected' : 'Delete'} onYes={() => be.deleteBackup(vm.id, b.id)} />
           </>])} />
       </Sec>
     </Page>

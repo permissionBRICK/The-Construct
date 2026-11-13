@@ -56,6 +56,8 @@ interface Slice {
   jobs: JobResponse[];
   /** Jobs this page saw end, by id. */
   ended: Map<string, JobResponse>;
+  /** Jobs the agent reported lost: no later read of them is shown. */
+  lost: Set<string>;
   admin: AdminData | null;
   autoReprovision: boolean | null;
   usageWindow: Host['usage']['window'];
@@ -255,7 +257,7 @@ export class ApiBackend implements Backend {
       for (const e of st.engines) {
         const sl = this.slices.get(e.id);
         if (sl) sl.view = e;
-        else this.slices.set(e.id, { view: e, me: null, health: null, all: [], mine: [], parts: new Map(), jobs: [], ended: new Map(), admin: null, autoReprovision: null, usageWindow: 'month', problem: null });
+        else this.slices.set(e.id, { view: e, me: null, health: null, all: [], mine: [], parts: new Map(), jobs: [], ended: new Map(), lost: new Set(), admin: null, autoReprovision: null, usageWindow: 'month', problem: null });
       }
       this.compose();
       await Promise.all([this.loadDevices(), ...st.engines.map(e => this.refreshEngine(e.id)), this.loadVault(), this.loadProfiles()]);
@@ -391,7 +393,7 @@ export class ApiBackend implements Backend {
     sl.problem = null;
     if (health.status === 'fulfilled') sl.health = health.value;
     if (vms.status === 'fulfilled') sl.all = vms.value; else sl.problem = errText(vms.reason);
-    if (jobs.status === 'fulfilled') sl.jobs = mergeJobs(sl.ended, jobs.value);
+    if (jobs.status === 'fulfilled') sl.jobs = mergeJobs(sl.ended, jobs.value.filter(j => ended(j) || !sl.lost.has(j.id)));
     if (upd.status === 'fulfilled') sl.autoReprovision = upd.value.autoReprovision;
     const me = sl.me.name.toLowerCase();
     sl.mine = sl.all.filter(v => v.kind !== 'child' && v.owner.toLowerCase() === me && !v.deleting);
@@ -545,7 +547,11 @@ export class ApiBackend implements Backend {
         else if (engine && this.slices.has(engine)) void this.refreshEngine(engine);
         return;
       }
-      case 'engine.reset': case 'job.lost': case 'vm.created': case 'vm.changed': case 'vm.power': case 'vm.deleted': case 'update.offered': case 'update.finished':
+      case 'job.lost':
+        if (engine && id) this.slices.get(engine)?.lost.add(id);
+        if (engine && this.slices.has(engine)) void this.refreshEngine(engine);
+        return;
+      case 'engine.reset': case 'vm.created': case 'vm.changed': case 'vm.power': case 'vm.deleted': case 'update.offered': case 'update.finished':
         if (engine && this.slices.has(engine)) void this.refreshEngine(engine);
         return;
     }
@@ -563,7 +569,7 @@ export class ApiBackend implements Backend {
       return;
     }
     const known = sl.ended.get(id);
-    if (known && !ended(job)) return;
+    if ((known && !ended(job)) || (sl.lost.has(id) && !ended(job))) return;
     const i = sl.jobs.findIndex(j => j.id === id);
     if (i >= 0) sl.jobs[i] = job; else sl.jobs.push(job);
     if (ended(job)) sl.ended.set(id, job);
@@ -850,7 +856,7 @@ export class ApiBackend implements Backend {
     if (pin.toUpperCase() !== p.pin.toUpperCase()) throw new Error('The host now presents a different certificate than the one you confirmed');
     const added = await ok(this.agent.POST('/api/engines', { body: { address: p.url, pin, userToken: token } }));
     if (!this.slices.has(added.id)) {
-      this.slices.set(added.id, { view: added, me: null, health: null, all: [], mine: [], parts: new Map(), jobs: [], ended: new Map(), admin: null, autoReprovision: null, usageWindow: 'month', problem: null });
+      this.slices.set(added.id, { view: added, me: null, health: null, all: [], mine: [], parts: new Map(), jobs: [], ended: new Map(), lost: new Set(), admin: null, autoReprovision: null, usageWindow: 'month', problem: null });
     }
     return added.id;
   }

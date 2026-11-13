@@ -696,3 +696,19 @@ describe('ApiBackend host fingerprint', () => {
     expect(calls.some(c => c.method === 'POST' && c.path === '/api/engines')).toBe(false);
   });
 });
+
+describe('ApiBackend lost jobs', () => {
+  it('does not bring back a job the agent reported lost when an older read arrives', async () => {
+    const { be, on, settle } = world();
+    on('POST', `/api/engines/${E1}/api/v1/vms/atlas/jobs`, { status: 202, json: { jobId: 'j1', kind: 'provision', replayed: false } });
+    on('GET', `/api/engines/${E1}/api/v1/jobs/j1`, { json: job('j1', 'atlas', 'running') });
+    await be.start();
+    be.reprovision('atlas');
+    await settle();
+    expect(activeJob(be.snapshot(), 'atlas')).toMatchObject({ state: 'running' });
+    be.onEvent('job.lost', { seq: 6, type: 'job.lost', engine: E1, data: { id: 'j1' } });
+    be.onEvent('job.progress', { seq: 5, type: 'job.progress', engine: E1, data: { id: 'j1', vm: 'atlas' } });
+    await settle();
+    expect(activeJob(be.snapshot(), 'atlas')).toBeNull();
+  });
+});

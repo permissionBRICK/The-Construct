@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { QrSquare, Icon } from '../icons';
 import { Btn, Confirm, Field, Head, NotYet, Page, Sec, Seg, Switch, Table, Tabs, Tag } from '../kit';
 import { copy, na, useApp } from '../ctx';
@@ -16,18 +16,24 @@ function RevealValue({ name }: { name: string }) {
   const { be, toast } = useApp();
   const [value, setValue] = useState<string | null>(null);
   const [left, setLeft] = useState(0);
+  // Each Show and each Hide starts a new turn; an answer that arrives for an older turn is dropped.
+  const turn = useRef(0);
+  const hide = () => { turn.current++; setValue(null); };
   useEffect(() => {
     if (value === null) return;
     const t = setInterval(() => setLeft(l => { if (l <= 1) { setValue(null); return 0; } return l - 1; }), 1000);
     return () => clearInterval(t);
   }, [value]);
-  if (value === null) return <Btn sm onClick={() => { void be.revealSecret(name).then(v => { setValue(v); setLeft(30); }, (e: Error) => toast(e.message)); }}>Show</Btn>;
+  if (value === null) return <Btn sm onClick={() => {
+    const mine = ++turn.current;
+    void be.revealSecret(name).then(v => { if (turn.current === mine) { setValue(v); setLeft(30); } }, (e: Error) => toast(e.message));
+  }}>Show</Btn>;
   return (
     <span class="confirm">
       <code class="m sel reveal">{value}</code>
       <span class="d m">{left}s</span>
       <Btn sm icon="copy" title="Copy" onClick={() => { copy(value); toast('Copied'); }} />
-      <Btn sm onClick={() => setValue(null)}>Hide</Btn>
+      <Btn sm onClick={hide}>Hide</Btn>
     </span>
   );
 }
@@ -72,7 +78,7 @@ export function Secrets() {
         <Table cols={[{ h: 'Secret', cls: 'm' }, { h: 'Note', cls: 'x' }, { h: 'In use', cls: 'x' }, { h: 'Last', cls: 'x' }, { h: 'Auto' }, { h: '', cls: 'e' }]}
           rows={s.secrets.map(x => [x.name, x.note, x.usedBy.join(', ') || '–', x.last,
             <Switch on={x.auto} onChange={v => be.setAutoApprove(x.name, v)} label={`Auto-approve ${x.name}`} />,
-            <span class="acts"><RevealValue key={x.name} name={x.name} /> <ReplaceValue key={x.name} name={x.name} /> <Confirm label="Delete" onYes={() => be.deleteSecret(x.name)} /></span>])} />
+            <span class="acts"><RevealValue key={`show-${x.name}`} name={x.name} /> <ReplaceValue key={`replace-${x.name}`} name={x.name} /> <Confirm key={`delete-${x.name}`} label="Delete" onYes={() => be.deleteSecret(x.name)} /></span>])} />
       </Sec>}
     </Page>
   );
@@ -103,7 +109,7 @@ export function Devices() {
         <Table cols={[{ h: 'Device' }, { h: 'Kind', cls: 'x' }, { h: 'Added', cls: 'x' }, { h: 'Seen' }, { h: '', cls: 'e' }]}
           rows={s.devices.map(d => [d.name, d.kind, d.added, d.revoked ? '–' : d.seen,
             d.me ? <Tag>this</Tag> : d.revoked ? <Btn sm onClick={() => { be.openRevocation(d.id); go({ page: 'revoke', arg: d.id }); }}>Revoked</Btn>
-              : <Confirm label="Revoke" onYes={() => { be.revokeDevice(d.id); go({ page: 'revoke', arg: d.id }); }} />])} />
+              : <Confirm key={d.id} label="Revoke" onYes={() => { be.revokeDevice(d.id); go({ page: 'revoke', arg: d.id }); }} />])} />
       </Sec>
       {!na(s, 'vault') && s.vaultModes.length > 0 && <Sec title="Vault on each host">
         <Table cols={[{ h: 'Host' }, { h: 'Mode', cls: 'e' }]} rows={s.vaultModes.map(m => [m.hostName, m.problem ? <span class="badc">{m.problem}</span>
