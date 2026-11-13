@@ -125,6 +125,7 @@ public sealed class PackageTests : IDisposable
         Assert.NotNull(repo);
         var publish=Path.Combine(_root,"publish");Directory.CreateDirectory(publish);
         await File.WriteAllBytesAsync(Path.Combine(publish,"Constructd.Api.exe"),RandomNumberGenerator.GetBytes(4096));
+        WindowsPublishExtras(publish);
         await File.WriteAllTextAsync(Path.Combine(publish,"Constructd.Api.runtimeconfig.json"), """{"runtimeOptions":{"frameworks":[{"name":"Microsoft.NETCore.App","version":"10.0.0"},{"name":"Microsoft.AspNetCore.App","version":"10.0.0"}]}}""");
         var output=Path.Combine(_root,"output");
         await Run("pwsh","-NoProfile","-File",Path.Combine(repo.FullName,"service/host/New-ConstructHostPackage.ps1"),"-PublishDir",publish,"-FrameworkDependentPublishDir",publish,"-OutputDir",output,"-Commit",new string('a',40));
@@ -137,6 +138,16 @@ public sealed class PackageTests : IDisposable
     }
     internal static PackageStager WindowsStager(IServiceProvider sp)=>new(sp.GetRequiredService<IReleaseSource>(),sp.GetRequiredService<IHostConfigStore>(),
         sp.GetRequiredService<ConstructdOptions>(),sp.GetRequiredService<IReleaseInfo>(),sp.GetService<IProcessRunner>()){IsWindows=true};
+    /// <summary>What a win-x64 publish carries besides the executable, which the packager checks for.</summary>
+    internal static void WindowsPublishExtras(string publish)
+    {
+        foreach (var file in new[] { "hyperv/HyperV.Driver.ps1", "hyperv/HyperV.ChildVm.ps1", "hyperv/HyperV.WindowsLicense.ps1", "guest/adopt-host.py", "guest/construct" })
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(publish, file))!);
+            File.WriteAllText(Path.Combine(publish, file), file);
+        }
+    }
+
     internal static async Task Run(string executable,params string[] args)
     {
         var start=new System.Diagnostics.ProcessStartInfo(executable){UseShellExecute=false,RedirectStandardOutput=true,RedirectStandardError=true};
