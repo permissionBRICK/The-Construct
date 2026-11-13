@@ -23,25 +23,25 @@ public static class VmEndpoints
     public static RouteGroupBuilder MapVmEndpoints(this RouteGroupBuilder api)
     {
         api.MapGet("/vms", ListAsync)
-            .RequireAuthorization(Policies.UserOrPrimaryToken).WithName("ListVms");
+            .RequireAuthorization(Policies.UserOrPrimaryToken).WithName("ListVms").Produces<IReadOnlyList<VmResponse>>();
 
         api.MapPost("/vms", CreateAsync)
-            .RequireAuthorization(Policies.User).Audited("vm.create").WithName("CreateVm");
+            .RequireAuthorization(Policies.User).Audited("vm.create").WithName("CreateVm").Produces<VmCreateAcceptedResponse>(StatusCodes.Status202Accepted);
 
         api.MapGet("/vms/{name}", GetAsync)
-            .RequireAuthorization(Policies.UserOrPrimaryToken).WithName("GetVm");
+            .RequireAuthorization(Policies.UserOrPrimaryToken).WithName("GetVm").Produces<VmResponse>();
 
         api.MapDelete("/vms/{name}", DeleteAsync)
-            .RequireAuthorization(Policies.UserOrPrimaryToken).Audited("vm.delete").WithName("DeleteVm");
+            .RequireAuthorization(Policies.UserOrPrimaryToken).Audited("vm.delete").WithName("DeleteVm").Produces<JobAcceptedResponse>(StatusCodes.Status202Accepted).Produces<JobReplayedResponse>();
 
         api.MapPost("/vms/{name}/power", PowerAsync)
-            .RequireAuthorization(Policies.User).Audited("vm.power").WithName("PowerVm");
+            .RequireAuthorization(Policies.User).Audited("vm.power").WithName("PowerVm").Produces<VmStateResponse>();
 
         api.MapGet("/vms/{name}/state", StateAsync)
-            .RequireAuthorization(Policies.UserOrPrimaryToken).WithName("GetVmState");
+            .RequireAuthorization(Policies.UserOrPrimaryToken).WithName("GetVmState").Produces<VmStateResponse>();
 
         api.MapGet("/vms/{name}/endpoint", EndpointAsync)
-            .RequireAuthorization(Policies.VmScoped).WithName("GetVmEndpoint");
+            .RequireAuthorization(Policies.VmScoped).WithName("GetVmEndpoint").Produces<EndpointResponse>();
 
         return api;
     }
@@ -178,7 +178,7 @@ public static class VmEndpoints
         {
             var latest = await repository.GetAsync(name, cancellationToken);
             if (latest is { Deleting: true } && await LifecycleEndpoints.LiveAsync(latest, http.RequestServices, cancellationToken))
-                return Results.Ok(new { jobId = latest.CurrentJobId, replayed = true });
+                return Results.Ok(new JobReplayedResponse(latest.CurrentJobId, true));
             gate.IsHeld(name, out var currentOperation); return LifecycleEndpoints.Busy(currentOperation);
         }
         var vm = await repository.GetAsync(name, cancellationToken);

@@ -19,12 +19,12 @@ public static class IdleEndpoints
     {
         api.MapGet("/vms/{name}/idle-policy", GetPolicyAsync)
             .RequireAuthorization(Policies.User)
-            .WithName("GetIdlePolicy");
+            .WithName("GetIdlePolicy").Produces<IdlePolicyResponse>();
 
         api.MapPut("/vms/{name}/idle-policy", PutPolicyAsync)
             .RequireAuthorization(Policies.User)
             .Audited("vm.idle-policy")
-            .WithName("PutIdlePolicy");
+            .WithName("PutIdlePolicy").Produces<IdlePolicyResponse>();
 
         // Guest telemetry accepts the VM's scoped token, as does usage intake.
         api.MapPost("/vms/{name}/activity", PostActivityAsync)

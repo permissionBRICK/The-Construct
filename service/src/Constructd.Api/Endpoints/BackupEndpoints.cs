@@ -29,16 +29,16 @@ public static partial class BackupEndpoints
         api.MapPost(Root, CreateAsync).RequireAuthorization(Policies.VmToken).Audited("backup.create").WithName("CreateBackup");
         api.MapPut(Item + "/keys", PutKeysAsync).RequireAuthorization(Policies.VmToken).Audited("backup.keys").WithName("PutBackupKeys");
         api.MapPut(Item + "/content", UploadAsync).RequireAuthorization(Policies.VmToken).Audited("backup.upload").WithName("UploadBackup");
-        api.MapDelete(Item, DeleteAsync).RequireAuthorization(Policies.VmScoped).Audited("backup.delete").WithName("DeleteBackup");
+        api.MapDelete(Item, DeleteAsync).RequireAuthorization(Policies.VmScoped).Audited("backup.delete").WithName("DeleteBackup").Produces(StatusCodes.Status204NoContent);
         api.MapPost(Root + "/report", ReportAsync).RequireAuthorization(Policies.VmToken).Audited("backup.report").WithName("ReportBackup");
         api.MapPost(Item + "/restored", RestoredAsync).RequireAuthorization(Policies.VmToken).Audited("backup.restored").WithName("BackupRestored");
-        api.MapGet(Root, ListAsync).RequireAuthorization(Policies.VmScoped).WithName("ListBackups");
+        api.MapGet(Root, ListAsync).RequireAuthorization(Policies.VmScoped).WithName("ListBackups").Produces<BackupListResponse>();
         api.MapGet(Item + "/content", DownloadAsync).RequireAuthorization(Policies.VmScoped).WithName("DownloadBackup");
         api.MapGet(Item + "/keys", GetKeysAsync).RequireAuthorization(Policies.VmScoped).WithName("GetBackupKeys");
-        api.MapGet(Root + "/status", StatusAsync).RequireAuthorization(Policies.VmScoped).WithName("GetBackupStatus");
-        api.MapPost(Root + "/request", RequestAsync).RequireAuthorization(Policies.User).Audited("backup.request").WithName("RequestBackup");
-        api.MapGet(Root + "/settings", GetSettingsAsync).RequireAuthorization(Policies.User).WithName("GetBackupSettings");
-        api.MapPut(Root + "/settings", PutSettingsAsync).RequireAuthorization(Policies.User).Audited("backup.settings").WithName("PutBackupSettings");
+        api.MapGet(Root + "/status", StatusAsync).RequireAuthorization(Policies.VmScoped).WithName("GetBackupStatus").Produces<BackupStatusResponse>();
+        api.MapPost(Root + "/request", RequestAsync).RequireAuthorization(Policies.User).Audited("backup.request").WithName("RequestBackup").Produces<BackupRequestedResponse>(StatusCodes.Status202Accepted);
+        api.MapGet(Root + "/settings", GetSettingsAsync).RequireAuthorization(Policies.User).WithName("GetBackupSettings").Produces<BackupSettingsResponse>();
+        api.MapPut(Root + "/settings", PutSettingsAsync).RequireAuthorization(Policies.User).Audited("backup.settings").WithName("PutBackupSettings").Produces<BackupSettingsResponse>();
         return api;
     }
 
@@ -236,14 +236,8 @@ public static partial class BackupEndpoints
         if (vm is null) return failure!;
         var now = clock.UtcNow;
         var list = (await backups.Store.ListAsync(vm.Owner, vm.Name, ct)).Where(b => b.IsComplete).OrderByDescending(b => b.CreatedAt);
-        return Results.Ok(new
-        {
-            backups = list.Select(b => new
-            {
-                id = b.Id, createdAt = b.CreatedAt, trigger = b.Trigger, sizeBytes = b.SizeBytes, sha256 = b.Sha256,
-                pinnedUntil = b.IsPinned(now) ? b.PinnedUntil : null,
-            }).ToList(),
-        });
+        return Results.Ok(new BackupListResponse([.. list.Select(b => new BackupSummaryResponse(
+            b.Id, b.CreatedAt, b.Trigger, b.SizeBytes, b.Sha256, b.IsPinned(now) ? b.PinnedUntil : null))]));
     }
 
     private static async Task<IResult> DownloadAsync(string name, string id, HttpContext http, IVmRepository vms,
@@ -277,20 +271,16 @@ public static partial class BackupEndpoints
         var host = await backups.ConfigAsync(ct);
         var state = await backups.Store.GetVmAsync(vm.Owner, vm.Name, ct);
         var complete = (await backups.Store.ListAsync(vm.Owner, vm.Name, ct)).Where(b => b.IsComplete).ToList();
-        return Results.Ok(new
-        {
-            enabled = host.Enabled,
-            lastAttemptAt = state?.LastAttemptAt,
-            lastSuccessAt = state?.LastSuccessAt,
-            lastFailure = state?.LastFailure is { } last
-                ? (object)new { at = last.At, trigger = last.Trigger, reason = last.Reason, detail = last.Detail }
-                : null,
-            failingSince = state?.FailingSince,
-            requestPending = host.Enabled && BackupSchedule.RequestPending(state, now),
-            count = complete.Count,
-            totalBytes = complete.Sum(b => b.SizeBytes ?? 0),
-            nextDueAt = BackupSchedule.NextDueAt(host, state, vm.Created, now),
-        });
+        return Results.Ok(new BackupStatusResponse(
+            Enabled: host.Enabled,
+            LastAttemptAt: state?.LastAttemptAt,
+            LastSuccessAt: state?.LastSuccessAt,
+            LastFailure: state?.LastFailure,
+            FailingSince: state?.FailingSince,
+            RequestPending: host.Enabled && BackupSchedule.RequestPending(state, now),
+            Count: complete.Count,
+            TotalBytes: complete.Sum(b => b.SizeBytes ?? 0),
+            NextDueAt: BackupSchedule.NextDueAt(host, state, vm.Created, now)));
     }
 
     // ── the owner ───────────────────────────────────────────────────────────────
@@ -307,7 +297,7 @@ public static partial class BackupEndpoints
         var state = await backups.Store.GetVmAsync(vm.Owner, vm.Name, ct) ?? new BackupVmState(vm.Owner, vm.Name);
         await backups.Store.SaveVmAsync(state with { RequestPendingAt = clock.UtcNow }, ct);
         CodedProblems.Audit(http, "backup.request", vm.Owner, target: vm.Name);
-        return Results.Accepted(null, new { requestPending = true });
+        return Results.Accepted(null, new BackupRequestedResponse(true));
     }
 
     private static async Task<IResult> GetSettingsAsync(string name, HttpContext http, IVmRepository vms,
@@ -351,18 +341,11 @@ public static partial class BackupEndpoints
         return true;
     }
 
-    private static object Settings(BackupsConfig host, BackupVmState? state) => new
-    {
-        intervalHours = state?.IntervalHours,
-        keep = state?.Keep,
-        effective = new
-        {
-            enabled = host.Enabled,
-            intervalHours = BackupSchedule.EffectiveIntervalHours(host, state),
-            keep = BackupSchedule.EffectiveKeep(host, state),
-        },
-        host = new { enabled = host.Enabled, intervalHours = host.IntervalHours, keep = host.Keep, maxKeep = host.MaxKeep },
-    };
+    private static BackupSettingsResponse Settings(BackupsConfig host, BackupVmState? state) => new(
+        state?.IntervalHours,
+        state?.Keep,
+        new BackupEffectiveSettings(host.Enabled, BackupSchedule.EffectiveIntervalHours(host, state), BackupSchedule.EffectiveKeep(host, state)),
+        new BackupHostSettings(host.Enabled, host.IntervalHours, host.Keep, host.MaxKeep));
 
     /// <summary>Reads at most <paramref name="max"/> bytes of the body; null when it is longer.</summary>
     private static async Task<byte[]?> ReadLimitedAsync(HttpRequest request, int max, CancellationToken ct)

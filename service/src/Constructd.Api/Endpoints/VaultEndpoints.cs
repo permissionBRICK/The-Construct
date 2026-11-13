@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Constructd.Api.Auth;
+using Constructd.Api.Contracts;
 using Constructd.Api.Infrastructure;
 using Constructd.Core.Abstractions;
 using Constructd.Core.Configuration;
@@ -27,22 +28,22 @@ public static class VaultEndpoints
     public static RouteGroupBuilder MapVaultEndpoints(this RouteGroupBuilder api)
     {
         // ---- the user (owner only) ----------------------------------------------------------
-        api.MapGet("/vault/entries", GetEntriesAsync).RequireAuthorization(Policies.User).WithName("GetVaultEntries");
-        api.MapPut("/vault/entries", PutEntriesAsync).RequireAuthorization(Policies.User).Audited("vault.sync").WithName("PutVaultEntries");
-        api.MapPut("/vault/settings", PutSettingsAsync).RequireAuthorization(Policies.User).Audited("vault.settings").WithName("PutVaultSettings");
-        api.MapPost("/vms/{name}/vault/unlock", UnlockAsync).RequireAuthorization(Policies.User).Audited("vault.unlock").WithName("UnlockVault");
-        api.MapGet("/vault/leases", GetLeasesAsync).RequireAuthorization(Policies.User).WithName("GetVaultLeases");
-        api.MapDelete("/vault/leases/{id}", RevokeLeaseAsync).RequireAuthorization(Policies.User).Audited("vault.lease.revoke", "id").WithName("RevokeVaultLease");
-        api.MapGet("/vault/devices", GetDevicesAsync).RequireAuthorization(Policies.User).WithName("GetVaultDevices");
-        api.MapPost("/vault/devices", PairDeviceAsync).RequireAuthorization(Policies.User).Audited("vault.device.pair").WithName("PairVaultDevice");
-        api.MapDelete("/vault/devices/{id}", RevokeDeviceAsync).RequireAuthorization(Policies.User).Audited("vault.device.revoke", "id").WithName("RevokeVaultDevice");
-        api.MapGet("/vault/activity", GetActivityAsync).RequireAuthorization(Policies.User).WithName("GetVaultActivity");
+        api.MapGet("/vault/entries", GetEntriesAsync).RequireAuthorization(Policies.User).WithName("GetVaultEntries").Produces<VaultEntriesResponse>();
+        api.MapPut("/vault/entries", PutEntriesAsync).RequireAuthorization(Policies.User).Audited("vault.sync").WithName("PutVaultEntries").Produces<VaultPutEntriesResponse>();
+        api.MapPut("/vault/settings", PutSettingsAsync).RequireAuthorization(Policies.User).Audited("vault.settings").WithName("PutVaultSettings").Produces(StatusCodes.Status204NoContent);
+        api.MapPost("/vms/{name}/vault/unlock", UnlockAsync).RequireAuthorization(Policies.User).Audited("vault.unlock").WithName("UnlockVault").Produces(StatusCodes.Status204NoContent);
+        api.MapGet("/vault/leases", GetLeasesAsync).RequireAuthorization(Policies.User).WithName("GetVaultLeases").Produces<VaultLeasesResponse>();
+        api.MapDelete("/vault/leases/{id}", RevokeLeaseAsync).RequireAuthorization(Policies.User).Audited("vault.lease.revoke", "id").WithName("RevokeVaultLease").Produces(StatusCodes.Status204NoContent);
+        api.MapGet("/vault/devices", GetDevicesAsync).RequireAuthorization(Policies.User).WithName("GetVaultDevices").Produces<VaultDevicesResponse>();
+        api.MapPost("/vault/devices", PairDeviceAsync).RequireAuthorization(Policies.User).Audited("vault.device.pair").WithName("PairVaultDevice").Produces<VaultDevicePairedResponse>();
+        api.MapDelete("/vault/devices/{id}", RevokeDeviceAsync).RequireAuthorization(Policies.User).Audited("vault.device.revoke", "id").WithName("RevokeVaultDevice").Produces(StatusCodes.Status204NoContent);
+        api.MapGet("/vault/activity", GetActivityAsync).RequireAuthorization(Policies.User).WithName("GetVaultActivity").Produces<VaultActivityResponse>();
 
         // ---- the user or a paired device -----------------------------------------------------
-        api.MapGet("/vault/approvals", GetApprovals).RequireAuthorization(Policies.VaultApprover).WithName("GetVaultApprovals");
-        api.MapPost("/vault/approvals/{id}", DecideAsync).RequireAuthorization(Policies.VaultApprover).Audited("vault.approval", "id").WithName("DecideVaultApproval");
-        api.MapGet("/vault/files", GetFilesAsync).RequireAuthorization(Policies.VaultApprover).WithName("GetVaultFiles");
-        api.MapPost("/vault/files/{id}", DecideFileAsync).RequireAuthorization(Policies.VaultApprover).Audited("vault.file", "id").WithName("DecideVaultFile");
+        api.MapGet("/vault/approvals", GetApprovals).RequireAuthorization(Policies.VaultApprover).WithName("GetVaultApprovals").Produces<VaultApprovalsResponse>();
+        api.MapPost("/vault/approvals/{id}", DecideAsync).RequireAuthorization(Policies.VaultApprover).Audited("vault.approval", "id").WithName("DecideVaultApproval").Produces(StatusCodes.Status204NoContent);
+        api.MapGet("/vault/files", GetFilesAsync).RequireAuthorization(Policies.VaultApprover).WithName("GetVaultFiles").Produces<VaultFilesResponse>();
+        api.MapPost("/vault/files/{id}", DecideFileAsync).RequireAuthorization(Policies.VaultApprover).Audited("vault.file", "id").WithName("DecideVaultFile").Produces(StatusCodes.Status204NoContent);
         api.MapGet("/vault/device", WhoAmI).RequireAuthorization(Policies.VaultDevice).WithName("GetVaultDevice");
 
         // ---- the guest (its own primary VM's token) -----------------------------------------
@@ -53,10 +54,10 @@ public static class VaultEndpoints
         return api;
     }
 
-    public sealed record EntryDto(string? Name, string? Description, bool? HasUsername, string? Payload, long? UpdatedAt, string? UpdatedBy, bool? Deleted, bool? AutoApprove = null);
+    public sealed record EntryDto(string? Name, string? Description, bool? HasUsername, [property: ConstructSecret] string? Payload, long? UpdatedAt, string? UpdatedBy, bool? Deleted, bool? AutoApprove = null);
     public sealed record EntriesRequest(List<EntryDto?>? Entries);
-    public sealed record SettingsRequest(string? Mode, string? Key, string? KeyCheck);
-    public sealed record UnlockRequest(string? Key);
+    public sealed record SettingsRequest(string? Mode, [property: ConstructSecret] string? Key, string? KeyCheck);
+    public sealed record UnlockRequest([property: ConstructSecret] string? Key);
     public sealed record DecisionRequest(string? Decision);
     public sealed record FileRequest(string? Action);
     public sealed record DeviceRequest(string? Label);
@@ -81,13 +82,10 @@ public static class VaultEndpoints
     private static async Task<IResult> GetEntriesAsync(HttpContext http, VaultHostService vault, CancellationToken ct)
     {
         var view = await vault.GetEntriesAsync(Owner(http), ct).ConfigureAwait(false);
-        return Results.Ok(new
-        {
-            revision = view.Revision, mode = view.Mode, keyCheck = view.KeyCheck, unlockedVms = view.UnlockedVms,
-            entries = view.Entries.Select(e => new { name = e.Name, description = e.Description, hasUsername = e.HasUsername, payload = e.Payload,
-                updatedAt = e.UpdatedAt, updatedBy = e.UpdatedBy, deleted = e.Deleted, autoApprove = e.AutoApprove }),
-            devices = view.Devices.Select(Device),
-        });
+        return Results.Ok(new VaultEntriesResponse(view.Revision, view.Mode, view.KeyCheck, view.UnlockedVms,
+            [.. view.Entries.Select(e => new VaultEntryResponse(e.Name, e.Description, e.HasUsername, e.Payload,
+                e.UpdatedAt, e.UpdatedBy, e.Deleted, e.AutoApprove))],
+            [.. view.Devices.Select(VaultDeviceResponse.From)]));
     }
 
     private static Task<IResult> PutEntriesAsync(EntriesRequest? request, HttpContext http, VaultHostService vault, CancellationToken ct) => Run(http, async () =>
@@ -99,7 +97,7 @@ public static class VaultEndpoints
             : new VaultEntry(e.Name ?? "", e.Description ?? "", e.HasUsername ?? false, e.Payload, e.UpdatedAt ?? 0, e.UpdatedBy ?? "", e.Deleted ?? false, e.AutoApprove ?? false)).ToArray();
         var (revision, applied) = await vault.PutEntriesAsync(Owner(http), entries, ct).ConfigureAwait(false);
         http.SetAuditDetail($"entries={entries.Length}, applied={applied}, revision={revision}");
-        return Results.Ok(new { revision, applied });
+        return Results.Ok(new VaultPutEntriesResponse(revision, applied));
     });
 
     private static Task<IResult> PutSettingsAsync(SettingsRequest? request, HttpContext http, VaultHostService vault, CancellationToken ct) => Run(http, async () =>
@@ -123,24 +121,14 @@ public static class VaultEndpoints
     });
 
     private static async Task<IResult> GetLeasesAsync(HttpContext http, VaultHostService vault, CancellationToken ct) =>
-        Results.Ok(new
-        {
-            leases = (await vault.LeasesAsync(Owner(http), ct).ConfigureAwait(false)).Select(l => new
-            {
-                id = l.Id, vm = l.Vm, name = l.Name, usesLeft = l.UsesLeft, expiresAt = l.ExpiresAt.ToUnixTimeMilliseconds(), reason = l.Reason, origin = l.Origin,
-            }),
-        });
+        Results.Ok(new VaultLeasesResponse([.. (await vault.LeasesAsync(Owner(http), ct).ConfigureAwait(false)).Select(l =>
+            new VaultLeaseResponse(l.Id, l.Vm, l.Name, l.UsesLeft, l.ExpiresAt.ToUnixTimeMilliseconds(), l.Reason, l.Origin))]));
 
     private static Task<IResult> RevokeLeaseAsync(string id, HttpContext http, VaultHostService vault, CancellationToken ct) => Run(http, async () =>
     {
         await vault.RevokeLeaseAsync(Owner(http), id, ct).ConfigureAwait(false);
         return Results.NoContent();
     });
-
-    private static object Device(VaultDevice d) => new
-    {
-        id = d.Id, label = d.Label, createdAt = d.CreatedAt.ToUnixTimeMilliseconds(), lastUsedAt = d.LastUsedAt?.ToUnixTimeMilliseconds(),
-    };
 
     // The approval page's address (Logic.VaultWebAddress): the host setting vault.webUrl, the service option,
     // or the service's own address. webUrlSource tells the Companion which, so it can point at the setting
@@ -151,7 +139,7 @@ public static class VaultEndpoints
     private static async Task<IResult> GetDevicesAsync(HttpContext http, VaultHostService vault, IHostConfigStore config, ConstructdOptions options, CancellationToken ct)
     {
         var (webUrl, webUrlSource) = await WebAddressAsync(config, options, ct).ConfigureAwait(false);
-        return Results.Ok(new { webUrl, webUrlSource, devices = (await vault.DevicesAsync(Owner(http), ct).ConfigureAwait(false)).Select(Device) });
+        return Results.Ok(new VaultDevicesResponse(webUrl, webUrlSource, [.. (await vault.DevicesAsync(Owner(http), ct).ConfigureAwait(false)).Select(VaultDeviceResponse.From)]));
     }
 
     private static Task<IResult> PairDeviceAsync(DeviceRequest? request, HttpContext http, VaultHostService vault, IHostConfigStore config, ConstructdOptions options, CancellationToken ct) => Run(http, async () =>
@@ -160,7 +148,7 @@ public static class VaultEndpoints
         var (device, token) = await vault.PairDeviceAsync(Owner(http), request?.Label, ct).ConfigureAwait(false);
         http.SetAuditDetail($"device={device.Id}");
         var (webUrl, webUrlSource) = await WebAddressAsync(config, options, ct).ConfigureAwait(false);
-        return Results.Ok(new { id = device.Id, token, webUrl, webUrlSource });
+        return Results.Ok(new VaultDevicePairedResponse(device.Id, token, webUrl, webUrlSource));
     });
 
     private static Task<IResult> RevokeDeviceAsync(string id, HttpContext http, VaultHostService vault, CancellationToken ct) => Run(http, async () =>
@@ -170,16 +158,13 @@ public static class VaultEndpoints
     });
 
     private static async Task<IResult> GetActivityAsync(HttpContext http, VaultHostService vault, CancellationToken ct) =>
-        Results.Ok(new
-        {
-            events = (await vault.ActivityAsync(Owner(http), ct).ConfigureAwait(false))
-                .Select(e => new { at = e.At.ToUnixTimeMilliseconds(), vm = e.Vm, text = e.Text, warning = e.Warning }),
-        });
+        Results.Ok(new VaultActivityResponse([.. (await vault.ActivityAsync(Owner(http), ct).ConfigureAwait(false))
+            .Select(e => new VaultActivityEvent(e.At.ToUnixTimeMilliseconds(), e.Vm, e.Text, e.Warning))]));
 
     // ── the user or a paired device ─────────────────────────────────────────────
 
     private static IResult GetApprovals(HttpContext http, VaultHostService vault) =>
-        Results.Ok(new { approvals = vault.Approvals(Owner(http)) });
+        Results.Ok(new VaultApprovalsResponse(vault.Approvals(Owner(http))));
 
     private static Task<IResult> DecideAsync(string id, DecisionRequest? request, HttpContext http, VaultHostService vault, CancellationToken ct) => Run(http, async () =>
     {
@@ -190,7 +175,7 @@ public static class VaultEndpoints
     });
 
     private static async Task<IResult> GetFilesAsync(HttpContext http, VaultHostService vault, CancellationToken ct) =>
-        Results.Ok(new { files = await vault.FilesAsync(Owner(http), ct).ConfigureAwait(false) });
+        Results.Ok(new VaultFilesResponse(await vault.FilesAsync(Owner(http), ct).ConfigureAwait(false)));
 
     private static Task<IResult> DecideFileAsync(string id, FileRequest? request, HttpContext http, VaultHostService vault, CancellationToken ct) => Run(http, async () =>
     {

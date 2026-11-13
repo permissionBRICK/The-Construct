@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The typed C# client of constructd, generated at build time by NSwag from the committed contract
+    (service/openapi/constructd.v1.json) into obj/. Regenerate the contract and rebuild, and the client
+    follows. The only hand-written file, ConstructdClient.Json.cs, sets the enum format.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Constructd.Client</RootNamespace>
+    <ContractFile>$(MSBuildThisFileDirectory)..\..\openapi\constructd.v1.json</ContractFile>
+    <GeneratedClient>$(BaseIntermediateOutputPath)ConstructdClient.g.cs</GeneratedClient>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NSwag.MSBuild" Version="14.7.1">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <Target Name="GenerateConstructdClient" BeforeTargets="CoreCompile" Inputs="$(ContractFile);$(MSBuildThisFileFullPath)" Outputs="$(GeneratedClient)">
+    <Exec Command="$(NSwagExe_Net100) openapi2csclient /input:&quot;$(ContractFile)&quot; /output:&quot;$(GeneratedClient)&quot; /namespace:Constructd.Client /className:ConstructdClient /operationGenerationMode:SingleClientFromOperationId /useBaseUrl:false /generateClientInterfaces:true /jsonLibrary:SystemTextJson /generateNullableReferenceTypes:true /generateOptionalPropertiesAsNullable:true" />
+  </Target>
+
+  <Target Name="IncludeConstructdClient" AfterTargets="GenerateConstructdClient" BeforeTargets="CoreCompile">
+    <ItemGroup>
+      <Compile Include="$(GeneratedClient)" />
+    </ItemGroup>
+  </Target>
+
+</Project>

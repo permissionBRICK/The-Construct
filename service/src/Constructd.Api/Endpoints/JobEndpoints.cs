@@ -25,9 +25,9 @@ public static class JobEndpoints
     {
         var jobs = api.MapGroup("/jobs").RequireAuthorization(Policies.UserOrPrimaryToken);
 
-        api.MapGet("/jobs", ListAsync).RequireAuthorization(Policies.UserOrPrimaryToken).WithName("ListJobs");
-        jobs.MapPost("/{id}/cancel", CancelAsync).Audited("job.cancel").WithName("CancelJob");
-        jobs.MapGet("/{id}", GetAsync).WithName("GetJob");
+        api.MapGet("/jobs", ListAsync).RequireAuthorization(Policies.UserOrPrimaryToken).WithName("ListJobs").Produces<IReadOnlyList<JobResponse>>();
+        jobs.MapPost("/{id}/cancel", CancelAsync).Audited("job.cancel").WithName("CancelJob").Produces<JobCancelResponse>();
+        jobs.MapGet("/{id}", GetAsync).WithName("GetJob").Produces<JobResponse>();
         jobs.MapGet("/{id}/events", EventsAsync).WithName("GetJobEvents");
 
         return api;
@@ -51,7 +51,7 @@ public static class JobEndpoints
         var job = await jobs.GetAsync(id, ct); if (job is null) return Problems.NotFound("Unknown job.");
         if (!CanRead(http, job)) return Problems.Forbidden("Job access refused.");
         CodedProblems.Audit(http, "job.cancel", job.Owner, target: job.VmName, extra: "job=" + job.Id);
-        return Results.Ok(new { jobId = id, cancelled = await jobs.CancelAsync(id, ct) });
+        return Results.Ok(new JobCancelResponse(id, await jobs.CancelAsync(id, ct)));
     }
 
     private static async Task<IResult> GetAsync(

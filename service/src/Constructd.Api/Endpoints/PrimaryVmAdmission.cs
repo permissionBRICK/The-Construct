@@ -22,7 +22,7 @@ public static class PrimaryVmAdmission
         var ignoredOptions = new List<string>();
         if (request.Opts?.AutomaticCheckpoints == true && !driver.Capabilities.Checkpoints) ignoredOptions.Add("automaticCheckpoints");
         if (request.Opts?.Nested == true && !driver.NestedAvailable) ignoredOptions.Add("nested");
-        var response = new { jobId = id, nested = descriptor.Nested, nestedFromHostDefault = request.Opts?.Nested is null, ignoredOptions };
+        var response = new VmCreateAcceptedResponse(id, descriptor.Nested, request.Opts?.Nested is null, ignoredOptions);
         descriptor = descriptor with { AutomaticCheckpoints = descriptor.AutomaticCheckpoints && driver.Capabilities.Checkpoints };
         var key = supplied is null ? null : new OperationKeyRecord(vm.Owner, "create-vm", supplied,
             OperationFingerprint.Compute(http.Request.Path, JsonSerializer.SerializeToElement(request, ApiJson.Options)), vm.Name, id,

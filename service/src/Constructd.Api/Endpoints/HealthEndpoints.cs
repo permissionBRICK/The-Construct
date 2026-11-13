@@ -1,3 +1,4 @@
+using Constructd.Api.Contracts;
 using Constructd.Api.Auth;
 using Constructd.Core.Abstractions;
 using Constructd.Core.Domain;
@@ -29,7 +30,7 @@ public static class HealthEndpoints
             if (http.User.Identity?.IsAuthenticated == true && (http.User.IsKnownUser() || http.User.IsVmToken() || http.User.Identity.AuthenticationType == UpdateHandoffAuthenticationHandler.SchemeName))
             { body["commit"] = release.Installed.Commit; body["packageVersion"] = release.Installed.PackageVersion; body["installedAt"] = release.Installed.InstalledAt; }
             return Results.Ok(body);
-        }).AllowAnonymous().WithName("Health");
+        }).AllowAnonymous().WithName("Health").Produces<HealthResponse>();
         return api;
     }
 }

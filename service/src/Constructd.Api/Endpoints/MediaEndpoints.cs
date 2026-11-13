@@ -31,11 +31,11 @@ public static partial class MediaEndpoints
         media.MapGet("/uploads/{id}",UploadAsync).WithName("GetMediaUpload");
         media.MapPost("/uploads/{id}/complete",CompleteAsync).Audited("media.upload.complete","id").WithName("CompleteMediaUpload");
         media.MapDelete("/uploads/{id}",AbortAsync).Audited("media.upload.abort","id").WithName("AbortMediaUpload");
-        api.MapGet("/media",ListAsync).RequireAuthorization(Policies.UserOrPrimaryToken).WithName("ListMedia");
+        api.MapGet("/media",ListAsync).RequireAuthorization(Policies.UserOrPrimaryToken).WithName("ListMedia").Produces<IReadOnlyList<MediaItemResponse>>();
         media.MapGet("/{id}",GetAsync).WithName("GetMedia");
-        media.MapGet("/{id}/references",ReferencesAsync).WithName("GetMediaReferences");
-        media.MapDelete("/{id}",DeleteAsync).Audited("media.delete","id").WithName("DeleteMedia");
-        media.MapPost("/cleanup",CleanupAsync).RequireAuthorization(Policies.Admin).Audited("media.cleanup").WithName("CleanupMedia");
+        media.MapGet("/{id}/references",ReferencesAsync).WithName("GetMediaReferences").Produces<IReadOnlyList<MediaReferenceResponse>>();
+        media.MapDelete("/{id}",DeleteAsync).Audited("media.delete","id").WithName("DeleteMedia").Produces(StatusCodes.Status204NoContent).Produces<JobAcceptedResponse>(StatusCodes.Status202Accepted);
+        media.MapPost("/cleanup",CleanupAsync).RequireAuthorization(Policies.Admin).Audited("media.cleanup").WithName("CleanupMedia").Produces<JobAcceptedResponse>(StatusCodes.Status202Accepted);
         return api;
     }
     private static IResult Error(string code,object? extensions = null) => Results.Problem(statusCode: code switch {
@@ -253,7 +253,7 @@ public static partial class MediaEndpoints
         return Error("not-found");
     }
     private static async Task<IResult> ReferencesAsync(string id,HttpContext http,IMediaStore store,IVmRepository vms,CancellationToken ct) =>
-        await store.GetAsync(id,ct) is { } item && await OwnAsync(http,item.Owner,vms,ct) ? Results.Ok((await store.ListReferencesAsync(id,ct)).Select(r=>new {r.VmName,r.Slot,r.Created})) : Error("not-found");
+        await store.GetAsync(id,ct) is { } item && await OwnAsync(http,item.Owner,vms,ct) ? Results.Ok((await store.ListReferencesAsync(id,ct)).Select(r=>new MediaReferenceResponse(r.VmName,r.Slot,r.Created)).ToList()) : Error("not-found");
     private static async Task<IResult> DeleteAsync(string id,HttpContext http,IMediaStore store,IVmRepository vms,IMediaGate gate,
         IMaintenanceGate maintenance,MediaJobs work,IAdmissionStore admission,IPersistedJobRunner runner,IClock clock,CancellationToken ct)
     {
@@ -282,7 +282,7 @@ public static partial class MediaEndpoints
                 await admission.MarkStartFailedAsync(job.Id,"job-start-failed",CancellationToken.None);
                 return Error(ex is NotSupportedException ? "unsupported-capability" : "job-start-failed",new {jobId=job.Id,mediaId=id,capability="media",level="unsupported"});
             }
-            return Results.Accepted(null,new {jobId=job.Id});
+            return Results.Accepted(null,new JobAcceptedResponse(job.Id));
         }
         finally { activity?.Dispose(); }
     }
@@ -292,7 +292,7 @@ public static partial class MediaEndpoints
         try
         {
             var initiator=http.User.Actor(); var job=await jobs.SubmitAsync("media-cleanup",null,http.User.NameOrEmpty(),async(p,t)=> {using(activity) return await work.CleanupAsync(initiator,p,t);},ct);
-            CodedProblems.Audit(http,"media.cleanup",http.User.NameOrEmpty(),target:job.Id); return Results.Accepted(null,new {jobId=job.Id});
+            CodedProblems.Audit(http,"media.cleanup",http.User.NameOrEmpty(),target:job.Id); return Results.Accepted(null,new JobAcceptedResponse(job.Id));
         }
         catch { activity.Dispose(); throw; }
     }
