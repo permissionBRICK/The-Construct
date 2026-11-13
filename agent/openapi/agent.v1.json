@@ -789,6 +789,181 @@
         }
       }
     },
+    "/api/engines/{engine}/vms/{vm}/jobs": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "description": "The engine's POST /vms/{name}/jobs. Credentials go with a provision or a reinstall. The agent adds secrets.gitCloneCredentialsB64 from this device's git credential helper, for the user's own VM only and unless the body carries one; everything else goes to the engine as sent. The answer is the engine's (status and body), with hostsWithoutCredential: the HTTP(S) hosts of the VM's repos that had no working credential here.",
+        "operationId": "StartVmJobWithCredentials",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "vm",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStartedWithCredentials"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/engines/{engine}/vms": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "description": "The engine's POST /vms. Credentials go with a create that has settings (its first provision). The agent adds secrets.gitCloneCredentialsB64 from this device's git credential helper, for the user's own VM only and unless the body carries one; everything else goes to the engine as sent. The answer is the engine's (status and body), with hostsWithoutCredential: the HTTP(S) hosts of the VM's repos that had no working credential here.",
+        "operationId": "CreateVmWithCredentials",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStartedWithCredentials"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/engines/{engine}/jobs/{id}/retry": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "description": "The engine's POST /jobs/{id}/retry. Credentials go with the retry of a provision or a reinstall. The agent adds secrets.gitCloneCredentialsB64 from this device's git credential helper, for the user's own VM only and unless the body carries one; everything else goes to the engine as sent. The answer is the engine's (status and body), with hostsWithoutCredential: the HTTP(S) hosts of the VM's repos that had no working credential here.",
+        "operationId": "RetryJobWithCredentials",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/JsonObject"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStartedWithCredentials"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/devices/{id}/secrets": {
       "get": {
         "tags": [
@@ -3006,6 +3181,41 @@
             ]
           }
         }
+      },
+      "JobStartedWithCredentials": {
+        "required": [
+          "jobId",
+          "kind",
+          "replayed",
+          "hostsWithoutCredential"
+        ],
+        "type": "object",
+        "properties": {
+          "jobId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "replayed": {
+            "type": [
+              "null",
+              "boolean"
+            ]
+          },
+          "hostsWithoutCredential": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "JsonObject": {
+        "type": "object"
       },
       "OldWritersView": {
         "required": [

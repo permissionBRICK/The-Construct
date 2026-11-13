@@ -9490,6 +9490,16 @@
                 "$ref": "#/components/schemas/VmDesiredState"
               }
             ]
+          },
+          "secrets": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ProvisionSecretsRequest"
+              }
+            ]
           }
         }
       },
