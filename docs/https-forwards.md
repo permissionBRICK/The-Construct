@@ -166,6 +166,12 @@ is refused with code `https-unavailable` (exit 7 from the CLI).
 * `--reuse` keeps HTTPS and plain forwards of the same port apart; with `--name` it reuses only
   the forward of that name.
 
+To have provisioning request one on every VM a project runs on, declare it in the project's
+profile: `"forwards": [{"port": 5173, "https": true, "name": "app"}]` (see
+[Project profiles § Port forwards](projects.md#port-forwards)). Provisioning asks with
+`--https-if-available`, so the same profile opens a plain host forward where the host offers no
+HTTPS. `--main` is left to T3 Code, which provisioning makes the main forward.
+
 The API fields are `https`, `main`, `upstreamTls`, `name` and `replaceMain` on
 `POST /vms/{name}/forwards`. A forward in a list carries `https: true`, `main`, `upstreamTls`, its
 `name`, and `portUrl` next to `url` when `url` is a shared-port address.

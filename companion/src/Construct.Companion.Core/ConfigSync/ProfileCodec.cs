@@ -12,12 +12,18 @@ public static class ProfileCodec
     private static string Text(JsonNode? n) => n is JsonValue v && v.TryGetValue<string>(out var s) ? s : n?.ToJsonString() ?? "";
     private static bool Map(JsonNode? n) => n is JsonObject o && o.All(p => StringValue(p.Value));
     private static readonly string[] Agents = ["claude", "codex", "opencode"];
-    private static readonly string[] ForwardKeys = ["port", "label", "to"];
+    private static readonly string[] ForwardKeys = ["port", "label", "to", "https", "name", "upstreamTls"];
     private static readonly string[] ForwardTargets = ["client", "host"];
+    // One DNS label, as `construct expose --name` takes it.
+    private static readonly System.Text.RegularExpressions.Regex ForwardNamePattern = new(@"\A[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\z", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
     // JS Number.isInteger on the parsed double: 8080.0 and 8.08e3 are the port 8080 there too.
     private static int? ForwardPort(JsonNode? n) => n is JsonValue v && v.GetValueKind() == JsonValueKind.Number && v.TryGetValue<double>(out var d)
         && double.IsFinite(d) && Math.Floor(d) == d && d >= 1 && d <= 65535 ? (int)d : null;
     private static bool ForwardTarget(JsonNode? n) => n is JsonValue v && v.TryGetValue<string>(out var s) && ForwardTargets.Contains(s);
+    private static bool ForwardName(JsonNode? n) => n is JsonValue v && v.GetValueKind() == JsonValueKind.String && ForwardNamePattern.IsMatch(v.GetValue<string>());
+    private static bool Bool(JsonNode? n) => n is JsonValue v && v.GetValueKind() is JsonValueKind.True or JsonValueKind.False;
+    private static bool True(JsonNode? n) => n is JsonValue v && v.GetValueKind() == JsonValueKind.True;
+    private static bool IsText(JsonNode? n, string text) => n is JsonValue v && v.GetValueKind() == JsonValueKind.String && v.GetValue<string>() == text;
     public static IReadOnlyList<string> ValidateProfile(string name, JsonNode? node)
     {
         if (node is not JsonObject obj) return ["profile is not a JSON object"];
@@ -86,6 +92,12 @@ public static class ProfileCodec
                 if (ForwardPort(f["port"]) is null) errors.Add($"forwards[{i}].port must be an integer from 1 to 65535");
                 if (f.ContainsKey("label") && !StringValue(f["label"])) errors.Add($"forwards[{i}].label must be a string");
                 if (f.ContainsKey("to") && !ForwardTarget(f["to"])) errors.Add($"forwards[{i}].to must be \"client\" or \"host\"");
+                if (f.ContainsKey("https") && !Bool(f["https"])) errors.Add($"forwards[{i}].https must be true or false");
+                if (f.ContainsKey("name") && !ForwardName(f["name"])) errors.Add($"forwards[{i}].name must be one DNS label: up to 63 lowercase letters, digits and hyphens, starting and ending with a letter or digit");
+                if (f.ContainsKey("upstreamTls") && !Bool(f["upstreamTls"])) errors.Add($"forwards[{i}].upstreamTls must be true or false");
+                if (True(f["https"]) && IsText(f["to"], "client")) errors.Add($"forwards[{i}].to must be \"host\" or left out: the host serves an HTTPS forward");
+                if (f.ContainsKey("name") && !True(f["https"])) errors.Add($"forwards[{i}].name needs \"https\": true");
+                if (True(f["upstreamTls"]) && !True(f["https"])) errors.Add($"forwards[{i}].upstreamTls needs \"https\": true");
             }
         }
         if (obj.ContainsKey("tests") && obj["tests"] is not JsonObject) errors.Add("\"tests\" must be an object");
@@ -149,7 +161,15 @@ public static class ProfileCodec
         var forwards = new JsonArray();
         foreach (var f in (o["forwards"] as JsonArray ?? []).Cast<JsonObject>())
         {
-            var e = new JsonObject { ["port"] = ForwardPort(f["port"]), ["to"] = f.ContainsKey("to") ? f["to"]!.DeepClone() : "client" };
+            // An HTTPS forward is a host forward (the host terminates the TLS); name and upstreamTls only go with it.
+            var https = True(f["https"]);
+            var e = new JsonObject { ["port"] = ForwardPort(f["port"]), ["to"] = https ? "host" : f.ContainsKey("to") ? f["to"]!.DeepClone() : "client" };
+            if (https)
+            {
+                e["https"] = true;
+                if (ForwardName(f["name"])) e["name"] = f["name"]!.DeepClone();
+                if (True(f["upstreamTls"])) e["upstreamTls"] = true;
+            }
             if (Str(f["label"])) e["label"] = f["label"]!.DeepClone();
             forwards.Add(e);
         }

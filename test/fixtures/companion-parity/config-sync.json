@@ -964,6 +964,28 @@
   },
   {
     "input": {
+      "name": "a",
+      "raw": "{\"name\":\"a\",\"forwards\":[{\"label\":\"app\",\"upstreamTls\":true,\"name\":\"app\",\"https\":true,\"port\":5173},{\"port\":5174,\"https\":true,\"to\":\"host\",\"upstreamTls\":false},{\"port\":5175,\"https\":false,\"to\":\"host\"}]}"
+    },
+    "kind": "canonical",
+    "output": {
+      "content": "{\n  \"name\": \"a\",\n  \"repos\": [],\n  \"sdks\": {},\n  \"mcp\": [],\n  \"hostPackages\": [],\n  \"provisionCommands\": [],\n  \"forwards\": [\n    {\n      \"port\": 5173,\n      \"to\": \"host\",\n      \"https\": true,\n      \"name\": \"app\",\n      \"upstreamTls\": true,\n      \"label\": \"app\"\n    },\n    {\n      \"port\": 5174,\n      \"to\": \"host\",\n      \"https\": true\n    },\n    {\n      \"port\": 5175,\n      \"to\": \"host\"\n    }\n  ],\n  \"tests\": {}\n}\n",
+      "ok": true
+    }
+  },
+  {
+    "input": {
+      "name": "a",
+      "raw": "{\"name\":\"a\",\"forwards\":[{\"port\":1,\"https\":\"true\"},{\"port\":2,\"https\":1},{\"port\":3,\"https\":true,\"to\":\"client\"},{\"port\":4,\"name\":\"app\"},{\"port\":5,\"upstreamTls\":true},{\"port\":6,\"https\":true,\"upstreamTls\":1},{\"port\":7,\"https\":true,\"name\":\"App\"},{\"port\":8,\"https\":true,\"name\":\"a_b\"},{\"port\":9,\"https\":true,\"name\":\"a\\n\"},{\"port\":10,\"https\":null,\"name\":null}]}"
+    },
+    "kind": "canonical",
+    "output": {
+      "ok": false,
+      "reason": "is not a valid profile: forwards[0].https must be true or false; forwards[1].https must be true or false; forwards[2].to must be \"host\" or left out: the host serves an HTTPS forward; forwards[3].name needs \"https\": true; forwards[4].upstreamTls needs \"https\": true; forwards[5].upstreamTls must be true or false; forwards[6].name must be one DNS label: up to 63 lowercase letters, digits and hyphens, starting and ending with a letter or digit; forwards[7].name must be one DNS label: up to 63 lowercase letters, digits and hyphens, starting and ending with a letter or digit; forwards[8].name must be one DNS label: up to 63 lowercase letters, digits and hyphens, starting and ending with a letter or digit; forwards[9].https must be true or false; forwards[9].name must be one DNS label: up to 63 lowercase letters, digits and hyphens, starting and ending with a letter or digit; forwards[9].name needs \"https\": true"
+    }
+  },
+  {
+    "input": {
       "existingNames": [],
       "manifest": {},
       "selected": [

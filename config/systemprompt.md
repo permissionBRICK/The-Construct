@@ -32,7 +32,8 @@ It opens that port on the user's own machine, waits until the link actually
 works, and tells you if nothing is connected right now. `construct expose --help`
 lists the other ways this VM's host can publish a port. Forwards are lost on
 reinstall; to keep one, add it to the project's profile:
-`"forwards": [{"port": 5173, "label": "vite dev"}]`.
+`"forwards": [{"port": 5173, "label": "vite dev"}]` (`"https": true` for an
+HTTPS forward with the host's certificate, where the host offers one).
 
 On a service-managed primary VM, `construct vm` can create and operate disposable
 child VMs for isolated OS or installer tests. Start with `construct vm identity`

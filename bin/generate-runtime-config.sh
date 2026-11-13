@@ -183,14 +183,19 @@ jq -s '
       | add
     ),
     # One {profile, port, to, label} per declared port forward, for
-    # project-forwards.sh. A port asked for by several profiles (same target) is
-    # requested once, under the first profile that declared it.
+    # project-forwards.sh, plus {https, name, upstreamTls} for an HTTPS one (whose
+    # target is always the host). A port asked for by several profiles (same
+    # target, same kind and name) is requested once, under the first profile that
+    # declared it.
     forwards: (
       [ .[] | .name as $profile
         | (.forwards // [])[]
         | select(type == "object" and (.port | type) == "number")
-        | { profile: $profile, port: .port, to: (.to // "client"), label: (.label // "") } ]
-      | reduce .[] as $f ([]; if any(.[]; .port == $f.port and .to == $f.to) then . else . + [$f] end)
+        | (.https == true) as $https
+        | { profile: $profile, port: .port, to: (if $https then "host" else (.to // "client") end), label: (.label // "") }
+          + (if $https then { https: true, name: (.name // ""), upstreamTls: (.upstreamTls == true) } else {} end) ]
+      | reduce .[] as $f ([]; if any(.[]; .port == $f.port and .to == $f.to
+          and (.https // false) == ($f.https // false) and (.name // "") == ($f.name // "")) then . else . + [$f] end)
     ),
     tests: map({(.name): (.tests // {})}) | add
   }

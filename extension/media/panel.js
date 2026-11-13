@@ -344,20 +344,32 @@
     return String(text || "").split("\n").map((s) => s.trim()).filter(Boolean);
   }
 
-  // forwards[] <-> "port [client|host] [label]" lines. The target is always written
-  // out, so a label that starts with "client"/"host" cannot be misread on save.
+  // forwards[] <-> "port [client|host|https[+tls][:name]] [label]" lines. The target
+  // is always written out, so a label that starts with "client"/"host" cannot be
+  // misread on save. "https" is an HTTPS forward (to: host), "+tls" its upstreamTls,
+  // ":name" its name, all in one token so the label after it stays free text.
+  function forwardTarget(f) {
+    if (f.https !== true) return f.to === "host" ? "host" : "client";
+    return "https" + (f.upstreamTls === true ? "+tls" : "") + (typeof f.name === "string" && f.name ? ":" + f.name : "");
+  }
   function forwardsToText(forwards) {
     return (Array.isArray(forwards) ? forwards : []).filter((f) => f && typeof f === "object").map((f) =>
-      [String(f.port), f.to === "host" ? "host" : "client", typeof f.label === "string" ? f.label.trim() : ""]
+      [String(f.port), forwardTarget(f), typeof f.label === "string" ? f.label.trim() : ""]
         .filter(Boolean).join(" ")).join("\n");
   }
   function textToForwards(text) {
     const out = [];
     String(text || "").split("\n").forEach((line) => {
-      const m = /^(\d{1,5})(?:\s+(client|host)(?=\s|$))?(?:\s+(.*))?$/.exec(line.trim());
+      const m = /^(\d{1,5})(?:\s+(client|host|https(\+tls)?(?::([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))?)(?=\s|$))?(?:\s+(.*))?$/.exec(line.trim());
       if (!m || Number(m[1]) < 1 || Number(m[1]) > 65535) return;
-      const entry = { port: Number(m[1]), to: m[2] || "client" };
-      if (m[3] && m[3].trim()) entry.label = m[3].trim();
+      const https = !!m[2] && m[2].startsWith("https");
+      const entry = { port: Number(m[1]), to: https ? "host" : m[2] || "client" };
+      if (https) {
+        entry.https = true;
+        if (m[4]) entry.name = m[4];
+        if (m[3]) entry.upstreamTls = true;
+      }
+      if (m[5] && m[5].trim()) entry.label = m[5].trim();
       out.push(entry);
     });
     return out;

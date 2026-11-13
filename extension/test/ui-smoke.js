@@ -532,7 +532,8 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
     repos: [{ url: "https://h/o/billing.git", directory: "billing" }, { url: "https://h/o/api.git" }],
     sdks: { node: ["22", "24"], python: "3.12" }, mcp: [{ name: "gh", type: "stdio", command: "npx" }],
     hostPackages: ["build-essential"], provisionCommands: ["npm ci", "cp .env.example .env"],
-    forwards: [{ port: 5173, to: "client", label: "vite dev" }, { port: 9000, to: "host" }],
+    forwards: [{ port: 5173, to: "client", label: "vite dev" }, { port: 9000, to: "host" },
+      { port: 3000, to: "host", https: true, name: "app", upstreamTls: true, label: "web app" }, { port: 3001, to: "host", https: true }],
     tests: { web: { runner: "playwright", command: "npm test" } },
   } }, "*"));
   await page.waitForTimeout(80);
@@ -543,7 +544,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("modal: sdks rendered as name=values lines", (await page.inputValue("#pmSdks")).includes("node = 22, 24") && (await page.inputValue("#pmSdks")).includes("python = 3.12"));
   check("modal: mcp rendered as JSON", (await page.inputValue("#pmMcp")).includes('"gh"'));
   check("modal: provision commands one per line", (await page.inputValue("#pmProvision")) === "npm ci\ncp .env.example .env");
-  check("modal: forwards rendered as 'port target label' lines", (await page.inputValue("#pmForwards")) === "5173 client vite dev\n9000 host");
+  check("modal: forwards rendered as 'port target label' lines", (await page.inputValue("#pmForwards")) === "5173 client vite dev\n9000 host\n3000 https+tls:app web app\n3001 https");
 
   // add + remove a repo row.
   await page.click("#pmAddRepo");
@@ -564,7 +565,8 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await page.fill("#pmMcp", '[{"name":"gh","type":"stdio","command":"npx"}]');
   // forwards lines: the target is optional (client), a label may start with "host" once a
   // target precedes it, and lines without a valid port are dropped.
-  await page.fill("#pmForwards", "5173 vite dev\n8080 host  host api\nbogus\n70000 x\n\n3000");
+  // An https token carries the HTTPS fields; a malformed one is just part of the label.
+  await page.fill("#pmForwards", "5173 vite dev\n8080 host  host api\nbogus\n70000 x\n\n3000\n3001 https+tls:app web app\n3002 https\n3003 https:App x");
   await page.evaluate(() => { window.__posted.length = 0; });
   await page.click("#pmSave");
   posted = await page.evaluate(() => window.__posted);
@@ -577,7 +579,9 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("modal: saved profile preserves the un-edited tests block", saveProjMsg &&
     saveProjMsg.profile.tests && saveProjMsg.profile.tests.web && saveProjMsg.profile.tests.web.runner === "playwright");
   check("modal: saved profile carries the parsed forwards", saveProjMsg && JSON.stringify(saveProjMsg.profile.forwards) ===
-    JSON.stringify([{ port: 5173, to: "client", label: "vite dev" }, { port: 8080, to: "host", label: "host api" }, { port: 3000, to: "client" }]));
+    JSON.stringify([{ port: 5173, to: "client", label: "vite dev" }, { port: 8080, to: "host", label: "host api" }, { port: 3000, to: "client" },
+      { port: 3001, to: "host", https: true, name: "app", upstreamTls: true, label: "web app" }, { port: 3002, to: "host", https: true },
+      { port: 3003, to: "client", label: "https:App x" }]));
   check("modal: closes after a valid save", await page.locator("#projModal").isHidden());
 
   // Delete is an explicit modal action; confirmation and filesystem mutation
