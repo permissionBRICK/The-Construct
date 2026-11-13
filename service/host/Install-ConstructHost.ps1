@@ -985,6 +985,11 @@ function Set-ConstructHostFirewall {
     )
 
     if ($Solo) {
+        # A shared host's rules open every profile; on a PC that becomes solo they go.
+        foreach ($name in @("Construct constructd API", "Construct constructd SSH forwards", "Construct constructd app forwards")) {
+            $broad = Get-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue
+            if ($broad) { $broad | Remove-NetFirewallRule; Write-Note "Removed $name" }
+        }
         Set-ConstructGuestFirewallRule -DisplayName "Construct constructd guests" -LocalPort "$ListenPort" -InterfaceAlias "vEthernet ($SwitchName)"
         Write-Note "Solo: nothing else is opened. The LAN reaches this engine only after LAN access is switched on for pairing."
         return
@@ -1483,6 +1488,9 @@ if ($PublicHostPattern) {
 if ($Solo) {
     $PublicHost = Get-ConstructSoloHostName -ComputerName $env:COMPUTERNAME
     $PublicHostPattern = ""
+    # The mshome.net name and the guests-only rule hold on the Default Switch alone: an external
+    # switch's host interface is on the LAN.
+    $SwitchName = "Default Switch"
     Write-Ok "Solo install: this PC and its VMs reach the engine as $PublicHost; the LAN does not"
 }
 

@@ -68,7 +68,9 @@ ok "...named so the uninstaller removes it" ($script:rules[0].Name -eq 'Construc
 ok "no forward range is opened in solo" (-not ($script:rules | Where-Object { $_.Port -match '-' }))
 $script:existing = $true; $script:rules = @()
 Set-ConstructHostFirewall -Solo $true -ListenPort 7462 -SshRange $ssh -AppRange $app -SwitchName 'Default Switch'
-ok "a re-run replaces the rule instead of adding a second" ($script:removed -eq 1 -and $script:rules.Count -eq 1)
+ok "a re-run replaces the rule instead of adding a second" ($script:rules.Count -eq 1)
+ok "...and removes a shared host's three broad rules besides its own" ($script:removed -eq 4)
+ok "solo always uses the Default Switch" ($installText -match '(?s)\$PublicHostPattern = ""\s*\r?\n(\s*#[^\n]*\r?\n)*\s*\$SwitchName = "Default Switch"')
 $script:existing = $false; $script:rules = @()
 Set-ConstructHostFirewall -Solo $false -ListenPort 7462 -SshRange $ssh -AppRange $app -SwitchName 'Default Switch'
 ok "a shared host keeps its three rules and gets no guest rule" ($script:shared.Count -eq 3 -and $script:rules.Count -eq 0)
