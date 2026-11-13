@@ -39,6 +39,13 @@ public static class VaultEndpoints
         api.MapDelete("/vault/devices/{id}", RevokeDeviceAsync).RequireAuthorization(Policies.User).Audited("vault.device.revoke", "id").WithName("RevokeVaultDevice").Produces(StatusCodes.Status204NoContent);
         api.MapGet("/vault/activity", GetActivityAsync).RequireAuthorization(Policies.User).WithName("GetVaultActivity").Produces<VaultActivityResponse>();
 
+        // ---- a vault kept as secret records (plan 8.2, 9.1, 10.3) ----------------------------
+        api.MapGet("/vault/mode", GetModeAsync).RequireAuthorization(Policies.User).WithName("GetVaultMode").Produces<VaultModeResponse>();
+        api.MapPut("/vault/mode", PutModeAsync).RequireAuthorization(Policies.User).Audited("vault.mode").WithName("PutVaultMode").Produces(StatusCodes.Status204NoContent);
+        api.MapGet("/vault/entry-requests", GetEntryRequests).RequireAuthorization(Policies.User).WithName("GetVaultEntryRequests").Produces<VaultEntryRequestsResponse>();
+        api.MapPost("/vault/entry-requests/{id}", SaveEntryAsync).RequireAuthorization(Policies.User).Audited("vault.entry.save", "id").WithName("SaveVaultEntryRequest").Produces(StatusCodes.Status204NoContent);
+        api.MapPost("/vault/entry-requests/{id}/decline", DeclineEntryAsync).RequireAuthorization(Policies.User).Audited("vault.entry.decline", "id").WithName("DeclineVaultEntryRequest").Produces(StatusCodes.Status204NoContent);
+
         // ---- the user or a paired device -----------------------------------------------------
         api.MapGet("/vault/approvals", GetApprovals).RequireAuthorization(Policies.VaultApprover).WithName("GetVaultApprovals").Produces<VaultApprovalsResponse>();
         api.MapPost("/vault/approvals/{id}", DecideAsync).RequireAuthorization(Policies.VaultApprover).Audited("vault.approval", "id").WithName("DecideVaultApproval").Produces(StatusCodes.Status204NoContent);
@@ -57,7 +64,14 @@ public static class VaultEndpoints
     public sealed record EntryDto(string? Name, string? Description, bool? HasUsername, [property: ConstructSecret] string? Payload, long? UpdatedAt, string? UpdatedBy, bool? Deleted, bool? AutoApprove = null);
     public sealed record EntriesRequest(List<EntryDto?>? Entries);
     public sealed record SettingsRequest(string? Mode, [property: ConstructSecret] string? Key, string? KeyCheck);
-    public sealed record UnlockRequest([property: ConstructSecret] string? Key);
+    /// <param name="Key">The Companion's vault: <c>K</c> in base64.</param>
+    /// <param name="Grant">A vault kept as records: <c>K</c> sealed by a device to this engine's host key.</param>
+    public sealed record UnlockRequest([property: ConstructSecret] string? Key, KeyGrantDto? Grant = null);
+    /// <summary><c>K</c> sealed to this engine's host key (Construct.Keys.EngineGrants, name <c>K</c>).</summary>
+    public sealed record KeyGrantDto(long Epoch, [property: ConstructSecret] byte[]? Sealed);
+    public sealed record ModeRequest(string? Mode, KeyGrantDto? Grant);
+    /// <param name="Payload">The value sealed with <c>K</c> under the entry's name and <paramref name="UpdatedAt"/>.</param>
+    public sealed record EntrySaveRequest([property: ConstructSecret] string? Payload, long? UpdatedAt, bool? HasUsername);
     public sealed record DecisionRequest(string? Decision);
     public sealed record FileRequest(string? Action);
     public sealed record DeviceRequest(string? Label);
@@ -116,7 +130,7 @@ public static class VaultEndpoints
         if (vm is null) return Problems.NotFound($"No VM named '{name}'.");
         // The vault is the owner's alone: an admin cannot unlock another user's VM.
         if (!Ownership.SameName(vm.Owner, http.User.NameOrEmpty())) return CodedProblems.Create(403, "not-owner", "Only the VM's owner can unlock its key vault.");
-        await vault.UnlockAsync(vm, request?.Key, ct).ConfigureAwait(false);
+        await vault.UnlockAsync(vm, request?.Key, ct, Grant(request?.Grant)).ConfigureAwait(false);
         return Results.NoContent();
     });
 
@@ -161,6 +175,49 @@ public static class VaultEndpoints
         Results.Ok(new VaultActivityResponse([.. (await vault.ActivityAsync(Owner(http), ct).ConfigureAwait(false))
             .Select(e => new VaultActivityEvent(e.At.ToUnixTimeMilliseconds(), e.Vm, e.Text, e.Warning))]));
 
+    // ── a vault kept as records ─────────────────────────────────────────────────
+
+    private static VaultKeyGrant? Grant(KeyGrantDto? grant) => grant?.Sealed is { Length: > 0 } sealedKey ? new VaultKeyGrant(grant.Epoch, sealedKey) : null;
+
+    // device:<id> for a device of the new stack, phone:<id> for a paired approval device, user:<name> for a sign-in.
+    private static string Approver(HttpContext http) =>
+        http.User.FindFirst(DeviceAuthenticationHandler.DeviceClaim)?.Value is { } device ? "device:" + device
+        : http.User.FindFirst(ConstructdClaims.VaultDevice)?.Value is { } phone ? "phone:" + phone
+        : "user:" + http.User.NameOrEmpty();
+
+    private static async Task<IResult> GetModeAsync(HttpContext http, VaultHostService vault, CancellationToken ct)
+    {
+        var view = await vault.ModeAsync(Owner(http), ct).ConfigureAwait(false);
+        return Results.Ok(new VaultModeResponse(view.Mode, view.HoldsKey, view.Records, view.UnlockedVms));
+    }
+
+    private static Task<IResult> PutModeAsync(ModeRequest? request, HttpContext http, VaultHostService vault, CancellationToken ct) => Run(http, async () =>
+    {
+        http.SetAuditTarget(Owner(http));
+        http.SetAuditDetail($"mode={VaultProtocol.Sanitize(request?.Mode, 20)}, grant={(request?.Grant is null ? "absent" : "present")}");
+        await vault.SetModeAsync(Owner(http), request?.Mode, Grant(request?.Grant), ct).ConfigureAwait(false);
+        return Results.NoContent();
+    });
+
+    private static IResult GetEntryRequests(HttpContext http, VaultHostService vault) =>
+        Results.Ok(new VaultEntryRequestsResponse(vault.EntryRequests(Owner(http))));
+
+    // Only a device holds K, so only a device enters a value; it is that write's provenance (9.1 row 4).
+    private static Task<IResult> SaveEntryAsync(string id, EntrySaveRequest? request, HttpContext http, VaultHostService vault, CancellationToken ct) => Run(http, async () =>
+    {
+        if (http.User.FindFirst(DeviceAuthenticationHandler.DeviceClaim)?.Value is not { } device)
+            return CodedProblems.Create(403, "devices-only", "Only a device enters a secret.");
+        http.SetAuditDetail($"device={device}");
+        await vault.SaveEntryAsync(Owner(http), id, "device:" + device, request?.Payload, request?.UpdatedAt ?? 0, request?.HasUsername ?? false, ct).ConfigureAwait(false);
+        return Results.NoContent();
+    });
+
+    private static Task<IResult> DeclineEntryAsync(string id, HttpContext http, VaultHostService vault, CancellationToken ct) => Run(http, async () =>
+    {
+        await vault.DeclineEntryAsync(Owner(http), id, ct).ConfigureAwait(false);
+        return Results.NoContent();
+    });
+
     // ── the user or a paired device ─────────────────────────────────────────────
 
     private static IResult GetApprovals(HttpContext http, VaultHostService vault) =>
@@ -170,7 +227,7 @@ public static class VaultEndpoints
     {
         if (request?.Decision is not ("approve" or "deny")) return CodedProblems.Validation("decision", "Expected approve or deny.");
         http.SetAuditDetail($"decision={request.Decision}, by={(http.User.IsVaultDevice() ? "device" : "user")}");
-        await vault.DecideAsync(Owner(http), id, request.Decision == "approve", ct).ConfigureAwait(false);
+        await vault.DecideAsync(Owner(http), id, request.Decision == "approve", ct, Approver(http)).ConfigureAwait(false);
         return Results.NoContent();
     });
 

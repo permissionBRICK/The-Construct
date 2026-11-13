@@ -86,6 +86,45 @@ public sealed class EngineKeyStore : IDisposable
         return sealedBytes is null ? null : EngineGrants.Open(HostKey, EngineId, account, new EngineGrant(name, epoch, sealedBytes));
     }
 
+    /// <summary>The granted key of the newest epoch, unsealed, with that epoch; null when no device granted it.</summary>
+    public (long Epoch, byte[] Key)? LatestGrantedKey(string account, string name)
+    {
+        long epoch;
+        byte[] sealedBytes;
+        lock (_lock)
+        {
+            using var command = Command("SELECT epoch, sealed FROM engine_grants WHERE account = $a AND name = $n ORDER BY epoch DESC LIMIT 1", ("$a", account), ("$n", name));
+            using var reader = command.ExecuteReader();
+            if (!reader.Read()) return null;
+            epoch = reader.GetInt64(0);
+            sealedBytes = (byte[])reader.GetValue(1);
+        }
+
+        return (epoch, EngineGrants.Open(HostKey, EngineId, account, new EngineGrant(name, epoch, sealedBytes)));
+    }
+
+    /// <summary>Withdraws a granted key, every epoch of it (a device switching the vault to <c>locked</c>, 8.2).</summary>
+    public void DeleteGrant(string account, string name)
+    {
+        lock (_lock)
+        {
+            Run("DELETE FROM engine_grants WHERE account = $a AND name = $n", ("$a", account), ("$n", name));
+        }
+    }
+
+    /// <summary>The accounts that granted this engine <paramref name="name"/> in any epoch.</summary>
+    public IReadOnlyList<string> GrantingAccounts(string name)
+    {
+        lock (_lock)
+        {
+            using var command = Command("SELECT DISTINCT account FROM engine_grants WHERE name = $n ORDER BY account", ("$n", name));
+            using var reader = command.ExecuteReader();
+            var accounts = new List<string>();
+            while (reader.Read()) accounts.Add(reader.GetString(0));
+            return accounts;
+        }
+    }
+
     // ---- device tokens ----------------------------------------------------------------------------
 
     public string IssueDeviceToken(string account, string deviceId)

@@ -104,6 +104,13 @@ public sealed record VaultApprovalsResponse(IReadOnlyList<Constructd.Core.Servic
 
 public sealed record VaultFilesResponse(IReadOnlyList<Constructd.Core.Services.VaultFileView> Files);
 
+/// <param name="Mode"><c>available</c>, <c>locked</c>, or null while a Companion vault is not set up.</param>
+/// <param name="HoldsKey">Whether this engine holds <c>K</c> right now: granted (<c>available</c>) or in RAM for an unlocked VM.</param>
+/// <param name="Records">The vault lives in <c>secret</c> records (an account in the new stack); else in the Companion's table.</param>
+public sealed record VaultModeResponse(string? Mode, bool HoldsKey, bool Records, IReadOnlyList<string> UnlockedVms);
+
+public sealed record VaultEntryRequestsResponse(IReadOnlyList<Constructd.Core.Services.VaultEntryRequestView> Requests);
+
 // ── config backups (docs/plans/host-config-backups.md) ──
 
 public sealed record BackupListResponse(IReadOnlyList<BackupSummaryResponse> Backups);
