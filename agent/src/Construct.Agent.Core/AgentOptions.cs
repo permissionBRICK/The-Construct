@@ -31,6 +31,9 @@ public sealed class AgentOptions
     /// <summary>The device's OS parts (5.1); null picks the Linux one. The Windows shell passes its own.</summary>
     public Device.IDevicePlatform? Platform { get; init; }
 
+    /// <summary>The one-time upgrade's OS parts (11.6); null picks the default (no DPAPI: the old files cannot be opened).</summary>
+    public Upgrade.IUpgradePlatform? Upgrade { get; init; }
+
     public string Version { get; init; } =
         typeof(AgentOptions).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "development";
 

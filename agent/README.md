@@ -25,6 +25,7 @@ the workspace share of a VM on this PC, start with the OS, and updating itself (
 | `src/Construct.Agent.Core/Device/Runtime/` | Moved unchanged from the Companion's host: SSH supervisor, process runner, SSH transport, port reservations, loopback audio server |
 | `src/Construct.Agent.Core/Update/` | Self-update (`install.json`, `versions/`), "update everything" |
 | `src/Construct.Agent.Core/Http/DeviceRoutes.cs` | The device routes |
+| `src/Construct.Agent.Core/Upgrade/` | The one-time upgrade from the old client: the reader of its files (`LegacyState`, `LegacyConfigRepo`), the converter, the dialog's steps, `bridge.json` |
 | `src/construct-agent/` | The console host (Linux) |
 | `src/Construct.Agent.Windows/` | The Windows tray app: tray, WebView2 surfaces, single instance, DPAPI, toasts, WASAPI, `net use`, the Run value |
 | `install/` | Per-user install scripts: `install-construct-agent.sh` (Linux), `Install-ConstructAgent.ps1` (Windows) |
@@ -48,6 +49,7 @@ dotnet run --project agent/src/construct-agent -- run       # foreground; the de
 dotnet run --project agent/src/construct-agent -- open      # starts it if needed, opens the UI
 dotnet run --project agent/src/construct-agent -- repair    # report and restart, no engine needed
 dotnet run --project agent/src/construct-agent -- autostart on|off   # the systemd user unit
+dotnet run --project agent/src/construct-agent -- convert --from-legacy [--from DIR]   # the converter (Windows: construct-agent.exe convert ...)
 python3 scripts/package-agent.py --output DIR --commit SHA --version X.Y.Z   # both packages
 ```
 
@@ -73,6 +75,8 @@ first `ui/dist` above it.
 | `install.json` (0600) | The installed versions: `current`, `previous` and `pending` (12.2). |
 | `versions/<version>/` | One unpacked package per version; the current and the previous one are kept. |
 | `webview2/`, `shell.log`, `construct.png` | Windows only: the WebView2 profile, the tray app's error log, the toast icon. |
+| `bridge.json` (0600) | The one-time upgrade: `stage` (`new`, `converting`, `converted`, written last), the previous install folder, the engines it chose, the items already copied, the last run's items and notes. No secret. |
+| `legacy-upstream.json` (0600) | The old config repository's company upstream links (`manifest/`, `bases/`), kept as data until the new stack has upstream links. |
 
 The directory is 0700. Protection: on first start the agent keeps its protection key in the user's
 keyring through libsecret (`secret-tool`) when a session bus offers one; otherwise in
@@ -131,6 +135,32 @@ CONSTRUCT_AGENT_UPDATE_OPENAPI=1 dotnet test agent/Construct.Agent.slnx --filter
 
 Errors are `application/problem+json` `{title, status, code}`. A refusal by the store or an engine
 behind an agent route is reported as 403, never 401, so 401 always means the agent's own token.
+
+### The one-time upgrade
+
+An install of the old client (Companion, scripts, VS Code panel) moves over in the agent's first window
+(plan 11.6, 13.1, 13.2). The old files are only read; a failed step is retried; the way back is a reinstall
+of the old release by hand.
+
+| Route | What it does |
+|---|---|
+| `GET /api/upgrade` | `{legacy, stage, steps, found, storeEngine, localEngine, items, notes, oldWriters, running, error}`: the steps `engine`, `recovery`, `close`, `convert` with their state, what the old install holds (names and counts, no value), the last run's items |
+| `POST /api/upgrade/engine` | Step 1 (202): where the PC has a local VM, the host package from the device's channel, checked against the manifest, installed by `Install-ConstructHost.ps1 -Solo` with one UAC prompt; its token file is taken into the state and deleted. The old shared hosts are added with their pins and stored sign-ins. Chooses the store engine. |
+| `POST /api/device/setup` | Step 2, the existing first-device setup against `storeEngine`: with an old vault on the PC its key becomes the account's `K` |
+| `GET /api/upgrade/writers` | Step 3: `{open}`, the old writers still running (VS Code, the old Companion, a lifecycle script). The Windows agent holds the Companion's single-instance mutex. |
+| `POST /api/upgrade/convert {from?}` | Step 4 (202): the converter, progress as `upgrade` events. Refused while writers are open or before step 2. |
+
+The converter copies, per item, and lists each item it copied in `bridge.json` so a second run leaves it
+alone: the device channel (`constructRef`: `main` is stable, a branch nightly); the old shared hosts as
+engines with their pins and sign-ins, connected with the vault mode the Companion recorded; the config
+repository's `main` profiles through the store engine's `PUT /profiles/{name}`; a VM branch's unmerged
+change as that VM's write with the merge base as its base, so the engine merges per field and opens a
+conflict (branch ours, main theirs); the upstream links into `legacy-upstream.json`; the vault's secrets
+(only when the account's `K` is the old key); each old backup private key wrapped under `U` into a
+`setting` record `setting:legacy-backup-key:<fingerprint>`; the account's `B.pub` onto every VM it reaches
+over SSH with the old client's key (`construct backup recipients add`); last, each local VM adopted by the
+engine (`POST /vms/{name}/adopt`). Then `stage: converted`, and only then the old backup keys come off the
+VMs. Open vault leases and pending cleanups are not carried over: a VM asks again.
 
 ### Device routes
 

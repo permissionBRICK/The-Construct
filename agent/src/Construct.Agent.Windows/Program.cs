@@ -29,9 +29,10 @@ internal static class Program
         var dataDirectory = AgentOptions.DefaultDataDirectory();
         var install = new AgentInstall(dataDirectory, "construct-agent.exe");
         var running = install.RunningVersion(executable);
-        var platformOptions = new AgentOptions { DataDirectory = dataDirectory, UiDirectory = AgentOptions.DefaultUiDirectory() };
+        var upgrade = new WindowsUpgradePlatform(Path.Combine(dataDirectory, "legacy_known_hosts"));
+        var platformOptions = new AgentOptions { DataDirectory = dataDirectory, UiDirectory = AgentOptions.DefaultUiDirectory(), Upgrade = upgrade };
         var background = args.Contains("--background");
-        var command = args.FirstOrDefault(a => a is "repair" or "version" or "open");
+        var command = args.FirstOrDefault(a => a is "repair" or "version" or "open" or "convert");
 
         switch (command)
         {
@@ -39,6 +40,14 @@ internal static class Program
                 ParentConsole.Attach();
                 Console.WriteLine(platformOptions.Version);
                 return 0;
+            case "convert":
+            {
+                ParentConsole.Attach();
+                var at = Array.IndexOf(args, "--from");
+                if (!args.Contains("--from-legacy")) { Console.Error.WriteLine("Usage: construct-agent convert --from-legacy [--from DIR]"); return 2; }
+                return Construct.Agent.Upgrade.ConvertCommand.RunAsync(platformOptions, _ => new DpapiProtection(), at >= 0 && at + 1 < args.Length ? args[at + 1] : null,
+                    Console.Out, CancellationToken.None).GetAwaiter().GetResult();
+            }
             case "repair":
                 ParentConsole.Attach();
                 return Repair.RunAsync(platformOptions, new AgentLaunch(executable, ["--background"]), Console.Out, CancellationToken.None).GetAwaiter().GetResult();
@@ -55,6 +64,9 @@ internal static class Program
             return 0;
         }
 
+        // The old Companion's single-instance mutex (SingleInstance.cs): held for this agent's life, so a
+        // Companion started later ends at once and cannot write the old state the converter reads (13.2).
+        upgrade.HoldCompanionMutex();
         try
         {
             return Run(executable, platformOptions, install, running, background);
@@ -84,7 +96,7 @@ internal static class Program
         var icon = Path.Combine(defaults.DataDirectory, "construct.png");
         WriteIcon(icon);
         var platform = new WindowsPlatform(executable, icon);
-        var options = new AgentOptions { DataDirectory = defaults.DataDirectory, UiDirectory = defaults.UiDirectory, Platform = platform };
+        var options = new AgentOptions { DataDirectory = defaults.DataDirectory, UiDirectory = defaults.UiDirectory, Platform = platform, Upgrade = defaults.Upgrade };
 
         AgentHost? host = null;
         var ok = AgentUpdater.StartupAsync(install, running, async () =>

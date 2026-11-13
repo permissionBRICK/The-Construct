@@ -6,6 +6,7 @@ using Constructd.Core.Abstractions;
 using Constructd.Core.Domain;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Construct.Agent.Tests.Support;
@@ -19,9 +20,12 @@ public sealed class EngineHost : WebApplicationFactory<Program>
 {
     private readonly string _directory = Path.Combine(Path.GetTempPath(), "agent-test-engine-" + Guid.NewGuid().ToString("n"));
     private readonly int _port = FreePort();
+    private readonly Action<IServiceCollection>? _services;
 
-    public EngineHost()
+    /// <param name="services">Replaces engine services after composition (a fake guest for adoption).</param>
+    public EngineHost(Action<IServiceCollection>? services = null)
     {
+        _services = services;
         Directory.CreateDirectory(_directory);
         using var key = RSA.Create(2048);
         var request = new CertificateRequest("CN=engine.test", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
@@ -66,14 +70,15 @@ public sealed class EngineHost : WebApplicationFactory<Program>
             ["Constructd:ForwardReconcileSeconds"] = "0",
         };
         foreach (var (key, value) in settings) builder.UseSetting(key, value);
+        if (_services is not null) builder.ConfigureTestServices(_services);
     }
 
     /// <summary>Adds a user and returns an API token for them: the sign-in the first device uses.</summary>
-    public async Task<string> AddUserAsync(string name)
+    public async Task<string> AddUserAsync(string name, Role role = Role.User)
     {
         var users = Services.GetRequiredService<IUserStore>();
         var clock = Services.GetRequiredService<IClock>();
-        Assert.True(await users.CreateAsync(new User(name, Role.User, 5, clock.UtcNow, true), CancellationToken.None));
+        Assert.True(await users.CreateAsync(new User(name, role, 5, clock.UtcNow, true), CancellationToken.None));
         return (await Services.GetRequiredService<ITokenService>().IssueAsync(name, "test", CancellationToken.None)).Plaintext;
     }
 

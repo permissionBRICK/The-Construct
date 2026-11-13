@@ -5,22 +5,26 @@ using Construct.Agent.Http;
 using Construct.Agent.Update;
 using Microsoft.Extensions.Hosting;
 
-// construct-agent [run|open|repair|autostart on|off|version] [--data-dir DIR] [--ui DIR]
+// construct-agent [run|open|repair|autostart on|off|version|convert --from-legacy [--from DIR]] [--data-dir DIR] [--ui DIR]
 //   run        the agent in the foreground (the default)
 //   open       starts the agent when it is not running and opens the UI in the default browser
 //   repair     reports what it finds and restarts the agent; works with no engine reachable (5.3)
 //   autostart  installs (on) or removes (off) the systemd user unit that starts the agent with the session
 //   version    prints the version
-const string usage = "Usage: construct-agent [run|open|repair|autostart on|off|version] [--data-dir DIR] [--ui DIR]";
+//   convert    the one-time conversion of the old client's state (13.1), through a running agent or in this process
+const string usage = "Usage: construct-agent [run|open|repair|autostart on|off|version|convert --from-legacy [--from DIR]] [--data-dir DIR] [--ui DIR]";
 var command = "run";
-string? dataDirectory = null, ui = null, autostart = null;
+string? dataDirectory = null, ui = null, autostart = null, from = null;
+var fromLegacy = false;
 for (var i = 0; i < args.Length; i++)
 {
     switch (args[i])
     {
         case "--data-dir" when i + 1 < args.Length: dataDirectory = args[++i]; break;
         case "--ui" when i + 1 < args.Length: ui = args[++i]; break;
-        case "run" or "open" or "repair" or "version": command = args[i]; break;
+        case "run" or "open" or "repair" or "version" or "convert": command = args[i]; break;
+        case "--from-legacy": fromLegacy = true; break;
+        case "--from" when i + 1 < args.Length: from = args[++i]; break;
         case "autostart" when i + 1 < args.Length && args[i + 1] is "on" or "off": command = "autostart"; autostart = args[++i]; break;
         case "-h" or "--help":
             Console.WriteLine(usage);
@@ -38,6 +42,15 @@ var install = new AgentInstall(options.DataDirectory, "construct-agent");
 
 switch (command)
 {
+    case "convert":
+        if (!fromLegacy)
+        {
+            Console.Error.WriteLine(usage);
+            return 2;
+        }
+
+        return await Construct.Agent.Upgrade.ConvertCommand.RunAsync(options, null, from, Console.Out, CancellationToken.None);
+
     case "open":
     {
         var endpoint = await Repair.RunningAsync(options, CancellationToken.None) ?? await Repair.StartAsync(options, launch, CancellationToken.None);

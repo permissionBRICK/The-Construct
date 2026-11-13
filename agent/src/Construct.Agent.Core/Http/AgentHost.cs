@@ -24,14 +24,18 @@ namespace Construct.Agent.Http;
 /// </summary>
 public sealed class AgentHost : IAsyncDisposable
 {
-    private AgentHost(WebApplication app, DeviceAgent agent, AgentOptions options, string token, DeviceServices device)
+    private AgentHost(WebApplication app, DeviceAgent agent, AgentOptions options, string token, DeviceServices device, Upgrade.UpgradeService upgrade)
     {
+        Upgrade = upgrade;
         App = app;
         Agent = agent;
         Options = options;
         Token = token;
         Device = device;
     }
+
+    /// <summary>The one-time upgrade from the old client (11.6, 13.2).</summary>
+    public Upgrade.UpgradeService Upgrade { get; }
 
     /// <summary>The device features: VM links, open actions, SSH configuration, updates.</summary>
     public DeviceServices Device { get; }
@@ -71,7 +75,9 @@ public sealed class AgentHost : IAsyncDisposable
         var token = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
         var stop = () => app.Lifetime.StopApplication();
         var services = device?.Invoke(agent, stop) ?? DeviceServices.Create(agent, options, options.Platform ?? new LinuxPlatform(), stop);
-        var host = new AgentHost(app, agent, options, token, services);
+        var upgrade = new Upgrade.UpgradeService(agent, options,
+            options.Upgrade ?? new Upgrade.DefaultUpgradePlatform(Path.Combine(options.DataDirectory, "legacy_known_hosts")), services.Settings, new AgentEngines(agent));
+        var host = new AgentHost(app, agent, options, token, services, upgrade);
         var startedAt = options.Time.GetUtcNow();
 
         app.Lifetime.ApplicationStarted.Register(() =>
@@ -100,6 +106,7 @@ public sealed class AgentHost : IAsyncDisposable
 
         AgentRoutes.Map(app, host, startedAt);
         DeviceRoutes.Map(app.MapGroup("/api").WithTags("device"), services);
+        UpgradeRoutes.Map(app.MapGroup("/api").WithTags("upgrade"), upgrade);
         return host;
     }
 
@@ -124,6 +131,7 @@ public sealed class AgentHost : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await Device.DisposeAsync().ConfigureAwait(false);
+        Upgrade.Dispose();
         await App.StopAsync().ConfigureAwait(false);
         await App.DisposeAsync().ConfigureAwait(false);
         Agent.Dispose();
