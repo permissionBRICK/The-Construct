@@ -118,3 +118,47 @@ test('a hardware draft stays with its VM', async ({ page }) => {
   await page.getByRole('button', { name: /pebble/ }).click();
   await expect(page.getByRole('button', { name: 'Later' })).toHaveCount(0);
 });
+
+test('a remote host is added only after its fingerprint is confirmed in place', async ({ page }) => {
+  await open(page, 'win', 'calm', 'light', 'create');
+  await page.getByRole('radio', { name: 'Remote host' }).click();
+  await page.getByLabel('Name').fill('quill');
+  await page.getByLabel('Host address').fill('https://lab.example.net:8443');
+  await page.getByRole('radio', { name: 'Token' }).click();
+  await page.getByLabel('Token').fill('tok');
+  await page.getByRole('button', { name: 'Create' }).click();
+  const pin = page.getByRole('group', { name: 'Host fingerprint' });
+  await expect(pin).toContainText('4F1C 9A22');
+  await expect(page).toHaveScreenshot('win-create-pin-light.png');
+  // A new address drops the confirm.
+  await page.getByLabel('Host address').fill('https://other.example.net:8443');
+  await expect(pin).toHaveCount(0);
+  await page.getByRole('button', { name: 'Create' }).click();
+  await page.getByRole('button', { name: 'It matches' }).click();
+  await expect(page.locator('.vtab', { hasText: 'quill' })).toBeVisible();
+});
+
+test('a secret is shown for a moment, copied, hidden, and replaced in place', async ({ page }) => {
+  await open(page, 'win', 'calm', 'dark', 'vault');
+  const row = page.locator('tr', { hasText: 'forge-token' });
+  await row.getByRole('button', { name: 'Show' }).click();
+  await expect(row.locator('code.reveal')).toHaveText('forge-token-sample-value');
+  await expect(page).toHaveScreenshot('win-vault-reveal-dark.png');
+  await row.getByRole('button', { name: 'Hide' }).click();
+  await expect(page.getByText('forge-token-sample-value')).toHaveCount(0);
+  await row.getByRole('button', { name: 'Replace' }).click();
+  await row.getByLabel('New value of forge-token').fill('new-value');
+  await row.getByRole('button', { name: 'Save' }).click();
+  await expect(row.getByLabel('New value of forge-token')).toHaveCount(0);
+});
+
+test('a failed reinstall shows its step and log, and asks again before Retry reinstalls', async ({ page }) => {
+  await open(page, 'win', 'failed-reinstall', 'light');
+  await expect(page.locator('.blk.bad.job .msg')).toContainText('Installing Ubuntu');
+  await expect(page.locator('.logbox')).toBeVisible();
+  await page.getByRole('button', { name: 'Retry' }).click();
+  await expect(page.locator('.blk.bad.job')).toBeVisible();
+  await expect(page).toHaveScreenshot('win-reinstall-retry-light.png');
+  await page.getByRole('button', { name: 'Reinstall again' }).click();
+  await expect(page.locator('.blk.job .bh b')).toHaveText('Reinstalling');
+});
