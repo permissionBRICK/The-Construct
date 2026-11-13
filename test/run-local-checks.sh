@@ -55,7 +55,6 @@ if [[ "$group" == t3 || "$group" == all ]]; then
   bash test/t3-project-register.test.sh
   bash test/t3-update.test.sh
   pwsh -NoProfile -File test/t3-desktop-handoff.test.ps1
-  pwsh -NoProfile -File test/t3-update-mode.test.ps1
 fi
 if [[ "$group" == service || "$group" == all ]]; then
   bash test/usage-report.test.sh
@@ -111,7 +110,6 @@ if [[ "$group" == companion || "$group" == all ]]; then
   pwsh -NoProfile -File test/companion-install.test.ps1
   # First-install feature selection and installer forwarding (Linux PowerShell).
   pwsh -NoProfile -File test/feature-set.test.ps1
-  pwsh -NoProfile -File test/companion-entrypoints.test.ps1
   pwsh -NoProfile -File test/companion-package.test.ps1
 fi
 
@@ -136,6 +134,7 @@ if [[ "$group" == agent || "$group" == all ]]; then
   dotnet build agent/Construct.Agent.slnx -warnaserror
   dotnet test agent/Construct.Agent.slnx --no-build
   bash test/agent-install.test.sh
+  pwsh -NoProfile -File test/agent-bootstrap.test.ps1
   pwsh -NoProfile -Command '$null = [ScriptBlock]::Create((Get-Content -Raw agent/install/Install-ConstructAgent.ps1))'
 fi
 

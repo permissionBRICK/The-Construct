@@ -571,8 +571,10 @@ foreach ($rel in @("Provision-AgentVM.ps1", "Update-T3Code.ps1", "Set-AgentVmChe
 }
 
 # ...and must resolve it through the ONE adapter, never with a second copy of the rules.
-foreach ($rel in @("Provision-AgentVM.ps1", "Update-T3Code.ps1", "Set-AgentVmCheckpoints.ps1", "Set-AgentVmResources.ps1",
-                   "Get-AgentUsage.ps1", "Get-ConstructT3PairingLink.ps1")) {
+# (Update-T3Code.ps1 and Get-ConstructT3PairingLink.ps1 are shims onto the device agent now,
+# which resolves the name itself: test/agent-bootstrap.test.ps1.)
+foreach ($rel in @("Provision-AgentVM.ps1", "Set-AgentVmCheckpoints.ps1", "Set-AgentVmResources.ps1",
+                   "Get-AgentUsage.ps1")) {
     $txt = [System.IO.File]::ReadAllText((Join-Path $repoRoot $rel))
     ok "$rel resolves it with Resolve-ConstructVmTarget" ($txt -match 'Resolve-ConstructVmTarget')
     ok "$rel loads lib\AgentVm.InstanceTarget.ps1 for it" ($txt -match 'AgentVm\.InstanceTarget\.ps1')

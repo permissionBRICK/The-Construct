@@ -91,7 +91,8 @@ public sealed partial class DeviceAgent
                 // the store holds anything wrapped under it, so no answer lost in between strands it.
                 long epoch;
                 using (var http = StoreHttp()) epoch = await new Constructd.Store.Client.HttpStoreClient(http).ActiveEpochAsync(ct).ConfigureAwait(false);
-                keys = AccountKeys.Create(epoch);
+                // An upgrade carries the old vault key over as K (13.1); otherwise K is new.
+                keys = AccountKeys.Create(epoch, SetupVaultKey?.Invoke());
                 lock (_state)
                 {
                     _state.RootSeal = keys.SealRootTo(_key.PublicKey);

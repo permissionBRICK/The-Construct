@@ -790,6 +790,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/upgrade": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Where the one-time upgrade stands: the steps (engine, recovery, close, convert), what the old install holds, the last run's items. */
+        get: operations["GetUpgrade"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/upgrade/engine": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Step 1: installs this PC's engine with one elevation prompt when it has a local VM, and adds the shared hosts with their pins and sign-ins. Repeatable. */
+        post: operations["StartUpgradeEngine"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/upgrade/writers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Step 3: the old writers still open (VS Code, the old Companion); the conversion waits until the list is empty. */
+        get: operations["GetUpgradeWriters"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/upgrade/convert": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Step 4: copies the old state into the new stack and switches the local VMs over; repeatable, a second run changes nothing already there. */
+        post: operations["StartUpgradeConvert"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -856,6 +924,9 @@ export interface components {
             forwards: components["schemas"]["ForwardView"][];
             mic: components["schemas"]["AudioView"];
             sshConfig: null | string;
+        };
+        ConvertRequest: {
+            from?: null | string;
         };
         DeviceFeatures: {
             platform: string;
@@ -930,6 +1001,9 @@ export interface components {
             message: string;
             closable: boolean;
             child: null | string;
+        };
+        OldWritersView: {
+            open: string[];
         };
         OpenRequest: {
             what: string;
@@ -1087,6 +1161,45 @@ export interface components {
             installed: boolean;
             /** Format: date-time */
             checkedAt: null | string;
+        };
+        UpgradeFound: {
+            installFolder: null | string;
+            otherInstallFolders: string[];
+            localVms: string[];
+            remoteVms: string[];
+            hosts: string[];
+            profiles: string[];
+            /** Format: int32 */
+            unmergedChanges: number;
+            vault: boolean;
+            /** Format: int32 */
+            backupKeys: number;
+            upstream: boolean;
+            channel: string;
+        };
+        UpgradeItem: {
+            id: string;
+            label: string;
+            state: string;
+            message?: null | string;
+        };
+        UpgradeStep: {
+            id: string;
+            state: string;
+            message?: null | string;
+        };
+        UpgradeView: {
+            legacy: boolean;
+            stage: string;
+            steps: components["schemas"]["UpgradeStep"][];
+            found: null | components["schemas"]["UpgradeFound"];
+            storeEngine: null | string;
+            localEngine: null | string;
+            items: components["schemas"]["UpgradeItem"][];
+            notes: string[];
+            oldWriters: string[];
+            running: boolean;
+            error: null | string;
         };
         VaultApprovalItem: {
             engine: string;
@@ -2952,6 +3065,126 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    GetUpgrade: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpgradeView"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    StartUpgradeEngine: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpgradeView"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    GetUpgradeWriters: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OldWritersView"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    StartUpgradeConvert: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": null | components["schemas"]["ConvertRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpgradeView"];
+                };
             };
             /** @description An error. */
             default: {

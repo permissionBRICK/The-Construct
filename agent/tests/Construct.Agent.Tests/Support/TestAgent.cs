@@ -30,13 +30,14 @@ public sealed class TestAgent : IAsyncDisposable
 
     /// <param name="device">The device features; by default the real ones over a fake platform with a temporary home.</param>
     public static async Task<TestAgent> StartAsync(int localEnginePort = 1, string? directory = null, string? ui = null,
-        Func<DeviceAgent, Action, Device.DeviceServices>? device = null, Engines.IWindowsSignIn? windowsSignIn = null)
+        Func<DeviceAgent, Action, Device.DeviceServices>? device = null, Engines.IWindowsSignIn? windowsSignIn = null,
+        Upgrade.IUpgradePlatform? upgrade = null)
     {
         directory ??= Path.Combine(Path.GetTempPath(), "agent-test-" + Guid.NewGuid().ToString("n"));
         var options = new AgentOptions
         {
             DataDirectory = directory, UiDirectory = ui, Protection = "file", LocalEnginePort = localEnginePort, Platform = new FakePlatform(),
-            WindowsSignIn = windowsSignIn,
+            WindowsSignIn = windowsSignIn, Upgrade = upgrade,
         };
         var host = AgentHost.Create(options, new DeviceAgent(options) { PairingPoll = TimeSpan.FromMilliseconds(200) }, device);
         await host.StartAsync();
