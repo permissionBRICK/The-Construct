@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 # A configured guest environment must not alter host-side fixtures or tests.
 unset CONSTRUCT_SERVICE_URL CONSTRUCT_SERVICE_CA_FILE CONSTRUCT_EXTERNAL_HOST CONSTRUCT_EXTERNAL_SSH_PORT CONSTRUCT_INSTANCE_NAME CONSTRUCT_T3_VOICE_INPUT
 group="${1:-all}"
-case "$group" in panel|t3|service|companion|all) ;; *) echo 'Usage: bash test/run-local-checks.sh [panel|t3|service|companion|all]' >&2; exit 2 ;; esac
+case "$group" in panel|t3|service|companion|guest|all) ;; *) echo 'Usage: bash test/run-local-checks.sh [panel|t3|service|companion|guest|all]' >&2; exit 2 ;; esac
 if [[ "$group" == panel || "$group" == all ]]; then
   node extension/test/guest-console.test.js
   node extension/test/console.test.js
@@ -94,4 +94,10 @@ if [[ "$group" == companion || "$group" == all ]]; then
   pwsh -NoProfile -File test/feature-set.test.ps1
   pwsh -NoProfile -File test/companion-entrypoints.test.ps1
   pwsh -NoProfile -File test/companion-package.test.ps1
+fi
+
+# Not part of `all`: it creates a real child VM on the host and takes about half an
+# hour. Run it when guest-facing paths change (docs/local-checks.md).
+if [[ "$group" == guest ]]; then
+  bash test/e2e/guest-rig.sh quick
 fi

@@ -26,7 +26,8 @@ bash test/run-local-checks.sh panel
 bash test/run-local-checks.sh t3
 bash test/run-local-checks.sh service
 bash test/run-local-checks.sh companion
-# Or run all four groups:
+bash test/run-local-checks.sh guest
+# Or run the four groups panel, t3, service and companion:
 bash test/run-local-checks.sh all
 ```
 
@@ -40,6 +41,16 @@ merges and release preparation, not for ordinary changes.
 | T3, pairing, updates | `t3` |
 | `service/**`, `drivers/**`, `lib/**`, `bin/**` | `service` |
 | Installers | Companion PowerShell suites plus `pwsh -NoProfile -File test/feature-set.test.ps1` and the touched script's own tests |
+| Guest-facing: `bin/provision.sh` and what it runs, `bootstrap.sh`, `bin/build-autoinstall-iso.sh`, `bin/construct-manifest.sh` | `guest` |
+
+The `guest` group runs the guest rig (`test/e2e/guest-rig.sh quick`) and is not part
+of `all`. It needs a primary VM that may create children (`construct vm identity`),
+creates one Ubuntu child on the host (3 GB RAM, 2 cores, 25 GB disk, 4-hour lifetime),
+provisions it with this checkout, checks the result sentinel and exit code, saves the
+guest manifest and deletes the child. The first run downloads the Ubuntu ISO, builds the
+autoinstall ISO and uploads it to the host; later runs reuse both. A host that refuses
+the child ends the group with `incomplete: required verification not run` and exit 2.
+`bash test/e2e/guest-rig.sh --help` lists the `full` variant, `--keep` and `--compare`.
 
 The `companion` group builds with warnings as errors, runs Companion .NET tests,
 Node parity and Companion suites, the three Companion PowerShell suites, and the
