@@ -1673,6 +1673,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/vault/mode": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["GetVaultMode"];
+        put: operations["PutVaultMode"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/vault/entry-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["GetVaultEntryRequests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/vault/entry-requests/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["SaveVaultEntryRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/vault/entry-requests/{id}/decline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["DeclineVaultEntryRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/vault/approvals": {
         parameters: {
             query?: never;
@@ -4923,8 +4987,24 @@ export interface components {
             deleted: null | boolean;
             autoApprove?: null | boolean;
         };
+        VaultEndpointsEntrySaveRequest: {
+            payload: null | string;
+            /** Format: int64 */
+            updatedAt: null | number;
+            hasUsername: null | boolean;
+        };
         VaultEndpointsFileRequest: {
             action: null | string;
+        };
+        VaultEndpointsKeyGrantDto: {
+            /** Format: int64 */
+            epoch: number;
+            /** Format: byte */
+            sealed: null | string;
+        };
+        VaultEndpointsModeRequest: {
+            mode: null | string;
+            grant: null | components["schemas"]["VaultEndpointsKeyGrantDto"];
         };
         VaultEndpointsSettingsRequest: {
             mode: null | string;
@@ -4933,6 +5013,7 @@ export interface components {
         };
         VaultEndpointsUnlockRequest: {
             key: null | string;
+            grant?: null | components["schemas"]["VaultEndpointsKeyGrantDto"];
         };
         VaultEntriesResponse: {
             /** Format: int64 */
@@ -4942,6 +5023,21 @@ export interface components {
             unlockedVms: string[];
             entries: components["schemas"]["VaultEntryResponse"][];
             devices: components["schemas"]["VaultDeviceResponse"][];
+        };
+        VaultEntryRequestsResponse: {
+            requests: components["schemas"]["VaultEntryRequestView"][];
+        };
+        VaultEntryRequestView: {
+            id: string;
+            vm: string;
+            name: string;
+            description: string;
+            reason: string;
+            source: string;
+            /** Format: int64 */
+            createdAt: number;
+            /** Format: int64 */
+            expiresAt: number;
         };
         VaultEntryResponse: {
             name: string;
@@ -4981,6 +5077,12 @@ export interface components {
         };
         VaultLeasesResponse: {
             leases: components["schemas"]["VaultLeaseResponse"][];
+        };
+        VaultModeResponse: {
+            mode: null | string;
+            holdsKey: boolean;
+            records: boolean;
+            unlockedVms: string[];
         };
         VaultPromptFact: {
             label: string;
@@ -8606,6 +8708,157 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["VaultActivityResponse"];
                 };
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    GetVaultMode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VaultModeResponse"];
+                };
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    PutVaultMode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": null | components["schemas"]["VaultEndpointsModeRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    GetVaultEntryRequests: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VaultEntryRequestsResponse"];
+                };
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    SaveVaultEntryRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": null | components["schemas"]["VaultEndpointsEntrySaveRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    DeclineVaultEntryRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description An error, as a Problem document. */
             default: {
