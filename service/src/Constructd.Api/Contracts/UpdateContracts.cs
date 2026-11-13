@@ -20,7 +20,7 @@ public sealed record HostUpdateOfferResponse(string Version, string Commit);
 /// <paramref name="DatabaseCopy"/>: the database copy the last update took, kept for a manual restore.
 /// The state and error of the last run are <c>current.state</c> and <c>current.error</c>.
 /// </summary>
-public sealed record HostUpdateStatusResponse(bool SupportsAutoApply, InstalledRelease Installed, object? Current, IEnumerable<object> History,
+public sealed record HostUpdateStatusResponse(bool SupportsAutoApply, InstalledRelease Installed, HostUpdateHistoryEntry? Current, IEnumerable<HostUpdateHistoryEntry> History,
     RecoveryRecord? RecoveryRecord, object? LatestKnown, string Version, string Channel, bool Auto, HostUpdateOfferResponse? Available,
     string? AvailableError, string? DatabaseCopy);
 

@@ -94,8 +94,8 @@ public static class UpdateEndpoints
         HostUpdateJob work,CancellationToken ct)
     {
         var rows=await store.ListAsync(10,ct);var record=await launcher.ReadRecoveryRecordAsync(ct);
-        object Project(HostUpdateRecord r)=>new{updateId=r.Id,r.Commit,r.State,r.Phase,r.Phases,r.Started,r.Finished,r.Error,
-            blockingJobs=r.State==HostUpdateState.Draining ? gate.BlockingOperations : r.BlockingJobs};
+        HostUpdateHistoryEntry Project(HostUpdateRecord r)=>new(r.Id,r.Commit,r.State,r.Phase,r.Phases,r.Started,r.Finished,r.Error,
+            r.State==HostUpdateState.Draining ? gate.BlockingOperations : r.BlockingJobs);
         var settings=await checker.SettingsAsync(ct);
         var (offer,error)=await OfferAsync(work,settings.Channel,ct);
         var copy=rows.FirstOrDefault() is {} last ? Path.Combine(work.Root,"backup-"+last.Id,"constructd.db") : null;

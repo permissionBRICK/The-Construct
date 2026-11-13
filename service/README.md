@@ -235,7 +235,7 @@ See [the settings contract](../docs/plans/host-vm-settings.md) for dialog/partia
 |---|---|---|
 | `GET /health` | anonymous | Status, schema versions and feature names; authenticated callers also receive installed commit/version. |
 | `GET /host/status` | admin | Installed release, health, capacity snapshot, maintenance phase, active jobs and overdue leases. Incomplete capacity is reported honestly until its backend lands. |
-| `GET /host/capabilities` | user or primary token | Backend capabilities and current host policy. Unavailable adapters report `unsupported`. |
+| `GET /host/capabilities` | user or primary token | Backend capabilities and current host policy. Unavailable adapters report `unsupported`. `kind` is the host's platform: `hyperv`, `proxmox` or `external`. |
 | `GET` / `PUT /host/config` | admin | Read defaults/stored sections; atomically validate and replace supplied sections, optionally comparing each `expectedUpdatedAt`. |
 | `GET /users`, `GET /users/{name}` | admin | Enabled state, allowances, effective policy, VM counts and token count; no hashes. |
 | `PUT /users/{name}` | admin | Patch `role`, `enabled`, `maxVms`, `allowHostForwards`. Self-demotion/disable and removal of the last enabled admin are refused. |
@@ -301,6 +301,11 @@ gate: the resource policy is evaluated again inside every handler.
 
 There is deliberately no child-media content download route and no interactive-video
 console route.
+
+`/host/status`, `/host/config`, `/host/windows`, the update history in `/host/updates/status` and
+`/host/iso-catalog` answer typed records in the contract (`HostStatusResponse`, `HostConfigResponse`,
+`HostWindowsResponse`, `HostUpdateHistoryEntry`, `IsoCatalogResponse`) with the JSON they always wrote;
+`HostWireShapeTests` pins every property path against `tests/Constructd.Tests/Api/host-wire-shape.txt`.
 
 ### Provisioning from the engine
 

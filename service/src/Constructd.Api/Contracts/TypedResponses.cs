@@ -51,7 +51,8 @@ public sealed record UserAllowanceResponse(UserAllowance Stored, EffectiveAllowa
 /// <summary>A user's API token as listed; the secret itself is never shown again.</summary>
 public sealed record UserTokenSummaryResponse(string Id, string Label, DateTimeOffset Created, DateTimeOffset? LastUsed);
 
-public sealed record HostCapabilitiesResponse(string Backend, BackendCapabilities Capabilities, HostNestedCapabilities Nested, HostPolicyResponse Policy);
+/// <param name="Kind">The host's platform, typed (<paramref name="Backend"/> is the child driver's own name for it).</param>
+public sealed record HostCapabilitiesResponse(string Backend, HostKind Kind, BackendCapabilities Capabilities, HostNestedCapabilities Nested, HostPolicyResponse Policy);
 
 public sealed record HostNestedCapabilities(bool Available, bool Default, bool Selectable);
 
