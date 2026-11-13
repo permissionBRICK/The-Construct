@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'preact/hooks';
-import type { FirstRunRequest, HostProbe, Scheme, ThemeMode } from '../../backend/types';
+import type { FirstRunRequest, HostProbe, Scheme, ThemeMode, UpgradeStep } from '../../backend/types';
 import { updateDue, updateParts } from '../../model/update';
 import { SCHEME_ORDER, SCHEMES } from '../../model/tokens';
 import { Icon } from '../icons';
@@ -131,13 +131,15 @@ export function CreateVm() {
   const [where, setWhere] = useState<'local' | 'remote'>('local');
   const [name, setName] = useState('');
   const [addr, setAddr] = useState('');
-  const [signIn, setSignIn] = useState<'windows' | 'token'>(na(s, 'windows-sign-in') ? 'token' : 'windows');
+  const [choice, setSignIn] = useState<'windows' | 'token'>('windows');
+  // Windows sign-in only where this device runs Windows; elsewhere the token.
+  const signIn = na(s, 'windows-sign-in') ? 'token' : choice;
   const [token, setToken] = useState('');
   const pin = usePin();
   const taken = s.vms.some(v => v.name === name.trim());
   const valid = /^[a-z][a-z0-9-]{1,30}$/.test(name.trim()) && !taken && (where === 'local' || (addr.trim() && (signIn === 'windows' || token.trim())));
   const send = (confirmed?: string) => {
-    const id = be.createVm({ where, name: name.trim(), hostAddress: addr.trim(), signIn, token: token.trim(), pin: confirmed });
+    const id = be.createVm({ where, name: name.trim(), hostAddress: addr.trim(), signIn, token: signIn === 'token' ? token.trim() : '', pin: confirmed });
     if (id) selectVm(id);
     go({ page: 'home' });
   };
@@ -145,7 +147,7 @@ export function CreateVm() {
   const create = () => {
     if (!valid || pin.busy) return;
     if (where === 'local') { send(); return; }
-    pin.check(addr.trim(), p => { if (p.known && !token.trim()) send(); else pin.setProbe(p); });
+    pin.check(addr.trim(), p => { if (p.known && signIn === 'token' && !token.trim()) send(); else pin.setProbe(p); });
   };
   return (
     <Page>
@@ -170,13 +172,15 @@ export function CreateVm() {
   );
 }
 
-const STEPS: [string, string][] = [['intro', 'New Construct'], ['code', 'Recovery code'], ['convert', 'Moving over'], ['done', 'Done']];
+const STEPS: [UpgradeStep, string][] = [['engine', 'New Construct'], ['recovery', 'Recovery code'], ['close', 'Close programs'], ['convert', 'Moving over']];
 
-/** The one-time upgrade dialog (first screen of the window): what is new, the recovery code, moving over, done. */
+/** The one-time upgrade dialog (first screen of the window): the agent's steps in their order, each with its state;
+    a failed step shows its error in place with Retry. Continue runs the step the backend reports, never another. */
 export function Upgrade() {
   const { s, be, toast } = useApp();
   const u = s.upgrade;
   const [stored, setStored] = useState(false);
+  const [deviceName, setDeviceName] = useState(s.device.name);
   if (!u) return null;
   const at = STEPS.findIndex(x => x[0] === u.step);
   const top = (
@@ -186,7 +190,11 @@ export function Upgrade() {
     </>
   );
   const wl = (icon: preact.ComponentChildren, label: string, right?: preact.ComponentChildren, cls = '') => <div class={`wl ${cls}`}>{icon}<span>{label}</span>{right}</div>;
-  if (u.step === 'intro') return (
+  const problem = u.error && <div class="line badc" role="alert">{u.error}</div>;
+  const next = (label: string, icon: 'right' | 'open' = 'right', disabled = false) => (
+    <Btn kind="pri" icon={u.error ? 'retry' : icon} disabled={u.running || disabled} onClick={() => be.upgradeNext({ deviceName })}>{u.running ? 'Working' : u.error ? 'Retry' : label}</Btn>
+  );
+  if (u.step === 'engine') return (
     <div class="solo">{top}<h3>This is the new Construct</h3>
       <div class="wz"><div class="cap">New</div>
         {wl(<Icon n="monitor" />, 'One window for all your VMs')}
@@ -194,37 +202,57 @@ export function Upgrade() {
         {wl(<Icon n="phone" />, 'Approve vault requests from your phone')}
         {wl(<Icon n="repro" />, 'Update covers this PC, your hosts and your VMs')}
       </div>
-      <div class="wz"><div class="cap">Comes along</div>
-        <KV k="VMs">{s.vms.map(v => v.name).join(', ')}</KV><KV k="Projects">{s.projects.length}</KV><KV k="Secrets">{s.secrets.length}</KV>
-      </div>
-      <div class="wft"><span class="d"><Icon n="shield" />One admin prompt</span><Btn kind="pri" icon="right" onClick={() => be.upgradeNext()}>Continue</Btn></div>
+      {u.found && (
+        <div class="wz"><div class="cap">Comes along</div>
+          <KV k="VMs">{u.found.vms.join(', ') || '–'}</KV><KV k="Projects">{u.found.profiles}</KV><KV k="Key vault">{u.found.vault ? 'Yes' : 'No'}</KV>
+        </div>
+      )}
+      {problem}
+      <div class="wft">{u.adminPrompt && <span class="d"><Icon n="shield" />One admin prompt</span>}{next('Continue')}</div>
     </div>
   );
-  if (u.step === 'code') return (
+  if (u.step === 'recovery' && u.code) {
+    const code = u.code;
+    return (
+      <div class="solo">{top}<h3>Recovery code</h3>
+        <div class="codebox">{code.map(c => <span>{c}</span>)}</div>
+        <div class="three">
+          <Btn icon="copy" onClick={() => { copy(code.join('-')); toast('Copied'); }}>Copy</Btn>
+          <Btn icon="save" onClick={() => be.exportRecoveryCode('file')} disabled={na(s, 'export-code')}>Save</Btn>
+          <Btn icon="print" onClick={() => be.exportRecoveryCode('print')} disabled={na(s, 'export-code')}>Print</Btn>
+        </div>
+        <label class="bf check"><input type="checkbox" checked={stored} onChange={e => setStored(e.currentTarget.checked)} /><span>I stored it</span></label>
+        <Btn kind="pri" disabled={!stored} onClick={() => be.upgradeNext()}>Continue</Btn>
+      </div>
+    );
+  }
+  if (u.step === 'recovery') return (
     <div class="solo">{top}<h3>Recovery code</h3>
-      <div class="codebox">{u.code.map(c => <span>{c}</span>)}</div>
-      <div class="three">
-        <Btn icon="copy" onClick={() => { copy(u.code.join(' ')); toast('Copied'); }}>Copy</Btn>
-        <Btn icon="save" onClick={() => be.exportRecoveryCode('file')} disabled={na(s, 'export-code')}>Save</Btn>
-        <Btn icon="print" onClick={() => be.exportRecoveryCode('print')} disabled={na(s, 'export-code')}>Print</Btn>
+      <div class="blk form">
+        <label class="lab">Device name<Field value={deviceName} onInput={setDeviceName} label="Device name" placeholder="Device name" wide onEnter={() => deviceName.trim() && be.upgradeNext({ deviceName })} /></label>
       </div>
-      <label class="bf check"><input type="checkbox" checked={stored} onChange={e => setStored(e.currentTarget.checked)} /><span>I stored it</span></label>
-      <Btn kind="pri" disabled={!stored} onClick={() => be.upgradeNext()}>Continue</Btn>
+      {problem}
+      <div class="wft"><span class="d"><Icon n="key" />Shown once</span>{next('Continue', 'right', !deviceName.trim())}</div>
     </div>
   );
-  if (u.step === 'convert') return (
-    <div class="solo">{top}<h3>Moving over</h3>
-      <div class="wz">
-        {u.items.map(it => wl(it.state === 'done' ? <Icon n="check" /> : it.state === 'running' ? <Icon n="repro" /> : <i class="ring" />, it.name,
-          <>{it.count && <span class="rv">{it.count}</span>}{it.state === 'running' && <div class="bar"><i style={{ width: `${it.pct}%` }} /></div>}</>, it.state === 'done' ? 'ok' : it.state === 'waiting' ? 'wait' : ''))}
-      </div>
-      <div class="wft"><span class="d"><Icon n="power" />VMs keep running</span><Btn kind="pri" icon="right" disabled>Continue</Btn></div>
+  if (u.step === 'close') return (
+    <div class="solo">{top}<h3>Close these programs</h3>
+      <div class="wz">{u.writers.length ? u.writers.map(w => wl(<i class="ring" />, w, <span class="rv">Open</span>, 'wait')) : wl(<Icon n="check" />, 'All closed', undefined, 'ok')}</div>
+      {problem}
+      <div class="wft"><span class="d"><Icon n="repro" />Waiting</span></div>
     </div>
   );
   return (
-    <div class="solo">{top}<h3>Ready</h3>
-      <div class="wz">{s.vms.map(v => <div class="wl"><i class={`dot ${v.power === 'on' ? 'on' : ''}`} /><b>{v.name}</b><span class="d">{s.hosts.find(h => h.id === v.hostId)?.name}</span><span class="rv">{v.power === 'on' ? 'Running' : 'Off'}</span></div>)}</div>
-      <div class="wft"><span class="d"><Icon n="check" />{s.vms.length} VMs, {s.projects.length} projects, {s.secrets.length} secrets</span><Btn kind="pri" icon="open" onClick={() => be.upgradeNext()}>Open Construct</Btn></div>
+    <div class="solo">{top}<h3>Moving over</h3>
+      {u.items.length > 0 && (
+        <div class="wz">
+          {u.items.map(it => wl(it.state === 'done' || it.state === 'skipped' ? <Icon n="check" /> : it.state === 'running' ? <Icon n="repro" /> : it.state === 'failed' ? <Icon n="x" /> : <i class="ring" />, it.name,
+            <>{it.count && <span class={`rv ${it.state === 'failed' ? 'badc' : ''}`}>{it.count}</span>}{it.state === 'running' && it.pct > 0 && <div class="bar"><i style={{ width: `${it.pct}%` }} /></div>}</>,
+            it.state === 'done' || it.state === 'skipped' ? 'ok' : it.state === 'waiting' ? 'wait' : ''))}
+        </div>
+      )}
+      {problem}
+      <div class="wft"><span class="d"><Icon n="power" />VMs keep running</span>{next('Move over')}</div>
     </div>
   );
 }
@@ -240,6 +268,8 @@ export function FirstRun() {
   const [address, setAddress] = useState(f?.localAddress ?? '');
   const [deviceName, setDeviceName] = useState('');
   const [token, setToken] = useState('');
+  const [choice, setSignIn] = useState<'windows' | 'token'>('token');
+  const signIn = na(s, 'windows-sign-in') ? 'token' : choice;
   const [account, setAccount] = useState('');
   const [code, setCode] = useState('');
   const [stored, setStored] = useState(false);
@@ -272,8 +302,8 @@ export function FirstRun() {
       <div class="wft"><span class="d"><Icon n="repro" />Waiting for the other device</span><Btn onClick={() => be.firstRunNext()}>Cancel</Btn></div>
     </div>
   );
-  const valid = address.trim() && deviceName.trim() && (how !== 'setup' || token.trim()) && (how !== 'recover' || (account.trim() && code.trim()));
-  const start = (confirmed?: string) => be.firstRunStart({ how, address, deviceName, token, account, code, pin: confirmed });
+  const valid = address.trim() && deviceName.trim() && (how !== 'setup' || signIn === 'windows' || token.trim()) && (how !== 'recover' || (account.trim() && code.trim()));
+  const start = (confirmed?: string) => be.firstRunStart({ how, address, deviceName, signIn, token: signIn === 'token' ? token : '', account, code, pin: confirmed });
   // The engine on this machine is trusted as found; another host only with the fingerprint the user confirmed.
   const go = () => {
     if (!valid || f.busy || pin.busy) return;
@@ -286,7 +316,8 @@ export function FirstRun() {
         <Seg label="How" opts={['setup', 'pair', 'recover'] as const} labels={{ setup: 'New account', pair: 'Pair with a device', recover: 'Recovery code' }} value={how} onChange={setHow} />
         <label class="lab">Host address<Field value={address} onInput={v => { setAddress(v); pin.reset(); }} label="Host address" placeholder="https://host:8443" mono wide /></label>
         <label class="lab">Device name<Field value={deviceName} onInput={setDeviceName} label="Device name" placeholder="Device name" wide /></label>
-        {how === 'setup' && <label class="lab">Token<Field type="password" value={token} onInput={setToken} label="Token" placeholder="Token" mono wide /></label>}
+        {how === 'setup' && !na(s, 'windows-sign-in') && <Seg label="Sign-in" opts={['windows', 'token'] as const} labels={{ windows: 'Windows sign-in', token: 'Token' }} value={signIn} onChange={setSignIn} />}
+        {how === 'setup' && signIn === 'token' && <label class="lab">Token<Field type="password" value={token} onInput={setToken} label="Token" placeholder="Token" mono wide /></label>}
         {how === 'recover' && (
           <>
             <label class="lab">Account<Field value={account} onInput={setAccount} label="Account" placeholder="Account" mono wide /></label>

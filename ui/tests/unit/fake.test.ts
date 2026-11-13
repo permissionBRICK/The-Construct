@@ -237,14 +237,43 @@ describe('FakeBackend', () => {
     expect(activeJob(s, 'quill')?.kind).toBe('create');
   });
 
-  it('walks the one-time upgrade', () => {
+  it('walks the one-time upgrade in the agent\'s order', () => {
     const be = new FakeBackend({ scene: 'upgrade-intro', timers: false });
     be.upgradeNext();
-    expect(be.snapshot().upgrade?.step).toBe('code');
+    expect(be.snapshot().upgrade).toMatchObject({ step: 'recovery', code: null });
     be.upgradeNext();
-    expect(be.snapshot().upgrade?.step).toBe('done');
+    expect(be.snapshot().upgrade).toMatchObject({ step: 'recovery', code: null, error: 'Name this device' });
+    be.upgradeNext({ deviceName: 'laptop' });
+    expect(be.snapshot().upgrade?.code?.length).toBeGreaterThan(3);
+    be.upgradeNext();
+    expect(be.snapshot().upgrade).toMatchObject({ step: 'close', code: null, writers: ['VS Code'] });
+    be.upgradeNext();
+    expect(be.snapshot().upgrade?.step).toBe('convert');
     be.upgradeNext();
     expect(be.snapshot().upgrade).toBeNull();
+  });
+
+  it('starts the repair agent by hand where the host does not, and stops it', () => {
+    const be = new FakeBackend({ tick: 10 });
+    be.setRepairAuto('pc', false);
+    expect(be.snapshot().hosts.find(h => h.id === 'pc')!.repairAuto).toBe(false);
+    be.demo('fail-next');
+    be.reprovision('atlas');
+    run(500);
+    let j = activeJob(be.snapshot(), 'atlas')!;
+    expect(j).toMatchObject({ state: 'failed', repair: null, canRepair: true });
+    be.replyRepair(j.id, 'ignored');
+    be.startRepair(j.id);
+    j = activeJob(be.snapshot(), 'atlas')!;
+    expect(j).toMatchObject({ canRepair: false, repair: { state: 'working' } });
+    // A reply while it works goes nowhere.
+    be.replyRepair(j.id, 'too early');
+    expect(activeJob(be.snapshot(), 'atlas')!.repair!.messages.some(m => m.from === 'user')).toBe(false);
+    be.stopRepair(j.id);
+    j = activeJob(be.snapshot(), 'atlas')!;
+    expect(j).toMatchObject({ canRepair: true, repair: { state: 'stopped', outcome: 'Stopped' } });
+    run(200);
+    expect(activeJob(be.snapshot(), 'atlas')!.repair!.state).toBe('stopped');
   });
 });
 

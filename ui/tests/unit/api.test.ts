@@ -126,7 +126,9 @@ describe('ApiBackend', () => {
     expect(s.na).not.toContain('vault');
     expect(s.na).not.toContain('reinstall');
     expect(s.na).not.toContain('restore');
-    expect(s.na).toContain('repair-chat');
+    expect(s.na).not.toContain('repair-chat');
+    // Windows sign-in only on a device the agent reports as Windows; this one is Linux.
+    expect(s.na).toContain('windows-sign-in');
     // Settings and projects from the desired state; agents from the guest's report.
     expect(atlas.settings.services).toMatchObject({ vscodeTunnel: true, vscodeWeb: true, mic: false });
     expect(atlas.settings.identity).toMatchObject({ gitName: 'Alex', gitEmail: '', keepCredentials: false });
@@ -968,5 +970,296 @@ describe('ApiBackend lost jobs', () => {
     be.onEvent('job.progress', { seq: 5, type: 'job.progress', engine: E1, data: { id: 'j1', vm: 'atlas' } });
     await settle();
     expect(activeJob(be.snapshot(), 'atlas')).toBeNull();
+  });
+});
+
+describe('ApiBackend repair agent', () => {
+  const P = `/api/engines/${E1}/api/v1`;
+  const failed = (id = 'f1', kind = 'provision') => ({ ...job(id, 'atlas', 'failed', kind), result: { fixPrompt: ['x'] } });
+  const session = (o: Record<string, unknown> = {}) => ({
+    id: 's1', vm: 'atlas', jobId: 'f1', jobKind: 'provision', state: 'working', outcome: null, automatic: false, started: '2026-11-13T10:01:00Z', ended: null,
+    agent: 'claude', via: 'direct', retryJobId: null, retryRefused: null, lines: [], ...o,
+  });
+  const line = (seq: number, kind: string, text: string | null, outcome: string | null = null) => ({ seq, at: '2026-11-13T10:01:00Z', kind, text, outcome });
+
+  it('offers the start on a failed job, starts it, follows its output, sends one reply while it waits, and stops it', async () => {
+    const { be, calls, on, settle } = world();
+    on('GET', `${P}/jobs`, { json: [failed()] });
+    await be.start();
+    await settle();
+    let j = activeJob(be.snapshot(), 'atlas')!;
+    // The VM was asked once for a session that ran before the page opened: none (404).
+    expect(calls.filter(c => c.path === `${P}/vms/atlas/repair`).length).toBe(1);
+    expect(j).toMatchObject({ state: 'failed', repair: null, canRepair: true });
+    on('POST', `${P}/vms/atlas/repair`, { status: 202, json: session({ lines: [line(1, 'start', null), line(2, 'tool', 'Bash: tail log')] }) });
+    be.startRepair(j.id);
+    await settle();
+    j = activeJob(be.snapshot(), 'atlas')!;
+    expect(j.canRepair).toBe(false);
+    expect(j.repair).toMatchObject({ agent: 'Claude Code', state: 'working', messages: [{ from: 'tool', text: 'Bash: tail log' }], outcome: null });
+    // A reply while it works is not sent.
+    be.replyRepair(j.id, 'too early');
+    await settle();
+    expect(posts(calls).some(c => c.path.endsWith('/reply'))).toBe(false);
+    // Output arrives as an event: only the lines after the last one read.
+    on('GET', `${P}/vms/atlas/repair`, { json: session({ state: 'waiting', lines: [line(3, 'text', 'Retry, or switch the mirror?'), line(4, 'turn', null, 'question')] }) });
+    be.onEvent('repair.output', { seq: 9, type: 'repair.output', engine: E1, data: { id: 's1', vm: 'atlas' } });
+    await settle();
+    expect(calls.filter(c => c.path === `${P}/vms/atlas/repair`).at(-1)!.query).toBe('?after=2');
+    j = activeJob(be.snapshot(), 'atlas')!;
+    expect(j.repair!.state).toBe('asking');
+    expect(j.repair!.messages.map(m => m.from)).toEqual(['tool', 'agent']);
+    on('POST', `${P}/vms/atlas/repair/s1/reply`, { status: 204 });
+    on('GET', `${P}/vms/atlas/repair`, { json: session({ lines: [line(5, 'reply', 'retry it')] }) });
+    be.replyRepair(j.id, 'retry it');
+    be.replyRepair(j.id, 'twice');
+    await settle();
+    expect(posts(calls).filter(c => c.path.endsWith('/reply')).map(c => [c.path, c.body])).toEqual([[`${P}/vms/atlas/repair/s1/reply`, { text: 'retry it' }]]);
+    j = activeJob(be.snapshot(), 'atlas')!;
+    expect(j.repair).toMatchObject({ state: 'working' });
+    expect(j.repair!.messages.at(-1)).toEqual({ from: 'user', text: 'retry it' });
+    on('DELETE', `${P}/vms/atlas/repair/s1`, { status: 204 });
+    on('GET', `${P}/vms/atlas/repair`, { json: session({ state: 'ended', outcome: 'stopped', lines: [] }) });
+    be.stopRepair(j.id);
+    await settle();
+    expect(calls.filter(c => c.method === 'DELETE').map(c => c.path)).toEqual([`${P}/vms/atlas/repair/s1`]);
+    expect(activeJob(be.snapshot(), 'atlas')).toMatchObject({ canRepair: true, repair: { state: 'stopped', outcome: 'Stopped' } });
+  });
+
+  it('shows "fixed" only when the session ended fixed, then on the job the engine retried', async () => {
+    const { be, on, settle } = world();
+    on('GET', `${P}/jobs`, { json: [failed()] });
+    // The host started it itself before the page opened: it is read and followed.
+    on('GET', `${P}/vms/atlas/repair`, { json: session({ automatic: true, lines: [line(1, 'text', 'Done, the cause is fixed.'), line(2, 'turn', null, 'fixed')] }) });
+    await be.start();
+    await settle();
+    let j = activeJob(be.snapshot(), 'atlas')!;
+    expect(j.repair!.state).toBe('working');
+    expect(j.canRepair).toBe(false);
+    on('GET', `${P}/vms/atlas/repair`, { json: session({ state: 'ended', outcome: 'fixed', retryJobId: 'p2', lines: [line(3, 'end', null, 'fixed'), line(4, 'retry', 'The provision runs again (job p2).')] }) });
+    be.onEvent('repair.ended', { seq: 10, type: 'repair.ended', engine: E1, data: { id: 's1', vm: 'atlas' } });
+    await settle();
+    j = activeJob(be.snapshot(), 'atlas')!;
+    expect(j.repair).toMatchObject({ state: 'done', outcome: 'Fixed; the job runs again' });
+    expect(j.canRepair).toBe(false);
+    on('GET', `${P}/jobs/p2`, { json: { ...job('p2', 'atlas', 'running'), created: '2026-11-13T11:00:00Z' } });
+    on('GET', `${P}/jobs`, { json: [failed(), { ...job('p2', 'atlas', 'running'), created: '2026-11-13T11:00:00Z' }] });
+    be.onEvent('job.started', { seq: 11, type: 'job.started', engine: E1, data: { id: 'p2', vm: 'atlas' } });
+    await settle();
+    j = activeJob(be.snapshot(), 'atlas')!;
+    expect(j).toMatchObject({ state: 'running', repair: { state: 'done' } });
+  });
+
+  it('keeps each session with its own VM and engine', async () => {
+    const { be, calls, on, settle } = world({ engines: [{ id: E1, name: 'orchard', url: 'https://orchard.test:8443' }, { id: E2, name: 'lab', url: 'https://lab.test:8443' }] });
+    on('GET', `${P}/jobs`, { json: [failed()] });
+    on('GET', `/api/engines/${E2}/api/v1/jobs`, { json: [{ ...job('f1', 'harbor', 'failed'), result: {} }] });
+    // An answer that names another VM is not shown under atlas.
+    on('GET', `${P}/vms/atlas/repair`, { json: session({ vm: 'harbor', state: 'waiting', lines: [line(1, 'text', 'not yours')] }) });
+    on('GET', `/api/engines/${E2}/api/v1/vms/harbor/repair`, { json: session({ vm: 'harbor', state: 'waiting', lines: [line(1, 'text', 'harbor asks')] }) });
+    await be.start();
+    await settle();
+    expect(activeJob(be.snapshot(), 'atlas')).toMatchObject({ repair: null, canRepair: true });
+    const h = activeJob(be.snapshot(), 'harbor')!;
+    expect(h.repair!.messages).toEqual([{ from: 'agent', text: 'harbor asks' }]);
+    on('POST', `/api/engines/${E2}/api/v1/vms/harbor/repair/s1/reply`, { status: 204 });
+    be.replyRepair(h.id, 'go on');
+    await settle();
+    expect(posts(calls).filter(c => c.path.endsWith('/reply')).map(c => c.path)).toEqual([`/api/engines/${E2}/api/v1/vms/harbor/repair/s1/reply`]);
+    // An event of the other engine reads that engine's VM only.
+    const before = calls.length;
+    be.onEvent('repair.output', { seq: 12, type: 'repair.output', engine: E2, data: { id: 's1', vm: 'harbor' } });
+    await settle();
+    expect(calls.slice(before).map(c => c.path)).toEqual([`/api/engines/${E2}/api/v1/vms/harbor/repair`]);
+  });
+
+  it('follows the session the host started meanwhile instead of starting a second', async () => {
+    const { be, calls, on, settle } = world();
+    on('GET', `${P}/jobs`, { json: [failed()] });
+    on('POST', `${P}/vms/atlas/repair`, { status: 409, json: { title: 'running', status: 409, code: 'repair-running', sessionId: 's9' } });
+    on('GET', `${P}/vms/atlas/repair/s9`, { json: session({ id: 's9', lines: [line(1, 'text', 'Looking')] }) });
+    await be.start();
+    await settle();
+    be.startRepair(activeJob(be.snapshot(), 'atlas')!.id);
+    await settle();
+    expect(posts(calls).map(c => c.path)).toEqual([`${P}/vms/atlas/repair`]);
+    expect(activeJob(be.snapshot(), 'atlas')!.repair!.messages).toEqual([{ from: 'agent', text: 'Looking' }]);
+    expect(be.snapshot().notice).toBeNull();
+  });
+
+  it('switches repair.auto on a host the user administers, and reads it from the host configuration', async () => {
+    const { be, calls, on, settle } = world({ engines: [{ id: E1, name: 'orchard', url: 'https://orchard.test:8443' }, { id: E2, name: 'lab', url: 'https://lab.test:8443' }] });
+    on('GET', `${P}/host/config`, { json: { repair: { auto: true, source: 'default', updatedAt: null } } });
+    on('PUT', `${P}/host/config`, { status: 200, json: {} });
+    await be.start();
+    expect(be.snapshot().hosts.find(h => h.id === E1)!.repairAuto).toBe(true);
+    expect(be.snapshot().hosts.find(h => h.id === E2)!.repairAuto).toBeUndefined();
+    be.setRepairAuto(E2, false);
+    be.setRepairAuto(E1, false);
+    await settle();
+    expect(posts(calls).map(c => [c.path, c.body])).toEqual([[`${P}/host/config`, { repair: { auto: false } }]]);
+  });
+});
+
+describe('ApiBackend Windows sign-in', () => {
+  const windows = (w: ReturnType<typeof world>) => w.on('GET', '/api/device/features', { json: { platform: 'windows', notifications: true, microphone: true, share: true, startWithOs: true, shell: true } });
+
+  it('adds a remote host with Windows sign-in only where the device runs Windows', async () => {
+    const w = world();
+    windows(w);
+    w.on('POST', '/api/engines/probe', { json: { url: 'https://lab.test:8443', pin: 'P2', status: 'ok', known: null } });
+    w.on('POST', '/api/engines', { json: { id: E2, name: 'lab', url: 'https://lab.test:8443', pin: 'P2', engineId: null, enrolled: true, signedIn: true, store: false } });
+    w.on('GET', `/api/engines/${E2}/api/v1/vm-defaults`, { json: { recommendedRamGb: 8, recommendedDiskGb: 64 } });
+    w.on('POST', `/api/engines/${E2}/api/v1/vms`, { status: 202, json: { jobId: 'c1' } });
+    await w.be.start();
+    expect(w.be.snapshot().na).not.toContain('windows-sign-in');
+    expect(w.be.createVm({ where: 'remote', name: 'quill', hostAddress: 'https://lab.test:8443', signIn: 'windows', token: 'ignored', pin: 'P2' })).toBe('quill');
+    await w.settle();
+    expect(posts(w.calls).find(c => c.path === '/api/engines')!.body).toEqual({ address: 'https://lab.test:8443', pin: 'P2', userToken: null, windowsSignIn: true });
+  });
+
+  it('never sends Windows sign-in from a device that is not Windows, in a create or a first run', async () => {
+    const w = world({ registered: false, engines: [] });
+    w.on('POST', '/api/engines/probe', { json: { url: 'https://lab.test:8443', pin: 'P2', status: 'ok', known: null } });
+    await w.be.start();
+    expect(w.be.snapshot().na).toContain('windows-sign-in');
+    w.be.firstRunStart({ how: 'setup', address: 'https://lab.test:8443', deviceName: 'laptop', signIn: 'windows', pin: 'P2' });
+    await w.settle();
+    expect(posts(w.calls)).toEqual([]);
+    expect(w.be.snapshot().firstRun?.problem).toBe('Windows sign-in works on Windows only');
+    expect(w.be.createVm({ where: 'remote', name: 'quill', hostAddress: 'https://lab.test:8443', signIn: 'windows', pin: 'P2' })).toBeNull();
+    await w.settle();
+    expect(posts(w.calls)).toEqual([]);
+  });
+
+  it('sets up the first device with Windows sign-in on Windows', async () => {
+    const w = world({ registered: false, engines: [] });
+    windows(w);
+    w.on('POST', '/api/engines/probe', { json: { url: 'https://lab.test:8443', pin: 'P2', status: 'ok', known: null } });
+    w.on('POST', '/api/engines', { json: { id: E2, name: 'lab', url: 'https://lab.test:8443', pin: 'P2', engineId: null, enrolled: false, signedIn: true, store: false } });
+    w.on('POST', '/api/device/setup', { json: { recoveryCode: 'ABCD-EFGH' } });
+    await w.be.start();
+    w.be.firstRunStart({ how: 'setup', address: 'https://lab.test:8443', deviceName: 'laptop', signIn: 'windows', token: 'not sent', pin: 'P2' });
+    await w.settle();
+    expect(posts(w.calls).map(c => [c.path, c.body])).toEqual([
+      ['/api/engines/probe', { address: 'https://lab.test:8443' }],
+      ['/api/engines', { address: 'https://lab.test:8443', pin: 'P2', userToken: null, windowsSignIn: true }],
+      ['/api/device/setup', { engine: E2, deviceName: 'laptop' }],
+    ]);
+  });
+});
+
+describe('ApiBackend one-time upgrade', () => {
+  type Steps = Record<'engine' | 'recovery' | 'close' | 'convert', string>;
+  const view = (st: Partial<Steps>, o: Record<string, unknown> = {}) => ({
+    legacy: true, stage: 'new',
+    steps: (['engine', 'recovery', 'close', 'convert'] as const).map(id => ({ id, state: st[id] ?? 'todo', message: null })),
+    found: { installFolder: 'C:\\old', otherInstallFolders: [], localVms: ['atlas'], remoteVms: ['harbor'], hosts: [], profiles: ['webshop'], unmergedChanges: 0, vault: true, backupKeys: 1, upstream: false, channel: 'stable' },
+    storeEngine: E1, localEngine: E1, items: [], notes: [], oldWriters: [], running: false, error: null, ...o,
+  });
+
+  it('shows nothing of it where the agent has no upgrade or the install is converted', async () => {
+    const a = world();
+    await a.be.start();
+    expect(a.be.snapshot().upgrade).toBeNull();
+    const b = world();
+    b.on('GET', '/api/upgrade', { json: view({ engine: 'done', recovery: 'done', close: 'done', convert: 'done' }, { stage: 'converted' }) });
+    await b.be.start();
+    expect(b.be.snapshot().upgrade).toBeNull();
+    expect(b.be.snapshot().vms.length).toBeGreaterThan(0);
+  });
+
+  it('walks the agent\'s steps in their order; the code leaves the state when kept; the convert waits for the old programs', async () => {
+    const { be, calls, on, settle } = world({ registered: false });
+    on('GET', '/api/upgrade', { json: view({}) });
+    await be.start();
+    // The dialog stands in for the first run of an unregistered device.
+    expect(be.snapshot().firstRun).toBeNull();
+    expect(be.snapshot().upgrade).toMatchObject({ step: 'engine', running: false, error: null, adminPrompt: true, found: { vms: ['atlas', 'harbor'], profiles: 1, vault: true } });
+    on('POST', '/api/upgrade/engine', () => {
+      on('GET', '/api/upgrade', { json: view({ engine: 'done' }) });
+      return { status: 202, json: view({ engine: 'running' }, { running: true }) };
+    });
+    be.upgradeNext();
+    await settle();
+    expect(be.snapshot().upgrade?.step).toBe('recovery');
+    // No name: nothing is sent.
+    be.upgradeNext({ deviceName: ' ' });
+    await settle();
+    expect(be.snapshot().upgrade?.error).toBe('Name this device');
+    expect(posts(calls).map(c => c.path)).toEqual(['/api/upgrade/engine']);
+    on('POST', '/api/device/setup', () => {
+      on('GET', '/api/upgrade', { json: view({ engine: 'done', recovery: 'done', close: 'todo' }, { oldWriters: ['VS Code'] }) });
+      return { json: { recoveryCode: 'ABCD-EFGH-JKMN' } };
+    });
+    be.upgradeNext({ deviceName: 'laptop' });
+    await settle();
+    expect(posts(calls).at(-1)).toMatchObject({ path: '/api/device/setup', body: { engine: E1, deviceName: 'laptop' } });
+    // The agent reports the recovery step done; the code stays on screen until the user says it is kept.
+    expect(be.snapshot().upgrade).toMatchObject({ step: 'recovery', code: ['ABCD', 'EFGH', 'JKMN'] });
+    be.onEvent('upgrade', { seq: 1, type: 'upgrade', engine: null, data: null });
+    await settle();
+    expect(be.snapshot().upgrade?.step).toBe('recovery');
+    be.upgradeNext();
+    await settle();
+    expect(be.snapshot().upgrade).toMatchObject({ step: 'close', code: null, writers: ['VS Code'] });
+    expect(JSON.stringify(be.snapshot())).not.toContain('EFGH');
+    // At the close step nothing starts the conversion.
+    be.upgradeNext();
+    await settle();
+    expect(posts(calls).some(c => c.path === '/api/upgrade/convert')).toBe(false);
+    // VS Code closed, then opened again before Move over: the agent's list decides, nothing is sent.
+    on('GET', '/api/upgrade', { json: view({ engine: 'done', recovery: 'done', close: 'done' }) });
+    be.onEvent('upgrade', { seq: 2, type: 'upgrade', engine: null, data: null });
+    await settle();
+    expect(be.snapshot().upgrade?.step).toBe('convert');
+    on('GET', '/api/upgrade/writers', { json: { open: ['VS Code'] } });
+    be.upgradeNext();
+    await settle();
+    expect(posts(calls).some(c => c.path === '/api/upgrade/convert')).toBe(false);
+    expect(be.snapshot().upgrade?.error).toBe('Close these first: VS Code');
+    on('GET', '/api/upgrade/writers', { json: { open: [] } });
+    on('POST', '/api/upgrade/convert', () => {
+      on('GET', '/api/upgrade', { json: view({ engine: 'done', recovery: 'done', close: 'done', convert: 'running' }, { running: true, stage: 'converting' }) });
+      return { status: 202, json: view({ convert: 'running' }, { running: true }) };
+    });
+    be.upgradeNext();
+    await settle();
+    expect(be.snapshot().upgrade).toMatchObject({ step: 'convert', running: true, error: null });
+    be.onEvent('upgrade', { seq: 3, type: 'upgrade', engine: null, data: { id: 'profiles', label: 'Projects', state: 'done', message: '1 copied' } });
+    await settle();
+    expect(be.snapshot().upgrade?.items).toEqual([{ name: 'Projects', state: 'done', count: '1 copied', pct: 0 }]);
+    // Converted: the normal screens load.
+    on('GET', '/api/upgrade', { json: view({ engine: 'done', recovery: 'done', close: 'done', convert: 'done' }, { stage: 'converted' }) });
+    on('GET', '/api/state', { json: { device: { id: 'd1', name: 'laptop', account: 'acct1', registered: true, storeEngine: E1, protection: 'file', protectionWeak: true }, engines: [{ id: E1, name: 'orchard', url: 'https://orchard.test:8443', pin: 'AB', engineId: 'x', enrolled: true, signedIn: true, store: true }], pairing: null } });
+    be.onEvent('upgrade', { seq: 4, type: 'upgrade', engine: null, data: null });
+    await settle();
+    await settle();
+    expect(be.snapshot().upgrade).toBeNull();
+    expect(be.snapshot().vms.map(v => v.name)).toContain('atlas');
+    expect(posts(calls).map(c => c.path)).toEqual(['/api/upgrade/engine', '/api/device/setup', '/api/upgrade/convert']);
+    expect(calls.every(c => !c.query.includes('ABCD'))).toBe(true);
+  });
+
+  it('resumes at the step the agent reports after a reload, and runs nothing while a step runs', async () => {
+    const { be, calls, on } = world();
+    on('GET', '/api/upgrade', { json: view({ engine: 'done', recovery: 'done', close: 'done', convert: 'running' }, { running: true, stage: 'converting' }) });
+    await be.start();
+    expect(be.snapshot().upgrade).toMatchObject({ step: 'convert', running: true, code: null });
+    be.upgradeNext();
+    expect(posts(calls)).toEqual([]);
+    // Engines are not read while the dialog holds the screen.
+    expect(calls.some(c => c.path.startsWith('/api/engines/'))).toBe(false);
+  });
+
+  it('shows a failed step\'s error in place and retries that step', async () => {
+    const { be, calls, on, settle } = world({ registered: false, engines: [] });
+    on('GET', '/api/upgrade', { json: view({}, { error: 'The engine installer ended with exit code 1; see its window for why, then retry.' }) });
+    on('POST', '/api/upgrade/engine', { status: 202, json: view({ engine: 'running' }, { running: true }) });
+    await be.start();
+    expect(be.snapshot().upgrade).toMatchObject({ step: 'engine', error: 'The engine installer ended with exit code 1; see its window for why, then retry.' });
+    be.upgradeNext({ deviceName: 'laptop' });
+    await settle();
+    expect(posts(calls).map(c => c.path)).toEqual(['/api/upgrade/engine']);
   });
 });

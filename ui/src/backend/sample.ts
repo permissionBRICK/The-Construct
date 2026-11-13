@@ -47,7 +47,7 @@ const json = (o: unknown) => JSON.stringify(o, null, 2);
 
 function orchard(): Host {
   return {
-    id: 'orchard', name: 'orchard', kind: 'Proxmox', version: '2.4.0', channel: 'stable', admin: true,
+    id: 'orchard', name: 'orchard', kind: 'Proxmox', version: '2.4.0', channel: 'stable', admin: true, repairAuto: true,
     address: 'https://orchard.example.net:8443', signIn: 'token', vmCount: 4,
     health: { hypervisor: 'ok', database: 'ok', media: 'ok', inventory: 'ok' },
     capacity: { mode: 'enforce', ram: [212, 256], cpu: [38, 64], disk: [1.9, 4] },
@@ -150,7 +150,7 @@ export function sampleState(): State {
     ],
     hosts: [
       {
-        id: 'pc', name: 'This PC', kind: 'Hyper-V', version: '2.4.0', channel: 'stable', admin: true, address: 'https://192.0.2.10:8443', signIn: 'windows', vmCount: 2,
+        id: 'pc', name: 'This PC', kind: 'Hyper-V', version: '2.4.0', channel: 'stable', admin: true, repairAuto: true, address: 'https://192.0.2.10:8443', signIn: 'windows', vmCount: 2,
         ...emptyAdmin,
         lan: false,
         capacity: { mode: 'observe', ram: [24, 64], cpu: [12, 16], disk: [0.3, 1] },

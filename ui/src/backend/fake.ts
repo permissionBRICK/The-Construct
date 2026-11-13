@@ -1,4 +1,4 @@
-import type { Backend, CreateVmRequest, Host, HostProbe, HostUser, Job, JobKind, Prefs, Profile, ProfileSave, SettingsPatch, State, Vm } from './types';
+import type { Backend, CreateVmRequest, Host, HostProbe, HostUser, Job, JobKind, Prefs, Profile, ProfileSave, SettingsPatch, State, Upgrade, Vm } from './types';
 import { NEXT_RELEASE, PAIR_WORDS, RECOVERY_CODE, REINSTALL_STEPS, REPROVISION_STEPS, sampleState } from './sample';
 import { activeJob, newer, vmUpdateTarget } from '../model/vm';
 import { applies, applyPatch } from '../model/settings';
@@ -14,9 +14,9 @@ import { spanText } from './api/map';
 export type Scene =
   | 'calm' | 'update' | 'changed' | 'lease' | 'enter' | 'job' | 'failed' | 'failed-reinstall' | 'repair' | 'updating' | 'restart'
   | 'pairing' | 'pair-confirm' | 'revoked' | 'handout' | 'creating'
-  | 'upgrade-intro' | 'upgrade-code' | 'upgrade-convert' | 'upgrade-done';
+  | 'upgrade-intro' | 'upgrade-code' | 'upgrade-close' | 'upgrade-convert';
 
-export const SCENES: Scene[] = ['calm', 'update', 'changed', 'lease', 'enter', 'job', 'failed', 'failed-reinstall', 'repair', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'upgrade-intro', 'upgrade-code', 'upgrade-convert', 'upgrade-done'];
+export const SCENES: Scene[] = ['calm', 'update', 'changed', 'lease', 'enter', 'job', 'failed', 'failed-reinstall', 'repair', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'upgrade-intro', 'upgrade-code', 'upgrade-close', 'upgrade-convert'];
 
 /** Things the preview frame can make happen, beside the user's own actions. */
 export type Demo = 'lease' | 'enter' | 'release' | 'fail-next' | 'change';
@@ -133,10 +133,10 @@ export class FakeBackend implements Backend {
         d.jobs.push(j);
         break;
       }
-      case 'upgrade-intro': d.upgrade = { step: 'intro', code: RECOVERY_CODE, items: UPGRADE_ITEMS() }; break;
-      case 'upgrade-code': d.upgrade = { step: 'code', code: RECOVERY_CODE, items: UPGRADE_ITEMS() }; break;
-      case 'upgrade-convert': d.upgrade = { step: 'convert', code: RECOVERY_CODE, items: UPGRADE_ITEMS(3) }; break;
-      case 'upgrade-done': d.upgrade = { step: 'done', code: RECOVERY_CODE, items: UPGRADE_ITEMS(6) }; break;
+      case 'upgrade-intro': d.upgrade = upgrade('engine'); break;
+      case 'upgrade-code': d.upgrade = upgrade('recovery', { code: RECOVERY_CODE }); break;
+      case 'upgrade-close': d.upgrade = upgrade('close', { writers: ['VS Code'] }); break;
+      case 'upgrade-convert': d.upgrade = upgrade('convert', { running: true, items: UPGRADE_ITEMS(3) }); break;
     }
     this.timers = t;
   }
@@ -166,7 +166,10 @@ export class FakeBackend implements Backend {
     j.state = 'failed';
     j.error = 'apt is locked by another process';
     j.log.push(`fail ${j.step}: E: Could not get lock /var/lib/dpkg/lock-frontend`);
-    j.repair = { agent: 'Claude Code', state: 'working', messages: [{ from: 'agent', text: REPAIR_SCRIPT[0] }], t3Thread: true };
+    // The hosts here start the repair agent by themselves (`repair.auto`); a host with it off offers the button.
+    const auto = this.s.hosts.find(h => h.id === this.s.vms.find(v => v.id === j.vmId)?.hostId)?.repairAuto !== false;
+    j.repair = auto ? newRepair() : null;
+    j.canRepair = !auto;
   }
 
   private startJob(vmId: string, kind: JobKind, extra?: Partial<Job>): string | null {
@@ -255,7 +258,7 @@ export class FakeBackend implements Backend {
     const say = (i: number, then?: () => void) => this.after(3, () => {
       this.set(d => {
         const j = this.job(d, jobId);
-        if (!j?.repair || j.state !== 'failed') return;
+        if (!j?.repair || j.state !== 'failed' || j.repair.state !== 'working') return;
         j.repair.messages.push({ from: 'agent', text: REPAIR_SCRIPT[i] });
         if (i === 3) j.repair.state = 'asking';
       });
@@ -342,9 +345,26 @@ export class FakeBackend implements Backend {
     this.set(d => { const j = this.job(d, jobId); if (j) j.state = 'stopped'; });
   }
 
+  startRepair(jobId: string) {
+    const j = this.s.jobs.find(x => x.id === jobId);
+    if (!j || j.state !== 'failed' || !j.canRepair) return;
+    this.set(d => { const x = this.job(d, jobId)!; x.repair = newRepair(); x.canRepair = false; });
+    this.repairScript(jobId);
+  }
+
+  stopRepair(jobId: string) {
+    this.set(d => {
+      const j = this.job(d, jobId);
+      if (!j?.repair || (j.repair.state !== 'working' && j.repair.state !== 'asking')) return;
+      j.repair.state = 'stopped';
+      j.repair.outcome = 'Stopped';
+      j.canRepair = true;
+    });
+  }
+
   replyRepair(jobId: string, text: string) {
     const t = text.trim();
-    if (!t) return;
+    if (!t || this.s.jobs.find(x => x.id === jobId)?.repair?.state !== 'asking') return;
     this.set(d => {
       const j = this.job(d, jobId);
       if (!j?.repair) return;
@@ -356,10 +376,13 @@ export class FakeBackend implements Backend {
       this.set(d => {
         const j = this.job(d, jobId);
         if (!j?.repair) return;
-        j.repair.messages.push({ from: 'agent', text: stop ? 'Stopped unattended-upgrades and removed the lock. Running "Installing tools" again.' : 'Waiting for unattended-upgrades to finish, then running "Installing tools" again.' });
+        if (j.repair.state !== 'working') return;
+        j.repair.messages.push({ from: 'tool', text: stop ? 'Bash: systemctl stop unattended-upgrades' : 'Bash: systemctl is-active unattended-upgrades' });
+        j.repair.messages.push({ from: 'agent', text: stop ? 'Stopped unattended-upgrades and removed the lock.' : 'The updates finished; the lock is free.' });
         j.repair.state = 'done';
+        j.repair.outcome = 'Fixed; the job runs again';
       });
-      this.after(3, () => this.retryJob(jobId));
+      this.after(3, () => { if (this.s.jobs.find(x => x.id === jobId)?.repair?.state === 'done') this.retryJob(jobId); });
     });
   }
 
@@ -699,6 +722,10 @@ export class FakeBackend implements Backend {
 
   setUsageWindow(hostId: string, w: 'today' | 'month' | 'all') { this.hostSet(hostId, x => { x.usage.window = w; }); }
 
+  setRepairAuto(hostId: string, on: boolean) {
+    this.hostSet(hostId, x => { x.repairAuto = on; }, on ? 'The repair agent starts by itself' : 'The repair agent starts when asked');
+  }
+
   saveConfig(hostId: string, section: string, json: string): string | null {
     try { JSON.parse(json); } catch (e) { return (e as Error).message; }
     this.hostSet(hostId, x => { const c = x.config.find(y => y.name === section); if (c) { c.json = json; c.updated = 'now'; } x.audit.unshift({ at: 'now', actor: 'alex', action: 'config.save', target: section }); }, `Saved ${section}`);
@@ -720,20 +747,29 @@ export class FakeBackend implements Backend {
   exportRecoveryCode(how: 'file' | 'print') { this.set(() => {}, how === 'file' ? 'Saved as a file' : 'Printing'); }
   openLog() { this.set(() => {}, 'Log opens'); }
 
-  upgradeNext() {
+  /** The upgrade's steps in their order; the close step waits for VS Code, which the fake closes by itself. */
+  upgradeNext(input?: { deviceName?: string }) {
     const u = this.s.upgrade;
-    if (!u) return;
-    if (u.step === 'intro') return this.set(d => { d.upgrade!.step = 'code'; });
-    if (u.step === 'code') {
-      this.set(d => { d.upgrade!.step = 'convert'; d.upgrade!.items = UPGRADE_ITEMS(0); });
-      const step = (i: number) => this.after(2, () => {
-        this.set(d => { d.upgrade!.items = UPGRADE_ITEMS(i); if (i >= 6) d.upgrade!.step = 'done'; });
-        if (i < 6) step(i + 1);
-      });
-      if (this.timers) step(1); else this.set(d => { d.upgrade!.items = UPGRADE_ITEMS(6); d.upgrade!.step = 'done'; });
-      return;
+    if (!u || u.running) return;
+    const to = (step: Upgrade['step'], extra: Partial<Upgrade> = {}) => this.set(d => { d.upgrade = upgrade(step, extra); });
+    if (u.step === 'engine') return to('recovery');
+    if (u.step === 'recovery') {
+      if (u.code) {
+        to('close', { writers: ['VS Code'] });
+        if (this.timers) this.after(4, () => { if (this.s.upgrade?.step === 'close') to('convert'); });
+        return;
+      }
+      if (!input?.deviceName?.trim()) return to('recovery', { error: 'Name this device' });
+      return to('recovery', { code: RECOVERY_CODE });
     }
-    if (u.step === 'done') this.set(d => { d.upgrade = null; });
+    if (u.step === 'close') return to('convert');
+    to('convert', { running: true, items: UPGRADE_ITEMS(0) });
+    const step = (i: number) => this.after(2, () => {
+      if (i >= 6) { this.set(d => { d.upgrade = null; }, 'Moved over'); return; }
+      this.set(d => { d.upgrade!.items = UPGRADE_ITEMS(i); });
+      step(i + 1);
+    });
+    if (this.timers) step(1); else this.set(d => { d.upgrade = null; }, 'Moved over');
   }
 
   /** The fake starts as a device that is set up already. */
@@ -755,8 +791,14 @@ const REPAIR_SCRIPT = [
 
 const ROTATE = [{ secret: 'forge-token', last: '4 d' }, { secret: 'deploy-key', last: '9 d' }, { secret: 'staging-db', last: '12 d' }];
 
+function upgrade(step: Upgrade['step'], extra: Partial<Upgrade> = {}): Upgrade {
+  return { step, running: false, error: null, code: null, writers: [], items: [], found: { vms: ['atlas', 'harbor', 'mesa', 'quarry'], profiles: 4, vault: true }, adminPrompt: true, ...extra };
+}
+
+const newRepair = (): NonNullable<Job['repair']> => ({ agent: 'Claude Code', state: 'working', messages: [{ from: 'agent', text: REPAIR_SCRIPT[0] }], t3Thread: false, outcome: null });
+
 function UPGRADE_ITEMS(progress = 0) {
-  const names: [string, string][] = [['VS Code closed', ''], ['VMs', '4'], ['Projects', '4'], ['Key vault', '5'], ['Backups', '5'], ['VMs to the new engine', '4']];
+  const names: [string, string][] = [['Channel', ''], ['Hosts', '2'], ['Projects', '4'], ['Key vault', '5'], ['Backup keys', '5'], ['VMs to the new engine', '4']];
   return names.map(([name, count], i) => ({ name, count, state: (i < progress ? 'done' : i === progress ? 'running' : 'waiting') as 'done' | 'running' | 'waiting', pct: i === progress ? 60 : i < progress ? 100 : 0 }));
 }
 

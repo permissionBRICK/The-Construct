@@ -87,6 +87,10 @@ html[data-surf="alone"] body { background: transparent; }
 .app .chat p.agent { color: var(--fg); }
 .app .chat p.agent::before { content: "> "; color: var(--off); }
 .app .chat p.user { align-self: flex-end; max-width: 85%; padding: 4px 10px; border-radius: var(--rad); background: var(--pn); border: 1px solid var(--ln); font-family: var(--font); font-size: 13px; }
+.app .chat p.note, .app .chat p.end { color: var(--dim); font-family: var(--font); font-size: 12px; }
+.app .chat p.tool { color: var(--dim); }
+.app .chat p.tool::before { content: "$ "; color: var(--off); }
+.app .chat p.end.okc { color: var(--ok); }
 .app .chat p.typing::after { content: "_"; animation: blink 1s steps(1) infinite; }
 .app .reply { display: flex; gap: 8px; }
 .app .reply .in { flex: 1; width: auto; height: 38px; background: var(--bg); }
