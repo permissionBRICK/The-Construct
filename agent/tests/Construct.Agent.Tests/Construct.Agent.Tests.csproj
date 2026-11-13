@@ -22,6 +22,8 @@
     <ProjectReference Include="..\..\src\construct-agent\construct-agent.csproj" Aliases="cli" />
     <!-- The real engine, in fake mode, on a loopback HTTPS port. -->
     <ProjectReference Include="..\..\..\service\src\Constructd.Api\Constructd.Api.csproj" />
+    <!-- The Companion's fakes for the parts ported from it (SSH transport, toasts, audio). -->
+    <ProjectReference Include="..\..\..\companion\src\Construct.Companion.Fakes\Construct.Companion.Fakes.csproj" />
   </ItemGroup>
 
   <ItemGroup>

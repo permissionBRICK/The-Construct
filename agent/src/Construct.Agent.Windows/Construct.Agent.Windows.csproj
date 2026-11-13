@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The device agent on Windows (plan 5.1, 11.2): the agent's core in a tray app with WebView2 windows,
+    replacing the Companion. Its executable is construct-agent.exe, like the Linux host's, so repair and
+    the updater find it by the same name. Builds on Linux with Windows targeting, as the Companion does.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.17763.0</TargetFramework>
+    <OutputType>WinExe</OutputType>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <AssemblyName>construct-agent</AssemblyName>
+    <RootNamespace>Construct.Agent.Windows</RootNamespace>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Construct.Agent.Core\Construct.Agent.Core.csproj" />
+    <!-- Reused unchanged: WASAPI capture, WinRT toasts, the current-user registry, DPI and the parent console. -->
+    <ProjectReference Include="..\..\..\companion\src\Construct.Companion.Windows\Construct.Companion.Windows.csproj" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3650.58" />
+  </ItemGroup>
+
+  <!-- WebView2 also adds a WPF reference even though this is a WinForms app (as in the Companion). -->
+  <Target Name="RemoveWebView2Wpf" BeforeTargets="ResolveAssemblyReferences">
+    <ItemGroup><Reference Remove="@(Reference)" Condition="'%(Reference.Filename)' == 'Microsoft.Web.WebView2.Wpf'" /></ItemGroup>
+  </Target>
+
+</Project>

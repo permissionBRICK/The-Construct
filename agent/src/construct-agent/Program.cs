@@ -1,32 +1,40 @@
 using System.Diagnostics;
 using Construct.Agent;
+using Construct.Agent.Device;
 using Construct.Agent.Http;
+using Construct.Agent.Update;
 using Microsoft.Extensions.Hosting;
 
-// construct-agent [run|open|repair] [--data-dir DIR] [--ui DIR]
-//   run     the agent in the foreground (the default)
-//   open    starts the agent when it is not running and opens the UI in the default browser
-//   repair  reports what it finds and restarts the agent; works with no engine reachable (5.3)
+// construct-agent [run|open|repair|autostart on|off|version] [--data-dir DIR] [--ui DIR]
+//   run        the agent in the foreground (the default)
+//   open       starts the agent when it is not running and opens the UI in the default browser
+//   repair     reports what it finds and restarts the agent; works with no engine reachable (5.3)
+//   autostart  installs (on) or removes (off) the systemd user unit that starts the agent with the session
+//   version    prints the version
+const string usage = "Usage: construct-agent [run|open|repair|autostart on|off|version] [--data-dir DIR] [--ui DIR]";
 var command = "run";
-string? dataDirectory = null, ui = null;
+string? dataDirectory = null, ui = null, autostart = null;
 for (var i = 0; i < args.Length; i++)
 {
     switch (args[i])
     {
         case "--data-dir" when i + 1 < args.Length: dataDirectory = args[++i]; break;
         case "--ui" when i + 1 < args.Length: ui = args[++i]; break;
-        case "run" or "open" or "repair": command = args[i]; break;
+        case "run" or "open" or "repair" or "version": command = args[i]; break;
+        case "autostart" when i + 1 < args.Length && args[i + 1] is "on" or "off": command = "autostart"; autostart = args[++i]; break;
         case "-h" or "--help":
-            Console.WriteLine("Usage: construct-agent [run|open|repair] [--data-dir DIR] [--ui DIR]");
+            Console.WriteLine(usage);
             return 0;
         default:
-            Console.Error.WriteLine($"Unknown argument '{args[i]}'. Usage: construct-agent [run|open|repair] [--data-dir DIR] [--ui DIR]");
+            Console.Error.WriteLine($"Unknown argument '{args[i]}'. {usage}");
             return 2;
     }
 }
 
-var options = new AgentOptions { DataDirectory = dataDirectory ?? AgentOptions.DefaultDataDirectory(), UiDirectory = ui ?? AgentOptions.DefaultUiDirectory() };
+var platform = new LinuxPlatform();
+var options = new AgentOptions { DataDirectory = dataDirectory ?? AgentOptions.DefaultDataDirectory(), UiDirectory = ui ?? AgentOptions.DefaultUiDirectory(), Platform = platform };
 var launch = AgentLaunch.Current(dataDirectory, ui);
+var install = new AgentInstall(options.DataDirectory, "construct-agent");
 
 switch (command)
 {
@@ -61,10 +69,45 @@ switch (command)
     case "repair":
         return await Repair.RunAsync(options, launch, Console.Out, CancellationToken.None);
 
+    case "version":
+        Console.WriteLine(options.Version);
+        return 0;
+
+    case "autostart":
+    {
+        if (platform.StartWithOs is null)
+        {
+            Console.Error.WriteLine("systemctl was not found: starting with the session is not available here.");
+            return 1;
+        }
+
+        var running = install.RunningVersion(Environment.ProcessPath);
+        platform.SetStartWithOs(autostart == "on", running is not null ? install.ExecutableOf(running) : Environment.ProcessPath!);
+        Console.WriteLine(autostart == "on" ? $"Installed {platform.UnitPath}; the agent starts with the session." : "Removed the user unit.");
+        return 0;
+    }
+
     default:
     {
-        await using var host = AgentHost.Create(options);
-        await host.StartAsync();
+        // A version the last update switched to proves itself here; when it does not, the previous one starts again (12.2).
+        AgentHost? started = null;
+        var ok = await AgentUpdater.StartupAsync(install, install.RunningVersion(Environment.ProcessPath), async () =>
+        {
+            started = AgentHost.Create(options);
+            await started.StartAsync();
+            await started.SelfTestAsync();
+        }, platform, waitForPrevious: async () =>
+        {
+            for (var i = 0; i < 120 && await Repair.RunningAsync(options, CancellationToken.None) is not null; i++) await Task.Delay(250);
+        });
+        if (!ok)
+        {
+            if (started is not null) await started.DisposeAsync();
+            Console.Error.WriteLine("This version failed its self-test; the previous version was started again.");
+            return 1;
+        }
+
+        await using var host = started!;
         Console.WriteLine($"construct-agent {options.Version} on {host.BaseUrl} (device {host.Agent.DeviceId}); token in {options.EndpointPath}");
         using var stop = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) =>

@@ -10,6 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Construct.Agent.Device;
 
 namespace Construct.Agent.Http;
 
@@ -23,13 +24,17 @@ namespace Construct.Agent.Http;
 /// </summary>
 public sealed class AgentHost : IAsyncDisposable
 {
-    private AgentHost(WebApplication app, DeviceAgent agent, AgentOptions options, string token)
+    private AgentHost(WebApplication app, DeviceAgent agent, AgentOptions options, string token, DeviceServices device)
     {
         App = app;
         Agent = agent;
         Options = options;
         Token = token;
+        Device = device;
     }
+
+    /// <summary>The device features: VM links, open actions, SSH configuration, updates.</summary>
+    public DeviceServices Device { get; }
 
     public WebApplication App { get; }
 
@@ -44,7 +49,8 @@ public sealed class AgentHost : IAsyncDisposable
 
     public string BaseUrl => $"http://127.0.0.1:{Port}";
 
-    public static AgentHost Create(AgentOptions options, DeviceAgent? agent = null)
+    /// <param name="device">Builds the device features (tests pass fakes); by default from <see cref="AgentOptions.Platform"/>.</param>
+    public static AgentHost Create(AgentOptions options, DeviceAgent? agent = null, Func<DeviceAgent, Action, DeviceServices>? device = null)
     {
         agent ??= new DeviceAgent(options);
         var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions { Args = [] });
@@ -63,7 +69,9 @@ public sealed class AgentHost : IAsyncDisposable
 
         var app = builder.Build();
         var token = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
-        var host = new AgentHost(app, agent, options, token);
+        var stop = () => app.Lifetime.StopApplication();
+        var services = device?.Invoke(agent, stop) ?? DeviceServices.Create(agent, options, options.Platform ?? new LinuxPlatform(), stop);
+        var host = new AgentHost(app, agent, options, token, services);
         var startedAt = options.Time.GetUtcNow();
 
         app.Lifetime.ApplicationStarted.Register(() =>
@@ -90,13 +98,31 @@ public sealed class AgentHost : IAsyncDisposable
         }
 
         AgentRoutes.Map(app, host, startedAt);
+        DeviceRoutes.Map(app.MapGroup("/api").WithTags("device"), services);
         return host;
     }
 
-    public Task StartAsync(CancellationToken ct = default) => App.StartAsync(ct);
+    /// <summary>Starts the API, then the device features (VM links, update checks).</summary>
+    public async Task StartAsync(CancellationToken ct = default)
+    {
+        await App.StartAsync(ct).ConfigureAwait(false);
+        Device.Start();
+    }
+
+    /// <summary>
+    /// The self-test at start (12.2): the API answers its own health route from this process. A new
+    /// version that fails it is replaced by the previous one (<see cref="Update.AgentUpdater.StartupAsync"/>).
+    /// </summary>
+    public async Task SelfTestAsync(CancellationToken ct = default)
+    {
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        var health = await System.Net.Http.Json.HttpClientJsonExtensions.GetFromJsonAsync<AgentHealth>(http, BaseUrl + "/api/health", AgentJson.Options, ct).ConfigureAwait(false);
+        if (health?.Pid != Environment.ProcessId || health.Status != "ok") throw new InvalidOperationException("The agent's health route did not answer from this process.");
+    }
 
     public async ValueTask DisposeAsync()
     {
+        await Device.DisposeAsync().ConfigureAwait(false);
         await App.StopAsync().ConfigureAwait(false);
         await App.DisposeAsync().ConfigureAwait(false);
         Agent.Dispose();
