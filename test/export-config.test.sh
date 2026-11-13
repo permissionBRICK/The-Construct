@@ -374,9 +374,18 @@ for t in ed25519 ecdsa; do
   printf 'fresh %s public\n' "${t}" >"${target}/ssh_host_${t}_key.pub"
 done
 printf '#!/usr/bin/env bash\nexit 0\n' >"${tmp}/sshbin/sshd"
-chmod +x "${tmp}/sshbin/sshd"
+# ssh.service is unknown here, sshd.service restarts (SSHD_UNIT_RC=1: that fails too).
+cat >"${tmp}/sshbin/systemctl" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${SERVICE_CALLS}"
+case "$*" in
+  "try-restart sshd.service") exit "${SSHD_UNIT_RC:-0}" ;;
+esac
+exit 1
+STUB
+chmod +x "${tmp}/sshbin/sshd" "${tmp}/sshbin/systemctl"
 ssh_restore() { # <tarball> <log>
-  "${fixture_env[@]}" PATH="${tmp}/sshbin:${tmp}/bin:${PATH}" SERVICE_CALLS="${tmp}/ssh-calls" \
+  "${fixture_env[@]}" PATH="${tmp}/sshbin:${tmp}/bin:${PATH}" SERVICE_CALLS="${tmp}/ssh-calls" SSHD_UNIT_RC="${SSHD_UNIT_RC:-0}" \
     SSH_HOST_KEY_DIR="${target}" BACKUP_TGZ="$1" EXPORT_HOME="${tmp}/ssh-home" \
     bash "${ROOT}/bin/restore-config.sh" >"$2" 2>&1
 }
@@ -389,10 +398,8 @@ ok 'host keys: private keys 0600, public keys 0644' \
   test "$(stat -c '%a' "${target}/ssh_host_rsa_key" "${target}/ssh_host_rsa_key.pub" | tr '\n' ' ')" = '600 644 '
 ok 'host keys: sshd is restarted once' test "$(grep -cx 'try-restart ssh.service' "${tmp}/ssh-calls")" = 1
 
-# The fallback name is tried when ssh.service is unknown; the restart failing is
-# reported, not fatal. Covered by: the stub fails every call (exit 1) above, so the
-# second name was tried as well.
 ok 'host keys: the restart tries sshd.service when ssh.service fails' grep -qx 'try-restart sshd.service' "${tmp}/ssh-calls"
+ok 'host keys: the restore says it restored them' grep -q 'restored SSH host keys' "${tmp}/ssh-restore.log"
 
 rm -f "${tmp}/ssh-calls"
 ssh_restore "${tmp}/ssh-true.tar.gz" "${tmp}/ssh-again.log"
@@ -402,6 +409,16 @@ rm -f "${tmp}/ssh-calls"
 ssh_restore "${tmp}/ssh-false.tar.gz" "${tmp}/ssh-old.log"
 ok 'host keys: a backup without host keys changes none and restarts nothing' \
   sh -c "cmp -s '${keys}/ssh_host_ed25519_key' '${target}/ssh_host_ed25519_key' && ! grep -q 'try-restart' '${tmp}/ssh-calls' 2>/dev/null"
+
+# sshd cannot be restarted: the keys it runs with are put back, and nothing claims a restore.
+for t in ed25519 ecdsa; do printf 'fresh %s private\n' "${t}" >"${target}/ssh_host_${t}_key"; done
+rm -f "${target}/ssh_host_rsa_key" "${target}/ssh_host_rsa_key.pub"
+rc=0
+SSHD_UNIT_RC=1 ssh_restore "${tmp}/ssh-true.tar.gz" "${tmp}/ssh-norestart.log" || rc=$?
+ok 'host keys: a failed restart does not fail the restore' test "${rc}" = 0
+ok '... the previous keys are back' \
+  sh -c "grep -qx 'fresh ecdsa private' '${target}/ssh_host_ecdsa_key' && test ! -e '${target}/ssh_host_rsa_key'"
+ok '... and no restore is claimed' sh -c "! grep -q 'restored SSH host keys' '${tmp}/ssh-norestart.log'"
 
 # sshd refusing the saved keys: the VM keeps the keys it had, sshd is left alone.
 for t in ed25519 ecdsa; do printf 'fresh %s private\n' "${t}" >"${target}/ssh_host_${t}_key"; done

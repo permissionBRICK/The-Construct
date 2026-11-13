@@ -523,10 +523,14 @@ if [[ -n "${ssh_keys_restore}" ]]; then
       rm -f "${SSH_HOST_KEY_DIR}"/ssh_host_*
       cp -a "${_ssh_previous}"/ssh_host_* "${SSH_HOST_KEY_DIR}/" 2>/dev/null || true
       err "the saved SSH host keys could not be installed or sshd refused them; this VM keeps its new host keys"
-    else
-      systemctl try-restart ssh.service 2>/dev/null || systemctl try-restart sshd.service 2>/dev/null \
-        || err "sshd could not be restarted; it presents the restored host keys after the next reboot"
+    elif systemctl try-restart ssh.service 2>/dev/null || systemctl try-restart sshd.service 2>/dev/null; then
       log "restored SSH host keys"
+    else
+      # The running sshd may still present the keys it had: put them back, so what it presents and
+      # what is on disk agree, and the engine keeps trusting the key it saw.
+      rm -f "${SSH_HOST_KEY_DIR}"/ssh_host_*
+      cp -a "${_ssh_previous}"/ssh_host_* "${SSH_HOST_KEY_DIR}/" 2>/dev/null || true
+      err "sshd could not be restarted with the saved SSH host keys; this VM keeps its new host keys"
     fi
   fi
   rm -rf "${_ssh_stage}"
