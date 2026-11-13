@@ -46,14 +46,18 @@ public sealed class VmUpdates(IVmRepository vms, IUserStore users, IJobStore job
     /// <summary>Reprovisions the VMs one after the other in the background; answers their names.</summary>
     public IReadOnlyList<string> Start(IReadOnlyList<Vm> list, string actor)
     {
-        var names = list.Select(v => v.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        var queued = list.DistinctBy(v => v.Name, StringComparer.OrdinalIgnoreCase).ToArray();
+        var names = queued.Select(v => v.Name).ToArray();
         _ = Task.Run(async () =>
         {
-            foreach (var name in names)
+            foreach (var (name, owner, created) in queued.Select(v => (v.Name, v.Owner, v.Created)))
             {
                 try
                 {
-                    if (await vms.GetAsync(name, CancellationToken.None) is not { Deleting: false } vm) continue;
+                    // The same VM as when it was queued: a VM deleted meanwhile and recreated under its name
+                    // by somebody else is not touched.
+                    if (await vms.GetAsync(name, CancellationToken.None) is not { Deleting: false } vm ||
+                        !Ownership.SameName(vm.Owner, owner) || vm.Created != created) continue;
                     var job = await SubmitAsync(vm, actor, CancellationToken.None);
                     while (await jobs.GetAsync(job.Id, CancellationToken.None) is { State: JobState.Queued or JobState.Running })
                         await Task.Delay(TimeSpan.FromSeconds(1));
