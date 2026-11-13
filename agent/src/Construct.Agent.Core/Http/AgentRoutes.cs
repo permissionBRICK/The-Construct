@@ -104,6 +104,10 @@ public static class AgentRoutes
 
         api.MapDelete("/devices/{id}", async (DeviceAgent agent, string id, CancellationToken ct) =>
             TypedResults.Ok(await agent.RevokeDeviceAsync(id, ct))).WithName("RevokeDevice");
+
+        // ---- the vault (8.2, 8.4, 9.1, 10.3) ----
+
+        AgentVaultRoutes.Map(api);
     }
 
     private static async Task EventsAsync(HttpContext context, DeviceAgent agent, long? since)

@@ -88,6 +88,7 @@ $ construct secret release github-token staging-db
 | `delete <name>` | yes | Removes a secret from the vault. |
 | `auto-approve <name> on` | yes | Switches auto-approve on. |
 | `auto-approve <name> off` | no | Switches it off: requests need your approval again. |
+| `ask <name> --description … [--reason …]` | no (you enter the value) | Hosted VMs whose vault your devices keep: asks you to enter a secret the vault does not hold. You paste the value on a device; it is created only if the name is still free, needs your approval for every use and is never auto-approved. `list` shows the name as `requested` until then; the request lapses after a day. |
 
 `get` prints the value exactly, with no newline added. Values never appear on a command line:
 `add` reads stdin, and every value travels between the VM and the Companion only on stdin
@@ -326,6 +327,28 @@ the host queues a scan. The VM's minute heartbeat picks it up and runs the same 
 logs are redacted at once. Other files wait for your decision in the Companion or on the phone,
 and are handled on a later heartbeat. Only one scan per VM runs at a time. A scan that never
 reports back is handed out again after 30 minutes. A locked VM's scrub waits until it is unlocked.
+
+### A vault kept by your devices
+
+In the reworked platform (`docs/plans/construct-platform-design.md` 8.2, 9.1, 10.3) the vault is part of
+your account's records: each secret is a `secret` record, sealed with the account's record key, carrying
+today's entry with its value sealed with the vault key `K`. Your devices (the device agent) read and
+write them; a host keeps them for every user whose device granted it the record key, and every other user
+keeps the vault above unchanged. `construct secret` works the same on the VM. A host writes a secret only
+for these reasons, each recorded with who caused it: a VM adds a new name, a VM turns auto-approve off, a
+VM replaces, deletes or turns auto-approve on a secret after a device approved, or a device enters a value
+an agent asked for (`ask`). The mode is the host's per account: `available` while a device has granted
+it `K`, `locked` otherwise, when a device unlocks each running VM. A device that changes a value ends the
+leases on the old one and scrubs it from those VMs, as the sync does today.
+
+| Host route | Who | What |
+|---|---|---|
+| `GET /api/v1/vault/mode` | user or device | `{mode, holdsKey, records, unlockedVms}` |
+| `PUT /api/v1/vault/mode` | user or device | `{mode, grant?}`: `available` with `K` sealed to the host key, `locked` withdraws it |
+| `POST /api/v1/vms/{name}/vault/unlock` | owner | `{grant}` for a vault kept as records (`{key}` for the Companion's) |
+| `GET /api/v1/vault/entry-requests` | user or device | Pending `ask` requests: VM, name, the agent's description and reason, expiry |
+| `POST /api/v1/vault/entry-requests/{id}` | device | `{payload, updatedAt, hasUsername}`: the value sealed with `K`; `409 exists` when the name is taken |
+| `POST /api/v1/vault/entry-requests/{id}/decline` | user or device | Removes the request |
 
 ## Security model
 

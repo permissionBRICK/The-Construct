@@ -33,6 +33,8 @@ public sealed partial class VaultHostService
         public DateTimeOffset CreatedAt { get; } = createdAt;
         public DateTimeOffset Deadline { get; } = deadline;
         public PendingState State { get; set; }
+        // Who answered (device:<id>, phone:<id> or user:<name>): the provenance of an approved write (9.1).
+        public string? Approver { get; set; }
         public DateTimeOffset? DecidedAt { get; set; }
         public JsonObject? Response { get; set; }
         public string? LeaseId { get; set; }
@@ -59,12 +61,14 @@ public sealed partial class VaultHostService
         await gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var state = await store.GetOwnerAsync(vm.Owner, ct).ConfigureAwait(false);
-            var entries = await store.ListEntriesAsync(vm.Owner, ct).ConfigureAwait(false);
+            var state = await OwnerAsync(vm.Owner, ct).ConfigureAwait(false);
+            var entries = await EntriesAsync(vm.Owner, ct).ConfigureAwait(false);
+            if (state is { Records: true }) await ReconcileLeasesAsync(state, entries, ct).ConfigureAwait(false);
             if (request.Op is "list" or "status") return new(await ListAsync(vm, request, entries, ct).ConfigureAwait(false), null);
             if (state is not { Configured: true }) return new(VaultProtocol.Response(request.Id, "locked", NotSetUpMessage), null);
             return request.Op switch
             {
+                "ask" => new(AskForEntry(vm, request, state, entries), null),
                 "request" => await RequestAsync(vm, request, entries, ct).ConfigureAwait(false),
                 "get" => await GetAsync(vm, request, state, entries, ct).ConfigureAwait(false),
                 "release" => new(await ReleaseAsync(vm, request, entries, ct).ConfigureAwait(false), null),
@@ -74,6 +78,10 @@ public sealed partial class VaultHostService
             };
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (VaultProblemException e) when (e.Code == "write-conflict")
+        {
+            return new(VaultProtocol.Response(request.Id, "error", e.Message), null);
+        }
         catch (Exception e) when (e is not VaultProblemException)
         {
             return new(VaultProtocol.Response(request.Id, "error", "The key vault could not complete the request."), null);
@@ -93,6 +101,11 @@ public sealed partial class VaultHostService
             items.Add(new JsonObject { ["name"] = entry.Name, ["description"] = entry.Description, ["hasUsername"] = entry.HasUsername,
                 ["autoApprove"] = entry.AutoApprove, ["lease"] = lease is null ? null : VaultProtocol.Lease(lease) });
         }
+        // Names this VM asked the user to enter (10.3) show as requested until the entry exists.
+        if (request.Op == "list")
+            foreach (var asked in EntryRequestsOf(vm).Where(r => Live(entries, r.Name) is null))
+                items.Add(new JsonObject { ["name"] = asked.Name, ["description"] = asked.Description, ["hasUsername"] = false,
+                    ["autoApprove"] = false, ["lease"] = null, ["requested"] = true });
         var response = VaultProtocol.Response(request.Id, "ok", ""); response["items"] = items; return response;
     }
 
@@ -130,7 +143,7 @@ public sealed partial class VaultHostService
     private async Task<JsonObject> ReadAsync(Vm vm, VaultRequest request, VaultLease? lease, VaultOwnerState state, CancellationToken ct)
     {
         var name = request.Names[0];
-        var entries = await store.ListEntriesAsync(vm.Owner, ct).ConfigureAwait(false);
+        var entries = await EntriesAsync(vm.Owner, ct).ConfigureAwait(false);
         if (Live(entries, name) is not { } entry) return NotFound(request, name);
         var key = KeyFor(state, vm.Name);
         if (key is null) return Locked(request);
@@ -177,30 +190,42 @@ public sealed partial class VaultHostService
             var ttl = TimeSpan.FromSeconds(request.Ttl ?? DefaultTtl.TotalSeconds);
             return Ask(vm, request, VaultPrompts.Replace(vm.Name, existing, request), [name], null, (int)ttl.TotalSeconds);
         }
-        return new(await StoreAsync(vm, request, ct).ConfigureAwait(false), null);
+        return new(await StoreAsync(vm, request, null, ct).ConfigureAwait(false), null);
     }
 
-    // Stores an agent's secret and leases it to that VM; a replaced value ends every lease on the old one.
-    private async Task<JsonObject> StoreAsync(Vm vm, VaultRequest request, CancellationToken ct)
+    // Stores an agent's secret and leases it to that VM; a replaced value ends every lease on the old one. A name that
+    // exists is overwritten only on an approval (approved is the answered request): 9.1 row 1 or row 3.
+    private async Task<JsonObject> StoreAsync(Vm vm, VaultRequest request, Pending? approved, CancellationToken ct)
     {
         var name = request.Names[0];
-        var state = await store.GetOwnerAsync(vm.Owner, ct).ConfigureAwait(false);
+        var state = await OwnerAsync(vm.Owner, ct).ConfigureAwait(false);
         var key = KeyFor(state, vm.Name);
         if (key is null) return Locked(request);
         try
         {
-            var entries = await store.ListEntriesAsync(vm.Owner, ct).ConfigureAwait(false);
-            var old = Live(entries, name);
-            // Another VM (or the PC) may have added the same name meanwhile: no silent overwrite.
-            if (old is not null && !request.Replace) return Exists(request, name);
-            var now = clock.UtcNow;
-            // The new value must win every merge against what this host has seen for the name.
-            var stamp = Math.Max(now.ToUnixTimeMilliseconds(), (entries.FirstOrDefault(e => e.Name == name)?.UpdatedAt ?? 0) + 1);
-            // A replace keeps the secret's setting unless the agent named one.
-            var auto = request.AutoApprove ?? old?.AutoApprove ?? false;
-            var payload = VaultCrypto.SealEntry(key, name, stamp, request.Username, request.Secret!, auto);
+            VaultEntry? old = null;
+            bool auto = false;
+            DateTimeOffset now = default;
+            for (var attempt = 1; ; attempt++)
+            {
+                var entries = await EntriesAsync(vm.Owner, ct).ConfigureAwait(false);
+                old = Live(entries, name);
+                // Another VM (or a device) may have added the same name meanwhile: no silent overwrite.
+                if (old is not null && (!request.Replace || approved is null)) return Exists(request, name);
+                now = clock.UtcNow;
+                // The new value must win every merge against what this host has seen for the name.
+                var stamp = Math.Max(now.ToUnixTimeMilliseconds(), (entries.FirstOrDefault(e => e.Name == name)?.UpdatedAt ?? 0) + 1);
+                // A replace keeps the secret's setting unless the agent named one.
+                auto = request.AutoApprove ?? old?.AutoApprove ?? false;
+                var payload = VaultCrypto.SealEntry(key, name, stamp, request.Username, request.Secret!, auto);
+                var provenance = old is null
+                    ? new VaultProvenance(VaultProvenance.VmAdded, vm.Name, null, request.Id)
+                    : new VaultProvenance(VaultProvenance.VmApproved, vm.Name, approved!.Approver, approved.Id);
+                var next = new VaultEntry(name, request.Description, request.Username.Length > 0, payload, stamp, "vm:" + vm.Name, false, auto);
+                if (await SaveAsync(state!, next, BaseOf(entries, name), provenance, [VmOrigin(vm.Name)], ct).ConfigureAwait(false)) break;
+                if (attempt >= MaxWriteAttempts) throw KeptChanging(name);
+            }
             if (old is not null) await EndLeasesAsync(vm.Owner, old, now + ReleaseDelay, ct).ConfigureAwait(false);
-            await store.SaveEntriesAsync(vm.Owner, [new VaultEntry(name, request.Description, request.Username.Length > 0, payload, stamp, "vm:" + vm.Name, false, auto)], ct).ConfigureAwait(false);
             foreach (var held in (await store.ListAsync<VaultLease>(vm.Owner, ct).ConfigureAwait(false)).Where(l => Ownership.SameName(l.Vm, vm.Name) && l.Name == name))
                 await store.DeleteAsync<VaultLease>(held.Id, ct).ConfigureAwait(false);
             var response = VaultProtocol.Response(request.Id, "ok", "Stored."); response["names"] = new JsonArray(name); response["autoApprove"] = auto;
@@ -212,7 +237,8 @@ public sealed partial class VaultHostService
                 return response;
             }
             var ttl = TimeSpan.FromSeconds(request.Ttl ?? DefaultTtl.TotalSeconds);
-            var lease = new VaultLease(NewId(), vm.Owner, vm.Name, name, null, now + ttl, now, request.Reason, "added");
+            var stored = Live(await EntriesAsync(vm.Owner, ct).ConfigureAwait(false), name);
+            var lease = new VaultLease(NewId(), vm.Owner, vm.Name, name, null, now + ttl, now, request.Reason, "added", stored is null ? null : Copy(stored));
             await store.SaveAsync(lease, ct).ConfigureAwait(false);
             await RecordAsync(vm.Owner, vm.Name, $"{verb} {name} from the VM; it holds it {VaultRules.Access(null, ttl)}.", false, ct).ConfigureAwait(false);
             response["lease"] = VaultProtocol.Lease(lease);
@@ -228,16 +254,24 @@ public sealed partial class VaultHostService
         return Ask(vm, request, VaultPrompts.Delete(vm.Name, entry, request), [name], null, null);
     }
 
-    // A delete writes a tombstone; it needs no K. Every VM that held the value is scrubbed of it.
-    private async Task<JsonObject> TombstoneAsync(Vm vm, VaultRequest request, CancellationToken ct)
+    // A delete writes a tombstone; it needs no K. Every VM that held the value is scrubbed of it. Only on an approval (9.1 row 3).
+    private async Task<JsonObject> TombstoneAsync(Vm vm, VaultRequest request, Pending approved, CancellationToken ct)
     {
         var name = request.Names[0];
-        var entries = await store.ListEntriesAsync(vm.Owner, ct).ConfigureAwait(false);
-        if (Live(entries, name) is not { } old) return NotFound(request, name);
-        var now = clock.UtcNow;
+        var state = await OwnerAsync(vm.Owner, ct).ConfigureAwait(false);
+        VaultEntry old;
+        DateTimeOffset now;
+        for (var attempt = 1; ; attempt++)
+        {
+            var entries = await EntriesAsync(vm.Owner, ct).ConfigureAwait(false);
+            if (Live(entries, name) is not { } live) return NotFound(request, name);
+            old = live; now = clock.UtcNow;
+            var stamp = Math.Max(now.ToUnixTimeMilliseconds(), old.UpdatedAt + 1);
+            var provenance = new VaultProvenance(VaultProvenance.VmApproved, vm.Name, approved.Approver, approved.Id);
+            if (await SaveAsync(state!, new VaultEntry(name, "", false, null, stamp, "vm:" + vm.Name, true), old.Revision, provenance, [VmOrigin(vm.Name)], ct).ConfigureAwait(false)) break;
+            if (attempt >= MaxWriteAttempts) throw KeptChanging(name);
+        }
         await EndLeasesAsync(vm.Owner, old, now + ReleaseDelay, ct).ConfigureAwait(false);
-        var stamp = Math.Max(now.ToUnixTimeMilliseconds(), old.UpdatedAt + 1);
-        await store.SaveEntriesAsync(vm.Owner, [new VaultEntry(name, "", false, null, stamp, "vm:" + vm.Name, true)], ct).ConfigureAwait(false);
         await RecordAsync(vm.Owner, vm.Name, $"Deleted {name} at the VM's request.", false, ct).ConfigureAwait(false);
         var response = VaultProtocol.Response(request.Id, "ok", "Deleted."); response["names"] = new JsonArray(name); return response;
     }
@@ -251,27 +285,39 @@ public sealed partial class VaultHostService
         if (entry.AutoApprove == on) return new(Flagged(request, name, on, on ? "Already auto-approved." : "Already needs approval."), null);
         if (!HasKey(state, vm.Name)) return new(Locked(request), null);
         if (on) return Ask(vm, request, VaultPrompts.AutoApprove(vm.Name, entry, request), [name], null, null);
-        return new(await SetAutoApproveAsync(vm, request, ct).ConfigureAwait(false), null);
+        return new(await SetAutoApproveAsync(vm, request, null, ct).ConfigureAwait(false), null);
     }
 
-    private async Task<JsonObject> SetAutoApproveAsync(Vm vm, VaultRequest request, CancellationToken ct)
+    // Off needs nothing (9.1 row 2); on only comes here on an approval (row 3).
+    private async Task<JsonObject> SetAutoApproveAsync(Vm vm, VaultRequest request, Pending? approved, CancellationToken ct)
     {
         var name = request.Names[0]; var on = request.AutoApprove == true;
-        var key = KeyFor(await store.GetOwnerAsync(vm.Owner, ct).ConfigureAwait(false), vm.Name);
+        if (on && approved is null) throw new InvalidOperationException("Auto-approve is switched on only on an approval.");
+        var state = await OwnerAsync(vm.Owner, ct).ConfigureAwait(false);
+        var key = KeyFor(state, vm.Name);
         if (key is null) return Locked(request);
         try
         {
-            if (Live(await store.ListEntriesAsync(vm.Owner, ct).ConfigureAwait(false), name) is not { } old) return NotFound(request, name);
-            if (old.AutoApprove == on) return Flagged(request, name, on, on ? "Already auto-approved." : "Already needs approval.");
-            string username, secret;
-            try { (username, secret) = VaultCrypto.OpenEntry(key, old.Name, old.UpdatedAt, old.Payload!); }
-            catch (CryptographicException)
+            for (var attempt = 1; ; attempt++)
             {
-                return VaultProtocol.Response(request.Id, "error", "The secret could not be decrypted with this vault's key; open the Key Vault in your PC's Construct Companion.");
+                var entries = await EntriesAsync(vm.Owner, ct).ConfigureAwait(false);
+                if (Live(entries, name) is not { } old) return NotFound(request, name);
+                if (old.AutoApprove == on) return Flagged(request, name, on, on ? "Already auto-approved." : "Already needs approval.");
+                string username, secret;
+                try { (username, secret) = VaultCrypto.OpenEntry(key, old.Name, old.UpdatedAt, old.Payload!); }
+                catch (CryptographicException)
+                {
+                    return VaultProtocol.Response(request.Id, "error", "The secret could not be decrypted with this vault's key; open the Key Vault in your PC's Construct Companion.");
+                }
+                var stamp = Math.Max(clock.UtcNow.ToUnixTimeMilliseconds(), old.UpdatedAt + 1);
+                var payload = VaultCrypto.SealEntry(key, name, stamp, username, secret, on);
+                var provenance = on
+                    ? new VaultProvenance(VaultProvenance.VmApproved, vm.Name, approved!.Approver, approved.Id)
+                    : new VaultProvenance(VaultProvenance.VmAutoApproveOff, vm.Name, null, request.Id);
+                var next = old with { Payload = payload, UpdatedAt = stamp, UpdatedBy = "vm:" + vm.Name, AutoApprove = on, Provenance = null };
+                if (await SaveAsync(state!, next, old.Revision, provenance, [VmOrigin(vm.Name)], ct).ConfigureAwait(false)) break;
+                if (attempt >= MaxWriteAttempts) throw KeptChanging(name);
             }
-            var stamp = Math.Max(clock.UtcNow.ToUnixTimeMilliseconds(), old.UpdatedAt + 1);
-            var payload = VaultCrypto.SealEntry(key, name, stamp, username, secret, on);
-            await store.SaveEntriesAsync(vm.Owner, [old with { Payload = payload, UpdatedAt = stamp, UpdatedBy = "vm:" + vm.Name, AutoApprove = on }], ct).ConfigureAwait(false);
             await RecordAsync(vm.Owner, vm.Name, on ? $"Auto-approve for {name} approved at the VM's request." : $"{name} needs your approval again (the VM turned auto-approve off).", false, ct).ConfigureAwait(false);
             return Flagged(request, name, on, on ? "Auto-approved." : "Needs approval again.");
         }
@@ -331,7 +377,8 @@ public sealed partial class VaultHostService
     }
 
     /// <summary><c>POST /vault/approvals/{id}</c>: the first answer wins; later ones get 409.</summary>
-    public async Task DecideAsync(string owner, string id, bool approve, CancellationToken ct)
+    /// <param name="approver">Who answers: <c>device:&lt;id&gt;</c>, <c>phone:&lt;id&gt;</c> or <c>user:&lt;name&gt;</c>, kept as the provenance of the write.</param>
+    public async Task DecideAsync(string owner, string id, bool approve, CancellationToken ct, string? approver = null)
     {
         await gate.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -345,6 +392,7 @@ public sealed partial class VaultHostService
                     throw new VaultProblemException(409, "already-decided", record.State == PendingState.TimedOut ? "The request timed out." : "The request was already answered.");
                 record.State = approve ? PendingState.Approved : PendingState.Denied;
                 record.DecidedAt = clock.UtcNow;
+                record.Approver = approver ?? "user:" + owner;
             }
             if (!approve)
             {
@@ -373,14 +421,14 @@ public sealed partial class VaultHostService
             {
                 // The lease runs from the approval, not from the request: a slow answer must not shorten it.
                 var now = clock.UtcNow; var ttl = TimeSpan.FromSeconds(record.TtlSeconds ?? DefaultTtl.TotalSeconds);
-                var entries = await store.ListEntriesAsync(vm.Owner, ct).ConfigureAwait(false);
+                var entries = await EntriesAsync(vm.Owner, ct).ConfigureAwait(false);
                 var leases = await store.ListAsync<VaultLease>(vm.Owner, ct).ConfigureAwait(false);
                 VaultLease? granted = null; var names = new List<string>();
                 foreach (var name in record.Names.Where(n => Live(entries, n) is not null))
                 {
                     foreach (var held in leases.Where(l => Ownership.SameName(l.Vm, vm.Name) && l.Name == name))
                         await store.DeleteAsync<VaultLease>(held.Id, ct).ConfigureAwait(false);
-                    granted = new(NewId(), vm.Owner, vm.Name, name, request.Uses, now + ttl, now, request.Reason, "approved");
+                    granted = new(NewId(), vm.Owner, vm.Name, name, request.Uses, now + ttl, now, request.Reason, "approved", Copy(Live(entries, name)!));
                     await store.SaveAsync(granted, ct).ConfigureAwait(false); names.Add(name);
                 }
                 await RecordAsync(vm.Owner, vm.Name, $"Access to {string.Join(", ", names)} approved ({VaultRules.Access(request.Uses, ttl)}).", false, ct).ConfigureAwait(false);
@@ -395,7 +443,8 @@ public sealed partial class VaultHostService
                 var name = request.Names[0]; var now = clock.UtcNow;
                 foreach (var held in (await store.ListAsync<VaultLease>(vm.Owner, ct).ConfigureAwait(false)).Where(l => Ownership.SameName(l.Vm, vm.Name) && l.Name == name))
                     await store.DeleteAsync<VaultLease>(held.Id, ct).ConfigureAwait(false);
-                var once = new VaultLease(NewId(), vm.Owner, vm.Name, name, 1, now + OnceTtl, now, request.Reason, "once");
+                var seen = Live(await EntriesAsync(vm.Owner, ct).ConfigureAwait(false), name);
+                var once = new VaultLease(NewId(), vm.Owner, vm.Name, name, 1, now + OnceTtl, now, request.Reason, "once", seen is null ? null : Copy(seen));
                 await store.SaveAsync(once, ct).ConfigureAwait(false);
                 await RecordAsync(vm.Owner, vm.Name, $"One-time access to {name} approved.", false, ct).ConfigureAwait(false);
                 // The value is read when the guest picks the answer up.
@@ -404,13 +453,13 @@ public sealed partial class VaultHostService
                 return;
             }
             case "add":
-                Finish(record, await StoreAsync(vm, request, ct).ConfigureAwait(false));
+                Finish(record, await StoreAsync(vm, request, record, ct).ConfigureAwait(false));
                 return;
             case "autoApprove":
-                Finish(record, await SetAutoApproveAsync(vm, request, ct).ConfigureAwait(false));
+                Finish(record, await SetAutoApproveAsync(vm, request, record, ct).ConfigureAwait(false));
                 return;
             default:
-                Finish(record, await TombstoneAsync(vm, request, ct).ConfigureAwait(false));
+                Finish(record, await TombstoneAsync(vm, request, record, ct).ConfigureAwait(false));
                 return;
         }
     }
@@ -458,7 +507,10 @@ public sealed partial class VaultHostService
         await gate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
         try
         {
-            var state = await store.GetOwnerAsync(vm.Owner, CancellationToken.None).ConfigureAwait(false);
+            var state = await OwnerAsync(vm.Owner, CancellationToken.None).ConfigureAwait(false);
+            // A device may have replaced the value since the approval: that lease ends here, not with the new value.
+            if (state is { Records: true })
+                await ReconcileLeasesAsync(state, await EntriesAsync(vm.Owner, CancellationToken.None).ConfigureAwait(false), CancellationToken.None).ConfigureAwait(false);
             var lease = (await store.ListAsync<VaultLease>(vm.Owner, CancellationToken.None).ConfigureAwait(false)).FirstOrDefault(l => l.Id == record.LeaseId);
             if (lease is null || !LiveLease(lease, clock.UtcNow))
                 return VaultProtocol.Response(record.Request.Id, "denied", $"Access to {record.Request.Names[0]} was revoked on the PC.");

@@ -14,6 +14,9 @@ public sealed class VaultProblemException(int status, string code, string messag
     public string? Field { get; } = field;
 }
 
+/// <summary>What <c>GET /vault/mode</c> returns: the mode, whether this engine holds <c>K</c> right now, and where.</summary>
+public sealed record VaultModeView(string? Mode, bool HoldsKey, bool Records, IReadOnlyList<string> UnlockedVms);
+
 /// <summary>What <c>GET /vault/entries</c> returns.</summary>
 public sealed record VaultSyncView(long Revision, string? Mode, string? KeyCheck, IReadOnlyList<string> UnlockedVms,
     IReadOnlyList<VaultEntry> Entries, IReadOnlyList<VaultDevice> Devices);
@@ -26,17 +29,23 @@ public sealed record VaultSyncView(long Revision, string? Mode, string? KeyCheck
 ///
 /// Every durable change runs under <see cref="gate"/>; the pending approvals and the unlocked keys live
 /// in memory only, so a service restart forgets them (an unanswered request then reads as unknown).
+///
+/// An account in the new stack (<paramref name="records"/> hosts it) keeps its entries as <c>secret</c> records
+/// instead of the table (plan 9.1): this engine writes only what the 9.1 table permits, each write on the base
+/// revision it read, re-read and re-applied when that base was stale (9.6), with its provenance. Its mode follows
+/// whether a device granted this engine <c>K</c>.
 /// </summary>
 public sealed partial class VaultHostService(IVaultStore store, IVmRepository vms, IHypervisorDriver driver,
-    IVaultKeyProtector protector, IClock clock) : IVaultUnlocks
+    IVaultKeyProtector protector, IClock clock, IVaultRecords? records = null) : IVaultUnlocks
 {
     public static readonly TimeSpan DefaultTtl = TimeSpan.FromHours(1), OnceTtl = TimeSpan.FromMinutes(10),
         ReleaseDelay = TimeSpan.FromSeconds(5), ExhaustedGrace = TimeSpan.FromMinutes(1), RetryDelay = TimeSpan.FromMinutes(5),
         DefaultWait = TimeSpan.FromMinutes(10), MaxWait = TimeSpan.FromHours(24), PickupGrace = TimeSpan.FromMinutes(2),
         RedeliverAfter = TimeSpan.FromMinutes(30), Tick = TimeSpan.FromSeconds(10), StateCheck = TimeSpan.FromSeconds(30);
-    public const int ActivityLimit = 100, MaxPendingPerVm = 10, MaxDevices = 50, MaxEntries = 1000, MaxPayloadChars = 90000;
+    public const int ActivityLimit = 100, MaxPendingPerVm = 10, MaxDevices = 50, MaxEntries = 1000, MaxPayloadChars = 90000, MaxWriteAttempts = 5;
     public const string LockedMessage = "The key vault is locked for this VM: start or connect it from your PC's Construct Companion.";
     public const string NotSetUpMessage = "The key vault is not set up on this host yet: open the Key Vault in your PC's Construct Companion.";
+    public const string RecordsMessage = "This vault is kept by your devices (The Construct's device agent); the Companion's vault routes do not change it.";
 
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly ConcurrentDictionary<string, Unlocked> unlocked = new(StringComparer.OrdinalIgnoreCase);
@@ -59,20 +68,23 @@ public sealed partial class VaultHostService(IVaultStore store, IVmRepository vm
     /// <c>POST /vms/{name}/vault/unlock</c>: keeps the user's <c>K</c> in RAM for this running primary VM.
     /// A no-op when the vault is always available, not set up yet (there is no key check to verify
     /// against; the Companion unlocks online VMs once it has set the vault up) or already unlocked.
+    /// For a record-backed vault the device sends <c>K</c> sealed to this engine's host key (<paramref name="grant"/>),
+    /// checked against a live entry when there is one.
     /// </summary>
-    public async Task UnlockAsync(Vm vm, string? keyBase64, CancellationToken ct)
+    public async Task UnlockAsync(Vm vm, string? keyBase64, CancellationToken ct, VaultKeyGrant? grant = null)
     {
         if (vm.Kind != VmKind.Primary) throw new VaultProblemException(403, "vault-child", "Child VMs have no key vault access.");
-        var state = await store.GetOwnerAsync(vm.Owner, ct).ConfigureAwait(false);
+        var state = await OwnerAsync(vm.Owner, ct).ConfigureAwait(false);
         if (state is not { Configured: true } || state.Mode == VaultModes.Available || unlocked.ContainsKey(vm.Name)) return;
-        var key = VaultCrypto.DecodeKey(keyBase64) ?? throw Validation("key", "The vault key must be 32 bytes, base64-encoded.");
+        var key = state.Records ? OpenGrant(vm.Owner, grant) : VaultCrypto.DecodeKey(keyBase64) ?? throw Validation("key", "The vault key must be 32 bytes, base64-encoded.");
         try
         {
             if (vm.Deleting) throw new VaultProblemException(409, "vm-deleting", $"VM '{vm.Name}' is being deleted.");
             var observed = await driver.GetStateAsync(vm.Name, ct).ConfigureAwait(false);
             if (observed != VmState.Running)
                 throw new VaultProblemException(409, "vm-not-running", $"VM '{vm.Name}' is {observed.ToString().ToLowerInvariant()}; only a running VM can be unlocked.");
-            if (!VaultCrypto.Verify(key, state.KeyCheck!)) throw new VaultProblemException(400, "wrong-key", "That is not this vault's key.");
+            if (!(state.Records ? await OpensAsync(vm.Owner, key, ct).ConfigureAwait(false) : VaultCrypto.Verify(key, state.KeyCheck!)))
+                throw new VaultProblemException(400, "wrong-key", "That is not this vault's key.");
             var stored = key.ToArray();
             if (!unlocked.TryAdd(vm.Name, new(vm.Owner, stored))) { CryptographicOperations.ZeroMemory(stored); return; }
             await RecordAsync(vm.Owner, vm.Name, "Unlocked the key vault for this VM.", false, ct).ConfigureAwait(false);
@@ -114,6 +126,7 @@ public sealed partial class VaultHostService(IVaultStore store, IVmRepository vm
             await gate.WaitAsync(ct).ConfigureAwait(false);
             try
             {
+                if (records?.Hosts(owner) == true) throw new VaultProblemException(409, "vault-records", RecordsMessage);
                 var state = await store.GetOwnerAsync(owner, ct).ConfigureAwait(false);
                 // The first call sets the key check; later ones keep it (a re-sealed check of the same key
                 // differs in its nonce), and every key given is verified against it.
@@ -142,8 +155,8 @@ public sealed partial class VaultHostService(IVaultStore store, IVmRepository vm
         await gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var state = await store.GetOwnerAsync(owner, ct).ConfigureAwait(false);
-            var entries = await store.ListEntriesAsync(owner, ct).ConfigureAwait(false);
+            var state = await OwnerAsync(owner, ct).ConfigureAwait(false);
+            var entries = await EntriesAsync(owner, ct).ConfigureAwait(false);
             var devices = await store.ListDevicesAsync(owner, ct).ConfigureAwait(false);
             return new(state?.Revision ?? 0, state?.Mode, state?.KeyCheck, UnlockedVms(owner),
                 entries.OrderBy(e => e.Name, StringComparer.Ordinal).ToArray(), devices);
@@ -159,6 +172,8 @@ public sealed partial class VaultHostService(IVaultStore store, IVmRepository vm
     {
         if (incoming.Count > MaxEntries) throw Validation("entries", $"At most {MaxEntries} entries per call.");
         var clean = incoming.Select((e, i) => CheckEntry(e, i)).ToArray();
+        // Records are written only as the 9.1 table permits; the Companion's merge is not one of those writes.
+        if (records?.Hosts(owner) == true) throw new VaultProblemException(409, "vault-records", RecordsMessage);
         await gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
@@ -281,6 +296,13 @@ public sealed partial class VaultHostService(IVaultStore store, IVmRepository vm
     private byte[]? KeyFor(VaultOwnerState? state, string? vm)
     {
         if (state is not { Configured: true }) return null;
+        if (state.Records && state.Mode == VaultModes.Available)
+        {
+            var granted = records!.GrantedKey(state.Owner);
+            if (granted is { Length: VaultCrypto.KeyBytes }) return granted;
+            if (granted is not null) CryptographicOperations.ZeroMemory(granted);
+            return null;
+        }
         if (state.Mode == VaultModes.Available)
         {
             if (state.WrappedKey is not { } wrapped) return null;
@@ -326,9 +348,11 @@ public sealed partial class VaultHostService(IVaultStore store, IVmRepository vm
     private async Task<bool> EndAsync(VaultLease lease, DateTimeOffset due, IReadOnlyList<VaultEntry>? entries, CancellationToken ct)
     {
         await store.DeleteAsync<VaultLease>(lease.Id, ct).ConfigureAwait(false);
-        entries ??= await store.ListEntriesAsync(lease.Owner, ct).ConfigureAwait(false);
+        entries ??= await EntriesAsync(lease.Owner, ct).ConfigureAwait(false);
         var entry = Live(entries, lease.Name);
-        if (entry is { AutoApprove: false }) await QueueCleanupAsync(lease.Owner, lease.Vm, Copy(entry), due, ct).ConfigureAwait(false);
+        // The value the lease was granted on, not one that replaced it since: that one the VM never saw.
+        var seen = lease.Seen ?? (entry is null ? null : Copy(entry));
+        if (entry is not { AutoApprove: true } && seen is not null) await QueueCleanupAsync(lease.Owner, lease.Vm, seen, due, ct).ConfigureAwait(false);
         return entry is not { AutoApprove: true };
     }
 
@@ -338,7 +362,7 @@ public sealed partial class VaultHostService(IVaultStore store, IVmRepository vm
         foreach (var lease in (await store.ListAsync<VaultLease>(owner, ct).ConfigureAwait(false)).Where(l => l.Name == old.Name))
         {
             await store.DeleteAsync<VaultLease>(lease.Id, ct).ConfigureAwait(false);
-            if (!old.AutoApprove) await QueueCleanupAsync(owner, lease.Vm, Copy(old), due, ct).ConfigureAwait(false);
+            if (!old.AutoApprove) await QueueCleanupAsync(owner, lease.Vm, lease.Seen ?? Copy(old), due, ct).ConfigureAwait(false);
         }
     }
 
@@ -348,6 +372,140 @@ public sealed partial class VaultHostService(IVaultStore store, IVmRepository vm
                      .Where(c => Ownership.SameName(c.Vm, vm) && c.Copy.Name == copy.Name && c.Copy.Payload == copy.Payload))
             await store.DeleteAsync<VaultCleanup>(same.Id, ct).ConfigureAwait(false);
         await store.SaveAsync(new VaultCleanup(NewId(), owner, vm, copy, due), ct).ConfigureAwait(false);
+    }
+
+    // ── the record-backed vault (plan 9.1, 9.6) ────────────────────────────────
+
+    /// <summary>The owner's vault state: from the table, or synthesized for a record-backed vault.</summary>
+    private async Task<VaultOwnerState?> OwnerAsync(string owner, CancellationToken ct)
+    {
+        if (records?.Hosts(owner) != true) return await store.GetOwnerAsync(owner, ct).ConfigureAwait(false);
+        var key = records.GrantedKey(owner);
+        if (key is not null) CryptographicOperations.ZeroMemory(key);
+        return new VaultOwnerState(owner, 0, key is null ? VaultModes.Locked : VaultModes.Available, null, null, Records: true);
+    }
+
+    private async Task<IReadOnlyList<VaultEntry>> EntriesAsync(string owner, CancellationToken ct) =>
+        records?.Hosts(owner) == true
+            ? await records.ListAsync(owner, ct).ConfigureAwait(false)
+            : await store.ListEntriesAsync(owner, ct).ConfigureAwait(false);
+
+    /// <summary>
+    /// Saves one entry. The table takes it as it is (the gate serializes every writer); a record is written on the
+    /// base revision it was read at, and false means that base was stale: the caller re-reads and re-applies.
+    /// </summary>
+    private async Task<bool> SaveAsync(VaultOwnerState state, VaultEntry entry, long baseRevision, VaultProvenance provenance, IReadOnlyList<string> origins, CancellationToken ct)
+    {
+        if (!state.Records)
+        {
+            await store.SaveEntriesAsync(state.Owner, [entry], ct).ConfigureAwait(false);
+            return true;
+        }
+        return await records!.WriteAsync(state.Owner, entry with { Provenance = provenance }, baseRevision, provenance, origins, ct).ConfigureAwait(false);
+    }
+
+    private static long BaseOf(IEnumerable<VaultEntry> entries, string name) => entries.FirstOrDefault(e => e.Name == name)?.Revision ?? 0;
+    private static string VmOrigin(string vm) => "vm:" + vm;
+    private static VaultProblemException KeptChanging(string name) =>
+        new(409, "write-conflict", $"The secret {name} kept changing; try again.");
+
+    private byte[] OpenGrant(string owner, VaultKeyGrant? grant)
+    {
+        if (grant is null) throw Validation("grant", "A record-backed vault is unlocked with K sealed to this engine's host key.");
+        try
+        {
+            var key = records!.OpenKey(owner, grant);
+            if (key.Length == VaultCrypto.KeyBytes) return key;
+            CryptographicOperations.ZeroMemory(key);
+        }
+        catch (CryptographicException) { }
+        throw Validation("grant", "The grant does not open under this engine's host key.");
+    }
+
+    // A record-backed vault has no key check: a key that opens one live entry is the vault's key.
+    private async Task<bool> OpensAsync(string owner, byte[] key, CancellationToken ct)
+    {
+        var sample = (await EntriesAsync(owner, ct).ConfigureAwait(false)).FirstOrDefault(e => !e.Deleted && e.Payload is not null);
+        if (sample is null) return true;
+        try { VaultCrypto.OpenEntry(key, sample.Name, sample.UpdatedAt, sample.Payload!); return true; }
+        catch (CryptographicException) { return false; }
+    }
+
+    /// <summary><c>GET /vault/mode</c>.</summary>
+    public async Task<VaultModeView> ModeAsync(string owner, CancellationToken ct)
+    {
+        var state = await OwnerAsync(owner, ct).ConfigureAwait(false);
+        var vms = UnlockedVms(owner);
+        var key = KeyFor(state, null);
+        if (key is not null) CryptographicOperations.ZeroMemory(key);
+        return new(state?.Mode, key is not null, state?.Records == true, vms);
+    }
+
+    /// <summary>
+    /// <c>PUT /vault/mode</c> for a record-backed vault: a device grants <c>K</c> (<c>available</c>) or withdraws it
+    /// (<c>locked</c>). VMs a device unlocked keep their key in RAM until they stop.
+    /// </summary>
+    public async Task SetModeAsync(string owner, string? mode, VaultKeyGrant? grant, CancellationToken ct)
+    {
+        if (mode is not (VaultModes.Available or VaultModes.Locked)) throw Validation("mode", "Expected available or locked.");
+        if (records?.Hosts(owner) != true) throw new VaultProblemException(409, "vault-not-records", "This vault is the Companion's: set its mode with PUT /vault/settings.");
+        await gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var before = (await OwnerAsync(owner, ct).ConfigureAwait(false))!.Mode;
+            if (mode == VaultModes.Available)
+            {
+                var key = OpenGrant(owner, grant);
+                try
+                {
+                    if (!await OpensAsync(owner, key, ct).ConfigureAwait(false)) throw new VaultProblemException(400, "wrong-key", "That is not this vault's key.");
+                }
+                finally { CryptographicOperations.ZeroMemory(key); }
+            }
+            records.SetMode(owner, mode == VaultModes.Available, grant);
+            if (before != mode)
+                await RecordAsync(owner, "", mode == VaultModes.Available ? "The vault on this host is always available." : "The vault on this host is locked; a device unlocks each VM.", false, ct).ConfigureAwait(false);
+        }
+        finally { gate.Release(); }
+    }
+
+    /// <summary>
+    /// A record-backed entry can change under a lease: a device replaced or deleted it. Such a lease ends and its VM is
+    /// scrubbed of the value it was granted on (9.6). A re-sealed payload with the same value (auto-approve switched)
+    /// keeps the lease; without <c>K</c> any new payload counts as a new value, as in the Companion's sync.
+    /// </summary>
+    private async Task ReconcileLeasesAsync(VaultOwnerState state, IReadOnlyList<VaultEntry> entries, CancellationToken ct)
+    {
+        if (!state.Records) return;
+        var now = clock.UtcNow;
+        foreach (var lease in (await store.ListAsync<VaultLease>(state.Owner, ct).ConfigureAwait(false)).Where(l => l.Seen is not null))
+        {
+            var seen = lease.Seen!;
+            var current = Live(entries, lease.Name);
+            if (current?.Payload == seen.Payload) continue;
+            if (current is not null && SameValue(state, lease.Vm, seen, current))
+            {
+                await store.SaveAsync(lease with { Seen = Copy(current) }, ct).ConfigureAwait(false);
+                continue;
+            }
+            await store.DeleteAsync<VaultLease>(lease.Id, ct).ConfigureAwait(false);
+            await QueueCleanupAsync(state.Owner, lease.Vm, seen, now + ReleaseDelay, ct).ConfigureAwait(false);
+            await RecordAsync(state.Owner, lease.Vm, $"Access to {lease.Name} ended: {(current is null ? "it was deleted" : "its value changed")}; scrubbing the VM.", false, ct).ConfigureAwait(false);
+        }
+    }
+
+    private bool SameValue(VaultOwnerState state, string vm, VaultSecretCopy seen, VaultEntry current)
+    {
+        var key = KeyFor(state, vm);
+        if (key is null) return false;
+        try
+        {
+            var before = VaultCrypto.OpenEntry(key, seen.Name, seen.UpdatedAt, seen.Payload).Secret;
+            var after = VaultCrypto.OpenEntry(key, current.Name, current.UpdatedAt, current.Payload!).Secret;
+            return string.Equals(before, after, StringComparison.Ordinal);
+        }
+        catch (CryptographicException) { return false; }
+        finally { CryptographicOperations.ZeroMemory(key); }
     }
 
     private Task RecordAsync(string owner, string vm, string text, bool warning, CancellationToken ct) =>

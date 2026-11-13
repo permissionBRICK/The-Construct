@@ -4602,6 +4602,185 @@
         }
       }
     },
+    "/api/v1/vault/mode": {
+      "get": {
+        "tags": [
+          "VaultEndpoints"
+        ],
+        "operationId": "GetVaultMode",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultModeResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "VaultEndpoints"
+        ],
+        "operationId": "PutVaultMode",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/VaultEndpointsModeRequest"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vault/entry-requests": {
+      "get": {
+        "tags": [
+          "VaultEndpoints"
+        ],
+        "operationId": "GetVaultEntryRequests",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultEntryRequestsResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vault/entry-requests/{id}": {
+      "post": {
+        "tags": [
+          "VaultEndpoints"
+        ],
+        "operationId": "SaveVaultEntryRequest",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/VaultEndpointsEntrySaveRequest"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vault/entry-requests/{id}/decline": {
+      "post": {
+        "tags": [
+          "VaultEndpoints"
+        ],
+        "operationId": "DeclineVaultEntryRequest",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/vault/approvals": {
       "get": {
         "tags": [
@@ -11687,6 +11866,36 @@
           }
         }
       },
+      "VaultEndpointsEntrySaveRequest": {
+        "required": [
+          "payload",
+          "updatedAt",
+          "hasUsername"
+        ],
+        "type": "object",
+        "properties": {
+          "payload": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "x-construct-secret": true
+          },
+          "updatedAt": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int64"
+          },
+          "hasUsername": {
+            "type": [
+              "null",
+              "boolean"
+            ]
+          }
+        }
+      },
       "VaultEndpointsFileRequest": {
         "required": [
           "action"
@@ -11697,6 +11906,52 @@
             "type": [
               "null",
               "string"
+            ]
+          }
+        }
+      },
+      "VaultEndpointsKeyGrantDto": {
+        "required": [
+          "epoch",
+          "sealed"
+        ],
+        "type": "object",
+        "properties": {
+          "epoch": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "sealed": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "byte",
+            "x-construct-secret": true
+          }
+        }
+      },
+      "VaultEndpointsModeRequest": {
+        "required": [
+          "mode",
+          "grant"
+        ],
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "grant": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VaultEndpointsKeyGrantDto"
+              }
             ]
           }
         }
@@ -11742,6 +11997,16 @@
               "string"
             ],
             "x-construct-secret": true
+          },
+          "grant": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VaultEndpointsKeyGrantDto"
+              }
+            ]
           }
         }
       },
@@ -11789,6 +12054,61 @@
             "items": {
               "$ref": "#/components/schemas/VaultDeviceResponse"
             }
+          }
+        }
+      },
+      "VaultEntryRequestsResponse": {
+        "required": [
+          "requests"
+        ],
+        "type": "object",
+        "properties": {
+          "requests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VaultEntryRequestView"
+            }
+          }
+        }
+      },
+      "VaultEntryRequestView": {
+        "required": [
+          "id",
+          "vm",
+          "name",
+          "description",
+          "reason",
+          "source",
+          "createdAt",
+          "expiresAt"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "vm": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "expiresAt": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -11940,6 +12260,35 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/VaultLeaseResponse"
+            }
+          }
+        }
+      },
+      "VaultModeResponse": {
+        "required": [
+          "mode",
+          "holdsKey",
+          "records",
+          "unlockedVms"
+        ],
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "holdsKey": {
+            "type": "boolean"
+          },
+          "records": {
+            "type": "boolean"
+          },
+          "unlockedVms": {
+            "type": "array",
+            "items": {
+              "type": "string"
             }
           }
         }
