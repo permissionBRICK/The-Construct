@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Moved from companion/ with the agent (plan 11.1); the settings companion/Directory.Build.props gave it. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="../../../test/fixtures/companion-parity/hostadmin-config-schema.json" LogicalName="HostAdmin.ConfigSchema.json" />
+    <EmbeddedResource Include="../../../extension/vm/*.sh" Link="GuestScripts/%(Filename)%(Extension)" LogicalName="GuestScripts.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="../../../companion/src/Construct.Companion.Core/Vault/GuestScripts/*.sh" LogicalName="VaultScripts.%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

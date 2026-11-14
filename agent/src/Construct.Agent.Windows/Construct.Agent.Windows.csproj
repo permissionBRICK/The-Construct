@@ -24,7 +24,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Construct.Agent.Core\Construct.Agent.Core.csproj" />
     <!-- Reused unchanged: WASAPI capture, WinRT toasts, the current-user registry, DPI and the parent console. -->
-    <ProjectReference Include="..\..\..\companion\src\Construct.Companion.Windows\Construct.Companion.Windows.csproj" />
+    <ProjectReference Include="..\Construct.Companion.Windows\Construct.Companion.Windows.csproj" />
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3650.58" />
   </ItemGroup>
 
