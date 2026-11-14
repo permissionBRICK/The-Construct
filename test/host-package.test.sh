@@ -32,7 +32,7 @@ assert source.stat().st_size==m['sourceSizeBytes'];checks+=1
 assert hashlib.sha256(source.read_bytes()).hexdigest()==m['sourceSha256'];checks+=1
 with zipfile.ZipFile(source) as z:
     assert z.read('The-Construct-main/.construct-revision').decode().strip()==m['commit'];checks+=1
-    assert 'The-Construct-main/Auto-Install.ps1' in z.namelist();checks+=1
+    assert 'The-Construct-main/install.ps1' in z.namelist();checks+=1
 assert m['runtimes']==[{'name':'Microsoft.NETCore.App','majorVersion':10},{'name':'Microsoft.AspNetCore.App','majorVersion':10}];checks+=1
 for prefix in ('payload','frameworkDependent'):
     zip_path=root/m[prefix+'Asset']
@@ -52,7 +52,7 @@ for prefix in ('payload','frameworkDependent'):
         for name in ('HyperV.Driver.ps1','HyperV.ChildVm.ps1','HyperV.WindowsLicense.ps1'):
             assert z.read('service/hyperv/'+name)==pathlib.Path('service/src/Constructd.Windows/HyperV/Scripts/'+name).read_bytes();checks+=1
         assert z.read('service/guest/adopt-host.py')==pathlib.Path('bin/adopt-host.py').read_bytes();checks+=1
-        # The Windows host needs no client driver or VM scripts; its installer and updater keep theirs.
+        # No client driver or VM scripts; the installer and the updater keep theirs.
         assert not any(p.startswith(('scripts/drivers/','scripts/Create-AgentVM.ps1','scripts/Provision-AgentVM.ps1')) for p in files);checks+=1
         assert {'scripts/service/host/Install-ConstructHost.ps1','scripts/lib/Construct.Iso.ps1','scripts/lib/AgentVm.Common.ps1','scripts/bin/adopt-host.py'} <= set(files);checks+=1
         assert not any('appsettings.Production.json' in p or '/keys/' in p for p in files);checks+=1
@@ -62,8 +62,8 @@ assert linux.stat().st_size==m['linuxSizeBytes'];checks+=1
 assert hashlib.sha256(linux.read_bytes()).hexdigest()==m['linuxSha256'];checks+=1
 with zipfile.ZipFile(linux) as z:
     assert {'service/Constructd.Api','scripts/bin/provision.sh','updater/update-construct-host.sh'} <= set(z.namelist());checks+=1
-    # The Proxmox package is as before: its checkout keeps the client scripts.
-    assert {'scripts/drivers/Load-ConstructDriver.ps1','scripts/Provision-AgentVM.ps1'} <= set(z.namelist());checks+=1
+    # The old client's driver and VM scripts are gone from the repository, so from both packages.
+    assert not any(p.startswith(('scripts/drivers/','scripts/Create-AgentVM.ps1','scripts/Provision-AgentVM.ps1')) for p in z.namelist());checks+=1
     sums=z.read('SHA256SUMS')
     assert hashlib.sha256(sums).hexdigest()==m['linuxSumsSha256'];checks+=1
     files=dict((line[66:],line[:64]) for line in sums.decode().splitlines())

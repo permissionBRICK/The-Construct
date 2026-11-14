@@ -181,10 +181,10 @@ class ChangedGroupsTests(unittest.TestCase):
 
     def test_paths_map_to_the_groups_of_every_matching_row(self):
         self.assertEqual(self.groups('scripts/release.py'), ['release'])
-        self.assertEqual(self.groups('companion/src/App.cs', 'lib/AgentVm.Common.ps1'), ['companion', 'service'])
-        self.assertEqual(self.groups('extension/vm/t3-pairing.sh'), ['agent', 'companion', 'panel', 't3'])
+        self.assertEqual(self.groups('companion/src/x/vault-scan.sh', 'lib/AgentVm.Common.ps1'), ['agent', 'service'])
+        self.assertEqual(self.groups('extension/vm/t3-pairing.sh'), ['agent', 'panel', 'service', 't3'])
         self.assertEqual(self.groups('extension/extension.js'), ['panel'])
-        self.assertEqual(self.groups('install.ps1'), ['agent', 'companion', 'ui'])
+        self.assertEqual(self.groups('install.ps1'), ['agent', 'ui'])
         self.assertEqual(self.groups('service/src/Constructd.Core/Logic/ReleaseChannel.cs'), ['release', 'service'])
 
     def test_documentation_selects_nothing_and_an_unknown_path_selects_all(self):

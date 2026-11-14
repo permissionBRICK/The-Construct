@@ -643,14 +643,7 @@ class ProvisionWiringTests(unittest.TestCase):
         self.assertLess(snapshot, source.index('Installing T3 Code web GUI'))
         self.assertLess(snapshot, source.index('Running core host bootstrap'))
 
-    def test_host_and_installer_wiring(self):
-        host = (ROOT / 'Provision-AgentVM.ps1').read_text()
-        self.assertIn("Invoke-Scp -LocalPath (Join-Path $PSScriptRoot 'bin\\construct-t3-resume.py') "
-                      "-RemotePath $ExportT3ResumeScript", host)
-        self.assertEqual(3, host.count('$ExportScanScript $ExportConfigScript $ExportT3ResumeScript'))
-        self.assertIn('$rebootAfterArg = if ($script:UseRootKey) { "false" } else { "true" }', host)
-        self.assertIn('$envPrefix += " REBOOT_AFTER_PROVISION=\'$rebootAfterArg\'"', host)
-        self.assertIn("env PROVISION_PHASE=project-commands REBOOT_AFTER_PROVISION='$rebootAfterArg'", host)
+    def test_installer_wiring(self):
         installer = (ROOT / 'bin' / 'install-ai-tools.sh').read_text()
         function = installer[installer.index('install_t3code() {'):]
         early_return = function.index('t3_can_skip_restart "${_wanted_t3_build}"')

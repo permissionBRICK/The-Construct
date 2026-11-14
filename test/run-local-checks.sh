@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 # A configured guest environment must not alter host-side fixtures or tests.
 unset CONSTRUCT_SERVICE_URL CONSTRUCT_SERVICE_CA_FILE CONSTRUCT_EXTERNAL_HOST CONSTRUCT_EXTERNAL_SSH_PORT CONSTRUCT_INSTANCE_NAME CONSTRUCT_T3_VOICE_INPUT
-usage='Usage: bash test/run-local-checks.sh [panel|t3|service|companion|release|ui|agent|guest|all | --changed [<base>]]'
+usage='Usage: bash test/run-local-checks.sh [panel|t3|service|release|ui|agent|guest|all | --changed [<base>]]'
 group="${1:-all}"
 if [[ "$group" == --changed ]]; then
   # Touched paths since the merge base with <base> (default: the first of origin/nightly,
@@ -23,14 +23,12 @@ if [[ "$group" == --changed ]]; then
   for selected in $groups; do bash "$0" "$selected"; done
   exit 0
 fi
-case "$group" in panel|t3|service|companion|release|ui|agent|guest|all) ;; *) echo "$usage" >&2; exit 2 ;; esac
+case "$group" in panel|t3|service|release|ui|agent|guest|all) ;; *) echo "$usage" >&2; exit 2 ;; esac
 if [[ "$group" == panel || "$group" == all ]]; then
   # The VS Code extension (a window onto the device agent) without VS Code, and the profile validator the VM loads from it.
   node --test extension/test/agent.test.js extension/test/page.test.js extension/test/workspace.test.js extension/test/extension.test.js
   node extension/test/projects.test.js
-  pwsh -NoProfile -File test/lifecycle-run.test.ps1
-  pwsh -NoProfile -File test/vm-resources.test.ps1
-  pwsh -NoProfile -File test/console-local.test.ps1
+  node extension/test/project-set.test.js
 fi
 if [[ "$group" == t3 || "$group" == all ]]; then
   python3 test/t3-install-source.test.py
@@ -41,7 +39,7 @@ if [[ "$group" == t3 || "$group" == all ]]; then
   bash test/t3-prune.test.sh
   bash test/t3-project-register.test.sh
   bash test/t3-update.test.sh
-  pwsh -NoProfile -File test/t3-desktop-handoff.test.ps1
+  bash test/t3-https.test.sh
 fi
 if [[ "$group" == service || "$group" == all ]]; then
   bash test/usage-report.test.sh
@@ -51,7 +49,6 @@ if [[ "$group" == service || "$group" == all ]]; then
   bash test/construct-secret.test.sh
   bash test/construct-config.test.sh
   bash test/agent-fix.test.sh
-  pwsh -NoProfile -File test/agent-fix.test.ps1
   bash test/proxmox-nested-installer.test.sh
   /usr/bin/python3 -m unittest discover -s console-viewer -p 'test_*.py' -v
   node --check console-viewer/static/viewer.js
@@ -73,27 +70,41 @@ if [[ "$group" == service || "$group" == all ]]; then
   bash test/idle-report.test.sh
   bash test/construct-project.test.sh
   bash test/construct-update.test.sh
-  pwsh -NoProfile -File test/backup-keys.test.ps1
-  pwsh -NoProfile -File test/backup-actions.test.ps1
   python3 test/t3-pairing-forward.test.py
+  bash test/vault-guest-scripts.test.sh
+  bash test/construct-notify.test.sh
+  bash test/fetch-construct-source.test.sh
+  bash test/git-credential-handoff.test.sh
+  python3 test/checkout-projects.test.py
+  python3 test/provision-commands.test.py
+  bash test/provision-diskcheck.test.sh
+  bash test/provision-hostname.test.sh
+  bash test/provision-marker.test.sh
+  bash test/provision-steprunner.test.sh
+  bash test/partial-streaming.test.sh
+  bash test/patch-status.test.sh
+  bash test/opencode-install.test.sh
+  bash test/vscode-download.test.sh
+  bash test/systemprompt-install.test.sh
+  bash test/repair-agent.test.sh
+  bash test/autoinstall-iso.test.sh
+  python3 test/host-conversion.test.py
   dotnet test service/Constructd.sln -c Release
-  bash test/backup-e2e.test.sh
+  bash test/contracts-compile.test.sh
   pwsh -NoProfile -File service/tests/Constructd.Tests/Windows/windows-guest-report.test.ps1
+  pwsh -NoProfile -File service/tests/Constructd.Tests/Capacity/inventory.test.ps1
   pwsh -NoProfile -File test/windows-license-firmware.test.ps1
+  pwsh -NoProfile -File test/hyperv-prereqs.test.ps1
+  pwsh -NoProfile -File test/native-iso-host.test.ps1
+  python3 test/iso-download.test.py
+  bash test/host-package.test.sh
+  pwsh -NoProfile -File service/tests/host-release-installer.test.ps1
   pwsh -NoProfile -File service/tests/host-updater.test.ps1
   bash service/tests/host-updater.test.sh
   bash service/tests/proxmox-media-storage.test.sh
   bash service/tests/host-installer-certificate.test.sh
-fi
-
-if [[ "$group" == companion || "$group" == all ]]; then
-  # The Companion app and its tests read the old panel's pages (extension/media), which went with the thin
-  # extension; the app goes in a later block. Its Core, Windows and Fakes projects build in the agent group.
-  bash test/vault-guest-scripts.test.sh
-  pwsh -NoProfile -File test/companion-install.test.ps1
-  # First-install feature selection and installer forwarding (Linux PowerShell).
-  pwsh -NoProfile -File test/feature-set.test.ps1
-  pwsh -NoProfile -File test/companion-package.test.ps1
+  bash test/backup-e2e.test.sh
+  bash test/external-host.test.sh
 fi
 
 if [[ "$group" == release || "$group" == all ]]; then
@@ -117,7 +128,11 @@ if [[ "$group" == agent || "$group" == all ]]; then
   dotnet build agent/Construct.Agent.slnx -warnaserror
   dotnet test agent/Construct.Agent.slnx --no-build
   bash test/agent-install.test.sh
+  # The upgrade from an old install: the bootstraps, the old updaters of classes E and F against this
+  # tree (design 13.2), their release check and the lifecycle lock the class F updater takes.
   pwsh -NoProfile -File test/agent-bootstrap.test.ps1
+  pwsh -NoProfile -File test/source-release.test.ps1
+  pwsh -NoProfile -File test/lifecycle-run.test.ps1
   pwsh -NoProfile -Command '$null = [ScriptBlock]::Create((Get-Content -Raw agent/install/Install-ConstructAgent.ps1))'
 fi
 

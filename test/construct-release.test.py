@@ -28,15 +28,12 @@ def fixture(output, commit):
     return ['manifest.json', manifest['payloadAsset'], manifest['frameworkDependentAsset'], manifest['sourceAsset'], 'SHA256SUMS']
 
 
-plan_spec = importlib.util.spec_from_file_location('companion_plan', Path(__file__).parents[1] / 'scripts/companion-release-plan.py')
-companion_plan = importlib.util.module_from_spec(plan_spec)
-plan_spec.loader.exec_module(companion_plan)
 package_spec = importlib.util.spec_from_file_location('packager', Path(__file__).parents[1] / 'scripts/package-construct-release.py')
 packager = importlib.util.module_from_spec(package_spec)
 package_spec.loader.exec_module(packager)
 
 
-class CompanionPlanTests(unittest.TestCase):
+class PackageTests(unittest.TestCase):
     def setUp(self):
         import subprocess
         self.dir = tempfile.TemporaryDirectory(); self.root = Path(self.dir.name)
@@ -51,43 +48,6 @@ class CompanionPlanTests(unittest.TestCase):
 
     def releases(self, *tags):
         return [dict(tagName=t, publishedAt=f'2026-09-1{i}T00:00:00Z') for i, t in enumerate(tags)]
-
-    def test_docs_only_commit_points_at_newest_companion_release(self):
-        result = companion_plan.plan(self.root, self.docs, self.releases('host-' + self.docs, 'companion-' + self.base))
-        self.assertEqual(result, {'tag': 'companion-' + self.base, 'build': False, 'reason': 'unchanged'})
-
-    def test_companion_change_builds_its_own_release(self):
-        result = companion_plan.plan(self.root, self.companion, self.releases('companion-' + self.base))
-        self.assertEqual(('companion-' + self.companion, True), (result['tag'], result['build']))
-        self.assertIn('companion/App.cs', result['reason'])
-
-    def test_thin_extension_commit_keeps_the_last_companion(self):
-        (self.root / 'extension').mkdir(); (self.root / 'extension/package.json').write_text('{}')
-        self.git('add', '.'); self.git('commit', '-qm', 'thin extension'); thin = self.git('rev-parse', 'HEAD')
-        result = companion_plan.plan(self.root, thin, self.releases('companion-' + self.base))
-        self.assertEqual(result, {'tag': 'companion-' + self.base, 'build': False, 'reason': 'not-buildable'})
-
-    def test_first_release_and_published_rerun(self):
-        self.assertEqual(companion_plan.plan(self.root, self.docs, [])['build'], True)
-        result = companion_plan.plan(self.root, self.docs, self.releases('companion-' + self.docs))
-        self.assertEqual(result, {'tag': 'companion-' + self.docs, 'build': False, 'reason': 'already-published'})
-
-    def test_newest_release_by_publish_time_and_drafts_ignored_by_caller(self):
-        older = 'companion-' + self.base; newer = 'companion-' + self.docs
-        self.assertEqual(companion_plan.newest_companion([dict(tagName=newer, publishedAt='2026-09-12T00:00:00Z'), dict(tagName=older, publishedAt='2026-09-11T00:00:00Z'), dict(tagName='host-' + self.docs, publishedAt='2026-09-13T00:00:00Z')]), newer)
-
-    def test_package_records_companion_release_tag(self):
-        with tempfile.TemporaryDirectory() as out:
-            output = Path(out); commit = self.companion
-            manifest = dict(commit=commit, repository='owner/repo', releaseTag='host-' + commit)
-            for key, name in [('payload', f'construct-host-{commit[:7]}-win-x64.zip'), ('frameworkDependent', f'construct-host-{commit[:7]}-win-x64-fdd.zip')]:
-                data = key.encode(); (output / name).write_bytes(data)
-                manifest.update({key + 'Asset': name, key + 'SizeBytes': len(data), key + 'Sha256': hashlib.sha256(data).hexdigest()})
-            (output / 'manifest.json').write_text(json.dumps(manifest)); (output / 'SHA256SUMS').write_text('')
-            with self.assertRaises(ValueError):
-                packager.package(self.root, output, commit, 'owner/repo', 'companion-latest')
-            packager.package(self.root, output, commit, 'owner/repo', 'companion-' + self.base)
-            self.assertEqual(json.loads((output / 'manifest.json').read_text())['companionReleaseTag'], 'companion-' + self.base)
 
     def test_package_writes_channel_manifest_fields(self):
         with tempfile.TemporaryDirectory() as out:

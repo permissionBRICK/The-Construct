@@ -36,7 +36,7 @@ for unit in t3code-serve code-serve-web; do
   check "${unit}.service sets the variable" grep -qx "${LINE}" "${ROOT}/systemd/${unit}.service"
 done
 check "the Companion's embedded T3 unit sets the variable" \
-  grep -qx "${LINE}" "${ROOT}/companion/src/Construct.Companion.Core/State/T3Code.cs"
+  grep -qx "${LINE}" "${ROOT}/agent/src/Construct.Companion.Core/State/T3Code.cs"
 
 # ── configure_claude_rm_prompt_env ───────────────────────────────────────────
 
