@@ -401,6 +401,7 @@
         "tags": [
           "agent"
         ],
+        "description": "Issues a new recovery code; the old one stops working. Also how the first run or the upgrade shows the code again before it was confirmed.",
         "operationId": "NewRecoveryCode",
         "responses": {
           "200": {
@@ -412,6 +413,30 @@
                 }
               }
             }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/device/recovery-code/kept": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "description": "The user confirmed the recovery code shown last was kept: the setup's recovery step is done.",
+        "operationId": "ConfirmRecoveryCode",
+        "responses": {
+          "204": {
+            "description": "No Content"
           },
           "default": {
             "description": "An error.",
@@ -2633,6 +2658,37 @@
           }
         }
       }
+    },
+    "/api/upgrade/notes/read": {
+      "post": {
+        "tags": [
+          "upgrade"
+        ],
+        "description": "After the conversion: the user went on from its notes, which are not shown again.",
+        "operationId": "ReadUpgradeNotes",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -3027,7 +3083,8 @@
           "registered",
           "storeEngine",
           "protection",
-          "protectionWeak"
+          "protectionWeak",
+          "recoveryUnconfirmed"
         ],
         "type": "object",
         "properties": {
@@ -3059,6 +3116,9 @@
             "type": "string"
           },
           "protectionWeak": {
+            "type": "boolean"
+          },
+          "recoveryUnconfirmed": {
             "type": "boolean"
           }
         }
@@ -4090,7 +4150,8 @@
           "notes",
           "oldWriters",
           "running",
-          "error"
+          "error",
+          "oldHosts"
         ],
         "type": "object",
         "properties": {
@@ -4154,6 +4215,12 @@
               "null",
               "string"
             ]
+          },
+          "oldHosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },

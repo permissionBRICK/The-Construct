@@ -88,6 +88,14 @@ public sealed class TestAgent : IAsyncDisposable
 
     public static string Json(object value) => JsonSerializer.Serialize(value);
 
+    /// <summary>Stops this agent and starts a new one on the same directory, as after a restart of the process.</summary>
+    public async Task<TestAgent> RestartAsync(Upgrade.IUpgradePlatform? upgrade = null)
+    {
+        Api.Dispose();
+        await Host.DisposeAsync();
+        return await StartAsync(directory: Directory, upgrade: upgrade);
+    }
+
     public async ValueTask DisposeAsync()
     {
         Api.Dispose();

@@ -68,7 +68,15 @@ public static class AgentRoutes
             .WithDescription("The account's first device, against the engine's built-in store. The answer carries the recovery code, the only time it is shown.");
 
         api.MapPost("/device/recovery-code", async (DeviceAgent agent, CancellationToken ct) =>
-            TypedResults.Ok(new RecoveryCodeResponse(await agent.NewRecoveryCodeAsync(ct)))).WithName("NewRecoveryCode");
+            TypedResults.Ok(new RecoveryCodeResponse(await agent.NewRecoveryCodeAsync(ct)))).WithName("NewRecoveryCode")
+            .WithDescription("Issues a new recovery code; the old one stops working. Also how the first run or the upgrade shows the code again before it was confirmed.");
+
+        api.MapPost("/device/recovery-code/kept", (DeviceAgent agent) =>
+        {
+            agent.ConfirmRecoveryCode();
+            return TypedResults.NoContent();
+        }).WithName("ConfirmRecoveryCode")
+            .WithDescription("The user confirmed the recovery code shown last was kept: the setup's recovery step is done.");
 
         api.MapPost("/device/recover", async (DeviceAgent agent, [FromBody] RecoverRequest request, CancellationToken ct) =>
         {

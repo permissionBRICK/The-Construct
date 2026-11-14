@@ -111,6 +111,7 @@ public sealed partial class DeviceAgent
             lock (_state)
             {
                 _state.SetupPending = false;
+                _state.RecoveryUnconfirmed = true;
                 Save();
             }
         }
@@ -121,6 +122,23 @@ public sealed partial class DeviceAgent
 
         Changed();
         return code;
+    }
+
+    /// <summary>True while the code the setup issued is not confirmed as kept: the recovery step is not done.</summary>
+    public bool RecoveryUnconfirmed => _state.RecoveryUnconfirmed;
+
+    /// <summary>The user confirmed the recovery code shown last was kept; the recovery step is done (8.5, 11.6).</summary>
+    public void ConfirmRecoveryCode()
+    {
+        RequireRegistered();
+        lock (_state)
+        {
+            if (!_state.RecoveryUnconfirmed) return;
+            _state.RecoveryUnconfirmed = false;
+            Save();
+        }
+
+        Changed();
     }
 
     /// <summary>Issues a new recovery code (8.5, replacement); the old one stops working at the store.</summary>

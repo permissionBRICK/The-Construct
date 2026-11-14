@@ -74,7 +74,7 @@ public sealed partial class DeviceAgent : IDisposable
     // ---- views ----
 
     public DeviceView Device() => new(DeviceId, _state.DeviceName, _state.Account, _state.Registered, _state.StoreEngine,
-        _protection.Name, _protection.Weak);
+        _protection.Name, _protection.Weak, _state.Registered && _state.RecoveryUnconfirmed);
 
     public IReadOnlyList<EngineView> Engines()
     {
@@ -649,7 +649,8 @@ public sealed partial class DeviceAgent : IDisposable
 }
 
 /// <summary>This device as the UI sees it; no key and no token.</summary>
-public sealed record DeviceView(string Id, string? Name, string? Account, bool Registered, string? StoreEngine, string Protection, bool ProtectionWeak);
+/// <param name="RecoveryUnconfirmed">The setup's recovery code is not confirmed as kept yet: the first run or the upgrade shows it again, newly issued.</param>
+public sealed record DeviceView(string Id, string? Name, string? Account, bool Registered, string? StoreEngine, string Protection, bool ProtectionWeak, bool RecoveryUnconfirmed);
 
 /// <summary>An engine as the UI sees it; whether a credential exists, never the credential.</summary>
 public sealed record EngineView(string Id, string Name, string Url, string Pin, string? EngineId, bool Enrolled, bool SignedIn, bool Store);

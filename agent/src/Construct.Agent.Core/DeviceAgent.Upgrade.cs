@@ -53,6 +53,26 @@ public sealed partial class DeviceAgent
         return keys.Backup.ExportSubjectPublicKeyInfoPem();
     }
 
+    /// <summary>The account this device belongs to; null until it is registered.</summary>
+    public string? Account => _state.Account;
+
+    /// <summary>
+    /// Whether the engine still runs the old stack: it has no <c>GET /engine</c> (404), so this device cannot enrol
+    /// there and stays signed in the old way. Null when it did not tell (unreachable, refused the sign-in).
+    /// </summary>
+    internal async Task<bool?> RunsOldStackAsync(string engineId, CancellationToken ct)
+    {
+        if (Find(engineId) is not { } entry) return null;
+        try
+        {
+            await EngineApi(entry).GetEngineIdentityAsync(ct).ConfigureAwait(false);
+            return false;
+        }
+        catch (Constructd.Client.ApiException ex) { return ex.StatusCode == 404 ? true : null; }
+        catch (HttpRequestException) { return null; }
+        catch (TaskCanceledException) when (!ct.IsCancellationRequested) { return null; }
+    }
+
     /// <summary>The engine's id at this device for a URL, when known.</summary>
     internal string? EngineIdFor(string url) => Find(State.EngineEntry.IdFor(url.ToLowerInvariant()))?.Id;
 }

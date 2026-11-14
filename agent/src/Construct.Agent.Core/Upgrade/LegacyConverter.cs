@@ -32,7 +32,7 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
     /// <summary>Runs every item; true when the conversion is complete (<c>converted</c>).</summary>
     public async Task<bool> RunAsync(LegacyState legacy, CancellationToken ct)
     {
-        if (!agent.IsRegistered) throw new AgentFailure(409, "not-registered", "Set up the recovery code first: the converted records are sealed under the account's keys.");
+        if (!agent.IsRegistered || agent.RecoveryUnconfirmed) throw new AgentFailure(409, "not-registered", "Set up the recovery code first: the converted records are sealed under the account's keys.");
         var start = bridge.Read();
         _done = start.Done.ToHashSet(StringComparer.Ordinal);
         var store = start.StoreEngine ?? agent.StoreEngineId ?? throw new AgentFailure(409, "no-store", "This device has no store yet.");
@@ -52,7 +52,7 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
         if (complete && bridge.Read().Stage != BridgeState.Converted)
             bridge.Update(b => b with { Stage = BridgeState.Converted, ConvertedAt = DateTimeOffset.UtcNow });
         if (bridge.Read().Stage == BridgeState.Converted) await RemoveLegacyRecipientsAsync(legacy, instances, legacyKeys, start.LocalEngine, ct).ConfigureAwait(false);
-        bridge.Update(b => b with { Items = _items.ToArray(), Notes = _notes.Distinct().ToArray() });
+        bridge.Update(b => b with { Items = _items.ToArray(), Notes = _notes.Distinct().ToArray(), NotesAccount = agent.Account, NotesRead = false });
         return complete;
     }
 
@@ -138,6 +138,7 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
                     catch (AgentFailure failure) { problem = failure.Message; }
                 }
 
+                await UpgradeService.MarkOldHostAsync(agent, bridge, known.Id, ct).ConfigureAwait(false);
                 if (known.Enrolled) return ("done", host.VaultMode is null ? "Added and enrolled." : $"Added and enrolled; vault mode {host.VaultMode}.");
                 // Carried over all the same: the host keeps its pin and the old sign-in, and connecting it again from
                 // Settings enrols this device once the host can. A second run leaves it alone.

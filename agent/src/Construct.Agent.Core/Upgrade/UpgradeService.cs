@@ -11,8 +11,10 @@ namespace Construct.Agent.Upgrade;
 /// <param name="Legacy">True when the old client's state is on this PC: the dialog shows the upgrade variant.</param>
 /// <param name="Steps">The dialog's steps in order, each <c>todo</c>, <c>running</c>, <c>done</c>, <c>skipped</c> or <c>failed</c>.</param>
 /// <param name="Found">What the converter will read (counts and names, never a value).</param>
+/// <param name="Notes">What the last run says the user should know, until the user went on from them (<c>POST /api/upgrade/notes/read</c>); only to the account they were written for.</param>
+/// <param name="OldHosts">Shared hosts that still run the old stack: this device stays signed in the old way there until their admin updates them.</param>
 public sealed record UpgradeView(bool Legacy, string Stage, IReadOnlyList<UpgradeStep> Steps, UpgradeFound? Found, string? StoreEngine, string? LocalEngine,
-    IReadOnlyList<UpgradeItem> Items, IReadOnlyList<string> Notes, IReadOnlyList<string> OldWriters, bool Running, string? Error);
+    IReadOnlyList<UpgradeItem> Items, IReadOnlyList<string> Notes, IReadOnlyList<string> OldWriters, bool Running, string? Error, IReadOnlyList<string> OldHosts);
 
 public sealed record UpgradeStep(string Id, string State, string? Message = null);
 
@@ -98,12 +100,14 @@ public sealed class UpgradeService : IDisposable
         var steps = new List<UpgradeStep>
         {
             Step("engine", bridge.Engine is "done" or "skipped" ? bridge.Engine : "todo"),
-            Step("recovery", _agent.IsRegistered ? "done" : "todo"),
+            // Done only once the user confirmed the code was kept: until then the dialog shows it again, newly issued.
+            Step("recovery", _agent.IsRegistered && !_agent.RecoveryUnconfirmed ? "done" : "todo"),
             Step("close", bridge.Stage == BridgeState.Converted ? "done" : writers.Count == 0 ? "done" : "todo", writers.Count == 0 ? null : string.Join(", ", writers) + " still open."),
             Step("convert", bridge.Stage == BridgeState.Converted ? "done" : bridge.Items.Any(i => i.State == "failed") ? "failed" : "todo"),
         };
         return new UpgradeView(legacy is not null, bridge.Stage, steps, legacy is null ? null : Found(legacy), bridge.StoreEngine ?? _agent.StoreEngineId, bridge.LocalEngine,
-            bridge.Items, bridge.Notes, writers, _running is not null, error);
+            bridge.Items, !bridge.NotesRead && bridge.NotesAccount is { } owner && owner == _agent.Account ? bridge.Notes : [], writers, _running is not null, error,
+            bridge.OldHosts);
 
         UpgradeStep Step(string id, string state, string? message = null) =>
             _running == id ? new UpgradeStep(id, "running") : new UpgradeStep(id, state, message);
@@ -140,6 +144,7 @@ public sealed class UpgradeService : IDisposable
             var token = host.HasToken ? legacy.HostToken(host) : null;
             var added = await _agent.AddEngineAsync(host.Url, host.Pin!, null, token, ct).ConfigureAwait(false);
             if (token is not null) firstHost ??= added.Id;
+            if (token is not null) await MarkOldHostAsync(_agent, Bridge, added.Id, ct).ConfigureAwait(false);
         }
 
         var store = _agent.StoreEngineId ?? localEngine ?? firstHost
@@ -232,6 +237,17 @@ public sealed class UpgradeService : IDisposable
         }
         """;
 
+    /// <summary>Notes a shared host as still on the old stack, or no longer, as far as it told; the dialog names it before the conversion.</summary>
+    internal static async Task MarkOldHostAsync(DeviceAgent agent, BridgeFile bridge, string engineId, CancellationToken ct)
+    {
+        var old = await agent.RunsOldStackAsync(engineId, ct).ConfigureAwait(false);
+        if (old is null || agent.Engines().FirstOrDefault(e => e.Id == engineId) is not { } engine) return;
+        bridge.Update(b => b with
+        {
+            OldHosts = old.Value ? (b.OldHosts.Contains(engine.Name) ? b.OldHosts : [.. b.OldHosts, engine.Name]) : b.OldHosts.Where(h => h != engine.Name).ToArray(),
+        });
+    }
+
     // ---- step 3: the old writers ----
 
     /// <summary>
@@ -260,7 +276,7 @@ public sealed class UpgradeService : IDisposable
     /// <summary>Starts the conversion; refused while VS Code or the old Companion still runs, or before the recovery code is set.</summary>
     public UpgradeView StartConvert(ConvertRequest request)
     {
-        if (!_agent.IsRegistered) throw new AgentFailure(409, "not-registered", "Set up the recovery code first.");
+        if (!_agent.IsRegistered || _agent.RecoveryUnconfirmed) throw new AgentFailure(409, "not-registered", "Set up the recovery code first.");
         if (Bridge.Read().Stage != BridgeState.Converted && OldWriters() is { Count: > 0 } open)
             throw new AgentFailure(409, "writers-open", "Close these first: " + string.Join(", ", open) + ".");
         if (request.From is { Length: > 0 } from) Bridge.Update(b => b with { From = Path.GetFullPath(from) });
@@ -280,6 +296,15 @@ public sealed class UpgradeService : IDisposable
     }
 
     private Task ConvertAsync(CancellationToken ct) => ConvertAsync(ct, null);
+
+    /// <summary>The user went on from the notes the conversion left; they are not shown again.</summary>
+    public UpgradeView ReadNotes()
+    {
+        if (Bridge.Read().Stage != BridgeState.Converted) throw new AgentFailure(409, "not-converted", "The conversion has not finished.");
+        Bridge.Update(b => b with { NotesRead = true });
+        _agent.Events.Publish("upgrade");
+        return View();
+    }
 
     // ---- plumbing ----
 

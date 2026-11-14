@@ -39,6 +39,12 @@ public sealed class AgentState
     /// <summary>A first-device setup that registered this device but has not finished; setup again resumes it.</summary>
     public bool SetupPending { get; set; }
 
+    /// <summary>
+    /// The first-device setup issued a recovery code and the user has not yet confirmed it was kept (8.5). Until then
+    /// the dialog shows the step again with a new code; the earlier one stops working at the store.
+    /// </summary>
+    public bool RecoveryUnconfirmed { get; set; }
+
     [JsonIgnore]
     public bool Registered => Account is not null && StoreToken is not null && RootSeal is not null && !SetupPending;
 }

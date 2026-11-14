@@ -131,6 +131,7 @@ public sealed class UpgradeTests
         var work = (await rig.Local.Services.GetRequiredService<IVmDesiredStateSource>().GetDesiredAsync("work", CancellationToken.None))!.Desired;
         Assert.Equal(["api"], work.Projects);
         Assert.Equal("false", work.Settings.T3Code);
+        Assert.Empty(view["oldHosts"]!.AsArray());
         var host = view["items"]!.AsArray().Single(i => i!["id"]!.GetValue<string>().StartsWith("host:", StringComparison.Ordinal))!;
         Assert.Equal("done", host["state"]!.GetValue<string>());
         var state = await rig.Agent.GetAsync("api/state");
@@ -286,6 +287,125 @@ public sealed class UpgradeTests
     }
 
     [Fact]
+    public async Task The_recovery_step_is_done_only_once_the_code_was_confirmed_and_a_reload_gets_a_new_code()
+    {
+        await using var rig = await UpgradeRig.CreateAsync(SingleVm);
+        await rig.EngineStepAsync();
+        var first = await rig.IssueCodeAsync();
+        string Recovery(JsonNode view) => view["steps"]!.AsArray().Single(x => x!["id"]!.GetValue<string>() == "recovery")!["state"]!.GetValue<string>();
+
+        // Issued, not confirmed: the step is not done, the conversion refused, and so after a restart of the agent.
+        Assert.Equal("todo", Recovery(await rig.Agent.GetAsync("api/upgrade")));
+        Assert.True((await rig.Agent.GetAsync("api/state"))["device"]!["recoveryUnconfirmed"]!.GetValue<bool>());
+        await rig.Agent.PostAsync("api/upgrade/convert", null, HttpStatusCode.Conflict);
+        await Assert.ThrowsAsync<AgentFailure>(() => rig.Agent.Host.Upgrade.ConvertAsync(CancellationToken.None));
+        await rig.RestartAsync();
+        Assert.Equal("todo", Recovery(await rig.Agent.GetAsync("api/upgrade")));
+
+        // The page after a reload asks for a new code: the earlier one stops working at the store.
+        var second = (await rig.Agent.PostAsync("api/device/recovery-code", null))["recoveryCode"]!.GetValue<string>();
+        Assert.NotEqual(first, second);
+        var account = (await rig.Agent.GetAsync("api/state"))["device"]!["account"]!.GetValue<string>();
+        await using (var other = await TestAgent.StartAsync())
+        {
+            var engine = await other.AddEngineAsync(rig.Local);
+            await other.PostAsync("api/device/recover", new { engine, account, recoveryCode = first, deviceName = "other" }, HttpStatusCode.Forbidden);
+        }
+
+        await rig.Agent.PostAsync("api/device/recovery-code/kept", null, HttpStatusCode.NoContent);
+        Assert.Equal("done", Recovery(await rig.Agent.GetAsync("api/upgrade")));
+        Assert.False((await rig.Agent.GetAsync("api/state"))["device"]!["recoveryUnconfirmed"]!.GetValue<bool>());
+        Assert.Equal("converted", (await rig.ConvertAsync())["stage"]!.GetValue<string>());
+        // Neither code reached the agent's files.
+        rig.AssertNoSecretInAgentFiles(first, second, first.Replace("-", "", StringComparison.Ordinal), second.Replace("-", "", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task The_notes_stay_after_the_conversion_until_read_and_only_for_their_account()
+    {
+        await using var rig = await UpgradeRig.CreateAsync(SingleVm);
+        await rig.EngineStepAsync();
+        await rig.SetupAsync();
+        var view = await rig.ConvertAsync();
+        Assert.Equal("converted", view["stage"]!.GetValue<string>());
+        Assert.NotEmpty(view["notes"]!.AsArray());
+
+        // Kept over a restart of the agent.
+        await rig.RestartAsync();
+        var notes = (await rig.Agent.GetAsync("api/upgrade"))["notes"]!.AsArray().Select(n => n!.GetValue<string>()).ToArray();
+        Assert.Equal(view["notes"]!.AsArray().Select(n => n!.GetValue<string>()), notes);
+
+        // Notes written for another account are not shown.
+        var bridge = rig.Agent.Host.Upgrade.Bridge;
+        var owner = bridge.Read().NotesAccount;
+        bridge.Update(b => b with { NotesAccount = "someone-else" });
+        Assert.Empty((await rig.Agent.GetAsync("api/upgrade"))["notes"]!.AsArray());
+        bridge.Update(b => b with { NotesAccount = owner });
+
+        var read = await rig.Agent.PostAsync("api/upgrade/notes/read", null);
+        Assert.Empty(read["notes"]!.AsArray());
+        await rig.RestartAsync();
+        Assert.Empty((await rig.Agent.GetAsync("api/upgrade"))["notes"]!.AsArray());
+    }
+
+    [Fact]
+    public async Task The_notes_cannot_be_read_away_before_the_conversion()
+    {
+        await using var rig = await UpgradeRig.CreateAsync(SingleVm);
+        await rig.Agent.PostAsync("api/upgrade/notes/read", null, HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task A_shared_host_on_the_old_stack_is_named_before_the_conversion()
+    {
+        // The old stack has no GET /engine: this device stays signed in the old way there.
+        using var remote = new EngineHost(services => services.AddTransient<Microsoft.AspNetCore.Hosting.IStartupFilter, NoEngineRoute>());
+        var remoteToken = await remote.AddUserAsync("alice");
+        await using var rig = await UpgradeRig.CreateAsync(f =>
+        {
+            SingleVm(f);
+            f.SshKey("construct_far_ed25519");
+            f.Instances(new JsonObject
+            {
+                ["version"] = 1, ["defaultInstance"] = "agent-vm",
+                ["instances"] = new JsonObject
+                {
+                    ["far"] = new JsonObject
+                    {
+                        ["backend"] = "hyperv-remote", ["sshHost"] = "127.0.0.1", ["sshPort"] = 2201,
+                        ["service"] = new JsonObject { ["url"] = remote.Url, ["auth"] = "token" },
+                    },
+                },
+            });
+            f.RemoteHost(remote.Url, remote.Pin, remoteToken);
+        });
+
+        await rig.EngineStepAsync();
+        Assert.Equal(["127.0.0.1"], (await rig.Agent.GetAsync("api/upgrade"))["oldHosts"]!.AsArray().Select(n => n!.GetValue<string>()));
+        await rig.SetupAsync();
+        var view = await rig.ConvertAsync();
+        Assert.Equal(["127.0.0.1"], view["oldHosts"]!.AsArray().Select(n => n!.GetValue<string>()));
+        var added = (await rig.Agent.GetAsync("api/state"))["engines"]!.AsArray().Single(e => e!["url"]!.GetValue<string>() == remote.Url)!;
+        Assert.False(added["enrolled"]!.GetValue<bool>());
+        Assert.True(added["signedIn"]!.GetValue<bool>());
+        rig.AssertNoSecretInAgentFiles(remoteToken);
+    }
+
+    /// <summary>An engine without the new stack's identity route, as a host of the old stack answers.</summary>
+    private sealed class NoEngineRoute : Microsoft.AspNetCore.Hosting.IStartupFilter
+    {
+        public Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> Configure(Action<Microsoft.AspNetCore.Builder.IApplicationBuilder> next) => app =>
+        {
+            app.Use(call => context =>
+            {
+                if (context.Request.Path.StartsWithSegments("/api/v1/engine")) { context.Response.StatusCode = 404; return Task.CompletedTask; }
+                return call(context);
+            });
+            next(app);
+        };
+    }
+
+    [Fact]
     public async Task The_cli_converts_in_process_and_reports_each_item()
     {
         await using var rig = await UpgradeRig.CreateAsync(SingleVm);
@@ -321,9 +441,12 @@ internal sealed class UpgradeRig : IAsyncDisposable
 
     public AdoptableGuest Guest { get; }
 
-    public TestAgent Agent { get; }
+    public TestAgent Agent { get; private set; }
 
     public string AdminToken { get; }
+
+    /// <summary>The agent stops and starts again on its directory.</summary>
+    public async Task RestartAsync() => Agent = await Agent.RestartAsync(Platform);
 
     public string? Fingerprint => Fixture.BackupFingerprint;
 
@@ -364,12 +487,21 @@ internal sealed class UpgradeRig : IAsyncDisposable
         Assert.False(File.Exists(Path.Combine(Agent.Directory, "engine-token.json")));
     }
 
-    /// <summary>Step 2: the existing first-device setup against the store engine the engine step chose.</summary>
+    /// <summary>Step 2: the existing first-device setup against the store engine the engine step chose, and the code confirmed as kept.</summary>
     public async Task SetupAsync()
+    {
+        await IssueCodeAsync();
+        await Agent.PostAsync("api/device/recovery-code/kept", null, HttpStatusCode.NoContent);
+    }
+
+    /// <summary>The setup without the confirm; the code it showed.</summary>
+    public async Task<string> IssueCodeAsync()
     {
         var store = (await Agent.GetAsync("api/upgrade"))["storeEngine"]!.GetValue<string>();
         var answer = await Agent.PostAsync("api/device/setup", new { engine = store, deviceName = "pc", vaultMode = "available" });
-        Assert.False(string.IsNullOrEmpty(answer["recoveryCode"]?.GetValue<string>()));
+        var code = answer["recoveryCode"]?.GetValue<string>();
+        Assert.False(string.IsNullOrEmpty(code));
+        return code!;
     }
 
     public async Task<JsonNode> ConvertAsync()
