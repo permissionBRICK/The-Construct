@@ -997,6 +997,7 @@ export interface components {
             pid: number;
             /** Format: date-time */
             startedAt: string;
+            apiFeatures: string[];
         };
         AgentProblem: {
             title: string;

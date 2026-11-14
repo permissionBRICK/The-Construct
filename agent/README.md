@@ -89,7 +89,8 @@ identity.
 `http://127.0.0.1:<port>`, port and token in `endpoint.json`. Every `/api` route but `GET /api/health`
 takes `Authorization: Bearer <token>`. A request whose `Origin` is not the agent's own, or whose
 `Host` is not its loopback address, is refused; no CORS header is ever sent, so a page on another
-origin cannot send the header at all. Pages are not frameable. The UI bundle is served from `/`
+origin cannot send the header at all. Only VS Code's webview may frame a page (the thin extension's
+view); a web page cannot. The UI bundle is served from `/`
 without a token; `construct-agent open` hands the token to it in the URL fragment
 (`/#agent-token=...`), which the browser never sends to a server.
 
@@ -101,7 +102,7 @@ CONSTRUCT_AGENT_UPDATE_OPENAPI=1 dotnet test agent/Construct.Agent.slnx --filter
 
 | Route | What it does |
 |---|---|
-| `GET /api/health` | `{status, version, pid, startedAt}`, without the token |
+| `GET /api/health` | `{status, version, pid, startedAt, apiFeatures}`, without the token. `apiFeatures` names what this agent's API offers, for clients built for another version (T3 Code Desktop). |
 | `GET /api/state` | This device, the engines, the pairing in progress. No key, no token. |
 | `GET /api/events?since=` | SSE, see below |
 | `POST /api/shutdown` | Stops the agent (repair uses it) |

@@ -2771,7 +2771,8 @@
           "status",
           "version",
           "pid",
-          "startedAt"
+          "startedAt",
+          "apiFeatures"
         ],
         "type": "object",
         "properties": {
@@ -2788,6 +2789,12 @@
           "startedAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "apiFeatures": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },

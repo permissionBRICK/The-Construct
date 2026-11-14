@@ -15,7 +15,7 @@ public static class AgentRoutes
     {
         var api = app.MapGroup("/api").WithTags("agent");
 
-        api.MapGet("/health", () => TypedResults.Ok(new AgentHealth("ok", host.Options.Version, Environment.ProcessId, startedAt)))
+        api.MapGet("/health", () => TypedResults.Ok(new AgentHealth("ok", host.Options.Version, Environment.ProcessId, startedAt, AgentHealth.Features)))
             .WithName("Health").WithDescription("Answers without the token: the repair command and the shell ask whether the agent runs.");
 
         api.MapGet("/state", (DeviceAgent agent) => TypedResults.Ok(new AgentStateView(agent.Device(), agent.Engines(), agent.Pairing())))
@@ -164,7 +164,16 @@ public static class AgentRoutes
         context.Response.WriteAsync($"id: {item.Seq}\nevent: {item.Type}\ndata: {JsonSerializer.Serialize(item, AgentJson.Options)}\n\n", ct);
 }
 
-public sealed record AgentHealth(string Status, string Version, int Pid, DateTimeOffset StartedAt);
+/// <param name="ApiFeatures">What this agent's API offers, by name, so a client built for another version
+/// (T3 Code Desktop, the VS Code extension) knows what it can call (design 11.4). A name is only ever added.</param>
+public sealed record AgentHealth(string Status, string Version, int Pid, DateTimeOffset StartedAt, IReadOnlyList<string> ApiFeatures)
+{
+    public static readonly IReadOnlyList<string> Features =
+    [
+        "update", "update-everything", "engine-proxy", "events", "vault-approvals", "vault-entry-requests",
+        "connections", "t3-pairing", "shell-open", "upgrade", "git-jobs",
+    ];
+}
 
 public sealed record AgentStateView(DeviceView Device, IReadOnlyList<EngineView> Engines, PairingView? Pairing);
 
