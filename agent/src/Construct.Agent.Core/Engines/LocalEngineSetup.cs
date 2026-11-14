@@ -101,7 +101,13 @@ public sealed class LocalEngineSetup : IDisposable
                 }
                 finally
                 {
-                    lock (_gate) _running = false;
+                    lock (_gate)
+                    {
+                        _running = false;
+                        // Ended by something the run did not expect: a failure with Retry, never "running" forever.
+                        if (_state == "running") { _state = "failed"; _message = "Setting up the engine failed; retry."; }
+                    }
+
                     _agent.Events.Publish("engine-setup");
                 }
             });
@@ -129,7 +135,12 @@ public sealed class LocalEngineSetup : IDisposable
         }
         finally
         {
-            lock (_gate) _running = false;
+            lock (_gate)
+            {
+                _running = false;
+                if (_state == "running") { _state = "failed"; _message = "Setting up the engine failed; retry."; }
+            }
+
             _agent.Events.Publish("engine-setup");
         }
     }
