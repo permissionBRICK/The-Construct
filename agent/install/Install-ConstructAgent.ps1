@@ -6,7 +6,8 @@
 .DESCRIPTION
     Reads the channel manifest, downloads the agentWindows package, checks its SHA-256 against the
     manifest, unpacks it into %LOCALAPPDATA%\Construct\agent\versions\<version>\, records it as current
-    in install.json, lets it start with Windows and starts it in the tray. With -Package a local zip is
+    in install.json, installs the VS Code extension it carries (construct.vsix) where VS Code is installed,
+    lets it start with Windows and starts it in the tray. With -Package a local zip is
     installed instead (the hash check is then the caller's: the Windows installer of the whole product
     passes the package it verified). The agent updates itself from then on (plan 12.1).
 
@@ -26,6 +27,32 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+function Install-ConstructVsCodeExtension {
+    # The thin VS Code extension from the agent package (construct.vsix), over the old one: same id, higher
+    # version. VS Code not installed is not a failure; VS Code refusing the extension is (13.2).
+    param([string]$Folder)
+    $code = $null
+    $cmd = Get-Command code -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($cmd) { $code = $cmd.Source }
+    if (-not $code) {
+        foreach ($pair in @(@($env:LOCALAPPDATA, 'Programs\Microsoft VS Code\bin\code.cmd'), @($env:ProgramFiles, 'Microsoft VS Code\bin\code.cmd'))) {
+            if (-not $pair[0]) { continue }
+            $candidate = Join-Path $pair[0] $pair[1]
+            if (Test-Path -LiteralPath $candidate) { $code = $candidate; break }
+        }
+    }
+    if (-not $code) { Write-Host '    VS Code is not installed; no extension to update.'; return }
+    $vsix = Join-Path $Folder 'construct.vsix'
+    if (-not (Test-Path -LiteralPath $vsix)) { throw 'The agent package has no construct.vsix.' }
+    # code writes warnings to stderr even when it succeeds: only its exit code counts.
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $global:LASTEXITCODE = 1
+    try { & $code --install-extension $vsix --force 2>$null | Out-Null } finally { $ErrorActionPreference = $previousPreference }
+    if ($LASTEXITCODE -ne 0) { throw "VS Code did not install the Construct extension (code --install-extension exit $LASTEXITCODE)." }
+    Write-Host '    the Construct extension is installed in VS Code (it starts with the next VS Code window).'
+}
 
 $home_ = if ($env:CONSTRUCT_AGENT_HOME) { $env:CONSTRUCT_AGENT_HOME } else { Join-Path $env:LOCALAPPDATA 'Construct\agent' }
 New-Item -ItemType Directory -Force -Path $home_ | Out-Null
@@ -72,6 +99,7 @@ try {
         if (Test-Path -LiteralPath $target) { Remove-Item -Recurse -Force -LiteralPath $target }
         Move-Item -LiteralPath $partial -Destination $target
     }
+    Install-ConstructVsCodeExtension -Folder $target
 
     $installPath = Join-Path $home_ 'install.json'
     $previous = $null

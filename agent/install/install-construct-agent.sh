@@ -4,7 +4,8 @@
 #   install-construct-agent.sh [--channel stable|nightly|<https manifest URL>] [--package ZIP --version X.Y.Z+sha] [--no-start]
 #
 # Reads the channel manifest, downloads the agentLinux package, checks its SHA-256 against the manifest,
-# unpacks it into the agent's directory (versions/<version>/), records it as current in install.json and
+# unpacks it into the agent's directory (versions/<version>/), installs the VS Code extension it carries
+# where VS Code is installed (a failure there fails the install), records it as current in install.json and
 # starts it: as the systemd user unit when systemd runs the session, else in its own session. With
 # --package a local zip is installed instead (the hash check is then the caller's). The agent updates
 # itself from then on (plan 12.1).
@@ -66,6 +67,13 @@ if [[ ! -x "$target/construct-agent" ]]; then
   python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])' "$package" "$target.partial"
   chmod +x "$target.partial/construct-agent"
   rm -rf "$target"; mv "$target.partial" "$target"
+fi
+
+# The VS Code extension the package carries, where VS Code is installed; VS Code refusing it fails the install.
+if command -v code >/dev/null 2>&1; then
+  [[ -f "$target/construct.vsix" ]] || { echo "The agent package has no construct.vsix." >&2; exit 1; }
+  code --install-extension "$target/construct.vsix" --force >/dev/null 2>&1 \
+    || { echo "VS Code did not install the Construct extension (code --install-extension failed)." >&2; exit 1; }
 fi
 
 # A running agent stops first; the new one is current from here on.
