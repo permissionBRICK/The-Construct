@@ -42,6 +42,8 @@ const REPORTED_FILE = "reported"
 // is answered with a reminder instead of output.
 const POLL_GUARD_MS = 60 * 1000
 const MAX_PARENT_DEPTH = 8
+// Rounds (about a second each) a finished job waits for its root session to be known.
+const ROOT_RETRIES = 60
 
 const BACKGROUND_DESCRIPTION = `Run a shell command in the background, detached from this tool call.
 
@@ -108,7 +110,12 @@ export const BackgroundTasks = async ({ client, directory }) => {
   const lastCheck = new Map()
   /** sessionID -> parent sessionID, or null for a root session */
   const parents = new Map()
+  /** sessionID -> [{ text, entries }], wake-ups sent but not yet admitted by OpenCode */
+  const sent = new Map()
+  /** sessionID -> { at, root }, a wake-up turn admitted and possibly still running */
+  const admitted = new Map()
   let timer
+  let polling = false
 
   // --- job state on disk -----------------------------------------------------
 
@@ -275,27 +282,54 @@ export const BackgroundTasks = async ({ client, directory }) => {
     const key = `${job.sessionID}/${job.id}`
     known.set(key, job)
     watching.set(key, job)
-    if (!timer) {
-      timer = setInterval(poll, POLL_MS)
-      timer.unref?.()
-    }
+    ensureTimer()
+  }
+
+  function ensureTimer() {
+    if (timer) return
+    timer = setInterval(poll, POLL_MS)
+    timer.unref?.()
   }
 
   async function poll() {
-    for (const [key, job] of watching) {
-      // Stopped: stop watching. The result stays on disk and is reported on the next prompt.
-      if (disarmed(job)) {
+    if (polling) return // a slow round (network) must not overlap the next one
+    polling = true
+    try {
+      const retry = []
+      for (const [key, job] of watching) {
+        // Stopped: stop watching. The result stays on disk and is reported on the next prompt.
+        if (disarmed(job)) {
+          watching.delete(key)
+          continue
+        }
+        const result = outcome(job)
+        if (!result) continue
         watching.delete(key)
-        continue
+        if (!(await notify(job, result))) retry.push(job)
       }
-      const result = outcome(job)
-      if (!result) continue
-      watching.delete(key)
-      await notify(job, result)
+      for (const job of retry) watching.set(`${job.sessionID}/${job.id}`, job)
+      await enforceStops()
+    } finally {
+      polling = false
     }
-    if (!watching.size && timer) {
+    if (!watching.size && !admitted.size && timer) {
       clearInterval(timer)
       timer = undefined
+    }
+  }
+
+  /** A Stop after a wake-up turn was admitted ends that turn once it runs. */
+  async function enforceStops() {
+    for (const [sessionID, wake] of admitted) {
+      const at = Math.max(stoppedAt(sessionID), wake.root && wake.root !== sessionID ? stoppedAt(wake.root) : 0)
+      if (at < wake.at) continue
+      // Admitted but not running yet: check again next round. A finished turn's idle event clears it.
+      if (await isIdle(sessionID)) continue
+      if (admitted.get(sessionID) !== wake) continue // a newer prompt took over meanwhile
+      admitted.delete(sessionID)
+      try {
+        await client.session.abort({ path: { id: sessionID }, query: { directory } })
+      } catch {}
     }
   }
 
@@ -326,13 +360,18 @@ export const BackgroundTasks = async ({ client, directory }) => {
     } catch {}
   }
 
+  /** Returns false when the job should be retried on a later round. */
   async function notify(job, result) {
     await resolveRoot(job)
-    if (disarmed(job)) return
-    if (!claim(job.dir)) return
+    // Without its root the job cannot tell whether a Stop of the root covers it. Retry for a
+    // while (the server may still be starting); after that only its own session's Stop counts.
+    if (!job.root && (job.rootTries = (job.rootTries ?? 0) + 1) < ROOT_RETRIES) return false
+    if (disarmed(job)) return true
+    if (!claim(job.dir)) return true
     const entry = { job, text: renderNotification(job, result) }
-    if (await isIdle(job.sessionID)) return send(job.sessionID, [entry])
-    parked.set(job.sessionID, [...(parked.get(job.sessionID) ?? []), entry])
+    if (await isIdle(job.sessionID)) await send(job.sessionID, [entry])
+    else parked.set(job.sessionID, [...(parked.get(job.sessionID) ?? []), entry])
+    return true
   }
 
   async function isIdle(sessionID) {
@@ -353,22 +392,46 @@ export const BackgroundTasks = async ({ client, directory }) => {
       return false
     })
     if (!live.length) return
+    const text = live.map((entry) => entry.text).join("\n\n")
+    // Registered before the request: OpenCode may run the chat.message hook before it answers.
+    const wake = { text, entries: live }
+    sent.set(sessionID, [...(sent.get(sessionID) ?? []), wake])
     try {
       await client.session.promptAsync({
         path: { id: sessionID },
         query: { directory },
-        body: { parts: [{ type: "text", text: live.map((entry) => entry.text).join("\n\n") }] },
+        body: { parts: [{ type: "text", text }] },
       })
     } catch {
       // Session gone or server shutting down -- the result stays readable on disk.
+      forget(sessionID, wake)
+    }
+  }
+
+  function forget(sessionID, wake) {
+    const rest = (sent.get(sessionID) ?? []).filter((w) => w !== wake)
+    if (rest.length) sent.set(sessionID, rest)
+    else sent.delete(sessionID)
+  }
+
+  /**
+   * Called from chat.message, before OpenCode stores the prompt or starts a turn. Our own
+   * wake-up whose tasks were all disarmed by a Stop since it was sent is refused here.
+   */
+  function admit(sessionID, parts) {
+    const texts = parts.filter((part) => part?.type === "text").map((part) => part.text)
+    const wake = (sent.get(sessionID) ?? []).find((w) => texts.includes(w.text))
+    if (!wake) {
+      admitted.delete(sessionID) // a user prompt supersedes any wake-up turn
       return
     }
-    // A Stop that landed while the wake-up was in flight: end the turn it just started.
-    if (live.some(({ job }) => disarmed(job))) {
-      try {
-        await client.session.abort({ path: { id: sessionID }, query: { directory } })
-      } catch {}
+    forget(sessionID, wake)
+    if (wake.entries.every(({ job }) => disarmed(job))) {
+      for (const { job } of wake.entries) unclaim(job.dir)
+      throw new Error("Construct background watcher: wake-up dropped because the session was stopped")
     }
+    admitted.set(sessionID, { at: Date.now(), root: wake.entries[0].job.root })
+    ensureTimer()
   }
 
   // --- stop report -------------------------------------------------------------
@@ -553,17 +616,21 @@ export const BackgroundTasks = async ({ client, directory }) => {
         return
       }
       if (event.type !== "session.idle") return
+      admitted.delete(sessionID) // whatever turn ran has ended
       const entries = parked.get(sessionID)
       if (!entries?.length) return
       parked.delete(sessionID)
       await send(sessionID, entries)
     },
 
-    // The next prompt after a Stop (the user's, or another task's wake-up) tells the
-    // agent which tasks no longer wake it. Synthetic: the model sees it, T3 hides it.
+    // Every prompt passes here before OpenCode stores it. Our own wake-up is refused if a Stop
+    // disarmed its tasks in the meantime. The next prompt after a Stop (the user's, or another
+    // task's wake-up) tells the agent which tasks no longer wake it. Synthetic: the model sees
+    // it, T3 hides it.
     "chat.message": async (input, output) => {
       const sessionID = input?.sessionID
       if (!sessionID || !Array.isArray(output?.parts)) return
+      admit(sessionID, output.parts)
       const jobs = pendingReports(sessionID)
       if (!jobs.length) return
       output.parts.push({

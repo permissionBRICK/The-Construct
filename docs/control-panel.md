@@ -802,7 +802,9 @@ Stop disarms these wake-ups. An aborted turn (T3's Stop, the TUI, the abort API)
 Stop of a turn that had already settled both record the stop time in
 `~/.local/state/opencode/background/<session>/stopped`; T3 writes that file itself for a
 settled turn, because OpenCode receives no abort then. A `wait: true` task started before
-that time keeps running but never wakes the session, including tasks of its subagents.
+that time keeps running but never wakes the session, including tasks of its subagents. A
+wake-up already on its way when the Stop lands is refused before OpenCode stores it, and a
+wake-up turn that had already started is aborted.
 The next prompt to the session carries a hidden note listing those tasks and their state,
 so a resumed agent knows to read their results or wait for them again.
 

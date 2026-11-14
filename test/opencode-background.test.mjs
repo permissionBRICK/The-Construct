@@ -26,27 +26,46 @@ async function test(name, fn) {
   }
 }
 
-/** A plugin instance with a fake OpenCode client. */
-async function harness({ parents = {}, beforeAccept } = {}) {
+/** A plugin instance with a fake OpenCode client. Like OpenCode, every prompt passes the
+ *  chat.message hook before it is stored; a hook that throws drops the prompt. */
+async function harness({ parents = {}, beforeAccept, getFailures = 0 } = {}) {
   const prompts = []
+  const dropped = []
   const aborts = []
   const status = {}
+  let failures = getFailures
+  let plugin
   const client = {
     session: {
       status: async () => ({ data: status }),
       promptAsync: async (request) => {
+        const text = request.body.parts.map((part) => part.text).join("\n")
         if (beforeAccept) await beforeAccept(request)
-        prompts.push({ id: request.path.id, text: request.body.parts.map((part) => part.text).join("\n") })
+        try {
+          await plugin["chat.message"](
+            { sessionID: request.path.id },
+            { message: { id: "msg_wake" }, parts: [{ id: "prt_wake", type: "text", text }] },
+          )
+          prompts.push({ id: request.path.id, text })
+        } catch (err) {
+          dropped.push({ id: request.path.id, error: String(err?.message ?? err) })
+        }
         return { data: true }
       },
       abort: async (request) => {
         aborts.push(request.path.id)
         return { data: true }
       },
-      get: async ({ path: { id } }) => ({ data: { id, parentID: parents[id] } }),
+      get: async ({ path: { id } }) => {
+        if (failures > 0) {
+          failures--
+          throw new Error("server not ready")
+        }
+        return { data: { id, parentID: parents[id] } }
+      },
     },
   }
-  const plugin = await BackgroundTasks({ client, directory: root })
+  plugin = await BackgroundTasks({ client, directory: root })
   const ctx = (sessionID) => ({ sessionID, directory: root, ask: async () => {}, metadata: () => {} })
   const start = (sessionID, command, wait = true) =>
     plugin.tool.background.execute({ command, description: command, wait }, ctx(sessionID))
@@ -59,7 +78,7 @@ async function harness({ parents = {}, beforeAccept } = {}) {
     await plugin["chat.message"]({ sessionID }, out)
     return out.parts.slice(1)
   }
-  return { plugin, prompts, aborts, status, start, output, event, abort, nextPrompt }
+  return { plugin, prompts, dropped, aborts, status, start, output, event, abort, nextPrompt }
 }
 
 /** Waits until the plugin's 1 s watcher has seen a job exit. */
@@ -169,7 +188,7 @@ await test("re-checking a running armed task within a minute returns a reminder"
   await h.plugin.dispose()
 })
 
-await test("a Stop that lands while a wake-up is in flight aborts the turn it started", async () => {
+await test("a wake-up in flight when a Stop lands is refused at admission", async () => {
   const h = await harness({
     beforeAccept: async ({ path: { id } }) => {
       fs.writeFileSync(path.join(stateRoot, id, "stopped"), String(Date.now()))
@@ -177,8 +196,33 @@ await test("a Stop that lands while a wake-up is in flight aborts the turn it st
   })
   await h.start("ses_inflight", "echo racing")
   await settle()
-  assert.equal(h.prompts.length, 1, "the wake-up was already on its way")
-  assert.deepEqual(h.aborts, ["ses_inflight"], "and its turn is aborted right away")
+  assert.equal(h.prompts.length, 0, "OpenCode never stores or runs the stale wake-up")
+  assert.equal(h.dropped.length, 1)
+  assert.match(h.dropped[0].error, /session was stopped/)
+  assert.deepEqual(h.aborts, [], "nothing to abort: no turn was started")
+  const [part] = await h.nextPrompt("ses_inflight")
+  assert.match(part.text, /bg_1 \(echo racing\): exited 0/, "the result is reported on the next prompt instead")
+  await h.plugin.dispose()
+})
+
+await test("a Stop after a wake-up turn was admitted aborts that turn, never a newer user turn", async () => {
+  const h = await harness()
+  await h.start("ses_admitted", "echo woke")
+  await settle()
+  assert.equal(h.prompts.length, 1, "admitted")
+  h.status.ses_admitted = { type: "busy" }
+  fs.writeFileSync(path.join(stateRoot, "ses_admitted", "stopped"), String(Date.now() + 1))
+  await sleep(1500)
+  assert.deepEqual(h.aborts, ["ses_admitted"], "the wake-up turn is ended")
+
+  await h.start("ses_resumed", "echo woke")
+  await settle()
+  assert.equal(h.prompts.length, 2)
+  fs.writeFileSync(path.join(stateRoot, "ses_resumed", "stopped"), String(Date.now() + 1))
+  await h.nextPrompt("ses_resumed") // the user's own prompt right after the Stop
+  h.status.ses_resumed = { type: "busy" }
+  await sleep(1500)
+  assert.deepEqual(h.aborts, ["ses_admitted"], "the user's new turn is left alone")
   await h.plugin.dispose()
 })
 
@@ -199,11 +243,11 @@ await test("a task adopted from the previous plugin version honours a Stop of it
     sessionID: "ses_legacy_child", directory: root, cwd: root, pid: child.pid, started: Date.now(),
   }
   fs.writeFileSync(path.join(dir, "meta.json"), JSON.stringify(legacy))
-  const h = await harness({ parents: { ses_legacy_child: "ses_legacy_root" } })
+  const h = await harness({ parents: { ses_legacy_child: "ses_legacy_root" }, getFailures: 3 })
   fs.mkdirSync(path.join(stateRoot, "ses_legacy_root"), { recursive: true })
   fs.writeFileSync(path.join(stateRoot, "ses_legacy_root", "stopped"), String(Date.now()))
-  await sleep(3500)
-  assert.equal(h.prompts.length, 0, "the root's Stop covers the adopted subagent task")
+  await sleep(7000)
+  assert.equal(h.prompts.length, 0, "the root's Stop covers the adopted subagent task, after lookups failed at first")
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, "meta.json"), "utf8")).root, "ses_legacy_root", "root persisted")
   await h.plugin.dispose()
 })
