@@ -48,12 +48,15 @@ rev_of() {
   [[ -f "${f}" ]] && head -n 1 "${f}" | tr -dc '0-9'
 }
 
-# The host service did not answer, or answered that it cannot take part yet:
-# the caller falls back to today's file and marker.
+# The host service did not answer, answered that it cannot take part yet, or is
+# an older one that has no such route (its 404 or 405 says nothing about a
+# profile or a VM; this service's own always carries a detail): the caller
+# falls back to today's file and marker.
 unreachable() {
   case "${API_STATUS}" in
     000|5[0-9][0-9]) return 0 ;;
     409) [[ "$(jq -r '.code // ""' "$1" 2>/dev/null)" == not-participating ]] ;;
+    404|405) [[ -z "$(jq -r 'if type == "object" then (.detail // "") else "" end' "$1" 2>/dev/null)" ]] ;;
     *) return 1 ;;
   esac
 }

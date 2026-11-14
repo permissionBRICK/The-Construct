@@ -159,6 +159,18 @@ ok "set: unreachable host falls back to the file" sh -c "test ${rc} = 0 && jq -e
 ok "set: the fallback writes no revision" test ! -e "${store}/.state/web.rev"
 
 reset
+answer 404 '{"type":"https://tools.ietf.org/html/rfc9110#section-15.5.5","title":"Not Found","status":404}'
+printf '%s' "${profile}" | run set web >"${tmp}/out" 2>&1
+rc=$?
+ok "set: an older host without the route falls back to the file" sh -c "test ${rc} = 0 && jq -e '.sdks.node == \"20\"' '${store}/web.json' >/dev/null && test ! -e '${store}/.state/web.rev'"
+
+reset
+answer 404 '{"title":"Not Found","status":404,"detail":"No VM named work-vm."}'
+printf '%s' "${profile}" | run set web >"${tmp}/out" 2>&1
+rc=$?
+ok "set: this service's own 404 is a refusal, not a fallback" sh -c "test ${rc} -ne 0 && test ! -f '${store}/web.json' && grep -q 'refused' '${tmp}/out'"
+
+reset
 CONFIG="${local_cfg}" run set web <<<"${profile}" >/dev/null 2>&1
 ok "set: without a host service only the file is written" sh -c "test -f '${store}/web.json' && test ! -f '${stub_dir}/requests'"
 
@@ -186,6 +198,12 @@ printf '%s' "${profile}" >"${store}/web.json"
 printf '000' >"${stub_dir}/code"
 run delete web >/dev/null 2>&1
 ok "delete: unreachable host falls back to the marker" sh -c "test ! -f '${store}/web.json' && test -f '${store}/.deleted/web'"
+
+reset
+printf '%s' "${profile}" >"${store}/web.json"
+answer 404 '{"title":"Not Found","status":404}'
+run delete web >/dev/null 2>&1
+ok "delete: an older host without the route falls back to the marker" sh -c "test ! -f '${store}/web.json' && test -f '${store}/.deleted/web'"
 
 # ── conflicts and resolve ────────────────────────────────────────────────────
 
