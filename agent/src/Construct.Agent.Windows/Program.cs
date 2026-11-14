@@ -85,7 +85,7 @@ internal static class Program
             try
             {
                 if (File.Exists(log) && new FileInfo(log).Length > 1_000_000) File.Delete(log);
-                File.AppendAllText(log, $"{DateTimeOffset.UtcNow:O} {ex.GetType().Name}: {ex.Message}{Environment.NewLine}");
+                File.AppendAllText(log, $"{DateTimeOffset.UtcNow:O} 0x{ex.HResult:X8} {ex}{Environment.NewLine}");
             }
             catch (IOException)
             {

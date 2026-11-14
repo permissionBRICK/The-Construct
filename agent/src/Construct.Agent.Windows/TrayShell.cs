@@ -24,7 +24,7 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
     private readonly DeviceServices _device;
     private readonly Uri _origin;
     private readonly string _token;
-    private readonly string _profile;
+    private readonly WebViewRuntime _runtime;
     private readonly Action<Exception> _log;
     private Rectangle? _trayHitArea;
     private int _iconDpi = 96;
@@ -38,7 +38,7 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
         _device = device;
         _origin = origin;
         _token = token;
-        _profile = profile;
+        _runtime = new WebViewRuntime(profile);
         _log = log;
         _ = _dispatcher.Handle;
         _tray.ContextMenuStrip = _menu;
@@ -92,9 +92,10 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
 
     private void Show(string surface, string? route)
     {
+        Renew(surface);
         if (!_windows.TryGetValue(surface, out var window))
         {
-            window = new AgentWindow(surface, _origin, _token, _profile, Open, _log);
+            window = new AgentWindow(surface, _origin, _token, _runtime, Open, _log);
             if (surface == "pop") window.FocusLost += () => _gesture.FocusLost((Control.MouseButtons & MouseButtons.Left) != 0 && _trayHitArea is { } area && area.Contains(Cursor.Position));
             _windows[surface] = window;
         }
@@ -109,6 +110,33 @@ internal sealed class TrayShell : ApplicationContext, IAgentShell
         _attention = false;
         DrawIcon();
         window.Present(route);
+    }
+
+    /// <summary>
+    /// Before a surface opens: a surface whose WebView2 did not start is replaced, and when Windows has
+    /// installed a newer WebView2 runtime, or a surface is broken, and no working surface shows, every
+    /// surface and the shared environment go, so the next ones start on the runtime that is installed now.
+    /// </summary>
+    private void Renew(string surface)
+    {
+        var broken = _windows.Values.Any(w => w.Broken);
+        if ((_runtime.Stale || broken) && !_windows.Values.Any(w => w.Visible && !w.Broken))
+        {
+            foreach (var window in _windows.Values.ToArray()) Drop(window);
+            _windows.Clear();
+            _runtime.Reset();
+        }
+        else if (_windows.TryGetValue(surface, out var window) && window.Broken)
+        {
+            Drop(window);
+            _windows.Remove(surface);
+        }
+    }
+
+    private static void Drop(AgentWindow window)
+    {
+        window.Shutdown();
+        window.Dispose();
     }
 
     private void Hide(string surface)

@@ -11,13 +11,43 @@ namespace Construct.Agent.Windows;
 /// <c>?surf=</c>. Nothing else may load in it: any other navigation, frame or new window is cancelled,
 /// and an http(s) link goes to the default browser instead.
 /// </summary>
+/// <summary>
+/// The one WebView2 environment every surface of this process shares. A second environment on the same
+/// profile fails once Windows has updated the WebView2 runtime while a surface was open: the open one runs
+/// the old runtime, the new one would start the new runtime on the same profile. One environment keeps
+/// all surfaces on the same runtime; a newer one is taken when no surface shows (<see cref="Stale"/>).
+/// </summary>
+internal sealed class WebViewRuntime(string profile)
+{
+    private Task<CoreWebView2Environment>? _environment;
+
+    /// <summary>A newer runtime is installed; the shell starts over with it when no surface shows.</summary>
+    public bool Stale { get; private set; }
+
+    public Task<CoreWebView2Environment> EnvironmentAsync() => _environment ??= CreateAsync();
+
+    private async Task<CoreWebView2Environment> CreateAsync()
+    {
+        var environment = await CoreWebView2Environment.CreateAsync(userDataFolder: profile);
+        environment.NewBrowserVersionAvailable += (_, _) => Stale = true;
+        return environment;
+    }
+
+    /// <summary>Forgets the environment; the next surface creates a new one. Only when no surface uses it.</summary>
+    public void Reset()
+    {
+        _environment = null;
+        Stale = false;
+    }
+}
+
 internal sealed class AgentWindow : Form
 {
     private readonly WebView2 _web = new() { Dock = DockStyle.Fill };
     private readonly string _surface;
     private readonly Uri _origin;
     private readonly string _token;
-    private readonly string _profile;
+    private readonly WebViewRuntime _runtime;
     private readonly Action<string, string?> _open;
     private readonly Action<Exception> _log;
     private bool _initialized;
@@ -25,12 +55,12 @@ internal sealed class AgentWindow : Form
     private string? _pendingRoute;
 
     /// <param name="open">Opens another surface (<c>win</c> with a route) at the shell's request.</param>
-    public AgentWindow(string surface, Uri origin, string token, string profile, Action<string, string?> open, Action<Exception> log)
+    public AgentWindow(string surface, Uri origin, string token, WebViewRuntime runtime, Action<string, string?> open, Action<Exception> log)
     {
         _surface = surface;
         _origin = origin;
         _token = token;
-        _profile = profile;
+        _runtime = runtime;
         _open = open;
         _log = log;
         Text = "Construct";
@@ -68,6 +98,9 @@ internal sealed class AgentWindow : Form
 
     public event Action? FocusLost;
 
+    /// <summary>WebView2 did not start in this surface; the shell replaces it at the next open.</summary>
+    public bool Broken { get; private set; }
+
     private bool Floating => _surface is "pop" or "alone";
 
     /// <summary>Shows the surface; a route (<c>#/vault</c>) moves the window's page there.</summary>
@@ -97,8 +130,7 @@ internal sealed class AgentWindow : Form
     {
         try
         {
-            var environment = await CoreWebView2Environment.CreateAsync(userDataFolder: _profile);
-            await _web.EnsureCoreWebView2Async(environment);
+            await _web.EnsureCoreWebView2Async(await _runtime.EnvironmentAsync());
             var core = _web.CoreWebView2;
             core.Settings.AreDevToolsEnabled = false;
             core.Settings.AreDefaultContextMenusEnabled = false;
@@ -165,6 +197,7 @@ internal sealed class AgentWindow : Form
         catch (Exception ex)
         {
             _log(ex);
+            Broken = true;
             Controls.Clear();
             Controls.Add(new Label { Dock = DockStyle.Fill, Padding = new Padding(20), Text = "The Construct window could not start. Check that Microsoft Edge WebView2 Runtime is installed." });
             _web.Dispose();
