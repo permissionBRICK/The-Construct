@@ -43,7 +43,7 @@ $params = @{}
 foreach ($p in $ast.ParamBlock.Parameters) { $params[$p.Name.VariablePath.UserPath] = $p.StaticType.Name }
 ok "-Solo is a switch" ($params['Solo'] -eq 'SwitchParameter')
 ok "-TokenFile and -BootstrapKeyPath are strings" ($params['TokenFile'] -eq 'String' -and $params['BootstrapKeyPath'] -eq 'String')
-ok "both paths are made absolute before the elevated relaunch" ($installText -match "@\('ScriptsDir', 'PublishDir', 'DataDir', 'IsoSourcePath', 'TokenFile', 'BootstrapKeyPath'\)")
+ok "both paths are made absolute before the elevated relaunch" ($installText -match "@\('ScriptsDir', 'PublishDir', 'DataDir', 'IsoSourcePath', 'TokenFile', 'BootstrapKeyPath', 'ResultFile'\)")
 $guard = $installText.IndexOf('if ($Solo -and -not $TokenFile)')
 ok "a solo install without -TokenFile stops before the elevation prompt" ($guard -gt 0 -and $guard -lt $installText.IndexOf('# ── Self-elevate to Administrator'))
 ok "solo names the user who started the install as the admin, before elevation" (
@@ -150,6 +150,64 @@ ok "the service is pointed at the solo key" ($installText -match '\$bootstrapKey
 $keyStep = $installText.IndexOf('$bootstrapKey = Install-ConstructBootstrapKey')
 ok "the key is installed after the data directory is hardened" ($keyStep -gt $installText.IndexOf('Set-ConstructPathAcl -Path $entry.Path -Kind $entry.Kind -Name $entry.Name', $installText.IndexOf('# ── 1b.')))
 ok "ssh-keygen gets an empty passphrase that Windows PowerShell 5.1 does not drop" ($installText -match [regex]::Escape('$start.Arguments = ''-q -t ed25519 -N "" -C bootstrap@construct -f "'''))
+
+# ── Unattended (-ResultFile): no prompt, a result the agent reads ────────────
+# The installer's own text runs here: its parameter block, the result writer and its
+# trap, and the Hyper-V step, against a stub Ensure-HyperV. Under -NonInteractive with
+# no console input, so a Read-Host anywhere on the way would fail the run.
+Write-Host ""
+Write-Host "=== Unattended result ===" -ForegroundColor Cyan
+$header = $installText.Substring(0, $installText.IndexOf('# ── Absolute paths, first thing'))
+$hvFrom = $installText.IndexOf('    . (Join-Path $ScriptsDir "lib\AgentVm.Common.ps1")')
+$hvTo   = $installText.IndexOf('    Write-Ok "Hyper-V is available"')
+ok "the Hyper-V step is found in the installer" ($hvFrom -gt 0 -and $hvTo -gt $hvFrom)
+$hyperVStep = $installText.Substring($hvFrom, $hvTo - $hvFrom)
+$temp = Join-Path ([IO.Path]::GetTempPath()) ("solo-unattended-" + [guid]::NewGuid().ToString('n'))
+try {
+    New-Item -ItemType Directory -Path (Join-Path $temp 'lib') -Force | Out-Null
+    # The stub records whether it was told not to prompt and acts as the case says.
+    Set-Content -LiteralPath (Join-Path $temp 'lib/AgentVm.Common.ps1') -Value @'
+function Write-Step($m) { } function Write-Ok($m) { } function Write-Note($m) { }
+function Ensure-HyperV {
+    param([switch]$NoRestartPrompt)
+    Set-Content -LiteralPath (Join-Path $ScriptsDir 'asked.txt') -Value ([string][bool]$NoRestartPrompt)
+    switch ($env:CONSTRUCT_TEST_HYPERV) {
+        'restart' { if ($NoRestartPrompt) { return 'restart-needed' } else { throw 'the interactive path would prompt here' } }
+        'fail'    { throw "Hyper-V could not be enabled on this Windows Home edition.`nSee the guide above." }
+        default   { }
+    }
+}
+'@
+    $script = Join-Path $temp 'installer-part.ps1'
+    Set-Content -LiteralPath $script -Value ($header + "`n" + $hyperVStep + "`n" + '$script:ConstructResultWritten = $true' + "`n" + 'Write-ConstructInstallResult -Result done' + "`n")
+    $exe = (Get-Process -Id $PID).Path
+    function Invoke-Part([string]$Case, [switch]$Unattended) {
+        $result = Join-Path $temp 'result.json'
+        Remove-Item -LiteralPath $result, (Join-Path $temp 'asked.txt') -ErrorAction SilentlyContinue
+        $env:CONSTRUCT_TEST_HYPERV = $Case
+        $arguments = @('-NoProfile', '-NonInteractive', '-File', $script, '-ScriptsDir', $temp, '-PublishDir', $temp)
+        if ($Unattended) { $arguments += @('-ResultFile', $result) }
+        $output = '' | & $exe @arguments 2>&1
+        $code = $LASTEXITCODE
+        if ($env:CONSTRUCT_TEST_VERBOSE) { $output | Out-Host }
+        $read = if (Test-Path -LiteralPath $result) { Get-Content -Raw -LiteralPath $result | ConvertFrom-Json } else { $null }
+        return @{ Exit = $code; Result = $read; Asked = "$(Get-Content -Raw -LiteralPath (Join-Path $temp 'asked.txt') -ErrorAction SilentlyContinue)".Trim() }
+    }
+
+    $r = Invoke-Part restart -Unattended
+    ok "unattended: Ensure-HyperV is told not to prompt" ($r.Asked -eq 'True')
+    ok "unattended: a needed restart is the result, exit 3" ($r.Exit -eq 3 -and $r.Result.result -eq 'restart' -and $r.Result.message -eq 'Windows must restart to turn on Hyper-V.')
+    $r = Invoke-Part fail -Unattended
+    ok "unattended: a failure is the result with its first line as the reason" ($r.Exit -ne 0 -and $r.Result.result -eq 'failed' -and $r.Result.message -eq 'Hyper-V could not be enabled on this Windows Home edition.')
+    $r = Invoke-Part ready -Unattended
+    ok "unattended: an install that runs through says done" ($r.Exit -eq 0 -and $r.Result.result -eq 'done' -and $r.Result.message -eq '')
+    $r = Invoke-Part ready
+    ok "by hand: Ensure-HyperV keeps its restart prompt, no result file" ($r.Asked -eq 'False' -and $r.Exit -eq 0 -and $null -eq $r.Result)
+} finally {
+    Remove-Item Env:\CONSTRUCT_TEST_HYPERV -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Recurse -Force }
+}
+ok "the result is written last, after the install record" ($installText.LastIndexOf('Write-ConstructInstallResult -Result done') -gt $installText.IndexOf('Initialize-ConstructHostInstallRecord -Dir $PublishDir'))
 
 Write-Host ""
 Write-Host "host-installer-solo: $($script:pass) passed, $($script:fail) failed"

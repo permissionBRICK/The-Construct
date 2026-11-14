@@ -75,7 +75,8 @@ first `ui/dist` above it.
 | `device.json` (0600) | The device's settings: release channel, automatic updates, the VMs with the microphone on. |
 | `install.json` (0600) | The installed versions: `current`, `previous` and `pending` (12.2). |
 | `versions/<version>/` | One unpacked package per version; the current and the previous one are kept. |
-| `webview2/`, `shell.log`, `construct.png` | Windows only: the WebView2 profile, the tray app's error log, the toast icon. |
+| `webview2/`, `shell.log`, `construct.png` | Windows only: the WebView2 profile, the tray app's error log, the toast icon. The executable and its windows carry `construct.ico` (the tray's disc). |
+| `engine-install.log`, `engine-install.json` | Windows: the last engine setup's installer output and its outcome (`{result, message}`); no token |
 | `bridge.json` (0600) | The one-time upgrade: `stage` (`new`, `converting`, `converted`, written last), the previous install folder, the engines it chose, the items already copied, the last run's items and notes (with the account they are for and whether they were read), the shared hosts still on the old stack. No secret. |
 | `legacy-upstream.json` (0600) | The old config repository's company upstream links (`manifest/`, `bases/`), kept as data until the new stack has upstream links. |
 
@@ -109,6 +110,8 @@ CONSTRUCT_AGENT_UPDATE_OPENAPI=1 dotnet test agent/Construct.Agent.slnx --filter
 | `POST /api/shutdown` | Stops the agent (repair uses it) |
 | `POST /api/engines/probe {address}` | Connects without any credential and returns `{url, pin, status}` for the user to confirm |
 | `GET /api/engines/local` | The same for the solo engine on `https://127.0.0.1:7462`; 204 when none answers |
+| `GET`, `POST /api/engines/local/setup` | Sets up the engine on this PC (Windows, `501 not-available` elsewhere; below), the first run's "This PC". `{available, state, message, engine}`: `idle`, `running`, `done` with the engine's id, `failed` with the installer's reason, or `restart`. An engine on loopback the agent holds a sign-in for is taken without installing. Progress as `engine-setup` events |
+| `POST /api/device/restart` | Restarts Windows at once (202), only after the setup reported `restart` (`409 no-restart-needed` otherwise). Nothing continues by itself afterwards |
 | `POST /api/engines {address, pin, name?, userToken?, windowsSignIn?}` | Adds the engine with the confirmed pin. `userToken` is the user's sign-in there, needed until this device is enrolled; with `windowsSignIn` the signed-in Windows user signs in instead (Negotiate, Windows only, `501 not-available` elsewhere; `409 no-windows-sign-in` when the engine's challenge, read without a credential over the pinned connection, does not offer it). Either sign-in is dropped once the device holds a device token there. When the device is registered, the engine is also written as an `engine` record, granted `D` and enrolled. |
 | `DELETE /api/engines/{id}` | Removes it (not the engine that holds the store) |
 | `POST /api/engines/{id}/connect {vaultMode?}` | Grants `D`, and `K` when `vaultMode` is `available`; enrols this device |
@@ -152,11 +155,20 @@ of the old release by hand.
 | Route | What it does |
 |---|---|
 | `GET /api/upgrade` | `{legacy, stage, steps, found, storeEngine, localEngine, items, notes, oldWriters, running, error, oldHosts}`: the steps `engine`, `recovery` (done once the code was confirmed), `close`, `convert` with their state, what the old install holds (names and counts, no value), the last run's items; its notes until read, to the account they were written for; the shared hosts that still run the old stack (no `GET /engine`, so this device stays signed in the old way there), as the engine step and the converter found them |
-| `POST /api/upgrade/engine` | Step 1 (202): where the PC has a local VM, the host package from the device's channel, checked against the manifest, installed by `Install-ConstructHost.ps1 -Solo` with one UAC prompt; its token file is taken into the state and deleted. The old shared hosts are added with their pins and stored sign-ins. Chooses the store engine. |
+| `POST /api/upgrade/engine` | Step 1 (202): where the PC has a local VM, the engine setup below; the step's state is `restart` when Windows must restart first. The old shared hosts are added with their pins and stored sign-ins. Chooses the store engine. |
 | `POST /api/device/setup` | Step 2, the existing first-device setup against `storeEngine`: with an old vault on the PC its key becomes the account's `K` |
 | `GET /api/upgrade/writers` | Step 3: `{open}`, the old writers still running (VS Code, the old Companion, a lifecycle script). The Windows agent holds the Companion's single-instance mutex. |
 | `POST /api/upgrade/convert {from?}` | Step 4 (202): the converter, progress as `upgrade` events. Refused while writers are open or before step 2 is confirmed. |
 | `POST /api/upgrade/notes/read` | After `converted`: the user went on from the notes; they are not shown again |
+
+**The engine on this PC** (`Engines/LocalEngineSetup.cs`), one step for the first run and the upgrade: the host
+package of the device's channel, checked against the manifest's SHA-256, and `Install-ConstructHost.ps1 -Solo
+-ResultFile` run with one UAC prompt, no window and `-NonInteractive`. The elevated script is on the command line
+(`-EncodedCommand`, its values as base64 inside), hashes and unpacks the package from one handle that denies
+writes, into `%ProgramData%\Construct\host` made writable by SYSTEM and Administrators only. The installer's output
+goes to `engine-install.log`, its outcome to `engine-install.json`; its token file (`engine-token.json`, this user
+only) is taken into the state and deleted once the engine is added (kept until then, so a retry needs no second
+prompt). A token file that names anything but loopback is refused.
 
 The converter copies, per item, and lists each item it copied in `bridge.json` so a second run leaves it
 alone: the device channel (`constructRef`: `main` is stable, a branch nightly); the old shared hosts as
@@ -175,7 +187,7 @@ Then `stage: converted`, and only then the old backup keys come off the VMs, thr
 
 | Route | What it does |
 |---|---|
-| `GET /api/device/features` | `{platform, notifications, microphone, share, startWithOs, shell}`: what this device can do |
+| `GET /api/device/features` | `{platform, notifications, microphone, share, startWithOs, shell, engineHost}`: what this device can do; `engineHost`: it can run an engine (Windows) |
 | `GET`, `PUT /api/device/settings {channel?, autoUpdate?, startWithOs?}` | The release channel (`stable`, `nightly`, an https manifest URL), automatic updates (off by default), start with the OS (`null` where not available) |
 | `GET /api/device/ssh-key` | The device's SSH public key (`~/.ssh/construct_ed25519`, created on first use). The agent registers it at every engine it enrols at (and again on connect); the engine authorizes it on the user's VMs. With it the agent registers the account's `B.pub`, which the engine enrols on the user's VMs |
 | `GET /api/connections`, `POST /api/connections/refresh` | The user's own primary VMs on every engine: state, the address this device dials (the engine's `direct` address for a VM on this PC's engine, where it names one, else its `forwarded` endpoint), local forwards, the microphone |
@@ -244,6 +256,7 @@ API is rewritten to the proxy path; a fixed `Content-Length` is kept; `Set-Cooki
 |---|---|
 | `agent` | The agent's state changed (engines, device); reload `GET /api/state` |
 | `pairing` | A pairing on this device changed state |
+| `engine-setup` | The engine setup on this PC changed state; reload `GET /api/engines/local/setup` |
 | `vm.created`, `vm.changed`, `vm.power`, `vm.deleted`, `job.started`, `job.progress`, `job.ended`, `backup.added`, `backup.removed`, `update.offered`, `update.finished`, `repair.started`, `repair.output`, `repair.ended`, `vault.approval.added`, `vault.approval.ended`, `vault.entry-request.added`, `vault.entry-request.ended` | An engine's change, from its own stream (`GET /api/v1/events`): `data` is `{id, vm?}`, never the state; re-read the thing through the proxy (a vault event: `GET /api/vault/approvals` or `/api/vault/entry-requests`). Jobs started elsewhere arrive too. |
 | `engine.reset` | The agent (re)started following that engine and may have missed its changes; reload what you show from it |
 | `job.lost` | After a reset, a job the agent saw start can no longer be read |

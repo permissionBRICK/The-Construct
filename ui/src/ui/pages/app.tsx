@@ -172,6 +172,19 @@ export function CreateVm() {
   );
 }
 
+/** Windows must restart to turn on Hyper-V before the engine step can go on: one line, Restart now (the agent
+    restarts Windows) or later. Nothing goes on by itself afterwards; the step is there again. */
+function RestartLine({ text }: { text: string }) {
+  const { be } = useApp();
+  return (
+    <div class="blk row restart" role="status">
+      <b class="grow">{text}</b>
+      <Btn sm onClick={() => be.restartForEngine(false)}>Later</Btn>
+      <Btn sm kind="pri" icon="power" onClick={() => be.restartForEngine(true)}>Restart now</Btn>
+    </div>
+  );
+}
+
 const STEPS: [UpgradeStep, string][] = [['engine', 'New Construct'], ['recovery', 'Recovery code'], ['close', 'Close programs'], ['convert', 'Moving over']];
 
 /** The one-time upgrade dialog (first screen of the window): the agent's steps in their order, each with its state;
@@ -210,7 +223,9 @@ export function Upgrade() {
         </div>
       )}
       {problem}
-      <div class="wft">{u.adminPrompt && <span class="d"><Icon n="shield" />One admin prompt</span>}{next('Continue')}</div>
+      {u.restart
+        ? <RestartLine text={u.restart} />
+        : <div class="wft">{u.adminPrompt && <span class="d"><Icon n="shield" />One admin prompt</span>}{next('Continue')}</div>}
     </div>
   );
   if (u.step === 'recovery' && u.code) {
@@ -276,6 +291,7 @@ export function FirstRun() {
   const { s, be, toast } = useApp();
   const f = s.firstRun;
   const [how, setHow] = useState<FirstRunRequest['how']>('setup');
+  const [where, setWhere] = useState<'this-pc' | 'remote'>('this-pc');
   const [address, setAddress] = useState(f?.localAddress ?? '');
   const [deviceName, setDeviceName] = useState('');
   const [token, setToken] = useState('');
@@ -321,6 +337,29 @@ export function FirstRun() {
       <div class="wft"><span class="d"><Icon n="repro" />Waiting for the other device</span><Btn onClick={() => be.firstRunNext()}>Cancel</Btn></div>
     </div>
   );
+  const here = !!f.thisPc && where === 'this-pc';
+  const whereSeg = f.thisPc && <Seg label="Where" opts={['this-pc', 'remote'] as const} labels={{ 'this-pc': 'This PC', remote: 'Remote host' }} value={where} onChange={setWhere} />;
+  // This PC: a new account on its engine, set up here first with one admin prompt; the name is all there is to type.
+  if (here) {
+    const goHere = () => { if (deviceName.trim() && !f.busy) be.firstRunStart({ how: 'setup', where: 'this-pc', address: '', deviceName }); };
+    return (
+      <div class="solo">{top}<h3>This device</h3>
+        <div class="blk form">
+          {whereSeg}
+          <label class="lab">Device name<Field value={deviceName} onInput={setDeviceName} label="Device name" placeholder="Device name" wide onEnter={goHere} /></label>
+          {f.problem && <span class="badc" role="alert">{f.problem}</span>}
+        </div>
+        {f.restart
+          ? <RestartLine text={f.restart} />
+          : (
+            <div class="wft">
+              {f.thisPc === 'setup' ? <span class="d"><Icon n="shield" />One admin prompt</span> : <span />}
+              <Btn kind="pri" icon={f.problem ? 'retry' : 'right'} disabled={!deviceName.trim() || f.busy} onClick={goHere}>{f.busy ? 'Working' : f.problem ? 'Retry' : 'Continue'}</Btn>
+            </div>
+          )}
+      </div>
+    );
+  }
   const valid = address.trim() && deviceName.trim() && (how !== 'setup' || signIn === 'windows' || token.trim()) && (how !== 'recover' || (account.trim() && code.trim()));
   const start = (confirmed?: string) => be.firstRunStart({ how, address, deviceName, signIn, token: signIn === 'token' ? token : '', account, code, pin: confirmed });
   // The engine on this machine is trusted as found; another host only with the fingerprint the user confirmed.
@@ -332,6 +371,7 @@ export function FirstRun() {
   return (
     <div class="solo">{top}<h3>This device</h3>
       <div class="blk form">
+        {whereSeg}
         <Seg label="How" opts={['setup', 'pair', 'recover'] as const} labels={{ setup: 'New account', pair: 'Pair with a device', recover: 'Recovery code' }} value={how} onChange={setHow} />
         <label class="lab">Host address<Field value={address} onInput={v => { setAddress(v); pin.reset(); }} label="Host address" placeholder="https://host:8443" mono wide /></label>
         <label class="lab">Device name<Field value={deviceName} onInput={setDeviceName} label="Device name" placeholder="Device name" wide /></label>

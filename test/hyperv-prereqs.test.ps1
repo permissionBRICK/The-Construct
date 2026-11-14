@@ -4,10 +4,11 @@ $ErrorActionPreference = 'Stop'
 
 if (-not $Case) {
     $exe = (Get-Process -Id $PID).Path
-    foreach ($scenario in @('ready', 'tools-missing', 'all-missing', 'enable-failure', 'module-failure', 'command-missing', 'pending-reboot', 'new-reboot')) {
+    foreach ($scenario in @('ready', 'tools-missing', 'all-missing', 'enable-failure', 'module-failure', 'command-missing', 'pending-reboot', 'new-reboot', 'unattended-reboot', 'unattended-pending')) {
         # Ensure-HyperV exits after a reboot prompt. Isolate each scenario so we
         # can prove that it never reaches module loading or VM creation there.
-        $output = @(& $exe -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath -Case $scenario 2>&1)
+        # -NonInteractive: a Read-Host anywhere fails the case instead of waiting.
+        $output = @('' | & $exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $PSCommandPath -Case $scenario 2>&1)
         if ($LASTEXITCODE -ne 0 -or $output -notcontains "PASS $scenario") {
             throw "$scenario failed: $($output -join [Environment]::NewLine)"
         }
@@ -39,7 +40,7 @@ function Enable-WindowsOptionalFeature { [CmdletBinding()] param([switch]$Online
     Assert ($Online -and $All -and $NoRestart) 'Install dependencies without automatically restarting'
     $script:enabled += $FeatureName
     if ($Case -eq 'enable-failure') { throw 'Fixture feature install failed' }
-    return [pscustomobject]@{ RestartNeeded = ($Case -eq 'new-reboot') }
+    return [pscustomobject]@{ RestartNeeded = ($Case -in @('new-reboot', 'unattended-reboot')) }
 }
 function Import-Module { [CmdletBinding()] param($Name, [switch]$Global)
     Assert ($Name -eq 'Hyper-V' -and $Global) 'Load Hyper-V for subsequent VM commands'
@@ -57,7 +58,9 @@ function Get-ItemProperty { [CmdletBinding()] param($Path, $Name)
 }
 function Test-ConstructTui { return $true }
 function Restart-Computer { param([switch]$Force) throw 'Unexpected restart' }
+function Read-Host { param($Prompt) throw 'Unexpected prompt' }
 function Show-Menu { param($Title, $Options, $Default)
+    Assert ($Case -notlike 'unattended-*') 'An unattended run must not ask'
     Assert ($Case -in @('pending-reboot', 'new-reboot')) 'Unexpected reboot prompt'
     Assert ($script:imports -eq 0 -and $script:commands -eq 0) 'Do not use Hyper-V before restarting'
     if ($Case -eq 'pending-reboot') { Assert ($script:enabled.Count -eq 0) 'Do not reinstall pending features' }
@@ -72,8 +75,18 @@ switch ($Case) {
     'enable-failure' { $script:states[$tools] = 'Disabled' }
     'pending-reboot' { $script:states[$tools] = 'EnablePending' }
     'new-reboot' { $script:states[$tools] = 'Disabled' }
+    'unattended-reboot' { $script:states[$tools] = 'Disabled' }
+    'unattended-pending' { $script:states[$tools] = 'EnablePending' }
 }
 $failure = $null
+if ($Case -like 'unattended-*') {
+    # The agent's run: no menu, no prompt, no restart; the caller is told and nothing Hyper-V is used yet.
+    $answer = @(Ensure-HyperV -NoRestartPrompt)
+    Assert ($answer -contains 'restart-needed') 'Report the needed restart'
+    Assert ($script:imports -eq 0 -and $script:commands -eq 0) 'Do not use Hyper-V before restarting'
+    Write-Host "PASS $Case"
+    exit 0
+}
 try { Ensure-HyperV } catch { $failure = $_.Exception.Message }
 if ($Case -in @('pending-reboot', 'new-reboot')) { throw 'Continued despite a required reboot' }
 if ($Case -eq 'enable-failure') {

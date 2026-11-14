@@ -44,6 +44,27 @@ public sealed class UpgradeTests
     }
 
     [Fact]
+    public async Task The_engine_step_says_when_Windows_must_restart_and_goes_on_after_it()
+    {
+        await using var rig = await UpgradeRig.CreateAsync(SingleVm);
+        // The shared engine setup, with the installer reporting that Hyper-V needs a restart (EngineSetupTests covers its result file).
+        rig.Agent.Host.Upgrade.EngineInstaller = _ => throw new AgentFailure(409, "restart-needed", "Windows must restart to turn on Hyper-V.");
+        await rig.Agent.PostAsync("api/upgrade/engine", null, HttpStatusCode.Accepted);
+        await rig.Agent.Host.Upgrade.Work;
+        var view = await rig.Agent.GetAsync("api/upgrade");
+        Assert.True(view["error"] is null, view.ToJsonString());
+        Assert.Equal("restart", view["steps"]![0]!["state"]!.GetValue<string>());
+        Assert.Equal("Windows must restart to turn on Hyper-V.", view["steps"]![0]!["message"]!.GetValue<string>());
+        Assert.Null(rig.Agent.Host.Upgrade.Bridge.Read().LocalEngine);
+
+        await rig.Agent.PostAsync("api/device/restart", null, HttpStatusCode.Accepted);
+        Assert.Equal(1, rig.Platform.Restarts);
+
+        // After the restart the step is there again and runs through.
+        await rig.EngineStepAsync();
+    }
+
+    [Fact]
     public async Task A_single_local_VM_install_arrives_whole_and_a_second_run_changes_nothing()
     {
         await using var rig = await UpgradeRig.CreateAsync(SingleVm);

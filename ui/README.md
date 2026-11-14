@@ -58,6 +58,16 @@ A job the page saw end stays ended whatever an older read says. What has no even
 usage, guest reports (coding agents), host administration, profiles, secrets, and the vault requests of an
 engine that was not reachable.
 
+## First run
+
+A device without an identity shows the first run. Where it can host an engine (`engineHost`, Windows) and none runs
+on it, it asks where the account starts, as the create flow asks where a VM goes: This PC sets the engine up through
+the agent (`POST /api/engines/local/setup`, one admin prompt), waits for its `engine-setup` event and runs the
+first-device setup against the engine the agent names; Remote host shows the address, sign-in and fingerprint. Where
+an engine already runs on this PC, or the device cannot host one, only the remote fields show. When Windows must
+restart to turn on Hyper-V, the first run and the upgrade's engine step say so with Restart now
+(`POST /api/device/restart`) and Later; the step is there again afterwards.
+
 ## Settings, jobs, updates
 
 A VM's Services and Identity settings and its profiles are its desired state on its engine

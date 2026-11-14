@@ -40,8 +40,10 @@ public static class ConvertCommand
         }
 
         using var agent = new DeviceAgent(options, protection);
-        using var upgrade = new UpgradeService(agent, options, options.Upgrade ?? new DefaultUpgradePlatform(Path.Combine(options.DataDirectory, "legacy_known_hosts")),
-            new DeviceSettings(Path.Combine(options.DataDirectory, "device.json")), new AgentEngines(agent));
+        var platform = options.Upgrade ?? new DefaultUpgradePlatform(Path.Combine(options.DataDirectory, "legacy_known_hosts"));
+        var settings = new DeviceSettings(Path.Combine(options.DataDirectory, "device.json"));
+        using var setup = new Engines.LocalEngineSetup(agent, options, platform, settings);
+        var upgrade = new UpgradeService(agent, options, platform, settings, new AgentEngines(agent), setup);
         if (from is { Length: > 0 }) upgrade.Bridge.Update(b => b with { From = Path.GetFullPath(from) });
         try
         {

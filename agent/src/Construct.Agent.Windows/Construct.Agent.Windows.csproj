@@ -19,7 +19,13 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
+    <!-- The tray's green disc as a file (16 to 256 px): the executable's icon, and the windows' and taskbar button's. -->
+    <ApplicationIcon>construct.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="construct.ico" LogicalName="construct.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Construct.Agent.Core\Construct.Agent.Core.csproj" />

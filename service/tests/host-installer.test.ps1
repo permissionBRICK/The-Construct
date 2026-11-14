@@ -526,6 +526,10 @@ $relaunchScript = New-ConstructRelaunchScript `
     -PayloadJson (ConvertTo-ConstructPayload -Values @{ ScriptsDir = "C:\Construct" })
 ok "the elevation script splats the serialized parameters" ($relaunchScript -match '@bound')
 ok "the elevation script keeps the window open on failure" ($relaunchScript -match 'Read-Host')
+$unattendedRelaunch = New-ConstructRelaunchScript `
+    -ScriptPath "C:\Construct\service\host\Install-ConstructHost.ps1" `
+    -PayloadJson (ConvertTo-ConstructPayload -Values @{ ScriptsDir = "C:\Construct" }) -NoPause
+ok "an unattended elevation script (-ResultFile) does not wait for Enter" (-not ($unattendedRelaunch -match 'Read-Host'))
 
 # THE elevation-boundary rule: the parameters must be baked into the encoded command,
 # which is fixed once Start-Process has been called. A file would have to live in the

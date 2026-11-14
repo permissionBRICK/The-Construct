@@ -284,6 +284,8 @@ export interface Upgrade {
   oldHosts: string[];
   /** Step `done`: what the conversion could not finish, shown once; the step is there only when there are any. */
   notes: string[];
+  /** Step `engine`: Windows must restart to turn on Hyper-V (the line to show), until the user chose later. */
+  restart: string | null;
 }
 
 /** Parts of the product the backend cannot serve yet. The screens show such a part as not available. */
@@ -298,6 +300,11 @@ export interface FirstRun {
   step: 'start' | 'code' | 'pairing';
   /** The engine the agent found on this machine, offered as the address. */
   localAddress: string | null;
+  /** Where the account can start on this PC: `setup` installs the engine here (one admin prompt), `known` uses the
+      engine this PC's agent already set up; null where the device cannot host one or another engine runs here. */
+  thisPc: 'setup' | 'known' | null;
+  /** Setting up this PC's engine needs Windows to restart first (the line to show), until the user chose later. */
+  restart: string | null;
   /** While a call runs. */
   busy: boolean;
   problem: string | null;
@@ -311,6 +318,8 @@ export interface FirstRun {
 
 export interface FirstRunRequest {
   how: 'setup' | 'pair' | 'recover';
+  /** `this-pc`: a new account on the engine of this PC (set up first where needed); the address and sign-in are not used. */
+  where?: 'this-pc' | 'remote';
   address: string;
   deviceName: string;
   /** setup: the user's sign-in at the engine: a token, or Windows sign-in where this device offers it. */
@@ -499,4 +508,7 @@ export interface Backend {
   firstRunStart(req: FirstRunRequest): void;
   /** First run: the recovery code is stored, or the pairing is cancelled; go on. */
   firstRunNext(): void;
+  /** Windows must restart to turn on Hyper-V: restart it now (the agent does), or later (the line goes away; the step is
+      there again to continue). */
+  restartForEngine(now: boolean): void;
 }

@@ -118,10 +118,12 @@ function Ensure-HyperV {
           3. If a feature can't be enabled, point Windows 10/11 Home users at a
              community workaround (Hyper-V isn't officially supported there);
              other editions get generic guidance. Either way it throws.
-          4. If enabling a feature needs a reboot, prompt and reboot.
+          4. If enabling a feature needs a reboot, prompt and reboot. With
+             -NoRestartPrompt (an unattended run) nothing is asked and nothing
+             restarts: it returns 'restart-needed' and the caller says so.
     #>
     [CmdletBinding()]
-    param()
+    param([switch]$NoRestartPrompt)
 
     Show-TuiScreen -Title "Checking Hyper-V installation" -Body @(
         "Validating hardware virtualization and the required Windows features..."
@@ -218,6 +220,7 @@ function Ensure-HyperV {
     if ($rebootNeeded) {
         Write-Host ""
         Write-Warning "A reboot is required to finish enabling the virtualization features."
+        if ($NoRestartPrompt) { return 'restart-needed' }
         Write-Host "    After the reboot, re-run this script to continue." -ForegroundColor Yellow
         if (Test-ConstructTui) {
             $r = Show-Menu -Title "Reboot now?" -Options @(

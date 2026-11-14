@@ -1401,3 +1401,147 @@ describe('ApiBackend one-time upgrade', () => {
     expect(posts(calls).map(c => c.path)).toEqual(['/api/upgrade/engine']);
   });
 });
+
+describe('ApiBackend engine on this PC', () => {
+  const E9 = 'cccccccccccc';
+  const host = (w: ReturnType<typeof world>, engineHost = true) =>
+    w.on('GET', '/api/device/features', { json: { platform: 'windows', notifications: true, microphone: true, share: true, startWithOs: true, shell: true, engineHost } });
+  const setupView = (state: string, o: Record<string, unknown> = {}) => ({ json: { available: true, state, message: null, engine: null, ...o } });
+  const pc = { id: E9, name: 'This PC', url: 'https://127.0.0.1:7462', pin: 'P9', engineId: null, enrolled: false, signedIn: true, store: false };
+
+  it('offers This PC on a device that can host an engine and has none; it sets the engine up, then the device against exactly it', async () => {
+    const w = world({ registered: false, engines: [] });
+    host(w);
+    w.on('GET', '/api/engines/local', { status: 204 });
+    w.on('GET', '/api/engines/local/setup', setupView('idle'));
+    w.on('POST', '/api/engines/local/setup', () => {
+      w.on('GET', '/api/engines/local/setup', setupView('running'));
+      return { status: 202, ...setupView('running') };
+    });
+    w.on('POST', '/api/device/setup', { json: { recoveryCode: 'ABCD-EFGH', issue: 1 } });
+    await w.be.start();
+    expect(w.be.snapshot().firstRun).toMatchObject({ step: 'start', thisPc: 'setup', restart: null, localAddress: null });
+    w.be.firstRunStart({ how: 'setup', where: 'this-pc', address: 'ignored', deviceName: ' laptop ', token: 'ignored' });
+    await w.settle();
+    // While it runs nothing else is sent; its event ends the wait.
+    expect(posts(w.calls).map(c => c.path)).toEqual(['/api/engines/local/setup']);
+    expect(w.be.snapshot().firstRun?.busy).toBe(true);
+    w.on('GET', '/api/state', { json: { device: { id: 'd1', name: '', account: null, registered: false, storeEngine: null, protection: 'file', protectionWeak: true }, engines: [pc], pairing: null } });
+    w.on('GET', '/api/engines/local/setup', setupView('done', { engine: E9 }));
+    w.be.onEvent('engine-setup', { seq: 1, type: 'engine-setup', engine: null, data: null });
+    await w.settle();
+    await w.settle();
+    expect(posts(w.calls).map(c => [c.path, c.body])).toEqual([['/api/engines/local/setup', undefined], ['/api/device/setup', { engine: E9, deviceName: 'laptop' }]]);
+    expect(w.be.snapshot().firstRun).toMatchObject({ step: 'code', code: ['ABCD', 'EFGH'], busy: false });
+    expect(posts(w.calls).some(c => c.path === '/api/engines' || c.path === '/api/engines/probe')).toBe(false);
+  });
+
+  it('when Windows must restart: says so, restarts only on the click, and later leaves the step to continue', async () => {
+    const w = world({ registered: false, engines: [] });
+    host(w);
+    w.on('GET', '/api/engines/local', { status: 204 });
+    w.on('GET', '/api/engines/local/setup', setupView('idle'));
+    w.on('POST', '/api/engines/local/setup', () => {
+      w.on('GET', '/api/engines/local/setup', setupView('restart', { message: 'Windows must restart to turn on Hyper-V.' }));
+      return { status: 202, ...setupView('running') };
+    });
+    w.on('POST', '/api/device/restart', { status: 202 });
+    await w.be.start();
+    w.be.firstRunStart({ how: 'setup', where: 'this-pc', address: '', deviceName: 'laptop' });
+    await w.settle();
+    expect(w.be.snapshot().firstRun).toMatchObject({ step: 'start', busy: false, problem: null, restart: 'Windows must restart to turn on Hyper-V.' });
+    expect(posts(w.calls).map(c => c.path)).toEqual(['/api/engines/local/setup']);
+    w.be.restartForEngine(false);
+    expect(w.be.snapshot().firstRun?.restart).toBeNull();
+    expect(posts(w.calls).map(c => c.path)).toEqual(['/api/engines/local/setup']);
+    // Running it again (after the restart, or not) asks again; Restart now is the agent's restart.
+    w.be.firstRunStart({ how: 'setup', where: 'this-pc', address: '', deviceName: 'laptop' });
+    await w.settle();
+    expect(w.be.snapshot().firstRun?.restart).toBe('Windows must restart to turn on Hyper-V.');
+    w.be.restartForEngine(true);
+    await w.settle();
+    expect(posts(w.calls).map(c => c.path)).toEqual(['/api/engines/local/setup', '/api/engines/local/setup', '/api/device/restart']);
+  });
+
+  it('shows the installer\'s reason in place with Retry when the setup failed', async () => {
+    const w = world({ registered: false, engines: [] });
+    host(w);
+    w.on('GET', '/api/engines/local', { status: 204 });
+    w.on('GET', '/api/engines/local/setup', setupView('failed', { message: 'Hyper-V could not be enabled on this Windows Home edition.' }));
+    w.on('POST', '/api/engines/local/setup', { status: 202, ...setupView('running') });
+    await w.be.start();
+    w.be.firstRunStart({ how: 'setup', where: 'this-pc', address: '', deviceName: 'laptop' });
+    await w.settle();
+    expect(w.be.snapshot().firstRun).toMatchObject({ step: 'start', busy: false, restart: null, problem: 'Hyper-V could not be enabled on this Windows Home edition.' });
+    expect(posts(w.calls).some(c => c.path === '/api/device/setup')).toBe(false);
+  });
+
+  it('uses the engine this agent set up already, without a second install', async () => {
+    const w = world({ registered: false, engines: [] });
+    host(w);
+    w.on('GET', '/api/engines/local', { json: { url: 'https://127.0.0.1:7462', pin: 'P9', status: 'ok', known: E9 } });
+    w.on('GET', '/api/state', { json: { device: { id: 'd1', name: '', account: null, registered: false, storeEngine: null, protection: 'file', protectionWeak: true }, engines: [pc], pairing: null } });
+    w.on('POST', '/api/device/setup', { json: { recoveryCode: 'ABCD-EFGH', issue: 1 } });
+    await w.be.start();
+    expect(w.be.snapshot().firstRun).toMatchObject({ thisPc: 'known', localAddress: 'https://127.0.0.1:7462' });
+    w.be.firstRunStart({ how: 'setup', where: 'this-pc', address: '', deviceName: 'laptop' });
+    await w.settle();
+    expect(posts(w.calls).map(c => [c.path, c.body])).toEqual([['/api/device/setup', { engine: E9, deviceName: 'laptop' }]]);
+  });
+
+  it('keeps today\'s fields where another engine runs on this PC, or where the device cannot host one', async () => {
+    const a = world({ registered: false, engines: [] });
+    host(a);
+    a.on('GET', '/api/engines/local', { json: { url: 'https://127.0.0.1:7462', pin: 'P1', status: 'ok', known: null } });
+    await a.be.start();
+    expect(a.be.snapshot().firstRun).toMatchObject({ thisPc: null, localAddress: 'https://127.0.0.1:7462' });
+    // Known to the agent but without a sign-in there (a cancelled pairing): today's fields too.
+    const k = world({ registered: false, engines: [] });
+    host(k);
+    k.on('GET', '/api/engines/local', { json: { url: 'https://127.0.0.1:7462', pin: 'P9', status: 'ok', known: E9 } });
+    k.on('GET', '/api/state', { json: { device: { id: 'd1', name: '', account: null, registered: false, storeEngine: null, protection: 'file', protectionWeak: true }, engines: [{ ...pc, signedIn: false }], pairing: null } });
+    await k.be.start();
+    expect(k.be.snapshot().firstRun).toMatchObject({ thisPc: null });
+    const b = world({ registered: false, engines: [] });
+    host(b, false);
+    b.on('GET', '/api/engines/local', { status: 204 });
+    await b.be.start();
+    expect(b.be.snapshot().firstRun).toMatchObject({ thisPc: null });
+    const c = world({ registered: false, engines: [] });
+    c.on('GET', '/api/engines/local', { status: 204 });
+    await c.be.start();
+    expect(c.be.snapshot().firstRun?.thisPc).toBeNull();
+    // A this-pc request from such a device sends nothing.
+    c.be.firstRunStart({ how: 'setup', where: 'this-pc', address: '', deviceName: 'laptop' });
+    await c.settle();
+    expect(posts(c.calls)).toEqual([]);
+    expect(c.be.snapshot().firstRun?.problem).toBe('This device cannot run an engine');
+  });
+
+  it('shows the upgrade\'s restart in its engine step, with Restart now and later', async () => {
+    const w = world();
+    const steps = (engine: string, message: string | null = null) => ({ json: {
+      legacy: true, stage: 'new', steps: [{ id: 'engine', state: engine, message }, ...(['recovery', 'close', 'convert'] as const).map(id => ({ id, state: 'todo', message: null }))],
+      found: { installFolder: 'C:\\old', otherInstallFolders: [], localVms: ['atlas'], remoteVms: [], hosts: [], profiles: [], unmergedChanges: 0, vault: false, backupKeys: 0, upstream: false, channel: 'stable' },
+      storeEngine: null, localEngine: null, items: [], notes: [], oldWriters: [], running: false, error: null, oldHosts: [] } });
+    w.on('GET', '/api/upgrade', steps('todo'));
+    w.on('POST', '/api/upgrade/engine', () => {
+      w.on('GET', '/api/upgrade', steps('restart', 'Windows must restart to turn on Hyper-V.'));
+      return { status: 202, json: {} };
+    });
+    w.on('POST', '/api/device/restart', { status: 202 });
+    await w.be.start();
+    expect(w.be.snapshot().upgrade).toMatchObject({ step: 'engine', restart: null });
+    w.be.upgradeNext();
+    await w.settle();
+    expect(w.be.snapshot().upgrade).toMatchObject({ step: 'engine', error: null, restart: 'Windows must restart to turn on Hyper-V.' });
+    w.be.restartForEngine(false);
+    expect(w.be.snapshot().upgrade?.restart).toBeNull();
+    w.be.upgradeNext();
+    await w.settle();
+    expect(w.be.snapshot().upgrade?.restart).toBe('Windows must restart to turn on Hyper-V.');
+    w.be.restartForEngine(true);
+    await w.settle();
+    expect(posts(w.calls).map(c => c.path)).toEqual(['/api/upgrade/engine', '/api/upgrade/engine', '/api/device/restart']);
+  });
+});

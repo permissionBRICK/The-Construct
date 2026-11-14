@@ -136,6 +136,13 @@
     pick up. JSON: url, user, token, certificateSha256. Written when the admin is
     created, on -RotateAdminToken, or when the file is missing.
 
+.PARAMETER ResultFile
+    Unattended run for the device agent: nothing is asked and nothing waits for a key,
+    and the outcome goes to this file as JSON {result, message}: "done", "failed" with
+    the reason in one line, or "restart" when Windows must restart to turn on Hyper-V
+    (exit code 3; nothing restarts by itself, run the installer again afterwards).
+    Without it the installer asks as before, the Hyper-V restart prompt included.
+
 .PARAMETER BootstrapKeyPath
     With -Solo: the old client's bootstrap private key (keys\bootstrap_ed25519, with
     its .pub beside it), so VMs it installed stay reachable by the engine. Without it a
@@ -218,10 +225,33 @@ param(
 
     [string]$TokenFile = "",
 
-    [string]$BootstrapKeyPath = ""
+    [string]$BootstrapKeyPath = "",
+
+    [string]$ResultFile = ""
 )
 
 $ErrorActionPreference = "Stop"
+
+# ── The result for the device agent (-ResultFile) ────────────────────────────
+
+function Write-ConstructInstallResult {
+    <# -ResultFile's JSON: done, failed (the reason, one line) or restart. Nothing secret goes in. #>
+    param([Parameter(Mandatory = $true)][ValidateSet('done', 'failed', 'restart')][string]$Result, [string]$Message = "")
+    if (-not $ResultFile) { return }
+    $line = (($Message -split "`r?`n") | Where-Object { $_.Trim() } | Select-Object -First 1)
+    if (-not $line) { $line = "" }
+    $json = [ordered]@{ result = $Result; message = $line.Trim() } | ConvertTo-Json -Compress
+    [System.IO.File]::WriteAllText($ResultFile, $json, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+# Any error that ends the install ends it as "failed" with its reason; the error still ends the script.
+trap {
+    if ($ResultFile -and -not $script:ConstructResultWritten) {
+        $script:ConstructResultWritten = $true
+        Write-ConstructInstallResult -Result failed -Message $_.Exception.Message
+    }
+    break
+}
 
 # ── Absolute paths, first thing ──────────────────────────────────────────────
 # Relative -ScriptsDir / -PublishDir / -DataDir (".", ".\service\publish") are only
@@ -230,7 +260,7 @@ $ErrorActionPreference = "Stop"
 # not $PWD. Field failure: ".\service\publish" became C:\Windows\System32\service\publish,
 # whose ancestor ACL then blew up the trust check. So every path parameter is made
 # absolute here and only absolute values travel to the elevated copy.
-foreach ($pathParam in @('ScriptsDir', 'PublishDir', 'DataDir', 'IsoSourcePath', 'TokenFile', 'BootstrapKeyPath')) {
+foreach ($pathParam in @('ScriptsDir', 'PublishDir', 'DataDir', 'IsoSourcePath', 'TokenFile', 'BootstrapKeyPath', 'ResultFile')) {
     $value = Get-Variable -Name $pathParam -ValueOnly
     if ([string]::IsNullOrWhiteSpace($value)) { continue }
     $absolute = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($value)
@@ -299,10 +329,11 @@ function Test-ConstructPromptAllowed {
 }
 
 function Test-ConstructInteractive {
-    <# The facts about THIS session, handed to the pure decision above. #>
+    <# The facts about THIS session, handed to the pure decision above. -ResultFile is an unattended run. #>
     [CmdletBinding()]
     param()
 
+    if ($ResultFile) { return $false }
     return (Test-ConstructPromptAllowed `
         -InputRedirected ([Console]::IsInputRedirected) `
         -NonInteractiveHost (Test-ConstructNonInteractiveArgument -Arguments ([Environment]::GetCommandLineArgs())) `
@@ -360,13 +391,16 @@ function New-ConstructRelaunchScript {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$ScriptPath,
-        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$PayloadJson
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$PayloadJson,
+        # An unattended run (-ResultFile): a failure does not wait for Enter.
+        [switch]$NoPause
     )
 
     # Single-quoted PowerShell literals expand nothing; doubling the quote is the
     # complete escape, and this path is ours rather than a caller's.
     $script  = $ScriptPath.Replace("'", "''")
     $payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($PayloadJson))
+    $pause   = if ($NoPause) { '' } else { 'Read-Host "Press Enter to close"' }
 
     return @"
 `$ErrorActionPreference = 'Stop'
@@ -380,7 +414,7 @@ try {
     Write-Host ""
     Write-Host `$_.Exception.Message -ForegroundColor Red
     Write-Host ""
-    Read-Host "Press Enter to close"
+    $pause
     exit 1
 }
 "@
@@ -414,7 +448,7 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
     }
 
     $relaunch = New-ConstructRelaunchScript -ScriptPath $PSCommandPath `
-                    -PayloadJson (ConvertTo-ConstructPayload -Values $forward)
+                    -PayloadJson (ConvertTo-ConstructPayload -Values $forward) -NoPause:([bool]$ResultFile)
     $encoded  = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($relaunch))
 
     $elevated = Start-Process powershell.exe -Verb RunAs -PassThru -Wait -ArgumentList @(
@@ -1613,7 +1647,13 @@ if ($SkipPrereqs) {
     # reboot handling as a local install.
     . (Join-Path $ScriptsDir "lib\AgentVm.Common.ps1")
     if ($PSCmdlet.ShouldProcess($env:COMPUTERNAME, "Ensure the Hyper-V features are enabled")) {
-        Ensure-HyperV
+        # Unattended (-ResultFile): no restart prompt; the caller learns that Windows must restart.
+        if (@(Ensure-HyperV -NoRestartPrompt:([bool]$ResultFile)) -contains 'restart-needed') {
+            $script:ConstructResultWritten = $true
+            Write-ConstructInstallResult -Result restart -Message "Windows must restart to turn on Hyper-V."
+            Write-Note "Windows must restart to turn on Hyper-V; run the installer again afterwards."
+            exit 3
+        }
     }
     Write-Ok "Hyper-V is available"
 
@@ -1966,3 +2006,6 @@ Write-Host ""
 if ($PSCmdlet.ShouldProcess((Join-Path $PublishDir 'install.json'), 'Record installed package variant')) {
     Initialize-ConstructHostInstallRecord -Dir $PublishDir -Source $installedSource
 }
+
+$script:ConstructResultWritten = $true
+Write-ConstructInstallResult -Result done

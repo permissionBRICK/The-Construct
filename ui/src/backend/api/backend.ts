@@ -33,6 +33,7 @@ export const API_GAPS: Feature[] = [
 const WINDOWS_GAPS = API_GAPS.filter(f => f !== 'windows-sign-in');
 
 const NA = 'Not available yet';
+const RESTART_LINE = 'Windows has to restart to turn on Hyper-V.';
 const PREFS_KEY = 'construct.prefs';
 const DISMISSED_KEY = 'construct.dismissed';
 
@@ -165,6 +166,12 @@ export class ApiBackend implements Backend {
   private repairReads = new Map<string, Promise<void>>();
   /** This device runs Windows: Windows sign-in is offered and sent. */
   private windows = false;
+  /** This device can run an engine (Windows): the first run offers "This PC". */
+  private engineHost = false;
+  /** The user chose to restart later; the restart line stays away until the engine step runs again. */
+  private restartLater = false;
+  /** Wakes the wait for this PC's engine setup when its event arrives. */
+  private setupWake: (() => void) | null = null;
   /* The one-time upgrade: the agent's last answer, the recovery code while it is on screen (nowhere else), a step
      this page runs, its error, and the converter's items as its events report them. */
   private upgradeView: UpgradeView | null = null;
@@ -279,12 +286,25 @@ export class ApiBackend implements Backend {
       if (!st.device.registered) {
         await this.loadPlatform();
         if (!this.s.firstRun) {
-          let local: string | null = null;
+          let local: string | null = null, known: string | null = null;
           try {
             const r = await this.agent.GET('/api/engines/local');
             local = r.response.status === 200 && r.data ? r.data.url : null;
+            known = r.response.status === 200 && r.data ? r.data.known ?? null : null;
           } catch { /* no engine on this machine */ }
-          this.emit({ firstRun: { step: st.pairing && st.pairing.state === 'waiting' ? 'pairing' : 'start', localAddress: local, busy: false, problem: null, code: null,
+          // This PC: where it can host an engine and none runs here, or the one this agent set up runs. Another
+          // engine already running here keeps today's fields.
+          // `known` only where the agent can sign in there (a cancelled pairing leaves an entry without a sign-in).
+          const held = known ? st.engines.find(e => e.id === known) : undefined;
+          const thisPc = !this.engineHost ? null : !local ? 'setup' as const : held && (held.signedIn || held.enrolled) ? 'known' as const : null;
+          let restart: string | null = null;
+          if (thisPc === 'setup') {
+            try {
+              const v = await ok(this.agent.GET('/api/engines/local/setup'));
+              if (v.state === 'restart' && !this.restartLater) restart = v.message ?? RESTART_LINE;
+            } catch { /* offered as not started */ }
+          }
+          this.emit({ firstRun: { step: st.pairing && st.pairing.state === 'waiting' ? 'pairing' : 'start', localAddress: local, thisPc, restart, busy: false, problem: null, code: null,
             pairing: st.pairing && st.pairing.state === 'waiting' ? { code: st.pairing.pairingId, words: st.pairing.words, expiresAt: st.pairing.expiresAt } : null } });
         }
         return;
@@ -349,7 +369,11 @@ export class ApiBackend implements Backend {
 
   /** What this device is, before it has an identity (first run): only Windows offers Windows sign-in. */
   private async loadPlatform() {
-    try { this.setPlatform((await ok(this.agent.GET('/api/device/features'))).platform); } catch { /* offered as not Windows */ }
+    try {
+      const f = await ok(this.agent.GET('/api/device/features'));
+      this.setPlatform(f.platform);
+      this.engineHost = !!f.engineHost;
+    } catch { /* offered as not Windows */ }
   }
 
   private setPlatform(platform: string) {
@@ -696,6 +720,7 @@ export class ApiBackend implements Backend {
         if (type.endsWith('ended')) void this.loadVault();
         return;
       case 'pairing': return this.onPairing(data);
+      case 'engine-setup': this.setupWake?.(); return;
       case 'upgrade':
         if (data && typeof data.id === 'string' && typeof data.label === 'string' && this.upgradeItems) {
           this.upgradeItems.set(data.id, toUpgradeItem(data as never));
@@ -792,7 +817,7 @@ export class ApiBackend implements Backend {
   private async reissueFirstRunCode(account: string | null) {
     if (this.issuing) return;
     this.issuing = true;
-    const base = { step: 'code' as const, localAddress: null, pairing: null, account };
+    const base = { step: 'code' as const, localAddress: null, thisPc: null, restart: null, pairing: null, account };
     this.emit({ firstRun: { ...base, busy: true, problem: null, code: null } });
     try {
       const r = await ok(this.agent.POST('/api/device/recovery-code/again'));
@@ -827,11 +852,13 @@ export class ApiBackend implements Backend {
     const error = running ? null : this.upgradeProblem ?? v.error ?? (failedItems ? 'Some items did not move over' : null);
     const live = this.upgradeItems && (running || !v.items.length) ? [...this.upgradeItems.values()] : null;
     const found = v.found ? { vms: [...v.found.localVms, ...v.found.remoteVms], profiles: v.found.profiles.length, vault: v.found.vault } : null;
+    const engineStep = v.steps.find(x => x.id === 'engine');
+    const restart = step === 'engine' && !running && !this.restartLater && engineStep?.state === 'restart' ? engineStep.message ?? RESTART_LINE : null;
     this.emit({
       upgrade: {
         step, running, error, code: step === 'recovery' ? this.upgradeCode : null, writers: step === 'close' ? v.oldWriters : [],
         items: live ?? v.items.map(toUpgradeItem), found, adminPrompt: !!v.found?.localVms.length,
-        oldHosts: step === 'convert' ? v.oldHosts : [], notes: step === 'done' ? v.notes : [],
+        oldHosts: step === 'convert' ? v.oldHosts : [], notes: step === 'done' ? v.notes : [], restart,
       },
     });
     this.watchWriters(step === 'close' && !running);
@@ -870,7 +897,7 @@ export class ApiBackend implements Backend {
     this.composeUpgrade();
     void (async () => {
       try {
-        if (step === 'engine') await ok(this.agent.POST('/api/upgrade/engine'));
+        if (step === 'engine') { this.restartLater = false; await ok(this.agent.POST('/api/upgrade/engine')); }
         else if (step === 'recovery' && this.upgradeCode) {
           // The user confirmed the code is kept: the agent counts the step done, and the code leaves the state here.
           try {
@@ -1759,9 +1786,10 @@ export class ApiBackend implements Backend {
     const fr = this.s.firstRun;
     if (!fr || fr.busy) return;
     const set = (p: Partial<NonNullable<State['firstRun']>>) => this.emit({ firstRun: { ...(this.s.firstRun ?? fr), ...p } });
-    set({ busy: true, problem: null });
+    set({ busy: true, problem: null, restart: null });
     void (async () => {
       try {
+        if (req.where === 'this-pc') { await this.firstRunThisPc(req.deviceName.trim(), set); return; }
         const windows = req.how === 'setup' && req.signIn === 'windows';
         if (windows && !this.windows) throw new Error('Windows sign-in works on Windows only');
         const token = req.how === 'setup' && !windows ? (req.token ?? '').trim() || null : null;
@@ -1790,6 +1818,68 @@ export class ApiBackend implements Backend {
         }
       } catch (e) {
         set({ busy: false, problem: errText(e) });
+      }
+    })();
+  }
+
+  /** A new account on this PC's engine: set up first (one admin prompt) unless this agent holds it already, then the
+      first-device setup against exactly that engine, with the code to show. Windows needing a restart ends it there. */
+  private async firstRunThisPc(deviceName: string, set: (p: Partial<NonNullable<State['firstRun']>>) => void) {
+    const fr = this.s.firstRun;
+    if (!fr?.thisPc) throw new Error('This device cannot run an engine');
+    if (!deviceName) throw new Error('Name this device');
+    let engine: string;
+    if (fr.thisPc === 'known') {
+      const local = await this.agent.GET('/api/engines/local');
+      if (local.response.status !== 200 || !local.data?.known) throw new Error('No Construct engine runs on this PC');
+      engine = local.data.known;
+    } else {
+      this.restartLater = false;
+      await ok(this.agent.POST('/api/engines/local/setup'));
+      const v = await this.engineSetupDone();
+      if (v.state === 'restart') { set({ busy: false, restart: v.message ?? RESTART_LINE }); return; }
+      if (v.state !== 'done' || !v.engine) throw new Error(v.message ?? 'The engine could not be set up; retry');
+      engine = v.engine;
+      // From here on this PC's engine is the agent's: a retry or a reload goes on with it.
+      set({ thisPc: 'known' });
+    }
+    if (!this.slices.has(engine)) {
+      const st = await ok(this.agent.GET('/api/state'));
+      const e = st.engines.find(x => x.id === engine);
+      if (e) this.slices.set(engine, newSlice(e));
+    }
+    const r = await ok(this.agent.POST('/api/device/setup', { body: { engine, deviceName } }));
+    let account: string | null = null;
+    try { account = (await ok(this.agent.GET('/api/state'))).device.account ?? null; } catch { /* shown without it */ }
+    this.codeIssue = r.issue;
+    set({ busy: false, step: 'code', code: codeGroups(r.recoveryCode), account });
+  }
+
+  /** Waits until this PC's engine setup is no longer running: on its event, or a read every two seconds. */
+  private async engineSetupDone() {
+    for (;;) {
+      const v = await ok(this.agent.GET('/api/engines/local/setup'));
+      if (v.state !== 'running') return v;
+      await new Promise<void>(resolve => {
+        const t = setTimeout(() => { this.setupWake = null; resolve(); }, 2000);
+        this.setupWake = () => { clearTimeout(t); this.setupWake = null; resolve(); };
+      });
+    }
+  }
+
+  restartForEngine(now: boolean) {
+    if (!now) {
+      this.restartLater = true;
+      if (this.s.firstRun) this.emit({ firstRun: { ...this.s.firstRun, restart: null } });
+      this.composeUpgrade();
+      return;
+    }
+    void (async () => {
+      try {
+        await ok(this.agent.POST('/api/device/restart'));
+      } catch (e) {
+        if (this.s.firstRun) this.emit({ firstRun: { ...this.s.firstRun, problem: errText(e) } });
+        else { this.upgradeProblem = errText(e); this.composeUpgrade(); }
       }
     })();
   }
