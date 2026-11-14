@@ -33,8 +33,8 @@ irm https://raw.githubusercontent.com/permissionBRICK/The-Construct/main/install
 ```
 
 It installs the device agent for your user and opens its window, which sets up the engine and your
-first VM. An existing install of the old client moves over in the same window. On Linux, the
-agent's package carries `install-construct-agent.sh` ([agent/README.md](agent/README.md)).
+first VM. An existing install of the old client moves over in the same window. On Linux,
+`agent/install/install-construct-agent.sh` installs the agent for your user ([agent/README.md](agent/README.md)).
 
 ## 📚 Documentation
 
