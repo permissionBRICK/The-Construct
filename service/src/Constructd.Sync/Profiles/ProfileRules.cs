@@ -12,7 +12,7 @@ public sealed record ProfileProblem(string Field, string Message);
 /// (<c>forwards.to</c> is <c>client</c>, the inferred MCP <c>type</c>, empty lists) and puts the
 /// known fields in their canonical order; fields it does not know are kept after them.
 /// </summary>
-public static class ProfileRules
+public static partial class ProfileRules
 {
     public static readonly string[] KnownFields = ["name", "repos", "sdks", "mcp", "hostPackages", "provisionCommands", "forwards", "tests"];
 
@@ -65,9 +65,19 @@ public static class ProfileRules
         {
             if (item is not JsonObject f) return item?.DeepClone();
             var e = new JsonObject { ["port"] = Port(f["port"]) is { } port ? JsonNode.Parse(port.ToString(System.Globalization.CultureInfo.InvariantCulture)) : f["port"]?.DeepClone() };
-            e["to"] = f.ContainsKey("to") ? f["to"]?.DeepClone() : "client";
+            // An HTTPS forward is served by the host, whatever "to" said; "https" counts only when it is true,
+            // and "upstreamTls" and "name" only go with it (the guest's canonical form, in its key order).
+            var https = True(f["https"]);
+            e["to"] = https ? "host" : f.ContainsKey("to") ? f["to"]?.DeepClone() : "client";
+            if (https)
+            {
+                e["https"] = true;
+                if (f.ContainsKey("upstreamTls")) e["upstreamTls"] = f["upstreamTls"]?.DeepClone();
+                if (f.ContainsKey("name")) e["name"] = f["name"]?.DeepClone();
+            }
+
             if (Str(f["label"])) e["label"] = f["label"]!.DeepClone();
-            foreach (var (k, v) in f) if (k is not ("port" or "to" or "label")) e[k] = v?.DeepClone();
+            foreach (var (k, v) in f) if (k is not ("port" or "to" or "label" or "https" or "upstreamTls" or "name")) e[k] = v?.DeepClone();
             return e;
         });
 
@@ -171,10 +181,19 @@ public static class ProfileRules
             else for (var i = 0; i < forwards.Count; i++)
             {
                 if (forwards[i] is not JsonObject f) { Add("forwards", $"forwards[{i}] must be an object with a \"port\""); continue; }
-                foreach (var k in f.Select(p => p.Key)) if (k is not ("port" or "label" or "to")) Add("forwards", $"forwards[{i}] unknown key \"{k}\"");
+                foreach (var k in f.Select(p => p.Key)) if (k is not ("port" or "label" or "to" or "https" or "name" or "upstreamTls")) Add("forwards", $"forwards[{i}] unknown key \"{k}\"");
                 if (Port(f["port"]) is null) Add("forwards", $"forwards[{i}].port must be an integer from 1 to 65535");
                 if (f.ContainsKey("label") && !StringValue(f["label"])) Add("forwards", $"forwards[{i}].label must be a string");
                 if (f.ContainsKey("to") && Text(f["to"]) is not ("client" or "host")) Add("forwards", $"forwards[{i}].to must be \"client\" or \"host\"");
+                // An HTTPS forward with the host's certificate: it says what the port speaks, the host never guesses.
+                var https = True(f["https"]);
+                if (f.ContainsKey("https") && !Bool(f["https"])) Add("forwards", $"forwards[{i}].https must be true or false");
+                if (f.ContainsKey("name") && !ForwardName(f["name"])) Add("forwards", $"forwards[{i}].name must be one DNS label: up to 63 lowercase letters, digits and hyphens, starting and ending with a letter or digit");
+                if (f.ContainsKey("upstreamTls") && !Bool(f["upstreamTls"])) Add("forwards", $"forwards[{i}].upstreamTls must be true or false");
+                if (https && StringValue(f["to"]) && Text(f["to"]) == "client") Add("forwards", $"forwards[{i}].to must be \"host\" or left out: the host serves an HTTPS forward");
+                if (https && !f.ContainsKey("upstreamTls")) Add("forwards", $"forwards[{i}].upstreamTls is required with \"https\": true: false when the port serves plain HTTP, true when it speaks TLS itself");
+                if (f.ContainsKey("name") && !https) Add("forwards", $"forwards[{i}].name needs \"https\": true");
+                if (f.ContainsKey("upstreamTls") && !https) Add("forwards", $"forwards[{i}].upstreamTls needs \"https\": true");
             }
         }
 
@@ -198,6 +217,16 @@ public static class ProfileRules
     public static string Text(JsonNode? n) => n is JsonValue v && v.GetValueKind() == JsonValueKind.String ? v.GetValue<string>() : n?.ToJsonString() ?? "";
 
     private static bool StringValue(JsonNode? n) => n is JsonValue v && v.GetValueKind() == JsonValueKind.String;
+
+    private static bool Bool(JsonNode? n) => n is JsonValue v && v.GetValueKind() is JsonValueKind.True or JsonValueKind.False;
+
+    private static bool True(JsonNode? n) => n is JsonValue v && v.GetValueKind() == JsonValueKind.True;
+
+    /// <summary>One DNS label, as <c>construct expose --name</c> takes it.</summary>
+    private static bool ForwardName(JsonNode? n) => StringValue(n) && ForwardNamePattern().IsMatch(n!.GetValue<string>());
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"\A[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\z", System.Text.RegularExpressions.RegexOptions.CultureInvariant)]
+    private static partial System.Text.RegularExpressions.Regex ForwardNamePattern();
 
     private static bool StringMap(JsonNode? n) => n is JsonObject o && o.All(p => StringValue(p.Value));
 
