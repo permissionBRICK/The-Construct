@@ -47,6 +47,7 @@ printf '%s %s\n' "${method}" "${url}" >>"${d}/requests"
 [[ -n "${hdrfile}" ]] && cat "${hdrfile}" >>"${d}/headers"
 if [[ -f "${d}/exit" ]]; then echo "curl: (7) Failed to connect" >&2; printf '000'; exit 7; fi
 [[ -n "${out}" && -f "${d}/${method}.json" ]] && cp "${d}/${method}.json" "${out}"
+if [[ -f "${d}/broken" ]]; then echo "curl: (18) transfer closed with outstanding read data remaining" >&2; printf '%s' "$(cat "${d}/${method}.code")"; exit 18; fi
 printf '%s' "$(cat "${d}/${method}.code" 2>/dev/null || echo 404)"
 STUB
 chmod +x "${stubs}/curl"
@@ -145,6 +146,12 @@ reset
 update status --json
 ok "an engine that does not answer exits 8" test "${rc}" = 8
 ok "no answer prints nothing on stdout, one line on stderr" sh -c "test ! -s '${out}' && test \$(wc -l <'${err}') -eq 1"
+
+reset
+answer GET 200 "${status_json}"
+: >"${stub_dir}/broken"
+update status --json
+ok "an answer that broke off exits 8 with nothing on stdout" sh -c "test ${rc} = 8 && test ! -s '${out}' && test \$(wc -l <'${err}') -eq 1"
 
 reset
 rc=0

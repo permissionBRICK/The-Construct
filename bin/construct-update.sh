@@ -77,6 +77,9 @@ answer="${API_WORK}/answer"
 path="/api/v1/vms/$(urlencode "${INSTANCE_NAME}")/update"
 if [[ "${cmd}" == status ]]; then api GET "${path}" "" "${answer}"; else api POST "${path}" "" "${answer}"; fi
 
+# curl reports a transfer that broke off (even after a status line) on stderr: no answer to trust.
+[[ "${API_STATUS}" != 000 && -n "${API_ERROR}" ]] && fail "${EXIT_UNREACHABLE}" "the engine's answer broke off (${API_ERROR})"
+
 case "${API_STATUS}" in
   200|202) ;;
   000) fail "${EXIT_UNREACHABLE}" "the engine could not be reached${API_ERROR:+ (${API_ERROR})}" ;;

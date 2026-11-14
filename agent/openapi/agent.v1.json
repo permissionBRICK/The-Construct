@@ -401,8 +401,39 @@
         "tags": [
           "agent"
         ],
-        "description": "Issues a new recovery code; the old one stops working. Also how the first run or the upgrade shows the code again before it was confirmed.",
+        "description": "Issues a new recovery code; the old one stops working.",
         "operationId": "NewRecoveryCode",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryCodeResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/device/recovery-code/again": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "description": "While the setup's code is not confirmed: a new one (the earlier stops working), for the first run or the upgrade after a reload. 409 recovery-confirmed otherwise.",
+        "operationId": "ReissueRecoveryCode",
         "responses": {
           "200": {
             "description": "OK",
@@ -432,8 +463,18 @@
         "tags": [
           "agent"
         ],
-        "description": "The user confirmed the recovery code shown last was kept: the setup's recovery step is done.",
+        "description": "The user confirmed the code of that issue was kept: the setup's recovery step is done. 409 code-replaced when a newer code was issued since.",
         "operationId": "ConfirmRecoveryCode",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmRecoveryCodeRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "204": {
             "description": "No Content"
@@ -2886,6 +2927,18 @@
           }
         }
       },
+      "ConfirmRecoveryCodeRequest": {
+        "required": [
+          "issue"
+        ],
+        "type": "object",
+        "properties": {
+          "issue": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "ConnectEngineRequest": {
         "type": "object",
         "properties": {
@@ -3482,13 +3535,18 @@
       },
       "RecoveryCodeResponse": {
         "required": [
-          "recoveryCode"
+          "recoveryCode",
+          "issue"
         ],
         "type": "object",
         "properties": {
           "recoveryCode": {
             "type": "string",
             "x-construct-secret": true
+          },
+          "issue": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },

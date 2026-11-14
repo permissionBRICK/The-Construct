@@ -291,7 +291,7 @@ public sealed class UpgradeTests
     {
         await using var rig = await UpgradeRig.CreateAsync(SingleVm);
         await rig.EngineStepAsync();
-        var first = await rig.IssueCodeAsync();
+        var (first, firstIssue) = await rig.IssueCodeAsync();
         string Recovery(JsonNode view) => view["steps"]!.AsArray().Single(x => x!["id"]!.GetValue<string>() == "recovery")!["state"]!.GetValue<string>();
 
         // Issued, not confirmed: the step is not done, the conversion refused, and so after a restart of the agent.
@@ -303,8 +303,12 @@ public sealed class UpgradeTests
         Assert.Equal("todo", Recovery(await rig.Agent.GetAsync("api/upgrade")));
 
         // The page after a reload asks for a new code: the earlier one stops working at the store.
-        var second = (await rig.Agent.PostAsync("api/device/recovery-code", null))["recoveryCode"]!.GetValue<string>();
+        var again = await rig.Agent.PostAsync("api/device/recovery-code/again", null);
+        var second = again["recoveryCode"]!.GetValue<string>();
         Assert.NotEqual(first, second);
+        // Another window still showing the first code cannot confirm it: the current one is the second.
+        await rig.Agent.PostAsync("api/device/recovery-code/kept", new { issue = firstIssue }, HttpStatusCode.Conflict);
+        Assert.Equal("todo", Recovery(await rig.Agent.GetAsync("api/upgrade")));
         var account = (await rig.Agent.GetAsync("api/state"))["device"]!["account"]!.GetValue<string>();
         await using (var other = await TestAgent.StartAsync())
         {
@@ -312,8 +316,10 @@ public sealed class UpgradeTests
             await other.PostAsync("api/device/recover", new { engine, account, recoveryCode = first, deviceName = "other" }, HttpStatusCode.Forbidden);
         }
 
-        await rig.Agent.PostAsync("api/device/recovery-code/kept", null, HttpStatusCode.NoContent);
+        await rig.Agent.PostAsync("api/device/recovery-code/kept", new { issue = again["issue"]!.GetValue<long>() }, HttpStatusCode.NoContent);
         Assert.Equal("done", Recovery(await rig.Agent.GetAsync("api/upgrade")));
+        // Confirmed: no page can issue another code this way (a stale reload after the confirm).
+        await rig.Agent.PostAsync("api/device/recovery-code/again", null, HttpStatusCode.Conflict);
         Assert.False((await rig.Agent.GetAsync("api/state"))["device"]!["recoveryUnconfirmed"]!.GetValue<bool>());
         Assert.Equal("converted", (await rig.ConvertAsync())["stage"]!.GetValue<string>());
         // Neither code reached the agent's files.
@@ -346,6 +352,22 @@ public sealed class UpgradeTests
         Assert.Empty(read["notes"]!.AsArray());
         await rig.RestartAsync();
         Assert.Empty((await rig.Agent.GetAsync("api/upgrade"))["notes"]!.AsArray());
+    }
+
+    [Fact]
+    public async Task A_note_of_an_item_done_before_a_cut_stays_after_the_resumed_run()
+    {
+        await using var rig = await UpgradeRig.CreateAsync(SingleVm);
+        await rig.EngineStepAsync();
+        await rig.SetupAsync();
+        rig.Agent.Host.Upgrade.BeforeItem = id => id == "vm:agent-vm" ? throw new AgentFailure(500, "cut", "The agent stopped here.") : Task.CompletedTask;
+        await Assert.ThrowsAsync<AgentFailure>(() => rig.Agent.Host.Upgrade.ConvertAsync(CancellationToken.None));
+        rig.Agent.Host.Upgrade.BeforeItem = null;
+        await rig.RestartAsync();
+        var view = await rig.ConvertAsync();
+        Assert.Equal("converted", view["stage"]!.GetValue<string>());
+        Assert.Contains(view["notes"]!.AsArray(), n => n!.GetValue<string>().Contains("legacy-upstream.json", StringComparison.Ordinal));
+        Assert.Contains(view["notes"]!.AsArray(), n => n!.GetValue<string>().Contains("leases end", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -490,18 +512,18 @@ internal sealed class UpgradeRig : IAsyncDisposable
     /// <summary>Step 2: the existing first-device setup against the store engine the engine step chose, and the code confirmed as kept.</summary>
     public async Task SetupAsync()
     {
-        await IssueCodeAsync();
-        await Agent.PostAsync("api/device/recovery-code/kept", null, HttpStatusCode.NoContent);
+        var (_, issue) = await IssueCodeAsync();
+        await Agent.PostAsync("api/device/recovery-code/kept", new { issue }, HttpStatusCode.NoContent);
     }
 
-    /// <summary>The setup without the confirm; the code it showed.</summary>
-    public async Task<string> IssueCodeAsync()
+    /// <summary>The setup without the confirm; the code it showed and its issue.</summary>
+    public async Task<(string Code, long Issue)> IssueCodeAsync()
     {
         var store = (await Agent.GetAsync("api/upgrade"))["storeEngine"]!.GetValue<string>();
         var answer = await Agent.PostAsync("api/device/setup", new { engine = store, deviceName = "pc", vaultMode = "available" });
         var code = answer["recoveryCode"]?.GetValue<string>();
         Assert.False(string.IsNullOrEmpty(code));
-        return code!;
+        return (code!, answer["issue"]!.GetValue<long>());
     }
 
     public async Task<JsonNode> ConvertAsync()

@@ -28,9 +28,9 @@ public sealed partial class DeviceAgent
     /// stores their wraps, writes the device's and the engine's records, sets the recovery code, grants
     /// the engine its keys and enrols. Returns the recovery code: the one time it leaves the agent.
     /// </summary>
-    public async Task<string> SetupAsync(string engineId, string deviceName, string? vaultMode, CancellationToken ct)
+    public async Task<IssuedCode> SetupAsync(string engineId, string deviceName, string? vaultMode, CancellationToken ct)
     {
-        string code;
+        IssuedCode code;
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
@@ -127,22 +127,50 @@ public sealed partial class DeviceAgent
     /// <summary>True while the code the setup issued is not confirmed as kept: the recovery step is not done.</summary>
     public bool RecoveryUnconfirmed => _state.RecoveryUnconfirmed;
 
-    /// <summary>The user confirmed the recovery code shown last was kept; the recovery step is done (8.5, 11.6).</summary>
-    public void ConfirmRecoveryCode()
+    /// <summary>
+    /// The user confirmed the code of <paramref name="issue"/> was kept; the recovery step is done (8.5, 11.6). A code
+    /// replaced since (another window asked for a new one) is refused: the current one was not seen.
+    /// </summary>
+    public async Task ConfirmRecoveryCodeAsync(long issue, CancellationToken ct)
     {
-        RequireRegistered();
-        lock (_state)
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
         {
-            if (!_state.RecoveryUnconfirmed) return;
-            _state.RecoveryUnconfirmed = false;
-            Save();
+            RequireRegistered();
+            lock (_state)
+            {
+                if (issue != _state.RecoveryIssue) throw new AgentFailure(409, "code-replaced", "A newer recovery code was issued since; this one no longer works.");
+                if (!_state.RecoveryUnconfirmed) return;
+                _state.RecoveryUnconfirmed = false;
+                Save();
+            }
+        }
+        finally
+        {
+            _gate.Release();
         }
 
         Changed();
     }
 
+    /// <summary>The setup's code again, newly issued, only while it is not confirmed: what the first run or the upgrade shows after a reload.</summary>
+    public async Task<IssuedCode> ReissueRecoveryCodeAsync(CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            RequireRegistered();
+            if (!_state.RecoveryUnconfirmed) throw new AgentFailure(409, "recovery-confirmed", "The recovery code was confirmed already.");
+            return await SetRecoveryLockedAsync(ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     /// <summary>Issues a new recovery code (8.5, replacement); the old one stops working at the store.</summary>
-    public async Task<string> NewRecoveryCodeAsync(CancellationToken ct)
+    public async Task<IssuedCode> NewRecoveryCodeAsync(CancellationToken ct)
     {
         await _gate.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -156,7 +184,7 @@ public sealed partial class DeviceAgent
         }
     }
 
-    private async Task<string> SetRecoveryLockedAsync(CancellationToken ct)
+    private async Task<IssuedCode> SetRecoveryLockedAsync(CancellationToken ct)
     {
         var keys = await OpenKeysAsync(ct).ConfigureAwait(false);
         var code = RecoveryCode.Generate();
@@ -166,7 +194,14 @@ public sealed partial class DeviceAgent
             using var http = StoreHttp();
             using var response = await http.PutAsJsonAsync("recovery", new RecoverySetup(RecoveryCode.Verifier(secret), code.SealRoot(keys, _state.Account!)), StoreJson.Options, ct).ConfigureAwait(false);
             await EnsureStoreAsync(response, ct).ConfigureAwait(false);
-            return code.ToString();
+            long issue;
+            lock (_state)
+            {
+                issue = ++_state.RecoveryIssue;
+                Save();
+            }
+
+            return new IssuedCode(code.ToString(), issue);
         }
         finally
         {
@@ -633,3 +668,6 @@ public sealed record DeviceListItem(string Id, string Name, bool Me, bool Revoke
 public sealed record RevocationEngine(string Id, string Name, bool Confirmed);
 
 public sealed record RevocationView(string DeviceId, IReadOnlyList<RevocationEngine> Engines);
+
+/// <summary>A recovery code as it leaves the agent, once, and the number of its issue (no secret).</summary>
+public sealed record IssuedCode(string Code, long Issue);

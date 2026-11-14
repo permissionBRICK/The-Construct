@@ -180,8 +180,25 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Issues a new recovery code; the old one stops working. Also how the first run or the upgrade shows the code again before it was confirmed. */
+        /** @description Issues a new recovery code; the old one stops working. */
         post: operations["NewRecoveryCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/device/recovery-code/again": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description While the setup's code is not confirmed: a new one (the earlier stops working), for the first run or the upgrade after a reload. 409 recovery-confirmed otherwise. */
+        post: operations["ReissueRecoveryCode"];
         delete?: never;
         options?: never;
         head?: never;
@@ -197,7 +214,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description The user confirmed the recovery code shown last was kept: the setup's recovery step is done. */
+        /** @description The user confirmed the code of that issue was kept: the setup's recovery step is done. 409 code-replaced when a newer code was issued since. */
         post: operations["ConfirmRecoveryCode"];
         delete?: never;
         options?: never;
@@ -1014,6 +1031,10 @@ export interface components {
             path: string;
             message?: null | string;
         };
+        ConfirmRecoveryCodeRequest: {
+            /** Format: int64 */
+            issue: number;
+        };
         ConnectEngineRequest: {
             vaultMode?: null | string;
         };
@@ -1153,6 +1174,8 @@ export interface components {
         };
         RecoveryCodeResponse: {
             recoveryCode: string;
+            /** Format: int64 */
+            issue: number;
         };
         RestoreRequest: {
             requestId?: null | string;
@@ -1761,7 +1784,7 @@ export interface operations {
             };
         };
     };
-    ConfirmRecoveryCode: {
+    ReissueRecoveryCode: {
         parameters: {
             query?: never;
             header?: never;
@@ -1769,6 +1792,39 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryCodeResponse"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    ConfirmRecoveryCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfirmRecoveryCodeRequest"];
+            };
+        };
         responses: {
             /** @description No Content */
             204: {

@@ -173,6 +173,8 @@ export class ApiBackend implements Backend {
   private upgradeItems: Map<string, Upgrade['items'][number]> | null = null;
   /** A new recovery code is being asked for (a reload before the user confirmed the last one); one at a time. */
   private issuing = false;
+  /** The issue of the code on screen; the confirm names it, so a code replaced since is never confirmed. */
+  private codeIssue = 0;
   private writersTimer: ReturnType<typeof setTimeout> | null = null;
   constructor(private opts: ApiOptions) {
     this.fetchImpl = opts.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
@@ -772,10 +774,13 @@ export class ApiBackend implements Backend {
     try {
       const st = await ok(this.agent.GET('/api/state'));
       if (!st.device.registered || !st.device.recoveryUnconfirmed || this.upgradeCode) return;
-      this.upgradeCode = codeGroups((await ok(this.agent.POST('/api/device/recovery-code'))).recoveryCode);
+      const r = await ok(this.agent.POST('/api/device/recovery-code/again'));
+      this.upgradeCode = codeGroups(r.recoveryCode);
+      this.codeIssue = r.issue;
       this.upgradeProblem = null;
     } catch (e) {
-      this.upgradeProblem = errText(e);
+      // Confirmed meanwhile (another window): the agent's view goes on.
+      if (!(e instanceof ApiError && e.code === 'recovery-confirmed')) this.upgradeProblem = errText(e);
     } finally {
       this.issuing = false;
     }
@@ -789,9 +794,17 @@ export class ApiBackend implements Backend {
     const base = { step: 'code' as const, localAddress: null, pairing: null, account };
     this.emit({ firstRun: { ...base, busy: true, problem: null, code: null } });
     try {
-      const code = codeGroups((await ok(this.agent.POST('/api/device/recovery-code'))).recoveryCode);
-      this.emit({ firstRun: { ...base, busy: false, problem: null, code } });
+      const r = await ok(this.agent.POST('/api/device/recovery-code/again'));
+      this.codeIssue = r.issue;
+      this.emit({ firstRun: { ...base, busy: false, problem: null, code: codeGroups(r.recoveryCode) } });
     } catch (e) {
+      if (e instanceof ApiError && e.code === 'recovery-confirmed') {
+        // Confirmed meanwhile (another window): the normal screens.
+        this.issuing = false;
+        this.emit({ firstRun: null });
+        await this.load();
+        return;
+      }
       this.emit({ firstRun: { ...base, busy: false, problem: errText(e), code: null } });
     } finally {
       this.issuing = false;
@@ -859,7 +872,13 @@ export class ApiBackend implements Backend {
         if (step === 'engine') await ok(this.agent.POST('/api/upgrade/engine'));
         else if (step === 'recovery' && this.upgradeCode) {
           // The user confirmed the code is kept: the agent counts the step done, and the code leaves the state here.
-          await ok(this.agent.POST('/api/device/recovery-code/kept'));
+          try {
+            await ok(this.agent.POST('/api/device/recovery-code/kept', { body: { issue: this.codeIssue } }));
+          } catch (e) {
+            // Another window asked for a newer code: this one stopped working; the current one is shown instead.
+            if (e instanceof ApiError && e.code === 'code-replaced') this.upgradeCode = null;
+            throw e;
+          }
           this.upgradeCode = null;
         } else if (step === 'done') await ok(this.agent.POST('/api/upgrade/notes/read'));
         else if (step === 'recovery') {
@@ -868,6 +887,7 @@ export class ApiBackend implements Backend {
           if (!deviceName) throw new Error('Name this device');
           const r = await ok(this.agent.POST('/api/device/setup', { body: { engine: v.storeEngine, deviceName } }));
           this.upgradeCode = codeGroups(r.recoveryCode);
+          this.codeIssue = r.issue;
         } else if (step === 'convert') {
           const w = await ok(this.agent.GET('/api/upgrade/writers'));
           if (w.open.length) throw new Error(`Close these first: ${w.open.join(', ')}`);
@@ -1757,6 +1777,7 @@ export class ApiBackend implements Backend {
           const r = await ok(this.agent.POST('/api/device/setup', { body: { engine, deviceName } }));
           let account: string | null = null;
           try { account = (await ok(this.agent.GET('/api/state'))).device.account ?? null; } catch { /* shown without it */ }
+          this.codeIssue = r.issue;
           set({ busy: false, step: 'code', code: codeGroups(r.recoveryCode), account });
         } else if (req.how === 'pair') {
           const p = await ok(this.agent.POST('/api/pairing', { body: { engine, deviceName } }));
@@ -1782,8 +1803,10 @@ export class ApiBackend implements Backend {
       this.emit({ firstRun: { ...fr, busy: true, problem: null } });
       void (async () => {
         try {
-          await ok(this.agent.POST('/api/device/recovery-code/kept'));
+          await ok(this.agent.POST('/api/device/recovery-code/kept', { body: { issue: this.codeIssue } }));
         } catch (e) {
+          // Another window asked for a newer code: this one stopped working; the current one is shown instead.
+          if (e instanceof ApiError && e.code === 'code-replaced') { await this.reissueFirstRunCode(fr.account ?? null); return; }
           this.emit({ firstRun: { ...fr, busy: false, problem: errText(e) } });
           return;
         }

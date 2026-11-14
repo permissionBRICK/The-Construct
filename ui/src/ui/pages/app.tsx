@@ -181,6 +181,8 @@ export function Upgrade() {
   const u = s.upgrade;
   const [stored, setStored] = useState(false);
   const [deviceName, setDeviceName] = useState(s.device.name);
+  // A new code (shown again after a reload or a replaced one) is confirmed anew.
+  useEffect(() => setStored(false), [u?.code?.join('-')]);
   if (!u) return null;
   const at = u.step === 'done' ? STEPS.length : STEPS.findIndex(x => x[0] === u.step);
   const top = (
@@ -283,6 +285,7 @@ export function FirstRun() {
   const [code, setCode] = useState('');
   const [stored, setStored] = useState(false);
   const pin = usePin();
+  useEffect(() => setStored(false), [f?.code?.join('-')]);
   if (!f) return null;
   const at = f.step === 'code' ? 1 : 0;
   const top = (

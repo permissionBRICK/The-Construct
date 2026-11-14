@@ -399,7 +399,7 @@ describe('ApiBackend', () => {
     on('GET', '/api/engines/local', { json: { url: 'https://127.0.0.1:7462', pin: 'P1', status: 'ok', known: null } });
     on('POST', '/api/engines/probe', { json: { url: 'https://127.0.0.1:7462', pin: 'P1', status: 'ok', known: null } });
     on('POST', '/api/engines', { json: { id: E1, name: 'pc', url: 'https://127.0.0.1:7462', pin: 'P1', engineId: null, enrolled: false, signedIn: true, store: false } });
-    on('POST', '/api/device/setup', { json: { recoveryCode: 'ABCD-EFGH-JKMN' } });
+    on('POST', '/api/device/setup', { json: { recoveryCode: 'ABCD-EFGH-JKMN', issue: 1 } });
     await be.start();
     expect(be.snapshot().firstRun).toMatchObject({ step: 'start', localAddress: 'https://127.0.0.1:7462' });
     expect(be.snapshot().vms).toEqual([]);
@@ -415,23 +415,23 @@ describe('ApiBackend', () => {
     on('POST', '/api/device/recovery-code/kept', { status: 204 });
     be.firstRunNext();
     await settle();
-    expect(posts(calls).at(-1)?.path).toBe('/api/device/recovery-code/kept');
+    expect(posts(calls).at(-1)).toMatchObject({ path: '/api/device/recovery-code/kept', body: { issue: 1 } });
     expect(be.snapshot().firstRun).toBeNull();
     expect(JSON.stringify(be.snapshot())).not.toContain('EFGH');
   });
 
   it('shows a newly issued code after a reload before the first run\'s code was confirmed, and keeps it until the agent took the confirm', async () => {
     const { be, calls, on, settle } = world({ unconfirmed: true });
-    on('POST', '/api/device/recovery-code', { json: { recoveryCode: 'WXYZ-QRST' } });
+    on('POST', '/api/device/recovery-code/again', { json: { recoveryCode: 'WXYZ-QRST', issue: 2 } });
     await be.start();
-    expect(posts(calls).map(c => c.path)).toEqual(['/api/device/recovery-code']);
+    expect(posts(calls).map(c => c.path)).toEqual(['/api/device/recovery-code/again']);
     expect(be.snapshot().firstRun).toMatchObject({ step: 'code', code: ['WXYZ', 'QRST'], account: 'acct1' });
     // The normal screens wait.
     expect(calls.some(c => c.path.startsWith('/api/engines/'))).toBe(false);
     // An event in between issues no second code.
     be.onEvent('agent', { seq: 1, type: 'agent', engine: null, data: null });
     await settle();
-    expect(posts(calls).map(c => c.path)).toEqual(['/api/device/recovery-code']);
+    expect(posts(calls).map(c => c.path)).toEqual(['/api/device/recovery-code/again']);
     // The confirm fails: the code stays with the error.
     on('POST', '/api/device/recovery-code/kept', { status: 500, json: { title: 'The agent could not save it' } });
     be.firstRunNext();
@@ -455,7 +455,7 @@ describe('ApiBackend', () => {
     on('POST', '/api/device/setup', () => {
       on('GET', '/api/state', { json: { device: { id: 'd1', name: 'laptop', account: 'acct1', registered: true, storeEngine: E1, protection: 'file', protectionWeak: true }, engines: [], pairing: null } });
       be.onEvent('agent', { seq: 1, type: 'agent', engine: null, data: null });
-      return { json: { recoveryCode: 'ABCD-EFGH' } };
+      return { json: { recoveryCode: 'ABCD-EFGH', issue: 1 } };
     });
     await be.start();
     be.firstRunStart({ how: 'setup', address: 'https://orchard.test:8443', deviceName: 'laptop', token: 't', pin: 'P' });
@@ -1192,7 +1192,7 @@ describe('ApiBackend Windows sign-in', () => {
     windows(w);
     w.on('POST', '/api/engines/probe', { json: { url: 'https://lab.test:8443', pin: 'P2', status: 'ok', known: null } });
     w.on('POST', '/api/engines', { json: { id: E2, name: 'lab', url: 'https://lab.test:8443', pin: 'P2', engineId: null, enrolled: false, signedIn: true, store: false } });
-    w.on('POST', '/api/device/setup', { json: { recoveryCode: 'ABCD-EFGH' } });
+    w.on('POST', '/api/device/setup', { json: { recoveryCode: 'ABCD-EFGH', issue: 1 } });
     await w.be.start();
     w.be.firstRunStart({ how: 'setup', address: 'https://lab.test:8443', deviceName: 'laptop', signIn: 'windows', token: 'not sent', pin: 'P2' });
     await w.settle();
@@ -1246,7 +1246,7 @@ describe('ApiBackend one-time upgrade', () => {
     on('POST', '/api/device/setup', () => {
       on('GET', '/api/state', { json: { device: { id: 'd1', name: 'laptop', account: 'acct1', registered: true, storeEngine: E1, protection: 'file', protectionWeak: true, recoveryUnconfirmed: true }, engines: [], pairing: null } });
       on('GET', '/api/upgrade', { json: view({ engine: 'done' }) });
-      return { json: { recoveryCode: 'ABCD-EFGH-JKMN' } };
+      return { json: { recoveryCode: 'ABCD-EFGH-JKMN', issue: 1 } };
     });
     on('POST', '/api/device/recovery-code/kept', () => {
       on('GET', '/api/upgrade', { json: view({ engine: 'done', recovery: 'done', close: 'todo' }, { oldWriters: ['VS Code'] }) });
@@ -1304,14 +1304,14 @@ describe('ApiBackend one-time upgrade', () => {
   it('after a reload before the code was confirmed, shows a newly issued code; the conversion waits for the confirm', async () => {
     const { be, calls, on, settle } = world({ unconfirmed: true });
     on('GET', '/api/upgrade', { json: view({ engine: 'done' }) });
-    on('POST', '/api/device/recovery-code', { json: { recoveryCode: 'WXYZ-QRST' } });
+    on('POST', '/api/device/recovery-code/again', { json: { recoveryCode: 'WXYZ-QRST', issue: 2 } });
     await be.start();
     await settle();
     expect(be.snapshot().upgrade).toMatchObject({ step: 'recovery', code: ['WXYZ', 'QRST'] });
-    expect(posts(calls).map(c => c.path)).toEqual(['/api/device/recovery-code']);
+    expect(posts(calls).map(c => c.path)).toEqual(['/api/device/recovery-code/again']);
     be.onEvent('upgrade', { seq: 1, type: 'upgrade', engine: null, data: null });
     await settle();
-    expect(posts(calls).map(c => c.path)).toEqual(['/api/device/recovery-code']);
+    expect(posts(calls).map(c => c.path)).toEqual(['/api/device/recovery-code/again']);
     // The confirm fails: the code and the step stay, with the error.
     on('POST', '/api/device/recovery-code/kept', { status: 500, json: { title: 'The agent could not save it' } });
     be.upgradeNext();
@@ -1326,7 +1326,29 @@ describe('ApiBackend one-time upgrade', () => {
     // The shared host still on the old stack is named before the conversion.
     expect(be.snapshot().upgrade).toMatchObject({ step: 'convert', code: null, oldHosts: ['old.example'] });
     expect(JSON.stringify(be.snapshot())).not.toContain('QRST');
-    expect(posts(calls).map(c => c.path)).toEqual(['/api/device/recovery-code', '/api/device/recovery-code/kept', '/api/device/recovery-code/kept']);
+    expect(posts(calls).map(c => [c.path, c.body])).toEqual([['/api/device/recovery-code/again', undefined], ['/api/device/recovery-code/kept', { issue: 2 }], ['/api/device/recovery-code/kept', { issue: 2 }]]);
+  });
+
+  it('shows the current code when another window replaced the one on screen, and never confirms the replaced one', async () => {
+    const { be, calls, on, settle } = world({ unconfirmed: true });
+    on('GET', '/api/upgrade', { json: view({ engine: 'done' }) });
+    on('POST', '/api/device/recovery-code/again', { json: { recoveryCode: 'WXYZ-QRST', issue: 2 } });
+    await be.start();
+    await settle();
+    on('POST', '/api/device/recovery-code/kept', { status: 409, json: { title: 'A newer recovery code was issued since; this one no longer works.', code: 'code-replaced' } });
+    on('POST', '/api/device/recovery-code/again', { json: { recoveryCode: 'MNPQ-RSTV', issue: 4 } });
+    be.upgradeNext();
+    await settle();
+    await settle();
+    expect(be.snapshot().upgrade).toMatchObject({ step: 'recovery', code: ['MNPQ', 'RSTV'] });
+    on('POST', '/api/device/recovery-code/kept', () => {
+      on('GET', '/api/upgrade', { json: view({ engine: 'done', recovery: 'done' }) });
+      return { status: 204 };
+    });
+    be.upgradeNext();
+    await settle();
+    expect(posts(calls).filter(c => c.path.endsWith('/kept')).map(c => c.body)).toEqual([{ issue: 2 }, { issue: 4 }]);
+    expect(be.snapshot().upgrade).toMatchObject({ step: 'close', code: null });
   });
 
   it('issues no code at the recovery step before the setup', async () => {
