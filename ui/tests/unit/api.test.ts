@@ -1480,6 +1480,7 @@ describe('ApiBackend engine on this PC', () => {
     const w = world({ registered: false, engines: [] });
     host(w);
     w.on('GET', '/api/engines/local', { json: { url: 'https://127.0.0.1:7462', pin: 'P9', status: 'ok', known: E9 } });
+    w.on('GET', '/api/state', { json: { device: { id: 'd1', name: '', account: null, registered: false, storeEngine: null, protection: 'file', protectionWeak: true }, engines: [pc], pairing: null } });
     w.on('POST', '/api/device/setup', { json: { recoveryCode: 'ABCD-EFGH', issue: 1 } });
     await w.be.start();
     expect(w.be.snapshot().firstRun).toMatchObject({ thisPc: 'known', localAddress: 'https://127.0.0.1:7462' });
@@ -1494,6 +1495,13 @@ describe('ApiBackend engine on this PC', () => {
     a.on('GET', '/api/engines/local', { json: { url: 'https://127.0.0.1:7462', pin: 'P1', status: 'ok', known: null } });
     await a.be.start();
     expect(a.be.snapshot().firstRun).toMatchObject({ thisPc: null, localAddress: 'https://127.0.0.1:7462' });
+    // Known to the agent but without a sign-in there (a cancelled pairing): today's fields too.
+    const k = world({ registered: false, engines: [] });
+    host(k);
+    k.on('GET', '/api/engines/local', { json: { url: 'https://127.0.0.1:7462', pin: 'P9', status: 'ok', known: E9 } });
+    k.on('GET', '/api/state', { json: { device: { id: 'd1', name: '', account: null, registered: false, storeEngine: null, protection: 'file', protectionWeak: true }, engines: [{ ...pc, signedIn: false }], pairing: null } });
+    await k.be.start();
+    expect(k.be.snapshot().firstRun).toMatchObject({ thisPc: null });
     const b = world({ registered: false, engines: [] });
     host(b, false);
     b.on('GET', '/api/engines/local', { status: 204 });

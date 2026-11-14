@@ -313,7 +313,10 @@ public sealed class LocalEngineSetup : IDisposable
             [IO.File]::WriteAllText($p.resultFile, $json, (New-Object Text.UTF8Encoding($false)))
         }
         function Protect-Directory([string]$Path) {
-            if (-not (Test-Path -LiteralPath $Path)) { New-Item -ItemType Directory -Path $Path | Out-Null }
+            # A junction (anyone may create one under ProgramData) would put the tree under a parent this user controls.
+            $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+            if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "$Path is a link; remove it, then retry." }
+            if (-not $item) { New-Item -ItemType Directory -Path $Path | Out-Null }
             $acl = New-Object Security.AccessControl.DirectorySecurity
             $acl.SetAccessRuleProtection($true, $false)
             $admins = New-Object Security.Principal.SecurityIdentifier 'S-1-5-32-544'
@@ -327,7 +330,9 @@ public sealed class LocalEngineSetup : IDisposable
             $root = Join-Path $env:ProgramData 'Construct'
             $dir = Join-Path $root 'host'
             Protect-Directory $root
-            if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -Recurse -Force }
+            $old = Get-Item -LiteralPath $dir -Force -ErrorAction SilentlyContinue
+            if ($old -and ($old.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "$dir is a link; remove it, then retry." }
+            if ($old) { Remove-Item -LiteralPath $dir -Recurse -Force }
             Protect-Directory $dir
             Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
             $stream = [IO.File]::Open($p.zip, 'Open', 'Read', 'Read')

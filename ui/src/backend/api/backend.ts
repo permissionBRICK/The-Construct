@@ -294,7 +294,9 @@ export class ApiBackend implements Backend {
           } catch { /* no engine on this machine */ }
           // This PC: where it can host an engine and none runs here, or the one this agent set up runs. Another
           // engine already running here keeps today's fields.
-          const thisPc = !this.engineHost ? null : !local ? 'setup' as const : known ? 'known' as const : null;
+          // `known` only where the agent can sign in there (a cancelled pairing leaves an entry without a sign-in).
+          const held = known ? st.engines.find(e => e.id === known) : undefined;
+          const thisPc = !this.engineHost ? null : !local ? 'setup' as const : held && (held.signedIn || held.enrolled) ? 'known' as const : null;
           let restart: string | null = null;
           if (thisPc === 'setup') {
             try {

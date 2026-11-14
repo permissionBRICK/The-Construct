@@ -68,6 +68,7 @@ public sealed class EngineSetupTests : IAsyncDisposable
         Assert.DoesNotContain("-File", arguments);
         var script = Encoding.Unicode.GetString(Convert.FromBase64String(arguments[^1]));
         Assert.Contains("ResultFile = $p.resultFile", script, StringComparison.Ordinal);
+        Assert.Contains("is a link; remove it", script, StringComparison.Ordinal);
         Assert.DoesNotContain("Read-Host", script, StringComparison.Ordinal);
         var payload = JsonNode.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(
             System.Text.RegularExpressions.Regex.Match(script, @"FromBase64String\('([A-Za-z0-9+/=]+)'\)").Groups[1].Value)))!;
