@@ -112,7 +112,7 @@ switch (command)
         }, platform, waitForPrevious: async () =>
         {
             for (var i = 0; i < 120 && await Repair.RunningAsync(options, CancellationToken.None) is not null; i++) await Task.Delay(250);
-        });
+        }, confirmed: directory => _ = VsCodeExtension.InstallAsync(directory));
         if (!ok)
         {
             if (started is not null) await started.DisposeAsync();

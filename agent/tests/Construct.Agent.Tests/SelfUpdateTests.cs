@@ -130,8 +130,13 @@ public sealed class SelfUpdateTests : IAsyncDisposable
         device.Updater.StartInstall();
         await device.Updater.Work.WaitAsync(TimeSpan.FromSeconds(10));
 
-        Assert.True(await AgentUpdater.StartupAsync(device.Install, New, () => Task.CompletedTask, device.Platform));
+        var confirmed = new List<string>();
+        Assert.True(await AgentUpdater.StartupAsync(device.Install, New, () => Task.CompletedTask, device.Platform, confirmed: confirmed.Add));
 
+        // What follows the agent (the VS Code extension) is told once, with the new version's directory.
+        Assert.Equal([device.Install.DirectoryOf(New)], confirmed);
+        Assert.True(await AgentUpdater.StartupAsync(device.Install, New, () => Task.CompletedTask, device.Platform, confirmed: confirmed.Add));
+        Assert.Single(confirmed);
         Assert.Equal(new InstallState(New, Old), device.Install.Read());
         Assert.Equal([AgentInstall.DirectoryName(New), AgentInstall.DirectoryName(Old)],
             Directory.GetDirectories(device.Install.VersionsDirectory).Select(Path.GetFileName).Order(StringComparer.Ordinal).Reverse());
@@ -173,5 +178,32 @@ public sealed class SelfUpdateTests : IAsyncDisposable
         if (_device is not null) await _device.DisposeAsync();
         try { Directory.Delete(_directory, true); }
         catch (DirectoryNotFoundException) { }
+    }
+    [Fact]
+    public async Task The_extension_of_a_version_is_installed_into_vs_code_when_both_are_there()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var root = Directory.CreateTempSubdirectory("construct-vsix-").FullName;
+        try
+        {
+            var version = Path.Combine(root, "v"); Directory.CreateDirectory(version);
+            var bin = Path.Combine(root, "bin"); Directory.CreateDirectory(bin);
+            var log = Path.Combine(root, "args");
+
+            // No package, then no VS Code: nothing to do, and never a failure of the start.
+            Assert.Equal("no-package", await VsCodeExtension.InstallAsync(version, bin));
+            File.WriteAllText(Path.Combine(version, VsCodeExtension.FileName), "x");
+            Assert.Equal("no-vscode", await VsCodeExtension.InstallAsync(version, bin));
+
+            var code = Path.Combine(bin, "code");
+            File.WriteAllText(code, $"#!/bin/sh\nprintf '%s\\n' \"$@\" > '{log}'\nexit \"$(cat '{root}/exit' 2>/dev/null || echo 0)\"\n");
+            File.SetUnixFileMode(code, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            Assert.Equal("installed", await VsCodeExtension.InstallAsync(version, bin));
+            Assert.Equal(["--install-extension", Path.Combine(version, VsCodeExtension.FileName), "--force"], File.ReadAllLines(log));
+
+            File.WriteAllText(Path.Combine(root, "exit"), "3");
+            Assert.Equal("failed", await VsCodeExtension.InstallAsync(version, bin));
+        }
+        finally { Directory.Delete(root, recursive: true); }
     }
 }

@@ -104,7 +104,7 @@ internal static class Program
             host = AgentHost.Create(options, new DeviceAgent(options, _ => new DpapiProtection()));
             await host.StartAsync();
             await host.SelfTestAsync();
-        }, platform).GetAwaiter().GetResult();
+        }, platform, confirmed: directory => _ = VsCodeExtension.InstallAsync(directory)).GetAwaiter().GetResult();
         if (!ok || host is null)
         {
             if (host is not null) Task.Run(() => host.DisposeAsync().AsTask()).GetAwaiter().GetResult();

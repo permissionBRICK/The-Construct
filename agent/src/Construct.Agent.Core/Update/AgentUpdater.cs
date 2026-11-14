@@ -307,10 +307,11 @@ public sealed class AgentUpdater : IAsyncDisposable
     /// Starts the agent with <paramref name="startAndSelfTest"/> (the host comes up and answers its own
     /// health route). For the version the last switch made current and pending, a failure there writes
     /// the previous version back as current, starts it with <paramref name="launcher"/> and returns false;
-    /// a pass confirms the version and prunes older ones. Any other start just runs.
+    /// a pass confirms the version, prunes older ones and calls <paramref name="confirmed"/> with the
+    /// version's directory (what follows the agent: the VS Code extension). Any other start just runs.
     /// </summary>
     public static async Task<bool> StartupAsync(AgentInstall install, string? running, Func<Task> startAndSelfTest, IAgentLauncher launcher,
-        Func<Task>? waitForPrevious = null, CancellationToken ct = default)
+        Func<Task>? waitForPrevious = null, Action<string>? confirmed = null, CancellationToken ct = default)
     {
         var state = install.Read();
         var trial = state.Pending && running is not null && running == state.Current;
@@ -330,6 +331,7 @@ public sealed class AgentUpdater : IAsyncDisposable
         {
             install.Write(state with { Pending = false });
             install.Prune();
+            confirmed?.Invoke(install.DirectoryOf(running!));
         }
 
         return true;

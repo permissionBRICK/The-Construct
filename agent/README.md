@@ -209,7 +209,9 @@ offers its package (`agentWindows`, `agentLinux`) when the version differs. Inst
 compares its SHA-256 with the manifest's, unpacks it into `versions/<version>/` and, when no pairing
 and no "update everything" runs, writes `install.json` (new version current and pending, the running
 one previous), starts the new version and stops. The new version passes its self-test when its API
-answers its own health route; it then clears `pending` and removes older versions. When it fails,
+answers its own health route; it then clears `pending`, removes older versions and installs the
+package's `construct.vsix` into VS Code where VS Code is installed (in the background; a failure
+there changes nothing, an older extension keeps working). When it fails,
 it writes the previous version back as current and starts it. Under the systemd unit the unit is
 pointed at the new version and restarted; on Windows the Run value follows the new executable. The
 install scripts mark a version installed over another one pending as well, so it self-tests too. An
