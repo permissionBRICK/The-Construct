@@ -29,13 +29,13 @@ const job = (id: string, vm: string, state: string, kind = 'provision', progress
   id, kind, vmName: vm, state, created: '2026-11-13T10:00:00Z', finished: null, progress, result: null, error: state === 'failed' ? 'provision-steps-failed' : null, phase: null,
 });
 
-function world(opts: { registered?: boolean; engines?: { id: string; name: string; url: string }[] } = {}) {
+function world(opts: { registered?: boolean; unconfirmed?: boolean; engines?: { id: string; name: string; url: string }[] } = {}) {
   const calls: Call[] = [];
   const routes = new Map<string, Handler>();
   const on = (method: string, path: string, h: Handler | Reply) => routes.set(`${method} ${path}`, typeof h === 'function' ? h : () => h);
   const engines = (opts.engines ?? [{ id: E1, name: 'orchard', url: 'https://orchard.test:8443' }]).map(e => ({ ...e, pin: 'AB', engineId: 'x', enrolled: true, signedIn: false, store: e.id === E1 }));
   on('GET', '/api/health', { json: { status: 'ok', version: '3.1.0', pid: 1, startedAt: '2026-11-13T00:00:00Z' } });
-  on('GET', '/api/state', { json: { device: { id: 'd1', name: 'laptop', account: 'acct1', registered: opts.registered ?? true, storeEngine: E1, protection: 'file', protectionWeak: true }, engines, pairing: null } });
+  on('GET', '/api/state', { json: { device: { id: 'd1', name: 'laptop', account: 'acct1', registered: opts.registered ?? true, storeEngine: E1, protection: 'file', protectionWeak: true, recoveryUnconfirmed: opts.unconfirmed ?? false }, engines, pairing: null } });
   on('GET', '/api/update', { json: { version: '3.1.0', channel: 'stable', available: null, state: 'idle', error: null, installed: true, checkedAt: null } });
   on('GET', '/api/device/settings', { json: { channel: 'stable', autoUpdate: false, startWithOs: false } });
   on('GET', '/api/device/features', { json: { platform: 'linux', notifications: true, microphone: false, share: false, startWithOs: true, shell: false } });
@@ -411,10 +411,41 @@ describe('ApiBackend', () => {
       ['/api/device/setup', { engine: E1, deviceName: 'laptop' }],
     ]);
     expect(be.snapshot().firstRun).toMatchObject({ step: 'code', code: ['ABCD', 'EFGH', 'JKMN'], account: 'acct1' });
-    on('GET', '/api/state', { json: { device: { id: 'd1', name: 'laptop', account: 'acct1', registered: true, storeEngine: E1, protection: 'file', protectionWeak: true }, engines: [], pairing: null } });
+    on('GET', '/api/state', { json: { device: { id: 'd1', name: 'laptop', account: 'acct1', registered: true, storeEngine: E1, protection: 'file', protectionWeak: true, recoveryUnconfirmed: false }, engines: [], pairing: null } });
+    on('POST', '/api/device/recovery-code/kept', { status: 204 });
     be.firstRunNext();
+    await settle();
+    expect(posts(calls).at(-1)?.path).toBe('/api/device/recovery-code/kept');
     expect(be.snapshot().firstRun).toBeNull();
     expect(JSON.stringify(be.snapshot())).not.toContain('EFGH');
+  });
+
+  it('shows a newly issued code after a reload before the first run\'s code was confirmed, and keeps it until the agent took the confirm', async () => {
+    const { be, calls, on, settle } = world({ unconfirmed: true });
+    on('POST', '/api/device/recovery-code', { json: { recoveryCode: 'WXYZ-QRST' } });
+    await be.start();
+    expect(posts(calls).map(c => c.path)).toEqual(['/api/device/recovery-code']);
+    expect(be.snapshot().firstRun).toMatchObject({ step: 'code', code: ['WXYZ', 'QRST'], account: 'acct1' });
+    // The normal screens wait.
+    expect(calls.some(c => c.path.startsWith('/api/engines/'))).toBe(false);
+    // An event in between issues no second code.
+    be.onEvent('agent', { seq: 1, type: 'agent', engine: null, data: null });
+    await settle();
+    expect(posts(calls).map(c => c.path)).toEqual(['/api/device/recovery-code']);
+    // The confirm fails: the code stays with the error.
+    on('POST', '/api/device/recovery-code/kept', { status: 500, json: { title: 'The agent could not save it' } });
+    be.firstRunNext();
+    await settle();
+    expect(be.snapshot().firstRun).toMatchObject({ step: 'code', code: ['WXYZ', 'QRST'], problem: 'The agent could not save it' });
+    on('POST', '/api/device/recovery-code/kept', { status: 204 });
+    on('GET', '/api/state', { json: { device: { id: 'd1', name: 'laptop', account: 'acct1', registered: true, storeEngine: E1, protection: 'file', protectionWeak: true, recoveryUnconfirmed: false }, engines: [{ id: E1, name: 'orchard', url: 'https://orchard.test:8443', pin: 'AB', engineId: 'x', enrolled: true, signedIn: false, store: true }], pairing: null } });
+    be.firstRunNext();
+    await settle();
+    await settle();
+    expect(be.snapshot().firstRun).toBeNull();
+    expect(be.snapshot().vms.map(v => v.name)).toContain('atlas');
+    expect(JSON.stringify(be.snapshot())).not.toContain('QRST');
+    expect(calls.every(c => !c.query.includes('WXYZ'))).toBe(true);
   });
 
   it('keeps the first run until the recovery code was shown, when the agent reports the new identity first', async () => {
@@ -1179,7 +1210,7 @@ describe('ApiBackend one-time upgrade', () => {
     legacy: true, stage: 'new',
     steps: (['engine', 'recovery', 'close', 'convert'] as const).map(id => ({ id, state: st[id] ?? 'todo', message: null })),
     found: { installFolder: 'C:\\old', otherInstallFolders: [], localVms: ['atlas'], remoteVms: ['harbor'], hosts: [], profiles: ['webshop'], unmergedChanges: 0, vault: true, backupKeys: 1, upstream: false, channel: 'stable' },
-    storeEngine: E1, localEngine: E1, items: [], notes: [], oldWriters: [], running: false, error: null, ...o,
+    storeEngine: E1, localEngine: E1, items: [], notes: [], oldWriters: [], running: false, error: null, oldHosts: [], ...o,
   });
 
   it('shows nothing of it where the agent has no upgrade or the install is converted', async () => {
@@ -1213,13 +1244,18 @@ describe('ApiBackend one-time upgrade', () => {
     expect(be.snapshot().upgrade?.error).toBe('Name this device');
     expect(posts(calls).map(c => c.path)).toEqual(['/api/upgrade/engine']);
     on('POST', '/api/device/setup', () => {
-      on('GET', '/api/upgrade', { json: view({ engine: 'done', recovery: 'done', close: 'todo' }, { oldWriters: ['VS Code'] }) });
+      on('GET', '/api/state', { json: { device: { id: 'd1', name: 'laptop', account: 'acct1', registered: true, storeEngine: E1, protection: 'file', protectionWeak: true, recoveryUnconfirmed: true }, engines: [], pairing: null } });
+      on('GET', '/api/upgrade', { json: view({ engine: 'done' }) });
       return { json: { recoveryCode: 'ABCD-EFGH-JKMN' } };
+    });
+    on('POST', '/api/device/recovery-code/kept', () => {
+      on('GET', '/api/upgrade', { json: view({ engine: 'done', recovery: 'done', close: 'todo' }, { oldWriters: ['VS Code'] }) });
+      return { status: 204 };
     });
     be.upgradeNext({ deviceName: 'laptop' });
     await settle();
     expect(posts(calls).at(-1)).toMatchObject({ path: '/api/device/setup', body: { engine: E1, deviceName: 'laptop' } });
-    // The agent reports the recovery step done; the code stays on screen until the user says it is kept.
+    // The code stays on screen until the user says it is kept; an event issues no new one.
     expect(be.snapshot().upgrade).toMatchObject({ step: 'recovery', code: ['ABCD', 'EFGH', 'JKMN'] });
     be.onEvent('upgrade', { seq: 1, type: 'upgrade', engine: null, data: null });
     await settle();
@@ -1261,8 +1297,64 @@ describe('ApiBackend one-time upgrade', () => {
     await settle();
     expect(be.snapshot().upgrade).toBeNull();
     expect(be.snapshot().vms.map(v => v.name)).toContain('atlas');
-    expect(posts(calls).map(c => c.path)).toEqual(['/api/upgrade/engine', '/api/device/setup', '/api/upgrade/convert']);
+    expect(posts(calls).map(c => c.path)).toEqual(['/api/upgrade/engine', '/api/device/setup', '/api/device/recovery-code/kept', '/api/upgrade/convert']);
     expect(calls.every(c => !c.query.includes('ABCD'))).toBe(true);
+  });
+
+  it('after a reload before the code was confirmed, shows a newly issued code; the conversion waits for the confirm', async () => {
+    const { be, calls, on, settle } = world({ unconfirmed: true });
+    on('GET', '/api/upgrade', { json: view({ engine: 'done' }) });
+    on('POST', '/api/device/recovery-code', { json: { recoveryCode: 'WXYZ-QRST' } });
+    await be.start();
+    await settle();
+    expect(be.snapshot().upgrade).toMatchObject({ step: 'recovery', code: ['WXYZ', 'QRST'] });
+    expect(posts(calls).map(c => c.path)).toEqual(['/api/device/recovery-code']);
+    be.onEvent('upgrade', { seq: 1, type: 'upgrade', engine: null, data: null });
+    await settle();
+    expect(posts(calls).map(c => c.path)).toEqual(['/api/device/recovery-code']);
+    // The confirm fails: the code and the step stay, with the error.
+    on('POST', '/api/device/recovery-code/kept', { status: 500, json: { title: 'The agent could not save it' } });
+    be.upgradeNext();
+    await settle();
+    expect(be.snapshot().upgrade).toMatchObject({ step: 'recovery', code: ['WXYZ', 'QRST'], error: 'The agent could not save it' });
+    on('POST', '/api/device/recovery-code/kept', () => {
+      on('GET', '/api/upgrade', { json: view({ engine: 'done', recovery: 'done', close: 'done' }, { oldHosts: ['old.example'] }) });
+      return { status: 204 };
+    });
+    be.upgradeNext();
+    await settle();
+    // The shared host still on the old stack is named before the conversion.
+    expect(be.snapshot().upgrade).toMatchObject({ step: 'convert', code: null, oldHosts: ['old.example'] });
+    expect(JSON.stringify(be.snapshot())).not.toContain('QRST');
+    expect(posts(calls).map(c => c.path)).toEqual(['/api/device/recovery-code', '/api/device/recovery-code/kept', '/api/device/recovery-code/kept']);
+  });
+
+  it('issues no code at the recovery step before the setup', async () => {
+    const { be, calls, on, settle } = world({ registered: false });
+    on('GET', '/api/upgrade', { json: view({ engine: 'done' }) });
+    await be.start();
+    await settle();
+    expect(be.snapshot().upgrade).toMatchObject({ step: 'recovery', code: null });
+    expect(posts(calls)).toEqual([]);
+  });
+
+  it('shows the conversion\'s notes once after it, with one button on to the normal screens', async () => {
+    const { be, calls, on, settle } = world();
+    const done = { engine: 'done', recovery: 'done', close: 'done', convert: 'done' };
+    on('GET', '/api/upgrade', { json: view(done, { stage: 'converted', notes: ['The VM far was not reached; it is moved on the next run.'], oldHosts: ['old.example'] }) });
+    await be.start();
+    expect(be.snapshot().upgrade).toMatchObject({ step: 'done', notes: ['The VM far was not reached; it is moved on the next run.'], oldHosts: [] });
+    expect(calls.some(c => c.path.startsWith('/api/engines/'))).toBe(false);
+    on('POST', '/api/upgrade/notes/read', () => {
+      on('GET', '/api/upgrade', { json: view(done, { stage: 'converted' }) });
+      return { json: view(done, { stage: 'converted' }) };
+    });
+    be.upgradeNext();
+    await settle();
+    await settle();
+    expect(posts(calls).map(c => c.path)).toEqual(['/api/upgrade/notes/read']);
+    expect(be.snapshot().upgrade).toBeNull();
+    expect(be.snapshot().vms.map(v => v.name)).toContain('atlas');
   });
 
   it('resumes at the step the agent reports after a reload, and runs nothing while a step runs', async () => {

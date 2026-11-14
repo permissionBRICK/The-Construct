@@ -84,8 +84,11 @@ An admin switches `repair.auto` on the host's Configuration tab.
 When `GET /api/upgrade` reports an old install not converted, its dialog is the only screen. It shows the step
 the agent reports as the first not done (engine, recovery code, close programs, convert) and runs only that one;
 the conversion is sent only after `GET /api/upgrade/writers` is empty. The recovery code from `POST /api/device/setup`
-stays in the dialog's state until the user confirms it was kept; a reload after the setup cannot show it again and
-goes on at the close step. When the agent reports `converted`, the normal screens load.
+stays in the dialog's state only, until the user confirms it was kept (`POST /api/device/recovery-code/kept`); the agent
+counts the step done only then. A reload before that asks for a new code (`POST /api/device/recovery-code`; the earlier one
+stops working) and shows it; the first run does the same when `GET /api/state` reports `recoveryUnconfirmed`. The convert
+step names the shared hosts the agent reports as still on the old stack (`oldHosts`). When the agent reports `converted`
+with notes, they show once with one button (`POST /api/upgrade/notes/read`); then, or without notes, the normal screens load.
 
 ## Secrets, profiles, hosts
 

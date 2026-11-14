@@ -38,6 +38,8 @@ const SHOTS: [Surf, string, string, string?][] = [
   ['win', 'construct-update', 'update', 'app'],
   ['win', 'create-vm', 'calm', 'create'],
   ['win', 'upgrade-code', 'upgrade-code'],
+  ['win', 'upgrade-host', 'upgrade-host'],
+  ['win', 'upgrade-done', 'upgrade-done'],
   ['phone', 'home', 'calm'],
   ['phone', 'vault-request', 'enter'],
   ['phone', 'projects', 'calm', 'projects'],

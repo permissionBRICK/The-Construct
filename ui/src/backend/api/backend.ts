@@ -171,6 +171,8 @@ export class ApiBackend implements Backend {
   private upgradeBusy = false;
   private upgradeProblem: string | null = null;
   private upgradeItems: Map<string, Upgrade['items'][number]> | null = null;
+  /** A new recovery code is being asked for (a reload before the user confirmed the last one); one at a time. */
+  private issuing = false;
   private writersTimer: ReturnType<typeof setTimeout> | null = null;
   constructor(private opts: ApiOptions) {
     this.fetchImpl = opts.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
@@ -265,6 +267,12 @@ export class ApiBackend implements Backend {
       this.storeEngine = st.device.storeEngine;
       // An old install not converted yet: the upgrade dialog is the only screen until its last step.
       if (await this.loadUpgrade()) return;
+      // Set up, but the code was never confirmed as kept (a reload while it was on screen): shown again, newly issued.
+      if (st.device.registered && st.device.recoveryUnconfirmed) {
+        const fr = this.s.firstRun;
+        if (!(fr && (fr.busy || (fr.step === 'code' && fr.code)))) await this.reissueFirstRunCode(st.device.account ?? null);
+        return;
+      }
       if (!st.device.registered) {
         await this.loadPlatform();
         if (!this.s.firstRun) {
@@ -739,7 +747,8 @@ export class ApiBackend implements Backend {
       this.composeUpgrade();
       return true;
     }
-    if (!v.legacy || v.stage === 'converted') {
+    // Converted: the dialog stays only for the notes the conversion left, until the user went on from them.
+    if (!v.legacy || (v.stage === 'converted' && !v.notes.length)) {
       const was = this.s.upgrade !== null;
       this.upgradeView = null;
       this.upgradeCode = null;
@@ -751,7 +760,42 @@ export class ApiBackend implements Backend {
     }
     this.upgradeView = v;
     this.composeUpgrade();
+    if (this.s.upgrade?.step === 'recovery' && !this.upgradeCode && !this.upgradeBusy && !v.running) await this.reissueUpgradeCode();
     return true;
+  }
+
+  /** The recovery step after a reload: set up already but the code never confirmed. A new code replaces it; the old one
+      stops working. Nothing happens before the setup (the device-name form runs it). */
+  private async reissueUpgradeCode() {
+    if (this.issuing) return;
+    this.issuing = true;
+    try {
+      const st = await ok(this.agent.GET('/api/state'));
+      if (!st.device.registered || !st.device.recoveryUnconfirmed || this.upgradeCode) return;
+      this.upgradeCode = codeGroups((await ok(this.agent.POST('/api/device/recovery-code'))).recoveryCode);
+      this.upgradeProblem = null;
+    } catch (e) {
+      this.upgradeProblem = errText(e);
+    } finally {
+      this.issuing = false;
+    }
+    this.composeUpgrade();
+  }
+
+  /** The first run's code after a reload, as above. */
+  private async reissueFirstRunCode(account: string | null) {
+    if (this.issuing) return;
+    this.issuing = true;
+    const base = { step: 'code' as const, localAddress: null, pairing: null, account };
+    this.emit({ firstRun: { ...base, busy: true, problem: null, code: null } });
+    try {
+      const code = codeGroups((await ok(this.agent.POST('/api/device/recovery-code'))).recoveryCode);
+      this.emit({ firstRun: { ...base, busy: false, problem: null, code } });
+    } catch (e) {
+      this.emit({ firstRun: { ...base, busy: false, problem: errText(e), code: null } });
+    } finally {
+      this.issuing = false;
+    }
   }
 
   /** After an upgrade event or a step: the dialog follows the agent; when the conversion is done the normal screens load. */
@@ -763,7 +807,7 @@ export class ApiBackend implements Backend {
   private composeUpgrade() {
     const v = this.upgradeView;
     if (!v) return;
-    const step = upgradeStep(v, this.upgradeCode !== null) ?? 'convert';
+    const step = v.stage === 'converted' ? 'done' : upgradeStep(v, this.upgradeCode !== null) ?? 'convert';
     const running = this.upgradeBusy || v.running;
     const failedItems = step === 'convert' && v.steps.find(x => x.id === 'convert')?.state === 'failed';
     const error = running ? null : this.upgradeProblem ?? v.error ?? (failedItems ? 'Some items did not move over' : null);
@@ -773,6 +817,7 @@ export class ApiBackend implements Backend {
       upgrade: {
         step, running, error, code: step === 'recovery' ? this.upgradeCode : null, writers: step === 'close' ? v.oldWriters : [],
         items: live ?? v.items.map(toUpgradeItem), found, adminPrompt: !!v.found?.localVms.length,
+        oldHosts: step === 'convert' ? v.oldHosts : [], notes: step === 'done' ? v.notes : [],
       },
     });
     this.watchWriters(step === 'close' && !running);
@@ -805,19 +850,18 @@ export class ApiBackend implements Backend {
     const u = this.s.upgrade, v = this.upgradeView;
     if (!u || !v || u.running) return;
     const step = u.step;
-    if (step === 'recovery' && this.upgradeCode) {
-      // The user confirmed the code is kept: it leaves the state here and is kept nowhere.
-      this.upgradeCode = null;
-      this.composeUpgrade();
-      void this.followUpgrade();
-      return;
-    }
+    if (step === 'recovery' && !this.upgradeCode && !v.running && this.issuing) return;
     this.upgradeBusy = true;
     this.upgradeProblem = null;
     this.composeUpgrade();
     void (async () => {
       try {
         if (step === 'engine') await ok(this.agent.POST('/api/upgrade/engine'));
+        else if (step === 'recovery' && this.upgradeCode) {
+          // The user confirmed the code is kept: the agent counts the step done, and the code leaves the state here.
+          await ok(this.agent.POST('/api/device/recovery-code/kept'));
+          this.upgradeCode = null;
+        } else if (step === 'done') await ok(this.agent.POST('/api/upgrade/notes/read'));
         else if (step === 'recovery') {
           const deviceName = input?.deviceName?.trim() ?? '';
           if (!v.storeEngine) throw new Error('No engine holds the account yet; run the first step again');
@@ -1732,9 +1776,20 @@ export class ApiBackend implements Backend {
     const fr = this.s.firstRun;
     if (!fr) return;
     if (fr.step === 'code') {
-      // The code leaves the state here; it is not kept anywhere.
-      this.emit({ firstRun: null });
-      void this.load();
+      if (fr.busy) return;
+      if (!fr.code) { void this.reissueFirstRunCode(fr.account ?? null); return; }
+      // The user confirmed the code is kept: the agent counts the setup done, and the code leaves the state here.
+      this.emit({ firstRun: { ...fr, busy: true, problem: null } });
+      void (async () => {
+        try {
+          await ok(this.agent.POST('/api/device/recovery-code/kept'));
+        } catch (e) {
+          this.emit({ firstRun: { ...fr, busy: false, problem: errText(e) } });
+          return;
+        }
+        this.emit({ firstRun: null });
+        await this.load();
+      })();
     } else if (fr.step === 'pairing') {
       void this.agent.DELETE('/api/pairing').catch(() => {});
       this.emit({ firstRun: { ...fr, step: 'start', pairing: null } });
