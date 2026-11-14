@@ -43,6 +43,13 @@ internal sealed class WebViewRuntime(string profile)
 
 internal sealed class AgentWindow : Form
 {
+    /// <summary>The Construct icon (the tray's disc, <c>construct.ico</c>) for the window and its taskbar button, instead of the generic one.</summary>
+    private static readonly Lazy<Icon> WindowIcon = new(() =>
+    {
+        using var stream = typeof(AgentWindow).Assembly.GetManifestResourceStream("construct.ico") ?? throw new InvalidOperationException("The icon resource is missing.");
+        return new Icon(stream);
+    });
+
     private readonly WebView2 _web = new() { Dock = DockStyle.Fill };
     private readonly string _surface;
     private readonly Uri _origin;
@@ -64,6 +71,7 @@ internal sealed class AgentWindow : Form
         _open = open;
         _log = log;
         Text = "Construct";
+        Icon = WindowIcon.Value;
         AutoScaleMode = AutoScaleMode.Dpi;
         if (Floating)
         {
