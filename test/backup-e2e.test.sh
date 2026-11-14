@@ -228,19 +228,24 @@ E2="$(unwrap "$(sed -n 2p "${tmp}/saved.cbk")" 2>"${tmp}/container.err")"
 ok 'the PC reads the container header and unwraps the same identity' sh -c "test -n '${E2}' && test '${E2}' = '${E}'"
 ok 'the container payload decrypts' bash -c "{ IFS= read -r a; IFS= read -r b; cat; } <'${tmp}/saved.cbk' | age -d -i <(printf '%s\n' '${E}') | zstd -dc | tar -t | grep -q 'backup-info.json'"
 
-# ── 6. pre-reinstall: pinned until restored ──────────────────────────────────
+# ── 6. the VM's own upload: one slot, never pinned by the VM ─────────────────
+# A backup the VM starts by itself (an old client's pre-reinstall run does) goes into the VM's
+# slot. The VM cannot pin it or label it; pins are a user's (design 10.1).
 id2="$(guest create --trigger pre-reinstall 2>/dev/null | tail -n 1 | jq -r '.id // empty')"
-ok 'a pre-reinstall backup is pinned' sh -c "curl -fsS -H '@${tmp}/admin-header' '${BASE}/api/v1/vms/${VM}/backups' | jq -e --arg id '${id2}' '.backups[] | select(.id == \$id) | .pinnedUntil != null' >/dev/null"
+ok "the VM's own backup is a slot upload, not pinned" sh -c "curl -fsS -H '@${tmp}/admin-header' '${BASE}/api/v1/vms/${VM}/backups' | jq -e --arg id '${id2}' '.backups[] | select(.id == \$id) | .kind == \"slot\" and .pinned == false and .pinnedUntil == null' >/dev/null"
 guest restored "${id2}" >/dev/null 2>&1
-ok 'restored unpins it' sh -c "curl -fsS -H '@${tmp}/admin-header' '${BASE}/api/v1/vms/${VM}/backups' | jq -e --arg id '${id2}' '.backups[] | select(.id == \$id) | .pinnedUntil == null' >/dev/null"
+ok 'restored changes no pin' sh -c "curl -fsS -H '@${tmp}/admin-header' '${BASE}/api/v1/vms/${VM}/backups' | jq -e --arg id '${id2}' '.backups[] | select(.id == \$id) | .pinnedUntil == null' >/dev/null"
 
 # ── 7. settings and rotation ─────────────────────────────────────────────────
 settings="$(admin PUT "/vms/${VM}/backups/settings" '{"intervalHours":12,"keep":1}')"
 ok 'the owner sets a per-VM override' sh -c "printf '%s' '${settings}' | jq -e '.keep == 1 and .intervalHours == 12 and .effective.keep == 1' >/dev/null"
+# A second upload by the VM within half an hour is refused, so a VM cannot push its slot's
+# content out or fill the host; the host-requested backup stays as the protected one.
 id3="$(guest create --trigger manual 2>/dev/null | tail -n 1 | jq -r '.id // empty')"
+ok "a second upload by the VM within half an hour is refused" test -z "${id3}"
 list="$(admin GET "/vms/${VM}/backups")"
-ok 'keep 1 leaves only the newest backup' sh -c "printf '%s' '${list}' | jq -e --arg id '${id3}' '.backups | map(.id) == [\$id]' >/dev/null"
-ok 'rotated payload files are gone from the host' sh -c "test \"\$(find '${tmp}/host-backups' -name '*.age' | wc -l)\" -eq 1"
+ok 'keep 1 keeps the slot and the protected host backup' sh -c "printf '%s' '${list}' | jq -e --arg slot '${id2}' --arg host '${id1}' '(.backups | map(.id) | sort) == ([\$slot, \$host] | sort) and (.backups[] | select(.id == \$host) | .protected == true)' >/dev/null"
+ok 'the host holds exactly those two payloads' sh -c "test \"\$(find '${tmp}/host-backups' -name '*.age' | wc -l)\" -eq 2"
 
 # ── 8. a manual request reaches a busy VM on its next heartbeat ──────────────
 admin POST "/vms/${VM}/backups/request" '{}' >/dev/null
