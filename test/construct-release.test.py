@@ -61,6 +61,12 @@ class CompanionPlanTests(unittest.TestCase):
         self.assertEqual(('companion-' + self.companion, True), (result['tag'], result['build']))
         self.assertIn('companion/App.cs', result['reason'])
 
+    def test_thin_extension_commit_keeps_the_last_companion(self):
+        (self.root / 'extension').mkdir(); (self.root / 'extension/package.json').write_text('{}')
+        self.git('add', '.'); self.git('commit', '-qm', 'thin extension'); thin = self.git('rev-parse', 'HEAD')
+        result = companion_plan.plan(self.root, thin, self.releases('companion-' + self.base))
+        self.assertEqual(result, {'tag': 'companion-' + self.base, 'build': False, 'reason': 'not-buildable'})
+
     def test_first_release_and_published_rerun(self):
         self.assertEqual(companion_plan.plan(self.root, self.docs, [])['build'], True)
         result = companion_plan.plan(self.root, self.docs, self.releases('companion-' + self.docs))

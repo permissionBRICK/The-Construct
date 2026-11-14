@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 """Build the device agent's packages: Windows x64 (the tray app) and Linux x64 (the console host).
 
-Each zip holds a self-contained publish with construct-agent(.exe) at its root and the UI bundle in
-ui/. The release workflow runs this into the host release's output directory; package-construct-release.py
+Each zip holds a self-contained publish with construct-agent(.exe) at its root, the UI bundle in
+ui/ and the VS Code extension as construct.vsix (extension/ with the agent's install scripts in
+install/; the install scripts put it into VS Code where VS Code is installed). The release workflow runs this into the host release's output directory; package-construct-release.py
 then lists both in the channel manifest with their SHA-256 (docs/release-flow.md).
 
     python3 scripts/package-agent.py --output DIR --commit SHA --version X.Y.Z [--ui-dist ui/dist]
 """
 import argparse
+import json
 import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
 import tempfile
+from xml.sax.saxutils import escape
 import zipfile
 
 PACKAGES = {
@@ -40,6 +43,58 @@ def zip_directory(source, target, executable):
             archive.writestr(info, path.read_bytes())
 
 
+VSIX_NAME = 'construct.vsix'
+# What the extension needs at run time; extension/src/projects.js is the VM's (bin/project-set.js), vm/ the guest's.
+EXTENSION_FILES = ['package.json', 'extension.js', 'README.md', 'src/agent.js', 'src/page.js', 'src/workspace.js', 'media/icon.svg']
+INSTALL_SCRIPTS = ['agent/install/Install-ConstructAgent.ps1', 'agent/install/install-construct-agent.sh']
+CONTENT_TYPES = {'.js': 'application/javascript', '.json': 'application/json', '.md': 'text/markdown', '.svg': 'image/svg+xml',
+                 '.ps1': 'text/plain', '.sh': 'text/plain', '.vsixmanifest': 'text/xml'}
+
+
+def build_vsix(root, target):
+    """The extension as a VSIX (an OPC zip: the manifest, the content types, extension/...), as Build-ControlPanelVsix
+    in lib/ makes it, with the agent's install scripts in extension/install/ for the extension's install button."""
+    package = json.loads((root / 'extension' / 'package.json').read_text())
+    files = [(f'extension/{name}', root / 'extension' / name) for name in EXTENSION_FILES]
+    files += [(f'extension/install/{Path(name).name}', root / name) for name in INSTALL_SCRIPTS]
+    manifest = f'''<?xml version="1.0" encoding="utf-8"?>
+<PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
+  <Metadata>
+    <Identity Language="en-US" Id="{escape(package['name'])}" Version="{escape(package['version'])}" Publisher="{escape(package['publisher'])}" />
+    <DisplayName>{escape(package['displayName'])}</DisplayName>
+    <Description xml:space="preserve">{escape(package['description'])}</Description>
+    <Categories>Other</Categories>
+    <Properties>
+      <Property Id="Microsoft.VisualStudio.Code.Engine" Value="{escape(package['engines']['vscode'])}" />
+      <Property Id="Microsoft.VisualStudio.Code.ExtensionKind" Value="{escape(package['extensionKind'][0])}" />
+      <Property Id="Microsoft.VisualStudio.Code.ExecutesCode" Value="true" />
+    </Properties>
+  </Metadata>
+  <Installation>
+    <InstallationTarget Id="Microsoft.VisualStudio.Code"/>
+  </Installation>
+  <Dependencies/>
+  <Assets>
+    <Asset Type="Microsoft.VisualStudio.Code.Manifest" Path="extension/package.json" Addressable="true" />
+  </Assets>
+</PackageManifest>
+'''
+    types = sorted({Path(name).suffix for name, _ in files} | {'.vsixmanifest'})
+    content_types = ('<?xml version="1.0" encoding="utf-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                     + ''.join(f'<Default Extension="{t[1:]}" ContentType="{CONTENT_TYPES[t]}"/>' for t in types) + '</Types>')
+    with zipfile.ZipFile(target, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+        def put(name, data):
+            info = zipfile.ZipInfo(name, date_time=(2020, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o644 << 16
+            archive.writestr(info, data)
+        put('extension.vsixmanifest', manifest)
+        put('[Content_Types].xml', content_types)
+        for name, source in files:
+            put(name, source.read_bytes())
+    return target
+
+
 def build(root, output, commit, version, ui_dist):
     if not re.fullmatch(r'[0-9a-f]{40}', commit) or not re.fullmatch(r'\d+\.\d+\.\d+', version):
         raise ValueError('Invalid commit or version')
@@ -59,6 +114,7 @@ def build(root, output, commit, version, ui_dist):
             if not (publish / executable).is_file():
                 raise ValueError(f'{runtime} publish has no {executable}')
             shutil.copytree(ui_dist, publish / 'ui')
+            build_vsix(root, publish / VSIX_NAME)
             zip_directory(publish, output / asset_name(key, commit), executable)
             print(output / asset_name(key, commit))
 

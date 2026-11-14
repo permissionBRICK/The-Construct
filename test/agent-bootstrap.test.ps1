@@ -10,6 +10,8 @@
       * the old Update-Construct.ps1 bodies (class E and F, test/fixtures/legacy-updaters) run against a
         download of this tree: what they dot-source and call exists, a failure in the hook reaches
         their result file as "fail", a success as "ok".
+      * the VS Code extension the package carries (construct.vsix) is installed where VS Code is, before
+        the agent starts; VS Code refusing it fails the install and the update, no VS Code is no failure.
       * the shipped scripts parse as Windows PowerShell 5.1 syntax and are ASCII.
 
         pwsh -NoProfile -File test/agent-bootstrap.test.ps1
@@ -31,7 +33,7 @@ function Test-Ps51([string]$Text, [string]$Name) {
     Assert ($Text -notmatch '[^\x00-\x7F]') "$Name is ASCII"
     return $ast
 }
-foreach ($file in @('install.ps1', 'Update-Construct.ps1', 'Update-T3Code.ps1', 'Get-ConstructT3PairingLink.ps1', 'lib/Construct.AgentShim.ps1')) {
+foreach ($file in @('install.ps1', 'Update-Construct.ps1', 'Update-T3Code.ps1', 'Get-ConstructT3PairingLink.ps1', 'lib/Construct.AgentShim.ps1', 'agent/install/Install-ConstructAgent.ps1')) {
     $null = Test-Ps51 ([IO.File]::ReadAllText((Join-Path $repo $file))) $file
 }
 $hookFunctions = @{
@@ -72,6 +74,7 @@ foreach ($class in @('e', 'f')) {
 $package = Join-Path $dir 'package'
 New-Item -ItemType Directory -Path $package | Out-Null
 Set-Content (Join-Path $package 'construct-agent.exe') 'fake agent'
+Set-Content (Join-Path $package 'construct.vsix') 'fake extension'
 $zip = Join-Path $dir 'agent.zip'
 Compress-Archive -Path (Join-Path $package '*') -DestinationPath $zip
 $sha = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLowerInvariant()
@@ -84,6 +87,10 @@ $ErrorActionPreference = 'Stop'
 $w = Get-Content -Raw (Join-Path $World 'world.json') | ConvertFrom-Json
 function global:Log([string]$Line) { Add-Content -LiteralPath (Join-Path $World 'calls.log') $Line }
 $env:LOCALAPPDATA = Join-Path $World 'local'
+# VS Code's CLI: only this test's stubs (bin/code of the world logs its arguments), never one of the machine.
+$testDir = Split-Path $World -Parent
+$env:PATH = @($env:PATH -split [IO.Path]::PathSeparator | Where-Object { $_ -and ($_.StartsWith($testDir) -or -not (Test-Path -LiteralPath (Join-Path $_ 'code'))) }) -join [IO.Path]::PathSeparator
+if (Test-Path (Join-Path $World 'bin/code')) { $env:PATH = (Join-Path $World 'bin') + [IO.Path]::PathSeparator + $env:PATH }
 $agentHome = Join-Path $env:LOCALAPPDATA 'Construct/agent'
 function global:Invoke-RestMethod {
     param($Uri, $Method = 'Get', $Headers, $Body, $ContentType, $TimeoutSec, [switch]$UseBasicParsing, $MaximumRedirection)
@@ -140,6 +147,13 @@ function New-World([string]$Name, [hashtable]$Options) {
         New-Item -ItemType Directory -Path (Join-Path $world 'local/Programs/ConstructCompanion') -Force | Out-Null
         Set-Content (Join-Path $world 'local/Programs/ConstructCompanion/ConstructCompanion.exe') 'old'
     }
+    if ($Options.code) {
+        New-Item -ItemType Directory -Path (Join-Path $world 'bin') -Force | Out-Null
+        $exit = 0
+        if ($Options.code -eq 'fail') { $exit = 1 }
+        Set-Content (Join-Path $world 'bin/code') "#!/bin/sh`necho `"code `$*`" >> '$world/calls.log'`necho 'a warning on stderr' >&2`nexit $exit"
+        & chmod +x (Join-Path $world 'bin/code')
+    }
     if ($Options.agentRunning) {
         New-Item -ItemType Directory -Path (Join-Path $world 'local/Construct/agent') -Force | Out-Null
         Set-Content (Join-Path $world 'local/Construct/agent/endpoint.json') '{"port":5555,"token":"agent-token-value"}'
@@ -173,6 +187,36 @@ Assert (-not ($run.Calls | Where-Object { $_ -like 'start *ConstructCompanion.ex
 Assert (-not (Test-Path (Join-Path $world 'local/The-Construct/The-Construct-rework'))) 'no install folder per ref'
 Assert ($run.Output -notmatch 'agent-token-value|companion-token') 'no token in the output'
 
+Assert ($run.Output -match 'VS Code is not installed') "no VS Code is no failure: $($run.Output)"
+
+# ---- install.ps1: the extension the package carries goes into VS Code, before the agent starts ----
+$world = New-World 'vscode' @{ companion = $true; code = 'ok' }
+$run = Invoke-World $world (Join-Path $repo 'install.ps1')
+Assert ($run.Code -eq 0) "install.ps1 with VS Code succeeds: $($run.Output)"
+$vsix = Join-Path $world 'local/Construct/agent/versions/2.0.0+abc/construct.vsix'
+$codeAt = [array]::IndexOf($run.Calls, "code --install-extension $vsix --force")
+$startAt = [array]::IndexOf($run.Calls, ($run.Calls | Where-Object { $_ -like 'start *construct-agent.exe*' } | Select-Object -First 1))
+Assert ($codeAt -ge 0) "VS Code installs the package's extension: $($run.Calls -join ' | ')"
+Assert ($codeAt -lt $startAt) 'the extension is installed before the agent starts'
+Assert ($run.Output -notmatch 'a warning on stderr') 'what code writes to stderr is not shown and not a failure'
+
+# ---- install.ps1: VS Code refusing the extension fails the install, as the old updater's step did ----
+$world = New-World 'vscode-fail' @{ companion = $true; code = 'fail' }
+$run = Invoke-World $world (Join-Path $repo 'install.ps1')
+Assert ($run.Code -ne 0 -and $run.Output -match 'did not install the Construct extension') "a refused extension fails: $($run.Output)"
+Assert (-not ($run.Calls | Where-Object { $_ -like 'start *construct-agent.exe*' })) 'the agent is not started'
+Assert (@($run.Calls | Where-Object { $_ -like 'start *ConstructCompanion.exe --background' }).Count -eq 1) 'the Companion is started again'
+Assert (-not (Test-Path (Join-Path $world 'local/Construct/agent/install.json'))) 'install.json is not written'
+
+# ---- Install-ConstructAgent.ps1 (the agent's own Windows installer) installs the extension too ----
+$world = New-World 'agent-installer' @{ code = 'ok'; arguments = @('-Package', $zip, '-Version', '3.0.0', '-NoStart') }
+$run = Invoke-World $world (Join-Path $repo 'agent/install/Install-ConstructAgent.ps1')
+Assert ($run.Code -eq 0) "Install-ConstructAgent.ps1 succeeds: $($run.Output)"
+Assert (@($run.Calls | Where-Object { $_ -match '^code --install-extension .*3\.0\.0.construct\.vsix --force$' }).Count -eq 1) "it installs the extension: $($run.Calls -join ' | ')"
+$world = New-World 'agent-installer-fail' @{ code = 'fail'; arguments = @('-Package', $zip, '-Version', '3.0.0', '-NoStart') }
+$run = Invoke-World $world (Join-Path $repo 'agent/install/Install-ConstructAgent.ps1')
+Assert ($run.Code -ne 0 -and $run.Output -match 'did not install the Construct extension') "and fails when VS Code refuses it: $($run.Output)"
+
 # ---- install.ps1: a package that does not match the manifest leaves the old Companion running ----
 $world = New-World 'mismatch' @{ companion = $true; sha = ('0' * 64) }
 $run = Invoke-World $world (Join-Path $repo 'install.ps1')
@@ -194,13 +238,29 @@ Assert ($run.Code -eq 0) "hand-over succeeds: $($run.Output)"
 Assert ($run.Calls -contains 'rest Post http://127.0.0.1:5555/api/update/check' -and $run.Calls -contains 'rest Post http://127.0.0.1:5555/api/update/install') 'the running agent updates itself'
 Assert (-not ($run.Calls | Where-Object { $_ -like 'web *' -or $_ -like '*v1/quit' })) 'nothing is downloaded, the Companion is left alone'
 
+# ---- hand-over with VS Code: the installed version's extension replaces an old one; a refusal fails ----
+foreach ($case in @(@{ code = 'ok'; ok = $true }, @{ code = 'fail'; ok = $false })) {
+    $world = New-World ('handover-vscode-' + $case.code) @{ agentRunning = $true; code = $case.code }
+    $folder = Join-Path $world 'local/Construct/agent/versions\1.0.0'
+    New-Item -ItemType Directory -Path $folder -Force | Out-Null
+    Set-Content (Join-Path $folder 'construct.vsix') 'fake extension'
+    Set-Content (Join-Path $world 'local/Construct/agent/install.json') '{"current":"1.0.0","previous":null,"pending":false}'
+    $run = Invoke-World $world (Join-Path $repo 'install.ps1')
+    Assert (@($run.Calls | Where-Object { $_ -like 'code --install-extension *construct.vsix --force' }).Count -eq 1) "hand-over installs the extension ($($case.code)): $($run.Calls -join ' | ')"
+    Assert (($run.Code -eq 0) -eq $case.ok) "hand-over with VS Code $($case.code) exits by the extension step: $($run.Output)"
+}
+$world = New-World 'handover-vscode-novsix' @{ agentRunning = $true; code = 'ok' }
+$run = Invoke-World $world (Join-Path $repo 'install.ps1')
+Assert ($run.Code -eq 0 -and -not ($run.Calls | Where-Object { $_ -like 'code *' })) "an installed version without an extension is left to the agent: $($run.Output)"
+
 # ---- Update-Construct.ps1 (the bootstrap): the old parameters and the result file ----
 $scripts = Join-Path $dir 'scripts'
 New-Item -ItemType Directory -Path $scripts | Out-Null
 Copy-Item (Join-Path $repo 'install.ps1'), (Join-Path $repo 'Update-Construct.ps1') $scripts
-foreach ($case in @(@{ name = 'update-ok'; sha = $sha; want = 'ok' }, @{ name = 'update-fail'; sha = ('0' * 64); want = 'fail' })) {
+foreach ($case in @(@{ name = 'update-ok'; sha = $sha; want = 'ok' }, @{ name = 'update-fail'; sha = ('0' * 64); want = 'fail' },
+                    @{ name = 'update-vscode-fail'; sha = $sha; want = 'fail'; code = 'fail' }, @{ name = 'update-vscode-ok'; sha = $sha; want = 'ok'; code = 'ok' })) {
     $result = Join-Path $dir ($case.name + '.result')
-    $world = New-World $case.name @{ companion = $true; sha = $case.sha; arguments = @('-Repo', 'permissionBRICK/The-Construct', '-Ref', 'main', '-SkipCompanion', '-ResultFile', $result) }
+    $world = New-World $case.name @{ companion = $true; sha = $case.sha; code = $case.code; arguments = @('-Repo', 'permissionBRICK/The-Construct', '-Ref', 'main', '-SkipCompanion', '-ResultFile', $result) }
     $run = Invoke-World $world (Join-Path $scripts 'Update-Construct.ps1')
     Assert ((Get-Content $result).Trim() -eq $case.want) "Update-Construct.ps1 writes $($case.want): $($run.Output)"
     Assert (($run.Code -eq 0) -eq ($case.want -eq 'ok')) "Update-Construct.ps1 exits by its result ($($case.name))"

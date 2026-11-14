@@ -11,15 +11,10 @@ commands are preserved in local runners. They do not restart live T3 services.
 
 On Linux, install Node.js, Python 3, jq, PowerShell (`pwsh`) and the .NET 10 SDK.
 The gateway tests require aiohttp for `/usr/bin/python3` (on Ubuntu:
-`apt-get install python3-aiohttp jq`). Set up browser-test dependencies once:
+`apt-get install python3-aiohttp jq`). The `ui` group installs its own browser for
+its screenshots (`npx playwright install --with-deps chromium` in `ui/` once).
 
-```sh
-cd extension/test
-npm install
-npx playwright install --with-deps chromium
-```
-
-Then, from the repository root, choose the checks relevant to the change:
+From the repository root, choose the checks relevant to the change:
 
 ```sh
 bash test/run-local-checks.sh panel
@@ -48,11 +43,12 @@ stays within one directory and `**` crosses directories. A row without a group s
 | Path | Groups |
 |---|---|
 | `companion/**`, `test/fixtures/companion-parity/**`, `test/companion-*`, `test/feature-set.test.ps1`, `Install-ConstructCompanion.ps1`, `Auto-Install.ps1`, `install.ps1`, `Update-Construct.ps1` | `companion` |
-| `extension/src/**`, `extension/media/**`, `extension/vm/**`, `extension/test/**` | `panel`, `companion` |
-| `extension/src/updates.js`, `extension/src/t3code*`, `bin/*t3*`, `test/t3-*` | `t3` |
-| `service/**`, `drivers/**`, `lib/**`, `bin/**`, `console-viewer/**` | `service` |
+| `extension/**` | `panel` |
+| `extension/vm/**` | `companion` |
+| `bin/*t3*`, `test/t3-*`, `extension/vm/*t3*` | `t3` |
+| `service/**`, `drivers/**`, `lib/**`, `bin/**`, `console-viewer/**`, `extension/src/projects.js` | `service` |
 | `ui/**` | `ui` |
-| `agent/**`, `test/agent-install.test.sh`, `service/src/Construct.Keys/**`, `service/src/Constructd.Store/**`, `service/src/Constructd.Sync/**`, `service/src/Constructd.Api/**`, `service/openapi/**` | `agent`, `ui` |
+| `agent/**`, `test/agent-install.test.sh`, `test/agent-bootstrap.test.ps1`, `install.ps1`, `Update-Construct.ps1`, `scripts/package-agent.py`, `service/src/Construct.Keys/**`, `service/src/Constructd.Store/**`, `service/src/Constructd.Sync/**`, `service/src/Constructd.Api/**`, `service/openapi/**` | `agent`, `ui` |
 | `companion/src/Construct.Companion.Core/**`, `companion/src/Construct.Companion.Windows/**`, `companion/src/Construct.Companion.Fakes/**`, `extension/vm/**` | `agent` |
 | `scripts/**`, `.github/**`, `VERSION`, `test/release.test.py`, `test/construct-release.test.py`, `test/run-local-checks.sh`, `test/helpers/changed-groups.py`, `docs/local-checks.md`, `service/src/Constructd.Core/Logic/ReleaseChannel.cs`, `service/tests/Constructd.Tests/Updates/ReleaseChannelTests.cs` | `release` |
 | `docs/**`, `*.md`, `assets/**` | |
@@ -99,9 +95,11 @@ bash test/e2e/guest-rig.sh --backend local down
 
 `bash test/e2e/guest-rig.sh --help` lists the `full` variant, `--keep` and `--compare`.
 
-The `companion` group builds with warnings as errors, runs Companion .NET tests,
-Node parity and Companion suites, the three Companion PowerShell suites, and the
-first-install feature-set suite. It is included in `all`; the Companion workflow only publishes its Windows deliverable.
+The `companion` group runs the vault guest scripts' suite, the three Companion
+PowerShell suites and the first-install feature-set suite. The Companion app and its
+.NET tests are no longer built: they need the old panel's pages, which went with the
+thin extension, and the app itself goes next; the agent group builds the Companion
+projects the agent uses. It is included in `all`; the Companion workflow only publishes its Windows deliverable.
 
 The `agent` group builds the device agent with warnings as errors and runs its tests: several
 agents in process against the real engine in fake mode on a loopback HTTPS port (setup, pairing,
@@ -116,9 +114,12 @@ The `ui` group runs the client UI's unit tests (vitest), builds its static bundl
 and compares its screenshots in headless Chromium (Playwright). After an intended
 visual change, refresh the pictures with `npm run test:screens:update` in `ui/`.
 
-The panel defaults to the native theme; set `UI_SMOKE_THEME=classic` or `terminal`
-to check another theme. These runners group the former workflow checks; other
-focused tests remain available in `test/`, `extension/test/` and `service/tests/`.
+The `panel` group tests the VS Code extension under plain node with `vscode` faked
+(finding, starting and installing the agent, the webview documents and their message
+bridge, Remote-SSH, the register-workspace offer), the profile validator the VM's
+`construct project set` loads from `extension/src/projects.js`, and three PowerShell
+suites of the old lifecycle scripts. These runners group the former workflow checks;
+other focused tests remain available in `test/` and `service/tests/`.
 
 Windows PowerShell 5.1 behavior and the pinned Windows ISO executable need an
 actual Windows environment. Use a local disposable Windows VM with Node.js,
