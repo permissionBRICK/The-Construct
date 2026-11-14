@@ -64,8 +64,9 @@ internal sealed class WindowsUpgradePlatform(string knownHostsFile) : DefaultUpg
 
     public override async Task<int> RunElevatedAsync(string program, IReadOnlyList<string> arguments, CancellationToken ct)
     {
-        // runas needs the shell: the arguments are quoted here (paths and fixed switches, no secret).
-        var info = new ProcessStartInfo(program, string.Join(' ', arguments.Select(Quote))) { UseShellExecute = true, Verb = "runas" };
+        // runas needs the shell: the arguments are quoted here (paths and fixed switches, no secret). No window: the
+        // installer asks nothing and writes its output to a log.
+        var info = new ProcessStartInfo(program, string.Join(' ', arguments.Select(Quote))) { UseShellExecute = true, Verb = "runas", WindowStyle = ProcessWindowStyle.Hidden };
         try
         {
             using var process = Process.Start(info) ?? throw new AgentFailure(502, "engine-install-failed", "The installer did not start.");
@@ -76,6 +77,21 @@ internal sealed class WindowsUpgradePlatform(string knownHostsFile) : DefaultUpg
         {
             throw new AgentFailure(409, "elevation-declined", "The administrator prompt was declined; the engine was not installed.");
         }
+    }
+
+    public override bool CanHostEngine => Environment.Is64BitOperatingSystem;
+
+    /// <summary>Restarts Windows at once (<c>shutdown /r /t 0</c>, which a signed-in user may run); no window, no dialog of ours.</summary>
+    public override async Task RestartWindowsAsync(CancellationToken ct)
+    {
+        var shutdown = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "shutdown.exe");
+        var info = new ProcessStartInfo(shutdown) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardError = true, RedirectStandardOutput = true };
+        foreach (var arg in new[] { "/r", "/t", "0" }) info.ArgumentList.Add(arg);
+        using var process = Process.Start(info) ?? throw new AgentFailure(502, "restart-failed", "Windows could not be restarted.");
+        var error = await process.StandardError.ReadToEndAsync(ct).ConfigureAwait(false);
+        await process.WaitForExitAsync(ct).ConfigureAwait(false);
+        if (process.ExitCode != 0)
+            throw new AgentFailure(502, "restart-failed", error.Trim() is { Length: > 0 } said ? "Windows could not be restarted: " + said.Split('\n')[0].Trim() : "Windows could not be restarted.");
     }
 
     private static string Quote(string value) => value.Length > 0 && !value.Any(c => c is ' ' or '"' or '\t') ? value : "\"" + value.Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";

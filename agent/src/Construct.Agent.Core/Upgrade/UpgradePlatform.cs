@@ -28,8 +28,14 @@ public interface IUpgradePlatform
     /// <summary>The old writers still running, as the user would name them: VS Code, the old Companion. Empty when none.</summary>
     IReadOnlyList<string> OldWriters();
 
-    /// <summary>Runs <paramref name="program"/> with one elevation prompt and waits for it; its exit code.</summary>
+    /// <summary>Runs <paramref name="program"/> with one elevation prompt and no window, and waits for it; its exit code.</summary>
     Task<int> RunElevatedAsync(string program, IReadOnlyList<string> arguments, CancellationToken ct);
+
+    /// <summary>Whether this device can run an engine (5.3): Windows only.</summary>
+    bool CanHostEngine { get; }
+
+    /// <summary>Restarts the OS now, without a dialog of its own (the user clicked Restart now).</summary>
+    Task RestartWindowsAsync(CancellationToken ct);
 
     /// <summary>Runs <paramref name="command"/> on a VM as root, <paramref name="stdin"/> on its standard input.</summary>
     Task<VmShellResult> RunOnVmAsync(LegacyVmTarget target, IReadOnlyList<string> command, byte[]? stdin, CancellationToken ct);
@@ -67,6 +73,10 @@ public class DefaultUpgradePlatform(string knownHostsFile) : IUpgradePlatform
 
     public virtual Task<int> RunElevatedAsync(string program, IReadOnlyList<string> arguments, CancellationToken ct) =>
         throw new AgentFailure(501, "not-available", "Installing the engine needs Windows.");
+
+    public virtual bool CanHostEngine => false;
+
+    public virtual Task RestartWindowsAsync(CancellationToken ct) => throw new AgentFailure(501, "not-available", "Restarting needs Windows.");
 
     public virtual async Task<VmShellResult> RunOnVmAsync(LegacyVmTarget target, IReadOnlyList<string> command, byte[]? stdin, CancellationToken ct)
     {

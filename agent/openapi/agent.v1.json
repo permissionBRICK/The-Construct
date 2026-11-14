@@ -1731,7 +1731,7 @@
         "tags": [
           "device"
         ],
-        "description": "What this device can do: platform, notifications, microphone, workspace share, start with the OS (null: not available).",
+        "description": "What this device can do: platform, notifications, microphone, workspace share, start with the OS, whether it can run an engine (engineHost).",
         "operationId": "GetDeviceFeatures",
         "responses": {
           "200": {
@@ -1743,6 +1743,90 @@
                 }
               }
             }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/engines/local/setup": {
+      "get": {
+        "tags": [
+          "device"
+        ],
+        "description": "Where setting up the engine on this PC stands: idle, running, done (with its engine id), failed (the installer's reason) or restart (Windows must restart to turn on Hyper-V).",
+        "operationId": "GetLocalEngineSetup",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineSetupView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "device"
+        ],
+        "description": "Sets up the engine on this PC (Windows): the host package of the device's channel, checked against the manifest, installed unattended with one elevation prompt; the token goes into the state. An engine on loopback this agent already holds a sign-in for is taken as it is. Progress as engine-setup events; 501 not-available where the device cannot host one.",
+        "operationId": "StartLocalEngineSetup",
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineSetupView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/device/restart": {
+      "post": {
+        "tags": [
+          "device"
+        ],
+        "description": "Restarts Windows now, after the engine setup said Hyper-V needs it (409 no-restart-needed otherwise). Nothing continues by itself afterwards.",
+        "operationId": "RestartDevice",
+        "responses": {
+          "202": {
+            "description": "Accepted"
           },
           "default": {
             "description": "An error.",
@@ -3031,7 +3115,8 @@
           "microphone",
           "share",
           "startWithOs",
-          "shell"
+          "shell",
+          "engineHost"
         ],
         "type": "object",
         "properties": {
@@ -3051,6 +3136,9 @@
             "type": "boolean"
           },
           "shell": {
+            "type": "boolean"
+          },
+          "engineHost": {
             "type": "boolean"
           }
         }
@@ -3205,6 +3293,35 @@
             ]
           },
           "known": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "EngineSetupView": {
+        "required": [
+          "available",
+          "state",
+          "message",
+          "engine"
+        ],
+        "type": "object",
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "state": {
+            "type": "string"
+          },
+          "message": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "engine": {
             "type": [
               "null",
               "string"

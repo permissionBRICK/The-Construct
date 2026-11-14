@@ -1,4 +1,5 @@
 using Construct.Agent.Device;
+using Construct.Agent.Engines;
 using Construct.Agent.Update;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -14,12 +15,27 @@ namespace Construct.Agent.Http;
 /// </summary>
 public static class DeviceRoutes
 {
-    public static void Map(RouteGroupBuilder api, DeviceServices device)
+    public static void Map(RouteGroupBuilder api, DeviceServices device, LocalEngineSetup engineSetup)
     {
         // ---- this device ----
 
-        api.MapGet("/device/features", () => TypedResults.Ok(Features(device))).WithName("GetDeviceFeatures")
-            .WithDescription("What this device can do: platform, notifications, microphone, workspace share, start with the OS (null: not available).");
+        api.MapGet("/device/features", () => TypedResults.Ok(Features(device, engineSetup))).WithName("GetDeviceFeatures")
+            .WithDescription("What this device can do: platform, notifications, microphone, workspace share, start with the OS, whether it can run an engine (engineHost).");
+
+        // ---- the engine on this PC (5.3): the first run's setup; the upgrade runs the same as its engine step ----
+
+        api.MapGet("/engines/local/setup", () => TypedResults.Ok(engineSetup.View())).WithName("GetLocalEngineSetup")
+            .WithDescription("Where setting up the engine on this PC stands: idle, running, done (with its engine id), failed (the installer's reason) or restart (Windows must restart to turn on Hyper-V).");
+
+        api.MapPost("/engines/local/setup", () => TypedResults.Accepted("/api/engines/local/setup", engineSetup.Start())).WithName("StartLocalEngineSetup")
+            .WithDescription("Sets up the engine on this PC (Windows): the host package of the device's channel, checked against the manifest, installed unattended with one elevation prompt; the token goes into the state. An engine on loopback this agent already holds a sign-in for is taken as it is. Progress as engine-setup events; 501 not-available where the device cannot host one.");
+
+        api.MapPost("/device/restart", async (CancellationToken ct) =>
+        {
+            await engineSetup.RestartAsync(ct);
+            return TypedResults.Accepted("/api/engines/local/setup");
+        }).WithName("RestartDevice")
+            .WithDescription("Restarts Windows now, after the engine setup said Hyper-V needs it (409 no-restart-needed otherwise). Nothing continues by itself afterwards.");
 
         api.MapGet("/device/settings", () => TypedResults.Ok(Settings(device))).WithName("GetDeviceSettings");
 
@@ -122,8 +138,8 @@ public static class DeviceRoutes
         }).WithName("OpenShell").WithDescription("Shows a surface of the desktop shell (a second start of the app hands its request over this way).");
     }
 
-    private static DeviceFeatures Features(DeviceServices device) => new(device.Platform.Name, device.Platform.Notifications is not null,
-        device.Platform.Microphone is not null, device.Platform.Shares is not null, device.Platform.StartWithOs is not null, device.Shell is not null);
+    private static DeviceFeatures Features(DeviceServices device, LocalEngineSetup engineSetup) => new(device.Platform.Name, device.Platform.Notifications is not null,
+        device.Platform.Microphone is not null, device.Platform.Shares is not null, device.Platform.StartWithOs is not null, device.Shell is not null, engineSetup.Available);
 
     private static DeviceSettingsView Settings(DeviceServices device)
     {
@@ -132,7 +148,8 @@ public static class DeviceRoutes
     }
 }
 
-public sealed record DeviceFeatures(string Platform, bool Notifications, bool Microphone, bool Share, bool StartWithOs, bool Shell);
+/// <param name="EngineHost">This device can run an engine (Windows): the first run offers "This PC".</param>
+public sealed record DeviceFeatures(string Platform, bool Notifications, bool Microphone, bool Share, bool StartWithOs, bool Shell, bool EngineHost);
 
 /// <param name="StartWithOs">Null where the platform cannot start the agent with the session.</param>
 public sealed record DeviceSettingsView(string Channel, bool AutoUpdate, bool? StartWithOs);

@@ -40,7 +40,27 @@ public sealed class FakeUpgradePlatform(LegacyFixture fixture) : IUpgradePlatfor
 
     public IReadOnlyList<string> OldWriters() => Writers.ToArray();
 
-    public Task<int> RunElevatedAsync(string program, IReadOnlyList<string> arguments, CancellationToken ct) => throw new InvalidOperationException("Tests install no engine elevated.");
+    /// <summary>The elevated run; by default none happens. Tests of the engine setup act as the installer here.</summary>
+    public Func<string, IReadOnlyList<string>, int>? Elevated { get; set; }
+
+    public List<IReadOnlyList<string>> ElevatedRuns { get; } = [];
+
+    public bool CanHostEngine { get; set; } = true;
+
+    public int Restarts { get; private set; }
+
+    public Task<int> RunElevatedAsync(string program, IReadOnlyList<string> arguments, CancellationToken ct)
+    {
+        if (Elevated is null) throw new InvalidOperationException("Tests install no engine elevated.");
+        ElevatedRuns.Add(arguments);
+        return Task.FromResult(Elevated(program, arguments));
+    }
+
+    public Task RestartWindowsAsync(CancellationToken ct)
+    {
+        Restarts++;
+        return Task.CompletedTask;
+    }
 
     public Task<VmShellResult> RunOnVmAsync(LegacyVmTarget target, IReadOnlyList<string> command, byte[]? stdin, CancellationToken ct)
     {

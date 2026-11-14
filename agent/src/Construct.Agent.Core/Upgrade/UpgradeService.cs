@@ -1,15 +1,13 @@
-using System.IO.Compression;
-using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Construct.Agent.Device;
-using Construct.Agent.Update;
+using Construct.Agent.Engines;
 
 namespace Construct.Agent.Upgrade;
 
 /// <summary>Where the one-time upgrade stands, for the dialog (11.6).</summary>
 /// <param name="Legacy">True when the old client's state is on this PC: the dialog shows the upgrade variant.</param>
-/// <param name="Steps">The dialog's steps in order, each <c>todo</c>, <c>running</c>, <c>done</c>, <c>skipped</c> or <c>failed</c>.</param>
+/// <param name="Steps">The dialog's steps in order, each <c>todo</c>, <c>running</c>, <c>done</c>, <c>skipped</c> or <c>failed</c>; the engine step <c>restart</c> when Windows must restart to turn on Hyper-V.</param>
 /// <param name="Found">What the converter will read (counts and names, never a value).</param>
 /// <param name="Notes">What the last run says the user should know, until the user went on from them (<c>POST /api/upgrade/notes/read</c>); only to the account they were written for.</param>
 /// <param name="OldHosts">Shared hosts that still run the old stack: this device stays signed in the old way there until their admin updates them.</param>
@@ -32,27 +30,28 @@ public sealed record ConvertRequest(string? From = null);
 /// conversion. Each step can be repeated; the state is in <c>bridge.json</c>, whose <c>converted</c> stage
 /// is written last by the converter.
 /// </summary>
-public sealed class UpgradeService : IDisposable
+public sealed class UpgradeService
 {
     private readonly DeviceAgent _agent;
     private readonly AgentOptions _options;
     private readonly IUpgradePlatform _platform;
     private readonly DeviceSettings _settings;
     private readonly IDeviceEngines _engines;
-    private readonly HttpClient _http;
+    private readonly LocalEngineSetup _setup;
     private readonly object _gate = new();
     private Task _work = Task.CompletedTask;
     private string? _running;
     private string? _error;
 
-    public UpgradeService(DeviceAgent agent, AgentOptions options, IUpgradePlatform platform, DeviceSettings settings, IDeviceEngines engines, HttpClient? http = null)
+    /// <param name="setup">Sets up the engine on this PC; the first run uses the same.</param>
+    public UpgradeService(DeviceAgent agent, AgentOptions options, IUpgradePlatform platform, DeviceSettings settings, IDeviceEngines engines, LocalEngineSetup setup)
     {
         _agent = agent;
         _options = options;
         _platform = platform;
         _settings = settings;
         _engines = engines;
-        _http = http ?? new HttpClient { Timeout = TimeSpan.FromMinutes(10) };
+        _setup = setup;
         Bridge = new BridgeFile(Path.Combine(options.DataDirectory, "bridge.json"));
         // The first-device setup of an upgrade takes the old vault key as K (8.2, 13.1).
         agent.SetupVaultKey = SetupVaultKey;
@@ -63,8 +62,12 @@ public sealed class UpgradeService : IDisposable
     /// <summary>Tests replace the converter's knobs (a cut in the middle).</summary>
     public Func<string, Task>? BeforeItem { get; set; }
 
-    /// <summary>The package the engine step installs; tests replace it.</summary>
-    public Func<CancellationToken, Task<string>>? EngineInstaller { get; set; }
+    /// <summary>The package the engine step installs; tests replace it (<see cref="LocalEngineSetup.Installer"/>).</summary>
+    public Func<CancellationToken, Task<string>>? EngineInstaller
+    {
+        get => _setup.Installer;
+        set => _setup.Installer = value;
+    }
 
     /// <summary>The running step, awaitable.</summary>
     public Task Work
@@ -97,9 +100,11 @@ public sealed class UpgradeService : IDisposable
         catch (AgentFailure failure) { legacy = null; error ??= failure.Message; }
 
         var writers = bridge.Stage == BridgeState.Converted ? [] : OldWriters();
+        var setup = _setup.View();
         var steps = new List<UpgradeStep>
         {
-            Step("engine", bridge.Engine is "done" or "skipped" ? bridge.Engine : "todo"),
+            bridge.Engine is "done" or "skipped" ? Step("engine", bridge.Engine)
+                : setup.State == "restart" ? Step("engine", "restart", setup.Message) : Step("engine", "todo"),
             // Done only once the user confirmed the code was kept: until then the dialog shows it again, newly issued.
             Step("recovery", _agent.IsRegistered && !_agent.RecoveryUnconfirmed ? "done" : "todo"),
             Step("close", bridge.Stage == BridgeState.Converted ? "done" : writers.Count == 0 ? "done" : "todo", writers.Count == 0 ? null : string.Join(", ", writers) + " still open."),
@@ -134,7 +139,7 @@ public sealed class UpgradeService : IDisposable
         var local = legacy.Instances().Any(i => i.Local);
         string? localEngine = Bridge.Read().LocalEngine;
         if (local && (localEngine is null || _agent.Engines().All(e => e.Id != localEngine)))
-            localEngine = await InstallSoloEngineAsync(legacy, ct).ConfigureAwait(false);
+            localEngine = await _setup.RunAsync(legacy.BootstrapKey(), ct).ConfigureAwait(false);
 
         // The shared hosts are added for sign-in now; the converter enrols this device there.
         string? firstHost = null;
@@ -151,91 +156,6 @@ public sealed class UpgradeService : IDisposable
             ?? throw new AgentFailure(409, "no-engine", "No engine to keep the account's store: this PC has no local VM and no shared host with a stored sign-in.");
         Bridge.Update(b => b with { Engine = local ? "done" : "skipped", LocalEngine = localEngine, StoreEngine = store });
     }
-
-    /// <summary>
-    /// The solo engine (5.3): the host package from this device's channel, checked against the manifest's
-    /// SHA-256, installed by <c>Install-ConstructHost.ps1 -Solo</c> with one elevation prompt; the installer
-    /// writes the user's admin token into a file this user alone can read, which is taken into the state
-    /// (protected) and deleted.
-    /// </summary>
-    private async Task<string> InstallSoloEngineAsync(LegacyState legacy, CancellationToken ct)
-    {
-        var tokenFile = Path.Combine(_options.DataDirectory, "engine-token.json");
-        if (!File.Exists(tokenFile))
-        {
-            if (EngineInstaller is not null) tokenFile = await EngineInstaller(ct).ConfigureAwait(false);
-            else await RunSoloInstallerAsync(legacy, tokenFile, ct).ConfigureAwait(false);
-        }
-
-        if (!File.Exists(tokenFile)) throw new AgentFailure(502, "engine-install-failed", "The engine installer wrote no token; see its window for why, then retry.");
-        var document = JsonNode.Parse(File.ReadAllText(tokenFile)) as JsonObject ?? throw new AgentFailure(502, "engine-install-failed", "The engine's token file is not readable.");
-        var url = document["url"]?.GetValue<string>() ?? $"https://127.0.0.1:{_options.LocalEnginePort}";
-        var pin = (document["certificateSha256"]?.GetValue<string>() ?? "").Replace(":", "", StringComparison.Ordinal);
-        var token = document["token"]?.GetValue<string>();
-        var added = await _agent.AddEngineAsync(url, pin, "This PC", token, ct).ConfigureAwait(false);
-        File.Delete(tokenFile);
-        return added.Id;
-    }
-
-    private async Task RunSoloInstallerAsync(LegacyState legacy, string tokenFile, CancellationToken ct)
-    {
-        var channel = _settings.Read().Channel;
-        var manifestUrl = AgentUpdater.ManifestUrl(channel, AgentUpdater.DefaultRepository) ?? throw new AgentFailure(400, "invalid-channel", "The device's channel is not usable.");
-        var manifest = JsonNode.Parse(await _http.GetStringAsync(manifestUrl, ct).ConfigureAwait(false)) as JsonObject
-            ?? throw new AgentFailure(502, "manifest-unavailable", "The channel manifest could not be read.");
-        var asset = manifest["payloadAsset"]?.GetValue<string>();
-        var sha = manifest["payloadSha256"]?.GetValue<string>();
-        var tag = manifest["releaseTag"]?.GetValue<string>();
-        if (asset is null || sha is null || tag is null || asset.Contains('/') || asset.Contains('\\') || sha.Length != 64)
-            throw new AgentFailure(502, "manifest-invalid", "The channel manifest names no host package.");
-        var url = channel is "stable" or "nightly"
-            ? new Uri($"https://github.com/{AgentUpdater.DefaultRepository}/releases/download/{tag}/{Uri.EscapeDataString(asset)}")
-            : new Uri(manifestUrl, Uri.EscapeDataString(asset));
-        var zip = Path.Combine(_options.DataDirectory, "engine-package.zip");
-        await using (var file = File.Create(zip))
-        await using (var body = await _http.GetStreamAsync(url, ct).ConfigureAwait(false))
-            await body.CopyToAsync(file, ct).ConfigureAwait(false);
-        await using (var check = File.OpenRead(zip))
-            if (!Convert.ToHexStringLower(await SHA256.HashDataAsync(check, ct).ConfigureAwait(false)).Equals(sha, StringComparison.OrdinalIgnoreCase))
-                throw new AgentFailure(502, "package-mismatch", "The host package does not match the SHA-256 in the channel manifest.");
-        using (var archive = ZipFile.OpenRead(zip))
-            if (archive.GetEntry("scripts/service/host/Install-ConstructHost.ps1") is null) throw new AgentFailure(502, "package-invalid", "The host package has no installer.");
-
-        // The elevated part checks the hash again (the zip sits in this user's directory), unpacks the package
-        // under ProgramData, where the service may run from, and runs the solo install.
-        var script = Path.Combine(_options.DataDirectory, "install-engine.ps1");
-        File.WriteAllText(script, SoloScript);
-        var arguments = new List<string>
-        {
-            "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-Zip", zip, "-Sha256", sha, "-TokenFile", tokenFile,
-            "-AdminUser", Environment.UserDomainName + "\\" + Environment.UserName,
-        };
-        if (legacy.BootstrapKey() is { } key) arguments.AddRange(["-BootstrapKeyPath", key]);
-        var exit = await _platform.RunElevatedAsync("powershell.exe", arguments, ct).ConfigureAwait(false);
-        File.Delete(zip);
-        if (exit != 0) throw new AgentFailure(502, "engine-install-failed", $"The engine installer ended with exit code {exit}; see its window for why, then retry.");
-    }
-
-    private const string SoloScript = """
-        param([string]$Zip, [string]$Sha256, [string]$TokenFile, [string]$AdminUser, [string]$BootstrapKeyPath = '')
-        $ErrorActionPreference = 'Stop'
-        try {
-            if ((Get-FileHash -Algorithm SHA256 -LiteralPath $Zip).Hash.ToLowerInvariant() -ne $Sha256.ToLowerInvariant()) { throw 'The host package changed after it was checked.' }
-            $dir = Join-Path $env:ProgramData 'Construct\host'
-            if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -Recurse -Force }
-            Add-Type -AssemblyName System.IO.Compression.FileSystem
-            [IO.Compression.ZipFile]::ExtractToDirectory($Zip, $dir)
-            $installer = Join-Path $dir 'scripts\service\host\Install-ConstructHost.ps1'
-            $arguments = @{ Solo = $true; SkipIsoBuild = $true; TokenFile = $TokenFile; AdminUser = $AdminUser; ScriptsDir = (Join-Path $dir 'scripts'); PublishDir = (Join-Path $dir 'service') }
-            if ($BootstrapKeyPath) { $arguments.BootstrapKeyPath = $BootstrapKeyPath }
-            & $installer @arguments
-            exit 0
-        } catch {
-            Write-Host ('The engine install failed: ' + $_.Exception.Message) -ForegroundColor Red
-            Read-Host 'Press Enter to close' | Out-Null
-            exit 1
-        }
-        """;
 
     /// <summary>Notes a shared host as still on the old stack, or no longer, as far as it told; the dialog names it before the conversion.</summary>
     internal static async Task MarkOldHostAsync(DeviceAgent agent, BridgeFile bridge, string engineId, CancellationToken ct)
@@ -321,6 +241,10 @@ public sealed class UpgradeService : IDisposable
                 {
                     await work(CancellationToken.None).ConfigureAwait(false);
                 }
+                catch (AgentFailure failure) when (failure.Code == "restart-needed")
+                {
+                    // Not an error: the engine step says so, with Restart now (LocalEngineSetup).
+                }
                 catch (AgentFailure failure)
                 {
                     lock (_gate) _error = failure.Message;
@@ -340,6 +264,4 @@ public sealed class UpgradeService : IDisposable
         _agent.Events.Publish("upgrade");
         return View();
     }
-
-    public void Dispose() => _http.Dispose();
 }
