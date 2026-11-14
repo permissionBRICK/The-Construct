@@ -1,4 +1,5 @@
-"""Exercise Desktop's real PowerShell helper and VS Code's generated pairing script.
+"""Exercise the guest's pairing scripts (extension/vm/t3-pairing*.sh) as the device agent renders them
+(Construct.Companion.Core's T3Code.BuildPairingScript: one pass over the {{markers}}).
 
 SSH, the Construct forwarding CLI and T3 are process doubles. No host or live
 T3 installation is contacted; all shell/config paths are isolated in a temp dir.
@@ -6,6 +7,7 @@ T3 installation is contacted; all shell/config paths are isolated in a temp dir.
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -13,6 +15,17 @@ import textwrap
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def render(name, values):
+    """A guest script with its markers replaced in one pass, as GuestScripts.Render does."""
+    text = (ROOT / 'extension' / 'vm' / (name + '.sh')).read_text()
+    return re.sub(r'\{\{([A-Za-z][A-Za-z0-9]*)\}\}', lambda m: values[m.group(1)], text)
+
+
+def pairing_script(instance):
+    values = {'pairingBase': render('construct-t3-pairing-base', {}), 'instance': instance or ''}
+    return render('t3-pairing-instance' if instance else 't3-pairing', values)
 
 
 class PairingForwardTests(unittest.TestCase):
@@ -68,8 +81,7 @@ class PairingForwardTests(unittest.TestCase):
                 command = ['pwsh', '-NoProfile', '-File', str(ROOT / 'Get-ConstructT3PairingLink.ps1')]
                 result = subprocess.run(command, env=env, text=True, capture_output=True, timeout=20)
             else:
-                instance = '{name:"named-vm",backend:"hyperv-remote"}' if client == 'named-extension' else ''
-                script = subprocess.check_output(['node', '-e', f'process.stdout.write(require("./extension/src/t3code").buildPairingScript({instance}))'], cwd=ROOT, text=True)
+                script = pairing_script('named-vm' if client == 'named-extension' else None)
                 script = script.replace('CONFIG_FILE=/etc/construct/config.env', 'CONFIG_FILE=' + str(config))
                 result = subprocess.run(['bash', '-c', script], env=env, text=True, capture_output=True, timeout=20)
             calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []

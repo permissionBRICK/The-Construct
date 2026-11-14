@@ -25,30 +25,17 @@ if [[ "$group" == --changed ]]; then
 fi
 case "$group" in panel|t3|service|companion|release|ui|agent|guest|all) ;; *) echo "$usage" >&2; exit 2 ;; esac
 if [[ "$group" == panel || "$group" == all ]]; then
-  node extension/test/guest-console.test.js
-  node extension/test/console.test.js
-  node extension/test/hostadmin.test.js
-  node extension/test/hostadmin-config.test.js
-  node extension/test/host-usage.test.js
-  node extension/test/network-mode.test.js
-  node extension/test/hostadmin-ui.test.js
-  node extension/test/hostadmin-discovery.test.js
-  node extension/test/vmpower.test.js
-  node extension/test/lifecycle.test.js
-  node extension/test/lifecycle-preparation.test.js
-  node extension/test/lifecycle-run.test.js
-  node extension/test/backups.test.js
+  # The VS Code extension (a window onto the device agent) without VS Code, and the profile validator the VM loads from it.
+  node --test extension/test/agent.test.js extension/test/page.test.js extension/test/workspace.test.js extension/test/extension.test.js
+  node extension/test/projects.test.js
   pwsh -NoProfile -File test/lifecycle-run.test.ps1
   pwsh -NoProfile -File test/vm-resources.test.ps1
   pwsh -NoProfile -File test/console-local.test.ps1
-  UI_SMOKE_THEME="${UI_SMOKE_THEME:-native}" node extension/test/ui-smoke.js
 fi
 if [[ "$group" == t3 || "$group" == all ]]; then
   python3 test/t3-install-source.test.py
   python3 test/t3-prebuilt.test.py
   python3 test/t3-build-source.test.py
-  node extension/test/updates.test.js
-  node extension/test/t3code.test.js
   python3 test/t3-pairing-forward.test.py
   python3 test/t3-resume.test.py
   bash test/t3-prune.test.sh
@@ -79,8 +66,6 @@ if [[ "$group" == service || "$group" == all ]]; then
   bash test/docker-registry-mirrors.test.sh
   bash test/oom-guard.test.sh
   bash test/procps-guard.test.sh
-  node extension/test/drivers.test.js
-  node extension/test/hostadmin.test.js
   bash test/construct-vm.test.sh
   bash test/construct-backup.test.sh
   bash test/export-config.test.sh
@@ -89,7 +74,6 @@ if [[ "$group" == service || "$group" == all ]]; then
   bash test/construct-project.test.sh
   pwsh -NoProfile -File test/backup-keys.test.ps1
   pwsh -NoProfile -File test/backup-actions.test.ps1
-  node extension/test/t3code.test.js
   python3 test/t3-pairing-forward.test.py
   dotnet test service/Constructd.sln -c Release
   bash test/backup-e2e.test.sh
@@ -102,11 +86,9 @@ if [[ "$group" == service || "$group" == all ]]; then
 fi
 
 if [[ "$group" == companion || "$group" == all ]]; then
-  dotnet build companion/Construct.Companion.sln -warnaserror
-  dotnet test companion/Construct.Companion.sln --no-build
-  node extension/test/parity.test.js
+  # The Companion app and its tests read the old panel's pages (extension/media), which went with the thin
+  # extension; the app goes in a later block. Its Core, Windows and Fakes projects build in the agent group.
   bash test/vault-guest-scripts.test.sh
-  for suite in extension/test/companion*.test.js; do node "$suite"; done
   pwsh -NoProfile -File test/companion-install.test.ps1
   # First-install feature selection and installer forwarding (Linux PowerShell).
   pwsh -NoProfile -File test/feature-set.test.ps1

@@ -13,7 +13,7 @@ import subprocess
 import sys
 
 # Mirrors what the Companion package contains or installs (see docs/companion.md).
-COMPANION_PATHS = ['companion', 'extension/media', 'extension/vm', 'extension/src', 'extension/test',
+COMPANION_PATHS = ['companion', 'extension/vm',
                    'test/fixtures/companion-parity', 'lib/Construct.Companion.ps1', 'lib/Construct.Runtime.ps1',
                    'Install-ConstructCompanion.ps1', 'test/companion-*.test.ps1', 'Auto-Install.ps1',
                    'Update-Construct.ps1', 'Provision-AgentVM.ps1', '.github/workflows/companion-release.yml',
