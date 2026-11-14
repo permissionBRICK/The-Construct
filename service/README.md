@@ -1779,6 +1779,7 @@ Run it again after publishing a new build: it updates binaries, settings and the
 | `-Solo` | off | This PC's own engine; see *Solo install* below. |
 | `-TokenFile` | – | With `-Solo` (required): where the admin token is written, readable by `-AdminUser` only. |
 | `-BootstrapKeyPath` | – | With `-Solo`: the old client's `keys\bootstrap_ed25519`, taken over with its `.pub`; otherwise a pair is generated once. |
+| `-ResultFile` | – | Unattended (the device agent's run): nothing is asked, and the outcome goes to this file as `{result, message}`: `done`, `failed` with the reason in one line, or `restart` (exit 3) when Windows must restart to turn on Hyper-V. Nothing restarts by itself; run it again afterwards. Without it the installer asks as before, the restart prompt included. |
 
 ### Solo install
 
@@ -1801,6 +1802,9 @@ Run it again after publishing a new build: it updates binaries, settings and the
 - **The bootstrap key** lives in `<DataDir>\keys`, owned by LocalSystem.
 - **The PC's power plan** is not read or changed, and the service does not hold the PC awake while its
   VM runs (`Power:KeepHostAwake=false`), as the old local install did not.
+
+The device agent runs it hidden, with `-ResultFile`, and its output in `engine-install.log` in the agent's
+folder (`agent/README.md`, `POST /api/engines/local/setup`).
 
 A VM the old client made on this PC is adopted without being rebuilt:
 `constructd admin vms adopt-local <name> --owner <user> --settings <.construct-settings.json>
