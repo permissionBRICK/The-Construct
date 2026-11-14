@@ -2647,8 +2647,8 @@ closed for the complete snapshot.
 
 ## Linux host-administration end-to-end validation
 
-Run `bash test/host-admin-e2e.test.sh` (requires .NET 10, Node, curl and jq).
-`HostAdminEndToEndTests` also runs in the normal solution test suite. It skips
+Run `dotnet test service/tests/Constructd.Tests --filter FullyQualifiedName~HostAdminEndToEndTests`
+(requires .NET 10, Node, curl and jq). `HostAdminEndToEndTests` also runs in the normal solution test suite. It skips
 itself off Linux or when bash, Node, curl or jq is missing from PATH, so the
 portable solution test command remains usable on other hosts. The Bash wrapper
 requires its tools and fails if they are missing. The test launches

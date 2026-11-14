@@ -31,14 +31,15 @@ the workspace share of a VM on this PC, start with the OS, and updating itself (
 | `install/` | Per-user install scripts: `install-construct-agent.sh` (Linux), `Install-ConstructAgent.ps1` (Windows) |
 | `openapi/agent.v1.json` | The local API's contract, generated; a test fails on drift |
 | `tests/Construct.Agent.Tests/` | Agents in process against the real engine (fake mode) on a loopback HTTPS port |
+| `src/Construct.Companion.Core/`, `src/Construct.Companion.Windows/`, `tests/Construct.Companion.Fakes/` | The parts of the old Companion the agent builds on, moved here with their namespaces; only what the agent uses is left |
 
 It references the service's `Construct.Keys` (keys, pairing, recovery, proofs), `Constructd.Store`
 (the store's wire contract), `Constructd.Sync` (sealing records with `D`) and `Constructd.Client`
-(the engine's generated client). From the Companion it references `Construct.Companion.Core`
-unchanged (the forward planner and forwarder, the notifier and its parsing, the audio session,
-`SshArgs`, `T3Code` and the guest scripts these run) and, in the Windows app,
-`Construct.Companion.Windows` (WASAPI capture, WinRT toasts, the registry, DPI). The tests use
-`Construct.Companion.Fakes`.
+(the engine's generated client). From the old Companion it keeps `Construct.Companion.Core`
+(the forward planner and forwarder, the notifier and its parsing, the audio session, `SshArgs`,
+`T3Code` and the guest scripts of `extension/vm` these run) and, in the Windows app,
+`Construct.Companion.Windows` (WASAPI capture, WinRT toasts, the registry, DPI); the tests use
+`Construct.Companion.Fakes`. All three live under `agent/`.
 
 ## Commands
 

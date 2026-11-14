@@ -9,10 +9,9 @@ resolved through `config/iso-builder.json` (latest release by default).
 
 Nightly prereleases, the channel manifests and release cuts for the new stack: [Release flow and channels](release-flow.md).
 
-The per-user tray app ships independently as `companion-<commit>`; see
-[Construct Companion](companion.md) for its installer, package layout and release gates.
-Its release is published with `--latest=false` so the complete Construct manifest
-remains at the latest-release URL. Companion discovery still selects its own tags.
+The old per-user tray app, Construct Companion, shipped independently as `companion-<commit>`
+releases, published with `--latest=false` so the complete Construct manifest remained at the
+latest-release URL. It is no longer built; the device agent ships inside the Construct release.
 
 
 The immutable tag remains `host-<40-character commit>` for compatibility. Its assets
@@ -24,7 +23,7 @@ are:
 | `construct-host-<commit7>-win-x64-fdd.zip` | Framework-dependent host, same scripts and updater |
 | `construct-host-<commit7>-linux-x64.zip` | Self-contained Proxmox host in `service/`, matching `scripts/`, `updater/update-construct-host.sh`, and an in-archive `SHA256SUMS`. |
 | `construct-source-<commit40>.zip` | Pinned Construct source archive |
-| `manifest.json` | Identity, compatibility, runtime requirements, hashes, sizes and `companionReleaseTag` (the Companion release this commit installs) |
+| `manifest.json` | Identity, compatibility, runtime requirements, hashes and sizes |
 | `SHA256SUMS` | Host payload file hashes and all release archive hashes |
 
 The panel and both host platforms discover the current release at:
