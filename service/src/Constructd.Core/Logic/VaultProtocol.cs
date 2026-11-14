@@ -31,7 +31,7 @@ public static partial class VaultProtocol
     public const int MaxRequestBytes = 65536, MaxSecretBytes = 32768, MaxText = 300, MaxUses = 1000, MinTtl = 60, MaxTtl = 86400;
     // Shorter values would match all over a VM; such secrets are reported as not scannable instead.
     public const int MinPatternLength = 6;
-    public static readonly string[] Operations = ["list", "status", "request", "get", "release", "add", "delete", "autoApprove"];
+    public static readonly string[] Operations = ["list", "status", "request", "get", "release", "add", "delete", "autoApprove", "ask"];
     public static readonly string[] FileActions = ["keep", "redact", "delete"];
 
     public static bool IsValidName(string? name) => name is not null && NamePattern().IsMatch(name);
@@ -53,7 +53,7 @@ public static partial class VaultProtocol
             if (node is not JsonValue v || !v.TryGetValue<string>(out var name) || !IsValidName(name)) return Invalid("Secret names use letters, digits, '.', '_' and '-' (at most 64, starting with a letter or digit).");
             if (!names.Contains(name)) names.Add(name);
         }
-        var count = op switch { "request" => names.Count is >= 1 and <= 20, "get" or "add" or "delete" or "autoApprove" => names.Count == 1, "release" => names.Count >= 1, _ => true };
+        var count = op switch { "request" => names.Count is >= 1 and <= 20, "get" or "add" or "delete" or "autoApprove" or "ask" => names.Count == 1, "release" => names.Count >= 1, _ => true };
         if (!count) return Invalid(op == "request" ? "Name between 1 and 20 secrets." : op == "release" ? "Name the secrets to release." : "Name exactly one secret.");
         bool? autoApprove = raw["autoApprove"] is JsonValue flag && flag.GetValueKind() is JsonValueKind.True or JsonValueKind.False ? flag.GetValue<bool>() : null;
         if (op == "autoApprove" && autoApprove is null) return Invalid("Say on or off: construct secret auto-approve <name> on|off.");
@@ -72,6 +72,7 @@ public static partial class VaultProtocol
             finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(bytes); }
             if (Sanitize(raw.Str("description"), MaxText).Length == 0) return Invalid("Describe the secret with --description.");
         }
+        if (op == "ask" && Sanitize(raw.Str("description"), MaxText).Length == 0) return Invalid("Describe the secret with --description.");
         DateTimeOffset? deadline = raw["deadline"] is JsonValue d && d.TryGetValue<double>(out var ms) && double.IsFinite(ms) && ms > 0
             ? DateTimeOffset.FromUnixTimeMilliseconds((long)Math.Min(ms, 253402300799999)) : null;
         return (new(id, op, names, uses, ttl, raw.True("replace"), Sanitize(raw.Str("reason"), MaxText), Sanitize(raw.Str("description"), MaxText),

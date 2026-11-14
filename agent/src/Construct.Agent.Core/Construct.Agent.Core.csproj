@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The device agent's core (docs/plans/construct-platform-design.md 5.1, 6.2, 8, 11.1): the device's
+    keys, the engines its user works with, and the loopback API the UI talks to. Platform-independent:
+    the Linux pieces (libsecret, xdg-open) are plain processes, and a Windows shell adds its own.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Construct.Agent</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.11" />
+    <!-- Keys, pairing, recovery and request proofs. -->
+    <ProjectReference Include="..\..\..\service\src\Construct.Keys\Construct.Keys.csproj" />
+    <!-- The store's wire contract (records, identity routes) and sealing records with D. -->
+    <ProjectReference Include="..\..\..\service\src\Constructd.Store\Constructd.Store.csproj" />
+    <ProjectReference Include="..\..\..\service\src\Constructd.Sync\Constructd.Sync.csproj" />
+    <!-- The engine's generated client. -->
+    <ProjectReference Include="..\..\..\service\src\Constructd.Client\Constructd.Client.csproj" />
+    <!-- The Companion's platform-independent parts, reused unchanged (11.1): the forward planner and
+         forwarder, notification parsing, the microphone session, SshArgs and the guest scripts they run. -->
+    <ProjectReference Include="..\Construct.Companion.Core\Construct.Companion.Core.csproj" />
+  </ItemGroup>
+
+</Project>

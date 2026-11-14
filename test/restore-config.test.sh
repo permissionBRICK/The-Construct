@@ -308,6 +308,21 @@ d="$(proxy_fixture proxy-wrong-type '42')"
 run_restore "${d}" >/dev/null 2>&1
 ok "proxy address: a non-string value is ignored" test -z "$(read_config_key "${d}/config/config.env" T3CODE_PROXY_URL)"
 
+# ── SSH host keys from an extracted backup directory ─────────────────────────
+d="$(setup_fixture "ssh-host-keys" "false" "stable")"
+make_systemctl_stub "${d}"
+mkdir -p "${d}/backup/etc/ssh" "${d}/hostkeys"
+printf 'saved\n' >"${d}/backup/etc/ssh/ssh_host_ed25519_key"
+printf 'saved pub\n' >"${d}/backup/etc/ssh/ssh_host_ed25519_key.pub"
+printf 'fresh\n' >"${d}/hostkeys/ssh_host_ed25519_key"
+printf 'fresh pub\n' >"${d}/hostkeys/ssh_host_ed25519_key.pub"
+printf '#!/bin/bash\nexit 0\n' >"${d}/bin/sshd"
+chmod +x "${d}/bin/sshd"
+SSH_HOST_KEY_DIR="${d}/hostkeys" run_restore "${d}" >"${d}/out" 2>&1
+ok "host keys (directory backup): restored" grep -qx 'saved' "${d}/hostkeys/ssh_host_ed25519_key"
+ok "host keys (directory backup): private key 0600" test "$(stat -c '%a' "${d}/hostkeys/ssh_host_ed25519_key")" = 600
+ok "host keys (directory backup): reported" grep -q 'restored SSH host keys' "${d}/out"
+
 printf '\n  restore-config fixture tests — %d/%d passed\n\n' "${pass}" "$((pass + fail))"
 [ "${fail}" -eq 0 ] || exit 1
 exit 0

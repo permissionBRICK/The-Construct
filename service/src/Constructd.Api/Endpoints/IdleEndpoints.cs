@@ -19,12 +19,12 @@ public static class IdleEndpoints
     {
         api.MapGet("/vms/{name}/idle-policy", GetPolicyAsync)
             .RequireAuthorization(Policies.User)
-            .WithName("GetIdlePolicy");
+            .WithName("GetIdlePolicy").Produces<IdlePolicyResponse>();
 
         api.MapPut("/vms/{name}/idle-policy", PutPolicyAsync)
             .RequireAuthorization(Policies.User)
             .Audited("vm.idle-policy")
-            .WithName("PutIdlePolicy");
+            .WithName("PutIdlePolicy").Produces<IdlePolicyResponse>();
 
         // Guest telemetry accepts the VM's scoped token, as does usage intake.
         api.MapPost("/vms/{name}/activity", PostActivityAsync)
@@ -164,6 +164,19 @@ public static class IdleEndpoints
             due["backupDue"] = true;
             due["backupTrigger"] = backup.Trigger!;
         }
+
+        // Profile sync (design 9.3, 9.6): a changed projects digest has the engine read the folder;
+        // open conflicts this VM's edits are part of go to its agent.
+        var conflicts = await http.RequestServices.GetRequiredService<Constructd.Api.Profiles.ProfileSync>()
+            .HeartbeatAsync(lookup.Vm!, request.ProjectsDigest, cancellationToken).ConfigureAwait(false);
+        if (conflicts.Count > 0)
+        {
+            due["conflicts"] = conflicts.Select(ProfileEndpoints.ToNotice).ToList();
+        }
+
+        // The SSH keys of the owner's devices, when this VM missed a change.
+        await http.RequestServices.GetRequiredService<Constructd.Api.Devices.DeviceSshKeys>()
+            .HeartbeatAsync(lookup.Vm!, cancellationToken).ConfigureAwait(false);
 
         return due.Count == 0 ? Results.NoContent() : Results.Ok(due);
     }

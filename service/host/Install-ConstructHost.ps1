@@ -34,9 +34,10 @@
     Everything that changes the machine honours -WhatIf.
 
 .PARAMETER ScriptsDir
-    The Construct checkout the service invokes: it must contain drivers\,
-    lib\ and bin\. The service builds ISOs and drives Hyper-V through the files in
-    here, so it stays on disk after the install.
+    The scripts this installer and the host updater use: lib\ (the Hyper-V check and
+    the ISO tool resolver), config\ and service\host\ -- the host package's scripts\
+    folder or a Construct checkout. The service itself needs none of it: the Hyper-V
+    driver ships in -PublishDir (hyperv\).
 
 .PARAMETER PublishDir
     Directory holding the published constructd executable from dotnet publish.
@@ -119,6 +120,34 @@
 .PARAMETER SkipPowerSettings
     Do not read or change this host's power plan at all -- no report, no prompt.
 
+.PARAMETER Solo
+    Install the engine for this PC alone (design 5.3): the one elevation of the client
+    installer. The service listens on the API port and ONE firewall rule admits it on
+    the Default Switch interface only, so this PC (loopback) and its own VMs reach it
+    and the LAN does not, until the user turns LAN access on for pairing
+    (/api/v1/host/lan-access). The certificate and the VMs' service URL use this PC's
+    name on the Default Switch (<computer>.mshome.net). No other firewall rule, no
+    Kerberos, no power-plan change. -AdminUser (default: the user who started the
+    installer, before elevation) gets an admin token in -TokenFile, readable by that
+    user only. The bootstrap key lives in the data directory.
+
+.PARAMETER TokenFile
+    With -Solo (required there): where the admin token goes, for the device agent to
+    pick up. JSON: url, user, token, certificateSha256. Written when the admin is
+    created, on -RotateAdminToken, or when the file is missing.
+
+.PARAMETER ResultFile
+    Unattended run for the device agent: nothing is asked and nothing waits for a key,
+    and the outcome goes to this file as JSON {result, message}: "done", "failed" with
+    the reason in one line, or "restart" when Windows must restart to turn on Hyper-V
+    (exit code 3; nothing restarts by itself, run the installer again afterwards).
+    Without it the installer asks as before, the Hyper-V restart prompt included.
+
+.PARAMETER BootstrapKeyPath
+    With -Solo: the old client's bootstrap private key (keys\bootstrap_ed25519, with
+    its .pub beside it), so VMs it installed stay reachable by the engine. Without it a
+    new pair is generated once.
+
 .EXAMPLE
     .\Install-ConstructHost.ps1 -ScriptsDir C:\Construct -PublishDir C:\Construct\service\publish `
         -PublicHost buildbox.example.local `
@@ -190,10 +219,39 @@ param(
 
     [switch]$SkipPowerSettings,
 
-    [switch]$NoStart
+    [switch]$NoStart,
+
+    [switch]$Solo,
+
+    [string]$TokenFile = "",
+
+    [string]$BootstrapKeyPath = "",
+
+    [string]$ResultFile = ""
 )
 
 $ErrorActionPreference = "Stop"
+
+# ── The result for the device agent (-ResultFile) ────────────────────────────
+
+function Write-ConstructInstallResult {
+    <# -ResultFile's JSON: done, failed (the reason, one line) or restart. Nothing secret goes in. #>
+    param([Parameter(Mandatory = $true)][ValidateSet('done', 'failed', 'restart')][string]$Result, [string]$Message = "")
+    if (-not $ResultFile) { return }
+    $line = (($Message -split "`r?`n") | Where-Object { $_.Trim() } | Select-Object -First 1)
+    if (-not $line) { $line = "" }
+    $json = [ordered]@{ result = $Result; message = $line.Trim() } | ConvertTo-Json -Compress
+    [System.IO.File]::WriteAllText($ResultFile, $json, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+# Any error that ends the install ends it as "failed" with its reason; the error still ends the script.
+trap {
+    if ($ResultFile -and -not $script:ConstructResultWritten) {
+        $script:ConstructResultWritten = $true
+        Write-ConstructInstallResult -Result failed -Message $_.Exception.Message
+    }
+    break
+}
 
 # ── Absolute paths, first thing ──────────────────────────────────────────────
 # Relative -ScriptsDir / -PublishDir / -DataDir (".", ".\service\publish") are only
@@ -202,7 +260,7 @@ $ErrorActionPreference = "Stop"
 # not $PWD. Field failure: ".\service\publish" became C:\Windows\System32\service\publish,
 # whose ancestor ACL then blew up the trust check. So every path parameter is made
 # absolute here and only absolute values travel to the elevated copy.
-foreach ($pathParam in @('ScriptsDir', 'PublishDir', 'DataDir', 'IsoSourcePath')) {
+foreach ($pathParam in @('ScriptsDir', 'PublishDir', 'DataDir', 'IsoSourcePath', 'TokenFile', 'BootstrapKeyPath', 'ResultFile')) {
     $value = Get-Variable -Name $pathParam -ValueOnly
     if ([string]::IsNullOrWhiteSpace($value)) { continue }
     $absolute = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($value)
@@ -271,10 +329,11 @@ function Test-ConstructPromptAllowed {
 }
 
 function Test-ConstructInteractive {
-    <# The facts about THIS session, handed to the pure decision above. #>
+    <# The facts about THIS session, handed to the pure decision above. -ResultFile is an unattended run. #>
     [CmdletBinding()]
     param()
 
+    if ($ResultFile) { return $false }
     return (Test-ConstructPromptAllowed `
         -InputRedirected ([Console]::IsInputRedirected) `
         -NonInteractiveHost (Test-ConstructNonInteractiveArgument -Arguments ([Environment]::GetCommandLineArgs())) `
@@ -332,13 +391,16 @@ function New-ConstructRelaunchScript {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$ScriptPath,
-        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$PayloadJson
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$PayloadJson,
+        # An unattended run (-ResultFile): a failure does not wait for Enter.
+        [switch]$NoPause
     )
 
     # Single-quoted PowerShell literals expand nothing; doubling the quote is the
     # complete escape, and this path is ours rather than a caller's.
     $script  = $ScriptPath.Replace("'", "''")
     $payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($PayloadJson))
+    $pause   = if ($NoPause) { '' } else { 'Read-Host "Press Enter to close"' }
 
     return @"
 `$ErrorActionPreference = 'Stop'
@@ -352,11 +414,15 @@ try {
     Write-Host ""
     Write-Host `$_.Exception.Message -ForegroundColor Red
     Write-Host ""
-    Read-Host "Press Enter to close"
+    $pause
     exit 1
 }
 "@
 }
+
+# A solo install hands its token to the device agent through a file; without one it
+# would create an admin nobody can sign in as.
+if ($Solo -and -not $TokenFile) { throw "-Solo needs -TokenFile: the device agent reads its admin token there." }
 
 # ── Self-elevate to Administrator ────────────────────────────────────────────
 # Hyper-V features, the LocalMachine certificate store, firewall rules and service
@@ -376,9 +442,13 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
     if (-not $forward.ContainsKey('KeepHostAwake') -and -not (Test-ConstructInteractive)) {
         $forward['KeepHostAwake'] = $false
     }
+    # Solo: the admin is the user who started the install, whoever approves the prompt.
+    if ($Solo -and -not $forward.ContainsKey('AdminUser')) {
+        $forward['AdminUser'] = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    }
 
     $relaunch = New-ConstructRelaunchScript -ScriptPath $PSCommandPath `
-                    -PayloadJson (ConvertTo-ConstructPayload -Values $forward)
+                    -PayloadJson (ConvertTo-ConstructPayload -Values $forward) -NoPause:([bool]$ResultFile)
     $encoded  = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($relaunch))
 
     $elevated = Start-Process powershell.exe -Verb RunAs -PassThru -Wait -ArgumentList @(
@@ -892,6 +962,194 @@ function Set-ConstructFirewallRule {
     Write-Ok "$DisplayName ($LocalPort)"
 }
 
+# ── Solo install (design 5.3) ────────────────────────────────────────────────
+
+function Get-ConstructSoloHostName {
+    <#
+        This PC's name on the Hyper-V Default Switch. Its DNS answers
+        <computer>.mshome.net with the host's address on that switch, which changes
+        at every boot while the name does not -- the same convention the local VMs'
+        own names follow. The VMs reach the engine under it, and the certificate is
+        bound to it. Pure.
+    #>
+    param([Parameter(Mandatory = $true)][string]$ComputerName)
+    return ($ComputerName.Trim().ToLowerInvariant() + '.mshome.net')
+}
+
+function Set-ConstructGuestFirewallRule {
+    <#
+        Solo: one inbound TCP rule for the API port, limited to the Default Switch's
+        host interface, so the PC's own VMs reach the engine and no network profile
+        is opened. Replaced rather than duplicated, like Set-ConstructFirewallRule.
+    #>
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param(
+        [Parameter(Mandatory = $true)][string]$DisplayName,
+        [Parameter(Mandatory = $true)][string]$LocalPort,
+        [Parameter(Mandatory = $true)][string]$InterfaceAlias
+    )
+
+    $existing = Get-NetFirewallRule -DisplayName $DisplayName -ErrorAction SilentlyContinue
+    if ($existing) {
+        if ($PSCmdlet.ShouldProcess($DisplayName, "Remove the previous firewall rule")) {
+            $existing | Remove-NetFirewallRule
+        }
+    }
+
+    if ($PSCmdlet.ShouldProcess($DisplayName, "Allow inbound TCP $LocalPort on $InterfaceAlias only")) {
+        New-NetFirewallRule -DisplayName $DisplayName -Direction Inbound -Action Allow `
+            -Protocol TCP -LocalPort $LocalPort -InterfaceAlias $InterfaceAlias -Profile Any | Out-Null
+    }
+    Write-Ok "$DisplayName ($LocalPort on $InterfaceAlias)"
+}
+
+function Set-ConstructHostFirewall {
+    <#
+        The firewall step. A shared host opens the API port and both forward ranges
+        to every profile. A solo install opens the API port to its VMs only: loopback
+        needs no rule, the forwards stay on this PC, and LAN access is a separate rule
+        the service switches for pairing (FirewallLanAccess.cs).
+    #>
+    param(
+        [bool]$Solo,
+        [Parameter(Mandatory = $true)][int]$ListenPort,
+        [Parameter(Mandatory = $true)]$SshRange,
+        [Parameter(Mandatory = $true)]$AppRange,
+        [Parameter(Mandatory = $true)][string]$SwitchName
+    )
+
+    if ($Solo) {
+        # A shared host's rules open every profile; on a PC that becomes solo they go.
+        foreach ($name in @("Construct constructd API", "Construct constructd SSH forwards", "Construct constructd app forwards")) {
+            $broad = Get-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue
+            if ($broad) { $broad | Remove-NetFirewallRule; Write-Note "Removed $name" }
+        }
+        Set-ConstructGuestFirewallRule -DisplayName "Construct constructd guests" -LocalPort "$ListenPort" -InterfaceAlias "vEthernet ($SwitchName)"
+        Write-Note "Solo: nothing else is opened. The LAN reaches this engine only after LAN access is switched on for pairing."
+        return
+    }
+
+    Set-ConstructFirewallRule -DisplayName "Construct constructd API" -LocalPort "$ListenPort"
+    Set-ConstructFirewallRule -DisplayName "Construct constructd SSH forwards" -LocalPort "$($SshRange.Start)-$($SshRange.End)"
+    Set-ConstructFirewallRule -DisplayName "Construct constructd app forwards" -LocalPort "$($AppRange.Start)-$($AppRange.End)"
+    Write-Note "The forward ranges are what makes a VM reachable from the LAN; narrow the rules' scope if that is too broad for this network."
+}
+
+function Add-ConstructSoloSettings {
+    <#
+        What a solo install's settings add to a shared host's: the solo flag (the LAN
+        switch), no Kerberos, and the power plan left as a PC's own -- the service
+        does not hold the PC awake while its VM runs, as the old local install did
+        not either.
+    #>
+    param([Parameter(Mandatory = $true)]$Settings)
+    $Settings.Constructd['Solo'] = $true
+    $Settings.Constructd['Negotiate'] = [ordered]@{ Enabled = $false }
+    $Settings.Constructd['Power'] = [ordered]@{ KeepHostAwake = $false }
+}
+
+function Invoke-ConstructSshKeygen {
+    <#
+        A new ed25519 key without a passphrase. ProcessStartInfo rather than the call
+        operator: Windows PowerShell 5.1 drops an empty '' argument, and ssh-keygen
+        would then wait for a passphrase nobody types.
+    #>
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $start = New-Object System.Diagnostics.ProcessStartInfo 'ssh-keygen.exe'
+    $start.Arguments = '-q -t ed25519 -N "" -C bootstrap@construct -f "' + $Path + '"'
+    $start.UseShellExecute = $false
+    $process = [System.Diagnostics.Process]::Start($start)
+    $process.WaitForExit()
+    if ($process.ExitCode -ne 0) { throw "ssh-keygen could not create the bootstrap key (exit $($process.ExitCode))." }
+}
+
+function Install-ConstructBootstrapKey {
+    <#
+        Solo: the key pair the engine provisions VMs with, in the data directory
+        (only SYSTEM and Administrators read it). The old client's pair when given,
+        so the VMs it installed stay reachable; otherwise a new pair, once. Returns
+        the public key's path.
+    #>
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param(
+        [Parameter(Mandatory = $true)][string]$KeysDir,
+        [string]$SourceKey = ""
+    )
+
+    $key = Join-Path $KeysDir 'bootstrap_ed25519'
+    if (-not $PSCmdlet.ShouldProcess($key, "Install the bootstrap key")) { return "$key.pub" }
+    if (-not (Test-Path -LiteralPath $KeysDir)) { New-Item -ItemType Directory -Path $KeysDir -Force | Out-Null }
+    if ($SourceKey) {
+        Copy-Item -LiteralPath $SourceKey -Destination $key -Force
+        Copy-Item -LiteralPath "$SourceKey.pub" -Destination "$key.pub" -Force
+    } elseif (-not (Test-Path -LiteralPath $key)) {
+        Invoke-ConstructSshKeygen -Path $key
+    }
+    # The service's ssh runs as LocalSystem and refuses a private key another account owns.
+    & icacls.exe $key /setowner '*S-1-5-18' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "icacls could not give the bootstrap key to LocalSystem (exit $LASTEXITCODE)." }
+    return "$key.pub"
+}
+
+function Resolve-ConstructUserSid {
+    <# The SID of a DOMAIN\name account. #>
+    param([Parameter(Mandatory = $true)][string]$User)
+    return (New-Object System.Security.Principal.NTAccount($User)).Translate([System.Security.Principal.SecurityIdentifier]).Value
+}
+
+function Get-ConstructPrivateFileSddl {
+    <# A protected DACL with one entry: full access for this SID, nothing inherited. Pure. #>
+    param([Parameter(Mandatory = $true)][string]$Sid)
+    return "D:P(A;;FA;;;$Sid)"
+}
+
+function New-ConstructFileWithSddl {
+    <#
+        Creates the file WITH its ACL, in one call, and writes through the handle that
+        call returns -- so the content is never on disk under another ACL, and the
+        writer needs no entry of its own in it.
+    #>
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Sddl, [Parameter(Mandatory = $true)][byte[]]$Bytes)
+    $security = New-Object System.Security.AccessControl.FileSecurity
+    $security.SetSecurityDescriptorSddlForm($Sddl)
+    $stream = [System.IO.File]::Create($Path, 4096, [System.IO.FileOptions]::None, $security)
+    try { $stream.Write($Bytes, 0, $Bytes.Length) } finally { $stream.Dispose() }
+}
+
+function Write-ConstructPrivateFile {
+    <# A file only -User can read (Administrators can still take it over, as with any file). #>
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$User,
+        [Parameter(Mandatory = $true)][string]$Content
+    )
+    if (-not $PSCmdlet.ShouldProcess($Path, "Write a file only $User can read")) { return }
+    $sddl = Get-ConstructPrivateFileSddl -Sid (Resolve-ConstructUserSid -User $User)
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    if (Test-Path -LiteralPath $Path) { Remove-Item -LiteralPath $Path -Force }
+    New-ConstructFileWithSddl -Path $Path -Sddl $sddl -Bytes ((New-Object System.Text.UTF8Encoding($false)).GetBytes($Content))
+}
+
+function New-ConstructSoloTokenDocument {
+    <# What the device agent reads from -TokenFile. Pure. #>
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [Parameter(Mandatory = $true)][string]$User,
+        [Parameter(Mandatory = $true)][string]$Token,
+        [AllowEmptyString()][string]$CertificateSha256 = ""
+    )
+    return ([ordered]@{ url = $Url; user = $User; token = $Token; certificateSha256 = $CertificateSha256 } | ConvertTo-Json -Compress)
+}
+
+function Get-ConstructCertificateSha256 {
+    <# The SHA-256 fingerprint clients pin, as colon-separated pairs (docs/remote-host.md). #>
+    param([Parameter(Mandatory = $true)][byte[]]$RawData)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($sha.ComputeHash($RawData))).Replace('-', ':') } finally { $sha.Dispose() }
+}
+
 function Get-ConstructPowerSetting {
     <#
         The sleep timeouts this installer reports on, BY GUID.
@@ -1206,13 +1464,13 @@ if ($AclOnly) {
 Write-Step "Checking the inputs"
 
 if (-not (Test-Path -LiteralPath $ScriptsDir)) { throw "-ScriptsDir does not exist: $ScriptsDir" }
-foreach ($rel in @("drivers\Load-ConstructDriver.ps1", "lib\AgentVm.Common.ps1", "lib\Construct.Iso.ps1", "config\iso-builder.json")) {
+foreach ($rel in @("lib\AgentVm.Common.ps1", "lib\Construct.Iso.ps1", "config\iso-builder.json")) {
     $full = Join-Path $ScriptsDir $rel
     if (-not (Test-Path -LiteralPath $full)) {
-        throw "-ScriptsDir does not look like a Construct checkout: $full is missing."
+        throw "-ScriptsDir does not hold the installer's scripts: $full is missing."
     }
 }
-Write-Ok "Construct checkout: $ScriptsDir"
+Write-Ok "Installer scripts: $ScriptsDir"
 . (Join-Path $ScriptsDir "lib\Construct.Iso.ps1")
 
 $exe = Get-ConstructdExe -Dir $PublishDir
@@ -1261,6 +1519,15 @@ if ($PublicHostPattern) {
     Write-Ok "Per-VM public host names: $PublicHostPattern (needs a wildcard DNS record for $($PublicHostPattern.Replace('{name}', '*')) pointing at this host)"
 }
 
+if ($Solo) {
+    $PublicHost = Get-ConstructSoloHostName -ComputerName $env:COMPUTERNAME
+    $PublicHostPattern = ""
+    # The mshome.net name and the guests-only rule hold on the Default Switch alone: an external
+    # switch's host interface is on the LAN.
+    $SwitchName = "Default Switch"
+    Write-Ok "Solo install: this PC and its VMs reach the engine as $PublicHost; the LAN does not"
+}
+
 $listenPort = Get-ListenPort -Url $ListenUrl
 $sshRange   = Split-PortRange -Range $SshPortRange -Name "-SshPortRange"
 $appRange   = Split-PortRange -Range $AppPortRange -Name "-AppPortRange"
@@ -1286,7 +1553,7 @@ if (-not $AdminUser) {
 Write-Ok "First admin: $AdminUser"
 
 $bootstrapKey = Join-Path $ScriptsDir "keys\bootstrap_ed25519.pub"
-if (-not (Test-Path -LiteralPath $bootstrapKey)) {
+if (-not $Solo -and -not (Test-Path -LiteralPath $bootstrapKey)) {
     Write-Warning "Bootstrap public key not found at $bootstrapKey -- generate it before creating a VM:"
     Write-Host "    ssh-keygen -t ed25519 -N '' -C bootstrap@construct -f keys\bootstrap_ed25519" -ForegroundColor Yellow
 }
@@ -1362,6 +1629,14 @@ if ($SkipAclHardening) {
     }
 }
 
+# ── 1c. Solo: the bootstrap key, in the hardened data directory ──────────────
+
+if ($Solo) {
+    Write-Step "The bootstrap key"
+    $bootstrapKey = Install-ConstructBootstrapKey -KeysDir (Join-Path $DataDir 'keys') -SourceKey $BootstrapKeyPath
+    Write-Ok $bootstrapKey
+}
+
 # ── 2. Prerequisites ─────────────────────────────────────────────────────────
 
 if ($SkipPrereqs) {
@@ -1372,7 +1647,13 @@ if ($SkipPrereqs) {
     # reboot handling as a local install.
     . (Join-Path $ScriptsDir "lib\AgentVm.Common.ps1")
     if ($PSCmdlet.ShouldProcess($env:COMPUTERNAME, "Ensure the Hyper-V features are enabled")) {
-        Ensure-HyperV
+        # Unattended (-ResultFile): no restart prompt; the caller learns that Windows must restart.
+        if (@(Ensure-HyperV -NoRestartPrompt:([bool]$ResultFile)) -contains 'restart-needed') {
+            $script:ConstructResultWritten = $true
+            Write-ConstructInstallResult -Result restart -Message "Windows must restart to turn on Hyper-V."
+            Write-Note "Windows must restart to turn on Hyper-V; run the installer again afterwards."
+            exit 3
+        }
     }
     Write-Ok "Hyper-V is available"
 
@@ -1405,10 +1686,7 @@ if ($certificate) { $thumbprint = $certificate.Thumbprint }
 # ── 4. Firewall ──────────────────────────────────────────────────────────────
 
 Write-Step "Firewall rules"
-Set-ConstructFirewallRule -DisplayName "Construct constructd API" -LocalPort "$listenPort"
-Set-ConstructFirewallRule -DisplayName "Construct constructd SSH forwards" -LocalPort "$($sshRange.Start)-$($sshRange.End)"
-Set-ConstructFirewallRule -DisplayName "Construct constructd app forwards" -LocalPort "$($appRange.Start)-$($appRange.End)"
-Write-Note "The forward ranges are what makes a VM reachable from the LAN; narrow the rules' scope if that is too broad for this network."
+Set-ConstructHostFirewall -Solo ([bool]$Solo) -ListenPort $listenPort -SshRange $sshRange -AppRange $appRange -SwitchName $SwitchName
 
 # ── 4b. The host's own sleep settings ────────────────────────────────────────
 # Field failure (2026-09-04): the host dropped into S3 overnight ("System Idle") with
@@ -1422,8 +1700,8 @@ Write-Note "The forward ranges are what makes a VM reachable from the LAN; narro
 # values come out of the hex indices, which is the same on every host language.
 
 Write-Step "The host's sleep settings"
-if ($SkipPowerSettings) {
-    Write-Note "-SkipPowerSettings: this host's power plan was neither read nor changed."
+if ($SkipPowerSettings -or $Solo) {
+    Write-Note "This PC's power plan was neither read nor changed (-SkipPowerSettings or -Solo)."
 } else {
     # SCHEME_CURRENT is powercfg's own alias for the active scheme; the GUID is read
     # separately for the report only, so a failure there changes nothing.
@@ -1542,6 +1820,8 @@ if ($PublicHostPattern) {
     $settings.Constructd['PublicHostPattern'] = $PublicHostPattern
 }
 
+if ($Solo) { Add-ConstructSoloSettings -Settings $settings }
+
 
 $settingsPath = Join-Path $PublishDir "appsettings.Production.json"
 if ($PSCmdlet.ShouldProcess($settingsPath, "Write the service configuration")) {
@@ -1601,13 +1881,22 @@ if ($PSCmdlet.ShouldProcess($AdminUser, "Create the admin user and issue a token
 
     # A token per reinstall would leave a pile of permanent credentials behind, so a
     # re-run issues nothing unless asked.
-    if (-not $SkipAdminToken -and ($created -or $RotateAdminToken)) {
+    # Solo: the device agent signs in with the file's token, so a missing file gets a new one.
+    if (-not $SkipAdminToken -and ($created -or $RotateAdminToken -or ($Solo -and -not (Test-Path -LiteralPath $TokenFile)))) {
         $issue = Invoke-ConstructdAdmin -Exe $exe -Arguments @("admin", "tokens", "issue", $AdminUser, "--label", "install", "--json")
         if ($issue.ExitCode -ne 0) {
             throw "Could not issue an API token (exit $($issue.ExitCode))."
         }
         $token = (ConvertFrom-Json $issue.Output).token
-        Write-Ok "Issued an API token (printed once, below)"
+        if ($Solo) {
+            $pin = ""
+            if ($certificate) { $pin = Get-ConstructCertificateSha256 -RawData $certificate.RawData }
+            Write-ConstructPrivateFile -Path $TokenFile -User $AdminUser -Content (New-ConstructSoloTokenDocument -Url "https://127.0.0.1:$listenPort" -User $AdminUser -Token $token -CertificateSha256 $pin)
+            $token = ""
+            Write-Ok "Issued an API token into $TokenFile (readable by $AdminUser only)"
+        } else {
+            Write-Ok "Issued an API token (printed once, below)"
+        }
     } elseif ($SkipAdminToken) {
         Write-Note "The guided installer manages the admin token handoff."
     } else {
@@ -1717,3 +2006,6 @@ Write-Host ""
 if ($PSCmdlet.ShouldProcess((Join-Path $PublishDir 'install.json'), 'Record installed package variant')) {
     Initialize-ConstructHostInstallRecord -Dir $PublishDir -Source $installedSource
 }
+
+$script:ConstructResultWritten = $true
+Write-ConstructInstallResult -Result done

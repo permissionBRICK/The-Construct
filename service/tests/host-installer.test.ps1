@@ -526,6 +526,10 @@ $relaunchScript = New-ConstructRelaunchScript `
     -PayloadJson (ConvertTo-ConstructPayload -Values @{ ScriptsDir = "C:\Construct" })
 ok "the elevation script splats the serialized parameters" ($relaunchScript -match '@bound')
 ok "the elevation script keeps the window open on failure" ($relaunchScript -match 'Read-Host')
+$unattendedRelaunch = New-ConstructRelaunchScript `
+    -ScriptPath "C:\Construct\service\host\Install-ConstructHost.ps1" `
+    -PayloadJson (ConvertTo-ConstructPayload -Values @{ ScriptsDir = "C:\Construct" }) -NoPause
+ok "an unattended elevation script (-ResultFile) does not wait for Enter" (-not ($unattendedRelaunch -match 'Read-Host'))
 
 # THE elevation-boundary rule: the parameters must be baked into the encoded command,
 # which is fixed once Start-Process has been called. A file would have to live in the
@@ -900,7 +904,7 @@ ok "...against the ACTIVE scheme, through powercfg's own alias" ($installText -m
 # The seam the tests above mock is the one the installer really fills, with its own runner.
 ok "the report and the setter both get the real powercfg runner" (
     ([regex]::Matches($installText, '-Query \$\{function:Invoke-ConstructPowercfg\}')).Count -eq 2)
-ok "-SkipPowerSettings skips the whole step" ($installText -match 'if \(\$SkipPowerSettings\)')
+ok "-SkipPowerSettings (and -Solo) skips the whole step" ($installText -match 'if \(\$SkipPowerSettings -or \$Solo\)')
 ok "an explicit -KeepHostAwake decides instead of the prompt" (
     $installText -match '\$PSBoundParameters\.ContainsKey\("KeepHostAwake"\)')
 ok "an unattended run leaves the power plan alone" (

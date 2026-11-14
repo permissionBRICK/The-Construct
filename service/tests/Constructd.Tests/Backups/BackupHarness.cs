@@ -62,11 +62,12 @@ internal sealed class BackupHarness : IDisposable
     public BackupCoordinator Coordinator => App.Service<BackupCoordinator>();
     public IBackupStore Store => App.Service<IBackupStore>();
 
-    public static async Task<BackupHarness> CreateAsync(bool sqlite = false)
+    public static async Task<BackupHarness> CreateAsync(bool sqlite = false, long? slotMaxBytes = null)
     {
         var root = Path.Combine(Path.GetTempPath(), "constructd-backup-test-" + Guid.NewGuid().ToString("n"));
         var database = sqlite ? Path.Combine(root + "-db", "constructd.db") : null;
         var settings = new Dictionary<string, string?> { ["Constructd:Backups:RootDir"] = root };
+        if (slotMaxBytes is long slot) settings["Constructd:Backups:SlotMaxBytes"] = slot.ToString(System.Globalization.CultureInfo.InvariantCulture);
         void Probe(IServiceCollection services) => services.AddSingleton<IFreeSpaceProbe>(new FakeFreeSpaceProbe());
         var app = sqlite ? TestApp.WithSqlite(database!, settings, Probe) : new TestApp(settings, Probe);
         app.Clock.UtcNow = new DateTimeOffset(2026, 11, 4, 10, 0, 0, TimeSpan.Zero);
@@ -94,15 +95,28 @@ internal sealed class BackupHarness : IDisposable
 
     public static StringContent Json(string json) => new(json, Encoding.UTF8, "application/json");
 
-    public async Task<(HttpStatusCode Status, JsonObject Body)> OpenAsync(string trigger = "manual", long estimatedBytes = 1000, HttpClient? client = null)
+    /// <summary>The host opens its request for a backup of "dev" with <paramref name="trigger"/>, as the heartbeat or a user does.</summary>
+    public async Task RequestAsync(string trigger = "manual")
     {
-        using var response = await (client ?? Guest).PostAsJsonAsync("/api/v1/vms/dev/backups", new { trigger, estimatedBytes });
+        await using var held = await Coordinator.LockAsync("alice", "dev", default);
+        await Coordinator.OpenRequestLockedAsync("alice", "dev", trigger, default);
+    }
+
+    /// <summary>
+    /// The guest opens a session. <paramref name="requested"/>: the host asked first (with <paramref name="trigger"/>),
+    /// so the session is host-requested; otherwise it is whatever the host makes of it (a slot unless a request is open).
+    /// </summary>
+    public async Task<(HttpStatusCode Status, JsonObject Body)> OpenAsync(string trigger = "manual", long estimatedBytes = 1000, HttpClient? client = null,
+        bool requested = true, long? fileCount = null)
+    {
+        if (requested) await RequestAsync(trigger);
+        using var response = await (client ?? Guest).PostAsJsonAsync("/api/v1/vms/dev/backups", new { trigger, estimatedBytes, fileCount });
         return (response.StatusCode, await BodyAsync(response));
     }
 
-    public async Task<string> OpenIdAsync(string trigger = "manual", long estimatedBytes = 1000)
+    public async Task<string> OpenIdAsync(string trigger = "manual", long estimatedBytes = 1000, bool requested = true)
     {
-        var (status, body) = await OpenAsync(trigger, estimatedBytes);
+        var (status, body) = await OpenAsync(trigger, estimatedBytes, requested: requested);
         Assert.Equal(HttpStatusCode.Created, status);
         return body["id"]!.GetValue<string>();
     }
@@ -145,10 +159,10 @@ internal sealed class BackupHarness : IDisposable
         return response.StatusCode;
     }
 
-    /// <summary>Open, keys, payload: a complete backup.</summary>
-    public async Task<string> BackupAsync(byte[]? payload = null, string trigger = "manual")
+    /// <summary>Open, keys, payload: a complete backup, host-requested unless <paramref name="requested"/> is false.</summary>
+    public async Task<string> BackupAsync(byte[]? payload = null, string trigger = "manual", bool requested = true)
     {
-        var id = await OpenIdAsync(trigger);
+        var id = await OpenIdAsync(trigger, requested: requested);
         Assert.Equal(HttpStatusCode.NoContent, await PutKeysAsync(id));
         var (status, body) = await UploadAsync(id, payload ?? RandomNumberGenerator.GetBytes(4096));
         Assert.Equal(HttpStatusCode.OK, status);

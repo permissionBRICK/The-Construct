@@ -39,7 +39,10 @@ public sealed class ReleaseInfo : IReleaseInfo
     /// auto-ballooning may shrink a primary to) exist on Proxmox only. `config-backups` (host-stored,
     /// encrypted config backups of primaries) exists on both.
     /// </summary>
-    public IReadOnlyList<string> ApiFeatures => options?.IsProxmox == true
+    public IReadOnlyList<string> ApiFeatures => options?.IsExternal == true
+        // Existing VMs over SSH: no children, media, console, host updates or hardware settings.
+        ? ["host-admin", "usage", "key-vault", "config-backups", .. SourceCache]
+        : options?.IsProxmox == true
         ? ["host-admin", "windows-guests", "usage", "updates", "primary-cpu", "primary-memory", "primary-nested", "primary-memory-floor", "network-mode", "children", "media", "console", "network", "key-vault", "config-backups", .. SourceCache]
         : ["host-admin", "windows-guests", "usage", "children", "media", "console", "updates", "network", "primary-cpu", "primary-memory", "primary-nested", "key-vault", "config-backups", .. SourceCache];
     private string[] SourceCache => options?.HostAdmin.Source.Enabled != false ? ["source-cache"] : [];

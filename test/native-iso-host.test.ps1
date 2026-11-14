@@ -129,7 +129,7 @@ try {
     Assert ($script:request.Overwrite -eq $true) 'local force rebuild permits atomic replacement'
     Assert ($OutputEncoding -eq $oldEncoding) 'native stdin encoding is restored'
 
-    foreach ($file in @('Auto-Install.ps1', 'service/host/Install-ConstructHost.ps1', 'lib/Construct.Iso.ps1')) {
+    foreach ($file in @('service/host/Install-ConstructHost.ps1', 'lib/Construct.Iso.ps1')) {
         $path = Join-Path $PSScriptRoot "../$file"
         $tokens = $null; $errors = $null
         $ast = [Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)

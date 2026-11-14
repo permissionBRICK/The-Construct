@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
+using Constructd.Api.Contracts;
 using Constructd.Api.Endpoints;
 using Constructd.Api.Infrastructure;
 using Constructd.Core.Abstractions;
@@ -14,8 +15,10 @@ namespace Constructd.Api.Backups;
 /// is streamed into <c>&lt;id&gt;.age.partial</c> while it is hashed (SHA-256) and counted, never buffered.
 /// It stops at <c>maxBytes</c> (413 <c>backup-too-large</c>) or when the host's free space falls below the
 /// reserve, re-checked every <see cref="BackupCoordinator.SpaceCheckBytes"/> (507 <c>host-disk-space</c>).
-/// On success the file is renamed to <c>&lt;id&gt;.age</c>, the session completes and rotation runs; any
-/// failure removes the partial file and closes the session as failed. The caller registered the upload
+/// On success the file is renamed to <c>&lt;id&gt;.age</c> and the session completes: a host-requested one
+/// records the success and rotation runs; a slot upload replaces the VM's previous slot content and
+/// touches no schedule state. Any failure removes the partial file and closes the session as failed
+/// (recorded as a failure only for a host-requested session). The caller registered the upload
 /// with <see cref="BackupCoordinator.BeginUpload"/>; its token is cancelled when the session is deleted.
 /// </summary>
 internal sealed class BackupUpload(HttpContext http, Vm vm, ConfigBackup backup, CancellationTokenSource upload,
@@ -38,11 +41,11 @@ internal sealed class BackupUpload(HttpContext http, Vm vm, ConfigBackup backup,
             host = await backups.ConfigAsync(ct);
             if (backup.KeysJson is null)
                 return await CloseLockedAsync(new(409, "backup-keys-missing", "The keys file must be uploaded before the payload.", "host-refused"));
-            var stored = (await _store.ListAsync(vm.Owner, vm.Name, ct)).Where(b => b.IsComplete).Sum(b => b.SizeBytes ?? 0);
+            var stored = BackupCoordinator.StoredBytes(await _store.ListAsync(vm.Owner, vm.Name, ct), backup.IsSlot);
             var free = _files.FreeBytes();
             if (free < host.MinFreeBytes)
                 return await CloseLockedAsync(new(507, "host-disk-space", "The host is below its free-space reserve.", "host-refused"));
-            maxBytes = BackupCoordinator.MaxBytes(host, free, stored);
+            maxBytes = backups.MaxBytes(host, backup.IsSlot, free, stored);
             if (http.Request.ContentLength is long announced && announced > maxBytes)
                 return await CloseLockedAsync(TooLarge(maxBytes), MaxBytesExtra(maxBytes));
         }
@@ -68,17 +71,29 @@ internal sealed class BackupUpload(HttpContext http, Vm vm, ConfigBackup backup,
             }
             _files.Publish(vm.Owner, vm.Name, backup.Id);
             var completedAt = clock.UtcNow;
-            DateTimeOffset? pinned = backup.Trigger == BackupTriggers.PreReinstall ? backup.CreatedAt.AddDays(host.PinDays) : null;
+            // Only a host-requested pre-reinstall backup pins itself; a slot's trigger is always "slot".
+            DateTimeOffset? pinned = !backup.IsSlot && backup.Trigger == BackupTriggers.PreReinstall ? backup.CreatedAt.AddDays(host.PinDays) : null;
             await _store.CompleteAsync(backup.Id, completedAt, _received, sha256!, pinned, CancellationToken.None);
             backups.EndUpload(backup.Id, upload);
-            var state = await _store.GetVmAsync(vm.Owner, vm.Name, CancellationToken.None) ?? new BackupVmState(vm.Owner, vm.Name);
-            state = state with { LastSuccessAt = completedAt, FailingSince = null };
-            await _store.SaveVmAsync(state, CancellationToken.None);
-            // Old backups go only once the new one is complete.
-            await backups.RotateLockedAsync(vm.Owner, vm.Name, host, state, CancellationToken.None);
+            backups.Changes.Publish("backup.added", backup.Id, vm.Name, vm.Owner);
+            if (backup.IsSlot)
+            {
+                // The new slot content is verified and complete: the previous one goes.
+                foreach (var previous in (await _store.ListAsync(vm.Owner, vm.Name, CancellationToken.None))
+                             .Where(b => b.IsSlot && b.IsComplete && b.Id != backup.Id).ToList())
+                    await backups.DeleteLockedAsync(previous, CancellationToken.None);
+            }
+            else
+            {
+                var state = await _store.GetVmAsync(vm.Owner, vm.Name, CancellationToken.None) ?? new BackupVmState(vm.Owner, vm.Name);
+                state = state with { LastSuccessAt = completedAt, FailingSince = null };
+                await _store.SaveVmAsync(state, CancellationToken.None);
+                // Old backups go only once the new one is complete.
+                await backups.RotateLockedAsync(vm.Owner, vm.Name, host, state, CancellationToken.None);
+            }
         }
         CodedProblems.Audit(http, "backup.upload", vm.Owner, target: backup.Id, extra: $"trigger={backup.Trigger}, sizeBytes={_received}");
-        return Results.Ok(new { id = backup.Id, sizeBytes = _received, sha256, createdAt = backup.CreatedAt });
+        return TypedResults.Ok(new BackupUploadedResponse(backup.Id, _received, sha256!, backup.CreatedAt, BackupEndpoints.Kind(backup)));
     }
 
     private async Task<(string? Sha256, Failure? Failure, ExceptionDispatchInfo? Error)> StreamAsync(BackupsConfig host, long maxBytes, CancellationToken ct)
@@ -146,9 +161,10 @@ internal sealed class BackupUpload(HttpContext http, Vm vm, ConfigBackup backup,
         if (current is { IsOpen: true }) await _store.DeleteAsync(backup.Id, CancellationToken.None);
         backups.EndUpload(backup.Id, upload);
         // A session deleted under the upload was closed by someone else; its failure is not this upload's.
-        if (failure.Reason is not null && current is not null)
+        // A slot upload's failure is not schedule state.
+        if (failure.Reason is not null && current is not null && !backup.IsSlot)
             await backups.RecordFailureLockedAsync(vm.Owner, vm.Name, backup.Trigger, failure.Reason,
-                failure.Reason == "host-refused" ? failure.Code : null, CancellationToken.None);
+                failure.Reason == "host-refused" ? failure.Code : null, answersRequest: false, CancellationToken.None);
         try { _files.PruneDirectory(vm.Owner, vm.Name); }
         catch (IOException) { }
         catch (UnauthorizedAccessException) { }

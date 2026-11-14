@@ -1,0 +1,4658 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "construct-agent",
+    "description": "The device agent's local API on loopback (http://127.0.0.1:<port>, both in the token file). Every route but GET /api/health takes `Authorization: Bearer <token>`. Engine calls go through the proxy `/api/engines/{id}/api/v1/...`, which forwards to that engine's `/api/v1/...` (its own contract, service/openapi/constructd.v1.json) over the pinned connection with this device's credential. Every error answer is an AgentProblem.",
+    "version": "v1"
+  },
+  "paths": {
+    "/api/health": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "description": "Answers without the token: the repair command and the shell ask whether the agent runs.",
+        "operationId": "Health",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentHealth"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/state": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "operationId": "GetState",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentStateView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/shutdown": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "operationId": "Shutdown",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/events": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "description": "Server-sent events: `agent`, `pairing`, `job.progress`, `job.phase`, `job.state`, `job.lost`; `reset` when the events after `since` are gone. Each `data` is an AgentEvent.",
+        "operationId": "Events",
+        "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/engines": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "operationId": "ListEngines",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EngineView"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "description": "Adds an engine with the pin the user confirmed. The user's sign-in there is userToken, or, with windowsSignIn, the signed-in Windows user where the engine offers Negotiate (Windows only; 501 not-available elsewhere).",
+        "operationId": "AddEngine",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddEngineRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/engines/probe": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "description": "Connects to a pasted address without any credential and returns the certificate pin for the user to confirm.",
+        "operationId": "ProbeEngine",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProbeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineProbe"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/engines/local": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "description": "The solo engine on this machine on loopback; 204 when none answers.",
+        "operationId": "ProbeLocalEngine",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineProbe"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/engines/{id}": {
+      "delete": {
+        "tags": [
+          "agent"
+        ],
+        "operationId": "RemoveEngine",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/engines/{id}/connect": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "description": "Grants the engine D (and K when vaultMode is available) and enrols this device there.",
+        "operationId": "ConnectEngine",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectEngineRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/device/setup": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "description": "The account's first device, against the engine's built-in store. The answer carries the recovery code, the only time it is shown.",
+        "operationId": "SetUpFirstDevice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryCodeResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/device/recovery-code": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "description": "Issues a new recovery code; the old one stops working.",
+        "operationId": "NewRecoveryCode",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryCodeResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/device/recovery-code/again": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "description": "While the setup's code is not confirmed: a new one (the earlier stops working), for the first run or the upgrade after a reload. 409 recovery-confirmed otherwise.",
+        "operationId": "ReissueRecoveryCode",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryCodeResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/device/recovery-code/kept": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "description": "The user confirmed the code of that issue was kept: the setup's recovery step is done. 409 code-replaced when a newer code was issued since.",
+        "operationId": "ConfirmRecoveryCode",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmRecoveryCodeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/device/recover": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "operationId": "Recover",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecoverRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/pairing": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "description": "This device asks to join an account; the agent waits for the approval by itself and reports on /api/events.",
+        "operationId": "StartPairing",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartPairingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "operationId": "GetPairing",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "agent"
+        ],
+        "operationId": "CancelPairing",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/pairing/requests/{id}": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "operationId": "GetPairingRequest",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingRequestView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/pairing/requests/{id}/approve": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "description": "publicKey is the one GetPairingRequest returned with the words the user compared.",
+        "operationId": "ApprovePairing",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovePairingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/devices": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "operationId": "ListDevices",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DeviceListItem"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/devices/{id}": {
+      "delete": {
+        "tags": [
+          "agent"
+        ],
+        "operationId": "RevokeDevice",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevocationView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/engines/{engine}/vms/{vm}/backups/{backup}/restore": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "description": "Restores a stored backup into the running VM: the backup's key is unwrapped here with the account's backup key and goes only to the engine's restore job. Follow the job through the proxy.",
+        "operationId": "RestoreBackup",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "vm",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "backup",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/RestoreRequest"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreStarted"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/engines/{engine}/vms/{vm}/jobs": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "description": "The engine's POST /vms/{name}/jobs. Credentials go with a provision or a reinstall. The agent adds secrets.gitCloneCredentialsB64 from this device's git credential helper, for the user's own VM only and unless the body carries one; everything else goes to the engine as sent. The answer is the engine's (status and body), with hostsWithoutCredential: the HTTP(S) hosts of the VM's repos that had no working credential here.",
+        "operationId": "StartVmJobWithCredentials",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "vm",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStartedWithCredentials"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/engines/{engine}/vms": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "description": "The engine's POST /vms. Credentials go with a create that has settings (its first provision). The agent adds secrets.gitCloneCredentialsB64 from this device's git credential helper, for the user's own VM only and unless the body carries one; everything else goes to the engine as sent. The answer is the engine's (status and body), with hostsWithoutCredential: the HTTP(S) hosts of the VM's repos that had no working credential here.",
+        "operationId": "CreateVmWithCredentials",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStartedWithCredentials"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/engines/{engine}/jobs/{id}/retry": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "description": "The engine's POST /jobs/{id}/retry. Credentials go with the retry of a provision or a reinstall. The agent adds secrets.gitCloneCredentialsB64 from this device's git credential helper, for the user's own VM only and unless the body carries one; everything else goes to the engine as sent. The answer is the engine's (status and body), with hostsWithoutCredential: the HTTP(S) hosts of the VM's repos that had no working credential here.",
+        "operationId": "RetryJobWithCredentials",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/JsonObject"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStartedWithCredentials"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/devices/{id}/secrets": {
+      "get": {
+        "tags": [
+          "agent"
+        ],
+        "description": "Every secret a device could read (all of the account's), to rotate at their source when it is revoked.",
+        "operationId": "SecretsReadableByDevice",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SecretSummary"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/secrets": {
+      "get": {
+        "tags": [
+          "vault"
+        ],
+        "description": "Names, descriptions, the sealed auto-approve flag, leases on every engine reached and who wrote each; never a value.",
+        "operationId": "ListSecrets",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SecretView"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "vault"
+        ],
+        "description": "A new secret under a free name; 409 exists otherwise.",
+        "operationId": "AddSecret",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SecretInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/secrets/{name}": {
+      "patch": {
+        "tags": [
+          "vault"
+        ],
+        "description": "Replaces the description, username or value; null keeps a field. A new value ends the leases on the old one at every engine.",
+        "operationId": "ChangeSecret",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SecretChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "vault"
+        ],
+        "operationId": "DeleteSecret",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/secrets/{name}/reveal": {
+      "post": {
+        "tags": [
+          "vault"
+        ],
+        "description": "The one route that returns a value, for the user who asked to see it.",
+        "operationId": "RevealSecret",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretValue"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/secrets/{name}/auto-approve": {
+      "put": {
+        "tags": [
+          "vault"
+        ],
+        "operationId": "SetSecretAutoApprove",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutoApproveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/history": {
+      "get": {
+        "tags": [
+          "vault"
+        ],
+        "description": "Every write of every secret, newest first, with its provenance (a VM, the approving or entering device, the request id).",
+        "operationId": "SecretHistory",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SecretHistoryItem"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/approvals": {
+      "get": {
+        "tags": [
+          "vault"
+        ],
+        "operationId": "ListVaultApprovals",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultApprovalsView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/approvals/{engine}/{id}": {
+      "post": {
+        "tags": [
+          "vault"
+        ],
+        "description": "allow or deny; an allow of a lease request may carry ttlSeconds, the duration the user chose (60 to 86400). On a locked engine an allow first unlocks the VM that asked.",
+        "operationId": "DecideVaultApproval",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalDecision"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/leases/{engine}/{id}": {
+      "delete": {
+        "tags": [
+          "vault"
+        ],
+        "description": "Ends a lease before its time, at that engine; the VM's copy is scrubbed as on expiry.",
+        "operationId": "EndVaultLease",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/entry-requests": {
+      "get": {
+        "tags": [
+          "vault"
+        ],
+        "description": "Agents asking the user to enter a secret (construct secret ask). Description and reason are the agent's text.",
+        "operationId": "ListEntryRequests",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultEntryRequestsView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/entry-requests/{engine}/{id}": {
+      "post": {
+        "tags": [
+          "vault"
+        ],
+        "description": "Creates the secret only while its name is free (409 exists, nothing overwritten); it needs approval for every use and grants no lease.",
+        "operationId": "EnterSecret",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EntryInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/entry-requests/{engine}/{id}/decline": {
+      "post": {
+        "tags": [
+          "vault"
+        ],
+        "operationId": "DeclineEntryRequest",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/engines/{engine}/mode": {
+      "get": {
+        "tags": [
+          "vault"
+        ],
+        "operationId": "GetVaultMode",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultModeView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "vault"
+        ],
+        "description": "available grants the engine K; locked withdraws it (VMs a device unlocked keep it until they stop).",
+        "operationId": "SetVaultMode",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VaultModeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultModeView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/vault/engines/{engine}/vms/{vm}/unlock": {
+      "post": {
+        "tags": [
+          "vault"
+        ],
+        "description": "Gives a running VM on a locked engine K until it stops.",
+        "operationId": "UnlockVmVault",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "vm",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/device/features": {
+      "get": {
+        "tags": [
+          "device"
+        ],
+        "description": "What this device can do: platform, notifications, microphone, workspace share, start with the OS, whether it can run an engine (engineHost).",
+        "operationId": "GetDeviceFeatures",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceFeatures"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/engines/local/setup": {
+      "get": {
+        "tags": [
+          "device"
+        ],
+        "description": "Where setting up the engine on this PC stands: idle, running, done (with its engine id), failed (the installer's reason) or restart (Windows must restart to turn on Hyper-V).",
+        "operationId": "GetLocalEngineSetup",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineSetupView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "device"
+        ],
+        "description": "Sets up the engine on this PC (Windows): the host package of the device's channel, checked against the manifest, installed unattended with one elevation prompt; the token goes into the state. An engine on loopback this agent already holds a sign-in for is taken as it is. Progress as engine-setup events; 501 not-available where the device cannot host one.",
+        "operationId": "StartLocalEngineSetup",
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EngineSetupView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/device/restart": {
+      "post": {
+        "tags": [
+          "device"
+        ],
+        "description": "Restarts Windows now, after the engine setup said Hyper-V needs it (409 no-restart-needed otherwise). Nothing continues by itself afterwards.",
+        "operationId": "RestartDevice",
+        "responses": {
+          "202": {
+            "description": "Accepted"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/device/settings": {
+      "get": {
+        "tags": [
+          "device"
+        ],
+        "operationId": "GetDeviceSettings",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceSettingsView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "device"
+        ],
+        "description": "Changes what is given: the release channel, automatic updates, start with the OS.",
+        "operationId": "SetDeviceSettings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceSettingsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceSettingsView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/device/ssh-key": {
+      "get": {
+        "tags": [
+          "device"
+        ],
+        "description": "The device's SSH public key (created on first use); a VM must authorize it before forwards, notifications and the open actions reach it.",
+        "operationId": "GetDeviceSshKey",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SshKeyView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/connections": {
+      "get": {
+        "tags": [
+          "device"
+        ],
+        "description": "The user's own VMs on every engine: the address this device dials, its local forwards and the microphone.",
+        "operationId": "ListConnections",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ConnectionView"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/connections/refresh": {
+      "post": {
+        "tags": [
+          "device"
+        ],
+        "operationId": "RefreshConnections",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ConnectionView"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/update": {
+      "get": {
+        "tags": [
+          "device"
+        ],
+        "description": "This agent's version and channel, and the version on offer (`available`) after the last check.",
+        "operationId": "GetUpdate",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/update/check": {
+      "post": {
+        "tags": [
+          "device"
+        ],
+        "operationId": "CheckUpdate",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/update/install": {
+      "post": {
+        "tags": [
+          "device"
+        ],
+        "description": "Installs the version on offer when the agent is idle; the agent restarts as that version, and starts the previous one again when the new one fails its self-test.",
+        "operationId": "InstallUpdate",
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/update/everything": {
+      "get": {
+        "tags": [
+          "device"
+        ],
+        "operationId": "GetUpdateEverything",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EverythingView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "device"
+        ],
+        "description": "Each engine the user administers updates itself, each engine reprovisions the user's own VMs, then this device updates; the parts and their state, never stored.",
+        "operationId": "UpdateEverything",
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EverythingView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/shell/open": {
+      "post": {
+        "tags": [
+          "device"
+        ],
+        "description": "Shows a surface of the desktop shell (a second start of the app hands its request over this way).",
+        "operationId": "OpenShell",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShellOpenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/connections/{engine}/{vm}/forwards/{id}": {
+      "delete": {
+        "tags": [
+          "device"
+        ],
+        "operationId": "CloseForward",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "vm",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/connections/{engine}/{vm}/mic": {
+      "put": {
+        "tags": [
+          "device"
+        ],
+        "description": "Microphone passthrough to the VM; kept for the VM's next start.",
+        "operationId": "SetMicrophone",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "vm",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SwitchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudioView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/connections/{engine}/{vm}/ssh-config": {
+      "put": {
+        "tags": [
+          "device"
+        ],
+        "description": "Writes the VM's Host alias in ~/.ssh/config and VS Code's remote.SSH.remotePlatform entry.",
+        "operationId": "WriteSshConfig",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "vm",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ConfigWrite"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "device"
+        ],
+        "operationId": "RemoveSshConfig",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "vm",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ConfigWrite"
+                  }
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/connections/{engine}/{vm}/open": {
+      "post": {
+        "tags": [
+          "device"
+        ],
+        "description": "Opens the VM: `t3` (T3 Code's pairing link in the browser), `vscode` (Remote-SSH), `ssh` (a terminal).",
+        "operationId": "OpenVm",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "vm",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/connections/{engine}/{vm}/t3-pairing": {
+      "post": {
+        "tags": [
+          "device"
+        ],
+        "description": "A one-time T3 Code pairing link for T3 Desktop on one of the user's own running VMs (`pairUrl`, `links`, `scopes`). The link carries a one-time token: it is in this answer only.",
+        "operationId": "CreateT3PairingLink",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "vm",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/T3PairingLink"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/connections/{engine}/{vm}/share": {
+      "get": {
+        "tags": [
+          "device"
+        ],
+        "operationId": "GetShare",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "vm",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShareView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "device"
+        ],
+        "description": "Maps the workspace share of a VM on this PC to a drive letter (Windows).",
+        "operationId": "MapShare",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "vm",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShareView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "device"
+        ],
+        "operationId": "UnmapShare",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "vm",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/upgrade": {
+      "get": {
+        "tags": [
+          "upgrade"
+        ],
+        "description": "Where the one-time upgrade stands: the steps (engine, recovery, close, convert), what the old install holds, the last run's items.",
+        "operationId": "GetUpgrade",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/upgrade/engine": {
+      "post": {
+        "tags": [
+          "upgrade"
+        ],
+        "description": "Step 1: installs this PC's engine with one elevation prompt when it has a local VM, and adds the shared hosts with their pins and sign-ins. Repeatable.",
+        "operationId": "StartUpgradeEngine",
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/upgrade/writers": {
+      "get": {
+        "tags": [
+          "upgrade"
+        ],
+        "description": "Step 3: the old writers still open (VS Code, the old Companion); the conversion waits until the list is empty.",
+        "operationId": "GetUpgradeWriters",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OldWritersView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/upgrade/convert": {
+      "post": {
+        "tags": [
+          "upgrade"
+        ],
+        "description": "Step 4: copies the old state into the new stack and switches the local VMs over; repeatable, a second run changes nothing already there.",
+        "operationId": "StartUpgradeConvert",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ConvertRequest"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/upgrade/notes/read": {
+      "post": {
+        "tags": [
+          "upgrade"
+        ],
+        "description": "After the conversion: the user went on from its notes, which are not shown again.",
+        "operationId": "ReadUpgradeNotes",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AddEngineRequest": {
+        "required": [
+          "address",
+          "pin"
+        ],
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "pin": {
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "userToken": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "x-construct-secret": true
+          },
+          "windowsSignIn": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "AgentHealth": {
+        "required": [
+          "status",
+          "version",
+          "pid",
+          "startedAt",
+          "apiFeatures"
+        ],
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "pid": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "apiFeatures": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "AgentProblem": {
+        "required": [
+          "title",
+          "status",
+          "code"
+        ],
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "code": {
+            "type": "string"
+          }
+        }
+      },
+      "AgentStateView": {
+        "required": [
+          "device",
+          "engines",
+          "pairing"
+        ],
+        "type": "object",
+        "properties": {
+          "device": {
+            "$ref": "#/components/schemas/DeviceView"
+          },
+          "engines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EngineView"
+            }
+          },
+          "pairing": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PairingView"
+              }
+            ]
+          }
+        }
+      },
+      "ApprovalDecision": {
+        "required": [
+          "decision"
+        ],
+        "type": "object",
+        "properties": {
+          "decision": {
+            "type": "string"
+          },
+          "ttlSeconds": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          }
+        }
+      },
+      "ApprovePairingRequest": {
+        "required": [
+          "publicKey"
+        ],
+        "type": "object",
+        "properties": {
+          "publicKey": {
+            "type": "string"
+          }
+        }
+      },
+      "AudioView": {
+        "required": [
+          "enabled",
+          "capturing",
+          "error"
+        ],
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "capturing": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "AutoApproveRequest": {
+        "required": [
+          "on"
+        ],
+        "type": "object",
+        "properties": {
+          "on": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ConfigWrite": {
+        "required": [
+          "item",
+          "status",
+          "path"
+        ],
+        "type": "object",
+        "properties": {
+          "item": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "message": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "ConfirmRecoveryCodeRequest": {
+        "required": [
+          "issue"
+        ],
+        "type": "object",
+        "properties": {
+          "issue": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ConnectEngineRequest": {
+        "type": "object",
+        "properties": {
+          "vaultMode": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "ConnectionView": {
+        "required": [
+          "engine",
+          "vm",
+          "alias",
+          "state",
+          "address",
+          "linked",
+          "forwards",
+          "mic",
+          "sshConfig"
+        ],
+        "type": "object",
+        "properties": {
+          "engine": {
+            "type": "string"
+          },
+          "vm": {
+            "type": "string"
+          },
+          "alias": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "address": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/VmAddress"
+              }
+            ]
+          },
+          "linked": {
+            "type": "boolean"
+          },
+          "forwards": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ForwardView"
+            }
+          },
+          "mic": {
+            "$ref": "#/components/schemas/AudioView"
+          },
+          "sshConfig": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "ConvertRequest": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "DeviceFeatures": {
+        "required": [
+          "platform",
+          "notifications",
+          "microphone",
+          "share",
+          "startWithOs",
+          "shell",
+          "engineHost"
+        ],
+        "type": "object",
+        "properties": {
+          "platform": {
+            "type": "string"
+          },
+          "notifications": {
+            "type": "boolean"
+          },
+          "microphone": {
+            "type": "boolean"
+          },
+          "share": {
+            "type": "boolean"
+          },
+          "startWithOs": {
+            "type": "boolean"
+          },
+          "shell": {
+            "type": "boolean"
+          },
+          "engineHost": {
+            "type": "boolean"
+          }
+        }
+      },
+      "DeviceListItem": {
+        "required": [
+          "id",
+          "name",
+          "me",
+          "revoked",
+          "added",
+          "acknowledgedBy"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "me": {
+            "type": "boolean"
+          },
+          "revoked": {
+            "type": "boolean"
+          },
+          "added": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "acknowledgedBy": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "DeviceSettingsRequest": {
+        "type": "object",
+        "properties": {
+          "channel": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "autoUpdate": {
+            "type": [
+              "null",
+              "boolean"
+            ]
+          },
+          "startWithOs": {
+            "type": [
+              "null",
+              "boolean"
+            ]
+          }
+        }
+      },
+      "DeviceSettingsView": {
+        "required": [
+          "channel",
+          "autoUpdate",
+          "startWithOs"
+        ],
+        "type": "object",
+        "properties": {
+          "channel": {
+            "type": "string"
+          },
+          "autoUpdate": {
+            "type": "boolean"
+          },
+          "startWithOs": {
+            "type": [
+              "null",
+              "boolean"
+            ]
+          }
+        }
+      },
+      "DeviceView": {
+        "required": [
+          "id",
+          "name",
+          "account",
+          "registered",
+          "storeEngine",
+          "protection",
+          "protectionWeak",
+          "recoveryUnconfirmed"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "account": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "registered": {
+            "type": "boolean"
+          },
+          "storeEngine": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "protection": {
+            "type": "string"
+          },
+          "protectionWeak": {
+            "type": "boolean"
+          },
+          "recoveryUnconfirmed": {
+            "type": "boolean"
+          }
+        }
+      },
+      "EngineProbe": {
+        "required": [
+          "url",
+          "pin",
+          "status",
+          "known"
+        ],
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "pin": {
+            "type": "string"
+          },
+          "status": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "known": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "EngineSetupView": {
+        "required": [
+          "available",
+          "state",
+          "message",
+          "engine"
+        ],
+        "type": "object",
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "state": {
+            "type": "string"
+          },
+          "message": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "engine": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "EngineView": {
+        "required": [
+          "id",
+          "name",
+          "url",
+          "pin",
+          "engineId",
+          "enrolled",
+          "signedIn",
+          "store"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "pin": {
+            "type": "string"
+          },
+          "engineId": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "enrolled": {
+            "type": "boolean"
+          },
+          "signedIn": {
+            "type": "boolean"
+          },
+          "store": {
+            "type": "boolean"
+          }
+        }
+      },
+      "EntryInput": {
+        "required": [
+          "value"
+        ],
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string",
+            "x-construct-secret": true
+          },
+          "username": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "EverythingView": {
+        "required": [
+          "running",
+          "parts"
+        ],
+        "type": "object",
+        "properties": {
+          "running": {
+            "type": "boolean"
+          },
+          "parts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UpdatePart"
+            }
+          }
+        }
+      },
+      "ForwardView": {
+        "required": [
+          "id",
+          "label",
+          "target",
+          "status",
+          "vmPort",
+          "localPort",
+          "url",
+          "message",
+          "closable",
+          "child"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "vmPort": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          },
+          "localPort": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          },
+          "url": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "closable": {
+            "type": "boolean"
+          },
+          "child": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "JobStartedWithCredentials": {
+        "required": [
+          "jobId",
+          "kind",
+          "replayed",
+          "hostsWithoutCredential"
+        ],
+        "type": "object",
+        "properties": {
+          "jobId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "replayed": {
+            "type": [
+              "null",
+              "boolean"
+            ]
+          },
+          "hostsWithoutCredential": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "JsonObject": {
+        "type": "object"
+      },
+      "OldWritersView": {
+        "required": [
+          "open"
+        ],
+        "type": "object",
+        "properties": {
+          "open": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "OpenRequest": {
+        "required": [
+          "what"
+        ],
+        "type": "object",
+        "properties": {
+          "what": {
+            "type": "string"
+          }
+        }
+      },
+      "OpenResult": {
+        "required": [
+          "what",
+          "alias"
+        ],
+        "type": "object",
+        "properties": {
+          "what": {
+            "type": "string"
+          },
+          "alias": {
+            "type": "string"
+          },
+          "kind": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "PairingRequestView": {
+        "required": [
+          "pairingId",
+          "name",
+          "words",
+          "publicKey",
+          "expiresAt"
+        ],
+        "type": "object",
+        "properties": {
+          "pairingId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "words": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "publicKey": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "PairingView": {
+        "required": [
+          "pairingId",
+          "state",
+          "words",
+          "expiresAt",
+          "storeUrl",
+          "storePin",
+          "problem"
+        ],
+        "type": "object",
+        "properties": {
+          "pairingId": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "words": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "storeUrl": {
+            "type": "string"
+          },
+          "storePin": {
+            "type": "string"
+          },
+          "problem": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "ProbeRequest": {
+        "required": [
+          "address"
+        ],
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string"
+          }
+        }
+      },
+      "RecoverRequest": {
+        "required": [
+          "engine",
+          "account",
+          "recoveryCode",
+          "deviceName"
+        ],
+        "type": "object",
+        "properties": {
+          "engine": {
+            "type": "string"
+          },
+          "account": {
+            "type": "string"
+          },
+          "recoveryCode": {
+            "type": "string",
+            "x-construct-secret": true
+          },
+          "deviceName": {
+            "type": "string"
+          }
+        }
+      },
+      "RecoveryCodeResponse": {
+        "required": [
+          "recoveryCode",
+          "issue"
+        ],
+        "type": "object",
+        "properties": {
+          "recoveryCode": {
+            "type": "string",
+            "x-construct-secret": true
+          },
+          "issue": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "RestoreRequest": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "RestoreStarted": {
+        "required": [
+          "jobId",
+          "replayed"
+        ],
+        "type": "object",
+        "properties": {
+          "jobId": {
+            "type": "string"
+          },
+          "replayed": {
+            "type": "boolean"
+          }
+        }
+      },
+      "RevocationEngine": {
+        "required": [
+          "id",
+          "name",
+          "confirmed"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "confirmed": {
+            "type": "boolean"
+          }
+        }
+      },
+      "RevocationView": {
+        "required": [
+          "deviceId",
+          "engines"
+        ],
+        "type": "object",
+        "properties": {
+          "deviceId": {
+            "type": "string"
+          },
+          "engines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RevocationEngine"
+            }
+          }
+        }
+      },
+      "SecretChange": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "username": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "value": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "x-construct-secret": true
+          }
+        }
+      },
+      "SecretHistoryItem": {
+        "required": [
+          "name",
+          "action",
+          "revision",
+          "at",
+          "actor",
+          "provenance"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "provenance": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SecretProvenanceView"
+              }
+            ]
+          }
+        }
+      },
+      "SecretInput": {
+        "required": [
+          "name",
+          "description",
+          "value"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string",
+            "x-construct-secret": true
+          },
+          "username": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "autoApprove": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "SecretLeaseView": {
+        "required": [
+          "engine",
+          "engineName",
+          "id",
+          "vm",
+          "name",
+          "usesLeft",
+          "expiresAt"
+        ],
+        "type": "object",
+        "properties": {
+          "engine": {
+            "type": "string"
+          },
+          "engineName": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "vm": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "usesLeft": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          },
+          "expiresAt": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "SecretProvenanceView": {
+        "required": [
+          "kind",
+          "vm",
+          "engine",
+          "device",
+          "requestId"
+        ],
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "vm": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "engine": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "device": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "requestId": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "SecretSummary": {
+        "required": [
+          "name",
+          "description"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      },
+      "SecretValue": {
+        "required": [
+          "name",
+          "username",
+          "value"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string",
+            "x-construct-secret": true
+          }
+        }
+      },
+      "SecretView": {
+        "required": [
+          "name",
+          "description",
+          "hasUsername",
+          "autoApprove",
+          "readable",
+          "updatedAt",
+          "updatedBy",
+          "provenance",
+          "leases"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "hasUsername": {
+            "type": "boolean"
+          },
+          "autoApprove": {
+            "type": "boolean"
+          },
+          "readable": {
+            "type": "boolean"
+          },
+          "updatedAt": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "updatedBy": {
+            "type": "string"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/SecretProvenanceView"
+          },
+          "leases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SecretLeaseView"
+            }
+          }
+        }
+      },
+      "SetupRequest": {
+        "required": [
+          "engine",
+          "deviceName"
+        ],
+        "type": "object",
+        "properties": {
+          "engine": {
+            "type": "string"
+          },
+          "deviceName": {
+            "type": "string"
+          },
+          "vaultMode": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "ShareView": {
+        "required": [
+          "unc",
+          "letter"
+        ],
+        "type": "object",
+        "properties": {
+          "unc": {
+            "type": "string"
+          },
+          "letter": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "ShellOpenRequest": {
+        "required": [
+          "surface"
+        ],
+        "type": "object",
+        "properties": {
+          "surface": {
+            "type": "string"
+          },
+          "route": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "SshKeyView": {
+        "required": [
+          "publicKey",
+          "path"
+        ],
+        "type": "object",
+        "properties": {
+          "publicKey": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "StartPairingRequest": {
+        "required": [
+          "engine",
+          "deviceName"
+        ],
+        "type": "object",
+        "properties": {
+          "engine": {
+            "type": "string"
+          },
+          "deviceName": {
+            "type": "string"
+          }
+        }
+      },
+      "SwitchRequest": {
+        "required": [
+          "on"
+        ],
+        "type": "object",
+        "properties": {
+          "on": {
+            "type": "boolean"
+          }
+        }
+      },
+      "T3PairingLink": {
+        "required": [
+          "pairUrl",
+          "links",
+          "scopes"
+        ],
+        "type": "object",
+        "properties": {
+          "pairUrl": {
+            "type": "string"
+          },
+          "links": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/T3PairingLinkEntry"
+            }
+          },
+          "scopes": {
+            "type": "string"
+          }
+        }
+      },
+      "T3PairingLinkEntry": {
+        "required": [
+          "kind",
+          "pairUrl"
+        ],
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "pairUrl": {
+            "type": "string"
+          }
+        }
+      },
+      "UpdatePart": {
+        "required": [
+          "part",
+          "engine",
+          "name",
+          "state"
+        ],
+        "type": "object",
+        "properties": {
+          "part": {
+            "type": "string"
+          },
+          "engine": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "detail": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "UpdateView": {
+        "required": [
+          "version",
+          "channel",
+          "available",
+          "state",
+          "error",
+          "installed",
+          "checkedAt"
+        ],
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "string"
+          },
+          "channel": {
+            "type": "string"
+          },
+          "available": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "error": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "installed": {
+            "type": "boolean"
+          },
+          "checkedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "UpgradeFound": {
+        "required": [
+          "installFolder",
+          "otherInstallFolders",
+          "localVms",
+          "remoteVms",
+          "hosts",
+          "profiles",
+          "unmergedChanges",
+          "vault",
+          "backupKeys",
+          "upstream",
+          "channel"
+        ],
+        "type": "object",
+        "properties": {
+          "installFolder": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "otherInstallFolders": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "localVms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "remoteVms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "hosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "profiles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "unmergedChanges": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "vault": {
+            "type": "boolean"
+          },
+          "backupKeys": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "upstream": {
+            "type": "boolean"
+          },
+          "channel": {
+            "type": "string"
+          }
+        }
+      },
+      "UpgradeItem": {
+        "required": [
+          "id",
+          "label",
+          "state"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "message": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "UpgradeStep": {
+        "required": [
+          "id",
+          "state"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "message": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "UpgradeView": {
+        "required": [
+          "legacy",
+          "stage",
+          "steps",
+          "found",
+          "storeEngine",
+          "localEngine",
+          "items",
+          "notes",
+          "oldWriters",
+          "running",
+          "error",
+          "oldHosts"
+        ],
+        "type": "object",
+        "properties": {
+          "legacy": {
+            "type": "boolean"
+          },
+          "stage": {
+            "type": "string"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UpgradeStep"
+            }
+          },
+          "found": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/UpgradeFound"
+              }
+            ]
+          },
+          "storeEngine": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "localEngine": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UpgradeItem"
+            }
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "oldWriters": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "running": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "oldHosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "VaultApprovalItem": {
+        "required": [
+          "engine",
+          "engineName",
+          "id",
+          "vm",
+          "op",
+          "title",
+          "message",
+          "action",
+          "names",
+          "reason",
+          "source",
+          "createdAt",
+          "deadline"
+        ],
+        "type": "object",
+        "properties": {
+          "engine": {
+            "type": "string"
+          },
+          "engineName": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "vm": {
+            "type": "string"
+          },
+          "op": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reason": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "deadline": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "uses": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          },
+          "ttlSeconds": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          }
+        }
+      },
+      "VaultApprovalsView": {
+        "required": [
+          "approvals",
+          "unreachable"
+        ],
+        "type": "object",
+        "properties": {
+          "approvals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VaultApprovalItem"
+            }
+          },
+          "unreachable": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "VaultEntryRequestItem": {
+        "required": [
+          "engine",
+          "engineName",
+          "id",
+          "vm",
+          "name",
+          "description",
+          "reason",
+          "source",
+          "createdAt",
+          "expiresAt"
+        ],
+        "type": "object",
+        "properties": {
+          "engine": {
+            "type": "string"
+          },
+          "engineName": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "vm": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "expiresAt": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "VaultEntryRequestsView": {
+        "required": [
+          "requests",
+          "unreachable"
+        ],
+        "type": "object",
+        "properties": {
+          "requests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VaultEntryRequestItem"
+            }
+          },
+          "unreachable": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "VaultModeRequest": {
+        "required": [
+          "mode"
+        ],
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string"
+          }
+        }
+      },
+      "VaultModeView": {
+        "required": [
+          "engine",
+          "mode",
+          "holdsKey",
+          "records",
+          "unlockedVms"
+        ],
+        "type": "object",
+        "properties": {
+          "engine": {
+            "type": "string"
+          },
+          "mode": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "holdsKey": {
+            "type": "boolean"
+          },
+          "records": {
+            "type": "boolean"
+          },
+          "unlockedVms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "VmAddress": {
+        "required": [
+          "host",
+          "port",
+          "kind"
+        ],
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "kind": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "agent"
+    },
+    {
+      "name": "vault"
+    },
+    {
+      "name": "device"
+    },
+    {
+      "name": "upgrade"
+    }
+  ]
+}

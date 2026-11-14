@@ -1,4 +1,5 @@
-"""Exercise Desktop's real PowerShell helper and VS Code's generated pairing script.
+"""Exercise the guest's pairing scripts (extension/vm/t3-pairing*.sh) as the device agent renders them
+(Construct.Companion.Core's T3Code.BuildPairingScript: one pass over the {{markers}}).
 
 SSH, the Construct forwarding CLI and T3 are process doubles. No host or live
 T3 installation is contacted; all shell/config paths are isolated in a temp dir.
@@ -6,6 +7,7 @@ T3 installation is contacted; all shell/config paths are isolated in a temp dir.
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -13,6 +15,17 @@ import textwrap
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def render(name, values):
+    """A guest script with its markers replaced in one pass, as GuestScripts.Render does."""
+    text = (ROOT / 'extension' / 'vm' / (name + '.sh')).read_text()
+    return re.sub(r'\{\{([A-Za-z][A-Za-z0-9]*)\}\}', lambda m: values[m.group(1)], text)
+
+
+def pairing_script(instance):
+    values = {'pairingBase': render('construct-t3-pairing-base', {}), 'instance': instance or ''}
+    return render('t3-pairing-instance' if instance else 't3-pairing', values)
 
 
 class PairingForwardTests(unittest.TestCase):
@@ -68,15 +81,14 @@ class PairingForwardTests(unittest.TestCase):
                 command = ['pwsh', '-NoProfile', '-File', str(ROOT / 'Get-ConstructT3PairingLink.ps1')]
                 result = subprocess.run(command, env=env, text=True, capture_output=True, timeout=20)
             else:
-                instance = '{name:"named-vm",backend:"hyperv-remote"}' if client == 'named-extension' else ''
-                script = subprocess.check_output(['node', '-e', f'process.stdout.write(require("./extension/src/t3code").buildPairingScript({instance}))'], cwd=ROOT, text=True)
+                script = pairing_script('named-vm' if client == 'named-extension' else None)
                 script = script.replace('CONFIG_FILE=/etc/construct/config.env', 'CONFIG_FILE=' + str(config))
                 result = subprocess.run(['bash', '-c', script], env=env, text=True, capture_output=True, timeout=20)
             calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
             return result, calls
 
     def test_host_allowed_uses_actual_allocated_port(self):
-        for client in ('desktop', 'extension'):
+        for client in ('extension',):
             with self.subTest(client=client):
                 result, calls = self.run_pairing(client)
                 self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
@@ -86,7 +98,7 @@ class PairingForwardTests(unittest.TestCase):
                 self.assertIn('--reuse', calls[0])
 
     def test_denied_host_uses_actual_client_port_and_tls_localhost(self):
-        for client in ('desktop', 'extension'):
+        for client in ('extension',):
             with self.subTest(client=client):
                 result, calls = self.run_pairing(client, host_exit=7)
                 self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
@@ -97,7 +109,7 @@ class PairingForwardTests(unittest.TestCase):
                 if client == 'desktop': self.assertEqual(json.loads(result.stdout)['scopes'], 'administrative')
 
     def test_plain_listener_falls_back_without_inventing_tls(self):
-        for client in ('desktop', 'extension'):
+        for client in ('extension',):
             with self.subTest(client=client):
                 result, calls = self.run_pairing(client, host_exit=7, tls=False)
                 self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
@@ -105,7 +117,7 @@ class PairingForwardTests(unittest.TestCase):
                 self.assertTrue(all(call[1] == '5177' for call in calls))
 
     def test_missing_client_and_invalid_endpoints_never_mint_a_dead_link(self):
-        for client in ('desktop', 'extension'):
+        for client in ('extension',):
             for values in ({'host_exit': 7, 'client_exit': 5}, {'host_exit': 7, 'client_url': 'http://pc:70000/'},
                            {'host_exit': 7, 'client_url': 'http://pc:18807/evil'}, {'host_exit': 6}):
                 with self.subTest(client=client, values=values):
@@ -115,7 +127,7 @@ class PairingForwardTests(unittest.TestCase):
                     if values.get('host_exit') == 6: self.assertEqual(len(calls), 1)
 
     def test_local_instance_keeps_its_advertised_origin_without_forwarding(self):
-        for client in ('desktop', 'extension'):
+        for client in ('extension',):
             with self.subTest(client=client):
                 result, calls = self.run_pairing(client, managed=False)
                 self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
@@ -123,7 +135,7 @@ class PairingForwardTests(unittest.TestCase):
                 self.assertEqual(calls, [])
 
     def test_both_scripts_prefer_external_host_and_keep_mshome_fallback(self):
-        for client in ('desktop', 'extension', 'named-extension'):
+        for client in ('extension', 'named-extension'):
             for external in (None, 'external.example'):
                 with self.subTest(client=client, external=external):
                     result, calls = self.run_pairing(client, managed=False, tls=False, external=external)
@@ -135,7 +147,7 @@ class PairingForwardTests(unittest.TestCase):
                     self.assertEqual(calls, [])
 
     def test_direct_link_uses_guest_listener_port_and_effective_tls(self):
-        for client in ('desktop', 'extension', 'named-extension'):
+        for client in ('extension', 'named-extension'):
             for tls in (True, False):
                 for direct in ('guest.example', '2001:db8::12'):
                     with self.subTest(client=client, tls=tls, direct=direct):
@@ -149,7 +161,7 @@ class PairingForwardTests(unittest.TestCase):
                         self.assertEqual(data['links'][1], {'kind': 'direct', 'pairUrl': expected})
 
     def test_proxy_link_is_listed_first_and_pair_url_stays_forwarded(self):
-        for client in ('desktop', 'extension', 'named-extension'):
+        for client in ('extension', 'named-extension'):
             for proxy, origin in (('https://t3.example.net:8443', 'https://t3.example.net:8443'),
                                   ("'https://[2001:db8::7]:8443'", 'https://[2001:db8::7]:8443')):
                 with self.subTest(client=client, proxy=proxy):
@@ -163,7 +175,7 @@ class PairingForwardTests(unittest.TestCase):
                     self.assertEqual(len(calls), 1)
 
     def test_invalid_proxy_address_is_ignored(self):
-        for client in ('desktop', 'extension'):
+        for client in ('extension',):
             for proxy in ('https://t3.example.net/app', 'ftp://t3.example.net', 'https://t3.example.net:70000', "'https://t3.example.net/?a=1'"):
                 with self.subTest(client=client, proxy=proxy):
                     result, _ = self.run_pairing(client, proxy=proxy)

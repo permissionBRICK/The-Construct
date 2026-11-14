@@ -7,6 +7,7 @@ using Constructd.Sqlite;
 using Constructd.Windows.Forwards;
 using Constructd.Windows.HyperV;
 using Constructd.Windows.Iso;
+using Constructd.Windows.Network;
 using Constructd.Windows.Power;
 using Constructd.Windows.Process;
 
@@ -57,6 +58,8 @@ public static class ServiceComposition
         }
 
         services.AddHttpsForwards();
+        services.AddProvisioning(options);
+        services.AddRepairAgent(options);
 
         // Platform-agnostic, so these are the real implementations in every mode: the job engine runs
         // jobs in this process and persists them through whichever IJobStore was registered, and the
@@ -72,7 +75,7 @@ public static class ServiceComposition
                 // rendered form would carry the dependency's message, stack trace and Data with it.
                 (job, error) => logger.LogError(
                     "Job {JobId} ({Kind}) for {Vm} failed: {Error}.",
-                    job.Id, job.Kind, job.VmName ?? "-", error), sp.GetRequiredService<IMaintenanceGate>());
+                    job.Id, job.Kind, job.VmName ?? "-", error), sp.GetRequiredService<IMaintenanceGate>(), sp.GetRequiredService<ChangeFeed>());
         });
         services.AddSingleton<IJobEngine>(sp => sp.GetRequiredService<InProcessJobEngine>());
 
@@ -113,6 +116,7 @@ public static class ServiceComposition
         ArgumentNullException.ThrowIfNull(options);
 
         services.AddSingleton<IClock, SystemClock>();
+        services.AddSingleton<ChangeFeed>();
 
         if (options.EffectivePersistence == PersistenceMode.Sqlite)
         {
@@ -137,7 +141,8 @@ public static class ServiceComposition
         });
 
         services.AddSingleton<IUserStore, SqliteUserStore>();
-        services.AddSingleton<IVmRepository, SqliteVmRepository>();
+        services.AddSingleton<SqliteVmRepository>();
+        services.AddSingleton<IVmRepository>(sp => new ChangeReportingVmRepository(sp.GetRequiredService<SqliteVmRepository>(), sp.GetRequiredService<ChangeFeed>()));
         services.AddSingleton<ITokenUsageStore, SqliteTokenUsageStore>();
         services.AddSingleton<IAuditLog, SqliteAuditLog>();
         services.AddSingleton<IJobStore, SqliteJobStore>();
@@ -156,7 +161,7 @@ public static class ServiceComposition
         services.AddSingleton<IUserStore>(sp => sp.GetRequiredService<InMemoryUserStore>());
 
         services.AddSingleton<InMemoryVmRepository>();
-        services.AddSingleton<IVmRepository>(sp => sp.GetRequiredService<InMemoryVmRepository>());
+        services.AddSingleton<IVmRepository>(sp => new ChangeReportingVmRepository(sp.GetRequiredService<InMemoryVmRepository>(), sp.GetRequiredService<ChangeFeed>()));
         services.AddSingleton<ITokenUsageStore>(sp => sp.GetRequiredService<InMemoryVmRepository>());
 
         services.AddSingleton<InMemoryAuditLog>();
@@ -180,6 +185,9 @@ public static class ServiceComposition
         services.AddSingleton<IVmCpuDriver>(sp => sp.GetRequiredService<FakeHypervisorDriver>());
         services.AddSingleton<IVmMemoryDriver>(sp => sp.GetRequiredService<FakeHypervisorDriver>());
         services.AddSingleton<IVmMemoryFloorDriver>(sp => sp.GetRequiredService<FakeHypervisorDriver>());
+        services.AddSingleton<IVmFactsDriver>(sp => sp.GetRequiredService<FakeHypervisorDriver>());
+        services.AddSingleton<InMemoryLanAccess>();
+        services.AddSingleton<ILanAccess>(sp => sp.GetRequiredService<InMemoryLanAccess>());
 
         services.AddSingleton<FakeIsoBuilder>();
         services.AddSingleton<IIsoBuilder>(sp => sp.GetRequiredService<FakeIsoBuilder>());
@@ -232,6 +240,12 @@ public static class ServiceComposition
             return services.AddProxmoxPlatform(options);
         }
 
+        // Existing VMs reachable over SSH; any OS (ExternalComposition).
+        if (options.IsExternal)
+        {
+            return services.AddExternalPlatform(options);
+        }
+
         if (!OperatingSystem.IsWindows())
         {
             throw new InvalidOperationException(
@@ -239,9 +253,22 @@ public static class ServiceComposition
                 "the portproxy forward manager need Windows, and this process is running on " +
                 $"{Environment.OSVersion.Platform}. Start the service with --fake (or " +
                 "Constructd:Fake=true); persistence works in both modes. On a Proxmox VE node, set " +
-                "Constructd:Backend=proxmox (service/host/install-construct-host.sh does).");
+                "Constructd:Backend=proxmox (service/host/install-construct-host.sh does); for VMs that " +
+                "already exist and answer SSH, set Constructd:Backend=external.");
         }
 
+        return services.AddHyperVPlatform(options);
+    }
+
+    /// <summary>
+    /// The Hyper-V platform's registrations, without the operating-system check in front of them, so a
+    /// test can compose them off Windows. Needs no Construct checkout: the driver's PowerShell ships in
+    /// the service package (<see cref="HyperVScripts"/>).
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Interoperability", "CA1416:Validate platform compatibility",
+        Justification = "Only registers the Windows services; the caller checks the OS, and a test composes them off Windows without resolving them.")]
+    public static IServiceCollection AddHyperVPlatform(this IServiceCollection services, ConstructdOptions options)
+    {
         ValidatePlatformOptions(options);
 
         services.AddSingleton<IProcessRunner, ProcessRunner>();
@@ -254,7 +281,9 @@ public static class ServiceComposition
         services.AddSingleton<IHypervisorDriver, HyperVDriver>();
         services.AddSingleton<IVmCpuDriver>(sp => (HyperVDriver)sp.GetRequiredService<IHypervisorDriver>());
         services.AddSingleton<IVmMemoryDriver>(sp => (HyperVDriver)sp.GetRequiredService<IHypervisorDriver>());
+        services.AddSingleton<IVmFactsDriver>(sp => (HyperVDriver)sp.GetRequiredService<IHypervisorDriver>());
         services.AddSingleton<IPortForwardManager, NetshPortForwardManager>();
+        services.AddSingleton<ILanAccess, FirewallLanAccess>();
 
         // Held while VMs run so the host does not sleep under them; the container disposes it at
         // shutdown, which clears the request.
@@ -336,7 +365,7 @@ public static class ServiceComposition
 
     /// <summary>
     /// Fails at startup on a misconfiguration that would otherwise surface as a failed VM creation
-    /// twenty minutes in: the checkout the service invokes has to actually be a Construct checkout.
+    /// twenty minutes in: an unimplemented ISO mode, or a service package without the driver's scripts.
     /// </summary>
     private static void ValidatePlatformOptions(ConstructdOptions options)
     {
@@ -345,24 +374,12 @@ public static class ServiceComposition
             throw new InvalidOperationException(UnimplementedModeMessage(options.Iso.Mode));
         }
 
-        if (string.IsNullOrWhiteSpace(options.ScriptsDir))
+        foreach (var script in HyperVScripts.All)
         {
-            throw new InvalidOperationException(
-                "Constructd:ScriptsDir is not set. It must point at the Construct checkout the service " +
-                "invokes (the one holding drivers\\, lib\\ and bin\\).");
-        }
-
-        foreach (var required in new[]
-                 {
-                     Path.Combine(options.ScriptsDir, "drivers", "Load-ConstructDriver.ps1"),
-                     Path.Combine(options.ScriptsDir, "lib", "AgentVm.Common.ps1"),
-                     Path.Combine(options.ScriptsDir, "bin", "build-autoinstall-iso.sh"),
-                 })
-        {
-            if (!File.Exists(required))
+            if (!File.Exists(HyperVScripts.PathOf(script)))
             {
                 throw new InvalidOperationException(
-                    $"Constructd:ScriptsDir does not look like a Construct checkout: {required} is missing.");
+                    $"The service package is incomplete: the Hyper-V driver script {HyperVScripts.PathOf(script)} is missing. Reinstall the host package.");
             }
         }
     }

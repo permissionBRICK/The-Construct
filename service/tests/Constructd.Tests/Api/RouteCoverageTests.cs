@@ -24,6 +24,13 @@ public class RouteCoverageTests
         "POST /api/v1/host/updates/apply",
         "POST /api/v1/host/updates/cancel",
         "POST /api/v1/host/updates/resolve",
+        "POST /api/v1/host/updates/run",
+        "GET /api/v1/me/updates",
+        "PUT /api/v1/me/updates",
+        "POST /api/v1/me/vms/reprovision",
+        "POST /api/v1/host/vms/reprovision",
+        "GET /api/v1/vms/{name}/update",
+        "POST /api/v1/vms/{name}/update",
         "POST /api/v1/media/acquire",
         "POST /api/v1/media/acquire-windows",
         "POST /api/v1/media/{id}/prepare-windows",
@@ -52,9 +59,58 @@ public class RouteCoverageTests
         "POST /api/v1/vms/{name}/console/sessions/{sid}/keyboard",
         "POST /api/v1/vms/{name}/console/sessions/{sid}/mouse",
         "GET /api/v1/whoami",
+        "GET /api/v1/store/records",
+        "GET /api/v1/store/records/{id}",
+        "GET /api/v1/store/records/{id}/history",
+        "PUT /api/v1/store/records/{id}",
+        "DELETE /api/v1/store/records/{id}",
+        "POST /api/v1/store/records/batch",
+        "GET /api/v1/store/epochs",
+        "GET /api/v1/store/export",
+        "POST /api/v1/store/import",
+        "POST /api/v1/store/devices",
+        "GET /api/v1/store/devices",
+        "DELETE /api/v1/store/devices/{id}",
+        "POST /api/v1/store/devices/{id}/acknowledge",
+        "POST /api/v1/store/engines",
+        "GET /api/v1/store/keys",
+        "PUT /api/v1/store/keys",
+        "PUT /api/v1/store/recovery",
+        "POST /api/v1/store/recovery",
+        "POST /api/v1/store/pairing",
+        "GET /api/v1/store/pairing/{id}",
+        "PUT /api/v1/store/pairing/{id}",
+        "GET /api/v1/store/pairing/{id}/grant",
+        "GET /api/v1/engine",
+        "POST /api/v1/devices/enroll",
+        "DELETE /api/v1/devices/{id}",
+        "PUT /api/v1/engine/grants",
+        "PUT /api/v1/device/ssh-key",
+        "PUT /api/v1/device/backup-key",
+        "POST /api/v1/vms/{name}/backup-recipients",
+        "DELETE /api/v1/vms/{name}/backup-recipients/{fingerprint}",
+        "GET /api/v1/sync/records/{id}",
+        "PUT /api/v1/vms/{name}/profiles/{profile}",
+        "DELETE /api/v1/vms/{name}/profiles/{profile}",
+        "GET /api/v1/vms/{name}/repair",
+        "POST /api/v1/vms/{name}/repair",
+        "GET /api/v1/vms/{name}/repair/{id}",
+        "POST /api/v1/vms/{name}/repair/{id}/reply",
+        "DELETE /api/v1/vms/{name}/repair/{id}",
+        "GET /api/v1/vms/{name}/profile-conflicts",
+        "POST /api/v1/vms/{name}/profile-conflicts/{id}/resolve",
+        "GET /api/v1/profiles",
+        "GET /api/v1/profiles/{profile}",
+        "PUT /api/v1/profiles/{profile}",
+        "DELETE /api/v1/profiles/{profile}",
+        "GET /api/v1/profile-conflicts",
+        "POST /api/v1/profile-conflicts/{id}/resolve",
         "GET /api/v1/health",
         "GET /api/v1/host/status",
         "GET /api/v1/host/iso-catalog",
+        "GET /api/v1/host/lan-access",
+        "PUT /api/v1/host/lan-access",
+        "POST /api/v1/vms/{name}/adopt",
         "GET /api/v1/host/capacity",
         "GET /api/v1/host/capabilities",
         "GET /api/v1/host/config",
@@ -113,9 +169,15 @@ public class RouteCoverageTests
         "POST /api/v1/vms/{name}/activity",
         "POST /api/v1/vms/{name}/usage",
         "GET /api/v1/vms/{name}/usage",
+        "GET /api/v1/vms/{name}/agents",
+        "POST /api/v1/vms/{name}/jobs",
+        "GET /api/v1/vms/{name}/provision-status",
+        "GET /api/v1/vms/{name}/desired",
+        "PUT /api/v1/vms/{name}/desired",
         "GET /api/v1/host/usage",
         "GET /api/v1/jobs",
         "POST /api/v1/jobs/{id}/cancel",
+        "POST /api/v1/jobs/{id}/retry",
         "POST /api/v1/vms/{name}/lifecycle",
         "POST /api/v1/vms/{name}/lease",
         "PUT /api/v1/vms/{name}/sharing",
@@ -124,6 +186,7 @@ public class RouteCoverageTests
         "POST /api/v1/vms/{name}/media/release",
         "GET /api/v1/jobs/{id}",
         "GET /api/v1/jobs/{id}/events",
+        "GET /api/v1/events",
         "GET /api/v1/vault/entries",
         "PUT /api/v1/vault/entries",
         "PUT /api/v1/vault/settings",
@@ -134,6 +197,11 @@ public class RouteCoverageTests
         "POST /api/v1/vault/devices",
         "DELETE /api/v1/vault/devices/{id}",
         "GET /api/v1/vault/activity",
+        "GET /api/v1/vault/mode",
+        "PUT /api/v1/vault/mode",
+        "GET /api/v1/vault/entry-requests",
+        "POST /api/v1/vault/entry-requests/{id}",
+        "POST /api/v1/vault/entry-requests/{id}/decline",
         "GET /api/v1/vault/approvals",
         "POST /api/v1/vault/approvals/{id}",
         "GET /api/v1/vault/files",
@@ -153,6 +221,8 @@ public class RouteCoverageTests
         "DELETE /api/v1/vms/{name}/backups/{id:regex(^[0-9a-f]{{32}}$)}",
         "POST /api/v1/vms/{name}/backups/report",
         "POST /api/v1/vms/{name}/backups/{id:regex(^[0-9a-f]{{32}}$)}/restored",
+        "POST /api/v1/vms/{name}/backups/{id:regex(^[0-9a-f]{{32}}$)}/pin",
+        "DELETE /api/v1/vms/{name}/backups/{id:regex(^[0-9a-f]{{32}}$)}/pin",
         "GET /api/v1/vms/{name}/backups",
         "GET /api/v1/vms/{name}/backups/{id:regex(^[0-9a-f]{{32}}$)}/content",
         "GET /api/v1/vms/{name}/backups/{id:regex(^[0-9a-f]{{32}}$)}/keys",
@@ -163,7 +233,20 @@ public class RouteCoverageTests
     ];
 
     // The key vault's phone pages: anonymous static files, outside /api/v1.
-    private static readonly string[] AnonymousRoutes = ["GET /api/v1/health", "GET /vault/", "GET /vault/pair", "GET /vault/vault.js", "GET /vault/vault.css"];
+    /// <summary>Routes open to anyone: they answer an anonymous request with something other than a challenge.</summary>
+    private static readonly string[] OpenRoutes =
+    [
+        "GET /api/v1/health", "GET /vault/", "GET /vault/pair", "GET /vault/vault.js", "GET /vault/vault.css",
+        // Device registration, recovery and pairing: the credential is a code, a key proof or nothing (plan 8.3, 8.5).
+        "POST /api/v1/store/devices", "POST /api/v1/store/recovery", "POST /api/v1/store/pairing", "GET /api/v1/store/pairing/{id}/grant",
+        "POST /api/v1/devices/enroll",
+    ];
+
+    /// <summary>
+    /// Routes without an authorization policy: the open ones and the store's, which resolves its own
+    /// callers from the tokens it issued and challenges an anonymous caller itself.
+    /// </summary>
+    private static readonly string[] AnonymousRoutes = [.. OpenRoutes.Concat(ExpectedRoutes.Where(r => r.Contains(" /api/v1/store/", StringComparison.Ordinal))).Distinct()];
 
     private static List<(string Route, RouteEndpoint Endpoint)> Routes(TestApp app) =>
         app.Services.GetRequiredService<EndpointDataSource>().Endpoints
@@ -178,7 +261,7 @@ public class RouteCoverageTests
     public async Task EveryProtectedRouteChallengesAnonymousRequests()
     {
         using var app = new TestApp(); using var anonymous = app.CreateAnonymousClient();
-        foreach (var route in Routes(app).Where(r => !AnonymousRoutes.Contains(r.Route)))
+        foreach (var route in Routes(app).Where(r => !OpenRoutes.Contains(r.Route)))
         {
             var parts = route.Route.Split(' ', 2);
             // A parameter may carry a regex constraint with escaped braces ({{ }}); it gets a value that matches.

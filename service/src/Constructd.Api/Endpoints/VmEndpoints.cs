@@ -19,29 +19,31 @@ public static class VmEndpoints
     private const int MaxRamGb = 1024;
     private const int MinDiskGb = 8;
     private const int MaxDiskGb = 8192;
+    /// <summary>The disk a create without <c>diskGb</c> gets: the old clients' default, a cap the disk grows to on demand.</summary>
+    public const int DefaultDiskGb = 50;
 
     public static RouteGroupBuilder MapVmEndpoints(this RouteGroupBuilder api)
     {
         api.MapGet("/vms", ListAsync)
-            .RequireAuthorization(Policies.UserOrPrimaryToken).WithName("ListVms");
+            .RequireAuthorization(Policies.UserOrPrimaryToken).WithName("ListVms").Produces<IReadOnlyList<VmResponse>>();
 
         api.MapPost("/vms", CreateAsync)
-            .RequireAuthorization(Policies.User).Audited("vm.create").WithName("CreateVm");
+            .RequireAuthorization(Policies.User).Audited("vm.create").WithName("CreateVm").Produces<VmCreateAnswer>(StatusCodes.Status202Accepted).Produces<VmCreateAnswer>();
 
         api.MapGet("/vms/{name}", GetAsync)
-            .RequireAuthorization(Policies.UserOrPrimaryToken).WithName("GetVm");
+            .RequireAuthorization(Policies.UserOrPrimaryToken).WithName("GetVm").Produces<VmResponse>();
 
         api.MapDelete("/vms/{name}", DeleteAsync)
-            .RequireAuthorization(Policies.UserOrPrimaryToken).Audited("vm.delete").WithName("DeleteVm");
+            .RequireAuthorization(Policies.UserOrPrimaryToken).Audited("vm.delete").WithName("DeleteVm").Produces<JobStartAnswer>(StatusCodes.Status202Accepted).Produces<JobStartAnswer>();
 
         api.MapPost("/vms/{name}/power", PowerAsync)
-            .RequireAuthorization(Policies.User).Audited("vm.power").WithName("PowerVm");
+            .RequireAuthorization(Policies.User).Audited("vm.power").WithName("PowerVm").Produces<VmStateResponse>();
 
         api.MapGet("/vms/{name}/state", StateAsync)
-            .RequireAuthorization(Policies.UserOrPrimaryToken).WithName("GetVmState");
+            .RequireAuthorization(Policies.UserOrPrimaryToken).WithName("GetVmState").Produces<VmStateResponse>();
 
         api.MapGet("/vms/{name}/endpoint", EndpointAsync)
-            .RequireAuthorization(Policies.VmScoped).WithName("GetVmEndpoint");
+            .RequireAuthorization(Policies.VmScoped).WithName("GetVmEndpoint").Produces<EndpointResponse>();
 
         return api;
     }
@@ -96,9 +98,25 @@ public static class VmEndpoints
             return Problems.BadRequest($"'ramGb' must be between {MinRamGb} and {MaxRamGb}.");
         }
 
-        if (request.DiskGb is not int diskGb || diskGb is < MinDiskGb or > MaxDiskGb)
+        var diskGb = request.DiskGb ?? DefaultDiskGb;
+        if (diskGb is < MinDiskGb or > MaxDiskGb)
         {
             return Problems.BadRequest($"'diskGb' must be between {MinDiskGb} and {MaxDiskGb}.");
+        }
+
+        if (request.Desired is not null)
+        {
+            if (ProvisionEndpoints.Validate(request.Desired) is { } field) return CodedProblems.Validation(field, "Invalid value.");
+            try { http.RequestServices.GetRequiredService<ProvisionJobs>().SourceCommit(null); }
+            catch (ProvisionRequestException ex) { return CodedProblems.Create(ex.Status, ex.Code, ex.Message); }
+        }
+
+        if (request.Secrets is { } secrets)
+        {
+            if (secrets.VmTokenB64 is not null) return CodedProblems.Validation("secrets.vmTokenB64", "The create job issues the VM's token itself.");
+            if (secrets.BackupKey is not null) return CodedProblems.Validation("secrets.backupKey", "A create restores no backup.");
+            if (ProvisionEndpoints.SecretBag(secrets, false, out var check) is { } invalid) return invalid;
+            check.Clear();
         }
 
         var policy = IdlePolicyRules.Default(options.Idle);
@@ -178,7 +196,7 @@ public static class VmEndpoints
         {
             var latest = await repository.GetAsync(name, cancellationToken);
             if (latest is { Deleting: true } && await LifecycleEndpoints.LiveAsync(latest, http.RequestServices, cancellationToken))
-                return Results.Ok(new { jobId = latest.CurrentJobId, replayed = true });
+                return Results.Ok(new JobReplayedResponse(latest.CurrentJobId, true));
             gate.IsHeld(name, out var currentOperation); return LifecycleEndpoints.Busy(currentOperation);
         }
         var vm = await repository.GetAsync(name, cancellationToken);
@@ -222,6 +240,11 @@ public static class VmEndpoints
         }
 
         http.SetAuditDetail($"action={action}");
+
+        if (!driver.Capabilities.Power)
+        {
+            return LifecycleEndpoints.Problem("unsupported-on-host");
+        }
 
         if (action == "save" && !driver.Capabilities.Suspend)
         {
@@ -316,7 +339,19 @@ public static class VmEndpoints
         var vm = lookup.Vm!;
         if (vm.Kind == VmKind.Child) return CodedProblems.Create(409, "no-endpoint", "Children have no primary SSH endpoint.");
         var endpoint = await network.EndpointAsync(vm, cancellationToken);
-        if (endpoint is not null) return TypedResults.Ok(EndpointResponse.From(endpoint));
+        if (endpoint is not null)
+        {
+            // The driver's own endpoint is the VM's address on the engine's machine (Hyper-V's switch, a bridge).
+            Constructd.Core.Domain.Endpoint? direct = null;
+            try { direct = await http.RequestServices.GetRequiredService<IHypervisorDriver>().GetEndpointAsync(vm.Name, cancellationToken); }
+            catch (Exception ex) when (ex is not OperationCanceledException) { /* no direct address this time */ }
+            return TypedResults.Ok(EndpointResponse.From(endpoint) with
+            {
+                Forwarded = new SshAddress(endpoint.SshHost, endpoint.SshPort),
+                Direct = direct is { SshHost.Length: > 0 } ? new SshAddress(direct.SshHost, direct.SshPort) : null,
+            });
+        }
+
         return (await network.CurrentAsync(vm, cancellationToken)).Mode == "direct"
             ? CodedProblems.Create(409, "no-address", "The guest has not reported an address yet.")
             : Problems.UnavailableYet($"VM '{vm.Name}' has no ssh forward yet; wait for its creation job to finish.");

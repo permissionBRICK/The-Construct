@@ -13,17 +13,17 @@ public static class HostAdminEndpoints
 {
     public static RouteGroupBuilder MapHostAdminEndpoints(this RouteGroupBuilder api)
     {
-        api.MapGet("/host/status", StatusAsync).RequireAuthorization(Policies.Admin).WithName("HostStatus");
-        api.MapGet("/host/capabilities", CapabilitiesAsync).RequireAuthorization(Policies.UserOrPrimaryToken).WithName("HostCapabilities");
-        api.MapGet("/host/config", ConfigAsync).RequireAuthorization(Policies.Admin).WithName("HostConfig");
+        api.MapGet("/host/status", StatusAsync).RequireAuthorization(Policies.Admin).WithName("HostStatus").Produces<HostStatusResponse>();
+        api.MapGet("/host/capabilities", CapabilitiesAsync).RequireAuthorization(Policies.UserOrPrimaryToken).WithName("HostCapabilities").Produces<HostCapabilitiesResponse>();
+        api.MapGet("/host/config", ConfigAsync).RequireAuthorization(Policies.Admin).WithName("HostConfig").Produces<HostConfigResponse>();
         api.MapPut("/host/config", UpdateConfigAsync).RequireAuthorization(Policies.Admin).Audited("host.config").WithName("UpdateHostConfig");
-        api.MapGet("/users", UsersAsync).RequireAuthorization(Policies.Admin).WithName("ListUsers");
-        api.MapGet("/users/{name}", UserAsync).RequireAuthorization(Policies.Admin).WithName("GetUser");
-        api.MapPut("/users/{name}", UpdateUserAsync).RequireAuthorization(Policies.Admin).Audited("user.update").WithName("UpdateUser");
-        api.MapGet("/users/{name}/allowance", AllowanceAsync).RequireAuthorization(Policies.Admin).WithName("GetUserAllowance");
-        api.MapPut("/users/{name}/allowance", UpdateAllowanceAsync).RequireAuthorization(Policies.Admin).Audited("user.allowance").WithName("UpdateUserAllowance");
-        api.MapGet("/users/{name}/tokens", TokensAsync).RequireAuthorization(Policies.Admin).WithName("ListUserTokens");
-        api.MapDelete("/users/{name}/tokens/{id}", RevokeTokenAsync).RequireAuthorization(Policies.Admin).Audited("token.revoke").WithName("RevokeUserToken");
+        api.MapGet("/users", UsersAsync).RequireAuthorization(Policies.Admin).WithName("ListUsers").Produces<IReadOnlyList<UserDetailResponse>>();
+        api.MapGet("/users/{name}", UserAsync).RequireAuthorization(Policies.Admin).WithName("GetUser").Produces<UserDetailResponse>();
+        api.MapPut("/users/{name}", UpdateUserAsync).RequireAuthorization(Policies.Admin).Audited("user.update").WithName("UpdateUser").Produces<UserDetailResponse>();
+        api.MapGet("/users/{name}/allowance", AllowanceAsync).RequireAuthorization(Policies.Admin).WithName("GetUserAllowance").Produces<UserAllowanceResponse>();
+        api.MapPut("/users/{name}/allowance", UpdateAllowanceAsync).RequireAuthorization(Policies.Admin).Audited("user.allowance").WithName("UpdateUserAllowance").Produces<UserAllowanceResponse>();
+        api.MapGet("/users/{name}/tokens", TokensAsync).RequireAuthorization(Policies.Admin).WithName("ListUserTokens").Produces<IReadOnlyList<UserTokenSummaryResponse>>();
+        api.MapDelete("/users/{name}/tokens/{id}", RevokeTokenAsync).RequireAuthorization(Policies.Admin).Audited("token.revoke").WithName("RevokeUserToken").Produces(StatusCodes.Status204NoContent);
         return api;
     }
     internal static async Task<EffectiveAllowanceResponse> EffectiveAsync(string owner, string? parent, IDelegationPolicy policy, CancellationToken ct) =>
@@ -71,7 +71,7 @@ public static class HostAdminEndpoints
         return Results.Ok(await DetailAsync(user, policy, tokens, usage, ct));
     }
     private static async Task<IResult> AllowanceAsync(string name, IUserStore users, IDelegationPolicy policy, CancellationToken ct) =>
-        await users.GetAsync(name, ct) is { } user ? Results.Ok(new { stored = user.Allowance ?? UserAllowance.Unset, effective = await EffectiveAsync(name, null, policy, ct) }) : Problems.NotFound("Unknown user.");
+        await users.GetAsync(name, ct) is { } user ? Results.Ok(new UserAllowanceResponse(user.Allowance ?? UserAllowance.Unset, await EffectiveAsync(name, null, policy, ct))) : Problems.NotFound("Unknown user.");
     private static async Task<IResult> UpdateAllowanceAsync(string name, UserAllowance request, HttpContext http, IUserStore users, IUserAllowanceStore store, IDelegationPolicy policy, CancellationToken ct)
     {
         if (HostConfigValidation.Allowance(request) is { } error) return CodedProblems.Validation("allowance", error);
@@ -80,7 +80,7 @@ public static class HostAdminEndpoints
         return await AllowanceAsync(name, users, policy, ct);
     }
     private static async Task<IResult> TokensAsync(string name, IUserStore users, ITokenService tokens, CancellationToken ct) =>
-        await users.GetAsync(name, ct) is null ? Problems.NotFound("Unknown user.") : Results.Ok((await tokens.ListAsync(name, ct)).Select(t => new { t.Id, t.Label, t.Created, t.LastUsed }));
+        await users.GetAsync(name, ct) is null ? Problems.NotFound("Unknown user.") : Results.Ok((await tokens.ListAsync(name, ct)).Select(t => new UserTokenSummaryResponse(t.Id, t.Label, t.Created, t.LastUsed)).ToList());
     private static async Task<IResult> RevokeTokenAsync(string name, string id, HttpContext http, IUserTokenRevoker tokens, CancellationToken ct)
     {
         CodedProblems.Audit(http, "token.revoke", name, target: id);
@@ -93,52 +93,41 @@ public static class HostAdminEndpoints
         var virtualization = await config.GetAsync<VirtualizationConfig>("virtualization", ct) ?? HostAdminDefaults.Virtualization;
         var https = await config.GetAsync<HttpsConfig>("https", ct) ?? HostAdminDefaults.Https;
         var certificate = http.RequestServices.GetService<Constructd.Api.Https.HttpsCertificateStore>()?.Current;
-        return Results.Ok(new
-        {
-            backend = caps.Backend,
-            capabilities = caps,
-            nested = new { available = driver.NestedAvailable, @default = virtualization.NestedDefault, selectable = virtualization.NestedSelectable },
-            policy = new
-            {
+        return Results.Ok(new HostCapabilitiesResponse(
+            Backend: caps.Backend,
+            Kind: options.IsProxmox ? HostKind.Proxmox : options.IsExternal ? HostKind.External : HostKind.Hyperv,
+            Capabilities: caps,
+            Nested: new HostNestedCapabilities(driver.NestedAvailable, virtualization.NestedDefault, virtualization.NestedSelectable),
+            Policy: new HostPolicyResponse(
                 network.HostForwardsEnabled,
                 network.DirectAddressReporting,
                 network.DefaultMode,
                 network.OwnerMaySwitchMode,
                 defaults.AllowNeverLifetime,
                 defaults.MaxChildLifetimeSeconds,
-                capacityMode = (await CapacityConfigAsync(config, options, ct)).Mode,
-                memoryPressure = await config.GetAsync<MemoryPressureConfig>("memoryPressure", ct) ?? HostAdminDefaults.MemoryPressure,
+                CapacityMode: (await CapacityConfigAsync(config, options, ct)).Mode,
+                MemoryPressure: await config.GetAsync<MemoryPressureConfig>("memoryPressure", ct) ?? HostAdminDefaults.MemoryPressure,
                 // docs/https-forwards.md: whether `construct expose --https` can work here, and whether a main
                 // forward gets a port-less address under the VM's own name.
-                https = new
-                {
-                    available = certificate is not null,
-                    sharedPort = https.SharedPort,
-                    mainAddress = https.SharedPort is not null && !string.IsNullOrWhiteSpace(options.PublicHostPattern),
-                }
-            }
-        });
+                Https: new HostHttpsPolicy(
+                    Available: certificate is not null,
+                    SharedPort: https.SharedPort,
+                    MainAddress: https.SharedPort is not null && !string.IsNullOrWhiteSpace(options.PublicHostPattern)))));
     }
     internal static async Task<CapacityConfig> CapacityConfigAsync(IHostConfigStore config, ConstructdOptions options, CancellationToken ct) =>
         await config.GetAsync<CapacityConfig>("capacity", ct) ?? HostAdminDefaults.Capacity with { Mode = options.HostAdmin.Capacity.Mode };
-    internal static object CapacitySummary(HostCapacitySnapshot c, CapacityMode mode) => new
-    {
+    internal static HostCapacitySummary CapacitySummary(HostCapacitySnapshot c, CapacityMode mode) => new(
         c.Epoch,
         c.ObservedAt,
         c.Complete,
-        ram = new
-        {
-            totalBytes = c.RamTotalBytes, headroomBytes = c.RamHeadroomBytes, reservedBytes = c.RamReservedBytes,
-            unmanagedBytes = c.RamUnmanagedBytes, physicalFreeBytes = c.RamPhysicalFreeBytes, availableBytes = c.RamAvailableBytes,
-            usedBytes = c.RamUsedBytes, vmResidentBytes = c.VmResidentRamBytes,
-            hostOwnBytes = c.RamUsedBytes is long used && c.VmResidentRamBytes is long resident ? Math.Max(0, used - resident) : (long?)null,
-            committedBytes = c.RamReservedBytes + c.RamUnmanagedBytes,
-            admission = new { enforced = mode == CapacityMode.Enforce, lineBytes = Math.Max(0, c.RamTotalBytes - c.RamHeadroomBytes), availableBytes = c.RamAvailableBytes },
-            swap = c.SwapTotalBytes is long total && c.SwapUsedBytes is long swapUsed ? new { totalBytes = total, usedBytes = swapUsed } : null
-        },
-        cpu = new { logical = c.CpuLogical, budget = c.CpuBudget, active = c.CpuActive, available = c.CpuAvailable },
-        c.Volumes
-    };
+        new HostRamSummary(c.RamTotalBytes, c.RamHeadroomBytes, c.RamReservedBytes, c.RamUnmanagedBytes, c.RamPhysicalFreeBytes, c.RamAvailableBytes,
+            c.RamUsedBytes, c.VmResidentRamBytes,
+            c.RamUsedBytes is long used && c.VmResidentRamBytes is long resident ? Math.Max(0, used - resident) : null,
+            c.RamReservedBytes + c.RamUnmanagedBytes,
+            new HostRamAdmission(mode == CapacityMode.Enforce, Math.Max(0, c.RamTotalBytes - c.RamHeadroomBytes), c.RamAvailableBytes),
+            c.SwapTotalBytes is long total && c.SwapUsedBytes is long swapUsed ? new HostSwapSummary(total, swapUsed) : null),
+        new HostCpuSummary(c.CpuLogical, c.CpuBudget, c.CpuActive, c.CpuAvailable),
+        c.Volumes);
     private static async Task<IResult> StatusAsync(IReleaseInfo release, ICapacityLedger capacity, IHostConfigStore config, IMaintenanceGate maintenance,
         IJobQueryStore jobs, IVmRepository vms, ConstructdOptions options, MemoryPressureState pressure, CancellationToken ct)
     {
@@ -149,19 +138,17 @@ public static class HostAdminEndpoints
         var pressureConfig = await config.GetAsync<MemoryPressureConfig>("memoryPressure", ct) ?? HostAdminDefaults.MemoryPressure;
         var pressureEnabled = pressureConfig.Enabled && options.Idle.SchedulerEnabled;
         var pressureStatus = pressure.Status;
-        return Results.Ok(new
-        {
-            version = release.Installed,
-            health = new { hypervisor, database = "ok", media = Directory.Exists(options.HostAdmin.Media.RootDir) ? "ok" : "missing-root", inventory = snapshot.Complete ? "complete" : "incomplete" },
-            capacity = CapacitySummary(snapshot, mode),
-            capacityMode = mode,
-            memoryPressure = pressureStatus with { Enabled = pressureEnabled,
+        return Results.Ok(new HostStatusResponse(
+            release.Installed,
+            new HostHealthResponse(hypervisor, "ok", Directory.Exists(options.HostAdmin.Media.RootDir) ? "ok" : "missing-root", snapshot.Complete ? "complete" : "incomplete"),
+            CapacitySummary(snapshot, mode),
+            mode,
+            pressureStatus with { Enabled = pressureEnabled,
                 State = !pressureEnabled ? "off" : pressureStatus.State == "off" ? "idle" : pressureStatus.State },
-            maintenance = new { phase = maintenance.State, since = marker?.Since, updateId = marker?.UpdateId },
-            activeJobs = (await jobs.ListAsync(ct)).Where(j => j.State is JobState.Queued or JobState.Running).Select(j => new { j.Id, j.Kind, j.VmName, j.Owner, j.Initiator, j.Phase, j.Created }),
-            leaseOverdueCount = all.Count(v => v.Lease is { State: LeaseState.Overdue }),
-            unmanagedVmCount = snapshot.Unmanaged.Count
-        });
+            new HostMaintenanceResponse(maintenance.State, marker?.Since, marker?.UpdateId),
+            [.. (await jobs.ListAsync(ct)).Where(j => j.State is JobState.Queued or JobState.Running).Select(j => new HostActiveJobResponse(j.Id, j.Kind, j.VmName, j.Owner, j.Initiator, j.Phase, j.Created))],
+            all.Count(v => v.Lease is { State: LeaseState.Overdue }),
+            snapshot.Unmanaged.Count));
     }
     private static async Task<IResult> ConfigAsync(IHostConfigMetadata metadata, ConstructdOptions options, CancellationToken ct)
     {
@@ -202,6 +189,8 @@ public static class HostAdminEndpoints
             // A replacement must specify every required (non-nullable) property; omitted optional fields become null.
             foreach (var field in fallback.GetType().GetProperties())
                 if (!(fallback is NetworkConfig && field.Name == nameof(NetworkConfig.OwnerMaySwitchMode)) &&
+                    // Old clients' forms do not know updates.auto (12.1): omitted, it is false.
+                    !(fallback is UpdatesConfig && field.Name == nameof(UpdatesConfig.Auto)) &&
                     field.PropertyType.IsValueType && Nullable.GetUnderlyingType(field.PropertyType) is null &&
                     !property.Value.TryGetProperty(JsonNamingPolicy.CamelCase.ConvertName(field.Name), out _))
                     return CodedProblems.Validation(property.Name + "." + JsonNamingPolicy.CamelCase.ConvertName(field.Name), "Required in a section replacement.");

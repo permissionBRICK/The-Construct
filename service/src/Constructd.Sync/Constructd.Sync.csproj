@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <!--
+    The participant side of sync (docs/plans/construct-platform-design.md 9.2, 9.6, 9.8): sealing
+    payloads with D, the profile merge, and the engine's replica and outbox. The store
+    (Constructd.Store) never sees any of this in clear.
+  -->
+
+  <ItemGroup>
+    <ProjectReference Include="..\Constructd.Store\Constructd.Store.csproj" />
+    <ProjectReference Include="..\Construct.Keys\Construct.Keys.csproj" />
+  </ItemGroup>
+
+</Project>

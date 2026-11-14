@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using Constructd.Core.Domain;
 using Constructd.Core.Logic;
 
@@ -32,7 +33,7 @@ public sealed record UserResponse(string Name, Role Role, int MaxVms, bool Allow
 }
 
 /// <param name="Token">The plaintext secret — returned exactly once, never stored, never logged.</param>
-public sealed record TokenIssuedResponse(string Id, string Label, string Token, DateTimeOffset Created);
+public sealed record TokenIssuedResponse(string Id, string Label, [property: Infrastructure.ConstructSecret] string Token, DateTimeOffset Created);
 
 public sealed record IdlePolicyResponse(int TimeoutMinutes, IdleAction Action, int MaxTimeoutMinutes, bool Clamped, bool ForceEnabled = false);
 
@@ -176,7 +177,11 @@ public sealed record VmResponse(
 /// <paramref name="SshHost"/> unless the host runs a <c>Constructd:PublicHostPattern</c>; SSH is
 /// dialled on <paramref name="SshHost"/>:<paramref name="SshPort"/> either way.
 /// </param>
-public sealed record EndpointResponse(string SshHost, int SshPort, string PublicHost)
+/// <param name="Forwarded">On <c>GET /vms/{name}/endpoint</c>: the address every client dials (the engine's relay port, or the VM's own address in direct network mode); the same as <paramref name="SshHost"/>:<paramref name="SshPort"/>.</param>
+/// <param name="Direct">On <c>GET /vms/{name}/endpoint</c>, where the driver knows it: the VM's own address and port, reachable from the engine's machine (design 7.2).</param>
+public sealed record EndpointResponse(string SshHost, int SshPort, string PublicHost,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] SshAddress? Forwarded = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] SshAddress? Direct = null)
 {
     /// <summary>
     /// An endpoint with no public host — a driver-reported one, or a creation result stored by a
@@ -188,14 +193,17 @@ public sealed record EndpointResponse(string SshHost, int SshPort, string Public
             string.IsNullOrWhiteSpace(endpoint.PublicHost) ? endpoint.SshHost : endpoint.PublicHost);
 }
 
+/// <summary>Where a client dials a VM's SSH.</summary>
+public sealed record SshAddress(string Host, int Port);
+
 public sealed record VmStateResponse(VmState State);
 
 /// <summary>Answer to every call that starts a job: <c>202 Accepted</c> plus the job id.</summary>
 public sealed record JobAcceptedResponse(string JobId);
 
-public sealed record JobProgressResponse(DateTimeOffset At, string Text)
+public sealed record JobProgressResponse(DateTimeOffset At, string Text, string? Step = null, string? State = null, int? Percent = null)
 {
-    public static JobProgressResponse From(JobProgressLine line) => new(line.At, line.Text);
+    public static JobProgressResponse From(JobProgressLine line) => new(line.At, line.Text, line.Step, line.State, line.Percent);
 }
 
 /// <summary>
@@ -203,7 +211,9 @@ public sealed record JobProgressResponse(DateTimeOffset At, string Text)
 /// <see cref="Endpoint"/>) plus <see cref="VmToken"/>, which is filled in on the retrieval that
 /// consumes the job's one-time secret and is <c>null</c> on every later one.
 /// </summary>
-public sealed record VmCreateResultResponse(string Name, EndpointResponse Endpoint, string? VmToken);
+/// <param name="Provision">The first provision, when the create request carried settings; left out otherwise.</param>
+public sealed record VmCreateResultResponse(string Name, EndpointResponse Endpoint, string? VmToken,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ProvisionJobResult? Provision = null);
 
 public sealed record JobResponse(
     string Id,
@@ -246,7 +256,7 @@ public sealed record JobResponse(
 
         if (job.Result is VmCreateResult create)
         {
-            return new VmCreateResultResponse(create.Name, EndpointResponse.From(create.Endpoint), vmToken);
+            return new VmCreateResultResponse(create.Name, EndpointResponse.From(create.Endpoint), vmToken, create.Provision);
         }
 
         // Read back from a store: a JSON object without the token.

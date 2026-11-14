@@ -1166,7 +1166,7 @@ run_step optional "Installing AI tool console integration" \
 #     raise host desktop notifications, expose ports, manage delegated child
 #     VMs, use the key vault and change per-VM settings from the VM shell
 #     (`construct project`, `construct notify`, `construct expose`, `construct vm`,
-#     `construct secret`, `construct config`).
+#     `construct secret`, `construct config`, `construct update`).
 #     Runs every provision so an updated script always gets redeployed on
 #     reprovision. Silent (install prints nothing), including the forward spool:
 #     the default path's output must stay byte-identical.
@@ -1182,6 +1182,12 @@ install_construct_cli() {
   install -m 0755 "${REPO_DIR}/bin/construct-backup.sh" "${bin_dir}/construct-backup.sh" || return 1
   install -m 0755 "${REPO_DIR}/bin/construct-config.sh" "${bin_dir}/construct-config.sh" || return 1
   install -m 0755 "${REPO_DIR}/bin/construct-idle-report.sh" "${bin_dir}/construct-idle-report.sh" || return 1
+  # `construct project` on a VM with a host service (docs/config-sync.md, "The new stack").
+  install -m 0755 "${REPO_DIR}/bin/construct-project.sh" "${bin_dir}/construct-project.sh" || return 1
+  # `construct update` (the VM's own update route at its engine).
+  install -m 0755 "${REPO_DIR}/bin/construct-update.sh" "${bin_dir}/construct-update.sh" || return 1
+  install -d -m 0755 "${bin_dir}/lib" || return 1
+  install -m 0644 "${REPO_DIR}/bin/lib/construct-api.sh" "${bin_dir}/lib/construct-api.sh" || return 1
   # Forward spool (docs/expose.md): root-owned 0755, deliberately NOT 1777 like
   # the notification spool -- a request opens a port on the user's PC.
   install -d -m 0755 "${forwards_dir}" "${forwards_dir}/requests" \
@@ -1577,6 +1583,18 @@ record_timestamps() {
     kept="$(grep -v '^CONSTRUCT_COMMIT=' "${MARKER_FILE}" || true)"
     printf '%s\n' "${kept}" >"${MARKER_FILE}" || return
     note "    CONSTRUCT_COMMIT removed (this Construct could not resolve its own commit)"
+  fi
+  # What the host engine provisioned with (design 7.5): the source payload's sha256, the hash of
+  # the settings and profiles it applied, and its release channel. Written only when the engine
+  # gives them; a run without them (the PowerShell path) leaves the file as it was.
+  if [[ "${CONSTRUCT_PAYLOAD_HASH:-}" =~ ^[0-9a-f]{64}$ ]]; then
+    mark CONSTRUCT_PAYLOAD_HASH "${CONSTRUCT_PAYLOAD_HASH}" || return
+  fi
+  if [[ "${CONSTRUCT_DESIRED_HASH:-}" =~ ^[0-9a-f]{64}$ ]]; then
+    mark CONSTRUCT_DESIRED_HASH "${CONSTRUCT_DESIRED_HASH}" || return
+  fi
+  if [[ "${CONSTRUCT_CHANNEL:-}" =~ ^[A-Za-z0-9._/-]{1,64}$ ]]; then
+    mark CONSTRUCT_CHANNEL "${CONSTRUCT_CHANNEL}" || return
   fi
   chmod 0644 "${MARKER_FILE}"
 }

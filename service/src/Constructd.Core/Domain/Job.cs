@@ -1,7 +1,23 @@
 namespace Constructd.Core.Domain;
 
-/// <summary>A timestamped progress line of a job, as streamed over SSE.</summary>
-public sealed record JobProgressLine(DateTimeOffset At, string Text);
+/// <summary>
+/// A timestamped progress line of a job, as streamed over SSE. A job that reports steps (design 7.1)
+/// also fills <paramref name="Step"/>, <paramref name="State"/> and, where known, <paramref name="Percent"/>;
+/// <paramref name="Text"/> is then the output line, or a short "step: state" summary.
+/// </summary>
+public sealed record JobProgressLine(DateTimeOffset At, string Text, string? Step = null, string? State = null, int? Percent = null);
+
+/// <summary>Structured progress of a step-wise job: <c>{step, state, line?, percent?}</c>.</summary>
+public sealed record JobStepProgress(string Step, string State, string? Line = null, int? Percent = null);
+
+/// <summary>
+/// Implemented by the engine's progress sink: a job that reports steps checks for it and falls back
+/// to plain lines otherwise.
+/// </summary>
+public interface IJobStepProgress : IProgress<string>
+{
+    void Report(JobStepProgress value);
+}
 
 /// <summary>
 /// A long-running operation. Mutating VM lifecycle calls answer <c>202 {jobId}</c> and the client
@@ -38,13 +54,19 @@ public static class JobKinds
 {
     public const string CreateVm = "create-vm";
     public const string RemoveVm = "remove-vm";
+    public const string Provision = "provision";
+    public const string Reinstall = "reinstall";
+    public const string Restore = "restore";
 }
 
 /// <summary>
 /// Result of a <see cref="JobKinds.CreateVm"/> job. It is durable and carries no secret; the
 /// VM-scoped token is handed out exactly once through the job's one-time secret channel.
 /// </summary>
-public sealed record VmCreateResult(string Name, Endpoint Endpoint);
+/// <param name="Provision">The first provision, when the create request carried settings; null (and left out) otherwise.</param>
+public sealed record VmCreateResult(string Name, Endpoint Endpoint,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    ProvisionJobResult? Provision = null);
 
 /// <summary>
 /// What a job body returns: a durable, secret-free <paramref name="Result"/>, plus at most one

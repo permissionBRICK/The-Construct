@@ -12,6 +12,7 @@ public static class UpdateComposition
 {
     public static IServiceCollection AddUpdatePlatform(this IServiceCollection services,ConstructdOptions options)
     {
+        services.AddSingleton<VmAgents>();
         var data=Path.GetDirectoryName(Path.GetFullPath(options.DatabasePath))!;
         if(options.Fake)
         {
@@ -19,13 +20,16 @@ public static class UpdateComposition
             services.AddSingleton<FakeUpdateStager>();services.AddSingleton<IUpdateStager>(sp=>sp.GetRequiredService<FakeUpdateStager>());
             services.AddSingleton<FakeUpdaterLauncher>();services.AddSingleton<IUpdaterLauncher>(sp=>sp.GetRequiredService<FakeUpdaterLauncher>());
             services.AddSingleton<FakeHostLock>();services.AddSingleton<IHostLock>(sp=>sp.GetRequiredService<FakeHostLock>());
+            services.AddSingleton<FakeAgentReleases>();services.AddSingleton<IAgentReleases>(sp=>sp.GetRequiredService<FakeAgentReleases>());
         }
         else
         {
             services.AddSingleton<IHostLock>(new FileHostLock(data));
+            services.AddSingleton<IAgentReleases>(sp=>new AgentReleases(new HttpClient{Timeout=TimeSpan.FromSeconds(15)},sp.GetRequiredService<IClock>()));
             services.AddSingleton<IReleaseSource>(_=>new GitHubReleaseSource(new HttpClient(new HttpClientHandler{AllowAutoRedirect=false}){Timeout=TimeSpan.FromMinutes(30)}, options.HostAdmin.Source.MaxItemBytes));
             services.AddSingleton<IUpdateStager>(sp=>sp.GetRequiredService<PackageStager>());
-            if(options.IsProxmox) services.AddSingleton<IUpdaterLauncher>(sp=>new Constructd.Proxmox.Updates.SystemdUpdaterLauncher(sp.GetRequiredService<IProcessRunner>(),sp.GetRequiredService<IHostLock>(),data));
+            if(options.IsExternal) services.AddSingleton<IUpdaterLauncher>(sp=>sp.GetRequiredService<UnsupportedFeaturePlatform>());
+            else if(options.IsProxmox) services.AddSingleton<IUpdaterLauncher>(sp=>new Constructd.Proxmox.Updates.SystemdUpdaterLauncher(sp.GetRequiredService<IProcessRunner>(),sp.GetRequiredService<IHostLock>(),data));
             else services.AddSingleton<IUpdaterLauncher>(sp=>new ScheduledTaskUpdaterLauncher(sp.GetRequiredService<IProcessRunner>(),sp.GetRequiredService<IHostLock>(),data));
         }
         if(options.EffectivePersistence==PersistenceMode.Memory)
@@ -36,6 +40,8 @@ public static class UpdateComposition
         services.AddSingleton<IMaintenanceGate,InMemoryMaintenanceGate>();
         services.AddSingleton<PackageStager>();services.AddSingleton<HostUpdateJob>();
         services.AddSingleton<UpdateRecoveryService>();services.AddHostedService(sp=>sp.GetRequiredService<UpdateRecoveryService>());
+        services.AddSingleton<VmUpdates>();
+        services.AddSingleton<HostAutoUpdateService>();services.AddHostedService(sp=>sp.GetRequiredService<HostAutoUpdateService>());
         return services;
     }
 }

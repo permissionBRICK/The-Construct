@@ -266,30 +266,9 @@ sys.exit(asyncio.run(opener.main()))
                 env = {key: value for key, value in os.environ.items() if not key.startswith('CONSTRUCT_')}
                 env.update(CONFIG_FILE=str(config), CONSTRUCT_CONSOLE_OPENER=str(opener),
                            PATH=str(root / 'bin') + os.pathsep + env['PATH'])
-                panel = '''
-const cp = require('child_process');
-const root = process.argv[1], child = process.argv[2] === 'child';
-const consoleApi = require(root + '/extension/src/console');
-const instance = require(root + '/extension/src/instances').deriveDefaults('test-vm', {backend:'hyperv-remote'});
-const deps = {
-  platform: 'linux', probeLink: async () => true,
-  _ssh: {runRemoteScript: async script => {
-    if (script === consoleApi.buildEnsureGatewayScript()) return {code:0, stdout:'CONSOLE_GATEWAY=ready'};
-    return new Promise(resolve => cp.execFile('bash', ['-c', script], (error, stdout, stderr) =>
-      resolve({code:error ? error.code : 0, stdout, stderr})));
-  }},
-  _vscode: {ProgressLocation:{Notification:1}, Uri:{parse:x=>x},
-    window:{withProgress:async (_, action)=>action({report(){}})},
-    env:{openExternal:async url=>{process.stdout.write(url + '\\n'); return true;}}}
-};
-const opened = child ? require(root + '/extension/src/guest-console').openGuestConsole(instance, 'test-vm', deps)
-                     : consoleApi.open({instance}, deps);
-opened.catch(()=>{process.exitCode=1;});
-'''
+                # The guest's CLI; the old VS Code panel's console clients went with the thin extension.
                 commands = [
                     ['bash', str(root / 'bin/construct'), 'vm', 'console', 'self', '--web'],
-                    ['node', '-e', panel, str(root), 'primary'],
-                    ['node', '-e', panel, str(root), 'child'],
                 ]
                 for command in commands:
                     self.ended.clear()

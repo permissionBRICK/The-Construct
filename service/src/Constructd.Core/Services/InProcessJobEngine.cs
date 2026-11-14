@@ -22,7 +22,9 @@ namespace Constructd.Core.Services;
 /// its message, stack trace, <c>Data</c> or inner exceptions, so nothing outside this class ever sees
 /// it: not job state, not the SSE stream, not the audit trail, and not the log.
 /// </param>
-public sealed class InProcessJobEngine(IClock clock, IJobStore store, Action<Job, string>? diagnostics = null, IMaintenanceGate? maintenance = null)
+/// <param name="changes">The engine's change stream: a job's start, its progress (at most once a second) and its end.</param>
+public sealed class InProcessJobEngine(IClock clock, IJobStore store, Action<Job, string>? diagnostics = null, IMaintenanceGate? maintenance = null,
+    ChangeFeed? changes = null)
     : IJobEngine, IPersistedJobRunner, IDisposable
 {
     private readonly ConcurrentDictionary<string, JobEntry> _jobs = new(StringComparer.Ordinal);
@@ -96,6 +98,8 @@ public sealed class InProcessJobEngine(IClock clock, IJobStore store, Action<Job
             foreach (var subscriber in entry.Subscribers)
                 subscriber.Writer.TryWrite(new JobEvent(JobEventKind.Phase, new JobProgressLine(clock.UtcNow, phase), null));
         }
+
+        Progressed(entry, snapshot);
     }
 
     public async Task<Job?> GetAsync(string id, CancellationToken cancellationToken)
@@ -211,6 +215,7 @@ public sealed class InProcessJobEngine(IClock clock, IJobStore store, Action<Job
     private async Task RunAsync(JobEntry entry, Func<IProgress<string>, CancellationToken, Task<JobOutcome>> work)
     {
         await UpdateAsync(entry, job => job with { State = JobState.Running }).ConfigureAwait(false);
+        changes?.Job("job.started", entry.Snapshot);
         var progress = new JobProgress(this, entry);
 
         try
@@ -316,6 +321,22 @@ public sealed class InProcessJobEngine(IClock clock, IJobStore store, Action<Job
 
             entry.Subscribers.Clear();
         }
+
+        changes?.Job("job.ended", terminal);
+    }
+
+    /// <summary>A job's progress on the change stream, at most once a second per job: a client re-reads the job anyway.</summary>
+    private void Progressed(JobEntry entry, Job snapshot)
+    {
+        if (changes is null) return;
+        var now = Environment.TickCount64;
+        lock (entry.Gate)
+        {
+            // Under the job's lock, so no progress change can follow the job's end.
+            if (entry.Finished || entry.Completing || now - entry.ProgressChanged < 1000) return;
+            entry.ProgressChanged = now;
+            changes.Job("job.progress", snapshot);
+        }
     }
 
     private static string Combine(string? existing, string added) =>
@@ -349,9 +370,10 @@ public sealed class InProcessJobEngine(IClock clock, IJobStore store, Action<Job
         }
     }
 
-    private void Report(JobEntry entry, string text)
+    private void Report(JobEntry entry, string text, JobStepProgress? step = null)
     {
-        var line = new JobProgressLine(clock.UtcNow, text);
+        var line = step is null ? new JobProgressLine(clock.UtcNow, text)
+            : new JobProgressLine(clock.UtcNow, text, step.Step, step.State, step.Percent);
         Job snapshot;
 
         lock (entry.Gate)
@@ -373,6 +395,7 @@ public sealed class InProcessJobEngine(IClock clock, IJobStore store, Action<Job
         // Progress is reported from the job's own thread, so the write is queued rather than awaited;
         // the chain keeps it ordered and completion waits for it.
         _ = EnqueueWriteAsync(entry, snapshot);
+        Progressed(entry, snapshot);
     }
 
     private sealed class JobEntry(Job snapshot)
@@ -388,6 +411,9 @@ public sealed class InProcessJobEngine(IClock clock, IJobStore store, Action<Job
         public bool Finished { get; set; }
 
         public List<Channel<JobEvent>> Subscribers { get; } = [];
+
+        /// <summary>When the last <c>job.progress</c> change went out (<see cref="Environment.TickCount64"/>).</summary>
+        public long ProgressChanged { get; set; } = long.MinValue / 2;
 
         public CancellationTokenSource Cancellation { get; } = new();
 
@@ -407,8 +433,10 @@ public sealed class InProcessJobEngine(IClock clock, IJobStore store, Action<Job
     /// Synchronous progress sink. <see cref="Progress{T}"/> is deliberately not used: it posts to the
     /// thread pool, which would reorder job progress lines.
     /// </summary>
-    private sealed class JobProgress(InProcessJobEngine engine, JobEntry entry) : IProgress<string>
+    private sealed class JobProgress(InProcessJobEngine engine, JobEntry entry) : IJobStepProgress
     {
         public void Report(string value) => engine.Report(entry, value);
+
+        public void Report(JobStepProgress value) => engine.Report(entry, value.Line ?? $"{value.Step}: {value.State}", value);
     }
 }

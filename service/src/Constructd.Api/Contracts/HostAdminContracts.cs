@@ -13,7 +13,12 @@ public sealed record UserDetailResponse(string Name, Role Role, bool Enabled, in
     bool AllowHttpsForwards = false);
 public sealed record UserVmCounts(int Primaries, int Children);
 public sealed record UserUpdateRequest(string? Role = null, bool? Enabled = null, int? MaxVms = null, bool? AllowHostForwards = null,
-    System.Text.Json.JsonElement AllowNested = default, bool? AllowHttpsForwards = null);
+    bool? AllowHttpsForwards = null)
+{
+    /// <summary>true or false sets it, null clears it, absent keeps it. A property rather than a parameter
+    /// because the OpenAPI schema exporter cannot write a JsonElement default value.</summary>
+    public System.Text.Json.JsonElement AllowNested { get; init; }
+}
 public sealed record VmOverrideRequest(bool? AllowChildCreation = null, int? MaxRetainedChildren = null, long? MaxChildLifetimeSeconds = null,
     bool? AllowNeverLifetime = null, bool? AllowSharing = null);
 public sealed record VmTokenRequest(string? Kind = null);

@@ -237,7 +237,10 @@ Write-Step "Removing the firewall rules"
 foreach ($name in @(
     "Construct constructd API",
     "Construct constructd SSH forwards",
-    "Construct constructd app forwards")) {
+    "Construct constructd app forwards",
+    # A solo install's: its VMs on the Default Switch, and LAN access for pairing (FirewallLanAccess.cs).
+    "Construct constructd guests",
+    "ConstructEngineLan")) {
 
     $rule = Get-NetFirewallRule -DisplayName $name -ErrorAction SilentlyContinue
     if ($rule) {

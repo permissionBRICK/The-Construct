@@ -22,6 +22,7 @@ public static partial class HostConfigValidation
         ["vault"] = HostAdminDefaults.Vault,
         ["https"] = HostAdminDefaults.Https,
         ["backups"] = HostAdminDefaults.Backups,
+        ["repair"] = HostAdminDefaults.Repair,
     };
     public static string? Allowance(UserAllowance a) => a.MaxRetainedChildren < 0 || a.CpuBudget < 0 || a.RamBudgetBytes < 0 || a.StorageBudgetBytes < 0
         ? "Budgets and counts must be non-negative." : a.MaxChildLifetimeSeconds is < 300 ? "A finite lifetime limit must be at least 300 seconds." : null;
@@ -46,7 +47,8 @@ public static partial class HostConfigValidation
             "Backups require an interval of 0-720 hours, 1 <= keep <= maxKeep <= 50, 1-365 pin days, 0-3650 retention days, " +
             "a non-negative free-space reserve and a per-VM limit of null or at least 64 MiB.",
         VirtualizationConfig v when v.MinimumRamBytes is < 1L << 30 => "The minimum RAM must be null or at least 1 GiB.",
-        UpdatesConfig u when string.IsNullOrEmpty(u.Repository) || !RepositoryPattern().IsMatch(u.Repository) || u.Channel != "main" || u.DrainTimeoutMinutes < 1 || u.HealthTimeoutSeconds < 30 => "Updates require owner/repository, main channel and positive timeouts (health at least 30 seconds).",
+        UpdatesConfig u when string.IsNullOrEmpty(u.Repository) || !RepositoryPattern().IsMatch(u.Repository) || !ReleaseChannel.IsValid(u.Channel) || u.DrainTimeoutMinutes < 1 || u.HealthTimeoutSeconds < 30 =>
+            "Updates require owner/repository, a channel (stable, nightly or an https manifest URL; main means stable) and positive timeouts (health at least 30 seconds).",
         _ => null,
     };
     /// <summary>The shared HTTPS port must not collide with a port this service already owns.</summary>

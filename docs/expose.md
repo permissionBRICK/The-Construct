@@ -315,6 +315,11 @@ The route accepts up to 200 rows and 64 models per row and overwrites repeated
 VM-incarnation/tool/date keys. Negative counts or costs, unknown tools and invalid
 calendar dates are rejected. The host records receipt time for freshness.
 
+The report also lists the VM's coding agents, `agents: [{tool, version}]` for each of
+`claude`, `codex`, `opencode` and `t3` installed (the first semver of its `--version`).
+A guest with no usage rows but agents posts `days: []`. The host keeps the last list per
+VM and shows it with the newest release at `GET /api/v1/vms/{instance}/agents`.
+
 The matching VM token can write usage as well as its activity heartbeat. It cannot
 read host usage, read another VM's usage, or post for another VM. Owners and admins
 can read usage with their user credential. Deletion revokes the VM token and fences

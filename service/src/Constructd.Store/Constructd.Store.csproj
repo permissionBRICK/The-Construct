@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <!--
+    The record store (docs/plans/construct-platform-design.md 5.1, 9.1, 9.2, 9.5): encrypted records
+    with revisions, epochs and a feed, in its own SQLite file. It never sees plaintext. Embedded by
+    constructd under /api/v1/store and runnable alone (Constructd.Store.Host).
+  -->
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="..\Construct.Keys\Construct.Keys.csproj" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
+  </ItemGroup>
+
+</Project>

@@ -30,6 +30,8 @@ public static class VaultComposition
             services.AddSingleton<IVaultKeyProtector, EphemeralVaultKeyProtector>();
         }
 
+        // Accounts in the new stack keep their vault as secret records in this engine's store (plan 9.1).
+        services.AddSingleton<IVaultRecords, RecordVault>();
         services.AddSingleton<VaultHostService>();
         services.AddSingleton<IVaultUnlocks>(sp => sp.GetRequiredService<VaultHostService>());
         services.AddHostedService<Hosting.VaultSchedulerService>();

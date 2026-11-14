@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Constructd.Api.Auth;
+using Constructd.Api.Contracts;
 using Constructd.Api.Hosting;
 using Constructd.Api.Infrastructure;
 using Constructd.Api.Jobs;
@@ -14,7 +15,10 @@ public static class UpdateEndpoints
 {
     public static RouteGroupBuilder MapUpdateEndpoints(this RouteGroupBuilder api)
     {
-        api.MapGet("/host/updates/status",StatusAsync).RequireAuthorization(Policies.Admin).WithName("HostUpdateStatus");
+        api.MapGet("/host/updates/status",StatusAsync).RequireAuthorization(Policies.Admin).WithName("HostUpdateStatus").Produces<HostUpdateStatusResponse>();
+        // The one update action (12.1). The routes below it stay, unchanged, for old clients.
+        api.MapPost("/host/updates/run",RunAsync).RequireAuthorization(Policies.Admin).Audited("host.update.run")
+            .Produces<HostUpdateRunResponse>(StatusCodes.Status202Accepted).Produces<HostUpdateRunResponse>().WithName("HostUpdateRun");
         foreach(var action in new[]{"check","stage","apply","cancel","resolve"})
         {
             var route=api.MapPost("/host/updates/"+action,(UpdateRequest request,HttpContext http,HostUpdateJob work,UpdateRecoveryService recovery,
@@ -86,13 +90,48 @@ public static class UpdateEndpoints
         }
         finally {work.Acceptance.Release();}
     }
-    private static async Task<IResult> StatusAsync(IHostUpdateStore store,IReleaseInfo release,IUpdaterLauncher launcher,PackageStager checker,IHostConfigStore config,IMaintenanceGate gate,CancellationToken ct)
+    private static async Task<IResult> StatusAsync(IHostUpdateStore store,IReleaseInfo release,IUpdaterLauncher launcher,PackageStager checker,IHostConfigStore config,IMaintenanceGate gate,
+        HostUpdateJob work,CancellationToken ct)
     {
         var rows=await store.ListAsync(10,ct);var record=await launcher.ReadRecoveryRecordAsync(ct);
-        object Project(HostUpdateRecord r)=>new{updateId=r.Id,r.Commit,r.State,r.Phase,r.Phases,r.Started,r.Finished,r.Error,
-            blockingJobs=r.State==HostUpdateState.Draining ? gate.BlockingOperations : r.BlockingJobs};
-        return Results.Ok(new{supportsAutoApply=true,installed=release.Installed,current=rows.FirstOrDefault() is {} current ? Project(current) : null,
-            history=rows.Select(Project),recoveryRecord=record?.Outcome=="succeeded" ? null : record,
-            latestKnown=await config.GetAsync<object>("update-latest",ct)});
+        HostUpdateHistoryEntry Project(HostUpdateRecord r)=>new(r.Id,r.Commit,r.State,r.Phase,r.Phases,r.Started,r.Finished,r.Error,
+            r.State==HostUpdateState.Draining ? gate.BlockingOperations : r.BlockingJobs);
+        var settings=await checker.SettingsAsync(ct);
+        var (offer,error)=await OfferAsync(work,settings.Channel,ct);
+        var copy=rows.FirstOrDefault() is {} last ? Path.Combine(work.Root,"backup-"+last.Id,"constructd.db") : null;
+        return Results.Ok(new HostUpdateStatusResponse(true,release.Installed,rows.FirstOrDefault() is {} current ? Project(current) : null,
+            rows.Select(Project),record?.Outcome=="succeeded" ? null : record,await config.GetAsync<object>("update-latest",ct),
+            BuildVersion,settings.Channel,settings.Auto,offer is not null && offer.Commit!=release.Installed.Commit ? new(offer.Version,offer.Commit) : null,
+            error,copy is not null && File.Exists(copy) ? copy : null));
+    }
+    /// <summary>This build's version, <c>X.Y.Z+&lt;commit&gt;</c> in a release build.</summary>
+    public static string BuildVersion { get; } = typeof(UpdateEndpoints).Assembly
+        .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute),false)
+        .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion ?? "unknown";
+    /// <summary>The channel's release, read at most every 15 minutes and for at most 10 seconds per request.</summary>
+    internal static async Task<(UpdateOffer? Offer,string? Error)> OfferAsync(HostUpdateJob work,string channel,CancellationToken ct)
+    {
+        if(work.LastOffer(channel,TimeSpan.FromMinutes(15)) is {} known) return (known,null);
+        using var timeout=CancellationTokenSource.CreateLinkedTokenSource(ct);timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        try { await work.ReadChannelAsync(timeout.Token); return (work.LastOffer(channel,TimeSpan.FromMinutes(15)),null); }
+        catch(UpdateException ex) { return (null,ex.Code); }
+        catch(OperationCanceledException) when(!ct.IsCancellationRequested) { return (null,"release-source-timeout"); }
+    }
+    private static async Task<IResult> RunAsync(HttpContext http,HostUpdateJob work,CancellationToken ct)
+    {
+        await work.Acceptance.WaitAsync(ct);
+        try
+        {
+            var started=await work.RunAsync(http.User.Actor(),ct);
+            return started is null ? Results.Ok(new HostUpdateRunResponse("up-to-date",null,null))
+                : Results.Accepted("/api/v1/jobs/"+started.JobId,new HostUpdateRunResponse("started",started.JobId,started.UpdateId));
+        }
+        catch(UpdateException ex) { return RunProblem(http,ex); }
+        finally {work.Acceptance.Release();}
+    }
+    internal static IResult RunProblem(HttpContext http,UpdateException ex)
+    {
+        if(ex.Code=="maintenance") { http.Response.Headers.RetryAfter="30"; return CodedProblems.Create(503,ex.Code,"The host is in maintenance."); }
+        return CodedProblems.Create(ex.Code.StartsWith("release-source-",StringComparison.Ordinal) ? 502 : 409,ex.Code,ex.Message);
     }
 }

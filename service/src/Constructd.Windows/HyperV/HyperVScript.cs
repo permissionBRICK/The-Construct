@@ -7,24 +7,20 @@ namespace Constructd.Windows.HyperV;
 /// <summary>
 /// Composes the PowerShell the Hyper-V driver runs.
 ///
-/// The service does <b>not</b> talk to Hyper-V: it dot-sources
-/// <c>drivers\Load-ConstructDriver.ps1</c> and calls the contract functions of
-/// <c>docs/drivers.md</c> — the very functions the local install uses. One implementation, two entry
-/// points; a driver fix reaches the service without being ported, and a backend added to the loader is
-/// reachable from here by changing the backend id, not the service.
+/// The service does not call Hyper-V cmdlets from C#: every script dot-sources the driver's own
+/// <c>hyperv\HyperV.Driver.ps1</c> (<see cref="HyperVScripts"/>), which ships inside the service
+/// package, and calls the contract functions of <c>docs/drivers.md</c> there. Those functions were
+/// moved unchanged from the client's driver (<c>drivers/hyperv-local</c>), so the service needs no
+/// Construct checkout.
 ///
-/// Every script has the same shape: dot-source the shared lib and the loader, run the operation into
-/// <c>$result</c>, and print exactly one compressed JSON envelope as the last stdout line. Everything
-/// before it is the driver's own <c>Write-Step</c>/<c>Write-Ok</c> progress, which the caller forwards
-/// to the job (plan §4.4).
+/// Every script has the same shape: dot-source the driver, run the operation into <c>$result</c>, and
+/// print exactly one compressed JSON envelope as the last stdout line. Everything before it is the
+/// driver's own <c>Write-Step</c>/<c>Write-Ok</c> progress, which the caller forwards to the job
+/// (plan §4.4).
 /// </summary>
 internal static class HyperVScript
 {
-    /// <summary>The backend id passed to the loader. Only <c>hyperv-local</c> exists today.</summary>
-    public const string Backend = "hyperv-local";
-
     public static string CreateVm(
-        string scriptsDir,
         VmDescriptor descriptor,
         string switchName,
         string? vhdPath)
@@ -65,96 +61,89 @@ internal static class HyperVScript
         // when the unattended install starts. For the service that is right here.
         body.Append($"Start-ConstructVm -Name {PowerShellLiteral.Quote(name)}");
 
-        return Build(scriptsDir, body.ToString());
+        return Build(body.ToString());
     }
 
-    public static string RemoveVm(string scriptsDir, string vmName) =>
-        Call(scriptsDir, "Remove-ConstructVm", vmName);
+    public static string RemoveVm(string vmName) => Call("Remove-ConstructVm", vmName);
 
-    public static string StartVm(string scriptsDir, string vmName) =>
-        Call(scriptsDir, "Start-ConstructVm", vmName);
+    public static string StartVm(string vmName) => Call("Start-ConstructVm", vmName);
 
-    public static string SetMemory(string scriptsDir, string vmName, int ramGb) => Build(scriptsDir,
+    public static string SetMemory(string vmName, int ramGb) => Build(
         $"Set-ConstructVmMemory -Name {PowerShellLiteral.Quote(ArgumentGuard.VmName(vmName))} -MemoryGB {ArgumentGuard.Positive(ramGb, "ramGb", 1024)}");
 
-    public static string GetNested(string scriptsDir, string vmName) => Build(scriptsDir,
+    public static string GetNested(string vmName) => Build(
         $"$result = [bool](Get-ConstructVmNested -Name {PowerShellLiteral.Quote(ArgumentGuard.VmName(vmName))})");
 
-    public static string SetNested(string scriptsDir, string vmName, bool enabled) => Build(scriptsDir,
+    public static string SetNested(string vmName, bool enabled) => Build(
         $"Set-ConstructVmNested -Name {PowerShellLiteral.Quote(ArgumentGuard.VmName(vmName))} -Enabled {PowerShellLiteral.Bool(enabled)}");
 
-    public static string SetCpuCount(string scriptsDir, string vmName, int cpus) => Build(scriptsDir,
+    public static string SetCpuCount(string vmName, int cpus) => Build(
         $"Set-ConstructVmCpuCount -Name {PowerShellLiteral.Quote(ArgumentGuard.VmName(vmName))} -ProcessorCount {ArgumentGuard.Positive(cpus, "cpus", 64)}");
 
     /// <summary>
     /// <c>-Force</c> so Hyper-V never asks: the service runs under the SCM with
     /// <c>-NonInteractive</c>, where a confirmation prompt is a hang, not a question.
     /// </summary>
-    public static string StopVm(string scriptsDir, string vmName) =>
-        Build(scriptsDir, $"Stop-ConstructVm -Name {PowerShellLiteral.Quote(ArgumentGuard.VmName(vmName))} -Force");
+    public static string StopVm(string vmName) =>
+        Build($"Stop-ConstructVm -Name {PowerShellLiteral.Quote(ArgumentGuard.VmName(vmName))} -Force");
 
-    public static string SaveVm(string scriptsDir, string vmName) =>
-        Call(scriptsDir, "Save-ConstructVm", vmName);
+    public static string SaveVm(string vmName) => Call("Save-ConstructVm", vmName);
 
-    public static string DetachInstallMedia(string scriptsDir, string vmName) =>
-        Call(scriptsDir, "Detach-ConstructInstallMedia", vmName);
+    public static string DetachInstallMedia(string vmName) => Call("Detach-ConstructInstallMedia", vmName);
 
-    public static string GetState(string scriptsDir, string vmName) =>
-        Build(scriptsDir, $"$result = [string](Get-ConstructVmState -Name {PowerShellLiteral.Quote(ArgumentGuard.VmName(vmName))})");
+    public static string GetState(string vmName) =>
+        Build($"$result = [string](Get-ConstructVmState -Name {PowerShellLiteral.Quote(ArgumentGuard.VmName(vmName))})");
 
-    public static string GetEndpoint(string scriptsDir, string vmName)
+    public static string GetEndpoint(string vmName)
     {
         var name = PowerShellLiteral.Quote(ArgumentGuard.VmName(vmName));
 
         // $$ raw string: {{…}} interpolates, so PowerShell's own braces need no escaping.
         return Build(
-            scriptsDir,
             $$"""
               $endpoint = Get-ConstructVmEndpoint -Name {{name}}
               $result = @{ SshHost = [string]$endpoint.SshHost; SshPort = [int]$endpoint.SshPort }
               """);
     }
 
-    public static string WaitReachable(string scriptsDir, string vmName, int timeoutSeconds)
+    public static string WaitReachable(string vmName, int timeoutSeconds)
     {
         var name = PowerShellLiteral.Quote(ArgumentGuard.VmName(vmName));
         var seconds = ArgumentGuard.Positive(timeoutSeconds, "reachability timeout", 86400);
-        return Build(scriptsDir, $"$result = [bool](Wait-ConstructVmReachable -Name {name} -TimeoutSeconds {seconds})");
+        return Build($"$result = [bool](Wait-ConstructVmReachable -Name {name} -TimeoutSeconds {seconds})");
     }
 
-    public static string GetCapabilities(string scriptsDir) =>
+    public static string GetCapabilities() =>
         Build(
-            scriptsDir,
             """
             $caps = Get-ConstructDriverCapabilities
             $result = @{ Checkpoints = [bool]$caps.Checkpoints; Suspend = [bool]$caps.Suspend; Console = [string]$caps.Console; Backend = [string]$caps.Backend }
             """);
 
-    private static string Call(string scriptsDir, string function, string vmName) =>
-        Build(scriptsDir, $"{function} -Name {PowerShellLiteral.Quote(ArgumentGuard.VmName(vmName))}");
+    /// <summary>Read-only facts an adoption needs (<c>Get-ConstructVmFacts</c>); null value: no such VM.</summary>
+    public static string GetFacts(string vmName) =>
+        Build($"$result = Get-ConstructVmFacts -Name {PowerShellLiteral.Quote(ArgumentGuard.VmName(vmName))}");
+
+    private static string Call(string function, string vmName) =>
+        Build($"{function} -Name {PowerShellLiteral.Quote(ArgumentGuard.VmName(vmName))}");
 
     /// <summary>
     /// Wraps an operation in the envelope every driver call shares. The result JSON is the last stdout
     /// line; a failure inside the script is reported <em>in</em> that envelope rather than as a crash,
     /// so the caller always has one thing to parse.
     /// </summary>
-    private static string Build(string scriptsDir, string body)
+    private static string Build(string body)
     {
-        var root = ArgumentGuard.WindowsPath(scriptsDir, "Constructd:ScriptsDir").TrimEnd('\\', '/');
-        var lib = PowerShellLiteral.Quote($@"{root}\lib\AgentVm.Common.ps1");
-        var loader = PowerShellLiteral.Quote($@"{root}\drivers\Load-ConstructDriver.ps1");
+        var driver = PowerShellLiteral.Quote(HyperVScripts.PathOf(HyperVScripts.Driver));
 
         return $$"""
                  $ErrorActionPreference = 'Stop'
                  $ProgressPreference = 'SilentlyContinue'
                  $result = $null
                  try {
-                     $constructLib = {{lib}}
-                     if (-not (Test-Path -LiteralPath $constructLib)) { throw "Construct lib not found: $constructLib" }
-                     . $constructLib
-                     $constructLoader = {{loader}}
-                     if (-not (Test-Path -LiteralPath $constructLoader)) { throw "Construct driver loader not found: $constructLoader" }
-                     . $constructLoader -Backend '{{Backend}}'
+                     $constructDriver = {{driver}}
+                     if (-not (Test-Path -LiteralPath $constructDriver)) { throw "Construct Hyper-V driver not found: $constructDriver" }
+                     . $constructDriver
                  {{Indent(body)}}
                      $envelope = [ordered]@{ ok = $true; value = $result }
                  } catch {

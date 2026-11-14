@@ -45,7 +45,8 @@ chmod +x "${tmp}/bin/systemctl"
 fixture_env=(env -i PATH="${tmp}/bin:${PATH}" SERVICE_CALLS="${tmp}/service-calls"
   CONFIG_FILE="${tmp}/config.env" REPO_DIR="${tmp}/repo"
   PROJECTS_STORE="${tmp}/projects" WORKSPACE_ROOT="${tmp}/workspace"
-  VSCODE_SERVE_WEB_TOKEN_FILE="${tmp}/absent-token" T3CODE_TLS_DIR="${tmp}/absent-tls")
+  VSCODE_SERVE_WEB_TOKEN_FILE="${tmp}/absent-token" T3CODE_TLS_DIR="${tmp}/absent-tls"
+  SSH_HOST_KEY_DIR="${tmp}/absent-ssh")
 
 for auth in true false; do
   "${fixture_env[@]}" EXPORT_HOME="${tmp}/source" INCLUDE_AUTH="${auth}" \
@@ -271,7 +272,7 @@ rows() { python3 -I -c 'import sqlite3, sys; print(sqlite3.connect(sys.argv[1]).
 t3_env=(env -i PATH="${tmp}/t3bin:${PATH}" SERVICE_CALLS="${tmp}/stage-calls"
   CONFIG_FILE="${tmp}/config.env" REPO_DIR="${tmp}/repo" T3_RESUME_HELPER="${tmp}/no-resume-helper"
   PROJECTS_STORE="${tmp}/projects" WORKSPACE_ROOT="${tmp}/workspace"
-  VSCODE_SERVE_WEB_TOKEN_FILE="${tmp}/absent-token" T3CODE_TLS_DIR="${tmp}/absent-tls"
+  VSCODE_SERVE_WEB_TOKEN_FILE="${tmp}/absent-token" T3CODE_TLS_DIR="${tmp}/absent-tls" SSH_HOST_KEY_DIR="${tmp}/absent-ssh"
   EXPORT_HOME="${live}" INCLUDE_AUTH=true INCLUDE_HISTORY=true)
 
 stage="${tmp}/stage-backup"
@@ -346,6 +347,91 @@ rc=0
   STAGE_DIR="${tmp}/stage-failed" EXPORT_REASON=backup bash "${ROOT}/bin/export-config.sh" >/dev/null 2>&1 || rc=$?
 ok 'a failing export with STAGE_DIR fails too' test "${rc}" -ne 0
 ok '... and leaves the STAGE_DIR to its caller' test -d "${tmp}/stage-failed"
+
+# ── SSH host keys: export, restore through the tarball, sshd restarted once ──
+keys="${tmp}/ssh-src"
+mkdir -p "${keys}" "${tmp}/sshbin"
+for t in ed25519 rsa; do
+  printf 'saved %s private\n' "${t}" >"${keys}/ssh_host_${t}_key"
+  printf 'saved %s public\n' "${t}" >"${keys}/ssh_host_${t}_key.pub"
+  chmod 600 "${keys}/ssh_host_${t}_key"
+done
+for auth in true false; do
+  "${fixture_env[@]}" SSH_HOST_KEY_DIR="${keys}" EXPORT_HOME="${tmp}/source" INCLUDE_AUTH="${auth}" \
+    INCLUDE_HISTORY=false OUT="${tmp}/ssh-${auth}.tar.gz" \
+    bash "${ROOT}/bin/export-config.sh" >/dev/null 2>&1
+  tar -tzf "${tmp}/ssh-${auth}.tar.gz" >"${tmp}/ssh-${auth}.members"
+done
+ok 'host keys: auth=true saves every ssh_host_* file' \
+  test "$(grep -c '^\./etc/ssh/ssh_host_' "${tmp}/ssh-true.members")" = 4
+ok 'host keys: auth=false saves none' sh -c "! grep -q 'etc/ssh' '${tmp}/ssh-false.members'"
+
+# The fresh VM: other keys, one type the old VM did not have.
+target="${tmp}/ssh-target"
+mkdir -p "${target}"
+for t in ed25519 ecdsa; do
+  printf 'fresh %s private\n' "${t}" >"${target}/ssh_host_${t}_key"
+  printf 'fresh %s public\n' "${t}" >"${target}/ssh_host_${t}_key.pub"
+done
+printf '#!/usr/bin/env bash\nexit 0\n' >"${tmp}/sshbin/sshd"
+# ssh.service is unknown here, sshd.service restarts (SSHD_UNIT_RC=1: that fails too).
+cat >"${tmp}/sshbin/systemctl" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${SERVICE_CALLS}"
+case "$*" in
+  "try-restart sshd.service") exit "${SSHD_UNIT_RC:-0}" ;;
+esac
+exit 1
+STUB
+chmod +x "${tmp}/sshbin/sshd" "${tmp}/sshbin/systemctl"
+ssh_restore() { # <tarball> <log>
+  "${fixture_env[@]}" PATH="${tmp}/sshbin:${tmp}/bin:${PATH}" SERVICE_CALLS="${tmp}/ssh-calls" SSHD_UNIT_RC="${SSHD_UNIT_RC:-0}" \
+    SSH_HOST_KEY_DIR="${target}" BACKUP_TGZ="$1" EXPORT_HOME="${tmp}/ssh-home" \
+    bash "${ROOT}/bin/restore-config.sh" >"$2" 2>&1
+}
+rm -f "${tmp}/ssh-calls"
+ssh_restore "${tmp}/ssh-true.tar.gz" "${tmp}/ssh-restore.log"
+ok 'host keys: the saved keys replace the fresh ones' \
+  sh -c "cmp -s '${keys}/ssh_host_ed25519_key' '${target}/ssh_host_ed25519_key' && cmp -s '${keys}/ssh_host_rsa_key.pub' '${target}/ssh_host_rsa_key.pub'"
+ok 'host keys: a key type the backup lacks is removed' test ! -e "${target}/ssh_host_ecdsa_key"
+ok 'host keys: private keys 0600, public keys 0644' \
+  test "$(stat -c '%a' "${target}/ssh_host_rsa_key" "${target}/ssh_host_rsa_key.pub" | tr '\n' ' ')" = '600 644 '
+ok 'host keys: sshd is restarted once' test "$(grep -cx 'try-restart ssh.service' "${tmp}/ssh-calls")" = 1
+
+ok 'host keys: the restart tries sshd.service when ssh.service fails' grep -qx 'try-restart sshd.service' "${tmp}/ssh-calls"
+ok 'host keys: the restore says it restored them' grep -q 'restored SSH host keys' "${tmp}/ssh-restore.log"
+
+rm -f "${tmp}/ssh-calls"
+ssh_restore "${tmp}/ssh-true.tar.gz" "${tmp}/ssh-again.log"
+ok 'host keys: the same keys again restart nothing' sh -c "! grep -q 'try-restart' '${tmp}/ssh-calls' 2>/dev/null"
+
+rm -f "${tmp}/ssh-calls"
+ssh_restore "${tmp}/ssh-false.tar.gz" "${tmp}/ssh-old.log"
+ok 'host keys: a backup without host keys changes none and restarts nothing' \
+  sh -c "cmp -s '${keys}/ssh_host_ed25519_key' '${target}/ssh_host_ed25519_key' && ! grep -q 'try-restart' '${tmp}/ssh-calls' 2>/dev/null"
+
+# sshd cannot be restarted: the keys it runs with are put back, and nothing claims a restore.
+for t in ed25519 ecdsa; do printf 'fresh %s private\n' "${t}" >"${target}/ssh_host_${t}_key"; done
+rm -f "${target}/ssh_host_rsa_key" "${target}/ssh_host_rsa_key.pub"
+rc=0
+SSHD_UNIT_RC=1 ssh_restore "${tmp}/ssh-true.tar.gz" "${tmp}/ssh-norestart.log" || rc=$?
+ok 'host keys: a failed restart does not fail the restore' test "${rc}" = 0
+ok '... the previous keys are back' \
+  sh -c "grep -qx 'fresh ecdsa private' '${target}/ssh_host_ecdsa_key' && test ! -e '${target}/ssh_host_rsa_key'"
+ok '... and no restore is claimed' sh -c "! grep -q 'restored SSH host keys' '${tmp}/ssh-norestart.log'"
+
+# sshd refusing the saved keys: the VM keeps the keys it had, sshd is left alone.
+for t in ed25519 ecdsa; do printf 'fresh %s private\n' "${t}" >"${target}/ssh_host_${t}_key"; done
+rm -f "${target}/ssh_host_rsa_key" "${target}/ssh_host_rsa_key.pub"
+printf '#!/usr/bin/env bash\nexit 1\n' >"${tmp}/sshbin/sshd"
+rm -f "${tmp}/ssh-calls"
+rc=0
+ssh_restore "${tmp}/ssh-true.tar.gz" "${tmp}/ssh-refused.log" || rc=$?
+ok 'host keys: a refused key set does not fail the restore' test "${rc}" = 0
+ok '... the previous keys are back' \
+  sh -c "grep -qx 'fresh ecdsa private' '${target}/ssh_host_ecdsa_key' && grep -qx 'fresh ed25519 private' '${target}/ssh_host_ed25519_key' && test ! -e '${target}/ssh_host_rsa_key'"
+ok '... sshd is not restarted' sh -c "! grep -q 'try-restart' '${tmp}/ssh-calls' 2>/dev/null"
+ok '... and it is reported' grep -q 'sshd refused them' "${tmp}/ssh-refused.log"
 
 printf '\n  export-config fixture tests — %d/%d passed\n\n' "${pass}" "$((pass + fail))"
 [[ "${fail}" -eq 0 ]]

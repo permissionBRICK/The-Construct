@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '../../../..')).Path
-$file = Join-Path $repo 'drivers/hyperv-local/HyperVLocal.ChildVm.ps1'
+$file = Join-Path $repo 'service/src/Constructd.Windows/HyperV/Scripts/HyperV.ChildVm.ps1'
 $tokens = $null; $errors = $null
 $null = [Management.Automation.Language.Parser]::ParseFile($file, [ref]$tokens, [ref]$errors)
 if ($errors.Count -ne 0) { throw 'PowerShell parse failed' }

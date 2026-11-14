@@ -5,9 +5,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const http = require("node:http");
 const { spawn } = require("node:child_process");
-const { createHash, X509Certificate } = require("node:crypto");
+const { createHash } = require("node:crypto");
 const readline = require("node:readline");
-const rh = require("../../extension/src/remotehost.js");
 const base = process.env.E2E_BASE, temp = process.env.E2E_TEMP;
 const secrets = [process.env.E2E_ADMIN_TOKEN, "auxiliary-answer-file-secret-e2e"];
 const output = [];
@@ -23,8 +22,46 @@ async function control(action, values = {}) {
   return response;
 }
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-const pin = new X509Certificate(fs.readFileSync(process.env.E2E_CA)).fingerprint256;
-const client = token => rh.createClient({ baseUrl: base, auth: { kind: "token", token }, pin });
+// A user's or the admin's calls: the engine's routes over HTTPS, the certificate checked against the
+// test's CA (NODE_EXTRA_CA_CERTS). A refusal throws an error with the status and the problem's code.
+const query = params => {
+  const s = new URLSearchParams(Object.entries(params || {}).filter(([, v]) => v != null && v !== "").map(([k, v]) => [k, String(v)])).toString();
+  return s ? "?" + s : "";
+};
+function client(token) {
+  async function request(method, route, body) {
+    const response = await fetch(base + "/api/v1" + route, {
+      method, headers: { Accept: "application/json", Authorization: "Bearer " + token, ...(body != null ? { "Content-Type": "application/json" } : {}) },
+      ...(body != null ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(20000),
+    });
+    const text = await response.text();
+    let parsed = null;
+    if (text.trim()) { try { parsed = JSON.parse(text); } catch { parsed = text; } }
+    if (response.ok) return parsed;
+    const error = new Error(`${method} ${route.split("?")[0]} -> HTTP ${response.status}`);
+    error.status = response.status; error.body = parsed; error.code = parsed && typeof parsed.code === "string" ? parsed.code : "";
+    throw error;
+  }
+  const vm = name => "/vms/" + encodeURIComponent(name);
+  return {
+    health: () => request("GET", "/health"), whoami: () => request("GET", "/whoami"),
+    createUser: body => request("POST", "/users", body),
+    issueUserToken: (name, body) => request("POST", `/users/${encodeURIComponent(name)}/tokens`, body || {}),
+    hostConfig: () => request("GET", "/host/config"), putHostConfig: body => request("PUT", "/host/config", body),
+    hostCapacity: refresh => request("GET", "/host/capacity" + query({ refresh: refresh ? "true" : null })),
+    listVms: () => request("GET", "/vms"), createVm: spec => request("POST", "/vms", spec),
+    getVm: name => request("GET", vm(name)), getState: name => request("GET", vm(name) + "/state"),
+    deleteVm: (name, body) => request("DELETE", vm(name), body == null ? null : body),
+    rotateVmToken: (name, body) => request("POST", vm(name) + "/token", body || {}),
+    lifecycle: (name, body) => request("POST", vm(name) + "/lifecycle", body),
+    children: parent => request("GET", vm(parent) + "/children"), sharedVms: () => request("GET", "/vms/shared"),
+    forwardsVia: primary => request("GET", vm(primary) + "/forwards" + query({ via: primary })),
+    media: q => request("GET", "/media" + query(q)), mediaItem: id => request("GET", `/media/${encodeURIComponent(id)}`),
+    deleteMedia: id => request("DELETE", `/media/${encodeURIComponent(id)}`),
+    getJob: id => request("GET", `/jobs/${encodeURIComponent(id)}`), jobs: q => request("GET", "/jobs" + query(q)),
+    audit: q => request("GET", "/audit" + query(q)),
+  };
+}
 const admin = client(secrets[0]);
 async function api(token, method, route, body, expected = 200) {
   const response = await fetch(base + "/api/v1" + route, {
@@ -42,7 +79,7 @@ function safeCode(text) {
 async function refused(promise, status, code) {
   let error;
   try { await promise; } catch (e) { error = e; }
-  check(error && error.status === status && (!code || error.problem?.code === code || error.code === code), `extension refusal ${status}${code ? " " + code : ""} (got ${error?.status}:${error?.code})`);
+  check(error && error.status === status && (!code || error.problem?.code === code || error.code === code), `refusal ${status}${code ? " " + code : ""} (got ${error?.status}:${error?.code})`);
   return error.problem || error.body || error;
 }
 async function finish(c, accepted, state = "succeeded") {
@@ -124,7 +161,7 @@ async function main() {
   await refused(alice.deleteMedia(install.id), 409, "media-in-use");
   // Shared caller operations remain charged to Alice, with owner-only metadata withheld.
   await cli(["share", "upload-child", "--scope", "host", "--json"]);
-  check((await bob.sharedVms()).some(v => v.name === "upload-child"), "extension discovers host-shared child");
+  check((await bob.sharedVms()).some(v => v.name === "upload-child"), "a user discovers the host-shared child");
   await api(bobVmToken, "GET", "/vms/upload-child", null, 200);
   await api(bobVmToken, "GET", "/vms/url-child", null, 403);
   for (const [method, route, body] of [
@@ -143,7 +180,7 @@ async function main() {
   await api(bobVmToken, "POST", `/vms/upload-child/console/sessions/${session.sessionId}/keyboard`, { kind: "key", keyCode: 13 }, 200);
   const sharedForward = await api(bobVmToken, "POST", "/vms/upload-child/forwards", { vmPort: 8082, target: "client" }, 201);
   check(sharedForward.destination.via === "bob-primary" && sharedForward.destination.requestedBy === "vm:bob-primary", "shared client forward uses requester's primary");
-  check((await bob.forwardsVia("bob-primary")).some(f => f.id === sharedForward.id), "extension polls child forward through requester's primary");
+  check((await bob.forwardsVia("bob-primary")).some(f => f.id === sharedForward.id), "the requester polls the child forward through its primary");
   await cli(["share", "upload-child", "--scope", "private", "--json"]);
   await api(bobVmToken, "POST", `/vms/upload-child/console/sessions/${session.sessionId}/keyboard`, { kind: "key", keyCode: 13 }, 403);
   check(!(await bob.forwardsVia("bob-primary")).some(f => f.id === sharedForward.id), "making child private revokes shared forward and console access");

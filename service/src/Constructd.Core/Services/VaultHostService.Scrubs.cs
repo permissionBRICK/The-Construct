@@ -26,19 +26,24 @@ public sealed partial class VaultHostService
         try
         {
             var now = clock.UtcNow;
-            foreach (var owner in await store.ListOwnersAsync(ct).ConfigureAwait(false))
+            ExpireEntryRequests(now);
+            var owners = (await store.ListOwnersAsync(ct).ConfigureAwait(false)).Select(o => o.Owner)
+                .Concat(records?.Owners() ?? []).Distinct(StringComparer.Ordinal).ToArray();
+            foreach (var owner in owners)
             {
-                var expired = (await store.ListAsync<VaultLease>(owner.Owner, ct).ConfigureAwait(false)).Where(l => l.ExpiresAt <= now).ToArray();
+                if (records?.Hosts(owner) == true)
+                    await ReconcileLeasesAsync((await OwnerAsync(owner, ct).ConfigureAwait(false))!, await EntriesAsync(owner, ct).ConfigureAwait(false), ct).ConfigureAwait(false);
+                var expired = (await store.ListAsync<VaultLease>(owner, ct).ConfigureAwait(false)).Where(l => l.ExpiresAt <= now).ToArray();
                 if (expired.Length > 0)
                 {
-                    var entries = await store.ListEntriesAsync(owner.Owner, ct).ConfigureAwait(false);
+                    var entries = await EntriesAsync(owner, ct).ConfigureAwait(false);
                     foreach (var lease in expired)
                     {
                         var scrubbed = await EndAsync(lease, now, entries, ct).ConfigureAwait(false);
-                        await RecordAsync(owner.Owner, lease.Vm, $"Access to {lease.Name} expired{(scrubbed ? "; scrubbing the VM" : "")}.", false, ct).ConfigureAwait(false);
+                        await RecordAsync(owner, lease.Vm, $"Access to {lease.Name} expired{(scrubbed ? "; scrubbing the VM" : "")}.", false, ct).ConfigureAwait(false);
                     }
                 }
-                await ScheduleAsync(owner.Owner, now, ct).ConfigureAwait(false);
+                await ScheduleAsync(owner, now, ct).ConfigureAwait(false);
             }
             await store.PruneTombstonesAsync((now - VaultRules.TombstoneAge).ToUnixTimeMilliseconds(), ct).ConfigureAwait(false);
             await PurgeOrphansAsync(ct).ConfigureAwait(false);
@@ -54,6 +59,7 @@ public sealed partial class VaultHostService
     {
         Drop(vmName);
         CancelPending(vmName, "The VM is being deleted.");
+        CancelEntryRequests(vmName);
         await gate.WaitAsync(ct).ConfigureAwait(false);
         try { await PurgeAsync(r => Ownership.SameName(r.Vm, vmName), ct).ConfigureAwait(false); }
         finally { gate.Release(); }
@@ -81,7 +87,7 @@ public sealed partial class VaultHostService
         var cleanups = await store.ListAsync<VaultCleanup>(owner, ct).ConfigureAwait(false);
         if (!cleanups.Any(c => c.DueAt <= now)) return;
         var leases = await store.ListAsync<VaultLease>(owner, ct).ConfigureAwait(false);
-        var entries = await store.ListEntriesAsync(owner, ct).ConfigureAwait(false);
+        var entries = await EntriesAsync(owner, ct).ConfigureAwait(false);
         var jobs = await store.ListAsync<VaultScrubJob>(owner, ct).ConfigureAwait(false);
         var ready = new List<VaultCleanup>();
         foreach (var cleanup in cleanups.Where(c => c.DueAt <= now))
@@ -112,7 +118,7 @@ public sealed partial class VaultHostService
         await gate.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            var state = await store.GetOwnerAsync(vm.Owner, ct).ConfigureAwait(false);
+            var state = await OwnerAsync(vm.Owner, ct).ConfigureAwait(false);
             if (state is null) return false;
             var now = clock.UtcNow;
             await ScheduleAsync(vm.Owner, now, ct).ConfigureAwait(false);
@@ -135,7 +141,7 @@ public sealed partial class VaultHostService
         try
         {
             var now = clock.UtcNow;
-            var state = await store.GetOwnerAsync(vm.Owner, ct).ConfigureAwait(false);
+            var state = await OwnerAsync(vm.Owner, ct).ConfigureAwait(false);
             if (state is null) return new JsonObject { ["jobs"] = result };
             await ScheduleAsync(vm.Owner, now, ct).ConfigureAwait(false);
             key = KeyFor(state, vm.Name);

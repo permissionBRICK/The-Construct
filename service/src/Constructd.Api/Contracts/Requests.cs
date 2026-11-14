@@ -10,7 +10,18 @@ public sealed record CreateUserRequest(string? Name, string? Role, int? MaxVms, 
 
 public sealed record CreateTokenRequest(string? Label);
 
-public sealed record CreateVmRequest(string? Name, int? Cpu, int? RamGb, int? DiskGb, CreateVmOptions? Opts);
+/// <param name="Desired">
+/// The VM's provision settings. With them the create job also provisions the VM once it is reachable, as a
+/// <c>provision</c> job would, and stores them as the VM's settings; without them the VM is only built.
+/// </param>
+/// <param name="Secrets">
+/// With <paramref name="Desired"/>: the secrets that first provision needs, as on <c>POST /vms/{name}/jobs</c>
+/// (the device agent adds <c>gitCloneCredentialsB64</c>). Kept in the create job's RAM bag only and dropped when it
+/// ends; never stored, logged or part of the operation key's fingerprint. <c>vmTokenB64</c> and <c>backupKey</c>
+/// are not taken: the job issues the VM's token itself.
+/// </param>
+public sealed record CreateVmRequest(string? Name, int? Cpu, int? RamGb, int? DiskGb, CreateVmOptions? Opts,
+    VmDesiredState? Desired = null, ProvisionSecretsRequest? Secrets = null);
 
 /// <param name="Nested">Expose virtualization extensions to the guest.</param>
 /// <param name="AutomaticCheckpoints">Hyper-V automatic checkpoints (capability-gated).</param>
@@ -36,7 +47,8 @@ public sealed record ForwardAckRequest(string? Status, int? LocalPort, string? H
 
 public sealed record IdlePolicyRequest(int? TimeoutMinutes, string? Action);
 
-public sealed record ActivityRequest(bool? Busy, IReadOnlyList<string>? Reasons);
+/// <param name="ProjectsDigest">A digest of the VM's projects folder; when it changes the engine reads the folder (design 9.3).</param>
+public sealed record ActivityRequest(bool? Busy, IReadOnlyList<string>? Reasons, string? ProjectsDigest = null);
 
 /// <summary>Optional confirmation shape reserved for the child-lifecycle implementation.</summary>
 public sealed record DeleteVmRequest(CascadeConfirmation? Cascade = null);

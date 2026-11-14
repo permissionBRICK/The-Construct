@@ -28,7 +28,7 @@ public sealed class NetworkReconciliationTests
              new("parent", [], [new(parent.Incarnation ?? "parent-id", "nic", "bb", false, "switch")])],
             [], [new("10.2.3.1/24", "switch", "eth")], ["10.2.3.1"]);
         var runner = new RecordingProcessRunner { Default = new(0, JsonSerializer.Serialize(new { ok = true, value = facts }, ApiJson.Options), "", false) };
-        var provider = new HyperVGuestAddressProvider(runner, new ConstructdOptions { ScriptsDir = @"C:\Construct" }, app.Vms, app.Clock);
+        var provider = new HyperVGuestAddressProvider(runner, new ConstructdOptions(), app.Vms, app.Clock);
         var exposure = new AccessExposure(app.Vms, app.Users, app.Forwards, app.Service<IForwardStore>(),
             new GuestAddressResolver(provider, app.Vms, app.Service<INetworkRuleStore>()), app.Service<IHostNetworkPolicy>(),
             app.Service<INetworkRuleStore>(), app.Clock, app.Service<IAuditLog>());

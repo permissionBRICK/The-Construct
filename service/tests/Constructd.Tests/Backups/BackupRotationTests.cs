@@ -14,7 +14,8 @@ public sealed class BackupRotationTests
 
     private static string[] Kept(IReadOnlyList<ConfigBackup> backups, int keep, string now)
     {
-        var expired = BackupRotation.Expired(backups, keep, At(now));
+        // Horizon 0: the protected backup is the newest, which the slots keep anyway.
+        var expired = BackupRotation.Expired(backups, keep, At(now), minHorizonDays: 0);
         return backups.Select(b => b.Id).Except(expired).Order(StringComparer.Ordinal).ToArray();
     }
 
@@ -85,7 +86,7 @@ public sealed class BackupRotationTests
         var old = new[] { Complete("a", "2026-10-01T00:00:00Z"), Complete("b", "2026-10-02T00:00:00Z") };
         Assert.Equal(["a", "b"], Kept(old, 3, "2026-11-08T12:00:00Z"));
         Assert.Equal(["a", "b"], Kept(old, 4, "2026-11-08T12:00:00Z"));
-        Assert.Empty(BackupRotation.Expired([Complete("only", "2026-11-08T01:00:00Z")], 1, At("2026-11-08T12:00:00Z")));
+        Assert.Empty(BackupRotation.Expired([Complete("only", "2026-11-08T01:00:00Z")], 1, At("2026-11-08T12:00:00Z"), 0));
     }
 
     [Fact]
@@ -102,6 +103,6 @@ public sealed class BackupRotationTests
     public void Open_sessions_are_not_candidates()
     {
         var open = new ConfigBackup("open", "alice", "dev", BackupTriggers.Manual, BackupStates.Open, At("2026-11-08T11:00:00Z"));
-        Assert.DoesNotContain("open", BackupRotation.Expired([.. Daily, open], 1, At("2026-11-08T12:00:00Z")));
+        Assert.DoesNotContain("open", BackupRotation.Expired([.. Daily, open], 1, At("2026-11-08T12:00:00Z"), 0));
     }
 }

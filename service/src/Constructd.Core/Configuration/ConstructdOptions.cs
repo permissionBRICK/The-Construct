@@ -15,6 +15,8 @@ public sealed class ConstructdOptions
     /// <summary>Installed VAMT PowerShell module manifest. Required for proxy activation.</summary>
     public string VamtModulePath { get; set; } = string.Empty;
     public HostAdminOptions HostAdmin { get; set; } = new();
+    /// <summary>Profile sync: which accounts use a store elsewhere instead of this engine's own.</summary>
+    public SyncOptions Sync { get; set; } = new();
 
     public const string SectionName = "Constructd";
 
@@ -23,6 +25,12 @@ public sealed class ConstructdOptions
     /// Development only: it also enables the test-identity auth scheme.
     /// </summary>
     public bool Fake { get; set; }
+
+    /// <summary>
+    /// A single PC's own engine (design 5.3), written by <c>Install-ConstructHost.ps1 -Solo</c>. Its port
+    /// is open to the PC's own VMs only, until LAN access is switched on (<c>/api/v1/host/lan-access</c>).
+    /// </summary>
+    public bool Solo { get; set; }
 
     /// <summary>
     /// Where users, tokens, VMs, jobs and the audit trail live: <c>Sqlite</c> (the default) or
@@ -72,12 +80,18 @@ public sealed class ConstructdOptions
     /// Which hypervisor platform this host runs on: <c>hyperv</c> (the default: the Windows host with
     /// the Hyper-V driver, WSL/native ISO media and netsh forwards) or <c>proxmox</c> (a Proxmox VE
     /// node: VMs are cloned from a cached Ubuntu cloud image and seeded with cloud-init through
-    /// <c>qm</c>, and the service relays SSH/app forwards in-process). Fake mode ignores it.
+    /// <c>qm</c>, and the service relays SSH/app forwards in-process) or <c>external</c> (VMs that
+    /// already exist and are reachable over SSH, listed in <see cref="External"/>; any OS). Fake mode ignores it.
     /// </summary>
     public string Backend { get; set; } = "hyperv";
 
     /// <summary>True when <see cref="Backend"/> selects the Proxmox VE platform.</summary>
     public bool IsProxmox => string.Equals(Backend?.Trim(), "proxmox", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>True when <see cref="Backend"/> selects the external-endpoint platform.</summary>
+    public bool IsExternal => string.Equals(Backend?.Trim(), "external", StringComparison.OrdinalIgnoreCase);
+
+    public ExternalOptions External { get; set; } = new();
 
     public ProxmoxOptions Proxmox { get; set; } = new();
 
@@ -480,6 +494,12 @@ public sealed class BackupsOptions
     /// <summary>Directory for the encrypted backup payloads. Empty: <c>backups</c> next to the database.</summary>
     public string? RootDir { get; set; }
 
+    /// <summary>The largest slot upload of one VM; the slot may hold as much again while a new one is staged.</summary>
+    public long SlotMaxBytes { get; set; } = 2L << 30;
+
+    /// <summary>The retention horizon: the newest host-requested backup at least this old is never rotated out.</summary>
+    public int MinHorizonDays { get; set; } = 30;
+
     /// <summary>The backup directory in effect.</summary>
     public string ResolveRootDir(string databasePath) =>
         Path.TrimEndingDirectorySeparator(Path.GetFullPath(!string.IsNullOrWhiteSpace(RootDir) ? RootDir
@@ -501,4 +521,25 @@ public sealed class HttpsOptions
     public string ResolveCertificateDirectory(string databasePath) =>
         !string.IsNullOrWhiteSpace(CertificateDirectory) ? CertificateDirectory
             : Path.Combine(Path.GetDirectoryName(Path.GetFullPath(databasePath)) ?? ".", "https");
+}
+
+/// <summary>
+/// The external-endpoint platform (<c>Constructd:Backend = external</c>): VMs that exist already and
+/// are reachable over SSH. Creating a VM registers one of the names listed here; deleting it
+/// unregisters it. The service never powers, installs or removes them.
+/// </summary>
+public sealed class ExternalOptions
+{
+    /// <summary>By VM name: <c>Constructd:External:Vms:&lt;name&gt;:SshHost</c>, <c>:SshPort</c>, <c>:User</c>.</summary>
+    public Dictionary<string, ExternalVmOptions> Vms { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+}
+
+public sealed class ExternalVmOptions
+{
+    public string SshHost { get; set; } = string.Empty;
+
+    public int SshPort { get; set; } = 22;
+
+    /// <summary>The account provisioning logs in as.</summary>
+    public string User { get; set; } = string.Empty;
 }
