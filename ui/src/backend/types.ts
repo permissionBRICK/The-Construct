@@ -359,6 +359,8 @@ export interface State {
   upgrade: Upgrade | null;
   /** A short message from the last action, shown as a toast. Each new one has a new id. */
   notice: { id: number; text: string } | null;
+  /** Why the last create did not start, shown on the create page where it was asked; null once another starts. */
+  createError?: string | null;
   /** Parts not available from this backend. */
   na: Feature[];
   /** Set while this device has no identity: the first-run screen stands in for everything else. */

@@ -164,6 +164,7 @@ export function CreateVm() {
           </>
         )}
         {pin.err && <span class="badc">{pin.err}</span>}
+        {s.createError && <span class="badc">{s.createError}</span>}
         {where === 'remote' && pin.probe
           ? <PinConfirm probe={pin.probe} onNo={pin.reset} onYes={() => { const p = pin.probe!; pin.reset(); send(p.pin); }} />
           : <Btn kind="pri" icon="plus" disabled={!valid || pin.busy} onClick={create}>Create</Btn>}

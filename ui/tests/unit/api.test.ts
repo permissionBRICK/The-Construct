@@ -478,6 +478,27 @@ describe('ApiBackend', () => {
     await settle();
   });
 
+  it('says on the create page why a create did not start, and sends nothing when the host has no memory for a VM', async () => {
+    const { be, calls, on, settle } = world();
+    on('POST', '/api/engines/probe', { json: { url: 'https://lab.test:8443', pin: 'P2', status: 'ok', known: null } });
+    on('POST', '/api/engines', { json: { id: E2, name: 'lab', url: 'https://lab.test:8443', pin: 'P2', engineId: null, enrolled: true, signedIn: true, store: false } });
+    // A host whose free memory fits no VM recommends nothing.
+    on('GET', `/api/engines/${E2}/api/v1/vm-defaults`, { json: { hostLogicalCpus: 4, maximumCpus: 4, recommendedCpus: 4, maximumRamGb: 0, recommendedRamGb: 0, recommendedDiskGb: 50 } });
+    await be.start();
+    be.createVm({ where: 'remote', name: 'quill', hostAddress: 'https://lab.test:8443', signIn: 'token', token: 'tok', pin: 'p2' });
+    await settle();
+    expect(be.snapshot().createError).toBe('The host has too little free memory for a VM');
+    expect(posts(calls).filter(c => c.path.endsWith('/vms'))).toEqual([]);
+
+    // The engine's own refusal shows there too, in its words; the next create clears it.
+    on('GET', `/api/engines/${E2}/api/v1/vm-defaults`, { json: { hostLogicalCpus: 4, maximumCpus: 4, recommendedCpus: 4, maximumRamGb: 8, recommendedRamGb: 4, recommendedDiskGb: 50 } });
+    on('POST', `/api/engines/${E2}/vms`, { status: 409, json: { title: 'Conflict', status: 409, detail: 'A VM named quill exists.' } });
+    be.createVm({ where: 'remote', name: 'quill', hostAddress: 'https://lab.test:8443', signIn: 'token', token: 'tok', pin: 'p2' });
+    expect(be.snapshot().createError).toBeNull();
+    await settle();
+    expect(be.snapshot().createError).toBe('A VM named quill exists.');
+  });
+
   it('creates a VM on a pasted host with its token and settings in one request through the agent; the engine provisions it', async () => {
     const { be, calls, on, settle } = world();
     on('POST', '/api/engines/probe', { json: { url: 'https://lab.test:8443', pin: 'P2', status: 'ok', known: null } });
@@ -980,10 +1001,10 @@ describe('ApiBackend host fingerprint', () => {
     expect(await be.probeHost(' lab.test:8443 ')).toEqual({ url: 'https://lab.test:8443', pin: 'AA11', known: false });
     be.createVm({ where: 'remote', name: 'quill', hostAddress: 'https://lab.test:8443', signIn: 'token', token: 'tok' });
     await settle();
-    expect(be.snapshot().notice?.text).toMatch(/fingerprint/);
+    expect(be.snapshot().createError).toMatch(/fingerprint/);
     be.createVm({ where: 'remote', name: 'quill', hostAddress: 'https://lab.test:8443', signIn: 'token', token: 'tok', pin: 'BB22' });
     await settle();
-    expect(be.snapshot().notice?.text).toMatch(/different certificate/);
+    expect(be.snapshot().createError).toMatch(/different certificate/);
     expect(calls.some(c => c.method === 'POST' && c.path === '/api/engines')).toBe(false);
   });
 });

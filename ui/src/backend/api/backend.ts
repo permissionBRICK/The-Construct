@@ -1384,16 +1384,24 @@ export class ApiBackend implements Backend {
     if (req.where === 'remote' && !windows && req.signIn !== 'token') { this.note(NA); return null; }
     // Windows sign-in only where the agent reports Windows.
     if (windows && !this.windows) { this.note(NA); return null; }
-    void this.run(async () => {
-      const engine = req.where === 'local' ? await this.localEngine() : await this.addEngine(req.hostAddress ?? '', windows ? null : req.token ?? null, req.pin ?? null, undefined, windows);
-      // One request: the engine creates the VM with its recommended size and provisions it with these settings
-      // (none chosen yet: the guest's defaults; Settings changes them later).
-      const c = this.engine(engine);
-      const d = await ok(c.GET('/api/v1/vm-defaults'));
-      const r = await ok(this.agent.POST('/api/engines/{engine}/vms', { params: { path: { engine } }, body: { name, ramGb: d.recommendedRamGb, diskGb: d.recommendedDiskGb, desired: { projects: [], settings: {} } } as never }));
-      await this.refreshEngine(engine);
-      await this.track(engine, r.jobId, { kind: 'create' });
-    });
+    // A create that does not start says why on the create page, where it was asked, not in a passing notice.
+    this.emit({ createError: null });
+    void (async () => {
+      try {
+        const engine = req.where === 'local' ? await this.localEngine() : await this.addEngine(req.hostAddress ?? '', windows ? null : req.token ?? null, req.pin ?? null, undefined, windows);
+        // One request: the engine creates the VM with its recommended size and provisions it with these settings
+        // (none chosen yet: the guest's defaults; Settings changes them later).
+        const c = this.engine(engine);
+        const d = await ok(c.GET('/api/v1/vm-defaults'));
+        // The engine recommends nothing when no VM fits into the host's free memory.
+        if (!(d.recommendedRamGb >= 1)) throw new Error(req.where === 'local' ? 'This PC has too little free memory for a VM' : 'The host has too little free memory for a VM');
+        const r = await ok(this.agent.POST('/api/engines/{engine}/vms', { params: { path: { engine } }, body: { name, ramGb: d.recommendedRamGb, diskGb: d.recommendedDiskGb, desired: { projects: [], settings: {} } } as never }));
+        await this.refreshEngine(engine);
+        await this.track(engine, r.jobId, { kind: 'create' });
+      } catch (e) {
+        this.emit({ createError: errText(e) });
+      }
+    })();
     return name;
   }
 
