@@ -631,10 +631,45 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description What this device can do: platform, notifications, microphone, workspace share, start with the OS (null: not available). */
+        /** @description What this device can do: platform, notifications, microphone, workspace share, start with the OS, whether it can run an engine (engineHost). */
         get: operations["GetDeviceFeatures"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/engines/local/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Where setting up the engine on this PC stands: idle, running, done (with its engine id), failed (the installer's reason) or restart (Windows must restart to turn on Hyper-V). */
+        get: operations["GetLocalEngineSetup"];
+        put?: never;
+        /** @description Sets up the engine on this PC (Windows): the host package of the device's channel, checked against the manifest, installed unattended with one elevation prompt; the token goes into the state. An engine on loopback this agent already holds a sign-in for is taken as it is. Progress as engine-setup events; 501 not-available where the device cannot host one. */
+        post: operations["StartLocalEngineSetup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/device/restart": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Restarts Windows now, after the engine setup said Hyper-V needs it (409 no-restart-needed otherwise). Nothing continues by itself afterwards. */
+        post: operations["RestartDevice"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1060,6 +1095,7 @@ export interface components {
             share: boolean;
             startWithOs: boolean;
             shell: boolean;
+            engineHost: boolean;
         };
         DeviceListItem: {
             id: string;
@@ -1095,6 +1131,12 @@ export interface components {
             pin: string;
             status: null | string;
             known: null | string;
+        };
+        EngineSetupView: {
+            available: boolean;
+            state: string;
+            message: null | string;
+            engine: null | string;
         };
         EngineView: {
             id: string;
@@ -2791,6 +2833,91 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["DeviceFeatures"];
                 };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    GetLocalEngineSetup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EngineSetupView"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    StartLocalEngineSetup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EngineSetupView"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    RestartDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description An error. */
             default: {
