@@ -45,18 +45,20 @@ const MAX_PARENT_DEPTH = 8
 
 const BACKGROUND_DESCRIPTION = `Run a shell command in the background, detached from this tool call.
 
-The command is spawned in its own process group and keeps running after the tool
-returns, after your turn ends, and after opencode exits. Nothing kills it on a
-timeout. Use it for anything slow or open ended: test suites, builds, installs,
-downloads, dev servers, watchers, log tails, long migrations.
+This call returns immediately. It does NOT wait for the command: the command is
+still running when you get the result of this call. It runs in its own process
+group and keeps going after your turn ends and after opencode exits. Nothing
+kills it on a timeout. Use it for anything slow or open ended: test suites,
+builds, installs, downloads, dev servers, watchers, log tails, long migrations.
 
 wait: true (the normal choice)
-  You are woken in this session with the result as soon as the command exits,
-  even after your turn has ended. This is how you wait: start the task, then END
-  YOUR TURN with a one-line status unless you have other work that does not need
-  the result. Never wait by calling background_output again and again, by
-  sleeping, or by polling in a loop -- every check costs a whole turn. The user's
-  UI shows the session as waiting on the task until it wakes you.
+  When the command exits, its result arrives in this session as a new message
+  that resumes you automatically, even after your turn has ended. So the way to
+  wait is to stop: start the task, then END YOUR TURN with a one-line status,
+  unless you have other work that does not need the result. Do not wait for it
+  yourself -- no background_output checks, no sleep, no polling loop, no other
+  blocking command; every one of those costs turns. The user's UI shows the
+  session as waiting on the task until its result resumes you.
 
 Waiting for a condition instead of a command
   To wait for something to become true -- a VM getting an address, a CI run
@@ -156,7 +158,7 @@ export const BackgroundTasks = async ({ client, directory }) => {
     return Math.max(stoppedAt(job.sessionID), root) >= job.started
   }
 
-  /** The root of a (subagent) session's parent chain, best effort. */
+  /** The root of a (subagent) session's parent chain, or undefined while the server cannot say. */
   async function rootOf(sessionID) {
     let id = sessionID
     for (let depth = 0; depth < MAX_PARENT_DEPTH; depth++) {
@@ -164,9 +166,10 @@ export const BackgroundTasks = async ({ client, directory }) => {
       if (parent === undefined) {
         try {
           const res = await client.session.get({ path: { id }, query: { directory } })
-          parent = (res?.data ?? res)?.parentID ?? null
+          if (res?.error || !(res?.data ?? res)?.id) return undefined
+          parent = (res?.data ?? res).parentID ?? null
         } catch {
-          return id
+          return undefined
         }
         parents.set(id, parent)
       }
@@ -255,7 +258,7 @@ export const BackgroundTasks = async ({ client, directory }) => {
       description,
       wait,
       sessionID,
-      root: root || sessionID,
+      root, // undefined while unknown; notify() resolves it before any wake-up
       directory,
       cwd,
       pid: child.pid,
@@ -310,7 +313,21 @@ export const BackgroundTasks = async ({ client, directory }) => {
     fs.rmSync(path.join(dir, "notified"), { force: true })
   }
 
+  /** Jobs adopted from an older plugin version carry no root session yet. */
+  async function resolveRoot(job) {
+    if (job.root) return
+    const root = await rootOf(job.sessionID)
+    if (!root) return
+    job.root = root
+    try {
+      const file = path.join(job.dir, "meta.json")
+      const meta = JSON.parse(fs.readFileSync(file, "utf8"))
+      fs.writeFileSync(file, JSON.stringify({ ...meta, root: job.root }, undefined, 2))
+    } catch {}
+  }
+
   async function notify(job, result) {
+    await resolveRoot(job)
     if (disarmed(job)) return
     if (!claim(job.dir)) return
     const entry = { job, text: renderNotification(job, result) }
@@ -344,6 +361,13 @@ export const BackgroundTasks = async ({ client, directory }) => {
       })
     } catch {
       // Session gone or server shutting down -- the result stays readable on disk.
+      return
+    }
+    // A Stop that landed while the wake-up was in flight: end the turn it just started.
+    if (live.some(({ job }) => disarmed(job))) {
+      try {
+        await client.session.abort({ path: { id: sessionID }, query: { directory } })
+      } catch {}
     }
   }
 
@@ -509,6 +533,8 @@ export const BackgroundTasks = async ({ client, directory }) => {
         known.set(`${job.sessionID}/${job.id}`, job)
         if (disarmed(job)) continue
         watch(job)
+        // After startup, once the server answers; notify() resolves it again before any wake-up.
+        if (!job.root) setTimeout(() => resolveRoot(job).catch(() => {}), 5000).unref?.()
       }
     }
   }
@@ -592,16 +618,16 @@ export const BackgroundTasks = async ({ client, directory }) => {
           return {
             title: `${description} (${job.id})`,
             output: [
-              `Started background task ${job.id} (pid ${job.pid}).`,
+              `Started background task ${job.id} (pid ${job.pid}). It is still running: this call returned immediately and did not wait for it.`,
               `command: ${command}`,
               `cwd: ${cwd}`,
               `log: ${job.log}`,
               ``,
               ...(wait
                 ? [
-                    `wait: on -- you will be woken in this session with the result when it exits, even after your turn has ended.`,
-                    `Next: unless you have other work that does not need this result, end your turn now with a one-line status.`,
-                    `Do not call background_output, sleep or poll to wait for it.`,
+                    `wait: on -- when it exits, its result arrives here as a new message that resumes this session automatically, even after your turn has ended.`,
+                    `What to do now: if you have other work that does not need this result, do it. Otherwise end your turn now -- reply with a one-line status and stop.`,
+                    `Do not wait for it yourself: no background_output checks, no sleep, no loop or other blocking command.`,
                   ]
                 : [`wait: off -- fire and forget. The process keeps running even if opencode exits and nothing will notify you.`]),
               `Inspect it with background_output(id: "${job.id}") only if you need to; stop it with background_kill(id: "${job.id}").`,
@@ -652,8 +678,8 @@ export const BackgroundTasks = async ({ client, directory }) => {
                 title: `${job.description || job.command} (${job.id})`,
                 output: [
                   `${job.id}: still running after ${duration(job.started, s.at)}. Checked again ${duration(last)} after your last check.`,
-                  `You will be woken with its result when it exits, so there is nothing to poll.`,
-                  `End your turn now with a one-line status, unless you have other work that does not need this result.`,
+                  `Its result arrives as a new message that resumes this session when it exits, so there is nothing to poll.`,
+                  `End your turn now -- reply with a one-line status and stop -- unless you have other work that does not need this result.`,
                   `(New output is kept for a later check; full: true shows all of it.)`,
                 ].join("\n"),
                 metadata: { id: job.id, running: true, status: s.label },

@@ -27,14 +27,20 @@ async function test(name, fn) {
 }
 
 /** A plugin instance with a fake OpenCode client. */
-async function harness({ parents = {} } = {}) {
+async function harness({ parents = {}, beforeAccept } = {}) {
   const prompts = []
+  const aborts = []
   const status = {}
   const client = {
     session: {
       status: async () => ({ data: status }),
       promptAsync: async (request) => {
+        if (beforeAccept) await beforeAccept(request)
         prompts.push({ id: request.path.id, text: request.body.parts.map((part) => part.text).join("\n") })
+        return { data: true }
+      },
+      abort: async (request) => {
+        aborts.push(request.path.id)
         return { data: true }
       },
       get: async ({ path: { id } }) => ({ data: { id, parentID: parents[id] } }),
@@ -53,7 +59,7 @@ async function harness({ parents = {} } = {}) {
     await plugin["chat.message"]({ sessionID }, out)
     return out.parts.slice(1)
   }
-  return { plugin, prompts, status, start, output, event, abort, nextPrompt }
+  return { plugin, prompts, aborts, status, start, output, event, abort, nextPrompt }
 }
 
 /** Waits until the plugin's 1 s watcher has seen a job exit. */
@@ -62,7 +68,8 @@ const settle = () => sleep(2500)
 await test("a finished wait: true task wakes an idle session", async () => {
   const h = await harness()
   const started = await h.start("ses_wake", "echo hello")
-  assert.match(started.output, /end your turn now/)
+  assert.match(started.output, /still running: this call returned immediately and did not wait for it/)
+  assert.match(started.output, /Otherwise end your turn now/)
   await settle()
   assert.equal(h.prompts.length, 1)
   assert.equal(h.prompts[0].id, "ses_wake")
@@ -159,6 +166,45 @@ await test("re-checking a running armed task within a minute returns a reminder"
   const full = await h.output("ses_poll", "bg_1", true)
   assert.match(full.output, /output \(from the start\)/, "full: true still shows the output")
   await h.plugin.tool.background_kill.execute({ id: "bg_1" }, { sessionID: "ses_poll" })
+  await h.plugin.dispose()
+})
+
+await test("a Stop that lands while a wake-up is in flight aborts the turn it started", async () => {
+  const h = await harness({
+    beforeAccept: async ({ path: { id } }) => {
+      fs.writeFileSync(path.join(stateRoot, id, "stopped"), String(Date.now()))
+    },
+  })
+  await h.start("ses_inflight", "echo racing")
+  await settle()
+  assert.equal(h.prompts.length, 1, "the wake-up was already on its way")
+  assert.deepEqual(h.aborts, ["ses_inflight"], "and its turn is aborted right away")
+  await h.plugin.dispose()
+})
+
+await test("a task adopted from the previous plugin version honours a Stop of its root session", async () => {
+  // Old meta.json files have no `root`; the subagent session's task must still obey the root's Stop.
+  const dir = path.join(stateRoot, "ses_legacy_child", "bg_1")
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(path.join(dir, "command.sh"), "sleep 2\n")
+  const { spawn } = await import("node:child_process")
+  const wrapper = '"$1" "$2" </dev/null; c=$?; printf %s "$c" >"$3.part" && mv "$3.part" "$3"'
+  const child = spawn("/bin/sh", ["-c", wrapper, "legacy", "/bin/sh", path.join(dir, "command.sh"), path.join(dir, "exit")], {
+    detached: true,
+    stdio: "ignore",
+  })
+  child.unref()
+  const legacy = {
+    id: "bg_1", dir, log: path.join(dir, "output.log"), command: "sleep 2", description: "legacy", wait: true,
+    sessionID: "ses_legacy_child", directory: root, cwd: root, pid: child.pid, started: Date.now(),
+  }
+  fs.writeFileSync(path.join(dir, "meta.json"), JSON.stringify(legacy))
+  const h = await harness({ parents: { ses_legacy_child: "ses_legacy_root" } })
+  fs.mkdirSync(path.join(stateRoot, "ses_legacy_root"), { recursive: true })
+  fs.writeFileSync(path.join(stateRoot, "ses_legacy_root", "stopped"), String(Date.now()))
+  await sleep(3500)
+  assert.equal(h.prompts.length, 0, "the root's Stop covers the adopted subagent task")
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, "meta.json"), "utf8")).root, "ses_legacy_root", "root persisted")
   await h.plugin.dispose()
 })
 
