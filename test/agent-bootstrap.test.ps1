@@ -238,6 +238,21 @@ Assert ($run.Code -eq 0) "hand-over succeeds: $($run.Output)"
 Assert ($run.Calls -contains 'rest Post http://127.0.0.1:5555/api/update/check' -and $run.Calls -contains 'rest Post http://127.0.0.1:5555/api/update/install') 'the running agent updates itself'
 Assert (-not ($run.Calls | Where-Object { $_ -like 'web *' -or $_ -like '*v1/quit' })) 'nothing is downloaded, the Companion is left alone'
 
+# ---- hand-over with VS Code: the installed version's extension replaces an old one; a refusal fails ----
+foreach ($case in @(@{ code = 'ok'; ok = $true }, @{ code = 'fail'; ok = $false })) {
+    $world = New-World ('handover-vscode-' + $case.code) @{ agentRunning = $true; code = $case.code }
+    $folder = Join-Path $world 'local/Construct/agent/versions\1.0.0'
+    New-Item -ItemType Directory -Path $folder -Force | Out-Null
+    Set-Content (Join-Path $folder 'construct.vsix') 'fake extension'
+    Set-Content (Join-Path $world 'local/Construct/agent/install.json') '{"current":"1.0.0","previous":null,"pending":false}'
+    $run = Invoke-World $world (Join-Path $repo 'install.ps1')
+    Assert (@($run.Calls | Where-Object { $_ -like 'code --install-extension *construct.vsix --force' }).Count -eq 1) "hand-over installs the extension ($($case.code)): $($run.Calls -join ' | ')"
+    Assert (($run.Code -eq 0) -eq $case.ok) "hand-over with VS Code $($case.code) exits by the extension step: $($run.Output)"
+}
+$world = New-World 'handover-vscode-novsix' @{ agentRunning = $true; code = 'ok' }
+$run = Invoke-World $world (Join-Path $repo 'install.ps1')
+Assert ($run.Code -eq 0 -and -not ($run.Calls | Where-Object { $_ -like 'code *' })) "an installed version without an extension is left to the agent: $($run.Output)"
+
 # ---- Update-Construct.ps1 (the bootstrap): the old parameters and the result file ----
 $scripts = Join-Path $dir 'scripts'
 New-Item -ItemType Directory -Path $scripts | Out-Null

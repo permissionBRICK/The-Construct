@@ -281,8 +281,11 @@ async function register(plan) {
   // Switched on for the VM it is checked out on, as the old import did.
   const desiredRoute = `/api/engines/${enc(plan.vm.engine)}/api/v1/vms/${enc(plan.vm.vm)}/desired`;
   const current = await call("GET", desiredRoute);
-  const next = workspace.withProject(current && current.desired, plan.name);
+  const desired = current && current.desired;
+  const next = workspace.withProject(desired, plan.name);
   if (next) await call("PUT", desiredRoute, next);
+  // No desired state stored yet: nothing to add the profile to without inventing the VM's settings.
+  return Boolean(next) || Boolean(desired && Array.isArray(desired.projects) && desired.projects.includes(plan.name));
 }
 
 async function offer(plan) {
@@ -297,8 +300,10 @@ async function offer(plan) {
   }
   if (pick !== "Register") return;
   try {
-    await register(plan);
-    vscode.window.showInformationMessage(`Registered ${plan.name} as a project on ${plan.vm.vm}.`);
+    const on = await register(plan);
+    vscode.window.showInformationMessage(on
+      ? `Registered ${plan.name} as a project on ${plan.vm.vm}.`
+      : `Registered ${plan.name} as a project. Switch it on for ${plan.vm.vm} in the Construct window, so a reinstall checks it out.`);
   } catch (e) {
     vscode.window.showErrorMessage(`Could not register ${plan.name}: ${e.message}`);
   }

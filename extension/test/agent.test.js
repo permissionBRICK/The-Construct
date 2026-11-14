@@ -112,7 +112,7 @@ test("the start command is the agent's own background start", () => {
   assert.deepEqual(agent.startCommand("/h/construct-agent", "linux", { exists: () => false }), { file: "/h/construct-agent", args: ["run"] });
   const unit = p => p === "/usr/bin/systemctl" || p === "/cfg/systemd/user/construct-agent.service";
   assert.deepEqual(agent.startCommand("/h/construct-agent", "linux", { exists: unit, configHome: "/cfg" }),
-    { file: "/usr/bin/systemctl", args: ["--user", "start", "construct-agent.service"] });
+    { file: "/usr/bin/systemctl", args: ["--user", "start", "construct-agent.service"], unit: "/cfg/systemd/user/construct-agent.service" });
 });
 
 test("start runs the executable detached, and refuses one other users can write", t => {
@@ -127,6 +127,25 @@ test("start runs the executable detached, and refuses one other users can write"
   assert.equal(calls[0].unref, true);
   fs.chmodSync(path.dirname(exe), 0o777);
   assert.throws(() => agent.start({ exe, home }, { platform: "linux", spawn }), /other users/);
+  assert.equal(calls.length, 1);
+});
+
+test("start through the systemd unit refuses a unit other users can write", t => {
+  const home = tempHome(t);
+  const exe = installVersion(home, "1.0.0");
+  const unitDir = path.join(home, "config", "systemd", "user");
+  fs.mkdirSync(unitDir, { recursive: true, mode: 0o700 });
+  fs.chmodSync(path.join(home, "config"), 0o700); fs.chmodSync(path.join(home, "config", "systemd"), 0o700);
+  const unit = path.join(unitDir, "construct-agent.service");
+  fs.writeFileSync(unit, "[Service]\n", { mode: 0o600 });
+  const calls = [];
+  const spawn = (file, args) => { calls.push(file); return { on() {}, unref() {} }; };
+  const exists = p => p === "/usr/bin/systemctl" || fs.existsSync(p);
+  const opts = { platform: "linux", spawn, exists, configHome: path.join(home, "config"), unitTop: home };
+  agent.start({ exe, home }, opts);
+  assert.deepEqual(calls, ["/usr/bin/systemctl"]);
+  fs.chmodSync(unit, 0o666);
+  assert.throws(() => agent.start({ exe, home }, opts), /systemd unit/);
   assert.equal(calls.length, 1);
 });
 

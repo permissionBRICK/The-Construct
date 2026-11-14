@@ -189,8 +189,15 @@ if ($Ref -ne 'main') { $channel = 'nightly'; Write-Host "==> $Ref is not main: f
 
 $running = Get-ConstructRunningAgent
 if ($running) {
-    # Hand over: the running agent updates itself and opens its window.
+    # Hand over: the running agent updates itself and opens its window. The extension of the installed version
+    # goes into VS Code first, so an old control panel left in VS Code is replaced here too.
     Write-Host '==> The Construct agent is running; it updates itself.' -ForegroundColor Cyan
+    $current = $null
+    try { $current = [string](Get-Content -Raw -LiteralPath (Join-Path $agentHome 'install.json') | ConvertFrom-Json).current } catch { $current = $null }
+    if ($current -match '^[A-Za-z0-9.+_-]+$' -and $current -notin @('.', '..')) {
+        $folder = Join-Path $agentHome ('versions\' + $current)
+        if (Test-Path -LiteralPath (Join-Path $folder 'construct.vsix')) { Install-ConstructVsCodeExtension -Folder $folder }
+    }
     try {
         $offer = Invoke-ConstructAgentRoute -Endpoint $running -Path '/api/update/check'
         if ($offer.available) { Invoke-ConstructAgentRoute -Endpoint $running -Path '/api/update/install' | Out-Null }

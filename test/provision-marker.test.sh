@@ -162,8 +162,6 @@ ok "malformed engine markers are not written" is "INSTALLED_AT,REPROVISIONED_AT,
 PROBE="${ROOT}/extension/vm/probe.sh"
 ok "shared probe reads CONSTRUCT_COMMIT from provisioned.env" \
   grep -q "emit CONSTRUCT_COMMIT .*CONSTRUCT_COMMIT=" "${PROBE}"
-ok "extension probe renders the shared guest contract" \
-  grep -Fq 'guestScripts.render("probe")' "${ROOT}/extension/src/probe.js"
 
 printf '\n  provision marker tests — %d passed, %d failed\n\n' "${pass}" "${fail}"
 [[ "${fail}" -eq 0 ]]

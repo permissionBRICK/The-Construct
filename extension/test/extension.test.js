@@ -242,7 +242,18 @@ test("register this folder: written through the store engine's profile route and
   assert.deepEqual(put.body, { profile: { name: "shop", repos: [{ url: "https://github.com/o/shop.git", directory: "shop" }], sdks: {}, mcp: [], hostPackages: [], provisionCommands: [], tests: {} }, baseRevision: null });
   const desired = requests.find(r => r.method === "PUT" && r.route.endsWith("/desired"));
   assert.deepEqual(desired.body, { projects: ["api", "shop"], settings: { a: 1 } });
-  assert.match(vscode.messages.at(-1).text, /Registered shop/);
+  assert.match(vscode.messages.at(-1).text, /Registered shop as a project on work/);
+
+  // A VM without a stored desired state: the profile is written, and the message says it is not on yet.
+  requests.length = 0;
+  answers["GET /api/engines/e1/api/v1/vms/work/desired"] = { desired: null, hash: null };
+  answers["GET /api/engines/store1/api/v1/profiles"] = [];
+  vscode.answers.push("Register");
+  await vscode.commands["construct.registerWorkspace"]();
+  assert.ok(requests.some(r => r.method === "PUT" && r.route.endsWith("/profiles/shop")));
+  assert.ok(!requests.some(r => r.method === "PUT" && r.route.endsWith("/desired")));
+  assert.match(vscode.messages.at(-1).text, /Switch it on for work/);
+  answers["GET /api/engines/store1/api/v1/profiles"] = [{ name: "api", revision: 3 }];
 
   // Covered now: the command explains instead of offering; "never" is remembered per repository.
   requests.length = 0;

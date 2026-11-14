@@ -41,6 +41,16 @@ def changed_since(root, base, commit):
     return [line for line in diff.stdout.splitlines() if line.strip()]
 
 
+def has_path(root, commit, path):
+    return subprocess.run(['git', '-C', str(root), 'cat-file', '-e', f'{commit}:{path}'], capture_output=True).returncode == 0
+
+
+def buildable(root, commit):
+    """The Companion app copies the old panel's pages (extension/media); the thin extension removed them, so a
+    commit with the thin extension cannot produce a working Companion and keeps pointing at the last one."""
+    return not (has_path(root, commit, 'extension/package.json') and not has_path(root, commit, 'extension/media/panel.html'))
+
+
 def plan(root, commit, releases):
     if not re.fullmatch(r'[0-9a-f]{40}', commit):
         raise ValueError('Invalid commit')
@@ -48,6 +58,8 @@ def plan(root, commit, releases):
     if any(r.get('tagName') == own for r in releases):
         return {'tag': own, 'build': False, 'reason': 'already-published'}
     newest = newest_companion(releases)
+    if newest is not None and not buildable(root, commit):
+        return {'tag': newest, 'build': False, 'reason': 'not-buildable'}
     if newest is None:
         return {'tag': own, 'build': True, 'reason': 'no-companion-release'}
     changed = changed_since(root, newest[len('companion-'):], commit)

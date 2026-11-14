@@ -128,7 +128,7 @@ function startCommand(exe, platform = process.platform, deps = {}) {
   if (platform === "win32") return { file: exe, args: ["--background"] };
   const unit = path.posix.join(deps.configHome || (process.env.XDG_CONFIG_HOME || path.posix.join(require("os").homedir(), ".config")), "systemd", "user", "construct-agent.service");
   const systemctl = ["/usr/bin/systemctl", "/bin/systemctl"].find(p => (deps.exists || fs.existsSync)(p));
-  if (systemctl && (deps.exists || fs.existsSync)(unit)) return { file: systemctl, args: ["--user", "start", "construct-agent.service"] };
+  if (systemctl && (deps.exists || fs.existsSync)(unit)) return { file: systemctl, args: ["--user", "start", "construct-agent.service"], unit };
   return { file: exe, args: ["run"] };
 }
 
@@ -136,6 +136,10 @@ function start(found, opts = {}) {
   const platform = opts.platform || process.platform;
   if (!privatePath(found.exe, found.home, { platform })) throw new Error("The agent's folder can be written by other users; run construct-agent repair.");
   const cmd = startCommand(found.exe, platform, opts);
+  // The user unit names what systemd runs: it must be as private as the executable.
+  if (cmd.unit && !privatePath(cmd.unit, opts.unitTop || require("os").homedir(), { platform, stat: opts.stat, uid: opts.uid })) {
+    throw new Error("The agent's systemd unit can be written by other users; run construct-agent repair.");
+  }
   const child = (opts.spawn || childProcess.spawn)(cmd.file, cmd.args, { detached: true, stdio: "ignore", windowsHide: true });
   child.on("error", () => { /* reported by the wait below */ });
   child.unref();
