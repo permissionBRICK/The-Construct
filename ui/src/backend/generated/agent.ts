@@ -302,6 +302,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/engines/{engine}/vms/{vm}/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description The engine's POST /vms/{name}/jobs. Credentials go with a provision or a reinstall. The agent adds secrets.gitCloneCredentialsB64 from this device's git credential helper, for the user's own VM only and unless the body carries one; everything else goes to the engine as sent. The answer is the engine's (status and body), with hostsWithoutCredential: the HTTP(S) hosts of the VM's repos that had no working credential here. */
+        post: operations["StartVmJobWithCredentials"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/engines/{engine}/vms": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description The engine's POST /vms. Credentials go with a create that has settings (its first provision). The agent adds secrets.gitCloneCredentialsB64 from this device's git credential helper, for the user's own VM only and unless the body carries one; everything else goes to the engine as sent. The answer is the engine's (status and body), with hostsWithoutCredential: the HTTP(S) hosts of the VM's repos that had no working credential here. */
+        post: operations["CreateVmWithCredentials"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/engines/{engine}/jobs/{id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description The engine's POST /jobs/{id}/retry. Credentials go with the retry of a provision or a reinstall. The agent adds secrets.gitCloneCredentialsB64 from this device's git credential helper, for the user's own VM only and unless the body carries one; everything else goes to the engine as sent. The answer is the engine's (status and body), with hostsWithoutCredential: the HTTP(S) hosts of the VM's repos that had no working credential here. */
+        post: operations["RetryJobWithCredentials"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/devices/{id}/secrets": {
         parameters: {
             query?: never;
@@ -1019,6 +1070,13 @@ export interface components {
             closable: boolean;
             child: null | string;
         };
+        JobStartedWithCredentials: {
+            jobId: string;
+            kind: null | string;
+            replayed: null | boolean;
+            hostsWithoutCredential: string[];
+        };
+        JsonObject: Record<string, never>;
         OldWritersView: {
             open: string[];
         };
@@ -1943,6 +2001,113 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RestoreStarted"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    StartVmJobWithCredentials: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine: string;
+                vm: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JsonObject"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobStartedWithCredentials"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    CreateVmWithCredentials: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["JsonObject"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobStartedWithCredentials"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    RetryJobWithCredentials: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine: string;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": null | components["schemas"]["JsonObject"];
+            };
+        };
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobStartedWithCredentials"];
                 };
             };
             /** @description An error. */

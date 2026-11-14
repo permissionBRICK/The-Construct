@@ -65,7 +65,8 @@ public static partial class ProvisionEndpoints
             request.DeferProjectCommands == true, bag, request.Kind, request.Kind == JobKinds.Restore ? request.BackupId : null, request.FreshImage == true), ct);
     }
 
-    private static IResult? SecretBag(ProvisionSecretsRequest? secrets, bool restore, out JobSecretBag bag)
+    /// <summary>The validated secrets of a request in a new RAM bag; a problem when one is malformed.</summary>
+    internal static IResult? SecretBag(ProvisionSecretsRequest? secrets, bool restore, out JobSecretBag bag)
     {
         bag = new JobSecretBag();
         secrets ??= new ProvisionSecretsRequest();

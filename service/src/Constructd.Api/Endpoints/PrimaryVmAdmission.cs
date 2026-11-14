@@ -6,6 +6,7 @@ using Constructd.Core.Abstractions;
 using Constructd.Core.Configuration;
 using Constructd.Core.Domain;
 using Constructd.Core.Logic;
+using Constructd.Core.Services;
 using Constructd.Api.Jobs;
 namespace Constructd.Api.Endpoints;
 
@@ -26,7 +27,8 @@ public static class PrimaryVmAdmission
         var response = new VmCreateAcceptedResponse(id, descriptor.Nested, request.Opts?.Nested is null, ignoredOptions);
         descriptor = descriptor with { AutomaticCheckpoints = descriptor.AutomaticCheckpoints && driver.Capabilities.Checkpoints };
         var key = supplied is null ? null : new OperationKeyRecord(vm.Owner, "create-vm", supplied,
-            OperationFingerprint.Compute(http.Request.Path, JsonSerializer.SerializeToElement(request, ApiJson.Options)), vm.Name, id,
+            // The secrets are no part of the click: a repeat with credentials gathered again is the same request.
+            OperationFingerprint.Compute(http.Request.Path, JsonSerializer.SerializeToElement(request with { Secrets = null }, ApiJson.Options)), vm.Name, id,
             OperationKeyState.Completed, null, null, JsonSerializer.Serialize(response, ApiJson.Options), clock.UtcNow);
         var prior = key is null ? null : await services.GetRequiredService<IOperationKeyStore>().GetAsync(vm.Owner, key.Kind, key.Key, ct);
         if (prior is not null) return prior.Fingerprint == key!.Fingerprint && Ownership.SameName(prior.Target, vm.Name)
@@ -85,13 +87,16 @@ public static class PrimaryVmAdmission
             if (result.Capacity is { Allowed: false } decision) return CapacityProblem(decision);
             if (result.Outcome != AdmissionOutcome.Accepted) return LifecycleEndpoints.Problem("operation-key-conflict");
             var worker = services.GetRequiredService<Constructd.Api.Jobs.PrimaryVmJobs>();
+            // The first provision's secrets, in this job's RAM bag only (validated by the route); none without settings.
+            var secrets = new JobSecretBag();
+            if (request.Desired is not null) ProvisionEndpoints.SecretBag(request.Secrets, false, out secrets);
             try
             {
                 await services.GetRequiredService<IPersistedJobRunner>().StartPersistedAsync(job, handle,
-                    (progress, token) => worker.CreateAsync(job, vm, descriptor, result.ReservationIds, request.Opts?.Redownload == true, progress, token, request.Desired), CancellationToken.None);
+                    (progress, token) => worker.CreateAsync(job, vm, descriptor, result.ReservationIds, request.Opts?.Redownload == true, progress, token, request.Desired, secrets), CancellationToken.None);
                 handle = null;
             }
-            catch { await admission.MarkStartFailedAsync(id, "Primary job could not start.", CancellationToken.None); return LifecycleEndpoints.Problem("job-start-failed", 500); }
+            catch { secrets.Clear(); await admission.MarkStartFailedAsync(id, "Primary job could not start.", CancellationToken.None); return LifecycleEndpoints.Problem("job-start-failed", 500); }
             http.SetAuditDetail($"job={id}, cpu={vm.Cpu}, ramGb={vm.RamGb}, diskGb={vm.DiskGb}");
             return Results.Accepted("/api/v1/jobs/" + id, response);
         }

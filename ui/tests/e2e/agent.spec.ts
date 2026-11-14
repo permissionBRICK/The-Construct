@@ -105,7 +105,7 @@ test('first run, a VM, a reprovision and a second device on the real API', async
   await expect(pa.locator('.vtab', { hasText: 'alpha' })).toBeVisible();
   await expect(pa.getByRole('status')).toHaveText('Created alpha', { timeout: 90000 });
   await expect(pa.locator('.blk.job')).toHaveCount(0);
-  const created = sent.filter(r => /\/api\/v1\/vms$/.test(new URL(r.url).pathname));
+  const created = sent.filter(r => /\/api\/engines\/[^/]+\/vms$/.test(new URL(r.url).pathname));
   expect(created.length).toBe(1);
   expect(JSON.parse(created[0].body!)).toMatchObject({ name: 'alpha', desired: { projects: [], settings: {} } });
   expect(sent.filter(r => /\/vms\/alpha\/jobs$/.test(new URL(r.url).pathname))).toEqual([]);
@@ -140,7 +140,7 @@ test('first run, a VM, a reprovision and a second device on the real API', async
   await pa.locator('.blk.bad.job').getByRole('button', { name: 'Retry' }).click();
   await expect(pa.getByRole('status')).toHaveText('Reprovisioned alpha', { timeout: 90000 });
   await expect(pa.locator('.blk.job')).toHaveCount(0);
-  expect(sent.slice(before).map(r => new URL(r.url).pathname).filter(p => p.includes('/jobs'))).toEqual([expect.stringMatching(/\/api\/v1\/jobs\/[^/]+\/retry$/)]);
+  expect(sent.slice(before).map(r => new URL(r.url).pathname).filter(p => p.includes('/jobs'))).toEqual([expect.stringMatching(/\/api\/engines\/[^/]+\/jobs\/[^/]+\/retry$/)]);
 
   // The host's repair agent starts by itself by default; the admin switches that off on the host's settings.
   await pa.goto(`${a.base}/#/hosts`);

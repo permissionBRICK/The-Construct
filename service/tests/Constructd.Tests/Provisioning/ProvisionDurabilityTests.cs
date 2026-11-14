@@ -122,6 +122,64 @@ public sealed class ProvisionDurabilityTests
         finally { TryDelete(root); }
     }
 
+    [Fact]
+    public async Task A_create_with_secrets_stages_them_for_its_provision_and_stores_logs_or_audits_none()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "construct-create-secrets-" + Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(root);
+        var db = Path.Combine(root, "constructd.db");
+        const string sudo = "create-sudo-secret-112233";
+        var creds = Convert.ToBase64String(Encoding.UTF8.GetBytes("https://bob:create-clone-secret-445566@git.example.test"));
+        var guest = new FakeSshRunner();
+        var processes = new GuestProcesses(guest);
+        try
+        {
+            var h = await StartSqliteAsync(guest, db, root, createVm: true, new SystemSshRunner(processes));
+            try
+            {
+                ((Fakes.FakeReleaseInfo)h.App.Service<IReleaseInfo>()).Installed = new(ProvisionHarness.Commit, "1.0.0", null, "release");
+                guest.Provision = _ => (0, [$"echo {sudo} create-clone-secret-445566", .. FakeSshRunner.Clean]);
+                using var request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/vms")
+                {
+                    Content = System.Net.Http.Json.JsonContent.Create(new
+                    {
+                        name = "fresh", cpu = 2, ramGb = 4, diskGb = 32, desired = ProvisionHarness.Desired("web"),
+                        secrets = new { gitCloneCredentialsB64 = creds, sudoPassword = sudo },
+                    }),
+                };
+                request.Headers.Add("X-Construct-Operation-Key", "create-click-1");
+                var response = await h.Client.SendAsync(request);
+                Assert.True(response.StatusCode == HttpStatusCode.Accepted, await response.Content.ReadAsStringAsync());
+                var job = await h.Client.WaitForJobAsync((await response.ReadAsync<JobAcceptedResponse>()).JobId);
+                Assert.True(job.State == JobState.Succeeded, job.Error);
+                Assert.DoesNotContain("create-clone-secret", System.Text.Json.JsonSerializer.Serialize(job), StringComparison.Ordinal);
+                Assert.DoesNotContain(sudo, System.Text.Json.JsonSerializer.Serialize(job), StringComparison.Ordinal);
+            }
+            finally { await h.App.DisposeAsync(); }
+
+            string[] values = [sudo, creds, "create-clone-secret-445566"];
+            var forms = values.Concat(values.Select(v => Convert.ToBase64String(Encoding.UTF8.GetBytes(v)))).ToArray();
+            var database = string.Concat(Directory.GetFiles(root, "constructd.db*").Select(f => Encoding.UTF8.GetString(File.ReadAllBytes(f))));
+            Assert.Contains("create-click-1", database, StringComparison.Ordinal);
+            Assert.Contains("vm.create", database, StringComparison.Ordinal);
+            var logs = h.App.Logs.AllText();
+            var argv = string.Join('\n', processes.Calls.SelectMany(c => c.Arguments));
+            Assert.Contains("bin/provision.sh", argv, StringComparison.Ordinal);
+            foreach (var form in forms)
+            {
+                Assert.DoesNotContain(form, database, StringComparison.Ordinal);
+                Assert.DoesNotContain(form, logs, StringComparison.Ordinal);
+                Assert.DoesNotContain(form, argv, StringComparison.Ordinal);
+            }
+
+            // They reached the new VM's provision on stdin, in the staged secret file.
+            var stdin = string.Join('\n', processes.Calls.Select(c => c.StandardInput));
+            Assert.Contains($"GIT_CLONE_CREDENTIALS_B64='{creds}'", stdin, StringComparison.Ordinal);
+            Assert.Contains(sudo, stdin, StringComparison.Ordinal);
+        }
+        finally { TryDelete(root); }
+    }
+
     private static async Task<ProvisionHarness> StartSqliteAsync(FakeSshRunner ssh, string db, string root, bool createVm, ISshRunner? runner = null)
     {
         var h = await ProvisionHarness.StartAsync(ssh, db, createVm, Settings(root), runner);

@@ -1,6 +1,8 @@
+using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.AspNetCore.Routing;
 
 namespace Construct.Agent.Http;
@@ -93,7 +95,27 @@ public static class AgentVaultRoutes
             .WithTags("agent").WithName("RestoreBackup")
             .WithDescription("Restores a stored backup into the running VM: the backup's key is unwrapped here with the account's backup key and goes only to the engine's restore job. Follow the job through the proxy.");
 
+        // Jobs that clone project repos: the agent adds this device's git clone credentials (plan 7.4); the rest passes as sent.
+        const string WithCredentials = " The agent adds secrets.gitCloneCredentialsB64 from this device's git credential helper, for the user's own VM only and"
+            + " unless the body carries one; everything else goes to the engine as sent. The answer is the engine's (status and body), with"
+            + " hostsWithoutCredential: the HTTP(S) hosts of the VM's repos that had no working credential here.";
+        api.MapPost("/engines/{engine}/vms/{vm}/jobs", async (DeviceAgent agent, string engine, string vm, [FromBody] JsonObject body, CancellationToken ct) =>
+                Answer(await agent.StartVmJobAsync(engine, vm, body, ct)))
+            .WithTags("agent").WithName("StartVmJobWithCredentials").Produces<JobStartedWithCredentials>(StatusCodes.Status202Accepted)
+            .WithDescription("The engine's POST /vms/{name}/jobs. Credentials go with a provision or a reinstall." + WithCredentials);
+        api.MapPost("/engines/{engine}/vms", async (DeviceAgent agent, string engine, [FromBody] JsonObject body, CancellationToken ct) =>
+                Answer(await agent.CreateVmAsync(engine, body, ct)))
+            .WithTags("agent").WithName("CreateVmWithCredentials").Produces<JobStartedWithCredentials>(StatusCodes.Status202Accepted)
+            .WithDescription("The engine's POST /vms. Credentials go with a create that has settings (its first provision)." + WithCredentials);
+        api.MapPost("/engines/{engine}/jobs/{id}/retry", async (DeviceAgent agent, string engine, string id,
+                [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] JsonObject? body, CancellationToken ct) =>
+                Answer(await agent.RetryJobAsync(engine, id, body, ct)))
+            .WithTags("agent").WithName("RetryJobWithCredentials").Produces<JobStartedWithCredentials>(StatusCodes.Status202Accepted)
+            .WithDescription("The engine's POST /jobs/{id}/retry. Credentials go with the retry of a provision or a reinstall." + WithCredentials);
+
         api.MapGet("/devices/{id}/secrets", async (DeviceAgent agent, string id, CancellationToken ct) => TypedResults.Ok(await agent.SecretsReadableByAsync(id, ct)))
             .WithTags("agent").WithName("SecretsReadableByDevice").WithDescription("Every secret a device could read (all of the account's), to rotate at their source when it is revoked.");
     }
+
+    private static IResult Answer(EngineAnswer answer) => Results.Text(answer.Body, answer.ContentType, statusCode: answer.Status);
 }

@@ -14,8 +14,14 @@ public sealed record CreateTokenRequest(string? Label);
 /// The VM's provision settings. With them the create job also provisions the VM once it is reachable, as a
 /// <c>provision</c> job would, and stores them as the VM's settings; without them the VM is only built.
 /// </param>
+/// <param name="Secrets">
+/// With <paramref name="Desired"/>: the secrets that first provision needs, as on <c>POST /vms/{name}/jobs</c>
+/// (the device agent adds <c>gitCloneCredentialsB64</c>). Kept in the create job's RAM bag only and dropped when it
+/// ends; never stored, logged or part of the operation key's fingerprint. <c>vmTokenB64</c> and <c>backupKey</c>
+/// are not taken: the job issues the VM's token itself.
+/// </param>
 public sealed record CreateVmRequest(string? Name, int? Cpu, int? RamGb, int? DiskGb, CreateVmOptions? Opts,
-    VmDesiredState? Desired = null);
+    VmDesiredState? Desired = null, ProvisionSecretsRequest? Secrets = null);
 
 /// <param name="Nested">Expose virtualization extensions to the guest.</param>
 /// <param name="AutomaticCheckpoints">Hyper-V automatic checkpoints (capability-gated).</param>

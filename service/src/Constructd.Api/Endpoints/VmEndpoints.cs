@@ -111,6 +111,14 @@ public static class VmEndpoints
             catch (ProvisionRequestException ex) { return CodedProblems.Create(ex.Status, ex.Code, ex.Message); }
         }
 
+        if (request.Secrets is { } secrets)
+        {
+            if (secrets.VmTokenB64 is not null) return CodedProblems.Validation("secrets.vmTokenB64", "The create job issues the VM's token itself.");
+            if (secrets.BackupKey is not null) return CodedProblems.Validation("secrets.backupKey", "A create restores no backup.");
+            if (ProvisionEndpoints.SecretBag(secrets, false, out var check) is { } invalid) return invalid;
+            check.Clear();
+        }
+
         var policy = IdlePolicyRules.Default(options.Idle);
         if (request.Opts?.IdlePolicy is { } requested)
         {

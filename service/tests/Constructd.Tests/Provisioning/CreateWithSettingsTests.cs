@@ -53,6 +53,49 @@ public sealed class CreateWithSettingsTests
     }
 
     [Fact]
+    public async Task The_create_request_secrets_reach_the_first_provision_and_end_with_the_job()
+    {
+        await using var h = await StartAsync();
+        var creds = Convert.ToBase64String(Encoding.UTF8.GetBytes("https://bob:create-secret-8642@git.example.test"));
+        var response = await h.Client.PostJsonAsync("/api/v1/vms", new
+        {
+            name = "fresh", cpu = 2, ramGb = 4, diskGb = 32, desired = ProvisionHarness.Desired("web"), secrets = new { gitCloneCredentialsB64 = creds },
+        });
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        var job = await h.Client.WaitForJobAsync((await response.ReadAsync<JobAcceptedResponse>()).JobId);
+        Assert.True(JobState.Succeeded == job.State, job.Error);
+
+        var stage = h.Ssh.Calls.Single(c => c.Command.StartsWith("umask 077; cat > /tmp/.construct-provision-secrets.", StringComparison.Ordinal));
+        Assert.Contains($"GIT_CLONE_CREDENTIALS_B64='{creds}'", stage.StandardInput, StringComparison.Ordinal);
+        Assert.Contains("CONSTRUCT_VM_TOKEN_B64=", stage.StandardInput, StringComparison.Ordinal);
+        Assert.DoesNotContain(h.Ssh.Calls, c => c.Command.Contains(creds, StringComparison.Ordinal));
+        Assert.DoesNotContain("create-secret-8642", JsonSerializer.Serialize(job), StringComparison.Ordinal);
+
+        // A later provision of that VM without secrets has none: nothing was kept.
+        h.Ssh.Calls.Clear();
+        var again = await h.Client.WaitForJobAsync((await (await h.Client.PostJsonAsync("/api/v1/vms/fresh/jobs",
+            new { kind = "provision", requestId = "later", commit = ProvisionHarness.Commit })).ReadAsync<VmJobAcceptedResponse>()).JobId);
+        Assert.Equal(JobState.Succeeded, again.State);
+        Assert.DoesNotContain(h.Ssh.Calls, c => c.StandardInput?.Contains("GIT_CLONE_CREDENTIALS_B64", StringComparison.Ordinal) == true);
+    }
+
+    [Theory]
+    [InlineData("vmTokenB64", "dG9rZW4=")]
+    [InlineData("backupKey", "AGE-SECRET-KEY-1QQQQ")]
+    [InlineData("gitCloneCredentialsB64", "not base64!")]
+    public async Task Create_secrets_the_job_does_not_take_or_cannot_read_refuse_the_create(string field, string value)
+    {
+        await using var h = await StartAsync();
+        var response = await h.Client.PostJsonAsync("/api/v1/vms", new
+        {
+            name = "bad", cpu = 2, ramGb = 4, diskGb = 32, desired = ProvisionHarness.Desired(), secrets = new Dictionary<string, string> { [field] = value },
+        });
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("secrets." + field, await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        Assert.Null(await h.App.Vms.GetAsync("bad", default));
+    }
+
+    [Fact]
     public async Task A_failed_first_provision_fails_the_create_job_and_keeps_the_vm()
     {
         var ssh = new FakeSshRunner { Provision = _ => (1, FakeSshRunner.Clean) };

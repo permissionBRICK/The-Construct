@@ -142,7 +142,7 @@ that 202 as an `ApiException<JobAcceptedResponse>`.
 | `POST /users/{name}/tokens` | admin | Issues an API token `{label}`; the plaintext is in the response **once** and is never stored or logged. |
 | `GET /audit` | admin | Audit trail, newest first, `?limit=`. |
 | `GET /vms` | user or primary token | Owned VMs (token: its primary and children); all for admin. Optional `kind=primary|child|all`, `parent`, and admin-only `owner` filters. |
-| `POST /vms` | user | `{name, cpu?, ramGb, diskGb?, opts:{nested?, automaticCheckpoints?, idlePolicy?}, desired?}` → `202 {jobId, nested, nestedFromHostDefault, ignoredOptions}`. With `desired` (`{projects[], settings}`, as on a provision job) the create job stores them as the VM's settings and provisions the VM once it is reachable; the job then succeeds only when that provision did, and its result carries `provision` (the provision job's result). `nested` is the effective value; unsupported explicitly enabled options appear in `ignoredOptions`. Omit `cpu` by default to use all host logical CPUs within the supported maximum, host per-VM limit and remaining host/user CPU budgets. Name uniqueness and the quota are enforced by the insert itself. |
+| `POST /vms` | user | `{name, cpu?, ramGb, diskGb?, opts:{nested?, automaticCheckpoints?, idlePolicy?}, desired?}` → `202 {jobId, nested, nestedFromHostDefault, ignoredOptions}`. With `desired` (`{projects[], settings}`, as on a provision job) the create job stores them as the VM's settings and provisions the VM once it is reachable; the job then succeeds only when that provision did, and its result carries `provision` (the provision job's result). With `desired`, `secrets` (`gitCloneCredentialsB64`, `serveWebTokenB64`, `sudoPassword`; not `vmTokenB64` or `backupKey`, `400` for those) go to that provision as on a provision job: in the create job's memory only, dropped when it ends, and not part of the operation key's fingerprint. `nested` is the effective value; unsupported explicitly enabled options appear in `ignoredOptions`. Omit `cpu` by default to use all host logical CPUs within the supported maximum, host per-VM limit and remaining host/user CPU budgets. Name uniqueness and the quota are enforced by the insert itself. |
 | `GET /vms/{name}` | owner/admin | The VM including its `publicHost`, forwards and host-administration metadata. Never exposes the VM token hash. |
 | `DELETE /vms/{name}` | owner/admin | → `202 {jobId}`; accepting it fences the VM (see below) and the job removes the VM, its forwards and its SSH port. |
 | `POST /vms/{name}/power` | owner/admin | `{action: start\|stop\|save}`, synchronous, returns the new state. `save` needs the driver's suspend capability. |
@@ -330,7 +330,12 @@ and the job's `phase` is the step it is in.
   job's memory only. They reach the guest on SSH stdin, into a 0600 file the root shell sources and
   removes; they are never in an argument, and every progress line, error and result is filtered for
   them before it is stored. A retried job is sent them again. A sudo that wants a password the job
-  was not given fails the step with `secret-missing`.
+  was not given fails the step with `secret-missing`. `gitCloneCredentialsB64` comes from the device
+  agent, which adds the device's git credentials to a job started from a device; a job started without
+  one (a VM reprovisioning itself, the update follow-up, the repair agent's retry) clones with what the
+  VM kept (`~/.git-credentials` and its git config). A reinstall stages the clone credentials for its
+  main run and again for the deferred project phase after the restore, where they are tried before the
+  restored store.
 - Cancellation (`POST /jobs/{id}/cancel`) takes effect at the next step boundary. A job cut off by a
   restart is failed with the step it reached; running it again starts from the beginning.
 - A failed job's `result` has `failedStep`, `code`, the guest's `failedSteps` and the `fixPrompt` for
