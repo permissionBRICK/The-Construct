@@ -10,6 +10,12 @@
 //
 // With wait: true the plugin watches the job and, once it exits, prompts the
 // session again -- which wakes the agent even if its turn ended long ago.
+//
+// Stop disarms: when the user stops the session (an aborted turn, or the
+// `stopped` marker that Construct's T3 patch writes for a Stop after the turn
+// had already settled), every wait: true task started before that moment
+// stops waking it. The task keeps running and its result stays on disk; the
+// next prompt to the session tells the agent which tasks were disarmed.
 import { spawn } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
@@ -27,18 +33,37 @@ const PRUNE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 const TAIL_LINES = 40
 const TAIL_BYTES = 4000
 const SHELL = fs.existsSync("/bin/bash") ? "/bin/bash" : "/bin/sh"
+// Per-session marker holding the epoch milliseconds of the last Stop. Construct's
+// T3 patch writes it too, so keep the name and format stable.
+const STOP_FILE = "stopped"
+// Per-task marker: the agent has been told that this task no longer wakes it.
+const REPORTED_FILE = "reported"
+// A second background_output on a still-armed running task within this window
+// is answered with a reminder instead of output.
+const POLL_GUARD_MS = 60 * 1000
+const MAX_PARENT_DEPTH = 8
 
 const BACKGROUND_DESCRIPTION = `Run a shell command in the background, detached from this tool call.
 
 The command is spawned in its own process group and keeps running after the tool
 returns, after your turn ends, and after opencode exits. Nothing kills it on a
 timeout. Use it for anything slow or open ended: test suites, builds, installs,
-dev servers, watchers, log tails, long migrations.
+downloads, dev servers, watchers, log tails, long migrations.
 
 wait: true (the normal choice)
-  You are notified in this session as soon as the command exits, even if your
-  turn has already ended -- the result wakes you back up. Start the job, keep
-  working or end your turn; do NOT sit in a polling loop waiting for it.
+  You are woken in this session with the result as soon as the command exits,
+  even after your turn has ended. This is how you wait: start the task, then END
+  YOUR TURN with a one-line status unless you have other work that does not need
+  the result. Never wait by calling background_output again and again, by
+  sleeping, or by polling in a loop -- every check costs a whole turn. The user's
+  UI shows the session as waiting on the task until it wakes you.
+
+Waiting for a condition instead of a command
+  To wait for something to become true -- a VM getting an address, a CI run
+  finishing, a file, port or log line appearing -- write a shell loop that exits
+  once the condition holds (give it a time limit), run it with wait: true, and
+  end your turn. Example:
+    for i in $(seq 1 120); do curl -sf http://host:8080/health && exit 0; sleep 15; done; exit 1
 
 wait: false
   True fire and forget. Nobody wakes you. The process outlives opencode
@@ -46,18 +71,23 @@ wait: false
   just want running, a detached deploy). You can still inspect it later with
   background_output.
 
+If the user stops you, wait: true tasks started before the stop no longer wake
+you; they keep running and the next message tells you which ones were affected.
+
 Use the normal shell/bash tool instead when the command is quick and you need
 its result right now.`
 
 const OUTPUT_DESCRIPTION = `Check a background task started with the background tool: its status and its output.
 
-By default you get only output that appeared since your last check on that task,
-so you can call this repeatedly on a running job (a dev server, a watcher)
-without re-reading everything.
+Use it to look at a task when you have a reason to (it was woken, you suspect it
+hangs, you need a dev server's log) -- not to wait. A wait: true task wakes you
+by itself when it exits; checking it repeatedly while it runs only burns turns,
+and a re-check within a minute is answered with a reminder instead of output.
 
-Pass an empty id to list every background task of this session with its status.
-Every task also has a plain log file on disk (path is reported), so you can grep
-or tail it with the normal shell tool.`
+By default you get only output that appeared since your last check on that task.
+Pass full: true for the whole output. Pass an empty id to list every background
+task of this session with its status. Every task also has a plain log file on
+disk (path is reported), so you can grep or tail it with the normal shell tool.`
 
 const KILL_DESCRIPTION = `Stop a background task started with the background tool.
 
@@ -68,8 +98,14 @@ A killed task never sends a wake-up notification -- you already know it is gone.
 export const BackgroundTasks = async ({ client, directory }) => {
   /** key `sessionID/id` -> job, jobs we still owe a notification for */
   const watching = new Map()
-  /** sessionID -> [text], notifications parked until the session goes idle */
+  /** key `sessionID/id` -> job, every wait: true job of this process (for stop reports) */
+  const known = new Map()
+  /** sessionID -> [{ job, text }], notifications parked until the session goes idle */
   const parked = new Map()
+  /** key `sessionID/id` -> time background_output last returned output for it */
+  const lastCheck = new Map()
+  /** sessionID -> parent sessionID, or null for a root session */
+  const parents = new Map()
   let timer
 
   // --- job state on disk -----------------------------------------------------
@@ -92,6 +128,52 @@ export const BackgroundTasks = async ({ client, directory }) => {
     } catch {
       return undefined
     }
+  }
+
+  // --- stop markers ------------------------------------------------------------
+
+  function stoppedAt(sessionID) {
+    if (!sessionID) return 0
+    const at = Number(safeRead(path.join(sessionDir(sessionID), STOP_FILE)).trim())
+    return Number.isFinite(at) ? at : 0
+  }
+
+  /** Records a Stop of the session. The marker only ever moves forward. */
+  function markStopped(sessionID, at = Date.now()) {
+    if (stoppedAt(sessionID) >= at) return
+    try {
+      fs.mkdirSync(sessionDir(sessionID), { recursive: true })
+      const file = path.join(sessionDir(sessionID), STOP_FILE)
+      fs.writeFileSync(`${file}.${process.pid}.part`, String(at))
+      fs.renameSync(`${file}.${process.pid}.part`, file)
+    } catch {}
+  }
+
+  /** A wait: true job started before a Stop of its session or root session never wakes it. */
+  function disarmed(job) {
+    if (!job.wait) return false
+    const root = job.root && job.root !== job.sessionID ? stoppedAt(job.root) : 0
+    return Math.max(stoppedAt(job.sessionID), root) >= job.started
+  }
+
+  /** The root of a (subagent) session's parent chain, best effort. */
+  async function rootOf(sessionID) {
+    let id = sessionID
+    for (let depth = 0; depth < MAX_PARENT_DEPTH; depth++) {
+      let parent = parents.get(id)
+      if (parent === undefined) {
+        try {
+          const res = await client.session.get({ path: { id }, query: { directory } })
+          parent = (res?.data ?? res)?.parentID ?? null
+        } catch {
+          return id
+        }
+        parents.set(id, parent)
+      }
+      if (!parent) return id
+      id = parent
+    }
+    return id
   }
 
   const alive = (pid) => {
@@ -128,7 +210,7 @@ export const BackgroundTasks = async ({ client, directory }) => {
   function nextJobDir(sessionID) {
     const base = sessionDir(sessionID)
     fs.mkdirSync(base, { recursive: true })
-    let n = fs.readdirSync(base).length + 1
+    let n = fs.readdirSync(base).filter((name) => name.startsWith("bg_")).length + 1
     for (;;) {
       const dir = path.join(base, `bg_${n}`)
       try {
@@ -141,7 +223,7 @@ export const BackgroundTasks = async ({ client, directory }) => {
     }
   }
 
-  function spawnJob({ command, description, wait, sessionID, cwd }) {
+  function spawnJob({ command, description, wait, sessionID, root, cwd }) {
     const { id, dir } = nextJobDir(sessionID)
     const log = path.join(dir, "output.log")
     const commandFile = path.join(dir, "command.sh")
@@ -173,6 +255,7 @@ export const BackgroundTasks = async ({ client, directory }) => {
       description,
       wait,
       sessionID,
+      root: root || sessionID,
       directory,
       cwd,
       pid: child.pid,
@@ -186,7 +269,9 @@ export const BackgroundTasks = async ({ client, directory }) => {
   // --- watching and waking ---------------------------------------------------
 
   function watch(job) {
-    watching.set(`${job.sessionID}/${job.id}`, job)
+    const key = `${job.sessionID}/${job.id}`
+    known.set(key, job)
+    watching.set(key, job)
     if (!timer) {
       timer = setInterval(poll, POLL_MS)
       timer.unref?.()
@@ -195,6 +280,11 @@ export const BackgroundTasks = async ({ client, directory }) => {
 
   async function poll() {
     for (const [key, job] of watching) {
+      // Stopped: stop watching. The result stays on disk and is reported on the next prompt.
+      if (disarmed(job)) {
+        watching.delete(key)
+        continue
+      }
       const result = outcome(job)
       if (!result) continue
       watching.delete(key)
@@ -216,11 +306,16 @@ export const BackgroundTasks = async ({ client, directory }) => {
     }
   }
 
+  function unclaim(dir) {
+    fs.rmSync(path.join(dir, "notified"), { force: true })
+  }
+
   async function notify(job, result) {
+    if (disarmed(job)) return
     if (!claim(job.dir)) return
-    const text = renderNotification(job, result)
-    if (await isIdle(job.sessionID)) return send(job.sessionID, text)
-    parked.set(job.sessionID, [...(parked.get(job.sessionID) ?? []), text])
+    const entry = { job, text: renderNotification(job, result) }
+    if (await isIdle(job.sessionID)) return send(job.sessionID, [entry])
+    parked.set(job.sessionID, [...(parked.get(job.sessionID) ?? []), entry])
   }
 
   async function isIdle(sessionID) {
@@ -233,16 +328,64 @@ export const BackgroundTasks = async ({ client, directory }) => {
     }
   }
 
-  async function send(sessionID, text) {
+  async function send(sessionID, entries) {
+    // A Stop between parking and sending still wins: hand those back to the stop report.
+    const live = entries.filter(({ job }) => {
+      if (!disarmed(job)) return true
+      unclaim(job.dir)
+      return false
+    })
+    if (!live.length) return
     try {
       await client.session.promptAsync({
         path: { id: sessionID },
         query: { directory },
-        body: { parts: [{ type: "text", text }] },
+        body: { parts: [{ type: "text", text: live.map((entry) => entry.text).join("\n\n") }] },
       })
     } catch {
       // Session gone or server shutting down -- the result stays readable on disk.
     }
+  }
+
+  // --- stop report -------------------------------------------------------------
+
+  /** Disarmed wait: true jobs of this session (or its subagents) the agent was not told about. */
+  function pendingReports(sessionID) {
+    const byDir = new Map()
+    for (const job of listJobs(sessionID)) byDir.set(job.dir, job)
+    for (const job of known.values()) if (job.root === sessionID) byDir.set(job.dir, job)
+    return [...byDir.values()].filter(
+      (job) =>
+        disarmed(job) &&
+        !fs.existsSync(path.join(job.dir, "notified")) &&
+        !fs.existsSync(path.join(job.dir, REPORTED_FILE)),
+    )
+  }
+
+  function renderStopReport(jobs) {
+    const lines = [
+      `<background-tasks-stopped>`,
+      `Automated note: the user stopped this session earlier. These background tasks`,
+      `were started with wait: true before that stop and will NOT wake you:`,
+    ]
+    for (const job of jobs) {
+      const s = state(job)
+      lines.push(
+        `- ${job.id} (${job.description || job.command}): ${s.label} after ${duration(job.started, s.at)}, log: ${job.log}`,
+      )
+    }
+    const running = jobs.filter((job) => !state(job).done)
+    lines.push(``, `Read a result with background_output(id: "...", full: true).`)
+    if (running.length) {
+      const job = running[0]
+      lines.push(
+        `If you still need to wait for a running one, start a new wait: true task that`,
+        `waits for it and then end your turn, e.g. for ${job.id}:`,
+        `  while kill -0 ${job.pid} 2>/dev/null; do sleep 5; done; tail -n 40 '${job.log}'`,
+      )
+    }
+    lines.push(`</background-tasks-stopped>`)
+    return lines.join("\n")
   }
 
   function renderNotification(job, result) {
@@ -291,7 +434,8 @@ export const BackgroundTasks = async ({ client, directory }) => {
 
   function summary(job) {
     const s = state(job)
-    return `${job.id}  ${s.label}  ${duration(job.started, s.at)}  ${job.description || job.command}`
+    const stopped = disarmed(job) && !fs.existsSync(path.join(job.dir, "notified")) ? "  [stopped: does not wake you]" : ""
+    return `${job.id}  ${s.label}  ${duration(job.started, s.at)}  ${job.description || job.command}${stopped}`
   }
 
   function readSince(job, full) {
@@ -362,6 +506,8 @@ export const BackgroundTasks = async ({ client, directory }) => {
         if (!job.wait || job.directory !== directory) continue
         if (age > ADOPT_MAX_AGE_MS) continue
         if (fs.existsSync(path.join(job.dir, "notified"))) continue
+        known.set(`${job.sessionID}/${job.id}`, job)
+        if (disarmed(job)) continue
         watch(job)
       }
     }
@@ -372,12 +518,41 @@ export const BackgroundTasks = async ({ client, directory }) => {
 
   return {
     event: async ({ event }) => {
+      const sessionID = event?.properties?.sessionID
+      if (!sessionID) return
+      // An aborted turn is a Stop (T3's Stop, the TUI's Esc, the abort API). It is
+      // published before the session goes idle, so parked wake-ups are disarmed in time.
+      if (event.type === "session.error") {
+        if (event.properties.error?.name === "MessageAbortedError") markStopped(sessionID)
+        return
+      }
       if (event.type !== "session.idle") return
-      const sessionID = event.properties.sessionID
-      const texts = parked.get(sessionID)
-      if (!texts?.length) return
+      const entries = parked.get(sessionID)
+      if (!entries?.length) return
       parked.delete(sessionID)
-      await send(sessionID, texts.join("\n\n"))
+      await send(sessionID, entries)
+    },
+
+    // The next prompt after a Stop (the user's, or another task's wake-up) tells the
+    // agent which tasks no longer wake it. Synthetic: the model sees it, T3 hides it.
+    "chat.message": async (input, output) => {
+      const sessionID = input?.sessionID
+      if (!sessionID || !Array.isArray(output?.parts)) return
+      const jobs = pendingReports(sessionID)
+      if (!jobs.length) return
+      output.parts.push({
+        id: partID(),
+        sessionID,
+        messageID: output.message?.id ?? output.parts[0]?.messageID,
+        type: "text",
+        synthetic: true,
+        text: renderStopReport(jobs),
+      })
+      for (const job of jobs) {
+        try {
+          fs.writeFileSync(path.join(job.dir, REPORTED_FILE), "")
+        } catch {}
+      }
     },
 
     dispose: async () => {
@@ -411,7 +586,8 @@ export const BackgroundTasks = async ({ client, directory }) => {
             metadata: { command, description, background: true },
           })
           const cwd = ctx.directory || directory
-          const job = spawnJob({ command, description, wait, sessionID: ctx.sessionID, cwd })
+          const root = wait ? await rootOf(ctx.sessionID) : ctx.sessionID
+          const job = spawnJob({ command, description, wait, sessionID: ctx.sessionID, root, cwd })
           ctx.metadata({ title: `${description} (${job.id})`, metadata: { id: job.id, pid: job.pid } })
           return {
             title: `${description} (${job.id})`,
@@ -421,10 +597,14 @@ export const BackgroundTasks = async ({ client, directory }) => {
               `cwd: ${cwd}`,
               `log: ${job.log}`,
               ``,
-              wait
-                ? `wait: on -- you will be notified in this session when it exits, even after your turn has ended. Do not poll in a loop; carry on or end your turn, the result will wake you.`
-                : `wait: off -- fire and forget. The process keeps running even if opencode exits and nothing will notify you.`,
-              `Check on it any time with background_output(id: "${job.id}"), stop it with background_kill(id: "${job.id}").`,
+              ...(wait
+                ? [
+                    `wait: on -- you will be woken in this session with the result when it exits, even after your turn has ended.`,
+                    `Next: unless you have other work that does not need this result, end your turn now with a one-line status.`,
+                    `Do not call background_output, sleep or poll to wait for it.`,
+                  ]
+                : [`wait: off -- fire and forget. The process keeps running even if opencode exits and nothing will notify you.`]),
+              `Inspect it with background_output(id: "${job.id}") only if you need to; stop it with background_kill(id: "${job.id}").`,
             ].join("\n"),
             metadata: { id: job.id, pid: job.pid, log: job.log, wait },
           }
@@ -463,6 +643,24 @@ export const BackgroundTasks = async ({ client, directory }) => {
             )
           }
           const s = state(job)
+          const key = `${job.sessionID}/${job.id}`
+          const stopped = disarmed(job)
+          if (job.wait && !s.done && !stopped && !full) {
+            const last = lastCheck.get(key)
+            if (last !== undefined && Date.now() - last < POLL_GUARD_MS) {
+              return {
+                title: `${job.description || job.command} (${job.id})`,
+                output: [
+                  `${job.id}: still running after ${duration(job.started, s.at)}. Checked again ${duration(last)} after your last check.`,
+                  `You will be woken with its result when it exits, so there is nothing to poll.`,
+                  `End your turn now with a one-line status, unless you have other work that does not need this result.`,
+                  `(New output is kept for a later check; full: true shows all of it.)`,
+                ].join("\n"),
+                metadata: { id: job.id, running: true, status: s.label },
+              }
+            }
+          }
+          lastCheck.set(key, Date.now())
           const { text } = readSince(job, full)
           const body = text.trimEnd()
           return {
@@ -471,6 +669,7 @@ export const BackgroundTasks = async ({ client, directory }) => {
               `${job.id}: ${s.label} after ${duration(job.started, s.at)}`,
               `command: ${job.command}`,
               `log: ${job.log}`,
+              ...(job.wait && stopped && !s.done ? [`Stopped by the user: this task keeps running but no longer wakes you.`] : []),
               ``,
               body
                 ? [full ? "output (from the start):" : "output (new since your last check):", "```", body, "```"].join("\n")
@@ -495,6 +694,7 @@ export const BackgroundTasks = async ({ client, directory }) => {
           fs.writeFileSync(path.join(job.dir, "killed"), "")
           claim(job.dir) // a task we killed on purpose must not wake us up later
           watching.delete(`${job.sessionID}/${job.id}`)
+          lastCheck.delete(`${job.sessionID}/${job.id}`)
           kill(job.pid, "SIGTERM")
           for (let i = 0; i < 20 && alive(job.pid); i++) await sleep(100)
           if (alive(job.pid)) kill(job.pid, "SIGKILL")
@@ -522,6 +722,16 @@ function kill(pid, signal) {
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+// OpenCode's ascending part id layout: "prt_", 12 hex digits of (ms * 4096 + counter),
+// 14 base62 characters. One millisecond ahead so the note sorts after the prompt's parts.
+const BASE62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+function partID() {
+  const time = (BigInt(Date.now() + 1) * 0x1000n).toString(16).padStart(12, "0").slice(-12)
+  let rest = ""
+  for (let i = 0; i < 14; i++) rest += BASE62[Math.floor(Math.random() * 62)]
+  return `prt_${time}${rest}`
+}
 
 function safeRead(file) {
   try {

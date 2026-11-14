@@ -54,6 +54,7 @@ if [[ "$group" == service || "$group" == all ]]; then
   bash -n console-viewer/install.sh bin/construct-vm.sh bin/construct-secret.sh bin/construct-backup.sh bin/construct-config.sh bin/construct-oom-guard.sh bin/project-forwards.sh bin/provision.sh bin/fetch-construct-source.sh bin/construct-worktree-clone.sh bin/construct-agent-fix.sh service/host/xfs-cloud-image.sh service/host/install-construct-host.sh
   bash test/worktree-clone.test.sh
   bash test/codex-install.test.sh
+  node --no-warnings test/opencode-background.test.mjs
   bash test/claude-rm-prompt.test.sh
   pwsh -NoProfile -File test/browser-console-install.test.ps1
   bash test/browser-console-provision.test.sh
