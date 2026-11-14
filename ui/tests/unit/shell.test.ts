@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { makeShell } from '../../src/ui/shell';
+import { makeShell, openExternal } from '../../src/ui/shell';
 
 /* The desktop shell's hooks: in WebView2 the page asks the shell's host object; in a browser it navigates. */
 
@@ -33,5 +33,41 @@ describe('makeShell', () => {
     const w = win('https://127.0.0.1:5000/?surf=alone#/', { postMessage: 'nope' });
     makeShell(w).openWindow({ page: 'home' });
     expect(w.location.href).toBe('https://127.0.0.1:5000/?surf=win#/home');
+  });
+  it('asks the document that frames it (the VS Code view) when there is no host object', () => {
+    const sent: unknown[] = [];
+    const targets: string[] = [];
+    const w = win('http://127.0.0.1:5000/?surf=pop#/');
+    (w as unknown as { parent: unknown }).parent = { postMessage: (m: unknown, t: string) => { sent.push(m); targets.push(t); } };
+    const sh = makeShell(w);
+    sh.openWindow({ page: 'vault' });
+    sh.close();
+    expect(sent).toEqual([{ type: 'openWindow', route: '#/vault' }, { type: 'close' }]);
+    expect(w.location.href).toBe('http://127.0.0.1:5000/?surf=pop#/');
+  });
+
+  it('does not treat a top-level page as framed', () => {
+    const w = win('http://127.0.0.1:5000/?surf=pop#/');
+    (w as unknown as { parent: unknown }).parent = w;
+    makeShell(w).openWindow({ page: 'vault' });
+    expect(w.location.href).toBe('http://127.0.0.1:5000/?surf=win#/vault');
+  });
+});
+
+describe('openExternal', () => {
+  it('opens a new window in a browser and in the desktop shell, and asks the frame owner in VS Code', () => {
+    const opened: string[] = [];
+    const open = ((u: string) => { opened.push(u); return null; }) as unknown as Window['open'];
+    const plain = Object.assign(win('http://127.0.0.1:5000/'), { open });
+    openExternal(plain, 'http://localhost:3000');
+    const shell = Object.assign(win('http://127.0.0.1:5000/', { postMessage: () => { throw new Error('not the host object'); } }), { open });
+    openExternal(shell, 'http://localhost:3001');
+    expect(opened).toEqual(['http://localhost:3000', 'http://localhost:3001']);
+
+    const sent: unknown[] = [];
+    const framed = Object.assign(win('http://127.0.0.1:5000/'), { open, parent: { postMessage: (m: unknown) => sent.push(m) } });
+    openExternal(framed, 'http://localhost:3002');
+    expect(sent).toEqual([{ type: 'openExternal', url: 'http://localhost:3002' }]);
+    expect(opened).toHaveLength(2);
   });
 });

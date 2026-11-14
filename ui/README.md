@@ -110,8 +110,10 @@ sign-in is offered only where the agent reports a Windows device.
 
 In the Windows shell the page runs in WebView2 with `?surf=pop|win|alone`. Closing the pop-out or the lone vault
 card (its buttons, or Escape) posts `{type: 'close'}`, and opening the window posts `{type: 'openWindow', route}`,
-both through `window.chrome.webview.postMessage` and only when that object exists (`src/ui/shell.ts`). In a
-browser the pop-out opens the window by navigating, and close does nothing.
+both through `window.chrome.webview.postMessage` when that object exists (`src/ui/shell.ts`). Framed by the
+VS Code extension's view, the same two messages go to the framing document, and a forward's link goes there as
+`{type: 'openExternal', url}`, because a sandboxed frame cannot open a window; the extension checks each
+message. In a browser the pop-out opens the window by navigating, and close does nothing.
 
 ## Parameters of `index.html`
 

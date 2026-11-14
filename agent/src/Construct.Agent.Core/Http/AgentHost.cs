@@ -140,8 +140,9 @@ public sealed class AgentHost : IAsyncDisposable
     private static async Task GuardAsync(HttpContext context, RequestDelegate next, AgentHost host)
     {
         var headers = context.Response.Headers;
-        headers["X-Frame-Options"] = "DENY";
-        headers["Content-Security-Policy"] = "frame-ancestors 'none'";
+        // Only VS Code may frame the page (the thin extension's view): its webview and the window around it.
+        // A web page cannot. The framed page still needs the token, which only a local reader of the agent's file has.
+        headers["Content-Security-Policy"] = "frame-ancestors vscode-webview: vscode-file:";
         headers["X-Content-Type-Options"] = "nosniff";
         headers["Referrer-Policy"] = "no-referrer";
 

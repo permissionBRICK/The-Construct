@@ -44,6 +44,9 @@ test("the bridge accepts only the page's known messages", () => {
   assert.deepEqual(page.pageMessage({ type: "openWindow" }), { type: "openWindow", route: "#/" });
   assert.deepEqual(page.pageMessage({ type: "close" }), { type: "close" });
   assert.deepEqual(page.pageMessage({ type: "openVsCode", engine: "a1b2c3d4e5f6", vm: "work", extra: 1 }), { type: "openVsCode", engine: "a1b2c3d4e5f6", vm: "work" });
+  assert.deepEqual(page.pageMessage({ type: "openExternal", url: "http://localhost:3000/app?x=1" }), { type: "openExternal", url: "http://localhost:3000/app?x=1" });
+  for (const url of ["https://evil.example/", "http://localhost.evil.example:80/", "file:///etc/passwd", "http://localhost:3000/#x", "vscode://x", 7])
+    assert.equal(page.pageMessage({ type: "openExternal", url }), null, String(url));
   for (const bad of [null, "openWindow", [], { type: "openWindow", route: "https://evil/" }, { type: "openVsCode", engine: "../x", vm: "w" },
     { type: "openVsCode", engine: "e", vm: "w;rm -rf" }, { type: "run", command: "x" }]) {
     assert.equal(page.pageMessage(bad), null, JSON.stringify(bad));

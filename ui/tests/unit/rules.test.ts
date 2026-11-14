@@ -22,7 +22,7 @@ describe('rules', () => {
       expect(t, f).not.toMatch(/[?&]token=|agent-token=\$\{/);
     }
   });
-  it('posts messages only to the desktop shell\'s WebView2 host object', () => {
+  it('posts messages only from the shell hooks (to the desktop shell or the framing VS Code view)', () => {
     for (const [f, t] of src) if (/postMessage\s*\(/.test(t)) expect(f, f).toMatch(/[\\/]ui[\\/]shell\.ts$/);
   });
   it('loads no fonts or scripts from a CDN', () => {

@@ -38,7 +38,8 @@ public sealed class LocalApiTests
         {
             Assert.Equal(HttpStatusCode.OK, page.StatusCode);
             Assert.Contains("<title>ui</title>", await page.Content.ReadAsStringAsync());
-            Assert.Equal("DENY", page.Headers.GetValues("X-Frame-Options").Single());
+            // Only VS Code's webview may frame the page; a web page may not.
+            Assert.Equal("frame-ancestors vscode-webview: vscode-file:", page.Headers.GetValues("Content-Security-Policy").Single());
         }
 
         // A page on another origin is refused even with the token; so is a request for another host name.

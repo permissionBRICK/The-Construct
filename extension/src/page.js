@@ -13,6 +13,7 @@ const SURFACES = new Set(["pop", "win"]);
 const ROUTE_RE = /^#\/[A-Za-z0-9/_.~%-]{0,200}$/;
 const ENGINE_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const VM_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
+const LOCAL_URL_RE = /^https?:\/\/(localhost|127\.0\.0\.1):\d{1,5}(\/[A-Za-z0-9/_.~%?&=+-]{0,500})?$/;
 
 function esc(s) {
   return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -102,7 +103,8 @@ function frameHtml({ nonce, port }) {
 
 /**
  * What the extension accepts from the agent's page, or null. `openWindow` (the pop-out asks for
- * the window at a route), `close`, and `openVsCode` for one of the user's VMs.
+ * the window at a route), `close`, `openVsCode` for one of the user's VMs, and `openExternal` for a
+ * forwarded port on this machine.
  */
 function pageMessage(m) {
   if (!m || typeof m !== "object" || Array.isArray(m)) return null;
@@ -115,6 +117,9 @@ function pageMessage(m) {
     case "openVsCode":
       return typeof m.engine === "string" && ENGINE_RE.test(m.engine) && typeof m.vm === "string" && VM_RE.test(m.vm)
         ? { type: "openVsCode", engine: m.engine, vm: m.vm } : null;
+    case "openExternal":
+      // A forward's link: a port on this machine, nothing else.
+      return typeof m.url === "string" && LOCAL_URL_RE.test(m.url) ? { type: "openExternal", url: m.url } : null;
     default: return null;
   }
 }

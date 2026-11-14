@@ -5,6 +5,7 @@ import type {
   Backend, CreateVmRequest, Feature, FirstRunRequest, Host, HostProbe, HostUser, HostVm, Job, JobKind, Open, Prefs, ProfileSave, SettingsPatch, State, Upgrade, VaultMode, VaultRequest, Vm, WinKey,
 } from '../types';
 import { followEvents, type AgentEventData } from './events';
+import { openExternal } from '../../ui/shell';
 import {
   updateRunning, allowanceOf, codeGroups, hostVersion, jobKey, problemText, splitJobKey, toCert, toConfig, toDevice, toHostJob, toHostUser, toHostVm, toJob,
   toMedia, toStatus, toUpdates, toUsage, toVm, toWindows, vmKey, toSecret, toLeases, toVaultEvent, toApproval, toEntryRequest, toProfile, splitRequestKey, VM_JOB_KINDS,
@@ -1039,7 +1040,7 @@ export class ApiBackend implements Backend {
     const f = this.vmRef(vmId)?.vm.forwards.find(x => x.port === port);
     if (!f?.url) return;
     const url = /^https?:\/\//.test(f.url) ? f.url : `http://${f.url}`;
-    try { window.open(url, '_blank', 'noopener'); } catch { /* no window here */ }
+    openExternal(window, url);
   }
   openChildConsole(..._: unknown[]) { this.note(NA); }
   setVmPassword(..._: unknown[]) { this.note(NA); }

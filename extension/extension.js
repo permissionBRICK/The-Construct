@@ -170,6 +170,7 @@ function onPageMessage(m) {
   if (!m) return undefined;
   if (m.type === "openWindow") return openWindow(m.route);
   if (m.type === "openVsCode") return openVmInVsCode(m.engine, m.vm);
+  if (m.type === "openExternal") return vscode.env.openExternal(vscode.Uri.parse(m.url));
   return undefined;
 }
 
