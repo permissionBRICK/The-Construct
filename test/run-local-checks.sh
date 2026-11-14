@@ -98,6 +98,8 @@ if [[ "$group" == service || "$group" == all ]]; then
   pwsh -NoProfile -File test/native-iso-host.test.ps1
   python3 test/iso-download.test.py
   bash test/host-package.test.sh
+  pwsh -NoProfile -File service/tests/host-installer.test.ps1
+  pwsh -NoProfile -File service/tests/host-installer-solo.test.ps1
   pwsh -NoProfile -File service/tests/host-release-installer.test.ps1
   pwsh -NoProfile -File service/tests/host-updater.test.ps1
   bash service/tests/host-updater.test.sh
