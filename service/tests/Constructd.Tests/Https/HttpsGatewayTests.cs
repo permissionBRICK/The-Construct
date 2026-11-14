@@ -18,7 +18,7 @@ namespace Constructd.Tests.Https;
 
 /// <summary>
 /// The HTTPS front over real loopback sockets: TLS is terminated with the host's certificate, the byte stream
-/// (Host header included) reaches the guest unchanged, a TLS-speaking guest port is detected, the shared port
+/// (Host header included) reaches the guest unchanged, the guest port is spoken to the way the forward says, the shared port
 /// routes by server name to a VM's main forward and to the vault relay, a guest that does not answer gets a
 /// page that reloads itself, and a renewed certificate is served without a restart.
 /// </summary>
@@ -81,16 +81,45 @@ public sealed class HttpsGatewayTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task A_guest_port_that_speaks_tls_is_detected()
+    public async Task A_forward_that_says_its_port_speaks_tls_connects_with_tls()
     {
         await AddVmAsync("work-vm");
         using var guest = new HttpGuest(TestCertificates.SelfSigned(["guest.internal"]));
-        var forward = await AddHttpsForwardAsync("work-vm", guest.Port);
+        var forward = await AddHttpsForwardAsync("work-vm", guest.Port, upstreamTls: true);
 
         var (_, response) = await RequestAsync(forward.PublicPort!.Value, "work-vm.vms.test", "work-vm.vms.test");
 
         Assert.Contains("200 OK", response);
         Assert.Contains("tls=True", response);
+        Assert.Equal(1, guest.Accepted);
+    }
+
+    [Fact]
+    public async Task A_plain_forward_never_tries_tls_first()
+    {
+        await AddVmAsync("work-vm");
+        using var guest = new HttpGuest();
+        var forward = await AddHttpsForwardAsync("work-vm", guest.Port);
+
+        for (var i = 0; i < 2; i++)
+            Assert.Contains("200 OK", (await RequestAsync(forward.PublicPort!.Value, "work-vm.vms.test", "work-vm.vms.test")).Response);
+
+        Assert.Equal(2, guest.Accepted);
+        Assert.Equal(0, guest.TlsHellos);
+    }
+
+    [Fact]
+    public async Task A_tls_forward_whose_port_serves_plain_http_says_so()
+    {
+        await AddVmAsync("work-vm");
+        using var guest = new HttpGuest();
+        var forward = await AddHttpsForwardAsync("work-vm", guest.Port, upstreamTls: true);
+
+        var (_, response) = await RequestAsync(forward.PublicPort!.Value, "work-vm.vms.test", "work-vm.vms.test");
+
+        Assert.Contains("503 Service Unavailable", response);
+        Assert.Contains("but not with TLS", response);
+        Assert.Contains("--upstream-plain", response);
     }
 
     [Fact]
@@ -225,10 +254,10 @@ public sealed class HttpsGatewayTests : IAsyncDisposable
             TokenKind: VmTokenKind.Primary), 10, CancellationToken.None);
     }
 
-    private async Task<PortForward> AddHttpsForwardAsync(string vm, int vmPort, bool main = false, string? name = null)
+    private async Task<PortForward> AddHttpsForwardAsync(string vm, int vmPort, bool main = false, string? name = null, bool upstreamTls = false)
     {
         _driver.Port = vmPort;
-        var added = await _manager.TryAddHttpsForwardAsync(vm, vmPort, "web", new HttpsForwardOptions(main, null, name), 0, CancellationToken.None);
+        var added = await _manager.TryAddHttpsForwardAsync(vm, vmPort, "web", new HttpsForwardOptions(main, upstreamTls, name), 0, CancellationToken.None);
         Assert.Equal(AddForwardStatus.Added, added.Status);
         return added.Forward!;
     }
@@ -299,6 +328,12 @@ public sealed class HttpsGatewayTests : IAsyncDisposable
     {
         private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
         private readonly CancellationTokenSource _stop = new();
+        private int _accepted;
+        private int _tlsHellos;
+
+        /// <summary>Connections accepted, and TLS hellos a plain guest was sent.</summary>
+        public int Accepted => Volatile.Read(ref _accepted);
+        public int TlsHellos => Volatile.Read(ref _tlsHellos);
 
         public HttpGuest(TestCertificates.Issued? tls = null) : this("guest", tls)
         {
@@ -316,6 +351,7 @@ public sealed class HttpsGatewayTests : IAsyncDisposable
                     TcpClient client;
                     try { client = await _listener.AcceptTcpClientAsync(_stop.Token); }
                     catch (Exception) { break; }
+                    Interlocked.Increment(ref _accepted);
                     _ = Task.Run(async () =>
                     {
                         using (client)
@@ -338,6 +374,7 @@ public sealed class HttpsGatewayTests : IAsyncDisposable
                                     if (read == 0) return;
                                     if (certificate is null && head.Length == 0 && buffer[0] == 0x16)
                                     {
+                                        Interlocked.Increment(ref _tlsHellos);
                                         // What node and nginx do with a TLS hello on a plain port.
                                         await stream.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n"), _stop.Token);
                                         return;

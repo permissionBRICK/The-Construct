@@ -653,7 +653,7 @@ ok "https: the body asks for https, main and upstream TLS on a host forward" \
 reset_stub
 printf '403' >"${stub_dir}/code"
 printf '{"code":"https-unavailable","detail":"HTTPS forwards are not enabled for '"'"'alice'"'"'."}' >"${stub_dir}/response"
-refused_out="$(remote 5178 --https 2>&1)"; refused_code=$?
+refused_out="$(remote 5178 --https --upstream-plain 2>&1)"; refused_code=$?
 ok "https: an unavailable host is a refusal (exit 7)" test "${refused_code}" = 7
 ok "https: ...that says why" grep -q 'not enabled for' <<<"${refused_out}"
 
@@ -663,7 +663,7 @@ printf '409' >"${stub_dir}/code"
 printf '{"code":"https-unavailable","detail":"This host has no HTTPS certificate."}' >"${stub_dir}/response"
 printf '201' >"${stub_dir}/code-2"
 printf '{"id":"fwd-p","vmPort":5178,"publicPort":2311,"target":"host","label":"T3","url":"http://buildbox.example.local:2311/"}' >"${stub_dir}/response-2"
-fallback_out="$(remote 5178 --to host --https-if-available --main --label T3 2>&1)"; fallback_code=$?
+fallback_out="$(remote 5178 --to host --https-if-available --main --upstream-plain --label T3 2>&1)"; fallback_code=$?
 ok "https-if-available: falls back to a plain host forward" test "${fallback_code}:${fallback_out}" = "0:http://buildbox.example.local:2311/"
 ok "https-if-available: the second request is a plain one" sh -c "test \"\$(grep -c '\"https\":true' '${stub_dir}/bodies')\" = 1"
 
@@ -671,13 +671,50 @@ ok "https-if-available: the second request is a plain one" sh -c "test \"\$(grep
 reset_stub
 printf '200' >"${stub_dir}/code"
 printf '[{"id":"fwd-p","vmPort":5178,"target":"host","url":"http://buildbox.example.local:2311/"},{"id":"fwd-h","vmPort":5178,"target":"host","https":true,"url":"https://work-vm.vms.example:2310/"}]' >"${stub_dir}/response"
-reuse_https="$(remote 5178 --https --reuse 2>&1)"
+reuse_https="$(remote 5178 --https --upstream-plain --reuse 2>&1)"
 ok "https --reuse: finds the HTTPS forward" test "${reuse_https}" = "https://work-vm.vms.example:2310/"
 reset_stub
 printf '200' >"${stub_dir}/code"
 printf '[{"id":"fwd-h","vmPort":5178,"target":"host","https":true,"url":"https://work-vm.vms.example:2310/"},{"id":"fwd-p","vmPort":5178,"target":"host","url":"http://buildbox.example.local:2311/"}]' >"${stub_dir}/response"
 reuse_plain="$(remote 5178 --to host --reuse 2>&1)"
 ok "plain --reuse: never picks the HTTPS forward" test "${reuse_plain}" = "http://buildbox.example.local:2311/"
+
+# What the port speaks is stated, never detected: --https needs one of the two flags.
+reset_stub
+unstated_out="$(remote 5178 --https 2>&1)"; unstated_code=$?
+ok "upstream: --https without --upstream-plain/--upstream-tls is refused" test "${unstated_code}" = 1
+ok "upstream: ...naming --upstream-plain" grep -q -- '--upstream-plain' <<<"${unstated_out}"
+ok "upstream: ...and --upstream-tls" grep -q -- '--upstream-tls' <<<"${unstated_out}"
+ok "upstream: ...before asking the host anything" test ! -s "${stub_dir}/requests"
+ok "upstream: --https-if-available needs it too" sh -c "! STUB_DIR='${stub_dir}' PATH='${stubs}:${PATH}' CONFIG_FILE='${remote_cfg}' CONSTRUCT_VM_TOKEN_FILE='${token_file}' bash '${CLI}' expose 3000 --https-if-available >/dev/null 2>&1"
+ok "upstream: the two flags exclude each other" sh -c "! STUB_DIR='${stub_dir}' PATH='${stubs}:${PATH}' CONFIG_FILE='${remote_cfg}' CONSTRUCT_VM_TOKEN_FILE='${token_file}' bash '${CLI}' expose 3000 --https --upstream-plain --upstream-tls >/dev/null 2>&1"
+ok "upstream: --upstream-plain needs --https" sh -c "! STUB_DIR='${stub_dir}' PATH='${stubs}:${PATH}' CONFIG_FILE='${remote_cfg}' CONSTRUCT_VM_TOKEN_FILE='${token_file}' bash '${CLI}' expose 3000 --upstream-plain >/dev/null 2>&1"
+reset_stub
+printf '201' >"${stub_dir}/code"
+printf '{"id":"fwd-h","vmPort":5173,"publicPort":2310,"target":"host","url":"https://work-vm-5173.vms.example/","https":true,"upstreamTls":false}' >"${stub_dir}/response"
+remote 5173 --https --upstream-plain >/dev/null 2>&1
+ok "upstream: --upstream-plain asks for upstreamTls false" grep -q '"upstreamTls":false' "${stub_dir}/bodies"
+
+# --reuse replaces an HTTPS forward that says the other thing about the port: closed
+# first (its name and main address go to the new one), then created again.
+reset_stub
+printf '200' >"${stub_dir}/code"
+printf '[{"id":"fwd-old","vmPort":5173,"target":"host","https":true,"upstreamTls":false,"url":"https://work-vm-5173.vms.example/"}]' >"${stub_dir}/response"
+printf '204' >"${stub_dir}/code-2"
+printf '' >"${stub_dir}/response-2"
+printf '201' >"${stub_dir}/code-3"
+printf '{"id":"fwd-new","vmPort":5173,"publicPort":2314,"target":"host","url":"https://work-vm-5173.vms.example/","https":true,"upstreamTls":true}' >"${stub_dir}/response-3"
+replaced_out="$(remote 5173 --https --upstream-tls --reuse 2>"${tmp}/replaced.err")"; replaced_code=$?
+ok "upstream --reuse: a forward that says otherwise is replaced" test "${replaced_code}:${replaced_out}" = "0:https://work-vm-5173.vms.example/"
+ok "upstream --reuse: ...by closing the old one" grep -q 'DELETE https://buildbox.example.local:7462/api/v1/vms/work-vm/forwards/fwd-old' "${stub_dir}/requests"
+ok "upstream --reuse: ...and saying so" grep -q 'replaced forward fwd-old: port 5173 now speaks TLS' "${tmp}/replaced.err"
+ok "upstream --reuse: ...then asking for TLS" grep -q '"upstreamTls":true' "${stub_dir}/bodies"
+reset_stub
+printf '200' >"${stub_dir}/code"
+printf '[{"id":"fwd-old","vmPort":5173,"target":"host","https":true,"upstreamTls":true,"url":"https://work-vm-5173.vms.example/"}]' >"${stub_dir}/response"
+same_out="$(remote 5173 --https --upstream-tls --reuse 2>&1)"
+ok "upstream --reuse: a forward that says the same is reused" test "${same_out}" = "https://work-vm-5173.vms.example/"
+ok "upstream --reuse: ...without closing anything" sh -c "! grep -q DELETE '${stub_dir}/requests'"
 
 # Forward names and the main guard (docs/https-forwards.md, "Forward names").
 reset_stub
@@ -690,14 +727,14 @@ ok "names: ...and --replace-main" grep -q -- '--replace-main' <<<"${help_out}"
 reset_stub
 printf '201' >"${stub_dir}/code"
 printf '{"id":"fwd-n","vmName":"work-vm","vmPort":5173,"publicPort":2312,"target":"host","label":"app","url":"https://work-vm-app.vms.example/","https":true,"name":"app","portUrl":"https://work-vm.vms.example:2312/"}' >"${stub_dir}/response"
-named_out="$(remote 5173 --https --name App --label app 2>&1)"
+named_out="$(remote 5173 --https --upstream-plain --name App --label app 2>&1)"
 ok "names: prints the named link" test "${named_out}" = "https://work-vm-app.vms.example/"
 ok "names: the body carries the lowercased name" grep -q '"name":"app"' "${stub_dir}/bodies"
 
 reset_stub
 printf '201' >"${stub_dir}/code"
 printf '{"id":"fwd-m","vmName":"work-vm","vmPort":5174,"publicPort":2313,"target":"host","label":"web","url":"https://work-vm.vms.example/","https":true,"main":true,"name":"5174"}' >"${stub_dir}/response"
-remote 5174 --https --main --replace-main >/dev/null 2>&1
+remote 5174 --https --upstream-plain --main --replace-main >/dev/null 2>&1
 ok "names: --replace-main asks for it" sh -c "grep -q '\"main\":true' '${stub_dir}/bodies' && grep -q '\"replaceMain\":true' '${stub_dir}/bodies'"
 
 ok "names: --name needs --https" sh -c "! STUB_DIR='${stub_dir}' PATH='${stubs}:${PATH}' CONFIG_FILE='${remote_cfg}' CONSTRUCT_VM_TOKEN_FILE='${token_file}' bash '${CLI}' expose 3000 --name app >/dev/null 2>&1"
@@ -708,20 +745,20 @@ ok "names: a name is a DNS label" sh -c "! STUB_DIR='${stub_dir}' PATH='${stubs}
 reset_stub
 printf '409' >"${stub_dir}/code"
 printf '{"code":"https-name-taken","detail":"This VM already has an HTTPS forward named '"'"'app'"'"'."}' >"${stub_dir}/response"
-taken_out="$(remote 5175 --https --name app 2>&1)"; taken_code=$?
+taken_out="$(remote 5175 --https --upstream-plain --name app 2>&1)"; taken_code=$?
 ok "names: a taken name is a refusal (exit 7)" test "${taken_code}" = 7
 ok "names: ...that says why" grep -q "already has an HTTPS forward named" <<<"${taken_out}"
 reset_stub
 printf '409' >"${stub_dir}/code"
 printf '{"code":"main-taken","detail":"'"'"'T3'"'"' (VM port 5178) is this VM'"'"'s main HTTPS forward."}' >"${stub_dir}/response"
-main_out="$(remote 5175 --https --main 2>&1)"; main_code=$?
+main_out="$(remote 5175 --https --upstream-plain --main 2>&1)"; main_code=$?
 ok "names: a held main address is a refusal (exit 7)" test "${main_code}:$(grep -c 'main HTTPS forward' <<<"${main_out}")" = "7:1"
 
 # --reuse with --name only reuses the forward of that name.
 reset_stub
 printf '200' >"${stub_dir}/code"
 printf '[{"id":"fwd-a","vmPort":5173,"target":"host","https":true,"name":"5173","url":"https://work-vm-5173.vms.example/"},{"id":"fwd-b","vmPort":5173,"target":"host","https":true,"name":"docs","url":"https://work-vm-docs.vms.example/"}]' >"${stub_dir}/response"
-reuse_named="$(remote 5173 --https --name docs --reuse 2>&1)"
+reuse_named="$(remote 5173 --https --upstream-plain --name docs --reuse 2>&1)"
 ok "names --reuse: picks the forward with that name" test "${reuse_named}" = "https://work-vm-docs.vms.example/"
 
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"

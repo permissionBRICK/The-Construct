@@ -137,7 +137,12 @@ public sealed class HttpsApiTests
         Assert.Equal($"https://buildbox.test:{forward.PublicPort}/", forward.Url);
         Assert.StartsWith("https:", app.Forwards.Materialized[forward.Id]);
 
-        Assert.Equal(HttpStatusCode.BadRequest, (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 80, https = true, target = "client" })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 80, https = true, upstreamTls = false, target = "client" })).StatusCode);
+        var unstated = await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 80, https = true });
+        Assert.Equal(HttpStatusCode.BadRequest, unstated.StatusCode);
+        Assert.Contains("upstreamTls", await unstated.Content.ReadAsStringAsync());
+        var plain = await (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 8080, https = true, upstreamTls = false })).ReadAsync<ForwardResponse>();
+        Assert.Equal(false, plain.UpstreamTls);
         Assert.Equal(HttpStatusCode.BadRequest, (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 80, main = true, target = "host" })).StatusCode);
 
         var listed = await (await vm.GetAsync("/api/v1/vms/work-vm/forwards")).ReadAsync<List<ForwardResponse>>();
@@ -157,7 +162,7 @@ public sealed class HttpsApiTests
         Assert.Equal(HttpStatusCode.BadRequest, conflict.StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await admin.PutJsonAsync("/api/v1/host/config", new { https = new { sharedPort = shared, startOnRequest = true } })).StatusCode);
 
-        var forward = await (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5178, https = true, main = true })).ReadAsync<ForwardResponse>();
+        var forward = await (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5178, https = true, upstreamTls = false, main = true })).ReadAsync<ForwardResponse>();
 
         Assert.True(forward.Main);
         Assert.Equal($"https://work-vm.vms.test:{shared}/", forward.Url);
@@ -192,12 +197,12 @@ public sealed class HttpsApiTests
         var (app, _, vm, shared) = await SharedSetupAsync();
         using var _ = app;
 
-        var named = await (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5173, https = true, name = "App" })).ReadAsync<ForwardResponse>();
+        var named = await (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5173, https = true, upstreamTls = false, name = "App" })).ReadAsync<ForwardResponse>();
         Assert.Equal("app", named.Name);
         Assert.Equal($"https://work-vm-app.vms.test:{shared}/", named.Url);
         Assert.Equal($"https://work-vm.vms.test:{named.PublicPort}/", named.PortUrl);
 
-        var byPort = await (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 8080, https = true })).ReadAsync<ForwardResponse>();
+        var byPort = await (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 8080, https = true, upstreamTls = false })).ReadAsync<ForwardResponse>();
         Assert.Equal("8080", byPort.Name);
         Assert.Equal($"https://work-vm-8080.vms.test:{shared}/", byPort.Url);
 
@@ -214,21 +219,21 @@ public sealed class HttpsApiTests
     {
         var (app, admin, vm, _) = await SharedSetupAsync();
         using var _ = app;
-        Assert.Equal(HttpStatusCode.Created, (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5173, https = true, name = "app" })).StatusCode);
+        Assert.Equal(HttpStatusCode.Created, (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5173, https = true, upstreamTls = false, name = "app" })).StatusCode);
 
-        Assert.Equal(HttpStatusCode.BadRequest, (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5174, https = true, name = "my_app" })).StatusCode);
-        Assert.Equal(HttpStatusCode.BadRequest, (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5174, https = true, name = new string('n', 60) })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5174, https = true, upstreamTls = false, name = "my_app" })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5174, https = true, upstreamTls = false, name = new string('n', 60) })).StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest, (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5174, target = "host", name = "plain" })).StatusCode);
-        Assert.Equal(HttpStatusCode.BadRequest, (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5174, https = true, name = " " })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5174, https = true, upstreamTls = false, name = " " })).StatusCode);
 
-        var again = await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5174, https = true, name = "app" });
+        var again = await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5174, https = true, upstreamTls = false, name = "app" });
         Assert.Equal(HttpStatusCode.Conflict, again.StatusCode);
         Assert.Equal("https-name-taken", await CodeOfAsync(again));
         // A DEFAULT name is never refused: a second forward of the same port is created, and only the older one
         // gets the name; the newer one keeps its port address.
-        var first = await (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5173, https = true })).ReadAsync<ForwardResponse>();
+        var first = await (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5173, https = true, upstreamTls = false })).ReadAsync<ForwardResponse>();
         app.Clock.Advance(TimeSpan.FromSeconds(1));
-        var second = await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5173, https = true });
+        var second = await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5173, https = true, upstreamTls = false });
         Assert.Equal(HttpStatusCode.Created, second.StatusCode);
         var secondForward = await second.ReadAsync<ForwardResponse>();
         Assert.Contains("work-vm-5173.vms.test", first.Url);
@@ -236,19 +241,19 @@ public sealed class HttpsApiTests
 
         // work + "vm-app" would be work-vm-app, and work-vm + "db" is the VM work-vm-db.
         var other = app.CreateVmTokenClient((await admin.CreateVmAsync("work")).VmToken());
-        var clash = await other.PostJsonAsync("/api/v1/vms/work/forwards", new { vmPort = 5173, https = true, name = "vm-app" });
+        var clash = await other.PostJsonAsync("/api/v1/vms/work/forwards", new { vmPort = 5173, https = true, upstreamTls = false, name = "vm-app" });
         Assert.Equal(HttpStatusCode.Conflict, clash.StatusCode);
         Assert.Equal("https-name-taken", await CodeOfAsync(clash));
         Assert.Contains("work-vm", await clash.Content.ReadAsStringAsync());
         await admin.CreateVmAsync("work-vm-db");
-        var vmName = await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5432, https = true, name = "db" });
+        var vmName = await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5432, https = true, upstreamTls = false, name = "db" });
         Assert.Equal(HttpStatusCode.Conflict, vmName.StatusCode);
         Assert.Equal("https-name-taken", await CodeOfAsync(vmName));
         Assert.Contains("the VM", await vmName.Content.ReadAsStringAsync());
 
         // ...and never the key vault's address.
         Assert.Equal(HttpStatusCode.OK, (await admin.PutJsonAsync("/api/v1/host/config", new { vault = new { webUrl = "https://work-vm-vault.vms.test" } })).StatusCode);
-        var vault = await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 9000, https = true, name = "vault" });
+        var vault = await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 9000, https = true, upstreamTls = false, name = "vault" });
         Assert.Equal(HttpStatusCode.Conflict, vault.StatusCode);
         Assert.Contains("key vault", await vault.Content.ReadAsStringAsync());
     }
@@ -261,7 +266,7 @@ public sealed class HttpsApiTests
         var longName = "long-" + new string('v', 55); // 60 characters: <vm>-5178 would be 65
         var vm = app.CreateVmTokenClient((await admin.CreateVmAsync(longName)).VmToken());
 
-        var created = await vm.PostJsonAsync($"/api/v1/vms/{longName}/forwards", new { vmPort = 5178, https = true, main = true });
+        var created = await vm.PostJsonAsync($"/api/v1/vms/{longName}/forwards", new { vmPort = 5178, https = true, upstreamTls = false, main = true });
 
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
         Assert.StartsWith($"https://{longName}.vms.test:", (await created.ReadAsync<ForwardResponse>()).Url);
@@ -280,7 +285,7 @@ public sealed class HttpsApiTests
         var busy = ((IPEndPoint)squatter.LocalEndpoint).Port;
         Assert.Equal(HttpStatusCode.OK, (await admin.PutJsonAsync("/api/v1/host/config", new { https = new { sharedPort = busy, startOnRequest = true } })).StatusCode);
 
-        var forward = await (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5173, https = true, main = true })).ReadAsync<ForwardResponse>();
+        var forward = await (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5173, https = true, upstreamTls = false, main = true })).ReadAsync<ForwardResponse>();
 
         Assert.Equal($"https://work-vm.vms.test:{forward.PublicPort}/", forward.Url);
         var availability = await AvailabilityAsync(vm);
@@ -296,8 +301,8 @@ public sealed class HttpsApiTests
         var issued = TestCertificates.SelfSigned(["buildbox.test"]);
         app.Service<HttpsCertificateStore>().Import(issued.ChainPem, issued.KeyPem);
 
-        Assert.Equal(HttpStatusCode.Created, (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5173, https = true })).StatusCode);
-        Assert.Equal(HttpStatusCode.Created, (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5173, https = true })).StatusCode);
+        Assert.Equal(HttpStatusCode.Created, (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5173, https = true, upstreamTls = false })).StatusCode);
+        Assert.Equal(HttpStatusCode.Created, (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5173, https = true, upstreamTls = false })).StatusCode);
     }
 
     [Fact]
@@ -305,17 +310,17 @@ public sealed class HttpsApiTests
     {
         var (app, _, vm, shared) = await SharedSetupAsync();
         using var _ = app;
-        var t3 = await (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5178, https = true, main = true, label = "T3" })).ReadAsync<ForwardResponse>();
+        var t3 = await (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5178, https = true, upstreamTls = false, main = true, label = "T3" })).ReadAsync<ForwardResponse>();
         Assert.Equal($"https://work-vm.vms.test:{shared}/", t3.Url);
 
-        var taken = await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5173, https = true, main = true });
+        var taken = await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5173, https = true, upstreamTls = false, main = true });
         Assert.Equal(HttpStatusCode.Conflict, taken.StatusCode);
         Assert.Equal("main-taken", await CodeOfAsync(taken));
         Assert.Contains("'T3'", await taken.Content.ReadAsStringAsync());
-        Assert.Equal(HttpStatusCode.BadRequest, (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5173, https = true, replaceMain = true })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5173, https = true, upstreamTls = false, replaceMain = true })).StatusCode);
 
         app.Clock.Advance(TimeSpan.FromSeconds(1)); // "newest" is by creation time; the test clock stands still otherwise
-        var replaced = await (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5173, https = true, main = true, replaceMain = true })).ReadAsync<ForwardResponse>();
+        var replaced = await (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5173, https = true, upstreamTls = false, main = true, replaceMain = true })).ReadAsync<ForwardResponse>();
         Assert.Equal($"https://work-vm.vms.test:{shared}/", replaced.Url);
         // The older main forward keeps its own name, and gets the VM's back once the newer one is closed.
         var listed = await (await vm.GetAsync("/api/v1/vms/work-vm/forwards")).ReadAsync<List<ForwardResponse>>();
@@ -331,7 +336,7 @@ public sealed class HttpsApiTests
         var (app, _, vm, _) = await SharedSetupAsync(["work-vm.vms.test"]);
         using var _ = app;
 
-        var forward = await (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5173, https = true, name = "app" })).ReadAsync<ForwardResponse>();
+        var forward = await (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5173, https = true, upstreamTls = false, name = "app" })).ReadAsync<ForwardResponse>();
 
         Assert.Equal($"https://work-vm.vms.test:{forward.PublicPort}/", forward.Url);
         Assert.Null(forward.PortUrl);
@@ -357,7 +362,7 @@ public sealed class HttpsApiTests
         var issued = TestCertificates.SelfSigned(["buildbox.test"]);
         app.Service<HttpsCertificateStore>().Import(issued.ChainPem, issued.KeyPem);
         app.Driver.EndpointHostSuffix = ".invalid";
-        var forward = await (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5178, https = true })).ReadAsync<ForwardResponse>();
+        var forward = await (await vm.PostJsonAsync("/api/v1/vms/work-vm/forwards", new { vmPort = 5178, https = true, upstreamTls = false })).ReadAsync<ForwardResponse>();
         Assert.Equal(HttpStatusCode.OK, (await admin.PostJsonAsync("/api/v1/vms/work-vm/power", new { action = "save" })).StatusCode);
         Assert.Equal(VmState.Saved, app.Driver.StateOf("work-vm"));
 

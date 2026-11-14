@@ -11,6 +11,13 @@
 # (it opens as soon as the user's Construct client connects) instead of holding
 # up provisioning.
 #
+# An entry with `https: true` adds --https-if-available, --upstream-tls or
+# --upstream-plain as its `upstreamTls` says, and --name when it sets one: an
+# HTTPS forward with the host's certificate
+# where the host offers one for this VM, a plain host forward everywhere else
+# (a local install, a host without a certificate or without the permission), so
+# one shared profile works on every VM. That is how provisioning asks for T3.
+#
 # Forwards are VM state: a reinstall deletes them along with the VM, and nothing
 # but the profiles brings them back. Removing an entry from a profile does not
 # close the live forward; `construct expose --close <port>` does.
@@ -66,13 +73,27 @@ while IFS= read -r entry; do
   to="$(jq -r '.to // "client"' <<<"${entry}")"
   label="$(jq -r '.label // ""' <<<"${entry}")"
   profile="$(jq -r '.profile // ""' <<<"${entry}")"
+  https="$(jq -r '.https == true' <<<"${entry}")"
+  name="$(jq -r '.name // ""' <<<"${entry}")"
   args=("${port}" --to "${to}" --reuse --wait 0)
   [[ -n "${label}" ]] && args+=(--label "${label}")
+  kind="${to}"
+  if [[ "${https}" == "true" ]]; then
+    args+=(--https-if-available)
+    if [[ "$(jq -r '.upstreamTls == true' <<<"${entry}")" == "true" ]]; then args+=(--upstream-tls); else args+=(--upstream-plain); fi
+    [[ -n "${name}" ]] && args+=(--name "${name}")
+    kind="https${name:+ ${name}}"
+  fi
   rc=0
   link="$(CONFIG_FILE="${CONFIG_FILE}" bash "${EXPOSE}" "${args[@]}" 2>"${errfile}")" || rc=$?
-  what="${port} (${to}${label:+, ${label}}; ${profile})"
+  what="${port} (${kind}${label:+, ${label}}; ${profile})"
   case "${rc}" in
-    0) ok "  ${what}: ${link}" ;;
+    0)
+      ok "  ${what}: ${link}"
+      if [[ "${https}" == "true" && "${link}" != https://* ]]; then
+        note "    the host offers no HTTPS forward for this VM, so this is a plain host forward"
+      fi
+      ;;
     6) note "  ${what}: queued, opens when the user's Construct client connects" ;;
     7) failed=1; warn "  ${what}: refused by the host service"; sed 's/^/    /' "${errfile}" >&2 ;;
     *) failed=1; warn "  ${what}: not opened (construct expose exited ${rc})"; sed 's/^/    /' "${errfile}" >&2 ;;

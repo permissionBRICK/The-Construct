@@ -23,7 +23,8 @@ VM_VARS = ['CONSTRUCT_SERVICE_URL', 'CONSTRUCT_INSTANCE_NAME', 'CONSTRUCT_SERVIC
 STUB = '''#!/usr/bin/env bash
 printf '%s\\n' "$(printf '%q ' "$@")" >>"${STUB_CALLS}"
 rc="$(jq -r --arg p "$1" '.[$p] // 0' <<<"${STUB_CODES:-{\\}}")"
-if [[ "${rc}" == 0 ]]; then printf 'http://localhost:%s/\\n' "$1"; else printf 'stub diagnostic for %s\\n' "$1" >&2; fi
+scheme=http; [[ -n "${STUB_HTTPS:-}" && " $* " == *" --https-if-available "* ]] && scheme=https
+if [[ "${rc}" == 0 ]]; then printf '%s://localhost:%s/\\n' "${scheme}" "$1"; else printf 'stub diagnostic for %s\\n' "$1" >&2; fi
 exit "${rc}"
 '''
 
@@ -73,6 +74,20 @@ class ProjectForwardsTests(unittest.TestCase):
             dict(profile='a', port=5173, to='host', label=''),
         ])
 
+    def test_merge_makes_https_forwards_host_forwards_and_keeps_names_apart(self):
+        merged = self.profiles(
+            z=[dict(port=5173, https=True, upstreamTls=False, name='app', label='vite'),
+               dict(port=5173, https=True, upstreamTls=True), dict(port=5173, to='host')],
+            a=[dict(port=5173, https=True, upstreamTls=False, to='host', name='app'),
+               dict(port=5173, https=True, upstreamTls=False, name='other'), dict(port=8443, https=False, to='host')])
+        self.assertEqual(merged, [
+            dict(profile='z', port=5173, to='host', label='vite', https=True, upstreamTls=False, name='app'),
+            dict(profile='z', port=5173, to='host', label='', https=True, upstreamTls=True, name=''),
+            dict(profile='z', port=5173, to='host', label=''),
+            dict(profile='a', port=5173, to='host', label='', https=True, upstreamTls=False, name='other'),
+            dict(profile='a', port=8443, to='host', label=''),
+        ])
+
     def test_profiles_without_forwards_merge_to_an_empty_list(self):
         self.assertEqual(self.profiles(plain=None), [])
         result = self.run_script()
@@ -89,6 +104,26 @@ class ProjectForwardsTests(unittest.TestCase):
             "9000 --to host --reuse --wait 0 ",
         ])
         self.assertIn('5173 (client, vite dev; web): http://localhost:5173/', result.stdout)
+
+    def test_an_https_forward_is_requested_if_available_saying_what_its_port_speaks(self):
+        self.profiles(web=[dict(port=5173, https=True, name='app', upstreamTls=True, label='vite dev'),
+                           dict(port=5174, https=True, upstreamTls=False)])
+        result = self.run_script(STUB_HTTPS='1')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls.read_text().splitlines(), [
+            "5173 --to host --reuse --wait 0 --label vite\\ dev --https-if-available --upstream-tls --name app ",
+            "5174 --to host --reuse --wait 0 --https-if-available --upstream-plain ",
+        ])
+        self.assertIn('5173 (https app, vite dev; web): https://localhost:5173/', result.stdout)
+        self.assertIn('5174 (https; web): https://localhost:5174/', result.stdout)
+        self.assertNotIn('plain host forward', result.stdout)
+
+    def test_an_https_forward_the_host_cannot_serve_says_it_is_plain(self):
+        self.profiles(web=[dict(port=5173, https=True, upstreamTls=False)])
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('5173 (https; web): http://localhost:5173/', result.stdout)
+        self.assertIn('the host offers no HTTPS forward for this VM, so this is a plain host forward', result.stdout)
 
     def test_queued_is_success_and_a_failure_warns_without_stopping_the_rest(self):
         self.profiles(web=[dict(port=1001), dict(port=1002, to='host'), dict(port=1003), dict(port=1004)])
@@ -107,7 +142,8 @@ class ProjectForwardsTests(unittest.TestCase):
         # (queued, exit 6), a host forward is stateless, and a second provision
         # reuses the queued requests instead of adding new ones.
         spool = self.root / 'forwards'
-        self.profiles(web=[dict(port=5173, label='vite dev'), dict(port=8080, to='host'), dict(port=3000)])
+        self.profiles(web=[dict(port=5173, label='vite dev'), dict(port=8080, to='host'), dict(port=3000),
+                           dict(port=8443, https=True, upstreamTls=True, name='app')])
         env = dict(CONSTRUCT_EXPOSE_SCRIPT=str(ROOT / 'bin/construct-expose.sh'), CONSTRUCT_FORWARDS_DIR=str(spool),
                    CONSTRUCT_EXTERNAL_HOST='vm-1.example.test')
         for _ in range(2):
@@ -117,6 +153,8 @@ class ProjectForwardsTests(unittest.TestCase):
         self.assertEqual(sorted((r['vmPort'], r['label'], r['target']) for r in requests),
                          [(3000, '', 'client'), (5173, 'vite dev', 'client')])
         self.assertIn('8080 (host; web): http://vm-1.example.test:8080/', result.stdout)
+        # Without a host service an HTTPS entry is the plain host forward, not an error.
+        self.assertIn('8443 (https app; web): http://vm-1.example.test:8443/', result.stdout)
 
 
 if __name__ == '__main__':

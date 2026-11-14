@@ -169,6 +169,14 @@ public static class ForwardEndpoints
             return CodedProblems.Create(unavailable.Reason == "not-allowed" ? 403 : 409, "https-unavailable", unavailable.Message!);
         }
 
+        // Checked after availability, so a host without HTTPS still answers https-unavailable and a guest asking
+        // with --https-if-available falls back to a plain forward whatever it sent.
+        if (https && request.UpstreamTls is null)
+        {
+            return CodedProblems.Validation("upstreamTls",
+                "An HTTPS forward must say what the VM port speaks: upstreamTls=true when it serves TLS itself, false when it serves plain HTTP (construct expose --upstream-tls or --upstream-plain).");
+        }
+
         var label = request.Label?.Trim() ?? string.Empty;
         var network = http.RequestServices.GetRequiredService<VmNetworkSettings>();
         await using var networkGate = network.Supported
@@ -243,7 +251,7 @@ public static class ForwardEndpoints
             // between counting and adding, or attach a forward to a VM that is being torn down.
             result = https
                 ? await forwards.TryAddHttpsForwardAsync(vm.Name, vmPort, label,
-                    new HttpsForwardOptions(request.Main == true, request.UpstreamTls, httpsName), options.MaxForwardsPerVm, cancellationToken)
+                    new HttpsForwardOptions(request.Main == true, request.UpstreamTls == true, httpsName), options.MaxForwardsPerVm, cancellationToken)
                     .ConfigureAwait(false)
                 : await forwards.TryAddForwardAsync(
                     vm.Name, vmPort, target, label, options.MaxForwardsPerVm, cancellationToken)

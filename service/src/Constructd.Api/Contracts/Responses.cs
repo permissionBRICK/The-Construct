@@ -105,7 +105,7 @@ public sealed record ForwardResponse(
             return new(
                 forward.Id, forward.VmName, forward.VmPort, forward.PublicPort,
                 forward.Target, forward.Label, forward.Created, sharedUrl ?? portUrl,
-                Https: true, Main: forward.Main, UpstreamTls: forward.UpstreamTls, PortUrl: sharedUrl is null ? null : portUrl,
+                Https: true, Main: forward.Main, UpstreamTls: forward.UpstreamTls == true, PortUrl: sharedUrl is null ? null : portUrl,
                 Name: HttpsForwardNames.Effective(forward));
         }
 
