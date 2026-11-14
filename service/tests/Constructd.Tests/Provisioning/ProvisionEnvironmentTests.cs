@@ -1,15 +1,12 @@
-using System.Diagnostics;
-using System.Text;
-using System.Text.Json;
 using Constructd.Core.Domain;
 using Constructd.Core.Logic;
 
 namespace Constructd.Tests.Provisioning;
 
 /// <summary>
-/// The guest must see the same environment from the engine as from <c>Provision-AgentVM.ps1</c> for
-/// the same settings (design 4, "Guest equivalence"). Pinned twice: by the variable list below, and —
-/// where <c>pwsh</c> is installed — against the PowerShell's own statements, evaluated from the script.
+/// The guest sees the environment the old PowerShell provisioner gave it for the same settings (design 4,
+/// "Guest equivalence"), pinned by the variable list below. The provisioner itself is gone; the engine is
+/// the only implementation.
 /// </summary>
 public sealed class ProvisionEnvironmentTests
 {
@@ -31,7 +28,7 @@ public sealed class ProvisionEnvironmentTests
     [Fact]
     public void The_variable_set_is_the_PowerShell_one_in_its_order()
     {
-        // From Provision-AgentVM.ps1: the $envPrefix at the provision.sh call, + $externalEnv,
+        // As the old Provision-AgentVM.ps1 sent them: the $envPrefix at the provision.sh call, + $externalEnv,
         // + $serviceEnv, then T3CODE_BUILD_MODE, DEFER_PROJECT_COMMANDS, REBOOT_AFTER_PROVISION.
         string[] expected =
         [
@@ -54,88 +51,6 @@ public sealed class ProvisionEnvironmentTests
         Assert.DoesNotContain(ProvisionScript.CloneCredentialsVariable, keys);
         Assert.Equal(["CONSTRUCT_PAYLOAD_HASH", "CONSTRUCT_DESIRED_HASH", "CONSTRUCT_CHANNEL"], keys[^3..]);
     }
-
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public void The_environment_matches_the_PowerShell_statements_evaluated_from_the_script(bool remote)
-    {
-        if (FindPwsh() is not { } pwsh) return; // pinned by the test above alone
-        var input = remote ? Remote() : Local();
-        var s = input.Desired.Settings;
-        var cloneCred = remote ? "aHR0cHM6Ly91OnRAZ2l0LnRlc3Q=" : "";
-        var vars = new Dictionary<string, object?>
-        {
-            ["AiTools"] = s.AiTools ?? "opencode,claude-code,codex", ["Projects"] = string.Join(',', input.Desired.Projects),
-            ["SeedUser"] = s.SeedUser ?? input.DefaultSeedUser, ["agentNameArg"] = input.VmName + "-agent", ["RemoteUser"] = "root",
-            ["gitNameB64"] = Convert.ToBase64String(Encoding.UTF8.GetBytes(s.GitUserName ?? "")),
-            ["gitEmailB64"] = Convert.ToBase64String(Encoding.UTF8.GetBytes(s.GitEmail ?? "")),
-            ["gitCredStore"] = s.GitCredentialStore == true ? "true" : "false", ["cloneCredB64"] = cloneCred, ["cloneSkipHostsB64"] = "",
-            ["checkoutArg"] = "true", ["setupRootKeyArg"] = input.ConnectedAsRoot ? "false" : "true",
-            ["VsCodeServer"] = "true", ["VsCodeServeWeb"] = "true", ["VsCodeTunnel"] = "false", ["serveWebTokenB64"] = "",
-            ["vsCodeCommit"] = s.VsCodeClientCommit ?? "", ["constructVersion"] = input.ConstructVersion, ["SmbShare"] = "true",
-            ["ClaudePartialStreaming"] = "true", ["MicPassthrough"] = "false", ["OpenCodeBackgroundWatcher"] = "",
-            ["T3Code"] = s.T3Code ?? "", ["T3CodeChannel"] = "", ["T3CodeBuildSource"] = "", ["T3CodePatched"] = "",
-            ["T3CodeAutoApprove"] = "", ["T3CodeHttps"] = "", ["DockerRegistryMirrors"] = s.DockerRegistryMirrors ?? "",
-            // The PowerShell's default endpoint is not sent; the engine sends it only when stated.
-            ["VmHost"] = s.ExternalHost ?? "agent-vm.mshome.net", ["SshPort"] = s.ExternalSshPort ?? 22, ["PublicHost"] = "",
-            ["ServiceUrl"] = s.ServiceUrl ?? "", ["InstanceName"] = input.VmName, ["serviceCaB64"] = s.ServiceCaB64 ?? "",
-        };
-        var scenario = JsonSerializer.Serialize(new { useRootKey = input.ConnectedAsRoot, defer = input.DeferProjectCommands, vars });
-        // The PowerShell's 'explicitly bound' rule only matters for the default endpoint, which the engine never sends.
-        var (main, phase) = RunDriver(pwsh, scenario, explicitlyBound: remote);
-
-        // The engine stages the clone credential instead; the guest's environment is the same.
-        var secrets = remote ? new HashSet<string> { ProvisionScript.CloneCredentialsVariable } : new HashSet<string>();
-        var engineInput = input with { SecretNames = secrets };
-        var engine = ProvisionScript.MainEnvironment(engineInput).ToDictionary(v => v.Key, v => v.Value);
-        var enginePhase = ProvisionScript.ProjectPhaseEnvironment(engineInput).ToDictionary(v => v.Key, v => v.Value);
-        if (remote) { engine[ProvisionScript.CloneCredentialsVariable] = cloneCred; enginePhase[ProvisionScript.CloneCredentialsVariable] = cloneCred; }
-
-        Assert.Equal(ParseEnv(main).OrderBy(v => v.Key), engine.OrderBy(v => v.Key));
-        Assert.Equal(ParseEnv(phase).OrderBy(v => v.Key), enginePhase.OrderBy(v => v.Key));
-        Assert.EndsWith(" bash /opt/construct/repo/bin/provision.sh", phase, StringComparison.Ordinal);
-    }
-
-    /// <summary>Words of an <c>env A='x' B=y …</c> command as the shell sees them (single quotes only).</summary>
-    internal static Dictionary<string, string> ParseEnv(string command)
-    {
-        var words = new List<string>();
-        var word = new StringBuilder();
-        var quoted = false;
-        var any = false;
-        foreach (var c in command)
-        {
-            if (quoted) { if (c == '\'') quoted = false; else word.Append(c); continue; }
-            if (c == '\'') { quoted = true; any = true; continue; }
-            if (c == ' ') { if (any || word.Length > 0) words.Add(word.ToString()); word.Clear(); any = false; continue; }
-            if (c == '\\') continue; // only in '\'' here
-            word.Append(c);
-        }
-
-        if (any || word.Length > 0) words.Add(word.ToString());
-        Assert.Equal("env", words[0]);
-        return words.Skip(1).TakeWhile(w => w.Contains('=', StringComparison.Ordinal))
-            .Select(w => w.Split('=', 2)).ToDictionary(p => p[0], p => p[1]);
-    }
-
-    private static (string Main, string Phase) RunDriver(string pwsh, string scenario, bool explicitlyBound)
-    {
-        var script = FindRepoFile("Provision-AgentVM.ps1");
-        var driver = FindRepoFile("service/tests/Constructd.Tests/Provisioning/provision-env.driver.ps1");
-        var start = new ProcessStartInfo(pwsh) { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
-        foreach (var a in new[] { "-NoProfile", "-NonInteractive", "-File", driver, script, scenario, explicitlyBound ? "1" : "0" }) start.ArgumentList.Add(a);
-        using var process = Process.Start(start)!;
-        var output = process.StandardOutput.ReadToEnd();
-        var error = process.StandardError.ReadToEnd();
-        Assert.True(process.WaitForExit(120_000));
-        Assert.True(process.ExitCode == 0, error);
-        var lines = output.Split('\n').Select(l => l.TrimEnd('\r')).ToList();
-        return (lines.Single(l => l.StartsWith("MAIN:", StringComparison.Ordinal))[5..], lines.Single(l => l.StartsWith("PHASE:", StringComparison.Ordinal))[6..]);
-    }
-
-    private static string? FindPwsh() =>
-        new[] { "/usr/local/bin/pwsh", "/usr/bin/pwsh", "/opt/microsoft/powershell/7/pwsh" }.FirstOrDefault(File.Exists);
 
     internal static string FindRepoFile(string relativePath)
     {

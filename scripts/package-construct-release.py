@@ -9,7 +9,7 @@ import subprocess
 import zipfile
 
 
-def package(root, output, commit, repository, companion_release_tag=None, channel='stable', version='1.0.0'):
+def package(root, output, commit, repository, channel='stable', version='1.0.0'):
     if not re.fullmatch(r'[0-9a-f]{40}', commit) or not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository):
         raise ValueError('Invalid release identity')
     if channel not in ('stable', 'nightly') or not re.fullmatch(r'\d+\.\d+\.\d+', version):
@@ -56,11 +56,6 @@ def package(root, output, commit, repository, companion_release_tag=None, channe
         manifest.update({key + 'Asset': agent.name, key + 'Sha256': agent_hash, key + 'SizeBytes': agent.stat().st_size})
         with (output / 'SHA256SUMS').open('a') as sums:
             sums.write(f'{agent_hash}  {agent.name}\n')
-    if companion_release_tag is not None:
-        # The Companion this commit installs: its own build, or the newest one when nothing changed.
-        if not re.fullmatch(r'companion-[0-9a-f]{40}', companion_release_tag):
-            raise ValueError('Invalid Companion release tag')
-        manifest['companionReleaseTag'] = companion_release_tag
     # The channel manifest (docs/release-flow.md): additive keys old clients ignore. The guest
     # payload a VM receives is the source archive, so its hash identifies the guest payload.
     manifest.update(channel=channel, version=f'{version}+{commit}', guestPayloadHash=source_hash,
@@ -78,8 +73,7 @@ if __name__ == '__main__':
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--commit', required=True)
     parser.add_argument('--repository', required=True)
-    parser.add_argument('--companion-release-tag')
     parser.add_argument('--channel', choices=['stable', 'nightly'], default='stable')
     parser.add_argument('--version', default='1.0.0', help='X.Y.Z; the manifest records X.Y.Z+<commit>')
     args = parser.parse_args()
-    package(args.root, args.output, args.commit, args.repository, args.companion_release_tag, args.channel, args.version)
+    package(args.root, args.output, args.commit, args.repository, args.channel, args.version)

@@ -1,14 +1,12 @@
 #!/usr/bin/env bash
-# Regression tests for the key vault's guest scripts — the bash the Companion runs inside
-# each VM over SSH (companion/src/Construct.Companion.Core/Vault/GuestScripts/*.sh).
+# Regression tests for the key vault's scan and clean-up scripts
+# (companion/src/Construct.Companion.Core/Vault/GuestScripts/vault-{scan,clean}.sh), which
+# `construct secret _scrub` renders from the VM's own checkout (bin/construct-secret.sh).
 # Run: bash test/vault-guest-scripts.test.sh
 #
-# The scripts are templates: the Companion fills {{name}} placeholders with single-quoted
-# values and runs the result as `bash <file>`, with stdin as the data channel. These tests
-# render them the same way and run them locally (the SSH transport is the only part not
-# exercised). The invariants they guard:
-#   * the watcher hands every request over exactly once, as one line, and keeps the spool
-#     private and swept;
+# The scripts are templates: {{name}} placeholders are filled with single-quoted values and
+# the result runs as `bash <file>`, with stdin as the data channel. These tests render them
+# the same way and run them locally. The invariants they guard:
 #   * secrets travel on stdin only: never in argv, where every process on the VM sees them;
 #   * scrubbing edits files in place (agents keep appending to them) and leaves every other
 #     byte, row and database structure intact.
@@ -122,131 +120,14 @@ export S1 S2 S2J S3 S4
 
 # ── templates ────────────────────────────────────────────────────────────────
 placeholders() { grep -o '{{[A-Za-z][A-Za-z0-9]*}}' "$1" | sort -u | tr '\n' ' '; }
-ok "vault-watch.sh uses only {{dir}} {{heartbeat}} {{fallback}}" \
-  test "$(placeholders "${SCRIPTS}/vault-watch.sh")" = '{{dir}} {{fallback}} {{heartbeat}} '
-ok "vault-respond.sh uses only {{dir}} {{id}}" \
-  test "$(placeholders "${SCRIPTS}/vault-respond.sh")" = '{{dir}} {{id}} '
 ok "vault-scan.sh uses only {{dir}} {{roots}} {{maxSize}}" \
   test "$(placeholders "${SCRIPTS}/vault-scan.sh")" = '{{dir}} {{maxSize}} {{roots}} '
 ok "vault-clean.sh uses only {{dir}}" \
   test "$(placeholders "${SCRIPTS}/vault-clean.sh")" = '{{dir}} '
-for s in watch respond scan clean; do
+for s in scan clean; do
   ok "vault-${s}.sh has no stray {{ (the renderer would choke on the next edit)" \
     test "$(grep -o '{{' "${SCRIPTS}/vault-${s}.sh" | wc -l)" = "$(grep -o '{{[A-Za-z][A-Za-z0-9]*}}' "${SCRIPTS}/vault-${s}.sh" | wc -l)"
 done
-
-# ── vault-watch.sh: inotify path ─────────────────────────────────────────────
-spool="${tmp}/spool dir/it's"
-watch="${tmp}/watch.sh"
-render "${SCRIPTS}/vault-watch.sh" "${watch}" "dir=$(q "${spool}")" heartbeat=3 fallback=1
-ok "rendered vault-watch.sh parses" bash -n "${watch}"
-bash "${watch}" >"${tmp}/watch.out" 2>/dev/null &
-watch_pid=$!
-bg+=("${watch_pid}")
-ok "the watcher creates the spool" wait_for test -d "${spool}/responses"
-ok "spool base is 0700" test "$(mode_of "${spool}")" = 700
-ok "requests/ is 0700" test "$(mode_of "${spool}/requests")" = 700
-ok "responses/ is 0700" test "$(mode_of "${spool}/responses")" = 700
-ok "the watcher runs inotifywait on requests/" wait_for test "$(watchers_of "${spool}/requests")" = 1
-
-printf 'old' >"${spool}/responses/old-00001.json"
-touch -d '3 minutes ago' "${spool}/responses/old-00001.json"
-printf 'old' >"${spool}/responses/.tmp.old-00002"
-touch -d '3 minutes ago' "${spool}/responses/.tmp.old-00002"
-printf 'fresh' >"${spool}/responses/fresh-0001.json"
-printf 'fresh' >"${spool}/responses/.tmp.fresh-0002"
-printf 'half' >"${spool}/requests/.tmp.writing-01"
-printf 'half' >"${spool}/requests/.tmp.abandoned-1"
-touch -d '3 minutes ago' "${spool}/requests/.tmp.abandoned-1"
-printf '{"id":"stale-000001"}\n' >"${spool}/requests/stale-000001.json.claimed.99999"
-touch -d '5 minutes ago' "${spool}/requests/stale-000001.json.claimed.99999"
-printf '{"id":"held-0000001"}\n' >"${spool}/requests/held-0000001.json.claimed.88888"
-
-# Published the way the CLI does it: write a temp file, rename it into place.
-printf '{"v":1,\r\n"id":"req-0000001",\n"op":"get"}\r\n' >"${spool}/requests/.tmp.req-0000001"
-mv "${spool}/requests/.tmp.req-0000001" "${spool}/requests/req-0000001.json"
-# With a 3 s heartbeat, only the inotify event can deliver this within a second.
-within_a_second() {
-  local i
-  for ((i = 0; i < 10; i++)); do
-    grep -qxF '{"v":1,"id":"req-0000001","op":"get"}' "${tmp}/watch.out" && return 0
-    sleep 0.1
-  done
-  return 1
-}
-ok "a published request streams out within a second (inotify, not the heartbeat)" within_a_second
-head -c 70000 /dev/zero | tr '\0' 'x' >"${spool}/requests/.tmp.big-0000001"
-mv "${spool}/requests/.tmp.big-0000001" "${spool}/requests/big-0000001.json"
-one_cut_line() { awk 'length($0) == 65536 && /^x+$/ { f = 1 } END { exit !f }' "$1"; }
-ok "an oversized request is cut at 64 KiB, still one line" wait_for one_cut_line "${tmp}/watch.out"
-ok "a stale claim (dead watcher) is recovered and delivered" grep -qxF '{"id":"stale-000001"}' "${tmp}/watch.out"
-ok "a fresh claim is left to its live watcher" test -e "${spool}/requests/held-0000001.json.claimed.88888"
-ok "a fresh claim is not delivered" sh -c "! grep -q held-0000001 '${tmp}/watch.out'"
-ok "a request still being written (.tmp.*) is not claimed" test -e "${spool}/requests/.tmp.writing-01"
-ok "an abandoned .tmp request is swept after 2 minutes" test ! -e "${spool}/requests/.tmp.abandoned-1"
-ok "an uncollected response older than 2 minutes is swept" test ! -e "${spool}/responses/old-00001.json"
-ok "an abandoned .tmp response is swept" test ! -e "${spool}/responses/.tmp.old-00002"
-ok "a fresh response is kept for its CLI" test -e "${spool}/responses/fresh-0001.json"
-ok "a fresh .tmp response is kept" test -e "${spool}/responses/.tmp.fresh-0002"
-ok "claimed requests leave nothing behind" test -z "$(find "${spool}/requests" -name '*.json' -o -name '*.claimed.9*')"
-ok "a heartbeat line '#' follows when idle" wait_for grep -qx '#' "${tmp}/watch.out"
-ok "every request is delivered exactly once" \
-  test "$(grep -c '^{' "${tmp}/watch.out")" = 2
-ok "every output line is a request, a cut request or a heartbeat" \
-  test "$(grep -cvE '^(\{.*\}|x+|#)$' "${tmp}/watch.out")" = 0
-kill "${watch_pid}" 2>/dev/null
-wait "${watch_pid}" 2>/dev/null
-ok "the watcher leaves no inotifywait behind when it is killed" \
-  wait_for test "$(watchers_of "${spool}/requests")" = 0
-
-# ── vault-watch.sh: fallback poll (no inotifywait on the VM) ─────────────────
-noinotify="${tmp}/path-noinotify"
-restricted_path "${noinotify}" 'inotifywait'
-spool2="${tmp}/spool2"
-render "${SCRIPTS}/vault-watch.sh" "${tmp}/watch2.sh" "dir=$(q "${spool2}")" heartbeat=1 fallback=1
-PATH="${noinotify}" "${BASH}" "${tmp}/watch2.sh" >"${tmp}/watch2.out" 2>/dev/null &
-watch2_pid=$!
-bg+=("${watch2_pid}")
-ok "fallback: the spool is created" wait_for test -d "${spool2}/requests"
-printf '{"id":"poll-0000001"}' >"${spool2}/requests/.tmp.poll-0000001"
-mv "${spool2}/requests/.tmp.poll-0000001" "${spool2}/requests/poll-0000001.json"
-ok "fallback: a request is delivered by polling" wait_for grep -qxF '{"id":"poll-0000001"}' "${tmp}/watch2.out"
-ok "fallback: heartbeats still flow" wait_for grep -qx '#' "${tmp}/watch2.out"
-ok "fallback: no inotifywait was started" test "$(watchers_of "${spool2}/requests")" = 0
-kill "${watch2_pid}" 2>/dev/null
-wait "${watch2_pid}" 2>/dev/null
-
-# ── vault-respond.sh ─────────────────────────────────────────────────────────
-id='1730000000000-123-4567'
-spool3="${tmp}/spool 3"
-render "${SCRIPTS}/vault-respond.sh" "${tmp}/respond.sh" "dir=$(q "${spool3}")" "id=$(q "${id}")"
-ok "rendered vault-respond.sh parses" bash -n "${tmp}/respond.sh"
-printf '{"v":1,"id":"%s","status":"ok","secret":"AAEC\\t/w=="}\t\001\377' "${id}" >"${tmp}/response.in"
-install -d -m 0700 "${spool3}/responses"
-inotifywait -m -e create,close_write,moved_to --format '%e %f' "${spool3}/responses" >"${tmp}/events" 2>"${tmp}/events.err" &
-iw_pid=$!
-bg+=("${iw_pid}")
-wait_for grep -q 'Watches established' "${tmp}/events.err" >/dev/null
-bash "${tmp}/respond.sh" <"${tmp}/response.in"
-rc=$?
-sleep 0.2
-kill "${iw_pid}" 2>/dev/null
-wait "${iw_pid}" 2>/dev/null
-ok "respond exits 0" test "${rc}" = 0
-ok "the response lands as <id>.json, byte-exact from stdin" cmp -s "${tmp}/response.in" "${spool3}/responses/${id}.json"
-ok "the response is 0600" test "$(mode_of "${spool3}/responses/${id}.json")" = 600
-ok "the response appears by rename (the CLI never sees half of it)" grep -qx "MOVED_TO ${id}.json" "${tmp}/events"
-ok "the final name is never written in place" sh -c "! grep -qE '^(CREATE|CLOSE_WRITE[A-Z_,]*) ${id}\\.json\$' '${tmp}/events'"
-ok "no temp file is left behind" test -z "$(find "${spool3}/responses" -name '.tmp.*')"
-rm -rf "${spool3}"
-bash "${tmp}/respond.sh" <"${tmp}/response.in"
-ok "respond creates a missing spool, 0700" test "$(mode_of "${spool3}/responses")" = 700
-render "${SCRIPTS}/vault-respond.sh" "${tmp}/respond-bad.sh" "dir=$(q "${spool3}")" "id=$(q '../../escaped-1234')"
-ok "an id outside the request-id alphabet is refused" sh -c "! bash '${tmp}/respond-bad.sh' <'${tmp}/response.in'"
-ok "a refused id writes nothing" test -z "$(find "${tmp}" -name 'escaped-1234*')"
-render "${SCRIPTS}/vault-respond.sh" "${tmp}/respond-empty.sh" "dir=$(q "${spool3}")" "id=$(q 'empty-response-1')"
-ok "an empty response is refused" sh -c "! bash '${tmp}/respond-empty.sh' </dev/null"
-ok "an empty response publishes nothing" test -z "$(find "${spool3}/responses" -name '*empty-response-1*')"
 
 # ── vault-scan.sh ────────────────────────────────────────────────────────────
 home="${tmp}/home"

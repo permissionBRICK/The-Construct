@@ -156,14 +156,6 @@ exec /usr/bin/curl "$@"
         reset();overlayrun(patch,2,{'CONSTRUCT_SOURCE_COMMIT':''});ok('overlay cleaned on early input failure')
         reset();state['statuses']=[404];overlayrun(patch,3);ok('overlay cleaned on base fetch failure')
         reset();r=run();assert 'CONSTRUCT_SOURCE_OVERLAY_' not in r.stdout;ok('no-overlay output unchanged')
-        reset()
-        client=t/'client';client.mkdir();(client/'README.md').write_text('client change');(client/'added.txt').write_text('client addition')
-        packed=t/'packed.zip';packer=t/'pack.ps1'
-        packer.write_text("param($Library,$Tree,$Zip)\n$ErrorActionPreference='Stop'\n. $Library\nNew-ConstructSourceOverlay -Root $Tree -Path $Zip -Changes @{Modified=@('README.md');Added=@('added.txt');Deleted=@('bootstrap.sh')} | Out-Null\n")
-        subprocess.run(['pwsh','-NoProfile','-File',str(packer),str(root/'lib/AgentVm.Common.ps1'),str(client),str(packed)],check=True,capture_output=True)
-        overlayrun(packed.read_bytes())
-        assert (repo/'README.md').read_text()=='client change' and (repo/'added.txt').read_text()=='client addition' and not (repo/'bootstrap.sh').exists()
-        ok('real PowerShell overlay installs through guest HTTP fetch')
         print(f'{passed} passed')
     finally:
         server.shutdown();thread.join();server.server_close()

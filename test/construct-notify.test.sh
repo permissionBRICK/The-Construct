@@ -2,7 +2,7 @@
 # Regression tests for `construct notify` — the VM side of host desktop
 # notifications. Run: bash test/construct-notify.test.sh
 #
-# The wire contract the host depends on (extension/src/notify.js):
+# The wire contract the device depends on (the device agent's watcher, extension/vm/notify-*.sh):
 #   * one entry per file, ONE LINE of JSON — a newline in agent text would
 #     otherwise forge a second notification when the host claims the spool;
 #   * entries appear atomically, so a poll never reads a half-written file;
@@ -106,16 +106,25 @@ ok "the flood guard reports exit 5" test "${rc}" = 5
 ok "the flood guard queues nothing" test "$(entries | wc -l)" = 3
 
 # ── the host side: streaming watcher + exactly-once across VS Code windows ───
-# The host holds ONE long-lived SSH connection running extension/src/notify.js's
-# watch script. These run that real script locally (the SSH transport is the only
-# part not exercised) — the invariants it has to hold are the same either way.
-if command -v node >/dev/null 2>&1; then
+# The device agent holds ONE long-lived SSH connection running the watch script of
+# extension/vm/notify-watch.sh (NotificationProtocol in agent/src/Construct.Companion.Core).
+# These render the templates the same way, in one pass over the {{markers}}, and run them
+# locally (the SSH transport is the only part not exercised).
+if command -v python3 >/dev/null 2>&1; then
   watch="${tmp}/watch.sh"
   claim="${tmp}/claim.sh"
-  node -e 'const n=require(process.argv[1]); process.stdout.write(n.buildWatchScript({dir:process.argv[2],fallbackSeconds:1}))' \
-    "${ROOT}/extension/src/notify.js" "${spool}" >"${watch}"
-  node -e 'const n=require(process.argv[1]); process.stdout.write(n.buildClaimScript(process.argv[2]))' \
-    "${ROOT}/extension/src/notify.js" "${spool}" >"${claim}"
+  render_notify() { # <template> <fallback>
+    python3 - "${ROOT}/extension/vm" "$1" "${spool}" "$2" <<'PY'
+import re, sys
+from pathlib import Path
+vm, name, spool, fallback = Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
+values = {'dir': "'" + spool.replace("'", "'\\''") + "'", 'claim': (vm / 'notify-claim-function.sh').read_text(),
+          'heartbeat': '60', 'fallback': fallback}
+sys.stdout.write(re.sub(r'\{\{([A-Za-z][A-Za-z0-9]*)\}\}', lambda m: values[m.group(1)], (vm / (name + '.sh')).read_text()))
+PY
+  }
+  render_notify notify-watch 1 >"${watch}"
+  render_notify notify-claim 1 >"${claim}"
 
   # Streaming, not polling: a connected watcher emits the entry as it is queued.
   reset_spool

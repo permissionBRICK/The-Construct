@@ -1,23 +1,19 @@
 #!/usr/bin/env bash
 # END-TO-END test for host-stored config backups (docs/plans/host-config-backups.md):
-# the real guest CLI (bin/construct backup) and the real PowerShell key code
-# (lib/AgentVm.Backup.ps1) against a REAL `constructd` in fake mode.
+# the real guest CLI (bin/construct backup) against a REAL `constructd` in fake mode, with the
+# PC's side of the key contract (an RSA key that unwraps the backup's age identity) done by openssl.
 #
 #   bash test/backup-e2e.test.sh
 #
 # The unit suites stub the other side of each contract (test/construct-backup.test.sh stubs
-# the host, the service tests stub the guest, test/backup-keys.test.ps1 stubs both). This one
-# proves the three agree: routes and JSON shapes, the heartbeat's backupDue, the keys file the
+# the host, the service tests stub the guest). This one proves they agree: routes and JSON shapes, the heartbeat's backupDue, the keys file the
 # guest writes and the PC unwraps, the container format, pinning, settings and rotation.
 #
 # Everything runs in a scratch directory: a scratch home is exported, recipients, lock and
 # stage live under it, and `systemctl` is a stub, so the live system is never touched. The
 # service listens on plain http on 127.0.0.1 with in-memory persistence.
 #
-# SKIPS cleanly, with a reason, when dotnet, pwsh, age, zstd, openssl or jq is missing.
-
-# The PowerShell snippets are single-quoted on purpose.
-# shellcheck disable=SC2016
+# SKIPS cleanly, with a reason, when dotnet, age, zstd, openssl or jq is missing.
 
 set -u
 
@@ -56,7 +52,7 @@ trap cleanup EXIT
 
 printf '\n=== Host config backups end-to-end (fake constructd) ===\n'
 
-for tool in dotnet pwsh age age-keygen zstd openssl jq curl node; do
+for tool in dotnet age age-keygen zstd openssl jq curl node; do
   command -v "${tool}" >/dev/null 2>&1 || skip_all "${tool} is not installed"
 done
 [[ -d "${SERVICE_PROJ}" ]] || skip_all "service/src/Constructd.Api is not present in this checkout"
@@ -167,16 +163,17 @@ guest() {
     bash "${ROOT}/bin/construct" backup "$@"
 }
 
-# ── the PC side: lib/AgentVm.Backup.ps1 with a reversible stand-in for DPAPI ─
-pc() {
-  KEYDIR="${tmp}/pckey" BASE="${BASE}" TOKEN="${ADMIN_TOKEN}" VM="${VM}" pwsh -NoProfile -Command '
-$ErrorActionPreference = "Stop"
-. (Join-Path $env:ROOT "lib/AgentVm.Remote.ps1")
-. (Join-Path $env:ROOT "lib/AgentVm.Backup.ps1")
-function Protect-ConstructTokenBytes { param([byte[]]$Bytes) return ,([byte[]]@($Bytes | ForEach-Object { $_ -bxor 0x5A })) }
-function Unprotect-ConstructTokenBytes { param([byte[]]$Bytes) return ,([byte[]]@($Bytes | ForEach-Object { $_ -bxor 0x5A })) }
-$auth = New-ConstructApiAuth -Mode token -Token $env:TOKEN
-'"$1"
+# ── the PC side: an RSA key, and the unwrap of the backup identity (contract 3.2) ─
+mkdir -p "${tmp}/pckey"
+# unwrap <keys json> [expected backup id] -> the age identity the PC's key unwraps
+unwrap() {
+  local fp wrapped
+  if [[ -n "${2:-}" ]] && ! jq -e --arg id "$2" '.backupId == $id' <<<"$1" >/dev/null; then return 1; fi
+  fp="$(openssl pkey -pubin -in "${tmp}/pckey/pub.pem" -outform DER | sha256sum | cut -d' ' -f1)"
+  wrapped="$(jq -r --arg fp "${fp}" '.recipients[] | select(.fingerprint == $fp) | .wrapped' <<<"$1")"
+  [[ -n "${wrapped}" ]] || return 1
+  printf '%s' "${wrapped}" | base64 -d | openssl pkeyutl -decrypt -inkey "${tmp}/pckey/key.pem" \
+    -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -pkeyopt rsa_mgf1_md:sha256
 }
 
 # ── 1. the heartbeat asks a fresh VM for a backup ────────────────────────────
@@ -184,10 +181,9 @@ reply="$(heartbeat false)"
 ok 'a fresh idle VM is due: backupDue + scheduled' sh -c "test '$(cat "${tmp}/status")' = 200 && printf '%s' '${reply}' | jq -e '.backupDue == true and .backupTrigger == \"scheduled\"' >/dev/null"
 
 # ── 2. enrolment: the PC key's fingerprint is the guest's ────────────────────
-pc_out="$(pc '$k = Get-ConstructBackupPcKey -KeyDir $env:KEYDIR -Create -Label "e2e-pc"
-Set-Content -LiteralPath (Join-Path $env:KEYDIR "pub.pem") -Value $k.PublicKeyPem -NoNewline
-Write-Output "FP=$($k.Fingerprint)"' 2>&1)"
-pc_fp="$(sed -n 's/^FP=//p' <<<"${pc_out}")"
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "${tmp}/pckey/key.pem" 2>/dev/null
+openssl pkey -in "${tmp}/pckey/key.pem" -pubout -out "${tmp}/pckey/pub.pem"
+pc_fp="$(openssl pkey -pubin -in "${tmp}/pckey/pub.pem" -outform DER | sha256sum | cut -d' ' -f1)"
 guest_fp="$(guest recipients add --label e2e-pc <"${tmp}/pckey/pub.pem" 2>/dev/null | tail -n 1)"
 ok 'recipients add prints the PC fingerprint' sh -c "test -n '${pc_fp}' && test '${pc_fp}' = '${guest_fp}'"
 
@@ -210,8 +206,7 @@ ok 'status: lastSuccessAt set, not failing' sh -c "printf '%s' '${status}' | jq 
 ok 'the host file is not cleartext' sh -c "! grep -rqa 'e2e-secret' '${tmp}/host-backups'"
 
 # ── 4. the PC unwraps E from the host's keys file; the VM fetches and decrypts ─
-E="$(pc '$json = Get-ConstructHostBackupKeysJson -BaseUrl $env:BASE -VmName $env:VM -BackupId "'"${id1}"'" -Auth $auth
-Unprotect-ConstructBackupIdentity -KeysJson $json -KeyDir $env:KEYDIR -ExpectedBackupId "'"${id1}"'"' 2>"${tmp}/unwrap.err" | tail -n 1)"
+E="$(unwrap "$(admin GET "/vms/${VM}/backups/${id1}/keys")" "${id1}" 2>"${tmp}/unwrap.err")"
 ok 'the PC unwraps the backup identity' sh -c "printf '%s' '${E}' | grep -Eq '^AGE-SECRET-KEY-1[0-9A-Z]+$'"
 printf '%s\n' "${E}" | guest fetch --from-host "${id1}" --out "${tmp}/fetched.tar.zst" 2>"${tmp}/fetch.err"
 ok 'fetch decrypts the host backup' test -s "${tmp}/fetched.tar.zst"
@@ -229,8 +224,7 @@ ok 'verify with a wrong identity fails with exit 8' test "$?" = 8
 # ── 5. download: the container the PC saves ──────────────────────────────────
 guest download "${id1}" >"${tmp}/saved.cbk" 2>"${tmp}/download.err"
 ok 'download writes a container' sh -c "head -n 1 '${tmp}/saved.cbk' | grep -qx 'construct-backup/1'"
-E2="$(pc '$h = Read-ConstructBackupContainerHeader -Path "'"${tmp}/saved.cbk"'"
-Unprotect-ConstructBackupIdentity -KeysJson $h.KeysJson -KeyDir $env:KEYDIR' 2>"${tmp}/container.err" | tail -n 1)"
+E2="$(unwrap "$(sed -n 2p "${tmp}/saved.cbk")" 2>"${tmp}/container.err")"
 ok 'the PC reads the container header and unwraps the same identity' sh -c "test -n '${E2}' && test '${E2}' = '${E}'"
 ok 'the container payload decrypts' bash -c "{ IFS= read -r a; IFS= read -r b; cat; } <'${tmp}/saved.cbk' | age -d -i <(printf '%s\n' '${E}') | zstd -dc | tar -t | grep -q 'backup-info.json'"
 

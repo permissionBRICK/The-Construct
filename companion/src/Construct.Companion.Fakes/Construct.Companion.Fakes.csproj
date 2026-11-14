@@ -1,5 +1,0 @@
-<Project Sdk="Microsoft.NET.Sdk">
-  <ItemGroup>
-    <ProjectReference Include="../Construct.Companion.Core/Construct.Companion.Core.csproj" />
-  </ItemGroup>
-</Project>

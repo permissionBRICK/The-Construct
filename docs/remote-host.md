@@ -22,7 +22,7 @@ and VMs; ordinary users see their own usage. Reprovision guests to install the
 See [Host usage](control-panel.md#host-usage) for settings and backfill limits.
 Reporting on a real Hyper-V host still needs a field test.
 
-Remote installs also install [Construct Companion](companion.md) on the **user's PC**.
+Remote installs also install Construct Companion on the **user's PC**.
 The VM runs on the remote host; client forwards, notifications and microphone
 capture run on the user's desktop. Auto-Install performs this per-user step before
 choosing local or remote mode. Updates and plain reprovision refresh it too. A PC

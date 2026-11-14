@@ -1,8 +1,7 @@
 # Release flow and channels
 
-This covers the new stack. The old clients (`install.ps1`, `Update-Construct.ps1`, `lib/`,
-`companion/`, `extension/`) keep following `main` and `releases/latest` as described in
-[Host releases](host-release.md).
+This covers the new stack. Installs of the old client keep following `main` and `releases/latest`
+as described in [Host releases](host-release.md) until they upgrade.
 
 ## Branches and builds
 
@@ -19,9 +18,6 @@ Builds report `X.Y.Z+<sha>`. `X.Y.Z` is the highest `vX.Y.Z` tag or the `VERSION
 commit, whichever is higher, else `1.0.0` (`scripts/release.py version`). A release cut writes
 `VERSION`; the stable build of that commit also gets the tag `vX.Y.Z` and the title
 `Construct vX.Y.Z`.
-
-The Companion workflow follows the same branches; off `main` it publishes `companion-<sha>`
-as a prerelease, which the old Companion discovery ignores.
 
 ## Channel manifests
 

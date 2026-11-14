@@ -41,7 +41,7 @@ public sealed class ProvisionGuestE2ETests
             Path.Combine(Path.GetTempPath(), "construct-e2e-known_hosts"));
         var seed = Env("CONSTRUCT_E2E_SEED_USER") is { Length: > 0 } s ? s : user == "root" ? "agent" : user;
 
-        var repo = Path.GetDirectoryName(ProvisionEnvironmentTests.FindRepoFile("Provision-AgentVM.ps1"))!;
+        var repo = Path.GetDirectoryName(Path.GetDirectoryName(ProvisionEnvironmentTests.FindRepoFile("bin/provision.sh")))!;
         var commit = Git(repo, "rev-parse", "HEAD").Trim();
         var zipPath = Path.Combine(Path.GetTempPath(), $"construct-e2e-{commit}.zip");
         Git(repo, "archive", "--format=zip", "--prefix=construct-main/", "-o", zipPath, "HEAD");

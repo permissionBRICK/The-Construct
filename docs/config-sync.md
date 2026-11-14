@@ -571,7 +571,7 @@ folder contents. No migration step for the user.
 
 ## 11. The `add-config` entrypoint
 
-A single, state-aware action on [`Auto-Install.ps1`](../Auto-Install.ps1) for
+A single, state-aware action on `Auto-Install.ps1` for
 "add project configuration". It is a thin layer over machinery that already
 exists.
 
@@ -599,7 +599,7 @@ exists.
 project selection. `add-config` must instead compute **`PROJECTS = current-on-VM
 ∪ imported`** (read the VM's current `PROJECTS` from `config.env`, union the new
 names) so existing selections are preserved. Everything else —
-[`-Action`](../Auto-Install.ps1) menu-skip, `-Projects` picker-skip, idempotent
+`-Action` menu-skip, `-Projects` picker-skip, idempotent
 checkout, reprovision-keeps-data — already exists.
 
 ## 12. Parameterised install & generic passthrough
@@ -625,7 +625,7 @@ flow through `install.ps1` → `Auto-Install.ps1` → (self-elevation) → provi
   work through it for free, keeping this hot-path file tiny. Auto-Install is the
   sole authority that declares them (unknown params correctly error there).
 
-- **Self-elevation already forwards.** [`Auto-Install.ps1`](../Auto-Install.ps1)
+- **Self-elevation already forwards.** `Auto-Install.ps1`
   rebuilds its elevated relaunch arg list from `$PSBoundParameters`, so any bound
   param survives the admin hop. `-ConfigRepo` is a single string (one repo per
   share, §13), so no `[string[]]` serialisation crosses that boundary.
@@ -657,7 +657,7 @@ picker — the one-step path for "I have 23 local profiles and an empty repo".
 The picker's title shows the **redacted** URL.
 
 The decision core is the pure `planPublish` in
-[`extension/src/configsync.js`](../extension/src/configsync.js), and the picker
+`extension/src/configsync.js`, and the picker
 model itself is pure too (`buildPublishPickerItems` / `filterPublishSelection`),
 so the greying and the all-ticked default are unit-tested rather than only
 clicked. The IO twin in `extension.js` writes the same manifest bytes as the
@@ -817,7 +817,7 @@ The touch points that were built for this feature (kept for reference):
   tick; seed the fresh store by writing files from `main`.
 - **`construct project set` helper** on the VM — validate + write canonical
   JSON; refuse reserved names; no commit.
-- [`Auto-Install.ps1`](../Auto-Install.ps1) — `-Action add-config`, `-ConfigRepo`
+- `Auto-Install.ps1` — `-Action add-config`, `-ConfigRepo`
   (scalar), `-ConfigDir`, `-ImportConfigs`; union-not-replace `PROJECTS`;
   git check/prompt on `-ConfigRepo`; `-AutoResolve ours|theirs`.
 - [`install.ps1`](../install.ps1) — drop `[CmdletBinding()]`; forward `$args`.
@@ -839,7 +839,7 @@ The touch points that were built for this feature (kept for reference):
   `buildPublishPickerItems` / `filterPublishSelection` /
   `canonicalizeProfileText` / `publishManifestEntry` / `displayRemoteUrl` (pure)
   + `ensurePublishClone` / `checkoutPublishBranch` / `publishToRemote` in
-  [`extension/src/configsync.js`](../extension/src/configsync.js); the
+  `extension/src/configsync.js`; the
   per-remote **publish** button and **add remote & publish…** in the Projects
   tab; the shared fixtures under `test/fixtures/`.
 - `extension.js` / Projects tab UI — remote-repo section, import action, share

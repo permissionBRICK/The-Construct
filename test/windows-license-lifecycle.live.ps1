@@ -4,8 +4,8 @@
 # firmware; no Windows installation, key or Microsoft activation is involved.
 param([Parameter(Mandatory=$true)][string]$StorageRoot,
     [Parameter(Mandatory=$true)][ValidateRange(5,60)][int]$LifetimeMinutes)
-. (Join-Path $PSScriptRoot '../drivers/hyperv-local/HyperVLocal.ChildVm.ps1')
-. (Join-Path $PSScriptRoot '../drivers/hyperv-local/HyperVLocal.WindowsLicense.ps1')
+. (Join-Path $PSScriptRoot '../service/src/Constructd.Windows/HyperV/Scripts/HyperV.ChildVm.ps1')
+. (Join-Path $PSScriptRoot '../service/src/Constructd.Windows/HyperV/Scripts/HyperV.WindowsLicense.ps1')
 $ErrorActionPreference='Stop'
 $suffix=[guid]::NewGuid().ToString('N').Substring(0,8)
 $name='license-proof-'+$suffix

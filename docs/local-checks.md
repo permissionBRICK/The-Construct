@@ -20,7 +20,6 @@ From the repository root, choose the checks relevant to the change:
 bash test/run-local-checks.sh panel
 bash test/run-local-checks.sh t3
 bash test/run-local-checks.sh service
-bash test/run-local-checks.sh companion
 bash test/run-local-checks.sh release
 bash test/run-local-checks.sh ui
 bash test/run-local-checks.sh agent
@@ -42,14 +41,12 @@ stays within one directory and `**` crosses directories. A row without a group s
 
 | Path | Groups |
 |---|---|
-| `companion/**`, `test/fixtures/companion-parity/**`, `test/companion-*`, `test/feature-set.test.ps1`, `Install-ConstructCompanion.ps1`, `Auto-Install.ps1`, `install.ps1`, `Update-Construct.ps1` | `companion` |
 | `extension/**` | `panel` |
-| `extension/vm/**` | `companion` |
 | `bin/*t3*`, `test/t3-*`, `extension/vm/*t3*` | `t3` |
-| `service/**`, `drivers/**`, `lib/**`, `bin/**`, `console-viewer/**`, `extension/src/projects.js` | `service` |
+| `service/**`, `lib/**`, `bin/**`, `console-viewer/**`, `extension/src/projects.js`, `extension/vm/**`, `companion/**` | `service` |
 | `ui/**` | `ui` |
 | `agent/**`, `test/agent-install.test.sh`, `test/agent-bootstrap.test.ps1`, `install.ps1`, `Update-Construct.ps1`, `scripts/package-agent.py`, `service/src/Construct.Keys/**`, `service/src/Constructd.Store/**`, `service/src/Constructd.Sync/**`, `service/src/Constructd.Api/**`, `service/openapi/**` | `agent`, `ui` |
-| `companion/src/Construct.Companion.Core/**`, `companion/src/Construct.Companion.Windows/**`, `companion/src/Construct.Companion.Fakes/**`, `extension/vm/**` | `agent` |
+| `extension/vm/**`, `lib/**`, `Update-T3Code.ps1`, `Get-ConstructT3PairingLink.ps1`, `test/fixtures/legacy-updaters/**`, `test/source-release.test.ps1`, `test/lifecycle-run.test.ps1` | `agent` |
 | `scripts/**`, `.github/**`, `VERSION`, `test/release.test.py`, `test/construct-release.test.py`, `test/run-local-checks.sh`, `test/helpers/changed-groups.py`, `docs/local-checks.md`, `service/src/Constructd.Core/Logic/ReleaseChannel.cs`, `service/tests/Constructd.Tests/Updates/ReleaseChannelTests.cs` | `release` |
 | `docs/**`, `*.md`, `assets/**` | |
 
@@ -58,7 +55,7 @@ For installers, also run the touched script's own tests.
 The `guest` group runs the guest rig (`test/e2e/guest-rig.sh quick`). It is not part
 of `all` and `--changed` never selects it; run it by name when guest-facing paths change
 (`bin/provision.sh` and what it runs, `bootstrap.sh`, `bin/build-autoinstall-iso.sh`). It
-provisions an Ubuntu guest with this checkout the way `Provision-AgentVM.ps1` does, checks
+provisions an Ubuntu guest with this checkout the way the old `Provision-AgentVM.ps1` did, checks
 the result sentinel and exit code, reboots the guest, saves the guest manifest and removes
 the guest. Run artefacts (provisioning log, manifest, timings) go to
 `~/.local/state/construct-guest-rig/runs`, downloads to `~/.cache/construct-guest-rig`.
@@ -95,20 +92,17 @@ bash test/e2e/guest-rig.sh --backend local down
 
 `bash test/e2e/guest-rig.sh --help` lists the `full` variant, `--keep` and `--compare`.
 
-The `companion` group runs the vault guest scripts' suite, the three Companion
-PowerShell suites and the first-install feature-set suite. The Companion app and its
-.NET tests are no longer built: they need the old panel's pages, which went with the
-thin extension, and the app itself goes next; the agent group builds the Companion
-projects the agent uses. It is included in `all`; the Companion workflow only publishes its Windows deliverable.
-
 The `agent` group builds the device agent with warnings as errors and runs its tests: several
 agents in process against the real engine in fake mode on a loopback HTTPS port (setup, pairing,
 recovery, the proxy, revocation, the event stream, the local API's token and origin rules, repair,
 and the OpenAPI drift check), the device features with the platform faked (VM links and forwards,
 notifications, the SSH config, self-update against a fake channel, "update everything"), builds
-the Windows shell with Windows targeting, and runs the Linux install script's test. It needs the
-.NET 10 SDK, python3 and pwsh (a syntax check of the Windows install script). The agent reuses
-the Companion's Core, Windows and Fakes projects, so changes there run this group too.
+the Windows shell with Windows targeting, and runs the Linux install script's test. It also runs
+the upgrade from an old install: `install.ps1` and `Update-Construct.ps1`, the old updaters of
+classes E and F against this tree with the `lib/` functions they call, and the lifecycle lock.
+It needs the .NET 10 SDK, python3 and pwsh. The agent builds on projects that came from the
+Companion (`agent/src/Construct.Companion.*`) and embeds the guest scripts of `extension/vm`,
+so changes there run this group too.
 
 The `ui` group runs the client UI's unit tests (vitest), builds its static bundle
 and compares its screenshots in headless Chromium (Playwright). After an intended
@@ -117,9 +111,8 @@ visual change, refresh the pictures with `npm run test:screens:update` in `ui/`.
 The `panel` group tests the VS Code extension under plain node with `vscode` faked
 (finding, starting and installing the agent, the webview documents and their message
 bridge, Remote-SSH, the register-workspace offer), the profile validator the VM's
-`construct project set` loads from `extension/src/projects.js`, and three PowerShell
-suites of the old lifecycle scripts. These runners group the former workflow checks;
-other focused tests remain available in `test/` and `service/tests/`.
+`construct project set` loads from `extension/src/projects.js`, and the VM's
+`project-set.js` helper.
 
 Windows PowerShell 5.1 behavior and the pinned Windows ISO executable need an
 actual Windows environment. Use a local disposable Windows VM with Node.js,
@@ -133,22 +126,7 @@ GitHub runners provide convenience and clean environments, not unique test
 capabilities. A local Windows VM covers the platform-specific checks that this
 Linux development VM cannot execute directly.
 
-For remote source-cache changes, run the `service` group (including the guest script's
-`bash -n` check), plus these focused suites. They use Linux fakes/local HTTP fixtures and do
-not touch a running host service:
-
-```sh
-pwsh -NoProfile -File test/source-transport.test.ps1
-pwsh -NoProfile -File test/source-release.test.ps1
-pwsh -NoProfile -File test/remote-client.test.ps1
-pwsh -NoProfile -File test/provision-seed-user.test.ps1
-pwsh -NoProfile -File test/provision-ssh-diagnostics.test.ps1
-pwsh -NoProfile -File test/instance-identity.test.ps1
-pwsh -NoProfile -File service/tests/host-installer.test.ps1
-bash test/fetch-construct-source.test.sh
-bash test/provision-marker.test.sh
-bash test/remote-e2e.test.sh
-```
-
-The ZIP fixtures require `git`, `curl`, `sha256sum` and Python 3; end-to-end testing starts and
-stops its own fake constructd and drives the real PowerShell helpers and guest script.
+For the Hyper-V driver's scripts, the host installer and the ISO tools under real Windows
+PowerShell 5.1, `test/run-local-windows-checks.ps1` (above) runs their suites.
+`test/windows-license-lifecycle.live.ps1` boots isolated firmware on a disposable Hyper-V
+host (elevated) and is run by hand only.

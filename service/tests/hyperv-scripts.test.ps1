@@ -8,9 +8,10 @@
 
       (a) every file parses, and none uses syntax Windows PowerShell 5.1 lacks;
       (b) every function the service calls is defined by the files it dot-sources;
-      (c) every function moved from the client's driver and lib is still the same
-          text as its source, while those sources exist (a move, not a rewrite);
-      (d) Get-ConstructVmFacts, the one new function, against stubbed cmdlets.
+      (c) Get-ConstructVmFacts against stubbed cmdlets.
+
+    The files are the driver's only copy: they were moved from the old client's
+    drivers\hyperv-local and lib\AgentVm.Common.ps1, which are gone.
 
     The .NET suite runs this file too (HostInstallerTests).
 #>
@@ -79,27 +80,7 @@ foreach ($fn in @('Remove-AgentVm', 'Get-VhdChain', 'Remove-FileWithRetry')) {
 $driverText = Get-Content -Raw -LiteralPath (Join-Path $scripts 'HyperV.Driver.ps1')
 ok "the driver defines its progress fallbacks" ($driverText -match 'function Write-Step' -and $driverText -match 'function Write-Ok' -and $driverText -match 'function Write-Note')
 
-# ── (c) Moved, not rewritten ─────────────────────────────────────────────────
-Write-Host ""
-Write-Host "=== Same text as the sources ===" -ForegroundColor Cyan
-$origins = @(
-    @{ Copy = 'HyperV.Driver.ps1';         Sources = @('drivers/hyperv-local/HyperVLocal.Driver.ps1', 'lib/AgentVm.Common.ps1') }
-    @{ Copy = 'HyperV.ChildVm.ps1';        Sources = @('drivers/hyperv-local/HyperVLocal.ChildVm.ps1') }
-    @{ Copy = 'HyperV.WindowsLicense.ps1'; Sources = @('drivers/hyperv-local/HyperVLocal.WindowsLicense.ps1') }
-)
-foreach ($origin in $origins) {
-    $present = @($origin.Sources | Where-Object { Test-Path -LiteralPath (Join-Path $repoRoot $_) })
-    if ($present.Count -ne $origin.Sources.Count) { Write-Host "  SKIP  $($origin.Copy): its sources are gone"; continue }
-    $source = @{}
-    foreach ($rel in $origin.Sources) { $f = Get-Functions (Join-Path $repoRoot $rel); foreach ($k in $f.Keys) { if (-not $source.ContainsKey($k)) { $source[$k] = $f[$k] } } }
-    $copy = Get-Functions (Join-Path $scripts $origin.Copy)
-    foreach ($fn in ($copy.Keys | Sort-Object)) {
-        if ($fn -eq 'Get-ConstructVmFacts') { continue }   # the service's own
-        ok "$($origin.Copy): $fn is its source's text" ($source.ContainsKey($fn) -and $source[$fn] -ceq $copy[$fn])
-    }
-}
-
-# ── (d) Get-ConstructVmFacts ─────────────────────────────────────────────────
+# ── (c) Get-ConstructVmFacts ─────────────────────────────────────────────────
 Write-Host ""
 Write-Host "=== Get-ConstructVmFacts ===" -ForegroundColor Cyan
 . (Join-Path $scripts 'HyperV.Driver.ps1')
