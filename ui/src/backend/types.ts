@@ -262,7 +262,7 @@ export interface Prefs {
 
 /** The one-time upgrade's steps in their order: the engine on this PC, the recovery code, the old programs
     closed, the conversion. */
-export type UpgradeStep = 'engine' | 'recovery' | 'close' | 'convert';
+export type UpgradeStep = 'engine' | 'recovery' | 'close' | 'convert' | 'done';
 export interface Upgrade {
   /** The step the dialog is at, as the agent reports it: the first one not done. */
   step: UpgradeStep;
@@ -280,6 +280,10 @@ export interface Upgrade {
   found: { vms: string[]; profiles: number; vault: boolean } | null;
   /** Step `engine` installs an engine on this PC, with one admin prompt. */
   adminPrompt: boolean;
+  /** Step `convert`: shared hosts that still run the old Construct; their admin updates them from the host page. */
+  oldHosts: string[];
+  /** Step `done`: what the conversion could not finish, shown once; the step is there only when there are any. */
+  notes: string[];
 }
 
 /** Parts of the product the backend cannot serve yet. The screens show such a part as not available. */

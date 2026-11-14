@@ -1017,6 +1017,20 @@ Manual first deployment, retention, recovery fences and rollback
 limits are documented in [Host releases and deployment](host-release.md). No real-host
 update has been validated by the Linux test run. No signing-key setup is needed.
 
+### Updating from inside the VM (`construct update`)
+
+A VM asks its own engine with its VM token (`GET|POST /api/v1/vms/{name}/update`); T3 Code in the
+VM runs these for its update control.
+
+| Command | Does |
+|---|---|
+| `construct update status [--json]` | Whether a newer Construct payload is out for this VM, and a host release when the VM's owner administers the host. `--json` prints the engine's answer unchanged (`newerPayload`, `availableCommit`, `appliedCommit`, `hostUpdate`); without it, two plain lines. |
+| `construct update run [--json]` | Updates this VM (a reprovision); for an admin's VM while a host release is out, the host first, then this VM and the owner's other VMs there. `--json` prints `jobId`, `hostUpdateId`, `hostJobId`. |
+
+With `--json` nothing but the engine's answer reaches stdout. A failure prints one line on stderr and
+nothing on stdout: exit 4 when the VM has no engine or the host is older and has no such route (its
+admin updates it from the host page), 6 when the engine refused, 8 when it could not be reached.
+
 ### Child networking
 
 A child receives no Construct credential. Its parent primary (with a `primary`

@@ -401,6 +401,7 @@
         "tags": [
           "agent"
         ],
+        "description": "Issues a new recovery code; the old one stops working.",
         "operationId": "NewRecoveryCode",
         "responses": {
           "200": {
@@ -412,6 +413,71 @@
                 }
               }
             }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/device/recovery-code/again": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "description": "While the setup's code is not confirmed: a new one (the earlier stops working), for the first run or the upgrade after a reload. 409 recovery-confirmed otherwise.",
+        "operationId": "ReissueRecoveryCode",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryCodeResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/device/recovery-code/kept": {
+      "post": {
+        "tags": [
+          "agent"
+        ],
+        "description": "The user confirmed the code of that issue was kept: the setup's recovery step is done. 409 code-replaced when a newer code was issued since.",
+        "operationId": "ConfirmRecoveryCode",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmRecoveryCodeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
           },
           "default": {
             "description": "An error.",
@@ -2633,6 +2699,37 @@
           }
         }
       }
+    },
+    "/api/upgrade/notes/read": {
+      "post": {
+        "tags": [
+          "upgrade"
+        ],
+        "description": "After the conversion: the user went on from its notes, which are not shown again.",
+        "operationId": "ReadUpgradeNotes",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2827,6 +2924,18 @@
               "null",
               "string"
             ]
+          }
+        }
+      },
+      "ConfirmRecoveryCodeRequest": {
+        "required": [
+          "issue"
+        ],
+        "type": "object",
+        "properties": {
+          "issue": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -3027,7 +3136,8 @@
           "registered",
           "storeEngine",
           "protection",
-          "protectionWeak"
+          "protectionWeak",
+          "recoveryUnconfirmed"
         ],
         "type": "object",
         "properties": {
@@ -3059,6 +3169,9 @@
             "type": "string"
           },
           "protectionWeak": {
+            "type": "boolean"
+          },
+          "recoveryUnconfirmed": {
             "type": "boolean"
           }
         }
@@ -3422,13 +3535,18 @@
       },
       "RecoveryCodeResponse": {
         "required": [
-          "recoveryCode"
+          "recoveryCode",
+          "issue"
         ],
         "type": "object",
         "properties": {
           "recoveryCode": {
             "type": "string",
             "x-construct-secret": true
+          },
+          "issue": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -4090,7 +4208,8 @@
           "notes",
           "oldWriters",
           "running",
-          "error"
+          "error",
+          "oldHosts"
         ],
         "type": "object",
         "properties": {
@@ -4154,6 +4273,12 @@
               "null",
               "string"
             ]
+          },
+          "oldHosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },

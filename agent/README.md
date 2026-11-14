@@ -75,7 +75,7 @@ first `ui/dist` above it.
 | `install.json` (0600) | The installed versions: `current`, `previous` and `pending` (12.2). |
 | `versions/<version>/` | One unpacked package per version; the current and the previous one are kept. |
 | `webview2/`, `shell.log`, `construct.png` | Windows only: the WebView2 profile, the tray app's error log, the toast icon. |
-| `bridge.json` (0600) | The one-time upgrade: `stage` (`new`, `converting`, `converted`, written last), the previous install folder, the engines it chose, the items already copied, the last run's items and notes. No secret. |
+| `bridge.json` (0600) | The one-time upgrade: `stage` (`new`, `converting`, `converted`, written last), the previous install folder, the engines it chose, the items already copied, the last run's items and notes (with the account they are for and whether they were read), the shared hosts still on the old stack. No secret. |
 | `legacy-upstream.json` (0600) | The old config repository's company upstream links (`manifest/`, `bases/`), kept as data until the new stack has upstream links. |
 
 The directory is 0700. Protection: on first start the agent keeps its protection key in the user's
@@ -111,8 +111,10 @@ CONSTRUCT_AGENT_UPDATE_OPENAPI=1 dotnet test agent/Construct.Agent.slnx --filter
 | `DELETE /api/engines/{id}` | Removes it (not the engine that holds the store) |
 | `POST /api/engines/{id}/connect {vaultMode?}` | Grants `D`, and `K` when `vaultMode` is `available`; enrols this device |
 | `/api/engines/{id}/api/v1/...` | The proxy, below |
-| `POST /api/device/setup {engine, deviceName, vaultMode?}` | The account's first device against that engine's built-in store, signed in with the user token: registers the device, creates the account keys, stores their wraps, writes the device and engine records, sets the recovery code, grants and enrols. Answers `{recoveryCode}`, the only time the code leaves the agent. A setup cut short (agent stopped, answer lost) is resumed by calling it again; `U` is sealed and saved before the store holds anything under it. |
-| `POST /api/device/recovery-code` | A new recovery code; the old one stops working |
+| `POST /api/device/setup {engine, deviceName, vaultMode?}` | The account's first device against that engine's built-in store, signed in with the user token: registers the device, creates the account keys, stores their wraps, writes the device and engine records, sets the recovery code, grants and enrols. Answers `{recoveryCode, issue}`, the only time the code leaves the agent; the issue (a counter, no secret) is what the confirm names. A setup cut short (agent stopped, answer lost) is resumed by calling it again; `U` is sealed and saved before the store holds anything under it. |
+| `POST /api/device/recovery-code` | A new recovery code; the old one stops working. Answers `{recoveryCode, issue}` |
+| `POST /api/device/recovery-code/again` | Only while the setup's code is not confirmed: a new one, the earlier stops working; how the first run or the upgrade shows the code again after a reload. `409 recovery-confirmed` otherwise |
+| `POST /api/device/recovery-code/kept {issue}` | The user confirmed the code of that issue was kept (204); `409 code-replaced` when a newer code was issued since. Until then `GET /api/state` reports `device.recoveryUnconfirmed`, the upgrade's recovery step is not done and the conversion is refused |
 | `POST /api/device/recover {engine, account, recoveryCode, deviceName}` | A fresh device takes over the account with the code, then enrols at every engine of the account |
 | `POST /api/pairing {engine, deviceName}` | This device asks to join: `{pairingId, words, expiresAt, storeUrl, storePin}`; the agent waits for the approval itself and reports `pairing` events |
 | `GET`, `DELETE /api/pairing` | The pairing in progress; cancel it |
@@ -147,11 +149,12 @@ of the old release by hand.
 
 | Route | What it does |
 |---|---|
-| `GET /api/upgrade` | `{legacy, stage, steps, found, storeEngine, localEngine, items, notes, oldWriters, running, error}`: the steps `engine`, `recovery`, `close`, `convert` with their state, what the old install holds (names and counts, no value), the last run's items |
+| `GET /api/upgrade` | `{legacy, stage, steps, found, storeEngine, localEngine, items, notes, oldWriters, running, error, oldHosts}`: the steps `engine`, `recovery` (done once the code was confirmed), `close`, `convert` with their state, what the old install holds (names and counts, no value), the last run's items; its notes until read, to the account they were written for; the shared hosts that still run the old stack (no `GET /engine`, so this device stays signed in the old way there), as the engine step and the converter found them |
 | `POST /api/upgrade/engine` | Step 1 (202): where the PC has a local VM, the host package from the device's channel, checked against the manifest, installed by `Install-ConstructHost.ps1 -Solo` with one UAC prompt; its token file is taken into the state and deleted. The old shared hosts are added with their pins and stored sign-ins. Chooses the store engine. |
 | `POST /api/device/setup` | Step 2, the existing first-device setup against `storeEngine`: with an old vault on the PC its key becomes the account's `K` |
 | `GET /api/upgrade/writers` | Step 3: `{open}`, the old writers still running (VS Code, the old Companion, a lifecycle script). The Windows agent holds the Companion's single-instance mutex. |
-| `POST /api/upgrade/convert {from?}` | Step 4 (202): the converter, progress as `upgrade` events. Refused while writers are open or before step 2. |
+| `POST /api/upgrade/convert {from?}` | Step 4 (202): the converter, progress as `upgrade` events. Refused while writers are open or before step 2 is confirmed. |
+| `POST /api/upgrade/notes/read` | After `converted`: the user went on from the notes; they are not shown again |
 
 The converter copies, per item, and lists each item it copied in `bridge.json` so a second run leaves it
 alone: the device channel (`constructRef`: `main` is stable, a branch nightly); the old shared hosts as

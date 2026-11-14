@@ -26,13 +26,12 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
     public TimeSpan AdoptTimeout { get; init; } = TimeSpan.FromMinutes(15);
 
     private readonly List<UpgradeItem> _items = [];
-    private readonly List<string> _notes = [];
     private HashSet<string> _done = [];
 
     /// <summary>Runs every item; true when the conversion is complete (<c>converted</c>).</summary>
     public async Task<bool> RunAsync(LegacyState legacy, CancellationToken ct)
     {
-        if (!agent.IsRegistered) throw new AgentFailure(409, "not-registered", "Set up the recovery code first: the converted records are sealed under the account's keys.");
+        if (!agent.IsRegistered || agent.RecoveryUnconfirmed) throw new AgentFailure(409, "not-registered", "Set up the recovery code first: the converted records are sealed under the account's keys.");
         var start = bridge.Read();
         _done = start.Done.ToHashSet(StringComparer.Ordinal);
         var store = start.StoreEngine ?? agent.StoreEngineId ?? throw new AgentFailure(409, "no-store", "This device has no store yet.");
@@ -52,8 +51,19 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
         if (complete && bridge.Read().Stage != BridgeState.Converted)
             bridge.Update(b => b with { Stage = BridgeState.Converted, ConvertedAt = DateTimeOffset.UtcNow });
         if (bridge.Read().Stage == BridgeState.Converted) await RemoveLegacyRecipientsAsync(legacy, instances, legacyKeys, start.LocalEngine, ct).ConfigureAwait(false);
-        bridge.Update(b => b with { Items = _items.ToArray(), Notes = _notes.Distinct().ToArray() });
+        bridge.Update(b => b with { Items = _items.ToArray() });
         return complete;
+    }
+
+    /// <summary>
+    /// A note for the user, saved at once: an item that wrote one is skipped by a later run, which would not say it
+    /// again. Notes of earlier runs stay (they are facts about the old install), until the user read them.
+    /// </summary>
+    private void Note(string text)
+    {
+        bridge.Update(b => b.Notes.Contains(text) && b.NotesAccount == agent.Account
+            ? b
+            : b with { Notes = b.NotesAccount == agent.Account ? [.. b.Notes, text] : [text], NotesAccount = agent.Account, NotesRead = false });
     }
 
     // ---- one item ----
@@ -138,6 +148,7 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
                     catch (AgentFailure failure) { problem = failure.Message; }
                 }
 
+                await UpgradeService.MarkOldHostAsync(agent, bridge, known.Id, ct).ConfigureAwait(false);
                 if (known.Enrolled) return ("done", host.VaultMode is null ? "Added and enrolled." : $"Added and enrolled; vault mode {host.VaultMode}.");
                 // Carried over all the same: the host keeps its pin and the old sign-in, and connecting it again from
                 // Settings enrols this device once the host can. A second run leaves it alone.
@@ -165,7 +176,7 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
             }).ConfigureAwait(false);
         }
 
-        if (!repo.IsGit) _notes.Add("The config folder is no git repository (or git is missing): VM branches were not looked at.");
+        if (!repo.IsGit) Note("The config folder is no git repository (or git is missing): VM branches were not looked at.");
         foreach (var change in repo.UnmergedChanges(legacy.Instances().Select(i => i.ConfigBranch)))
         {
             await ItemAsync($"branch:{change.Branch}:{change.Profile}", $"Unmerged change to {change.Profile} on {change.Branch}", async () =>
@@ -260,7 +271,7 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
         if (files.Count == 0) return Task.FromResult<(string, string?)>(("skipped", "No upstream links."));
         var document = new JsonObject { ["v"] = 1, ["files"] = new JsonObject(files.Select(f => KeyValuePair.Create(f.Key, (JsonNode?)f.Value))) };
         PrivateFiles.Write(Path.Combine(dataDirectory, "legacy-upstream.json"), Encoding.UTF8.GetBytes(document.ToJsonString()));
-        _notes.Add("Company upstream links were kept as data in legacy-upstream.json; the new stack does not use them yet.");
+        Note("Company upstream links were kept as data in legacy-upstream.json; the new stack does not use them yet.");
         return Task.FromResult<(string, string?)>(("done", $"{files.Count} file(s) kept for when upstream links come to the new stack."));
     });
 
@@ -290,7 +301,7 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
             }
 
             if (vault.Leases > 0 || vault.Cleanups > 0)
-                _notes.Add("Open vault leases end with the upgrade: a VM that needs a secret again asks for it again.");
+                Note("Open vault leases end with the upgrade: a VM that needs a secret again asks for it again.");
             foreach (var secret in vault.Secrets)
             {
                 await ItemAsync("secret:" + secret.Name, "Secret " + secret.Name, async () =>

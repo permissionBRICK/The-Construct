@@ -180,7 +180,42 @@ export interface paths {
         };
         get?: never;
         put?: never;
+        /** @description Issues a new recovery code; the old one stops working. */
         post: operations["NewRecoveryCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/device/recovery-code/again": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description While the setup's code is not confirmed: a new one (the earlier stops working), for the first run or the upgrade after a reload. 409 recovery-confirmed otherwise. */
+        post: operations["ReissueRecoveryCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/device/recovery-code/kept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description The user confirmed the code of that issue was kept: the setup's recovery step is done. 409 code-replaced when a newer code was issued since. */
+        post: operations["ConfirmRecoveryCode"];
         delete?: never;
         options?: never;
         head?: never;
@@ -926,6 +961,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/upgrade/notes/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description After the conversion: the user went on from its notes, which are not shown again. */
+        post: operations["ReadUpgradeNotes"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -979,6 +1031,10 @@ export interface components {
             path: string;
             message?: null | string;
         };
+        ConfirmRecoveryCodeRequest: {
+            /** Format: int64 */
+            issue: number;
+        };
         ConnectEngineRequest: {
             vaultMode?: null | string;
         };
@@ -1031,6 +1087,7 @@ export interface components {
             storeEngine: null | string;
             protection: string;
             protectionWeak: boolean;
+            recoveryUnconfirmed: boolean;
         };
         EngineProbe: {
             url: string;
@@ -1117,6 +1174,8 @@ export interface components {
         };
         RecoveryCodeResponse: {
             recoveryCode: string;
+            /** Format: int64 */
+            issue: number;
         };
         RestoreRequest: {
             requestId?: null | string;
@@ -1284,6 +1343,7 @@ export interface components {
             oldWriters: string[];
             running: boolean;
             error: null | string;
+            oldHosts: string[];
         };
         VaultApprovalItem: {
             engine: string;
@@ -1712,6 +1772,66 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["RecoveryCodeResponse"];
                 };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    ReissueRecoveryCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryCodeResponse"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    ConfirmRecoveryCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfirmRecoveryCodeRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description An error. */
             default: {
@@ -3402,6 +3522,35 @@ export interface operations {
         responses: {
             /** @description Accepted */
             202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpgradeView"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    ReadUpgradeNotes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -14,9 +14,9 @@ import { spanText } from './api/map';
 export type Scene =
   | 'calm' | 'update' | 'changed' | 'lease' | 'enter' | 'job' | 'failed' | 'failed-reinstall' | 'repair' | 'updating' | 'restart'
   | 'pairing' | 'pair-confirm' | 'revoked' | 'handout' | 'creating'
-  | 'upgrade-intro' | 'upgrade-code' | 'upgrade-close' | 'upgrade-convert';
+  | 'upgrade-intro' | 'upgrade-code' | 'upgrade-close' | 'upgrade-convert' | 'upgrade-host' | 'upgrade-done';
 
-export const SCENES: Scene[] = ['calm', 'update', 'changed', 'lease', 'enter', 'job', 'failed', 'failed-reinstall', 'repair', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'upgrade-intro', 'upgrade-code', 'upgrade-close', 'upgrade-convert'];
+export const SCENES: Scene[] = ['calm', 'update', 'changed', 'lease', 'enter', 'job', 'failed', 'failed-reinstall', 'repair', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'upgrade-intro', 'upgrade-code', 'upgrade-close', 'upgrade-convert', 'upgrade-host', 'upgrade-done'];
 
 /** Things the preview frame can make happen, beside the user's own actions. */
 export type Demo = 'lease' | 'enter' | 'release' | 'fail-next' | 'change';
@@ -137,6 +137,8 @@ export class FakeBackend implements Backend {
       case 'upgrade-code': d.upgrade = upgrade('recovery', { code: RECOVERY_CODE }); break;
       case 'upgrade-close': d.upgrade = upgrade('close', { writers: ['VS Code'] }); break;
       case 'upgrade-convert': d.upgrade = upgrade('convert', { running: true, items: UPGRADE_ITEMS(3) }); break;
+      case 'upgrade-host': d.upgrade = upgrade('convert', { oldHosts: ['lab.example'] }); break;
+      case 'upgrade-done': d.upgrade = upgrade('done', { notes: ['The VM mesa was not reached; the next run moves it.', 'Open vault leases end with the upgrade: a VM that needs a secret again asks for it again.'] }); break;
     }
     this.timers = t;
   }
@@ -762,6 +764,7 @@ export class FakeBackend implements Backend {
       if (!input?.deviceName?.trim()) return to('recovery', { error: 'Name this device' });
       return to('recovery', { code: RECOVERY_CODE });
     }
+    if (u.step === 'done') { this.set(d => { d.upgrade = null; }, 'Moved over'); return; }
     if (u.step === 'close') return to('convert');
     to('convert', { running: true, items: UPGRADE_ITEMS(0) });
     const step = (i: number) => this.after(2, () => {
@@ -792,7 +795,8 @@ const REPAIR_SCRIPT = [
 const ROTATE = [{ secret: 'forge-token', last: '4 d' }, { secret: 'deploy-key', last: '9 d' }, { secret: 'staging-db', last: '12 d' }];
 
 function upgrade(step: Upgrade['step'], extra: Partial<Upgrade> = {}): Upgrade {
-  return { step, running: false, error: null, code: null, writers: [], items: [], found: { vms: ['atlas', 'harbor', 'mesa', 'quarry'], profiles: 4, vault: true }, adminPrompt: true, ...extra };
+  return { step, running: false, error: null, code: null, writers: [], items: [], found: { vms: ['atlas', 'harbor', 'mesa', 'quarry'], profiles: 4, vault: true }, adminPrompt: true,
+    oldHosts: [], notes: [], ...extra };
 }
 
 const newRepair = (): NonNullable<Job['repair']> => ({ agent: 'Claude Code', state: 'working', messages: [{ from: 'agent', text: REPAIR_SCRIPT[0] }], t3Thread: false, outcome: null });

@@ -27,6 +27,9 @@ public static class UpgradeRoutes
         api.MapPost("/upgrade/convert", ([FromBody] ConvertRequest? request) => TypedResults.Accepted("/api/upgrade", upgrade.StartConvert(request ?? new ConvertRequest())))
             .WithName("StartUpgradeConvert")
             .WithDescription("Step 4: copies the old state into the new stack and switches the local VMs over; repeatable, a second run changes nothing already there.");
+
+        api.MapPost("/upgrade/notes/read", () => TypedResults.Ok(upgrade.ReadNotes())).WithName("ReadUpgradeNotes")
+            .WithDescription("After the conversion: the user went on from its notes, which are not shown again.");
     }
 }
 

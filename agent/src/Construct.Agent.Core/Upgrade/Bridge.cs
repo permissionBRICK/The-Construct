@@ -35,6 +35,15 @@ public sealed record BridgeState
     /// <summary>What the last run says the user should know (leases end, upstream links kept as data, ...).</summary>
     public IReadOnlyList<string> Notes { get; init; } = [];
 
+    /// <summary>The account the last run wrote <see cref="Notes"/> for; they are shown to that account only.</summary>
+    public string? NotesAccount { get; init; }
+
+    /// <summary>The user went on from the notes after the conversion; they are not shown again.</summary>
+    public bool NotesRead { get; init; }
+
+    /// <summary>Shared hosts that still run the old stack (no <c>GET /engine</c>): this device stays signed in the old way there.</summary>
+    public IReadOnlyList<string> OldHosts { get; init; } = [];
+
     public DateTimeOffset? ConvertedAt { get; init; }
 }
 

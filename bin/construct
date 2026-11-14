@@ -14,6 +14,7 @@
 #   construct secret <command> [args]              key vault: lease secrets the user approves
 #   construct backup <command> [args]              encrypted config backups stored by the host
 #   construct config get|set|unset|list [args]     per-VM settings agents may change
+#   construct update status|run [--json]           a newer Construct for this VM; update it
 #   construct systemprompt                         regenerate every agent's instruction
 #                                                  file (template + ~/construct-custom-system-prompt.md)
 #
@@ -46,6 +47,8 @@
 #      lacks the feature, 5 not enough space on the VM, 6 host refused,
 #      7 transfer failed, 8 decryption or verification failed, 9 another
 #      backup or restore is running, 10 export or restore step failed
+#   update: 4 no engine or an older host without the route, 6 refused by
+#      the engine, 8 the engine could not be reached
 set -euo pipefail
 
 PROJECTS_STORE="${PROJECTS_STORE:-/opt/construct/projects}"
@@ -55,7 +58,14 @@ usage() {
   cat <<'USAGE'
 Usage: construct project <command> [args]
        construct notify <message> [options]
+       construct update status|run [--json]
        construct systemprompt
+
+update — a newer Construct for this VM, through its engine:
+  status [--json]               Whether a newer payload or host release is out.
+  run [--json]                  Update this VM (and the host first, when you
+                                administer it and a host release is out).
+  See construct update --help.
 
 systemprompt — regenerate the global instruction file of every installed agent
   (~/.claude/CLAUDE.md, ~/.codex/AGENTS.md, ~/.config/opencode/AGENTS.md) from
@@ -248,6 +258,12 @@ case "$1" in
       || die "construct-config.sh not found (looked next to $0 and in ${CONSTRUCT_REPO_DIR}/bin)"
     exec bash "${config_impl}" "$@"
     ;;
+  update)
+    shift
+    update_impl="$(find_helper construct-update.sh)" \
+      || die "construct-update.sh not found (looked next to $0 and in ${CONSTRUCT_REPO_DIR}/bin)"
+    exec bash "${update_impl}" "$@"
+    ;;
   systemprompt|system-prompt)
     # The renderer lives with the agent installers; source it function-only so
     # nothing else runs, then re-render root's (and TARGET_USER's) files.
@@ -259,7 +275,7 @@ case "$1" in
     exit $?
     ;;
   help|--help|-h) usage; exit 0 ;;
-  *) die "Unknown command: $1 (try: construct project set|get|delete|list|conflicts|resolve, construct notify, construct systemprompt)" ;;
+  *) die "Unknown command: $1 (try: construct project set|get|delete|list|conflicts|resolve, construct notify, construct update, construct systemprompt)" ;;
 esac
 
 if [[ $# -lt 1 ]]; then usage >&2; exit 1; fi

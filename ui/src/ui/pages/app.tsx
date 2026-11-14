@@ -181,8 +181,10 @@ export function Upgrade() {
   const u = s.upgrade;
   const [stored, setStored] = useState(false);
   const [deviceName, setDeviceName] = useState(s.device.name);
+  // A new code (shown again after a reload or a replaced one) is confirmed anew.
+  useEffect(() => setStored(false), [u?.code?.join('-')]);
   if (!u) return null;
-  const at = STEPS.findIndex(x => x[0] === u.step);
+  const at = u.step === 'done' ? STEPS.length : STEPS.findIndex(x => x[0] === u.step);
   const top = (
     <>
       <span class="brand"><Icon n="cube" />The Construct</span>
@@ -222,7 +224,8 @@ export function Upgrade() {
           <Btn icon="print" onClick={() => be.exportRecoveryCode('print')} disabled={na(s, 'export-code')}>Print</Btn>
         </div>
         <label class="bf check"><input type="checkbox" checked={stored} onChange={e => setStored(e.currentTarget.checked)} /><span>I stored it</span></label>
-        <Btn kind="pri" disabled={!stored} onClick={() => be.upgradeNext()}>Continue</Btn>
+        {problem}
+        <Btn kind="pri" disabled={!stored || u.running} onClick={() => be.upgradeNext()}>Continue</Btn>
       </div>
     );
   }
@@ -242,6 +245,13 @@ export function Upgrade() {
       <div class="wft"><span class="d"><Icon n="repro" />Waiting</span></div>
     </div>
   );
+  if (u.step === 'done') return (
+    <div class="solo">{top}<h3>Moved over</h3>
+      <div class="wz">{u.notes.map(n => wl(<Icon n="log" />, n))}</div>
+      {problem}
+      <div class="wft"><span />{next('Continue')}</div>
+    </div>
+  );
   return (
     <div class="solo">{top}<h3>Moving over</h3>
       {u.items.length > 0 && (
@@ -251,6 +261,7 @@ export function Upgrade() {
             it.state === 'done' || it.state === 'skipped' ? 'ok' : it.state === 'waiting' ? 'wait' : ''))}
         </div>
       )}
+      {u.oldHosts.length > 0 && <div class="line d">Not moved yet: {u.oldHosts.join(', ')}</div>}
       {problem}
       <div class="wft"><span class="d"><Icon n="power" />VMs keep running</span>{next('Move over')}</div>
     </div>
@@ -274,6 +285,7 @@ export function FirstRun() {
   const [code, setCode] = useState('');
   const [stored, setStored] = useState(false);
   const pin = usePin();
+  useEffect(() => setStored(false), [f?.code?.join('-')]);
   if (!f) return null;
   const at = f.step === 'code' ? 1 : 0;
   const top = (
@@ -292,7 +304,14 @@ export function FirstRun() {
         <Btn icon="print" onClick={() => be.exportRecoveryCode('print')} disabled={na(s, 'export-code')}>Print</Btn>
       </div>
       <label class="bf check"><input type="checkbox" checked={stored} onChange={e => setStored(e.currentTarget.checked)} /><span>I stored it</span></label>
-      <Btn kind="pri" disabled={!stored} onClick={() => be.firstRunNext()}>Continue</Btn>
+      {f.problem && <div class="line badc" role="alert">{f.problem}</div>}
+      <Btn kind="pri" disabled={!stored || f.busy} onClick={() => be.firstRunNext()}>Continue</Btn>
+    </div>
+  );
+  if (f.step === 'code') return (
+    <div class="solo">{top}<h3>Recovery code</h3>
+      {f.problem && <div class="line badc" role="alert">{f.problem}</div>}
+      <Btn kind="pri" icon="retry" disabled={f.busy} onClick={() => be.firstRunNext()}>{f.busy ? 'Working' : 'Retry'}</Btn>
     </div>
   );
   if (f.step === 'pairing' && f.pairing) return (

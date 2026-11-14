@@ -64,11 +64,23 @@ public static class AgentRoutes
         // ---- this device (8.2, 8.5) ----
 
         api.MapPost("/device/setup", async (DeviceAgent agent, [FromBody] SetupRequest request, CancellationToken ct) =>
-            TypedResults.Ok(new RecoveryCodeResponse(await agent.SetupAsync(request.Engine, request.DeviceName, request.VaultMode, ct)))).WithName("SetUpFirstDevice")
+            TypedResults.Ok(RecoveryCodeResponse.Of(await agent.SetupAsync(request.Engine, request.DeviceName, request.VaultMode, ct)))).WithName("SetUpFirstDevice")
             .WithDescription("The account's first device, against the engine's built-in store. The answer carries the recovery code, the only time it is shown.");
 
         api.MapPost("/device/recovery-code", async (DeviceAgent agent, CancellationToken ct) =>
-            TypedResults.Ok(new RecoveryCodeResponse(await agent.NewRecoveryCodeAsync(ct)))).WithName("NewRecoveryCode");
+            TypedResults.Ok(RecoveryCodeResponse.Of(await agent.NewRecoveryCodeAsync(ct)))).WithName("NewRecoveryCode")
+            .WithDescription("Issues a new recovery code; the old one stops working.");
+
+        api.MapPost("/device/recovery-code/again", async (DeviceAgent agent, CancellationToken ct) =>
+            TypedResults.Ok(RecoveryCodeResponse.Of(await agent.ReissueRecoveryCodeAsync(ct)))).WithName("ReissueRecoveryCode")
+            .WithDescription("While the setup's code is not confirmed: a new one (the earlier stops working), for the first run or the upgrade after a reload. 409 recovery-confirmed otherwise.");
+
+        api.MapPost("/device/recovery-code/kept", async (DeviceAgent agent, [FromBody] ConfirmRecoveryCodeRequest request, CancellationToken ct) =>
+        {
+            await agent.ConfirmRecoveryCodeAsync(request.Issue, ct);
+            return TypedResults.NoContent();
+        }).WithName("ConfirmRecoveryCode")
+            .WithDescription("The user confirmed the code of that issue was kept: the setup's recovery step is done. 409 code-replaced when a newer code was issued since."); 
 
         api.MapPost("/device/recover", async (DeviceAgent agent, [FromBody] RecoverRequest request, CancellationToken ct) =>
         {
@@ -169,7 +181,14 @@ public sealed record SetupRequest(string Engine, string DeviceName, string? Vaul
 
 public sealed record RecoverRequest(string Engine, string Account, [property: ConstructSecret] string RecoveryCode, string DeviceName);
 
-public sealed record RecoveryCodeResponse([property: ConstructSecret] string RecoveryCode);
+/// <param name="Issue">The number of this code's issue; the confirm names it.</param>
+public sealed record RecoveryCodeResponse([property: ConstructSecret] string RecoveryCode, long Issue)
+{
+    public static RecoveryCodeResponse Of(IssuedCode code) => new(code.Code, code.Issue);
+}
+
+/// <summary><c>POST /api/device/recovery-code/kept</c>: the issue of the code the user saw and kept.</summary>
+public sealed record ConfirmRecoveryCodeRequest(long Issue);
 
 public sealed record StartPairingRequest(string Engine, string DeviceName);
 
