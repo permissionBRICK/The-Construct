@@ -9,7 +9,8 @@ import { fileURLToPath } from 'node:url';
    to its end) and two device agents, each serving the built bundle. One browser drives both: first-run setup
    on the first device after confirming the host's fingerprint, a VM created through the UI with its settings
    and provisioned by the engine alone, a setting changed and the dot on Reprovision, a reprovision to its end,
-   a failed reprovision retried, a secret added and revealed, the VM asking for it through the engine's guest
+   a failed reprovision retried, the repair agent's switch turned off on the host, a failed step repaired by the
+   agent started from the UI (output, one reply, fixed, the job run again), a secret added and revealed, the VM asking for it through the engine's guest
    routes and the card allowing it, a profile edited and saved, a reinstall to its end, a restore of the backup
    it left, then the second device paired. */
 
@@ -140,6 +141,38 @@ test('first run, a VM, a reprovision and a second device on the real API', async
   await expect(pa.getByRole('status')).toHaveText('Reprovisioned alpha', { timeout: 90000 });
   await expect(pa.locator('.blk.job')).toHaveCount(0);
   expect(sent.slice(before).map(r => new URL(r.url).pathname).filter(p => p.includes('/jobs'))).toEqual([expect.stringMatching(/\/api\/v1\/jobs\/[^/]+\/retry$/)]);
+
+  // The host's repair agent starts by itself by default; the admin switches that off on the host's settings.
+  await pa.goto(`${a.base}/#/hosts`);
+  await pa.locator('tbody tr').first().click();
+  await pa.getByRole('tab', { name: 'Configuration' }).click();
+  const auto = pa.getByRole('switch', { name: 'Repair agent starts by itself' });
+  await expect(auto).toHaveAttribute('aria-checked', 'true');
+  await auto.click();
+  await expect(pa.getByRole('status')).toHaveText('The repair agent starts when asked');
+  await expect.poll(async () => (await (await admin.get('/api/v1/host/config')).json()).repair.auto).toBe(false);
+
+  // A provision step that fails: the agent is started from the failed job, its output shows, it takes one reply
+  // while it waits, says it fixed the cause, and the engine runs the job again to its end.
+  await pa.goto(`${a.base}/#/home`);
+  writeFileSync(join(engine.dir, 'fail-step'), '');
+  await pa.getByRole('button', { name: 'Reprovision' }).click();
+  const failed = pa.locator('.blk.bad.job');
+  await expect(failed.locator('.bh b').first()).toHaveText('Reprovision failed', { timeout: 90000 });
+  await failed.getByRole('button', { name: 'Let an agent fix it' }).click();
+  const chat = failed.getByLabel('Repair agent');
+  await expect(chat.locator('.chat p.tool')).toContainText('Bash: tail -n 50');
+  await expect(chat.locator('.chat p.agent').first()).toContainText('package mirror timed out');
+  await chat.getByRole('textbox', { name: 'Reply' }).fill('retry it');
+  await chat.getByRole('button', { name: 'Send' }).click();
+  await expect(chat.locator('.chat p.user')).toHaveText('retry it');
+  await expect(chat.getByRole('textbox', { name: 'Reply' })).toHaveCount(0);
+  await expect(pa.locator('.blk.job .msg.okc')).toContainText('Fixed; the job runs again', { timeout: 60000 });
+  await expect(pa.getByRole('status')).toHaveText('Reprovisioned alpha', { timeout: 90000 });
+  await expect(pa.locator('.blk.job')).toHaveCount(0);
+  const repair = (await (await admin.get('/api/v1/vms/alpha/repair')).json()) as { state: string; outcome: string; retryJobId: string | null; automatic: boolean };
+  expect(repair).toMatchObject({ state: 'ended', outcome: 'fixed', automatic: false });
+  expect(repair.retryJobId).not.toBeNull();
 
   // A secret added in the vault and revealed for a moment.
   await pa.goto(`${a.base}/#/vault`);

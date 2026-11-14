@@ -2,13 +2,14 @@ import createClient, { type Client } from 'openapi-fetch';
 import type { paths as AgentPaths } from '../generated/agent';
 import type { paths as EnginePaths } from '../generated/engine';
 import type {
-  Backend, CreateVmRequest, Feature, FirstRunRequest, Host, HostProbe, HostUser, HostVm, Job, JobKind, Open, Prefs, ProfileSave, SettingsPatch, State, VaultMode, VaultRequest, Vm, WinKey,
+  Backend, CreateVmRequest, Feature, FirstRunRequest, Host, HostProbe, HostUser, HostVm, Job, JobKind, Open, Prefs, ProfileSave, SettingsPatch, State, Upgrade, VaultMode, VaultRequest, Vm, WinKey,
 } from '../types';
 import { followEvents, type AgentEventData } from './events';
 import {
   updateRunning, allowanceOf, codeGroups, hostVersion, jobKey, problemText, splitJobKey, toCert, toConfig, toDevice, toHostJob, toHostUser, toHostVm, toJob,
   toMedia, toStatus, toUpdates, toUsage, toVm, toWindows, vmKey, toSecret, toLeases, toVaultEvent, toApproval, toEntryRequest, toProfile, splitRequestKey, VM_JOB_KINDS,
-  settingsFields, withDesired, toLink, toEverything, hostKind, toIsos,
+  settingsFields, withDesired, toLink, toEverything, hostKind, toIsos, toRepair, REPAIRABLE, upgradeStep, toUpgradeItem,
+  type RepairSession, type RepairLine, type UpgradeView,
   type DeviceItem, type ProfileResponse, type AuditEntry, type EngineView, type Health, type HostUpdateStatus, type HttpsStatus, type JobResponse, type MediaItem, type TokenSummary,
   type UsageSummary, type UserDetail, type VmParts, type VmResponse, type WhoAmI, type HostStatus, type HostConfig, type HostWindows, type HostCapabilities, type IsoCatalog,
   type ConnectionView, type ProvisionSettings,
@@ -24,9 +25,11 @@ type Loose = Record<string, unknown>;
 
 /** What this backend cannot serve yet; the screens show these parts as not available. */
 export const API_GAPS: Feature[] = [
-  'repair-chat', 'sharing', 'console', 'vm-password', 'vm-disk', 'vm-boot', 'windows-sign-in', 'export-code', 'code-reveal', 'vm-token',
+  'sharing', 'console', 'vm-password', 'vm-disk', 'vm-boot', 'windows-sign-in', 'export-code', 'code-reveal', 'vm-token',
   'agent-update', 'notifications', 'log', 'vm-history', 't3-proxy',
 ];
+/** On Windows the agent signs in with the Windows user where an engine offers it. */
+const WINDOWS_GAPS = API_GAPS.filter(f => f !== 'windows-sign-in');
 
 const NA = 'Not available yet';
 const PREFS_KEY = 'construct.prefs';
@@ -47,7 +50,12 @@ interface AdminData {
   isos: Host['isos'];
   /** A solo host's LAN switch; undefined on any other host. */
   lan: boolean | undefined;
+  /** `repair.auto` from the host configuration. */
+  repairAuto: boolean | undefined;
 }
+
+/** A repair session with the lines read so far. */
+interface RepairRead { sess: Omit<RepairSession, 'lines'>; lines: RepairLine[]; last: number }
 
 interface Slice {
   view: EngineView;
@@ -66,11 +74,18 @@ interface Slice {
   usageWindow: Host['usage']['window'];
   kind: string;
   problem: string | null;
+  /** The latest repair session of each of the user's VMs, keyed by the VM's name in lower case. */
+  repairs: Map<string, RepairRead>;
+  /** Failed jobs whose VM was asked for its repair session once. */
+  repairChecked: Set<string>;
+  /** Failed jobs a start of the repair agent is on its way for; sessions a reply is on its way to. */
+  repairStarting: Set<string>;
+  replying: Set<string>;
 }
 
 const newSlice = (view: EngineView): Slice => ({
   view, me: null, health: null, all: [], mine: [], parts: new Map(), jobs: [], ended: new Map(), lost: new Set(), admin: null, autoReprovision: null,
-  usageWindow: 'month', kind: '', problem: null,
+  usageWindow: 'month', kind: '', problem: null, repairs: new Map(), repairChecked: new Set(), repairStarting: new Set(), replying: new Set(),
 });
 
 class ApiError extends Error {
@@ -146,6 +161,17 @@ export class ApiBackend implements Backend {
   private linkProblem: string | null = null;
   private deviceAutoUpdate = false;
   private desiredSaves = new Map<string, Promise<void>>();
+  private repairReads = new Map<string, Promise<void>>();
+  /** This device runs Windows: Windows sign-in is offered and sent. */
+  private windows = false;
+  /* The one-time upgrade: the agent's last answer, the recovery code while it is on screen (nowhere else), a step
+     this page runs, its error, and the converter's items as its events report them. */
+  private upgradeView: UpgradeView | null = null;
+  private upgradeCode: string[] | null = null;
+  private upgradeBusy = false;
+  private upgradeProblem: string | null = null;
+  private upgradeItems: Map<string, Upgrade['items'][number]> | null = null;
+  private writersTimer: ReturnType<typeof setTimeout> | null = null;
   constructor(private opts: ApiOptions) {
     this.fetchImpl = opts.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
     const headers = { Authorization: `Bearer ${opts.token}` };
@@ -177,6 +203,7 @@ export class ApiBackend implements Backend {
   dispose() {
     this.stopEvents?.();
     if (this.timer) clearTimeout(this.timer);
+    if (this.writersTimer) clearTimeout(this.writersTimer);
     this.subs.clear();
   }
 
@@ -236,7 +263,10 @@ export class ApiBackend implements Backend {
       this.emit({ version: health.version.split('+')[0], device: { name: st.device.name ?? '' } });
       this.registered = st.device.registered;
       this.storeEngine = st.device.storeEngine;
+      // An old install not converted yet: the upgrade dialog is the only screen until its last step.
+      if (await this.loadUpgrade()) return;
       if (!st.device.registered) {
+        await this.loadPlatform();
         if (!this.s.firstRun) {
           let local: string | null = null;
           try {
@@ -296,11 +326,24 @@ export class ApiBackend implements Backend {
       prefs.startWithOs = !!set.value.startWithOs;
       this.deviceAutoUpdate = set.value.autoUpdate;
     }
-    if (feat.status === 'fulfilled') device.can = { mic: feat.value.microphone, share: feat.value.share, startWithOs: feat.value.startWithOs };
+    if (feat.status === 'fulfilled') {
+      device.can = { mic: feat.value.microphone, share: feat.value.share, startWithOs: feat.value.startWithOs };
+      this.setPlatform(feat.value.platform);
+    }
     if (key.status === 'fulfilled') device.sshKey = key.value.publicKey;
     const everything = every.status === 'fulfilled' && every.value.parts.length ? toEverything(every.value) : this.s.everything ?? null;
     this.emit({ device, prefs, release, everything });
     this.compose();
+  }
+
+  /** What this device is, before it has an identity (first run): only Windows offers Windows sign-in. */
+  private async loadPlatform() {
+    try { this.setPlatform((await ok(this.agent.GET('/api/device/features'))).platform); } catch { /* offered as not Windows */ }
+  }
+
+  private setPlatform(platform: string) {
+    this.windows = platform === 'windows';
+    this.emit({ na: this.windows ? WINDOWS_GAPS : API_GAPS });
   }
 
   /** This device's links to the user's VMs: forwards, the microphone, the SSH alias, and the share where it maps one. */
@@ -465,6 +508,15 @@ export class ApiBackend implements Backend {
         problems,
       });
     }));
+    // A failed job's VM is asked once for its repair session, which may have run before this page opened; events
+    // follow it from there.
+    for (const v of sl.mine) {
+      const newest = this.newestJob(sl, v.name);
+      if (newest?.state === 'failed' && REPAIRABLE.has(newest.kind) && !sl.repairChecked.has(newest.id)) {
+        sl.repairChecked.add(newest.id);
+        void this.readRepair(id, v.name);
+      }
+    }
     if (!sl.kind) {
       try { sl.kind = hostKind(await ok(c.GET('/api/v1/host/capabilities')) as HostCapabilities); } catch { /* shown without its kind */ }
     }
@@ -511,6 +563,7 @@ export class ApiBackend implements Backend {
       windows: windows.status === 'fulfilled' ? toWindows(windows.value) : prev?.windows ?? { winKeys: [], winGuests: [] },
       isos: isos.status === 'fulfilled' ? toIsos(isos.value) : prev?.isos ?? [],
       lan,
+      repairAuto: config.status === 'fulfilled' ? (config.value as HostConfig).repair?.auto ?? true : prev?.repairAuto,
     };
   }
 
@@ -540,12 +593,12 @@ export class ApiBackend implements Backend {
         else this.transit.delete(id);
         vms.push(v);
         // The newest VM job of this VM decides what its pages show.
-        const own = sl.jobs.filter(j => j.vmName?.toLowerCase() === r.name.toLowerCase() && VM_JOB_KINDS.includes(j.kind));
-        const newest = own.sort((a, b) => a.created.localeCompare(b.created)).at(-1);
+        const newest = this.newestJob(sl, r.name);
         if (newest) {
           const key = jobKey(engine, newest.id);
           const st = this.started.get(key);
           const job = toJob(key, id, newest, st?.kind);
+          if (job) this.withRepair(sl, r.name, newest, job);
           if (job && !this.dismissed.has(key)) jobs.push({ ...job, from: st?.from, to: st?.to, at: newest.created });
         }
       }
@@ -558,6 +611,24 @@ export class ApiBackend implements Backend {
       // On only when this device and every engine update by themselves; the switch sets all of them.
       prefs: { ...this.s.prefs, autoUpdate: this.deviceAutoUpdate && auto.every(Boolean) },
     });
+  }
+
+  private newestJob(sl: Slice, vm: string): JobResponse | undefined {
+    const own = sl.jobs.filter(j => j.vmName?.toLowerCase() === vm.toLowerCase() && VM_JOB_KINDS.includes(j.kind));
+    return own.sort((a, b) => a.created.localeCompare(b.created)).at(-1);
+  }
+
+  /** The repair session of this VM that belongs to the job: the one on a failed job, or, on the job the engine
+      retried after a fix, the fix. A session of another job or VM is never shown here. */
+  private withRepair(sl: Slice, vm: string, raw: JobResponse, job: Job) {
+    const rep = sl.repairs.get(vm.toLowerCase());
+    if (raw.state === 'failed') {
+      const own = rep && rep.sess.jobId === raw.id ? rep : null;
+      job.repair = own ? toRepair(own.sess, own.lines, sl.replying.has(own.sess.id)) : null;
+      job.canRepair = REPAIRABLE.has(raw.kind) && !sl.repairStarting.has(raw.id) && (!own || (own.sess.state === 'ended' && own.sess.outcome !== 'fixed'));
+    } else if (rep && rep.sess.retryJobId === raw.id && rep.sess.state === 'ended' && rep.sess.outcome === 'fixed') {
+      job.repair = toRepair(rep.sess, rep.lines);
+    }
   }
 
   private host(engine: string, sl: Slice): Host {
@@ -593,6 +664,7 @@ export class ApiBackend implements Backend {
       updateTo: admin ? (u?.available && u.available.commit !== u.installed.commit ? u.available.version : null) : null,
       problem: sl.problem,
       ...(a?.lan !== undefined ? { lan: a.lan } : {}),
+      ...(admin && a?.repairAuto !== undefined ? { repairAuto: a.repairAuto } : {}),
     };
   }
 
@@ -613,6 +685,17 @@ export class ApiBackend implements Backend {
         if (type.endsWith('ended')) void this.loadVault();
         return;
       case 'pairing': return this.onPairing(data);
+      case 'upgrade':
+        if (data && typeof data.id === 'string' && typeof data.label === 'string' && this.upgradeItems) {
+          this.upgradeItems.set(data.id, toUpgradeItem(data as never));
+        }
+        void this.followUpgrade();
+        return;
+      case 'repair.started': case 'repair.output': case 'repair.ended': {
+        const vm = typeof data?.vm === 'string' ? data.vm : null;
+        if (engine && vm && id && this.slices.has(engine)) void this.readRepair(engine, vm, id);
+        return;
+      }
       case 'job.started': case 'job.progress': case 'job.ended':
         if (engine && id && this.slices.has(engine)) void this.readJob(engine, id);
         return;
@@ -627,12 +710,238 @@ export class ApiBackend implements Backend {
         if (engine && this.slices.has(engine)) void this.refreshEngine(engine);
         return;
       case 'engine.reset':
-        if (engine && this.slices.has(engine)) { void this.refreshEngine(engine); void this.loadRequests(); }
+        if (engine && this.slices.has(engine)) {
+          // An engine restart ends every repair session: forget them, and ask each failed job's VM again.
+          const sl = this.slices.get(engine)!;
+          sl.repairs.clear();
+          sl.repairChecked.clear();
+          void this.refreshEngine(engine);
+          void this.loadRequests();
+        }
         return;
       case 'vm.created': case 'vm.changed': case 'vm.power': case 'vm.deleted': case 'update.offered': case 'update.finished':
         if (engine && this.slices.has(engine)) void this.refreshEngine(engine);
         return;
     }
+  }
+
+  /* --- the one-time upgrade --- */
+
+  /** Reads where the one-time upgrade stands; true while its dialog holds the screen. An agent without the
+      upgrade, or an install that is new or converted, shows the normal screens. */
+  private async loadUpgrade(): Promise<boolean> {
+    let v: UpgradeView;
+    try {
+      v = await ok(this.agent.GET('/api/upgrade'));
+    } catch (e) {
+      if (!this.s.upgrade) return false;
+      this.upgradeProblem = errText(e);
+      this.composeUpgrade();
+      return true;
+    }
+    if (!v.legacy || v.stage === 'converted') {
+      const was = this.s.upgrade !== null;
+      this.upgradeView = null;
+      this.upgradeCode = null;
+      this.upgradeItems = null;
+      this.upgradeProblem = null;
+      this.watchWriters(false);
+      if (was) { this.emit({ upgrade: null }); this.note('Moved over'); }
+      return false;
+    }
+    this.upgradeView = v;
+    this.composeUpgrade();
+    return true;
+  }
+
+  /** After an upgrade event or a step: the dialog follows the agent; when the conversion is done the normal screens load. */
+  private async followUpgrade() {
+    const was = this.s.upgrade !== null;
+    if (!(await this.loadUpgrade()) && was) await this.load();
+  }
+
+  private composeUpgrade() {
+    const v = this.upgradeView;
+    if (!v) return;
+    const step = upgradeStep(v, this.upgradeCode !== null) ?? 'convert';
+    const running = this.upgradeBusy || v.running;
+    const failedItems = step === 'convert' && v.steps.find(x => x.id === 'convert')?.state === 'failed';
+    const error = running ? null : this.upgradeProblem ?? v.error ?? (failedItems ? 'Some items did not move over' : null);
+    const live = this.upgradeItems && (running || !v.items.length) ? [...this.upgradeItems.values()] : null;
+    const found = v.found ? { vms: [...v.found.localVms, ...v.found.remoteVms], profiles: v.found.profiles.length, vault: v.found.vault } : null;
+    this.emit({
+      upgrade: {
+        step, running, error, code: step === 'recovery' ? this.upgradeCode : null, writers: step === 'close' ? v.oldWriters : [],
+        items: live ?? v.items.map(toUpgradeItem), found, adminPrompt: !!v.found?.localVms.length,
+      },
+    });
+    this.watchWriters(step === 'close' && !running);
+  }
+
+  /** While the dialog waits for the old programs to close: asks the agent every two seconds which are still open. */
+  private watchWriters(on: boolean) {
+    if (!on) {
+      if (this.writersTimer) clearTimeout(this.writersTimer);
+      this.writersTimer = null;
+      return;
+    }
+    if (this.writersTimer || !(this.opts.pollMs ?? 60000)) return;
+    this.writersTimer = setTimeout(() => {
+      this.writersTimer = null;
+      void (async () => {
+        try {
+          const w = await ok(this.agent.GET('/api/upgrade/writers'));
+          const shown = this.s.upgrade?.writers ?? [];
+          if (!w.open.length || w.open.join('\n') !== shown.join('\n')) { await this.loadUpgrade(); return; }
+        } catch { /* asked again in a moment */ }
+        this.watchWriters(this.s.upgrade?.step === 'close' && !this.s.upgrade.running);
+      })();
+    }, 2000);
+  }
+
+  /** Runs the step the agent reports as the current one, or goes on from the shown recovery code. Nothing else:
+      no step is skipped, and the conversion starts only after the agent says no old program is open. */
+  upgradeNext(input?: { deviceName?: string }) {
+    const u = this.s.upgrade, v = this.upgradeView;
+    if (!u || !v || u.running) return;
+    const step = u.step;
+    if (step === 'recovery' && this.upgradeCode) {
+      // The user confirmed the code is kept: it leaves the state here and is kept nowhere.
+      this.upgradeCode = null;
+      this.composeUpgrade();
+      void this.followUpgrade();
+      return;
+    }
+    this.upgradeBusy = true;
+    this.upgradeProblem = null;
+    this.composeUpgrade();
+    void (async () => {
+      try {
+        if (step === 'engine') await ok(this.agent.POST('/api/upgrade/engine'));
+        else if (step === 'recovery') {
+          const deviceName = input?.deviceName?.trim() ?? '';
+          if (!v.storeEngine) throw new Error('No engine holds the account yet; run the first step again');
+          if (!deviceName) throw new Error('Name this device');
+          const r = await ok(this.agent.POST('/api/device/setup', { body: { engine: v.storeEngine, deviceName } }));
+          this.upgradeCode = codeGroups(r.recoveryCode);
+        } else if (step === 'convert') {
+          const w = await ok(this.agent.GET('/api/upgrade/writers'));
+          if (w.open.length) throw new Error(`Close these first: ${w.open.join(', ')}`);
+          this.upgradeItems = new Map();
+          await ok(this.agent.POST('/api/upgrade/convert', { body: {} }));
+        }
+      } catch (e) {
+        this.upgradeProblem = errText(e);
+      } finally {
+        this.upgradeBusy = false;
+      }
+      await this.followUpgrade();
+    })();
+  }
+
+  /* --- the repair agent --- */
+
+  /** Reads a VM's repair session after an event (or once for a failed job): one read per VM at a time, the lines
+      after the last one read when it is the same session, all of them for a new one. */
+  private readRepair(engine: string, vm: string, id?: string): Promise<void> {
+    const key = vmKey(engine, vm.toLowerCase());
+    const next = (this.repairReads.get(key) ?? Promise.resolve()).then(() => this.fetchRepair(engine, vm, id));
+    this.repairReads.set(key, next);
+    return next;
+  }
+
+  private async fetchRepair(engine: string, vm: string, id?: string) {
+    const sl = this.slices.get(engine);
+    const own = sl?.mine.find(v => v.name.toLowerCase() === vm.toLowerCase());
+    if (!sl || !own) return;
+    const key = own.name.toLowerCase();
+    const c = this.engine(engine);
+    const known = sl.repairs.get(key);
+    const one = (sid: string) => ok(c.GET('/api/v1/vms/{name}/repair/{id}', { params: { path: { name: own.name, id: sid } } }));
+    let r: RepairSession;
+    try {
+      if (id && known?.sess.id !== id) r = await one(id);
+      else {
+        r = await ok(c.GET('/api/v1/vms/{name}/repair', { params: { path: { name: own.name }, query: { after: known?.last ?? 0 } } }));
+        if (known && r.id !== known.sess.id && known.last > 0) r = await one(r.id);
+      }
+    } catch {
+      return; // none (404 no-repair), or not readable now: the job shows its log
+    }
+    this.storeRepair(sl, key, r);
+    this.compose();
+  }
+
+  /** Keeps a session's lines; one of another VM, or older than the one known, is not taken. */
+  private storeRepair(sl: Slice, key: string, r: RepairSession) {
+    if (r.vm.toLowerCase() !== key) return;
+    const known = sl.repairs.get(key);
+    const { lines, ...sess } = r;
+    if (known && known.sess.id !== r.id && known.sess.started > r.started) return;
+    const same = known?.sess.id === r.id;
+    const kept = same ? [...known!.lines, ...lines.filter(l => l.seq > known!.last)] : lines;
+    // A late answer read before the session ended (a start's own answer) does not bring an ended session back.
+    const keep = same && known!.sess.state === 'ended' && sess.state !== 'ended' ? known!.sess : sess;
+    sl.repairs.set(key, { sess: keep, lines: kept, last: kept.at(-1)?.seq ?? (same ? known!.last : 0) });
+  }
+
+  /** The failed job behind a key and the session that belongs to it, all from the one engine and VM the job names. */
+  private repairOf(key: string) {
+    const job = this.s.jobs.find(j => j.id === key);
+    const ref = job && this.vmRef(job.vmId);
+    if (!job || !ref) return null;
+    const [engine, id] = splitJobKey(key);
+    const sl = this.slices.get(engine);
+    const raw = sl?.jobs.find(j => j.id === id);
+    if (engine !== ref.engine || !sl || !raw) return null;
+    const rep = sl.repairs.get(ref.name.toLowerCase());
+    return { job, engine, sl, vm: ref.name, raw, rep: rep && rep.sess.jobId === raw.id ? rep : null };
+  }
+
+  /** "Let an agent fix it": the engine starts the agent on the VM's latest failed job. One the host started
+      meanwhile is followed instead. */
+  startRepair(key: string) {
+    const x = this.repairOf(key);
+    if (!x || x.raw.state !== 'failed' || !x.job.canRepair) return;
+    x.sl.repairStarting.add(x.raw.id);
+    this.compose();
+    const c = this.engine(x.engine);
+    void this.run(async () => {
+      try {
+        const r = await ok(c.POST('/api/v1/vms/{name}/repair', { params: { path: { name: x.vm } } }));
+        this.storeRepair(x.sl, x.vm.toLowerCase(), r);
+      } catch (e) {
+        const sid = e instanceof ApiError && e.code === 'repair-running' ? e.body?.sessionId : null;
+        if (typeof sid !== 'string') throw e;
+        await this.readRepair(x.engine, x.vm, sid);
+      }
+    }).finally(() => { x.sl.repairStarting.delete(x.raw.id); this.compose(); });
+  }
+
+  /** One reply, only while the session waits for one, to that session on that VM. */
+  replyRepair(key: string, text: string) {
+    const t = text.trim();
+    const x = this.repairOf(key);
+    if (!t || !x?.rep || x.rep.sess.state !== 'waiting' || x.sl.replying.has(x.rep.sess.id)) return;
+    const sid = x.rep.sess.id;
+    x.sl.replying.add(sid);
+    this.compose();
+    void this.run(() => ok(this.engine(x.engine).POST('/api/v1/vms/{name}/repair/{id}/reply', { params: { path: { name: x.vm, id: sid } }, body: { text: t } })))
+      .then(async done => {
+        const cur = x.sl.repairs.get(x.vm.toLowerCase());
+        if (done && cur?.sess.id === sid && cur.sess.state === 'waiting') cur.sess = { ...cur.sess, state: 'working' };
+        x.sl.replying.delete(sid);
+        this.compose();
+        await this.readRepair(x.engine, x.vm, sid);
+      });
+  }
+
+  stopRepair(key: string) {
+    const x = this.repairOf(key);
+    if (!x?.rep || x.rep.sess.state === 'ended') return;
+    const sid = x.rep.sess.id;
+    void this.run(() => ok(this.engine(x.engine).DELETE('/api/v1/vms/{name}/repair/{id}', { params: { path: { name: x.vm, id: sid } } })))
+      .then(() => this.readRepair(x.engine, x.vm, sid));
   }
 
   /** Reads one job after an event about it. A job that ended stays ended whatever an older read says. */
@@ -812,8 +1121,6 @@ export class ApiBackend implements Backend {
     }, undefined, engine);
   }
 
-  replyRepair(..._: unknown[]) { this.note(NA); }
-
   dismissJob(key: string) {
     this.dismissed.add(key);
     store.set(DISMISSED_KEY, [...this.dismissed].slice(-200));
@@ -981,9 +1288,12 @@ export class ApiBackend implements Backend {
   createVm(req: CreateVmRequest): string | null {
     const name = req.name.trim();
     if (!name) return null;
-    if (req.where === 'remote' && req.signIn !== 'token') { this.note(NA); return null; }
+    const windows = req.where === 'remote' && req.signIn === 'windows';
+    if (req.where === 'remote' && !windows && req.signIn !== 'token') { this.note(NA); return null; }
+    // Windows sign-in only where the agent reports Windows.
+    if (windows && !this.windows) { this.note(NA); return null; }
     void this.run(async () => {
-      const engine = req.where === 'local' ? await this.localEngine() : await this.addEngine(req.hostAddress ?? '', req.token ?? null, req.pin ?? null);
+      const engine = req.where === 'local' ? await this.localEngine() : await this.addEngine(req.hostAddress ?? '', windows ? null : req.token ?? null, req.pin ?? null, undefined, windows);
       // One request: the engine creates the VM with its recommended size and provisions it with these settings
       // (none chosen yet: the guest's defaults; Settings changes them later).
       const c = this.engine(engine);
@@ -1010,12 +1320,12 @@ export class ApiBackend implements Backend {
 
   /** Adds an engine with the pin the user confirmed (the engine on this machine needs none: `local`), or finds
       it when known. The agent connects only to the certificate the pin names. */
-  private async addEngine(address: string, token: string | null, pin: string | null, local?: { url: string; pin: string; known: string | null }): Promise<string> {
+  private async addEngine(address: string, token: string | null, pin: string | null, local?: { url: string; pin: string; known: string | null }, windows = false): Promise<string> {
     const p = local ?? await ok(this.agent.POST('/api/engines/probe', { body: { address } }));
-    if (p.known && !token) return p.known;
+    if (p.known && !token && !windows) return p.known;
     if (!pin) throw new Error('Confirm the host\'s fingerprint first');
     if (pin.toUpperCase() !== p.pin.toUpperCase()) throw new Error('The host now presents a different certificate than the one you confirmed');
-    const added = await ok(this.agent.POST('/api/engines', { body: { address: p.url, pin, userToken: token, windowsSignIn: false } }));
+    const added = await ok(this.agent.POST('/api/engines', { body: { address: p.url, pin, userToken: windows ? null : token, windowsSignIn: windows && this.windows } }));
     if (!this.slices.has(added.id)) this.slices.set(added.id, newSlice(added));
     return added.id;
   }
@@ -1186,6 +1496,11 @@ export class ApiBackend implements Backend {
 
   updateHostVms(hostId: string) {
     this.hostAct(hostId, c => ok(c.POST('/api/v1/host/vms/reprovision')), 'Reprovisioning every VM on this host, one after the other');
+  }
+
+  setRepairAuto(hostId: string, on: boolean) {
+    if (this.s.hosts.find(h => h.id === hostId)?.repairAuto === undefined) return;
+    this.hostAct(hostId, c => ok(c.PUT('/api/v1/host/config', { body: { repair: { auto: on } } as never })), on ? 'The repair agent starts by itself' : 'The repair agent starts when asked');
   }
 
   setLanAccess(hostId: string, on: boolean) {
@@ -1371,7 +1686,6 @@ export class ApiBackend implements Backend {
 
   exportRecoveryCode(..._: unknown[]) { this.note(NA); }
   openLog(..._: unknown[]) { this.note(NA); }
-  upgradeNext() { /* the one-time upgrade from the old stack is not part of this backend */ }
 
   /* --- first run --- */
 
@@ -1382,15 +1696,17 @@ export class ApiBackend implements Backend {
     set({ busy: true, problem: null });
     void (async () => {
       try {
-        const token = req.how === 'setup' ? (req.token ?? '').trim() || null : null;
+        const windows = req.how === 'setup' && req.signIn === 'windows';
+        if (windows && !this.windows) throw new Error('Windows sign-in works on Windows only');
+        const token = req.how === 'setup' && !windows ? (req.token ?? '').trim() || null : null;
         const address = req.address.trim();
         // The engine on this machine is trusted as found; any other only with the fingerprint the user confirmed.
         let engine: string;
         if (fr.localAddress && address === fr.localAddress) {
           const local = await this.agent.GET('/api/engines/local');
           if (local.response.status !== 200 || !local.data) throw new Error('No Construct engine runs on this PC');
-          engine = await this.addEngine(local.data.url, token, local.data.pin, local.data);
-        } else engine = await this.addEngine(address, token, req.pin ?? null);
+          engine = await this.addEngine(local.data.url, token, local.data.pin, local.data, windows);
+        } else engine = await this.addEngine(address, token, req.pin ?? null, undefined, windows);
         const deviceName = req.deviceName.trim();
         if (req.how === 'setup') {
           const r = await ok(this.agent.POST('/api/device/setup', { body: { engine, deviceName } }));

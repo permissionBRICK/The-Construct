@@ -1,6 +1,6 @@
 import type { components as E } from '../generated/engine';
 import type { components as A } from '../generated/agent';
-import type { Agent, Backup, Device, Everything, Forward, Host, HostJob, HostUpdate, HostUser, HostVm, Job, JobKind, Lease, Power, Profile, Secret, SettingsPatch, VaultEvent, VaultRequest, Vm, VmSettings, WinGuest, WinKey } from '../types';
+import type { Agent, Backup, Device, Everything, Forward, Host, HostJob, HostUpdate, HostUser, HostVm, Job, JobKind, Lease, Power, Profile, Repair, RepairMessage, Secret, SettingsPatch, Upgrade, VaultEvent, VaultRequest, Vm, VmSettings, WinGuest, WinKey } from '../types';
 
 /* From what the agent and the engines report to the pieces of `State`. Pure functions, no I/O: each takes
    the responses it needs and leaves out what they do not say. */
@@ -428,6 +428,65 @@ export function problemText(e: unknown, fallback = 'Failed'): string {
 
 /** `ABCD-EFGH-...` or `ABCD EFGH ...` → the groups. */
 export const codeGroups = (code: string) => code.split(/[\s-]+/).filter(Boolean);
+
+/* --- the repair agent --- */
+
+export type RepairSession = E['schemas']['RepairSessionResponse'];
+export type RepairLine = E['schemas']['RepairLineResponse'];
+/** Engine job kinds the repair agent works on. */
+export const REPAIRABLE = new Set(['provision', 'reinstall', 'restore']);
+const AGENT_NAMES: Record<string, string> = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode' };
+
+/** One line of a session as the chat shows it, or null for lines that are not shown (the start, a turn's end, the retry: the outcome says it). */
+function repairMessage(l: RepairLine): RepairMessage | null {
+  const text = l.text?.trim();
+  if (!text) return null;
+  switch (l.kind) {
+    case 'text': return { from: 'agent', text };
+    case 'reply': return { from: 'user', text };
+    case 'tool': return { from: 'tool', text };
+    case 'note': case 'error': case 'log': case 'end': return { from: 'note', text };
+    default: return null;
+  }
+}
+
+/** A session with the lines read so far. Fixed only when the engine says so: the session ended with `fixed`.
+    `sending`: a reply is on its way, so the box waits. */
+export function toRepair(s: Omit<RepairSession, 'lines'>, lines: RepairLine[], sending = false): Repair {
+  const state: Repair['state'] = s.state === 'working' || (s.state === 'waiting' && sending) ? 'working' : s.state === 'waiting' ? 'asking'
+    : s.outcome === 'fixed' ? 'done' : s.outcome === 'stopped' || s.outcome === 'superseded' ? 'stopped' : 'gave-up';
+  const outcome = state === 'done' ? (s.retryJobId ? 'Fixed; the job runs again' : s.retryRefused ? `Fixed. ${s.retryRefused}` : 'Fixed')
+    : state === 'stopped' ? (s.outcome === 'superseded' ? 'Ended by another job on this VM' : 'Stopped')
+    : state === 'gave-up' ? 'Not fixed' : null;
+  return {
+    agent: (s.agent && AGENT_NAMES[s.agent]) || 'Repair agent',
+    state,
+    messages: lines.map(repairMessage).filter((m): m is RepairMessage => m !== null),
+    t3Thread: false,
+    outcome,
+  };
+}
+
+/* --- the one-time upgrade --- */
+
+export type UpgradeView = A['schemas']['UpgradeView'];
+const UPGRADE_ORDER: Upgrade['step'][] = ['engine', 'recovery', 'close', 'convert'];
+
+/** The step the dialog is at: the first the agent does not report done or skipped; the recovery step stays while
+    its code is on screen. Null: every step is done. */
+export function upgradeStep(v: UpgradeView, codeShown: boolean): Upgrade['step'] | null {
+  for (const id of UPGRADE_ORDER) {
+    if (id === 'recovery' && codeShown) return id;
+    const st = v.steps.find(x => x.id === id)?.state;
+    if (st !== 'done' && st !== 'skipped') return id;
+  }
+  return null;
+}
+
+export function toUpgradeItem(i: A['schemas']['UpgradeItem']): Upgrade['items'][number] {
+  const state = i.state === 'done' || i.state === 'running' || i.state === 'skipped' || i.state === 'failed' ? i.state : 'waiting';
+  return { name: i.label, state, count: i.message ?? '', pct: 0 };
+}
 
 /* --- the key vault --- */
 

@@ -41,8 +41,9 @@ the agent's tests do, with a scripted SSH guest so provision and reinstall jobs 
 `construct backup` through the engine's backup routes), and the agent; it drives the first run with the host's
 fingerprint, creating a VM with its settings (the engine provisions it; the page sends no provision), a setting
 changed and the dot on Reprovision, a reprovision, a failed reprovision retried through the engine's retry route
-(the scripted guest fails once when the test leaves `fail-next` in the engine's directory), a secret added and
-revealed, a VM's vault request allowed from its card, a profile edited and saved, a reinstall, a restore of the
+(the scripted guest fails once when the test leaves `fail-next` in the engine's directory), the host's `repair.auto`
+switched off, a failed provision step (`fail-step`) repaired by the agent started from the UI (the engine's fake-mode
+guest session asks once and fixes on the reply; the engine runs the job again), a secret added and revealed, a VM's vault request allowed from its card, a profile edited and saved, a reinstall, a restore of the
 backup it left through the agent's restore route, and pairing a second device in headless Chromium. Nothing in
 the product enrols the account's backup key on a VM yet; the scripted guest adds it from the store once the test
 names the account, so the device can open the backup.
@@ -68,6 +69,24 @@ provision or reinstall is retried through `POST /jobs/{id}/retry`; a restore nee
 device opens, so it starts again through the agent's restore route. Update runs the agent's "update everything"
 and shows each part's state; "only this VM" is the engine's VM update route.
 
+## Repair agent
+
+A failed provision, reinstall or restore shows the VM's repair session from its engine (`GET /vms/{name}/repair`,
+read once per failed job, then on each `repair.started`, `repair.output` and `repair.ended` event, the lines after the
+last one read). Only a session whose `jobId` is that job shows under it, and only the engine and VM of that job get
+its reply, Stop (`DELETE`) or start (`POST /vms/{name}/repair`; a `409 repair-running` follows the session the host
+started). The reply box is there only while the session waits for an answer. "Fixed" shows only when the session
+ended with `fixed`; the job the engine retried then shows it. The pop-out opens the window on the VM (`#/home/<vm>`).
+An admin switches `repair.auto` on the host's Configuration tab.
+
+## The one-time upgrade
+
+When `GET /api/upgrade` reports an old install not converted, its dialog is the only screen. It shows the step
+the agent reports as the first not done (engine, recovery code, close programs, convert) and runs only that one;
+the conversion is sent only after `GET /api/upgrade/writers` is empty. The recovery code from `POST /api/device/setup`
+stays in the dialog's state until the user confirms it was kept; a reload after the setup cannot show it again and
+goes on at the close step. When the agent reports `converted`, the normal screens load.
+
 ## Secrets, profiles, hosts
 
 A secret's value reaches the page only from the agent's `reveal` route, into the element that shows it for
@@ -81,11 +100,11 @@ this machine is added only after the user confirmed the certificate fingerprint 
 ## What the API does not offer yet
 
 `State.na` lists the parts `ApiBackend` cannot serve; each screen shows such a part as not available
-and its action sends nothing. They are the repair agent's chat, sharing VS Code web, updating a VM's coding
+and its action sends nothing. They are sharing VS Code web, updating a VM's coding
 agents, the T3 proxy URL and the chat history kept in backups (neither is in the desired state), the disk,
 checkpoints and start-with-host settings, the VM password, the log and consoles, rotating a VM token (its
-one-time value has no place yet), the notifications switch, Windows sign-in, and saving or printing the
-recovery code.
+one-time value has no place yet), the notifications switch, and saving or printing the recovery code. Windows
+sign-in is offered only where the agent reports a Windows device.
 
 ## Desktop shell
 

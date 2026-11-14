@@ -73,6 +73,14 @@ export function App({ be, surf, shell, hashRouting, initialRoute, mode }: AppPro
   };
   useEffect(() => { if (s.notice) toast(s.notice.text); }, [s.notice?.id]);
 
+  // `#/home/<vm>` opens the overview of that VM (the pop-out opens the window on a VM this way).
+  useEffect(() => {
+    if (route.page !== 'home' || !route.arg || !s.vms.some(v => v.id === route.arg)) return;
+    setVmId(route.arg);
+    ls.set(VM_KEY, route.arg);
+    setRoute({ page: 'home' });
+    if (hashRouting) history.replaceState(null, '', formatRoute({ page: 'home' }));
+  }, [route.page, route.arg, s.vms.length]);
   const vm = s.vms.find(v => v.id === vmId) ?? s.vms[0] ?? null;
   const go = (r: Route) => {
     setRoute(r);

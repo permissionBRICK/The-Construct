@@ -87,14 +87,18 @@ export interface Profile {
 export type JobKind = 'reprovision' | 'reinstall' | 'update' | 'restore' | 'create';
 export type JobState = 'running' | 'failed' | 'done' | 'stopped';
 
-export interface RepairMessage { from: 'agent' | 'user'; text: string }
+/** One line of the repair agent's output: what it says, what the user sent, a note of the guest script, one action of the agent. */
+export interface RepairMessage { from: 'agent' | 'user' | 'note' | 'tool'; text: string }
 export interface Repair {
   agent: string;
-  /** working: it acts on its own; asking: it waits for a reply; done: it fixed the cause; gave-up: the user takes over. */
-  state: 'working' | 'asking' | 'done' | 'gave-up';
+  /** working: it acts on its own; asking: it waits for a reply; done: the engine reports it fixed the cause;
+      gave-up: it ended without a fix; stopped: the user or another job on the VM ended it. */
+  state: 'working' | 'asking' | 'done' | 'gave-up' | 'stopped';
   messages: RepairMessage[];
   /** Set when the agent runs as a T3 Code thread, which can be opened there instead. */
   t3Thread: boolean;
+  /** After the end: how it ended and what the engine did with the job. */
+  outcome?: string | null;
 }
 
 export interface Job {
@@ -115,6 +119,8 @@ export interface Job {
   scope?: 'all' | 'vm';
   /** The repair agent, started when the job failed. Null when the VM cannot run an agent. */
   repair: Repair | null;
+  /** A failed job without a running repair: "Let an agent fix it" starts one. */
+  canRepair?: boolean;
 }
 
 /** An agent on a VM asks for something only the user can give: a lease of a secret, or a new secret's value. */
@@ -230,6 +236,8 @@ export interface Host {
   problem?: string | null;
   /** A solo host (the engine on the user's own PC): whether other devices on the LAN reach it. Undefined elsewhere. */
   lan?: boolean;
+  /** Admin only: the repair agent starts by itself when a job fails (`repair.auto`). Undefined: not read. */
+  repairAuto?: boolean;
 }
 
 /** Shown once after adding a user: what that user's client needs. */
@@ -252,11 +260,26 @@ export interface Prefs {
   notifications: boolean;
 }
 
-export type UpgradeStep = 'intro' | 'code' | 'convert' | 'done';
+/** The one-time upgrade's steps in their order: the engine on this PC, the recovery code, the old programs
+    closed, the conversion. */
+export type UpgradeStep = 'engine' | 'recovery' | 'close' | 'convert';
 export interface Upgrade {
+  /** The step the dialog is at, as the agent reports it: the first one not done. */
   step: UpgradeStep;
-  code: string[];
-  items: { name: string; state: 'done' | 'running' | 'waiting'; count: string; pct: number }[];
+  /** The step runs now. */
+  running: boolean;
+  /** The current step failed with this; it shows in place with Retry. */
+  error: string | null;
+  /** Step `recovery`: the code, shown once until the user confirmed it was kept; it is kept nowhere else. */
+  code: string[] | null;
+  /** Step `close`: the programs that still have the old files open. */
+  writers: string[];
+  /** Step `convert`: each item the converter copies. */
+  items: { name: string; state: 'done' | 'running' | 'waiting' | 'skipped' | 'failed'; count: string; pct: number }[];
+  /** What the old install holds. */
+  found: { vms: string[]; profiles: number; vault: boolean } | null;
+  /** Step `engine` installs an engine on this PC, with one admin prompt. */
+  adminPrompt: boolean;
 }
 
 /** Parts of the product the backend cannot serve yet. The screens show such a part as not available. */
@@ -286,8 +309,9 @@ export interface FirstRunRequest {
   how: 'setup' | 'pair' | 'recover';
   address: string;
   deviceName: string;
-  /** setup: the user's sign-in at the engine. */
+  /** setup: the user's sign-in at the engine: a token, or Windows sign-in where this device offers it. */
   token?: string;
+  signIn?: 'windows' | 'token';
   /** recover: the account and the recovery code. */
   account?: string;
   code?: string;
@@ -374,7 +398,11 @@ export interface Backend {
   updateVm(vmId: string): void;
   stopJob(jobId: string): void;
   retryJob(jobId: string): void;
+  /** Starts the repair agent on a failed job ("Let an agent fix it"). */
+  startRepair(jobId: string): void;
+  /** Sends one reply while the repair agent waits for one. */
   replyRepair(jobId: string, text: string): void;
+  stopRepair(jobId: string): void;
   dismissJob(jobId: string): void;
   /** Hardware changes ask restart now or later; `when` says which. Other groups save at once. */
   saveSettings(vmId: string, patch: SettingsPatch, when?: 'now' | 'later'): void;
@@ -428,6 +456,8 @@ export interface Backend {
   updateHostVms(hostId: string): void;
   /** A solo host: let devices on the LAN reach it (before a second device pairs). */
   setLanAccess(hostId: string, on: boolean): void;
+  /** The host setting `repair.auto`: the repair agent starts by itself when a job fails. */
+  setRepairAuto(hostId: string, on: boolean): void;
   addUser(hostId: string, user: { name: string; role: 'admin' | 'user'; maxVms: number; hostForwards: HostUser['hostForwards'] }): void;
   saveUser(hostId: string, user: HostUser): void;
   removeUser(hostId: string, name: string): void;
@@ -458,7 +488,9 @@ export interface Backend {
   /** Hand the recovery code to the shell: a file picker for saving, or the print dialog. */
   exportRecoveryCode(how: 'file' | 'print'): void;
   openLog(): void;
-  upgradeNext(): void;
+  /** The one-time upgrade: runs the current step again or goes on from it; the backend decides which step that is.
+      `deviceName` names this device at the recovery step. */
+  upgradeNext(input?: { deviceName?: string }): void;
   /** First run: set up, pair or recover. */
   firstRunStart(req: FirstRunRequest): void;
   /** First run: the recovery code is stored, or the pairing is cancelled; go on. */

@@ -330,9 +330,15 @@ function HOps({ h }: { h: Host }) {
 }
 
 function HConfig({ h }: { h: Host }) {
+  const { be } = useApp();
   const [open, setOpen] = useState<string | null>(null);
   return (
     <>
+      {h.repairAuto !== undefined && (
+        <Sec>
+          <Row l="Repair agent starts by itself"><Switch on={h.repairAuto} onChange={on => be.setRepairAuto(h.id, on)} label="Repair agent starts by itself" /></Row>
+        </Sec>
+      )}
       <Sec title="Sections">
         <Table cols={[{ h: 'Section', cls: 'm' }, { h: 'Changed', cls: 'x' }, { h: '', cls: 'e' }]}
           rows={h.config.map(c => [c.name, c.updated, <Btn sm icon="edit" onClick={() => setOpen(open === c.name ? null : c.name)}>{open === c.name ? 'Close' : 'Edit'}</Btn>])} />

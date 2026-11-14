@@ -82,26 +82,32 @@ function LogView({ job }: { job: Job }) {
   );
 }
 
-/** The repair agent under a failed job: its output and one reply box. */
+/** The repair agent under a failed job: its output as plain text, one reply box while it waits for an answer,
+    Stop, and how it ended. */
 function Repair({ job }: { job: Job }) {
   const { be } = useApp();
   const r = job.repair!;
   const [text, setText] = useState('');
   const end = useRef<HTMLDivElement>(null);
-  useEffect(() => { end.current?.scrollIntoView?.({ block: 'nearest' }); }, [r.messages.length]);
-  const send = () => { if (text.trim()) { be.replyRepair(job.id, text); setText(''); } };
+  useEffect(() => { end.current?.scrollIntoView?.({ block: 'nearest' }); }, [r.messages.length, r.state]);
+  const asking = r.state === 'asking';
+  const send = () => { if (asking && text.trim()) { be.replyRepair(job.id, text); setText(''); } };
   return (
-    <div class="repair">
-      <div class="bh"><Icon n="fix" /><b>{r.agent}</b>{r.t3Thread && <Btn sm icon="open" onClick={() => be.open(job.vmId, 't3')}>T3 Code</Btn>}</div>
+    <div class="repair" aria-label="Repair agent">
+      <div class="bh"><Icon n="fix" /><b>{r.agent}</b>
+        {r.t3Thread && <Btn sm icon="open" onClick={() => be.open(job.vmId, 't3')}>T3 Code</Btn>}
+        {(r.state === 'working' || asking) && <Btn sm onClick={() => be.stopRepair(job.id)}>Stop</Btn>}
+      </div>
       <div class="chat" aria-live="polite">
         {r.messages.map(m => <p class={m.from}>{m.text}</p>)}
         {r.state === 'working' && <p class="agent typing" aria-label="working" />}
+        {r.outcome && <p class={`end ${r.state === 'done' ? 'okc' : ''}`}>{r.outcome}</p>}
         <div ref={end} />
       </div>
-      {r.state !== 'done' && (
+      {asking && (
         <div class="reply">
           <Field value={text} onInput={setText} label="Reply" placeholder="Reply" onEnter={send} wide />
-          <Btn kind={r.state === 'asking' ? 'pri' : ''} icon="send" title="Send" onClick={send} disabled={!text.trim()} />
+          <Btn kind="pri" icon="send" title="Send" onClick={send} disabled={!text.trim()} />
         </div>
       )}
     </div>
@@ -109,15 +115,23 @@ function Repair({ job }: { job: Job }) {
 }
 
 export function JobBlock({ job, vm }: { job: Job; vm: Vm }) {
-  const { be } = useApp();
+  const { be, surf, shell } = useApp();
   const [log, setLog] = useState(false);
   if (job.state === 'failed') {
+    // The pop-out has no room for the chat: its button opens the window on this VM, where the chat is.
+    const pop = surf === 'pop';
     return (
       <div class="blk bad job">
         <div class="bh"><Icon n="x" /><b>{failedTitle(job)}</b><Btn sm icon="log" onClick={() => setLog(!log)}>Log</Btn></div>
         <div class="msg">{job.step}: {job.error}</div>
         {(log || !job.repair) && <LogView job={job} />}
-        {job.repair && <Repair job={job} />}
+        {pop && (job.repair || job.canRepair) && (
+          <Btn icon="fix" onClick={() => { if (!job.repair || job.canRepair) be.startRepair(job.id); shell.openWindow({ page: 'home', arg: vm.id }); }}>
+            {job.repair && !job.canRepair ? job.repair.agent : 'Let an agent fix it'}
+          </Btn>
+        )}
+        {!pop && job.repair && <Repair job={job} />}
+        {!pop && job.canRepair && <Btn icon="fix" onClick={() => be.startRepair(job.id)}>Let an agent fix it</Btn>}
         <div class="two">
           {job.kind === 'reinstall' || job.kind === 'restore'
             ? <Confirm label="Retry" icon="retry" verb={job.kind === 'reinstall' ? 'Reinstall again' : 'Restore again'} sm={false} onYes={() => be.retryJob(job.id)} />
@@ -136,6 +150,7 @@ export function JobBlock({ job, vm }: { job: Job; vm: Vm }) {
         <span class="m">{job.kind === 'update' ? `${job.from} → ${job.to}` : `${job.stepIndex + 1} / ${job.stepCount} · ${job.pct}%`}</span>
       </div>
       <Bar pct={job.pct} />
+      {job.repair?.state === 'done' && <div class="msg okc">{job.repair.agent}: {job.repair.outcome}</div>}
       <div class="bf"><span>{job.step}</span><Btn sm onClick={() => setLog(!log)}>Log</Btn><Btn sm onClick={() => be.stopJob(job.id)}>Stop</Btn></div>
       {log && <LogView job={job} />}
     </div>
