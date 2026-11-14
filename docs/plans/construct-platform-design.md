@@ -951,10 +951,15 @@ first screen, in two variants.
 
 | Step | Fresh install | Upgrade from the old stack |
 |---|---|---|
-| 1. Host side | The installer has already installed the engine with its one admin prompt. | "This is a new Construct", with a few lines on what changed. One admin prompt installs the engine when this PC has a local VM. |
+| 1. Host side | The first screen asks where the account starts, where the device can host an engine and none runs on it: "This PC" installs the engine with one admin prompt, "Remote host" takes a host's address. | "This is a new Construct", with a few lines on what changed. One admin prompt installs the engine when this PC has a local VM. |
 | 2. Recovery code | Shown once with save as file, print and copy; the user confirms they stored it (8.5). The vault key is created here. | The same. It comes before conversion because the records are sealed under `U`. The existing vault key moves under `U`, so the code now restores the vault; an install without a vault gets one. |
 | 3. Conversion | Not needed. | The dialog asks the user to close VS Code and waits until it is closed, then the converter (13.1) runs with progress per item (13.2). VMs keep running. |
 | 4. Done | "Create your VM" (below). | The converted VMs. |
+
+The engine install of step 1 is the same code in both variants: it shows no console window and
+asks nothing. Where Windows has to restart to turn on Hyper-V, the step says so with "Restart now"
+and "Later"; after the restart the step is there again to continue, and nothing runs by itself
+(found on a Windows 11 PC, 2026-11-14).
 
 The rest of the UI stays closed until step 3 is done. A failed step shows its error with a retry
 and resumes there after a restart. A second device does not see this dialog; it is paired (8.3).
