@@ -67,6 +67,8 @@ TIMEOUT = float(os.environ.get("CONSTRUCT_SIGN_IN_TIMEOUT_SEC", "1200"))
 # Wide enough that no CLI wraps a sign-in link; the text is kept without padding.
 ROWS, COLS = 50, 400
 MAX_TEXT = 32 * 1024
+# Input waiting for a CLI that does not read; more is dropped.
+MAX_PENDING = 64 * 1024
 
 AGENTS = {
     "claude-code": ("claude", "claude"),
@@ -524,15 +526,6 @@ def keystrokes(raw):
     return text.encode("utf-8") + b"\r"
 
 
-def write_all(fd, data):
-    while data:
-        try:
-            n = os.write(fd, data)
-        except InterruptedError:
-            continue
-        data = data[n:]
-
-
 def run(agent, session):
     command, tool = AGENTS[agent]
     if not shutil.which(command):
@@ -555,12 +548,16 @@ def run(agent, session):
 
     # The child leads its own session, so its process group is its pid.
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
+    # Input goes to the terminal as the CLI reads it, through the loop: a CLI that reads nothing never
+    # blocks the loop, so its output, the end of stdin and the deadline are still served.
+    os.set_blocking(fd, False)
     with open(pid_file(session), "w") as f:
         f.write(str(pid))
 
     term = Term(ROWS)
     decoder = codecs.getincrementaldecoder("utf-8")("replace")
     stdin = Input()
+    pending = bytearray()
     deadline = time.monotonic() + TIMEOUT
     last_out = last_emit = 0.0
     shown = ""
@@ -584,25 +581,35 @@ def run(agent, session):
                 stop_group(pid)
             watch = [fd] + ([] if stdin.closed else [0])
             try:
-                ready, _, _ = select.select(watch, [], [], 0.1)
+                ready, writable, _ = select.select(watch, [fd] if pending else [], [], 0.1)
             except InterruptedError:
-                ready = []
+                ready = writable = []
             if fd in ready:
                 try:
                     data = os.read(fd, 65536)
+                except BlockingIOError:
+                    data = None
                 except OSError as error:
                     if error.errno != errno.EIO:
                         raise
                     data = b""
-                if not data:
-                    break
-                term.feed(decoder.decode(data))
-                last_out = time.monotonic()
+                if data is not None:
+                    if not data:
+                        break
+                    term.feed(decoder.decode(data))
+                    last_out = time.monotonic()
+            if fd in writable:
+                try:
+                    del pending[:os.write(fd, pending)]
+                except (BlockingIOError, InterruptedError):
+                    pass
+                except OSError:
+                    pending.clear()
             if 0 in ready:
                 for raw in stdin.lines():
                     keys = keystrokes(raw)
-                    if keys:
-                        write_all(fd, keys)
+                    if keys and len(pending) + len(keys) <= MAX_PENDING:
+                        pending += keys
                 if stdin.closed:
                     outcome = outcome or "stopped"
                     stop_group(pid)

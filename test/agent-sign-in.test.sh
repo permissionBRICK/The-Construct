@@ -225,6 +225,22 @@ FAKE_CODEX_WAIT=0 session next codex 1
 wait "${runner}"
 ok "one at a time: a new sign-in stops the old one" jq_end orphan '.outcome == "stopped"'
 
+# A CLI that reads nothing: long replies pile up without blocking the loop, so the deadline and the end
+# of stdin still end the sign-in.
+flood() {
+  local name="$1" hold="$2"
+  shift 2
+  {
+    sleep 0.5
+    python3 -c 'import json; line = json.dumps({"text": "x" * 4096}); print("\n".join([line] * 100))'
+    sleep "${hold}"
+  } | env "$@" FAKE_CODEX_WAIT=30 timeout 20 python3 "${SCRIPT}" --session "${name}" codex >"${tmp}/${name}.out" 2>"${tmp}/${name}.err"
+}
+flood flood 6 CONSTRUCT_SIGN_IN_TIMEOUT_SEC=2
+ok "unread input: the deadline still ends the sign-in" jq_end flood '.outcome == "stopped" and (.text | test("too long"))'
+flood flood-eof 0
+ok "unread input: the end of stdin still ends the sign-in" jq_end flood-eof '.outcome == "stopped"'
+
 # Nobody finishes it: it ends by itself.
 rm -f "${HOME}/.claude/.credentials.json"
 CONSTRUCT_SIGN_IN_TIMEOUT_SEC=1 session slow claude-code 4
