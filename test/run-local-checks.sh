@@ -40,6 +40,7 @@ if [[ "$group" == t3 || "$group" == all ]]; then
   bash test/t3-project-register.test.sh
   bash test/t3-update.test.sh
   bash test/t3-https.test.sh
+  bash test/t3-patch-shims.test.sh
 fi
 if [[ "$group" == service || "$group" == all ]]; then
   bash test/usage-report.test.sh
