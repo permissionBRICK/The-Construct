@@ -143,7 +143,10 @@ public sealed class ChildCreateJob(IVmRepository vms, IVmMetadataStore identity,
         {
             try
             {
-                if (startIntentExists && !recoveringStart && await hypervisor.GetStateAsync(vm.Name, CancellationToken.None) == VmState.Off)
+                // A start refused before it booted anything has closed its intent already.
+                if (startIntentExists && await keys.GetAsync(vm.Owner, "child-start", job.Id + ":start", CancellationToken.None) is not { State: OperationKeyState.InFlight })
+                    startIntentExists = false;
+                if (startIntentExists && !recoveringStart && await hypervisor.GetSettledStateAsync(vm.Name, CancellationToken.None) == VmState.Off)
                 {
                     await keys.CompleteAsync(vm.Owner, "child-start", job.Id + ":start", "\"start-failed\"", CancellationToken.None);
                     startIntentExists = false;

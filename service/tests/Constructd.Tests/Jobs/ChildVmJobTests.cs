@@ -122,6 +122,59 @@ public sealed class ChildVmJobTests
         var key = await app.Service<IOperationKeyStore>().GetAsync(vm.Owner, "child-start", job.Id + ":start", default);
         Assert.Equal(error is "power-state-changed" or "vm-state-unknown" ? OperationKeyState.InFlight : OperationKeyState.Completed, key!.State);
     }
+    private static async Task<(Job Job, Vm Vm, string[] Holds)> CreatedWithoutStart(TestApp app, HttpClient client)
+    {
+        var job = await Finish(app, await client.PostAsJsonAsync("/api/v1/vms/parent/children", Request(false)));
+        var vm = (await app.Vms.GetAsync("child", default))!;
+        var ledger = app.Service<ICapacityLedger>();
+        await ledger.TryReserveAsync(new(vm.Owner, vm.Name, job.Id,
+            [new(ReservationResource.Ram, vm.RamBytes, null, null), new(ReservationResource.Cpu, vm.Cpu, null, null)], TimeSpan.FromHours(2)), default);
+        return (job, vm, (await ledger.SnapshotAsync(false, default)).Reservations.Select(r => r.Id).ToArray());
+    }
+    [Fact]
+    public async Task StartReadsTheStateAgainWhenItFailsForAMoment()
+    {
+        await using var app = new TestApp(); using var client = await Setup(app);
+        var (job, vm, holds) = await CreatedWithoutStart(app, client);
+        // Proxmox's VM list lags a fresh create: the reads right before the start fail.
+        app.Driver.AnswerUnknown(vm.Name, 3);
+        var started = await app.Service<ChildStartIntent>().RunAsync(job, vm, holds, default);
+        Assert.Equal(VmState.Running, started.State);
+        Assert.Equal(1, app.Driver.Calls.Count(c => c == "start:child"));
+    }
+    [Fact]
+    public async Task AFreshStartRefusedOnAnUnknownStateClosesItsIntent()
+    {
+        await using var app = new TestApp(); using var client = await Setup(app);
+        var (job, vm, holds) = await CreatedWithoutStart(app, client);
+        app.Driver.SetState(vm.Name, VmState.Unknown);
+        var error = await Assert.ThrowsAsync<ChildValidationException>(() => app.Service<ChildStartIntent>().RunAsync(job, vm, holds, default));
+        Assert.Equal("vm-state-unknown", error.Code);
+        Assert.DoesNotContain("start:child", app.Driver.Calls);
+        // Nothing was booted, so nothing is left for later starts or the reconciler to recover.
+        var key = await app.Service<IOperationKeyStore>().GetAsync(vm.Owner, "child-start", job.Id + ":start", default);
+        Assert.Equal(OperationKeyState.Completed, key!.State);
+        Assert.Empty(await app.Service<IOperationKeyStore>().ListInFlightAsync(vm.Name, default));
+    }
+    [Fact]
+    public async Task ACreateWhoseStartIsRefusedLeavesNoStartIntentBehind()
+    {
+        await using var app = new TestApp(); using var client = await Setup(app);
+        app.Driver.AnswerUnknown("child", int.MaxValue);
+        var response = await client.PostAsJsonAsync("/api/v1/vms/parent/children", Request());
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        var id = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("jobId").GetString()!;
+        var jobs = app.Service<IJobEngine>();
+        // The start reads the state again for VmStateReads.SettleWindow before it gives up.
+        using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60)))
+            await foreach (var unused in jobs.SubscribeAsync(id, timeout.Token)) { }
+        var job = (await jobs.GetAsync(id, default))!;
+        Assert.Equal(JobState.Failed, job.State);
+        Assert.Contains("vm-state-unknown", job.Error);
+        Assert.DoesNotContain("start:child", app.Driver.Calls);
+        Assert.DoesNotContain(await app.Service<IOperationKeyStore>().ListInFlightAsync("child", default), k => k.Kind == "child-start");
+        Assert.DoesNotContain(job.Progress, line => line.Text.Contains("Start intent retained", StringComparison.Ordinal));
+    }
     [Theory]
     [InlineData(true, "10m", LeaseState.Active)]
     [InlineData(false, "10m", LeaseState.Inactive)]
