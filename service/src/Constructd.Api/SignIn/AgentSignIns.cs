@@ -29,6 +29,7 @@ public sealed class AgentSignInSession
     internal readonly List<string> Notes = [];
     internal string Screen = "";
     internal AgentSignInLine? End;
+    internal AgentSignInLine? Link;
 
     public string Id { get; }
     public string Vm { get; }
@@ -52,6 +53,18 @@ public sealed class AgentSignInSession
 
     /// <summary>Whether the agent is signed in after the session, as the VM checked it at the end; null before.</summary>
     public bool? SignedIn { get; internal set; }
+
+    /// <summary>The client said it forwards a loopback redirect (design 11.8, "No pasted code").</summary>
+    public bool Browser { get; internal init; }
+
+    /// <summary>The last link the CLI opened while the sign-in runs, with its loopback port on the VM; null otherwise.</summary>
+    public (string Url, int? Port)? Opened
+    {
+        get
+        {
+            lock (Gate) return Link is { Url: { } url } ? (url, Link.Port) : null;
+        }
+    }
 
     /// <summary>
     /// What the terminal shows, followed by what the script or the connection said besides; empty once the sign-in
@@ -99,7 +112,13 @@ public sealed class AgentSignIns(IGuestSessionRunner guests, ISshRunner ssh, IPr
     public AgentSignInSession? Latest(string vm) => _byVm.TryGetValue(vm, out var session) ? session : null;
 
     /// <summary>Starts <paramref name="agent"/>'s sign-in on <paramref name="vm"/>, ending the VM's running one first.</summary>
-    public async Task<AgentSignInSession> StartAsync(Vm vm, string agent, CancellationToken ct)
+    public async Task<AgentSignInSession> StartAsync(Vm vm, string agent, CancellationToken ct) => await StartAsync(vm, agent, false, ct);
+
+    /// <summary>
+    /// Starts <paramref name="agent"/>'s sign-in on <paramref name="vm"/>, ending the VM's running one first.
+    /// <paramref name="browser"/>: the client forwards a loopback redirect, so Codex uses its browser sign-in.
+    /// </summary>
+    public async Task<AgentSignInSession> StartAsync(Vm vm, string agent, bool browser, CancellationToken ct)
     {
         var target = await targets.ResolveAsync(vm, ct)
             ?? throw new AgentSignInRefusedException("vm-endpoint-unknown", "The VM has no SSH endpoint the engine can dial.");
@@ -107,7 +126,7 @@ public sealed class AgentSignIns(IGuestSessionRunner guests, ISshRunner ssh, IPr
         try
         {
             if (Latest(vm.Name) is { Running: true } running) await EndAsync(running, "stopped");
-            var session = new AgentSignInSession(Guid.NewGuid().ToString("n"), vm, agent, clock.UtcNow) { Target = target };
+            var session = new AgentSignInSession(Guid.NewGuid().ToString("n"), vm, agent, clock.UtcNow) { Target = target, Browser = browser };
             _byVm[vm.Name] = session;
             changes.Publish("agent-sign-in.started", session.Id, session.Vm, session.Owner, ownerOnly: true);
             string? failed = null;
@@ -115,7 +134,7 @@ public sealed class AgentSignIns(IGuestSessionRunner guests, ISshRunner ssh, IPr
             {
                 try
                 {
-                    session.Guest = guests.Start(target, AgentSignInScript.StartCommand(session.Id, agent, target.IsRoot), line => OnLine(session, line));
+                    session.Guest = guests.Start(target, AgentSignInScript.StartCommand(session.Id, agent, target.IsRoot, browser), line => OnLine(session, line));
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
@@ -184,6 +203,9 @@ public sealed class AgentSignIns(IGuestSessionRunner guests, ISshRunner ssh, IPr
             {
                 case "screen":
                     session.Screen = line.Text ?? "";
+                    break;
+                case "browser" when line.Url is not null:
+                    session.Link = line;
                     break;
                 case "end":
                     session.End = line;
@@ -265,6 +287,7 @@ public sealed class AgentSignIns(IGuestSessionRunner guests, ISshRunner ssh, IPr
             session.Screen = "";
             session.Notes.Clear();
             session.End = null;
+            session.Link = null;
             session.Revision++;
         }
 

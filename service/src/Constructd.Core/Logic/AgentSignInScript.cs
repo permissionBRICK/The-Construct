@@ -5,10 +5,13 @@ namespace Constructd.Core.Logic;
 
 /// <summary>One line of the guest's sign-in script, as the engine reads it (design 11.8).</summary>
 /// <param name="Type">
-/// <c>start</c>, <c>screen</c> (the terminal's whole text now), <c>end</c>, or <c>log</c> for a line that was
-/// not JSON (sudo, ssh, a missing script).
+/// <c>start</c>, <c>screen</c> (the terminal's whole text now), <c>browser</c> (a link the CLI opened), <c>end</c>,
+/// or <c>log</c> for a line that was not JSON (sudo, ssh, a missing script).
 /// </param>
-public sealed record AgentSignInLine(string Type, string? Text, string? Outcome = null, bool? SignedIn = null, string? Version = null);
+/// <param name="Url">A <c>browser</c> line's link: the one the CLI opened through BROWSER.</param>
+/// <param name="Port">A <c>browser</c> line's loopback port on the VM that the link sends the browser back to.</param>
+public sealed record AgentSignInLine(string Type, string? Text, string? Outcome = null, bool? SignedIn = null, string? Version = null,
+    string? Url = null, int? Port = null);
 
 /// <summary>
 /// The guest side of an agent's sign-in (<c>bin/construct-agent-sign-in.py</c>, S34): its commands, the input
@@ -32,14 +35,17 @@ public static class AgentSignInScript
 
     /// <summary>
     /// Runs the script as root for <paramref name="agent"/>. Nothing the user types is on this command line:
-    /// input goes on stdin.
+    /// input goes on stdin. <paramref name="browser"/>: the client forwards a loopback redirect (<c>--browser</c>).
     /// </summary>
-    public static string StartCommand(string sessionId, string agent, bool connectedAsRoot)
+    public static string StartCommand(string sessionId, string agent, bool connectedAsRoot, bool browser = false)
     {
         if (!RepairScript.IsSessionId(sessionId)) throw new ArgumentException("Invalid session id.", nameof(sessionId));
         if (!CodingAgents.Known.Contains(agent)) throw new ArgumentException("Unknown agent.", nameof(agent));
-        return RepairScript.AsRoot($"python3 {ScriptPath} --session {sessionId} {agent}", connectedAsRoot);
+        return RepairScript.AsRoot($"python3 {ScriptPath} --session {sessionId}{(browser ? " --browser" : "")} {agent}", connectedAsRoot);
     }
+
+    /// <summary>The longest sign-in link kept.</summary>
+    public const int MaxUrl = 4096;
 
     /// <summary>Ends a session's processes on the guest, whatever became of its connection.</summary>
     public static string StopCommand(string sessionId, bool connectedAsRoot)
@@ -69,13 +75,19 @@ public static class AgentSignInScript
                 if (root.ValueKind == JsonValueKind.Object && Text(root, "type") is { Length: > 0 } type)
                     return new(type, Cap(Text(root, "text")), Text(root, "outcome"),
                         root.TryGetProperty("signedIn", out var s) && s.ValueKind is JsonValueKind.True or JsonValueKind.False ? s.GetBoolean() : null,
-                        Text(root, "version"));
+                        Text(root, "version"), SignInUrl(Text(root, "url")),
+                        root.TryGetProperty("port", out var p) && p.ValueKind == JsonValueKind.Number && p.TryGetInt32(out var port) && port is >= 1024 and <= 65535 ? port : null);
             }
             catch (JsonException) { }
         }
 
         return new("log", Cap(line));
     }
+
+    /// <summary>A sign-in link as the script reports it: https, short, nothing but visible characters; else null.</summary>
+    public static string? SignInUrl(string? url) =>
+        url is { Length: > 8 and <= MaxUrl } && url.StartsWith("https://", StringComparison.Ordinal) && url.All(c => c is > ' ' and < '\x7f')
+        && Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps && uri.UserInfo.Length == 0 ? url : null;
 
     private static string? Text(JsonElement e, string name) =>
         e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;

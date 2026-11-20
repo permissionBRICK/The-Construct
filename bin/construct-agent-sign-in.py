@@ -5,7 +5,7 @@ The Construct engine starts it over SSH, as root, when the user clicks Sign in o
 agents. It runs that agent's sign-in command under a pseudo-terminal and reports what the terminal
 shows as JSON lines on stdout; each line on stdin is input from the user, which goes to the terminal.
 
-  python3 /opt/construct/repo/bin/construct-agent-sign-in.py --session ID AGENT
+  python3 /opt/construct/repo/bin/construct-agent-sign-in.py --session ID [--browser] AGENT
   python3 /opt/construct/repo/bin/construct-agent-sign-in.py --stop --session ID
   python3 /opt/construct/repo/bin/construct-agent-sign-in.py --status
 
@@ -13,8 +13,17 @@ AGENT is claude-code, codex, opencode or antigravity. The sign-in commands:
 
   claude-code   claude auth login            a link, then "Paste code here"
   codex         codex login --device-auth    a link and a one-time code to enter there
+                codex login (--browser)      a link whose sign-in returns to the CLI on 127.0.0.1:1455
   opencode      opencode auth login          OpenCode's own list of integrations, then its sign-in
   antigravity   agy acp --login              a link, then the authorization code to paste
+
+Each runs with BROWSER set to bin/construct-sign-in-browser.sh, so the link a CLI would open in a
+browser is reported instead ("browser" below). Where that link sends the browser back to the CLI
+on the VM (Claude Code, Codex and OpenCode's ChatGPT sign-in listen on a loopback port there), a
+client that forwards the port from its own machine to the VM and opens the link signs in without
+a pasted code (design 11.8, "No pasted code"). --browser says the client can: Codex then uses its
+browser sign-in instead of the device code. Antigravity returns to a page Google hosts and keeps
+the paste.
 
 Antigravity keeps the terminal's sign-in in ~/.gemini/antigravity-cli/antigravity-oauth-token and
 T3 Code gives it a private home (~/.t3/userdata/providers/antigravity/<sha256 of the instance id>,
@@ -30,6 +39,9 @@ End of stdin ends the session: the sign-in and everything it started are stopped
 stdout, one JSON object per line:
   {"type": "start", "agent": "codex"}
   {"type": "screen", "text": "..."}   the terminal's text now, whole, as the CLI wrote it
+  {"type": "browser", "url": "https://...", "port": 1455}   a link the CLI opened; port when it
+                                      sends the browser back to http://localhost or 127.0.0.1 on the
+                                      VM (1024-65535)
   {"type": "end", "outcome": "done" | "failed" | "stopped", "text": "...",
    "signedIn": true | false, "version": "1.2.3"}   (the last two when known)
 
@@ -59,8 +71,12 @@ import subprocess
 import sys
 import termios
 import time
+import urllib.parse
 
 RUN_DIR = os.environ.get("CONSTRUCT_SIGN_IN_RUN_DIR", "/run/construct/sign-in")
+# The BROWSER of every sign-in: it hands the link to this script (see the top).
+BROWSER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "construct-sign-in-browser.sh")
+MAX_URL = 4096
 T3_HOME = os.environ.get("T3CODE_HOME", os.path.join(os.path.expanduser("~"), ".t3"))
 # A sign-in nobody finishes ends by itself.
 TIMEOUT = float(os.environ.get("CONSTRUCT_SIGN_IN_TIMEOUT_SEC", "1200"))
@@ -259,12 +275,12 @@ def opencode_v2():
     return not match or not match.group(0).startswith("1.")
 
 
-def sign_in_command(agent):
-    """The agent's own sign-in: argv and extra environment."""
+def sign_in_command(agent, browser=False):
+    """The agent's own sign-in: argv and extra environment. browser: the client forwards a loopback redirect."""
     if agent == "claude-code":
         return ["claude", "auth", "login"], {}
     if agent == "codex":
-        return ["codex", "login", "--device-auth"], {}
+        return ["codex", "login"] + ([] if browser else ["--device-auth"]), {}
     if agent == "opencode":
         # OpenCode 2 would otherwise start its per-user background service for this.
         return ["opencode", "auth", "login"] + (["--standalone"] if opencode_v2() else []), {}
@@ -417,6 +433,55 @@ def status():
     return 0
 
 
+# ---- The links a CLI opens (BROWSER).
+
+def redirect_port(url):
+    """The loopback port a sign-in link sends the browser back to (its redirect_uri), or None."""
+    try:
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+        for value in query.get("redirect_uri", []):
+            back = urllib.parse.urlsplit(value)
+            if back.scheme == "http" and back.hostname in ("localhost", "127.0.0.1") and back.port and 1024 <= back.port <= 65535:
+                return back.port
+    except ValueError:
+        pass
+    return None
+
+
+def browser_event(line):
+    """The event for one link the helper wrote: https only, short, nothing but visible characters."""
+    url = line.strip()
+    if not url.startswith("https://") or len(url) > MAX_URL or any(ch <= " " or ch == "\x7f" for ch in url):
+        return None
+    event = {"type": "browser", "url": url}
+    port = redirect_port(url)
+    if port:
+        event["port"] = port
+    return event
+
+
+class Links:
+    """The links file the BROWSER helper appends to, read as it grows."""
+
+    def __init__(self, path):
+        self.path = path
+        self.offset = 0
+        self.rest = b""
+
+    def events(self):
+        try:
+            with open(self.path, "rb") as f:
+                f.seek(self.offset)
+                chunk = f.read(65536)
+        except OSError:
+            return []
+        self.offset += len(chunk)
+        *lines, self.rest = (self.rest + chunk).split(b"\n")
+        if len(self.rest) > MAX_URL:
+            self.rest = b""
+        return [e for e in (browser_event(line.decode("utf-8", "replace")) for line in lines) if e]
+
+
 # ---- Sessions.
 
 # Exit statuses of our own children that stop_group reaped while it waited.
@@ -526,15 +591,23 @@ def keystrokes(raw):
     return text.encode("utf-8") + b"\r"
 
 
-def run(agent, session):
+def run(agent, session, browser=False):
     command, tool = AGENTS[agent]
     if not shutil.which(command):
         emit({"type": "end", "outcome": "failed", "text": f"{command} is not installed on this VM."})
         return 127
-    argv, extra = sign_in_command(agent)
+    argv, extra = sign_in_command(agent, browser)
 
     os.makedirs(RUN_DIR, mode=0o700, exist_ok=True)
     stop_others(session)
+    links_path = os.path.join(RUN_DIR, session + ".links")
+    try:
+        os.unlink(links_path)
+    except FileNotFoundError:
+        pass
+    links = Links(links_path)
+    if os.access(BROWSER, os.X_OK):
+        extra = dict(extra, BROWSER=BROWSER, CONSTRUCT_SIGN_IN_LINKS=links_path)
     emit({"type": "start", "agent": agent})
 
     pid, fd = pty.fork()
@@ -613,6 +686,8 @@ def run(agent, session):
                 if stdin.closed:
                     outcome = outcome or "stopped"
                     stop_group(pid)
+            for event in links.events():
+                emit(event)
             now = time.monotonic()
             # Shown when the output pauses, and at least twice a second while it streams.
             if term.text() != shown and (now - last_out >= 0.1 or now - last_emit >= 0.5):
@@ -623,10 +698,11 @@ def run(agent, session):
     finally:
         # However this ends (stdin closed, a signal, an error), the sign-in and what it started go.
         stop_group(pid, wait=2.0)
-        try:
-            os.unlink(pid_file(session))
-        except OSError:
-            pass
+        for path in (pid_file(session), links_path):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
 
     term.feed(decoder.decode(b"", final=True))
     code = reap(pid)
@@ -659,13 +735,13 @@ def run(agent, session):
 
 
 def usage():
-    print("Usage: construct-agent-sign-in.py --session ID AGENT | --stop --session ID | --status", file=sys.stderr)
+    print("Usage: construct-agent-sign-in.py --session ID [--browser] AGENT | --stop --session ID | --status", file=sys.stderr)
     return 2
 
 
 def main(args):
     session = agent = None
-    stop = False
+    stop = browser = False
     i = 0
     while i < len(args):
         a = args[i]
@@ -677,6 +753,8 @@ def main(args):
             continue
         if a == "--stop":
             stop = True
+        elif a == "--browser":
+            browser = True
         elif a in AGENTS and agent is None:
             agent = a
         else:
@@ -692,7 +770,7 @@ def main(args):
     # Ended by a signal: the sign-in goes too.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     signal.signal(signal.SIGHUP, lambda *_: sys.exit(129))
-    return run(agent, session)
+    return run(agent, session, browser)
 
 
 if __name__ == "__main__":

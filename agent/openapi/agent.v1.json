@@ -2242,6 +2242,105 @@
         }
       }
     },
+    "/api/connections/{engine}/{vm}/sign-in": {
+      "post": {
+        "tags": [
+          "device"
+        ],
+        "description": "A coding agent's sign-in without a pasted code (11.8): for the running sign-in `session` of `agent` on one of the user's own VMs, whose link returns to a loopback port on the VM, forwards 127.0.0.1:<port> on this device to the VM and opens the link in the default browser. The forward closes when the sign-in ends or after twenty minutes. 409 `no-browser-sign-in`, `port-taken`, `vm-not-running`; 501 when this device cannot open links.",
+        "operationId": "ForwardSignIn",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "vm",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignInForwardRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInForwardView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "device"
+        ],
+        "description": "Closes the VM's sign-in forward, if one is open.",
+        "operationId": "EndSignInForward",
+        "parameters": [
+          {
+            "name": "engine",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "vm",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/connections/{engine}/{vm}/mic": {
       "put": {
         "tags": [
@@ -4045,6 +4144,33 @@
               "null",
               "string"
             ]
+          }
+        }
+      },
+      "SignInForwardRequest": {
+        "required": [
+          "agent",
+          "session"
+        ],
+        "type": "object",
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          }
+        }
+      },
+      "SignInForwardView": {
+        "required": [
+          "port"
+        ],
+        "type": "object",
+        "properties": {
+          "port": {
+            "type": "integer",
+            "format": "int32"
           }
         }
       },

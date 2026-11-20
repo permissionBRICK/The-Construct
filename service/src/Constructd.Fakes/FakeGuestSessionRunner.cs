@@ -43,6 +43,12 @@ public sealed class FakeGuestSessionRunner : IGuestSessionRunner
         s.Emit(new { type = "start", agent });
         var screen = $"Sign in to {agent}:\n  https://sign-in.example/{agent}?state=fake\n\nPaste code here if prompted > ";
         s.Emit(new { type = "screen", text = screen });
+        // As the real CLIs: Claude Code opens a link that returns to its own port; Codex does with --browser.
+        if (agent == "claude-code" || (agent == "codex" && s.Command.Contains(" --browser ", StringComparison.Ordinal)))
+        {
+            var port = agent == "codex" ? 1455 : 45678;
+            s.Emit(new { type = "browser", url = $"https://sign-in.example/{agent}/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A{port}%2Fcallback&state=fake", port });
+        }
         if (await s.ReadLineAsync() is not { } line)
         {
             s.Emit(new { type = "end", outcome = "stopped", signedIn = false, text = "" });

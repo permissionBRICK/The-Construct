@@ -98,12 +98,26 @@ public sealed record VmAgentsResponse(DateTimeOffset? ReportedAt, IReadOnlyList<
 /// <c>running</c> or <c>ended</c>; <paramref name="Outcome"/> after the end: <c>done</c>, <c>failed</c>, <c>stopped</c>
 /// or <c>error</c>. <paramref name="SignedIn"/>: whether the agent is signed in, as the VM checked it at the end.
 /// </summary>
+/// <paramref name="Browser"/>: the last link the CLI opened while it runs (null otherwise), with the loopback port on the
+/// VM it sends the browser back to; a client that forwards that port from its own machine and opens the link signs in
+/// without a pasted code (design 11.8).
 public sealed record AgentSignInResponse(string Id, string Agent, string State, string? Outcome, string Text, long Revision,
-    bool? SignedIn, DateTimeOffset Started, DateTimeOffset? Ended)
+    bool? SignedIn, DateTimeOffset Started, DateTimeOffset? Ended, AgentSignInBrowser? Browser = null)
 {
     public static AgentSignInResponse From(Constructd.Api.SignIn.AgentSignInSession s) =>
-        new(s.Id, s.Agent, s.Running ? "running" : "ended", s.Outcome, s.Text, s.Revision, s.SignedIn, s.Started, s.Ended);
+        new(s.Id, s.Agent, s.Running ? "running" : "ended", s.Outcome, s.Text, s.Revision, s.SignedIn, s.Started, s.Ended,
+            s.Opened is { } opened ? new(opened.Url, opened.Port) : null);
 }
+
+/// <summary>A link a sign-in's CLI opened: <paramref name="Port"/> is the loopback port on the VM it returns to (1024-65535), if any.</summary>
+public sealed record AgentSignInBrowser(string Url, int? Port);
+
+/// <summary>
+/// <c>POST /vms/{name}/agents/{agent}/sign-in</c>, optional. <paramref name="Browser"/>: this client forwards a sign-in's
+/// loopback redirect from its own machine to the VM (a device agent): Codex then uses its browser sign-in instead of the
+/// device code.
+/// </summary>
+public sealed record AgentSignInStartRequest(bool? Browser = null);
 
 /// <summary>
 /// Input to a sign-in's terminal: <paramref name="Text"/> is typed and followed by Enter (empty: Enter alone), or

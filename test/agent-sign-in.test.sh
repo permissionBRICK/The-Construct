@@ -40,6 +40,8 @@ case "$*" in
   "auth status") [[ -s "${HOME}/.claude/.credentials.json" ]]; exit $? ;;
   "auth login")
     echo "pid $$" >>"${FAKE_LOG}"
+    # The link with the redirect to its own port goes to BROWSER; the screen shows the one for a pasted code.
+    [[ -n "${BROWSER:-}" ]] && "${BROWSER}" "https://claude.example/oauth?code=true&redirect_uri=http%3A%2F%2Flocalhost%3A45678%2Fcallback&state=abc"
     printf 'Opening browser to sign in\xe2\x80\xa6\r\n'
     printf "If the browser didn't open, visit: \e]8;;https://claude.example/oauth?code=true&state=abc\a\e[1mhttps://claude.example/oauth?code=true&state=abc\e[0m\e]8;;\a\r\n"
     printf 'Paste code here if prompted > '
@@ -60,6 +62,17 @@ cat >"${tmp}/bin/codex" <<'EOF'
 case "$*" in
   --version) echo "codex-cli 0.170.0"; exit 0 ;;
   "login status") [[ -s "${HOME}/.codex/auth.json" ]] && { echo "Logged in using ChatGPT"; exit 0; }; echo "Not logged in"; exit 1 ;;
+  login)
+    echo "browser login" >>"${FAKE_LOG}"
+    printf 'Starting local login server on http://localhost:1455.\n'
+    "${BROWSER}" "https://auth.openai.example/oauth/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A1455%2Fauth%2Fcallback&state=s1"
+    # Links a client must not take for a loopback redirect: a low port, plain http, a space.
+    "${BROWSER}" "https://auth.openai.example/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A80%2Fcb"
+    "${BROWSER}" "http://auth.openai.example/oauth/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A1455%2Fauth%2Fcallback"
+    "${BROWSER}" "https://auth.openai.example/a b"
+    sleep "${FAKE_CODEX_WAIT:-0.5}"
+    mkdir -p "${HOME}/.codex"; echo '{}' >"${HOME}/.codex/auth.json"
+    echo "Successfully logged in"; exit 0 ;;
   "login --device-auth")
     printf '1. Open this link in your browser and sign in to your account\n   \e[94mhttps://auth.openai.example/codex/device\e[0m\n\n'
     printf '2. Enter this one-time code \e[90m(expires in 15 minutes)\e[0m\n   \e[94mABCD-12345\e[0m\n'
@@ -95,6 +108,7 @@ case "$*" in
   --version) echo "1.5.13"; exit 0 ;;
   "acp --login")
     echo "storage=${AGY_ACP_FORCE_FILE_STORAGE:-}" >>"${FAKE_LOG}"
+    "${BROWSER}" "https://accounts.google.example/o/oauth2/auth?redirect_uri=https%3A%2F%2Fantigravity.example%2Foauth-callback&state=xyz"
     printf 'Open this link in a browser to log in with Google:\n  https://accounts.google.example/o/oauth2/auth?state=xyz\nThen paste the authorization code, or the full URL of the page you land on, and press Enter:\n'
     IFS= read -r code
     mkdir -p "${HOME}/.gemini/antigravity-cli"; printf 'token-for-%s' "${code}" >"${HOME}/.gemini/antigravity-cli/antigravity-oauth-token"
@@ -113,7 +127,7 @@ session() {
     sleep 0.8
     for line in "$@"; do printf '%s\n' "${line}"; sleep 0.8; done
     sleep "${hold}"
-  } | timeout 60 python3 "${SCRIPT}" --session "${name}" "${agent}" >"${tmp}/${name}.out" 2>"${tmp}/${name}.err"
+  } | timeout 60 python3 "${SCRIPT}" --session "${name}" ${SIGN_IN_FLAGS:-} "${agent}" >"${tmp}/${name}.out" 2>"${tmp}/${name}.err"
   printf '%s' "${PIPESTATUS[1]}" >"${tmp}/${name}.rc"
 }
 last_screen() { jq -rs '[.[] | select(.type == "screen")] | last | .text' "${tmp}/$1.out"; }
@@ -129,6 +143,7 @@ ok "claude: the prompt without a newline is shown" grep -q 'Paste code here if p
 ok "claude: the code reached the CLI" grep -qx 'got good-code' "${FAKE_LOG}"
 ok "claude: ends done, signed in, with its version" jq_end claude '.outcome == "done" and .signedIn == true and .version == "2.1.300"'
 ok "claude: exit 0" test "$(cat "${tmp}/claude.rc")" = 0
+ok "claude: the link it opened is reported with its redirect port" jqt -s '[.[] | select(.type == "browser")] == [{"type": "browser", "url": "https://claude.example/oauth?code=true&redirect_uri=http%3A%2F%2Flocalhost%3A45678%2Fcallback&state=abc", "port": 45678}]' "${tmp}/claude.out"
 ok "claude: no pid file left" test -z "$(ls -A "${tmp}/run")"
 
 # Control characters typed into the reply never reach the terminal as such.
@@ -142,6 +157,14 @@ ok "input: exit 3" test "$(cat "${tmp}/ctrl.rc")" = 3
 session codex codex 1.5
 ok "codex: link and one-time code on the screen" bash -c '[[ "$1" == *"https://auth.openai.example/codex/device"* && "$1" == *"ABCD-12345"* ]]' _ "$(last_screen codex)"
 ok "codex: ends done and signed in" jq_end codex '.outcome == "done" and .signedIn == true and .version == "0.170.0"'
+ok "codex: no browser sign-in without --browser" bash -c '! grep -q "browser login" "$1"' _ "${FAKE_LOG}"
+rm -f "${HOME}/.codex/auth.json"
+SIGN_IN_FLAGS=--browser session codex-browser codex 1.5
+ok "codex --browser: its browser sign-in, not the device code" grep -qx 'browser login' "${FAKE_LOG}"
+ok "codex --browser: the loopback redirect's port, and links without one" jqt -s '[.[] | select(.type == "browser") | .port] == [1455, null]' "${tmp}/codex-browser.out"
+ok "codex --browser: plain http and links with spaces are not reported" jqt -s '[.[] | select(.type == "browser")] | length == 2' "${tmp}/codex-browser.out"
+ok "codex --browser: ends done and signed in" jq_end codex-browser '.outcome == "done" and .signedIn == true'
+ok "codex --browser: the links file is gone" test -z "$(ls -A "${tmp}/run")"
 
 # ── OpenCode 2: --standalone, an arrow key, a list that redraws ───────────────
 session opencode opencode 1.5 '{"key":"down"}' '{"text":""}'
@@ -156,6 +179,7 @@ session agy antigravity 1.5 '{"text":"4/0Acode"}'
 t3dir="${T3CODE_HOME}/userdata/providers/antigravity/$(printf '%s' antigravity | sha256sum | cut -d' ' -f1)/antigravity-acp"
 ok "antigravity: signs in with file storage" grep -qx 'storage=1' "${FAKE_LOG}"
 ok "antigravity: ends done and signed in" jq_end agy '.outcome == "done" and .signedIn == true and .version == "1.5.13"'
+ok "antigravity: its link returns to a hosted page: no port" jqt -s '[.[] | select(.type == "browser")] | length == 1 and (.[0] | has("port") | not)' "${tmp}/agy.out"
 ok "antigravity: T3 Code's home has the same token" cmp -s "${HOME}/.gemini/antigravity-cli/antigravity-oauth-token" "${t3dir}/antigravity-oauth-token"
 ok "antigravity: and so has another T3 instance's home" cmp -s "${HOME}/.gemini/antigravity-cli/antigravity-oauth-token" "${other}/antigravity-acp/antigravity-oauth-token"
 ok "antigravity: the copy is private" bash -c '[[ "$(stat -c %a "$1/antigravity-oauth-token")" == 600 && "$(stat -c %a "$1")" == 700 ]]' _ "${t3dir}"

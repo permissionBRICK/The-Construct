@@ -2997,6 +2997,22 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/AgentSignInStartRequest"
+                  }
+                ]
+              }
+            }
+          }
+        },
         "responses": {
           "202": {
             "description": "Accepted",
@@ -8664,6 +8680,25 @@
           }
         }
       },
+      "AgentSignInBrowser": {
+        "required": [
+          "url",
+          "port"
+        ],
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "port": {
+            "type": [
+              "null",
+              "integer"
+            ],
+            "format": "int32"
+          }
+        }
+      },
       "AgentSignInInputRequest": {
         "type": "object",
         "properties": {
@@ -8739,6 +8774,27 @@
               "string"
             ],
             "format": "date-time"
+          },
+          "browser": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AgentSignInBrowser"
+              }
+            ]
+          }
+        }
+      },
+      "AgentSignInStartRequest": {
+        "type": "object",
+        "properties": {
+          "browser": {
+            "type": [
+              "null",
+              "boolean"
+            ]
           }
         }
       },

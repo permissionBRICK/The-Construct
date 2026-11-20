@@ -41,6 +41,9 @@ export interface SignIn {
   agent: AgentId;
   state: 'starting' | 'running' | 'failed' | 'stopped';
   text: string;
+  /** The sign-in continues in the browser: this device forwards its redirect to the VM (11.8, "No pasted code"). The
+      CLI's text and the reply field stay reachable for the fallback. */
+  browser?: boolean;
 }
 
 /** Input to a sign-in's terminal: text followed by Enter (empty: Enter alone), or an arrow key for a list. */
@@ -445,7 +448,8 @@ export interface Backend {
   /** Hardware changes ask restart now or later; `when` says which. Other groups save at once. */
   saveSettings(vmId: string, patch: SettingsPatch, when?: 'now' | 'later'): void;
   updateAgents(vmId: string): void;
-  /** Starts a coding agent's own sign-in on the VM; one that runs ends. */
+  /** Starts a coding agent's own sign-in on the VM; one that runs ends. Where this device can, the sign-in returns
+      from the browser without a pasted code. */
   signIn(vmId: string, agent: AgentId): void;
   /** Types into the running sign-in's terminal. */
   signInInput(input: SignInInput): void;

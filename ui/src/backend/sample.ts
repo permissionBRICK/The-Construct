@@ -27,6 +27,12 @@ export const SIGN_IN_TEXT: Record<string, string> = {
   antigravity: 'Open this link in a browser to log in with Google:\n  https://accounts.example.net/o/oauth2/auth?access_type=offline&client_id=1071&redirect_uri=https%3A%2F%2Fsign-in.example.net%2Foauth-callback&state=6pSX\nThen paste the authorization code, or the full URL of the page you land on, and press Enter:',
 };
 
+/** What the CLIs show while their sign-in returns from the browser (this device forwards the redirect). */
+export const SIGN_IN_BROWSER_TEXT: Record<string, string> = {
+  'claude-code': SIGN_IN_TEXT['claude-code'],
+  codex: 'Starting local login server on http://localhost:1455.\nIf your browser did not open, navigate to this URL to authenticate:\n\nhttps://auth.example.net/oauth/authorize?response_type=code&redirect_uri=http%3A%2F%2F127.0.0.1%3A1455%2Fauth%2Fcallback&state=Qe7w',
+};
+
 function vm(p: Partial<Vm> & Pick<Vm, 'id' | 'name' | 'hostId' | 'power' | 'address'>): Vm {
   return {
     os: 'Ubuntu 24.04.2 LTS', installed: '12 Jun 2026', reprovisioned: '2 days ago', version: '2.4.0', changeWaits: null,

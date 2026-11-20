@@ -41,6 +41,14 @@ const DISMISSED_KEY = 'construct.dismissed';
 
 interface Started { kind: JobKind; from?: string; to?: string; freshImage?: boolean; backupId?: string }
 
+/** A coding agent's sign-in this device follows (see ApiBackend.signIn). */
+interface SignInAt {
+  engine: string; vm: string; vmId: string; agent: AgentId; id: string | null; revision: number;
+  /** Started as a browser sign-in (Codex's differs from its device code). */
+  browser: boolean;
+  forward: 'none' | 'asked' | 'open' | 'failed';
+}
+
 interface AdminData {
   users: HostUser[];
   status: HostStatus | null;
@@ -1048,20 +1056,23 @@ export class ApiBackend implements Backend {
 
   /* --- signing in to the coding agents --- */
 
-  /** The sign-in this device follows: where it runs, and its session and the revision read once the engine named it. */
-  private signInAt: { engine: string; vm: string; vmId: string; agent: AgentId; id: string | null; revision: number } | null = null;
+  /** The sign-in this device follows: where it runs, and its session and the revision read once the engine named it.
+      `forward`: the device agent's forward of its redirect (11.8, "No pasted code"), asked for once per sign-in. */
+  private signInAt: SignInAt | null = null;
   private signInReads: Promise<void> = Promise.resolve();
 
-  /** One at a time: the engine ends a sign-in already running on the VM. */
-  signIn(vmId: string, agent: AgentId) {
+  /** One at a time: the engine ends a sign-in already running on the VM. This device forwards a sign-in's loopback
+      redirect, so the engine is told it may use a browser sign-in (`browser`); Codex's start without it is the
+      fallback when the forward fails. */
+  signIn(vmId: string, agent: AgentId, browser = true) {
     const ref = this.vmRef(vmId);
     if (!ref) return;
-    const at = { engine: ref.engine, vm: ref.name, vmId, agent, id: null as string | null, revision: -1 };
+    const at: SignInAt = { engine: ref.engine, vm: ref.name, vmId, agent, id: null, revision: -1, browser, forward: 'none' };
     this.signInAt = at;
     this.emit({ signIn: { vmId, agent, state: 'starting', text: '' } });
     void (async () => {
       try {
-        const r = await ok(this.engine(at.engine).POST('/api/v1/vms/{name}/agents/{agent}/sign-in', { params: { path: { name: at.vm, agent } } }));
+        const r = await ok(this.engine(at.engine).POST('/api/v1/vms/{name}/agents/{agent}/sign-in', { params: { path: { name: at.vm, agent } }, body: { browser } }));
         // Put away before the engine answered: it ends there too (one another start replaced is over already).
         if (this.signInAt !== at && r.state === 'running') this.endSignIn(at, r.id);
         this.storeSignIn(at, r);
@@ -1089,21 +1100,53 @@ export class ApiBackend implements Backend {
   }
 
   /** Shows what the sign-in's terminal shows. One that signed in goes away; the VM's agents are read again. */
-  private storeSignIn(at: NonNullable<typeof this.signInAt>, r: AgentSignIn) {
+  private storeSignIn(at: SignInAt, r: AgentSignIn) {
     // Another one's, or older than what was read (answers may cross).
     if (this.signInAt !== at || r.agent !== at.agent || (at.id && at.id !== r.id) || r.revision < at.revision) return;
     at.id = r.id;
     at.revision = r.revision;
     const state: SignIn['state'] | 'done' = r.state === 'running' ? 'running' : r.outcome === 'done' ? 'done' : r.outcome === 'stopped' ? 'stopped' : 'failed';
-    if (state !== 'running') void this.readAgents(at.engine, at.vm);
+    if (state !== 'running') {
+      void this.readAgents(at.engine, at.vm);
+      this.endForward(at);
+    }
     if (state === 'done') {
       this.signInAt = null;
       this.emit({ signIn: null });
       return;
     }
+    // The CLI opened a link that returns to its own port on the VM: this device forwards that port and opens it.
+    if (state === 'running' && r.browser?.port && at.forward === 'none') {
+      at.forward = 'asked';
+      void this.forwardSignIn(at, r.id);
+    }
     // An ended sign-in's terminal text is gone on the engine: the panel keeps what it showed last.
     const text = r.text || (r.state === 'running' ? '' : this.s.signIn?.text ?? '');
-    this.emit({ signIn: { vmId: at.vmId, agent: at.agent, state, text } });
+    this.emit({ signIn: { vmId: at.vmId, agent: at.agent, state, text, ...(state === 'running' && at.forward === 'open' ? { browser: true } : {}) } });
+  }
+
+  /** Asks the device agent to forward the sign-in's redirect and open its link. When it cannot (no link to the VM,
+      the port taken here), the panel stays as it is: the CLI's text and the reply field; Codex, whose browser sign-in
+      takes no pasted code, starts again with the device code. */
+  private async forwardSignIn(at: SignInAt, session: string) {
+    try {
+      await ok(this.agent.POST('/api/connections/{engine}/{vm}/sign-in', { params: { path: { engine: at.engine, vm: at.vm } }, body: { agent: at.agent, session } }));
+      if (this.signInAt !== at) { void this.agent.DELETE('/api/connections/{engine}/{vm}/sign-in', { params: { path: { engine: at.engine, vm: at.vm } } }).catch(() => {}); return; }
+      at.forward = 'open';
+      const cur = this.s.signIn;
+      if (cur?.state === 'running') this.emit({ signIn: { ...cur, browser: true } });
+    } catch {
+      if (this.signInAt !== at) return;
+      at.forward = 'failed';
+      if (at.agent === 'codex' && at.browser) this.signIn(at.vmId, at.agent, false);
+    }
+  }
+
+  /** Closes the device's forward of a sign-in that is over (the agent closes it by itself too). */
+  private endForward(at: SignInAt) {
+    if (at.forward !== 'open') return;
+    at.forward = 'failed';
+    void this.agent.DELETE('/api/connections/{engine}/{vm}/sign-in', { params: { path: { engine: at.engine, vm: at.vm } } }).catch(() => {});
   }
 
   /** Types into the followed sign-in, named by its session: input meant for it never reaches a newer one. */
@@ -1121,6 +1164,7 @@ export class ApiBackend implements Backend {
     this.emit({ signIn: null });
     // Before the engine named it, the start's answer ends it.
     if (at?.id && running) this.endSignIn(at, at.id);
+    if (at) this.endForward(at);
   }
 
   /** Ends one sign-in on the engine, by its session: a newer one on the VM is left alone. */

@@ -1699,6 +1699,63 @@ describe('ApiBackend agent sign-in', () => {
   });
 });
 
+describe('ApiBackend sign-in without a pasted code', () => {
+  const P = `/api/engines/${E1}/api/v1`;
+  const F = `/api/connections/${E1}/atlas/sign-in`;
+  const session = (o: Record<string, unknown> = {}) => ({
+    id: 'si1', agent: 'claude-code', state: 'running', outcome: null, text: 'Paste code here > ', revision: 1, signedIn: null, started: '', ended: null, ...o,
+  });
+  const link = (port: number) => ({ url: `https://sign-in.example/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A${port}%2Fcallback`, port });
+
+  it('asks for a browser sign-in, has the device forward its redirect, and closes the forward at the end', async () => {
+    const { be, calls, on, settle } = world();
+    await be.start();
+    on('POST', `${P}/vms/atlas/agents/claude-code/sign-in`, { status: 202, json: session({ browser: link(45678) }) });
+    on('POST', F, { json: { port: 45678 } });
+    on('DELETE', F, { status: 204 });
+    be.signIn('atlas', 'claude-code');
+    await settle();
+    expect(posts(calls).find(c => c.path.endsWith('/claude-code/sign-in'))!.body).toEqual({ browser: true });
+    expect(posts(calls).filter(c => c.path === F).map(c => c.body)).toEqual([{ agent: 'claude-code', session: 'si1' }]);
+    expect(be.snapshot().signIn).toMatchObject({ state: 'running', browser: true, text: 'Paste code here > ' });
+
+    // Read again: asked once only.
+    on('GET', `${P}/vms/atlas/agents/claude-code/sign-in`, { json: session({ browser: link(45678), revision: 2 }) });
+    be.onEvent('agent-sign-in.output', { seq: 1, type: 'agent-sign-in.output', engine: E1, data: { id: 'si1', vm: 'atlas' } });
+    await settle();
+    expect(posts(calls).filter(c => c.path === F).length).toBe(1);
+
+    on('GET', `${P}/vms/atlas/agents/claude-code/sign-in`, { json: session({ state: 'ended', outcome: 'done', signedIn: true, text: '', revision: 3 }) });
+    on('GET', `${P}/vms/atlas/agents`, { json: { reportedAt: null, agents: [] } });
+    be.onEvent('agent-sign-in.ended', { seq: 2, type: 'agent-sign-in.ended', engine: E1, data: { id: 'si1', vm: 'atlas' } });
+    await settle();
+    expect(be.snapshot().signIn).toBeNull();
+    expect(calls.filter(c => c.method === 'DELETE' && c.path === F).length).toBe(1);
+  });
+
+  it('keeps the CLI\'s text and the paste when the device cannot forward; Codex starts again with its device code', async () => {
+    const { be, calls, on, settle } = world();
+    await be.start();
+    on('POST', `${P}/vms/atlas/agents/claude-code/sign-in`, { status: 202, json: session({ browser: link(45678) }) });
+    on('POST', F, { status: 409, json: { title: 'Port 45678 is in use on this device.', status: 409, code: 'port-taken' } });
+    be.signIn('atlas', 'claude-code');
+    await settle();
+    expect(be.snapshot().signIn).toMatchObject({ state: 'running', text: 'Paste code here > ' });
+    expect(be.snapshot().signIn!.browser).toBeUndefined();
+    expect(posts(calls).filter(c => c.path.endsWith('/claude-code/sign-in')).length).toBe(1);
+
+    let starts = 0;
+    on('POST', `${P}/vms/atlas/agents/codex/sign-in`, () => {
+      starts++;
+      return { status: 202, json: starts === 1 ? session({ id: 'si2', agent: 'codex', browser: link(1455) }) : session({ id: 'si3', agent: 'codex', text: 'code ABCD' }) };
+    });
+    be.signIn('atlas', 'codex');
+    await settle();
+    expect(posts(calls).filter(c => c.path.endsWith('/codex/sign-in')).map(c => c.body)).toEqual([{ browser: true }, { browser: false }]);
+    expect(be.snapshot().signIn).toMatchObject({ agent: 'codex', state: 'running', text: 'code ABCD' });
+  });
+});
+
 describe('ApiBackend agent sign-in output before the start\'s answer', () => {
   it('follows output that comes before the engine named the session', async () => {
     const P = `/api/engines/${E1}/api/v1`;

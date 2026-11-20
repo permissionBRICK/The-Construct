@@ -269,6 +269,8 @@ describe('FakeBackend', () => {
     be.signIn('atlas', 'claude-code');
     expect(be.snapshot().signIn).toMatchObject({ vmId: 'atlas', agent: 'claude-code', state: 'starting' });
     run(15);
+    // It goes on in the browser; the CLI's own paste stays.
+    expect(be.snapshot().signIn).toMatchObject({ state: 'running', browser: true });
     expect(be.snapshot().signIn!.text).toContain('Paste code here');
     be.signInInput({ text: 'bad' });
     run(15);
@@ -287,7 +289,7 @@ describe('FakeBackend', () => {
     expect(be.snapshot().vms[0].agents.find(a => a.id === 'antigravity')).toMatchObject({ signedIn: true, installed: true });
   });
 
-  it('signs Codex in when its device code was entered elsewhere, and a new sign-in replaces one that runs', () => {
+  it('signs Codex in when its browser sign-in came back, and a new sign-in replaces one that runs', () => {
     const be = new FakeBackend({ tick: 10 });
     be.signIn('atlas', 'opencode');
     run(15);

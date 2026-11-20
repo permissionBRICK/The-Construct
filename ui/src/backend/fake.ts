@@ -1,5 +1,5 @@
 import type { AgentId, Backend, CreateVmRequest, FirstRun, FirstRunRequest, Host, HostProbe, HostUser, Job, JobKind, Prefs, Profile, ProfileSave, SettingsPatch, SignInInput, State, Upgrade, Vm } from './types';
-import { NEXT_RELEASE, PAIR_WORDS, RECOVERY_CODE, REINSTALL_STEPS, REPROVISION_STEPS, SIGN_IN_TEXT, sampleState } from './sample';
+import { NEXT_RELEASE, PAIR_WORDS, RECOVERY_CODE, REINSTALL_STEPS, REPROVISION_STEPS, SIGN_IN_BROWSER_TEXT, SIGN_IN_TEXT, sampleState } from './sample';
 import { activeJob, newer, vmUpdateTarget } from '../model/vm';
 import { AGENTS, agentSwitches, applies, applyPatch } from '../model/settings';
 import { updateParts } from '../model/update';
@@ -13,11 +13,11 @@ import { spanText } from './api/map';
 
 export type Scene =
   | 'calm' | 'update' | 'changed' | 'lease' | 'enter' | 'job' | 'failed' | 'failed-reinstall' | 'repair' | 'updating' | 'restart'
-  | 'pairing' | 'pair-confirm' | 'revoked' | 'handout' | 'creating' | 'created' | 'sign-in' | 'sign-in-failed'
+  | 'pairing' | 'pair-confirm' | 'revoked' | 'handout' | 'creating' | 'created' | 'sign-in' | 'sign-in-failed' | 'sign-in-browser'
   | 'upgrade-intro' | 'upgrade-code' | 'upgrade-close' | 'upgrade-convert' | 'upgrade-host' | 'upgrade-done' | 'upgrade-restart'
   | 'first-run' | 'first-run-restart';
 
-export const SCENES: Scene[] = ['calm', 'update', 'changed', 'lease', 'enter', 'job', 'failed', 'failed-reinstall', 'repair', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'created', 'sign-in', 'sign-in-failed', 'upgrade-intro', 'upgrade-code', 'upgrade-close', 'upgrade-convert', 'upgrade-host', 'upgrade-done', 'upgrade-restart', 'first-run', 'first-run-restart'];
+export const SCENES: Scene[] = ['calm', 'update', 'changed', 'lease', 'enter', 'job', 'failed', 'failed-reinstall', 'repair', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'created', 'sign-in', 'sign-in-failed', 'sign-in-browser', 'upgrade-intro', 'upgrade-code', 'upgrade-close', 'upgrade-convert', 'upgrade-host', 'upgrade-done', 'upgrade-restart', 'first-run', 'first-run-restart'];
 
 /** Things the preview frame can make happen, beside the user's own actions. */
 export type Demo = 'lease' | 'enter' | 'release' | 'fail-next' | 'change';
@@ -144,6 +144,7 @@ export class FakeBackend implements Backend {
       }
       case 'sign-in': d.signIn = { vmId: 'atlas', agent: 'codex', state: 'running', text: SIGN_IN_TEXT.codex }; break;
       case 'sign-in-failed': d.signIn = { vmId: 'atlas', agent: 'claude-code', state: 'failed', text: SIGN_IN_TEXT['claude-code'] + 'bad-code\nOAuth error: Invalid code' }; break;
+      case 'sign-in-browser': d.signIn = { vmId: 'atlas', agent: 'codex', state: 'running', text: SIGN_IN_BROWSER_TEXT.codex, browser: true }; break;
       case 'upgrade-intro': d.upgrade = upgrade('engine'); break;
       case 'upgrade-code': d.upgrade = upgrade('recovery', { code: RECOVERY_CODE }); break;
       case 'upgrade-close': d.upgrade = upgrade('close', { writers: ['VS Code'] }); break;
@@ -421,11 +422,12 @@ export class FakeBackend implements Backend {
   signIn(vmId: string, agent: AgentId) {
     this.set(d => { d.signIn = { vmId, agent, state: 'starting', text: '' }; });
     const mine = () => this.s.signIn?.vmId === vmId && this.s.signIn.agent === agent;
+    // Claude Code and Codex return from the browser through this device's forward; a code typed still works.
+    const browser = agent === 'claude-code' || agent === 'codex';
     this.after(1, () => {
-      if (mine()) this.set(d => { d.signIn = { vmId, agent, state: 'running', text: SIGN_IN_TEXT[agent] }; });
+      if (mine()) this.set(d => { d.signIn = { vmId, agent, state: 'running', text: browser ? SIGN_IN_BROWSER_TEXT[agent] : SIGN_IN_TEXT[agent], ...(browser ? { browser: true } : {}) }; });
     });
-    // Codex's device code is entered in the browser; the CLI goes on by itself.
-    if (agent === 'codex') this.after(6, () => { if (mine() && this.s.signIn?.state === 'running') this.signedIn(vmId, agent); });
+    if (browser) this.after(6, () => { if (mine() && this.s.signIn?.state === 'running') this.signedIn(vmId, agent); });
   }
 
   signInInput(input: SignInInput) {

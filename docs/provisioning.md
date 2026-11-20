@@ -157,7 +157,10 @@ says the cause is fixed, the engine runs the job again once. See `service/README
 Signing in to the coding agents works the same way, without a console: the client's Sign in has the engine run
 `bin/construct-agent-sign-in.py <agent>` on the VM, which starts the agent's own sign-in under a pseudo-terminal
 (`claude auth login`, `codex login --device-auth`, `opencode auth login`, `agy acp --login`) and reports the
-terminal's text; what the user types goes to it. The Antigravity sign-in lands in
+terminal's text; what the user types goes to it. Each runs with `BROWSER` set to `bin/construct-sign-in-browser.sh`,
+which hands the link the CLI would open to the script; where that link returns to a loopback port on the VM, a
+device agent forwards the port from the PC and opens the link, and the sign-in ends without a pasted code (Codex
+then runs `codex login`). The Antigravity sign-in lands in
 `~/.gemini/antigravity-cli/antigravity-oauth-token` and is copied into T3 Code's private Antigravity home, so the
 terminal and T3 Code share one sign-in. `--status` prints whether each installed agent is signed in; the usage
 report sends it with the versions. See `service/README.md`, *Signing in to the coding agents*.

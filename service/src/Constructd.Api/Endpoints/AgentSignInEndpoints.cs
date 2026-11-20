@@ -21,6 +21,7 @@ public static class AgentSignInEndpoints
     public static RouteGroupBuilder MapAgentSignInEndpoints(this RouteGroupBuilder api)
     {
         api.MapPost("/vms/{name}/agents/{agent}/sign-in", StartAsync).RequireAuthorization(Policies.User).Audited("vm.agent.sign-in")
+            .Accepts<AgentSignInStartRequest>("application/json")
             .Produces<AgentSignInResponse>(StatusCodes.Status202Accepted).WithName("StartAgentSignIn")
             .WithDescription("Starts the agent's own sign-in on the VM in a terminal (claude-code, codex, opencode, antigravity); a sign-in running on the VM ends. 409: `vm-endpoint-unknown`, `sign-in-not-started` (the connection to the VM failed).");
         api.MapGet("/vms/{name}/agents/{agent}/sign-in", GetAsync).RequireAuthorization(Policies.User)
@@ -54,14 +55,16 @@ public static class AgentSignInEndpoints
 
     private static IResult None() => CodedProblems.Create(404, "no-sign-in", "No sign-in of this agent runs or ran on this VM since the engine started.");
 
-    private static async Task<IResult> StartAsync(string name, string agent, HttpContext http, IVmRepository vms, AgentSignIns signIns, CancellationToken ct)
+    private static async Task<IResult> StartAsync(string name, string agent, AgentSignInStartRequest? request, HttpContext http, IVmRepository vms,
+        AgentSignIns signIns, CancellationToken ct)
     {
         var (vm, denied) = await VmAsync(name, agent, http, vms, ct);
         if (vm is null) return denied!;
         try
         {
-            var session = await signIns.StartAsync(vm, agent, ct);
-            http.SetAuditDetail($"agent={agent}; session={session.Id}");
+            var browser = request?.Browser == true;
+            var session = await signIns.StartAsync(vm, agent, browser, ct);
+            http.SetAuditDetail($"agent={agent}; session={session.Id}" + (browser ? "; browser" : ""));
             return Results.Accepted($"/api/v1/vms/{vm.Name}/agents/{agent}/sign-in", AgentSignInResponse.From(session));
         }
         catch (AgentSignInRefusedException ex)

@@ -1,5 +1,6 @@
 import { expect, request, test, type Page } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { createServer, type Server } from 'node:net';
 import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -41,7 +42,8 @@ async function startAgent(name: string): Promise<{ base: string; token: string }
   const dir = mkdtempSync(join(tmpdir(), `ui-e2e-${name}-`));
   dirs.push(dir);
   // The file protection, as in the agent's own tests: no keyring on a build machine.
-  const p = spawn('dotnet', [AGENT, 'run', '--data-dir', dir, '--ui', join(ui, 'dist')], { stdio: 'ignore', env: { ...process.env, DBUS_SESSION_BUS_ADDRESS: '' } });
+  // BROWSER: a link the agent opens (xdg-open without a desktop) opens nothing on the build machine.
+  const p = spawn('dotnet', [AGENT, 'run', '--data-dir', dir, '--ui', join(ui, 'dist')], { stdio: 'ignore', env: { ...process.env, DBUS_SESSION_BUS_ADDRESS: '', BROWSER: 'true' } });
   children.push(p);
   const file = join(dir, 'endpoint.json');
   for (let i = 0; i < 300 && !existsSync(file); i++) await new Promise(r => setTimeout(r, 100));
@@ -110,7 +112,14 @@ test('first run, a VM, a reprovision and a second device on the real API', async
   await expect(pa.locator('.blk.job')).toHaveCount(0);
 
   // Then a sign-in step with the chosen agents, none required: the agent's own sign-in runs on the VM (the engine's
-  // scripted guest in fake mode), its link and prompt show, a code goes to it, and the agent is signed in.
+  // scripted guest in fake mode), its link and prompt show, a code goes to it, and the agent is signed in. The ports
+  // its links return to are taken on this machine, so the device cannot forward them: the CLI's text and the paste
+  // stay, and Codex starts again with its device code.
+  const held = await Promise.all([45678, 1455].map(port => new Promise<Server | null>(resolve => {
+    const server = createServer();
+    server.once('error', () => resolve(null));
+    server.listen(port, '127.0.0.1', () => resolve(server));
+  })));
   await expect(pa.getByRole('heading', { name: 'Sign in' })).toBeVisible();
   const step = pa.locator('.blk.form');
   for (const name of ['Claude Code', 'Codex', 'OpenCode', 'Antigravity']) await expect(step.locator('.r', { hasText: name })).toBeVisible();
@@ -130,6 +139,7 @@ test('first run, a VM, a reprovision and a second device on the real API', async
   await pa.getByRole('group', { name: 'Sign in to Codex' }).getByRole('button', { name: 'Cancel' }).click();
   await expect(pa.getByRole('group', { name: 'Sign in to Codex' })).toHaveCount(0);
   await expect(step.locator('.r', { hasText: 'Codex' }).getByRole('button', { name: 'Sign in' })).toBeEnabled();
+  for (const server of held) server?.close();
   await pa.getByRole('button', { name: 'Continue' }).click();
 
   // The ready screen: T3 Code, recommended, and VS Code.

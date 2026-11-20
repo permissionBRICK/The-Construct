@@ -76,6 +76,16 @@ public static class DeviceRoutes
             return TypedResults.NoContent();
         }).WithName("CloseForward");
 
+        vm.MapPost("/sign-in", async (string engine, string vm, [FromBody] SignInForwardRequest request, CancellationToken ct) =>
+            TypedResults.Ok(await device.SignIns.StartAsync(engine, vm, request, ct))).WithName("ForwardSignIn")
+            .WithDescription("A coding agent's sign-in without a pasted code (11.8): for the running sign-in `session` of `agent` on one of the user's own VMs, whose link returns to a loopback port on the VM, forwards 127.0.0.1:<port> on this device to the VM and opens the link in the default browser. The forward closes when the sign-in ends or after twenty minutes. 409 `no-browser-sign-in`, `port-taken`, `vm-not-running`; 501 when this device cannot open links.");
+
+        vm.MapDelete("/sign-in", async (string engine, string vm, CancellationToken ct) =>
+        {
+            await device.SignIns.StopAsync(engine, vm, ct);
+            return TypedResults.NoContent();
+        }).WithName("EndSignInForward").WithDescription("Closes the VM's sign-in forward, if one is open.");
+
         vm.MapPut("/mic", async (string engine, string vm, [FromBody] SwitchRequest request, CancellationToken ct) =>
             TypedResults.Ok(await device.Links.SetMicAsync(engine, vm, request.On, ct))).WithName("SetMicrophone")
             .WithDescription("Microphone passthrough to the VM; kept for the VM's next start.");

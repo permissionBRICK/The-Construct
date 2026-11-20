@@ -142,6 +142,47 @@ public sealed class AgentSignInTests
     }
 
     [Fact]
+    public async Task A_client_that_forwards_gets_the_link_the_cli_opened_with_its_port_while_it_runs()
+    {
+        await using var h = await ProvisionHarness.StartAsync();
+        var response = await h.Client.PostAsJsonAsync($"{Url}/codex/sign-in", new { browser = true });
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        var started = await response.ReadAsync<AgentSignInResponse>();
+        Assert.Contains($"--session {started.Id} --browser codex", Guests(h).Sessions.Single().Command, StringComparison.Ordinal);
+
+        var shown = await Until(h.Client, s => s.Browser is not null, "the link", "codex");
+        Assert.Equal(1455, shown.Browser!.Port);
+        Assert.StartsWith("https://sign-in.example/codex/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A1455", shown.Browser.Url, StringComparison.Ordinal);
+
+        // Over: the link goes with the rest of what the sign-in showed.
+        Assert.Equal(HttpStatusCode.NoContent, (await h.Client.DeleteAsync($"{Url}/codex/sign-in?session={started.Id}")).StatusCode);
+        Assert.Null((await Read(h.Client, "codex"))!.Browser);
+    }
+
+    [Fact]
+    public async Task Without_a_forwarding_client_codex_keeps_the_device_code()
+    {
+        await using var h = await ProvisionHarness.StartAsync();
+        await StartAsync(h, "codex");
+        await Until(h.Client, s => s.Running(), "the prompt", "codex");
+        Assert.DoesNotContain("--browser", Guests(h).Sessions.Single().Command, StringComparison.Ordinal);
+        Assert.Null((await Read(h.Client, "codex"))!.Browser);
+    }
+
+    [Theory]
+    [InlineData("""{"type":"browser","url":"https://a.example/x?redirect_uri=http%3A%2F%2Flocalhost%3A45678%2Fcb","port":45678}""", "https://a.example/x?redirect_uri=http%3A%2F%2Flocalhost%3A45678%2Fcb", 45678)]
+    [InlineData("""{"type":"browser","url":"https://a.example/x","port":80}""", "https://a.example/x", null)]
+    [InlineData("""{"type":"browser","url":"https://a.example/x","port":70000}""", "https://a.example/x", null)]
+    [InlineData("""{"type":"browser","url":"http://a.example/x","port":45678}""", null, 45678)]
+    [InlineData("""{"type":"browser","url":"https://user:pw@a.example/x"}""", null, null)]
+    [InlineData("""{"type":"browser","url":"https://a.example/a b"}""", null, null)]
+    public void A_browser_line_keeps_only_an_https_link_and_a_port_from_1024(string raw, string? url, int? port)
+    {
+        var line = Constructd.Core.Logic.AgentSignInScript.Parse(raw);
+        Assert.Equal(("browser", url, port), (line.Type, line.Url, line.Port));
+    }
+
+    [Fact]
     public async Task Input_and_cancel_reach_only_the_sign_in_they_name()
     {
         await using var h = await ProvisionHarness.StartAsync();

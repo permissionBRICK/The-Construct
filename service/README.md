@@ -444,7 +444,10 @@ as well).
 - `POST /vms/{name}/agents/{agent}/sign-in` (`agent`: `claude-code`, `codex`, `opencode`, `antigravity`) starts
   it and answers `202` with the session: `state` (`running`, `ended`), `outcome` (`done`, `failed`, `stopped`,
   `error`), `text` (the terminal's whole text now, links and codes as the CLI wrote them), `revision` (counts its
-  changes) and, after the end, `signedIn` as the VM checked it. A sign-in already running on the VM ends first.
+  changes), `browser` (the last link the CLI opened, `{url, port}`, `port` when it returns to a loopback port on
+  the VM) and, after the end, `signedIn` as the VM checked it. A sign-in already running on the VM ends first. The
+  optional body `{browser: true}` says the client forwards such a port from its own machine (a device agent):
+  Codex then runs `codex login` instead of `codex login --device-auth`.
 - `GET /vms/{name}/agents/{agent}/sign-in` reads it (`404 no-sign-in` when none ran since the engine started or
   another agent's came after it).
 - `POST .../sign-in/input` `{text, session}` types the text and Enter into the terminal (empty: Enter alone),

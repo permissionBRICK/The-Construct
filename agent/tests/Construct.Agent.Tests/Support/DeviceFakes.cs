@@ -169,7 +169,7 @@ public sealed class FakeDevice : IAsyncDisposable
             () => everything?.Running != true, Platform, () => Stopped++, () => { }) { Running = running };
         Everything = new UpdateEverything(Engines, Updater, () => { }, TimeProvider.System) { PollInterval = TimeSpan.FromMilliseconds(20), HostUpdateLimit = TimeSpan.FromSeconds(5) };
         everything = Everything;
-        Services = new DeviceServices(Platform, Settings, ssh, Links, Updater, Everything);
+        Services = new DeviceServices(Platform, Settings, ssh, Links, Updater, Everything, Engines);
     }
 
     public FakeEngines Engines { get; }

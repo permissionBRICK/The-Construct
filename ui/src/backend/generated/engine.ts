@@ -4124,6 +4124,11 @@ export interface components {
             reasons: null | string[];
             projectsDigest?: null | string;
         };
+        AgentSignInBrowser: {
+            url: string;
+            /** Format: int32 */
+            port: null | number;
+        };
         AgentSignInInputRequest: {
             text?: null | string;
             key?: null | string;
@@ -4142,6 +4147,10 @@ export interface components {
             started: string;
             /** Format: date-time */
             ended: null | string;
+            browser?: null | components["schemas"]["AgentSignInBrowser"];
+        };
+        AgentSignInStartRequest: {
+            browser?: null | boolean;
         };
         AllowanceUsage: {
             /** Format: int32 */
@@ -8530,7 +8539,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": null | components["schemas"]["AgentSignInStartRequest"];
+            };
+        };
         responses: {
             /** @description Accepted */
             202: {

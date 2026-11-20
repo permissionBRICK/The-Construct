@@ -161,7 +161,8 @@ export function JobBlock({ job, vm }: { job: Job; vm: Vm }) {
 }
 
 /** A coding agent's own sign-in on the VM: its terminal's text, the links in it opened in the browser, one field
-    for what it asks (Enter sends, also empty; the arrow keys move a list it shows), Cancel. */
+    for what it asks (Enter sends, also empty; the arrow keys move a list it shows), Cancel. While the sign-in goes on
+    in the browser (this device forwards its redirect), one line and Cancel; the terminal stays behind Terminal. */
 export function SignInBlock({ si }: { si: SignIn }) {
   const { be } = useApp();
   const [text, setText] = useState('');
@@ -175,9 +176,8 @@ export function SignInBlock({ si }: { si: SignIn }) {
     else if (!text && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); be.signInInput({ key: e.key === 'ArrowUp' ? 'up' : 'down' }); }
   };
   const open = (url: string) => (e: MouseEvent) => { e.preventDefault(); openExternal(window, url); };
-  return (
-    <div class={`blk signin ${running ? '' : 'bad'}`} role="group" aria-label={`Sign in to ${name}`}>
-      <div class="bh"><Icon n="key" /><b>{name}</b><Btn sm onClick={() => be.closeSignIn()}>{running ? 'Cancel' : 'Close'}</Btn></div>
+  const terminal = (
+    <>
       <pre class="term" ref={term} aria-live="polite">
         {linkParts(si.text).map(p => ('url' in p ? <a href={p.url} target="_blank" rel="noopener noreferrer" onClick={open(p.url)}>{p.url}</a> : p.text))}
         {si.state === 'starting' && <span class="typing" aria-label="starting" />}
@@ -189,6 +189,17 @@ export function SignInBlock({ si }: { si: SignIn }) {
           <Btn kind="pri" icon="send" title="Send" onClick={send} />
         </div>
       )}
+    </>
+  );
+  return (
+    <div class={`blk signin ${running ? '' : 'bad'}`} role="group" aria-label={`Sign in to ${name}`}>
+      <div class="bh"><Icon n="key" /><b>{name}</b><Btn sm onClick={() => be.closeSignIn()}>{running ? 'Cancel' : 'Close'}</Btn></div>
+      {si.browser && si.state === 'running' ? (
+        <>
+          <div class="msg"><span class="typing">Continue in your browser</span></div>
+          <details class="more-term"><summary><Icon n="term" />Terminal</summary>{terminal}</details>
+        </>
+      ) : terminal}
     </div>
   );
 }
