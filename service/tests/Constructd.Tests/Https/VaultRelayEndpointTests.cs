@@ -47,6 +47,21 @@ public sealed class VaultRelayEndpointTests
         Assert.Equal(expected, new VaultRelayEndpoint(new BoundServer(bound), options).Port);
     }
 
+    [Theory]
+    [InlineData("127.0.0.1", true)]
+    [InlineData("::ffff:127.0.0.1", true)]
+    // An API listener on another loopback address that has the relay's port number.
+    [InlineData("127.0.0.2", false)]
+    public void Only_the_relay_listeners_own_address_counts_as_relayed(string local, bool relayed)
+    {
+        var relay = new VaultRelayEndpoint(new BoundServer("http://127.0.0.2:41234", "http://127.0.0.1:41234"),
+            new ConstructdOptions { ListenUrl = "http://127.0.0.2:41234" });
+        var http = new DefaultHttpContext();
+        http.Connection.LocalIpAddress = IPAddress.Parse(local);
+        http.Connection.LocalPort = 41234;
+        Assert.Equal(relayed, relay.IsRelayed(http));
+    }
+
     [Fact]
     public void Nothing_is_cached_while_only_the_dynamic_api_port_is_bound()
     {
