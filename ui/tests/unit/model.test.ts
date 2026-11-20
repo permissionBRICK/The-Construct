@@ -7,7 +7,7 @@ import { formatRoute, parseRoute, section } from '../../src/model/route';
 import { contrast, cssVars, SCHEME_ORDER, SCHEMES } from '../../src/model/tokens';
 import type { Job } from '../../src/backend/types';
 import { profileError } from '../../src/model/profile';
-import { linkParts, signedIn } from '../../src/model/signin';
+import { linkParts, lostSignIns, signedIn } from '../../src/model/signin';
 
 const job = (p: Partial<Job>): Job => ({ id: 'j', vmId: 'atlas', kind: 'reprovision', state: 'running', step: 's', stepIndex: 0, stepCount: 3, pct: 0, log: [], error: null, repair: null, ...p });
 
@@ -179,6 +179,15 @@ describe('sign-in text', () => {
     expect(linkParts('(see https://c.example/a_(b))')).toEqual([{ text: '(see ' }, { url: 'https://c.example/a_(b)' }, { text: ')' }]);
     expect(linkParts('no link, javascript:alert(1) or ftp://x')).toEqual([{ text: 'no link, javascript:alert(1) or ftp://x' }]);
     expect(linkParts('')).toEqual([]);
+  });
+
+  it('lists the lost sign-ins of every VM, oldest first, by the ids the sign-in takes', () => {
+    const vms = sampleState().vms;
+    expect(lostSignIns(vms)).toEqual([]);
+    vms[1].agents.find(a => a.id === 'codex')!.lostAt = '2026-11-20T09:00:00Z';
+    vms[0].agents.find(a => a.id === 'claude')!.lostAt = '2026-11-20T08:00:00Z';
+    vms[0].agents.find(a => a.id === 't3')!.lostAt = '2026-11-20T07:00:00Z';
+    expect(lostSignIns(vms).map(l => [l.vm.id, l.id.id])).toEqual([[vms[0].id, 'claude-code'], [vms[1].id, 'codex']]);
   });
 
   it('reads an agent\'s sign-in from the VM\'s report by its tool id', () => {

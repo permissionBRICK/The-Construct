@@ -289,6 +289,19 @@ describe('FakeBackend', () => {
     expect(be.snapshot().vms[0].agents.find(a => a.id === 'antigravity')).toMatchObject({ signedIn: true, installed: true });
   });
 
+  it('puts a lost sign-in away, and a sign-in clears it', () => {
+    const be = new FakeBackend({ scene: 'signed-out', tick: 10 });
+    const claude = () => be.snapshot().vms[0].agents.find(a => a.id === 'claude')!;
+    expect(claude().lostAt).toBeTruthy();
+    be.dismissSignInNotice('atlas', 'claude-code');
+    expect(claude().lostAt).toBeNull();
+
+    const again = new FakeBackend({ scene: 'signed-out', tick: 10 });
+    again.signIn('atlas', 'claude-code');
+    run(100);
+    expect(again.snapshot().vms[0].agents.find(a => a.id === 'claude')).toMatchObject({ signedIn: true, lostAt: null });
+  });
+
   it('signs OpenCode in with an OpenRouter key, or opens its own list', () => {
     const be = new FakeBackend({ tick: 10 });
     be.signIn('atlas', 'opencode');

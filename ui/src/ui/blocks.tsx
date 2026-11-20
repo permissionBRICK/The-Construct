@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { Everything, Job, SignIn, VaultRequest, Vm } from '../backend/types';
+import type { AgentId, Everything, Job, SignIn, VaultRequest, Vm } from '../backend/types';
 import { spanChoices, spanText } from '../backend/api/map';
 import { failedTitle, jobWord, mainAction } from '../model/vm';
 import { AGENTS } from '../model/settings';
-import { linkParts } from '../model/signin';
+import { linkParts, lostSignIns } from '../model/signin';
 import { openExternal } from './shell';
 import { Icon } from './icons';
 import { Bar, Btn, Confirm, Field, Pip, Switch, Tag, UpTag } from './kit';
@@ -72,6 +72,26 @@ export function EverythingBlock({ e }: { e: Everything }) {
 export function VaultCards() {
   const { s } = useApp();
   return <>{s.vaultRequests.map(r => <VaultCard key={r.id} r={r} />)}</>;
+}
+
+/** A lost sign-in (S36), like the vault's card: the agent was signed in and the VM reports it signed out. Sign in
+    starts its sign-in, and the card turns into the sign-in's panel; the cross puts the card away. */
+export function SignInCard({ vm, agent, onDone }: { vm: Vm; agent: AgentId; onDone?: () => void }) {
+  const { s, be } = useApp();
+  const name = AGENTS.find(a => a.id === agent)?.name ?? agent;
+  if (s.signIn?.vmId === vm.id && s.signIn.agent === agent) return <SignInBlock si={s.signIn} />;
+  return (
+    <div class="blk warn ask" role="alertdialog" aria-label={`${vm.name}: ${name} is signed out`}>
+      <div class="bh"><Icon n="key" /><b>{vm.name}: {name} is signed out</b>
+        <Btn sm icon="x" title="Dismiss" onClick={() => { be.dismissSignInNotice(vm.id, agent); onDone?.(); }} /></div>
+      <Btn kind="pri" icon="key" onClick={() => be.signIn(vm.id, agent)}>Sign in</Btn>
+    </div>
+  );
+}
+
+export function SignInCards() {
+  const { s } = useApp();
+  return <>{lostSignIns(s.vms).map(l => <SignInCard key={l.vm.id + '/' + l.id.id} vm={l.vm} agent={l.id.id} />)}</>;
 }
 
 function LogView({ job }: { job: Job }) {

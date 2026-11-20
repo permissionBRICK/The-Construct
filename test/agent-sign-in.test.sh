@@ -37,7 +37,11 @@ cat >"${tmp}/bin/claude" <<'EOF'
 #!/usr/bin/env bash
 case "$*" in
   --version) echo "2.1.300 (Claude Code)"; exit 0 ;;
-  "auth status") [[ -s "${HOME}/.claude/.credentials.json" ]]; exit $? ;;
+  "auth status")
+    if [[ -s "${HOME}/.claude/.credentials.json" ]]; then
+      printf '{"loggedIn": true, "authMethod": "claude.ai", "loginExpiresAt": %s}\n' "${FAKE_CLAUDE_EXPIRES:-null}"; exit 0
+    fi
+    printf '{"loggedIn": false, "authMethod": "none", "loginExpiresAt": null}\n'; exit 1 ;;
   "auth login")
     echo "pid $$" >>"${FAKE_LOG}"
     # The link with the redirect to its own port goes to BROWSER; the screen shows the one for a pasted code.
@@ -320,6 +324,20 @@ ok "status: installed agents only, each checked" jqt '. == {"claude": false, "co
 mv "${tmp}/agy.off" "${tmp}/bin/agy"
 status="$(python3 "${SCRIPT}" --status)"
 ok "status: antigravity by its token file" jqt '.antigravity == true' <<<"${status}"
+
+# The checks that see an ended sign-in: Claude Code's sign-in end, Antigravity's token without a refresh token.
+mkdir -p "${HOME}/.claude"; echo '{"claudeAiOauth":{}}' >"${HOME}/.claude/.credentials.json"
+status="$(FAKE_CLAUDE_EXPIRES='"2099-01-01T00:00:00.000Z"' python3 "${SCRIPT}" --status)"
+ok "status: claude signed in until its sign-in ends" jqt '.claude == true' <<<"${status}"
+status="$(FAKE_CLAUDE_EXPIRES='"2020-01-01T00:00:00.000Z"' python3 "${SCRIPT}" --status)"
+ok "status: claude whose sign-in ended is signed out" jqt '.claude == false' <<<"${status}"
+token="${HOME}/.gemini/antigravity-cli/antigravity-oauth-token"
+printf '{"access_token":"a","token_type":"Bearer","refresh_token":"r","expiry":"2020-01-01T00:00:00Z"}' >"${token}"
+ok "status: antigravity with a refresh token is signed in" jqt '.antigravity == true' <<<"$(python3 "${SCRIPT}" --status)"
+printf '{"access_token":"a","token_type":"Bearer","expiry":"2020-01-01T00:00:00Z"}' >"${token}"
+ok "status: antigravity whose only token expired is signed out" jqt '.antigravity == false' <<<"$(python3 "${SCRIPT}" --status)"
+printf '{"access_token":"a","token_type":"Bearer","expiry":"2099-01-01T00:00:00Z"}' >"${token}"
+ok "status: antigravity with a live access token is signed in" jqt '.antigravity == true' <<<"$(python3 "${SCRIPT}" --status)"
 
 # Nothing a session showed went to stderr.
 ok "no output on stderr" bash -c '! grep -l . "$1"/*.err' _ "${tmp}"

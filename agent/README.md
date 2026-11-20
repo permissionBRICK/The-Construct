@@ -135,6 +135,7 @@ CONSTRUCT_AGENT_UPDATE_OPENAPI=1 dotnet test agent/Construct.Agent.slnx --filter
 | `POST /api/vault/secrets/{name}/reveal` | `{name, username, value}`: the only route that returns a value |
 | `PUT /api/vault/secrets/{name}/auto-approve {on}` | Switches auto-approve |
 | `GET /api/vault/history` | Every write of every secret, newest first, with its provenance (VM, approving or entering device, request id) |
+| `GET /api/agent-notices` | The lost sign-ins on the user's own VMs from every engine (S36): `{notices: [{engine, engineName, vm, agent, name, at}], unreachable}`. With Construct closed, a new one pops its card alone from the tray, once per loss while the agent runs |
 | `GET /api/vault/approvals`, `POST /api/vault/approvals/{engine}/{id} {decision: allow\|deny, ttlSeconds?}` | The engines' pending approvals with the `uses` and `ttlSeconds` the VM asked for; an allow of a lease request may carry the duration the user chose (60 to 86400 s), which the lease gets. On a `locked` engine an allow first unlocks the VM that asked |
 | `DELETE /api/vault/leases/{engine}/{id}` | Ends a lease early (the lease views carry `id`); the engine scrubs the value as on expiry |
 | `GET /api/vault/entry-requests`, `POST /api/vault/entry-requests/{engine}/{id} {value, username?}`, `POST …/decline` | `construct secret ask`: the user enters the value, sealed here with `K`; created only while the name is free, never auto-approved, no lease |
@@ -258,7 +259,7 @@ API is rewritten to the proxy path; a fixed `Content-Length` is kept; `Set-Cooki
 | `agent` | The agent's state changed (engines, device); reload `GET /api/state` |
 | `pairing` | A pairing on this device changed state |
 | `engine-setup` | The engine setup on this PC changed state; reload `GET /api/engines/local/setup` |
-| `vm.created`, `vm.changed`, `vm.power`, `vm.deleted`, `job.started`, `job.progress`, `job.ended`, `backup.added`, `backup.removed`, `update.offered`, `update.finished`, `repair.started`, `repair.output`, `repair.ended`, `vault.approval.added`, `vault.approval.ended`, `vault.entry-request.added`, `vault.entry-request.ended` | An engine's change, from its own stream (`GET /api/v1/events`): `data` is `{id, vm?}`, never the state; re-read the thing through the proxy (a vault event: `GET /api/vault/approvals` or `/api/vault/entry-requests`). Jobs started elsewhere arrive too. |
+| `vm.created`, `vm.changed`, `vm.power`, `vm.deleted`, `job.started`, `job.progress`, `job.ended`, `backup.added`, `backup.removed`, `update.offered`, `update.finished`, `repair.started`, `repair.output`, `repair.ended`, `vault.approval.added`, `vault.approval.ended`, `vault.entry-request.added`, `vault.entry-request.ended`, `agent-sign-in.started`, `agent-sign-in.output`, `agent-sign-in.ended`, `agent-notice.changed` | An engine's change, from its own stream (`GET /api/v1/events`): `data` is `{id, vm?}`, never the state; re-read the thing through the proxy (a vault event: `GET /api/vault/approvals` or `/api/vault/entry-requests`). Jobs started elsewhere arrive too. |
 | `engine.reset` | The agent (re)started following that engine and may have missed its changes; reload what you show from it |
 | `job.lost` | After a reset, a job the agent saw start can no longer be read |
 | `reset` | The events after `since` are gone (more than 1000 behind, or an earlier run); reload the state |

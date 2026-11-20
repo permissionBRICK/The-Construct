@@ -1,3 +1,6 @@
+import type { Agent, Vm } from '../backend/types';
+import { AGENTS } from './settings';
+
 /* A sign-in's terminal text with its links: the CLI's own words, links opened in the browser. */
 
 export type Part = { text: string } | { url: string };
@@ -26,4 +29,14 @@ export function linkParts(text: string): Part[] {
 export function signedIn(agents: { id: string; signedIn?: boolean | null }[], tool: string): boolean | undefined {
   const s = agents.find(a => a.id === tool)?.signedIn;
   return s ?? undefined;
+}
+
+/** The lost sign-ins (S36) of every VM, oldest first: a card each. */
+export function lostSignIns(vms: Vm[]): { vm: Vm; agent: Agent; id: (typeof AGENTS)[number] }[] {
+  return vms
+    .flatMap(vm => vm.agents.flatMap(agent => {
+      const id = AGENTS.find(a => a.tool === agent.id);
+      return agent.lostAt && id ? [{ vm, agent, id }] : [];
+    }))
+    .sort((a, b) => (a.agent.lostAt! < b.agent.lostAt! ? -1 : 1));
 }

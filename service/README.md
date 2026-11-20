@@ -292,7 +292,7 @@ gate: the resource policy is evaluated again inside every handler.
 | Jobs | `GET /jobs`; `GET /jobs/{id}`; `GET /jobs/{id}/events`; `POST /jobs/{id}/cancel`; `POST /jobs/{id}/retry` | Owner/initiator or Admin; retry: the VM's owner or an Admin, user credentials. Event streams replay progress and phase history, then one terminal state. |
 | Provisioning | `POST /vms/{name}/jobs` (`provision`, `reinstall`, `restore`); `GET /vms/{name}/provision-status`; `GET`, `PUT /vms/{name}/desired` | Owner/Admin user credential, primaries only. See *Provisioning from the engine*. |
 | Repair agent | `GET`, `POST /vms/{name}/repair`; `GET /vms/{name}/repair/{id}`; `POST /vms/{name}/repair/{id}/reply`; `DELETE /vms/{name}/repair/{id}` | Owner/Admin user credential, primaries only; a VM token cannot read or steer its own repair. See *The repair agent*. |
-| Agent sign-in | `GET`, `POST`, `DELETE /vms/{name}/agents/{agent}/sign-in`; `POST /vms/{name}/agents/{agent}/sign-in/input` | The VM's owner only, with a user or device credential, primaries only: not an admin, not a VM token. See *Signing in to the coding agents*. |
+| Agent sign-in | `GET`, `POST`, `DELETE /vms/{name}/agents/{agent}/sign-in`; `POST /vms/{name}/agents/{agent}/sign-in/input`; `DELETE /vms/{name}/agents/{agent}/notice`; `GET /agent-notices` | The VM's owner only, with a user or device credential, primaries only: not an admin, not a VM token. See *Signing in to the coding agents* and *Token usage*. |
 | Media | `GET /media`; `POST /media/acquire`; `POST /media/uploads`; `GET /media/uploads/{id}`; `PUT /media/uploads/{id}/chunks/{index}`; `POST /media/uploads/{id}/complete`; `DELETE /media/uploads/{id}`; `GET /media/{id}`; `GET /media/{id}/references`; `DELETE /media/{id}`; `POST /media/cleanup` | Owner primary/user or Admin; a shared operator gets only reduced metadata for attached media. Cleanup is Admin-only. |
 | Console | `GET /vms/{name}/console/capabilities`; `POST /vms/{name}/console/sessions`; `POST /vms/{name}/console/sessions/{sid}/renew`; `DELETE /vms/{name}/console/sessions/{sid}`; `GET /vms/{name}/console/sessions/{sid}/screenshot`; `POST .../{sid}/keyboard`; `POST .../{sid}/mouse` | Current VM operator; session remains bound to its creating principal and is re-authorized on every call. |
 | Host updates | `GET /host/updates/status`; `POST /host/updates/check`; `POST /host/updates/stage`; `POST /host/updates/apply`; `POST /host/updates/cancel`; `POST /host/updates/resolve` | Admin. Apply (including resume) and resolve are the only narrowly maintenance-exempt mutations. |
@@ -716,10 +716,20 @@ The usage report also carries the VM's coding agents, `agents: [{tool, version, 
 `opencode`, `antigravity`, `t3`; the first semver of each CLI's `--version`; `signedIn` by
 `construct-agent-sign-in.py --status`, each CLI's cheapest check), and the guest posts it with `days: []` when only
 agents changed. The engine keeps the last list per VM (bound to the VM's creation time, in the host config store). `GET
-/vms/{name}/agents` (owner/Admin) answers `{reportedAt, agents: [{tool, name, version, latest, updateAvailable, signedIn}]}`;
-`latest` is read where the old panel read it (npm for Claude Code and T3 Code, honouring the VM's T3 channel,
+/vms/{name}/agents` (owner/Admin) answers `{reportedAt, agents: [{tool, name, version, latest, updateAvailable, signedIn,
+lostAt}]}`; `latest` is read where the old panel read it (npm for Claude Code and T3 Code, honouring the VM's T3 channel,
 GitHub releases for Codex and OpenCode), cached for six hours and null when unreachable. A report without `agents`
-leaves the stored list alone.
+leaves the stored list alone; an agent whose check did not answer keeps the `signedIn` the VM reported last.
+
+A lost sign-in (design S36): when a report says an agent that was signed in is signed out, and the agent is one of
+the VM's desired coding agents, the engine notes it with the report (`lostAt`), so it survives a restart, and
+announces `agent-notice.changed` (the agent's tool id and the VM) to the owner only. It goes when a report or a
+sign-in through the engine finds the agent signed in, or the agent leaves the VM. `GET /agent-notices` lists the
+caller's own VMs' lost sign-ins (`{notices: [{vm, agent, name, at}]}`, `agent` as the sign-in routes take it);
+`DELETE /vms/{name}/agents/{agent}/notice` (the owner only) puts one away, and it comes back only after the agent
+was signed in and lost again. The guest's checks see a sign-in that ended where the CLI says when (Claude Code's
+`loginExpiresAt`, an Antigravity token without a refresh token); none sees one revoked at the provider before the
+agent next uses it.
 
 Usage reads return `{window, generatedAt, totals:{tokens,costUsd}, byUser, byVm}`.
 User rows include `user`, `tokens`, `costUsd`, `vms`, `lastReportedAt` and `tools`.

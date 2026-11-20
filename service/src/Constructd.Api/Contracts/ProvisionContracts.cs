@@ -81,9 +81,21 @@ public sealed record JobRetryRequest(ProvisionSecretsRequest? Secrets = null, st
 /// <summary>
 /// One coding agent of a VM. <paramref name="Latest"/> is the newest release where it is published (null when unknown).
 /// <paramref name="SignedIn"/>: whether the agent is signed in, as the VM last reported it or a sign-in on it found; null
-/// when not known (T3 Code, or a VM that has not said).
+/// when not known (T3 Code, or a VM that has not said). <paramref name="LostAt"/>: a lost sign-in (S36), when the VM
+/// reported the agent signed out after it was signed in; null when there is none, it was signed in again, or the owner
+/// dismissed it.
 /// </summary>
-public sealed record VmAgentResponse(string Tool, string Name, string Version, string? Latest, bool UpdateAvailable, bool? SignedIn = null);
+public sealed record VmAgentResponse(string Tool, string Name, string Version, string? Latest, bool UpdateAvailable, bool? SignedIn = null,
+    DateTimeOffset? LostAt = null);
+
+/// <summary>
+/// <c>GET /agent-notices</c>: a lost sign-in on one of the caller's own VMs (S36). <paramref name="Agent"/> is the id the
+/// sign-in routes take (<c>claude-code</c>, <c>codex</c>, <c>opencode</c>, <c>antigravity</c>).
+/// </summary>
+public sealed record AgentNoticeResponse(string Vm, string Agent, string Name, DateTimeOffset At);
+
+/// <summary><c>GET /agent-notices</c>: the lost sign-ins on the caller's own VMs, oldest first.</summary>
+public sealed record AgentNoticesResponse(IReadOnlyList<AgentNoticeResponse> Notices);
 
 /// <summary>
 /// <c>GET /vms/{name}/agents</c>: the coding agents the VM last reported (with its token-usage report) and whether a

@@ -320,6 +320,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agent-notices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The lost sign-ins on the user's own VMs, from every engine (S36): a coding agent the VM reported signed out after it was signed in, until it is signed in again or dismissed on its engine. */
+        get: operations["ListAgentNotices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/engines/{engine}/vms/{vm}/backups/{backup}/restore": {
         parameters: {
             query?: never;
@@ -1051,6 +1068,18 @@ export interface components {
             /** Format: date-time */
             startedAt: string;
             apiFeatures: string[];
+        };
+        AgentNoticeItem: {
+            engine: string;
+            engineName: string;
+            vm: string;
+            agent: string;
+            name: string;
+            at: string;
+        };
+        AgentNoticesView: {
+            notices: components["schemas"]["AgentNoticeItem"][];
+            unreachable: string[];
         };
         AgentProblem: {
             title: string;
@@ -2153,6 +2182,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RevocationView"];
+                };
+            };
+            /** @description An error. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["AgentProblem"];
+                };
+            };
+        };
+    };
+    ListAgentNotices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentNoticesView"];
                 };
             };
             /** @description An error. */

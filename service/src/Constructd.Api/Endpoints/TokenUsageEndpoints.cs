@@ -53,7 +53,7 @@ public static class TokenUsageEndpoints
         {
             var latest = await releases.LatestAsync(agent.Tool, agent.Tool == "t3" ? channel : null, ct);
             list.Add(new(agent.Tool, VmAgents.Names[agent.Tool], agent.Version, latest, VmAgents.IsNewer(latest, agent.Version),
-                agent.Tool == "t3" ? null : agent.SignedIn));
+                agent.Tool == "t3" ? null : agent.SignedIn, report!.Lost?.FirstOrDefault(l => l.Tool == agent.Tool)?.At));
         }
         return TypedResults.Ok(new VmAgentsResponse(report?.ReportedAt, list));
     }
@@ -95,7 +95,14 @@ public static class TokenUsageEndpoints
             agents.Add(new(tool, version, tool == "t3" ? null : agent.SignedIn));
         }
         if (!await store.UpsertAsync(lookup.Vm!, days, clock.UtcNow, ct)) return LifecycleEndpoints.Problem("power-state-changed");
-        if (request.Agents is not null) await http.RequestServices.GetRequiredService<VmAgents>().SaveAsync(lookup.Vm!, agents, clock.UtcNow, ct);
+        if (request.Agents is not null)
+        {
+            // A lost sign-in is noted only for an agent the VM is meant to have (its desired coding agents).
+            var desired = await http.RequestServices.GetRequiredService<IVmDesiredStateSource>().GetDesiredForAsync(lookup.Vm!, ct);
+            var chosen = desired is null ? null
+                : (CodingAgents.FromAiTools(CodingAgents.AiTools(desired.Desired)) ?? CodingAgents.Default).Select(AgentSignInScript.Tool).ToArray();
+            await http.RequestServices.GetRequiredService<VmAgents>().SaveAsync(lookup.Vm!, agents, clock.UtcNow, ct, chosen);
+        }
         http.SetAuditDetail($"rows={days.Count}");
         return TypedResults.NoContent();
     }

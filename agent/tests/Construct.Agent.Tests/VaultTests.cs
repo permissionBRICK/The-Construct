@@ -285,6 +285,28 @@ public sealed class VaultTests
 
     // ---- support ----
 
+    [Fact]
+    public async Task A_lost_sign_in_is_listed_with_its_engine_until_it_is_dismissed()
+    {
+        using var engine = new EngineHost();
+        var (laptop, engineId) = await SetUpAsync(engine, "available");
+        await using var _ = laptop;
+        var vm = await CreateVmAsync(laptop, engine, engineId);
+        Assert.Empty((await laptop.GetAsync("api/agent-notices"))["notices"]!.AsArray());
+
+        // The VM reported Codex signed in, then signed out (S36).
+        var agents = engine.Services.GetRequiredService<Constructd.Api.Jobs.VmAgents>();
+        await agents.SaveAsync(vm, [new("codex", "0.170.0", true)], DateTimeOffset.UtcNow, CancellationToken.None);
+        await agents.SaveAsync(vm, [new("codex", "0.170.0", false)], DateTimeOffset.UtcNow, CancellationToken.None);
+
+        var notice = Assert.Single((await laptop.GetAsync("api/agent-notices"))["notices"]!.AsArray())!;
+        Assert.Equal((engineId, "dev", "codex", "Codex"), (notice["engine"]!.GetValue<string>(), notice["vm"]!.GetValue<string>(),
+            notice["agent"]!.GetValue<string>(), notice["name"]!.GetValue<string>()));
+        using (var dismissed = await laptop.Api.DeleteAsync($"api/engines/{engineId}/api/v1/vms/dev/agents/codex/notice"))
+            Assert.Equal(HttpStatusCode.NoContent, dismissed.StatusCode);
+        Assert.Empty((await laptop.GetAsync("api/agent-notices"))["notices"]!.AsArray());
+    }
+
     private static async Task<(TestAgent Laptop, string EngineId)> SetUpAsync(EngineHost engine, string vaultMode)
     {
         var signIn = await engine.AddUserAsync("alice");

@@ -782,6 +782,37 @@
         }
       }
     },
+    "/api/agent-notices": {
+      "get": {
+        "tags": [
+          "vault"
+        ],
+        "description": "The lost sign-ins on the user's own VMs, from every engine (S36): a coding agent the VM reported signed out after it was signed in, until it is signed in again or dismissed on its engine.",
+        "operationId": "ListAgentNotices",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentNoticesView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentProblem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/engines/{engine}/vms/{vm}/backups/{backup}/restore": {
       "post": {
         "tags": [
@@ -2974,6 +3005,58 @@
             "format": "date-time"
           },
           "apiFeatures": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "AgentNoticeItem": {
+        "required": [
+          "engine",
+          "engineName",
+          "vm",
+          "agent",
+          "name",
+          "at"
+        ],
+        "type": "object",
+        "properties": {
+          "engine": {
+            "type": "string"
+          },
+          "engineName": {
+            "type": "string"
+          },
+          "vm": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "at": {
+            "type": "string"
+          }
+        }
+      },
+      "AgentNoticesView": {
+        "required": [
+          "notices",
+          "unreachable"
+        ],
+        "type": "object",
+        "properties": {
+          "notices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentNoticeItem"
+            }
+          },
+          "unreachable": {
             "type": "array",
             "items": {
               "type": "string"

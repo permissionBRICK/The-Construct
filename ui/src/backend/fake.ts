@@ -13,11 +13,11 @@ import { spanText } from './api/map';
 
 export type Scene =
   | 'calm' | 'update' | 'changed' | 'lease' | 'enter' | 'job' | 'failed' | 'failed-reinstall' | 'repair' | 'updating' | 'restart'
-  | 'pairing' | 'pair-confirm' | 'revoked' | 'handout' | 'creating' | 'created' | 'sign-in' | 'sign-in-failed' | 'sign-in-browser' | 'sign-in-key'
+  | 'pairing' | 'pair-confirm' | 'revoked' | 'handout' | 'creating' | 'created' | 'sign-in' | 'sign-in-failed' | 'sign-in-browser' | 'sign-in-key' | 'signed-out'
   | 'upgrade-intro' | 'upgrade-code' | 'upgrade-close' | 'upgrade-convert' | 'upgrade-host' | 'upgrade-done' | 'upgrade-restart'
   | 'first-run' | 'first-run-restart';
 
-export const SCENES: Scene[] = ['calm', 'update', 'changed', 'lease', 'enter', 'job', 'failed', 'failed-reinstall', 'repair', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'created', 'sign-in', 'sign-in-failed', 'sign-in-browser', 'sign-in-key', 'upgrade-intro', 'upgrade-code', 'upgrade-close', 'upgrade-convert', 'upgrade-host', 'upgrade-done', 'upgrade-restart', 'first-run', 'first-run-restart'];
+export const SCENES: Scene[] = ['calm', 'update', 'changed', 'lease', 'enter', 'job', 'failed', 'failed-reinstall', 'repair', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'created', 'sign-in', 'sign-in-failed', 'sign-in-browser', 'sign-in-key', 'signed-out', 'upgrade-intro', 'upgrade-code', 'upgrade-close', 'upgrade-convert', 'upgrade-host', 'upgrade-done', 'upgrade-restart', 'first-run', 'first-run-restart'];
 
 /** Things the preview frame can make happen, beside the user's own actions. */
 export type Demo = 'lease' | 'enter' | 'release' | 'fail-next' | 'change';
@@ -144,6 +144,12 @@ export class FakeBackend implements Backend {
       }
       case 'sign-in': d.signIn = { vmId: 'atlas', agent: 'codex', state: 'running', text: SIGN_IN_TEXT.codex }; break;
       case 'sign-in-failed': d.signIn = { vmId: 'atlas', agent: 'claude-code', state: 'failed', text: SIGN_IN_TEXT['claude-code'] + 'bad-code\nOAuth error: Invalid code' }; break;
+      // Claude Code on atlas was signed in and the VM reported it signed out (S36).
+      case 'signed-out': {
+        const a = d.vms[0].agents.find(x => x.id === 'claude');
+        if (a) { a.signedIn = false; a.lostAt = '2026-11-20T08:15:00Z'; }
+        break;
+      }
       case 'sign-in-key': {
         d.signIn = { vmId: 'atlas', agent: 'opencode', state: 'key', text: '' };
         const oc = d.vms[0].agents.find(a => a.id === 'opencode');
@@ -445,6 +451,11 @@ export class FakeBackend implements Backend {
     this.after(2, () => { if (this.s.signIn?.vmId === vmId && this.s.signIn.agent === 'opencode' && this.s.signIn.state === 'running') this.signedIn(vmId, 'opencode'); });
   }
 
+  dismissSignInNotice(vmId: string, agent: AgentId) {
+    const tool = AGENTS.find(a => a.id === agent)?.tool;
+    this.set(d => { const a = this.vm(d, vmId).agents.find(x => x.id === tool); if (a) a.lostAt = null; });
+  }
+
   signInInput(input: SignInInput) {
     const si = this.s.signIn;
     if (!si || si.state !== 'running' || !('text' in input) || !input.text.trim()) return;
@@ -465,7 +476,7 @@ export class FakeBackend implements Backend {
       d.signIn = null;
       const v = this.vm(d, vmId);
       const r = v.agents.find(x => x.id === a.tool);
-      if (r) r.signedIn = true;
+      if (r) { r.signedIn = true; r.lostAt = null; }
       else v.agents.push({ id: a.tool, name: a.name, version: '1.0.0', latest: '1.0.0', installed: true, signedIn: true });
     });
   }

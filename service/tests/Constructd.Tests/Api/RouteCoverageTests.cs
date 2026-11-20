@@ -101,6 +101,8 @@ public class RouteCoverageTests
         "POST /api/v1/vms/{name}/agents/{agent}/sign-in",
         "POST /api/v1/vms/{name}/agents/{agent}/sign-in/input",
         "DELETE /api/v1/vms/{name}/agents/{agent}/sign-in",
+        "GET /api/v1/agent-notices",
+        "DELETE /api/v1/vms/{name}/agents/{agent}/notice",
         "GET /api/v1/vms/{name}/profile-conflicts",
         "POST /api/v1/vms/{name}/profile-conflicts/{id}/resolve",
         "GET /api/v1/profiles",

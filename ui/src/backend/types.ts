@@ -30,8 +30,10 @@ export interface VmSettings {
 }
 
 /** `id`: the engine's tool id (claude, codex, opencode, antigravity, t3). `newer`: the engine says a newer version is
-    out; without it the versions are compared. `signedIn`: as the VM reported it; undefined or null: not known. */
-export interface Agent { id: string; name: string; version: string; latest: string; installed: boolean; newer?: boolean; signedIn?: boolean | null }
+    out; without it the versions are compared. `signedIn`: as the VM reported it; undefined or null: not known.
+    `lostAt`: a lost sign-in (S36): the VM reported it signed out after it was signed in; its card waits until the
+    agent is signed in again or the card is put away. */
+export interface Agent { id: string; name: string; version: string; latest: string; installed: boolean; newer?: boolean; signedIn?: boolean | null; lostAt?: string | null }
 
 /** A coding agent's own sign-in on a VM, one at a time: what its terminal shows, as its CLI wrote it (S34).
     key: OpenCode asks for an OpenRouter API key first, nothing runs yet; starting: asked for; running: the CLI shows
@@ -455,6 +457,8 @@ export interface Backend {
   signIn(vmId: string, agent: AgentId, how?: 'list'): void;
   /** OpenCode's sign-in with an OpenRouter API key: the key goes to OpenCode's prompt as a secret and is kept nowhere. */
   signInWithKey(vmId: string, key: string): void;
+  /** Puts a lost sign-in's card away; it comes back only when the agent was signed in and lost again. */
+  dismissSignInNotice(vmId: string, agent: AgentId): void;
   /** Types into the running sign-in's terminal. */
   signInInput(input: SignInInput): void;
   /** Ends the running sign-in, or puts away one that failed. */

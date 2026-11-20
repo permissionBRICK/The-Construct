@@ -1756,6 +1756,26 @@ describe('ApiBackend sign-in without a pasted code', () => {
   });
 });
 
+describe('ApiBackend lost sign-ins', () => {
+  const P = `/api/engines/${E1}/api/v1`;
+  it('shows the VM\'s lost sign-in, reads the agents again when one changes, and puts one away on the engine', async () => {
+    const { be, calls, on, settle } = world();
+    await be.start();
+    const agents = (lostAt: string | null) => ({ json: { reportedAt: null, agents: [{ tool: 'claude', name: 'Claude Code', version: '2.1.0', latest: '2.1.0', updateAvailable: false, signedIn: false, lostAt }] } });
+    on('GET', `${P}/vms/atlas/agents`, agents('2026-11-20T08:00:00Z'));
+    be.onEvent('agent-notice.changed', { seq: 1, type: 'agent-notice.changed', engine: E1, data: { id: 'claude', vm: 'atlas' } });
+    await settle();
+    expect(be.snapshot().vms.find(v => v.name === 'atlas')!.agents.find(a => a.id === 'claude')!.lostAt).toBe('2026-11-20T08:00:00Z');
+
+    on('DELETE', `${P}/vms/atlas/agents/claude-code/notice`, { status: 204 });
+    on('GET', `${P}/vms/atlas/agents`, agents(null));
+    be.dismissSignInNotice('atlas', 'claude-code');
+    await settle();
+    expect(calls.filter(c => c.method === 'DELETE').map(c => c.path)).toEqual([`${P}/vms/atlas/agents/claude-code/notice`]);
+    expect(be.snapshot().vms.find(v => v.name === 'atlas')!.agents.find(a => a.id === 'claude')!.lostAt).toBeNull();
+  });
+});
+
 describe('ApiBackend OpenCode with an OpenRouter key', () => {
   const P = `/api/engines/${E1}/api/v1`;
   it('asks for the key first, starts OpenRouter\'s sign-in, sends the key once as a secret; its own list is the other way', async () => {

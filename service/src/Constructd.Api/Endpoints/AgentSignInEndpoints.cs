@@ -1,6 +1,7 @@
 using Constructd.Api.Auth;
 using Constructd.Api.Contracts;
 using Constructd.Api.Infrastructure;
+using Constructd.Api.Jobs;
 using Constructd.Api.SignIn;
 using Constructd.Core.Abstractions;
 using Constructd.Core.Domain;
@@ -32,6 +33,12 @@ public static class AgentSignInEndpoints
             .Audited("vm.agent.sign-in.input", auditSuccess: false)
             .Accepts<AgentSignInInputRequest>("application/json").Produces(StatusCodes.Status204NoContent).WithName("AgentSignInInput")
             .WithDescription("Types into the sign-in named by `session`: `text` and Enter, a `key`, or a `secret` (an API key, typed once the CLI no longer echoes and never shown). 409 `sign-in-ended` when it is over or a newer one took its place.");
+        api.MapGet("/agent-notices", NoticesAsync).RequireAuthorization(Policies.User)
+            .Produces<AgentNoticesResponse>().WithName("ListAgentNotices")
+            .WithDescription("The lost sign-ins on the caller's own VMs (S36): agents the VM reported signed out after they were signed in, until signed in again or dismissed.");
+        api.MapDelete("/vms/{name}/agents/{agent}/notice", DismissAsync).RequireAuthorization(Policies.User).Audited("vm.agent.notice.dismiss")
+            .Produces(StatusCodes.Status204NoContent).WithName("DismissAgentNotice")
+            .WithDescription("Puts the agent's lost sign-in away; it comes back only when the agent was signed in and lost again. The VM's owner only. Dismissing none does nothing.");
         api.MapDelete("/vms/{name}/agents/{agent}/sign-in", EndAsync).RequireAuthorization(Policies.User).Audited("vm.agent.sign-in.end")
             .Produces(StatusCodes.Status204NoContent).WithName("EndAgentSignIn")
             .WithDescription("Ends the sign-in named by `session` and its processes on the VM. Ending one that is over, or that a newer one replaced, does nothing.");
@@ -101,6 +108,29 @@ public static class AgentSignInEndpoints
         return session.Id == id && await signIns.InputAsync(session, request.Text, request.Key, ct, request.Secret)
             ? Results.NoContent()
             : CodedProblems.Create(409, "sign-in-ended", "The sign-in is over.");
+    }
+
+    private static async Task<IResult> NoticesAsync(HttpContext http, IVmRepository vms, VmAgents agents, CancellationToken ct)
+    {
+        var list = new List<AgentNoticeResponse>();
+        if (!http.User.IsKnownUser()) return Results.Ok(new AgentNoticesResponse(list));
+        foreach (var vm in await vms.ListAsync(http.User.NameOrEmpty(), ct))
+        {
+            if (vm.Kind != VmKind.Primary || vm.Deleting || !Ownership.SameName(http.User.NameOrEmpty(), vm.Owner)) continue;
+            foreach (var lost in (await agents.GetAsync(vm, ct))?.Lost ?? [])
+                list.Add(new(vm.Name, AgentSignInScript.Agent(lost.Tool), VmAgents.Names.GetValueOrDefault(lost.Tool, lost.Tool), lost.At));
+        }
+
+        return Results.Ok(new AgentNoticesResponse([.. list.OrderBy(n => n.At)]));
+    }
+
+    private static async Task<IResult> DismissAsync(string name, string agent, HttpContext http, IVmRepository vms, VmAgents agents, CancellationToken ct)
+    {
+        var (vm, denied) = await VmAsync(name, agent, http, vms, ct);
+        if (vm is null) return denied!;
+        http.SetAuditDetail($"agent={agent}");
+        await agents.DismissAsync(vm, AgentSignInScript.Tool(agent), ct);
+        return Results.NoContent();
     }
 
     private static async Task<IResult> EndAsync(string name, string agent, string? session, HttpContext http, IVmRepository vms, AgentSignIns signIns,

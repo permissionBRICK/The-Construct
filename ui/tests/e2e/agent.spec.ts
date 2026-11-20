@@ -269,6 +269,22 @@ test('first run, a VM, a reprovision and a second device on the real API', async
     return text ? JSON.parse(text).status : `${r.status()} pending`;
   }).toBe('ok');
 
+  // Claude Code, signed in on the sign-in step, is reported signed out by the VM: a card like the vault's offers Sign
+  // in on the overview; put away, it stays away.
+  await pa.goto(`${a.base}/#/`);
+  const lost = await guest.post('/api/v1/vms/alpha/usage', {
+    data: { generatedAt: new Date().toISOString(), days: [], agents: [{ tool: 'claude', version: '1.0.0', signedIn: false }] },
+  });
+  expect(lost.status()).toBe(204);
+  const lostCard = pa.getByRole('alertdialog', { name: 'alpha: Claude Code is signed out' });
+  await expect(lostCard).toBeVisible();
+  await expect(lostCard.getByRole('button', { name: 'Sign in' })).toBeVisible();
+  await lostCard.getByRole('button', { name: 'Dismiss' }).click();
+  await expect(lostCard).toHaveCount(0);
+  await pa.reload();
+  await expect(pa.getByRole('heading', { name: 'alpha' })).toBeVisible();
+  await expect(lostCard).toHaveCount(0);
+
   // A profile added, its file edited and saved through the store's engine.
   await pa.goto(`${a.base}/#/projects`);
   await pa.getByRole('button', { name: 'Add' }).click();

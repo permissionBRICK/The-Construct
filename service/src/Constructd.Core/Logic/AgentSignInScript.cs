@@ -33,6 +33,9 @@ public static class AgentSignInScript
     /// <summary>The agent's id in the VM's agent report (<see cref="CodingAgents.Known"/> otherwise).</summary>
     public static string Tool(string agent) => agent == "claude-code" ? "claude" : agent;
 
+    /// <summary>The agent's <see cref="CodingAgents.Known"/> id for its id in the VM's agent report.</summary>
+    public static string Agent(string tool) => tool == "claude" ? "claude-code" : tool;
+
     /// <summary>The providers an agent's sign-in can go straight to: OpenCode with an OpenRouter API key (11.8).</summary>
     public static bool ValidProvider(string agent, string provider) => agent == "opencode" && provider == "openrouter";
 

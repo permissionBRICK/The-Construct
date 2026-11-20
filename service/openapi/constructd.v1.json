@@ -3189,6 +3189,79 @@
         }
       }
     },
+    "/api/v1/agent-notices": {
+      "get": {
+        "tags": [
+          "AgentSignInEndpoints"
+        ],
+        "description": "The lost sign-ins on the caller's own VMs (S36): agents the VM reported signed out after they were signed in, until signed in again or dismissed.",
+        "operationId": "ListAgentNotices",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentNoticesResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vms/{name}/agents/{agent}/notice": {
+      "delete": {
+        "tags": [
+          "AgentSignInEndpoints"
+        ],
+        "description": "Puts the agent's lost sign-in away; it comes back only when the agent was signed in and lost again. The VM's owner only. Dismissing none does nothing.",
+        "operationId": "DismissAgentNotice",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agent",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/vms/{name}/adopt": {
       "post": {
         "tags": [
@@ -8677,6 +8750,44 @@
               "null",
               "string"
             ]
+          }
+        }
+      },
+      "AgentNoticeResponse": {
+        "required": [
+          "vm",
+          "agent",
+          "name",
+          "at"
+        ],
+        "type": "object",
+        "properties": {
+          "vm": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "AgentNoticesResponse": {
+        "required": [
+          "notices"
+        ],
+        "type": "object",
+        "properties": {
+          "notices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentNoticeResponse"
+            }
           }
         }
       },
@@ -15864,6 +15975,13 @@
               "null",
               "boolean"
             ]
+          },
+          "lostAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
           }
         }
       },

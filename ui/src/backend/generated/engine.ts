@@ -749,6 +749,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agent-notices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The lost sign-ins on the caller's own VMs (S36): agents the VM reported signed out after they were signed in, until signed in again or dismissed. */
+        get: operations["ListAgentNotices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/vms/{name}/agents/{agent}/notice": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Puts the agent's lost sign-in away; it comes back only when the agent was signed in and lost again. The VM's owner only. Dismissing none does nothing. */
+        delete: operations["DismissAgentNotice"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/vms/{name}/adopt": {
         parameters: {
             query?: never;
@@ -4124,6 +4158,16 @@ export interface components {
             reasons: null | string[];
             projectsDigest?: null | string;
         };
+        AgentNoticeResponse: {
+            vm: string;
+            agent: string;
+            name: string;
+            /** Format: date-time */
+            at: string;
+        };
+        AgentNoticesResponse: {
+            notices: components["schemas"]["AgentNoticeResponse"][];
+        };
         AgentSignInBrowser: {
             url: string;
             /** Format: int32 */
@@ -5909,6 +5953,8 @@ export interface components {
             latest: null | string;
             updateAvailable: boolean;
             signedIn?: null | boolean;
+            /** Format: date-time */
+            lostAt?: null | string;
         };
         VmAgentsResponse: {
             /** Format: date-time */
@@ -8614,6 +8660,65 @@ export interface operations {
                 "application/json": null | components["schemas"]["AgentSignInInputRequest"];
             };
         };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    ListAgentNotices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentNoticesResponse"];
+                };
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    DismissAgentNotice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description No Content */
             204: {

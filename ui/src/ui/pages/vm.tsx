@@ -7,7 +7,7 @@ import { aliasWritten } from '../../backend/api/map';
 import { Icon } from '../icons';
 import { Btn, Confirm, Copyable, Dot, Field, Head, KV, NotYet, Page, Row, Sec, Seg, Switch, Table, Tabs, Tag, UpTag } from '../kit';
 import { copy, na, useApp } from '../ctx';
-import { ActionButtons, JobBlock, PowerBtn, ReinstallConfirm, SignInBlock, VaultCards } from '../blocks';
+import { ActionButtons, JobBlock, PowerBtn, ReinstallConfirm, SignInBlock, SignInCards, VaultCards } from '../blocks';
 import { signedIn } from '../../model/signin';
 
 /* Pages of one VM: overview, projects (list, one project, its file), connections, backups, settings. */
@@ -44,6 +44,7 @@ export function Overview({ vm }: { vm: Vm }) {
   return (
     <Page>
       <VaultCards />
+      <SignInCards />
       <div class="vp">
         <div class="vp1">
           <div class="vpn">

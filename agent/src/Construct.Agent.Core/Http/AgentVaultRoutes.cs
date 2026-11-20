@@ -15,6 +15,10 @@ public static class AgentVaultRoutes
 {
     public static void Map(RouteGroupBuilder api)
     {
+        api.MapGet("/agent-notices", async (DeviceAgent agent, CancellationToken ct) => TypedResults.Ok(await agent.AgentNoticesAsync(ct)))
+            .WithName("ListAgentNotices").WithTags("vault")
+            .WithDescription("The lost sign-ins on the user's own VMs, from every engine (S36): a coding agent the VM reported signed out after it was signed in, until it is signed in again or dismissed on its engine.");
+
         var vault = api.MapGroup("/vault").WithTags("vault");
 
         vault.MapGet("/secrets", async (DeviceAgent agent, CancellationToken ct) => TypedResults.Ok(await agent.ListSecretsAsync(ct)))

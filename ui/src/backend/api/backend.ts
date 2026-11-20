@@ -749,6 +749,12 @@ export class ApiBackend implements Backend {
         if (at && engine === at.engine && vm?.toLowerCase() === at.vm.toLowerCase() && (id === at.id || at.id === null)) void this.readSignIn();
         return;
       }
+      case 'agent-notice.changed': {
+        // A lost sign-in appeared, cleared or was put away (on any device): the VM's agents again.
+        const vm = typeof data?.vm === 'string' ? data.vm : null;
+        if (engine && vm && this.slices.has(engine)) void this.readAgents(engine, vm);
+        return;
+      }
       case 'job.started': case 'job.progress': case 'job.ended':
         if (engine && id && this.slices.has(engine)) void this.readJob(engine, id);
         return;
@@ -1189,6 +1195,13 @@ export class ApiBackend implements Backend {
     // Before the engine named it, the start's answer ends it.
     if (at?.id && running) this.endSignIn(at, at.id);
     if (at) this.endForward(at);
+  }
+
+  dismissSignInNotice(vmId: string, agent: AgentId) {
+    const ref = this.vmRef(vmId);
+    if (!ref) return;
+    void this.run(() => ok(this.engine(ref.engine).DELETE('/api/v1/vms/{name}/agents/{agent}/notice', { params: { path: { name: ref.name, agent } } })))
+      .then(() => this.readAgents(ref.engine, ref.name));
   }
 
   /** Ends one sign-in on the engine, by its session: a newer one on the VM is left alone. */

@@ -52,7 +52,14 @@ stdout, one JSON object per line:
 
 --status prints one JSON object: each installed agent, by the ids its version report uses (claude,
 codex, opencode, antigravity), and whether it is signed in, by the cheapest check its CLI has. An
-agent whose check did not answer is left out.
+agent whose check did not answer is left out. None of them asks the provider, so none sees a
+sign-in revoked there (signed out elsewhere, a password change, a deleted key) before the agent
+next uses it:
+  claude       `claude auth status`: signed in, and its sign-in's end (loginExpiresAt, which a
+               renewal does not move) not passed
+  codex        `codex login status`: a sign-in is stored; an expired or revoked one is not seen
+  opencode     `opencode auth list` (OpenCode 1: auth.json): a credential is stored
+  antigravity  the token file: a refresh token, or an access token that has not expired
 
 Nothing is logged here: the output can carry one-time codes.
 
@@ -60,6 +67,7 @@ Exit status: 0 when the sign-in ended well, 3 when it did not, 2 for a usage err
 agent is not installed.
 """
 import codecs
+import datetime
 import errno
 import fcntl
 import hashlib
@@ -395,7 +403,16 @@ def signed_in(tool):
     """Whether the agent is signed in; None when its check did not answer."""
     if tool == "claude":
         r = run_status(["claude", "auth", "status"])
-        return None if r is None or r.returncode not in (0, 1) else r.returncode == 0
+        if r is None or r.returncode not in (0, 1):
+            return None
+        try:
+            stated = json.loads(r.stdout)
+        except ValueError:
+            stated = None
+        if not isinstance(stated, dict) or not isinstance(stated.get("loggedIn"), bool):
+            return r.returncode == 0
+        # A Claude sign-in ends at a date its renewals do not move; past it, it is gone.
+        return stated["loggedIn"] and not passed(stated.get("loginExpiresAt"))
     if tool == "codex":
         r = run_status(["codex", "login", "status"])
         return None if r is None or r.returncode not in (0, 1) else r.returncode == 0
@@ -419,9 +436,37 @@ def signed_in(tool):
             return None
         return isinstance(stored, dict) and len(stored) > 0
     if tool == "antigravity":
-        token = antigravity_token()
-        return os.path.isfile(token) and os.path.getsize(token) > 0
+        try:
+            with open(antigravity_token(), "rb") as f:
+                raw = f.read()
+        except FileNotFoundError:
+            return False
+        except OSError:
+            return None
+        if not raw.strip():
+            return False
+        try:
+            token = json.loads(raw)
+        except ValueError:
+            return True
+        # An OAuth token (access_token, refresh_token, expiry): without a refresh token it ends with its access token.
+        if isinstance(token, dict) and not token.get("refresh_token") and passed(token.get("expiry")):
+            return False
+        return True
     return None
+
+
+def passed(when):
+    """Whether an ISO 8601 time is in the past; False when it is missing or unreadable."""
+    if not isinstance(when, str) or not when:
+        return False
+    try:
+        at = datetime.datetime.fromisoformat(when.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=datetime.timezone.utc)
+    return at <= datetime.datetime.now(datetime.timezone.utc)
 
 
 def version_of(command):
