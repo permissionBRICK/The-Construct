@@ -31,8 +31,15 @@ public sealed class ChildStartIntent(IOperationKeyStore keys, IAdmissionStore ad
             return vm;
         }
         if (vm.PowerGeneration != key.PowerGeneration) throw Error("power-state-changed");
-        var state = await hypervisor.GetStateAsync(vm.Name, ct);
-        if (state is not (VmState.Running or VmState.Off or VmState.Saved)) throw Error("vm-state-unknown");
+        var state = await hypervisor.GetSettledStateAsync(vm.Name, ct);
+        if (state is not (VmState.Running or VmState.Off or VmState.Saved))
+        {
+            // A fresh intent has started nothing yet, so it is closed: a failed create must not leave an
+            // in-flight start behind. A replayed one may have booted the VM and stays for reconciliation.
+            if (inserted.Outcome == OperationKeyOutcome.Inserted)
+                await keys.CompleteAsync(key.Owner, key.Kind, key.Key, JsonSerializer.Serialize("vm-state-unknown"), ct);
+            throw Error("vm-state-unknown");
+        }
         var holds = snapshot.Reservations.Where(r => r.VmName == vm.Name && (r.OperationId == job.Id || r.OperationId?.StartsWith(job.Id + ":resume:", StringComparison.Ordinal) == true)).ToArray();
         var ids = holds.Select(r => r.Id).ToArray();
         if (state != VmState.Running)

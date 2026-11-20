@@ -20,7 +20,8 @@ public sealed class LifecycleStart(IVmRepository vms, IHypervisorDriver driver, 
             throw new LifecycleException("operation-key-conflict");
         if (key?.State == OperationKeyState.Completed)
             return JsonSerializer.Deserialize<Reply>(key.ResponseJson!, ApiJson.Options)!;
-        var state = await driver.GetStateAsync(vm.Name, ct);
+        // A child's state read can fail for a moment right after its create or a delete (VmStateReads).
+        var state = vm.Kind == VmKind.Child ? await driver.GetSettledStateAsync(vm.Name, ct) : await driver.GetStateAsync(vm.Name, ct);
         // Only before a new start intent: a recovered intent must keep the hardware it reserved.
         if (key is null)
         {

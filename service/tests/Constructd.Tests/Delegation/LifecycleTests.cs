@@ -96,6 +96,15 @@ public sealed class LifecycleTests
         Assert.Equal(VmState.Off, app.Driver.StateOf("child"));
     }
     [Fact]
+    public async Task AChildStartReadsTheStateAgainWhenItFailsForAMoment()
+    {
+        await using var app = new TestApp(); using var client = await Setup(app, start: false);
+        app.Driver.AnswerUnknown("child", 3);
+        var response = await client.PostAsJsonAsync("/api/v1/vms/child/lifecycle", new { action = "start", lifetime = "10m" });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(VmState.Running, app.Driver.StateOf("child"));
+    }
+    [Fact]
     public async Task SaveResumeRenewAndRestartHaveDistinctLeaseSemantics()
     {
         await using var app = new TestApp(); using var client = await Setup(app);
