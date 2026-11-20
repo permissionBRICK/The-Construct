@@ -162,6 +162,14 @@ check "low disk creates nothing" test "$(size_units)" = none
 export STUB_DF_AVAIL=2627584
 run auto
 check "enough disk creates the file" test "$(size_units)" = 6
+# A full disk still lets the file shrink: that gives disk back.
+export STUB_DF_AVAIL=0
+run 2
+check "full disk shrink exits 0" test "${rc}" -eq 0
+check "full disk still shrinks" test "$(size_units)" = 2
+check "shrunk file active" active
+run 4
+check "full disk does not grow" test "$(size_units)" = 2
 
 # --- swapoff refused (pages don't fit in RAM): old file kept --------------------------
 machine 12246828
