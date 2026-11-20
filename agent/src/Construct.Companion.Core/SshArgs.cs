@@ -31,9 +31,11 @@ public static partial class SshArgs
     }
 
     // Long-lived `ssh -T` running a script from stdin-free base64; keepalives detect a dead VM.
+    // A TCP connection of its own (no multiplexing, no forwards from a user's ssh config): the guest's idle
+    // report skips the watch's connection, so nothing else may ride on it (extension/vm/notify-watch.sh).
     public static string[] BuildWatch(SshConfiguration cfg, string script, string? keyPath = null)
     {
-        var args = new List<string> { "-T" };
+        var args = new List<string> { "-T", "-o", "ControlMaster=no", "-o", "ControlPath=none", "-o", "ClearAllForwardings=yes" };
         args.AddRange(Common(cfg));
         args.AddRange(["-o", "ServerAliveInterval=20", "-o", "ServerAliveCountMax=3"]);
         AddPort(args, cfg.SshPort);

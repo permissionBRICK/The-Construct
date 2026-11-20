@@ -126,16 +126,19 @@ _ss_session_count() {
   # An ss that exists but fails (unsupported filter syntax, a netlink hiccup,
   # restricted permissions) must not be read as an empty connection table.
   out="$("${SS_CMD}" -tn state established "( sport = :${SSH_PORT} )" 2>/dev/null)" || return 1
-  # Count every row but ss's header and the connections of Construct's own watches; the peer
-  # address:port is a row's last field.
-  local watches line peer count=0
+  # Count every row but ss's header and the connections of Construct's own watches, matched by
+  # both ends; a row's last two fields are its local and its peer address:port.
+  local watches line peer local_end count=0
   local -a fields
-  watches="$(_watch_peers)"
+  watches="$(_watch_connections)"
   while IFS= read -r line; do
     read -r -a fields <<<"${line}"
-    [[ ${#fields[@]} -gt 0 && "${fields[0]}" != Recv-Q ]] || continue
+    [[ ${#fields[@]} -ge 2 && "${fields[0]}" != Recv-Q ]] || continue
     peer="${fields[${#fields[@]}-1]}"
-    if [[ -n "${watches}" ]] && grep -qxF -- "$(_address_key "${peer%:*}"):${peer##*:}" <<<"${watches}"; then continue; fi
+    local_end="${fields[${#fields[@]}-2]}"
+    if [[ -n "${watches}" ]] && grep -qxF -- "$(_address_key "${peer%:*}"):${peer##*:} $(_address_key "${local_end%:*}"):${local_end##*:}" <<<"${watches}"; then
+      continue
+    fi
     count=$((count + 1))
   done <<<"${out}"
   printf '%s\n' "${count}"
@@ -148,14 +151,16 @@ _ss_session_count() {
 WATCH_DIR="${CONSTRUCT_IDLE_WATCH_DIR:-/run/construct/watch-sessions}"
 # One spelling for an address: no brackets, no IPv4-mapped prefix.
 _address_key() { local a="${1#[}"; a="${a%]}"; printf '%s' "${a#::ffff:}"; }
-_watch_peers() {
-  local f pid ip port _rest
+# One line per live watch: "<peer address>:<port> <local address>:<port>", both ends of its connection.
+_watch_connections() {
+  local f pid ip port server_ip server_port _rest
   for f in "${WATCH_DIR}"/*; do
     [[ -f "${f}" ]] || continue
     pid="${f##*-}"
     [[ "${pid}" =~ ^[0-9]+$ && -d "${PROC_DIR}/${pid}" ]] || continue
-    read -r ip port _rest <"${f}" 2>/dev/null || continue
-    [[ -n "${ip}" && "${port}" =~ ^[0-9]+$ ]] && printf '%s:%s\n' "$(_address_key "${ip}")" "${port}"
+    read -r ip port server_ip server_port _rest <"${f}" 2>/dev/null || continue
+    [[ -n "${ip}" && "${port}" =~ ^[0-9]+$ && -n "${server_ip}" && "${server_port}" =~ ^[0-9]+$ ]] || continue
+    printf '%s:%s %s:%s\n' "$(_address_key "${ip}")" "${port}" "$(_address_key "${server_ip}")" "${server_port}"
   done
   return 0
 }

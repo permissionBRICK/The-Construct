@@ -17,6 +17,15 @@ public sealed class NotificationWatchTests
     }
 
     [Fact]
+    public void The_watch_has_a_connection_of_its_own()
+    {
+        // The idle report skips the watch's connection, so a multiplexed shell or forward must not share it.
+        var args = Construct.Companion.Core.SshArgs.BuildWatch(new(), "true");
+        foreach (var option in new[] { "ControlMaster=no", "ControlPath=none", "ClearAllForwardings=yes" })
+            Assert.Contains(option, args);
+    }
+
+    [Fact]
     public void A_watch_directory_is_shell_quoted()
     {
         var script = NotificationProtocol.WatchScript(watchDir: "/tmp/it's here");

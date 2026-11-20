@@ -175,6 +175,11 @@ printf 'Recv-Q Send-Q Local Address:Port Peer Address:Port\n0 0 203.0.113.5:22 2
 watch_session 4242 203.0.113.9 51000 no
 ok "  a record whose watch is gone hides nothing" test "$(report)" = '{"busy":true,"reasons":["ssh-session"]}'
 
+reset_scene
+printf 'Recv-Q Send-Q Local Address:Port Peer Address:Port\n0 0 198.51.100.7:22 203.0.113.9:51000\n' >"${ss_out}"
+watch_session 4242 203.0.113.9 51000 yes
+ok "  the same peer on another of the guest's addresses still counts" test "$(report)" = '{"busy":true,"reasons":["ssh-session"]}'
+
 ok "  the report looks where the device agent's watch records (NotificationProtocol)" \
   sh -c "grep -q 'CONSTRUCT_IDLE_WATCH_DIR:-/run/construct/watch-sessions}' '${REPORTER}' && grep -q 'WatchSessionsDirectory = \"/run/construct/watch-sessions\"' '${ROOT}/agent/src/Construct.Companion.Core/Notifications/NotificationProtocol.cs'"
 
