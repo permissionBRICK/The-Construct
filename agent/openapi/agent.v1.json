@@ -2335,7 +2335,7 @@
         "tags": [
           "device"
         ],
-        "description": "Closes the VM's sign-in forward, if one is open.",
+        "description": "Closes the VM's sign-in forward when it is the one of sign-in `session`; a newer sign-in's forward stays.",
         "operationId": "EndSignInForward",
         "parameters": [
           {
@@ -2349,6 +2349,14 @@
           {
             "name": "vm",
             "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "session",
+            "in": "query",
             "required": true,
             "schema": {
               "type": "string"

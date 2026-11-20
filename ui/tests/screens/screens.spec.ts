@@ -178,3 +178,23 @@ test('a failed reinstall shows its step and log, and asks again before Retry rei
   await page.getByRole('button', { name: 'Reinstall again' }).click();
   await expect(page.locator('.blk.job .bh b')).toHaveText('Reinstalling');
 });
+
+test('cards popped alone give way to the next one and close the surface only when none is left', async ({ page }) => {
+  // The desktop shell's host object, recording what the page asks of it.
+  await page.addInitScript(() => {
+    const sent: unknown[] = [];
+    (window as unknown as { __sent: unknown[] }).__sent = sent;
+    (window as unknown as { chrome: unknown }).chrome = { webview: { postMessage: (m: unknown) => { sent.push(m); } } };
+  });
+  await open(page, 'alone', 'signed-out-two', 'dark');
+  const closes = () => page.evaluate(() => (window as unknown as { __sent: { type: string }[] }).__sent.filter(m => m.type === 'close').length);
+  const card = page.getByRole('alertdialog');
+  await expect(card).toHaveCount(1);
+  const first = await card.getAttribute('aria-label');
+  await card.getByRole('button', { name: 'Dismiss' }).click();
+  await expect(card).toHaveCount(1);
+  await expect(card).not.toHaveAttribute('aria-label', first ?? '');
+  expect(await closes()).toBe(0);
+  await card.getByRole('button', { name: 'Dismiss' }).click();
+  await expect.poll(closes).toBe(1);
+});

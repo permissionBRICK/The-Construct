@@ -871,7 +871,7 @@ export interface paths {
         put?: never;
         /** @description A coding agent's sign-in without a pasted code (11.8): for the running sign-in `session` of `agent` on one of the user's own VMs, whose link returns to a loopback port on the VM, forwards 127.0.0.1:<port> on this device to the VM and opens the link in the default browser. The forward closes when the sign-in ends or after twenty minutes. 409 `no-browser-sign-in`, `port-taken`, `vm-not-running`; 501 when this device cannot open links. */
         post: operations["ForwardSignIn"];
-        /** @description Closes the VM's sign-in forward, if one is open. */
+        /** @description Closes the VM's sign-in forward when it is the one of sign-in `session`; a newer sign-in's forward stays. */
         delete: operations["EndSignInForward"];
         options?: never;
         head?: never;
@@ -3408,7 +3408,9 @@ export interface operations {
     };
     EndSignInForward: {
         parameters: {
-            query?: never;
+            query: {
+                session: string;
+            };
             header?: never;
             path: {
                 engine: string;

@@ -264,13 +264,41 @@ public sealed class DeviceLinkTests : IAsyncDisposable
 
         await signIns.StartAsync("e1", "work", new("claude-code", "s2"), CancellationToken.None);
         var second = tunnels.Last();
-        await signIns.StopAsync("e1", "work", CancellationToken.None);
+        // Only its own sign-in closes a forward: an older panel's cleanup leaves it open.
+        await signIns.StopAsync("e1", "work", "s1", CancellationToken.None);
+        Assert.False(second.Process.Stopped);
+        await signIns.StopAsync("e1", "work", "s2", CancellationToken.None);
         Assert.True(second.Process.Stopped);
 
         signIns.Limit = TimeSpan.FromMilliseconds(200);
         await signIns.StartAsync("e1", "work", new("claude-code", "s2"), CancellationToken.None);
         var third = tunnels.Last();
         await FakeDevice.WaitAsync(() => third.Process.Stopped, "the limit to close it");
+    }
+
+    [Fact]
+    public async Task A_start_whose_engine_answer_comes_late_does_not_replace_a_newer_sign_ins_forward()
+    {
+        await _device.Links.RefreshAsync(CancellationToken.None);
+        var signIns = _device.Services.SignIns;
+        signIns.Poll = TimeSpan.FromMinutes(5);
+        const string newer = "https://claude.example/oauth?redirect_uri=http%3A%2F%2Flocalhost%3A45679%2Fcallback&state=t";
+        var late = new TaskCompletionSource<JsonNode?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var asked = 0;
+        // The first question gets its answer late, saying s1 runs; by then s2 has taken its place on the engine.
+        _device.Engines.OnAsync("e1", "GET vms/work/agents/claude-code/sign-in", _ => Interlocked.Increment(ref asked) == 1
+            ? late.Task
+            : Task.FromResult(JsonNode.Parse(SignIn("s2", browser: "{\"url\":\"" + newer + "\",\"port\":45679}"))));
+
+        var first = signIns.StartAsync("e1", "work", new("claude-code", "s1"), CancellationToken.None);
+        await FakeDevice.WaitAsync(() => Volatile.Read(ref asked) == 1, "the first start to ask the engine");
+        var second = signIns.StartAsync("e1", "work", new("claude-code", "s2"), CancellationToken.None);
+        late.SetResult(JsonNode.Parse(SignIn("s1")));
+        await first;
+        await second;
+
+        Assert.Equal(45679, signIns.Port("e1", "work"));
+        Assert.Equal(newer, _device.Platform.Opened.Last());
     }
 
     [Fact]

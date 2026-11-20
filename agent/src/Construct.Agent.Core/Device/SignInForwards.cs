@@ -35,12 +35,14 @@ public sealed class SignInForwards(VmLinks links, IDeviceEngines engines, IDevic
         if (!Agents.Contains(request.Agent) || request.Session is not { Length: > 0 and <= 64 })
             throw new AgentFailure(400, "invalid-request", "agent and session are required.");
         links.Target(engine, vm);
-        var (url, port) = await RedirectAsync(engine, vm, request, ct).ConfigureAwait(false)
-            ?? throw new AgentFailure(409, "no-browser-sign-in", "That sign-in does not run, or its link does not return to this machine.");
 
         await _serial.WaitAsync(ct).ConfigureAwait(false);
         try
         {
+            // Asked inside the lock: a start whose answer comes late cannot replace a newer sign-in's forward, because
+            // the newer start asks again after it and finds its own sign-in.
+            var (url, port) = await RedirectAsync(engine, vm, request, ct).ConfigureAwait(false)
+                ?? throw new AgentFailure(409, "no-browser-sign-in", "That sign-in does not run, or its link does not return to this machine.");
             await CloseAsync(Key(engine, vm)).ConfigureAwait(false);
             var tunnel = await links.OpenLoopbackTunnelAsync(engine, vm, port, ct).ConfigureAwait(false)
                 ?? throw new AgentFailure(409, "port-taken", $"Port {port} is in use on this device.");
@@ -62,11 +64,16 @@ public sealed class SignInForwards(VmLinks links, IDeviceEngines engines, IDevic
         }
     }
 
-    /// <summary>Closes the VM's sign-in forward, if one is open.</summary>
-    public async Task StopAsync(string engine, string vm, CancellationToken ct)
+    /// <summary>Closes the VM's sign-in forward when it is the one of <paramref name="session"/>; a newer sign-in's stays.</summary>
+    public async Task StopAsync(string engine, string vm, string session, CancellationToken ct)
     {
         await _serial.WaitAsync(ct).ConfigureAwait(false);
-        try { await CloseAsync(Key(engine, vm)).ConfigureAwait(false); }
+        try
+        {
+            lock (_open)
+                if (!_open.TryGetValue(Key(engine, vm), out var current) || current.Session != session) return;
+            await CloseAsync(Key(engine, vm)).ConfigureAwait(false);
+        }
         finally { _serial.Release(); }
     }
 

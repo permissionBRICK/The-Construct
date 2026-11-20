@@ -47,6 +47,8 @@ interface SignInAt {
   /** Started as a browser sign-in (Codex's differs from its device code). */
   browser: boolean;
   forward: 'none' | 'asked' | 'open' | 'failed';
+  /** The sign-in session whose redirect the device forwards. */
+  forwarded?: string;
 }
 
 interface AdminData {
@@ -1161,7 +1163,8 @@ export class ApiBackend implements Backend {
   private async forwardSignIn(at: SignInAt, session: string) {
     try {
       await ok(this.agent.POST('/api/connections/{engine}/{vm}/sign-in', { params: { path: { engine: at.engine, vm: at.vm } }, body: { agent: at.agent, session } }));
-      if (this.signInAt !== at) { void this.agent.DELETE('/api/connections/{engine}/{vm}/sign-in', { params: { path: { engine: at.engine, vm: at.vm } } }).catch(() => {}); return; }
+      if (this.signInAt !== at) { void this.agent.DELETE('/api/connections/{engine}/{vm}/sign-in', { params: { path: { engine: at.engine, vm: at.vm }, query: { session } } }).catch(() => {}); return; }
+      at.forwarded = session;
       at.forward = 'open';
       const cur = this.s.signIn;
       if (cur?.state === 'running') this.emit({ signIn: { ...cur, browser: true } });
@@ -1172,11 +1175,12 @@ export class ApiBackend implements Backend {
     }
   }
 
-  /** Closes the device's forward of a sign-in that is over (the agent closes it by itself too). */
+  /** Closes the device's forward of a sign-in that is over, by its session: a newer sign-in's forward stays (the agent
+      closes it by itself too). */
   private endForward(at: SignInAt) {
-    if (at.forward !== 'open') return;
+    if (at.forward !== 'open' || !at.forwarded) return;
     at.forward = 'failed';
-    void this.agent.DELETE('/api/connections/{engine}/{vm}/sign-in', { params: { path: { engine: at.engine, vm: at.vm } } }).catch(() => {});
+    void this.agent.DELETE('/api/connections/{engine}/{vm}/sign-in', { params: { path: { engine: at.engine, vm: at.vm }, query: { session: at.forwarded } } }).catch(() => {});
   }
 
   /** Types into the followed sign-in, named by its session: input meant for it never reaches a newer one. */

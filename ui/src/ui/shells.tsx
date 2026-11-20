@@ -86,8 +86,10 @@ export function PopOut() {
     left to show. */
 export function Alone() {
   const { s, shell } = useApp();
-  const r = s.vaultRequests[0];
-  const lost = lostSignIns(s.vms)[0];
+  // A card done gives way to the next one waiting; the surface closes once none is left.
+  const [gone, setGone] = useState<string[]>([]);
+  const r = s.vaultRequests.find(x => !gone.includes('v:' + x.id));
+  const lost = lostSignIns(s.vms).find(l => !gone.includes('n:' + l.vm.id + '/' + l.id.id));
   const any = !!r || !!lost || !!s.signIn;
   const shown = useRef(false);
   useEffect(() => {
@@ -96,8 +98,8 @@ export function Alone() {
   }, [any]);
   return (
     <div class="alone">
-      {r ? <VaultCard key={r.id} r={r} onDone={() => shell.close()} />
-        : lost ? <SignInCard vm={lost.vm} agent={lost.id.id} onDone={() => shell.close()} />
+      {r ? <VaultCard key={r.id} r={r} onDone={() => setGone(g => [...g, 'v:' + r.id])} />
+        : lost ? <SignInCard key={lost.vm.id + '/' + lost.id.id} vm={lost.vm} agent={lost.id.id} onDone={() => setGone(g => [...g, 'n:' + lost.vm.id + '/' + lost.id.id])} />
         : s.signIn ? <SignInBlock si={s.signIn} /> : null}
     </div>
   );
