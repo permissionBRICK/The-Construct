@@ -764,5 +764,56 @@ printf '[{"id":"fwd-a","vmPort":5173,"target":"host","https":true,"name":"5173",
 reuse_named="$(remote 5173 --https --upstream-plain --name docs --reuse 2>&1)"
 ok "names --reuse: picks the forward with that name" test "${reuse_named}" = "https://work-vm-docs.vms.example/"
 
+# ── notes: what a forward is for and where its service lives ─────────────────
+
+created='{"id":"fwd-n","vmName":"work-vm","vmPort":5173,"publicPort":31236,"target":"host","label":"vite","created":"2026-09-01T09:00:00Z","url":"http://buildbox.example.local:31236/"}'
+reset_stub
+printf '201' >"${stub_dir}/code"
+printf '%s' "${created}" >"${stub_dir}/response"
+remote 5173 --label vite --to host --purpose $'chart page\tpreview' --source /root/repos/charts >/dev/null 2>&1
+ok "notes: the purpose is sent, on one line" grep -q '"purpose":"chart page preview"' "${stub_dir}/bodies"
+ok "notes: the source is sent" grep -q '"source":"/root/repos/charts"' "${stub_dir}/bodies"
+
+mkdir -p "${tmp}/repo/sub" "${tmp}/plain"
+git -C "${tmp}/repo" init -q 2>/dev/null
+reset_stub
+printf '201' >"${stub_dir}/code"
+printf '%s' "${created}" >"${stub_dir}/response"
+(cd "${tmp}/repo/sub" && remote 5173 --to host >/dev/null 2>&1)
+ok "notes: without --source, the git repository it runs in is the source" \
+  grep -q "\"source\":\"$(cd "${tmp}/repo" && pwd -P)\"" "${stub_dir}/bodies"
+reset_stub
+printf '201' >"${stub_dir}/code"
+printf '%s' "${created}" >"${stub_dir}/response"
+(cd "${tmp}/plain" && remote 5173 --to host >/dev/null 2>&1)
+lacks() { ! grep -q -- "$1" "${stub_dir}/bodies"; }
+ok "notes: outside a repository no source is guessed" lacks '"source"'
+ok "notes: and without --purpose none is sent" lacks '"purpose"'
+
+reset_stub
+printf '200' >"${stub_dir}/code"
+printf '[{"id":"fwd-n","vmPort":5173,"target":"host","label":"vite","url":"http://buildbox.example.local:31236/","purpose":"chart page preview","source":"/root/repos/charts"},{"id":"fwd-o","vmPort":3000,"target":"host","label":"api","url":"http://buildbox.example.local:31237/"}]' \
+  >"${stub_dir}/response"
+remote --list >"${tmp}/notes_list.out" 2>&1
+ok "notes: --list shows a forward's purpose under its row" grep -qx '    purpose: chart page preview' "${tmp}/notes_list.out"
+ok "notes: ... and its source" grep -qx '    source:  /root/repos/charts' "${tmp}/notes_list.out"
+ok "notes: a forward without a note is listed as before" \
+  sh -c "test \"\$(grep -c 'purpose:' '${tmp}/notes_list.out')\" = 1 && grep -q 'fwd-o' '${tmp}/notes_list.out'"
+
+reset_spool
+(cd "${tmp}/plain" && expose 5173 --purpose "local preview" --source /root/repos/site --wait 0 >/dev/null 2>&1)
+ok "notes: a local request carries the note too" \
+  sh -c "grep -q '\"purpose\":\"local preview\"' '$(first_request)' && grep -q '\"source\":\"/root/repos/site\"' '$(first_request)'"
+(cd "${tmp}/plain" && expose --list >"${tmp}/notes_local.out" 2>&1)
+ok "notes: local --list shows it" grep -qx '    purpose: local preview' "${tmp}/notes_local.out"
+
+reset_stub
+printf '403' >"${stub_dir}/code"
+printf '{"title":"Forbidden","status":403,"code":"forward-limit","detail":"VM '\''work-vm'\'' already has the maximum of 100 forwards. List them (construct expose --list), check each one'\''s purpose and source, and close the ones no longer needed (construct expose --close ID)."}' \
+  >"${stub_dir}/response"
+remote 5174 --to host >"${tmp}/limit.out" 2>"${tmp}/limit.err"
+ok "notes: at the forward limit the CLI exits 7" test "$?" = 7
+ok "notes: ... and passes on how to make room" grep -q 'construct expose --close ID' "${tmp}/limit.err"
+
 printf '\n%d passed, %d failed\n' "${pass}" "${fail}"
 [[ "${fail}" -eq 0 ]]

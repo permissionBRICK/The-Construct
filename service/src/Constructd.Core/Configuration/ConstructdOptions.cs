@@ -188,12 +188,11 @@ public sealed class ConstructdOptions
     public PortRangeOptions AppForwardPorts { get; set; } = new(2300, 2999);
 
     /// <summary>
-    /// Optional cap on extra forwards per VM; zero or negative means uncapped (the default). The real
-    /// bound is the forward port ranges themselves — allocation fails when a range is exhausted — so
-    /// the cap exists only for operators who want a tighter per-VM budget (plan §4.6's "capped
-    /// count/range" for scoped VM tokens).
+    /// Cap on extra forwards per VM (plan §4.6's "capped count/range" for scoped VM tokens): 100 unless the host
+    /// sets another number; zero or negative means uncapped. A guest that hits it lists its forwards, reads each
+    /// one's purpose and source, and closes the obsolete ones (docs/expose.md).
     /// </summary>
-    public int MaxForwardsPerVm { get; set; }
+    public int MaxForwardsPerVm { get; set; } = 100;
 
     /// <summary>Retry host forward reconciliation after boot and DHCP changes. Zero disables periodic passes.</summary>
     public int ForwardReconcileSeconds { get; set; } = 30;

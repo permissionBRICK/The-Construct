@@ -9457,6 +9457,18 @@
               "null",
               "boolean"
             ]
+          },
+          "purpose": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "source": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -10185,6 +10197,18 @@
             ]
           },
           "name": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "purpose": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "source": {
             "type": [
               "null",
               "string"

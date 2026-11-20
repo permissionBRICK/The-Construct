@@ -29,6 +29,7 @@ NAT, so nothing listening here is reachable under it.
 When you start a server the user should open — a dev server, a preview, a
 notebook — bind it to `0.0.0.0` rather than `127.0.0.1`, run
 `construct expose <port>` and hand the user the link it prints.
+Always pass `--purpose "<what it is for>" --source <repo path>`, so whoever hits the forward limit can tell which forwards are obsolete.
 It opens that port on the user's own machine, waits until the link actually
 works, and tells you if nothing is connected right now. `construct expose --help`
 lists the other ways this VM's host can publish a port. Forwards are lost on

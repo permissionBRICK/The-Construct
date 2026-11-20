@@ -74,7 +74,9 @@ public sealed record ForwardResponse(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)] bool Main = false,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] bool? UpstreamTls = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? PortUrl = null,
-    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Name = null)
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Name = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Purpose = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? Source = null)
 {
     /// <summary>
     /// <paramref name="publicHost"/> is the LAN name host forwards are advertised on. A client
@@ -106,7 +108,7 @@ public sealed record ForwardResponse(
                 forward.Id, forward.VmName, forward.VmPort, forward.PublicPort,
                 forward.Target, forward.Label, forward.Created, sharedUrl ?? portUrl,
                 Https: true, Main: forward.Main, UpstreamTls: forward.UpstreamTls == true, PortUrl: sharedUrl is null ? null : portUrl,
-                Name: HttpsForwardNames.Effective(forward));
+                Name: HttpsForwardNames.Effective(forward), Purpose: forward.Purpose, Source: forward.Source);
         }
 
         // Every host in a link goes through the one rule (ForwardHost, docs/expose.md): an IPv6
@@ -119,7 +121,8 @@ public sealed record ForwardResponse(
         {
             return new(
                 forward.Id, forward.VmName, forward.VmPort, forward.PublicPort,
-                forward.Target, forward.Label, forward.Created, url, Destination: forward.Destination);
+                forward.Target, forward.Label, forward.Created, url, Destination: forward.Destination,
+                Purpose: forward.Purpose, Source: forward.Source);
         }
 
         if (ack.Status == AckStatus.Open && ack.LocalPort is int local)

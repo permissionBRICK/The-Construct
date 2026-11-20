@@ -228,7 +228,7 @@ public class ForwardTests
     public async Task A_zero_cap_means_uncapped_and_only_the_port_range_bounds_forwards()
     {
         // The TestApp host pins the cap to 3 (the concurrency suite relies on it); 0 must
-        // lift it entirely — the production default since the cap became opt-in.
+        // lift it entirely, as an operator may still choose (the default is 100).
         var (app, owner, _) = await SetupAsync(settings: new Dictionary<string, string?>
         {
             ["Constructd:MaxForwardsPerVm"] = "0",

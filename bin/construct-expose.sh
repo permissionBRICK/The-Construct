@@ -37,6 +37,8 @@ CURL="${CONSTRUCT_CURL:-curl}"
 API_TIMEOUT="${CONSTRUCT_SERVICE_TIMEOUT_SEC:-20}"
 
 MAX_LABEL=100
+MAX_PURPOSE=200
+MAX_SOURCE=400
 
 EXIT_QUEUED=6
 EXIT_REFUSED=7
@@ -46,8 +48,8 @@ die() { printf 'construct expose: %s\n' "$*" >&2; exit 1; }
 
 usage() {
   cat <<'USAGE'
-Usage: construct expose <port> [--label <text>] [--to client|host] [--wait <sec>]
-                            [--reuse]
+Usage: construct expose <port> [--label <text>] [--purpose <text>] [--source <path>]
+                            [--to client|host] [--wait <sec>] [--reuse]
        construct expose --list
        construct expose --close <id|port>
 
@@ -55,6 +57,8 @@ Expose a port from this VM and print the link to open it.
 
   construct expose 5173                  open it on the user's PC, print the link
   construct expose 5173 --label "vite"   ... and label it for --list
+  construct expose 5173 --purpose "chart page preview" --source ~/repos/charts
+                                         ... and say what it is for and where it lives
   construct expose --list                list this VM's forwards
   construct expose --close 5173          close one (by port, or by id)
 
@@ -71,6 +75,11 @@ Targets:
 
 Options:
   -l, --label <text>    Label shown in --list and in the extension.
+      --purpose <text>  What the forward is for, in a few words. --list shows it, so
+                        whoever hits the per-VM forward limit can tell which forwards
+                        are obsolete and close them.
+      --source <path>   Where the service behind it lives, e.g. its repo path
+                        (default: the git repository of the current directory).
   -t, --to client|host  Forward target (default: client).
   -w, --wait <sec>      How long to wait for a client forward to come up
                         (default: 30).
@@ -189,12 +198,24 @@ json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 
 # Strip control characters, squeeze whitespace, trim, cap the length -- a label
 # ends up in a one-line JSON document the extension parses.
-clean_label() {
+clean_text() { # <text> <max>
   local text="$1"
   text="$(printf '%s' "${text}" | tr '\000-\037\177' '   ' | tr -s ' ')"
   text="${text#"${text%%[![:space:]]*}"}"
   text="${text%"${text##*[![:space:]]}"}"
-  printf '%s' "${text:0:${MAX_LABEL}}"
+  printf '%s' "${text:0:$2}"
+}
+clean_label() { clean_text "$1" "${MAX_LABEL}"; }
+
+# The forward's note: what it is for and where its service lives (docs/expose.md).
+note_fields() {
+  if [[ -n "${PURPOSE}" ]]; then printf ',"purpose":"%s"' "$(json_escape "${PURPOSE}")"; fi
+  if [[ -n "${SOURCE_PATH}" ]]; then printf ',"source":"%s"' "$(json_escape "${SOURCE_PATH}")"; fi
+}
+# Printed under a forward's row in --list when it has one.
+print_note() { # <purpose> <source>
+  if [[ -n "$1" ]]; then printf '    purpose: %s\n' "$1"; fi
+  if [[ -n "$2" ]]; then printf '    source:  %s\n' "$2"; fi
 }
 
 have_jq() { command -v jq >/dev/null 2>&1; }
@@ -407,7 +428,7 @@ link_from_forward() {
 
 write_request() {
   local id="$1" port="$2" label="$3" tmp json
-  json="{\"v\":1,\"id\":\"$(json_escape "${id}")\",\"vmPort\":${port},\"label\":\"$(json_escape "${label}")\",\"target\":\"client\",\"createdAt\":\"$(now_iso)\"}"
+  json="{\"v\":1,\"id\":\"$(json_escape "${id}")\",\"vmPort\":${port},\"label\":\"$(json_escape "${label}")\",\"target\":\"client\"$(note_fields),\"createdAt\":\"$(now_iso)\"}"
   tmp="${REQUEST_DIR}/.tmp.$$.${RANDOM}"
   printf '%s\n' "${json}" >"${tmp}" 2>/dev/null || die "cannot write to ${REQUEST_DIR} (run as root?)"
   chmod 0644 "${tmp}" 2>/dev/null || true
@@ -506,6 +527,7 @@ local_list() {
       url="$(link_from_ack "${ack}" 2>/dev/null)" || url=""
     fi
     print_row "${id}" "${port}" "${target:-client}" "${status}" "${label}" "${url}"
+    print_note "$(json_field "${request}" purpose)" "$(json_field "${request}" source)"
   done
   shopt -u nullglob
 }
@@ -763,7 +785,7 @@ remote_get_or_create() {
     fi
   fi
   api_call POST "$(forwards_path)" \
-    "{\"vmPort\":${port},\"label\":\"$(json_escape "${label}")\",\"target\":\"${target}\"$(https_fields)}"
+    "{\"vmPort\":${port},\"label\":\"$(json_escape "${label}")\",\"target\":\"${target}\"$(https_fields)$(note_fields)}"
   if [[ "${HTTPS_IF_AVAILABLE}" == "true" && "${API_STATUS}" =~ ^40[39]$ && "${API_BODY}" == *'"https-unavailable"'* ]]; then
     HTTPS=false; MAIN=false; UPSTREAM=""; HTTPS_IF_AVAILABLE=false; NAME=""; REPLACE_MAIN=false
     remote_get_or_create "${port}" "${label}" "${target}"
@@ -836,6 +858,7 @@ remote_list() {
       "${status}" \
       "$(json_field "${object}" label)" \
       "${url}"
+    print_note "$(json_field "${object}" purpose)" "$(json_field "${object}" source)"
   done < <(json_objects "${API_BODY}")
 }
 
@@ -895,6 +918,9 @@ MAIN=false
 UPSTREAM=""
 NAME=""
 REPLACE_MAIN=false
+PURPOSE=""
+SOURCE_PATH=""
+source_given=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -915,6 +941,8 @@ while [[ $# -gt 0 ]]; do
       ;;
     --name) shift; [[ $# -gt 0 && -n "$1" ]] || die "--name requires a value"; NAME="${1,,}" ;;
     --replace-main) REPLACE_MAIN=true ;;
+    --purpose) shift; [[ $# -gt 0 ]] || die "--purpose requires a value"; PURPOSE="$1" ;;
+    --source) shift; [[ $# -gt 0 ]] || die "--source requires a path"; SOURCE_PATH="$1"; source_given=true ;;
     --) shift; if [[ $# -gt 0 ]]; then port="$1"; shift; fi; break ;;
     -*) die "unknown option: $1 (try: construct expose --help)" ;;
     *)
@@ -959,6 +987,13 @@ case "${mode}" in
     is_port "${port}" || die "invalid port: ${port} (expected 1-65535)"
     port="$((10#${port}))"
     label="$(clean_label "${label}")"
+    PURPOSE="$(clean_text "${PURPOSE}" "${MAX_PURPOSE}")"
+    # Without --source, the git repository the command runs in is the best guess at where the
+    # service lives; outside one there is no guess.
+    if [[ "${source_given}" != true ]] && command -v git >/dev/null 2>&1; then
+      SOURCE_PATH="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+    fi
+    SOURCE_PATH="$(clean_text "${SOURCE_PATH}" "${MAX_SOURCE}")"
     if [[ -n "${SERVICE_URL}" ]]; then
       remote_expose "${port}" "${label}" "${target}" "${wait_sec}"
     elif [[ "${HTTPS}" == "true" && "${HTTPS_IF_AVAILABLE}" != "true" ]]; then

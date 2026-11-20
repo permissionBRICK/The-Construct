@@ -193,7 +193,9 @@ jq -s '
         | select(type == "object" and (.port | type) == "number")
         | (.https == true) as $https
         | { profile: $profile, port: .port, to: (if $https then "host" else (.to // "client") end), label: (.label // "") }
-          + (if $https then { https: true, upstreamTls: (.upstreamTls == true), name: (.name // "") } else {} end) ]
+          + (if $https then { https: true, upstreamTls: (.upstreamTls == true), name: (.name // "") } else {} end)
+          + (if (.purpose | type) == "string" and .purpose != "" then { purpose: .purpose } else {} end)
+          + (if (.source | type) == "string" and .source != "" then { source: .source } else {} end) ]
       | reduce .[] as $f ([]; if any(.[]; .port == $f.port and .to == $f.to
           and (.https // false) == ($f.https // false) and (.name // "") == ($f.name // "")) then . else . + [$f] end)
     ),
