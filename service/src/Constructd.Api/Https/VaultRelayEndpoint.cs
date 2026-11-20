@@ -33,7 +33,9 @@ public sealed class VaultRelayEndpoint(IServer server, ConstructdOptions options
         {
             if (Volatile.Read(ref _port) > 0) return _port;
             var addresses = server.Features.Get<IServerAddressesFeature>()?.Addresses;
-            foreach (var bound in addresses ?? [])
+            // Kestrel lists its addresses in the order Program.cs configures them, ListenUrl first and the
+            // relay last, so with a dynamic plain-http API port as well the relay is the last loopback one.
+            foreach (var bound in (addresses ?? []).Reverse())
             {
                 if (!bound.StartsWith("http://127.0.0.1:", StringComparison.Ordinal) || !Uri.TryCreate(bound, UriKind.Absolute, out var uri) ||
                     uri.Port <= 0 || _apiPorts.Contains(uri.Port)) continue;
