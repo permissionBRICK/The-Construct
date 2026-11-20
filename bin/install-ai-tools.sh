@@ -259,14 +259,18 @@ opencode_npm_fallback() {
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash - || return 1
     DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs || return 1
   fi
-  # OpenCode 1 from npm owns the same `opencode` command, and npm will not take
-  # over another package's command: remove it first, it is being replaced.
-  if npm ls -g --depth=0 opencode-ai >/dev/null 2>&1; then
-    npm uninstall -g opencode-ai || return 1
-  fi
+  # OpenCode 1 from npm owns the same `opencode` command, which npm hands over only
+  # with --force. OpenCode 1 is removed once OpenCode 2 is installed, so a failed
+  # install leaves it working as it was. Removing it also removes the shared command
+  # link; install_opencode then links /usr/local/bin/opencode to OpenCode 2's binary.
+  local v1=false force=()
+  if npm ls -g --depth=0 opencode-ai >/dev/null 2>&1; then v1=true; force=(--force); fi
   # The package's postinstall unpacks the platform binary; newer npm gates
   # install scripts behind --allow-scripts, older npm ignores the unknown flag.
-  npm install -g "${spec}" --allow-scripts=@opencode/cli
+  npm install -g "${spec}" --allow-scripts=@opencode/cli ${force[@]+"${force[@]}"} || return 1
+  if [[ "${v1}" == true ]]; then
+    npm uninstall -g opencode-ai || warn "could not remove OpenCode 1 (opencode-ai) from npm; OpenCode 2 is installed"
+  fi
 }
 
 # OpenCode 2 converts OpenCode 1's database in place, one way, on its first start.
@@ -345,7 +349,13 @@ install_opencode() {
         fresh="$(npm root -g 2>/dev/null)/@opencode/cli/bin/opencode.exe"
       else
         opencode_reachability_note
-        if [[ "${had_opencode}" == true ]]; then
+        if [[ "${installed%%.*}" == 1 ]]; then
+          # The move failed and OpenCode 1 is still installed: it runs on as before, with
+          # its own plugin, which the OpenCode 2 configuration below would replace.
+          systemctl start opencode-serve 2>/dev/null || true
+          err "the move to OpenCode 2 failed (installer and npm); staying on OpenCode ${installed}"
+          return 1
+        elif [[ "${had_opencode}" == true ]]; then
           warn "opencode update failed (installer and npm); keeping the existing version"
         else
           err "opencode install failed: neither the official installer nor npm could fetch it"

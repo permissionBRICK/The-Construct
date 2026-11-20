@@ -138,9 +138,28 @@ run_case npm_latest 'opencode_npm_fallback'
 ok "without a version the npm fallback takes latest" grep -q 'install -g @opencode/cli@latest' "${tmp}/npm.log"
 
 run_case npm_v1 'opencode_npm_fallback 2.3.2' STUB_NPM_HAS_V1=0
-ok "OpenCode 1 from npm (opencode-ai) is removed first" sh -c \
-  "grep -n 'uninstall -g opencode-ai' '${tmp}/npm.log' | cut -d: -f1 | head -1 | xargs test 1 -le && \
-   test \"\$(grep -n 'uninstall -g opencode-ai' '${tmp}/npm.log' | cut -d: -f1)\" -lt \"\$(grep -n 'install -g @opencode/cli' '${tmp}/npm.log' | cut -d: -f1)\""
+ok "OpenCode 2 takes over OpenCode 1's npm command with --force" grep -q -- 'install -g @opencode/cli@2.3.2 --allow-scripts=@opencode/cli --force' "${tmp}/npm.log"
+ok "OpenCode 1 from npm (opencode-ai) is removed only after OpenCode 2 is installed" sh -c \
+  "test \"\$(grep -n 'install -g @opencode/cli' '${tmp}/npm.log' | cut -d: -f1)\" -lt \"\$(grep -n 'uninstall -g opencode-ai' '${tmp}/npm.log' | cut -d: -f1)\""
+
+run_case npm_v1_fail 'opencode_npm_fallback 2.3.2' STUB_NPM_HAS_V1=0 STUB_NPM_RC=1
+ok "a failed OpenCode 2 install from npm fails" test "$(cat "${tmp}/npm_v1_fail.rc")" = 1
+ok "a failed OpenCode 2 install from npm leaves OpenCode 1 installed" sh -c "! grep -q 'uninstall' '${tmp}/npm.log'"
+
+# A failed move: neither the installer nor npm brings OpenCode 2. Every step that writes
+# outside the test is replaced by a recorder, so a regression shows here and never
+# touches this machine.
+recorders='opencode_keep_v1_data() { :; }
+for f in configure_opencode_settings install_agent_system_prompt configure_opencode_background_watcher install ln sed; do
+  eval "$f() { printf \"%s\\n\" \"$f \$*\" >>\"\$STUB_LOG_DIR/steps.log\"; }"
+done'
+rm -f "${tmp}/steps.log"
+run_case move_fail "${recorders}"'; install_opencode' STUB_OPENCODE_VERSION=1.19.6 \
+  STUB_REGISTRY_BODY='{"version":"2.3.2"}' STUB_INSTALLER_RC=1 STUB_NPM_RC=1 STUB_NPM_HAS_V1=0 \
+  TARGET_USER=root WORKSPACE_ROOT="${tmp}/ws" REPO_DIR="${ROOT}"
+ok "a failed move to OpenCode 2 fails the install" test "$(cat "${tmp}/move_fail.rc")" = 1
+ok "a failed move starts OpenCode 1's server again" grep -qx 'start opencode-serve' "${tmp}/systemctl.log"
+ok "a failed move keeps OpenCode 1's plugin and settings" test ! -e "${tmp}/steps.log"
 
 run_case npm_fail 'opencode_npm_fallback 2.3.2' STUB_NPM_RC=1
 ok "a failing npm is reported as a failure" test "$(cat "${tmp}/npm_fail.rc")" = 1
