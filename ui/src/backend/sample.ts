@@ -9,6 +9,7 @@ const settings = (memGb: number, cpus: number): VmSettings => ({
   idle: { afterMin: 30, then: 'never' },
   services: { t3Web: true, vscodeWeb: true, vscodeTunnel: false, smb: false, mic: false, claudeLive: true, opencodeWatcher: true, t3ProxyUrl: 'https://t3.example.net' },
   identity: { gitName: 'Alex Example', gitEmail: 'alex@example.net', keepCredentials: false, historyDays: '90' },
+  swap: { sizeGb: 'auto' },
 });
 
 const agents = () => [

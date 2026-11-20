@@ -56,7 +56,24 @@ public sealed class DesiredStateRouteTests
         Assert.Contains("\"projects\"", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
         response = await h.Client.PutJsonAsync(Url, new { projects = Array.Empty<string>(), settings = new { seedUser = "Root;x" } });
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        response = await h.Client.PutJsonAsync(Url, new { projects = Array.Empty<string>(), settings = new { swapSizeGb = "256" } });
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("\"settings.swapSizeGb\"", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
         Assert.Null((await (await h.Client.GetAsync(Url)).ReadAsync<VmDesiredStateResponse>()).Desired);
+    }
+
+    [Fact]
+    public async Task The_stored_swap_size_reaches_the_guest()
+    {
+        await using var h = await ProvisionHarness.StartAsync();
+        var put = await h.Client.PutJsonAsync(Url, new { projects = new[] { "default" }, settings = new { seedUser = "agent", swapSizeGb = "0" } });
+        Assert.Equal(HttpStatusCode.OK, put.StatusCode);
+        Assert.Equal("0", (await put.ReadAsync<VmDesiredStateResponse>()).Desired!.Settings.SwapSizeGb);
+
+        var job = await h.Client.WaitForJobAsync((await (await h.Client.PostJsonAsync($"/api/v1/vms/{ProvisionHarness.Vm}/jobs",
+            new { kind = "provision", requestId = "swap", commit = ProvisionHarness.Commit })).ReadAsync<VmJobAcceptedResponse>()).JobId);
+        Assert.Equal(JobState.Succeeded, job.State);
+        Assert.Equal("0", FakeSshRunner.Variable(h.Ssh.Commands.Single(c => c.Contains("bin/provision.sh", StringComparison.Ordinal)), "SWAP_SIZE_GB"));
     }
 
     [Fact]

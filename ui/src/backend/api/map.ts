@@ -102,7 +102,7 @@ function services(p: ProvisionSettings | null | undefined): VmSettings['services
   return out;
 }
 
-/** A Services or Identity patch as the fields of ProvisionSettings it changes; fields the page does not show are not named. */
+/** A Services, Identity or swap patch as the fields of ProvisionSettings it changes; fields the page does not show are not named. */
 export function settingsFields(patch: SettingsPatch): Partial<ProvisionSettings> {
   const out: Record<string, unknown> = {};
   for (const [k, f] of SERVICES) if (patch.services?.[k] !== undefined) out[f] = patch.services[k] ? 'true' : 'false';
@@ -110,6 +110,7 @@ export function settingsFields(patch: SettingsPatch): Partial<ProvisionSettings>
   if (patch.identity?.gitName !== undefined) out.gitUserName = patch.identity.gitName.trim() || null;
   if (patch.identity?.gitEmail !== undefined) out.gitEmail = patch.identity.gitEmail.trim() || null;
   if (patch.identity?.keepCredentials !== undefined) out.gitCredentialStore = patch.identity.keepCredentials;
+  if (patch.swap?.sizeGb !== undefined) out.swapSizeGb = patch.swap.sizeGb;
   return out as Partial<ProvisionSettings>;
 }
 
@@ -149,6 +150,7 @@ export function toVm(id: string, engine: string, r: VmResponse, all: VmResponse[
         gitName: p.desired?.desired?.settings.gitUserName ?? '', gitEmail: p.desired?.desired?.settings.gitEmail ?? '',
         keepCredentials: p.desired?.desired?.settings.gitCredentialStore ?? false, historyDays: '30',
       },
+      swap: { sizeGb: p.desired?.desired?.settings.swapSizeGb ?? 'auto' },
     },
     appliedHw: { memGb: r.ramGb, cpus: r.cpu },
     usage: {

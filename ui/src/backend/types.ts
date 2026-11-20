@@ -15,13 +15,15 @@ export interface Usage {
   diskUsedGb: number | null;
 }
 
-/** Settings of one VM. `hw` applies on restart, `disk` on reinstall, `services` and `identity` on reprovision. */
+/** Settings of one VM. `hw` applies on restart, `disk` on reinstall, `services`, `identity` and `swap` on reprovision. */
 export interface VmSettings {
   hw: { memGb: number; cpus: number; checkpoints: boolean; startWithHost: boolean };
   disk: { diskGb: number; ubuntu: string };
   idle: { afterMin: number; then: 'save' | 'shutdown' | 'never' };
   services: { t3Web: boolean; vscodeWeb: boolean; vscodeTunnel: boolean; smb: boolean; mic: boolean; claudeLive: boolean; opencodeWatcher: boolean; t3ProxyUrl: string };
   identity: { gitName: string; gitEmail: string; keepCredentials: boolean; historyDays: '30' | '90' | 'all' };
+  /** The guest's swap file: `auto` or whole GB 0-128 (`swapSize`). */
+  swap: { sizeGb: string };
 }
 
 /** `newer`: the engine says a newer version is out; without it the versions are compared. */

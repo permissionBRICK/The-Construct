@@ -300,6 +300,10 @@ RAM.
   again. A file is only created or grown while the disk keeps at least 2 GiB and 10 % of its
   size free; otherwise the step warns and leaves the swap file as it is.
 - The OOM guard below still decides who goes first if RAM and swap both run out.
+- In the Construct app it is **Swap file** on the VM's Settings, Resources tab: `auto` or a whole
+  number 0–128, stored in the VM's desired state on its engine (`swapSizeGb`) and applied at the
+  next reprovision. The engine refuses any other value. An install moved over from the old client
+  keeps its `swapSizeGb`.
 
 ### Out-of-memory ranking
 
