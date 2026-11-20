@@ -9,6 +9,14 @@ public sealed class ChildStartIntent(IOperationKeyStore keys, IAdmissionStore ad
     ICapacityLedger capacity, IHypervisorDriver hypervisor, IVmRepository vms, IClock clock)
 {
     public static readonly JsonSerializerOptions IntentJsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly string RefusedBeforeBoot = JsonSerializer.Serialize("vm-state-unknown");
+
+    /// <summary>
+    /// True for an intent this class closed because it refused the start before booting anything. Any
+    /// other completed intent (a boot included) still owns the VM it may have started.
+    /// </summary>
+    public static bool ClosedBeforeBoot(OperationKeyRecord? key) =>
+        key is { State: OperationKeyState.Completed } && key.ResponseJson == RefusedBeforeBoot;
     public sealed record Intent(long? Lifetime, long ExpectedLeaseVersion, DateTimeOffset ActivationBase,
         IReadOnlyList<ReservationLine> Lines);
 
@@ -37,7 +45,7 @@ public sealed class ChildStartIntent(IOperationKeyStore keys, IAdmissionStore ad
             // A fresh intent has started nothing yet, so it is closed: a failed create must not leave an
             // in-flight start behind. A replayed one may have booted the VM and stays for reconciliation.
             if (inserted.Outcome == OperationKeyOutcome.Inserted)
-                await keys.CompleteAsync(key.Owner, key.Kind, key.Key, JsonSerializer.Serialize("vm-state-unknown"), ct);
+                await keys.CompleteAsync(key.Owner, key.Kind, key.Key, RefusedBeforeBoot, ct);
             throw Error("vm-state-unknown");
         }
         var holds = snapshot.Reservations.Where(r => r.VmName == vm.Name && (r.OperationId == job.Id || r.OperationId?.StartsWith(job.Id + ":resume:", StringComparison.Ordinal) == true)).ToArray();

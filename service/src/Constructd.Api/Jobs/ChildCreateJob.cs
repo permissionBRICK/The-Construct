@@ -143,8 +143,11 @@ public sealed class ChildCreateJob(IVmRepository vms, IVmMetadataStore identity,
         {
             try
             {
-                // A start refused before it booted anything has closed its intent already.
-                if (startIntentExists && await keys.GetAsync(vm.Owner, "child-start", job.Id + ":start", CancellationToken.None) is not { State: OperationKeyState.InFlight })
+                // This run's start was refused before it booted anything and closed its intent, so the
+                // VM this run created is cleaned up. A recovered run did not allocate (it has nothing to
+                // clean up with) and keeps the intent's VM, as does any intent completed after a boot.
+                if (startIntentExists && !recoveringStart && ChildStartIntent.ClosedBeforeBoot(
+                        await keys.GetAsync(vm.Owner, "child-start", job.Id + ":start", CancellationToken.None)))
                     startIntentExists = false;
                 if (startIntentExists && !recoveringStart && await hypervisor.GetSettledStateAsync(vm.Name, CancellationToken.None) == VmState.Off)
                 {

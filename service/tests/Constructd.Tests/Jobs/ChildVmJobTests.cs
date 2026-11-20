@@ -174,6 +174,53 @@ public sealed class ChildVmJobTests
         Assert.DoesNotContain("start:child", app.Driver.Calls);
         Assert.DoesNotContain(await app.Service<IOperationKeyStore>().ListInFlightAsync("child", default), k => k.Kind == "child-start");
         Assert.DoesNotContain(job.Progress, line => line.Text.Contains("Start intent retained", StringComparison.Ordinal));
+        // Nothing booted, so the create's cleanup removes the VM and gives everything back, although the
+        // hypervisor's list still cannot tell (the child driver's inventory confirms the removal).
+        Assert.Contains("remove:child", app.Service<FakeChildVmDriver>().Calls);
+        Assert.Null(await app.Vms.GetAsync("child", default));
+        Assert.DoesNotContain((await app.Service<ICapacityLedger>().SnapshotAsync(false, default)).Reservations, r => r.VmName == "child");
+    }
+    private sealed class FailingCreatedPolicy(INetworkPolicyReconciler inner) : INetworkPolicyReconciler
+    {
+        public string IsolationLevel => inner.IsolationLevel;
+        public Task OnVmCreatedAsync(Vm vm, CancellationToken ct) => throw new IOException("network policy store unavailable");
+        public Task OnVmDeletedAsync(string vmName, CancellationToken ct) => inner.OnVmDeletedAsync(vmName, ct);
+        public Task OnSharingChangedAsync(Vm vm, SharingScope previous, CancellationToken ct) => inner.OnSharingChangedAsync(vm, previous, ct);
+        public Task OnAddressChangedAsync(string vmName, IReadOnlyList<GuestAddress> addresses, CancellationToken ct) => inner.OnAddressChangedAsync(vmName, addresses, ct);
+        public Task<int> ReconcileAsync(CancellationToken ct) => inner.ReconcileAsync(ct);
+        public Task<int> ReconcileAsync(IGuestAddressProvider snapshot, CancellationToken ct) => inner.ReconcileAsync(snapshot, ct);
+        public Task<IReadOnlyList<NetworkRule>> ListRulesAsync(string vmName, CancellationToken ct) => inner.ListRulesAsync(vmName, ct);
+    }
+    [Fact]
+    public async Task AFailureAfterTheBootKeepsTheRunningChild()
+    {
+        await using var app = new TestApp(configureServices: services => services.AddSingleton<INetworkPolicyReconciler>(sp =>
+            new FailingCreatedPolicy(ActivatorUtilities.CreateInstance<NoIsolationNetworkPolicy>(sp))));
+        using var client = await Setup(app);
+        var job = await Finish(app, await client.PostAsJsonAsync("/api/v1/vms/parent/children", Request()));
+        Assert.Equal(JobState.Failed, job.State);
+        // The start intent completed with the boot; the failure after it must not destroy the running VM.
+        Assert.Equal(VmState.Running, app.Driver.StateOf("child"));
+        Assert.NotNull(await app.Vms.GetAsync("child", default));
+        Assert.DoesNotContain("remove:child", app.Service<FakeChildVmDriver>().Calls);
+        Assert.Contains((await app.Service<ICapacityLedger>().SnapshotAsync(false, default)).Reservations, r => r.VmName == "child" && r.Resource == ReservationResource.Ram);
+    }
+    [Fact]
+    public async Task ARecoveredCreateKeepsItsVmWhenItsStartWasRefusedEarlier()
+    {
+        await using var app = new TestApp(); using var client = await Setup(app);
+        var (job, vm, holds) = await CreatedWithoutStart(app, client);
+        // An earlier run of this job refused the start and closed the intent, then the engine stopped.
+        await app.Service<IOperationKeyStore>().TryInsertAsync(new(vm.Owner, "child-start", job.Id + ":start", job.Id, vm.Name, job.Id,
+            OperationKeyState.Completed, JsonSerializer.Serialize(new ChildStartIntent.Intent(600, vm.Lease!.Version, app.Clock.UtcNow, [])),
+            vm.PowerGeneration, JsonSerializer.Serialize("vm-state-unknown"), app.Clock.UtcNow), default);
+        var placement = await app.Service<IChildVmStorage>().ResolveStorageAsync(vm.Name, default);
+        var error = await Assert.ThrowsAsync<ChildValidationException>(() =>
+            app.Service<ChildCreateJob>().RunAsync(job, vm, placement, true, holds, new Progress<string>(), default));
+        Assert.Equal("vm-state-unknown", error.Code);
+        // This run allocated nothing and must not drop the record of a VM that still exists.
+        Assert.NotNull(await app.Vms.GetAsync(vm.Name, default));
+        Assert.DoesNotContain("remove:child", app.Service<FakeChildVmDriver>().Calls);
     }
     [Theory]
     [InlineData(true, "10m", LeaseState.Active)]
