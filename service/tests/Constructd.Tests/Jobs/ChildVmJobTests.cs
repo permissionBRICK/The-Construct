@@ -180,10 +180,10 @@ public sealed class ChildVmJobTests
         Assert.Null(await app.Vms.GetAsync("child", default));
         Assert.DoesNotContain((await app.Service<ICapacityLedger>().SnapshotAsync(false, default)).Reservations, r => r.VmName == "child");
     }
-    private sealed class FailingCreatedPolicy(INetworkPolicyReconciler inner) : INetworkPolicyReconciler
+    private sealed class FailingCreatedPolicy(INetworkPolicyReconciler inner, Action<Vm> before) : INetworkPolicyReconciler
     {
         public string IsolationLevel => inner.IsolationLevel;
-        public Task OnVmCreatedAsync(Vm vm, CancellationToken ct) => throw new IOException("network policy store unavailable");
+        public Task OnVmCreatedAsync(Vm vm, CancellationToken ct) { before(vm); throw new IOException("network policy store unavailable"); }
         public Task OnVmDeletedAsync(string vmName, CancellationToken ct) => inner.OnVmDeletedAsync(vmName, ct);
         public Task OnSharingChangedAsync(Vm vm, SharingScope previous, CancellationToken ct) => inner.OnSharingChangedAsync(vm, previous, ct);
         public Task OnAddressChangedAsync(string vmName, IReadOnlyList<GuestAddress> addresses, CancellationToken ct) => inner.OnAddressChangedAsync(vmName, addresses, ct);
@@ -191,16 +191,20 @@ public sealed class ChildVmJobTests
         public Task<int> ReconcileAsync(IGuestAddressProvider snapshot, CancellationToken ct) => inner.ReconcileAsync(snapshot, ct);
         public Task<IReadOnlyList<NetworkRule>> ListRulesAsync(string vmName, CancellationToken ct) => inner.ListRulesAsync(vmName, ct);
     }
-    [Fact]
-    public async Task AFailureAfterTheBootKeepsTheRunningChild()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AFailureAfterTheBootKeepsTheChild(bool guestShutDown)
     {
         await using var app = new TestApp(configureServices: services => services.AddSingleton<INetworkPolicyReconciler>(sp =>
-            new FailingCreatedPolicy(ActivatorUtilities.CreateInstance<NoIsolationNetworkPolicy>(sp))));
+            new FailingCreatedPolicy(ActivatorUtilities.CreateInstance<NoIsolationNetworkPolicy>(sp),
+                vm => { if (guestShutDown) sp.GetRequiredService<FakeHypervisorDriver>().SetState(vm.Name, VmState.Off); })));
         using var client = await Setup(app);
         var job = await Finish(app, await client.PostAsJsonAsync("/api/v1/vms/parent/children", Request()));
         Assert.Equal(JobState.Failed, job.State);
-        // The start intent completed with the boot; the failure after it must not destroy the running VM.
-        Assert.Equal(VmState.Running, app.Driver.StateOf("child"));
+        // The start intent completed with the boot; a failure after it must not destroy the VM, also when
+        // the guest has shut itself down in between.
+        Assert.Equal(guestShutDown ? VmState.Off : VmState.Running, app.Driver.StateOf("child"));
         Assert.NotNull(await app.Vms.GetAsync("child", default));
         Assert.DoesNotContain("remove:child", app.Service<FakeChildVmDriver>().Calls);
         Assert.Contains((await app.Service<ICapacityLedger>().SnapshotAsync(false, default)).Reservations, r => r.VmName == "child" && r.Resource == ReservationResource.Ram);

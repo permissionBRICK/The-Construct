@@ -149,11 +149,11 @@ public sealed class ChildCreateJob(IVmRepository vms, IVmMetadataStore identity,
                 if (startIntentExists && !recoveringStart && ChildStartIntent.ClosedBeforeBoot(
                         await keys.GetAsync(vm.Owner, "child-start", job.Id + ":start", CancellationToken.None)))
                     startIntentExists = false;
-                if (startIntentExists && !recoveringStart && await hypervisor.GetSettledStateAsync(vm.Name, CancellationToken.None) == VmState.Off)
-                {
-                    await keys.CompleteAsync(vm.Owner, "child-start", job.Id + ":start", "\"start-failed\"", CancellationToken.None);
+                // Off while the intent is still in flight: the start failed and closes its intent here. An intent
+                // the boot completed keeps its VM, also when the guest has shut down since.
+                if (startIntentExists && !recoveringStart && await hypervisor.GetSettledStateAsync(vm.Name, CancellationToken.None) == VmState.Off &&
+                    await keys.CompleteAsync(vm.Owner, "child-start", job.Id + ":start", "\"start-failed\"", CancellationToken.None))
                     startIntentExists = false;
-                }
                 if (startIntentExists)
                 {
                     progress.Report("Start intent retained for reconciliation; ownership and capacity remain recorded.");
