@@ -263,6 +263,41 @@ describe('FakeBackend', () => {
     expect(be.snapshot().upgrade).toBeNull();
   });
 
+  it('signs in to an agent with a code typed, and fails a wrong one', () => {
+    const be = new FakeBackend({ tick: 10 });
+    expect(be.snapshot().vms[0].agents.find(a => a.id === 'codex')!.signedIn).toBe(false);
+    be.signIn('atlas', 'claude-code');
+    expect(be.snapshot().signIn).toMatchObject({ vmId: 'atlas', agent: 'claude-code', state: 'starting' });
+    run(15);
+    expect(be.snapshot().signIn!.text).toContain('Paste code here');
+    be.signInInput({ text: 'bad' });
+    run(15);
+    expect(be.snapshot().signIn).toMatchObject({ state: 'failed' });
+    expect(be.snapshot().signIn!.text).toContain('Invalid code');
+    be.closeSignIn();
+    expect(be.snapshot().signIn).toBeNull();
+
+    be.signIn('atlas', 'antigravity');
+    run(15);
+    be.signInInput({ key: 'down' });
+    be.signInInput({ text: '4/0Acode' });
+    run(15);
+    // Signed in: the panel goes, and the agent shows as signed in (reported now, if it was not before).
+    expect(be.snapshot().signIn).toBeNull();
+    expect(be.snapshot().vms[0].agents.find(a => a.id === 'antigravity')).toMatchObject({ signedIn: true, installed: true });
+  });
+
+  it('signs Codex in when its device code was entered elsewhere, and a new sign-in replaces one that runs', () => {
+    const be = new FakeBackend({ tick: 10 });
+    be.signIn('atlas', 'opencode');
+    run(15);
+    be.signIn('atlas', 'codex');
+    expect(be.snapshot().signIn).toMatchObject({ agent: 'codex' });
+    run(100);
+    expect(be.snapshot().signIn).toBeNull();
+    expect(be.snapshot().vms[0].agents.find(a => a.id === 'codex')!.signedIn).toBe(true);
+  });
+
   it('starts the repair agent by hand where the host does not, and stops it', () => {
     const be = new FakeBackend({ tick: 10 });
     be.setRepairAuto('pc', false);

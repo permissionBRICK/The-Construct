@@ -2,7 +2,8 @@ import createClient, { type Client } from 'openapi-fetch';
 import type { paths as AgentPaths } from '../generated/agent';
 import type { paths as EnginePaths } from '../generated/engine';
 import type {
-  Backend, CreateVmRequest, Feature, FirstRunRequest, Host, HostProbe, HostUser, HostVm, Job, JobKind, Open, Prefs, ProfileSave, SettingsPatch, State, Upgrade, VaultMode, VaultRequest, Vm, WinKey,
+  AgentId, Backend, CreateVmRequest, Feature, FirstRunRequest, Host, HostProbe, HostUser, HostVm, Job, JobKind, Open, Prefs, ProfileSave, SettingsPatch, SignIn, SignInInput, State, Upgrade,
+  VaultMode, VaultRequest, Vm, WinKey,
 } from '../types';
 import { followEvents, type AgentEventData } from './events';
 import { openExternal } from '../../ui/shell';
@@ -11,7 +12,7 @@ import {
   updateRunning, allowanceOf, codeGroups, hostVersion, jobKey, problemText, splitJobKey, toCert, toConfig, toDevice, toHostJob, toHostUser, toHostVm, toJob,
   toMedia, toStatus, toUpdates, toUsage, toVm, toWindows, vmKey, toSecret, toLeases, toVaultEvent, toApproval, toEntryRequest, toProfile, splitRequestKey, VM_JOB_KINDS,
   settingsFields, withDesired, codingAgents, toLink, toEverything, hostKind, toIsos, toRepair, REPAIRABLE, upgradeStep, toUpgradeItem,
-  type RepairSession, type RepairLine, type UpgradeView,
+  type RepairSession, type RepairLine, type UpgradeView, type AgentSignIn,
   type DeviceItem, type ProfileResponse, type AuditEntry, type EngineView, type Health, type HostUpdateStatus, type HttpsStatus, type JobResponse, type MediaItem, type TokenSummary,
   type UsageSummary, type UserDetail, type VmParts, type VmResponse, type WhoAmI, type HostStatus, type HostConfig, type HostWindows, type HostCapabilities, type IsoCatalog,
   type ConnectionView, type ProvisionSettings,
@@ -194,7 +195,7 @@ export class ApiBackend implements Backend {
       device: { name: '' }, version: '', release: null, vms: [], hosts: [], projects: [], sync: { when: '–', remote: '', rev: '' }, jobs: [],
       vaultRequests: [], secrets: [], leases: [], devices: [], history: [], vaultModes: [], problems: {}, pairing: null, revocation: null, handout: null,
       prefs: { channel: 'stable', theme: p.theme ?? 'auto', scheme: p.scheme ?? 'green', autoUpdate: false, startWithOs: false, notifications: false },
-      upgrade: null, notice: null, na: API_GAPS, firstRun: null, everything: null,
+      upgrade: null, notice: null, na: API_GAPS, firstRun: null, everything: null, signIn: null,
     };
   }
 
@@ -733,6 +734,13 @@ export class ApiBackend implements Backend {
         if (engine && vm && id && this.slices.has(engine)) void this.readRepair(engine, vm, id);
         return;
       }
+      case 'agent-sign-in.output': case 'agent-sign-in.ended': {
+        const at = this.signInAt;
+        const vm = typeof data?.vm === 'string' ? data.vm : null;
+        // Its output may come before the start's answer named the session.
+        if (at && engine === at.engine && vm?.toLowerCase() === at.vm.toLowerCase() && (id === at.id || at.id === null)) void this.readSignIn();
+        return;
+      }
       case 'job.started': case 'job.progress': case 'job.ended':
         if (engine && id && this.slices.has(engine)) void this.readJob(engine, id);
         return;
@@ -747,6 +755,7 @@ export class ApiBackend implements Backend {
         if (engine && this.slices.has(engine)) void this.refreshEngine(engine);
         return;
       case 'engine.reset':
+        if (engine && engine === this.signInAt?.engine) void this.readSignIn();
         if (engine && this.slices.has(engine)) {
           // An engine restart ends every repair session: forget them, and ask each failed job's VM again.
           const sl = this.slices.get(engine)!;
@@ -1035,6 +1044,90 @@ export class ApiBackend implements Backend {
     const sid = x.rep.sess.id;
     void this.run(() => ok(this.engine(x.engine).DELETE('/api/v1/vms/{name}/repair/{id}', { params: { path: { name: x.vm, id: sid } } })))
       .then(() => this.readRepair(x.engine, x.vm, sid));
+  }
+
+  /* --- signing in to the coding agents --- */
+
+  /** The sign-in this device follows: where it runs, and its session and the revision read once the engine named it. */
+  private signInAt: { engine: string; vm: string; vmId: string; agent: AgentId; id: string | null; revision: number } | null = null;
+  private signInReads: Promise<void> = Promise.resolve();
+
+  /** One at a time: the engine ends a sign-in already running on the VM. */
+  signIn(vmId: string, agent: AgentId) {
+    const ref = this.vmRef(vmId);
+    if (!ref) return;
+    const at = { engine: ref.engine, vm: ref.name, vmId, agent, id: null as string | null, revision: -1 };
+    this.signInAt = at;
+    this.emit({ signIn: { vmId, agent, state: 'starting', text: '' } });
+    void (async () => {
+      try {
+        const r = await ok(this.engine(at.engine).POST('/api/v1/vms/{name}/agents/{agent}/sign-in', { params: { path: { name: at.vm, agent } } }));
+        // Put away before the engine answered: it ends there too.
+        if (this.signInAt === null) void this.engine(at.engine).DELETE('/api/v1/vms/{name}/agents/{agent}/sign-in', { params: { path: { name: at.vm, agent } } }).catch(() => {});
+        this.storeSignIn(at, r);
+      } catch (e) {
+        if (this.signInAt === at) this.emit({ signIn: { vmId, agent, state: 'failed', text: errText(e) } });
+      }
+    })();
+  }
+
+  /** Reads the followed sign-in after an event about it, one read at a time. */
+  private readSignIn(): Promise<void> {
+    const at = this.signInAt;
+    if (!at) return this.signInReads;
+    this.signInReads = this.signInReads.then(async () => {
+      if (this.signInAt !== at) return;
+      try {
+        this.storeSignIn(at, await ok(this.engine(at.engine).GET('/api/v1/vms/{name}/agents/{agent}/sign-in', { params: { path: { name: at.vm, agent: at.agent } } })));
+      } catch (e) {
+        // Gone (another device started one, the engine restarted): over, with the last text.
+        const cur = this.s.signIn;
+        if (e instanceof ApiError && e.status === 404 && this.signInAt === at && cur) this.emit({ signIn: { ...cur, state: 'stopped' } });
+      }
+    });
+    return this.signInReads;
+  }
+
+  /** Shows what the sign-in's terminal shows. One that signed in goes away; the VM's agents are read again. */
+  private storeSignIn(at: NonNullable<typeof this.signInAt>, r: AgentSignIn) {
+    // Another one's, or older than what was read (answers may cross).
+    if (this.signInAt !== at || r.agent !== at.agent || (at.id && at.id !== r.id) || r.revision < at.revision) return;
+    at.id = r.id;
+    at.revision = r.revision;
+    const state: SignIn['state'] | 'done' = r.state === 'running' ? 'running' : r.outcome === 'done' ? 'done' : r.outcome === 'stopped' ? 'stopped' : 'failed';
+    if (state !== 'running') void this.readAgents(at.engine, at.vm);
+    if (state === 'done') {
+      this.signInAt = null;
+      this.emit({ signIn: null });
+      return;
+    }
+    this.emit({ signIn: { vmId: at.vmId, agent: at.agent, state, text: r.text } });
+  }
+
+  signInInput(input: SignInInput) {
+    const at = this.signInAt;
+    if (!at?.id || this.s.signIn?.state !== 'running') return;
+    void this.run(() => ok(this.engine(at.engine).POST('/api/v1/vms/{name}/agents/{agent}/sign-in/input', { params: { path: { name: at.vm, agent: at.agent } }, body: input as never })));
+  }
+
+  closeSignIn() {
+    const at = this.signInAt;
+    const running = this.s.signIn?.state === 'running' || this.s.signIn?.state === 'starting';
+    this.signInAt = null;
+    this.emit({ signIn: null });
+    if (at && running) void this.engine(at.engine).DELETE('/api/v1/vms/{name}/agents/{agent}/sign-in', { params: { path: { name: at.vm, agent: at.agent } } }).catch(() => {});
+  }
+
+  /** The VM's coding agents again (versions, signed in). */
+  private async readAgents(engine: string, vm: string) {
+    const sl = this.slices.get(engine);
+    if (!sl) return;
+    try {
+      const agents = await ok(this.engine(engine).GET('/api/v1/vms/{name}/agents', { params: { path: { name: vm } } }));
+      const key = [...sl.parts.keys()].find(k => k.toLowerCase() === vm.toLowerCase()) ?? vm;
+      sl.parts.set(key, { ...(sl.parts.get(key) ?? {}), agents });
+      this.compose();
+    } catch { /* shown as it was */ }
   }
 
   /** Reads one job after an event about it. A job that ended stays ended whatever an older read says. */

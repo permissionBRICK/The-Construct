@@ -33,6 +33,7 @@ export type DesiredResponse = E['schemas']['VmDesiredStateResponse'];
 export type DesiredState = E['schemas']['VmDesiredState'];
 export type ProvisionSettings = E['schemas']['ProvisionSettings'];
 export type AgentsResponse = E['schemas']['VmAgentsResponse'];
+export type AgentSignIn = E['schemas']['AgentSignInResponse'];
 export type HostStatus = E['schemas']['HostStatusResponse'];
 export type HostConfig = E['schemas']['HostConfigResponse'];
 export type HostWindows = E['schemas']['HostWindowsResponse'];
@@ -126,7 +127,7 @@ export function withDesired(current: DesiredState | null | undefined, fields: Pa
 export const codingAgents = (d: DesiredState | null | undefined): string[] => d?.codingAgents ?? DEFAULT_AGENTS;
 
 export function toAgents(a: AgentsResponse | null | undefined): Agent[] {
-  return (a?.agents ?? []).map(x => ({ id: x.tool, name: x.name || x.tool, version: x.version, latest: x.latest ?? x.version, installed: true, newer: x.updateAvailable }));
+  return (a?.agents ?? []).map(x => ({ id: x.tool, name: x.name || x.tool, version: x.version, latest: x.latest ?? x.version, installed: true, newer: x.updateAvailable, signedIn: x.signedIn ?? null }));
 }
 
 /** One of the user's primaries, with what its engine said about it. `id` is chosen by the caller. */

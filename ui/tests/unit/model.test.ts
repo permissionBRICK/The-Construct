@@ -7,6 +7,7 @@ import { formatRoute, parseRoute, section } from '../../src/model/route';
 import { contrast, cssVars, SCHEME_ORDER, SCHEMES } from '../../src/model/tokens';
 import type { Job } from '../../src/backend/types';
 import { profileError } from '../../src/model/profile';
+import { linkParts, signedIn } from '../../src/model/signin';
 
 const job = (p: Partial<Job>): Job => ({ id: 'j', vmId: 'atlas', kind: 'reprovision', state: 'running', step: 's', stepIndex: 0, stepCount: 3, pct: 0, log: [], error: null, repair: null, ...p });
 
@@ -166,5 +167,22 @@ describe('profile shape', () => {
     const p = structuredClone(sampleState().projects[0]);
     (p.forwards as unknown[]).push({ port: '80', label: 'x' });
     expect(profileError(p)).toMatch(/forwards/);
+  });
+});
+
+describe('sign-in text', () => {
+  it('splits the links out of a CLI\'s text and leaves sentence punctuation outside', () => {
+    expect(linkParts("If the browser didn't open, visit: https://a.example/oauth?code=true&x=1\nPaste code here > ")).toEqual([
+      { text: "If the browser didn't open, visit: " }, { url: 'https://a.example/oauth?code=true&x=1' }, { text: '\nPaste code here > ' },
+    ]);
+    expect(linkParts('Open https://b.example/device.')).toEqual([{ text: 'Open ' }, { url: 'https://b.example/device' }, { text: '.' }]);
+    expect(linkParts('(see https://c.example/a_(b))')).toEqual([{ text: '(see ' }, { url: 'https://c.example/a_(b)' }, { text: ')' }]);
+    expect(linkParts('no link, javascript:alert(1) or ftp://x')).toEqual([{ text: 'no link, javascript:alert(1) or ftp://x' }]);
+    expect(linkParts('')).toEqual([]);
+  });
+
+  it('reads an agent\'s sign-in from the VM\'s report by its tool id', () => {
+    const agents = [{ id: 'claude', signedIn: true }, { id: 'codex', signedIn: false }, { id: 'opencode', signedIn: null }];
+    expect(['claude', 'codex', 'opencode', 'antigravity'].map(t => signedIn(agents, t))).toEqual([true, false, undefined, undefined]);
   });
 });
