@@ -422,9 +422,12 @@ sudo /opt/construct/repo/bin/setup-root-ssh-key.sh
 The workflow lets you pick tools, records `AI_TOOLS=`, and runs `bin/install-ai-tools.sh`.
 Currently supported selections:
 
-- `opencode`: installs the CLI and autostarts `opencode serve --hostname 0.0.0.0 --port 4096`
-  as root via `opencode-serve.service`. See [opencode installs behind a company
-  network](#opencode-installs-behind-a-company-network) if this step fails.
+- `opencode`: installs OpenCode 2 (`@opencode/cli`) and autostarts `opencode serve --hostname
+  0.0.0.0 --port 4096` as root via `opencode-serve.service`. OpenCode 2 protects the server with a
+  password it makes at each start and writes to the journal
+  (`journalctl -u opencode-serve | grep 'server password'`). See [opencode installs behind a
+  company network](#opencode-installs-behind-a-company-network) if this step fails, and
+  [Moving from OpenCode 1](#moving-from-opencode-1) for VMs that ran OpenCode 1.
 - `claude-code`: installs the Claude Code CLI and prints the SSH connection target.
 - `codex`: installs the Codex CLI, supports Codex App SSH remote connections, and can start the
   experimental Codex app-server on `0.0.0.0:4500` via `codex-app-server.service`. The official
@@ -475,29 +478,33 @@ documents each one inline, and [`construct expose`](expose.md#configuration) cov
 
 ### opencode installs behind a company network
 
-opencode is the one tool that isn't installed from a package registry, and its official
-installer has two habits that break on corporate networks:
+OpenCode 2's official installer (`opencode.ai/v2/install`) downloads the `@opencode/cli`
+build for the platform from the npm registry. Construct reads the latest version from the
+registry first and pins it through the installer's `VERSION` environment variable, and a
+reprovision runs the installer only when a newer release is out. A failed attempt is retried
+three times with backoff.
 
-- **It resolves its version through `api.github.com`,** which allows 60 unauthenticated
-  requests per hour **per source IP**. Behind a company NAT that budget is shared by every
-  machine on the network and is routinely spent, so the installer exits with
-  `Failed to fetch version information` — on every attempt, since retrying hits the same wall
-  until the hourly reset. Construct now resolves the latest tag from the plain
-  `github.com/.../releases/latest` redirect (no API, no quota) and pins it through the
-  installer's `VERSION` environment variable, so that call never happens.
-- **It downloads its release archive without `curl --fail`,** so a proxy error page gets piped
-  into `tar` and the install dies with `gzip: stdin: not in gzip format`. Each attempt is
-  retried three times with backoff.
-
-If the official installer still fails, provisioning falls back to the **`opencode-ai` npm
-package** — the same release, fetched from the npm registry, which is usually reachable (or
-mirrored) where raw GitHub downloads are blocked. Only if that fails too does the step fail,
-and it then prints the HTTP status of `github.com`, `api.github.com` and `registry.npmjs.org`
-so you can tell "offline" from "proxy block" from "rate limit" at a glance.
+If the official installer still fails, provisioning falls back to the **`@opencode/cli` npm
+package** — the same release, which is usually reachable (or mirrored) where other downloads
+are blocked. Only if that fails too does the step fail, and it then prints the HTTP status of
+`opencode.ai` and `registry.npmjs.org` so you can tell "offline" from "proxy block" at a
+glance. When an update fails, the installed version is kept.
 
 Either layout is fine afterwards: `/usr/local/bin/opencode` is pointed at whichever binary was
 installed (`~/.opencode/bin/opencode` or the npm package's), which is what `opencode-serve.service`
 executes.
+
+### Moving from OpenCode 1
+
+A VM that ran OpenCode 1 moves to OpenCode 2 at its next update or reprovision. OpenCode 2
+converts OpenCode 1's database in place, one way, when it first starts. Before the first
+OpenCode 2 install, provisioning stops `opencode-serve` and copies each data folder once to
+`~/.local/share/opencode-v1-copy`; that copy is the only way back. To go back, stop
+`opencode-serve`, put the copy back as `~/.local/share/opencode` and install OpenCode 1
+(`curl -fsSL https://opencode.ai/install | bash`). When the copy cannot be made (a full disk),
+the VM stays on OpenCode 1 and the step fails. An OpenCode 1 session that T3 Code runs during
+the copy can still write to the database. The copy is not removed by Construct; delete it once
+you no longer need the way back.
 
 ### Bypass-mode defaults
 

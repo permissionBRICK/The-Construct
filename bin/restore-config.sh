@@ -41,12 +41,14 @@ trap report_restore_error ERR
 cleanup_tmp=""
 t3_was_running=""
 codex_was_running=""
+opencode_was_running=""
 cleanup_restore() {
   local rc=$?
   trap - EXIT
   if [[ "${rc}" -ne 0 ]]; then
     [[ -n "${t3_was_running:-}" ]] && systemctl start t3code-serve 2>/dev/null || true
     [[ -n "${codex_was_running:-}" ]] && systemctl start codex-app-server 2>/dev/null || true
+    [[ -n "${opencode_was_running:-}" ]] && systemctl start opencode-serve 2>/dev/null || true
   fi
   [[ -n "${cleanup_tmp}" ]] && rm -rf "${cleanup_tmp}"
   exit "${rc}"
@@ -184,6 +186,32 @@ if [[ -n "${t3_state_restore}" ]]; then
   done
 fi
 
+# ── OpenCode database across the overlay ─────────────────────────────────────
+# Same as T3 Code's store: the freshly provisioned opencode-serve holds its own new
+# opencode.db open, and a restored database must not land under the live server
+# or next to its -wal/-shm. Stop it across the copy and drop the minutes-old files.
+# OpenCode 2 converts a database from an OpenCode 1 backup when it starts.
+opencode_db_restore=""
+if [[ -n "${archive_restore}" ]]; then
+  grep -Eq '^(\./)?home/\.local/share/opencode/opencode\.db$' "${archive_list}" && opencode_db_restore=1 || true
+elif [[ -f "${BACKUP_DIR}/home/.local/share/opencode/opencode.db" ]]; then
+  opencode_db_restore=1
+fi
+if [[ -n "${opencode_db_restore}" ]]; then
+  if command -v systemctl >/dev/null 2>&1; then
+    case "$(systemctl is-active opencode-serve 2>/dev/null || true)" in
+      active|activating|reloading) opencode_was_running=1 ;;
+    esac
+    if [[ -n "${opencode_was_running}" ]]; then
+      log "pausing opencode-serve for the restored OpenCode database"
+      systemctl stop opencode-serve 2>/dev/null || true
+    fi
+  fi
+  rm -f "${EXPORT_HOME}/.local/share/opencode/opencode.db" \
+        "${EXPORT_HOME}/.local/share/opencode/opencode.db-wal" \
+        "${EXPORT_HOME}/.local/share/opencode/opencode.db-shm"
+fi
+
 # Overlay while preserving ownership/perms/timestamps. Tarball restores stream
 # home/ directly; an already-extracted BACKUP_DIR uses trailing /. so dotfiles
 # copy without nesting under a "home" directory.
@@ -207,6 +235,11 @@ fi
 if [[ -n "${t3_was_running}" ]]; then
   systemctl start t3code-serve 2>/dev/null || true
   log "restored T3 Code state; t3code-serve restarted on the restored store"
+fi
+
+if [[ -n "${opencode_was_running}" ]]; then
+  systemctl start opencode-serve 2>/dev/null || true
+  log "restored the OpenCode database; opencode-serve restarted on it"
 fi
 
 if [[ -n "${codex_reindex}" ]]; then

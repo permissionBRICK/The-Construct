@@ -8,8 +8,14 @@
 // to opencode or closed TUI can take them down. State lives on disk under
 // STATE_ROOT so output stays readable across restarts.
 //
-// With wait: true the plugin watches the job and, once it exits, prompts the
-// session again -- which wakes the agent even if its turn ended long ago.
+// With wait: true the plugin watches the job and, once it exits, queues a message
+// for the session -- which wakes the agent even if its turn ended long ago.
+//
+// An OpenCode 2 plugin (default export with id and setup). Its tools are direct
+// tools (codemode: false), so clients see their calls: T3 Code's OpenCode monitor
+// shows an armed watcher from the `background` call's metadata { id, wait } and
+// ends it on the wake message (metadata.source "construct-background") or on a
+// `background_kill` call.
 import { spawn } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
@@ -64,12 +70,20 @@ const KILL_DESCRIPTION = `Stop a background task started with the background too
 Terminates the whole process group (SIGTERM, then SIGKILL if it does not exit).
 A killed task never sends a wake-up notification -- you already know it is gone.`
 
-/** Plain-JSON-Schema args: opencode marks every declared arg as required. */
-export const BackgroundTasks = async ({ client, directory }) => {
+/** Plain JSON Schema input; every argument is required, as OpenCode 1 made them. */
+const input = (properties) => ({
+  type: "object",
+  properties,
+  required: Object.keys(properties),
+  additionalProperties: false,
+})
+
+export default { id: "construct-background", setup }
+
+async function setup(ctx) {
+  const directory = ctx.location.directory
   /** key `sessionID/id` -> job, jobs we still owe a notification for */
   const watching = new Map()
-  /** sessionID -> [text], notifications parked until the session goes idle */
-  const parked = new Map()
   let timer
 
   // --- job state on disk -----------------------------------------------------
@@ -216,29 +230,16 @@ export const BackgroundTasks = async ({ client, directory }) => {
     }
   }
 
+  // "queue" delivers after the session's current work and wakes an idle session.
   async function notify(job, result) {
     if (!claim(job.dir)) return
-    const text = renderNotification(job, result)
-    if (await isIdle(job.sessionID)) return send(job.sessionID, text)
-    parked.set(job.sessionID, [...(parked.get(job.sessionID) ?? []), text])
-  }
-
-  async function isIdle(sessionID) {
     try {
-      const res = await client.session.status({})
-      const status = (res?.data ?? res)?.[sessionID]
-      return !status || status.type === "idle"
-    } catch {
-      return true
-    }
-  }
-
-  async function send(sessionID, text) {
-    try {
-      await client.session.promptAsync({
-        path: { id: sessionID },
-        query: { directory },
-        body: { parts: [{ type: "text", text }] },
+      await ctx.session.synthetic({
+        sessionID: job.sessionID,
+        text: renderNotification(job, result),
+        description: `Background task ${job.id} finished`,
+        metadata: { source: "construct-background", id: job.id },
+        delivery: "queue",
       })
     } catch {
       // Session gone or server shutting down -- the result stays readable on disk.
@@ -370,142 +371,134 @@ export const BackgroundTasks = async ({ client, directory }) => {
 
   // --- tools -----------------------------------------------------------------
 
-  return {
-    event: async ({ event }) => {
-      if (event.type !== "session.idle") return
-      const sessionID = event.properties.sessionID
-      const texts = parked.get(sessionID)
-      if (!texts?.length) return
-      parked.delete(sessionID)
-      await send(sessionID, texts.join("\n\n"))
-    },
-
-    dispose: async () => {
-      if (timer) clearInterval(timer)
-    },
-
-    tool: {
-      background: {
-        description: BACKGROUND_DESCRIPTION,
-        args: {
-          command: { type: "string", description: "Shell command to run in the background" },
-          description: {
-            type: "string",
-            description: "Short label for this task, 3-8 words, e.g. 'run the full test suite'",
-          },
-          wait: {
-            type: "boolean",
-            description:
-              "true: wake me with the result when it exits (normal choice). false: pure fire and forget, no notification.",
-          },
+  await ctx.tool.transform((tools) => {
+    tools.add({
+      name: "background",
+      description: BACKGROUND_DESCRIPTION,
+      options: { codemode: false },
+      input: input({
+        command: { type: "string", description: "Shell command to run in the background" },
+        description: {
+          type: "string",
+          description: "Short label for this task, 3-8 words, e.g. 'run the full test suite'",
         },
-        async execute(args, ctx) {
-          const command = String(args?.command ?? "").trim()
-          if (!command) throw new Error("command is required")
-          const wait = args?.wait !== false && args?.wait !== "false"
-          const description = String(args?.description ?? "").trim() || command
-          await ctx.ask({
-            permission: "bash",
-            patterns: [command],
-            always: [command],
-            metadata: { command, description, background: true },
-          })
-          const cwd = ctx.directory || directory
-          const job = spawnJob({ command, description, wait, sessionID: ctx.sessionID, cwd })
-          ctx.metadata({ title: `${description} (${job.id})`, metadata: { id: job.id, pid: job.pid } })
-          return {
-            title: `${description} (${job.id})`,
-            output: [
-              `Started background task ${job.id} (pid ${job.pid}).`,
-              `command: ${command}`,
-              `cwd: ${cwd}`,
-              `log: ${job.log}`,
-              ``,
-              wait
-                ? `wait: on -- you will be notified in this session when it exits, even after your turn has ended. Do not poll in a loop; carry on or end your turn, the result will wake you.`
-                : `wait: off -- fire and forget. The process keeps running even if opencode exits and nothing will notify you.`,
-              `Check on it any time with background_output(id: "${job.id}"), stop it with background_kill(id: "${job.id}").`,
-            ].join("\n"),
-            metadata: { id: job.id, pid: job.pid, log: job.log, wait },
-          }
+        wait: {
+          type: "boolean",
+          description:
+            "true: wake me with the result when it exits (normal choice). false: pure fire and forget, no notification.",
         },
+      }),
+      async execute(args, context) {
+        const command = String(args?.command ?? "").trim()
+        if (!command) throw new Error("command is required")
+        const wait = args?.wait !== false && args?.wait !== "false"
+        const description = String(args?.description ?? "").trim() || command
+        await ctx.permission.assert({
+          sessionID: context.sessionID,
+          agent: context.agent,
+          action: "shell",
+          resources: [command],
+          save: [command],
+          metadata: { command, description, background: true },
+          source: { type: "tool", messageID: context.messageID, id: context.id },
+        })
+        const cwd = directory
+        const job = spawnJob({ command, description, wait, sessionID: context.sessionID, cwd })
+        return {
+          content: [
+            `Started background task ${job.id} (pid ${job.pid}).`,
+            `command: ${command}`,
+            `cwd: ${cwd}`,
+            `log: ${job.log}`,
+            ``,
+            wait
+              ? `wait: on -- you will be notified in this session when it exits, even after your turn has ended. Do not poll in a loop; carry on or end your turn, the result will wake you.`
+              : `wait: off -- fire and forget. The process keeps running even if opencode exits and nothing will notify you.`,
+            `Check on it any time with background_output(id: "${job.id}"), stop it with background_kill(id: "${job.id}").`,
+          ].join("\n"),
+          metadata: { id: job.id, pid: job.pid, log: job.log, wait, description },
+        }
       },
+    })
 
-      background_output: {
-        description: OUTPUT_DESCRIPTION,
-        args: {
-          id: {
-            type: "string",
-            description: "Task id, e.g. 'bg_1'. Empty string lists all background tasks of this session.",
-          },
-          full: {
-            type: "boolean",
-            description: "true: whole output from the start. false: only output since your last check.",
-          },
+    tools.add({
+      name: "background_output",
+      description: OUTPUT_DESCRIPTION,
+      options: { codemode: false },
+      input: input({
+        id: {
+          type: "string",
+          description: "Task id, e.g. 'bg_1'. Empty string lists all background tasks of this session.",
         },
-        async execute(args, ctx) {
-          const id = String(args?.id ?? "").trim()
-          const full = args?.full === true || args?.full === "true"
-          const jobs = listJobs(ctx.sessionID)
-
-          if (!id || id === "all") {
-            if (!jobs.length) return "No background tasks in this session."
-            return {
-              title: `${jobs.length} background task(s)`,
-              output: ["Background tasks in this session:", ...jobs.map(summary)].join("\n"),
-            }
-          }
-
-          const job = jobs.find((j) => j.id === id)
-          if (!job) {
-            throw new Error(
-              `No background task ${id} in this session. Known: ${jobs.map((j) => j.id).join(", ") || "none"}`,
-            )
-          }
-          const s = state(job)
-          const { text } = readSince(job, full)
-          const body = text.trimEnd()
-          return {
-            title: `${job.description || job.command} (${job.id})`,
-            output: [
-              `${job.id}: ${s.label} after ${duration(job.started, s.at)}`,
-              `command: ${job.command}`,
-              `log: ${job.log}`,
-              ``,
-              body
-                ? [full ? "output (from the start):" : "output (new since your last check):", "```", body, "```"].join("\n")
-                : full
-                  ? "(no output)"
-                  : "(no new output since your last check)",
-            ].join("\n"),
-            metadata: { id: job.id, running: !s.done, status: s.label },
-          }
+        full: {
+          type: "boolean",
+          description: "true: whole output from the start. false: only output since your last check.",
         },
+      }),
+      async execute(args, context) {
+        const id = String(args?.id ?? "").trim()
+        const full = args?.full === true || args?.full === "true"
+        const jobs = listJobs(context.sessionID)
+
+        if (!id || id === "all") {
+          if (!jobs.length) return { content: "No background tasks in this session." }
+          return { content: ["Background tasks in this session:", ...jobs.map(summary)].join("\n") }
+        }
+
+        const job = jobs.find((j) => j.id === id)
+        if (!job) {
+          throw new Error(
+            `No background task ${id} in this session. Known: ${jobs.map((j) => j.id).join(", ") || "none"}`,
+          )
+        }
+        const s = state(job)
+        const { text } = readSince(job, full)
+        const body = text.trimEnd()
+        return {
+          content: [
+            `${job.id}: ${s.label} after ${duration(job.started, s.at)}`,
+            `command: ${job.command}`,
+            `log: ${job.log}`,
+            ``,
+            body
+              ? [full ? "output (from the start):" : "output (new since your last check):", "```", body, "```"].join("\n")
+              : full
+                ? "(no output)"
+                : "(no new output since your last check)",
+          ].join("\n"),
+          metadata: { id: job.id, running: !s.done, status: s.label },
+        }
       },
+    })
 
-      background_kill: {
-        description: KILL_DESCRIPTION,
-        args: { id: { type: "string", description: "Task id to kill, e.g. 'bg_1'" } },
-        async execute(args, ctx) {
-          const id = String(args?.id ?? "").trim()
-          const job = listJobs(ctx.sessionID).find((j) => j.id === id)
-          if (!job) throw new Error(`No background task ${id} in this session.`)
-          if (readExit(job.dir)) return `${job.id} had already finished: ${state(job).label}`
+    tools.add({
+      name: "background_kill",
+      description: KILL_DESCRIPTION,
+      options: { codemode: false },
+      input: input({ id: { type: "string", description: "Task id to kill, e.g. 'bg_1'" } }),
+      async execute(args, context) {
+        const id = String(args?.id ?? "").trim()
+        const job = listJobs(context.sessionID).find((j) => j.id === id)
+        if (!job) throw new Error(`No background task ${id} in this session.`)
+        if (readExit(job.dir)) return { content: `${job.id} had already finished: ${state(job).label}`, metadata: { id: job.id } }
 
-          fs.writeFileSync(path.join(job.dir, "killed"), "")
-          claim(job.dir) // a task we killed on purpose must not wake us up later
-          watching.delete(`${job.sessionID}/${job.id}`)
-          kill(job.pid, "SIGTERM")
-          for (let i = 0; i < 20 && alive(job.pid); i++) await sleep(100)
-          if (alive(job.pid)) kill(job.pid, "SIGKILL")
-          if (!readExit(job.dir)) fs.writeFileSync(path.join(job.dir, "exit"), "143")
-          return {
-            title: `killed ${job.id}`,
-            output: [`Killed background task ${job.id} (${job.command}).`, `log: ${job.log}`].join("\n"),
-          }
-        },
+        fs.writeFileSync(path.join(job.dir, "killed"), "")
+        claim(job.dir) // a task we killed on purpose must not wake us up later
+        watching.delete(`${job.sessionID}/${job.id}`)
+        kill(job.pid, "SIGTERM")
+        for (let i = 0; i < 20 && alive(job.pid); i++) await sleep(100)
+        if (alive(job.pid)) kill(job.pid, "SIGKILL")
+        if (!readExit(job.dir)) fs.writeFileSync(path.join(job.dir, "exit"), "143")
+        return {
+          content: [`Killed background task ${job.id} (${job.command}).`, `log: ${job.log}`].join("\n"),
+          metadata: { id: job.id },
+        }
       },
-    },
+    })
+  })
+
+  return () => {
+    if (timer) clearInterval(timer)
   }
 }
 

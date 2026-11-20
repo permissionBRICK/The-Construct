@@ -63,7 +63,7 @@ public sealed class AgentReleases(HttpClient http, IClock clock) : IAgentRelease
         {
             "claude" => ("https://registry.npmjs.org/@anthropic-ai/claude-code/latest", "version"),
             "codex" => ("https://api.github.com/repos/openai/codex/releases/latest", "tag_name"),
-            "opencode" => ("https://api.github.com/repos/sst/opencode/releases/latest", "tag_name"),
+            "opencode" => ("https://registry.npmjs.org/@opencode/cli/latest", "version"), // OpenCode 2; OpenCode 1 was opencode-ai
             // The manifest Google's installer and the CLI's updater read (T3 Code reads it too).
             "antigravity" => ("https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_amd64.json", "version"),
             "t3" => (channel == "nightly" ? "https://registry.npmjs.org/t3/nightly" : "https://registry.npmjs.org/t3/latest", "version"),

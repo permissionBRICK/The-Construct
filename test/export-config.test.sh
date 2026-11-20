@@ -315,6 +315,16 @@ rm -f "${tmp}/stage-calls"
 ok 'reinstall + STAGE_DIR: T3 Code is still stopped and started' \
   test "$(grep -cE '^(stop|start) t3code-serve$' "${tmp}/stage-calls" 2>/dev/null)" = 2
 
+# OpenCode 2 keeps its sign-ins in opencode.db, so a sanitized backup (no auth) leaves
+# the database out like T3 Code's store; OpenCode 1's session files still go along.
+mkdir -p "${live}/.local/share/opencode/storage/session"
+printf '{}\n' >"${live}/.local/share/opencode/storage/session/s1.json"
+"${t3_env[@]}" INCLUDE_AUTH=false EXPORT_REASON=backup STAGE_DIR="${tmp}/stage-noauth" \
+  bash "${ROOT}/bin/export-config.sh" >"${tmp}/stage-noauth.log" 2>&1
+ok 'no auth: the OpenCode database (sessions and sign-ins) is left out' \
+  sh -c "test ! -e '${tmp}/stage-noauth/home/.local/share/opencode/opencode.db' && ! grep -q 'opencode.db' '${tmp}/stage-noauth/MANIFEST.txt'"
+ok 'no auth: OpenCode 1 session files are kept' test -f "${tmp}/stage-noauth/home/.local/share/opencode/storage/session/s1.json"
+
 # Reinstall export from a T3 Code terminal: stopping t3code-serve would end the export with
 # it and leave T3 down, so the server keeps running and its store is an online snapshot.
 printf '0::/system.slice/t3code-serve.service\n' >"${tmp}/t3-cgroup"

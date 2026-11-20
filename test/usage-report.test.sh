@@ -47,7 +47,12 @@ cat >"${tmp}/bin/agy" <<'STUB'
 #!/usr/bin/env bash
 echo "1.5.2"
 STUB
-chmod +x "${tmp}/bin/ccusage" "${tmp}/bin/curl" "${tmp}/bin/claude" "${tmp}/bin/codex" "${tmp}/bin/agy"
+# OpenCode 2 prints its name before the version (OpenCode 1 printed the bare version).
+cat >"${tmp}/bin/opencode" <<'STUB'
+#!/usr/bin/env bash
+echo "opencode v2.3.2"
+STUB
+chmod +x "${tmp}/bin/ccusage" "${tmp}/bin/curl" "${tmp}/bin/claude" "${tmp}/bin/codex" "${tmp}/bin/agy" "${tmp}/bin/opencode"
 export PATH="${tmp}/bin:${PATH}" CONFIG_FILE="${tmp}/config.env"
 export CONSTRUCT_VM_TOKEN_FILE="${tmp}/token" CONSTRUCT_USAGE_STATE_DIR="${tmp}/state"
 printf 'test-usage-secret\n' >"${tmp}/token"
@@ -63,6 +68,7 @@ jq -e '.days | length == 15' "${tmp}/body.json" >/dev/null
 jq -e '.agents | map(select(.tool == "claude" or .tool == "codex")) == [{"tool":"claude","version":"2.1.4"},{"tool":"codex","version":"0.98.0"}]' "${tmp}/body.json" >/dev/null
 # The Antigravity CLI runs as agy and is reported as antigravity.
 jq -e '.agents | map(select(.tool == "antigravity")) == [{"tool":"antigravity","version":"1.5.2"}]' "${tmp}/body.json" >/dev/null
+jq -e '.agents | map(select(.tool == "opencode")) == [{"tool":"opencode","version":"2.3.2"}]' "${tmp}/body.json" >/dev/null
 jq -e --arg today "$(date +%F)" '.days[] | select(.day == $today and .tool == "claude") | .totalTokens == 37 and .cacheCreateTokens == 3 and .models["model-a"].totalTokens == 37' "${tmp}/body.json" >/dev/null
 jq -e --arg today "$(date +%F)" '.days[] | select(.day == $today and .tool == "codex") | .costUsd == 2.34 and .cacheReadTokens == 4 and .models["model-b"].totalTokens == 30' "${tmp}/body.json" >/dev/null
 [[ -f "${tmp}/state/backfilled" && ! -d "$(cat "${tmp}/work")" ]]
