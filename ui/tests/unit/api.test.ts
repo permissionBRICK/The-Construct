@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ApiBackend } from '../../src/backend/api/backend';
 import { SseParser } from '../../src/backend/api/events';
-import { spanText } from '../../src/backend/api/map';
+import { codingAgents, spanText } from '../../src/backend/api/map';
 import { activeJob } from '../../src/model/vm';
 import { updateParts } from '../../src/model/update';
 
@@ -568,6 +568,16 @@ describe('ApiBackend', () => {
     expect(be.snapshot().handout).toEqual({ hostId: E1, user: 'kai', address: 'https://orchard.test:8443', token: 'cst_secret' });
     be.closeHandout();
     expect(be.snapshot().handout).toBeNull();
+  });
+});
+
+describe('codingAgents', () => {
+  it('reads the list, else the VM\'s own AI_TOOLS, else the defaults, as the engine does', () => {
+    expect(codingAgents({ projects: [], settings: { aiTools: 'claude-code' }, codingAgents: ['codex'] })).toEqual(['codex']);
+    expect(codingAgents({ projects: [], settings: { aiTools: "'claude-code,t3code,claude-code'" } })).toEqual(['claude-code']);
+    expect(codingAgents({ projects: [], settings: { aiTools: 'none' } })).toEqual([]);
+    expect(codingAgents({ projects: [], settings: {} })).toEqual(['claude-code', 'codex', 'opencode']);
+    expect(codingAgents(null)).toEqual(['claude-code', 'codex', 'opencode']);
   });
 });
 

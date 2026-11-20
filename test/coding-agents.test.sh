@@ -135,6 +135,20 @@ run_case t3_none 'configure_t3_providers' T3CODE_HOME="${t3}" AI_TOOLS=none
 ok "every agent off turns every provider off" jq_ok '.providerInstances
   | [.claudeAgent, .codex, .opencode, .antigravity] | map(.enabled) == [false, false, false, false]' "${settings}"
 
+cat >"${settings}" <<'JSON'
+{
+  "providers": {
+    "codex": { "enabled": true, "homePath": "/srv/codex-home" },
+    "opencode": { "serverUrl": "http://127.0.0.1:4096", "serverPassword": "x" }
+  }
+}
+JSON
+run_case t3_legacy 'configure_t3_providers' T3CODE_HOME="${t3}" AI_TOOLS=codex,opencode
+ok "an older providers entry moves into the new instance with its configuration" jq_ok '.providerInstances
+  | .codex == {driver: "codex", enabled: true, config: {homePath: "/srv/codex-home"}}
+  and .opencode == {driver: "opencode", enabled: true, config: {serverUrl: "http://127.0.0.1:4096", serverPassword: "x"}}
+  and .claudeAgent == {driver: "claudeAgent", enabled: false}' "${settings}"
+
 printf '{ not json' >"${settings}"
 run_case t3_bad 'configure_t3_providers' T3CODE_HOME="${t3}" AI_TOOLS=codex
 ok "invalid T3 settings are left alone without failing the install" test "$(cat "${tmp}/t3_bad.rc")" = 0 -a "$(cat "${settings}")" = '{ not json'

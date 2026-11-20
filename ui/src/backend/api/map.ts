@@ -1,6 +1,6 @@
 import type { components as E } from '../generated/engine';
 import type { components as A } from '../generated/agent';
-import { agentSwitches, DEFAULT_AGENTS } from '../../model/settings';
+import { AGENTS, agentSwitches, DEFAULT_AGENTS } from '../../model/settings';
 import type { Agent, Backup, Device, Everything, Forward, Host, HostJob, HostUpdate, HostUser, HostVm, Job, JobKind, Lease, Power, Profile, Repair, RepairMessage, Secret, SettingsPatch, Upgrade, VaultEvent, VaultRequest, Vm, VmSettings, WinGuest, WinKey } from '../types';
 
 /* From what the agent and the engines report to the pieces of `State`. Pure functions, no I/O: each takes
@@ -122,8 +122,15 @@ export function withDesired(current: DesiredState | null | undefined, fields: Pa
   } as DesiredState;
 }
 
-/** The coding agents a desired state names; none named: the default ones. */
-export const codingAgents = (d: DesiredState | null | undefined): string[] => d?.codingAgents ?? DEFAULT_AGENTS;
+/** The coding agents a desired state names, read as the engine reads them: its list, else the VM's own `AI_TOOLS`
+    setting (`none` is no agent), else the default ones. */
+export function codingAgents(d: DesiredState | null | undefined): string[] {
+  if (d?.codingAgents) return d.codingAgents;
+  const saved = (d?.settings?.aiTools ?? '').trim().replace(/^'+|'+$/g, '').trim();
+  if (!saved) return DEFAULT_AGENTS;
+  const known: string[] = AGENTS.map(a => a.id);
+  return [...new Set(saved.split(',').map(t => t.trim()).filter(t => known.includes(t)))];
+}
 
 export function toAgents(a: AgentsResponse | null | undefined): Agent[] {
   return (a?.agents ?? []).map(x => ({ id: x.tool, name: x.name || x.tool, version: x.version, latest: x.latest ?? x.version, installed: true, newer: x.updateAvailable }));

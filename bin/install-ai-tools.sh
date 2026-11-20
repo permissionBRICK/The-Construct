@@ -1005,11 +1005,17 @@ except (ValueError, UnicodeError) as error:
     print(f"WARNING: leaving invalid T3 settings untouched: {settings}: {error}", file=sys.stderr)
     sys.exit(0)
 before = json.dumps(data, sort_keys=True)
+legacy = data.get("providers") if isinstance(data.get("providers"), dict) else {}
 instances = data.setdefault("providerInstances", {})
 for tool, driver in drivers.items():
     instance = instances.get(driver)
     if not isinstance(instance, dict):
+        # T3 moves an older `providers.<driver>` entry into this instance only while the instance is
+        # missing, and then drops it; so a new instance takes that entry's configuration with it.
+        old = legacy.get(driver)
         instance = {"driver": driver}
+        if isinstance(old, dict) and any(key != "enabled" for key in old):
+            instance["config"] = {key: value for key, value in old.items() if key != "enabled"}
     config = instance.get("config") if isinstance(instance.get("config"), dict) else {}
     # T3 folds a config-level flag into the instance's, and an off there wins.
     config.pop("enabled", None)
