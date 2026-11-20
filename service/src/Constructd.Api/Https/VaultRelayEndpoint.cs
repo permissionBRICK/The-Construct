@@ -22,6 +22,12 @@ public sealed class VaultRelayEndpoint(IServer server, ConstructdOptions options
         .Select(url => Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttp ? uri.Port : 0)
         .Where(port => port > 0).ToHashSet();
 
+    // The API's own plain-http loopback listeners on a dynamic port: they are told apart from the relay only
+    // by Kestrel's bind order, so the relay is known once one more such address is bound.
+    private readonly int _dynamicApiListeners = (options.ListenUrl ?? "")
+        .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Count(url => Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttp && uri.Host == "127.0.0.1" && uri.Port == 0);
+
     /// <summary>The extra listen URL, or null when the service has no listen URL of its own (tests, development).</summary>
     public static string? ListenUrl(ConstructdOptions options) =>
         string.IsNullOrWhiteSpace(options.ListenUrl) ? null : $"http://127.0.0.1:{Math.Max(0, options.Https.VaultRelayPort)}";
@@ -33,15 +39,18 @@ public sealed class VaultRelayEndpoint(IServer server, ConstructdOptions options
         {
             if (Volatile.Read(ref _port) > 0) return _port;
             var addresses = server.Features.Get<IServerAddressesFeature>()?.Addresses;
-            // Kestrel lists its addresses in the order Program.cs configures them, ListenUrl first and the
-            // relay last, so with a dynamic plain-http API port as well the relay is the last loopback one.
-            foreach (var bound in (addresses ?? []).Reverse())
+            if (addresses is null) return 0;
+            // Kestrel publishes each address as it binds it, in the order Program.cs configures them: ListenUrl,
+            // then the relay. Until the relay is bound as well, the last candidate can still be a dynamic API
+            // port, so nothing is cached before then. Kestrel's enumerator is a snapshot of the live list.
+            var candidates = new List<int>();
+            foreach (var bound in addresses)
             {
-                if (!bound.StartsWith("http://127.0.0.1:", StringComparison.Ordinal) || !Uri.TryCreate(bound, UriKind.Absolute, out var uri) ||
-                    uri.Port <= 0 || _apiPorts.Contains(uri.Port)) continue;
-                Volatile.Write(ref _port, uri.Port);
-                break;
+                if (bound.StartsWith("http://127.0.0.1:", StringComparison.Ordinal) && Uri.TryCreate(bound, UriKind.Absolute, out var uri) &&
+                    uri.Port > 0 && !_apiPorts.Contains(uri.Port)) candidates.Add(uri.Port);
             }
+            if (candidates.Count <= _dynamicApiListeners) return 0;
+            Volatile.Write(ref _port, candidates[^1]);
             return _port;
         }
     }
