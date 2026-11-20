@@ -90,6 +90,7 @@ Feature parameters for `Auto-Install.ps1`:
 | `-MicPassthrough true\|false` | Microphone passthrough. |
 | `-AutomaticCheckpoints true\|false` | Hyper-V automatic checkpoints, local or remote. |
 | `-OpenCodeBackgroundWatcher true\|false` | OpenCode background watcher patch. |
+| `-SwapSizeGB auto\|0\|N` | The VM's swap file: `auto` is half the RAM (at most 8 GB), `0` none, `N` that many GB (up to 128). Omitted: the size saved in the control panel, else the VM's own. See [Swap file](provisioning.md#swap-file). |
 | `-T3Code true\|false` | T3 Code web GUI. `-T3CodeChannel stable\|nightly` overrides the preset's stable channel. |
 | `-T3CodePatched true\|false` | Patched T3 Code + Desktop. The old name `-T3CodeLimitResume` is also accepted. |
 | `-T3CodeHttps true\|false` | T3 Code HTTPS. |

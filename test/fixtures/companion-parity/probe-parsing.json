@@ -346,11 +346,12 @@
   },
   {
     "host": null,
-    "input": "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://bad/path\nMEM_GB\t-1\nVM_CPUS\twrong\nDISK_PCT\t101%\nOPENCODE_BACKGROUND_WATCHER\tfalse\nT3CODE_PROXY_URL\thttps://t3.example.net/app",
+    "input": "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://bad/path\nMEM_GB\t-1\nVM_CPUS\twrong\nDISK_PCT\t101%\nOPENCODE_BACKGROUND_WATCHER\tfalse\nSWAP_SIZE_GB\t'0'\nT3CODE_PROXY_URL\thttps://t3.example.net/app",
     "map": {
       "DISK_PCT": "101%",
       "MEM_GB": "-1",
       "OPENCODE_BACKGROUND_WATCHER": "false",
+      "SWAP_SIZE_GB": "'0'",
       "T3CODE": "true",
       "T3CODE_PROXY_URL": "https://t3.example.net/app",
       "T3CODE_PUBLIC_BASE_URL": "https://bad/path",
@@ -374,6 +375,7 @@
       "ubuntu": "",
       "vmConfig": {
         "opencodeBackgroundWatcher": false,
+        "swapSizeGb": "0",
         "t3code": true
       },
       "vmName": ""
@@ -381,11 +383,12 @@
   },
   {
     "host": "vm.example",
-    "input": "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://bad/path\nMEM_GB\t-1\nVM_CPUS\twrong\nDISK_PCT\t101%\nOPENCODE_BACKGROUND_WATCHER\tfalse\nT3CODE_PROXY_URL\thttps://t3.example.net/app",
+    "input": "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://bad/path\nMEM_GB\t-1\nVM_CPUS\twrong\nDISK_PCT\t101%\nOPENCODE_BACKGROUND_WATCHER\tfalse\nSWAP_SIZE_GB\t'0'\nT3CODE_PROXY_URL\thttps://t3.example.net/app",
     "map": {
       "DISK_PCT": "101%",
       "MEM_GB": "-1",
       "OPENCODE_BACKGROUND_WATCHER": "false",
+      "SWAP_SIZE_GB": "'0'",
       "T3CODE": "true",
       "T3CODE_PROXY_URL": "https://t3.example.net/app",
       "T3CODE_PUBLIC_BASE_URL": "https://bad/path",
@@ -410,6 +413,7 @@
       "ubuntu": "",
       "vmConfig": {
         "opencodeBackgroundWatcher": false,
+        "swapSizeGb": "0",
         "t3code": true
       },
       "vmName": ""
@@ -417,11 +421,12 @@
   },
   {
     "host": "::1",
-    "input": "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://bad/path\nMEM_GB\t-1\nVM_CPUS\twrong\nDISK_PCT\t101%\nOPENCODE_BACKGROUND_WATCHER\tfalse\nT3CODE_PROXY_URL\thttps://t3.example.net/app",
+    "input": "T3CODE\ttrue\nT3CODE_PUBLIC_BASE_URL\thttps://bad/path\nMEM_GB\t-1\nVM_CPUS\twrong\nDISK_PCT\t101%\nOPENCODE_BACKGROUND_WATCHER\tfalse\nSWAP_SIZE_GB\t'0'\nT3CODE_PROXY_URL\thttps://t3.example.net/app",
     "map": {
       "DISK_PCT": "101%",
       "MEM_GB": "-1",
       "OPENCODE_BACKGROUND_WATCHER": "false",
+      "SWAP_SIZE_GB": "'0'",
       "T3CODE": "true",
       "T3CODE_PROXY_URL": "https://t3.example.net/app",
       "T3CODE_PUBLIC_BASE_URL": "https://bad/path",
@@ -446,6 +451,7 @@
       "ubuntu": "",
       "vmConfig": {
         "opencodeBackgroundWatcher": false,
+        "swapSizeGb": "0",
         "t3code": true
       },
       "vmName": ""
@@ -645,6 +651,162 @@
       "ubuntu": "",
       "vmConfig": {
         "t3code": false
+      },
+      "vmName": ""
+    }
+  },
+  {
+    "host": null,
+    "input": "SWAP_SIZE_GB\t12\nMEM_GB\t24",
+    "map": {
+      "MEM_GB": "24",
+      "SWAP_SIZE_GB": "12"
+    },
+    "output": {
+      "agents": [],
+      "projects": [],
+      "resources": "24 GB RAM",
+      "ubuntu": "",
+      "vmConfig": {
+        "swapSizeGb": "12"
+      },
+      "vmName": "",
+      "vmSpec": {
+        "ramGb": 24
+      }
+    }
+  },
+  {
+    "host": "vm.example",
+    "input": "SWAP_SIZE_GB\t12\nMEM_GB\t24",
+    "map": {
+      "MEM_GB": "24",
+      "SWAP_SIZE_GB": "12"
+    },
+    "output": {
+      "agents": [],
+      "projects": [],
+      "resources": "24 GB RAM",
+      "ubuntu": "",
+      "vmConfig": {
+        "swapSizeGb": "12"
+      },
+      "vmName": "",
+      "vmSpec": {
+        "ramGb": 24
+      }
+    }
+  },
+  {
+    "host": "::1",
+    "input": "SWAP_SIZE_GB\t12\nMEM_GB\t24",
+    "map": {
+      "MEM_GB": "24",
+      "SWAP_SIZE_GB": "12"
+    },
+    "output": {
+      "agents": [],
+      "projects": [],
+      "resources": "24 GB RAM",
+      "ubuntu": "",
+      "vmConfig": {
+        "swapSizeGb": "12"
+      },
+      "vmName": "",
+      "vmSpec": {
+        "ramGb": 24
+      }
+    }
+  },
+  {
+    "host": null,
+    "input": "SWAP_SIZE_GB\t200",
+    "map": {
+      "SWAP_SIZE_GB": "200"
+    },
+    "output": {
+      "agents": [],
+      "projects": [],
+      "resources": "",
+      "ubuntu": "",
+      "vmName": ""
+    }
+  },
+  {
+    "host": "vm.example",
+    "input": "SWAP_SIZE_GB\t200",
+    "map": {
+      "SWAP_SIZE_GB": "200"
+    },
+    "output": {
+      "agents": [],
+      "projects": [],
+      "resources": "",
+      "ubuntu": "",
+      "vmName": ""
+    }
+  },
+  {
+    "host": "::1",
+    "input": "SWAP_SIZE_GB\t200",
+    "map": {
+      "SWAP_SIZE_GB": "200"
+    },
+    "output": {
+      "agents": [],
+      "projects": [],
+      "resources": "",
+      "ubuntu": "",
+      "vmName": ""
+    }
+  },
+  {
+    "host": null,
+    "input": "SWAP_SIZE_GB\tauto",
+    "map": {
+      "SWAP_SIZE_GB": "auto"
+    },
+    "output": {
+      "agents": [],
+      "projects": [],
+      "resources": "",
+      "ubuntu": "",
+      "vmConfig": {
+        "swapSizeGb": "auto"
+      },
+      "vmName": ""
+    }
+  },
+  {
+    "host": "vm.example",
+    "input": "SWAP_SIZE_GB\tauto",
+    "map": {
+      "SWAP_SIZE_GB": "auto"
+    },
+    "output": {
+      "agents": [],
+      "projects": [],
+      "resources": "",
+      "ubuntu": "",
+      "vmConfig": {
+        "swapSizeGb": "auto"
+      },
+      "vmName": ""
+    }
+  },
+  {
+    "host": "::1",
+    "input": "SWAP_SIZE_GB\tauto",
+    "map": {
+      "SWAP_SIZE_GB": "auto"
+    },
+    "output": {
+      "agents": [],
+      "projects": [],
+      "resources": "",
+      "ubuntu": "",
+      "vmConfig": {
+        "swapSizeGb": "auto"
       },
       "vmName": ""
     }

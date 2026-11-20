@@ -69,8 +69,13 @@ public sealed class InstanceStateStore(IStateFileSystem files, string? name, str
         var spec = probe["vmSpec"] as JsonObject ?? []; var config = probe["vmConfig"] as JsonObject ?? [];
         foreach (var (key, field) in new[] { ("vmMemoryGB", "ramGb"), ("vmDiskGB", "diskGb"), ("vmCpuCount", "cpus") })
             if (!current.ContainsKey(key) && StateJson.Number(spec[field]) is > 0 and var n && double.IsFinite(n)) patch[key] = n;
-        foreach (var key in new[] { "t3code", "t3codeChannel", "t3codePatched", "t3codeAutoApprove", "opencodeBackgroundWatcher" })
-            if (!current.ContainsKey(key) && (key == "t3codeChannel" ? StateJson.Text(config[key]) is "stable" or "nightly" : StateJson.Boolean(config[key]).HasValue)) patch[key] = config[key]?.DeepClone();
+        foreach (var key in new[] { "t3code", "t3codeChannel", "t3codePatched", "t3codeAutoApprove", "opencodeBackgroundWatcher", "swapSizeGb" })
+            if (!current.ContainsKey(key) && (key switch
+            {
+                "t3codeChannel" => StateJson.Text(config[key]) is "stable" or "nightly",
+                "swapSizeGb" => StateJson.Text(config[key]) is { } swap && SettingsMapping.SwapSize(config[key]) == swap,
+                _ => StateJson.Boolean(config[key]).HasValue
+            })) patch[key] = config[key]?.DeepClone();
         if (patch.Count == 0) return null;
         SaveState(patch); return patch;
     }

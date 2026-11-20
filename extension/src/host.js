@@ -323,6 +323,21 @@ function saveSelectedProjects(scriptsDir, names) {
 }
 
 /**
+ * The swap file size as the settings store keeps it (`swapSizeGb`, passed as
+ * -SwapSizeGB and read by bin/setup-swap.sh as SWAP_SIZE_GB): "auto" (half the RAM,
+ * at most 8 GB) or a whole number of GB from 0 (no swap file) to 128, as a string.
+ * Anything else is null: not a value to store or pass on. Pure; the panel's
+ * swapSizeCheck and SettingsMapping.SwapSize in the Companion follow the same rule.
+ */
+function normalizeSwapSize(v) {
+  if (v == null || typeof v === "boolean") return null;
+  const s = String(v).trim().toLowerCase();
+  if (s === "auto") return s;
+  if (!/^[0-9]{1,3}$/.test(s) || Number(s) > 128) return null;
+  return String(Number(s));
+}
+
+/**
  * Translate the on-disk settings into the webview form shape. Only keys that are
  * actually present (and well-typed) are emitted, so the panel's applySettings can
  * leave its HTML defaults untouched for anything the file doesn't carry — e.g. a
@@ -354,6 +369,8 @@ function mapToForm(raw) {
   if (typeof raw.t3codePatched === "boolean") form.t3codePatched = raw.t3codePatched;
   if (typeof raw.vmAutoCheckpoints === "boolean") form.autoCheckpoints = raw.vmAutoCheckpoints;
   if (has("historyRetentionDays")) form.historyRetentionDays = String(raw.historyRetentionDays);
+  const swap = normalizeSwapSize(raw.swapSizeGb);
+  if (swap !== null) form.swapSizeGb = swap;
   return form;
 }
 
@@ -411,6 +428,10 @@ function mapFromForm(form) {
   // Days of agent chat history the config backup keeps (bin/export-config.sh
   // HISTORY_RETENTION_DAYS); passed on reinstall / redownload / Export config.
   setNum("historyRetentionDays", form.historyRetentionDays);
+  // Swap file size, applied by the next reprovision. An invalid value is dropped
+  // (the stored one stays), like an unknown T3 channel.
+  const swap = normalizeSwapSize(form.swapSizeGb);
+  if (swap !== null) out.swapSizeGb = swap;
   return out;
 }
 
@@ -436,6 +457,10 @@ function patchReprovisionChanges(previous, next) {
     (next.opencodeBackgroundWatcher === true)
   ) {
     changes.push("OpenCode background watcher");
+  }
+  // Missing means auto, the VM's default.
+  if ((normalizeSwapSize(previous.swapSizeGb) || "auto") !== (normalizeSwapSize(next.swapSizeGb) || "auto")) {
+    changes.push("swap file size");
   }
   return changes;
 }
@@ -488,7 +513,7 @@ module.exports = {
   CONTAINER, MARKER, SETTINGS_FILE,
   localAppData, findScriptsDir, resolveScriptsDir,
   settingsPath, projectsDir, configDir,
-  currentSettings, readRawSettings, writeRawSettings, mapToForm, mapFromForm, patchReprovisionChanges,
+  currentSettings, readRawSettings, writeRawSettings, mapToForm, mapFromForm, patchReprovisionChanges, normalizeSwapSize,
   readSettings, saveSettings, readProjectProfile,
   safeProfileName, listProjectProfiles, writeProjectProfile, deleteProjectProfile, writeProjectProfileIfAbsent,
   readSelectedProjects, hasPersistedSelection, saveSelectedProjects,

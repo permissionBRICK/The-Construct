@@ -24,6 +24,17 @@ public static class SettingsMapping
         ("t3codeAutoApprove", "t3codeAutoApprove", 'b'), ("t3codePatched", "t3codePatched", 'b'), ("vmAutoCheckpoints", "autoCheckpoints", 'b'),
         ("historyRetentionDays", "historyRetentionDays", 'n')
     ];
+    // The swap file size as the settings store keeps it (swapSizeGb, passed as -SwapSizeGB): "auto" or a whole number
+    // of GB from 0 to 128, as a string; anything else is null. Mirrors host.normalizeSwapSize.
+    public static string? SwapSize(JsonNode? value)
+    {
+        if (value is null || StateJson.Boolean(value) is not null) return null;
+        var s = StateJson.Trim(StateJson.String(value)).ToLowerInvariant();
+        if (s == "auto") return s;
+        if (!Regex.IsMatch(s, "^[0-9]{1,3}$")) return null;
+        var n = int.Parse(s, CultureInfo.InvariantCulture);
+        return n <= 128 ? n.ToString(CultureInfo.InvariantCulture) : null;
+    }
     public static JsonObject MapToForm(JsonObject? raw)
     {
         var result = new JsonObject();
@@ -37,6 +48,7 @@ public static class SettingsMapping
             if (kind == 'b') { if (StateJson.Boolean(value) is bool b) result[form] = b; }
             else if (kind != 'c' || StateJson.String(value) is "stable" or "nightly") result[form] = StateJson.String(value);
         }
+        if (SwapSize(raw["swapSizeGb"]) is { } swap) result["swapSizeGb"] = swap;
         return result;
     }
     public static JsonObject MapFromForm(JsonObject? form)
@@ -58,6 +70,7 @@ public static class SettingsMapping
             }
             else result[key] = s;
         }
+        if (SwapSize(form["swapSizeGb"]) is { } swap) result["swapSizeGb"] = swap;
         return result;
     }
     public static string[] PatchReprovisionChanges(JsonObject? previous, JsonObject? next)
@@ -70,6 +83,7 @@ public static class SettingsMapping
             !StateJson.StrictEquals(StateJson.Truthy(previous["t3codeChannel"]) ? previous["t3codeChannel"] : JsonValue.Create("stable"), StateJson.Truthy(next["t3codeChannel"]) ? next["t3codeChannel"] : JsonValue.Create("stable")))))
             result.Add("patched T3 Code + Desktop build");
         if (Is(previous, "opencodeBackgroundWatcher") != Is(next, "opencodeBackgroundWatcher")) result.Add("OpenCode background watcher");
+        if ((SwapSize(previous["swapSizeGb"]) ?? "auto") != (SwapSize(next["swapSizeGb"]) ?? "auto")) result.Add("swap file size");
         return result.ToArray();
     }
 }

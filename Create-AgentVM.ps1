@@ -67,6 +67,10 @@ param(
     # Forwarded to Provision-AgentVM.ps1: optional OpenCode background watcher.
     # Empty = keep the VM's saved choice; "true"/"false".
     [string]$OpenCodeBackgroundWatcher = "",
+    # Forwarded to Provision-AgentVM.ps1: the guest's swap file size. Empty = keep the
+    # VM's saved choice; "auto", "0" or a whole number of GB up to 128.
+    [ValidatePattern('\A(auto|[0-9]|[1-9][0-9]|1[01][0-9]|12[0-8])?\z')]
+    [string]$SwapSizeGB = "",
     # Forwarded to Provision-AgentVM.ps1: opt-in T3 Code web GUI. Empty = keep the
     # VM's saved choice; "true"/"false".
     [string]$T3Code = "",
@@ -385,6 +389,7 @@ if ((Test-ConstructVmPresent -Name $VmName) -eq $true) {
         if ($PSBoundParameters.ContainsKey('ClaudePartialStreaming')) { $provArgs['ClaudePartialStreaming'] = $ClaudePartialStreaming }
         if ($PSBoundParameters.ContainsKey('MicPassthrough'))         { $provArgs['MicPassthrough']         = $MicPassthrough }
         if ($PSBoundParameters.ContainsKey('OpenCodeBackgroundWatcher')) { $provArgs['OpenCodeBackgroundWatcher'] = $OpenCodeBackgroundWatcher }
+        if ($PSBoundParameters.ContainsKey('SwapSizeGB'))             { $provArgs['SwapSizeGB']             = $SwapSizeGB }
         if ($PSBoundParameters.ContainsKey('T3Code'))                 { $provArgs['T3Code']                 = $T3Code }
         if ($PSBoundParameters.ContainsKey('T3CodeChannel'))          { $provArgs['T3CodeChannel']          = $T3CodeChannel }
         if ($PSBoundParameters.ContainsKey('T3CodePatched'))      { $provArgs['T3CodePatched']      = $T3CodePatched }
@@ -646,6 +651,7 @@ if ($isAutoinstall) {
             if ($PSBoundParameters.ContainsKey('ClaudePartialStreaming')) { $provArgs['ClaudePartialStreaming'] = $ClaudePartialStreaming }
             if ($PSBoundParameters.ContainsKey('MicPassthrough'))         { $provArgs['MicPassthrough']         = $MicPassthrough }
             if ($PSBoundParameters.ContainsKey('OpenCodeBackgroundWatcher')) { $provArgs['OpenCodeBackgroundWatcher'] = $OpenCodeBackgroundWatcher }
+            if ($PSBoundParameters.ContainsKey('SwapSizeGB'))             { $provArgs['SwapSizeGB']             = $SwapSizeGB }
         if ($PSBoundParameters.ContainsKey('T3Code'))                 { $provArgs['T3Code']                 = $T3Code }
             if ($PSBoundParameters.ContainsKey('T3CodeChannel'))          { $provArgs['T3CodeChannel']          = $T3CodeChannel }
             if ($PSBoundParameters.ContainsKey('T3CodePatched'))      { $provArgs['T3CodePatched']      = $T3CodePatched }

@@ -11,6 +11,7 @@ const guestScripts = require("./guest-scripts");
 // parse here (no jq dependency on the VM).
 
 const ssh = require("./ssh");
+const host = require("./host");
 
 const REMOTE_PROBE = guestScripts.render("probe");
 
@@ -57,6 +58,9 @@ function parseVmConfig(map) {
   if (patched !== null) out.t3codePatched = patched;
   const watcher = bool(map.OPENCODE_BACKGROUND_WATCHER);
   if (watcher !== null) out.opencodeBackgroundWatcher = watcher;
+  // Only a size the VM saved (config.env holds SWAP_SIZE_GB only when it was chosen).
+  const swap = host.normalizeSwapSize(cfgUnquote(map.SWAP_SIZE_GB));
+  if (swap !== null) out.swapSizeGb = swap;
   return Object.keys(out).length ? out : null;
 }
 

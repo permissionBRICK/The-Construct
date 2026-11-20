@@ -289,7 +289,7 @@ try {
   const probedVm = {
     online: true,
     vmSpec: { ramGb: 16, diskGb: 150, cpus: 8 },
-    vmConfig: { t3code: true, t3codeChannel: "stable", t3codePatched: true, opencodeBackgroundWatcher: false },
+    vmConfig: { t3code: true, t3codeChannel: "stable", t3codePatched: true, opencodeBackgroundWatcher: false, swapSizeGb: "4" },
   };
   ok("backfill: an offline VM writes nothing", state.backfillFromProbe(bf, { online: false }) === null);
   ok("backfill: a failed probe writes nothing", state.backfillFromProbe(bf, { online: true, probeError: "x" }) === null);
@@ -298,10 +298,10 @@ try {
   ok("backfill: a console-installed VM (no keys saved) gets its size + keep-saved config recorded",
     written && written.vmMemoryGB === 16 && written.vmDiskGB === 150 && written.vmCpuCount === 8 &&
     written.t3code === true && written.t3codeChannel === "stable" && written.t3codePatched === true &&
-    written.opencodeBackgroundWatcher === false, JSON.stringify(written));
+    written.opencodeBackgroundWatcher === false && written.swapSizeGb === "4", JSON.stringify(written));
   ok("backfill: ...into that instance's own file", fs.existsSync(path.join(instDir, "field-vm.json")));
   ok("backfill: ...which the settings form now reads (ram/disk/cpu + the unlit toggle lit)",
-    (() => { const f = state.readSettings(bf); return f.ram === "16" && f.disk === "150" && f.cpu === "8" && f.t3codePatched === true; })());
+    (() => { const f = state.readSettings(bf); return f.ram === "16" && f.disk === "150" && f.cpu === "8" && f.t3codePatched === true && f.swapSizeGb === "4"; })());
   ok("backfill: a second probe has nothing left to add", state.backfillFromProbe(bf, probedVm) === null);
   // The user's saved choice wins over what the VM currently is: they may have turned
   // the patched build OFF and not reprovisioned yet.
@@ -315,7 +315,7 @@ try {
   ok("backfill: a probe without the facts (older VM) writes nothing",
     state.backfillFromProbe(state.store("bare-vm", scriptsDir, env), { online: true, projects: [] }) === null);
   ok("backfill: an unknown channel / non-boolean is not recorded",
-    (() => { const w = state.backfillFromProbe(state.store("odd-vm", scriptsDir, env), { online: true, vmConfig: { t3codeChannel: "alpha", t3code: "true" } }); return w === null; })());
+    (() => { const w = state.backfillFromProbe(state.store("odd-vm", scriptsDir, env), { online: true, vmConfig: { t3codeChannel: "alpha", t3code: "true", swapSizeGb: "200" } }); return w === null; })());
   // The default instance backfills into the legacy top level, like every other write.
   const defBefore = host.readRawSettings(scriptsDir);
   const defPatch = state.backfillFromProbe(def, { online: true, vmSpec: { ramGb: 20, diskGb: 300, cpus: 12 } });

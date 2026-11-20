@@ -101,6 +101,11 @@ param(
     # Install Construct's dependency-free OpenCode background watcher plugin.
     # Off by default; EMPTY keeps the VM's saved choice. "true"/"false"/"".
     [string]$OpenCodeBackgroundWatcher = "",
+    # Size of the guest's swap file (bin/setup-swap.sh, SWAP_SIZE_GB): "auto" (half the
+    # RAM, at most 8 GB), "0" (no swap file) or a whole number of GB up to 128. EMPTY keeps
+    # the VM's saved choice. Checked here: it lands in a single-quoted env assignment.
+    [ValidatePattern('\A(auto|[0-9]|[1-9][0-9]|1[01][0-9]|12[0-8])?\z')]
+    [string]$SwapSizeGB = "",
     # Opt-in T3 Code web GUI (the `t3` npm package -- a browser control plane for
     # the coding agents; service t3code-serve, pairing-token gated). EMPTY (the
     # default) keeps the VM's saved choice (config.env T3CODE), so a plain console
@@ -313,6 +318,7 @@ $ErrorActionPreference = "Stop"
 if ($T3CodeChannel) { $T3CodeChannel = $T3CodeChannel.ToLower() }
 if ($T3CodeBuildSource) { $T3CodeBuildSource = $T3CodeBuildSource.ToLower() }
 if ($T3CodeHttps) { $T3CodeHttps = $T3CodeHttps.ToLower() }
+if ($SwapSizeGB) { $SwapSizeGB = $SwapSizeGB.ToLower() }
 # It lands inside a single-quoted env assignment on the remote command line.
 if ($DockerRegistryMirrors -match "['`"\s]" -and $DockerRegistryMirrors -notmatch '^[A-Za-z0-9.:/,_ -]+$') { throw "-DockerRegistryMirrors must be mirror URLs separated by commas or spaces, or 'none'." }
 
@@ -3137,7 +3143,7 @@ if ($VmTokenB64) {
     $tokenExport  = "export CONSTRUCT_VM_TOKEN_B64=`"`$(cat '$vmTokenRemotePath')`"; "
     $tokenCleanup = "; __rc=`$?; rm -f '$vmTokenRemotePath'; exit `$__rc"
 }
-$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' GIT_CLONE_SKIP_HOSTS_B64='$cloneSkipHostsB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit' CONSTRUCT_VERSION='$constructVersion' SMB_SHARE='$SmbShare' CLAUDE_PARTIAL_STREAMING='$ClaudePartialStreaming' MIC_PASSTHROUGH='$MicPassthrough' OPENCODE_BACKGROUND_WATCHER='$OpenCodeBackgroundWatcher' T3CODE='$T3Code' T3CODE_CHANNEL='$T3CodeChannel' T3CODE_BUILD_SOURCE='$T3CodeBuildSource' T3CODE_PATCHED='$T3CodePatched' T3CODE_AUTO_APPROVE='$T3CodeAutoApprove' T3CODE_HTTPS='$T3CodeHttps' DOCKER_REGISTRY_MIRRORS='$DockerRegistryMirrors'" + $externalEnv + $serviceEnv + " T3CODE_BUILD_MODE='server'"
+$envPrefix = "env AI_TOOLS='$AiTools' PROJECTS='$Projects' SSH_USER='$SeedUser' AGENT_NAME='$agentNameArg' CLAUDE_USER='$RemoteUser' GIT_USER_NAME_B64='$gitNameB64' GIT_USER_EMAIL_B64='$gitEmailB64' GIT_CREDENTIAL_STORE='$gitCredStore' GIT_CLONE_CREDENTIALS_B64='$cloneCredB64' GIT_CLONE_SKIP_HOSTS_B64='$cloneSkipHostsB64' CHECKOUT_PROJECTS='$checkoutArg' SETUP_ROOT_SSH_KEY='$setupRootKeyArg' VSCODE_SERVER='$VsCodeServer' VSCODE_SERVE_WEB='$VsCodeServeWeb' VSCODE_TUNNEL='$VsCodeTunnel' VSCODE_SERVE_WEB_TOKEN_B64='$serveWebTokenB64' VSCODE_CLIENT_COMMIT='$vsCodeCommit' CONSTRUCT_VERSION='$constructVersion' SMB_SHARE='$SmbShare' CLAUDE_PARTIAL_STREAMING='$ClaudePartialStreaming' MIC_PASSTHROUGH='$MicPassthrough' OPENCODE_BACKGROUND_WATCHER='$OpenCodeBackgroundWatcher' SWAP_SIZE_GB='$SwapSizeGB' T3CODE='$T3Code' T3CODE_CHANNEL='$T3CodeChannel' T3CODE_BUILD_SOURCE='$T3CodeBuildSource' T3CODE_PATCHED='$T3CodePatched' T3CODE_AUTO_APPROVE='$T3CodeAutoApprove' T3CODE_HTTPS='$T3CodeHttps' DOCKER_REGISTRY_MIRRORS='$DockerRegistryMirrors'" + $externalEnv + $serviceEnv + " T3CODE_BUILD_MODE='server'"
 # A reinstall that restores a saved config runs the project CHECKOUT and the project
 # provisioning commands only after the restore (see below): the checkout needs the VM's
 # restored credential store and git config (a credential this PC could not verify, a

@@ -108,4 +108,15 @@ public sealed class StateStoreTests
         probe["probeError"] = true; var other = new InstanceStateStore(fs, "other", "/scripts"); Assert.Null(other.BackfillFromProbe(probe)); Assert.False(fs.FileExists(other.StatePath!));
         probe["online"] = false; Assert.Null(store.BackfillFromProbe(probe));
     }
+    [Fact]
+    public void BackfillRecordsOnlyAValidSwapSize()
+    {
+        var fs = Files(); var store = new InstanceStateStore(fs, "dev", "/scripts");
+        var probe = new JsonObject { ["online"] = true, ["vmConfig"] = new JsonObject { ["swapSizeGb"] = "200" } };
+        Assert.Null(store.BackfillFromProbe(probe));
+        probe["vmConfig"] = new JsonObject { ["swapSizeGb"] = "4" };
+        Assert.Equal("4", store.BackfillFromProbe(probe)!["swapSizeGb"]!.GetValue<string>());
+        Assert.Equal("4", store.ReadSettings()["swapSizeGb"]!.GetValue<string>());
+        probe["vmConfig"] = new JsonObject { ["swapSizeGb"] = "8" }; Assert.Null(store.BackfillFromProbe(probe));
+    }
 }

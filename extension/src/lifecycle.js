@@ -553,6 +553,8 @@ function buildInvocation(action, opts = {}) {
       if (opts.supportsT3CodeChannel !== false) pushPair("-T3CodeChannel", s.t3codeChannel);
       if (opts.supportsT3CodePatched !== false) pushBool("-T3CodePatched", s.t3codePatched);
       if (opts.supportsT3CodeAutoApprove !== false) pushBool("-T3CodeAutoApprove", s.t3codeAutoApprove);
+      // The swap file size; absent = the VM keeps its saved size (auto by default).
+      if (opts.supportsSwapSizeGB !== false) pushPair("-SwapSizeGB", s.swapSizeGb);
       // Launched from the panel: don't prompt for the SMB drive letter etc. (still pauses
       // at the end so output is readable — -NonInteractive is NOT -Auto).
       addSwitch("-NonInteractive");
@@ -636,6 +638,7 @@ function buildInvocation(action, opts = {}) {
       if (opts.supportsT3CodeChannel !== false) pushPair("-T3CodeChannel", s.t3codeChannel);
       if (opts.supportsT3CodePatched !== false) pushBool("-T3CodePatched", s.t3codePatched);
       if (opts.supportsT3CodeAutoApprove !== false) pushBool("-T3CodeAutoApprove", s.t3codeAutoApprove);
+      if (opts.supportsSwapSizeGB !== false) pushPair("-SwapSizeGB", s.swapSizeGb);
       // How much chat history the pre-delete config save keeps (Auto-Install forwards it
       // to the export). Capability-gated like the flags above.
       if (opts.supportsHistoryRetentionDays !== false) pushPair("-HistoryRetentionDays", s.historyRetentionDays);
@@ -1245,6 +1248,7 @@ function run(action, opts = {}) {
     supportsT3CodeAutoApprove: scriptSupportsT3CodeAutoApprove(scriptsDir, action),
     supportsOpenCodeBackgroundWatcher: scriptSupportsOpenCodeBackgroundWatcher(scriptsDir, action),
     supportsHistoryRetentionDays: scriptSupportsHistoryRetentionDays(scriptsDir, action),
+    supportsSwapSizeGB: scriptSupportsParam(scriptsDir, scriptForAction(action), "SwapSizeGB"),
     backupFile: opts.backupFile,
     backupId: opts.backupId,
     backupKeyFile: opts.backupKeyFile,

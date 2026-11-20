@@ -497,7 +497,7 @@ try {
 Write-Host ""
 Write-Host "=== Remote provisioning arguments ===" -ForegroundColor Cyan
 $SkipCompanion = $false
-$ClaudePartialStreaming = "on"; $MicPassthrough = "off"; $OpenCodeBackgroundWatcher = "on"
+$ClaudePartialStreaming = "on"; $MicPassthrough = "off"; $OpenCodeBackgroundWatcher = "on"; $SwapSizeGB = "12"
 $T3Code = "on"; $T3CodeChannel = "stable"; $T3CodePatched = "off"; $T3CodeAutoApprove = "off"
 $AutoResolve = $false; $Repo = "owner/repo"; $Ref = "main"
 $script:RemoteBound  = @{}
@@ -505,7 +505,7 @@ $script:RemoteBound  = @{}
 $fullParams = @{}
 foreach ($p in @('VmHost','SshPort','HostAlias','LocalKeyName','ConfigBranch','ServiceUrl','InstanceName','VmTokenB64',
                  'Projects','GitUserName','GitEmail','GitCloneCredentialsB64','AgentPassword','RestoreDir','AutoResolve',
-                 'Auto','Repo','Ref','ClaudePartialStreaming','MicPassthrough','OpenCodeBackgroundWatcher',
+                 'Auto','Repo','Ref','ClaudePartialStreaming','MicPassthrough','OpenCodeBackgroundWatcher','SwapSizeGB',
                  'T3Code','T3CodeChannel','T3CodePatched','T3CodeAutoApprove','PublicHost')) { $fullParams[$p] = $true }
 $script:RemoteProvCmd = [pscustomobject]@{ Parameters = $fullParams }
 
@@ -517,6 +517,7 @@ ok "args: -SshPort is the ALLOCATED forward" ($args1['SshPort'] -eq 2201)
 ok "args: -HostAlias is the instance name (its own ssh_config block)" ($args1['HostAlias'] -eq 'work-vm')
 ok "args: -LocalKeyName is instance-scoped (never overwrites the default VM's key)" ($args1['LocalKeyName'] -eq 'construct_work-vm_ed25519')
 ok "args: -ConfigBranch is this VM's own ref" ($args1['ConfigBranch'] -eq 'vm-work-vm')
+ok "args: -SwapSizeGB reaches the guest" ($args1['SwapSizeGB'] -eq '12')
 $argsConv = New-ConstructRemoteProvisionArgs -Name 'agent-vm' -Endpoint $ep -ServiceUrl 'https://b:7462' `
                -KeyName 'agent_vm_ed25519' -ConfigBranch 'vm'
 ok "args: -LocalKeyName is the key the entry names, not one derived from the name" (
@@ -545,10 +546,10 @@ ok "args: the RAW token appears in no argument value" `
 # them -- an unknown parameter is a BINDING failure, and by then a rebuild has already
 # deleted the VM.
 $oldParams = @{}
-foreach ($p in $fullParams.Keys) { if ($p -notin @('T3CodeChannel', 'T3CodePatched', 'OpenCodeBackgroundWatcher')) { $oldParams[$p] = $true } }
+foreach ($p in $fullParams.Keys) { if ($p -notin @('T3CodeChannel', 'T3CodePatched', 'OpenCodeBackgroundWatcher', 'SwapSizeGB')) { $oldParams[$p] = $true } }
 $script:RemoteProvCmd = [pscustomobject]@{ Parameters = $oldParams }
 $args4 = New-ConstructRemoteProvisionArgs -Name 'work-vm' -Endpoint $ep -ServiceUrl 'https://b:7462' -KeyName 'construct_work-vm_ed25519' -ConfigBranch 'vm-work-vm'
-foreach ($p in @('T3CodeChannel', 'T3CodePatched', 'OpenCodeBackgroundWatcher')) {
+foreach ($p in @('T3CodeChannel', 'T3CodePatched', 'OpenCodeBackgroundWatcher', 'SwapSizeGB')) {
     ok "args: -$p is dropped when the installed provisioner does not declare it" (-not $args4.ContainsKey($p))
 }
 ok "args: ...while the identity arguments are still there (they are non-negotiable)" `

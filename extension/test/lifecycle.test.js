@@ -116,6 +116,12 @@ ok("reprovision: drops the OpenCode watcher flag for old scripts",
   !life.buildInvocation("reprovision", { settings: { opencodeBackgroundWatcher: true }, supportsOpenCodeBackgroundWatcher: false }).args.includes("-OpenCodeBackgroundWatcher"));
 ok("rebuild: keeps the OpenCode watcher flag when supported",
   has(life.buildInvocation("reinstall", { settings: { opencodeBackgroundWatcher: true }, supportsOpenCodeBackgroundWatcher: true }).args, "-OpenCodeBackgroundWatcher", "true"));
+ok("reprovision: passes the saved swap file size", has(life.buildInvocation("reprovision", { settings: { swapSizeGb: "0" } }).args, "-SwapSizeGB", "0"));
+ok("rebuild: passes the saved swap file size", has(life.buildInvocation("redownload", { settings: { swapSizeGb: "auto" } }).args, "-SwapSizeGB", "auto"));
+ok("reprovision: no saved swap size -> no -SwapSizeGB (the VM keeps its own)", !reproEmpty.args.includes("-SwapSizeGB"));
+ok("reprovision/rebuild: drop -SwapSizeGB for old scripts",
+  !life.buildInvocation("reprovision", { settings: { swapSizeGb: "16" }, supportsSwapSizeGB: false }).args.includes("-SwapSizeGB") &&
+  !life.buildInvocation("reinstall", { settings: { swapSizeGb: "16" }, supportsSwapSizeGB: false }).args.includes("-SwapSizeGB"));
 
 ok("export: passes -HistoryRetentionDays from the saved setting",
   has(life.buildInvocation("exportConfig", { backupDir: "C:/b", settings: { historyRetentionDays: "0" } }).args, "-HistoryRetentionDays", "0"));

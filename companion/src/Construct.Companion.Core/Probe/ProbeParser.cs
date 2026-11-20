@@ -44,6 +44,7 @@ public static class ProbeParser
             var s = StateJson.Trim(ConfigUnquote(map.GetValueOrDefault(key))).ToLowerInvariant(); if (s is "true" or "false") result[field] = s == "true";
         }
         var ch = StateJson.Trim(ConfigUnquote(map.GetValueOrDefault("T3CODE_CHANNEL"))); if (ch is "stable" or "nightly") result["t3codeChannel"] = ch;
+        if (SettingsMapping.SwapSize(JsonValue.Create(ConfigUnquote(map.GetValueOrDefault("SWAP_SIZE_GB")))) is { } swap) result["swapSizeGb"] = swap;
         return result.Count == 0 ? null : result;
     }
     public static JsonObject ToState(IReadOnlyDictionary<string, string> map, string? host = null)

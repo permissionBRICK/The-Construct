@@ -102,7 +102,7 @@ try {
         $script:SkipCreateVm=$false; $script:Action=''; $script:FromPanel=$false
         $script:Auto=$false; $script:NonInteractive=$false; $script:FeatureSetResolved=$false
         $script:FeatureSet=''; $script:InputRedirected=$false
-        $script:VmName='Agent-VM'; $script:InstanceName=''; $script:SkipCompanion=[switch]$false
+        $script:VmName='Agent-VM'; $script:InstanceName=''; $script:SkipCompanion=[switch]$false; $script:SwapSizeGB=''
         $script:PriorKey=$false; $script:PriorVm=$false
         $script:Menus=0; $script:Questions=@(); $script:Screens=0; $script:Pick=0
     }
@@ -194,6 +194,23 @@ try {
         try { Resolve-ConstructFeatureSet @bad | Out-Null } catch { $threw=$true }
         Assert $threw "Invalid $inputKind boolean remains an error"
     }
+    # The swap file size rides the same replay: an explicit one is saved for the VM, a
+    # saved one fills an unbound -SwapSizeGB, and a junk saved value is no preference.
+    Reset-Scenario
+    $script:SwapSizeGB='AUTO'
+    Restore-ConstructInstallFeatures -Name 'swap-vm'
+    Assert ((Read-ConstructInstanceState -Name 'swap-vm' -Dir $dir).swapSizeGb -eq 'auto') 'Explicit swap size is saved for the VM, lowercase'
+    Save-ConstructInstanceState -Name 'swap-vm' -Dir $dir -Values @{swapSizeGb='012'}
+    Reset-Scenario
+    Restore-ConstructInstallFeatures -Name 'swap-vm'
+    Assert ($SwapSizeGB -eq '12') 'Saved swap size fills an unbound -SwapSizeGB'
+    Reset-Scenario
+    Save-ConstructInstanceState -Name 'swap-vm' -Dir $dir -Values @{swapSizeGb='500'}
+    Restore-ConstructInstallFeatures -Name 'swap-vm'
+    Assert ($SwapSizeGB -eq '') 'Saved junk swap size is ignored'
+    $script:SwapSizeGB='0'
+    $swapRemote=New-ConstructRemoteProvisionArgs -Name 'work-vm' -Endpoint @{SshHost='example';SshPort=2222} -ServiceUrl 'https://example:7462' -KeyName 'construct_work-vm_ed25519' -ConfigBranch 'vm-work-vm'
+    Assert ($swapRemote['SwapSizeGB'] -eq '0') 'Remote provisioning forwards the swap size'
     # Simulate a partial checkout without the optional instance-state library.
     & {
         function Get-Command {

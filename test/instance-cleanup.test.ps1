@@ -297,7 +297,7 @@ try {
         installedCommit = 'a' * 40; constructRepo = 'permissionBRICK/The-Construct'; constructRef = 'main'
         gitUserName = 'alice'; gitEmail = 'alice@example.com'; gitCredentialStore = $true
         provisionedCommit = 'b' * 40
-        micPassthrough = $true; claudePartialStreaming = $true; opencodeBackgroundWatcher = $true
+        micPassthrough = $true; claudePartialStreaming = $true; opencodeBackgroundWatcher = $true; swapSizeGb = '16'
         t3code = $true; t3codeChannel = 'nightly'; t3codePatched = $true
         vsCodeServeWeb = $true; vsCodeTunnel = $false; smbShare = $true
         vmMemoryGB = '16'; vmDiskGB = '120'; ubuntuRelease = '24.04'
