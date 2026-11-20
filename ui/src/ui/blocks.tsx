@@ -164,6 +164,29 @@ export function JobBlock({ job, vm }: { job: Job; vm: Vm }) {
     for what it asks (Enter sends, also empty; the arrow keys move a list it shows), Cancel. While the sign-in goes on
     in the browser (this device forwards its redirect), one line and Cancel; the terminal stays behind Terminal. */
 export function SignInBlock({ si }: { si: SignIn }) {
+  if (si.state === 'key') return <OpenRouterKey si={si} />;
+  return <SignInTerminal si={si} />;
+}
+
+/** OpenCode's sign-in starts with an OpenRouter API key (11.8); OpenCode's own list of providers stays one click away.
+    The key leaves the field when it is sent. */
+function OpenRouterKey({ si }: { si: SignIn }) {
+  const { be } = useApp();
+  const [key, setKey] = useState('');
+  const go = () => { const k = key.trim(); setKey(''); if (k) be.signInWithKey(si.vmId, k); };
+  return (
+    <div class="blk signin" role="group" aria-label="Sign in to OpenCode">
+      <div class="bh"><Icon n="key" /><b>OpenCode</b><Btn sm onClick={() => be.closeSignIn()}>Cancel</Btn></div>
+      <Field type="password" value={key} onInput={setKey} label="OpenRouter API key" placeholder="OpenRouter API key" mono wide onEnter={go} />
+      <div class="two">
+        <Btn onClick={() => be.signIn(si.vmId, 'opencode', 'list')}>Other providers</Btn>
+        <Btn kind="pri" disabled={!key.trim()} onClick={go}>Sign in</Btn>
+      </div>
+    </div>
+  );
+}
+
+function SignInTerminal({ si }: { si: SignIn }) {
   const { be } = useApp();
   const [text, setText] = useState('');
   const term = useRef<HTMLPreElement>(null);

@@ -133,6 +133,13 @@ test('first run, a VM, a reprovision and a second device on the real API', async
   await expect(step.locator('.r', { hasText: 'Claude Code' })).toContainText('Signed in');
   const agents = (await (await admin.get('/api/v1/vms/alpha/agents')).json()) as { agents: { tool: string; signedIn: boolean | null }[] };
   expect(agents.agents.find(x => x.tool === 'claude')?.signedIn).toBe(true);
+  // OpenCode with an OpenRouter key: one field, the key goes to OpenCode's prompt and shows nowhere.
+  await step.locator('.r', { hasText: 'OpenCode' }).getByRole('button', { name: 'Sign in' }).click();
+  const oc = pa.getByRole('group', { name: 'Sign in to OpenCode' });
+  await oc.getByLabel('OpenRouter API key').fill('sk-or-v1-e2e-not-a-key');
+  await oc.getByRole('button', { name: 'Sign in' }).click();
+  await expect(step.locator('.r', { hasText: 'OpenCode' })).toContainText('Signed in');
+  await expect(pa.locator('body')).not.toContainText('sk-or-v1-e2e-not-a-key');
   // Codex is left for later: its sign-in is cancelled.
   await step.locator('.r', { hasText: 'Codex' }).getByRole('button', { name: 'Sign in' }).click();
   await expect(pa.getByRole('group', { name: 'Sign in to Codex' })).toContainText('https://sign-in.example/codex');

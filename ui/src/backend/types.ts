@@ -34,12 +34,13 @@ export interface VmSettings {
 export interface Agent { id: string; name: string; version: string; latest: string; installed: boolean; newer?: boolean; signedIn?: boolean | null }
 
 /** A coding agent's own sign-in on a VM, one at a time: what its terminal shows, as its CLI wrote it (S34).
-    starting: asked for; running: the CLI shows or waits; failed: it ended without signing in (its text says why);
-    stopped: it took too long or was ended. One that signed in is gone, and the agent shows as signed in. */
+    key: OpenCode asks for an OpenRouter API key first, nothing runs yet; starting: asked for; running: the CLI shows
+    or waits; failed: it ended without signing in (its text says why); stopped: it took too long or was ended. One
+    that signed in is gone, and the agent shows as signed in. */
 export interface SignIn {
   vmId: string;
   agent: AgentId;
-  state: 'starting' | 'running' | 'failed' | 'stopped';
+  state: 'key' | 'starting' | 'running' | 'failed' | 'stopped';
   text: string;
   /** The sign-in continues in the browser: this device forwards its redirect to the VM (11.8, "No pasted code"). The
       CLI's text and the reply field stay reachable for the fallback. */
@@ -449,8 +450,11 @@ export interface Backend {
   saveSettings(vmId: string, patch: SettingsPatch, when?: 'now' | 'later'): void;
   updateAgents(vmId: string): void;
   /** Starts a coding agent's own sign-in on the VM; one that runs ends. Where this device can, the sign-in returns
-      from the browser without a pasted code. */
-  signIn(vmId: string, agent: AgentId): void;
+      from the browser without a pasted code. OpenCode first asks for an OpenRouter API key (`signInWithKey`);
+      `list` starts OpenCode's own list of providers instead. */
+  signIn(vmId: string, agent: AgentId, how?: 'list'): void;
+  /** OpenCode's sign-in with an OpenRouter API key: the key goes to OpenCode's prompt as a secret and is kept nowhere. */
+  signInWithKey(vmId: string, key: string): void;
   /** Types into the running sign-in's terminal. */
   signInInput(input: SignInInput): void;
   /** Ends the running sign-in, or puts away one that failed. */

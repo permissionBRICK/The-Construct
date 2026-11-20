@@ -31,6 +31,7 @@ const SHOTS: [Surf, string, string, string?][] = [
   ['win', 'sign-in', 'sign-in', 'settings/agents'],
   ['win', 'sign-in-failed', 'sign-in-failed', 'settings/agents'],
   ['win', 'sign-in-browser', 'sign-in-browser', 'settings/agents'],
+  ['win', 'sign-in-key', 'sign-in-key', 'settings/agents'],
   ['win', 'vault', 'calm', 'vault'],
   ['win', 'devices', 'calm', 'devices'],
   ['win', 'backups', 'calm', 'backups'],

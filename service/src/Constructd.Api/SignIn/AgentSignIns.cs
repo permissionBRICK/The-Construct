@@ -112,13 +112,14 @@ public sealed class AgentSignIns(IGuestSessionRunner guests, ISshRunner ssh, IPr
     public AgentSignInSession? Latest(string vm) => _byVm.TryGetValue(vm, out var session) ? session : null;
 
     /// <summary>Starts <paramref name="agent"/>'s sign-in on <paramref name="vm"/>, ending the VM's running one first.</summary>
-    public async Task<AgentSignInSession> StartAsync(Vm vm, string agent, CancellationToken ct) => await StartAsync(vm, agent, false, ct);
+    public async Task<AgentSignInSession> StartAsync(Vm vm, string agent, CancellationToken ct) => await StartAsync(vm, agent, false, null, ct);
 
     /// <summary>
     /// Starts <paramref name="agent"/>'s sign-in on <paramref name="vm"/>, ending the VM's running one first.
-    /// <paramref name="browser"/>: the client forwards a loopback redirect, so Codex uses its browser sign-in.
+    /// <paramref name="browser"/>: the client forwards a loopback redirect, so Codex uses its browser sign-in;
+    /// <paramref name="provider"/>: the provider OpenCode's sign-in goes straight to (<c>openrouter</c>).
     /// </summary>
-    public async Task<AgentSignInSession> StartAsync(Vm vm, string agent, bool browser, CancellationToken ct)
+    public async Task<AgentSignInSession> StartAsync(Vm vm, string agent, bool browser, string? provider, CancellationToken ct)
     {
         var target = await targets.ResolveAsync(vm, ct)
             ?? throw new AgentSignInRefusedException("vm-endpoint-unknown", "The VM has no SSH endpoint the engine can dial.");
@@ -134,7 +135,7 @@ public sealed class AgentSignIns(IGuestSessionRunner guests, ISshRunner ssh, IPr
             {
                 try
                 {
-                    session.Guest = guests.Start(target, AgentSignInScript.StartCommand(session.Id, agent, target.IsRoot, browser), line => OnLine(session, line));
+                    session.Guest = guests.Start(target, AgentSignInScript.StartCommand(session.Id, agent, target.IsRoot, browser, provider), line => OnLine(session, line));
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
@@ -154,8 +155,11 @@ public sealed class AgentSignIns(IGuestSessionRunner guests, ISshRunner ssh, IPr
         finally { _starting.Release(); }
     }
 
-    /// <summary>Types a line (or presses a key) in the session's terminal. False when the session is over.</summary>
-    public async Task<bool> InputAsync(AgentSignInSession session, string? text, string? key, CancellationToken ct)
+    /// <summary>
+    /// Types a line, a secret or a key in the session's terminal. False when the session is over. Nothing of it is kept
+    /// here: it goes to the VM's stdin and nowhere else.
+    /// </summary>
+    public async Task<bool> InputAsync(AgentSignInSession session, string? text, string? key, CancellationToken ct, string? secret = null)
     {
         IGuestSession? guest;
         lock (session.Gate)
@@ -165,7 +169,7 @@ public sealed class AgentSignIns(IGuestSessionRunner guests, ISshRunner ssh, IPr
         }
 
         if (guest is null) return false;
-        try { await guest.WriteLineAsync(AgentSignInScript.InputLine(text, key), ct); }
+        try { await guest.WriteLineAsync(AgentSignInScript.InputLine(text, key, secret), ct); }
         catch (IOException) { return false; }
         catch (ObjectDisposedException) { return false; }
         return true;

@@ -83,12 +83,23 @@ esac
 exit 2
 EOF
 
-# OpenCode 2: a list that redraws itself in place (cursor up, erase below) when an arrow key moves it.
+# OpenCode 2: a list that redraws itself in place (cursor up, erase below) when an arrow key moves it; OpenRouter's
+# key after a start in which the terminal still echoes, read with echo off (the real prompt shows a mask).
 cat >"${tmp}/bin/opencode" <<'EOF'
 #!/usr/bin/env bash
 case "$*" in
-  --version) echo "opencode v2.3.2"; exit 0 ;;
+  --version) echo "opencode ${FAKE_OC_VERSION:-v2.3.2}"; exit 0 ;;
   "auth list --standalone --format json") cat "${HOME}/oc-auth.json" 2>/dev/null || echo '[]'; exit 0 ;;
+  "auth login openrouter --standalone"|"auth login --provider openrouter")
+    echo "args $*" >>"${FAKE_LOG}"
+    sleep 1
+    printf '\xe2\x97\x86  Enter your OpenRouter API key\r\n'
+    IFS= read -rs key
+    printf 'key %s\n' "${key}" >>"${FAKE_LOG}"
+    # A CLI that echoes the key after all: the screen must not show it.
+    [[ -n "${FAKE_OC_ECHO:-}" ]] && printf 'Saved %s\r\n' "${key}"
+    echo '[{"id":"openrouter"}]' >"${HOME}/oc-auth.json"
+    printf '\xe2\x97\x87  Connected to OpenRouter\r\n'; exit 0 ;;
   "auth login --standalone")
     printf '\e[?25l\xe2\x97\x86  Select login method\r\n\xe2\x94\x82  \xe2\x97\x8f Sign in with ChatGPT\r\n\xe2\x94\x82  \xe2\x97\x8b API key\r\n\xe2\x94\x94\r\n'
     IFS= read -rsn3 key
@@ -171,6 +182,28 @@ session opencode opencode 1.5 '{"key":"down"}' '{"text":""}'
 screen="$(last_screen opencode)"
 ok "opencode: the redrawn list shows once, the choice moved" bash -c '[[ "$(grep -c "Sign in with ChatGPT" <<<"$1")" == 1 && "$1" == *"● API key"* && "$1" == *"○ Sign in with ChatGPT"* ]]' _ "${screen}"
 ok "opencode: ends done and signed in" jq_end opencode '.outcome == "done" and .signedIn == true and .version == "2.3.2"'
+
+# ── OpenCode with an OpenRouter key: typed only once the terminal no longer echoes, never shown ──
+rm -f "${HOME}/oc-auth.json"
+: >"${FAKE_LOG}"
+key='sk-or-v1-0000fake0000test'
+SIGN_IN_FLAGS='--provider openrouter' session openrouter opencode 2.5 "{\"secret\":\"${key}\"}"
+ok "openrouter: OpenCode 2 goes straight to OpenRouter" grep -qx 'args auth login openrouter --standalone' "${FAKE_LOG}"
+ok "openrouter: the key reached the prompt once it read with echo off" grep -qx "key ${key}" "${FAKE_LOG}"
+ok "openrouter: ends done and signed in" jq_end openrouter '.outcome == "done" and .signedIn == true'
+ok "openrouter: the key is on no screen" bash -c '! grep -q "$1" "$2"' _ "${key}" "${tmp}/openrouter.out"
+rm -f "${HOME}/oc-auth.json"
+FAKE_OC_ECHO=1 SIGN_IN_FLAGS='--provider openrouter' session openrouter-echo opencode 2.5 "{\"secret\":\"${key}\"}"
+ok "openrouter: a key the CLI echoes is blotted out" bash -c '! grep -q "$1" "$2" && [[ "$3" == *"Saved ••••"* ]]' _ "${key}" "${tmp}/openrouter-echo.out" "$(last_screen openrouter-echo)"
+: >"${FAKE_LOG}"
+rm -f "${HOME}/oc-auth.json"
+FAKE_OC_VERSION=1.19.6 SIGN_IN_FLAGS='--provider openrouter' session openrouter-v1 opencode 2.5 "{\"secret\":\"${key}\"}"
+ok "openrouter: OpenCode 1 takes --provider" grep -qx 'args auth login --provider openrouter' "${FAKE_LOG}"
+python3 "${SCRIPT}" --session p1 --provider openrouter codex </dev/null >/dev/null 2>&1
+ok "usage: a provider only for OpenCode" test "$?" = 2
+python3 "${SCRIPT}" --session p1 --provider anthropic opencode </dev/null >/dev/null 2>&1
+ok "usage: only OpenRouter" test "$?" = 2
+rm -f "${HOME}/oc-auth.json"
 
 # ── Antigravity: file storage, and the token shared with T3 Code's homes ──────
 other="${T3CODE_HOME}/userdata/providers/antigravity/0123abcd"

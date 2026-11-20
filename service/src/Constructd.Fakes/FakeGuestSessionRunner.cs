@@ -41,6 +41,24 @@ public sealed class FakeGuestSessionRunner : IGuestSessionRunner
     {
         var agent = SignInAgent(s);
         s.Emit(new { type = "start", agent });
+        // OpenCode straight to OpenRouter: its key prompt, masked; any key signs in.
+        if (s.Command.Contains(" --provider openrouter ", StringComparison.Ordinal))
+        {
+            var prompt = "┌  Connect an integration\n│\n◆  Enter your OpenRouter API key\n│  _\n└";
+            s.Emit(new { type = "screen", text = prompt });
+            if (await s.ReadLineAsync() is not { } key)
+            {
+                s.Emit(new { type = "end", outcome = "stopped", signedIn = false, text = "" });
+                return;
+            }
+
+            using var typed = JsonDocument.Parse(key);
+            var length = typed.RootElement.TryGetProperty("secret", out var secret) ? secret.GetString()!.Length : 0;
+            s.Emit(new { type = "screen", text = prompt.Replace("_", new string('▪', length), StringComparison.Ordinal) + "\n◇  Connected to OpenRouter" });
+            s.Emit(new { type = "end", outcome = "done", signedIn = true, version = "2.3.2", text = "" });
+            return;
+        }
+
         var screen = $"Sign in to {agent}:\n  https://sign-in.example/{agent}?state=fake\n\nPaste code here if prompted > ";
         s.Emit(new { type = "screen", text = screen });
         // As the real CLIs: Claude Code opens a link that returns to its own port; Codex does with --browser.

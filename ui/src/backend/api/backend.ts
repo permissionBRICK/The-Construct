@@ -1061,22 +1061,46 @@ export class ApiBackend implements Backend {
   private signInAt: SignInAt | null = null;
   private signInReads: Promise<void> = Promise.resolve();
 
-  /** One at a time: the engine ends a sign-in already running on the VM. This device forwards a sign-in's loopback
-      redirect, so the engine is told it may use a browser sign-in (`browser`); Codex's start without it is the
-      fallback when the forward fails. */
-  signIn(vmId: string, agent: AgentId, browser = true) {
+  /** One at a time: the engine ends a sign-in already running on the VM. OpenCode asks for an OpenRouter key first
+      (nothing runs on the VM until it is given); `list` is OpenCode's own list. */
+  signIn(vmId: string, agent: AgentId, how?: 'list') {
+    if (agent === 'opencode' && how !== 'list') {
+      if (this.signInAt) this.closeSignIn();
+      this.emit({ signIn: { vmId, agent, state: 'key', text: '' } });
+      return;
+    }
+    this.startSignIn(vmId, agent, { browser: true });
+  }
+
+  signInWithKey(vmId: string, key: string) {
+    if (key) this.startSignIn(vmId, 'opencode', { browser: true, provider: 'openrouter', secret: key });
+  }
+
+  /** This device forwards a sign-in's loopback redirect, so the engine is told it may use a browser sign-in
+      (`browser`); Codex's start without it is the fallback when the forward fails. A secret (OpenRouter's key) goes
+      to the sign-in once the engine named it, and is dropped then. */
+  private startSignIn(vmId: string, agent: AgentId, o: { browser: boolean; provider?: 'openrouter'; secret?: string }) {
     const ref = this.vmRef(vmId);
     if (!ref) return;
-    const at: SignInAt = { engine: ref.engine, vm: ref.name, vmId, agent, id: null, revision: -1, browser, forward: 'none' };
+    const at: SignInAt = { engine: ref.engine, vm: ref.name, vmId, agent, id: null, revision: -1, browser: o.browser, forward: 'none' };
     this.signInAt = at;
     this.emit({ signIn: { vmId, agent, state: 'starting', text: '' } });
+    let secret = o.secret;
     void (async () => {
       try {
-        const r = await ok(this.engine(at.engine).POST('/api/v1/vms/{name}/agents/{agent}/sign-in', { params: { path: { name: at.vm, agent } }, body: { browser } }));
+        const body = { browser: o.browser, ...(o.provider ? { provider: o.provider } : {}) };
+        const r = await ok(this.engine(at.engine).POST('/api/v1/vms/{name}/agents/{agent}/sign-in', { params: { path: { name: at.vm, agent } }, body }));
         // Put away before the engine answered: it ends there too (one another start replaced is over already).
         if (this.signInAt !== at && r.state === 'running') this.endSignIn(at, r.id);
+        if (secret && this.signInAt === at && r.state === 'running') {
+          const input = { secret, session: r.id };
+          secret = undefined;
+          void this.run(() => ok(this.engine(at.engine).POST('/api/v1/vms/{name}/agents/{agent}/sign-in/input', { params: { path: { name: at.vm, agent } }, body: input })));
+        }
+        secret = undefined;
         this.storeSignIn(at, r);
       } catch (e) {
+        secret = undefined;
         if (this.signInAt === at) this.emit({ signIn: { vmId, agent, state: 'failed', text: errText(e) } });
       }
     })();
@@ -1138,7 +1162,7 @@ export class ApiBackend implements Backend {
     } catch {
       if (this.signInAt !== at) return;
       at.forward = 'failed';
-      if (at.agent === 'codex' && at.browser) this.signIn(at.vmId, at.agent, false);
+      if (at.agent === 'codex' && at.browser) this.startSignIn(at.vmId, at.agent, { browser: false });
     }
   }
 

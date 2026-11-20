@@ -2977,7 +2977,7 @@
         "tags": [
           "AgentSignInEndpoints"
         ],
-        "description": "Starts the agent's own sign-in on the VM in a terminal (claude-code, codex, opencode, antigravity); a sign-in running on the VM ends. 409: `vm-endpoint-unknown`, `sign-in-not-started` (the connection to the VM failed).",
+        "description": "Starts the agent's own sign-in on the VM in a terminal (claude-code, codex, opencode, antigravity); a sign-in running on the VM ends. `browser`: this client forwards a loopback redirect; `provider: openrouter`: OpenCode asks for an OpenRouter API key. 409: `vm-endpoint-unknown`, `sign-in-not-started` (the connection to the VM failed).",
         "operationId": "StartAgentSignIn",
         "parameters": [
           {
@@ -3136,7 +3136,7 @@
         "tags": [
           "AgentSignInEndpoints"
         ],
-        "description": "Types into the sign-in named by `session`. 409 `sign-in-ended` when it is over or a newer one took its place.",
+        "description": "Types into the sign-in named by `session`: `text` and Enter, a `key`, or a `secret` (an API key, typed once the CLI no longer echoes and never shown). 409 `sign-in-ended` when it is over or a newer one took its place.",
         "operationId": "AgentSignInInput",
         "parameters": [
           {
@@ -8719,6 +8719,12 @@
               "null",
               "string"
             ]
+          },
+          "secret": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -8794,6 +8800,12 @@
             "type": [
               "null",
               "boolean"
+            ]
+          },
+          "provider": {
+            "type": [
+              "null",
+              "string"
             ]
           }
         }

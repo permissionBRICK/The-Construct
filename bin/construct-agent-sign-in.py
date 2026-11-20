@@ -5,7 +5,7 @@ The Construct engine starts it over SSH, as root, when the user clicks Sign in o
 agents. It runs that agent's sign-in command under a pseudo-terminal and reports what the terminal
 shows as JSON lines on stdout; each line on stdin is input from the user, which goes to the terminal.
 
-  python3 /opt/construct/repo/bin/construct-agent-sign-in.py --session ID [--browser] AGENT
+  python3 /opt/construct/repo/bin/construct-agent-sign-in.py --session ID [--browser] [--provider openrouter] AGENT
   python3 /opt/construct/repo/bin/construct-agent-sign-in.py --stop --session ID
   python3 /opt/construct/repo/bin/construct-agent-sign-in.py --status
 
@@ -15,6 +15,8 @@ AGENT is claude-code, codex, opencode or antigravity. The sign-in commands:
   codex         codex login --device-auth    a link and a one-time code to enter there
                 codex login (--browser)      a link whose sign-in returns to the CLI on 127.0.0.1:1455
   opencode      opencode auth login          OpenCode's own list of integrations, then its sign-in
+                opencode auth login openrouter (--provider openrouter; OpenCode 1: --provider openrouter)
+                                             OpenRouter's API key, sent as a secret (below)
   antigravity   agy acp --login              a link, then the authorization code to paste
 
 Each runs with BROWSER set to bin/construct-sign-in-browser.sh, so the link a CLI would open in a
@@ -34,6 +36,9 @@ serves both.
 stdin, one JSON object per line:
   {"text": "..."}          typed into the terminal, then Enter (empty: Enter alone)
   {"key": "up" | "down"}   an arrow key, for a list the sign-in shows
+  {"secret": "..."}        an API key: typed, then Enter, only once the terminal no longer echoes (the
+                           CLI's prompt has turned echo off to read it), so it never shows; it is also
+                           blotted out of the screen, and kept nowhere but in this process until it ends
 End of stdin ends the session: the sign-in and everything it started are stopped.
 
 stdout, one JSON object per line:
@@ -275,15 +280,18 @@ def opencode_v2():
     return not match or not match.group(0).startswith("1.")
 
 
-def sign_in_command(agent, browser=False):
-    """The agent's own sign-in: argv and extra environment. browser: the client forwards a loopback redirect."""
+def sign_in_command(agent, browser=False, provider=None):
+    """The agent's own sign-in: argv and extra environment. browser: the client forwards a loopback redirect;
+    provider: OpenCode's sign-in goes straight to that provider (openrouter: its API key)."""
     if agent == "claude-code":
         return ["claude", "auth", "login"], {}
     if agent == "codex":
         return ["codex", "login"] + ([] if browser else ["--device-auth"]), {}
     if agent == "opencode":
-        # OpenCode 2 would otherwise start its per-user background service for this.
-        return ["opencode", "auth", "login"] + (["--standalone"] if opencode_v2() else []), {}
+        if opencode_v2():
+            # OpenCode 2 would otherwise start its per-user background service for this.
+            return ["opencode", "auth", "login"] + ([provider] if provider else []) + ["--standalone"], {}
+        return ["opencode", "auth", "login"] + (["--provider", provider] if provider else []), {}
     # The terminal's sign-in; file storage, since a VM has no keyring (the CLI reads the file then).
     return ["agy", "acp", "--login"], {"AGY_ACP_FORCE_FILE_STORAGE": "1"}
 
@@ -574,7 +582,8 @@ class Input:
 
 
 def keystrokes(raw):
-    """What one input line types: its text and Enter, or one key. None for a line that is neither."""
+    """What one input line types: (its text and Enter, or one key; whether it is a secret). None for a line that
+    is neither."""
     try:
         line = json.loads(raw.decode("utf-8", "replace"))
     except ValueError:
@@ -582,21 +591,42 @@ def keystrokes(raw):
     if not isinstance(line, dict):
         return None
     if isinstance(line.get("key"), str):
-        return KEYS.get(line["key"])
-    text = line.get("text")
+        key = KEYS.get(line["key"])
+        return (key, False) if key else None
+    secret = isinstance(line.get("secret"), str)
+    text = line.get("secret") if secret else line.get("text")
     if not isinstance(text, str) or len(text) > 16384:
         return None
     # Typed text only: no control characters that would steer the terminal.
     text = "".join(ch for ch in text if ch >= " " and ch != "\x7f")
-    return text.encode("utf-8") + b"\r"
+    if secret and not text:
+        return None
+    return text.encode("utf-8") + b"\r", secret
 
 
-def run(agent, session, browser=False):
+def echoing(fd):
+    """Whether the terminal echoes what is typed: no prompt has turned echo off to read a key (on the master side,
+    Linux answers with the CLI's side of the terminal). Unknown: True."""
+    try:
+        return bool(termios.tcgetattr(fd)[3] & termios.ECHO)
+    except termios.error:
+        return True
+
+
+def blot(text, secrets):
+    """The screen without any secret typed into it."""
+    for secret in secrets:
+        if len(secret) >= 4:
+            text = text.replace(secret, "\u2022" * 8)
+    return text
+
+
+def run(agent, session, browser=False, provider=None):
     command, tool = AGENTS[agent]
     if not shutil.which(command):
         emit({"type": "end", "outcome": "failed", "text": f"{command} is not installed on this VM."})
         return 127
-    argv, extra = sign_in_command(agent, browser)
+    argv, extra = sign_in_command(agent, browser, provider)
 
     os.makedirs(RUN_DIR, mode=0o700, exist_ok=True)
     stop_others(session)
@@ -631,6 +661,9 @@ def run(agent, session, browser=False):
     decoder = codecs.getincrementaldecoder("utf-8")("replace")
     stdin = Input()
     pending = bytearray()
+    # Secrets wait here until the terminal stops echoing; typed ones stay only to be blotted out of the screen.
+    secrets_waiting = []
+    secrets = []
     deadline = time.monotonic() + TIMEOUT
     last_out = last_emit = 0.0
     shown = ""
@@ -639,7 +672,7 @@ def run(agent, session, browser=False):
 
     def show(force=False):
         nonlocal shown, last_emit
-        text = term.text()
+        text = blot(term.text(), secrets)
         if text != shown or force:
             shown = text
             emit({"type": "screen", "text": text})
@@ -680,17 +713,23 @@ def run(agent, session, browser=False):
                     pending.clear()
             if 0 in ready:
                 for raw in stdin.lines():
-                    keys = keystrokes(raw)
-                    if keys and len(pending) + len(keys) <= MAX_PENDING:
-                        pending += keys
+                    typed = keystrokes(raw)
+                    if typed and typed[1]:
+                        secrets_waiting.append(typed[0])
+                    elif typed and len(pending) + len(typed[0]) <= MAX_PENDING:
+                        pending += typed[0]
                 if stdin.closed:
                     outcome = outcome or "stopped"
                     stop_group(pid)
+            if secrets_waiting and not pending and not echoing(fd):
+                secret = secrets_waiting.pop(0)
+                secrets.append(secret[:-1].decode("utf-8"))
+                pending += secret
             for event in links.events():
                 emit(event)
             now = time.monotonic()
             # Shown when the output pauses, and at least twice a second while it streams.
-            if term.text() != shown and (now - last_out >= 0.1 or now - last_emit >= 0.5):
+            if blot(term.text(), secrets) != shown and (now - last_out >= 0.1 or now - last_emit >= 0.5):
                 show()
             # Over when the sign-in exited, even if something it started still holds the terminal.
             if not ready and reap(pid) is not None:
@@ -734,13 +773,17 @@ def run(agent, session, browser=False):
     return 0 if outcome == "done" else 3
 
 
+PROVIDERS = {"opencode": ("openrouter",)}
+
+
 def usage():
-    print("Usage: construct-agent-sign-in.py --session ID [--browser] AGENT | --stop --session ID | --status", file=sys.stderr)
+    print("Usage: construct-agent-sign-in.py --session ID [--browser] [--provider openrouter] AGENT | --stop --session ID | --status",
+          file=sys.stderr)
     return 2
 
 
 def main(args):
-    session = agent = None
+    session = agent = provider = None
     stop = browser = False
     i = 0
     while i < len(args):
@@ -749,6 +792,10 @@ def main(args):
             return status()
         if a == "--session" and i + 1 < len(args):
             session = args[i + 1]
+            i += 2
+            continue
+        if a == "--provider" and i + 1 < len(args):
+            provider = args[i + 1]
             i += 2
             continue
         if a == "--stop":
@@ -765,12 +812,12 @@ def main(args):
     if stop:
         stop_session(session)
         return 0
-    if agent is None:
+    if agent is None or (provider is not None and provider not in PROVIDERS.get(agent, ())):
         return usage()
     # Ended by a signal: the sign-in goes too.
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     signal.signal(signal.SIGHUP, lambda *_: sys.exit(129))
-    return run(agent, session, browser)
+    return run(agent, session, browser, provider)
 
 
 if __name__ == "__main__":

@@ -1756,6 +1756,30 @@ describe('ApiBackend sign-in without a pasted code', () => {
   });
 });
 
+describe('ApiBackend OpenCode with an OpenRouter key', () => {
+  const P = `/api/engines/${E1}/api/v1`;
+  it('asks for the key first, starts OpenRouter\'s sign-in, sends the key once as a secret; its own list is the other way', async () => {
+    const { be, calls, on, settle } = world();
+    await be.start();
+    be.signIn('atlas', 'opencode');
+    expect(be.snapshot().signIn).toEqual({ vmId: 'atlas', agent: 'opencode', state: 'key', text: '' });
+    expect(calls.filter(c => c.path.includes('/sign-in'))).toEqual([]);
+
+    const session = (o: Record<string, unknown> = {}) => ({ id: 'oc1', agent: 'opencode', state: 'running', outcome: null, text: '', revision: 1, signedIn: null, started: '', ended: null, ...o });
+    on('POST', `${P}/vms/atlas/agents/opencode/sign-in`, { status: 202, json: session() });
+    on('POST', `${P}/vms/atlas/agents/opencode/sign-in/input`, { status: 204 });
+    be.signInWithKey('atlas', 'sk-or-v1-test');
+    await settle();
+    expect(posts(calls).filter(c => c.path.endsWith('/opencode/sign-in')).map(c => c.body)).toEqual([{ browser: true, provider: 'openrouter' }]);
+    expect(posts(calls).filter(c => c.path.endsWith('/input')).map(c => c.body)).toEqual([{ secret: 'sk-or-v1-test', session: 'oc1' }]);
+    expect(JSON.stringify(be.snapshot())).not.toContain('sk-or-v1-test');
+
+    be.signIn('atlas', 'opencode', 'list');
+    await settle();
+    expect(posts(calls).filter(c => c.path.endsWith('/opencode/sign-in')).map(c => c.body).at(-1)).toEqual({ browser: true });
+  });
+});
+
 describe('ApiBackend agent sign-in output before the start\'s answer', () => {
   it('follows output that comes before the engine named the session', async () => {
     const P = `/api/engines/${E1}/api/v1`;

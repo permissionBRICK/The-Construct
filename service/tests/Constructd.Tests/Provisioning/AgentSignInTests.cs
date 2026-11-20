@@ -160,6 +160,38 @@ public sealed class AgentSignInTests
     }
 
     [Fact]
+    public async Task OpenCode_signs_in_with_an_openrouter_key_that_is_typed_as_a_secret_and_never_kept()
+    {
+        await using var h = await ProvisionHarness.StartAsync();
+        Assert.Equal(HttpStatusCode.BadRequest, (await h.Client.PostAsJsonAsync($"{Url}/codex/sign-in", new { provider = "openrouter" })).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await h.Client.PostAsJsonAsync($"{Url}/opencode/sign-in", new { provider = "anthropic" })).StatusCode);
+        Assert.Empty(Guests(h).Sessions);
+
+        var response = await h.Client.PostAsJsonAsync($"{Url}/opencode/sign-in", new { provider = "openrouter" });
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        var started = await response.ReadAsync<AgentSignInResponse>();
+        var guest = Guests(h).Sessions.Single();
+        Assert.Contains($"--session {started.Id} --provider openrouter opencode", guest.Command, StringComparison.Ordinal);
+        await Until(h.Client, s => s.Text.Contains("OpenRouter API key", StringComparison.Ordinal), "the key prompt", "opencode");
+
+        var input = $"{Url}/opencode/sign-in/input";
+        const string key = "sk-or-v1-0000fake0000test";
+        foreach (var bad in new object[] { new { secret = "", session = started.Id }, new { secret = key, text = "x", session = started.Id }, new { secret = "a\u0003b", session = started.Id } })
+            Assert.Equal(HttpStatusCode.BadRequest, (await h.Client.PostAsJsonAsync(input, bad)).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await h.Client.PostAsJsonAsync(input, new { secret = key, session = started.Id })).StatusCode);
+        Assert.Equal(key, JsonDocument.Parse(guest.Received.Single()).RootElement.GetProperty("secret").GetString());
+
+        var ended = await Until(h.Client, s => s.State == "ended", "the end", "opencode");
+        Assert.Equal(("done", true), (ended.Outcome, ended.SignedIn));
+        var opencode = Assert.Single((await (await h.Client.GetAsync(Url)).ReadAsync<VmAgentsResponse>()).Agents);
+        Assert.Equal(("opencode", (bool?)true), (opencode.Tool, opencode.SignedIn));
+        var admin = await h.App.CreateUserClientAsync("root", Role.Admin);
+        var audit = await (await admin.GetAsync("/api/v1/audit")).Content.ReadAsStringAsync();
+        Assert.DoesNotContain(key, audit, StringComparison.Ordinal);
+        Assert.Contains("provider=openrouter", audit, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Without_a_forwarding_client_codex_keeps_the_device_code()
     {
         await using var h = await ProvisionHarness.StartAsync();

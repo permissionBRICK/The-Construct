@@ -115,14 +115,16 @@ public sealed record AgentSignInBrowser(string Url, int? Port);
 /// <summary>
 /// <c>POST /vms/{name}/agents/{agent}/sign-in</c>, optional. <paramref name="Browser"/>: this client forwards a sign-in's
 /// loopback redirect from its own machine to the VM (a device agent): Codex then uses its browser sign-in instead of the
-/// device code.
+/// device code. <paramref name="Provider"/>: <c>openrouter</c> for OpenCode, whose sign-in then asks for an OpenRouter API
+/// key (sent as <c>secret</c>) instead of showing OpenCode's own list.
 /// </summary>
-public sealed record AgentSignInStartRequest(bool? Browser = null);
+public sealed record AgentSignInStartRequest(bool? Browser = null, string? Provider = null);
 
 /// <summary>
-/// Input to a sign-in's terminal: <paramref name="Text"/> is typed and followed by Enter (empty: Enter alone), or
-/// <paramref name="Key"/> (<c>up</c>, <c>down</c>) is pressed, for a list the sign-in shows. One of the two.
+/// Input to a sign-in's terminal: <paramref name="Text"/> is typed and followed by Enter (empty: Enter alone),
+/// <paramref name="Key"/> (<c>up</c>, <c>down</c>) is pressed, for a list the sign-in shows, or <paramref name="Secret"/>
+/// (an API key) is typed and followed by Enter once the CLI's prompt no longer echoes, and never shown. One of the three.
 /// <paramref name="Session"/> (required) is the id of the sign-in it is meant for: input for one that is no longer the
 /// VM's latest is refused.
 /// </summary>
-public sealed record AgentSignInInputRequest(string? Text = null, string? Key = null, string? Session = null);
+public sealed record AgentSignInInputRequest(string? Text = null, string? Key = null, string? Session = null, string? Secret = null);

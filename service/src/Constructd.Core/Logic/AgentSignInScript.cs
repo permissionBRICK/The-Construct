@@ -33,15 +33,21 @@ public static class AgentSignInScript
     /// <summary>The agent's id in the VM's agent report (<see cref="CodingAgents.Known"/> otherwise).</summary>
     public static string Tool(string agent) => agent == "claude-code" ? "claude" : agent;
 
+    /// <summary>The providers an agent's sign-in can go straight to: OpenCode with an OpenRouter API key (11.8).</summary>
+    public static bool ValidProvider(string agent, string provider) => agent == "opencode" && provider == "openrouter";
+
     /// <summary>
     /// Runs the script as root for <paramref name="agent"/>. Nothing the user types is on this command line:
-    /// input goes on stdin. <paramref name="browser"/>: the client forwards a loopback redirect (<c>--browser</c>).
+    /// input goes on stdin. <paramref name="browser"/>: the client forwards a loopback redirect (<c>--browser</c>);
+    /// <paramref name="provider"/>: <see cref="ValidProvider"/> (<c>--provider</c>).
     /// </summary>
-    public static string StartCommand(string sessionId, string agent, bool connectedAsRoot, bool browser = false)
+    public static string StartCommand(string sessionId, string agent, bool connectedAsRoot, bool browser = false, string? provider = null)
     {
         if (!RepairScript.IsSessionId(sessionId)) throw new ArgumentException("Invalid session id.", nameof(sessionId));
         if (!CodingAgents.Known.Contains(agent)) throw new ArgumentException("Unknown agent.", nameof(agent));
-        return RepairScript.AsRoot($"python3 {ScriptPath} --session {sessionId}{(browser ? " --browser" : "")} {agent}", connectedAsRoot);
+        if (provider is not null && !ValidProvider(agent, provider)) throw new ArgumentException("Unknown provider.", nameof(provider));
+        return RepairScript.AsRoot(
+            $"python3 {ScriptPath} --session {sessionId}{(browser ? " --browser" : "")}{(provider is null ? "" : " --provider " + provider)} {agent}", connectedAsRoot);
     }
 
     /// <summary>The longest sign-in link kept.</summary>
@@ -54,9 +60,13 @@ public static class AgentSignInScript
         return RepairScript.AsRoot($"python3 {ScriptPath} --stop --session {sessionId}", connectedAsRoot);
     }
 
-    /// <summary>One input line as the script reads it: a key, or text followed by Enter.</summary>
-    public static string InputLine(string? text, string? key) => JsonSerializer.Serialize(key is not null
-        ? new Dictionary<string, string> { ["key"] = key }
+    /// <summary>
+    /// One input line as the script reads it: a key, text followed by Enter, or a secret (an API key), which the
+    /// script types only once the terminal no longer echoes and blots out of the screen.
+    /// </summary>
+    public static string InputLine(string? text, string? key, string? secret = null) => JsonSerializer.Serialize(
+        key is not null ? new Dictionary<string, string> { ["key"] = key }
+        : secret is not null ? new Dictionary<string, string> { ["secret"] = secret }
         : new Dictionary<string, string> { ["text"] = text ?? "" });
 
     /// <summary>Whether <paramref name="text"/> may be typed: short, and no control characters.</summary>

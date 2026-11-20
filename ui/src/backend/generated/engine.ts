@@ -723,7 +723,7 @@ export interface paths {
         /** @description The agent's latest sign-in on the VM; 404 `no-sign-in` when none ran since the engine started or another agent's came after it. */
         get: operations["GetAgentSignIn"];
         put?: never;
-        /** @description Starts the agent's own sign-in on the VM in a terminal (claude-code, codex, opencode, antigravity); a sign-in running on the VM ends. 409: `vm-endpoint-unknown`, `sign-in-not-started` (the connection to the VM failed). */
+        /** @description Starts the agent's own sign-in on the VM in a terminal (claude-code, codex, opencode, antigravity); a sign-in running on the VM ends. `browser`: this client forwards a loopback redirect; `provider: openrouter`: OpenCode asks for an OpenRouter API key. 409: `vm-endpoint-unknown`, `sign-in-not-started` (the connection to the VM failed). */
         post: operations["StartAgentSignIn"];
         /** @description Ends the sign-in named by `session` and its processes on the VM. Ending one that is over, or that a newer one replaced, does nothing. */
         delete: operations["EndAgentSignIn"];
@@ -741,7 +741,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Types into the sign-in named by `session`. 409 `sign-in-ended` when it is over or a newer one took its place. */
+        /** @description Types into the sign-in named by `session`: `text` and Enter, a `key`, or a `secret` (an API key, typed once the CLI no longer echoes and never shown). 409 `sign-in-ended` when it is over or a newer one took its place. */
         post: operations["AgentSignInInput"];
         delete?: never;
         options?: never;
@@ -4133,6 +4133,7 @@ export interface components {
             text?: null | string;
             key?: null | string;
             session?: null | string;
+            secret?: null | string;
         };
         AgentSignInResponse: {
             id: string;
@@ -4151,6 +4152,7 @@ export interface components {
         };
         AgentSignInStartRequest: {
             browser?: null | boolean;
+            provider?: null | string;
         };
         AllowanceUsage: {
             /** Format: int32 */

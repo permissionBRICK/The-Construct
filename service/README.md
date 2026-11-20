@@ -447,13 +447,15 @@ as well).
   changes), `browser` (the last link the CLI opened, `{url, port}`, `port` when it returns to a loopback port on
   the VM) and, after the end, `signedIn` as the VM checked it. A sign-in already running on the VM ends first. The
   optional body `{browser: true}` says the client forwards such a port from its own machine (a device agent):
-  Codex then runs `codex login` instead of `codex login --device-auth`.
+  Codex then runs `codex login` instead of `codex login --device-auth`; `{provider: "openrouter"}` (OpenCode only)
+  runs `opencode auth login openrouter`, which asks for an OpenRouter API key, sent as `secret`.
 - `GET /vms/{name}/agents/{agent}/sign-in` reads it (`404 no-sign-in` when none ran since the engine started or
   another agent's came after it).
 - `POST .../sign-in/input` `{text, session}` types the text and Enter into the terminal (empty: Enter alone),
-  `{key, session}` presses `up` or `down` for a list the sign-in shows; at most 4096 characters, no control
-  characters; `session` is the sign-in's id; `409 sign-in-ended` once it is over or a newer sign-in took its
-  place. Only refused input is audited, never its text.
+  `{key, session}` presses `up` or `down` for a list the sign-in shows, `{secret, session}` types an API key and
+  Enter once the CLI's prompt has turned the terminal's echo off, and blots it out of the screen; at most 4096
+  characters, no control characters; `session` is the sign-in's id; `409 sign-in-ended` once it is over or a newer
+  sign-in took its place. Only refused input is audited, never its text.
 - `DELETE .../sign-in?session=<id>` ends that sign-in: stdin closes and `construct-agent-sign-in.py --stop` ends
   its process group. One that is over, or that a newer one replaced, is left as it is.
 - The change stream announces `agent-sign-in.started`, `agent-sign-in.output` (at most four times a second) and

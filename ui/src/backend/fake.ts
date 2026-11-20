@@ -13,11 +13,11 @@ import { spanText } from './api/map';
 
 export type Scene =
   | 'calm' | 'update' | 'changed' | 'lease' | 'enter' | 'job' | 'failed' | 'failed-reinstall' | 'repair' | 'updating' | 'restart'
-  | 'pairing' | 'pair-confirm' | 'revoked' | 'handout' | 'creating' | 'created' | 'sign-in' | 'sign-in-failed' | 'sign-in-browser'
+  | 'pairing' | 'pair-confirm' | 'revoked' | 'handout' | 'creating' | 'created' | 'sign-in' | 'sign-in-failed' | 'sign-in-browser' | 'sign-in-key'
   | 'upgrade-intro' | 'upgrade-code' | 'upgrade-close' | 'upgrade-convert' | 'upgrade-host' | 'upgrade-done' | 'upgrade-restart'
   | 'first-run' | 'first-run-restart';
 
-export const SCENES: Scene[] = ['calm', 'update', 'changed', 'lease', 'enter', 'job', 'failed', 'failed-reinstall', 'repair', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'created', 'sign-in', 'sign-in-failed', 'sign-in-browser', 'upgrade-intro', 'upgrade-code', 'upgrade-close', 'upgrade-convert', 'upgrade-host', 'upgrade-done', 'upgrade-restart', 'first-run', 'first-run-restart'];
+export const SCENES: Scene[] = ['calm', 'update', 'changed', 'lease', 'enter', 'job', 'failed', 'failed-reinstall', 'repair', 'updating', 'restart', 'pairing', 'pair-confirm', 'revoked', 'handout', 'creating', 'created', 'sign-in', 'sign-in-failed', 'sign-in-browser', 'sign-in-key', 'upgrade-intro', 'upgrade-code', 'upgrade-close', 'upgrade-convert', 'upgrade-host', 'upgrade-done', 'upgrade-restart', 'first-run', 'first-run-restart'];
 
 /** Things the preview frame can make happen, beside the user's own actions. */
 export type Demo = 'lease' | 'enter' | 'release' | 'fail-next' | 'change';
@@ -144,6 +144,12 @@ export class FakeBackend implements Backend {
       }
       case 'sign-in': d.signIn = { vmId: 'atlas', agent: 'codex', state: 'running', text: SIGN_IN_TEXT.codex }; break;
       case 'sign-in-failed': d.signIn = { vmId: 'atlas', agent: 'claude-code', state: 'failed', text: SIGN_IN_TEXT['claude-code'] + 'bad-code\nOAuth error: Invalid code' }; break;
+      case 'sign-in-key': {
+        d.signIn = { vmId: 'atlas', agent: 'opencode', state: 'key', text: '' };
+        const oc = d.vms[0].agents.find(a => a.id === 'opencode');
+        if (oc) oc.signedIn = false;
+        break;
+      }
       case 'sign-in-browser': d.signIn = { vmId: 'atlas', agent: 'codex', state: 'running', text: SIGN_IN_BROWSER_TEXT.codex, browser: true }; break;
       case 'upgrade-intro': d.upgrade = upgrade('engine'); break;
       case 'upgrade-code': d.upgrade = upgrade('recovery', { code: RECOVERY_CODE }); break;
@@ -419,7 +425,9 @@ export class FakeBackend implements Backend {
 
   /* --- signing in to the coding agents: the CLI's text, a code typed, signed in --- */
 
-  signIn(vmId: string, agent: AgentId) {
+  signIn(vmId: string, agent: AgentId, how?: 'list') {
+    // OpenCode: an OpenRouter key first; its own list is the other way.
+    if (agent === 'opencode' && how !== 'list') { this.set(d => { d.signIn = { vmId, agent, state: 'key', text: '' }; }); return; }
     this.set(d => { d.signIn = { vmId, agent, state: 'starting', text: '' }; });
     const mine = () => this.s.signIn?.vmId === vmId && this.s.signIn.agent === agent;
     // Claude Code and Codex return from the browser through this device's forward; a code typed still works.
@@ -428,6 +436,13 @@ export class FakeBackend implements Backend {
       if (mine()) this.set(d => { d.signIn = { vmId, agent, state: 'running', text: browser ? SIGN_IN_BROWSER_TEXT[agent] : SIGN_IN_TEXT[agent], ...(browser ? { browser: true } : {}) }; });
     });
     if (browser) this.after(6, () => { if (mine() && this.s.signIn?.state === 'running') this.signedIn(vmId, agent); });
+  }
+
+  signInWithKey(vmId: string, key: string) {
+    if (!key) return;
+    const prompt = '┌  Connect an integration\n│\n◆  Enter your OpenRouter API key\n│  ';
+    this.set(d => { d.signIn = { vmId, agent: 'opencode', state: 'running', text: prompt + '▪'.repeat(key.length) }; });
+    this.after(2, () => { if (this.s.signIn?.vmId === vmId && this.s.signIn.agent === 'opencode' && this.s.signIn.state === 'running') this.signedIn(vmId, 'opencode'); });
   }
 
   signInInput(input: SignInInput) {

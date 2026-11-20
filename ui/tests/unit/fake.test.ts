@@ -289,6 +289,21 @@ describe('FakeBackend', () => {
     expect(be.snapshot().vms[0].agents.find(a => a.id === 'antigravity')).toMatchObject({ signedIn: true, installed: true });
   });
 
+  it('signs OpenCode in with an OpenRouter key, or opens its own list', () => {
+    const be = new FakeBackend({ tick: 10 });
+    be.signIn('atlas', 'opencode');
+    expect(be.snapshot().signIn).toMatchObject({ agent: 'opencode', state: 'key' });
+    be.signIn('atlas', 'opencode', 'list');
+    run(15);
+    expect(be.snapshot().signIn).toMatchObject({ agent: 'opencode', state: 'running' });
+    expect(be.snapshot().signIn!.text).toContain('Select integration');
+    be.signInWithKey('atlas', 'sk-or-v1-test');
+    expect(be.snapshot().signIn!.text).not.toContain('sk-or-v1-test');
+    run(30);
+    expect(be.snapshot().signIn).toBeNull();
+    expect(be.snapshot().vms[0].agents.find(a => a.id === 'opencode')!.signedIn).toBe(true);
+  });
+
   it('signs Codex in when its browser sign-in came back, and a new sign-in replaces one that runs', () => {
     const be = new FakeBackend({ tick: 10 });
     be.signIn('atlas', 'opencode');

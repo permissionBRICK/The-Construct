@@ -23,7 +23,7 @@ public static class AgentSignInEndpoints
         api.MapPost("/vms/{name}/agents/{agent}/sign-in", StartAsync).RequireAuthorization(Policies.User).Audited("vm.agent.sign-in")
             .Accepts<AgentSignInStartRequest>("application/json")
             .Produces<AgentSignInResponse>(StatusCodes.Status202Accepted).WithName("StartAgentSignIn")
-            .WithDescription("Starts the agent's own sign-in on the VM in a terminal (claude-code, codex, opencode, antigravity); a sign-in running on the VM ends. 409: `vm-endpoint-unknown`, `sign-in-not-started` (the connection to the VM failed).");
+            .WithDescription("Starts the agent's own sign-in on the VM in a terminal (claude-code, codex, opencode, antigravity); a sign-in running on the VM ends. `browser`: this client forwards a loopback redirect; `provider: openrouter`: OpenCode asks for an OpenRouter API key. 409: `vm-endpoint-unknown`, `sign-in-not-started` (the connection to the VM failed).");
         api.MapGet("/vms/{name}/agents/{agent}/sign-in", GetAsync).RequireAuthorization(Policies.User)
             .Produces<AgentSignInResponse>().WithName("GetAgentSignIn")
             .WithDescription("The agent's latest sign-in on the VM; 404 `no-sign-in` when none ran since the engine started or another agent's came after it.");
@@ -31,7 +31,7 @@ public static class AgentSignInEndpoints
         api.MapPost("/vms/{name}/agents/{agent}/sign-in/input", InputAsync).RequireAuthorization(Policies.User)
             .Audited("vm.agent.sign-in.input", auditSuccess: false)
             .Accepts<AgentSignInInputRequest>("application/json").Produces(StatusCodes.Status204NoContent).WithName("AgentSignInInput")
-            .WithDescription("Types into the sign-in named by `session`. 409 `sign-in-ended` when it is over or a newer one took its place.");
+            .WithDescription("Types into the sign-in named by `session`: `text` and Enter, a `key`, or a `secret` (an API key, typed once the CLI no longer echoes and never shown). 409 `sign-in-ended` when it is over or a newer one took its place.");
         api.MapDelete("/vms/{name}/agents/{agent}/sign-in", EndAsync).RequireAuthorization(Policies.User).Audited("vm.agent.sign-in.end")
             .Produces(StatusCodes.Status204NoContent).WithName("EndAgentSignIn")
             .WithDescription("Ends the sign-in named by `session` and its processes on the VM. Ending one that is over, or that a newer one replaced, does nothing.");
@@ -63,8 +63,10 @@ public static class AgentSignInEndpoints
         try
         {
             var browser = request?.Browser == true;
-            var session = await signIns.StartAsync(vm, agent, browser, ct);
-            http.SetAuditDetail($"agent={agent}; session={session.Id}" + (browser ? "; browser" : ""));
+            if (request?.Provider is { } provider && !AgentSignInScript.ValidProvider(agent, provider))
+                return CodedProblems.Validation("provider", "Only OpenCode takes a provider: openrouter.");
+            var session = await signIns.StartAsync(vm, agent, browser, request?.Provider, ct);
+            http.SetAuditDetail($"agent={agent}; session={session.Id}" + (browser ? "; browser" : "") + (request?.Provider is { } p ? "; provider=" + p : ""));
             return Results.Accepted($"/api/v1/vms/{vm.Name}/agents/{agent}/sign-in", AgentSignInResponse.From(session));
         }
         catch (AgentSignInRefusedException ex)
@@ -85,16 +87,18 @@ public static class AgentSignInEndpoints
     {
         var (vm, denied) = await VmAsync(name, agent, http, vms, ct);
         if (vm is null) return denied!;
-        if (request is null || (request.Text is null) == (request.Key is null))
-            return CodedProblems.Validation("text", "Expected text or key.");
+        if (request is null || new[] { request.Text, request.Key, request.Secret }.Count(v => v is not null) != 1)
+            return CodedProblems.Validation("text", "Expected text, key or secret.");
         if (request.Session is not { Length: > 0 } id) return CodedProblems.Validation("session", "Expected the sign-in's id.");
         if (request.Text is { } text && !AgentSignInScript.ValidInput(text))
             return CodedProblems.Validation("text", $"Expected at most {AgentSignInScript.MaxInput} characters without control characters.");
+        if (request.Secret is { } secret && (secret.Length == 0 || !AgentSignInScript.ValidInput(secret)))
+            return CodedProblems.Validation("secret", $"Expected 1 to {AgentSignInScript.MaxInput} characters without control characters.");
         if (request.Key is { } key && !AgentSignInScript.Keys.Contains(key))
             return CodedProblems.Validation("key", "Expected " + string.Join(" or ", AgentSignInScript.Keys) + ".");
         if (Find(signIns, vm, agent) is not { } session) return None();
         // A panel that still shows an older sign-in never types into the newer one.
-        return session.Id == id && await signIns.InputAsync(session, request.Text, request.Key, ct)
+        return session.Id == id && await signIns.InputAsync(session, request.Text, request.Key, ct, request.Secret)
             ? Results.NoContent()
             : CodedProblems.Create(409, "sign-in-ended", "The sign-in is over.");
     }
