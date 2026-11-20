@@ -217,6 +217,7 @@ SETTLED (owner, 2026-11-09; S9 to S24 from the plan walkthrough the same day; S2
 | S33 | opencode 2 ships with the rework (owner, 2026-11-20; 4.2). A VM moves to it at its next update or reprovision. | The move converts OpenCode's database in place, one way; the data folder is copied once before the first opencode 2 start, and that copy is the only way back. |
 | S34 | Signing in to the coding agents happens in the UI: a step after creating a VM, and Sign in on each agent of the VM page. The engine runs the agent's own sign-in on the VM and the UI shows its output, links and a reply field (owner, 2026-11-20; 11.8). | The UI does not parse each agent's sign-in; when an agent changes its sign-in, the user still sees its own text. Accounts never pass through the vault or the store. Antigravity's sign-in is copied into T3 Code's private Antigravity home: a sign-out on one side leaves the other signed in until the token is revoked. |
 | S35 | Creating a VM ends on a ready screen with T3 Code (recommended) and VS Code (owner, 2026-11-20; 11.6). | None. |
+| S36 | When a coding agent that was signed in on a VM is signed out, a card like the vault's offers Sign in, once per loss: dismissed, it stays away until the agent was signed in and lost again; with Construct closed it pops alone once (owner, 2026-11-20; 11.8). | A deliberate sign-out also shows the card once. The loss is seen at the VM's next report, up to 15 minutes later. |
 
 ## 4. Compatibility invariants
 
@@ -898,7 +899,7 @@ after four redesign rounds. The mockup is kept outside this repository; in words
 | Tray pop-out | One VM at a time, chosen from a name menu: its state, Open (T3 Code, VS Code, SSH) and a stack of large actions with Reprovision and Reinstall at the centre. Key vault and Control panel in the footer. A vault request appears as a yellow card on top; with Construct closed, that card alone pops from the tray. |
 | Window | VMs as tabs on top, a dark sidebar (Projects, Connections, Backups, Settings per VM; Key vault, Hosts, Construct below), technical pages with tables: project list and the profile JSON, settings in tabs, the vault with secrets, access, devices and history. |
 | Phone and browser | The pop-out's stack, then the pages, with a bottom tab bar. |
-| Rules | Only the vault asks for attention. No counters, no attention queue, no chat in the middle, no grouping by host, no forwards on the overview, no subtitle under a title. Yellow means an update or a change that waits. |
+| Rules | Only the vault and a lost agent sign-in (S36) ask for attention. No counters, no attention queue, no chat in the middle, no grouping by host, no forwards on the overview, no subtitle under a title. Yellow means an update or a change that waits. |
 | Colours | Schemes selectable beside light and dark: green on black (default), blue, copper and slate, black and white. |
 
 ### 11.3 No native dialogs
@@ -998,13 +999,15 @@ directly, simple pages with tables. Two changes:
 
 ### 11.8 Coding agents
 
-SETTLED (owner, 2026-11-20, S32, S34).
+SETTLED (owner, 2026-11-20, S32, S34, S36).
 
 | Concern | Design |
 |---|---|
 | Choice | The VM's desired state carries the list of coding agents (`AI_TOOLS` in the guest). Create and the VM page show one switch per agent; a change waits for Reprovision like any other setting. Adoption keeps the list the VM has. |
 | Turned off | Not updated, not configured, turned off in T3 Code; not uninstalled. |
 | Sign in | `POST /vms/{name}/agents/{agent}/sign-in` starts the agent's own sign-in on the VM in a terminal session; its output streams as events, a reply goes to its input, and it ends with the process. One runs per VM. The UI shows the text with links opened in the browser. Each agent row shows whether it is signed in, as the VM reports it. The commands: `claude auth login`, `codex login --device-auth`, `opencode auth login` (its own list of integrations, arrow keys included), `agy acp --login`; the Antigravity token then goes into T3 Code's Antigravity home too, which reads the same file format. |
+| No pasted code | As the Claude Code extension does over Remote-SSH (owner, 2026-11-20): the sign-in runs with `BROWSER` set to a helper that reports the URL the CLI opens. When that URL sends the browser back to `localhost:<port>` (Claude Code and Codex listen there on the VM), the device agent forwards that port from the PC to the VM for the sign-in's length and opens the URL; the redirect reaches the CLI and the sign-in ends by itself. Codex then uses its browser sign-in instead of the device code. Without a device agent (phone, browser) or with the port taken on the PC, the CLI's own text with the paste field stays. |
+| Lost sign-in | S36. The engine notes the change from signed in to signed out in the VM's report; the card's Sign in starts the sign-in above. |
 | T3 Code | Each chosen agent is turned on as a T3 Code provider and points at the copy the VM installed. |
 
 ## 12. Updates
