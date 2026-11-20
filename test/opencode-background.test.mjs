@@ -66,6 +66,7 @@ async function harness({ parents = {}, getFailures = 0, hold = false } = {}) {
   const synthetics = []
   const requests = []
   const interrupts = []
+  const interruptCalls = []
   const history = new Map()
   const queued = new Map()
   let failuresLeft = getFailures
@@ -106,8 +107,10 @@ async function harness({ parents = {}, getFailures = 0, hold = false } = {}) {
         return { id: item.id }
       },
       // Like OpenCode: the call returns at once, the interrupted event follows.
-      interrupt: async ({ sessionID }) => {
+      interrupt: async (input) => {
+        const { sessionID } = input
         interrupts.push(sessionID)
+        interruptCalls.push(input)
         setTimeout(() => events.push({ type: "session.execution.interrupted", data: { sessionID, reason: "user" } }), 5)
         return { interrupted: true }
       },
@@ -142,7 +145,7 @@ async function harness({ parents = {}, getFailures = 0, hold = false } = {}) {
   }
   const wakes = (sessionID) =>
     synthetics.filter((s) => s.sessionID === sessionID && s.metadata?.source === "construct-background")
-  return { hooks, synthetics, requests, interrupts, history, start, output, kill, event, interrupted, userPrompt, wakes, run, dispose }
+  return { hooks, synthetics, requests, interrupts, interruptCalls, history, start, output, kill, event, interrupted, userPrompt, wakes, run, dispose }
 }
 
 /** Waits until the plugin's 1 s watcher has seen a job exit. */
@@ -297,6 +300,7 @@ await test("a wake-up OpenCode still held when a Stop landed is refused before t
   await h.run("ses_held")
   assert.equal(h.requests.length, 0, "the model is never asked: the turn is interrupted first")
   assert.deepEqual(h.interrupts, ["ses_held"])
+  assert.equal(h.interruptCalls[0].resume, true, "a prompt steered in meanwhile still runs")
   await sleep(30)
   assert.equal(fs.readFileSync(path.join(stateRoot, "ses_held", "stopped"), "utf8"), String(stoppedAt), "the plugin's own interrupt is not a new Stop")
   assert.ok(fs.existsSync(path.join(stateRoot, "ses_held", "bg_1", "refused")))
@@ -334,6 +338,93 @@ await test("a Stop after a wake-up turn started ends that turn, never a newer us
   await h.run("ses_resumed")
   assert.equal(h.requests.length, 3, "an accepted wake-up stays in later requests")
   assert.ok(h.requests[2].messages.some((m) => m.metadata?.source === "construct-background"))
+  h.dispose()
+})
+
+const wakeMessage = (wake) => ({ role: "user", content: wake.text, metadata: wake.metadata })
+
+await test("a wake-up held back during a turn survives a crash before the turn ends", async () => {
+  const first = await harness()
+  await first.event("session.execution.started", { sessionID: "ses_crash" })
+  await first.start("ses_crash", "echo survived")
+  await settle()
+  assert.equal(first.wakes("ses_crash").length, 0, "held back")
+  assert.ok(!fs.existsSync(path.join(stateRoot, "ses_crash", "bg_1", "notified")), "not claimed while held back")
+  first.dispose() // OpenCode dies before the turn ends: no end-of-execution event
+  const second = await harness()
+  await settle()
+  assert.equal(second.wakes("ses_crash").length, 1, "the next start adopts the job and delivers its wake-up")
+  second.dispose()
+})
+
+await test("a subagent's root is found through any number of levels, never through a cycle", async () => {
+  const parents = { ses_cycle_a: "ses_cycle_b", ses_cycle_b: "ses_cycle_a" }
+  for (let level = 1; level <= 12; level++) parents[`ses_deep_${level}`] = `ses_deep_${level - 1}`
+  const h = await harness({ parents })
+  await h.start("ses_deep_12", "sleep 1")
+  await h.start("ses_cycle_a", "sleep 30")
+  const meta = (id) => JSON.parse(fs.readFileSync(path.join(stateRoot, id, "bg_1", "meta.json"), "utf8"))
+  assert.equal(meta("ses_deep_12").root, "ses_deep_0", "the real root, not an intermediate ancestor")
+  assert.equal(meta("ses_cycle_a").root, undefined, "a cycle is never recorded as the root")
+  writeStop("ses_deep_0")
+  await settle()
+  assert.equal(h.wakes("ses_deep_12").length, 0, "the real root's Stop covers the deep subagent")
+  await h.kill("ses_cycle_a", "bg_1")
+  h.dispose()
+})
+
+await test("the first prompt after a Stop lists a task whose wake-up OpenCode still holds", async () => {
+  const h = await harness({ hold: true })
+  await h.start("ses_queued", "echo queued")
+  await settle()
+  assert.equal(h.wakes("ses_queued").length, 1, "handed over, still queued in OpenCode")
+  writeStop("ses_queued")
+  const [note] = await h.userPrompt("ses_queued") // a steered prompt runs ahead of the queued wake-up
+  assert.match(note.text, /bg_1 \(echo queued\): exited 0/)
+  const listing = await h.output("ses_queued", "")
+  assert.match(listing.content, /\[stopped: does not wake you\]/)
+  await h.run("ses_queued")
+  assert.ok(fs.existsSync(path.join(stateRoot, "ses_queued", "bg_1", "refused")))
+  assert.deepEqual(await h.userPrompt("ses_queued"), [], "reported only once")
+  h.dispose()
+})
+
+await test("a compaction leaves out a wake-up a Stop disarmed and leaves the decision to the request", async () => {
+  const h = await harness({ hold: true })
+  await h.start("ses_compact", "echo compact")
+  await settle()
+  writeStop("ses_compact")
+  const [wake] = h.wakes("ses_compact")
+  const messages = [{ role: "user", content: "earlier" }, { role: "assistant", content: "ok" }, wakeMessage(wake)]
+  await h.hooks.compaction({ sessionID: "ses_compact", messages })
+  assert.equal(messages.length, 2, "not summarized")
+  assert.ok(!fs.existsSync(path.join(stateRoot, "ses_compact", "bg_1", "refused")), "undecided until the request")
+  assert.deepEqual(h.interrupts, [])
+  await h.run("ses_compact")
+  assert.deepEqual(h.interrupts, ["ses_compact"], "the request still refuses it and ends the turn")
+  h.dispose()
+})
+
+await test("a refused wake-up ends its turn even when a step limit appended an assistant note", async () => {
+  const h = await harness({ hold: true })
+  await h.start("ses_steps", "echo steps")
+  await settle()
+  writeStop("ses_steps")
+  const [wake] = h.wakes("ses_steps")
+  const messages = [{ role: "user", content: "earlier" }, { role: "assistant", content: "ok" }, wakeMessage(wake), { role: "assistant", content: "MAX STEPS" }]
+  await h.hooks.context({ sessionID: "ses_steps", messages })
+  assert.deepEqual(h.interrupts, ["ses_steps"], "interrupted before the model is asked")
+  assert.ok(messages.every((m) => m.metadata?.source !== "construct-background"), "left out of the request")
+
+  // The same with the user's prompt promoted after it: that turn is the user's and runs.
+  await h.start("ses_steps_user", "echo steps")
+  await settle()
+  writeStop("ses_steps_user")
+  const [other] = h.wakes("ses_steps_user")
+  const withPrompt = [wakeMessage(other), { role: "user", content: "the user's prompt" }]
+  await h.hooks.context({ sessionID: "ses_steps_user", messages: withPrompt })
+  assert.deepEqual(h.interrupts, ["ses_steps"], "the user's turn is not interrupted")
+  assert.equal(withPrompt.length, 1)
   h.dispose()
 })
 

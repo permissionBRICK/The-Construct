@@ -54,7 +54,6 @@ const REPORT_SOURCE = "construct-background-stopped"
 // A second background_output on a still-armed running task within this window
 // is answered with a reminder instead of output.
 const POLL_GUARD_MS = 60 * 1000
-const MAX_PARENT_DEPTH = 8
 // Rounds (about a second each) a finished job waits for its root session to be known.
 const ROOT_RETRIES = 60
 // How long a refused wake-up's turn may take to end after the plugin interrupted it.
@@ -207,8 +206,9 @@ async function setup(ctx) {
 
   /** The root of a (subagent) session's parent chain, or undefined while the server cannot say. */
   async function rootOf(sessionID) {
-    let id = sessionID
-    for (let depth = 0; depth < MAX_PARENT_DEPTH; depth++) {
+    const seen = new Set()
+    for (let id = sessionID; !seen.has(id); ) {
+      seen.add(id)
       let parent = parents.get(id)
       if (parent === undefined) {
         try {
@@ -223,7 +223,7 @@ async function setup(ctx) {
       if (!parent) return id
       id = parent
     }
-    return id
+    return undefined // a cycle: no root to trust
   }
 
   const alive = (pid) => {
@@ -372,7 +372,8 @@ async function setup(ctx) {
   async function interrupt(sessionID) {
     selfInterrupts.set(sessionID, Date.now())
     try {
-      const reply = await ctx.session.interrupt({ sessionID })
+      // resume: a prompt steered in meanwhile still runs instead of waiting for the next wake.
+      const reply = await ctx.session.interrupt({ sessionID, resume: true })
       if (reply?.interrupted === false) selfInterrupts.delete(sessionID)
     } catch {
       selfInterrupts.delete(sessionID)
@@ -415,10 +416,10 @@ async function setup(ctx) {
     // while (the server may still be starting); after that only its own session's Stop counts.
     if (!job.root && (job.rootTries = (job.rootTries ?? 0) + 1) < ROOT_RETRIES) return false
     if (disarmed(job)) return true
-    if (!claim(job.dir)) return true
     const entry = { job, text: renderNotification(job, result) }
     // OpenCode keeps a queued message through an interrupt and runs it on the next wake, so a
     // wake-up is never queued behind running work: it waits here until that work has ended.
+    // It is claimed only when it is handed over, so after a crash the next start adopts it again.
     if (busy.has(job.sessionID)) {
       parked.set(job.sessionID, [...(parked.get(job.sessionID) ?? []), entry])
       ensureTimer()
@@ -435,27 +436,25 @@ async function setup(ctx) {
   }
 
   async function send(sessionID, entries) {
-    // A Stop between parking and sending still wins: hand those back to the stop report.
-    const live = entries.filter(({ job }) => {
-      if (!disarmed(job)) return true
-      unclaim(job.dir)
-      return false
-    })
+    // A Stop between parking and sending still wins: those go to the stop report.
+    const live = entries.filter(({ job }) => !disarmed(job))
     if (!live.length) return
-    const report = takeReport(sessionID)
-    for (const [index, { job, text }] of live.entries()) {
+    let report = takeReport(sessionID)
+    for (const { job, text } of live) {
+      if (!claim(job.dir)) continue // killed or delivered meanwhile
       // Recorded before the request: OpenCode may build the next model request before it answers.
       touch(job.dir, WAKE_FILE, String(Date.now()))
       try {
         const item = await ctx.session.synthetic({
           sessionID,
-          text: index === 0 && report ? `${text}\n\n${report.text}` : text,
+          text: report ? `${text}\n\n${report.text}` : text,
           description: `Background task ${job.id} finished`,
           metadata: { source: SOURCE, id: job.id },
           delivery: "queue",
         })
         if (item?.id) inboxJobs.set(item.id, job)
-        if (index === 0 && report) report.done()
+        report?.done()
+        report = undefined
       } catch {
         // Session gone or server shutting down -- the result stays readable on disk.
         remove(job.dir, WAKE_FILE)
@@ -466,50 +465,50 @@ async function setup(ctx) {
   // --- refusing stale wake-ups ---------------------------------------------------
 
   /**
-   * Runs right before every model request with the messages it carries. A wake-up the model
-   * has not seen yet is checked here once: still armed, it is accepted for good; disarmed by a
-   * Stop since it was handed over (OpenCode had it queued), it is refused for good -- left out
-   * of this and every later request, and its turn is interrupted when nothing else started it.
+   * Wake-ups in a model request's messages. One the model has not seen yet is decided once, by
+   * the `context` hook right before the request: still armed, it is accepted for good; disarmed
+   * by a Stop since it was handed over (OpenCode had it queued), it is refused for good and left
+   * out of this and every later request. Without `decide` (compaction) it is only left out.
+   * `stale`: a wake-up refused now with no other input after it, so it alone started the turn.
    */
-  async function review(request) {
-    const { sessionID, messages } = request
-    busy.add(sessionID) // a model request runs: the session's events may still be on their way
-    // The newest input: the trailing user messages after the last assistant reply or tool result.
-    let start = messages.length
-    while (start > 0 && messages[start - 1]?.role === "user") start--
-    let refusedLatest = false
-    let remaining = 0
-    let userInput = false
+  function screen(sessionID, messages, decide) {
+    let newer = false
+    let stale = false
     let accepted
     for (let i = messages.length - 1; i >= 0; i--) {
       const meta = messages[i]?.metadata
-      const latest = i >= start
       const job = meta?.source === SOURCE && typeof meta.id === "string" ? readMeta(jobDir(sessionID, meta.id)) : undefined
-      if (job && has(job.dir, WAKE_FILE) && !has(job.dir, ACCEPTED_FILE) && !has(job.dir, REFUSED_FILE)) {
+      if (!job) {
+        if (messages[i]?.role === "user" && meta?.source !== REPORT_SOURCE) newer = true
+        continue
+      }
+      const undecided = has(job.dir, WAKE_FILE) && !has(job.dir, ACCEPTED_FILE) && !has(job.dir, REFUSED_FILE)
+      if (undecided && decide) {
         if (disarmed(job)) {
           touch(job.dir, REFUSED_FILE)
           unclaim(job.dir)
+          stale ||= !newer
         } else {
           touch(job.dir, ACCEPTED_FILE)
-          if (latest) accepted = job
+          if (!newer) accepted = job
         }
       }
-      if (job && has(job.dir, REFUSED_FILE)) {
-        messages.splice(i, 1)
-        refusedLatest ||= latest
-        continue
-      }
-      if (!latest || meta?.source === REPORT_SOURCE) continue
-      remaining++
-      if (!job) userInput = true
+      if (has(job.dir, REFUSED_FILE) || (undecided && !decide && disarmed(job))) messages.splice(i, 1)
     }
-    if (userInput) wakeTurns.delete(sessionID) // a newer prompt took over
-    else if (accepted) {
+    return { stale: stale && !accepted, accepted }
+  }
+
+  /** Right before every model request: a refused wake-up never reaches the model. */
+  async function review(request) {
+    const { sessionID, messages } = request
+    busy.add(sessionID) // a model request runs: the session's events may still be on their way
+    const { stale, accepted } = screen(sessionID, messages, true)
+    if (accepted) {
       wakeTurns.set(sessionID, { at: Date.now(), root: accepted.root })
       ensureTimer()
     }
-    if (!refusedLatest || remaining) return
-    // Only refused wake-ups started this turn: end it before the model is asked anything.
+    if (!stale) return
+    // Only a refused wake-up started this turn: end it before the model is asked anything.
     const ended = new Promise((resolve) => {
       interruptWaiters.set(sessionID, [...(interruptWaiters.get(sessionID) ?? []), resolve])
       setTimeout(resolve, REFUSE_WAIT_MS).unref?.()
@@ -520,14 +519,15 @@ async function setup(ctx) {
 
   // --- stop report -------------------------------------------------------------
 
+  /** The model has not seen the job's result: no wake-up yet, or one OpenCode still holds. */
+  const unseen = (job) => !has(job.dir, "notified") || (has(job.dir, WAKE_FILE) && !has(job.dir, ACCEPTED_FILE))
+
   /** Disarmed wait: true jobs of this session (or its subagents) the agent was not told about. */
   function pendingReports(sessionID) {
     const byDir = new Map()
     for (const job of listJobs(sessionID)) byDir.set(job.dir, job)
     for (const job of known.values()) if (job.root === sessionID) byDir.set(job.dir, job)
-    return [...byDir.values()].filter(
-      (job) => disarmed(job) && !has(job.dir, "notified") && !has(job.dir, REPORTED_FILE),
-    )
+    return [...byDir.values()].filter((job) => disarmed(job) && unseen(job) && !has(job.dir, REPORTED_FILE))
   }
 
   /** The stop report for the session's next prompt; call done() once it was delivered. */
@@ -614,7 +614,7 @@ async function setup(ctx) {
 
   function summary(job) {
     const s = state(job)
-    const stopped = disarmed(job) && !has(job.dir, "notified") ? "  [stopped: does not wake you]" : ""
+    const stopped = disarmed(job) && unseen(job) ? "  [stopped: does not wake you]" : ""
     return `${job.id}  ${s.label}  ${duration(job.started, s.at)}  ${job.description || job.command}${stopped}`
   }
 
@@ -717,11 +717,8 @@ async function setup(ctx) {
         if (reason === "user" && !(own && Date.now() - own < SELF_INTERRUPT_MS)) markStopped(sessionID)
         for (const resolve of interruptWaiters.get(sessionID) ?? []) resolve()
         interruptWaiters.delete(sessionID)
-        if (reason === "shutdown") {
-          // Not delivered: the next server start adopts these jobs again.
-          for (const { job } of parked.get(sessionID) ?? []) unclaim(job.dir)
-          parked.delete(sessionID)
-        } else await flush(sessionID) // disarmed ones go to the stop report
+        if (reason === "shutdown") parked.delete(sessionID) // unclaimed: the next start adopts them again
+        else await flush(sessionID) // disarmed ones go to the stop report
         return
       }
       case "session.execution.succeeded":
@@ -765,6 +762,10 @@ async function setup(ctx) {
 
   // Every model request: refuse wake-ups a Stop overtook while OpenCode had them queued.
   await ctx.session.hook("context", (event) => review(event))
+  // A compaction right after OpenCode delivered a refused wake-up must not summarize it either.
+  await ctx.session.hook("compaction", (event) => {
+    screen(event.sessionID, event.messages, false)
+  })
 
   // A user prompt: it supersedes any wake-up turn, and it carries the stop report. The report
   // is a synthetic message without a description (hidden in timelines, seen by the model),
