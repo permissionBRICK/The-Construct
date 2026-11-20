@@ -85,6 +85,30 @@ all_vers() {
   ' "${GENERATED_JSON}"
 }
 
+# Another apt run (unattended-upgrades, a parallel project group) may hold apt's locks.
+# DPkg::Lock::Timeout makes apt-get wait for the dpkg lock, but `apt-get update` does not
+# apply it to the package-list lock, so a run that fails on a held lock is retried until
+# the same timeout has passed. Its error output is shown once the attempt has ended. apt runs
+# in the C locale so that the lock error is recognized whatever language the caller uses.
+APT_LOCK_TIMEOUT="${APT_LOCK_TIMEOUT:-900}"
+APT_LOCK_RETRY_SECONDS="${APT_LOCK_RETRY_SECONDS:-5}"
+apt_get() {
+  local deadline=$((SECONDS + APT_LOCK_TIMEOUT)) errors rc
+  errors="$(mktemp)"
+  while :; do
+    rc=0
+    LC_ALL=C apt-get -o DPkg::Lock::Timeout="${APT_LOCK_TIMEOUT}" "$@" 2>"${errors}" || rc=$?
+    cat "${errors}" >&2
+    if (( rc != 0 )) && grep -q 'Could not get lock' "${errors}" && (( SECONDS < deadline )); then
+      note "apt is busy (another apt run holds its lock); retrying in ${APT_LOCK_RETRY_SECONDS} s"
+      sleep "${APT_LOCK_RETRY_SECONDS}"
+      continue
+    fi
+    rm -f "${errors}"
+    return "${rc}"
+  done
+}
+
 install_node() {
   local ver="$1" major
   major="${ver%%.*}"; major="${major:-22}"
@@ -95,14 +119,14 @@ install_node() {
   fi
   step "Installing Node.js ${major}.x (NodeSource)"
   curl -fsSL "https://deb.nodesource.com/setup_${major}.x" | bash -
-  apt-get install -y nodejs
+  apt_get install -y nodejs
 }
 
 install_python() {
   local ver="${1:-3}"
   step "Installing Python 3 toolchain (requested: ${ver})"
-  apt-get update
-  apt-get install -y python3 python3-venv python3-pip
+  apt_get update
+  apt_get install -y python3 python3-venv python3-pip
 }
 
 install_dotnet() {

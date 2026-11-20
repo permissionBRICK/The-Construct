@@ -245,6 +245,9 @@ reset_stub() {
 systemctl_log="${tmp}/systemctl.log"
 
 # run_backup <config> [VAR=value ...] -- <args...>: the CLI in a clean environment.
+# A login shell's cgroup: the export must not take itself for a T3 Code terminal (this suite
+# may run in one) and skip the stop a pre-reinstall export makes.
+printf '0::/user.slice/user-0.slice/session-1.scope\n' >"${tmp}/session-cgroup"
 run_backup() {
   local cfg="$1"; shift
   local -a extra=()
@@ -256,7 +259,7 @@ run_backup() {
     VSCODE_SERVE_WEB_TOKEN_FILE="${sw_token}" T3CODE_TLS_DIR="${tmp}/absent-tls" \
     CONSTRUCT_BACKUP_RECIPIENTS_DIR="${recips}" CONSTRUCT_BACKUP_LOCK_FILE="${lock}" \
     CONSTRUCT_BACKUP_STAGE_PARENT="${tmp}/stage" \
-    STUB_DIR="${state}" SYSTEMCTL_LOG="${systemctl_log}" \
+    STUB_DIR="${state}" SYSTEMCTL_LOG="${systemctl_log}" CONSTRUCT_CGROUP_FILE="${tmp}/session-cgroup" \
     ${extra[@]+"${extra[@]}"} bash "${CLI}" backup "$@"
 }
 

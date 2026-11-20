@@ -79,6 +79,31 @@ public sealed partial class ProxmoxChildDriverTests : IDisposable
         Assert.Contains("order=ide2;ide0;scsi0", argv); Assert.Contains("parent=parent", config["description"].ToString());
     }
     [Theory]
+    [InlineData("virtio=BC:24:11:00:00:01,bridge=vmbr1,firewall=1", "vmbr1")]
+    [InlineData(null, "vmbr0")]
+    public async Task A_child_joins_its_parents_bridge_and_falls_back_to_the_configured_one(string? parentNet0, string expected)
+    {
+        await vms.AddAsync(new("child", "alice", 2, 1, 4, clock.UtcNow, VmState.Off, null, null, IdlePolicy.Disabled, [], Kind: VmKind.Child, Parent: "parent"), 10, default);
+        var parentConfig = new Dictionary<string, object> { ["name"] = "parent" };
+        if (parentNet0 is not null) parentConfig["net0"] = parentNet0;
+        runner.RespondStdout("[]").RespondStdout("101")
+            .RespondStdout("""[{"name":"parent","vmid":100}]""").Respond(_ => Ok(parentConfig))
+            .Respond(call =>
+            {
+                for (var i = 2; i < call.Arguments.Count; i += 2) config[call.Arguments[i][2..]] = call.Arguments[i + 1];
+                config["sata0"] = "local-lvm:vm-101-disk-1,discard=on,size=4G";
+                config["efidisk0"] = "local-lvm:vm-101-disk-0,efitype=4m,pre-enrolled-keys=1,size=4M";
+                config["tpmstate0"] = "local-lvm:vm-101-disk-2,version=v2.0,size=4M";
+                return new(0, "", "", false);
+            });
+        QueryConfig();
+        await driver.CreateOwnedAsync(new("child", Hardware, null, Install, Auxiliary, "ignored-contract-switch"), "job-operation", null, default);
+        Assert.Equal(["get", "/nodes/pve1/qemu/100/config", "--output-format", "json"], runner.Calls[3].Arguments);
+        var argv = runner.Calls[4].Arguments;
+        Assert.Equal("create", argv[0]);
+        Assert.Equal("e1000e,bridge=" + expected, argv[argv.ToList().IndexOf("--net0") + 1]);
+    }
+    [Theory]
     [InlineData(1, false)] [InlineData(2, true)]
     public async Task Unsupported_hardware_never_allocates(int generation, bool dynamic)
     {

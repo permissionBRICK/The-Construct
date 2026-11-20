@@ -119,5 +119,14 @@ ok "template: points at the custom file and the CLI" \
   bash -c 'grep -q "construct-custom-system-prompt.md" "$1" && grep -q "construct systemprompt" "$1"' \
     _ "${ROOT}/config/systemprompt.md"
 
+# 11. The advertised name is not promised to reach a port opened on the VM: on a
+#     service-managed VM it can be the host's, with the VM behind the host's NAT.
+links_from_expose() {
+  ! grep -q "reachable from the user's machine over that name" "$1" &&
+    grep -q "behind the host's" "$1" && grep -q 'construct expose <port>' "$1"
+}
+ok "template: links come from construct expose, not the advertised name" \
+  links_from_expose "${ROOT}/config/systemprompt.md"
+
 printf '\n  systemprompt install tests — %d/%d passed\n\n' "${pass}" "$((pass + fail))"
 [[ "${fail}" -eq 0 ]]

@@ -8,6 +8,9 @@
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Never inherit the VM's own CONSTRUCT_*/T3CODE_* settings (test/helpers/isolate-env.sh).
+# shellcheck disable=SC1091
+. "${ROOT}/test/helpers/isolate-env.sh"
 SCRIPT="${ROOT}/bin/construct-t3-update.sh"
 if [[ "${EUID}" -ne 0 ]]; then
   echo "  SKIP  t3-update tests need root (the script refuses to run without it)"

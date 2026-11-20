@@ -63,7 +63,11 @@ public sealed class ChildDeleteJob(IVmRepository vms, IVmDelegationRepository me
         if (retained is not null)
             await ((IWindowsLicenseMachines)driver).ParkWindowsAsync(vm.Name, retained.Incarnation, ct);
         else await driver.RemoveAsync(vm.Name, progress, ct);
-        if (await hypervisor.GetStateAsync(vm.Name, ct) != VmState.Absent) throw new ChildValidationException("cleanup-unverified", "vm");
+        // The hypervisor's VM list can lag the removal (Proxmox: pvestatd's cache) and then cannot tell;
+        // the child driver's own inventory confirms that the VM is gone.
+        var removed = await hypervisor.GetStateAsync(vm.Name, ct);
+        if (removed != VmState.Absent && !(removed == VmState.Unknown && await driver.GetVmIdAsync(vm.Name, ct) is null))
+            throw new ChildValidationException("cleanup-unverified", "vm");
         if (phase is not null) await phase("forwards");
         await forwards.RemoveAllForwardsAsync(vm.Name, ct);
         await network.OnVmDeletedAsync(vm.Name, ct);

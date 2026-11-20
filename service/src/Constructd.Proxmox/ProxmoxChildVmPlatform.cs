@@ -64,7 +64,6 @@ public sealed partial class ProxmoxChildVmPlatform(IProcessRunner processes, IHy
             throw new ChildValidationException("storage-placement-unavailable", "diskPath");
         var install = descriptor.InstallMediaPath is null ? null : media.ToVolume(descriptor.InstallMediaPath);
         var auxiliary = descriptor.AuxiliaryMediaPath is null ? null : media.ToVolume(descriptor.AuxiliaryMediaPath);
-        var bridge = Identifier(options.Proxmox.Bridge);
         if (await commands.FindAsync(name, ct) is not null || ReadOwnership(name) is not null)
             throw new ChildValidationException("name-taken", "name");
         var next = await commands.QueryAsync(["get", "/cluster/nextid"], ct);
@@ -72,6 +71,7 @@ public sealed partial class ProxmoxChildVmPlatform(IProcessRunner processes, IHy
             throw ProxmoxCommands.Failure();
         var parent = (await vms.GetAsync(name, ct))?.Parent ?? "none";
         if (parent != "none") ArgumentGuard.VmName(parent);
+        var bridge = h.NetworkAttached ? await BridgeAsync(parent, ct) : Identifier(options.Proxmox.Bridge);
         var owner = new ChildOwnership(name, id, Guid.NewGuid().ToString(), operationId, parent, clock.UtcNow, []);
         WriteOwnership(owner, create: true);
         progress?.Report("Creating child VM hardware and disk.");
@@ -102,6 +102,19 @@ public sealed partial class ProxmoxChildVmPlatform(IProcessRunner processes, IHy
         var config = await commands.ConfigAsync(id, ct);
         VerifyOwner(config, owner);
         WriteOwnership(owner with { Volumes = OwnedVolumes(config, id) });
+    }
+
+    /// <summary>
+    /// The bridge a child's card joins: its parent's own (the parent's <c>net0</c>), so the parent reaches
+    /// the child and forwards through the parent work. <c>Proxmox:Bridge</c> when the parent is no VM on
+    /// this node or has no bridged <c>net0</c>.
+    /// </summary>
+    private async Task<string> BridgeAsync(string parent, CancellationToken ct)
+    {
+        if (parent != "none" && await commands.FindAsync(parent, ct) is int id &&
+            ProxmoxCommands.Property(ProxmoxCommands.String(await commands.ConfigAsync(id, ct), "net0"), "bridge") is { Length: > 0 } bridge)
+            return Identifier(bridge);
+        return Identifier(options.Proxmox.Bridge);
     }
 
     private string Efi(bool secure) => Storage + ":1,efitype=4m,pre-enrolled-keys=" + (secure ? "1" : "0");

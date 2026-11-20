@@ -17,17 +17,18 @@ about this environment are worth knowing up front:
 
 ## Reaching this machine
 
-This VM is reachable from the user's machine under the __AGENT_ADDRESS_KIND__:
+Construct advertises this VM to the user's machine under the __AGENT_ADDRESS_KIND__:
 
     __AGENT_DNS__
 
-Use that hostname when you need to surface a URL or connection detail the user
-can open from their own machine (for example, a dev server you started here).
-Bind long-running services to `0.0.0.0` rather than `127.0.0.1` so they are
-reachable from the user's machine over that name.
+That is the address for SSH and the other connections Construct sets up. Do not
+build a URL from it and a port you opened yourself: on a VM that a Construct host
+service manages, the name can belong to the host, with this VM behind the host's
+NAT, so nothing listening here is reachable under it.
 
 When you start a server the user should open — a dev server, a preview, a
-notebook — run `construct expose <port>` and hand the user the link it prints.
+notebook — bind it to `0.0.0.0` rather than `127.0.0.1`, run
+`construct expose <port>` and hand the user the link it prints.
 It opens that port on the user's own machine, waits until the link actually
 works, and tells you if nothing is connected right now. `construct expose --help`
 lists the other ways this VM's host can publish a port. Forwards are lost on
