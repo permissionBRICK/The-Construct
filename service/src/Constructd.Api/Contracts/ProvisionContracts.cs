@@ -108,5 +108,7 @@ public sealed record AgentSignInResponse(string Id, string Agent, string State, 
 /// <summary>
 /// Input to a sign-in's terminal: <paramref name="Text"/> is typed and followed by Enter (empty: Enter alone), or
 /// <paramref name="Key"/> (<c>up</c>, <c>down</c>) is pressed, for a list the sign-in shows. One of the two.
+/// <paramref name="Session"/> (required) is the id of the sign-in it is meant for: input for one that is no longer the
+/// VM's latest is refused.
 /// </summary>
-public sealed record AgentSignInInputRequest(string? Text = null, string? Key = null);
+public sealed record AgentSignInInputRequest(string? Text = null, string? Key = null, string? Session = null);

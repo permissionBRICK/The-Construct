@@ -1062,8 +1062,8 @@ export class ApiBackend implements Backend {
     void (async () => {
       try {
         const r = await ok(this.engine(at.engine).POST('/api/v1/vms/{name}/agents/{agent}/sign-in', { params: { path: { name: at.vm, agent } } }));
-        // Put away before the engine answered: it ends there too.
-        if (this.signInAt === null) void this.engine(at.engine).DELETE('/api/v1/vms/{name}/agents/{agent}/sign-in', { params: { path: { name: at.vm, agent } } }).catch(() => {});
+        // Put away before the engine answered: it ends there too (one another start replaced is over already).
+        if (this.signInAt !== at && r.state === 'running') this.endSignIn(at, r.id);
         this.storeSignIn(at, r);
       } catch (e) {
         if (this.signInAt === at) this.emit({ signIn: { vmId, agent, state: 'failed', text: errText(e) } });
@@ -1106,10 +1106,12 @@ export class ApiBackend implements Backend {
     this.emit({ signIn: { vmId: at.vmId, agent: at.agent, state, text } });
   }
 
+  /** Types into the followed sign-in, named by its session: input meant for it never reaches a newer one. */
   signInInput(input: SignInInput) {
     const at = this.signInAt;
     if (!at?.id || this.s.signIn?.state !== 'running') return;
-    void this.run(() => ok(this.engine(at.engine).POST('/api/v1/vms/{name}/agents/{agent}/sign-in/input', { params: { path: { name: at.vm, agent: at.agent } }, body: input as never })));
+    const body = { ...input, session: at.id };
+    void this.run(() => ok(this.engine(at.engine).POST('/api/v1/vms/{name}/agents/{agent}/sign-in/input', { params: { path: { name: at.vm, agent: at.agent } }, body })));
   }
 
   closeSignIn() {
@@ -1117,7 +1119,13 @@ export class ApiBackend implements Backend {
     const running = this.s.signIn?.state === 'running' || this.s.signIn?.state === 'starting';
     this.signInAt = null;
     this.emit({ signIn: null });
-    if (at && running) void this.engine(at.engine).DELETE('/api/v1/vms/{name}/agents/{agent}/sign-in', { params: { path: { name: at.vm, agent: at.agent } } }).catch(() => {});
+    // Before the engine named it, the start's answer ends it.
+    if (at?.id && running) this.endSignIn(at, at.id);
+  }
+
+  /** Ends one sign-in on the engine, by its session: a newer one on the VM is left alone. */
+  private endSignIn(at: { engine: string; vm: string; agent: AgentId }, session: string) {
+    void this.engine(at.engine).DELETE('/api/v1/vms/{name}/agents/{agent}/sign-in', { params: { path: { name: at.vm, agent: at.agent }, query: { session } } }).catch(() => {});
   }
 
   /** The VM's coding agents again (versions, signed in). */

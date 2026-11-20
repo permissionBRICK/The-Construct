@@ -725,7 +725,7 @@ export interface paths {
         put?: never;
         /** @description Starts the agent's own sign-in on the VM in a terminal (claude-code, codex, opencode, antigravity); a sign-in running on the VM ends. 409: `vm-endpoint-unknown`, `sign-in-not-started` (the connection to the VM failed). */
         post: operations["StartAgentSignIn"];
-        /** @description Ends the sign-in and its processes on the VM. Ending an ended one does nothing. */
+        /** @description Ends the sign-in named by `session` and its processes on the VM. Ending one that is over, or that a newer one replaced, does nothing. */
         delete: operations["EndAgentSignIn"];
         options?: never;
         head?: never;
@@ -741,7 +741,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Types into the sign-in's terminal. 409 `sign-in-ended` when it is over. */
+        /** @description Types into the sign-in named by `session`. 409 `sign-in-ended` when it is over or a newer one took its place. */
         post: operations["AgentSignInInput"];
         delete?: never;
         options?: never;
@@ -4127,6 +4127,7 @@ export interface components {
         AgentSignInInputRequest: {
             text?: null | string;
             key?: null | string;
+            session?: null | string;
         };
         AgentSignInResponse: {
             id: string;
@@ -8553,7 +8554,9 @@ export interface operations {
     };
     EndAgentSignIn: {
         parameters: {
-            query?: never;
+            query?: {
+                session?: string;
+            };
             header?: never;
             path: {
                 name: string;

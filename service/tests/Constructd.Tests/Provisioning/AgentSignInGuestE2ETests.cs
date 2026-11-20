@@ -40,23 +40,25 @@ public sealed class AgentSignInGuestE2ETests
         foreach (var agent in agents)
         {
             var url = $"/api/v1/vms/e2e/agents/{agent}/sign-in";
-            Assert.Equal(HttpStatusCode.Accepted, (await client.PostAsync(url, null)).StatusCode);
+            var start = await client.PostAsync(url, null);
+            Assert.Equal(HttpStatusCode.Accepted, start.StatusCode);
+            var session = (await start.ReadAsync<AgentSignInResponse>()).Id;
             // OpenCode shows its list of integrations first: a search typed picks OpenAI, two arrow keys and Enter
             // its device code method.
             if (agent == "opencode")
             {
                 await UntilAsync(client, url, s => s.Text.Contains("Select integration", StringComparison.Ordinal), "OpenCode's list");
-                await InputAsync(client, url, new { text = "OpenAI" });
+                await InputAsync(client, url, new { text = "OpenAI", session });
                 await UntilAsync(client, url, s => s.Text.Contains("Select login method", StringComparison.Ordinal), "OpenCode's methods");
-                await InputAsync(client, url, new { key = "down" });
-                await InputAsync(client, url, new { key = "down" });
-                await InputAsync(client, url, new { text = "" });
+                await InputAsync(client, url, new { key = "down", session });
+                await InputAsync(client, url, new { key = "down", session });
+                await InputAsync(client, url, new { text = "", session });
             }
 
             var shown = await UntilAsync(client, url, s => s.Text.Contains("https://", StringComparison.Ordinal), agent + "'s link");
             Assert.Equal("running", shown.State);
 
-            Assert.Equal(HttpStatusCode.NoContent, (await client.DeleteAsync(url)).StatusCode);
+            Assert.Equal(HttpStatusCode.NoContent, (await client.DeleteAsync($"{url}?session={session}")).StatusCode);
             var ended = await (await client.GetAsync(url)).ReadAsync<AgentSignInResponse>();
             Assert.Equal(("ended", "stopped"), (ended.State, ended.Outcome));
         }

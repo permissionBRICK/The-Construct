@@ -30,10 +30,10 @@ public static class AgentSignInEndpoints
         api.MapPost("/vms/{name}/agents/{agent}/sign-in/input", InputAsync).RequireAuthorization(Policies.User)
             .Audited("vm.agent.sign-in.input", auditSuccess: false)
             .Accepts<AgentSignInInputRequest>("application/json").Produces(StatusCodes.Status204NoContent).WithName("AgentSignInInput")
-            .WithDescription("Types into the sign-in's terminal. 409 `sign-in-ended` when it is over.");
+            .WithDescription("Types into the sign-in named by `session`. 409 `sign-in-ended` when it is over or a newer one took its place.");
         api.MapDelete("/vms/{name}/agents/{agent}/sign-in", EndAsync).RequireAuthorization(Policies.User).Audited("vm.agent.sign-in.end")
             .Produces(StatusCodes.Status204NoContent).WithName("EndAgentSignIn")
-            .WithDescription("Ends the sign-in and its processes on the VM. Ending an ended one does nothing.");
+            .WithDescription("Ends the sign-in named by `session` and its processes on the VM. Ending one that is over, or that a newer one replaced, does nothing.");
         return api;
     }
 
@@ -84,23 +84,27 @@ public static class AgentSignInEndpoints
         if (vm is null) return denied!;
         if (request is null || (request.Text is null) == (request.Key is null))
             return CodedProblems.Validation("text", "Expected text or key.");
+        if (request.Session is not { Length: > 0 } id) return CodedProblems.Validation("session", "Expected the sign-in's id.");
         if (request.Text is { } text && !AgentSignInScript.ValidInput(text))
             return CodedProblems.Validation("text", $"Expected at most {AgentSignInScript.MaxInput} characters without control characters.");
         if (request.Key is { } key && !AgentSignInScript.Keys.Contains(key))
             return CodedProblems.Validation("key", "Expected " + string.Join(" or ", AgentSignInScript.Keys) + ".");
         if (Find(signIns, vm, agent) is not { } session) return None();
-        return await signIns.InputAsync(session, request.Text, request.Key, ct)
+        // A panel that still shows an older sign-in never types into the newer one.
+        return session.Id == id && await signIns.InputAsync(session, request.Text, request.Key, ct)
             ? Results.NoContent()
             : CodedProblems.Create(409, "sign-in-ended", "The sign-in is over.");
     }
 
-    private static async Task<IResult> EndAsync(string name, string agent, HttpContext http, IVmRepository vms, AgentSignIns signIns, CancellationToken ct)
+    private static async Task<IResult> EndAsync(string name, string agent, string? session, HttpContext http, IVmRepository vms, AgentSignIns signIns,
+        CancellationToken ct)
     {
         var (vm, denied) = await VmAsync(name, agent, http, vms, ct);
         if (vm is null) return denied!;
-        if (Find(signIns, vm, agent) is not { } session) return None();
-        http.SetAuditDetail($"agent={agent}; session={session.Id}");
-        await signIns.EndAsync(session, "stopped");
+        if (session is not { Length: > 0 }) return CodedProblems.Validation("session", "Expected the sign-in's id.");
+        http.SetAuditDetail($"agent={agent}; session={session}");
+        // Only the sign-in it names: one a newer sign-in replaced is over already.
+        if (Find(signIns, vm, agent) is { } current && current.Id == session) await signIns.EndAsync(current, "stopped");
         return Results.NoContent();
     }
 }

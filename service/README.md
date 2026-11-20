@@ -447,10 +447,12 @@ as well).
   changes) and, after the end, `signedIn` as the VM checked it. A sign-in already running on the VM ends first.
 - `GET /vms/{name}/agents/{agent}/sign-in` reads it (`404 no-sign-in` when none ran since the engine started or
   another agent's came after it).
-- `POST .../sign-in/input` `{text}` types the text and Enter into the terminal (empty: Enter alone), `{key}`
-  presses `up` or `down` for a list the sign-in shows; at most 4096 characters, no control characters; `409
-  sign-in-ended` once it is over. Only refused input is audited, never its text.
-- `DELETE .../sign-in` ends it: stdin closes and `construct-agent-sign-in.py --stop` ends its process group.
+- `POST .../sign-in/input` `{text, session}` types the text and Enter into the terminal (empty: Enter alone),
+  `{key, session}` presses `up` or `down` for a list the sign-in shows; at most 4096 characters, no control
+  characters; `session` is the sign-in's id; `409 sign-in-ended` once it is over or a newer sign-in took its
+  place. Only refused input is audited, never its text.
+- `DELETE .../sign-in?session=<id>` ends that sign-in: stdin closes and `construct-agent-sign-in.py --stop` ends
+  its process group. One that is over, or that a newer one replaced, is left as it is.
 - The change stream announces `agent-sign-in.started`, `agent-sign-in.output` (at most four times a second) and
   `agent-sign-in.ended` with the session id and the VM, to the owner only.
 

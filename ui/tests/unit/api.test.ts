@@ -1642,7 +1642,7 @@ describe('ApiBackend agent sign-in', () => {
     be.signInInput({ text: 'the-code' });
     be.signInInput({ key: 'down' });
     await settle();
-    expect(posts(calls).filter(c => c.path.endsWith('/input')).map(c => c.body)).toEqual([{ text: 'the-code' }, { key: 'down' }]);
+    expect(posts(calls).filter(c => c.path.endsWith('/input')).map(c => c.body)).toEqual([{ text: 'the-code', session: 'si1' }, { key: 'down', session: 'si1' }]);
 
     on('GET', `${P}/vms/atlas/agents/claude-code/sign-in`, { json: session({ state: 'ended', outcome: 'done', signedIn: true, revision: 5 }) });
     on('GET', `${P}/vms/atlas/agents`, { json: { reportedAt: null, agents: [{ tool: 'claude', name: 'Claude Code', version: '2.1.0', latest: '2.2.0', updateAvailable: true, signedIn: true }] } });
@@ -1682,7 +1682,19 @@ describe('ApiBackend agent sign-in', () => {
     await settle();
     be.closeSignIn();
     await settle();
-    expect(calls.filter(c => c.method === 'DELETE').map(c => c.path)).toEqual([`${P}/vms/atlas/agents/codex/sign-in`]);
+    expect(calls.filter(c => c.method === 'DELETE').map(c => c.path + c.query)).toEqual([`${P}/vms/atlas/agents/codex/sign-in?session=si1`]);
+    expect(be.snapshot().signIn).toBeNull();
+  });
+
+  it('ends a sign-in put away before the engine answered, by the id the answer named', async () => {
+    const { be, calls, on, settle } = world();
+    await be.start();
+    on('POST', `${P}/vms/atlas/agents/codex/sign-in`, { status: 202, json: session({ id: 'si7', agent: 'codex' }) });
+    on('DELETE', `${P}/vms/atlas/agents/codex/sign-in`, { status: 204 });
+    be.signIn('atlas', 'codex');
+    be.closeSignIn();
+    await settle();
+    expect(calls.filter(c => c.method === 'DELETE').map(c => c.path + c.query)).toEqual([`${P}/vms/atlas/agents/codex/sign-in?session=si7`]);
     expect(be.snapshot().signIn).toBeNull();
   });
 });
