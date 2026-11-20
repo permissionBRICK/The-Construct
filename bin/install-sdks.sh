@@ -128,22 +128,32 @@ install_node() {
 }
 
 SYSTEM_PYTHON="${SYSTEM_PYTHON:-/usr/bin/python3}"
+# Where the Debian packages (Ubuntu's and deadsnakes') put their python3.X.
+PYTHON_BIN_DIR="${PYTHON_BIN_DIR:-/usr/bin}"
 PYTHON_DEFAULT_LINK="${PYTHON_DEFAULT_LINK:-/usr/local/bin/python3}"
 PYTHON_PPA="${PYTHON_PPA:-ppa:deadsnakes/ppa}"
 APT_SOURCES_DIR="${APT_SOURCES_DIR:-/etc/apt/sources.list.d}"
 
 deb_installed() { [[ "$(dpkg-query -W -f='${Status}' "$1" 2>/dev/null)" == "install ok installed" ]]; }
-# A link at PYTHON_DEFAULT_LINK to some pythonX.Y is this script's to change; anything else
-# there was put by someone else and stays.
-python_link_ours() { [[ -L "${PYTHON_DEFAULT_LINK}" && "$(basename "$(readlink "${PYTHON_DEFAULT_LINK}")")" =~ ^python3\.[0-9]+$ ]]; }
+# Whether the configured repositories (a mirror included) offer a package.
+apt_offers() { local c; c="$(LC_ALL=C apt-cache policy "$1" 2>/dev/null | sed -n 's/^ *Candidate: *//p' | head -1)"; [[ -n "${c}" && "${c}" != "(none)" ]]; }
+# A link at PYTHON_DEFAULT_LINK to a packaged interpreter (PYTHON_BIN_DIR/python3.X) is
+# Construct's to change; anything else there was put by someone else and stays.
+python_link_ours() {
+  local target
+  [[ -L "${PYTHON_DEFAULT_LINK}" ]] || return 1
+  target="$(readlink "${PYTHON_DEFAULT_LINK}")"
+  [[ "${target%/*}" == "${PYTHON_BIN_DIR}" && "${target##*/}" =~ ^python3\.[0-9]+$ ]]
+}
 
 install_python() {
-  local requested=("$@") distro v minor newest="" seen=" " missing=() extra=() target
+  local requested=("$@") distro v p minor newest="" seen=" " missing=() extra=() updated=false need_ppa=false target
   [[ ${#requested[@]} -gt 0 ]] || requested=(3)
   step "Installing Python (requested: ${requested[*]})"
-  for v in python3 python3-venv python3-pip; do deb_installed "${v}" || missing+=("${v}"); done
+  for p in python3 python3-venv python3-pip; do deb_installed "${p}" || missing+=("${p}"); done
   if [[ ${#missing[@]} -gt 0 ]]; then
     apt_get update
+    updated=true
     apt_get install -y "${missing[@]}"
   fi
   distro="$("${SYSTEM_PYTHON}" -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
@@ -160,22 +170,26 @@ install_python() {
     fi
     [[ "${seen}" != *" ${minor} "* ]] || continue
     seen+="${minor} "
-    if [[ "${minor}" == "${distro}" ]] || command -v "python${minor}" >/dev/null 2>&1; then
-      note "Python ${minor} already installed"
-    else
-      extra+=("python${minor}" "python${minor}-venv")
+    # The distro's own version is the python3 packages above. Any other one needs both its
+    # interpreter and its venv package (without it, `python3 -m venv` cannot set up pip).
+    local before=${#extra[@]}
+    if [[ "${minor}" != "${distro}" ]]; then
+      for p in "python${minor}" "python${minor}-venv"; do deb_installed "${p}" || extra+=("${p}"); done
     fi
+    (( ${#extra[@]} > before )) || note "Python ${minor} already installed"
   done
   if [[ ${#extra[@]} -gt 0 ]]; then
-    if ! grep -rqs deadsnakes "${APT_SOURCES_DIR}"; then
+    [[ "${updated}" == true ]] || apt_get update
+    # A configured repository (a mirror) may offer them already; the PPA only for what it does not.
+    for p in "${extra[@]}"; do apt_offers "${p}" || need_ppa=true; done
+    if [[ "${need_ppa}" == true ]] && ! grep -rqs deadsnakes "${APT_SOURCES_DIR}"; then
       if ! command -v add-apt-repository >/dev/null 2>&1; then
-        apt_get update
         apt_get install -y software-properties-common
       fi
       # --no-update: the update below waits for apt's locks, add-apt-repository's own does not.
       LC_ALL=C add-apt-repository -y -n "${PYTHON_PPA}"
+      apt_get update
     fi
-    apt_get update
     apt_get install -y "${extra[@]}"
   fi
   [[ -n "${newest}" ]] || return 0
@@ -184,7 +198,9 @@ install_python() {
     ok "python3 is the distro's Python ${distro}"
     return 0
   fi
-  target="$(command -v "python${newest}")" || { err "python${newest} is not on PATH after its install"; return 1; }
+  # The packaged interpreter, not whatever python3.X comes first on PATH (a user's shim).
+  target="${PYTHON_BIN_DIR}/python${newest}"
+  [[ -x "${target}" ]] || { err "${target} is missing after its install"; return 1; }
   if [[ -e "${PYTHON_DEFAULT_LINK}" || -L "${PYTHON_DEFAULT_LINK}" ]] && ! python_link_ours; then
     warn "${PYTHON_DEFAULT_LINK} was not made by Construct; leaving it, so python3 is not switched to ${newest}"
     return 0
