@@ -138,8 +138,12 @@ class Fixture:
         shutil.rmtree(self.dir, ignore_errors=True)
 
     def env(self, **extra):
+        # A login shell's cgroup: export-config.sh must not take itself for a T3 Code terminal
+        # (this suite may run in one) and skip the stop these tests expect.
+        cgroup = self.dir / 'cgroup'
+        cgroup.write_text('0::/user.slice/user-0.slice/session-1.scope\n')
         env = {
-            'PATH': f'{self.bin}:/usr/bin:/bin', 'HOME': str(self.dir),
+            'PATH': f'{self.bin}:/usr/bin:/bin', 'HOME': str(self.dir), 'CONSTRUCT_CGROUP_FILE': str(cgroup),
             'CONSTRUCT_T3_RESUME_FILE': str(self.pending), 'CONSTRUCT_T3_RESUME_TOKEN_FILE': str(self.token),
             'CONSTRUCT_T3_API': f'http://127.0.0.1:{self.server.server_address[1]}',
             'CONSTRUCT_PROVISION_MARKER': str(self.marker), 'CONSTRUCT_REBOOT_REQUIRED_FILE': str(self.reboot_required),
