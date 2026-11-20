@@ -209,6 +209,31 @@ public sealed class ChildVmJobTests
         Assert.DoesNotContain("remove:child", app.Service<FakeChildVmDriver>().Calls);
         Assert.Contains((await app.Service<ICapacityLedger>().SnapshotAsync(false, default)).Reservations, r => r.VmName == "child" && r.Resource == ReservationResource.Ram);
     }
+    /// <summary>A key store whose start intents cannot be recorded, as when the job is cancelled first.</summary>
+    private sealed class NoStartIntents(IOperationKeyStore inner) : IOperationKeyStore
+    {
+        public Task<OperationKeyRecord?> GetAsync(string owner, string kind, string key, CancellationToken ct) => inner.GetAsync(owner, kind, key, ct);
+        public Task<(OperationKeyOutcome Outcome, OperationKeyRecord? Existing)> TryInsertAsync(OperationKeyRecord record, CancellationToken ct) =>
+            record.Kind == "child-start" ? throw new OperationCanceledException() : inner.TryInsertAsync(record, ct);
+        public Task<bool> CompleteAsync(string owner, string kind, string key, string responseJson, CancellationToken ct) => inner.CompleteAsync(owner, kind, key, responseJson, ct);
+        public Task<bool> RemoveAsync(string owner, string kind, string key, CancellationToken ct) => inner.RemoveAsync(owner, kind, key, ct);
+        public Task<IReadOnlyList<OperationKeyRecord>> ListInFlightAsync(string vmName, CancellationToken ct) => inner.ListInFlightAsync(vmName, ct);
+        public Task<int> SweepAsync(DateTimeOffset olderThan, CancellationToken ct) => inner.SweepAsync(olderThan, ct);
+    }
+    [Fact]
+    public async Task AStartThatFailsBeforeRecordingItsIntentCleansUpItsOffVm()
+    {
+        await using var app = new TestApp(configureServices: services =>
+            services.AddSingleton<IOperationKeyStore>(sp => new NoStartIntents(sp.GetRequiredService<InMemoryOperationKeyStore>())));
+        using var client = await Setup(app);
+        var job = await Finish(app, await client.PostAsJsonAsync("/api/v1/vms/parent/children", Request()));
+        Assert.Equal(JobState.Failed, job.State);
+        Assert.DoesNotContain("start:child", app.Driver.Calls);
+        // No intent was recorded, so nothing was booted: the VM this run allocated is removed again.
+        Assert.Contains("remove:child", app.Service<FakeChildVmDriver>().Calls);
+        Assert.Null(await app.Vms.GetAsync("child", default));
+        Assert.DoesNotContain((await app.Service<ICapacityLedger>().SnapshotAsync(false, default)).Reservations, r => r.VmName == "child");
+    }
     [Fact]
     public async Task ARecoveredCreateKeepsItsVmWhenItsStartWasRefusedEarlier()
     {
