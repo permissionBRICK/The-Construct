@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # A configured guest environment must not alter host-side fixtures or tests.
-unset CONSTRUCT_SERVICE_URL CONSTRUCT_SERVICE_CA_FILE CONSTRUCT_EXTERNAL_HOST CONSTRUCT_EXTERNAL_SSH_PORT CONSTRUCT_INSTANCE_NAME CONSTRUCT_T3_VOICE_INPUT
+. test/helpers/isolate-env.sh
 usage='Usage: bash test/run-local-checks.sh [panel|t3|service|release|ui|agent|guest|all | --changed [<base>]]'
 group="${1:-all}"
 if [[ "$group" == --changed ]]; then
@@ -45,6 +45,7 @@ if [[ "$group" == service || "$group" == all ]]; then
   bash test/usage-report.test.sh
   bash test/endpoint-refresh.test.sh
   bash test/construct-expose.test.sh
+  bash test/isolate-env.test.sh
   python3 test/project-forwards.test.py
   bash test/construct-secret.test.sh
   bash test/construct-config.test.sh

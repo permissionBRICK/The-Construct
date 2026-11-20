@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 repo="$(cd "$(dirname "$0")/.." && pwd)"
+# Never inherit the VM's own CONSTRUCT_*/T3CODE_* settings (test/helpers/isolate-env.sh).
+# shellcheck disable=SC1091
+. "${repo}/test/helpers/isolate-env.sh"
 work="$(mktemp -d)"
 trap 'rm -r "${work}"' EXIT
 export CONFIG_FILE="${work}/config.env" CONSTRUCT_VM_TOKEN_FILE="${work}/token"
