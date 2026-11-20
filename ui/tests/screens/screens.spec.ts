@@ -88,6 +88,24 @@ test('a memory change asks restart now or later', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Later' })).toHaveCount(0);
 });
 
+test('a swap file size is checked, then waits for the next reprovision', async ({ page }) => {
+  await open(page, 'win', 'calm', 'light', 'settings');
+  const swap = page.getByRole('textbox', { name: 'Swap file' });
+  const hint = page.getByText('auto: half the RAM, at most 8 GB · 0: none');
+  await swap.fill('300');
+  await swap.press('Enter');
+  await expect(hint).toHaveClass(/badc/);
+  // auto is saved even though it is shown already: unset only keeps what the VM has.
+  await swap.fill('auto');
+  await swap.press('Enter');
+  await expect(page.getByText('Saved, applies at the next reprovision')).toBeVisible();
+  await swap.fill(' 16 ');
+  await swap.press('Enter');
+  await expect(hint).not.toHaveClass(/badc/);
+  await expect(swap).toHaveValue('16');
+  await expect(page.getByText('Saved, applies at the next reprovision')).toBeVisible();
+});
+
 test('the repair agent takes a reply', async ({ page }) => {
   await open(page, 'win', 'repair', 'dark');
   await page.getByRole('textbox', { name: 'Reply' }).fill('wait for them');

@@ -90,6 +90,7 @@ public static partial class ProvisionScript
         Add("CLAUDE_PARTIAL_STREAMING", s.ClaudePartialStreaming ?? "true");
         Add("MIC_PASSTHROUGH", s.MicPassthrough ?? "false");
         Add("OPENCODE_BACKGROUND_WATCHER", s.OpenCodeBackgroundWatcher);
+        Add("SWAP_SIZE_GB", s.SwapSizeGb);
         Add("T3CODE", s.T3Code);
         Add("T3CODE_CHANNEL", s.T3CodeChannel);
         Add("T3CODE_BUILD_SOURCE", s.T3CodeBuildSource);
@@ -134,6 +135,15 @@ public static partial class ProvisionScript
         vars.Add(new("GIT_CLONE_SKIP_HOSTS_B64", s.GitCloneSkipHostsB64 ?? string.Empty));
         return vars;
     }
+
+    /// <summary>
+    /// A <c>SWAP_SIZE_GB</c> as <c>bin/setup-swap.sh</c> takes it: <c>auto</c>, or a whole number of GiB from 0 to
+    /// 128 without leading zeros.
+    /// </summary>
+    public static bool IsSwapSize(string? value) => value is not null && SwapSize().IsMatch(value);
+
+    [GeneratedRegex(@"^(auto|0|[1-9][0-9]?|1[01][0-9]|12[0-8])\z")]
+    private static partial Regex SwapSize();
 
     /// <summary>Rejects values that cannot travel in a shell word safely even when quoted.</summary>
     public static string? Invalid(IEnumerable<KeyValuePair<string, string>> vars) =>

@@ -70,7 +70,7 @@ restart to turn on Hyper-V, the first run and the upgrade's engine step say so w
 
 ## Settings, jobs, updates
 
-A VM's Services and Identity settings and its profiles are its desired state on its engine
+A VM's Services and Identity settings, its swap file size and its profiles are its desired state on its engine
 (`GET`/`PUT /vms/{name}/desired`): a save reads the document, changes the named fields and stores it whole, so
 fields this page does not show stay as they are. Nothing runs on the VM; the engine's `provision-status` then
 reports the change and Reprovision shows the dot. Memory and CPU keep their own routes and the inline "restart

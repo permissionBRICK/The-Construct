@@ -57,7 +57,28 @@ public sealed class ProvisionScriptTests
         Assert.NotEqual(ProvisionScript.DesiredHash(a), ProvisionScript.DesiredHash(a with { Settings = new ProvisionSettings { T3Code = "false" } }));
         Assert.NotEqual(ProvisionScript.DesiredHash(a), ProvisionScript.DesiredHash(a with { Projects = ["default", "web"] }));
         Assert.Matches("^[0-9a-f]{64}$", ProvisionScript.DesiredHash(a));
+        // Unset fields stay out of the hashed JSON, so a field added later leaves the hashes stored before it alone.
+        Assert.Equal("d62729e5ed07476c46c590be8290ac5151d36757a956f4fc1703a8eb177a457f", ProvisionScript.DesiredHash(a));
+        Assert.NotEqual(ProvisionScript.DesiredHash(a), ProvisionScript.DesiredHash(a with { Settings = a.Settings with { SwapSizeGb = "auto" } }));
     }
+
+    [Theory]
+    [InlineData("auto", true)]
+    [InlineData("0", true)]
+    [InlineData("8", true)]
+    [InlineData("99", true)]
+    [InlineData("128", true)]
+    [InlineData("129", false)]
+    [InlineData("200", false)]
+    [InlineData("08", false)]
+    [InlineData("-1", false)]
+    [InlineData("4.5", false)]
+    [InlineData("Auto", false)]
+    [InlineData("4\n", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void A_swap_size_is_auto_or_a_whole_number_of_gib_up_to_128(string? value, bool valid) =>
+        Assert.Equal(valid, ProvisionScript.IsSwapSize(value));
 
     [Fact]
     public void Root_commands_are_wrapped_as_Invoke_SshStream_does()

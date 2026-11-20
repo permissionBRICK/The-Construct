@@ -10,6 +10,7 @@ const GROUP: Record<keyof VmSettings, Applies> = {
   idle: 'now',
   services: 'reprovision',
   identity: 'reprovision',
+  swap: 'reprovision',
 };
 
 export function applies(patch: SettingsPatch): Applies {
@@ -30,6 +31,13 @@ export function hwChange(now: { memGb: number; cpus: number }, want: { memGb: nu
   if (now.memGb !== want.memGb) out.push(`Memory ${now.memGb} → ${want.memGb} GB`);
   if (now.cpus !== want.cpus) out.push(`vCPUs ${now.cpus} → ${want.cpus}`);
   return out.join(' · ');
+}
+
+/** A typed swap file size as the engine takes it (`auto`, or whole GB 0-128 without leading zeros); null when it is neither. */
+export function swapSize(typed: string): string | null {
+  const v = typed.trim().toLowerCase();
+  if (v === 'auto') return v;
+  return /^[0-9]{1,3}$/.test(v) && Number(v) <= 128 ? String(Number(v)) : null;
 }
 
 /** Merge a patch into settings without mutating. */

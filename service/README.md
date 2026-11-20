@@ -349,7 +349,9 @@ beside the database. `GET /vms/{name}/provision-status` answers `settingsChanged
 `GET /vms/{name}/desired` answers the stored settings `{desired: {projects[], settings}, hash, updatedAt, updatedBy}`
 (all null before any are stored); `PUT` with `{projects[], settings}` stores them and changes nothing in the VM, so
 `settingsChanged` turns true until a provision ran with them. Stored settings belong to the VM they were stored for:
-a VM created again under the name (by anyone) starts without them.
+a VM created again under the name (by anyone) starts without them. `settings.swapSizeGb` is the guest's swap file
+(`SWAP_SIZE_GB`, `docs/provisioning.md`, *Swap file*): `auto` or a whole number of GiB from 0 to 128, anything else is
+a 400 naming the field; null keeps the VM's saved choice.
 
 The same route starts the two other jobs of a VM's life:
 
