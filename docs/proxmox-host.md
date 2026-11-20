@@ -559,7 +559,7 @@ Remaining limitations:
 | `Proxmox:MediaStorage` | `construct-media` | Directory storage with ISO content; `HostAdmin:Media:RootDir` defaults to `/var/lib/constructd/media/template/iso` |
 | `Proxmox:ImageVolume` | `local:import/construct-ubuntu-noble-xfs-amd64.qcow2` | the cached cloud image |
 | `Proxmox:SnippetStorage` / `SnippetDir` | `local` / `/var/lib/vz/snippets` | where per-VM seeds go |
-| `Proxmox:Bridge` | `vmbr0` | guest network |
+| `Proxmox:Bridge` | `vmbr0` | guest network; a child joins its parent's bridge (the parent's `net0`) and falls back to this one |
 | `Proxmox:CpuType` | `host` | QEMU CPU model with nesting enabled |
 | `Proxmox:CpuTypeWithoutNesting` | `x86-64-v2-AES` | QEMU CPU model with nesting disabled and for child VMs; must not expose VMX/SVM. The `-AES` suffix is dropped automatically on hosts without AES-NI |
 | `Proxmox:QmPath` / `PveshPath` | `qm` / `pvesh` | the commands |
