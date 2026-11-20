@@ -14,6 +14,18 @@ const ROUTE_RE = /^#\/[A-Za-z0-9/_.~%-]{0,200}$/;
 const ENGINE_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const VM_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
 const LOCAL_URL_RE = /^https?:\/\/(localhost|127\.0\.0\.1):\d{1,5}(\/[A-Za-z0-9/_.~%?&=+-]{0,500})?$/;
+const WEB_URL_MAX = 2048;
+
+/** A web link the page may open (a sign-in's link): https, a host, no credentials, no spaces or control
+    characters, at most WEB_URL_MAX characters. VS Code applies its own link protection when it opens one. */
+function webUrl(s) {
+  if (typeof s !== "string" || s.length > WEB_URL_MAX || !/^https:\/\/[\x21-\x7e]+$/.test(s)) return false;
+  let u;
+  try { u = new URL(s); } catch { return false; }
+  // The host as written: present, no user part, and the one the URL parser read.
+  const host = s.slice(8).split(/[/?#]/)[0].toLowerCase();
+  return u.protocol === "https:" && host.length > 0 && host === u.host && !u.username && !u.password;
+}
 
 function esc(s) {
   return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -104,7 +116,7 @@ function frameHtml({ nonce, port }) {
 /**
  * What the extension accepts from the agent's page, or null. `openWindow` (the pop-out asks for
  * the window at a route), `close`, `openVsCode` for one of the user's VMs, and `openExternal` for a
- * forwarded port on this machine.
+ * forwarded port on this machine or an https link (`web: true`).
  */
 function pageMessage(m) {
   if (!m || typeof m !== "object" || Array.isArray(m)) return null;
@@ -118,8 +130,9 @@ function pageMessage(m) {
       return typeof m.engine === "string" && ENGINE_RE.test(m.engine) && typeof m.vm === "string" && VM_RE.test(m.vm)
         ? { type: "openVsCode", engine: m.engine, vm: m.vm } : null;
     case "openExternal":
-      // A forward's link: a port on this machine, nothing else.
-      return typeof m.url === "string" && LOCAL_URL_RE.test(m.url) ? { type: "openExternal", url: m.url } : null;
+      // A forward's link (a port on this machine), or a web link such as an agent's sign-in.
+      if (typeof m.url === "string" && LOCAL_URL_RE.test(m.url)) return { type: "openExternal", url: m.url };
+      return webUrl(m.url) ? { type: "openExternal", url: m.url, web: true } : null;
     default: return null;
   }
 }

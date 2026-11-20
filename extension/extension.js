@@ -170,7 +170,8 @@ function onPageMessage(m) {
   if (!m) return undefined;
   if (m.type === "openWindow") return openWindow(m.route);
   if (m.type === "openVsCode") return openVmInVsCode(m.engine, m.vm);
-  if (m.type === "openExternal") return vscode.env.openExternal(vscode.Uri.parse(m.url));
+  // A web link goes as its string: parsing and printing it as a Uri would re-encode its query (a sign-in's `+`).
+  if (m.type === "openExternal") return vscode.env.openExternal(m.web ? m.url : vscode.Uri.parse(m.url));
   return undefined;
 }
 
