@@ -4,6 +4,9 @@
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Never inherit the VM's own CONSTRUCT_*/T3CODE_* settings (test/helpers/isolate-env.sh).
+# shellcheck disable=SC1091
+. "${ROOT}/test/helpers/isolate-env.sh"
 CLI="${ROOT}/bin/construct"
 tmp="$(mktemp -d)"
 trap 'if [[ "${KEEP_TEST_TMP:-0}" == 1 ]]; then printf "kept test fixture: %s\\n" "${tmp}"; else rm -r "${tmp}"; fi' EXIT
