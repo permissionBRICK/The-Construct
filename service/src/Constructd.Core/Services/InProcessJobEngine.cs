@@ -35,7 +35,8 @@ public sealed class InProcessJobEngine(IClock clock, IJobStore store, Action<Job
         string? vmName,
         string owner,
         Func<IProgress<string>, CancellationToken, Task<JobOutcome>> work,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? initiator = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(kind);
         ArgumentNullException.ThrowIfNull(work);
@@ -50,7 +51,8 @@ public sealed class InProcessJobEngine(IClock clock, IJobStore store, Action<Job
             Result: null,
             Error: null,
             Created: clock.UtcNow,
-            Finished: null));
+            Finished: null,
+            Initiator: initiator));
 
         IDisposable? handle = null;
         if (maintenance is not null && kind is "create-vm" or "remove-vm" or "iso-build" or "iso-acquire" or "host-install" or "host-reachability")
