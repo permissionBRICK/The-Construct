@@ -15,6 +15,13 @@ public sealed class VaultRelayEndpoint(IServer server, ConstructdOptions options
 {
     private int _port = Math.Max(0, options.Https.VaultRelayPort);
 
+    // The API's own plain-http ports: a plain-http loopback listen URL (fake mode, tests, local
+    // development) is bound next to the relay and must not be taken for it.
+    private readonly HashSet<int> _apiPorts = (options.ListenUrl ?? "")
+        .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Select(url => Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttp ? uri.Port : 0)
+        .Where(port => port > 0).ToHashSet();
+
     /// <summary>The extra listen URL, or null when the service has no listen URL of its own (tests, development).</summary>
     public static string? ListenUrl(ConstructdOptions options) =>
         string.IsNullOrWhiteSpace(options.ListenUrl) ? null : $"http://127.0.0.1:{Math.Max(0, options.Https.VaultRelayPort)}";
@@ -26,8 +33,13 @@ public sealed class VaultRelayEndpoint(IServer server, ConstructdOptions options
         {
             if (Volatile.Read(ref _port) > 0) return _port;
             var addresses = server.Features.Get<IServerAddressesFeature>()?.Addresses;
-            var bound = addresses?.FirstOrDefault(a => a.StartsWith("http://127.0.0.1:", StringComparison.Ordinal));
-            if (bound is not null && Uri.TryCreate(bound, UriKind.Absolute, out var uri) && uri.Port > 0) Volatile.Write(ref _port, uri.Port);
+            foreach (var bound in addresses ?? [])
+            {
+                if (!bound.StartsWith("http://127.0.0.1:", StringComparison.Ordinal) || !Uri.TryCreate(bound, UriKind.Absolute, out var uri) ||
+                    uri.Port <= 0 || _apiPorts.Contains(uri.Port)) continue;
+                Volatile.Write(ref _port, uri.Port);
+                break;
+            }
             return _port;
         }
     }
