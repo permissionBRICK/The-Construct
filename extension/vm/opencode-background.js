@@ -138,7 +138,7 @@ async function setup(ctx) {
   const lastCheck = new Map()
   /** sessionID -> parent sessionID, or null for a root session */
   const parents = new Map()
-  /** sessionID -> { at, root }, a turn that runs on an accepted wake-up */
+  /** sessionID -> { at, root, messageID }, a turn that runs on an accepted wake-up */
   const wakeTurns = new Map()
   /** sessionID -> time the plugin interrupted that session itself */
   const selfInterrupts = new Map()
@@ -472,10 +472,13 @@ async function setup(ctx) {
    * `stale`: a wake-up refused now with no other input after it, so it alone started the turn.
    */
   function screen(sessionID, messages, decide) {
+    const turn = wakeTurns.get(sessionID)
     let newer = false
     let stale = false
     let accepted
     for (let i = messages.length - 1; i >= 0; i--) {
+      // Input after the wake-up that started the running turn: a newer prompt took that turn over.
+      if (decide && newer && turn?.messageID && messages[i]?.id === turn.messageID) wakeTurns.delete(sessionID)
       const meta = messages[i]?.metadata
       const job = meta?.source === SOURCE && typeof meta.id === "string" ? readMeta(jobDir(sessionID, meta.id)) : undefined
       if (!job) {
@@ -490,7 +493,7 @@ async function setup(ctx) {
           stale ||= !newer
         } else {
           touch(job.dir, ACCEPTED_FILE)
-          if (!newer) accepted = job
+          if (!newer) accepted = { job, messageID: messages[i]?.id }
         }
       }
       if (has(job.dir, REFUSED_FILE) || (undecided && !decide && disarmed(job))) messages.splice(i, 1)
@@ -504,7 +507,7 @@ async function setup(ctx) {
     busy.add(sessionID) // a model request runs: the session's events may still be on their way
     const { stale, accepted } = screen(sessionID, messages, true)
     if (accepted) {
-      wakeTurns.set(sessionID, { at: Date.now(), root: accepted.root })
+      wakeTurns.set(sessionID, { at: Date.now(), root: accepted.job.root, messageID: accepted.messageID })
       ensureTimer()
     }
     if (!stale) return
@@ -685,9 +688,8 @@ async function setup(ctx) {
         }
         if (!job.wait || job.directory !== directory) continue
         if (age > ADOPT_MAX_AGE_MS) continue
-        if (has(job.dir, "notified")) continue
-        known.set(`${job.sessionID}/${job.id}`, job)
-        if (disarmed(job)) continue
+        known.set(`${job.sessionID}/${job.id}`, job) // the root's stop report looks subagent jobs up here
+        if (has(job.dir, "notified") || disarmed(job)) continue
         watch(job)
         // After startup, once the server answers; notify() resolves it again before any wake-up.
         if (!job.root) setTimeout(() => resolveRoot(job).catch(() => {}), 5000).unref?.()

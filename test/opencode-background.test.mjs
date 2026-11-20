@@ -76,7 +76,7 @@ async function harness({ parents = {}, getFailures = 0, hold = false } = {}) {
     const pending = queued.get(sessionID) ?? []
     queued.delete(sessionID)
     const messages = history.get(sessionID) ?? []
-    for (const item of pending) messages.push({ role: "user", content: item.text, metadata: item.metadata })
+    for (const item of pending) messages.push({ id: item.id, role: "user", content: item.text, metadata: item.metadata })
     history.set(sessionID, messages)
     const request = { sessionID, messages: [...messages] }
     const before = interrupts.length
@@ -138,8 +138,8 @@ async function harness({ parents = {}, getFailures = 0, hold = false } = {}) {
     queued.set(sessionID, (queued.get(sessionID) ?? []).filter((item) => !notes.includes(item)))
     history.set(sessionID, [
       ...(history.get(sessionID) ?? []),
-      ...notes.map((note) => ({ role: "user", content: note.text, metadata: note.metadata })),
-      { role: "user", content: text },
+      ...notes.map((note) => ({ id: note.id, role: "user", content: note.text, metadata: note.metadata })),
+      { id: `msg_user_${++n}`, role: "user", content: text },
     ])
     return notes
   }
@@ -426,6 +426,38 @@ await test("a refused wake-up ends its turn even when a step limit appended an a
   assert.deepEqual(h.interrupts, ["ses_steps"], "the user's turn is not interrupted")
   assert.equal(withPrompt.length, 1)
   h.dispose()
+})
+
+await test("a root Stop never interrupts a child's prompt admitted after its wake-up turn started", async () => {
+  const h = await harness({ parents: { ses_kid: "ses_top" }, hold: true })
+  await h.start("ses_kid", "echo kid")
+  await settle()
+  await h.event("session.execution.started", { sessionID: "ses_kid" })
+  // OpenCode runs the prompt hook before it admits the prompt; the wake-up's request runs in between.
+  await h.hooks.prompt({ sessionID: "ses_kid", messageID: "msg_kid_user", prompt: { text: "user prompt" }, delivery: "steer" })
+  await h.run("ses_kid")
+  h.history.get("ses_kid").push({ id: "msg_kid_user", role: "user", content: "user prompt" })
+  await h.run("ses_kid") // the next request carries the user's prompt
+  assert.equal(h.requests.length, 2)
+  writeStop("ses_top", Date.now() + 1)
+  await sleep(1500)
+  assert.deepEqual(h.interrupts, [], "the child's turn now belongs to the user")
+  h.dispose()
+})
+
+await test("after a restart the root's first prompt lists a child's task whose held wake-up a Stop disarmed", async () => {
+  const first = await harness({ parents: { ses_kid_r: "ses_top_r" }, hold: true })
+  await first.start("ses_kid_r", "echo kid")
+  await settle()
+  assert.equal(first.wakes("ses_kid_r").length, 1, "handed over, still queued in OpenCode")
+  writeStop("ses_top_r")
+  first.dispose()
+  const second = await harness({ parents: { ses_kid_r: "ses_top_r" } })
+  const [note] = await second.userPrompt("ses_top_r")
+  assert.match(note?.text ?? "", /bg_1 \(echo kid\): exited 0/)
+  await settle()
+  assert.equal(second.wakes("ses_kid_r").length, 0, "indexed for the report, not watched again")
+  second.dispose()
 })
 
 await test("a task adopted from the previous plugin version honours a Stop of its root session", async () => {
