@@ -143,16 +143,17 @@ public sealed class ChildCreateJob(IVmRepository vms, IVmMetadataStore identity,
         {
             try
             {
+                var intent = startIntentExists ? await keys.GetAsync(vm.Owner, "child-start", job.Id + ":start", CancellationToken.None) : null;
                 // This run's start was refused before it booted anything and closed its intent, so the
                 // VM this run created is cleaned up. A recovered run did not allocate (it has nothing to
                 // clean up with) and keeps the intent's VM, as does any intent completed after a boot.
-                if (startIntentExists && !recoveringStart && ChildStartIntent.ClosedBeforeBoot(
-                        await keys.GetAsync(vm.Owner, "child-start", job.Id + ":start", CancellationToken.None)))
+                if (startIntentExists && !recoveringStart && ChildStartIntent.ClosedBeforeBoot(intent))
                     startIntentExists = false;
-                // Off while the intent is still in flight: the start failed and closes its intent here. An intent
-                // the boot completed keeps its VM, also when the guest has shut down since.
+                // Off while the intent is still in flight, or before the start recorded one at all (nothing
+                // boots without it): the start failed, and the intent is closed here. An intent the boot
+                // completed keeps its VM, also when the guest has shut down since.
                 if (startIntentExists && !recoveringStart && await hypervisor.GetSettledStateAsync(vm.Name, CancellationToken.None) == VmState.Off &&
-                    await keys.CompleteAsync(vm.Owner, "child-start", job.Id + ":start", "\"start-failed\"", CancellationToken.None))
+                    (intent is null || await keys.CompleteAsync(vm.Owner, "child-start", job.Id + ":start", "\"start-failed\"", CancellationToken.None)))
                     startIntentExists = false;
                 if (startIntentExists)
                 {
