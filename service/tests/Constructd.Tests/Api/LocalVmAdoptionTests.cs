@@ -274,6 +274,22 @@ public sealed class LocalVmAdoptionTests : IDisposable
         Assert.Empty(LegacyClientSettings.ToDesired(null, null).Projects);
     }
 
+    [Fact]
+    public void The_old_clients_swap_size_is_kept_when_the_guest_takes_it()
+    {
+        static string? Swap(string settings, string? instance = null) =>
+            LegacyClientSettings.ToDesired(JsonNode.Parse(settings) as JsonObject, instance is null ? null : JsonNode.Parse(instance) as JsonObject).Settings.SwapSizeGb;
+
+        Assert.Equal("16", Swap("""{"swapSizeGb":"16"}"""));
+        Assert.Equal("auto", Swap("""{"swapSizeGb":" Auto "}"""));
+        Assert.Equal("8", Swap("""{"swapSizeGb":"08"}"""));
+        // A named instance keeps its own value in its own file.
+        Assert.Equal("0", Swap("""{"swapSizeGb":"8"}""", """{"swapSizeGb":"0"}"""));
+        Assert.Null(Swap("""{"swapSizeGb":"8"}""", "{}"));
+        Assert.Null(Swap("""{"swapSizeGb":"500"}"""));
+        Assert.Null(Swap("""{"swapSizeGb":8}"""));
+    }
+
     private static string RepoFile(string relative)
     {
         for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)

@@ -175,6 +175,11 @@ test('first run, a VM, a reprovision and a second device on the real API', async
   await expect(pa.getByRole('status')).toHaveText('Saved, applies at the next reprovision');
   // The same notice may still show from the save before: wait for the stored state.
   await expect.poll(async () => (await (await admin.get('/api/v1/vms/alpha/desired')).json()).desired.codingAgents).toEqual(['claude-code', 'opencode', 'antigravity']);
+  // So is the swap file size on the Resources tab, next to what is stored already.
+  await pa.goto(`${a.base}/#/settings`);
+  await pa.getByRole('textbox', { name: 'Swap file' }).fill('4');
+  await pa.getByRole('textbox', { name: 'Swap file' }).press('Enter');
+  await expect.poll(async () => (await (await admin.get('/api/v1/vms/alpha/desired')).json()).desired.settings).toMatchObject({ swapSizeGb: '4', vsCodeTunnel: 'true' });
   await pa.goto(`${a.base}/#/home`);
   await expect(pa.locator('.vp2 .pip')).toHaveCount(1);
 

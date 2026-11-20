@@ -13657,6 +13657,12 @@
               "string"
             ]
           },
+          "swapSizeGb": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
           "t3Code": {
             "type": [
               "null",

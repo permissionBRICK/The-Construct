@@ -132,6 +132,7 @@ describe('ApiBackend', () => {
     // Settings and projects from the desired state; agents from the guest's report.
     expect(atlas.settings.services).toMatchObject({ vscodeTunnel: true, vscodeWeb: true, mic: false });
     expect(atlas.settings.identity).toMatchObject({ gitName: 'Alex', gitEmail: '', keepCredentials: false });
+    expect(atlas.settings.swap).toEqual({ sizeGb: 'auto' });
     expect(atlas.projectsOn).toEqual(['webshop']);
     expect(atlas.agents.map(a => [a.name, a.newer])).toEqual([['Claude Code', true], ['Codex', false]]);
     // Host facts: the kind from the capabilities, the ISO catalog, no LAN switch on a host that is not solo.
@@ -325,6 +326,18 @@ describe('ApiBackend', () => {
     be.saveSettings('atlas', { services: { t3Web: true } });
     await settle();
     expect(calls.find(c => c.method === 'PUT')!.body).toEqual({ projects: [], settings: { t3Code: 'true', t3CodeHttps: 'true' } });
+  });
+
+  it('stores the swap file size in the desired state, for the next reprovision', async () => {
+    const { be, on, calls, settle } = world();
+    on('GET', `/api/engines/${E1}/api/v1/vms/atlas/desired`, { json: { desired: { projects: [], settings: { swapSizeGb: '0', smbShare: 'true' } }, hash: 'h', updatedAt: null, updatedBy: null } });
+    on('PUT', `/api/engines/${E1}/api/v1/vms/atlas/desired`, b => ({ json: { desired: b, hash: 'h2', updatedAt: null, updatedBy: null } }));
+    await be.start();
+    expect(be.snapshot().vms.find(v => v.name === 'atlas')!.settings.swap).toEqual({ sizeGb: '0' });
+    be.saveSettings('atlas', { swap: { sizeGb: '16' } });
+    await settle();
+    expect(calls.find(c => c.method === 'PUT')!.body).toEqual({ projects: [], settings: { swapSizeGb: '16', smbShare: 'true' } });
+    expect(be.snapshot().notice?.text).toBe('Saved, applies at the next reprovision');
   });
 
   it('labels an approval span exactly', () => {

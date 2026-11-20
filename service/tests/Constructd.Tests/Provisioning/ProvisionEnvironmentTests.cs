@@ -29,14 +29,15 @@ public sealed class ProvisionEnvironmentTests
     public void The_variable_set_is_the_PowerShell_one_in_its_order()
     {
         // As the old Provision-AgentVM.ps1 sent them: the $envPrefix at the provision.sh call, + $externalEnv,
-        // + $serviceEnv, then T3CODE_BUILD_MODE, DEFER_PROJECT_COMMANDS, REBOOT_AFTER_PROVISION.
+        // + $serviceEnv, then T3CODE_BUILD_MODE, DEFER_PROJECT_COMMANDS, REBOOT_AFTER_PROVISION. SWAP_SIZE_GB came
+        // after the PowerShell provisioner.
         string[] expected =
         [
             "AI_TOOLS", "PROJECTS", "SSH_USER", "AGENT_NAME", "CLAUDE_USER", "GIT_USER_NAME_B64", "GIT_USER_EMAIL_B64",
             "GIT_CREDENTIAL_STORE", "GIT_CLONE_CREDENTIALS_B64", "GIT_CLONE_SKIP_HOSTS_B64", "CHECKOUT_PROJECTS", "SETUP_ROOT_SSH_KEY",
             "VSCODE_SERVER", "VSCODE_SERVE_WEB", "VSCODE_TUNNEL", "VSCODE_SERVE_WEB_TOKEN_B64", "VSCODE_CLIENT_COMMIT",
             "CONSTRUCT_VERSION", "SMB_SHARE", "CLAUDE_PARTIAL_STREAMING", "MIC_PASSTHROUGH", "OPENCODE_BACKGROUND_WATCHER",
-            "T3CODE", "T3CODE_CHANNEL", "T3CODE_BUILD_SOURCE", "T3CODE_PATCHED", "T3CODE_AUTO_APPROVE", "T3CODE_HTTPS",
+            "SWAP_SIZE_GB", "T3CODE", "T3CODE_CHANNEL", "T3CODE_BUILD_SOURCE", "T3CODE_PATCHED", "T3CODE_AUTO_APPROVE", "T3CODE_HTTPS",
             "DOCKER_REGISTRY_MIRRORS", "CONSTRUCT_EXTERNAL_HOST", "CONSTRUCT_EXTERNAL_SSH_PORT", "CONSTRUCT_SERVICE_URL",
             "CONSTRUCT_SERVICE_CA_B64", "CONSTRUCT_INSTANCE_NAME", "T3CODE_BUILD_MODE", "DEFER_PROJECT_COMMANDS", "REBOOT_AFTER_PROVISION",
         ];
@@ -85,6 +86,14 @@ public sealed class ProvisionEnvironmentTests
     [InlineData(null, null)]
     public void A_vms_saved_AI_TOOLS_reads_as_its_coding_agents(string? saved, string? agents) =>
         Assert.Equal(agents, CodingAgents.FromAiTools(saved) is { } list ? string.Join(',', list) : null);
+
+    [Fact]
+    public void The_swap_size_is_sent_as_stored_and_empty_keeps_the_vms_saved_choice()
+    {
+        static string Swap(ProvisionEnvInput input) => ProvisionScript.MainEnvironment(input).Single(v => v.Key == "SWAP_SIZE_GB").Value;
+        Assert.Equal(string.Empty, Swap(Local()));
+        Assert.Equal("4", Swap(Local() with { Desired = new VmDesiredState(["default"], new ProvisionSettings { SwapSizeGb = "4" }) }));
+    }
 
     internal static string FindRepoFile(string relativePath)
     {

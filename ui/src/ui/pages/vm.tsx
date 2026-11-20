@@ -1,7 +1,7 @@
 import { useState } from 'preact/hooks';
 import type { Agent, Profile, SettingsPatch, Vm, VmSettings } from '../../backend/types';
 import { activeJob, vmDot, vmWord, newer, vmUpdateTarget } from '../../model/vm';
-import { AGENTS, groupApplies, hwChange } from '../../model/settings';
+import { AGENTS, groupApplies, hwChange, swapSize } from '../../model/settings';
 import { profileError } from '../../model/profile';
 import { aliasWritten } from '../../backend/api/map';
 import { Icon } from '../icons';
@@ -300,6 +300,7 @@ export function Settings({ vm }: { vm: Vm }) {
           <Row l="Checkpoints"><Switch on={st.hw.checkpoints} onChange={v => save({ hw: { checkpoints: v } })} label="Checkpoints" /></Row>
           <Row l="Start with host"><Switch on={st.hw.startWithHost} onChange={v => save({ hw: { startWithHost: v } })} label="Start with host" /></Row>
           </>}
+          {na(s, 'vm-services') ? null : <SwapSize value={st.swap.sizeGb} tag={tag('swap')} onSave={v => save({ swap: { sizeGb: v } })} />}
         </Sec>
         <Sec title="Disk and system" right={tag('disk')}>
           {na(s, 'vm-disk') ? <NotYet /> : <><Row l={<>Disk <span class="d">GB</span></>}><Seg label="Disk" opts={[60, 120, 240] as const} value={st.disk.diskGb as 120} onChange={v => save({ disk: { diskGb: v } })} /></Row>
@@ -361,7 +362,7 @@ export function Settings({ vm }: { vm: Vm }) {
         <div class="blk warn row"><b class="grow">{pendingRestart}</b><Btn sm kind="pri" icon="power" onClick={() => be.restart(vm.id)}>Restart now</Btn></div>
       )}
       <Tabs items={[['res', 'Resources'], ['svc', 'Services'], ['id', 'Identity'], ['agents', 'Agents']]} value={tab} onChange={t => go({ page: 'settings', arg: t })} />
-      {vm.problems?.settings && (tab === 'svc' || tab === 'id') && <div class="line badc">{vm.problems.settings}</div>}
+      {vm.problems?.settings && tab !== 'agents' && <div class="line badc">{vm.problems.settings}</div>}
       {body[tab]()}
     </Page>
   );
@@ -372,6 +373,30 @@ function BlurField({ label, value, onSave }: { label: string; value: string; onS
   const [v, setV] = useState(value);
   const commit = () => { if (v !== value) onSave(v); };
   return <input class="in m" aria-label={label} value={v} onInput={e => setV(e.currentTarget.value)} onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') commit(); }} />;
+}
+
+/** The swap file size, saved on blur or Enter. It shows the stored value unless something was typed, so only a
+    typed value is ever saved, also one equal to the shown `auto` that is only the default; the hint turns red while
+    the typed value is not one the guest takes. */
+function SwapSize({ value, tag, onSave }: { value: string; tag: preact.JSX.Element; onSave: (v: string) => void }) {
+  const [typed, setTyped] = useState<string | null>(null);
+  const [bad, setBad] = useState(false);
+  const commit = () => {
+    if (typed === null) return;
+    const n = swapSize(typed);
+    setBad(n === null);
+    if (n === null) return;
+    setTyped(null);
+    onSave(n);
+  };
+  return (
+    <>
+      <Row l={<>Swap file <span class="d">GB</span> {tag}</>}>
+        <input class="in m short" aria-label="Swap file" value={typed ?? value} onInput={e => setTyped(e.currentTarget.value)} onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') commit(); }} />
+      </Row>
+      <div class={`line ${bad ? 'badc' : 'd'}`}>auto: half the RAM, at most 8 GB · 0: none</div>
+    </>
+  );
 }
 
 function PasswordChange({ vm }: { vm: Vm }) {

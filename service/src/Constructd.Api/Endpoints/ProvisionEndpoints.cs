@@ -178,6 +178,7 @@ public static partial class ProvisionEndpoints
         if (desired.Settings.ExternalSshPort is < 1 or > 65535) return "desired.settings.externalSshPort";
         if (desired.Settings.GitCloneSkipHostsB64 is { } skip && !Base64Pattern().IsMatch(skip)) return "desired.settings.gitCloneSkipHostsB64";
         if (desired.CodingAgents is { } agents && !CodingAgents.Valid(agents)) return "desired.codingAgents";
+        if (desired.Settings.SwapSizeGb is { } swap && !ProvisionScript.IsSwapSize(swap)) return "desired.settings.swapSizeGb";
         return null;
     }
 

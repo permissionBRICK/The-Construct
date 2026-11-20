@@ -18,7 +18,7 @@ export interface Usage {
 /** A coding agent a VM can have; the engine's `codingAgents` ids. */
 export type AgentId = 'claude-code' | 'codex' | 'opencode' | 'antigravity';
 
-/** Settings of one VM. `hw` applies on restart, `disk` on reinstall, `services`, `identity` and `agents` on reprovision. */
+/** Settings of one VM. `hw` applies on restart, `disk` on reinstall, `services`, `identity`, `agents` and `swap` on reprovision. */
 export interface VmSettings {
   hw: { memGb: number; cpus: number; checkpoints: boolean; startWithHost: boolean };
   disk: { diskGb: number; ubuntu: string };
@@ -27,6 +27,8 @@ export interface VmSettings {
   identity: { gitName: string; gitEmail: string; keepCredentials: boolean; historyDays: '30' | '90' | 'all' };
   /** The coding agents chosen for the VM. One turned off stays installed but is no longer updated or configured. */
   agents: Record<AgentId, boolean>;
+  /** The guest's swap file: `auto` or whole GB 0-128 (`swapSize`). */
+  swap: { sizeGb: string };
 }
 
 /** `id`: the engine's tool id (claude, codex, opencode, antigravity, t3). `newer`: the engine says a newer version is

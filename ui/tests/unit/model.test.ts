@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { sampleState } from '../../src/backend/sample';
 import { activeJob, cmpVersion, mainAction, vmDot, vmUpdateTarget, vmWord } from '../../src/model/vm';
 import { updateDue, updateParts, updatePlan } from '../../src/model/update';
-import { agentList, agentSwitches, applies, applyPatch, DEFAULT_AGENTS, hwChange } from '../../src/model/settings';
+import { agentList, agentSwitches, applies, applyPatch, DEFAULT_AGENTS, hwChange, swapSize } from '../../src/model/settings';
 import { formatRoute, parseRoute, section } from '../../src/model/route';
 import { contrast, cssVars, SCHEME_ORDER, SCHEMES } from '../../src/model/tokens';
 import type { Job } from '../../src/backend/types';
@@ -97,6 +97,7 @@ describe('settings', () => {
     expect(applies({ hw: { checkpoints: true } })).toBe('now');
     expect(applies({ idle: { afterMin: 15 } })).toBe('now');
     expect(applies({ services: { smb: true } })).toBe('reprovision');
+    expect(applies({ swap: { sizeGb: '4' } })).toBe('reprovision');
     expect(applies({ disk: { diskGb: 240 }, services: { smb: true } })).toBe('reinstall');
     expect(applies({ agents: { antigravity: true } })).toBe('reprovision');
   });
@@ -113,6 +114,11 @@ describe('settings', () => {
     expect(hwChange({ memGb: 16, cpus: 8 }, { memGb: 32, cpus: 8 })).toBe('Memory 16 → 32 GB');
     expect(hwChange({ memGb: 16, cpus: 8 }, { memGb: 16, cpus: 4 })).toBe('vCPUs 8 → 4');
     expect(hwChange({ memGb: 16, cpus: 8 }, { memGb: 16, cpus: 8 })).toBe('');
+  });
+
+  it('takes a swap file size the guest takes, and nothing else', () => {
+    expect(['auto', ' Auto ', '0', '8', '08', '128'].map(swapSize)).toEqual(['auto', 'auto', '0', '8', '8', '128']);
+    expect(['', '129', '-1', '4.5', '4 GB', 'none'].map(swapSize)).toEqual([null, null, null, null, null, null]);
   });
 
   it('merges a patch without touching the original', () => {

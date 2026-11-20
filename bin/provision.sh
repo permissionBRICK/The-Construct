@@ -463,6 +463,16 @@ fi
 OPENCODE_BACKGROUND_WATCHER="${OPENCODE_BACKGROUND_WATCHER:-${_opencode_background_saved:-false}}"
 [[ "${OPENCODE_BACKGROUND_WATCHER}" == "true" ]] || OPENCODE_BACKGROUND_WATCHER=false
 
+# >>> SWAP_SIZE_GB resolution (cut out and run by test/setup-swap.test.sh)
+# Size of the guest's swap file in GiB (bin/setup-swap.sh): auto (half the RAM, at
+# most 8), 0 (none) or a whole number. Empty input keeps the VM's saved choice.
+_swap_size_saved=""
+if [[ -f "${CONFIG_FILE}" ]]; then
+  _swap_size_saved="$(sed -n 's/^SWAP_SIZE_GB=//p' "${CONFIG_FILE}" | head -1 || true)"
+fi
+SWAP_SIZE_GB="${SWAP_SIZE_GB:-${_swap_size_saved:-auto}}"
+# <<< SWAP_SIZE_GB resolution
+
 # Optional global git identity to set on the VM. Passed base64-encoded (see
 # Provision-AgentVM.ps1) so names/emails with spaces or apostrophes survive the
 # SSH/shell layers untouched. Empty when not supplied -- left unchanged on the VM.
@@ -624,6 +634,7 @@ note "    T3CODE_BUILD_SOURCE=${T3CODE_BUILD_SOURCE}"
 note "    T3CODE_HTTPS=${T3CODE_HTTPS}"
 note "    T3CODE_PATCHED=${T3CODE_PATCHED}"
 note "    OPENCODE_BACKGROUND_WATCHER=${OPENCODE_BACKGROUND_WATCHER}"
+note "    SWAP_SIZE_GB=${SWAP_SIZE_GB}"
 note "    SMB_SHARE=${SMB_SHARE:-(saved/default)}"
 # Only mention the external identity when it carries information, so a default
 # install's provisioning log is unchanged.
@@ -744,6 +755,10 @@ write_configuration() {
   cfg T3CODE_AUTO_APPROVE "${T3CODE_AUTO_APPROVE}" || return
   sed -i '/^T3CODE_LIMIT_RESUME=/d' "${CONFIG_FILE}" || return
   cfg OPENCODE_BACKGROUND_WATCHER "${OPENCODE_BACKGROUND_WATCHER}" || return
+  # Only when it says something, so a default install's config.env stays as it was.
+  if [[ -n "${_swap_size_saved}" || "${SWAP_SIZE_GB}" != "auto" ]]; then
+    cfg SWAP_SIZE_GB "${SWAP_SIZE_GB}" || return
+  fi
   # Persist the external identity only when it carries information (a non-empty
   # host; a non-default or previously saved port), so a default install's
   # config.env stays byte-identical.
@@ -783,6 +798,10 @@ write_configuration() {
   fi
 }
 run_step critical "Writing configuration to ${CONFIG_FILE}" write_configuration
+
+# Swap file (/swap.img) and zswap, early so the installs below already have it.
+# See bin/setup-swap.sh and docs/provisioning.md#swap-file.
+run_step optional "Setting up the swap file" bash "${REPO_DIR}/bin/setup-swap.sh" "${SWAP_SIZE_GB}"
 
 # 2a. The VM's scoped service token (plan §2/§4.6): it authorizes ONLY this VM's
 #     own port forwards and its activity heartbeat. Passed base64-encoded so it

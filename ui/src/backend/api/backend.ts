@@ -1415,7 +1415,7 @@ export class ApiBackend implements Backend {
     const path = { params: { path: { name: ref.name } } };
     if (patch.disk || patch.hw?.checkpoints !== undefined || patch.hw?.startWithHost !== undefined) { this.note(NA); return; }
     if (patch.services?.t3ProxyUrl !== undefined || patch.identity?.historyDays !== undefined) { this.note(NA); return; }
-    if (patch.services || patch.identity || patch.agents) {
+    if (patch.services || patch.identity || patch.agents || patch.swap) {
       // Stored for the next reprovision; the VM itself stays as it is until then (7.5).
       const agents = patch.agents && ((cur: string[]) => agentList({ ...agentSwitches(cur), ...patch.agents }));
       void this.run(() => this.changeDesired(ref.engine, ref.name, settingsFields(patch), undefined, agents), 'Saved, applies at the next reprovision', ref.engine);

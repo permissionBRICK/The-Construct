@@ -37,6 +37,11 @@ public sealed record ProvisionSettings
     public string? ClaudePartialStreaming { get; init; }
     public string? MicPassthrough { get; init; }
     public string? OpenCodeBackgroundWatcher { get; init; }
+    /// <summary>
+    /// <c>SWAP_SIZE_GB</c>: the guest's swap file, <c>auto</c> (half the RAM, at most 8 GiB) or a whole number of
+    /// GiB from 0 (none) to 128. Null keeps the VM's saved choice, <c>auto</c> on a new VM.
+    /// </summary>
+    public string? SwapSizeGb { get; init; }
     public string? T3Code { get; init; }
     public string? T3CodeChannel { get; init; }
     public string? T3CodeBuildSource { get; init; }

@@ -5367,6 +5367,7 @@ export interface components {
             claudePartialStreaming?: null | string;
             micPassthrough?: null | string;
             openCodeBackgroundWatcher?: null | string;
+            swapSizeGb?: null | string;
             t3Code?: null | string;
             t3CodeChannel?: null | string;
             t3CodeBuildSource?: null | string;
