@@ -53,6 +53,7 @@ import re
 import select
 import shutil
 import signal
+import stat
 import struct
 import subprocess
 import sys
@@ -277,35 +278,81 @@ def antigravity_token():
     return os.path.join(home(), ".gemini", "antigravity-cli", "antigravity-oauth-token")
 
 
+T3_ANTIGRAVITY = ("userdata", "providers", "antigravity")
+
+
 def t3_antigravity_homes():
-    """T3 Code's Antigravity homes: the one of Construct's provider instance and any other it made."""
-    base = os.path.join(T3_HOME, "userdata", "providers", "antigravity")
-    homes = {os.path.join(base, hashlib.sha256(b"antigravity").hexdigest())}
+    """T3 Code's Antigravity homes, by name under T3_ANTIGRAVITY: the one of Construct's provider instance and
+    any other T3 Code made (real directories only, never a symlink)."""
+    base = os.path.join(T3_HOME, *T3_ANTIGRAVITY)
+    homes = {hashlib.sha256(b"antigravity").hexdigest()}
     try:
-        homes.update(os.path.join(base, d) for d in os.listdir(base) if os.path.isdir(os.path.join(base, d)))
+        with os.scandir(base) as entries:
+            homes.update(e.name for e in entries if e.is_dir(follow_symlinks=False))
     except OSError:
         pass
     return sorted(homes)
 
 
+def open_dir(base, parts, create=False):
+    """A descriptor of base/parts..., each part opened without following a symlink (one fails the walk);
+    with create, missing parts are made private. base is a path or a directory's descriptor."""
+    fd = os.open(base, os.O_RDONLY | os.O_DIRECTORY) if isinstance(base, str) else os.dup(base)
+    try:
+        for part in parts:
+            if create:
+                try:
+                    os.mkdir(part, 0o700, dir_fd=fd)
+                except FileExistsError:
+                    pass
+            inner = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = inner
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 def share_antigravity_sign_in():
-    """Copies the terminal's Antigravity token into T3 Code's homes, as T3 Code lays them out."""
-    source = antigravity_token()
-    if not os.path.isfile(source) or os.path.getsize(source) == 0:
+    """Copies the terminal's Antigravity token into T3 Code's homes, as T3 Code lays them out. Neither the
+    token nor a directory on its way, on either side, may be a symlink."""
+    try:
+        src = open_dir(home(), [".gemini", "antigravity-cli"])
+    except FileNotFoundError:
         return False
-    with open(source, "rb") as f:
+    try:
+        fd = os.open("antigravity-oauth-token", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=src)
+    except FileNotFoundError:
+        return False
+    finally:
+        os.close(src)
+    with os.fdopen(fd, "rb") as f:
+        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+            return False
         token = f.read()
+    if not token:
+        return False
     for profile in t3_antigravity_homes():
-        target_dir = os.path.join(profile, "antigravity-acp")
-        os.makedirs(target_dir, mode=0o700, exist_ok=True)
-        for d in (profile, target_dir):
-            os.chmod(d, 0o700)
-        target = os.path.join(target_dir, "antigravity-oauth-token")
-        temporary = target + ".construct"
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "wb") as f:
-            f.write(token)
-        os.replace(temporary, target)
+        profile_fd = open_dir(T3_HOME, T3_ANTIGRAVITY + (profile,), create=True)
+        try:
+            os.fchmod(profile_fd, 0o700)
+            target = open_dir(profile_fd, ["antigravity-acp"], create=True)
+        finally:
+            os.close(profile_fd)
+        try:
+            os.fchmod(target, 0o700)
+            temporary = "antigravity-oauth-token.construct"
+            try:
+                os.unlink(temporary, dir_fd=target)
+            except FileNotFoundError:
+                pass
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=target)
+            with os.fdopen(fd, "wb") as f:
+                f.write(token)
+            os.replace(temporary, "antigravity-oauth-token", src_dir_fd=target, dst_dir_fd=target)
+        finally:
+            os.close(target)
     return True
 
 

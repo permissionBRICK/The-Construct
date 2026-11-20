@@ -160,6 +160,42 @@ ok "antigravity: T3 Code's home has the same token" cmp -s "${HOME}/.gemini/anti
 ok "antigravity: and so has another T3 instance's home" cmp -s "${HOME}/.gemini/antigravity-cli/antigravity-oauth-token" "${other}/antigravity-acp/antigravity-oauth-token"
 ok "antigravity: the copy is private" bash -c '[[ "$(stat -c %a "$1/antigravity-oauth-token")" == 600 && "$(stat -c %a "$1")" == 700 ]]' _ "${t3dir}"
 
+# The copy follows no symlink on either side and never reuses a temporary file's permissions.
+share() { python3 -c 'import importlib.util, sys
+spec = importlib.util.spec_from_file_location("s", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+try:
+    print(m.share_antigravity_sign_in())
+except OSError as e:
+    print("refused", e.errno)' "${SCRIPT}"; }
+export -f share
+export SCRIPT
+token="${HOME}/.gemini/antigravity-cli/antigravity-oauth-token"
+printf 'outside' >"${tmp}/outside"
+chmod 644 "${tmp}/outside"
+rm -f "${t3dir}/antigravity-oauth-token"
+printf 'stale' >"${t3dir}/antigravity-oauth-token.construct"
+chmod 666 "${t3dir}/antigravity-oauth-token.construct"
+ln -s "${tmp}/outside" "${t3dir}/antigravity-oauth-token"
+ok "antigravity copy: a symlinked target is replaced, not followed" bash -c '[[ "$(share)" == True && ! -L "$1/antigravity-oauth-token" && "$(cat "$2")" == outside ]]' _ "${t3dir}" "${tmp}/outside"
+ok "antigravity copy: an old temporary file does not keep its permissions" bash -c '[[ "$(stat -c %a "$1/antigravity-oauth-token")" == 600 && ! -e "$1/antigravity-oauth-token.construct" ]]' _ "${t3dir}"
+mv "${other}/antigravity-acp" "${tmp}/elsewhere"
+ln -s "${tmp}/elsewhere" "${other}/antigravity-acp"
+rm -f "${tmp}/elsewhere/antigravity-oauth-token"
+ok "antigravity copy: a symlinked directory on the way is refused" bash -c '[[ "$(share)" == refused* && ! -e "$1/antigravity-oauth-token" ]]' _ "${tmp}/elsewhere"
+rm "${other}/antigravity-acp"
+mv "${token}" "${tmp}/real-token"
+ln -s "${tmp}/real-token" "${token}"
+rm -f "${t3dir}/antigravity-oauth-token"
+ok "antigravity copy: a symlinked token is refused" bash -c '[[ "$(share)" == refused* && ! -e "$1/antigravity-oauth-token" ]]' _ "${t3dir}"
+rm "${token}"
+mv "${HOME}/.gemini/antigravity-cli" "${tmp}/agy-cli"
+ln -s "${tmp}/agy-cli" "${HOME}/.gemini/antigravity-cli"
+mv "${tmp}/real-token" "${tmp}/agy-cli/antigravity-oauth-token"
+ok "antigravity copy: a symlinked directory above the token is refused" bash -c '[[ "$(share)" == refused* && ! -e "$1/antigravity-oauth-token" ]]' _ "${t3dir}"
+rm "${HOME}/.gemini/antigravity-cli"
+mv "${tmp}/agy-cli" "${HOME}/.gemini/antigravity-cli"
+ok "antigravity copy: copies again once the paths are plain" bash -c '[[ "$(share)" == True ]] && cmp -s "$1" "$2/antigravity-oauth-token"' _ "${token}" "${t3dir}"
+
 # ── Ending a session ──────────────────────────────────────────────────────────
 rm -f "${HOME}/.claude/.credentials.json"
 : >"${FAKE_LOG}"
