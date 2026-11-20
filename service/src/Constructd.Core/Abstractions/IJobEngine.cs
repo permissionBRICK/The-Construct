@@ -12,14 +12,16 @@ public interface IJobEngine
     /// <summary>
     /// Queues <paramref name="work"/> and returns the queued job. <paramref name="owner"/> is the
     /// submitting principal and is what authorizes reads of the job and its result. Awaited because
-    /// the job is durable from the moment it is queued.
+    /// the job is durable from the moment it is queued. <paramref name="initiator"/> is the actor that
+    /// asked for it (<see cref="Job.Initiator"/>): a VM token reads only the jobs it initiated.
     /// </summary>
     Task<Job> SubmitAsync(
         string kind,
         string? vmName,
         string owner,
         Func<IProgress<string>, CancellationToken, Task<JobOutcome>> work,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        string? initiator = null);
 
     Task<Job?> GetAsync(string id, CancellationToken cancellationToken);
 

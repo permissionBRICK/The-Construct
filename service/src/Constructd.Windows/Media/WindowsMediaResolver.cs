@@ -55,9 +55,7 @@ public sealed class WindowsMediaResolver(IProcessRunner runner, ConstructdOption
         try
         {
             await File.WriteAllTextAsync(temp, script, ct);
-            var result = await runner.RunAsync(OperatingSystem.IsWindows() ? options.PowerShellPath : "pwsh",
-                ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", temp, "-Win", "11", "-Rel", "latest", "-Ed", "Pro", "-Lang", fidoLanguage, "-Arch", "x64", "-GetUrl"],
-                null, TimeSpan.FromMinutes(5), null, ct);
+            var result = await RunFidoAsync(temp, fidoLanguage, ct);
             if (!result.Succeeded)
             {
                 var reason = FidoFailure(result);
@@ -73,6 +71,25 @@ public sealed class WindowsMediaResolver(IProcessRunner runner, ConstructdOption
             return uri;
         }
         finally { File.Delete(temp); }
+    }
+
+    /// <summary>
+    /// Runs Fido. Off Windows that needs PowerShell 7 (<c>pwsh</c>), which a Proxmox host does not have
+    /// unless it was installed: name that, instead of failing with the process start's bare error.
+    /// </summary>
+    internal async Task<ProcessResult> RunFidoAsync(string script, string fidoLanguage, CancellationToken ct)
+    {
+        try
+        {
+            return await runner.RunAsync(OperatingSystem.IsWindows() ? options.PowerShellPath : "pwsh",
+                ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, "-Win", "11", "-Rel", "latest", "-Ed", "Pro", "-Lang", fidoLanguage, "-Arch", "x64", "-GetUrl"],
+                null, TimeSpan.FromMinutes(5), null, ct);
+        }
+        catch (System.ComponentModel.Win32Exception) when (!OperatingSystem.IsWindows())
+        {
+            logger.LogWarning("Resolving Windows 11 media needs PowerShell 7 (pwsh) on this host, and it is not installed.");
+            throw new MediaException("windows-resolver-pwsh-missing");
+        }
     }
 
     /// <summary>The anchored Fido -Lang pattern for a language code, or null when Microsoft offers no such ISO.</summary>

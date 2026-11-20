@@ -1,3 +1,6 @@
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
 using Constructd.Api.Jobs;
 using Constructd.Core.Abstractions;
 using Constructd.Core.Configuration;
@@ -48,5 +51,35 @@ public sealed class WindowsMediaJobsTests
         Assert.Equal(WindowsMediaJobs.GuestAgentSha256, expected);
         Assert.Matches("^[0-9a-f]{64}$", expected);
         Assert.Equal(WindowsMediaJobs.GuestAgentUrl, item.SourceUrl);
+    }
+
+    [Theory]
+    [InlineData("11")]
+    [InlineData("server-2022")]
+    public async Task A_vm_reads_and_lists_the_windows_acquire_job_it_started_and_sees_why_it_failed(string windows)
+    {
+        await using var app = new TestApp();
+        using var owner = await app.CreateUserClientAsync("bob");
+        await owner.CreateVmAsync("work-vm");
+        var token = await app.Service<IVmTokenIssuer>().IssueVmTokenAsync("work-vm", VmTokenKind.Primary, default);
+        using var guest = app.CreateVmTokenClient(token);
+
+        using var accepted = await guest.PostAsJsonAsync("/api/v1/media/acquire-windows", new { windows, edition = windows == "11" ? "pro" : "standard", lang = "en" });
+        Assert.Equal(HttpStatusCode.Accepted, accepted.StatusCode);
+        var jobId = (await accepted.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("jobId").GetString()!;
+
+        var job = await guest.WaitForJobAsync(jobId);
+        Assert.Equal(JobState.Failed, job.State);
+        // Fake mode has no resolver; the point is that the VM sees the code at all.
+        Assert.Equal("windows-resolver-unavailable", job.Error);
+        var listed = await guest.GetFromJsonAsync<JsonElement>("/api/v1/jobs?kind=windows-media-acquire");
+        Assert.Contains(listed.EnumerateArray(), j => j.GetProperty("id").GetString() == jobId);
+
+        // Another VM of the same owner still cannot read it.
+        await owner.CreateVmAsync("other-vm");
+        using var other = app.CreateVmTokenClient(await app.Service<IVmTokenIssuer>().IssueVmTokenAsync("other-vm", VmTokenKind.Primary, default));
+        Assert.Equal(HttpStatusCode.Forbidden, (await other.GetAsync("/api/v1/jobs/" + jobId)).StatusCode);
+        // The owner still reads it as before.
+        Assert.Equal(HttpStatusCode.OK, (await owner.GetAsync("/api/v1/jobs/" + jobId)).StatusCode);
     }
 }
