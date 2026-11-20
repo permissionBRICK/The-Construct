@@ -308,6 +308,7 @@ public sealed partial class MessageDispatcher(CompanionInstances instances, Stat
                 ["instance"] = entry.Definition.DeepClone(), ["settings"] = entry.Store.ReadSettings(),
                 ["instanceParams"] = JsonSerializer.SerializeToNode(LifecycleBuilder.InstanceParameterSupport(files, directory, action, entry.Definition)),
                 ["supportsHistoryRetentionDays"] = LifecycleBuilder.ActionScriptSupportsParameter(files, directory, action, "HistoryRetentionDays"),
+                ["supportsSwapSizeGB"] = LifecycleBuilder.ActionScriptSupportsParameter(files, directory, action, "SwapSizeGB"),
                 ["projects"] = await EffectiveProjects(entry, ct), ["backupMode"] = message["backup"]?.DeepClone(),
                 ["backupDir"] = Path.Combine(directory, "config")
             };

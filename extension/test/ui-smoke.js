@@ -240,7 +240,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   await page.evaluate(() => window.postMessage({ type: "settings", settings: {
     gitName: "Trinity", gitEmail: "trin@zion.io", gitCred: false,
     ram: "16", disk: "120", ubuntu: "22.04", serveWeb: false, tunnel: true, smb: false, mic: true,
-    autoCheckpoints: true, opencodeBackgroundWatcher: true, historyRetentionDays: "14",
+    autoCheckpoints: true, opencodeBackgroundWatcher: true, historyRetentionDays: "14", swapSizeGb: "16",
   } }, "*"));
   await page.waitForTimeout(60);
   check("settings populate: text fields", (await page.inputValue("#setGitName")) === "Trinity" && (await page.inputValue("#setRam")) === "16");
@@ -248,6 +248,10 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("settings populate: automatic-checkpoints switch driven", (await page.getAttribute("#setAutoCheckpoints", "aria-checked")) === "true");
   check("settings populate: OpenCode watcher switch driven", (await page.getAttribute("#setOpenCodeBackgroundWatcher", "aria-checked")) === "true");
   check("settings populate: chat history retention", (await page.inputValue("#setHistoryRetention")) === "14");
+  check("settings populate: swap file size", (await page.inputValue("#setSwapSize")) === "16");
+  check("settings: the swap file field sits under VM resources", /Swap file/.test(
+    await page.locator("#setSwapSize").locator("xpath=ancestor::section[1]").innerText()) &&
+    /VM resources/.test(await page.locator("#setSwapSize").locator("xpath=ancestor::section[1]").innerText()));
 
   // "Restart to apply" (RAM + vCPUs): the note compares the entered size with the VM's
   // real size (vmpower.planResourceApply, mirrored in panel.js), the button saves and then
@@ -340,6 +344,19 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("settings mic: switching back posts enabled:true", (await page.evaluate(() => window.__posted)).some((m) => m.type === "setAudio" && m.enabled === true)
     && (await page.getAttribute("#setMic", "aria-checked")) === "true");
 
+  // Swap file: a settings payload without the key shows auto (the default), an invalid
+  // entry is flagged and blocks the save, a valid one is saved normalized.
+  check("swap: a payload without a saved size shows auto", (await page.inputValue("#setSwapSize")) === "auto");
+  const savesBefore = await page.evaluate(() => window.__posted.filter((m) => m.type === "saveSettings").length);
+  await page.fill("#setSwapSize", "200");
+  check("swap: an entry over 128 is flagged", (await page.getAttribute("#setSwapSize", "aria-invalid")) === "true" &&
+    /auto, 0 or a whole number up to 128/.test(await page.locator("#swapSizeNote").innerText()));
+  await page.click("#saveBtn");
+  check("swap: ...and the save waits for a fix", (await page.evaluate(() => window.__posted.filter((m) => m.type === "saveSettings").length)) === savesBefore);
+  await page.fill("#setSwapSize", " 08 ");
+  check("swap: a whole number clears the error", (await page.getAttribute("#setSwapSize", "aria-invalid")) === "false" &&
+    (await page.locator("#swapSizeNote").innerText()).trim() === "");
+
   // save -> extension: gather the form and post saveSettings.
   await page.click("#saveBtn");
   const savePosted = await page.evaluate(() => window.__posted);
@@ -349,6 +366,7 @@ const check = (name, ok, detail) => results.push({ name, ok: !!ok, detail: detai
   check("save carries the automatic-checkpoints toggle", savedMsg && savedMsg.settings.autoCheckpoints === true);
   check("save carries the OpenCode watcher toggle", savedMsg && savedMsg.settings.opencodeBackgroundWatcher === true);
   check("save carries the chat history retention", savedMsg && savedMsg.settings.historyRetentionDays === "14");
+  check("save carries the swap file size, normalized", savedMsg && savedMsg.settings.swapSizeGb === "8");
   // Honesty: agents/projects aren't wired yet, so they must NOT be gathered, and
   // the settings view must not present ignored interactive agent/project chips.
   check("save omits unwired agents/projects", savedMsg && !("agents" in savedMsg.settings) && !("projects" in savedMsg.settings));

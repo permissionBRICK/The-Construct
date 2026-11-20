@@ -18,8 +18,9 @@ try {
 param([string]$Action, [switch]$FromPanel, [switch]$NonInteractive, [string]$VsCodeServeWeb, [string]$VsCodeTunnel,
       [string]$SmbShare, [string]$ClaudePartialStreaming, [string]$MicPassthrough, [string]$T3Code, [string]$T3CodeChannel,
       [string]$T3CodePatched, [string]$Projects, [string]$InstanceName, [string]$VmHost, [string]$HostAlias,
-      [int]$SshPort, [string]$LocalKeyName)
+      [int]$SshPort, [string]$LocalKeyName, [string]$SwapSizeGB)
 Add-Content -LiteralPath $env:FAKE_LOG -Value $Action
+Add-Content -LiteralPath "$env:FAKE_LOG.swap" -Value "[$SwapSizeGB]"
 Add-Content -LiteralPath "$env:FAKE_LOG.target" -Value "$InstanceName|$HostAlias"
 Add-Content -LiteralPath "$env:FAKE_LOG.patched" -Value $T3CodePatched
 if ($Action -eq 't3update' -and $env:FAKE_OLD_GUEST -eq '1') { $global:ConstructT3UpdateNeedsReprovision = $true; return }
@@ -31,7 +32,7 @@ if ($env:FAKE_OUTCOME -eq 'errors') { $global:ConstructProvisionHadErrors = $tru
     $log = Join-Path $root 'calls.log'
     $settings = Join-Path $root '.construct-settings.json'
     function Run([string]$Mode, [string]$Provisioned, [string]$OldGuest = '0', [string]$Outcome = '', [hashtable]$Preference = @{}) {
-        Remove-Item $log, "$log.target", "$log.patched" -ErrorAction SilentlyContinue
+        Remove-Item $log, "$log.target", "$log.patched", "$log.swap" -ErrorAction SilentlyContinue
         $saved = @{ installedCommit = 'a' * 40; provisionedCommit = $Provisioned; t3code = $true }
         foreach ($key in $Preference.Keys) { $saved[$key] = $Preference[$key] }
         $saved | ConvertTo-Json | Set-Content $settings
@@ -48,6 +49,13 @@ if ($env:FAKE_OUTCOME -eq 'errors') { $global:ConstructProvisionHadErrors = $tru
     Assert ((Get-Content "$log.patched") -eq 'true') 'Legacy patched preference reaches the new provisioner parameter'
     $r = Run 'reprovision' $current '0' '' @{ t3codeLimitResume = $true; t3codePatched = $false }
     Assert ((Get-Content "$log.patched") -eq 'false') 'New patched preference overrides legacy state'
+
+    $r = Run 'reprovision' $current '0' '' @{ swapSizeGb = '016' }
+    Assert ((Get-Content "$log.swap") -eq '[16]') 'A saved swap file size reaches the reprovision, normalized'
+    $r = Run 'reprovision' $current '0' '' @{ swapSizeGb = '200' }
+    Assert ((Get-Content "$log.swap") -eq '[]') 'An invalid saved swap file size is not passed on'
+    $r = Run 'reprovision' $current
+    Assert ((Get-Content "$log.swap") -eq '[]') 'No saved swap file size: the VM keeps its own'
 
     $r = Run '' $current
     Assert ($r.Calls -eq 't3update' -and $r.Exit -eq 0) "auto on a current VM must update T3 Code alone: $($r.Calls)/$($r.Exit)"

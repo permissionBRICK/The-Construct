@@ -252,7 +252,7 @@ ok("state: an unparseable commit is dropped rather than surfaced",
 // 150 GB VHDX is exactly 150 GiB on the disk device, nproc is the vCPU count.
 const specState = probe.toState(probe.parseProbe([
   "MEM_GB\t16", "DISK_DEV_BYTES\t161061273600", "VM_CPUS\t8", "DISK_SIZE\t147G",
-  "T3CODE\ttrue", "T3CODE_CHANNEL\tstable", "T3CODE_PATCHED\ttrue", "OPENCODE_BACKGROUND_WATCHER\tfalse",
+  "T3CODE\ttrue", "T3CODE_CHANNEL\tstable", "T3CODE_PATCHED\ttrue", "OPENCODE_BACKGROUND_WATCHER\tfalse", "SWAP_SIZE_GB\t'16'",
 ].join("\n")));
 ok("vmSpec: RAM, exact disk size from the device, vCPUs",
   specState.vmSpec && specState.vmSpec.ramGb === 16 && specState.vmSpec.diskGb === 150 && specState.vmSpec.cpus === 8,
@@ -260,8 +260,13 @@ ok("vmSpec: RAM, exact disk size from the device, vCPUs",
 ok("vmSpec: the disk comes from the DEVICE size, not df's filesystem size", specState.vmSpec.diskGb !== 147);
 ok("vmConfig: the keep-saved keys as the settings form stores them",
   specState.vmConfig && specState.vmConfig.t3code === true && specState.vmConfig.t3codeChannel === "stable" &&
-  specState.vmConfig.t3codePatched === true && specState.vmConfig.opencodeBackgroundWatcher === false,
+  specState.vmConfig.t3codePatched === true && specState.vmConfig.opencodeBackgroundWatcher === false &&
+  specState.vmConfig.swapSizeGb === "16",
   JSON.stringify(specState.vmConfig));
+ok("vmConfig: an unsaved or invalid SWAP_SIZE_GB is not reported",
+  !("swapSizeGb" in (probe.parseVmConfig({ SWAP_SIZE_GB: "", T3CODE: "true" }) || {})) &&
+  !("swapSizeGb" in (probe.parseVmConfig({ SWAP_SIZE_GB: "lots", T3CODE: "true" }) || {})));
+ok("probe script: reports the VM's saved SWAP_SIZE_GB", probe.REMOTE_PROBE.includes("emit SWAP_SIZE_GB"));
 const partialSpec = probe.parseVmSpec({ MEM_GB: "8", DISK_DEV_BYTES: "", VM_CPUS: "garbage" });
 ok("vmSpec: only the parts the VM reported (no zero/garbage numbers)",
   partialSpec.ramGb === 8 && !("diskGb" in partialSpec) && !("cpus" in partialSpec));

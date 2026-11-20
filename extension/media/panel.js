@@ -484,6 +484,7 @@
       ram: val("setRam"), disk: val("setDisk"), cpu: val("setCpu"), ubuntu: val("setUbuntu"),
       autoCheckpoints: swOn($("setAutoCheckpoints")),
       historyRetentionDays: val("setHistoryRetention"),
+      swapSizeGb: swapSizeCheck(val("setSwapSize")).value,
       serveWeb: swOn($("setServeWeb")), tunnel: swOn($("setTunnel")), smb: swOn($("setSmb")), mic: swOn($("setMic")),
       partialStreaming: swOn($("setPartialStreaming")),
       opencodeBackgroundWatcher: swOn($("setOpenCodeBackgroundWatcher")),
@@ -493,8 +494,32 @@
       t3codeAutoApprove: swOn($("setT3AutoApprove")),
     };
   }
+  // Swap file: "auto" or a whole number of GB from 0 to 128; empty means auto. Mirrors
+  // host.normalizeSwapSize, the canonical, unit-tested rule this copy can't require().
+  function swapSizeCheck(v) {
+    const s = String(v == null ? "" : v).trim().toLowerCase();
+    if (s === "" || s === "auto") return { value: "auto" };
+    if (/^[0-9]{1,3}$/.test(s) && Number(s) <= 128) return { value: String(Number(s)) };
+    return { error: "enter auto, 0 or a whole number up to 128" };
+  }
+  // Shows the field's error; false while the entry is invalid, so a save waits for a fix.
+  function renderSwapSize() {
+    const input = $("setSwapSize"), note = $("swapSizeNote");
+    if (!input) return true;
+    const checked = swapSizeCheck(input.value);
+    input.setAttribute("aria-invalid", checked.error ? "true" : "false");
+    if (note) note.textContent = checked.error || "";
+    return !checked.error;
+  }
+  if ($("setSwapSize")) $("setSwapSize").addEventListener("input", renderSwapSize);
+  function saveSettingsChecked() {
+    if (!renderSwapSize()) { $("setSwapSize").focus(); return false; }
+    micEchoes = 0;
+    post({ type: "saveSettings", settings: gatherSettings() });
+    return true;
+  }
   // A save answers with the whole form, so its settings echo applies in full.
-  $("saveBtn") && $("saveBtn").addEventListener("click", () => { micEchoes = 0; post({ type: "saveSettings", settings: gatherSettings() }); });
+  $("saveBtn") && $("saveBtn").addEventListener("click", saveSettingsChecked);
 
   // ── "Restart to apply" for RAM + vCPUs ──────────────────────────────────────
   // The extension applies what the settings FILE says, so the button saves first (the
@@ -534,8 +559,7 @@
   $("resApplyBtn") && $("resApplyBtn").addEventListener("click", () => {
     const s = gatherSettings();
     if (resourceNumber(s.ram, false) === null && resourceNumber(s.cpu, true) === null) { renderResourcePending(); return; }
-    micEchoes = 0;
-    post({ type: "saveSettings", settings: s });
+    if (!saveSettingsChecked()) return;
     post({ type: "applyVmResources" });
   });
   renderResourcePending();
@@ -1478,6 +1502,9 @@
     setVal("setRam", s.ram); setVal("setDisk", s.disk); setVal("setCpu", s.cpu);
     setVal("setUbuntu", s.ubuntu);
     setVal("setHistoryRetention", s.historyRetentionDays);
+    // Not saved = auto (the VM default); always set, so another VM's size never lingers.
+    setVal("setSwapSize", typeof s.swapSizeGb === "string" ? s.swapSizeGb : "auto");
+    renderSwapSize();
     setSw("setGitCred", s.gitCred); setSw("setServeWeb", s.serveWeb);
     setSw("setTunnel", s.tunnel); setSw("setSmb", s.smb); setSw("setMic", s.mic);
     setSw("setPartialStreaming", s.partialStreaming);

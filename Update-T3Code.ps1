@@ -171,6 +171,12 @@ $provCmd = Get-Command -Name $provision -CommandType ExternalScript -ErrorAction
 if ($null -ne $settings.t3codeHttps -and $provCmd.Parameters.ContainsKey('T3CodeHttps')) {
     $params.T3CodeHttps = As-BoolString $settings.t3codeHttps $true
 }
+# The swap file size, the same way: only a valid saved value, only to a provisioner that has it.
+$savedSwap = "$($settings.swapSizeGb)".Trim().ToLowerInvariant()
+if ($savedSwap -match '\A(auto|[0-9]{1,3})\z' -and ($savedSwap -eq 'auto' -or [int]$savedSwap -le 128) -and
+    $provCmd.Parameters.ContainsKey('SwapSizeGB')) {
+    $params.SwapSizeGB = if ($savedSwap -eq 'auto') { 'auto' } else { "$([int]$savedSwap)" }
+}
 # A value counts as "supplied" when the caller bound it OR when -InstanceName resolved
 # it above -- a name-targeted rebuild has to reach the same VM a four-argument one does.
 $identity = @{}

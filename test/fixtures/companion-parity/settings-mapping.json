@@ -21,6 +21,7 @@
       "micPassthrough": false,
       "opencodeBackgroundWatcher": true,
       "smbShare": true,
+      "swapSizeGb": "16",
       "t3code": true,
       "t3codeAutoApprove": true,
       "t3codeChannel": "nightly",
@@ -48,6 +49,7 @@
       "ram": "8",
       "serveWeb": true,
       "smb": true,
+      "swapSizeGb": "16",
       "t3code": true,
       "t3codeAutoApprove": true,
       "t3codeChannel": "nightly",
@@ -55,7 +57,7 @@
       "tunnel": false,
       "ubuntu": "24.04"
     },
-    "outputJson": "{\"gitName\":\" ü \",\"gitEmail\":\"a@b\",\"gitCred\":false,\"ram\":\"8\",\"disk\":\"80\",\"cpu\":\"4\",\"ubuntu\":\"24.04\",\"serveWeb\":true,\"tunnel\":false,\"smb\":true,\"mic\":false,\"partialStreaming\":true,\"opencodeBackgroundWatcher\":true,\"t3code\":true,\"t3codeChannel\":\"nightly\",\"t3codeAutoApprove\":true,\"t3codePatched\":true,\"autoCheckpoints\":false,\"historyRetentionDays\":\"30\"}"
+    "outputJson": "{\"gitName\":\" ü \",\"gitEmail\":\"a@b\",\"gitCred\":false,\"ram\":\"8\",\"disk\":\"80\",\"cpu\":\"4\",\"ubuntu\":\"24.04\",\"serveWeb\":true,\"tunnel\":false,\"smb\":true,\"mic\":false,\"partialStreaming\":true,\"opencodeBackgroundWatcher\":true,\"t3code\":true,\"t3codeChannel\":\"nightly\",\"t3codeAutoApprove\":true,\"t3codePatched\":true,\"autoCheckpoints\":false,\"historyRetentionDays\":\"30\",\"swapSizeGb\":\"16\"}"
   },
   {
     "input": {
@@ -67,6 +69,7 @@
       "micPassthrough": null,
       "opencodeBackgroundWatcher": null,
       "smbShare": null,
+      "swapSizeGb": null,
       "t3code": null,
       "t3codeAutoApprove": null,
       "t3codeChannel": null,
@@ -101,6 +104,7 @@
       "micPassthrough": "wrong",
       "opencodeBackgroundWatcher": "wrong",
       "smbShare": "wrong",
+      "swapSizeGb": "wrong",
       "t3code": "wrong",
       "t3codeAutoApprove": "wrong",
       "t3codeChannel": "wrong",
@@ -143,6 +147,72 @@
     "outputJson": "{\"gitName\":\"1,,x\",\"ram\":\"[object Object]\"}"
   },
   {
+    "input": {
+      "swapSizeGb": " AUTO "
+    },
+    "kind": "to",
+    "output": {
+      "swapSizeGb": "auto"
+    },
+    "outputJson": "{\"swapSizeGb\":\"auto\"}"
+  },
+  {
+    "input": {
+      "swapSizeGb": 0
+    },
+    "kind": "to",
+    "output": {
+      "swapSizeGb": "0"
+    },
+    "outputJson": "{\"swapSizeGb\":\"0\"}"
+  },
+  {
+    "input": {
+      "swapSizeGb": "007"
+    },
+    "kind": "to",
+    "output": {
+      "swapSizeGb": "7"
+    },
+    "outputJson": "{\"swapSizeGb\":\"7\"}"
+  },
+  {
+    "input": {
+      "swapSizeGb": "129"
+    },
+    "kind": "to",
+    "output": {},
+    "outputJson": "{}"
+  },
+  {
+    "input": {
+      "swapSizeGb": "4.5"
+    },
+    "kind": "to",
+    "output": {},
+    "outputJson": "{}"
+  },
+  {
+    "input": {
+      "swapSizeGb": [
+        8
+      ]
+    },
+    "kind": "to",
+    "output": {
+      "swapSizeGb": "8"
+    },
+    "outputJson": "{\"swapSizeGb\":\"8\"}"
+  },
+  {
+    "input": {
+      "swapSizeGb": true
+    },
+    "kind": "to",
+    "output": {},
+    "outputJson": "{}"
+  },
+  {
     "input": null,
     "kind": "from",
     "output": {}
@@ -167,6 +237,7 @@
       "ram": "8",
       "serveWeb": true,
       "smb": true,
+      "swapSizeGb": "16",
       "t3code": true,
       "t3codeAutoApprove": true,
       "t3codeChannel": "nightly",
@@ -184,6 +255,7 @@
       "micPassthrough": false,
       "opencodeBackgroundWatcher": true,
       "smbShare": true,
+      "swapSizeGb": "16",
       "t3code": true,
       "t3codeAutoApprove": true,
       "t3codeChannel": "nightly",
@@ -241,6 +313,61 @@
     }
   },
   {
+    "input": {
+      "swapSizeGb": "Auto"
+    },
+    "kind": "from",
+    "output": {
+      "swapSizeGb": "auto"
+    }
+  },
+  {
+    "input": {
+      "swapSizeGb": " 0 "
+    },
+    "kind": "from",
+    "output": {
+      "swapSizeGb": "0"
+    }
+  },
+  {
+    "input": {
+      "swapSizeGb": 128
+    },
+    "kind": "from",
+    "output": {
+      "swapSizeGb": "128"
+    }
+  },
+  {
+    "input": {
+      "swapSizeGb": "-1"
+    },
+    "kind": "from",
+    "output": {}
+  },
+  {
+    "input": {
+      "swapSizeGb": ""
+    },
+    "kind": "from",
+    "output": {}
+  },
+  {
+    "input": {
+      "swapSizeGb": "1e2"
+    },
+    "kind": "from",
+    "output": {}
+  },
+  {
+    "input": {
+      "swapSizeGb": null
+    },
+    "kind": "from",
+    "output": {}
+  },
+  {
     "kind": "patch",
     "next": {},
     "output": [],
@@ -271,6 +398,32 @@
   },
   {
     "kind": "patch",
+    "next": {
+      "swapSizeGb": "auto"
+    },
+    "output": [],
+    "previous": {}
+  },
+  {
+    "kind": "patch",
+    "next": {
+      "swapSizeGb": "0"
+    },
+    "output": [
+      "swap file size"
+    ],
+    "previous": {}
+  },
+  {
+    "kind": "patch",
+    "next": {
+      "swapSizeGb": "bad"
+    },
+    "output": [],
+    "previous": {}
+  },
+  {
+    "kind": "patch",
     "next": {},
     "output": [
       "patched T3 Code + Desktop build"
@@ -315,6 +468,49 @@
   },
   {
     "kind": "patch",
+    "next": {
+      "swapSizeGb": "auto"
+    },
+    "output": [
+      "patched T3 Code + Desktop build"
+    ],
+    "previous": {
+      "t3code": true,
+      "t3codeChannel": " ",
+      "t3codePatched": true
+    }
+  },
+  {
+    "kind": "patch",
+    "next": {
+      "swapSizeGb": "0"
+    },
+    "output": [
+      "patched T3 Code + Desktop build",
+      "swap file size"
+    ],
+    "previous": {
+      "t3code": true,
+      "t3codeChannel": " ",
+      "t3codePatched": true
+    }
+  },
+  {
+    "kind": "patch",
+    "next": {
+      "swapSizeGb": "bad"
+    },
+    "output": [
+      "patched T3 Code + Desktop build"
+    ],
+    "previous": {
+      "t3code": true,
+      "t3codeChannel": " ",
+      "t3codePatched": true
+    }
+  },
+  {
+    "kind": "patch",
     "next": {},
     "output": [
       "patched T3 Code + Desktop build"
@@ -358,6 +554,127 @@
       "t3codeAutoApprove": true,
       "t3codeChannel": "stable",
       "t3codePatched": true
+    }
+  },
+  {
+    "kind": "patch",
+    "next": {
+      "swapSizeGb": "auto"
+    },
+    "output": [
+      "patched T3 Code + Desktop build"
+    ],
+    "previous": {
+      "t3code": true,
+      "t3codeAutoApprove": true,
+      "t3codeChannel": "stable",
+      "t3codePatched": true
+    }
+  },
+  {
+    "kind": "patch",
+    "next": {
+      "swapSizeGb": "0"
+    },
+    "output": [
+      "patched T3 Code + Desktop build",
+      "swap file size"
+    ],
+    "previous": {
+      "t3code": true,
+      "t3codeAutoApprove": true,
+      "t3codeChannel": "stable",
+      "t3codePatched": true
+    }
+  },
+  {
+    "kind": "patch",
+    "next": {
+      "swapSizeGb": "bad"
+    },
+    "output": [
+      "patched T3 Code + Desktop build"
+    ],
+    "previous": {
+      "t3code": true,
+      "t3codeAutoApprove": true,
+      "t3codeChannel": "stable",
+      "t3codePatched": true
+    }
+  },
+  {
+    "kind": "patch",
+    "next": {},
+    "output": [
+      "swap file size"
+    ],
+    "previous": {
+      "swapSizeGb": "12"
+    }
+  },
+  {
+    "kind": "patch",
+    "next": {
+      "t3code": true,
+      "t3codeAutoApprove": true,
+      "t3codeChannel": "nightly",
+      "t3codePatched": true
+    },
+    "output": [
+      "patched T3 Code + Desktop build",
+      "swap file size"
+    ],
+    "previous": {
+      "swapSizeGb": "12"
+    }
+  },
+  {
+    "kind": "patch",
+    "next": {
+      "opencodeBackgroundWatcher": true
+    },
+    "output": [
+      "OpenCode background watcher",
+      "swap file size"
+    ],
+    "previous": {
+      "swapSizeGb": "12"
+    }
+  },
+  {
+    "kind": "patch",
+    "next": {
+      "swapSizeGb": "auto"
+    },
+    "output": [
+      "swap file size"
+    ],
+    "previous": {
+      "swapSizeGb": "12"
+    }
+  },
+  {
+    "kind": "patch",
+    "next": {
+      "swapSizeGb": "0"
+    },
+    "output": [
+      "swap file size"
+    ],
+    "previous": {
+      "swapSizeGb": "12"
+    }
+  },
+  {
+    "kind": "patch",
+    "next": {
+      "swapSizeGb": "bad"
+    },
+    "output": [
+      "swap file size"
+    ],
+    "previous": {
+      "swapSizeGb": "12"
     }
   }
 ]

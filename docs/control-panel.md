@@ -732,6 +732,22 @@ It defaults to `-VmName Agent-VM -Backend hyperv-local`, takes `-InstanceName` l
 other host scripts, and refuses to run when the backend reports no `Resources`
 capability rather than resizing some *local* VM that happens to share the name.
 
+### Swap file
+
+**Settings → VM resources → Swap file** sets the size of the VM's swap file:
+
+- `auto` (the default): half the RAM, at most 8 GB
+- `0`: no swap file
+- a whole number up to `128`: that many GB
+
+The panel accepts nothing else and keeps an invalid entry from being saved. The size is
+applied by the next reprovision, so saving a changed value shows the same **Reprovision
+now** prompt as the [OpenCode background watcher](#opencode-background-watcher) toggle. A
+reinstall or redownload uses it too. While nothing is saved here, the VM keeps the size it
+already has; the panel shows a size the VM saved itself (for example from a console run)
+once the VM is online. What the guest does with the value is described in
+[Provisioning → Swap file](provisioning.md#swap-file).
+
 ### Chat history kept in backups
 
 **Settings → VM resources → Chat history kept in backups** (days, default 30; `0` keeps

@@ -132,6 +132,11 @@ param(
     # Forwarded down: optional dependency-free OpenCode background watcher.
     # Empty = keep the VM's saved choice; "true"/"false".
     [string]$OpenCodeBackgroundWatcher = "",
+    # Forwarded down: the guest's swap file size (bin/setup-swap.sh). Empty = the size the
+    # control panel saved for this VM, else the VM's own saved choice; "auto" (half the
+    # RAM, at most 8 GB), "0" (no swap file) or a whole number of GB up to 128.
+    [ValidatePattern('\A(auto|[0-9]|[1-9][0-9]|1[01][0-9]|12[0-8])?\z')]
+    [string]$SwapSizeGB = "",
     # Forwarded down (Create-AgentVM.ps1 -> Provision-AgentVM.ps1): opt-in T3 Code
     # web GUI. Empty = keep the VM's saved choice; "true"/"false".
     [string]$T3Code = "",
@@ -830,6 +835,17 @@ function Restore-ConstructInstallFeatures {
         $script:T3CodeChannel = ([string]$script:ConstructFeatureParameters['T3CodeChannel']).ToLowerInvariant()
         $script:ConstructFeatureParameters['T3CodeChannel'] = $T3CodeChannel
         if ($T3CodeChannel) { $settings['t3codeChannel'] = $T3CodeChannel }
+    }
+    # The swap file size is not a feature toggle, but it is replayed the same way: an
+    # explicit -SwapSizeGB is saved for this VM, otherwise the saved one rides along.
+    if ($script:SwapSizeGB) {
+        $script:SwapSizeGB = ([string]$script:SwapSizeGB).ToLowerInvariant()
+        $settings['swapSizeGb'] = $script:SwapSizeGB
+    } elseif ($saved -and $saved.PSObject.Properties.Name -contains 'swapSizeGb') {
+        $savedSwap = "$($saved.swapSizeGb)".Trim().ToLowerInvariant()
+        if ($savedSwap -match '\A(auto|[0-9]{1,3})\z' -and ($savedSwap -eq 'auto' -or [int]$savedSwap -le 128)) {
+            $script:SwapSizeGB = if ($savedSwap -eq 'auto') { 'auto' } else { "$([int]$savedSwap)" }
+        }
     }
     if ($settings.Count) {
         if (Get-Command Save-ConstructInstanceState -ErrorAction SilentlyContinue) {
@@ -2632,6 +2648,7 @@ function New-ConstructRemoteProvisionArgs {
         ClaudePartialStreaming    = $ClaudePartialStreaming
         MicPassthrough            = $MicPassthrough
         OpenCodeBackgroundWatcher = $OpenCodeBackgroundWatcher
+        SwapSizeGB                = $SwapSizeGB
         T3Code                    = $T3Code
         T3CodeChannel             = $T3CodeChannel
         T3CodePatched         = $T3CodePatched
@@ -2657,7 +2674,7 @@ function New-ConstructRemoteProvisionArgs {
         $a['Repo'] = $Repo; $a['Ref'] = $Ref
     }
     if ($SkipCompanion -and $script:RemoteProvCmd -and $script:RemoteProvCmd.Parameters.ContainsKey('SkipCompanion')) { $a['SkipCompanion'] = $true }
-    foreach ($opt in @('T3CodeChannel', 'T3CodePatched', 'T3CodeAutoApprove', 'OpenCodeBackgroundWatcher')) {
+    foreach ($opt in @('T3CodeChannel', 'T3CodePatched', 'T3CodeAutoApprove', 'OpenCodeBackgroundWatcher', 'SwapSizeGB')) {
         if ($script:RemoteProvCmd -and -not $script:RemoteProvCmd.Parameters.ContainsKey($opt)) { $a.Remove($opt) }
     }
     if ($script:ConstructFeatureParameters) {
@@ -3462,6 +3479,7 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
         $reprovArgs['ClaudePartialStreaming'] = $ClaudePartialStreaming
         $reprovArgs['MicPassthrough'] = $MicPassthrough
         $reprovArgs['OpenCodeBackgroundWatcher'] = $OpenCodeBackgroundWatcher
+        $reprovArgs['SwapSizeGB'] = $SwapSizeGB
         $reprovArgs['T3Code'] = $T3Code
         $reprovArgs['T3CodeChannel'] = $T3CodeChannel
         $reprovArgs['T3CodePatched'] = $T3CodePatched
@@ -3486,12 +3504,14 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
             if (-not $reprovCmd.Parameters.ContainsKey('OpenCodeBackgroundWatcher')) {
                 $reprovArgs.Remove('OpenCodeBackgroundWatcher')
             }
+            if (-not $reprovCmd.Parameters.ContainsKey('SwapSizeGB')) { $reprovArgs.Remove('SwapSizeGB') }
         } catch {
             $reprovCmd = $null
             $reprovArgs.Remove('T3CodeChannel')
             $reprovArgs.Remove('T3CodePatched')
             $reprovArgs.Remove('T3CodeAutoApprove')
             $reprovArgs.Remove('OpenCodeBackgroundWatcher')
+            $reprovArgs.Remove('SwapSizeGB')
         }
         try {
             Add-ConstructFeatureArguments -Arguments $reprovArgs -Values $script:ConstructFeatureParameters -Command $reprovCmd
@@ -3825,6 +3845,7 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
                 ClaudePartialStreaming = $ClaudePartialStreaming
                 MicPassthrough        = $MicPassthrough
                 OpenCodeBackgroundWatcher = $OpenCodeBackgroundWatcher
+                SwapSizeGB            = $SwapSizeGB
                 T3Code                = $T3Code
                 T3CodeChannel         = $T3CodeChannel
                 T3CodePatched     = $T3CodePatched
@@ -3849,12 +3870,14 @@ if (-not $SkipCreateVm -and (Test-ConstructDriverPrereqs) -and
                 if (-not $acProvCmd.Parameters.ContainsKey('OpenCodeBackgroundWatcher')) {
                     $acReprovArgs.Remove('OpenCodeBackgroundWatcher')
                 }
+                if (-not $acProvCmd.Parameters.ContainsKey('SwapSizeGB')) { $acReprovArgs.Remove('SwapSizeGB') }
             } catch {
                 $acProvCmd = $null
                 $acReprovArgs.Remove('T3CodeChannel')
                 $acReprovArgs.Remove('T3CodePatched')
                 $acReprovArgs.Remove('T3CodeAutoApprove')
                 $acReprovArgs.Remove('OpenCodeBackgroundWatcher')
+                $acReprovArgs.Remove('SwapSizeGB')
             }
             Add-ConstructFeatureArguments -Arguments $acReprovArgs -Values $script:ConstructFeatureParameters -Command $acProvCmd
             Invoke-DeElevatedProvision -ScriptPath $provisionScript -ProvisionParams $acReprovArgs
@@ -4298,6 +4321,7 @@ $createArgs = @{
     ClaudePartialStreaming = $ClaudePartialStreaming
     MicPassthrough = $MicPassthrough
     OpenCodeBackgroundWatcher = $OpenCodeBackgroundWatcher
+    SwapSizeGB    = $SwapSizeGB
     T3Code        = $T3Code
     T3CodeChannel = $T3CodeChannel
     AutomaticCheckpoints = $effectiveAutoCheckpoints
@@ -4336,6 +4360,7 @@ try {
     if (-not $createCmd.Parameters.ContainsKey('OpenCodeBackgroundWatcher')) {
         $createArgs.Remove('OpenCodeBackgroundWatcher')
     }
+    if (-not $createCmd.Parameters.ContainsKey('SwapSizeGB')) { $createArgs.Remove('SwapSizeGB') }
     # Forward the VM name only when the target script understands it (skew guard).
     if ($createCmd.Parameters.ContainsKey('VmName')) {
         $createArgs['VmName'] = $HyperVmName
@@ -4362,6 +4387,7 @@ try {
     $createArgs.Remove('AutomaticCheckpoints')
     $createArgs.Remove('T3CodeChannel')
     $createArgs.Remove('OpenCodeBackgroundWatcher')
+    $createArgs.Remove('SwapSizeGB')
     Write-Warning "Could not check Create-AgentVM.ps1's parameters ($($_.Exception.Message))."
     Write-Host "    Creating the VM without -AutomaticCheckpoints; set it afterwards from the control panel" -ForegroundColor Yellow
     Write-Host "    (Settings -> VM resources) or with Set-AgentVmCheckpoints.ps1." -ForegroundColor Yellow
@@ -4408,6 +4434,7 @@ try {
         ClaudePartialStreaming = $ClaudePartialStreaming
         MicPassthrough        = $MicPassthrough
         OpenCodeBackgroundWatcher = $OpenCodeBackgroundWatcher
+        SwapSizeGB            = $SwapSizeGB
         T3Code                = $T3Code
         T3CodeChannel         = $T3CodeChannel
         Auto      = $true
@@ -4434,10 +4461,12 @@ try {
         if (-not $provCmd.Parameters.ContainsKey('OpenCodeBackgroundWatcher')) {
             $provArgs.Remove('OpenCodeBackgroundWatcher')
         }
+        if (-not $provCmd.Parameters.ContainsKey('SwapSizeGB')) { $provArgs.Remove('SwapSizeGB') }
     } catch {
         $provCmd = $null
         $provArgs.Remove('T3CodeChannel')
         $provArgs.Remove('OpenCodeBackgroundWatcher')
+        $provArgs.Remove('SwapSizeGB')
     }
     Add-ConstructFeatureArguments -Arguments $provArgs -Values $script:ConstructFeatureParameters -Command $provCmd
     Invoke-DeElevatedProvision -ScriptPath $provisionScript -ProvisionParams $provArgs

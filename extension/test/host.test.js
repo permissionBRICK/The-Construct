@@ -173,6 +173,24 @@ try {
       { t3codePatched: false, opencodeBackgroundWatcher: false },
       { t3codePatched: true, opencodeBackgroundWatcher: true },
     ).length === 2);
+  ok("patch changes: a new swap file size is reported",
+    JSON.stringify(host.patchReprovisionChanges({ swapSizeGb: "auto" }, { swapSizeGb: "16" })) === JSON.stringify(["swap file size"]));
+  ok("patch changes: a missing swap size is auto (saving auto needs no reprovision)",
+    host.patchReprovisionChanges({}, { swapSizeGb: "auto" }).length === 0 &&
+    JSON.stringify(host.patchReprovisionChanges({ swapSizeGb: "4" }, {})) === JSON.stringify(["swap file size"]));
+
+  // ── swap file size (swapSizeGb) ──────────────────────────────────────────
+  const swapCases = [["auto", "auto"], [" AUTO ", "auto"], ["0", "0"], ["08", "8"], ["128", "128"], [16, "16"],
+    ["129", null], ["-1", null], ["4.5", null], ["1e2", null], ["4 GB", null], ["", null], [null, null], [undefined, null], [true, null], [{}, null]];
+  ok("normalizeSwapSize: auto or a whole number of GB 0-128, anything else null",
+    swapCases.every(([input, want]) => host.normalizeSwapSize(input) === want),
+    JSON.stringify(swapCases.map(([input]) => host.normalizeSwapSize(input))));
+  ok("mapToForm: a saved swap size is shown, normalized", host.mapToForm({ swapSizeGb: " 012 " }).swapSizeGb === "12");
+  ok("mapToForm: an invalid saved swap size is left out", !("swapSizeGb" in host.mapToForm({ swapSizeGb: "lots" })));
+  ok("mapFromForm: a swap size persists as swapSizeGb", host.mapFromForm({ swapSizeGb: "Auto" }).swapSizeGb === "auto" &&
+    host.mapFromForm({ swapSizeGb: "0" }).swapSizeGb === "0");
+  ok("mapFromForm: an invalid swap size is dropped (stored value stays)", !("swapSizeGb" in host.mapFromForm({ swapSizeGb: "200" })));
+
   const extensionSource = fs.readFileSync(path.join(__dirname, "..", "extension.js"), "utf8");
   ok("patch settings: save path has no live T3/OpenCode patch invocation",
     !extensionSource.includes("setLimitResumeOnVm") && !extensionSource.includes("setBackgroundWatcherOnVm"));

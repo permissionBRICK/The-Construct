@@ -268,7 +268,10 @@ on ext4 it does nothing. See [worktrees.md](worktrees.md).
 ### Swap file
 
 Every (re)provision runs `bin/setup-swap.sh` with `SWAP_SIZE_GB`, right after it writes
-`config.env` so the installs that follow already have swap. Without swap, a guest that runs
+`config.env` so the installs that follow already have swap. On Windows the size is set in the
+control panel (**Settings → VM resources → Swap file**, see
+[Control panel](control-panel.md#swap-file)) or with `-SwapSizeGB` on `Auto-Install.ps1`,
+`Create-AgentVM.ps1` and `Provision-AgentVM.ps1`, which pass it on as `SWAP_SIZE_GB`. Without swap, a guest that runs
 out of RAM for a moment (four builds at once, or a hypervisor that is slow to give memory
 back) can only kill processes; with swap it gets slow for a while instead, and memory that
 nothing touches (idle agent sessions, finished threads, language servers) can move out of
