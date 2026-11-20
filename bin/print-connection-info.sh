@@ -119,6 +119,7 @@ OpenCode:
   Bind:     ${OPENCODE_HOST}:${OPENCODE_PORT}
   URL:      http://${url_host}:${OPENCODE_PORT}
   Docs:     http://${url_host}:${OPENCODE_PORT}/doc
+  Password: new at each start; journalctl -u opencode-serve | grep 'server password'
 EOF
 fi
 

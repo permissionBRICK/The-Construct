@@ -203,10 +203,8 @@ install_agent_system_prompts_all() {
   note "Rendered ${rendered} agent instruction file(s)."
 }
 
-# Run an official `curl | bash` installer with retries. The opencode installer
-# downloads its release archive without curl --fail, so a transient HTTP error
-# (rate limit, CDN hiccup) pipes an error page into tar and the install dies
-# mid-run with "gzip: stdin: not in gzip format". Each attempt re-downloads
+# Run an official `curl | bash` installer with retries. A transient HTTP error
+# (rate limit, CDN hiccup) fails an attempt mid-run; each attempt re-downloads
 # into a fresh temp dir, so retrying with backoff is safe and rides out blips.
 run_installer_with_retries() {
   local label="$1"; shift
@@ -223,92 +221,141 @@ run_installer_with_retries() {
   return 1
 }
 
-# Resolve the latest opencode release WITHOUT api.github.com. The official
-# installer looks the version up through the unauthenticated GitHub REST API,
-# which is rate-limited to 60 requests/hour per SOURCE IP -- behind a corporate
-# NAT that budget is shared by the whole office and is routinely exhausted, so
-# the installer exits 1 with "Failed to fetch version information" on every
-# attempt (retrying just hits the same wall; the quota resets hourly). The plain
-# releases/latest redirect is served by github.com itself and carries no such
-# quota, so resolve the tag here and hand it to the installer via its VERSION
-# env var -- which skips the API call entirely. Empty output = unresolved, the
-# caller then runs the installer unpinned and falls back to npm.
+# OpenCode 2 ships as the npm package @opencode/cli (OpenCode 1 was opencode-ai).
+# Its installer downloads that package's platform build from the npm registry, so
+# the registry's latest tag is the version to install. Empty output = unresolved;
+# the caller then runs the installer unpinned and falls back to npm.
 opencode_latest_version() {
-  curl -sI --max-time 20 -o /dev/null -w '%{redirect_url}' \
-    https://github.com/anomalyco/opencode/releases/latest 2>/dev/null |
-    sed -n 's#.*/releases/tag/v\([0-9][^/]*\)$#\1#p'
+  curl -fsSL --max-time 20 https://registry.npmjs.org/@opencode%2fcli/latest 2>/dev/null |
+    jq -r '.version // empty' 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' || true
+}
+
+# The installed version: OpenCode 1 prints "1.19.6", OpenCode 2 "opencode v2.3.2".
+opencode_installed_version() {
+  opencode --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true
 }
 
 opencode_official_installer() {
   local version="${1:-}"
   if [[ -n "${version}" ]]; then
-    curl -fsSL https://opencode.ai/install | VERSION="${version}" bash
+    curl -fsSL https://opencode.ai/v2/install | VERSION="${version}" bash
   else
-    curl -fsSL https://opencode.ai/install | bash
+    curl -fsSL https://opencode.ai/v2/install | bash
   fi
 }
 
-# Fallback path when GitHub is unreachable (proxy, blocklist, rate limit): the
-# opencode-ai npm package ships the same release, and the npm registry is
-# usually reachable/mirrored where raw GitHub downloads are not -- it is already
-# how codex and t3 get installed here. Node may not be provisioned yet (this
-# script runs before install-sdks.sh), so bootstrap it like install_codex does.
+# Fallback when the installer fails: the same release from npm, which is usually
+# reachable or mirrored where other downloads are not -- it is already how codex
+# and t3 get installed here. Node may not be provisioned yet (this script runs
+# before install-sdks.sh), so bootstrap it like install_codex does.
 opencode_npm_fallback() {
-  local version="${1:-}" spec="opencode-ai@latest"
-  if [[ -n "${version}" ]]; then spec="opencode-ai@${version}"; fi
+  local version="${1:-}" spec="@opencode/cli@latest"
+  if [[ -n "${version}" ]]; then spec="@opencode/cli@${version}"; fi
   if ! command -v npm >/dev/null 2>&1; then
     step "Installing Node.js 22.x (required for the opencode npm fallback)"
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash - || return 1
     DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs || return 1
   fi
+  # OpenCode 1 from npm owns the same `opencode` command, and npm will not take
+  # over another package's command: remove it first, it is being replaced.
+  if npm ls -g --depth=0 opencode-ai >/dev/null 2>&1; then
+    npm uninstall -g opencode-ai || return 1
+  fi
   # The package's postinstall unpacks the platform binary; newer npm gates
   # install scripts behind --allow-scripts, older npm ignores the unknown flag.
-  npm install -g "${spec}" --allow-scripts=opencode-ai
+  npm install -g "${spec}" --allow-scripts=@opencode/cli
+}
+
+# OpenCode 2 converts OpenCode 1's database in place, one way, on its first start.
+# Before the first OpenCode 2 install, each data folder is copied once to
+# ~/.local/share/opencode-v1-copy; that copy is the only way back to OpenCode 1.
+# The copy's own directory is the marker: it is renamed into place only when
+# complete, so an interrupted copy is made again. opencode-serve is stopped first so
+# it does not write during the copy (it starts again at the end of install_opencode);
+# an OpenCode 1 session that T3 Code runs at that moment still can.
+opencode_keep_v1_data() {
+  local home data copy
+  if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet opencode-serve 2>/dev/null; then
+    systemctl stop opencode-serve || true
+  fi
+  for home in "$@"; do
+    data="${home}/.local/share/opencode"
+    copy="${home}/.local/share/opencode-v1-copy"
+    [[ -d "${data}" && ! -e "${copy}" ]] || continue
+    rm -rf -- "${copy}.partial"
+    if cp -a --reflink=auto -- "${data}" "${copy}.partial" && mv -- "${copy}.partial" "${copy}"; then
+      ok "kept OpenCode 1's data at ${copy} (the way back to OpenCode 1)"
+    else
+      rm -rf -- "${copy}.partial"
+      err "could not copy ${data} before the move to OpenCode 2 (free space: $(df -h "${home}" 2>/dev/null | awk 'NR==2 {print $4}'))"
+      return 1
+    fi
+  done
 }
 
 # One line per endpoint the install needs, so a failed install says WHY instead
-# of leaving the operator to guess between "offline", "proxy" and "rate limit".
+# of leaving the operator to guess between "offline" and "proxy".
 opencode_reachability_note() {
   local url code
-  for url in https://github.com https://api.github.com/rate_limit https://registry.npmjs.org; do
+  for url in https://opencode.ai https://registry.npmjs.org; do
     code="$(curl -s --max-time 15 -o /dev/null -w '%{http_code}' "${url}" 2>/dev/null || echo "000")"
     note "  ${url} -> HTTP ${code}$([[ "${code}" == "000" ]] && printf ' (unreachable: no route, DNS or proxy block)')"
   done
 }
 
 install_opencode() {
-  step "Installing opencode CLI"
-  local had_opencode=false opencode_version
-  if command -v opencode >/dev/null 2>&1; then had_opencode=true; fi
+  step "Installing opencode CLI (OpenCode 2)"
+  local had_opencode=false installed="" latest="" fresh=""
+  if command -v opencode >/dev/null 2>&1; then
+    had_opencode=true
+    installed="$(opencode_installed_version)"
+  fi
 
-  opencode_version="$(opencode_latest_version || true)"
-  if [[ -n "${opencode_version}" ]]; then
-    note "latest opencode release: ${opencode_version} (pinned, so the installer skips the rate-limited GitHub API)"
+  latest="$(opencode_latest_version)"
+  if [[ -n "${latest}" ]]; then
+    note "latest opencode release: ${latest}"
   else
-    warn "could not resolve the latest opencode release from github.com; letting the installer decide"
+    warn "could not resolve the latest opencode release from the npm registry; letting the installer decide"
   fi
 
-  # Always run the official installer: on a fresh VM it installs opencode, and on
-  # a re-provision it updates an existing install to the latest version. When
-  # opencode is already present a failed update (e.g. no network) is non-fatal --
-  # we keep the working copy rather than aborting provisioning.
-  if [[ "${had_opencode}" == true ]]; then
-    note "opencode already installed; updating to the latest version"
-  fi
-  if ! run_installer_with_retries "opencode" opencode_official_installer "${opencode_version}"; then
-    warn "official opencode installer failed; falling back to npm (opencode-ai)"
-    if ! opencode_npm_fallback "${opencode_version}"; then
-      opencode_reachability_note
-      if [[ "${had_opencode}" == true ]]; then
-        warn "opencode update failed (installer and npm); keeping the existing version"
-      else
-        err "opencode install failed: neither the official installer nor npm could fetch it"
+  # Install on a fresh VM, update when a newer release is out, and keep the working
+  # copy when an update fails (e.g. no network) rather than aborting provisioning.
+  if [[ -n "${installed}" && -n "${latest}" &&
+        "$(printf '%s\n' "${latest}" "${installed}" | sort -V | tail -n1)" == "${installed}" ]]; then
+    ok "opencode ${installed} is up to date"
+  else
+    if [[ "${installed%%.*}" == 1 ]]; then
+      local homes=(/root)
+      if [[ "${TARGET_USER}" != "root" ]] && id "${TARGET_USER}" >/dev/null 2>&1; then homes+=("/home/${TARGET_USER}"); fi
+      note "moving from OpenCode ${installed} to OpenCode 2"
+      if ! opencode_keep_v1_data "${homes[@]}"; then
+        err "staying on OpenCode ${installed}"
+        systemctl start opencode-serve 2>/dev/null || true
         return 1
+      fi
+    fi
+    if run_installer_with_retries "opencode" opencode_official_installer "${latest}"; then
+      fresh="${HOME:-/root}/.opencode/bin/opencode"
+    else
+      warn "official opencode installer failed; falling back to npm (@opencode/cli)"
+      if opencode_npm_fallback "${latest}"; then
+        fresh="$(npm root -g 2>/dev/null)/@opencode/cli/bin/opencode.exe"
+      else
+        opencode_reachability_note
+        if [[ "${had_opencode}" == true ]]; then
+          warn "opencode update failed (installer and npm); keeping the existing version"
+        else
+          err "opencode install failed: neither the official installer nor npm could fetch it"
+          return 1
+        fi
       fi
     fi
   fi
 
-  # Resolve the binary /usr/local/bin/opencode should point at. command -v may
+  # The install that just ran says where its binary is: the installer's
+  # ~/.opencode/bin/opencode, or the one inside npm's global @opencode/cli.
+  # Otherwise (already current, or the update failed) resolve the binary
+  # /usr/local/bin/opencode should point at. command -v may
   # report our own symlink from a previous provision, or an npm global shim
   # (with Ubuntu's apt/nodesource npm the global prefix is /usr/local, so the
   # shim itself IS /usr/local/bin/opencode -- a symlink into node_modules).
@@ -316,7 +363,12 @@ install_opencode() {
   # symlinking /usr/local/bin/opencode to itself, which made opencode-serve fail
   # with 203/EXEC.
   opencode_bin=""
-  opencode_path="$(command -v opencode || true)"
+  opencode_path=""
+  if [[ -n "${fresh}" && -x "${fresh}" ]]; then
+    opencode_bin="${fresh}"
+  else
+    opencode_path="$(command -v opencode || true)"
+  fi
   if [[ -n "${opencode_path}" ]]; then
     opencode_resolved="$(readlink -f "${opencode_path}" 2>/dev/null || true)"
     if [[ -n "${opencode_resolved}" && -x "${opencode_resolved}" ]]; then
@@ -338,8 +390,8 @@ install_opencode() {
       /root/.local/bin/opencode \
       "${HOME:-/root}/.opencode/bin/opencode" \
       "${HOME:-/root}/.local/bin/opencode" \
-      /usr/local/lib/node_modules/opencode-ai/bin/opencode.exe \
-      /usr/lib/node_modules/opencode-ai/bin/opencode.exe; do
+      /usr/local/lib/node_modules/@opencode/cli/bin/opencode.exe \
+      /usr/lib/node_modules/@opencode/cli/bin/opencode.exe; do
       if [[ -x "${candidate}" ]]; then
         opencode_bin="${candidate}"
         break
