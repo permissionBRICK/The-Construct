@@ -39,7 +39,8 @@ construct vm create --name windows-lab --os windows --windows win11-pro \
 ```
 
 The acquire job resolves Windows 11 with a pinned [Fido resolver](https://github.com/pbatard/Fido/tree/3d47260b8915385c58e20c73e24b36e9a9536f3f).
-The host needs PowerShell for that resolver, `pwsh` on Proxmox. `--lang` takes a
+The host needs PowerShell for that resolver, `pwsh` on Proxmox; without it the job fails
+with `windows-resolver-pwsh-missing`. `--lang` takes a
 language code such as `de`, `fr-CA` or `pt-BR`; codes without a Windows 11 ISO fail with
 `windows-language-unsupported`. Microsoft's download protection refuses some networks
 and rate-limits repeated requests; the job then fails with `windows-download-rejected`,

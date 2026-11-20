@@ -107,7 +107,9 @@ function sanitizeMcp(mcp) {
 // (docs/https-forwards.md). It must say what the port speaks, `upstreamTls`
 // (--upstream-tls / --upstream-plain): the host never guesses. `name` is
 // `--name`; provisioning requests it with --https-if-available.
-const FORWARD_KEYS = ["port", "label", "to", "https", "name", "upstreamTls"];
+const FORWARD_KEYS = ["port", "label", "to", "https", "name", "upstreamTls", "purpose", "source"];
+// What a forward is for and where its service lives (construct expose --purpose / --source).
+function isNoteText(v, max) { return typeof v === "string" && v.length <= max && !/[\u0000-\u001f\u007f-\u009f]/.test(v); }
 const FORWARD_TARGETS = ["client", "host"];
 // One DNS label, as `construct expose --name` takes it.
 const FORWARD_NAME = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
@@ -137,6 +139,8 @@ function sanitizeForwards(forwards) {
       if (isForwardName(f.name)) entry.name = f.name;
     }
     if (nonEmptyString(f.label)) entry.label = f.label;
+    if (nonEmptyString(f.purpose) && isNoteText(f.purpose, 200)) entry.purpose = f.purpose;
+    if (nonEmptyString(f.source) && isNoteText(f.source, 400)) entry.source = f.source;
     out.push(entry);
   }
   return out;
@@ -260,6 +264,8 @@ function validateProfile(name, obj) {
       if ("https" in f && typeof f.https !== "boolean") errors.push(`forwards[${i}].https must be true or false`);
       if ("name" in f && !isForwardName(f.name)) errors.push(`forwards[${i}].name must be one DNS label: up to 63 lowercase letters, digits and hyphens, starting and ending with a letter or digit`);
       if ("upstreamTls" in f && typeof f.upstreamTls !== "boolean") errors.push(`forwards[${i}].upstreamTls must be true or false`);
+      if ("purpose" in f && !isNoteText(f.purpose, 200)) errors.push(`forwards[${i}].purpose must be a string on one line of at most 200 characters`);
+      if ("source" in f && !isNoteText(f.source, 400)) errors.push(`forwards[${i}].source must be a path on one line of at most 400 characters`);
       if (f.https === true && f.to === "client") errors.push(`forwards[${i}].to must be "host" or left out: the host serves an HTTPS forward`);
       if (f.https === true && !("upstreamTls" in f)) errors.push(`forwards[${i}].upstreamTls is required with "https": true: false when the port serves plain HTTP, true when it speaks TLS itself`);
       if ("name" in f && f.https !== true) errors.push(`forwards[${i}].name needs "https": true`);

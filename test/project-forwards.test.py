@@ -68,10 +68,11 @@ class ProjectForwardsTests(unittest.TestCase):
             z=[dict(port=5173, label='vite'), dict(port=9000, to='host')],
             a=[dict(port=5173, to='client', label='other'), dict(port=5173, to='host')],
             none=None)
+        z, a = str(self.store / 'z.json'), str(self.store / 'a.json')
         self.assertEqual(merged, [
-            dict(profile='z', port=5173, to='client', label='vite'),
-            dict(profile='z', port=9000, to='host', label=''),
-            dict(profile='a', port=5173, to='host', label=''),
+            dict(profile='z', port=5173, to='client', label='vite', source=z),
+            dict(profile='z', port=9000, to='host', label='', source=z),
+            dict(profile='a', port=5173, to='host', label='', source=a),
         ])
 
     def test_merge_makes_https_forwards_host_forwards_and_keeps_names_apart(self):
@@ -80,12 +81,13 @@ class ProjectForwardsTests(unittest.TestCase):
                dict(port=5173, https=True, upstreamTls=True), dict(port=5173, to='host')],
             a=[dict(port=5173, https=True, upstreamTls=False, to='host', name='app'),
                dict(port=5173, https=True, upstreamTls=False, name='other'), dict(port=8443, https=False, to='host')])
+        z, a = str(self.store / 'z.json'), str(self.store / 'a.json')
         self.assertEqual(merged, [
-            dict(profile='z', port=5173, to='host', label='vite', https=True, upstreamTls=False, name='app'),
-            dict(profile='z', port=5173, to='host', label='', https=True, upstreamTls=True, name=''),
-            dict(profile='z', port=5173, to='host', label=''),
-            dict(profile='a', port=5173, to='host', label='', https=True, upstreamTls=False, name='other'),
-            dict(profile='a', port=8443, to='host', label=''),
+            dict(profile='z', port=5173, to='host', label='vite', https=True, upstreamTls=False, name='app', source=z),
+            dict(profile='z', port=5173, to='host', label='', https=True, upstreamTls=True, name='', source=z),
+            dict(profile='z', port=5173, to='host', label='', source=z),
+            dict(profile='a', port=5173, to='host', label='', https=True, upstreamTls=False, name='other', source=a),
+            dict(profile='a', port=8443, to='host', label='', source=a),
         ])
 
     def test_profiles_without_forwards_merge_to_an_empty_list(self):
@@ -100,10 +102,26 @@ class ProjectForwardsTests(unittest.TestCase):
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls.read_text().splitlines(), [
-            "5173 --to client --reuse --wait 0 --label vite\\ dev ",
-            "9000 --to host --reuse --wait 0 ",
+            f"5173 --to client --reuse --wait 0 --label vite\\ dev --source {self.store}/web.json ",
+            f"9000 --to host --reuse --wait 0 --source {self.store}/web.json ",
         ])
         self.assertIn('5173 (client, vite dev; web): http://localhost:5173/', result.stdout)
+
+    def test_a_forward_says_what_it_is_for_and_where_it_comes_from(self):
+        merged = self.profiles(web=[dict(port=5173, label='vite', purpose='chart page preview', source='/root/repos/charts'),
+                                    dict(port=9000, to='host', purpose='')])
+        self.assertEqual(merged, [
+            dict(profile='web', port=5173, to='client', label='vite', purpose='chart page preview', source='/root/repos/charts'),
+            # Without a source of its own, the forward points at the profile file that asks for it.
+            dict(profile='web', port=9000, to='host', label='', source=str(self.store / 'web.json')),
+        ])
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.calls.read_text().splitlines(), [
+            "5173 --to client --reuse --wait 0 --label vite --purpose chart\\ page\\ preview --source /root/repos/charts ",
+            # Without a source of its own, the forward points at the profile that asks for it.
+            f"9000 --to host --reuse --wait 0 --source {self.store}/web.json ",
+        ])
 
     def test_an_https_forward_is_requested_if_available_saying_what_its_port_speaks(self):
         self.profiles(web=[dict(port=5173, https=True, name='app', upstreamTls=True, label='vite dev'),
@@ -111,8 +129,8 @@ class ProjectForwardsTests(unittest.TestCase):
         result = self.run_script(STUB_HTTPS='1')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.calls.read_text().splitlines(), [
-            "5173 --to host --reuse --wait 0 --label vite\\ dev --https-if-available --upstream-tls --name app ",
-            "5174 --to host --reuse --wait 0 --https-if-available --upstream-plain ",
+            f"5173 --to host --reuse --wait 0 --label vite\\ dev --source {self.store}/web.json --https-if-available --upstream-tls --name app ",
+            f"5174 --to host --reuse --wait 0 --source {self.store}/web.json --https-if-available --upstream-plain ",
         ])
         self.assertIn('5173 (https app, vite dev; web): https://localhost:5173/', result.stdout)
         self.assertIn('5174 (https; web): https://localhost:5174/', result.stdout)

@@ -62,8 +62,8 @@ public sealed class SqliteForwardStore(SqliteDatabase database) : IForwardStore
         await using var connection = await database.OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO forwards (id, vm_name, vm_port, public_port, target, label, created, destination_vm, destination_via, destination_connect_address, destination_connect_port, requested_by, relationship, destination_verified, https, main, upstream_tls, https_name)
-            VALUES (@id, @vmName, @vmPort, @publicPort, @target, @label, @created, @dvm, @via, @address, @port, @requester, @relationship, @verified, @https, @main, @upstreamTls, @httpsName);
+            INSERT INTO forwards (id, vm_name, vm_port, public_port, target, label, created, destination_vm, destination_via, destination_connect_address, destination_connect_port, requested_by, relationship, destination_verified, https, main, upstream_tls, https_name, purpose, source)
+            VALUES (@id, @vmName, @vmPort, @publicPort, @target, @label, @created, @dvm, @via, @address, @port, @requester, @relationship, @verified, @https, @main, @upstreamTls, @httpsName, @purpose, @source);
             """;
         command
             .With("@id", forward.Id)
@@ -76,10 +76,21 @@ public sealed class SqliteForwardStore(SqliteDatabase database) : IForwardStore
             .With("@https", forward.Https ? 1 : 0)
             .With("@main", forward.Main ? 1 : 0)
             .With("@upstreamTls", forward.UpstreamTls is bool tls ? tls ? 1 : 0 : null)
-            .With("@httpsName", string.IsNullOrWhiteSpace(forward.HttpsName) ? null : forward.HttpsName);
+            .With("@httpsName", string.IsNullOrWhiteSpace(forward.HttpsName) ? null : forward.HttpsName)
+            .With("@purpose", forward.Purpose)
+            .With("@source", forward.Source);
 
         BindDestination(command, forward.Destination);
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<bool> SetNoteAsync(string id, string? purpose, string? source, CancellationToken ct)
+    {
+        await using var connection = await database.OpenAsync(ct).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE forwards SET purpose = @purpose, source = @source WHERE id = @id;";
+        command.With("@id", id).With("@purpose", purpose).With("@source", source);
+        return await command.ExecuteNonQueryAsync(ct).ConfigureAwait(false) == 1;
     }
 
     public async Task<bool> SetAckAsync(string id, ForwardAck ack, CancellationToken cancellationToken)
@@ -154,7 +165,9 @@ public sealed class SqliteForwardStore(SqliteDatabase database) : IForwardStore
         reader.GetIntOrNull("https") == 1,
         reader.GetIntOrNull("main") == 1,
         reader.GetIntOrNull("upstream_tls") is int upstreamTls ? upstreamTls == 1 : null,
-        reader.GetStringOrNull("https_name"));
+        reader.GetStringOrNull("https_name"),
+        reader.GetStringOrNull("purpose"),
+        reader.GetStringOrNull("source"));
 
     /// <summary>The ack columns, or null when nobody has acked this forward.</summary>
     private static ForwardAck? ReadAck(SqliteDataReader reader)

@@ -83,18 +83,25 @@ public sealed class WindowsMediaJobs(IMediaStore store, IMediaFiles files, IMedi
         }
         catch { await FailedAsync(item); throw new MediaException("windows-unattend-failed"); }
     }
+    /// <summary>
+    /// The virtio-win ISO the guest agent is installed from: a versioned HTTPS link and its SHA-256. The
+    /// stable-virtio alias answers 301 to an http:// address, which the transfer refuses as a TLS downgrade.
+    /// Change both together.
+    /// </summary>
+    public const string GuestAgentUrl = "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.302-1/virtio-win-0.1.302.iso";
+    public const string GuestAgentSha256 = "303f7ae40dad495d6ae474fdc571df58958a4dbc5c37a522d80f9a203867949d";
     public async Task<MediaItem> GuestAgentAsync(IProgress<string>? progress, CancellationToken ct)
     {
         if (options.Fake) throw new MediaException("windows-guest-agent-unavailable");
         var id = Id("virtio-win-stable");
         await using var locked = await gate.AcquireAsync(id, "guest-agent-media", ct);
         if (await store.GetAsync(id, ct) is { State: MediaState.Ready } cached) return cached;
-        var item = new MediaItem(id, "host", "virtio-win guest agent", MediaRole.Auxiliary, MediaSource.Url, null,
-            files.PathFor(id), MediaState.Transferring, null, 1L << 30, null, null, null, null, null, clock.UtcNow, null, null, true);
+        var item = new MediaItem(id, "host", "virtio-win guest agent", MediaRole.Auxiliary, MediaSource.Url, GuestAgentUrl,
+            files.PathFor(id), MediaState.Transferring, null, 1L << 30, null, GuestAgentSha256, null, null, null, clock.UtcNow, null, null, true);
         await ResetAsync(item, ct);
         try
         {
-            await transfer.AcquireAsync(item, new("https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win.iso"), 1L << 30, TimeSpan.FromHours(1), progress, ct);
+            await transfer.AcquireAsync(item, new(GuestAgentUrl), 1L << 30, TimeSpan.FromHours(1), progress, ct);
             return await ReadyAsync(item, ct);
         }
         catch { await FailedAsync(item); throw new MediaException("windows-guest-agent-media-failed"); }

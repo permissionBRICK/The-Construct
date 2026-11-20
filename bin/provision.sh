@@ -867,9 +867,9 @@ setup_host_forwards() {
 
   # KEY|label|port|https-flags, one per ENABLED web service ('|' because a label may
   # carry a colon). A service that is switched off asks for nothing, so its key is
-  # simply absent from the file.
+  # simply absent from the file. Each forward's note names the service and its unit.
   local -a wanted=()
-  local -a https_args=()
+  local -a https_args=() note_args=()
   local https_flags
   case ",${AI_TOOLS}," in
     *,opencode,*) wanted+=("OPENCODE|opencode server|${OPENCODE_PORT}|") ;;
@@ -893,8 +893,13 @@ setup_host_forwards() {
     rc=0
     # stdout is the link and nothing else; the CLI's own diagnostics go to stderr and
     # therefore into the provisioning log the host is streaming.
+    case "${key}" in
+      OPENCODE) note_args=(--purpose "OpenCode server, set up by Construct provisioning" --source /etc/systemd/system/opencode-serve.service) ;;
+      T3) note_args=(--purpose "T3 Code web GUI, set up by Construct provisioning" --source /etc/systemd/system/t3code-serve.service) ;;
+      *) note_args=() ;;
+    esac
     url="$(CONFIG_FILE="${CONFIG_FILE}" bash "${expose}" "${port}" --to host --reuse --label "${label}" \
-      ${https_args[@]+"${https_args[@]}"})" || rc=$?
+      "${note_args[@]}" ${https_args[@]+"${https_args[@]}"})" || rc=$?
     authority=""
     if (( rc == 0 )) && [[ -n "${url}" ]]; then
       authority="$(url_authority "${url}")"

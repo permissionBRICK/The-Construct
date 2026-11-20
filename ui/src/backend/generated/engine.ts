@@ -4363,6 +4363,8 @@ export interface components {
             upstreamTls?: null | boolean;
             name?: null | string;
             replaceMain?: null | boolean;
+            purpose?: null | string;
+            source?: null | string;
         };
         CreateTokenRequest: {
             label: null | string;
@@ -4531,6 +4533,8 @@ export interface components {
             upstreamTls?: null | boolean;
             portUrl?: null | string;
             name?: null | string;
+            purpose?: null | string;
+            source?: null | string;
         };
         /** @enum {string} */
         ForwardTarget: "client" | "host";

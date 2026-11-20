@@ -36,8 +36,11 @@ public sealed record PowerRequest(string? Action);
 /// <param name="Name">With <paramref name="Https"/>: the forward's own name, served as <c>&lt;vm&gt;-&lt;name&gt;</c> on the shared
 /// HTTPS port; omitted = the VM port.</param>
 /// <param name="ReplaceMain">With <paramref name="Main"/>: take the VM's main address over from an open main forward.</param>
+/// <param name="Purpose">What the forward is for, in a few words (at most 200 characters).</param>
+/// <param name="Source">Where the service behind it lives, e.g. its repo path (at most 400 characters).</param>
 public sealed record CreateForwardRequest(int? VmPort, string? Label, string? Target, int? ConnectPort = null, string? Via = null,
-    bool? Https = null, bool? Main = null, bool? UpstreamTls = null, string? Name = null, bool? ReplaceMain = null);
+    bool? Https = null, bool? Main = null, bool? UpstreamTls = null, string? Name = null, bool? ReplaceMain = null,
+    string? Purpose = null, string? Source = null);
 
 /// <param name="Status"><c>open</c> or <c>error</c>.</param>
 /// <param name="LocalPort">The port the extension actually opened. Required for <c>open</c>.</param>

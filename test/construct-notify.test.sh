@@ -114,12 +114,12 @@ if command -v python3 >/dev/null 2>&1; then
   watch="${tmp}/watch.sh"
   claim="${tmp}/claim.sh"
   render_notify() { # <template> <fallback>
-    python3 - "${ROOT}/extension/vm" "$1" "${spool}" "$2" <<'PY'
+    python3 - "${ROOT}/extension/vm" "$1" "${spool}" "$2" "${tmp}/watch-sessions" <<'PY'
 import re, sys
 from pathlib import Path
-vm, name, spool, fallback = Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
+vm, name, spool, fallback, sessions = Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
 values = {'dir': "'" + spool.replace("'", "'\\''") + "'", 'claim': (vm / 'notify-claim-function.sh').read_text(),
-          'heartbeat': '60', 'fallback': fallback}
+          'heartbeat': '60', 'fallback': fallback, 'watchDir': "'" + sessions.replace("'", "'\\''") + "'"}
 sys.stdout.write(re.sub(r'\{\{([A-Za-z][A-Za-z0-9]*)\}\}', lambda m: values[m.group(1)], (vm / (name + '.sh')).read_text()))
 PY
   }
@@ -137,6 +137,19 @@ PY
   kill "${stream_pid}" 2>/dev/null || true
   wait "${stream_pid}" 2>/dev/null || true
   ok "a connected watcher streams a new entry" grep -q '"body":"streamed"' "${tmp}/stream.out"
+
+  # Over SSH the watch records its connection, so the idle report does not count it, and
+  # removes the record when it ends.
+  reset_spool
+  mkdir -p "${spool}"
+  SSH_CONNECTION="203.0.113.9 51000 203.0.113.5 22" bash "${watch}" >/dev/null 2>&1 &
+  stream_pid=$!
+  sleep 1
+  ok "a watch over SSH records its connection under its pid" \
+    grep -qx '203.0.113.9 51000 203.0.113.5 22' "${tmp}/watch-sessions/notify-${stream_pid}"
+  kill "${stream_pid}" 2>/dev/null || true
+  wait "${stream_pid}" 2>/dev/null || true
+  ok "  and removes the record when it ends" test ! -e "${tmp}/watch-sessions/notify-${stream_pid}"
   # ^-anchored so this check can't match its own command line.
   ok "the watcher leaves no inotifywait behind when it is killed" \
     sh -c "! pgrep -f '^inotifywait .*${spool}' >/dev/null"

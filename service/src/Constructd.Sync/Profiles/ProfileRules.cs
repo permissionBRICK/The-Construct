@@ -77,7 +77,9 @@ public static partial class ProfileRules
             }
 
             if (Str(f["label"])) e["label"] = f["label"]!.DeepClone();
-            foreach (var (k, v) in f) if (k is not ("port" or "to" or "label" or "https" or "upstreamTls" or "name")) e[k] = v?.DeepClone();
+            if (Str(f["purpose"])) e["purpose"] = f["purpose"]!.DeepClone();
+            if (Str(f["source"])) e["source"] = f["source"]!.DeepClone();
+            foreach (var (k, v) in f) if (k is not ("port" or "to" or "label" or "https" or "upstreamTls" or "name" or "purpose" or "source")) e[k] = v?.DeepClone();
             return e;
         });
 
@@ -181,7 +183,12 @@ public static partial class ProfileRules
             else for (var i = 0; i < forwards.Count; i++)
             {
                 if (forwards[i] is not JsonObject f) { Add("forwards", $"forwards[{i}] must be an object with a \"port\""); continue; }
-                foreach (var k in f.Select(p => p.Key)) if (k is not ("port" or "label" or "to" or "https" or "name" or "upstreamTls")) Add("forwards", $"forwards[{i}] unknown key \"{k}\"");
+                foreach (var k in f.Select(p => p.Key)) if (k is not ("port" or "label" or "to" or "https" or "name" or "upstreamTls" or "purpose" or "source")) Add("forwards", $"forwards[{i}] unknown key \"{k}\"");
+                // What the forward is for and where its service lives (construct expose --purpose / --source).
+                if (f.ContainsKey("purpose") && !(StringValue(f["purpose"]) && Text(f["purpose"])!.Length <= 200 && !Text(f["purpose"])!.Any(char.IsControl)))
+                    Add("forwards", $"forwards[{i}].purpose must be a string on one line of at most 200 characters");
+                if (f.ContainsKey("source") && !(StringValue(f["source"]) && Text(f["source"])!.Length <= 400 && !Text(f["source"])!.Any(char.IsControl)))
+                    Add("forwards", $"forwards[{i}].source must be a path on one line of at most 400 characters");
                 if (Port(f["port"]) is null) Add("forwards", $"forwards[{i}].port must be an integer from 1 to 65535");
                 if (f.ContainsKey("label") && !StringValue(f["label"])) Add("forwards", $"forwards[{i}].label must be a string");
                 if (f.ContainsKey("to") && Text(f["to"]) is not ("client" or "host")) Add("forwards", $"forwards[{i}].to must be \"client\" or \"host\"");

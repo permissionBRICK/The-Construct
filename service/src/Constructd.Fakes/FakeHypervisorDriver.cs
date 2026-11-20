@@ -112,6 +112,17 @@ public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver, IVmM
 
     public void SetState(string name, VmState state) => _states[name] = state;
 
+    private readonly Dictionary<string, int> _unknownReads = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The next <paramref name="reads"/> state reads of <paramref name="name"/> answer <see cref="VmState.Unknown"/>,
+    /// as a Proxmox read that fails for a moment right after a create does. Zero clears it.
+    /// </summary>
+    public void AnswerUnknown(string name, int reads)
+    {
+        lock (_unknownReads) _unknownReads[name] = reads;
+    }
+
     public VmState StateOf(string name) => _states.TryGetValue(name, out var state) ? state : VmState.Absent;
 
     public async Task CreateVmAsync(VmDescriptor descriptor, IProgress<string>? progress, CancellationToken cancellationToken)
@@ -190,6 +201,10 @@ public sealed class FakeHypervisorDriver : IHypervisorDriver, IVmCpuDriver, IVmM
     public Task<VmState> GetStateAsync(string name, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        lock (_unknownReads)
+        {
+            if (_unknownReads.TryGetValue(name, out var left) && left > 0) { _unknownReads[name] = left - 1; return Task.FromResult(VmState.Unknown); }
+        }
         return Task.FromResult(StateOf(name));
     }
 

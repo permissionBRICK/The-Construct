@@ -21,6 +21,7 @@ public sealed class ProfileForwardRulesTests
     [InlineData("""[{"port":5173,"https":true,"upstreamTls":false}]""")]
     [InlineData("""[{"port":5173,"https":true,"upstreamTls":true,"name":"vite-dev","label":"vite dev","to":"host"}]""")]
     [InlineData("""[{"port":5173,"https":false}]""")]
+    [InlineData("""[{"port":5173,"purpose":"chart page preview","source":"/root/repos/chart  preview"}]""")]
     public void A_valid_forward_is_accepted(string forwards) => Assert.Empty(Errors(forwards));
 
     [Theory]
@@ -33,6 +34,8 @@ public sealed class ProfileForwardRulesTests
     [InlineData("""[{"port":5173,"name":"web"}]""", "name needs \"https\": true")]
     [InlineData("""[{"port":5173,"upstreamTls":false}]""", "upstreamTls needs \"https\": true")]
     [InlineData("""[{"port":5173,"scheme":"https"}]""", "unknown key \"scheme\"")]
+    [InlineData("""[{"port":5173,"purpose":2}]""", "purpose must be a string on one line of at most 200 characters")]
+    [InlineData("""[{"port":5173,"source":"/a\nb"}]""", "source must be a path on one line of at most 400 characters")]
     public void An_invalid_forward_is_refused_with_the_guests_message(string forwards, string expected) =>
         Assert.Contains(Errors(forwards), e => e.Contains(expected, StringComparison.Ordinal));
 
@@ -45,6 +48,9 @@ public sealed class ProfileForwardRulesTests
         // "https": false is not an HTTPS forward and is not kept.
         Assert.Equal("""[{"port":3000,"to":"client"}]""", Stored("""[{"port":3000,"https":false}]"""));
         Assert.Equal("""[{"port":3000,"to":"host","label":"web"}]""", Stored("""[{"port":3000,"to":"host","label":"web"}]"""));
+        // Purpose and source follow the label, the source exactly, in the guest's order whatever the input's.
+        Assert.Equal("""[{"port":5173,"to":"client","label":"vite","purpose":"preview","source":"/root/repos/chart  preview"}]""",
+            Stored("""[{"source":"/root/repos/chart  preview","purpose":"preview","label":"vite","port":5173}]"""));
     }
 
     [Fact]

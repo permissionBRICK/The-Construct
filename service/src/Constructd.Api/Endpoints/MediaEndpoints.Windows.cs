@@ -20,7 +20,7 @@ public static partial class MediaEndpoints
         try
         {
             var job = await jobs.SubmitAsync("windows-media-acquire", null, owner, async (p, t) =>
-            { using (activity) { var item = await work.AcquireAsync(product, request.Edition, request.Lang, p, t); return new(new { mediaId = item.Id }); } }, ct);
+            { using (activity) { var item = await work.AcquireAsync(product, request.Edition, request.Lang, p, t); return new(new { mediaId = item.Id }); } }, ct, http.User.Actor());
             CodedProblems.Audit(http, "media.acquire-windows", owner, target: job.Id);
             return Results.Accepted(null, new { jobId = job.Id });
         }
@@ -44,7 +44,7 @@ public static partial class MediaEndpoints
                     var current = await store.GetAsync(id, t) ?? throw new MediaException("not-found");
                     var ready = await work.PrepareAsync(current, p, t); return new(new { mediaId = ready.Id });
                 }
-            }, ct);
+            }, ct, http.User.Actor());
             CodedProblems.Audit(http, "media.prepare-windows", owner, target: id);
             return Results.Accepted(null, new { jobId = job.Id });
         }

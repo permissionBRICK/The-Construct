@@ -43,6 +43,20 @@ public sealed class InMemoryForwardStore : IForwardStore
         return Task.CompletedTask;
     }
 
+    public Task<bool> SetNoteAsync(string id, string? purpose, string? source, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        while (_forwards.TryGetValue(id, out var existing))
+        {
+            if (_forwards.TryUpdate(id, existing with { Purpose = purpose, Source = source }, existing))
+            {
+                return Task.FromResult(true);
+            }
+        }
+
+        return Task.FromResult(false);
+    }
+
     public Task<bool> SetAckAsync(string id, ForwardAck ack, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(ack);

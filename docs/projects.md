@@ -260,6 +260,8 @@ carries them over. A forward that should come back is declared in a profile:
 |---|---|
 | `port` | The port inside the VM, 1–65535 (required). |
 | `label` | Optional; shown in `construct expose --list` and the Construct client. |
+| `purpose` | Optional: what the forward is for, in a few words (`construct expose --purpose`). |
+| `source` | Optional: where the service lives, e.g. its repo path (`--source`). Without it the forward's source is this profile's file, `/opt/construct/projects/<profile>.json`, which asks for it again on every provision. |
 | `to` | `client` (default): a tunnel to the user's PC. `host`: a port on the host's LAN address, subject to the host service's host-forward permission. |
 | `https` | Optional, `true`: an [HTTPS forward](https-forwards.md) with the host's certificate. It is a host forward, so `to` is `host` or left out. |
 | `upstreamTls` | **Required** with `https`, not allowed without: `false` when the port serves plain HTTP (`--upstream-plain`), `true` when it speaks TLS itself (`--upstream-tls`). The host connects exactly that way and never guesses. |
