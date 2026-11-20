@@ -1,8 +1,12 @@
 using System.Net;
 using System.Text.Json;
 using Constructd.Api.Contracts;
+using Constructd.Core.Abstractions;
 using Constructd.Core.Configuration;
+using Constructd.Core.Domain;
+using Constructd.Fakes;
 using Constructd.Tests.Support;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Constructd.Tests.Api;
 
@@ -25,6 +29,65 @@ public sealed class ForwardNoteTests
     [Fact]
     public void A_vm_has_at_most_100_forwards_unless_the_host_says_otherwise() =>
         Assert.Equal(100, new ConstructdOptions().MaxForwardsPerVm);
+
+    [Fact]
+    public async Task The_shipped_configuration_caps_a_vm_at_100_forwards()
+    {
+        // The test host pins the cap to 3; without that, appsettings.json is what binds.
+        await using var app = new TestApp(new Dictionary<string, string?> { ["Constructd:MaxForwardsPerVm"] = null });
+        Assert.Equal(100, app.Service<ConstructdOptions>().MaxForwardsPerVm);
+    }
+
+    [Fact]
+    public async Task An_acknowledged_forward_keeps_its_note()
+    {
+        var (app, owner, guest) = await SetupAsync();
+        using var _app = app; using var _owner = owner; using var _guest = guest;
+        var id = (await (await guest.PostJsonAsync(Forwards, new { vmPort = 5173, target = "client", purpose = "chart preview", source = "/root/repos/charts" }))
+            .ReadAsync<ForwardResponse>()).Id;
+        Assert.Equal(HttpStatusCode.OK, (await owner.PostJsonAsync($"{Forwards}/{id}/ack", new { status = "open", localPort = 5173 })).StatusCode);
+        var listed = Assert.Single(await (await guest.GetAsync(Forwards)).ReadAsync<List<ForwardResponse>>());
+        Assert.Equal("open", listed.Status);
+        Assert.Equal(("chart preview", "/root/repos/charts"), (listed.Purpose, listed.Source));
+    }
+
+    [Fact]
+    public async Task A_source_is_kept_exactly_and_one_with_control_characters_is_refused()
+    {
+        var (app, owner, guest) = await SetupAsync();
+        using var _app = app; using var _owner = owner; using var _guest = guest;
+        var kept = await (await guest.PostJsonAsync(Forwards, new { vmPort = 5173, target = "client", source = "/root/repos/chart  preview" }))
+            .ReadAsync<ForwardResponse>();
+        Assert.Equal("/root/repos/chart  preview", kept.Source);
+        using var refused = await guest.PostJsonAsync(Forwards, new { vmPort = 5174, target = "client", source = "/root/repos/a\nb" });
+        Assert.Equal(HttpStatusCode.BadRequest, refused.StatusCode);
+    }
+
+    /// <summary>A forward store whose note writes fail.</summary>
+    private sealed class FailingNotes(InMemoryForwardStore inner) : IForwardStore
+    {
+        public Task<PortForward?> GetAsync(string id, CancellationToken ct) => inner.GetAsync(id, ct);
+        public Task<IReadOnlyList<PortForward>> ListAsync(string? vmName, CancellationToken ct) => inner.ListAsync(vmName, ct);
+        public Task<int> CountByVmAsync(string vmName, CancellationToken ct) => inner.CountByVmAsync(vmName, ct);
+        public Task AddAsync(PortForward forward, CancellationToken ct) => inner.AddAsync(forward, ct);
+        public Task<bool> SetAckAsync(string id, ForwardAck ack, CancellationToken ct) => inner.SetAckAsync(id, ack, ct);
+        public Task<bool> SetDestinationAsync(string id, ForwardDestination destination, ForwardAck? ack, CancellationToken ct) => inner.SetDestinationAsync(id, destination, ack, ct);
+        public Task<bool> SetNoteAsync(string id, string? purpose, string? source, CancellationToken ct) => throw new IOException("database is locked");
+        public Task<bool> RemoveAsync(string id, CancellationToken ct) => inner.RemoveAsync(id, ct);
+    }
+
+    [Fact]
+    public async Task A_note_that_cannot_be_stored_does_not_fail_the_forward()
+    {
+        var app = new TestApp(configureServices: services => services.AddSingleton<IForwardStore>(sp => new FailingNotes(sp.GetRequiredService<InMemoryForwardStore>())));
+        var (_, owner, guest) = await SetupAsync(app);
+        using var _app = app; using var _owner = owner; using var _guest = guest;
+        // The forward exists once the insert is done; failing the request now would make a client retry into a second one.
+        using var created = await guest.PostJsonAsync(Forwards, new { vmPort = 5173, target = "client", purpose = "chart preview" });
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        Assert.Null((await created.ReadAsync<ForwardResponse>()).Purpose);
+        Assert.Single(await (await owner.GetAsync(Forwards)).ReadAsync<List<ForwardResponse>>());
+    }
 
     [Fact]
     public async Task A_forward_keeps_its_purpose_and_source_and_lists_them()

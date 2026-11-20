@@ -141,7 +141,7 @@ public sealed record ForwardResponse(
             LocalPort: ack.LocalPort,
             HostLabel: ack.HostLabel,
             Message: ack.Message,
-            AckedAt: ack.At, Destination: forward.Destination);
+            AckedAt: ack.At, Destination: forward.Destination, Purpose: forward.Purpose, Source: forward.Source);
     }
 }
 

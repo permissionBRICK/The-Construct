@@ -77,9 +77,9 @@ while IFS= read -r entry; do
   name="$(jq -r '.name // ""' <<<"${entry}")"
   purpose="$(jq -r '.purpose // ""' <<<"${entry}")"
   # Where the forward comes from: the profile's own source, or else the profile file that asks
-  # for it on every provision. Always named, so the CLI never guesses from this script's cwd.
+  # for it on every provision (generate-runtime-config.sh resolves it). Always named, so the CLI
+  # never guesses from this script's cwd.
   source_path="$(jq -r '.source // ""' <<<"${entry}")"
-  [[ -n "${source_path}" || -z "${profile}" ]] || source_path="${AGENT_HOME}/projects/${profile}.json"
   args=("${port}" --to "${to}" --reuse --wait 0)
   [[ -n "${label}" ]] && args+=(--label "${label}")
   [[ -n "${purpose}" ]] && args+=(--purpose "${purpose}")

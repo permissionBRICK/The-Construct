@@ -773,6 +773,15 @@ printf '%s' "${created}" >"${stub_dir}/response"
 remote 5173 --label vite --to host --purpose $'chart page\tpreview' --source /root/repos/charts >/dev/null 2>&1
 ok "notes: the purpose is sent, on one line" grep -q '"purpose":"chart page preview"' "${stub_dir}/bodies"
 ok "notes: the source is sent" grep -q '"source":"/root/repos/charts"' "${stub_dir}/bodies"
+reset_stub
+printf '201' >"${stub_dir}/code"
+printf '%s' "${created}" >"${stub_dir}/response"
+remote 5173 --to host --source '/root/repos/chart  preview' >/dev/null 2>&1
+ok "notes: a source is sent exactly as given" grep -q '"source":"/root/repos/chart  preview"' "${stub_dir}/bodies"
+reset_stub
+remote 5173 --to host --source $'/root/repos/a\nb' >/dev/null 2>"${tmp}/badsource.err"
+ok "notes: a source with a line break is refused before any request" \
+  sh -c "grep -q 'path on one line' '${tmp}/badsource.err' && test ! -f '${stub_dir}/requests'"
 
 mkdir -p "${tmp}/repo/sub" "${tmp}/plain"
 git -C "${tmp}/repo" init -q 2>/dev/null

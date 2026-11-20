@@ -193,6 +193,16 @@ ok("reserved: default.json (with extension) is NOT the base name", !projects.isR
 
 // ── sanitizeForwards (coercive) ───────────────────────────────────────────────
 (function () {
+  const fwNote = (forwards) => projects.validateProfile("x", { name: "x", forwards });
+  ok("validate: forwards purpose and source pass",
+    fwNote([{ port: 1, purpose: "chart page preview", source: "/root/repos/chart  preview" }]).ok);
+  ok("validate: forwards purpose and source must be one-line strings within their caps",
+    eq(fwNote([{ port: 1, purpose: 2 }, { port: 2, source: "/a\nb" }, { port: 3, purpose: "x".repeat(201) }, { port: 4, source: "y".repeat(401) }]).errors,
+      ["forwards[0].purpose must be a string on one line of at most 200 characters", "forwards[1].source must be a path on one line of at most 400 characters",
+       "forwards[2].purpose must be a string on one line of at most 200 characters", "forwards[3].source must be a path on one line of at most 400 characters"]));
+  ok("forwards: purpose and source are kept after the label, the source exactly",
+    eq(projects.sanitizeForwards([{ source: "/root/repos/chart  preview", purpose: "preview", label: "vite", port: 5173 }]),
+      [{ port: 5173, to: "client", label: "vite", purpose: "preview", source: "/root/repos/chart  preview" }]));
   ok("forwards: non-array -> []", eq(projects.sanitizeForwards(null), []) && eq(projects.sanitizeForwards({}), []));
   ok("forwards: to defaults to client, blank label dropped, label kept verbatim",
     eq(projects.sanitizeForwards([{ port: 5173, label: "  " }, { port: 9000, label: " api ", to: "host" }]),

@@ -993,7 +993,9 @@ case "${mode}" in
     if [[ "${source_given}" != true ]] && command -v git >/dev/null 2>&1; then
       SOURCE_PATH="$(git rev-parse --show-toplevel 2>/dev/null || true)"
     fi
-    SOURCE_PATH="$(clean_text "${SOURCE_PATH}" "${MAX_SOURCE}")"
+    # A path is sent exactly as given; one the service cannot store is refused here.
+    if [[ "${SOURCE_PATH}" == *[[:cntrl:]]* ]]; then die "--source must be a path on one line"; fi
+    (( ${#SOURCE_PATH} <= MAX_SOURCE )) || die "--source is longer than ${MAX_SOURCE} characters"
     if [[ -n "${SERVICE_URL}" ]]; then
       remote_expose "${port}" "${label}" "${target}" "${wait_sec}"
     elif [[ "${HTTPS}" == "true" && "${HTTPS_IF_AVAILABLE}" != "true" ]]; then

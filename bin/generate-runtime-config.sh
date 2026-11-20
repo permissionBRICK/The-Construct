@@ -137,7 +137,10 @@ if [[ "${#project_json_args[@]}" -eq 0 ]]; then
   fi
 fi
 
-jq -s '
+# Each profile's resolved file, in the order of the jq inputs: a forward without a source of its
+# own points at the file that asks for it (the shipped default.json included).
+profile_files_json="$(printf '%s\n' "${project_json_args[@]}" | jq -R . | jq -sc .)"
+jq -s --argjson files "${profile_files_json}" '
   def unique_strings: map(select(type == "string" and length > 0)) | unique;
   # "24" < "26" < "3.12" as strings is meaningless for runtimes; compare numerically,
   # segment by segment, and keep the HIGHEST requested version first — install-sdks.sh
@@ -188,14 +191,14 @@ jq -s '
     # target, same kind and name) is requested once, under the first profile that
     # declared it.
     forwards: (
-      [ .[] | .name as $profile
+      [ to_entries[] | $files[.key] as $file | .value | .name as $profile
         | (.forwards // [])[]
         | select(type == "object" and (.port | type) == "number")
         | (.https == true) as $https
         | { profile: $profile, port: .port, to: (if $https then "host" else (.to // "client") end), label: (.label // "") }
           + (if $https then { https: true, upstreamTls: (.upstreamTls == true), name: (.name // "") } else {} end)
           + (if (.purpose | type) == "string" and .purpose != "" then { purpose: .purpose } else {} end)
-          + (if (.source | type) == "string" and .source != "" then { source: .source } else {} end) ]
+          + { source: (if (.source | type) == "string" and .source != "" then .source else $file end) } ]
       | reduce .[] as $f ([]; if any(.[]; .port == $f.port and .to == $f.to
           and (.https // false) == ($f.https // false) and (.name // "") == ($f.name // "")) then . else . + [$f] end)
     ),
