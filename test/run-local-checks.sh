@@ -58,6 +58,7 @@ if [[ "$group" == service || "$group" == all ]]; then
   bash test/worktree-clone.test.sh
   bash test/codex-install.test.sh
   bash test/coding-agents.test.sh
+  node --no-warnings test/opencode-background.test.mjs
   bash test/claude-rm-prompt.test.sh
   pwsh -NoProfile -File test/browser-console-install.test.ps1
   bash test/browser-console-provision.test.sh
