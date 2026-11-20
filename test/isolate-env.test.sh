@@ -38,13 +38,16 @@ ok "every CONSTRUCT_* and T3CODE_* variable is gone" test "${left}" = "kept kept
 
 # ── the suites that used to inherit them ─────────────────────────────────────
 
-port="$(python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
-python3 -I - "${port}" "${tmp}/connections" <<'PY' &
-import socket, sys
+# The listener binds a free port itself and publishes it once it listens, so every
+# connection it logs comes from a suite under test.
+python3 -I - "${tmp}/port" "${tmp}/connections" <<'PY' &
+import os, socket, sys
 server = socket.socket()
-server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-server.bind(("127.0.0.1", int(sys.argv[1])))
+server.bind(("127.0.0.1", 0))
 server.listen()
+with open(sys.argv[1] + ".tmp", "w") as published:
+    published.write(str(server.getsockname()[1]))
+os.replace(sys.argv[1] + ".tmp", sys.argv[1])
 while True:
     conn, _ = server.accept()
     with open(sys.argv[2], "a") as log:
@@ -52,11 +55,9 @@ while True:
     conn.close()
 PY
 listener=$!
-for _ in $(seq 1 50); do
-  python3 -I -c 'import socket, sys; socket.create_connection(("127.0.0.1", int(sys.argv[1])), 1).close()' "${port}" 2>/dev/null && break
-  sleep 0.1
-done
-rm -f "${tmp}/connections"
+for _ in $(seq 1 100); do [[ -s "${tmp}/port" ]] && break; sleep 0.1; done
+port="$(cat "${tmp}/port" 2>/dev/null)"
+ok "the recording listener is up" test -n "${port}"
 
 leaked=(env CONSTRUCT_SERVICE_URL="http://127.0.0.1:${port}" CONSTRUCT_INSTANCE_NAME=vm-1
   CONSTRUCT_VM_TOKEN_FILE="${tmp}/token" T3CODE_PATCHED=true T3CODE_CHANNEL=stable T3CODE_BUILD_SOURCE=prebuilt)
