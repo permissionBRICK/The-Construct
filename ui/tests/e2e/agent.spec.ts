@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 /* The UI on the real API: the engine (constructd in fake mode, with a scripted guest so a provision job runs
    to its end) and two device agents, each serving the built bundle. One browser drives both: first-run setup
    on the first device after confirming the host's fingerprint, a VM created through the UI with its settings
-   and provisioned by the engine alone, a setting changed and the dot on Reprovision, a reprovision to its end,
+   and provisioned by the engine alone, an agent signed in on the step after it and the ready screen, a setting changed and the dot on Reprovision, a reprovision to its end,
    a failed reprovision retried, the repair agent's switch turned off on the host, a failed step repaired by the
    agent started from the UI (output, one reply, fixed, the job run again), a secret added and revealed, the VM asking for it through the engine's guest
    routes and the card allowing it, a profile edited and saved, a reinstall to its end, a restore of the backup
@@ -103,16 +103,45 @@ test('first run, a VM, a reprovision and a second device on the real API', async
   await pa.getByRole('switch', { name: 'Antigravity' }).click();
   await pa.getByRole('button', { name: 'Create' }).click();
 
-  // The home screen shows the VM; one request created it with its settings and the engine provisions it.
-  await expect(pa.locator('.vp h1')).toHaveText('alpha');
+  // The create screen follows the job; one request created the VM with its settings and the engine provisions it.
+  const admin = await request.newContext({ baseURL: engine.url, ignoreHTTPSErrors: true, extraHTTPHeaders: { Authorization: `Bearer ${engine.token}` } });
   await expect(pa.locator('.vtab', { hasText: 'alpha' })).toBeVisible();
   await expect(pa.getByRole('status')).toHaveText('Created alpha', { timeout: 90000 });
   await expect(pa.locator('.blk.job')).toHaveCount(0);
+
+  // Then a sign-in step with the chosen agents, none required: the agent's own sign-in runs on the VM (the engine's
+  // scripted guest in fake mode), its link and prompt show, a code goes to it, and the agent is signed in.
+  await expect(pa.getByRole('heading', { name: 'Sign in' })).toBeVisible();
+  const step = pa.locator('.blk.form');
+  for (const name of ['Claude Code', 'Codex', 'OpenCode', 'Antigravity']) await expect(step.locator('.r', { hasText: name })).toBeVisible();
+  await step.locator('.r', { hasText: 'Claude Code' }).getByRole('button', { name: 'Sign in' }).click();
+  const panel = pa.getByRole('group', { name: 'Sign in to Claude Code' });
+  await expect(panel.getByRole('link', { name: 'https://sign-in.example/claude-code?state=fake' })).toBeVisible();
+  await expect(panel).toContainText('Paste code here if prompted >');
+  await panel.getByLabel('Reply to Claude Code').fill('code-from-the-browser');
+  await panel.getByLabel('Reply to Claude Code').press('Enter');
+  await expect(panel).toHaveCount(0);
+  await expect(step.locator('.r', { hasText: 'Claude Code' })).toContainText('Signed in');
+  const agents = (await (await admin.get('/api/v1/vms/alpha/agents')).json()) as { agents: { tool: string; signedIn: boolean | null }[] };
+  expect(agents.agents.find(x => x.tool === 'claude')?.signedIn).toBe(true);
+  // Codex is left for later: its sign-in is cancelled.
+  await step.locator('.r', { hasText: 'Codex' }).getByRole('button', { name: 'Sign in' }).click();
+  await expect(pa.getByRole('group', { name: 'Sign in to Codex' })).toContainText('https://sign-in.example/codex');
+  await pa.getByRole('group', { name: 'Sign in to Codex' }).getByRole('button', { name: 'Cancel' }).click();
+  await expect(pa.getByRole('group', { name: 'Sign in to Codex' })).toHaveCount(0);
+  await expect(step.locator('.r', { hasText: 'Codex' }).getByRole('button', { name: 'Sign in' })).toBeEnabled();
+  await pa.getByRole('button', { name: 'Continue' }).click();
+
+  // The ready screen: T3 Code, recommended, and VS Code.
+  await expect(pa.getByRole('heading', { name: 'alpha is ready' })).toBeVisible();
+  await expect(pa.getByRole('button', { name: /T3 Code/ })).toContainText('recommended');
+  await expect(pa.getByRole('button', { name: 'VS Code' })).toBeVisible();
+  await pa.goto(`${a.base}/#/home`);
+  await expect(pa.locator('.vp h1')).toHaveText('alpha');
   const created = sent.filter(r => /\/api\/engines\/[^/]+\/vms$/.test(new URL(r.url).pathname));
   expect(created.length).toBe(1);
   expect(JSON.parse(created[0].body!)).toMatchObject({ name: 'alpha', desired: { projects: [], settings: {}, codingAgents: ['claude-code', 'codex', 'opencode', 'antigravity'] } });
   expect(sent.filter(r => /\/vms\/alpha\/jobs$/.test(new URL(r.url).pathname))).toEqual([]);
-  const admin = await request.newContext({ baseURL: engine.url, ignoreHTTPSErrors: true, extraHTTPHeaders: { Authorization: `Bearer ${engine.token}` } });
   const status = async () => (await (await admin.get('/api/v1/vms/alpha/provision-status')).json()) as { settingsChanged: boolean; applied: { jobId: string } | null };
   expect((await status()).applied).not.toBeNull();
   await expect(pa.locator('.vp2 .pip')).toHaveCount(0);
@@ -127,7 +156,8 @@ test('first run, a VM, a reprovision and a second device on the real API', async
   await pa.goto(`${a.base}/#/settings/agents`);
   await pa.getByRole('switch', { name: 'Codex' }).click();
   await expect(pa.getByRole('status')).toHaveText('Saved, applies at the next reprovision');
-  expect((await (await admin.get('/api/v1/vms/alpha/desired')).json()).desired.codingAgents).toEqual(['claude-code', 'opencode', 'antigravity']);
+  // The same notice may still show from the save before: wait for the stored state.
+  await expect.poll(async () => (await (await admin.get('/api/v1/vms/alpha/desired')).json()).desired.codingAgents).toEqual(['claude-code', 'opencode', 'antigravity']);
   await pa.goto(`${a.base}/#/home`);
   await expect(pa.locator('.vp2 .pip')).toHaveCount(1);
 

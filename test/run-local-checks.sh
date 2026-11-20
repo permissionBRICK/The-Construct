@@ -91,6 +91,7 @@ if [[ "$group" == service || "$group" == all ]]; then
   bash test/vscode-download.test.sh
   bash test/systemprompt-install.test.sh
   bash test/repair-agent.test.sh
+  bash test/agent-sign-in.test.sh
   bash test/autoinstall-iso.test.sh
   python3 test/host-conversion.test.py
   dotnet test service/Constructd.sln -c Release

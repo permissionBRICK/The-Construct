@@ -30,8 +30,21 @@ export interface VmSettings {
 }
 
 /** `id`: the engine's tool id (claude, codex, opencode, antigravity, t3). `newer`: the engine says a newer version is
-    out; without it the versions are compared. */
-export interface Agent { id: string; name: string; version: string; latest: string; installed: boolean; newer?: boolean }
+    out; without it the versions are compared. `signedIn`: as the VM reported it; undefined or null: not known. */
+export interface Agent { id: string; name: string; version: string; latest: string; installed: boolean; newer?: boolean; signedIn?: boolean | null }
+
+/** A coding agent's own sign-in on a VM, one at a time: what its terminal shows, as its CLI wrote it (S34).
+    starting: asked for; running: the CLI shows or waits; failed: it ended without signing in (its text says why);
+    stopped: it took too long or was ended. One that signed in is gone, and the agent shows as signed in. */
+export interface SignIn {
+  vmId: string;
+  agent: AgentId;
+  state: 'starting' | 'running' | 'failed' | 'stopped';
+  text: string;
+}
+
+/** Input to a sign-in's terminal: text followed by Enter (empty: Enter alone), or an arrow key for a list. */
+export type SignInInput = { text: string } | { key: 'up' | 'down' };
 export interface ChildVm { name: string; os: string; left: string; power: Power }
 /** A forward of this device to a VM; `closable`: this device opened it and can close it. */
 export interface Forward { id: string; port: number; label: string; to: 'This device' | 'LAN'; url: string; closable?: boolean; status?: string }
@@ -373,6 +386,8 @@ export interface State {
   firstRun: FirstRun | null;
   /** The last "update everything" run since this device started; null before one. */
   everything?: Everything | null;
+  /** The coding agent sign-in this device started, while it runs or after it failed; null otherwise. */
+  signIn?: SignIn | null;
 }
 
 export type SettingsPatch = { [K in keyof VmSettings]?: Partial<VmSettings[K]> };
@@ -430,6 +445,12 @@ export interface Backend {
   /** Hardware changes ask restart now or later; `when` says which. Other groups save at once. */
   saveSettings(vmId: string, patch: SettingsPatch, when?: 'now' | 'later'): void;
   updateAgents(vmId: string): void;
+  /** Starts a coding agent's own sign-in on the VM; one that runs ends. */
+  signIn(vmId: string, agent: AgentId): void;
+  /** Types into the running sign-in's terminal. */
+  signInInput(input: SignInInput): void;
+  /** Ends the running sign-in, or puts away one that failed. */
+  closeSignIn(): void;
   setProjectOn(vmId: string, project: string, on: boolean): void;
   /** Saves a profile document; `revision` is the one the editor read. Changed: the profile was reloaded. */
   saveProfile(name: string, doc: Record<string, unknown>, revision: number | undefined): Promise<ProfileSave>;

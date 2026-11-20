@@ -4,9 +4,10 @@ import { updateDue, updateParts } from '../../model/update';
 import { SCHEME_ORDER, SCHEMES } from '../../model/tokens';
 import { AGENTS, agentList, agentSwitches, DEFAULT_AGENTS } from '../../model/settings';
 import { Icon } from '../icons';
-import { Btn, Confirm, Copyable, Field, Head, KV, Page, Row, Sec, Seg, Switch, Table, Tag } from '../kit';
+import { Bar, Btn, Confirm, Copyable, Field, Head, KV, Page, Row, Sec, Seg, Switch, Table, Tag } from '../kit';
 import { copy, na, useApp } from '../ctx';
-import { EverythingBlock } from '../blocks';
+import { EverythingBlock, JobBlock, SignInBlock } from '../blocks';
+import { SignInCell } from './vm';
 
 /* Construct: the one Update, the parts it covers, preferences, this device. Then creating a VM and the
    one-time upgrade dialog. */
@@ -127,7 +128,54 @@ function usePin() {
   return { probe, setProbe, busy, err, check, reset };
 }
 
+/** After Create (S34, S35): the job; when it is done, Sign in for each chosen agent (none is required) and Continue;
+    then the ready screen with T3 Code, recommended, and VS Code. The route holds the step, so a VM tab or a
+    reload comes back to it: #/create/<vm>, #/create/<vm>/ready. */
+function Created({ vmId, ready }: { vmId: string; ready: boolean }) {
+  const { s, be, go, surf, selectVm, vm: current } = useApp();
+  const vm = s.vms.find(v => v.id === vmId);
+  // The new VM is the one the window shows, also after a reload or a link.
+  useEffect(() => { if (vm && current?.id !== vm.id) selectVm(vm.id); }, [vm?.id]);
+  // The create job, or the retry that followed it when it failed.
+  const job = s.jobs.filter(j => j.vmId === vmId).at(-1);
+  const back = surf === 'phone' ? () => go({ page: 'home' }) : undefined;
+  if (!vm || !job || job.state !== 'done') return (
+    <Page>
+      <Head title="New VM" back={back} />
+      {vm && job && job.state !== 'stopped' ? <JobBlock job={job} vm={vm} />
+        : s.createError || job?.state === 'stopped' ? <div class="line"><span class="badc grow">{s.createError ?? 'Stopped'}</span><Btn sm onClick={() => go({ page: 'create' })}>Back</Btn></div>
+        : <div class="blk job"><div class="bh"><Icon n="repro" /><b>Creating</b></div><Bar pct={0} /></div>}
+    </Page>
+  );
+  const chosen = AGENTS.filter(a => vm.settings.agents[a.id]);
+  if (!ready && chosen.length) return (
+    <Page>
+      <Head title="Sign in" back={back} />
+      <div class="blk form narrow">
+        <div>{chosen.map(a => <Row l={a.name}><SignInCell vm={vm} agent={a} /></Row>)}</div>
+        {s.signIn?.vmId === vm.id && <SignInBlock si={s.signIn} />}
+        <Btn kind="pri" icon="right" onClick={() => go({ page: 'create', arg: vm.id, tab: 'ready' })}>Continue</Btn>
+      </div>
+    </Page>
+  );
+  return (
+    <Page>
+      <Head title={`${vm.name} is ready`} back={back} />
+      <div class="blk form narrow ready">
+        <Btn kind="pri" icon="open" onClick={() => be.open(vm.id, 't3')} disabled={na(s, 'open')}>T3 Code<Tag>recommended</Tag></Btn>
+        <Btn icon="code" onClick={() => be.open(vm.id, 'vscode')} disabled={na(s, 'open')}>VS Code</Btn>
+      </div>
+    </Page>
+  );
+}
+
 export function CreateVm() {
+  const { route } = useApp();
+  if (route.page === 'create' && route.arg) return <Created vmId={route.arg} ready={route.tab === 'ready'} />;
+  return <CreateForm />;
+}
+
+function CreateForm() {
   const { s, be, go, selectVm, surf } = useApp();
   const [where, setWhere] = useState<'local' | 'remote'>('local');
   const [name, setName] = useState('');
@@ -142,8 +190,9 @@ export function CreateVm() {
   const valid = /^[a-z][a-z0-9-]{1,30}$/.test(name.trim()) && !taken && (where === 'local' || (addr.trim() && (signIn === 'windows' || token.trim())));
   const send = (confirmed?: string) => {
     const id = be.createVm({ where, name: name.trim(), hostAddress: addr.trim(), signIn, token: signIn === 'token' ? token.trim() : '', pin: confirmed, agents: agentList(agents) });
-    if (id) selectVm(id);
-    go({ page: 'home' });
+    if (!id) { go({ page: 'home' }); return; }
+    selectVm(id);
+    go({ page: 'create', arg: id });
   };
   // A remote host is added only with the fingerprint the user confirmed; a known one needs no confirm.
   const create = () => {

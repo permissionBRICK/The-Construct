@@ -6,27 +6,53 @@ using Constructd.Core.Abstractions;
 namespace Constructd.Fakes;
 
 /// <summary>
-/// A guest that answers like <c>bin/construct-repair-agent.sh</c>, for fake mode and the tests. By default
-/// the agent looks at the log, asks a question, and on the first reply says it fixed the cause; the end of
-/// stdin ends it as "stopped". <see cref="Script"/> replaces that conversation.
+/// A guest that answers like <c>bin/construct-repair-agent.sh</c> and <c>bin/construct-agent-sign-in.py</c>, for fake
+/// mode and the tests. By default the repair agent looks at the log, asks a question, and on the first reply says it
+/// fixed the cause; a sign-in shows a link and a prompt and is done with the first code typed. The end of stdin ends
+/// either as "stopped". <see cref="Script"/> and <see cref="SignInScript"/> replace them.
 /// </summary>
 public sealed class FakeGuestSessionRunner : IGuestSessionRunner
 {
     public ConcurrentQueue<FakeGuestSession> Sessions { get; } = new();
 
-    /// <summary>What the fake agent does; the default asks once and then fixes.</summary>
+    /// <summary>What the fake repair agent does; the default asks once and then fixes.</summary>
     public Func<FakeGuestSession, Task> Script { get; set; } = AskThenFix;
+
+    /// <summary>What a fake sign-in does; the default asks for a code and signs in with it.</summary>
+    public Func<FakeGuestSession, Task> SignInScript { get; set; } = CodeThenDone;
 
     public IGuestSession Start(SshTarget target, string command, Action<string> onLine)
     {
         var session = new FakeGuestSession(target, command, onLine);
         Sessions.Enqueue(session);
+        var script = command.Contains("construct-agent-sign-in.py", StringComparison.Ordinal) ? SignInScript : Script;
         _ = Task.Run(async () =>
         {
-            try { await Script(session); }
+            try { await script(session); }
             finally { session.Exit(); }
         });
         return session;
+    }
+
+    /// <summary>The agent named on a sign-in's command line.</summary>
+    public static string SignInAgent(FakeGuestSession s) => s.Command.Split(' ', '\'').Reverse().FirstOrDefault(w => w is "claude-code" or "codex" or "opencode" or "antigravity") ?? "claude-code";
+
+    public static async Task CodeThenDone(FakeGuestSession s)
+    {
+        var agent = SignInAgent(s);
+        s.Emit(new { type = "start", agent });
+        var screen = $"Sign in to {agent}:\n  https://sign-in.example/{agent}?state=fake\n\nPaste code here if prompted > ";
+        s.Emit(new { type = "screen", text = screen });
+        if (await s.ReadLineAsync() is not { } line)
+        {
+            s.Emit(new { type = "end", outcome = "stopped", signedIn = false, text = "" });
+            return;
+        }
+
+        using var input = JsonDocument.Parse(line);
+        var code = input.RootElement.TryGetProperty("text", out var t) ? t.GetString() : "";
+        s.Emit(new { type = "screen", text = screen + code + "\nSigned in." });
+        s.Emit(new { type = "end", outcome = "done", signedIn = true, version = "1.0.0", text = "" });
     }
 
     public static async Task AskThenFix(FakeGuestSession s)

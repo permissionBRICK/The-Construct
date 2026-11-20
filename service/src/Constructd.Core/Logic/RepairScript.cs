@@ -54,7 +54,7 @@ public static partial class RepairScript
     }
 
     /// <summary>Root through <c>sudo -n</c> (no password: stdin is the conversation) and a login shell; stderr merged.</summary>
-    private static string AsRoot(string command, bool connectedAsRoot) =>
+    internal static string AsRoot(string command, bool connectedAsRoot) =>
         (connectedAsRoot ? "" : "sudo -n ") + "bash -lc " + ProvisionScript.Quote(command) + " 2>&1";
 
     /// <summary>A reply as the script reads it: one JSON line.</summary>

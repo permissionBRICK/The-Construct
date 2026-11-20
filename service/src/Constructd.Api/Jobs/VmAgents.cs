@@ -7,8 +7,11 @@ using Constructd.Core.Domain;
 
 namespace Constructd.Api.Jobs;
 
-/// <summary>One coding agent the guest found installed, with the version its <c>--version</c> printed.</summary>
-public sealed record VmAgentVersion(string Tool, string Version);
+/// <summary>
+/// One coding agent the guest found installed, with the version its <c>--version</c> printed and whether it is
+/// signed in (null: not reported).
+/// </summary>
+public sealed record VmAgentVersion(string Tool, string Version, bool? SignedIn = null);
 
 /// <summary>
 /// What a VM last reported about its coding agents, carried by its token-usage report. Bound to the VM's
@@ -34,6 +37,28 @@ public sealed partial class VmAgents(IHostConfigStore config)
 
     public async Task<VmAgentsReport?> GetAsync(Vm vm, CancellationToken ct) =>
         await config.GetAsync<VmAgentsReport>(Key(vm.Name), ct) is { } report && report.VmCreated == vm.Created ? report : null;
+
+    private readonly SemaphoreSlim _marking = new(1, 1);
+
+    /// <summary>
+    /// What a sign-in on the VM found when it ended (design 11.8): the agent's sign-in state, and its version where
+    /// the VM reported none yet, so the pages show it before the next report comes.
+    /// </summary>
+    public async Task MarkSignedInAsync(Vm vm, string tool, bool signedIn, string? version, DateTimeOffset at, CancellationToken ct)
+    {
+        await _marking.WaitAsync(ct);
+        try
+        {
+            var report = await GetAsync(vm, ct);
+            var agents = (report?.Agents ?? []).ToList();
+            var i = agents.FindIndex(a => a.Tool == tool);
+            if (i >= 0) agents[i] = agents[i] with { SignedIn = signedIn };
+            else if (version is not null && VersionPattern().IsMatch(version)) agents.Add(new(tool, version, signedIn));
+            else return;
+            await config.SetAsync(Key(vm.Name), new VmAgentsReport(vm.Created, report?.ReportedAt ?? at, agents), "vm:" + vm.Name, ct);
+        }
+        finally { _marking.Release(); }
+    }
 
     /// <summary>True when <paramref name="latest"/> is a newer major.minor.patch than <paramref name="installed"/> (the old panel's rule).</summary>
     public static bool IsNewer(string? latest, string installed)

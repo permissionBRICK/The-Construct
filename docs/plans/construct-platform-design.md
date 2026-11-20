@@ -215,7 +215,7 @@ SETTLED (owner, 2026-11-09; S9 to S24 from the plan walkthrough the same day; S2
 | S31 | Install statistics (5.5) are left out of the first release. | The project does not learn its install count until then. |
 | S32 | Coding agents are chosen per VM, with one switch each when the VM is created and on its page. Claude Code, Codex and OpenCode are on by default; the Antigravity CLI is offered and off by default. Other agents T3 Code supports are added only when asked for (owner, 2026-11-20; 11.8). | Turning an agent off stops its updates and turns it off in T3 Code but does not uninstall it; its files and sign-in stay on the VM. |
 | S33 | opencode 2 ships with the rework (owner, 2026-11-20; 4.2). A VM moves to it at its next update or reprovision. | The move converts OpenCode's database in place, one way; the data folder is copied once before the first opencode 2 start, and that copy is the only way back. |
-| S34 | Signing in to the coding agents happens in the UI: a step after creating a VM, and Sign in on each agent of the VM page. The engine runs the agent's own sign-in on the VM and the UI shows its output, links and a reply field (owner, 2026-11-20; 11.8). | The UI does not parse each agent's sign-in; when an agent changes its sign-in, the user still sees its own text. Accounts never pass through the vault or the store. |
+| S34 | Signing in to the coding agents happens in the UI: a step after creating a VM, and Sign in on each agent of the VM page. The engine runs the agent's own sign-in on the VM and the UI shows its output, links and a reply field (owner, 2026-11-20; 11.8). | The UI does not parse each agent's sign-in; when an agent changes its sign-in, the user still sees its own text. Accounts never pass through the vault or the store. Antigravity's sign-in is copied into T3 Code's private Antigravity home: a sign-out on one side leaves the other signed in until the token is revoked. |
 | S35 | Creating a VM ends on a ready screen with T3 Code (recommended) and VS Code (owner, 2026-11-20; 11.6). | None. |
 
 ## 4. Compatibility invariants
@@ -1004,7 +1004,7 @@ SETTLED (owner, 2026-11-20, S32, S34).
 |---|---|
 | Choice | The VM's desired state carries the list of coding agents (`AI_TOOLS` in the guest). Create and the VM page show one switch per agent; a change waits for Reprovision like any other setting. Adoption keeps the list the VM has. |
 | Turned off | Not updated, not configured, turned off in T3 Code; not uninstalled. |
-| Sign in | `POST /vms/{name}/agents/{agent}/sign-in` starts the agent's own sign-in on the VM in a terminal session; its output streams as events, a reply goes to its input, and it ends with the process. The UI shows the text with links opened in the browser. Each agent row shows whether it is signed in, as the VM reports it. |
+| Sign in | `POST /vms/{name}/agents/{agent}/sign-in` starts the agent's own sign-in on the VM in a terminal session; its output streams as events, a reply goes to its input, and it ends with the process. One runs per VM. The UI shows the text with links opened in the browser. Each agent row shows whether it is signed in, as the VM reports it. The commands: `claude auth login`, `codex login --device-auth`, `opencode auth login` (its own list of integrations, arrow keys included), `agy acp --login`; the Antigravity token then goes into T3 Code's Antigravity home too, which reads the same file format. |
 | T3 Code | Each chosen agent is turned on as a T3 Code provider and points at the copy the VM installed. |
 
 ## 12. Updates

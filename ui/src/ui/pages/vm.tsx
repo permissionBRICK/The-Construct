@@ -7,12 +7,21 @@ import { aliasWritten } from '../../backend/api/map';
 import { Icon } from '../icons';
 import { Btn, Confirm, Copyable, Dot, Field, Head, KV, NotYet, Page, Row, Sec, Seg, Switch, Table, Tabs, Tag, UpTag } from '../kit';
 import { copy, na, useApp } from '../ctx';
-import { ActionButtons, JobBlock, PowerBtn, ReinstallConfirm, VaultCards } from '../blocks';
+import { ActionButtons, JobBlock, PowerBtn, ReinstallConfirm, SignInBlock, VaultCards } from '../blocks';
+import { signedIn } from '../../model/signin';
 
 /* Pages of one VM: overview, projects (list, one project, its file), connections, backups, settings. */
 
 /** A newer version of a coding agent is out: the engine says so, else the versions are compared. */
 const agentBehind = (a: Agent) => a.newer ?? newer(a.latest, a.version);
+
+/** A chosen agent's sign-in: signed in as the VM reports it, else Sign in (also while the VM has not said). */
+export function SignInCell({ vm, agent }: { vm: Vm; agent: (typeof AGENTS)[number] }) {
+  const { s, be } = useApp();
+  if (signedIn(vm.agents, agent.tool)) return <span class="okc signed"><Icon n="check" />Signed in</span>;
+  const busy = s.signIn?.vmId === vm.id && s.signIn.agent === agent.id && s.signIn.state !== 'failed' && s.signIn.state !== 'stopped';
+  return <Btn sm icon="key" disabled={busy} onClick={() => be.signIn(vm.id, agent.id)}>Sign in</Btn>;
+}
 
 export function useBack() {
   const { surf, go } = useApp();
@@ -329,16 +338,18 @@ export function Settings({ vm }: { vm: Vm }) {
     agents: () => (
       <Sec title="Coding agents" right={<>{tag('agents')}{vm.agents.some(agentBehind) && !na(s, 'agent-update') && <Btn sm onClick={() => be.updateAgents(vm.id)}>Update all</Btn>}</>}>
         {vm.problems?.agents && <div class="line badc">{vm.problems.agents}</div>}
-        <Table cols={[{ h: 'Agent' }, { h: 'Version', cls: 'm' }, { h: 'Latest', cls: 'x m' }, { h: 'On', cls: 'e' }]}
+        <Table cols={[{ h: 'Agent' }, { h: 'Version', cls: 'm' }, { h: 'Latest', cls: 'x m' }, { h: '' }, { h: 'On', cls: 'e' }]}
           rows={[
             ...AGENTS.map(a => {
               const r = na(s, 'agents') ? undefined : vm.agents.find(x => x.id === a.tool);
               return [a.name, r?.version ?? '–', r ? (agentBehind(r) ? <Tag warn>{r.latest}</Tag> : r.latest) : '–',
+                st.agents[a.id] && !na(s, 'agents') ? <SignInCell vm={vm} agent={a} /> : '',
                 <Switch on={st.agents[a.id]} onChange={v => save({ agents: { [a.id]: v } })} label={a.name} />];
             }),
             // T3 Code is on in Services; its version shows here with the agents it runs.
-            ...vm.agents.filter(r => !AGENTS.some(a => a.tool === r.id)).map(r => [r.name, r.version, agentBehind(r) ? <Tag warn>{r.latest}</Tag> : r.latest, '']),
+            ...vm.agents.filter(r => !AGENTS.some(a => a.tool === r.id)).map(r => [r.name, r.version, agentBehind(r) ? <Tag warn>{r.latest}</Tag> : r.latest, '', '']),
           ]} />
+        {s.signIn?.vmId === vm.id && <SignInBlock si={s.signIn} />}
       </Sec>
     ),
   };

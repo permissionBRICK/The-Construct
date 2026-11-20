@@ -28,6 +28,8 @@ const SHOTS: [Surf, string, string, string?][] = [
   ['win', 'project-file', 'calm', 'file/webshop'],
   ['win', 'settings-restart', 'restart', 'settings'],
   ['win', 'settings-agents', 'calm', 'settings/agents'],
+  ['win', 'sign-in', 'sign-in', 'settings/agents'],
+  ['win', 'sign-in-failed', 'sign-in-failed', 'settings/agents'],
   ['win', 'vault', 'calm', 'vault'],
   ['win', 'devices', 'calm', 'devices'],
   ['win', 'backups', 'calm', 'backups'],
@@ -38,6 +40,8 @@ const SHOTS: [Surf, string, string, string?][] = [
   ['win', 'host-media', 'calm', 'host/orchard/media'],
   ['win', 'construct-update', 'update', 'app'],
   ['win', 'create-vm', 'calm', 'create'],
+  ['win', 'create-sign-in', 'created', 'create/quill'],
+  ['win', 'create-ready', 'created', 'create/quill/ready'],
   ['win', 'upgrade-code', 'upgrade-code'],
   ['win', 'upgrade-host', 'upgrade-host'],
   ['win', 'upgrade-done', 'upgrade-done'],
@@ -49,6 +53,7 @@ const SHOTS: [Surf, string, string, string?][] = [
   ['phone', 'projects', 'calm', 'projects'],
   ['phone', 'vault', 'calm', 'vault'],
   ['phone', 'construct', 'update', 'app'],
+  ['phone', 'create-sign-in', 'created', 'create/quill'],
 ];
 
 async function open(page: Page, surf: Surf, scene: string, theme: string, route = '') {

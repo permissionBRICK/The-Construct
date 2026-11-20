@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'preact/hooks';
-import type { Everything, Job, VaultRequest, Vm } from '../backend/types';
+import type { Everything, Job, SignIn, VaultRequest, Vm } from '../backend/types';
 import { spanChoices, spanText } from '../backend/api/map';
 import { failedTitle, jobWord, mainAction } from '../model/vm';
+import { AGENTS } from '../model/settings';
+import { linkParts } from '../model/signin';
+import { openExternal } from './shell';
 import { Icon } from './icons';
 import { Bar, Btn, Confirm, Field, Pip, Switch, Tag, UpTag } from './kit';
 import { copy, na, useApp } from './ctx';
@@ -153,6 +156,39 @@ export function JobBlock({ job, vm }: { job: Job; vm: Vm }) {
       {job.repair?.state === 'done' && <div class="msg okc">{job.repair.agent}: {job.repair.outcome}</div>}
       <div class="bf"><span>{job.step}</span><Btn sm onClick={() => setLog(!log)}>Log</Btn><Btn sm onClick={() => be.stopJob(job.id)}>Stop</Btn></div>
       {log && <LogView job={job} />}
+    </div>
+  );
+}
+
+/** A coding agent's own sign-in on the VM: its terminal's text, the links in it opened in the browser, one field
+    for what it asks (Enter sends, also empty; the arrow keys move a list it shows), Cancel. */
+export function SignInBlock({ si }: { si: SignIn }) {
+  const { be } = useApp();
+  const [text, setText] = useState('');
+  const term = useRef<HTMLPreElement>(null);
+  useEffect(() => { const t = term.current; if (t) t.scrollTop = t.scrollHeight; }, [si.text]);
+  const name = AGENTS.find(a => a.id === si.agent)?.name ?? si.agent;
+  const running = si.state === 'running' || si.state === 'starting';
+  const send = () => { be.signInInput({ text }); setText(''); };
+  const keys = (e: KeyboardEvent) => {
+    if (e.key === 'Enter') { e.preventDefault(); send(); }
+    else if (!text && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) { e.preventDefault(); be.signInInput({ key: e.key === 'ArrowUp' ? 'up' : 'down' }); }
+  };
+  const open = (url: string) => (e: MouseEvent) => { e.preventDefault(); openExternal(window, url); };
+  return (
+    <div class={`blk signin ${running ? '' : 'bad'}`} role="group" aria-label={`Sign in to ${name}`}>
+      <div class="bh"><Icon n="key" /><b>{name}</b><Btn sm onClick={() => be.closeSignIn()}>{running ? 'Cancel' : 'Close'}</Btn></div>
+      <pre class="term" ref={term} aria-live="polite">
+        {linkParts(si.text).map(p => ('url' in p ? <a href={p.url} target="_blank" rel="noopener noreferrer" onClick={open(p.url)}>{p.url}</a> : p.text))}
+        {si.state === 'starting' && <span class="typing" aria-label="starting" />}
+      </pre>
+      {si.state === 'running' && (
+        <div class="reply">
+          <input class="in m" value={text} placeholder="Reply" aria-label={`Reply to ${name}`} autoComplete="off" spellcheck={false}
+            onInput={e => setText(e.currentTarget.value)} onKeyDown={keys} />
+          <Btn kind="pri" icon="send" title="Send" onClick={send} />
+        </div>
+      )}
     </div>
   );
 }

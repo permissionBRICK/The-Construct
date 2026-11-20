@@ -25,6 +25,8 @@ public static class RepairComposition
         else services.AddSingleton<IGuestSessionRunner>(_ => new SshGuestSessionRunner(new Constructd.Windows.Process.StreamingProcessRunner()));
         services.AddSingleton<InMemoryVmOperationGate>();
         services.AddSingleton<RepairSessions>();
+        // The coding agents' sign-ins (design 11.8) run over the same guest connection.
+        services.AddSingleton<Constructd.Api.SignIn.AgentSignIns>();
         services.Replace(ServiceDescriptor.Singleton<IVmOperationGate>(sp =>
             new RepairAwareVmOperationGate(sp.GetRequiredService<InMemoryVmOperationGate>(), sp.GetRequiredService<RepairSessions>())));
         services.AddHostedService<RepairTrigger>();

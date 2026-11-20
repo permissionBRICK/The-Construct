@@ -1607,3 +1607,84 @@ describe('ApiBackend engine on this PC', () => {
     expect(posts(w.calls).map(c => c.path)).toEqual(['/api/upgrade/engine', '/api/upgrade/engine', '/api/device/restart']);
   });
 });
+
+describe('ApiBackend agent sign-in', () => {
+  const P = `/api/engines/${E1}/api/v1`;
+  const session = (o: Record<string, unknown> = {}) => ({
+    id: 'si1', agent: 'claude-code', state: 'running', outcome: null, text: '', revision: 1, signedIn: null, started: '2026-11-20T10:00:00Z', ended: null, ...o,
+  });
+
+  it('starts the sign-in, follows its terminal, types into it, and reads the agents again when it signed in', async () => {
+    const { be, calls, on, settle } = world();
+    await be.start();
+    on('POST', `${P}/vms/atlas/agents/claude-code/sign-in`, { status: 202, json: session() });
+    be.signIn('atlas', 'claude-code');
+    expect(be.snapshot().signIn).toEqual({ vmId: 'atlas', agent: 'claude-code', state: 'starting', text: '' });
+    await settle();
+    expect(be.snapshot().signIn).toMatchObject({ state: 'running', text: '' });
+
+    // An older answer does not take back what was read.
+    on('GET', `${P}/vms/atlas/agents/claude-code/sign-in`, { json: session({ text: 'old', revision: 0 }) });
+    be.onEvent('agent-sign-in.output', { seq: 0, type: 'agent-sign-in.output', engine: E1, data: { id: 'si1', vm: 'atlas' } });
+    await settle();
+    expect(be.snapshot().signIn!.text).toBe('');
+    on('GET', `${P}/vms/atlas/agents/claude-code/sign-in`, { json: session({ text: 'visit: https://x.example/o\nPaste code here > ', revision: 2 }) });
+    // Another session's output, or another VM's, is not followed.
+    be.onEvent('agent-sign-in.output', { seq: 1, type: 'agent-sign-in.output', engine: E1, data: { id: 'other', vm: 'atlas' } });
+    be.onEvent('agent-sign-in.output', { seq: 2, type: 'agent-sign-in.output', engine: E1, data: { id: 'si1', vm: 'harbor' } });
+    await settle();
+    expect(calls.filter(c => c.method === 'GET' && c.path.endsWith('/sign-in')).length).toBe(1);
+    be.onEvent('agent-sign-in.output', { seq: 3, type: 'agent-sign-in.output', engine: E1, data: { id: 'si1', vm: 'atlas' } });
+    await settle();
+    expect(be.snapshot().signIn!.text).toContain('Paste code here');
+
+    on('POST', `${P}/vms/atlas/agents/claude-code/sign-in/input`, { status: 204 });
+    be.signInInput({ text: 'the-code' });
+    be.signInInput({ key: 'down' });
+    await settle();
+    expect(posts(calls).filter(c => c.path.endsWith('/input')).map(c => c.body)).toEqual([{ text: 'the-code' }, { key: 'down' }]);
+
+    on('GET', `${P}/vms/atlas/agents/claude-code/sign-in`, { json: session({ state: 'ended', outcome: 'done', signedIn: true, revision: 5 }) });
+    on('GET', `${P}/vms/atlas/agents`, { json: { reportedAt: null, agents: [{ tool: 'claude', name: 'Claude Code', version: '2.1.0', latest: '2.2.0', updateAvailable: true, signedIn: true }] } });
+    be.onEvent('agent-sign-in.ended', { seq: 4, type: 'agent-sign-in.ended', engine: E1, data: { id: 'si1', vm: 'atlas' } });
+    await settle();
+    expect(be.snapshot().signIn).toBeNull();
+    expect(be.snapshot().vms.find(v => v.name === 'atlas')!.agents.find(a => a.id === 'claude')!.signedIn).toBe(true);
+  });
+
+  it('shows a refused start in the panel, and cancels a running one on the engine', async () => {
+    const { be, calls, on, settle } = world();
+    await be.start();
+    on('POST', `${P}/vms/atlas/agents/codex/sign-in`, { status: 409, json: { title: 'The VM has no SSH endpoint the engine can dial.', status: 409, code: 'vm-endpoint-unknown' } });
+    be.signIn('atlas', 'codex');
+    await settle();
+    expect(be.snapshot().signIn).toMatchObject({ state: 'failed', text: 'The VM has no SSH endpoint the engine can dial.' });
+    be.closeSignIn();
+    expect(be.snapshot().signIn).toBeNull();
+    expect(calls.filter(c => c.method === 'DELETE')).toEqual([]);
+
+    on('POST', `${P}/vms/atlas/agents/codex/sign-in`, { status: 202, json: session({ agent: 'codex', text: 'code ABCD' }) });
+    on('DELETE', `${P}/vms/atlas/agents/codex/sign-in`, { status: 204 });
+    be.signIn('atlas', 'codex');
+    await settle();
+    be.closeSignIn();
+    await settle();
+    expect(calls.filter(c => c.method === 'DELETE').map(c => c.path)).toEqual([`${P}/vms/atlas/agents/codex/sign-in`]);
+    expect(be.snapshot().signIn).toBeNull();
+  });
+});
+
+describe('ApiBackend agent sign-in output before the start\'s answer', () => {
+  it('follows output that comes before the engine named the session', async () => {
+    const P = `/api/engines/${E1}/api/v1`;
+    const { be, on, settle } = world();
+    await be.start();
+    on('POST', `${P}/vms/atlas/agents/codex/sign-in`, () => ({ status: 202, json: { id: 'si2', agent: 'codex', state: 'running', outcome: null, text: '', revision: 0, signedIn: null, started: '', ended: null } }));
+    on('GET', `${P}/vms/atlas/agents/codex/sign-in`, { json: { id: 'si2', agent: 'codex', state: 'running', outcome: null, text: 'code ABCD', revision: 3, signedIn: null, started: '', ended: null } });
+    be.signIn('atlas', 'codex');
+    be.onEvent('agent-sign-in.output', { seq: 1, type: 'agent-sign-in.output', engine: E1, data: { id: 'si2', vm: 'atlas' } });
+    await settle();
+    // The start's own answer (revision 0) came after the read (revision 3): the text stays.
+    expect(be.snapshot().signIn).toMatchObject({ state: 'running', text: 'code ABCD' });
+  });
+});

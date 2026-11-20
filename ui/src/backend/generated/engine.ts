@@ -713,6 +713,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/vms/{name}/agents/{agent}/sign-in": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The agent's latest sign-in on the VM; 404 `no-sign-in` when none ran since the engine started or another agent's came after it. */
+        get: operations["GetAgentSignIn"];
+        put?: never;
+        /** @description Starts the agent's own sign-in on the VM in a terminal (claude-code, codex, opencode, antigravity); a sign-in running on the VM ends. 409: `vm-endpoint-unknown`. */
+        post: operations["StartAgentSignIn"];
+        /** @description Ends the sign-in and its processes on the VM. Ending an ended one does nothing. */
+        delete: operations["EndAgentSignIn"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/vms/{name}/agents/{agent}/sign-in/input": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Types into the sign-in's terminal. 409 `sign-in-ended` when it is over. */
+        post: operations["AgentSignInInput"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/vms/{name}/adopt": {
         parameters: {
             query?: never;
@@ -4088,6 +4124,24 @@ export interface components {
             reasons: null | string[];
             projectsDigest?: null | string;
         };
+        AgentSignInInputRequest: {
+            text?: null | string;
+            key?: null | string;
+        };
+        AgentSignInResponse: {
+            id: string;
+            agent: string;
+            state: string;
+            outcome: null | string;
+            text: string;
+            /** Format: int64 */
+            revision: number;
+            signedIn: null | boolean;
+            /** Format: date-time */
+            started: string;
+            /** Format: date-time */
+            ended: null | string;
+        };
         AllowanceUsage: {
             /** Format: int32 */
             primaries: number;
@@ -4554,6 +4608,7 @@ export interface components {
         GuestAgentRequest: {
             tool: null | string;
             version: null | string;
+            signedIn?: null | boolean;
         };
         GuestReport: {
             constructCommit: null | string;
@@ -5841,6 +5896,7 @@ export interface components {
             version: string;
             latest: null | string;
             updateAvailable: boolean;
+            signedIn?: null | boolean;
         };
         VmAgentsResponse: {
             /** Format: date-time */
@@ -8410,6 +8466,134 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["RepairReplyRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    GetAgentSignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSignInResponse"];
+                };
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    StartAgentSignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentSignInResponse"];
+                };
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    EndAgentSignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An error, as a Problem document. */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
+        };
+    };
+    AgentSignInInput: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": null | components["schemas"]["AgentSignInInputRequest"];
             };
         };
         responses: {
