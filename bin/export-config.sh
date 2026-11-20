@@ -80,7 +80,9 @@
 #   EXPORT_REASON  reinstall (default) or backup. reinstall is the export taken
 #                  before a reinstall: busy T3 Code threads are recorded in
 #                  t3-resume.json and t3code-serve is stopped across the copy of
-#                  its event store. backup leaves every service running and copies
+#                  its event store (run from a T3 Code terminal, it keeps running
+#                  and the store is copied as an online snapshot, as for backup).
+#                  backup leaves every service running and copies
 #                  each SQLite database with SQLite's online backup API instead,
 #                  as one self-contained file (no -wal/-shm).
 #   CONFIG_FILE    construct config.env         (default /etc/construct/config.env)
@@ -490,6 +492,11 @@ if [[ "${T3CODE:-false}" == "true" || -d "${EXPORT_HOME}/.t3/userdata" ]]; then
       fi
     else
       _t3_stopped=""
+      # Run from a T3 Code terminal, this script is part of t3code-serve: stopping it would end the
+      # script before the start below, and Restart=always does not undo a manual stop, so T3 would
+      # stay down. Take the online snapshot a backup takes instead and leave the server running.
+      _t3_in_service=""
+      if grep -q 't3code-serve\.service' "${CONSTRUCT_CGROUP_FILE:-/proc/self/cgroup}" 2>/dev/null; then _t3_in_service=1; fi
       if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet t3code-serve 2>/dev/null; then
         # Record the busy threads first: the stop below ends their turns, and a
         # reinstalled VM tells them what happened (bin/construct-t3-resume.py). The
@@ -502,15 +509,21 @@ if [[ "${T3CODE:-false}" == "true" || -d "${EXPORT_HOME}/.t3/userdata" ]]; then
             note "warning: could not record the busy T3 Code threads; a reinstall will not resume them"
           fi
         fi
-        systemctl stop t3code-serve 2>/dev/null && _t3_stopped=1
+        if [[ -n "${_t3_in_service}" ]]; then
+          note "running inside T3 Code: t3code-serve keeps running, its store is copied as an online snapshot"
+        else
+          systemctl stop t3code-serve 2>/dev/null && _t3_stopped=1
+        fi
       fi
       # T3 Code 0.1.0 moved the store to statev2.sqlite, seeded once from
       # state.sqlite and self-contained from then on; the old file stays behind
       # unused. Take only the store the server opens.
-      if [[ -f "${EXPORT_HOME}/.t3/userdata/statev2.sqlite" ]]; then
-        add_glob ".t3/userdata/statev2.sqlite*"
+      _t3_store=".t3/userdata/state.sqlite"
+      if [[ -f "${EXPORT_HOME}/.t3/userdata/statev2.sqlite" ]]; then _t3_store=".t3/userdata/statev2.sqlite"; fi
+      if [[ -n "${_t3_in_service}" ]]; then
+        add_sqlite_snapshot "${_t3_store}"
       else
-        add_glob ".t3/userdata/state.sqlite*"
+        add_glob "${_t3_store}*"
       fi
       if [[ -n "${_t3_stopped}" ]]; then
         _t3_stopped=""

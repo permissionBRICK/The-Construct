@@ -269,7 +269,9 @@ live_db "${live}/.local/share/opencode/opencode.db" sessions
 live_db "${live}/.codex/memories_1.sqlite" memories
 chmod 0600 "${live}/.t3/userdata/statev2.sqlite"
 rows() { python3 -I -c 'import sqlite3, sys; print(sqlite3.connect(sys.argv[1]).execute("select count(*) from " + sys.argv[2]).fetchone()[0])' "$1" "$2" 2>/dev/null; }
-t3_env=(env -i PATH="${tmp}/t3bin:${PATH}" SERVICE_CALLS="${tmp}/stage-calls"
+# A login shell's cgroup: these exports do not run inside T3 Code (this suite may itself).
+printf '0::/user.slice/user-0.slice/session-1.scope\n' >"${tmp}/session-cgroup"
+t3_env=(env -i PATH="${tmp}/t3bin:${PATH}" SERVICE_CALLS="${tmp}/stage-calls" CONSTRUCT_CGROUP_FILE="${tmp}/session-cgroup"
   CONFIG_FILE="${tmp}/config.env" REPO_DIR="${tmp}/repo" T3_RESUME_HELPER="${tmp}/no-resume-helper"
   PROJECTS_STORE="${tmp}/projects" WORKSPACE_ROOT="${tmp}/workspace"
   VSCODE_SERVE_WEB_TOKEN_FILE="${tmp}/absent-token" T3CODE_TLS_DIR="${tmp}/absent-tls" SSH_HOST_KEY_DIR="${tmp}/absent-ssh"
@@ -312,6 +314,24 @@ rm -f "${tmp}/stage-calls"
 "${t3_env[@]}" EXPORT_REASON=reinstall STAGE_DIR="${tmp}/stage-reinstall" bash "${ROOT}/bin/export-config.sh" >/dev/null 2>&1
 ok 'reinstall + STAGE_DIR: T3 Code is still stopped and started' \
   test "$(grep -cE '^(stop|start) t3code-serve$' "${tmp}/stage-calls" 2>/dev/null)" = 2
+
+# Reinstall export from a T3 Code terminal: stopping t3code-serve would end the export with
+# it and leave T3 down, so the server keeps running and its store is an online snapshot.
+printf '0::/system.slice/t3code-serve.service\n' >"${tmp}/t3-cgroup"
+rm -f "${tmp}/stage-calls"
+rc=0
+"${t3_env[@]}" CONSTRUCT_CGROUP_FILE="${tmp}/t3-cgroup" OUT="${tmp}/in-t3.tar.gz" \
+  bash "${ROOT}/bin/export-config.sh" >"${tmp}/in-t3.log" 2>&1 || rc=$?
+ok 'reinstall inside T3 Code: exits 0' test "${rc}" = 0
+ok 'reinstall inside T3 Code: t3code-serve is neither stopped nor restarted' \
+  test -z "$(grep -E '^(stop|start|restart) ' "${tmp}/stage-calls" 2>/dev/null)"
+ok 'reinstall inside T3 Code: says why' grep -q 'running inside T3 Code' "${tmp}/in-t3.log"
+mkdir -p "${tmp}/in-t3"
+tar -xzf "${tmp}/in-t3.tar.gz" -C "${tmp}/in-t3"
+ok 'reinstall inside T3 Code: the T3 store is a snapshot that carries the -wal rows' \
+  test "$(rows "${tmp}/in-t3/home/.t3/userdata/statev2.sqlite" threads)" = 2
+ok 'reinstall inside T3 Code: no T3 -wal/-shm side files are packed' \
+  test -z "$(find "${tmp}/in-t3/home/.t3" \( -name '*-wal' -o -name '*-shm' \) -print -quit)"
 
 rc=0
 "${t3_env[@]}" EXPORT_REASON=sometimes OUT="${tmp}/bad-reason.tar.gz" bash "${ROOT}/bin/export-config.sh" >/dev/null 2>"${tmp}/bad-reason.err" || rc=$?
