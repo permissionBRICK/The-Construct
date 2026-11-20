@@ -70,6 +70,82 @@ public sealed class AgentSignInGuestE2ETests
         Assert.DoesNotContain(left, l => !l.Contains("pgrep", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// The sign-in without a pasted code (11.8) against the real CLIs: a browser sign-in of Claude Code and Codex reports
+    /// the link its CLI opened with the loopback port its redirect returns to; a forward to that port over SSH, as a
+    /// device opens one, reaches the CLI's listener, which answers a bogus callback (and refuses its code). Nothing is
+    /// signed in.
+    /// </summary>
+    [E2ESshFact]
+    public async Task A_browser_sign_ins_redirect_reaches_the_cli_through_a_forward()
+    {
+        string Env(string name) => Environment.GetEnvironmentVariable(name) ?? "";
+        var target = new SshTarget(Env("CONSTRUCT_E2E_SSH_HOST"), int.TryParse(Env("CONSTRUCT_E2E_SSH_PORT"), out var sshPort) ? sshPort : 22,
+            Env("CONSTRUCT_E2E_SSH_USER") is { Length: > 0 } u ? u : "root", Env("CONSTRUCT_E2E_SSH_KEY") is { Length: > 0 } key ? key : null,
+            Path.Combine(Path.GetTempPath(), "construct-e2e-known_hosts"));
+        var wanted = Env("CONSTRUCT_E2E_SIGN_IN_AGENTS") is { Length: > 0 } list ? list.Split(',') : ["claude-code", "codex"];
+        var ssh = new SystemSshRunner(new ProcessRunner());
+        using var app = new TestApp(configureServices: services =>
+        {
+            services.AddSingleton<ISshRunner>(ssh);
+            services.AddSingleton<IGuestSessionRunner>(new SshGuestSessionRunner(new StreamingProcessRunner()));
+            services.AddSingleton<Constructd.Api.Jobs.IProvisionTargets>(new FixedTarget(target));
+        });
+        var client = await app.CreateUserClientAsync("alice");
+        await client.CreateVmAsync("e2e");
+
+        foreach (var agent in wanted.Where(a => a is "claude-code" or "codex"))
+        {
+            var url = $"/api/v1/vms/e2e/agents/{agent}/sign-in";
+            var start = await client.PostAsJsonAsync(url, new { browser = true });
+            Assert.Equal(HttpStatusCode.Accepted, start.StatusCode);
+            var session = (await start.ReadAsync<AgentSignInResponse>()).Id;
+            var shown = await UntilAsync(client, url, s => s.Browser?.Port is not null, agent + "'s browser link");
+            var link = new Uri(shown.Browser!.Url);
+            var query = System.Web.HttpUtility.ParseQueryString(link.Query);
+            var back = new Uri(query["redirect_uri"]!);
+            Assert.Equal(shown.Browser.Port, back.Port);
+            Assert.Contains(back.Host, new[] { "localhost", "127.0.0.1" });
+
+            // The forward a device opens: 127.0.0.1 here to the same loopback port on the VM.
+            var local = FreePort();
+            using var forward = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ssh",
+            [
+                "-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-o", "StrictHostKeyChecking=accept-new",
+                "-o", "UserKnownHostsFile=" + target.KnownHostsFile, "-p", target.Port.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                .. target.IdentityFile is { } k ? new[] { "-i", k } : [], "-L", $"127.0.0.1:{local}:127.0.0.1:{back.Port}", $"{target.User}@{target.Host}",
+            ]) { RedirectStandardError = true })!;
+            try
+            {
+                using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+                var callback = $"http://127.0.0.1:{local}{back.AbsolutePath}?code=bogus&state={Uri.EscapeDataString(query["state"] ?? "")}";
+                HttpResponseMessage? answer = null;
+                for (var i = 0; i < 50 && answer is null; i++)
+                {
+                    try { answer = await http.GetAsync(callback); }
+                    catch (HttpRequestException) { await Task.Delay(200); }
+                }
+
+                // The CLI's own listener answered through the forward; the bogus code signs nothing in.
+                Assert.NotNull(answer);
+                System.Console.WriteLine($"{agent}: redirect port {back.Port}, the CLI answered {(int)answer!.StatusCode}");
+            }
+            finally
+            {
+                if (!forward.HasExited) forward.Kill();
+            }
+
+            Assert.Equal(HttpStatusCode.NoContent, (await client.DeleteAsync($"{url}?session={session}")).StatusCode);
+        }
+    }
+
+    private static int FreePort()
+    {
+        using var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        return ((IPEndPoint)listener.LocalEndpoint).Port;
+    }
+
     private static async Task InputAsync(HttpClient client, string url, object input)
     {
         Assert.Equal(HttpStatusCode.NoContent, (await client.PostAsJsonAsync(url + "/input", input)).StatusCode);
