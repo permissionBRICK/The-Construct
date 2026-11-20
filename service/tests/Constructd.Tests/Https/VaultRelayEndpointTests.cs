@@ -37,6 +37,8 @@ public sealed class VaultRelayEndpointTests
     [InlineData("https://0.0.0.0:7462", new[] { "https://0.0.0.0:7462", "http://127.0.0.1:41234" }, 41234)]
     // A dynamic plain-http API port as well: Kestrel lists ListenUrl first and the relay last.
     [InlineData("http://127.0.0.1:0", new[] { "http://127.0.0.1:41000", "http://127.0.0.1:41234" }, 41234)]
+    // A fixed API listener on another loopback address may share its port number with the dynamic one.
+    [InlineData("http://127.0.0.2:41000;http://127.0.0.1:0", new[] { "http://127.0.0.2:41000", "http://127.0.0.1:41000", "http://127.0.0.1:41234" }, 41234)]
     // Nothing but the API itself: there is no relay port yet.
     [InlineData("http://127.0.0.1:5000", new[] { "http://127.0.0.1:5000" }, 0)]
     public void The_relay_port_is_the_extra_listener_never_the_apis_own(string listenUrl, string[] bound, int expected)

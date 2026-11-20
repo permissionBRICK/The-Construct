@@ -15,11 +15,12 @@ public sealed class VaultRelayEndpoint(IServer server, ConstructdOptions options
 {
     private int _port = Math.Max(0, options.Https.VaultRelayPort);
 
-    // The API's own plain-http ports: a plain-http loopback listen URL (fake mode, tests, local
-    // development) is bound next to the relay and must not be taken for it.
+    // The ports of the API's own fixed plain-http listeners on 127.0.0.1: a plain-http loopback listen URL
+    // (fake mode, tests, local development) is bound next to the relay and must not be taken for it. Only
+    // 127.0.0.1 counts: a listener on another address can share a port number with a 127.0.0.1 one.
     private readonly HashSet<int> _apiPorts = (options.ListenUrl ?? "")
         .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-        .Select(url => Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttp ? uri.Port : 0)
+        .Select(url => Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttp && uri.Host == "127.0.0.1" ? uri.Port : 0)
         .Where(port => port > 0).ToHashSet();
 
     // The API's own plain-http loopback listeners on a dynamic port: they are told apart from the relay only
