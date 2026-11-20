@@ -227,6 +227,7 @@ for f in \
   ".codex/.credentials.json" \
   ".local/share/opencode/auth.json" \
   ".local/share/opencode/mcp-auth.json" \
+  ".config/antigravity/plugin-secrets.json" \
   ".config/gh/hosts.yml" \
   ".git-credentials" \
   ".npmrc"; do
@@ -272,7 +273,7 @@ if [[ -d "${EXPORT_HOME}/.ssh" ]]; then
 fi
 
 # Report instruction / memory files that came back, for the provisioning log.
-for f in ".claude/CLAUDE.md" ".codex/AGENTS.md" ".config/opencode/AGENTS.md"; do
+for f in ".claude/CLAUDE.md" ".codex/AGENTS.md" ".config/opencode/AGENTS.md" ".gemini/AGENTS.md"; do
   [[ -e "${EXPORT_HOME}/${f}" ]] && log "restored ${f}"
 done
 
@@ -292,7 +293,7 @@ fi
 
 # Report restored chat history (captured when the export ran with
 # INCLUDE_HISTORY=true), so the provisioning log shows it came back.
-for f in ".claude/history.jsonl" ".codex/sessions" ".local/share/opencode/storage"; do
+for f in ".claude/history.jsonl" ".codex/sessions" ".local/share/opencode/storage" ".gemini/antigravity-cli/conversations"; do
   [[ -e "${EXPORT_HOME}/${f}" ]] && log "restored chat history: ${f}"
 done
 # A freshly provisioned T3 Code server creates its own store; only one taken

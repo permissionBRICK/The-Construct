@@ -90,7 +90,7 @@ public static class TokenUsageEndpoints
         {
             if (agent?.Tool is not { } tool || !VmAgents.Names.ContainsKey(tool) || agent.Version is not { } version ||
                 !VmAgents.VersionPattern().IsMatch(version) || agents.Any(a => a.Tool == tool))
-                return Problems.BadRequest("Each agent requires a unique known tool (claude, codex, opencode, t3) and a version.");
+                return Problems.BadRequest("Each agent requires a unique known tool (claude, codex, opencode, antigravity, t3) and a version.");
             agents.Add(new(tool, version));
         }
         if (!await store.UpsertAsync(lookup.Vm!, days, clock.UtcNow, ct)) return LifecycleEndpoints.Problem("power-state-changed");

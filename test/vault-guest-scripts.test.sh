@@ -135,7 +135,7 @@ other="${tmp}/other"
 vd="${home}/vault spool"
 mkdir -p "${home}/dir with space" "${home}/node_modules/pkg" "${home}/repo/.git/objects/ab" \
   "${home}/.cache/x" "${home}/proj/target/debug" "${home}/proj2/target" \
-  "${home}/.claude/projects/p" "${other}" "${vd}/responses"
+  "${home}/.claude/projects/p" "${home}/.gemini/antigravity-cli/conversations" "${other}" "${vd}/responses"
 printf 'token=%s\n' "${S1}" >"${home}/notes.txt"
 { printf '\000\001\002binary'; printf '%s' "${S3}"; printf '\000tail'; } >"${home}/blob.bin"
 odd="${home}/dir with space/odd"$'\n'"name 'q'.txt"
@@ -150,6 +150,7 @@ printf '%s' "${S1}" >"${home}/proj/target/debug/out.txt"
 printf '%s' "${S1}" >"${home}/proj2/target/out.txt"
 { printf '%s\n' "${S1}"; head -c 20000 /dev/zero | tr '\0' 'a'; } >"${home}/big.txt"
 { printf '%s\n' "${S1}"; head -c 20000 /dev/zero | tr '\0' 'a'; } >"${home}/.claude/projects/p/big.jsonl"
+{ printf '%s\n' "${S1}"; head -c 20000 /dev/zero | tr '\0' 'a'; } >"${home}/.gemini/antigravity-cli/conversations/c1.pb"
 printf 'nothing here\n' >"${home}/clean.txt"
 printf '{"secret":"%s"}' "${S1}" >"${vd}/responses/stale-000001.json"
 ln -s notes.txt "${home}/link.txt"
@@ -194,6 +195,7 @@ PY
 }
 expected="$(sort <<EOF
 ~/home/.claude/projects/p/big.jsonl|1|text|size
+~/home/.gemini/antigravity-cli/conversations/c1.pb|1|text|size
 ~/home/app.db-wal|1|sqlite-aux|size
 ~/home/app.db|2|sqlite|size
 ~/home/blob.bin|3|binary|size

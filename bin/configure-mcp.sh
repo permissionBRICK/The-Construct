@@ -8,6 +8,7 @@
 #   Claude Code  ~/.claude.json        .mcpServers[name] = { command,args,env | type:http,url,headers }
 #   Codex        ~/.codex/config.toml  [mcp_servers."name"] command/args/[.env] | url/bearer_token_env_var
 #   Opencode     ~/.config/opencode/opencode.json  .mcp[name] = { type:local,command[],environment | type:remote,url,headers }
+#   Antigravity  ~/.gemini/config/mcp_config.json  .mcpServers[name] = { command,args,env | serverUrl,headers } + disabled
 #
 # Upsert by name: an existing server of the same name is replaced; other servers
 # (and unrelated config) are left untouched. Servers are NOT removed when they
@@ -17,7 +18,7 @@
 #   stdio:  { "name", "command", "args"?, "env"? }
 #   http:   { "name", "url", "headers"?, "bearerTokenEnvVar"? }
 # plus two optional fields on either form:
-#   "agents":  subset of [claude|claude-code, codex, opencode] -- only configure
+#   "agents":  subset of [claude|claude-code, codex, opencode, antigravity] -- only configure
 #              this server into those agents (default: all). The same name may
 #              appear more than once with different "agents" to give an agent a
 #              different config.
@@ -177,6 +178,35 @@ if has_agent "opencode"; then
     --argjson rm "${rm_names}" --argjson m "${oc_map}"
   chown "${CLAUDE_USER}:${CLAUDE_USER}" "${cf}" 2>/dev/null || true
   ok "  Opencode: wrote .mcp to ${cf}"
+fi
+
+# ── Antigravity: ~/.gemini/config/mcp_config.json .mcpServers ────────────────
+# The Antigravity CLI's global MCP file. Like Opencode it has a per-server flag
+# (disabled), so a disabled server is still written and flagged. A remote server
+# takes serverUrl (Streamable HTTP).
+if has_agent "antigravity"; then
+  cf="${home_dir}/.gemini/config/mcp_config.json"
+  install -d -m 0755 "$(dirname "${cf}")"
+  [[ -s "${cf}" ]] || echo '{}' >"${cf}"
+  ag_map="$(jq -c '
+    def targets($a): (.agents == null) or (.agents | any(. == $a));
+    [ .mcpServers[]? | select(targets("antigravity"))
+      | { (.name): (
+          (if (.url // "") != "" then
+            ({ serverUrl: .url }
+             + (if (.headers // {}) != {} then { headers: .headers } else {} end))
+          else
+            ({ command: .command, args: (.args // []) }
+             + (if (.env // {}) != {} then { env: .env } else {} end))
+          end)
+          + { disabled: (.enabled == false) }
+        ) } ] | add // {}' "${GENERATED_JSON}")"
+  rm_names="$(jq -cn --argjson d "${declared_names}" --argjson m "${ag_map}" '$d - ($m | keys)')"
+  write_json "${cf}" \
+    '.mcpServers = ((reduce $rm[] as $k ((.mcpServers // {}); del(.[$k]))) + $m)' \
+    --argjson rm "${rm_names}" --argjson m "${ag_map}"
+  chown "${CLAUDE_USER}:${CLAUDE_USER}" "${home_dir}/.gemini" "${home_dir}/.gemini/config" "${cf}" 2>/dev/null || true
+  ok "  Antigravity: wrote .mcpServers to ${cf}"
 fi
 
 # ── Codex: ~/.codex/config.toml [mcp_servers."name"] ─────────────────────────

@@ -16,12 +16,12 @@ public sealed record VmAgentVersion(string Tool, string Version);
 /// </summary>
 public sealed record VmAgentsReport(DateTimeOffset VmCreated, DateTimeOffset ReportedAt, IReadOnlyList<VmAgentVersion> Agents);
 
-/// <summary>The coding agents of a VM (Claude Code, Codex, OpenCode, T3 Code), stored per VM in the host config store.</summary>
+/// <summary>The coding agents of a VM (Claude Code, Codex, OpenCode, Antigravity, T3 Code), stored per VM in the host config store.</summary>
 public sealed partial class VmAgents(IHostConfigStore config)
 {
     public static readonly IReadOnlyDictionary<string, string> Names = new Dictionary<string, string>
     {
-        ["claude"] = "Claude Code", ["codex"] = "Codex", ["opencode"] = "OpenCode", ["t3"] = "T3 Code",
+        ["claude"] = "Claude Code", ["codex"] = "Codex", ["opencode"] = "OpenCode", ["antigravity"] = "Antigravity", ["t3"] = "T3 Code",
     };
 
     [GeneratedRegex(@"^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.+-]{1,48})?$")]
@@ -64,6 +64,8 @@ public sealed class AgentReleases(HttpClient http, IClock clock) : IAgentRelease
             "claude" => ("https://registry.npmjs.org/@anthropic-ai/claude-code/latest", "version"),
             "codex" => ("https://api.github.com/repos/openai/codex/releases/latest", "tag_name"),
             "opencode" => ("https://api.github.com/repos/sst/opencode/releases/latest", "tag_name"),
+            // The manifest Google's installer and the CLI's updater read (T3 Code reads it too).
+            "antigravity" => ("https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_amd64.json", "version"),
             "t3" => (channel == "nightly" ? "https://registry.npmjs.org/t3/nightly" : "https://registry.npmjs.org/t3/latest", "version"),
             _ => ((string?)null, ""),
         };

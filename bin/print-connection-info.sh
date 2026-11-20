@@ -111,6 +111,14 @@ Claude Code:
 EOF
 fi
 
+if has_selected_or_installed_tool antigravity agy; then
+    cat <<EOF
+
+Antigravity CLI:
+  Connect over SSH, then run: agy
+EOF
+fi
+
 if has_selected_or_installed_tool opencode opencode opencode-serve; then
     cat <<EOF
 

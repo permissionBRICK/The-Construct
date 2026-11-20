@@ -76,6 +76,9 @@ fi
 CONSTRUCT_EXTERNAL_HOST="${_external_host_override:-${CONSTRUCT_EXTERNAL_HOST:-}}"
 T3CODE_PATCHED="${_t3_patched_override}"
 
+# The coding agents this VM has (config.env), before an override narrows AI_TOOLS to the
+# one tool this run installs: T3 Code turns its providers on and off by it.
+CODING_AGENTS="${AI_TOOLS:-opencode,claude-code,codex}"
 AI_TOOLS="${AI_TOOLS_OVERRIDE:-${AI_TOOLS:-}}"
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-/root/repos}"
 OPENCODE_HOST="${OPENCODE_HOST:-0.0.0.0}"
@@ -134,7 +137,7 @@ AGENT_SYSTEM_PROMPT_CUSTOM="${AGENT_SYSTEM_PROMPT_CUSTOM:-/root/construct-custom
 AGENT_SYSTEM_PROMPT_ROOT_HOME="${AGENT_SYSTEM_PROMPT_ROOT_HOME:-/root}"
 AGENT_SYSTEM_PROMPT_HOME_BASE="${AGENT_SYSTEM_PROMPT_HOME_BASE:-/home}"
 # The instruction file of each supported agent, relative to a home directory.
-AGENT_SYSTEM_PROMPT_FILES=(".claude/CLAUDE.md" ".codex/AGENTS.md" ".config/opencode/AGENTS.md")
+AGENT_SYSTEM_PROMPT_FILES=(".claude/CLAUDE.md" ".codex/AGENTS.md" ".config/opencode/AGENTS.md" ".gemini/AGENTS.md")
 
 # The full instruction text: the shipped template with the live DNS name, then
 # the custom file (when present and non-empty) separated by one blank line.
@@ -903,6 +906,135 @@ install_codex() {
   install_agent_system_prompt "${codex_home}/.codex/AGENTS.md" "${codex_owner}"
 }
 
+# Google's Antigravity CLI installer (https://antigravity.google/cli/install.sh) reads the
+# release manifest for this platform, downloads that build, checks its SHA-512, copies it to
+# ~/.local/bin/agy and runs `agy install` for the shell setup. It exits 0 doing nothing when
+# that file exists, so it only installs; `agy update` updates an installed CLI. Downloaded to
+# a file first: a failed download piped into bash would "succeed" with an empty script.
+antigravity_official_installer() {
+  local owner="$1" home_dir="$2" installer rc=0
+  installer="$(mktemp)"
+  chmod 0644 "${installer}"
+  if curl -fsSL https://antigravity.google/cli/install.sh -o "${installer}"; then
+    if [[ "${owner}" == root ]]; then
+      HOME="${home_dir}" bash "${installer}" </dev/null || rc=$?
+    else
+      sudo -H -u "${owner}" bash "${installer}" </dev/null || rc=$?
+    fi
+  else
+    rc=$?
+  fi
+  rm -f "${installer}"
+  return "${rc}"
+}
+
+# Antigravity runs without per-tool approval prompts on these VMs, like the other agents:
+# toolPermission "always-proceed" in its CLI settings (ask and deny rules still apply).
+# Other keys in the file are kept.
+configure_antigravity_settings() {
+  local home_dir="$1" owner="$2"
+  local config_dir="${home_dir}/.gemini/antigravity-cli"
+  local config_file="${config_dir}/settings.json" tmp
+  step "Seeding Antigravity permission settings in ${config_file}"
+  install -d -m 0700 "${config_dir}"
+  [[ -s "${config_file}" ]] || echo '{}' >"${config_file}"
+  tmp="$(mktemp)"
+  if jq '.toolPermission = "always-proceed"' "${config_file}" >"${tmp}"; then
+    cat "${tmp}" >"${config_file}"
+  else
+    warn "WARNING: ${config_file} is not valid JSON; leaving it unchanged"
+  fi
+  rm -f "${tmp}"
+  chown "${owner}:${owner}" "${home_dir}/.gemini" "${config_dir}" "${config_file}" 2>/dev/null || true
+}
+
+install_antigravity() {
+  local home_dir owner agy link="${AGY_LINK:-/usr/local/bin/agy}"
+  step "Installing the Antigravity CLI"
+  if [[ "${TARGET_USER}" != "root" ]] && id "${TARGET_USER}" >/dev/null 2>&1; then
+    home_dir="${AGENT_SYSTEM_PROMPT_HOME_BASE}/${TARGET_USER}"
+    owner="${TARGET_USER}"
+  else
+    home_dir="${AGENT_SYSTEM_PROMPT_ROOT_HOME}"
+    owner="root"
+  fi
+  agy="${home_dir}/.local/bin/agy"
+  if [[ -x "${agy}" ]]; then
+    note "Antigravity CLI already installed; updating"
+    # Best-effort, like the other agents' self-updates: a failed update keeps the
+    # working installed version.
+    if [[ "${owner}" == root ]]; then
+      HOME="${home_dir}" "${agy}" update </dev/null || warn "agy update failed; keeping the installed version"
+    else
+      sudo -H -u "${owner}" "${agy}" update </dev/null || warn "agy update failed; keeping the installed version"
+    fi
+  elif ! run_installer_with_retries "Antigravity CLI" antigravity_official_installer "${owner}" "${home_dir}"; then
+    err "The Antigravity CLI installer failed"
+    return 1
+  fi
+  if [[ ! -x "${agy}" ]]; then
+    err "The Antigravity CLI installer finished, but ${agy} is missing"
+    return 1
+  fi
+  # One copy for every shell and for T3 Code, whose Antigravity provider points here.
+  ln -sf "${agy}" "${link}"
+  configure_antigravity_settings "${home_dir}" "${owner}"
+  install_agent_system_prompt "${home_dir}/.gemini/AGENTS.md" "${owner}"
+}
+
+# T3 Code's provider for each coding agent: on for the agents this VM has (CODING_AGENTS),
+# off for the others, so a provider T3 Code shows is one Construct installs and updates.
+# Antigravity points at the CLI installed above. The rest of settings.json is kept; T3
+# watches the file and applies a change without a restart.
+configure_t3_providers() {
+  python3 - "${T3CODE_HOME:-/root/.t3}/userdata/settings.json" "${CODING_AGENTS}" <<'PY'
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+
+settings, chosen = Path(sys.argv[1]), {tool.strip() for tool in sys.argv[2].split(",")}
+drivers = {"claude-code": "claudeAgent", "codex": "codex", "opencode": "opencode", "antigravity": "antigravity"}
+settings.parent.mkdir(parents=True, exist_ok=True)
+try:
+    data = json.loads(settings.read_text()) if settings.exists() else {}
+    if not isinstance(data, dict) or not isinstance(data.get("providerInstances", {}), dict):
+        raise ValueError("expected a JSON object")
+except (ValueError, UnicodeError) as error:
+    print(f"WARNING: leaving invalid T3 settings untouched: {settings}: {error}", file=sys.stderr)
+    sys.exit(0)
+before = json.dumps(data, sort_keys=True)
+instances = data.setdefault("providerInstances", {})
+for tool, driver in drivers.items():
+    instance = instances.get(driver)
+    if not isinstance(instance, dict):
+        instance = {"driver": driver}
+    config = instance.get("config") if isinstance(instance.get("config"), dict) else {}
+    # T3 folds a config-level flag into the instance's, and an off there wins.
+    config.pop("enabled", None)
+    if driver == "antigravity" and tool in chosen and not config.get("binaryPath"):
+        config["binaryPath"] = "/usr/local/bin/agy"
+    instance["enabled"] = tool in chosen
+    if config or "config" in instance:
+        instance["config"] = config
+    instances[driver] = instance
+if json.dumps(data, sort_keys=True) == before:
+    sys.exit(0)
+fd, temporary = tempfile.mkstemp(dir=settings.parent, prefix=".settings-")
+try:
+    with os.fdopen(fd, "w") as output:
+        json.dump(data, output, indent=2)
+        output.write("\n")
+    os.chmod(temporary, 0o644)
+    os.replace(temporary, settings)
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
+print(f"T3 Code providers: {', '.join(d for t, d in drivers.items() if t in chosen) or 'none'} on")
+PY
+}
+
 # Install the T3 Code web GUI (the `t3` npm package -- pingdotgg's browser
 # control plane for coding agents) and autostart it as the t3code-serve service.
 # Opt-in: selected via the T3CODE flag in config.env / the control panel's
@@ -1206,6 +1338,7 @@ install_t3code() {
   systemctl enable --quiet construct-t3-resume.service
 
   migrate_t3_native_limit_resume
+  configure_t3_providers || warn "Could not set T3 Code's providers; continuing"
 
   # On an unchanged upstream T3 + Construct revision, the source builder has
   # already restored the exact server symlink and Desktop status. If that same
@@ -1299,6 +1432,10 @@ fi
 
 if has_tool codex; then
   run_tool "Codex installation" install_codex
+fi
+
+if has_tool antigravity; then
+  run_tool "Antigravity installation" install_antigravity
 fi
 
 if has_tool t3code; then

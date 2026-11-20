@@ -23,13 +23,15 @@ public sealed class VmAgentsTests
         var latest = h.App.Service<FakeAgentReleases>().Latest;
         latest["claude"] = "2.2.0";
         latest["codex"] = "0.98.0";
+        latest["antigravity"] = "1.6.0";
         latest["t3@nightly"] = "0.0.30-nightly.1";
         await h.Client.PutJsonAsync($"/api/v1/vms/{ProvisionHarness.Vm}/desired",
             new { projects = Array.Empty<string>(), settings = new { t3CodeChannel = "nightly" } });
         using var vm = h.App.CreateVmTokenClient(h.VmToken!);
         var posted = await vm.PostJsonAsync($"/api/v1/vms/{ProvisionHarness.Vm}/usage", Report(new object[]
         {
-            new { tool = "claude", version = "2.1.4" }, new { tool = "codex", version = "0.98.0" }, new { tool = "t3", version = "0.0.29-nightly.7" },
+            new { tool = "claude", version = "2.1.4" }, new { tool = "codex", version = "0.98.0" }, new { tool = "antigravity", version = "1.5.2" },
+            new { tool = "t3", version = "0.0.29-nightly.7" },
         }));
         Assert.Equal(HttpStatusCode.NoContent, posted.StatusCode);
 
@@ -38,13 +40,14 @@ public sealed class VmAgentsTests
         Assert.Equal([
             new VmAgentResponse("claude", "Claude Code", "2.1.4", "2.2.0", true),
             new VmAgentResponse("codex", "Codex", "0.98.0", "0.98.0", false),
+            new VmAgentResponse("antigravity", "Antigravity", "1.5.2", "1.6.0", true),
             new VmAgentResponse("t3", "T3 Code", "0.0.29-nightly.7", "0.0.30-nightly.1", true),
         ], read.Agents);
 
         // A usage report without the field leaves the agents as they were; another user reads nothing.
         Assert.Equal(HttpStatusCode.NoContent, (await vm.PostJsonAsync($"/api/v1/vms/{ProvisionHarness.Vm}/usage",
             new { generatedAt = DateTimeOffset.UtcNow, days = Array.Empty<object>() })).StatusCode);
-        Assert.Equal(3, (await (await h.Client.GetAsync(Url)).ReadAsync<VmAgentsResponse>()).Agents.Count);
+        Assert.Equal(4, (await (await h.Client.GetAsync(Url)).ReadAsync<VmAgentsResponse>()).Agents.Count);
         var bob = await h.App.CreateUserClientAsync("bob");
         Assert.Equal(HttpStatusCode.Forbidden, (await bob.GetAsync(Url)).StatusCode);
     }
@@ -62,5 +65,37 @@ public sealed class VmAgentsTests
         })
             Assert.Equal(HttpStatusCode.BadRequest, (await vm.PostJsonAsync($"/api/v1/vms/{ProvisionHarness.Vm}/usage", Report(agents))).StatusCode);
         Assert.Empty((await (await h.Client.GetAsync(Url)).ReadAsync<VmAgentsResponse>()).Agents);
+    }
+}
+
+/// <summary>Where <see cref="Constructd.Api.Jobs.AgentReleases"/> reads each agent's newest version.</summary>
+public sealed class AgentReleasesTests
+{
+    [Fact]
+    public async Task Antigravity_is_read_from_the_manifest_googles_installer_reads()
+    {
+        var handler = new Answers();
+        handler.Bodies["https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_amd64.json"] =
+            """{"version":"1.6.2","url":"https://storage.googleapis.com/x.tar.gz","sha512":"00"}""";
+        var releases = new Constructd.Api.Jobs.AgentReleases(new HttpClient(handler), new Constructd.Core.Abstractions.SystemClock());
+
+        Assert.Equal("1.6.2", await releases.LatestAsync("antigravity", null, CancellationToken.None));
+        Assert.Null(await releases.LatestAsync("vim", null, CancellationToken.None));
+        Assert.Single(handler.Asked);
+    }
+
+    private sealed class Answers : HttpMessageHandler
+    {
+        public Dictionary<string, string> Bodies { get; } = [];
+        public List<string> Asked { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var url = request.RequestUri!.ToString();
+            Asked.Add(url);
+            return Task.FromResult(Bodies.TryGetValue(url, out var body)
+                ? new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) }
+                : new HttpResponseMessage(HttpStatusCode.NotFound));
+        }
     }
 }

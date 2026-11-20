@@ -83,9 +83,12 @@ done
 # The installed coding agents and their versions ride along (the host shows them per VM);
 # the first semver anywhere in --version's output, as the old panel's probe reads it.
 printf '[]' >"${work}/agents.json"
-for tool in claude codex opencode t3; do
-  command -v "${tool}" >/dev/null 2>&1 || continue
-  version="$(timeout 20 "${tool}" --version 2>&1 </dev/null | grep -oE '[0-9]+[.][0-9]+[.][0-9]+([-.+][0-9A-Za-z.+-]+)?' | head -1 | cut -c1-60 || true)"
+# The Antigravity CLI's command is agy; the host knows it as antigravity.
+for tool in claude codex opencode antigravity t3; do
+  command="${tool}"
+  [[ "${tool}" != antigravity ]] || command=agy
+  command -v "${command}" >/dev/null 2>&1 || continue
+  version="$(timeout 20 "${command}" --version 2>&1 </dev/null | grep -oE '[0-9]+[.][0-9]+[.][0-9]+([-.+][0-9A-Za-z.+-]+)?' | head -1 | cut -c1-60 || true)"
   [[ -n "${version}" ]] || continue
   jq --arg t "${tool}" --arg v "${version}" '. + [{tool: $t, version: $v}]' "${work}/agents.json" >"${work}/next.json" && mv "${work}/next.json" "${work}/agents.json"
 done

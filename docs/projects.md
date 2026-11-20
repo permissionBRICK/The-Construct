@@ -148,7 +148,7 @@ mechanism was never wired into any agent and has been removed.)
 
 Optional on either form:
 
-- `"agents"`: subset of `["claude", "claude-code", "codex", "opencode"]` — only
+- `"agents"`: subset of `["claude", "claude-code", "codex", "opencode", "antigravity"]` — only
   configure the server into those agents (default: all). List the same `name`
   twice with different `agents` to give an agent a different config.
 - `"enabled"`: set `false` to add the server **flagged disabled** (default

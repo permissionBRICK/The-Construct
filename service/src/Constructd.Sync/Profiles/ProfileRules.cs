@@ -16,7 +16,7 @@ public static partial class ProfileRules
 {
     public static readonly string[] KnownFields = ["name", "repos", "sdks", "mcp", "hostPackages", "provisionCommands", "forwards", "tests"];
 
-    private static readonly string[] Agents = ["claude", "claude-code", "codex", "opencode"];
+    private static readonly string[] Agents = ["claude", "claude-code", "codex", "opencode", "antigravity"];
 
     // ---- canonical form -------------------------------------------------------------------------
 

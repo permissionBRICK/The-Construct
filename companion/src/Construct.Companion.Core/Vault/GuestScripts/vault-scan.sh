@@ -73,7 +73,7 @@ find -H "${existing[@]}" -xdev \
   -o -path '*/.local/share/opencode/snapshot' -o -samefile "$d" \
   -o \( -name target -exec test -e '{}/CACHEDIR.TAG' \; \) \) -prune \) \
   -o -type f \( -size "-$((max + 1))c" -o -path '*/.claude/*' -o -path '*/.codex/*' \
-  -o -path '*/.local/share/opencode/*' -o -path '*/.t3/userdata/*' \) -print0 2>/dev/null |
+  -o -path '*/.local/share/opencode/*' -o -path '*/.gemini/antigravity-cli/*' -o -path '*/.t3/userdata/*' \) -print0 2>/dev/null |
   xargs -0 -r grep -lZF --binary-files=text -f "$w/all.pat" -- 2>/dev/null |
   sort -z -u >"$w/cand"
 
