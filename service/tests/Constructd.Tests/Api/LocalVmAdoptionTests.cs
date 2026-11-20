@@ -280,6 +280,7 @@ public sealed class LocalVmAdoptionTests : IDisposable
 
         Assert.Equal("16", Swap("""{"swapSizeGb":"16"}"""));
         Assert.Equal("auto", Swap("""{"swapSizeGb":" Auto "}"""));
+        Assert.Equal("8", Swap("""{"swapSizeGb":"08"}"""));
         // A named instance keeps its own value in its own file.
         Assert.Equal("0", Swap("""{"swapSizeGb":"8"}""", """{"swapSizeGb":"0"}"""));
         Assert.Null(Swap("""{"swapSizeGb":"8"}""", "{}"));

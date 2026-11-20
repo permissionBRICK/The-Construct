@@ -167,7 +167,8 @@ if (( have_bytes == want_bytes )) && { is_active || "${SWAPON}" "${SWAP_FILE}" 2
   exit 0
 fi
 
-if ! disk_allows "${want_bytes}" "${have_bytes}"; then
+# Only a new or larger file has to leave the disk its reserve; a smaller one gives disk back.
+if (( want_bytes > have_bytes )) && ! disk_allows "${want_bytes}" "${have_bytes}"; then
   warn "not enough free disk for a ${gib} GiB swap file (the disk keeps at least 2 GiB and 10 % free); ${SWAP_FILE} left as it is"
   exit 0
 fi

@@ -356,7 +356,8 @@ function BlurField({ label, value, onSave }: { label: string; value: string; onS
 }
 
 /** The swap file size, saved on blur or Enter. It shows the stored value unless something was typed, so only a
-    typed value is ever saved; the hint turns red while that value is not one the guest takes. */
+    typed value is ever saved, also one equal to the shown `auto` that is only the default; the hint turns red while
+    the typed value is not one the guest takes. */
 function SwapSize({ value, tag, onSave }: { value: string; tag: preact.JSX.Element; onSave: (v: string) => void }) {
   const [typed, setTyped] = useState<string | null>(null);
   const [bad, setBad] = useState(false);
@@ -366,7 +367,7 @@ function SwapSize({ value, tag, onSave }: { value: string; tag: preact.JSX.Eleme
     setBad(n === null);
     if (n === null) return;
     setTyped(null);
-    if (n !== value) onSave(n);
+    onSave(n);
   };
   return (
     <>

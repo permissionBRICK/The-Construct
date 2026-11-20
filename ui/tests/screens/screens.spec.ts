@@ -95,6 +95,10 @@ test('a swap file size is checked, then waits for the next reprovision', async (
   await swap.fill('300');
   await swap.press('Enter');
   await expect(hint).toHaveClass(/badc/);
+  // auto is saved even though it is shown already: unset only keeps what the VM has.
+  await swap.fill('auto');
+  await swap.press('Enter');
+  await expect(page.getByText('Saved, applies at the next reprovision')).toBeVisible();
   await swap.fill(' 16 ');
   await swap.press('Enter');
   await expect(hint).not.toHaveClass(/badc/);

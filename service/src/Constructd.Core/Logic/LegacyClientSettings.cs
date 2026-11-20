@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json.Nodes;
 using Constructd.Core.Domain;
 
@@ -27,6 +28,7 @@ public static class LegacyClientSettings
             from[key] is JsonValue value && value.TryGetValue<string>(out var text) && !string.IsNullOrWhiteSpace(text) ? text.Trim() : null;
         var channel = Text(vm, "t3codeChannel");
         var swap = Text(vm, "swapSizeGb")?.ToLowerInvariant();
+        if (int.TryParse(swap, NumberStyles.None, CultureInfo.InvariantCulture, out var swapGb)) swap = swapGb.ToString(CultureInfo.InvariantCulture);
 
         var projects = vm["projects"] is JsonArray list
             ? list.Select(p => p is JsonValue v && v.TryGetValue<string>(out var name) ? name.Trim() : null)
