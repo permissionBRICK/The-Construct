@@ -56,10 +56,13 @@ public sealed class VaultRelayEndpoint(IServer server, ConstructdOptions options
         }
     }
 
-    /// <summary>True for a request that arrived through the relay endpoint.</summary>
+    /// <summary>
+    /// True for a request that arrived through the relay endpoint. The relay listens on 127.0.0.1 only;
+    /// another loopback address (an API listener on 127.0.0.2) can use the same port number.
+    /// </summary>
     public bool IsRelayed(HttpContext http) =>
         Port is > 0 and var port && http.Connection.LocalPort == port && !http.Request.IsHttps &&
-        http.Connection.LocalIpAddress is { } local && IPAddress.IsLoopback(local);
+        http.Connection.LocalIpAddress is { } local && (local.IsIPv4MappedToIPv6 ? local.MapToIPv4() : local).Equals(IPAddress.Loopback);
 
     /// <summary>The only paths the relay endpoint answers: the phone pages and the routes they call.</summary>
     public static bool Allowed(PathString path) =>
