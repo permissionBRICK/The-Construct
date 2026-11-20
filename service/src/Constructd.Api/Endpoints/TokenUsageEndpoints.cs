@@ -52,7 +52,8 @@ public static class TokenUsageEndpoints
         foreach (var agent in report?.Agents ?? [])
         {
             var latest = await releases.LatestAsync(agent.Tool, agent.Tool == "t3" ? channel : null, ct);
-            list.Add(new(agent.Tool, VmAgents.Names[agent.Tool], agent.Version, latest, VmAgents.IsNewer(latest, agent.Version)));
+            list.Add(new(agent.Tool, VmAgents.Names[agent.Tool], agent.Version, latest, VmAgents.IsNewer(latest, agent.Version),
+                agent.Tool == "t3" ? null : agent.SignedIn));
         }
         return TypedResults.Ok(new VmAgentsResponse(report?.ReportedAt, list));
     }
@@ -91,7 +92,7 @@ public static class TokenUsageEndpoints
             if (agent?.Tool is not { } tool || !VmAgents.Names.ContainsKey(tool) || agent.Version is not { } version ||
                 !VmAgents.VersionPattern().IsMatch(version) || agents.Any(a => a.Tool == tool))
                 return Problems.BadRequest("Each agent requires a unique known tool (claude, codex, opencode, antigravity, t3) and a version.");
-            agents.Add(new(tool, version));
+            agents.Add(new(tool, version, tool == "t3" ? null : agent.SignedIn));
         }
         if (!await store.UpsertAsync(lookup.Vm!, days, clock.UtcNow, ct)) return LifecycleEndpoints.Problem("power-state-changed");
         if (request.Agents is not null) await http.RequestServices.GetRequiredService<VmAgents>().SaveAsync(lookup.Vm!, agents, clock.UtcNow, ct);

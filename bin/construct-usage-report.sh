@@ -92,6 +92,14 @@ for tool in claude codex opencode antigravity t3; do
   [[ -n "${version}" ]] || continue
   jq --arg t "${tool}" --arg v "${version}" '. + [{tool: $t, version: $v}]' "${work}/agents.json" >"${work}/next.json" && mv "${work}/next.json" "${work}/agents.json"
 done
+# Whether each is signed in, by the sign-in script's checks (an agent it could not check is left out).
+signin="${SCRIPT_DIR}/lib/construct-agent-sign-in.py"
+[[ -f "${signin}" ]] || signin="${SCRIPT_DIR}/construct-agent-sign-in.py"
+if [[ -f "${signin}" ]] && timeout 120 python3 "${signin}" --status >"${work}/signed-in.json" 2>/dev/null &&
+  jq -e 'type == "object"' "${work}/signed-in.json" >/dev/null 2>&1; then
+  jq --slurpfile s "${work}/signed-in.json" 'map(. + (if ($s[0][.tool] | type) == "boolean" then {signedIn: $s[0][.tool]} else {} end))' \
+    "${work}/agents.json" >"${work}/next.json" && mv "${work}/next.json" "${work}/agents.json"
+fi
 jq -e 'length > 0' "${work}/days.json" >/dev/null || jq -e 'length > 0' "${work}/agents.json" >/dev/null || exit 0
 jq --slurpfile agents "${work}/agents.json" '{generatedAt: (now | todate), days: ., agents: $agents[0]}' "${work}/days.json" >"${work}/request.json" || exit 0
 token="$(head -n 1 "${VM_TOKEN_FILE}" 2>/dev/null | tr -d '\r\n' || true)"

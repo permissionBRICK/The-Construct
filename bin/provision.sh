@@ -1380,6 +1380,8 @@ setup_usage_report_timer() {
   install -m 0755 "${REPO_DIR}/bin/construct-usage-report.sh" "${bin_dir}/construct-usage-report.sh" || return 1
   install -m 0644 "${REPO_DIR}/extension/vm/usage-collect.sh" "${bin_dir}/lib/usage-collect.sh" || return 1
   install -m 0644 "${REPO_DIR}/bin/lib/usage-normalize.jq" "${bin_dir}/lib/usage-normalize.jq" || return 1
+  # The report says whether each agent is signed in, by the sign-in script's checks.
+  install -m 0644 "${REPO_DIR}/bin/construct-agent-sign-in.py" "${bin_dir}/lib/construct-agent-sign-in.py" || return 1
   install -m 0644 "${REPO_DIR}/systemd/construct-usage-report.service" "${unit_dir}/construct-usage-report.service" || return 1
   install -m 0644 "${REPO_DIR}/systemd/construct-usage-report.timer" "${unit_dir}/construct-usage-report.timer" || return 1
   sed -i "s/^OnUnitActiveSec=.*/OnUnitActiveSec=${CONSTRUCT_USAGE_REPORT_INTERVAL_MIN}min/" "${unit_dir}/construct-usage-report.timer" || return 1

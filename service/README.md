@@ -292,6 +292,7 @@ gate: the resource policy is evaluated again inside every handler.
 | Jobs | `GET /jobs`; `GET /jobs/{id}`; `GET /jobs/{id}/events`; `POST /jobs/{id}/cancel`; `POST /jobs/{id}/retry` | Owner/initiator or Admin; retry: the VM's owner or an Admin, user credentials. Event streams replay progress and phase history, then one terminal state. |
 | Provisioning | `POST /vms/{name}/jobs` (`provision`, `reinstall`, `restore`); `GET /vms/{name}/provision-status`; `GET`, `PUT /vms/{name}/desired` | Owner/Admin user credential, primaries only. See *Provisioning from the engine*. |
 | Repair agent | `GET`, `POST /vms/{name}/repair`; `GET /vms/{name}/repair/{id}`; `POST /vms/{name}/repair/{id}/reply`; `DELETE /vms/{name}/repair/{id}` | Owner/Admin user credential, primaries only; a VM token cannot read or steer its own repair. See *The repair agent*. |
+| Agent sign-in | `GET`, `POST`, `DELETE /vms/{name}/agents/{agent}/sign-in`; `POST /vms/{name}/agents/{agent}/sign-in/input` | The VM's owner only, with a user or device credential, primaries only: not an admin, not a VM token. See *Signing in to the coding agents*. |
 | Media | `GET /media`; `POST /media/acquire`; `POST /media/uploads`; `GET /media/uploads/{id}`; `PUT /media/uploads/{id}/chunks/{index}`; `POST /media/uploads/{id}/complete`; `DELETE /media/uploads/{id}`; `GET /media/{id}`; `GET /media/{id}/references`; `DELETE /media/{id}`; `POST /media/cleanup` | Owner primary/user or Admin; a shared operator gets only reduced metadata for attached media. Cleanup is Admin-only. |
 | Console | `GET /vms/{name}/console/capabilities`; `POST /vms/{name}/console/sessions`; `POST /vms/{name}/console/sessions/{sid}/renew`; `DELETE /vms/{name}/console/sessions/{sid}`; `GET /vms/{name}/console/sessions/{sid}/screenshot`; `POST .../{sid}/keyboard`; `POST .../{sid}/mouse` | Current VM operator; session remains bound to its creating principal and is re-authorized on every call. |
 | Host updates | `GET /host/updates/status`; `POST /host/updates/check`; `POST /host/updates/stage`; `POST /host/updates/apply`; `POST /host/updates/cancel`; `POST /host/updates/resolve` | Admin. Apply (including resume) and resolve are the only narrowly maintenance-exempt mutations. |
@@ -431,6 +432,32 @@ retries the failed job once by the retry route's rules (`retryJobId`, or `retryR
 restore needs its backup's key from a device), and a retry that fails starts no second repair; a repair by
 hand still can. The output can hold what the VM holds: it lives in the engine's memory only, never in the
 database or a log, and an engine restart ends every session.
+
+### Signing in to the coding agents
+
+The owner signs in to a VM's coding agents from the client (design 11.8, S34): the engine runs the agent's own
+sign-in on the VM, as root over SSH, through `bin/construct-agent-sign-in.py`, which starts it under a
+pseudo-terminal and reports what the terminal shows (`claude auth login`, `codex login --device-auth`,
+`opencode auth login`, `agy acp --login`; the Antigravity sign-in is copied into T3 Code's own Antigravity home
+as well).
+
+- `POST /vms/{name}/agents/{agent}/sign-in` (`agent`: `claude-code`, `codex`, `opencode`, `antigravity`) starts
+  it and answers `202` with the session: `state` (`running`, `ended`), `outcome` (`done`, `failed`, `stopped`,
+  `error`), `text` (the terminal's whole text now, links and codes as the CLI wrote them), `revision` (counts its
+  changes) and, after the end, `signedIn` as the VM checked it. A sign-in already running on the VM ends first.
+- `GET /vms/{name}/agents/{agent}/sign-in` reads it (`404 no-sign-in` when none ran since the engine started or
+  another agent's came after it).
+- `POST .../sign-in/input` `{text}` types the text and Enter into the terminal (empty: Enter alone), `{key}`
+  presses `up` or `down` for a list the sign-in shows; at most 4096 characters, no control characters; `409
+  sign-in-ended` once it is over. Only refused input is audited, never its text.
+- `DELETE .../sign-in` ends it: stdin closes and `construct-agent-sign-in.py --stop` ends its process group.
+- The change stream announces `agent-sign-in.started`, `agent-sign-in.output` (at most four times a second) and
+  `agent-sign-in.ended` with the session id and the VM, to the owner only.
+
+When it ends, the VM's check (`signedIn`, and the agent's version) goes into the VM's agent report, so
+`GET /vms/{name}/agents` shows it at once. The terminal's text can hold one-time codes: it lives in the engine's
+memory only, never in the database, a log or the audit log, and an engine restart ends every session. A sign-in
+takes no lock on the VM; one nobody finishes ends on the VM after twenty minutes.
 
 ### The account's backup key on VMs
 
@@ -676,10 +703,11 @@ integers. Costs must fit a non-negative signed 64-bit micro-dollar value; fracti
 smaller than one micro-dollar are truncated. Invalid batches write nothing.
 Successful telemetry does not enter the audit log; refused and failed requests do.
 
-The usage report also carries the VM's coding agents, `agents: [{tool, version}]` (`claude`, `codex`, `opencode`,
-`t3`; the first semver of each CLI's `--version`), and the guest posts it with `days: []` when only agents changed.
-The engine keeps the last list per VM (bound to the VM's creation time, in the host config store). `GET
-/vms/{name}/agents` (owner/Admin) answers `{reportedAt, agents: [{tool, name, version, latest, updateAvailable}]}`;
+The usage report also carries the VM's coding agents, `agents: [{tool, version, signedIn?}]` (`claude`, `codex`,
+`opencode`, `antigravity`, `t3`; the first semver of each CLI's `--version`; `signedIn` by
+`construct-agent-sign-in.py --status`, each CLI's cheapest check), and the guest posts it with `days: []` when only
+agents changed. The engine keeps the last list per VM (bound to the VM's creation time, in the host config store). `GET
+/vms/{name}/agents` (owner/Admin) answers `{reportedAt, agents: [{tool, name, version, latest, updateAvailable, signedIn}]}`;
 `latest` is read where the old panel read it (npm for Claude Code and T3 Code, honouring the VM's T3 channel,
 GitHub releases for Codex and OpenCode), cached for six hours and null when unreachable. A report without `agents`
 leaves the stored list alone.

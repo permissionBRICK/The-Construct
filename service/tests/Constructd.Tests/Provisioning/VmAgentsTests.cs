@@ -53,6 +53,22 @@ public sealed class VmAgentsTests
     }
 
     [Fact]
+    public async Task The_guest_reports_whether_each_agent_is_signed_in()
+    {
+        await using var h = await ProvisionHarness.StartAsync();
+        using var vm = h.App.CreateVmTokenClient(h.VmToken!);
+        Assert.Equal(HttpStatusCode.NoContent, (await vm.PostJsonAsync($"/api/v1/vms/{ProvisionHarness.Vm}/usage", Report(new object[]
+        {
+            new { tool = "claude", version = "2.1.4", signedIn = true }, new { tool = "codex", version = "0.98.0", signedIn = false },
+            new { tool = "opencode", version = "2.3.2" }, new { tool = "t3", version = "0.1.10", signedIn = true },
+        }))).StatusCode);
+
+        var read = await (await h.Client.GetAsync(Url)).ReadAsync<VmAgentsResponse>();
+        // Not reported: unknown; T3 Code has no sign-in of its own here.
+        Assert.Equal([true, false, null, null], read.Agents.Select(a => a.SignedIn));
+    }
+
+    [Fact]
     public async Task Unknown_tools_and_odd_versions_are_refused()
     {
         await using var h = await ProvisionHarness.StartAsync();

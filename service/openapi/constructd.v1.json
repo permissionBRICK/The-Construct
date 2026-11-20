@@ -2972,6 +2972,200 @@
         }
       }
     },
+    "/api/v1/vms/{name}/agents/{agent}/sign-in": {
+      "post": {
+        "tags": [
+          "AgentSignInEndpoints"
+        ],
+        "description": "Starts the agent's own sign-in on the VM in a terminal (claude-code, codex, opencode, antigravity); a sign-in running on the VM ends. 409: `vm-endpoint-unknown`.",
+        "operationId": "StartAgentSignIn",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agent",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSignInResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "AgentSignInEndpoints"
+        ],
+        "description": "The agent's latest sign-in on the VM; 404 `no-sign-in` when none ran since the engine started or another agent's came after it.",
+        "operationId": "GetAgentSignIn",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agent",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentSignInResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "AgentSignInEndpoints"
+        ],
+        "description": "Ends the sign-in and its processes on the VM. Ending an ended one does nothing.",
+        "operationId": "EndAgentSignIn",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agent",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/vms/{name}/agents/{agent}/sign-in/input": {
+      "post": {
+        "tags": [
+          "AgentSignInEndpoints"
+        ],
+        "description": "Types into the sign-in's terminal. 409 `sign-in-ended` when it is over.",
+        "operationId": "AgentSignInInput",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "agent",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/AgentSignInInputRequest"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          },
+          "default": {
+            "description": "An error, as a Problem document.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/vms/{name}/adopt": {
       "post": {
         "tags": [
@@ -8463,6 +8657,78 @@
           }
         }
       },
+      "AgentSignInInputRequest": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "key": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "AgentSignInResponse": {
+        "required": [
+          "id",
+          "agent",
+          "state",
+          "outcome",
+          "text",
+          "revision",
+          "signedIn",
+          "started",
+          "ended"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "signedIn": {
+            "type": [
+              "null",
+              "boolean"
+            ]
+          },
+          "started": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ended": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
       "AllowanceUsage": {
         "required": [
           "primaries",
@@ -10290,6 +10556,12 @@
             "type": [
               "null",
               "string"
+            ]
+          },
+          "signedIn": {
+            "type": [
+              "null",
+              "boolean"
             ]
           }
         }
@@ -15505,6 +15777,12 @@
           },
           "updateAvailable": {
             "type": "boolean"
+          },
+          "signedIn": {
+            "type": [
+              "null",
+              "boolean"
+            ]
           }
         }
       },
@@ -17318,6 +17596,9 @@
     },
     {
       "name": "RepairEndpoints"
+    },
+    {
+      "name": "AgentSignInEndpoints"
     },
     {
       "name": "LocalAdoptionEndpoints"

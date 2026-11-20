@@ -78,11 +78,35 @@ public sealed record VmDesiredStateResponse(VmDesiredState? Desired, string? Has
 /// </summary>
 public sealed record JobRetryRequest(ProvisionSecretsRequest? Secrets = null, string? BackupId = null);
 
-/// <summary>One coding agent of a VM. <paramref name="Latest"/> is the newest release where it is published (null when unknown).</summary>
-public sealed record VmAgentResponse(string Tool, string Name, string Version, string? Latest, bool UpdateAvailable);
+/// <summary>
+/// One coding agent of a VM. <paramref name="Latest"/> is the newest release where it is published (null when unknown).
+/// <paramref name="SignedIn"/>: whether the agent is signed in, as the VM last reported it or a sign-in on it found; null
+/// when not known (T3 Code, or a VM that has not said).
+/// </summary>
+public sealed record VmAgentResponse(string Tool, string Name, string Version, string? Latest, bool UpdateAvailable, bool? SignedIn = null);
 
 /// <summary>
 /// <c>GET /vms/{name}/agents</c>: the coding agents the VM last reported (with its token-usage report) and whether a
 /// newer release is out. <paramref name="ReportedAt"/> is null and the list empty while the VM has reported none.
 /// </summary>
 public sealed record VmAgentsResponse(DateTimeOffset? ReportedAt, IReadOnlyList<VmAgentResponse> Agents);
+
+/// <summary>
+/// A coding agent's sign-in on a VM (<c>/vms/{name}/agents/{agent}/sign-in</c>, design 11.8). <paramref name="Text"/> is
+/// what the agent's terminal shows now, whole, as its CLI wrote it (links and codes included), followed by what the
+/// script or the connection said besides; <paramref name="Revision"/> counts its changes. <paramref name="State"/>:
+/// <c>running</c> or <c>ended</c>; <paramref name="Outcome"/> after the end: <c>done</c>, <c>failed</c>, <c>stopped</c>
+/// or <c>error</c>. <paramref name="SignedIn"/>: whether the agent is signed in, as the VM checked it at the end.
+/// </summary>
+public sealed record AgentSignInResponse(string Id, string Agent, string State, string? Outcome, string Text, long Revision,
+    bool? SignedIn, DateTimeOffset Started, DateTimeOffset? Ended)
+{
+    public static AgentSignInResponse From(Constructd.Api.SignIn.AgentSignInSession s) =>
+        new(s.Id, s.Agent, s.Running ? "running" : "ended", s.Outcome, s.Text, s.Revision, s.SignedIn, s.Started, s.Ended);
+}
+
+/// <summary>
+/// Input to a sign-in's terminal: <paramref name="Text"/> is typed and followed by Enter (empty: Enter alone), or
+/// <paramref name="Key"/> (<c>up</c>, <c>down</c>) is pressed, for a list the sign-in shows. One of the two.
+/// </summary>
+public sealed record AgentSignInInputRequest(string? Text = null, string? Key = null);
