@@ -15,17 +15,23 @@ export interface Usage {
   diskUsedGb: number | null;
 }
 
-/** Settings of one VM. `hw` applies on restart, `disk` on reinstall, `services` and `identity` on reprovision. */
+/** A coding agent a VM can have; the engine's `codingAgents` ids. */
+export type AgentId = 'claude-code' | 'codex' | 'opencode' | 'antigravity';
+
+/** Settings of one VM. `hw` applies on restart, `disk` on reinstall, `services`, `identity` and `agents` on reprovision. */
 export interface VmSettings {
   hw: { memGb: number; cpus: number; checkpoints: boolean; startWithHost: boolean };
   disk: { diskGb: number; ubuntu: string };
   idle: { afterMin: number; then: 'save' | 'shutdown' | 'never' };
   services: { t3Web: boolean; vscodeWeb: boolean; vscodeTunnel: boolean; smb: boolean; mic: boolean; claudeLive: boolean; opencodeWatcher: boolean; t3ProxyUrl: string };
   identity: { gitName: string; gitEmail: string; keepCredentials: boolean; historyDays: '30' | '90' | 'all' };
+  /** The coding agents chosen for the VM. One turned off stays installed but is no longer updated or configured. */
+  agents: Record<AgentId, boolean>;
 }
 
-/** `newer`: the engine says a newer version is out; without it the versions are compared. */
-export interface Agent { name: string; version: string; latest: string; installed: boolean; newer?: boolean }
+/** `id`: the engine's tool id (claude, codex, opencode, antigravity, t3). `newer`: the engine says a newer version is
+    out; without it the versions are compared. */
+export interface Agent { id: string; name: string; version: string; latest: string; installed: boolean; newer?: boolean }
 export interface ChildVm { name: string; os: string; left: string; power: Power }
 /** A forward of this device to a VM; `closable`: this device opened it and can close it. */
 export interface Forward { id: string; port: number; label: string; to: 'This device' | 'LAN'; url: string; closable?: boolean; status?: string }
@@ -379,6 +385,8 @@ export interface CreateVmRequest {
   token?: string;
   /** remote: the certificate fingerprint the user confirmed for `hostAddress` (from `probeHost`). */
   pin?: string;
+  /** The coding agents to install; undefined: the default ones. */
+  agents?: AgentId[];
 }
 
 /** What a host presents before it is added: its address as the agent reads it and its certificate's fingerprint. */

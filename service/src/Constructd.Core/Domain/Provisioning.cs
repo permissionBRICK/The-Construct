@@ -8,7 +8,7 @@ namespace Constructd.Core.Domain;
 /// </summary>
 public sealed record ProvisionSettings
 {
-    /// <summary><c>AI_TOOLS</c>; default <c>opencode,claude-code,codex</c>.</summary>
+    /// <summary><c>AI_TOOLS</c>; default <c>opencode,claude-code,codex</c>. <see cref="VmDesiredState.CodingAgents"/>, when set, wins.</summary>
     public string? AiTools { get; init; }
     /// <summary><c>SSH_USER</c>: the autoinstall seed user; default the engine's <c>Iso:SeedUser</c>.</summary>
     public string? SeedUser { get; init; }
@@ -57,10 +57,47 @@ public sealed record ProvisionSettings
 }
 
 /// <summary>
-/// What a VM should look like after its next provision: the selected project profiles and the
-/// settings. The engine keeps the last one per VM, so a reprovision needs no client.
+/// What a VM should look like after its next provision: the selected project profiles, the
+/// settings and the coding agents (plan 11.8; null: <see cref="CodingAgents.Default"/>). The engine
+/// keeps the last one per VM, so a reprovision needs no client.
 /// </summary>
-public sealed record VmDesiredState(IReadOnlyList<string> Projects, ProvisionSettings Settings);
+public sealed record VmDesiredState(IReadOnlyList<string> Projects, ProvisionSettings Settings, IReadOnlyList<string>? CodingAgents = null);
+
+/// <summary>
+/// The coding agents a VM can have, by their <c>AI_TOOLS</c> ids (plan 11.8). An agent left out is no longer
+/// installed, updated or configured, and is off in T3 Code; it is not uninstalled.
+/// </summary>
+public static class CodingAgents
+{
+    public static readonly IReadOnlyList<string> Known = ["claude-code", "codex", "opencode", "antigravity"];
+
+    /// <summary>What a VM without a choice gets, as before the choice existed.</summary>
+    public static readonly IReadOnlyList<string> Default = ["opencode", "claude-code", "codex"];
+
+    /// <summary>Known ids, each once.</summary>
+    public static bool Valid(IReadOnlyList<string?> agents) =>
+        agents.All(a => a is not null && Known.Contains(a)) && agents.Distinct(StringComparer.Ordinal).Count() == agents.Count;
+
+    /// <summary><c>AI_TOOLS</c> for a desired state; <c>none</c> when every agent is off (an empty value means the default).</summary>
+    public static string AiTools(VmDesiredState desired) => desired.CodingAgents switch
+    {
+        null => desired.Settings.AiTools ?? string.Join(',', Default),
+        { Count: 0 } => "none",
+        var chosen => string.Join(',', chosen),
+    };
+
+    /// <summary>The known ids in an <c>AI_TOOLS</c> value as a VM saved it (quotes undone); null when it names none and is empty.</summary>
+    public static IReadOnlyList<string>? FromAiTools(string? value)
+    {
+        var text = (value ?? "").Trim().Trim('\'').Trim();
+        if (text.Length == 0) return null;
+        return text.Split(',').Select(t => t.Trim()).Where(Known.Contains).Distinct(StringComparer.Ordinal).ToArray();
+    }
+
+    /// <summary>In <see cref="Known"/>'s order, so the same choice hashes the same.</summary>
+    public static IReadOnlyList<string>? Canonical(IReadOnlyList<string>? agents) =>
+        agents is null ? null : Known.Where(agents.Contains).ToArray();
+}
 
 /// <summary>
 /// A stored desired state with its canonical hash (<c>CONSTRUCT_DESIRED_HASH</c>). <paramref name="VmCreated"/> is the

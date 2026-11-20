@@ -183,6 +183,16 @@ describe('FakeBackend', () => {
     expect(be.snapshot().vms[0].changeWaits).toBe('Settings');
   });
 
+  it('creates a VM with the coding agents chosen and switches one for the next reprovision', () => {
+    const be = new FakeBackend({ timers: false });
+    be.createVm({ where: 'local', name: 'quill', agents: ['claude-code', 'antigravity'] });
+    expect(be.snapshot().vms.find(v => v.name === 'quill')!.settings.agents).toEqual({ 'claude-code': true, codex: false, opencode: false, antigravity: true });
+    be.saveSettings('atlas', { agents: { antigravity: true } });
+    const atlas = be.snapshot().vms.find(v => v.name === 'atlas')!;
+    expect(atlas.settings.agents.antigravity).toBe(true);
+    expect(atlas.changeWaits).toBe('Settings');
+  });
+
   it('pairs a device after the words are confirmed', () => {
     const be = new FakeBackend({ tick: 100 });
     be.startPairing();

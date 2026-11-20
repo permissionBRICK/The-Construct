@@ -5900,6 +5900,7 @@ export interface components {
         VmDesiredState: {
             projects: string[];
             settings: components["schemas"]["ProvisionSettings"];
+            codingAgents?: null | string[];
         };
         VmDesiredStateResponse: {
             desired: null | components["schemas"]["VmDesiredState"];

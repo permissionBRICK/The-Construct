@@ -1,7 +1,7 @@
 import type { Backend, CreateVmRequest, FirstRun, FirstRunRequest, Host, HostProbe, HostUser, Job, JobKind, Prefs, Profile, ProfileSave, SettingsPatch, State, Upgrade, Vm } from './types';
 import { NEXT_RELEASE, PAIR_WORDS, RECOVERY_CODE, REINSTALL_STEPS, REPROVISION_STEPS, sampleState } from './sample';
 import { activeJob, newer, vmUpdateTarget } from '../model/vm';
-import { applies, applyPatch } from '../model/settings';
+import { agentSwitches, applies, applyPatch } from '../model/settings';
 import { updateParts } from '../model/update';
 import { spanText } from './api/map';
 
@@ -483,7 +483,9 @@ export class FakeBackend implements Backend {
       }
     }
     this.set(d => {
-      d.vms.push(newVm(name, hostId, `${name}.example.net`));
+      const v = newVm(name, hostId, `${name}.example.net`);
+      if (req.agents) v.settings.agents = agentSwitches(req.agents);
+      d.vms.push(v);
       const h = this.host(d, hostId);
       h.vmCount += 1;
       h.vms.push({ name, owner: 'alex', role: 'primary', power: 'off', cpuPct: 0, memGb: 0, memMaxGb: 8, diskGb: 0, cpus: 4, network: 'default', address: '–', lease: 'no expiry', shared: false, tokensToday: '0' });

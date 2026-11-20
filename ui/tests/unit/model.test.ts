@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { sampleState } from '../../src/backend/sample';
 import { activeJob, cmpVersion, mainAction, vmDot, vmUpdateTarget, vmWord } from '../../src/model/vm';
 import { updateDue, updateParts, updatePlan } from '../../src/model/update';
-import { applies, applyPatch, hwChange } from '../../src/model/settings';
+import { agentList, agentSwitches, applies, applyPatch, DEFAULT_AGENTS, hwChange } from '../../src/model/settings';
 import { formatRoute, parseRoute, section } from '../../src/model/route';
 import { contrast, cssVars, SCHEME_ORDER, SCHEMES } from '../../src/model/tokens';
 import type { Job } from '../../src/backend/types';
@@ -97,6 +97,15 @@ describe('settings', () => {
     expect(applies({ idle: { afterMin: 15 } })).toBe('now');
     expect(applies({ services: { smb: true } })).toBe('reprovision');
     expect(applies({ disk: { diskGb: 240 }, services: { smb: true } })).toBe('reinstall');
+    expect(applies({ agents: { antigravity: true } })).toBe('reprovision');
+  });
+
+  it('turns the engine\'s list of coding agents into one switch each and back, in one order', () => {
+    expect(DEFAULT_AGENTS).toEqual(['claude-code', 'codex', 'opencode']);
+    const on = agentSwitches(['antigravity', 'codex', 'vim']);
+    expect(on).toEqual({ 'claude-code': false, codex: true, opencode: false, antigravity: true });
+    expect(agentList(on)).toEqual(['codex', 'antigravity']);
+    expect(agentList({ ...on, codex: false })).toEqual(['antigravity']);
   });
 
   it('describes a hardware change for the restart choice', () => {

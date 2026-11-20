@@ -52,6 +52,40 @@ public sealed class ProvisionEnvironmentTests
         Assert.Equal(["CONSTRUCT_PAYLOAD_HASH", "CONSTRUCT_DESIRED_HASH", "CONSTRUCT_CHANNEL"], keys[^3..]);
     }
 
+    [Fact]
+    public void The_coding_agents_chosen_are_AI_TOOLS_and_without_a_choice_the_default_three()
+    {
+        string AiTools(VmDesiredState desired) =>
+            ProvisionScript.MainEnvironment(Local() with { Desired = desired }).Single(v => v.Key == "AI_TOOLS").Value;
+        var settings = new ProvisionSettings();
+        Assert.Equal("opencode,claude-code,codex", AiTools(new VmDesiredState(["default"], settings)));
+        Assert.Equal("claude-code", AiTools(new VmDesiredState(["default"], settings with { AiTools = "claude-code" })));
+        Assert.Equal("claude-code,antigravity", AiTools(new VmDesiredState(["default"], settings with { AiTools = "codex" }, ["claude-code", "antigravity"])));
+        // Every agent off: an empty AI_TOOLS would mean the guest's default.
+        Assert.Equal("none", AiTools(new VmDesiredState(["default"], settings, [])));
+    }
+
+    [Fact]
+    public void The_hash_of_a_state_without_coding_agents_is_what_it_was_and_their_order_does_not_count()
+    {
+        // Stored states from before the field keep their hash, so no VM shows a change that waits after the update.
+        var before = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData("""{"projects":["default"],"settings":{}}"""u8));
+        Assert.Equal(before, ProvisionScript.DesiredHash(new VmDesiredState(["default"], new ProvisionSettings())));
+        var one = ProvisionScript.DesiredHash(new VmDesiredState(["default"], new ProvisionSettings(), ["codex", "claude-code"]));
+        Assert.Equal(one, ProvisionScript.DesiredHash(new VmDesiredState(["default"], new ProvisionSettings(), ["claude-code", "codex"])));
+        Assert.NotEqual(before, one);
+        Assert.NotEqual(one, ProvisionScript.DesiredHash(new VmDesiredState(["default"], new ProvisionSettings(), ["claude-code"])));
+    }
+
+    [Theory]
+    [InlineData("'opencode,claude-code,codex'", "opencode,claude-code,codex")]
+    [InlineData("claude-code, antigravity,pi", "claude-code,antigravity")]
+    [InlineData("none", "")]
+    [InlineData("", null)]
+    [InlineData(null, null)]
+    public void A_vms_saved_AI_TOOLS_reads_as_its_coding_agents(string? saved, string? agents) =>
+        Assert.Equal(agents, CodingAgents.FromAiTools(saved) is { } list ? string.Join(',', list) : null);
+
     internal static string FindRepoFile(string relativePath)
     {
         for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)

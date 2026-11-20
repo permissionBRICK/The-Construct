@@ -1,7 +1,7 @@
 import { useState } from 'preact/hooks';
 import type { Agent, Profile, SettingsPatch, Vm, VmSettings } from '../../backend/types';
 import { activeJob, vmDot, vmWord, newer, vmUpdateTarget } from '../../model/vm';
-import { groupApplies, hwChange } from '../../model/settings';
+import { AGENTS, groupApplies, hwChange } from '../../model/settings';
 import { profileError } from '../../model/profile';
 import { aliasWritten } from '../../backend/api/map';
 import { Icon } from '../icons';
@@ -326,11 +326,19 @@ export function Settings({ vm }: { vm: Vm }) {
         </Sec>
       </>
     ),
-    agents: () => na(s, 'agents') ? <Sec title="Coding agents"><NotYet /></Sec> : (
-      <Sec title="Coding agents" right={vm.agents.some(agentBehind) && !na(s, 'agent-update') && <Btn sm onClick={() => be.updateAgents(vm.id)}>Update all</Btn>}>
+    agents: () => (
+      <Sec title="Coding agents" right={<>{tag('agents')}{vm.agents.some(agentBehind) && !na(s, 'agent-update') && <Btn sm onClick={() => be.updateAgents(vm.id)}>Update all</Btn>}</>}>
         {vm.problems?.agents && <div class="line badc">{vm.problems.agents}</div>}
-        <Table cols={[{ h: 'Agent' }, { h: 'Version', cls: 'm' }, { h: 'Latest', cls: 'x m' }, { h: 'Installed', cls: 'e' }]}
-          rows={vm.agents.map(a => [a.name, a.version, agentBehind(a) ? <Tag warn>{a.latest}</Tag> : a.latest, <Switch on={a.installed} onChange={() => {}} label={`${a.name} installed`} disabled />])} />
+        <Table cols={[{ h: 'Agent' }, { h: 'Version', cls: 'm' }, { h: 'Latest', cls: 'x m' }, { h: 'On', cls: 'e' }]}
+          rows={[
+            ...AGENTS.map(a => {
+              const r = na(s, 'agents') ? undefined : vm.agents.find(x => x.id === a.tool);
+              return [a.name, r?.version ?? '–', r ? (agentBehind(r) ? <Tag warn>{r.latest}</Tag> : r.latest) : '–',
+                <Switch on={st.agents[a.id]} onChange={v => save({ agents: { [a.id]: v } })} label={a.name} />];
+            }),
+            // T3 Code is on in Services; its version shows here with the agents it runs.
+            ...vm.agents.filter(r => !AGENTS.some(a => a.tool === r.id)).map(r => [r.name, r.version, agentBehind(r) ? <Tag warn>{r.latest}</Tag> : r.latest, '']),
+          ]} />
       </Sec>
     ),
   };

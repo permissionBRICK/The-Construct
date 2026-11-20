@@ -27,6 +27,7 @@ const SHOTS: [Surf, string, string, string?][] = [
   ['win', 'projects', 'calm', 'projects'],
   ['win', 'project-file', 'calm', 'file/webshop'],
   ['win', 'settings-restart', 'restart', 'settings'],
+  ['win', 'settings-agents', 'calm', 'settings/agents'],
   ['win', 'vault', 'calm', 'vault'],
   ['win', 'devices', 'calm', 'devices'],
   ['win', 'backups', 'calm', 'backups'],

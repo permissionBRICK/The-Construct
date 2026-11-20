@@ -15728,6 +15728,15 @@
           },
           "settings": {
             "$ref": "#/components/schemas/ProvisionSettings"
+          },
+          "codingAgents": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            }
           }
         }
       },

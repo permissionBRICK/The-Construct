@@ -285,6 +285,24 @@ describe('ApiBackend', () => {
     expect(be.snapshot().vms.find(v => v.name === 'harbor')!.changeWaits).toBe('Settings');
   });
 
+  it('shows the coding agents a VM has and stores a switched one for the next reprovision', async () => {
+    const { be, calls, on, settle } = world();
+    let doc: Record<string, unknown> = { projects: [], settings: { gitUserName: 'Alex' } };
+    on('GET', `/api/engines/${E1}/api/v1/vms/atlas/desired`, () => ({ json: { desired: doc, hash: 'h', updatedAt: null, updatedBy: null } }));
+    on('PUT', `/api/engines/${E1}/api/v1/vms/atlas/desired`, b => { doc = b as Record<string, unknown>; return { json: { desired: b, hash: 'h2', updatedAt: null, updatedBy: null } }; });
+    await be.start();
+    // None chosen yet: the default ones.
+    expect(be.snapshot().vms.find(v => v.name === 'atlas')!.settings.agents).toEqual({ 'claude-code': true, codex: true, opencode: true, antigravity: false });
+    be.saveSettings('atlas', { agents: { antigravity: true } });
+    await settle();
+    expect(doc).toEqual({ projects: [], settings: { gitUserName: 'Alex' }, codingAgents: ['claude-code', 'codex', 'opencode', 'antigravity'] });
+    be.saveSettings('atlas', { agents: { codex: false } });
+    await settle();
+    expect(doc.codingAgents).toEqual(['claude-code', 'opencode', 'antigravity']);
+    expect(calls.some(c => c.method === 'POST' && c.path.includes('/jobs'))).toBe(false);
+    expect(be.snapshot().notice?.text).toBe('Saved, applies at the next reprovision');
+  });
+
   it('stores two quick changes of one VM one after the other, so neither is lost', async () => {
     const { be, on, settle } = world();
     let doc: Record<string, unknown> = { projects: ['webshop'], settings: { aiTools: 'claude-code' } };
@@ -521,9 +539,22 @@ describe('ApiBackend', () => {
     expect(posts(calls).map(c => [c.path, c.body])).toEqual([
       ['/api/engines/probe', { address: 'https://lab.test:8443' }],
       ['/api/engines', { address: 'https://lab.test:8443', pin: 'p2', userToken: 'tok', windowsSignIn: false }],
-      [`/api/engines/${E2}/vms`, { name: 'quill', ramGb: 8, diskGb: 64, desired: { projects: [], settings: {} } }],
+      [`/api/engines/${E2}/vms`, { name: 'quill', ramGb: 8, diskGb: 64, desired: { projects: [], settings: {}, codingAgents: ['claude-code', 'codex', 'opencode'] } }],
     ]);
     expect(be.snapshot().notice?.text).toBe('Created quill');
+  });
+
+  it('creates a VM with the coding agents chosen on the create page', async () => {
+    const { be, calls, on, settle } = world();
+    on('POST', '/api/engines/probe', { json: { url: 'https://orchard.test:8443', pin: 'AB', status: 'ok', known: E1 } });
+    on('GET', `/api/engines/${E1}/api/v1/vm-defaults`, { json: { hostLogicalCpus: 8, maximumCpus: 8, recommendedCpus: 8, maximumRamGb: 16, recommendedRamGb: 8, recommendedDiskGb: 64 } });
+    on('POST', `/api/engines/${E1}/vms`, { status: 202, json: { jobId: 'c2', nested: false, nestedFromHostDefault: true, ignoredOptions: [], hostsWithoutCredential: [] } });
+    on('GET', `/api/engines/${E1}/api/v1/jobs/c2`, { json: job('c2', 'quill', 'running', 'create-vm') });
+    await be.start();
+    expect(be.createVm({ where: 'remote', name: 'quill', hostAddress: 'https://orchard.test:8443', signIn: 'token', agents: ['claude-code', 'antigravity'] })).toBe('quill');
+    await settle();
+    const create = posts(calls).find(c => c.path === `/api/engines/${E1}/vms`)!;
+    expect((create.body as { desired: unknown }).desired).toEqual({ projects: [], settings: {}, codingAgents: ['claude-code', 'antigravity'] });
   });
 
   it('adds a user and hands out the first token once', async () => {

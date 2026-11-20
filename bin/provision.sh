@@ -1112,7 +1112,8 @@ fi
 IFS=',' read -ra _selected_ai_tools <<<"${AI_TOOLS}"
 for _ai_tool in "${_selected_ai_tools[@]}"; do
   _ai_tool="${_ai_tool//[[:space:]]/}"
-  [[ -n "${_ai_tool}" ]] || continue
+  # "none": every coding agent switched off for this VM.
+  [[ -n "${_ai_tool}" && "${_ai_tool}" != none ]] || continue
   run_step optional "Installing AI tool: ${_ai_tool}" \
     env TARGET_USER="${CLAUDE_USER}" AI_TOOLS_OVERRIDE="${_ai_tool}" AI_CONSOLE_INTEGRATION=false \
     OPENCODE_BACKGROUND_WATCHER="${OPENCODE_BACKGROUND_WATCHER}" \

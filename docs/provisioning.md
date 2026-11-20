@@ -181,7 +181,7 @@ Recognized variables:
 | `AGENT_NAME` | — | Name of this agent VM |
 | `PROJECTS` | — | Comma-separated project profiles to activate |
 | `SSH_USER` | — | Seed SSH user |
-| `AI_TOOLS` | `opencode,claude-code,codex` | Agent CLIs to install |
+| `AI_TOOLS` | `opencode,claude-code,codex` | Agent CLIs to install and configure: `claude-code`, `codex`, `opencode`, `antigravity`; `none` for none. One left out is not uninstalled, only no longer updated or configured, and T3 Code's provider for it is turned off. The engine sets it from the VM's coding agents. |
 | `ALLOW_HOST_PACKAGES` | `true` | Install the `hostPackages` project profiles declare. `false` only warns; it is not a sandbox, since `provisionCommands` run as root anyway. |
 | `WORKSPACE_ROOT` | `/root/repos` | Where project repos are cloned |
 | `CLAUDE_USER` | `root` | User Claude Code's CLI and VS Code extension settings are written for |

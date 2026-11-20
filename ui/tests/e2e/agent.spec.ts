@@ -98,6 +98,9 @@ test('first run, a VM, a reprovision and a second device on the real API', async
   const sent: { method: string; url: string; body: string | null }[] = [];
   pa.on('request', r => { if (r.method() !== 'GET') sent.push({ method: r.method(), url: r.url(), body: r.postData() }); });
   await pa.getByLabel('Name').fill('alpha');
+  // Claude Code, Codex and OpenCode are on; Antigravity is offered off.
+  await expect(pa.getByRole('switch', { name: 'Antigravity' })).toHaveAttribute('aria-checked', 'false');
+  await pa.getByRole('switch', { name: 'Antigravity' }).click();
   await pa.getByRole('button', { name: 'Create' }).click();
 
   // The home screen shows the VM; one request created it with its settings and the engine provisions it.
@@ -107,7 +110,7 @@ test('first run, a VM, a reprovision and a second device on the real API', async
   await expect(pa.locator('.blk.job')).toHaveCount(0);
   const created = sent.filter(r => /\/api\/engines\/[^/]+\/vms$/.test(new URL(r.url).pathname));
   expect(created.length).toBe(1);
-  expect(JSON.parse(created[0].body!)).toMatchObject({ name: 'alpha', desired: { projects: [], settings: {} } });
+  expect(JSON.parse(created[0].body!)).toMatchObject({ name: 'alpha', desired: { projects: [], settings: {}, codingAgents: ['claude-code', 'codex', 'opencode', 'antigravity'] } });
   expect(sent.filter(r => /\/vms\/alpha\/jobs$/.test(new URL(r.url).pathname))).toEqual([]);
   const admin = await request.newContext({ baseURL: engine.url, ignoreHTTPSErrors: true, extraHTTPHeaders: { Authorization: `Bearer ${engine.token}` } });
   const status = async () => (await (await admin.get('/api/v1/vms/alpha/provision-status')).json()) as { settingsChanged: boolean; applied: { jobId: string } | null };
@@ -120,6 +123,11 @@ test('first run, a VM, a reprovision and a second device on the real API', async
   await expect(pa.getByRole('status')).toHaveText('Saved, applies at the next reprovision');
   expect((await (await admin.get('/api/v1/vms/alpha/desired')).json()).desired.settings.vsCodeTunnel).toBe('true');
   expect((await status()).settingsChanged).toBe(true);
+  // So is a coding agent switched off on the Agents tab.
+  await pa.goto(`${a.base}/#/settings/agents`);
+  await pa.getByRole('switch', { name: 'Codex' }).click();
+  await expect(pa.getByRole('status')).toHaveText('Saved, applies at the next reprovision');
+  expect((await (await admin.get('/api/v1/vms/alpha/desired')).json()).desired.codingAgents).toEqual(['claude-code', 'opencode', 'antigravity']);
   await pa.goto(`${a.base}/#/home`);
   await expect(pa.locator('.vp2 .pip')).toHaveCount(1);
 

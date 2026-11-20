@@ -2,6 +2,7 @@ import { useEffect, useState } from 'preact/hooks';
 import type { FirstRunRequest, HostProbe, Scheme, ThemeMode, UpgradeStep } from '../../backend/types';
 import { updateDue, updateParts } from '../../model/update';
 import { SCHEME_ORDER, SCHEMES } from '../../model/tokens';
+import { AGENTS, agentList, agentSwitches, DEFAULT_AGENTS } from '../../model/settings';
 import { Icon } from '../icons';
 import { Btn, Confirm, Copyable, Field, Head, KV, Page, Row, Sec, Seg, Switch, Table, Tag } from '../kit';
 import { copy, na, useApp } from '../ctx';
@@ -135,11 +136,12 @@ export function CreateVm() {
   // Windows sign-in only where this device runs Windows; elsewhere the token.
   const signIn = na(s, 'windows-sign-in') ? 'token' : choice;
   const [token, setToken] = useState('');
+  const [agents, setAgents] = useState(() => agentSwitches(DEFAULT_AGENTS));
   const pin = usePin();
   const taken = s.vms.some(v => v.name === name.trim());
   const valid = /^[a-z][a-z0-9-]{1,30}$/.test(name.trim()) && !taken && (where === 'local' || (addr.trim() && (signIn === 'windows' || token.trim())));
   const send = (confirmed?: string) => {
-    const id = be.createVm({ where, name: name.trim(), hostAddress: addr.trim(), signIn, token: signIn === 'token' ? token.trim() : '', pin: confirmed });
+    const id = be.createVm({ where, name: name.trim(), hostAddress: addr.trim(), signIn, token: signIn === 'token' ? token.trim() : '', pin: confirmed, agents: agentList(agents) });
     if (id) selectVm(id);
     go({ page: 'home' });
   };
@@ -163,6 +165,8 @@ export function CreateVm() {
             {signIn === 'token' && <Field type="password" value={token} onInput={setToken} label="Token" placeholder="Token" mono wide />}
           </>
         )}
+        <span class="lab">Coding agents</span>
+        <div>{AGENTS.map(a => <Row l={a.name}><Switch on={agents[a.id]} onChange={v => setAgents({ ...agents, [a.id]: v })} label={a.name} /></Row>)}</div>
         {pin.err && <span class="badc">{pin.err}</span>}
         {s.createError && <span class="badc">{s.createError}</span>}
         {where === 'remote' && pin.probe

@@ -6,10 +6,11 @@ import type {
 } from '../types';
 import { followEvents, type AgentEventData } from './events';
 import { openExternal } from '../../ui/shell';
+import { agentList, agentSwitches, DEFAULT_AGENTS } from '../../model/settings';
 import {
   updateRunning, allowanceOf, codeGroups, hostVersion, jobKey, problemText, splitJobKey, toCert, toConfig, toDevice, toHostJob, toHostUser, toHostVm, toJob,
   toMedia, toStatus, toUpdates, toUsage, toVm, toWindows, vmKey, toSecret, toLeases, toVaultEvent, toApproval, toEntryRequest, toProfile, splitRequestKey, VM_JOB_KINDS,
-  settingsFields, withDesired, toLink, toEverything, hostKind, toIsos, toRepair, REPAIRABLE, upgradeStep, toUpgradeItem,
+  settingsFields, withDesired, codingAgents, toLink, toEverything, hostKind, toIsos, toRepair, REPAIRABLE, upgradeStep, toUpgradeItem,
   type RepairSession, type RepairLine, type UpgradeView,
   type DeviceItem, type ProfileResponse, type AuditEntry, type EngineView, type Health, type HostUpdateStatus, type HttpsStatus, type JobResponse, type MediaItem, type TokenSummary,
   type UsageSummary, type UserDetail, type VmParts, type VmResponse, type WhoAmI, type HostStatus, type HostConfig, type HostWindows, type HostCapabilities, type IsoCatalog,
@@ -1226,9 +1227,10 @@ export class ApiBackend implements Backend {
     const path = { params: { path: { name: ref.name } } };
     if (patch.disk || patch.hw?.checkpoints !== undefined || patch.hw?.startWithHost !== undefined) { this.note(NA); return; }
     if (patch.services?.t3ProxyUrl !== undefined || patch.identity?.historyDays !== undefined) { this.note(NA); return; }
-    if (patch.services || patch.identity) {
+    if (patch.services || patch.identity || patch.agents) {
       // Stored for the next reprovision; the VM itself stays as it is until then (7.5).
-      void this.run(() => this.changeDesired(ref.engine, ref.name, settingsFields(patch)), 'Saved, applies at the next reprovision', ref.engine);
+      const agents = patch.agents && ((cur: string[]) => agentList({ ...agentSwitches(cur), ...patch.agents }));
+      void this.run(() => this.changeDesired(ref.engine, ref.name, settingsFields(patch), undefined, agents), 'Saved, applies at the next reprovision', ref.engine);
       return;
     }
     void this.run(async () => {
@@ -1244,19 +1246,21 @@ export class ApiBackend implements Backend {
 
   /** Reads the VM's desired state from its engine, changes the named fields (and the projects), and stores it whole,
       so fields this page does not show are kept as the engine holds them. */
-  private changeDesired(engine: string, name: string, fields: Partial<ProvisionSettings>, projects?: (current: string[]) => string[]): Promise<void> {
+  private changeDesired(engine: string, name: string, fields: Partial<ProvisionSettings>, projects?: (current: string[]) => string[],
+    agents?: (current: string[]) => string[]): Promise<void> {
     // One save per VM at a time: each reads what the one before it stored, so neither drops the other's change.
     const key = vmKey(engine, name.toLowerCase());
-    const next = (this.desiredSaves.get(key) ?? Promise.resolve()).catch(() => {}).then(() => this.storeDesired(engine, name, fields, projects));
+    const next = (this.desiredSaves.get(key) ?? Promise.resolve()).catch(() => {}).then(() => this.storeDesired(engine, name, fields, projects, agents));
     this.desiredSaves.set(key, next);
     return next;
   }
 
-  private async storeDesired(engine: string, name: string, fields: Partial<ProvisionSettings>, projects?: (current: string[]) => string[]) {
+  private async storeDesired(engine: string, name: string, fields: Partial<ProvisionSettings>, projects?: (current: string[]) => string[],
+    agents?: (current: string[]) => string[]) {
     const c = this.engine(engine);
     const path = { params: { path: { name } } };
     const now = await ok(c.GET('/api/v1/vms/{name}/desired', path));
-    const next = withDesired(now.desired, fields, projects?.(now.desired?.projects ?? []));
+    const next = withDesired(now.desired, fields, projects?.(now.desired?.projects ?? []), agents?.(codingAgents(now.desired)));
     await ok(c.PUT('/api/v1/vms/{name}/desired', { ...path, body: next }));
   }
 
@@ -1390,12 +1394,12 @@ export class ApiBackend implements Backend {
       try {
         const engine = req.where === 'local' ? await this.localEngine() : await this.addEngine(req.hostAddress ?? '', windows ? null : req.token ?? null, req.pin ?? null, undefined, windows);
         // One request: the engine creates the VM with its recommended size and provisions it with these settings
-        // (none chosen yet: the guest's defaults; Settings changes them later).
+        // (the coding agents chosen; nothing else chosen yet: the guest's defaults; Settings changes them later).
         const c = this.engine(engine);
         const d = await ok(c.GET('/api/v1/vm-defaults'));
         // The engine recommends nothing when no VM fits into the host's free memory.
         if (!(d.recommendedRamGb >= 1)) throw new Error(req.where === 'local' ? 'This PC has too little free memory for a VM' : 'The host has too little free memory for a VM');
-        const r = await ok(this.agent.POST('/api/engines/{engine}/vms', { params: { path: { engine } }, body: { name, ramGb: d.recommendedRamGb, diskGb: d.recommendedDiskGb, desired: { projects: [], settings: {} } } as never }));
+        const r = await ok(this.agent.POST('/api/engines/{engine}/vms', { params: { path: { engine } }, body: { name, ramGb: d.recommendedRamGb, diskGb: d.recommendedDiskGb, desired: { projects: [], settings: {}, codingAgents: req.agents ?? DEFAULT_AGENTS } } as never }));
         await this.refreshEngine(engine);
         await this.track(engine, r.jobId, { kind: 'create' });
       } catch (e) {

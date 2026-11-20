@@ -9,13 +9,14 @@ const settings = (memGb: number, cpus: number): VmSettings => ({
   idle: { afterMin: 30, then: 'never' },
   services: { t3Web: true, vscodeWeb: true, vscodeTunnel: false, smb: false, mic: false, claudeLive: true, opencodeWatcher: true, t3ProxyUrl: 'https://t3.example.net' },
   identity: { gitName: 'Alex Example', gitEmail: 'alex@example.net', keepCredentials: false, historyDays: '90' },
+  agents: { 'claude-code': true, codex: true, opencode: true, antigravity: false },
 });
 
 const agents = () => [
-  { name: 'Claude Code', version: '2.1.317', latest: '2.1.317', installed: true },
-  { name: 'Codex', version: '0.48.0', latest: '0.49.1', installed: true },
-  { name: 'OpenCode', version: '1.0.132', latest: '1.0.132', installed: true },
-  { name: 'T3 Code', version: '0.1.4', latest: '0.1.4', installed: true },
+  { id: 'claude', name: 'Claude Code', version: '2.1.317', latest: '2.1.317', installed: true },
+  { id: 'codex', name: 'Codex', version: '0.48.0', latest: '0.49.1', installed: true },
+  { id: 'opencode', name: 'OpenCode', version: '1.0.132', latest: '1.0.132', installed: true },
+  { id: 't3', name: 'T3 Code', version: '0.1.4', latest: '0.1.4', installed: true },
 ];
 
 function vm(p: Partial<Vm> & Pick<Vm, 'id' | 'name' | 'hostId' | 'power' | 'address'>): Vm {
