@@ -63,7 +63,7 @@ public sealed class AgentReleases(HttpClient http, IClock clock) : IAgentRelease
         {
             "claude" => ("https://registry.npmjs.org/@anthropic-ai/claude-code/latest", "version"),
             "codex" => ("https://api.github.com/repos/openai/codex/releases/latest", "tag_name"),
-            "opencode" => ("https://api.github.com/repos/sst/opencode/releases/latest", "tag_name"),
+            "opencode" => ("https://registry.npmjs.org/@opencode/cli/latest", "version"), // OpenCode 2; OpenCode 1 was opencode-ai
             "t3" => (channel == "nightly" ? "https://registry.npmjs.org/t3/nightly" : "https://registry.npmjs.org/t3/latest", "version"),
             _ => ((string?)null, ""),
         };
