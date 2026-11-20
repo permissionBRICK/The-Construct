@@ -197,6 +197,7 @@ Recognized variables:
 | `SMB_USER` | `dev` | SMB login name (file access on the share runs as root) |
 | `SMB_SHARE_NAME` | `repo` | Share name in the UNC path `\\<vm>\<name>` |
 | `SMB_PASSWORD` | _generated_ | Generated once and persisted; reused on reprovision |
+| `SWAP_SIZE_GB` | `auto` | Size of the guest's swap file `/swap.img` in GiB: `auto` is half the RAM rounded to whole GiB (at least 1, at most 8), `0` removes the file, a whole number 1–128 sets it. zswap is switched on with it. Empty keeps the VM's saved choice. See [Swap file](#swap-file) |
 | `ALLOW_LOW_DISK` | `false` | Provision even when the free-disk preflight says the VM disk is full (see below) |
 | `CONSTRUCT_EXTERNAL_HOST` | *(empty → `$(hostname).mshome.net`)* | The address **clients** use to reach this VM. Everything the guest prints — the console banner, the serve-web/OpenCode URLs, the SMB UNC — is built from it instead of concatenating a Hyper-V name. Empty reproduces the historical output byte for byte |
 | `CONSTRUCT_EXTERNAL_SSH_PORT` | `22` | The port clients use for SSH, for the same printed URLs |
@@ -263,6 +264,30 @@ Every (re)provision installs a git `post-checkout` hook through the system git t
 into existing checkouts under `WORKSPACE_ROOT`. On the XFS root of new VMs it seeds each new
 `git worktree add` with reflink copies of the main worktree's build outputs and dependencies;
 on ext4 it does nothing. See [worktrees.md](worktrees.md).
+
+### Swap file
+
+Every (re)provision runs `bin/setup-swap.sh` with `SWAP_SIZE_GB`, right after it writes
+`config.env` so the installs that follow already have swap. Without swap, a guest that runs
+out of RAM for a moment (four builds at once, or a hypervisor that is slow to give memory
+back) can only kill processes; with swap it gets slow for a while instead, and memory that
+nothing touches (idle agent sessions, finished threads, language servers) can move out of
+RAM.
+
+- The file is `/swap.img`, the name Ubuntu's installer uses for its own swap file. A guest
+  that already has one gets it resized rather than a second file; other swap (partitions,
+  zram, other files) is left alone. It is listed in `/etc/fstab`, so it comes back at boot.
+- `auto` (the default) is half the RAM, rounded to whole GiB, at least 1 and at most 8 GiB:
+  6 GiB on a 12 GiB VM. `auto` follows the RAM at the next provision after a resize.
+- zswap is switched on with the file and kept on across reboots by
+  `/etc/tmpfiles.d/construct-zswap.conf`: pages on their way to swap are first kept
+  compressed in RAM, so a lot of swapping never reaches the disk. `0` removes the file, its
+  fstab line and that entry.
+- A size change switches the old file off first, which moves its pages back into RAM. When
+  they do not fit, the old file stays as it is with a warning and the next provision tries
+  again. A file is only created or grown while the disk keeps at least 2 GiB and 10 % of its
+  size free; otherwise the step warns and leaves the swap file as it is.
+- The OOM guard below still decides who goes first if RAM and swap both run out.
 
 ### Out-of-memory ranking
 

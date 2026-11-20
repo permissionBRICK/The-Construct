@@ -53,7 +53,7 @@ if [[ "$group" == service || "$group" == all ]]; then
   bash test/proxmox-nested-installer.test.sh
   /usr/bin/python3 -m unittest discover -s console-viewer -p 'test_*.py' -v
   node --check console-viewer/static/viewer.js
-  bash -n console-viewer/install.sh bin/construct-vm.sh bin/construct-secret.sh bin/construct-backup.sh bin/construct-config.sh bin/construct-oom-guard.sh bin/project-forwards.sh bin/provision.sh bin/fetch-construct-source.sh bin/construct-worktree-clone.sh bin/construct-agent-fix.sh service/host/xfs-cloud-image.sh service/host/install-construct-host.sh
+  bash -n console-viewer/install.sh bin/construct-vm.sh bin/construct-secret.sh bin/construct-backup.sh bin/construct-config.sh bin/construct-oom-guard.sh bin/setup-swap.sh bin/project-forwards.sh bin/provision.sh bin/fetch-construct-source.sh bin/construct-worktree-clone.sh bin/construct-agent-fix.sh service/host/xfs-cloud-image.sh service/host/install-construct-host.sh
   bash test/worktree-clone.test.sh
   bash test/codex-install.test.sh
   bash test/claude-rm-prompt.test.sh
@@ -64,6 +64,7 @@ if [[ "$group" == service || "$group" == all ]]; then
   bash test/install-sdks.test.sh
   bash test/docker-registry-mirrors.test.sh
   bash test/oom-guard.test.sh
+  bash test/setup-swap.test.sh
   bash test/procps-guard.test.sh
   node extension/test/drivers.test.js
   node extension/test/hostadmin.test.js
