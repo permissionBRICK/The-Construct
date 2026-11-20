@@ -43,7 +43,7 @@ stays within one directory and `**` crosses directories. A row without a group s
 |---|---|
 | `extension/**` | `panel` |
 | `bin/*t3*`, `test/t3-*`, `extension/vm/*t3*` | `t3` |
-| `service/**`, `lib/**`, `bin/**`, `console-viewer/**`, `extension/src/projects.js`, `extension/vm/**`, `companion/**` | `service` |
+| `service/**`, `lib/**`, `bin/**`, `console-viewer/**`, `extension/src/projects.js`, `extension/vm/**`, `companion/**`, `test/isolate-env.test.sh`, `test/install-sdks.test.sh` | `service` |
 | `ui/**` | `ui` |
 | `agent/**`, `test/agent-install.test.sh`, `test/agent-bootstrap.test.ps1`, `install.ps1`, `Update-Construct.ps1`, `scripts/package-agent.py`, `service/src/Construct.Keys/**`, `service/src/Constructd.Store/**`, `service/src/Constructd.Sync/**`, `service/src/Constructd.Api/**`, `service/openapi/**` | `agent`, `ui` |
 | `extension/vm/**`, `lib/**`, `Update-T3Code.ps1`, `Get-ConstructT3PairingLink.ps1`, `test/fixtures/legacy-updaters/**`, `test/source-release.test.ps1`, `test/lifecycle-run.test.ps1` | `agent` |
