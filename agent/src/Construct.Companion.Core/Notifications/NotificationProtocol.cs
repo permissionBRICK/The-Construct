@@ -8,6 +8,8 @@ namespace Construct.Companion.Core.Notifications;
 public static class NotificationProtocol
 {
     public const string SpoolDirectory = "/run/construct/notify";
+    /// <summary>Where the watch records its SSH connection, so the guest's idle report does not count it (bin/construct-idle-report.sh).</summary>
+    public const string WatchSessionsDirectory = "/run/construct/watch-sessions";
     public static string NormalizeLevel(string? value) => Trim(value ?? "").ToLowerInvariant() switch
     { "warn" or "warning" => "warning", "err" or "critical" or "error" => "error", _ => "info" };
     public static JsonArray ParseEntries(string stdout)
@@ -43,7 +45,10 @@ public static class NotificationProtocol
     }
     public static string ClickUri(string instance) => "construct://open?instance=" + Uri.EscapeDataString(instance);
     public static string ClaimScript(string dir = SpoolDirectory) => GuestScripts.Render("notify-claim", Values(dir));
-    public static string WatchScript(string dir = SpoolDirectory)
-    { var values = Values(dir); values["heartbeat"] = "60"; values["fallback"] = "3"; return GuestScripts.Render("notify-watch", values); }
+    public static string WatchScript(string dir = SpoolDirectory, string watchDir = WatchSessionsDirectory)
+    {
+        var values = Values(dir); values["heartbeat"] = "60"; values["fallback"] = "3"; values["watchDir"] = ShellQuote.Single(watchDir);
+        return GuestScripts.Render("notify-watch", values);
+    }
     private static Dictionary<string, string> Values(string dir) => new() { ["dir"] = ShellQuote.Single(dir), ["claim"] = GuestScripts.Render("notify-claim-function") };
 }

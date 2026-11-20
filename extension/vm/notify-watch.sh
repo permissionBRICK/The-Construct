@@ -1,12 +1,21 @@
 set -u
 d={{dir}}
 {{claim}}
+# This connection is Construct's own watch, not somebody working on the VM: record it
+# ($SSH_CONNECTION is "client-ip client-port server-ip server-port") under this shell's pid,
+# so bin/construct-idle-report.sh does not count it as an SSH session. Without SSH (a test)
+# or without a writable directory nothing is recorded and the connection counts as before.
+ws=""
+if [ -n "${SSH_CONNECTION:-}" ] && mkdir -p {{watchDir}} 2>/dev/null; then
+  ws={{watchDir}}/notify-$$
+  printf '%s\n' "$SSH_CONNECTION" >"$ws" 2>/dev/null || ws=""
+fi
 # Leave nothing behind when this watcher ends: the host closing the connection sends
 # a SIGHUP (or breaks the pipe under our next write), and without this the inotifywait
 # we started would linger on the VM claiming entries into a dead pipe.
 iw=""
 cleanup() { if [ -n "$iw" ]; then kill "$iw" 2>/dev/null || true; fi; }
-trap 'cleanup; exit 0' EXIT HUP INT TERM PIPE
+trap 'cleanup; if [ -n "$ws" ]; then rm -f "$ws"; fi; exit 0' EXIT HUP INT TERM PIPE
 last=$SECONDS
 beat() {
   if [ $((SECONDS - last)) -ge {{heartbeat}} ]; then last=$SECONDS; printf '#\n'; fi
