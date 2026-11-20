@@ -1652,6 +1652,19 @@ describe('ApiBackend agent sign-in', () => {
     expect(be.snapshot().vms.find(v => v.name === 'atlas')!.agents.find(a => a.id === 'claude')!.signedIn).toBe(true);
   });
 
+  it('keeps the last text it showed when the engine forgot it at the end', async () => {
+    const { be, on, settle } = world();
+    await be.start();
+    on('POST', `${P}/vms/atlas/agents/claude-code/sign-in`, { status: 202, json: session({ text: 'Paste code here > bad\nOAuth error', revision: 2 }) });
+    be.signIn('atlas', 'claude-code');
+    await settle();
+    on('GET', `${P}/vms/atlas/agents/claude-code/sign-in`, { json: session({ state: 'ended', outcome: 'failed', signedIn: false, text: '', revision: 3 }) });
+    on('GET', `${P}/vms/atlas/agents`, { json: { reportedAt: null, agents: [] } });
+    be.onEvent('agent-sign-in.ended', { seq: 1, type: 'agent-sign-in.ended', engine: E1, data: { id: 'si1', vm: 'atlas' } });
+    await settle();
+    expect(be.snapshot().signIn).toMatchObject({ state: 'failed', text: 'Paste code here > bad\nOAuth error' });
+  });
+
   it('shows a refused start in the panel, and cancels a running one on the engine', async () => {
     const { be, calls, on, settle } = world();
     await be.start();

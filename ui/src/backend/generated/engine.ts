@@ -723,7 +723,7 @@ export interface paths {
         /** @description The agent's latest sign-in on the VM; 404 `no-sign-in` when none ran since the engine started or another agent's came after it. */
         get: operations["GetAgentSignIn"];
         put?: never;
-        /** @description Starts the agent's own sign-in on the VM in a terminal (claude-code, codex, opencode, antigravity); a sign-in running on the VM ends. 409: `vm-endpoint-unknown`. */
+        /** @description Starts the agent's own sign-in on the VM in a terminal (claude-code, codex, opencode, antigravity); a sign-in running on the VM ends. 409: `vm-endpoint-unknown`, `sign-in-not-started` (the connection to the VM failed). */
         post: operations["StartAgentSignIn"];
         /** @description Ends the sign-in and its processes on the VM. Ending an ended one does nothing. */
         delete: operations["EndAgentSignIn"];

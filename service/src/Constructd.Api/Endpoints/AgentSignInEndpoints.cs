@@ -22,7 +22,7 @@ public static class AgentSignInEndpoints
     {
         api.MapPost("/vms/{name}/agents/{agent}/sign-in", StartAsync).RequireAuthorization(Policies.User).Audited("vm.agent.sign-in")
             .Produces<AgentSignInResponse>(StatusCodes.Status202Accepted).WithName("StartAgentSignIn")
-            .WithDescription("Starts the agent's own sign-in on the VM in a terminal (claude-code, codex, opencode, antigravity); a sign-in running on the VM ends. 409: `vm-endpoint-unknown`.");
+            .WithDescription("Starts the agent's own sign-in on the VM in a terminal (claude-code, codex, opencode, antigravity); a sign-in running on the VM ends. 409: `vm-endpoint-unknown`, `sign-in-not-started` (the connection to the VM failed).");
         api.MapGet("/vms/{name}/agents/{agent}/sign-in", GetAsync).RequireAuthorization(Policies.User)
             .Produces<AgentSignInResponse>().WithName("GetAgentSignIn")
             .WithDescription("The agent's latest sign-in on the VM; 404 `no-sign-in` when none ran since the engine started or another agent's came after it.");

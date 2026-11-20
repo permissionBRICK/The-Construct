@@ -9,8 +9,9 @@ namespace Constructd.Api.SignIn;
 
 /// <summary>
 /// One coding agent's sign-in on a VM (design 11.8, S34): the agent's own sign-in command in a terminal on the VM.
-/// What its terminal shows lives only here, in memory: never in the database, a log or the audit log, since it
-/// can carry one-time codes. An engine restart ends it.
+/// What its terminal shows lives only here, in memory, while the sign-in runs: never in the database, a log or the
+/// audit log, since it can carry one-time codes and sign-in links. When it ends, only its outcome and the signed-in
+/// state stay. An engine restart ends it.
 /// </summary>
 public sealed class AgentSignInSession
 {
@@ -52,7 +53,10 @@ public sealed class AgentSignInSession
     /// <summary>Whether the agent is signed in after the session, as the VM checked it at the end; null before.</summary>
     public bool? SignedIn { get; internal set; }
 
-    /// <summary>What the terminal shows, followed by what the script or the connection said besides.</summary>
+    /// <summary>
+    /// What the terminal shows, followed by what the script or the connection said besides; empty once the sign-in
+    /// ended.
+    /// </summary>
     public string Text
     {
         get
@@ -106,6 +110,7 @@ public sealed class AgentSignIns(IGuestSessionRunner guests, ISshRunner ssh, IPr
             var session = new AgentSignInSession(Guid.NewGuid().ToString("n"), vm, agent, clock.UtcNow) { Target = target };
             _byVm[vm.Name] = session;
             changes.Publish("agent-sign-in.started", session.Id, session.Vm, session.Owner, ownerOnly: true);
+            string? failed = null;
             lock (session.Gate)
             {
                 try
@@ -114,12 +119,17 @@ public sealed class AgentSignIns(IGuestSessionRunner guests, ISshRunner ssh, IPr
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    session.Notes.Add("The sign-in could not be started: " + SafeError.Describe(ex));
+                    failed = SafeError.Describe(ex);
                 }
             }
 
             if (session.Guest is { } guest) _ = Task.Run(() => FollowAsync(session, guest), CancellationToken.None);
-            else Finish(session, "error");
+            else
+            {
+                Finish(session, "error");
+                throw new AgentSignInRefusedException("sign-in-not-started", "The sign-in could not be started: " + failed);
+            }
+
             return session;
         }
         finally { _starting.Release(); }
@@ -169,6 +179,7 @@ public sealed class AgentSignIns(IGuestSessionRunner guests, ISshRunner ssh, IPr
         var line = AgentSignInScript.Parse(raw);
         lock (session.Gate)
         {
+            if (!session.Running) return;
             switch (line.Type)
             {
                 case "screen":
@@ -250,6 +261,10 @@ public sealed class AgentSignIns(IGuestSessionRunner guests, ISshRunner ssh, IPr
             session.Outcome = outcome;
             session.Ended = clock.UtcNow;
             session.Guest = null;
+            // What the terminal showed goes with the sign-in: codes and links are not kept for later readers.
+            session.Screen = "";
+            session.Notes.Clear();
+            session.End = null;
             session.Revision++;
         }
 

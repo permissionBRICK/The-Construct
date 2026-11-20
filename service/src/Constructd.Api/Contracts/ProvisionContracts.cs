@@ -94,7 +94,7 @@ public sealed record VmAgentsResponse(DateTimeOffset? ReportedAt, IReadOnlyList<
 /// <summary>
 /// A coding agent's sign-in on a VM (<c>/vms/{name}/agents/{agent}/sign-in</c>, design 11.8). <paramref name="Text"/> is
 /// what the agent's terminal shows now, whole, as its CLI wrote it (links and codes included), followed by what the
-/// script or the connection said besides; <paramref name="Revision"/> counts its changes. <paramref name="State"/>:
+/// script or the connection said besides; empty once the sign-in ended. <paramref name="Revision"/> counts its changes. <paramref name="State"/>:
 /// <c>running</c> or <c>ended</c>; <paramref name="Outcome"/> after the end: <c>done</c>, <c>failed</c>, <c>stopped</c>
 /// or <c>error</c>. <paramref name="SignedIn"/>: whether the agent is signed in, as the VM checked it at the end.
 /// </summary>

@@ -455,9 +455,11 @@ as well).
   `agent-sign-in.ended` with the session id and the VM, to the owner only.
 
 When it ends, the VM's check (`signedIn`, and the agent's version) goes into the VM's agent report, so
-`GET /vms/{name}/agents` shows it at once. The terminal's text can hold one-time codes: it lives in the engine's
-memory only, never in the database, a log or the audit log, and an engine restart ends every session. A sign-in
-takes no lock on the VM; one nobody finishes ends on the VM after twenty minutes.
+`GET /vms/{name}/agents` shows it at once. The terminal's text can hold one-time codes and sign-in links: it lives
+in the engine's memory only while the sign-in runs, never in the database, a log or the audit log; once it ended
+only its outcome and `signedIn` stay (`text` is empty), and an engine restart ends every session. A sign-in that
+cannot start answers `409 sign-in-not-started`. A sign-in takes no lock on the VM; one nobody finishes ends on the
+VM after twenty minutes.
 
 ### The account's backup key on VMs
 

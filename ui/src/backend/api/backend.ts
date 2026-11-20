@@ -1101,7 +1101,9 @@ export class ApiBackend implements Backend {
       this.emit({ signIn: null });
       return;
     }
-    this.emit({ signIn: { vmId: at.vmId, agent: at.agent, state, text: r.text } });
+    // An ended sign-in's terminal text is gone on the engine: the panel keeps what it showed last.
+    const text = r.text || (r.state === 'running' ? '' : this.s.signIn?.text ?? '');
+    this.emit({ signIn: { vmId: at.vmId, agent: at.agent, state, text } });
   }
 
   signInInput(input: SignInInput) {

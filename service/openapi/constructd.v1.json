@@ -2977,7 +2977,7 @@
         "tags": [
           "AgentSignInEndpoints"
         ],
-        "description": "Starts the agent's own sign-in on the VM in a terminal (claude-code, codex, opencode, antigravity); a sign-in running on the VM ends. 409: `vm-endpoint-unknown`.",
+        "description": "Starts the agent's own sign-in on the VM in a terminal (claude-code, codex, opencode, antigravity); a sign-in running on the VM ends. 409: `vm-endpoint-unknown`, `sign-in-not-started` (the connection to the VM failed).",
         "operationId": "StartAgentSignIn",
         "parameters": [
           {

@@ -68,7 +68,8 @@ public sealed class AgentSignInTests
 
         var ended = await Until(h.Client, s => s.State == "ended", "the end");
         Assert.Equal(("done", true), (ended.Outcome, ended.SignedIn));
-        Assert.Contains("Signed in.", ended.Text, StringComparison.Ordinal);
+        // Over: what the terminal showed (its link, the code) is gone; the outcome and the check stay.
+        Assert.Equal("", ended.Text);
 
         // The VM had reported no agents yet: the sign-in's check is there at once, with the version it read.
         var agents = await (await h.Client.GetAsync(Url)).ReadAsync<VmAgentsResponse>();
@@ -112,7 +113,7 @@ public sealed class AgentSignInTests
         Assert.Equal(HttpStatusCode.NoContent, (await h.Client.DeleteAsync($"{Url}/claude-code/sign-in")).StatusCode);
 
         var ended = await Read(h.Client);
-        Assert.Equal(("ended", "stopped"), (ended!.State, ended.Outcome));
+        Assert.Equal(("ended", "stopped", ""), (ended!.State, ended.Outcome, ended.Text));
         Assert.True(Assert.Single(Guests(h).Sessions).Disposed);
         Assert.Contains(h.Ssh.Commands, c => c.Contains($"construct-agent-sign-in.py --stop --session {started.Id}", StringComparison.Ordinal));
         // Over: input is refused, a second cancel does nothing, and the agent's state is not touched.
@@ -204,19 +205,22 @@ public sealed class AgentSignInTests
     }
 
     [Fact]
-    public async Task A_connection_that_ends_without_an_end_line_is_an_error_with_what_it_said()
+    public async Task A_connection_that_ends_without_an_end_line_is_an_error()
     {
         await using var h = await ProvisionHarness.StartAsync();
-        Guests(h).SignInScript = s =>
+        var release = new TaskCompletionSource();
+        Guests(h).SignInScript = async s =>
         {
             s.EmitRaw("sudo: a password is required");
-            return Task.CompletedTask;
+            await release.Task;
         };
         await StartAsync(h, "opencode");
+        // What the connection said shows while it lasts.
+        var shown = await Until(h.Client, s => s.Text.Length > 0, "the note", "opencode");
+        Assert.Contains("sudo: a password is required", shown.Text, StringComparison.Ordinal);
+        release.SetResult();
         var ended = await Until(h.Client, s => s.State == "ended", "the end", "opencode");
-        Assert.Equal("error", ended.Outcome);
-        Assert.Contains("sudo: a password is required", ended.Text, StringComparison.Ordinal);
-        Assert.Null(ended.SignedIn);
+        Assert.Equal(("error", "", (bool?)null), (ended.Outcome, ended.Text, ended.SignedIn));
     }
 }
 
