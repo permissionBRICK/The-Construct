@@ -40,8 +40,12 @@ case " $* " in
     n=$(( $(cat "${COUNT}" 2>/dev/null || echo 0) + 1 )); echo "${n}" >"${COUNT}"
     if [[ -n "${UPDATE_ERROR:-}" ]]; then echo "${UPDATE_ERROR}" >&2; exit 100; fi
     if (( n <= LOCKED_UPDATES )); then
-      echo "E: Could not get lock /var/lib/apt/lists/lock. It is held by process 4242 (apt-get)" >&2
-      echo "E: Unable to lock directory /var/lib/apt/lists/" >&2
+      # apt translates its messages; only the C locale says "Could not get lock".
+      if [[ "${LC_ALL:-}" == C ]]; then
+        echo "E: Could not get lock /var/lib/apt/lists/lock. It is held by process 4242 (apt-get)" >&2
+      else
+        echo "E: Sperre /var/lib/apt/lists/lock konnte nicht erlangt werden. Sie wird von Prozess 4242 (apt-get) gehalten." >&2
+      fi
       exit 100
     fi ;;
 esac
@@ -67,6 +71,10 @@ ok "  update is retried until the lock is free" test "$(updates)" = 3
 ok "  then the toolchain is installed once" test "$(installs)" = 1
 ok "  every apt-get call waits for the dpkg lock too" all_wait_for_dpkg
 ok "  and the wait is reported" grep -q 'apt is busy' "${tmp}/out"
+
+run LOCKED_UPDATES=2 LANG=de_DE.UTF-8 LC_ALL=de_DE.UTF-8 LANGUAGE=de
+ok "a caller in another language still waits for the lock" rc_is 0
+ok "  with the same retries" test "$(updates)" = 3
 
 run LOCKED_UPDATES=0 UPDATE_ERROR="E: Failed to fetch http://archive.example/dists/noble/InRelease"
 ok "any other apt failure is not retried" test "$(updates)" = 1
