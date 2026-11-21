@@ -40,8 +40,8 @@ internal static class Program
     private static int Run(string channel, string repository, string version, string[] args)
     {
         var console = new SetupConsole();
+        Banner();
         console.WriteLine($"Construct setup {version.Split('+')[0]}, {SetupChannel.Name(channel)} channel");
-        console.WriteLine("It installs Construct for your user; that needs no administrator rights.");
         var ignored = args.Where((a, i) => !(a is "--channel" or "--repository") && !(i > 0 && args[i - 1] is "--channel" or "--repository")).ToArray();
         if (ignored.Length > 0) console.WriteLine("Ignored: " + string.Join(' ', ignored));
 
@@ -72,6 +72,73 @@ internal static class Program
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or HttpRequestException or InvalidDataException or Win32Exception)
         {
             return Fail(ex.Message, console);
+        }
+    }
+
+    private static readonly string[] Name =
+    [
+        " ██████╗ ██████╗ ███╗   ██╗███████╗████████╗██████╗ ██╗   ██╗ ██████╗████████╗",
+        "██╔════╝██╔═══██╗████╗  ██║██╔════╝╚══██╔══╝██╔══██╗██║   ██║██╔════╝╚══██╔══╝",
+        "██║     ██║   ██║██╔██╗ ██║███████╗   ██║   ██████╔╝██║   ██║██║        ██║   ",
+        "██║     ██║   ██║██║╚██╗██║╚════██║   ██║   ██╔══██╗██║   ██║██║        ██║   ",
+        "╚██████╗╚██████╔╝██║ ╚████║███████║   ██║   ██║  ██║╚██████╔╝╚██████╗   ██║   ",
+        " ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝   ╚═╝   ╚═╝  ╚═╝ ╚═════╝  ╚═════╝   ╚═╝   ",
+    ];
+
+    private const string Rain = "0123456789$+-*/=%#&<>[]{}|:;";
+
+    /// <summary>
+    /// The header: a moment of green digital rain, the name, and one more row of rain under it. Only the name, in plain
+    /// text, when the output is not a console.
+    /// </summary>
+    private static void Banner()
+    {
+        if (Console.IsOutputRedirected)
+        {
+            Console.WriteLine("CONSTRUCT");
+            return;
+        }
+
+        try { Console.OutputEncoding = Encoding.UTF8; }
+        catch (IOException) { /* the console keeps its code page: the block letters may show as plain characters */ }
+        int width;
+        try { width = Math.Min(Name[0].Length, Console.WindowWidth - 1); }
+        catch (IOException) { width = Name[0].Length; }
+
+        void RainRow(double density)
+        {
+            foreach (var column in Enumerable.Range(0, width))
+            {
+                var on = Random.Shared.NextDouble() < density;
+                Console.ForegroundColor = Random.Shared.Next(5) == 0 ? ConsoleColor.Green : ConsoleColor.DarkGreen;
+                Console.Write(on ? Rain[Random.Shared.Next(Rain.Length)] : ' ');
+            }
+
+            Console.WriteLine();
+        }
+
+        try
+        {
+            Console.WriteLine();
+            foreach (var density in new[] { 0.08, 0.16, 0.24 })
+            {
+                RainRow(density);
+                Thread.Sleep(60);
+            }
+
+            Console.ForegroundColor = ConsoleColor.Green;
+            foreach (var line in Name)
+            {
+                Console.WriteLine(line[..Math.Min(line.Length, width)]);
+                Thread.Sleep(30);
+            }
+
+            RainRow(0.16);
+            Console.WriteLine();
+        }
+        finally
+        {
+            Console.ResetColor();
         }
     }
 

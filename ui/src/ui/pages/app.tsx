@@ -267,10 +267,10 @@ export function Upgrade() {
   if (u.step === 'engine') return (
     <div class="solo">{top}<h3>This is the new Construct</h3>
       <div class="wz"><div class="cap">New</div>
-        {wl(<Icon n="monitor" />, 'One window for all your VMs')}
-        {wl(<Icon n="key" />, 'The vault comes back with a recovery code')}
-        {wl(<Icon n="phone" />, 'Approve vault requests from your phone')}
-        {wl(<Icon n="repro" />, 'Update covers this PC, your hosts and your VMs')}
+        {wl(<Icon n="monitor" />, 'Completely reworked UI')}
+        {wl(<Icon n="repro" />, 'One-Click Updates')}
+        {wl(<Icon n="key" />, 'Auth Agents through Construct')}
+        {wl(<Icon n="fix" />, 'Better Reprovision / Reinstall')}
       </div>
       {u.found && (
         <div class="wz"><div class="cap">Comes along</div>
