@@ -529,9 +529,13 @@ public sealed class LegacyConverter(DeviceAgent agent, IDeviceEngines engines, D
     /// </summary>
     private static void DeleteInstallImages(LegacyState legacy)
     {
+        // Only folders inside the old client's own root (%LOCALAPPDATA%\The-Construct): an install named with --from
+        // elsewhere (an extracted copy in Downloads) is the user's, and so are its images.
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(legacy.Root)) + Path.DirectorySeparatorChar;
         foreach (var folder in new[] { legacy.InstallFolder }.Concat(legacy.OtherInstallFolders))
         {
             if (folder is null || !Directory.Exists(folder)) continue;
+            if (!Path.GetFullPath(folder).StartsWith(root, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)) continue;
             foreach (var image in Directory.EnumerateFiles(folder, "*-autoinstall.iso", SearchOption.TopDirectoryOnly))
             {
                 try { File.Delete(image); }

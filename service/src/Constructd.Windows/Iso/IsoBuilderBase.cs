@@ -346,10 +346,13 @@ public abstract class IsoBuilderBase : IIsoBuilder, IIsoMediaBuilder, IDisposabl
             .OrderBy(f => UbuntuIsoIndex.PointRelease(NameOf(f))).ToList();
         if (current is not { } image)
         {
-            if (kept.Count > 0 && !redownload)
+            // Offline: only an image whose checksum was recorded from SHA256SUMS when it was downloaded, checked again now.
+            var verified = kept.LastOrDefault(f => _files.FileExists(f + VerifiedSuffix));
+            if (verified is not null && !redownload)
             {
-                progress?.Report($"the Ubuntu release list could not be read ({lookupFailure}); using the image kept on the host: {kept[^1]}");
-                return kept[^1];
+                progress?.Report($"the Ubuntu release list could not be read ({lookupFailure}); using the image kept on the host: {verified}");
+                VerifyChecksum(vmName, verified, _files.ReadAllText(verified + VerifiedSuffix), "the checksum recorded at its download", progress);
+                return verified;
             }
 
             throw Fail(vmName, $"no Ubuntu source ISO is configured and the current {UbuntuIsoIndex.Line} image could not be looked up on " +
@@ -359,13 +362,19 @@ public abstract class IsoBuilderBase : IIsoBuilder, IIsoMediaBuilder, IDisposabl
         progress?.Report($"the current {UbuntuIsoIndex.Line} image is {image.FileName}");
         var path = await CachedOrDownloadedAsync(vmName, new Uri(UbuntuIsoIndex.Directory, image.FileName), $@"{cacheDir}\{image.FileName}",
             image.Sha256, "the release's SHA256SUMS", progress, cancellationToken, redownload).ConfigureAwait(false);
+        // Checked against SHA256SUMS just now: the checksum is kept for a later build without the release list.
+        _files.WriteAllText(path + VerifiedSuffix, image.Sha256);
         foreach (var older in kept.Where(f => !string.Equals(f, path, StringComparison.OrdinalIgnoreCase)))
         {
             if (_files.TryDeleteFile(older)) progress?.Report($"removed the image of an earlier point release: {older}");
+            _files.TryDeleteFile(older + VerifiedSuffix);
         }
 
         return path;
     }
+
+    /// <summary>Next to a discovered image: the SHA-256 SHA256SUMS gave it, for a build while the list cannot be read.</summary>
+    private const string VerifiedSuffix = ".sha256";
 
     /// <summary>The source ISO in the cache, downloaded first when it is not there (or a redownload asks for it), and checked.</summary>
     private async Task<string> CachedOrDownloadedAsync(string? vmName, Uri url, string cached, string? expectedSha256, string checksumSource,

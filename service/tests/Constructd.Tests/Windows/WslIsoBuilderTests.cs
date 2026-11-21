@@ -187,6 +187,8 @@ public sealed class WslIsoBuilderTests
         Assert.Equal(new Uri("https://releases.ubuntu.com/24.04/ubuntu-24.04.5-live-server-amd64.iso"), download.Source);
         Assert.True(files.FileExists(@"C:\ProgramData\Construct\service\iso\ubuntu-24.04.5-live-server-amd64.iso"));
         Assert.False(files.FileExists(older));
+        Assert.Equal("9bfd8a9d1b1e0e0f1a1b1c1d1e1f2021222324252627282930313233343536ab",
+            files.ReadAllText(@"C:\ProgramData\Construct\service\iso\ubuntu-24.04.5-live-server-amd64.iso.sha256"));
         Assert.Contains("/mnt/c/ProgramData/Construct/service/iso/ubuntu-24.04.5-live-server-amd64.iso", runner[1].Arguments);
     }
 
@@ -220,10 +222,21 @@ public sealed class WslIsoBuilderTests
         Assert.Contains("releases.ubuntu.com", ex.Detail);
         Assert.Contains("Constructd:Iso:SourceUrl", ex.Detail);
 
-        files.WithBinary(@"C:\ProgramData\Construct\service\iso\ubuntu-24.04.3-live-server-amd64.iso");
-        files.WithBinary(@"C:\ProgramData\Construct\service\iso\ubuntu-24.04.10-live-server-amd64.iso");
+        // Only an image whose checksum was recorded at its download counts, and that checksum is checked again.
+        const string dir = @"C:\ProgramData\Construct\service\iso\";
+        files.WithBinary(dir + "ubuntu-24.04.3-live-server-amd64.iso", sha256: "aa");
+        files.WriteAllText(dir + "ubuntu-24.04.3-live-server-amd64.iso.sha256", "aa");
+        files.WithBinary(dir + "ubuntu-24.04.10-live-server-amd64.iso", sha256: "bb");
+        files.WriteAllText(dir + "ubuntu-24.04.10-live-server-amd64.iso.sha256", "bb");
+        files.WithBinary(dir + "ubuntu-24.04.11-live-server-amd64.iso", sha256: "cc");
         await BuildAsync(builder);
         Assert.Contains("/mnt/c/ProgramData/Construct/service/iso/ubuntu-24.04.10-live-server-amd64.iso", runner[0].Arguments);
+
+        // Changed since its download: refused, not used.
+        files.WithBinary(dir + "ubuntu-24.04.10-live-server-amd64.iso", sha256: "changed");
+        var changed = await Assert.ThrowsAsync<IsoBuildException>(() => BuildAsync(builder, vmName: "other-vm"));
+        Assert.Single(runner.Calls);
+        Assert.Contains("checksum", changed.Detail, StringComparison.OrdinalIgnoreCase);
     }
 
     [Theory]

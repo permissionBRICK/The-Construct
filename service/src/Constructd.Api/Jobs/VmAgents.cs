@@ -74,6 +74,10 @@ public sealed partial class VmAgents(IHostConfigStore config, ChangeFeed changes
                     lost.Add(new(agent.Tool, at));
             }
 
+            // While a job holds the VM an agent the report leaves out (its check did not answer mid-provision) keeps what
+            // was known of it, so a sign-in lost after the job is still told from the one before.
+            if (busy && before is not null)
+                now.AddRange(before.Agents.Where(a => now.All(n => n.Tool != a.Tool)));
             lost.RemoveAll(l => now.All(a => a.Tool != l.Tool));
             await WriteAsync(vm, new VmAgentsReport(vm.Created, at, now, lost), before, ct);
         }

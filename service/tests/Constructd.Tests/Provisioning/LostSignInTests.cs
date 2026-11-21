@@ -86,6 +86,21 @@ public sealed class LostSignInTests
     }
 
     [Fact]
+    public async Task An_agent_a_report_leaves_out_during_a_job_keeps_its_sign_in_so_a_loss_after_the_job_is_still_told()
+    {
+        await using var h = await ProvisionHarness.StartAsync();
+        await ReportAsync(h, ("claude", true), ("codex", true));
+
+        // Mid-provision Claude's check does not answer: the report names Codex only.
+        await using (await h.App.Service<IVmOperationGate>().AcquireAsync(ProvisionHarness.Vm, "job-1", default))
+            await ReportAsync(h, ("codex", true));
+        Assert.Equal(true, (await AgentAsync(h, "claude")).SignedIn);
+
+        await ReportAsync(h, ("claude", false), ("codex", true));
+        Assert.Equal("claude-code", Assert.Single(await NoticesAsync(h.Client)).Agent);
+    }
+
+    [Fact]
     public async Task A_dismissed_notice_stays_away_until_the_agent_was_signed_in_and_lost_again()
     {
         await using var h = await ProvisionHarness.StartAsync();
