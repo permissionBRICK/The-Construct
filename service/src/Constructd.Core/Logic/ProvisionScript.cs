@@ -203,10 +203,12 @@ public static partial class ProvisionScript
 
     /// <summary>
     /// The guest's agent report (the coding agents, their versions and sign-in checks) printed as JSON instead of sent:
-    /// the installed usage report's, else the repository's copy.
+    /// the installed usage report's, else the repository's copy. A guest whose script predates <c>--agents</c> runs
+    /// nothing (it would run its whole usage report instead) and the timer reports.
     /// </summary>
     public const string AgentReportCommand =
-        "s=/usr/local/bin/construct-usage-report.sh; [ -x \"$s\" ] || s=" + RepoDir + "/bin/construct-usage-report.sh; [ -f \"$s\" ] && bash \"$s\" --agents";
+        "s=/usr/local/bin/construct-usage-report.sh; [ -x \"$s\" ] || s=" + RepoDir + "/bin/construct-usage-report.sh; " +
+        "grep -q -e '--agents' \"$s\" 2>/dev/null && bash \"$s\" --agents";
 
     /// <summary>The PowerShell's final step: strip the bootstrap key (root path only) and reboot in the background.</summary>
     public static string RebootCommand(string? bootstrapPublicKey, string seedUser)
