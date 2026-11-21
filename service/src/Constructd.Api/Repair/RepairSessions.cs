@@ -63,6 +63,9 @@ public sealed class RepairSession
 
     public RepairAgentInfo? Agent { get; internal set; }
 
+    /// <summary>The T3 Code thread the repair runs in (the start line named it), or null for an agent run directly.</summary>
+    public RepairT3Thread? T3Thread => Agent?.T3Thread;
+
     /// <summary>The retry the engine started after a fix, if any.</summary>
     public string? RetryJobId { get; internal set; }
 
@@ -88,6 +91,8 @@ public sealed class RepairRefusedException(int status, string code, string messa
 /// The repair sessions, one at a time per VM (design 11.5, S26). A session starts when a
 /// <c>provision</c>, <c>reinstall</c> or <c>restore</c> job fails with failed guest steps (unless the host's
 /// <c>repair.auto</c> is off) or by request; it runs <c>bin/construct-repair-agent.sh</c> on the VM over SSH,
+/// which starts a T3 Code thread in the VM and follows it (or, with <c>repair.chat</c> or without T3 Code there,
+/// runs the agent directly),
 /// keeps its last <see cref="RepairScript.MaxLines"/> lines, and announces itself on the change stream
 /// (<c>repair.started</c>, <c>repair.output</c> at most once a second, <c>repair.ended</c>). A job that takes
 /// the VM's operation gate ends the session first (<see cref="RepairAwareVmOperationGate"/>), so a repair and
@@ -120,8 +125,10 @@ public sealed class RepairSessions(IServiceProvider services, InMemoryVmOperatio
         Latest(vm) is { } session && string.Equals(session.Id, id, StringComparison.Ordinal) ? session : null;
 
     /// <summary>Whether a job's failure may start a repair by itself.</summary>
-    public async Task<bool> AutomaticAsync(CancellationToken ct) =>
-        (await config.GetAsync<RepairConfig>("repair", ct) ?? HostAdminDefaults.Repair).Auto;
+    public async Task<bool> AutomaticAsync(CancellationToken ct) => (await ConfigAsync(ct)).Auto;
+
+    private async Task<RepairConfig> ConfigAsync(CancellationToken ct) =>
+        await config.GetAsync<RepairConfig>("repair", ct) ?? HostAdminDefaults.Repair;
 
     /// <summary>Called for each job that ended: starts the repair of a failed lifecycle job when the host allows it.</summary>
     public async Task OnJobEndedAsync(string jobId, CancellationToken ct)
@@ -158,6 +165,7 @@ public sealed class RepairSessions(IServiceProvider services, InMemoryVmOperatio
             "The job did not fail in a step an agent on the VM can repair.");
         var target = await targets.ResolveAsync(vm, ct)
             ?? throw new RepairRefusedException(409, "vm-endpoint-unknown", "The VM has no SSH endpoint the engine can dial.");
+        var inT3 = !(await ConfigAsync(ct)).Chat;
 
         var id = Guid.NewGuid().ToString("n");
         IAsyncDisposable? gate;
@@ -188,7 +196,7 @@ public sealed class RepairSessions(IServiceProvider services, InMemoryVmOperatio
             _byVm[vm.Name] = session;
             changes.Publish("repair.started", session.Id, session.Vm, session.Owner);
             var rebooted = RepairScript.Rebooted(failed.Result is null ? null : JsonSerializer.SerializeToElement(failed.Result, ApiJson.Options));
-            _ = Task.Run(() => RunAsync(session, RepairScript.StartCommand(id, prompt, target.IsRoot), rebooted), CancellationToken.None);
+            _ = Task.Run(() => RunAsync(session, RepairScript.StartCommand(id, prompt, target.IsRoot, inT3, failed.Kind), rebooted), CancellationToken.None);
             return session;
         }
     }
@@ -329,6 +337,8 @@ public sealed class RepairSessions(IServiceProvider services, InMemoryVmOperatio
         {
             if (line.Kind == "start" && RepairScript.AgentInfo(raw) is { } agent) session.Agent = agent;
             if (line.Kind == "turn" && session.State == RepairState.Working && line.Outcome != "fixed") session.State = RepairState.Waiting;
+            // A T3 Code thread runs again: the user answered it in T3 Code.
+            if (line.Kind == "run" && session.State == RepairState.Waiting) session.State = RepairState.Working;
         }
     }
 

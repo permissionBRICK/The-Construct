@@ -119,6 +119,7 @@
 .network.updatedAt:null
 .network:object
 .repair.auto:bool
+.repair.chat:bool
 .repair.source:string
 .repair.updatedAt:null
 .repair:object

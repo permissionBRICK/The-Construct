@@ -23,6 +23,32 @@ public sealed class RepairScriptTests
     }
 
     [Fact]
+    public void A_repair_in_t3_code_asks_the_script_for_a_thread_named_after_the_job_kind()
+    {
+        var b64 = Convert.ToBase64String(Encoding.UTF8.GetBytes("p"));
+        Assert.Equal($"bash -lc 'bash /opt/construct/repo/bin/construct-repair-agent.sh --session abc123 --prompt-b64 {b64} --via t3 --kind provision' 2>&1",
+            RepairScript.StartCommand("abc123", "p", connectedAsRoot: true, inT3: true, kind: JobKinds.Provision));
+        // The chat in Construct starts the script as before, which every guest's script knows.
+        Assert.Equal($"bash -lc 'bash /opt/construct/repo/bin/construct-repair-agent.sh --session abc123 --prompt-b64 {b64}' 2>&1",
+            RepairScript.StartCommand("abc123", "p", connectedAsRoot: true, inT3: false, kind: JobKinds.Provision));
+        Assert.Throws<ArgumentException>(() => RepairScript.StartCommand("abc123", "p", true, inT3: true, kind: "x y"));
+    }
+
+    [Fact]
+    public void The_start_line_of_a_t3_code_thread_names_the_thread_and_its_environment()
+    {
+        var info = RepairScript.AgentInfo("""{"type":"start","agent":"t3","via":"t3","thread":"thread:9f2%3A","environment":"6f1c0b9e-2d4a-4c55-9a41-0e2b7c1d5f60","title":"Construct repair: provision failed"}""");
+        Assert.Equal(new RepairT3Thread("6f1c0b9e-2d4a-4c55-9a41-0e2b7c1d5f60", "thread:9f2%3A", "Construct repair: provision failed"), info!.T3Thread);
+        Assert.Equal(("t3", "t3"), (info.Agent, info.Via));
+        // No environment: the thread is still named, T3 Code then opens without a link to it.
+        Assert.Equal(new RepairT3Thread(null, "t1", null), RepairScript.AgentInfo("""{"type":"start","agent":"t3","via":"t3","thread":"t1","environment":""}""")!.T3Thread);
+        // Ids that would leave a link's path segment are not taken.
+        Assert.Null(RepairScript.AgentInfo("""{"type":"start","agent":"t3","via":"t3","thread":"a/../b","environment":"e"}""")!.T3Thread);
+        Assert.Null(RepairScript.AgentInfo("""{"type":"start","agent":"t3","via":"t3","thread":"t1","environment":"e f"}""")!.T3Thread);
+        Assert.Null(RepairScript.AgentInfo("""{"type":"start","agent":"claude","via":"direct"}""")!.T3Thread);
+    }
+
+    [Fact]
     public void A_reply_is_one_json_line_whatever_it_holds()
     {
         var line = RepairScript.ReplyLine("two\nlines \"and\" 'quotes'");

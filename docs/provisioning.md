@@ -148,11 +148,14 @@ error) shows no prompt and no menu.
 On a host that provisions VMs itself (the engine), no one has to be at a console: the engine starts
 the same kind of agent on the VM by itself with `bin/construct-repair-agent.sh`, the headless
 counterpart of `construct-agent-fix.sh`. It reads the prompt in `config/repair-prompt.md` plus what
-failed, runs Claude Code (or Codex, or OpenCode, in the order `AI_TOOLS` names them) without
-question, plan or permission prompts, and reports what the agent says and
-does as JSON lines. The agent fixes what it can and asks in plain text only for a real choice, a
-trade-off or a suspected Construct bug; the user answers in the client under the failed job. When it
-says the cause is fixed, the engine runs the job again once. See `service/README.md`, *The repair agent*.
+failed and starts it as a T3 Code thread in the VM (project "Construct repair"), which the client's
+failed job opens in T3 Code; the user follows and answers it there. With the host setting
+`repair.chat`, or without a running T3 Code on the VM, it runs Claude Code (or Codex, or OpenCode, in
+the order `AI_TOOLS` names them) directly without question, plan or permission prompts, and the user
+answers in the client under the failed job. Either way the script reports what the agent says as
+JSON lines. The agent fixes what it can and asks in plain text only for a real choice, a trade-off or
+a suspected Construct bug. When it says the cause is fixed, the engine runs the job again once. See
+`service/README.md`, *The repair agent*.
 
 Signing in to the coding agents works the same way, without a console: the client's Sign in has the engine run
 `bin/construct-agent-sign-in.py <agent>` on the VM, which starts the agent's own sign-in under a pseudo-terminal
