@@ -100,6 +100,19 @@ public sealed class LegacyState
 
     // ---- the install folder ----
 
+    /// <summary>
+    /// The install folders that are the old client's own: inside its root (<c>%LOCALAPPDATA%\The-Construct</c>) and there.
+    /// An install named with <c>from</c> elsewhere (an extracted copy in Downloads) is the user's, and the move leaves it alone.
+    /// </summary>
+    public IEnumerable<string> OwnInstallFolders()
+    {
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Root)) + Path.DirectorySeparatorChar;
+        foreach (var folder in new[] { InstallFolder }.Concat(OtherInstallFolders))
+            if (folder is not null && Directory.Exists(folder)
+                && Path.GetFullPath(folder).StartsWith(root, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                yield return folder;
+    }
+
     /// <summary><c>.construct-settings.json</c> of the install folder, or an empty object.</summary>
     public JsonObject InstallSettings() => InstallFolder is null ? [] : ReadObject(Path.Combine(InstallFolder, ".construct-settings.json")) ?? [];
 

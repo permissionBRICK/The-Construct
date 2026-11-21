@@ -36,6 +36,12 @@ public sealed class AgentEngines(DeviceAgent agent) : IDeviceEngines
         using var request = new HttpRequestMessage(method, "api/v1/" + path);
         if (body is not null) request.Content = JsonContent.Create(body);
         agent.Stamp(engine, request.Headers);
+        return await SendAsync(http, request, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Sends one request to an engine: its JSON answer, or an <see cref="AgentFailure"/> with the engine's code.</summary>
+    internal static async Task<JsonNode?> SendAsync(HttpClient http, HttpRequestMessage request, CancellationToken ct)
+    {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(TimeSpan.FromSeconds(30));
         HttpResponseMessage response;
@@ -64,4 +70,25 @@ public sealed class AgentEngines(DeviceAgent agent) : IDeviceEngines
             catch (System.Text.Json.JsonException) { return null; }
         }
     }
+}
+
+/// <summary>
+/// One host reached with its pin and a token, outside the device's engines: the upgrade dialog asks a host of the old
+/// client before the engine step adds it (R1). The token stays in memory.
+/// </summary>
+internal sealed class PinnedEngine(string url, string pin, string token) : IDeviceEngines, IDisposable
+{
+    private readonly HttpClient _http = Engines.EngineHttp.Client(new Uri(url.TrimEnd('/') + "/"), pin, TimeSpan.FromSeconds(20));
+
+    public IReadOnlyList<EngineView> List() => [];
+
+    public async Task<JsonNode?> SendAsync(string engine, HttpMethod method, string path, JsonNode? body, CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(method, "api/v1/" + path);
+        if (body is not null) request.Content = JsonContent.Create(body);
+        request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+        return await AgentEngines.SendAsync(_http, request, ct).ConfigureAwait(false);
+    }
+
+    public void Dispose() => _http.Dispose();
 }
