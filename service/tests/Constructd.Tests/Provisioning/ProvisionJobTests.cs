@@ -235,6 +235,41 @@ public sealed class ProvisionJobTests
     }
 
     [Fact]
+    public async Task An_adopted_vm_is_provisioned_as_root_for_the_account_its_guest_names()
+    {
+        // FatPC test 2026-11-21: a VM adopted from the old client has no seed user; the engine reaches it as root with
+        // the key the adoption kept and keeps the account the old client made (SSH_USER), as the old client did.
+        var directory = Path.Combine(Path.GetTempPath(), "construct-provision-adopted-" + Guid.NewGuid().ToString("n"));
+        try
+        {
+            var ssh = new FakeSshRunner { GuestSeedUser = "legacy" };
+            await using var h = await ProvisionHarness.StartAsync(ssh, databasePath: Path.Combine(directory, "constructd.db"));
+            var key = Constructd.Api.Jobs.ProvisionTargets.AdoptedKeyPath(h.App.Service<Constructd.Core.Configuration.ConstructdOptions>(), ProvisionHarness.Vm);
+            Directory.CreateDirectory(Path.GetDirectoryName(key)!);
+            await File.WriteAllTextAsync(key, "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----\n");
+
+            // As the adoption stores it: no seed user (LegacyClientSettings.ToDesired).
+            var job = await h.RunAsync("click-1", new
+            {
+                projects = new[] { "default" },
+                settings = new { aiTools = "claude-code", t3Code = "true", serviceUrl = "https://host.test:8443", externalHost = "host.test", externalSshPort = 2201 },
+            });
+
+            Assert.True(JobState.Succeeded == job.State, job.Error);
+            Assert.All(ssh.Calls, c => Assert.Equal(("root", key), (c.Target.User, c.Target.IdentityFile)));
+            var commands = ssh.Commands.ToList();
+            Assert.Contains(commands, c => FakeSshRunner.Unwrap(c).Contains("chown -R legacy:legacy /opt/construct", StringComparison.Ordinal));
+            var provision = commands.Single(c => c.Contains("bin/provision.sh", StringComparison.Ordinal));
+            Assert.Equal("legacy", FakeSshRunner.Variable(provision, "SSH_USER"));
+            Assert.DoesNotContain(commands, c => c.StartsWith("sudo", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
     public async Task A_failed_copy_fails_the_copy_step()
     {
         await using var h = await ProvisionHarness.StartAsync(new FakeSshRunner { UnpackExit = 2 });

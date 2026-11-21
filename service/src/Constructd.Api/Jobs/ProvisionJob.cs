@@ -83,6 +83,16 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
 
             // ── copy ─────────────────────────────────────────────────────────────────
             await BeginAsync(context, "copy", cancel);
+            // A VM adopted from the old client (reached as root, no seed user recorded) keeps the account the old
+            // client made, as the old client asked the guest before each provision: SSH_USER, when it exists there.
+            if (run.Target.IsRoot && run.Desired.Desired.Settings.SeedUser is null &&
+                await GuestSeedUserAsync(context) is { } kept && kept != run.DefaultSeedUser)
+            {
+                run = run with { DefaultSeedUser = kept };
+                context.Run = run;
+                seedUser = kept;
+            }
+
             await RootAsync(context, "copy", "rm -f " + ProvisionScript.RemoteArchive, required: true);
             try { await ssh.CopyAsync(run.Target, tarPath, ProvisionScript.RemoteArchive, CancellationToken.None); }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -368,6 +378,14 @@ public sealed class ProvisionJob(ISshRunner ssh, ISourceCache sources, IVmApplie
         if (exit == 255 && !lines.Any(l => l == ProvisionScript.ResultStart))
             throw new ProvisionStepException(step, "ssh-failed", $"the guest could not be reached over SSH as {context.Run.Target.User}@{context.Run.Target.Host}:{context.Run.Target.Port}.");
         return new(exit, lines);
+    }
+
+    /// <summary>The account the guest names as its seed user (<c>SSH_USER</c>), when that account exists there.</summary>
+    private async Task<string?> GuestSeedUserAsync(Context context)
+    {
+        var read = await RootCommandAsync(context with { Quiet = true }, "copy", ProvisionScript.GuestSeedUserCommand, ShortTimeout);
+        var user = read.ExitCode == 0 ? read.Lines.Select(l => l.Trim()).FirstOrDefault(l => l.Length > 0) : null;
+        return user is not null && ProvisionScript.IsSafeUserName(user) ? user : null;
     }
 
     private async Task<GuestRun> RootAsync(Context context, string step, string command, bool required, string? input = null)

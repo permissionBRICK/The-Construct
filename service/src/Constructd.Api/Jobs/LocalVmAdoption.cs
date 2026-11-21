@@ -140,25 +140,35 @@ public static class LocalVmAdoption
 
         // The engine's own copy of the old client's key: ssh refuses a key file other accounts can
         // read, and the engine's data directory is only its own and the administrators'.
-        var data = Path.GetDirectoryName(Path.GetFullPath(options.DatabasePath))!;
-        var keyDir = Path.Combine(data, "ssh");
+        // Later jobs reach the VM with it too (ProvisionTargets): it has no seed user. Kept there only once it
+        // proved to reach this VM, so a failed attempt never replaces a key that works.
+        var keyFile = ProvisionTargets.AdoptedKeyPath(options, name);
+        var keyDir = Path.GetDirectoryName(keyFile)!;
         Directory.CreateDirectory(keyDir);
-        var keyFile = Path.Combine(keyDir, name + "_root");
-        await File.WriteAllTextAsync(keyFile, privateKey.Replace("\r\n", "\n", StringComparison.Ordinal).TrimEnd() + "\n", ct);
-        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(keyFile, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        var target = new SshTarget(endpoint.SshHost, endpoint.SshPort, "root", keyFile, Path.Combine(keyDir, "known_hosts"));
+        var trial = keyFile + ".trial";
+        await File.WriteAllTextAsync(trial, privateKey.Replace("\r\n", "\n", StringComparison.Ordinal).TrimEnd() + "\n", ct);
+        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(trial, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        var target = new SshTarget(endpoint.SshHost, endpoint.SshPort, "root", trial, Path.Combine(keyDir, "known_hosts"));
 
-        // The guest the key reached has to be this VM: its firmware id is the one Hyper-V reports. The coding agents it
-        // was provisioned with (AI_TOOLS in its config) follow, when it names them.
-        var identity = new Lines();
-        var read = await ssh.RunAsync(target, IdentityCommand, null, identity, TimeSpan.FromMinutes(2), ct);
-        if (read != 0 || identity.Items.Count is not (2 or 3)) throw new VmAdoptionException("guest", $"Could not read the guest's identity over SSH (exit {read}).");
-        var machineId = identity.Items[0].Trim();
-        if (!Guid.TryParse(identity.Items[1].Trim(), out var guestFirmware) || !Guid.TryParse(facts.FirmwareId, out var vmFirmware) ||
-            guestFirmware == Guid.Empty || guestFirmware != vmFirmware)
-            throw new VmAdoptionException("guest", "The guest reached over SSH is not this Hyper-V VM; nothing was changed in it.");
-        progress.Report("The guest's firmware id matches the Hyper-V VM");
-        return new ReachedGuest(target, machineId, identity.Items.Count == 3 ? CodingAgents.FromAiTools(identity.Items[2]) : null);
+        try
+        {
+            // The guest the key reached has to be this VM: its firmware id is the one Hyper-V reports. The coding agents it
+            // was provisioned with (AI_TOOLS in its config) follow, when it names them.
+            var identity = new Lines();
+            var read = await ssh.RunAsync(target, IdentityCommand, null, identity, TimeSpan.FromMinutes(2), ct);
+            if (read != 0 || identity.Items.Count is not (2 or 3)) throw new VmAdoptionException("guest", $"Could not read the guest's identity over SSH (exit {read}).");
+            var machineId = identity.Items[0].Trim();
+            if (!Guid.TryParse(identity.Items[1].Trim(), out var guestFirmware) || !Guid.TryParse(facts.FirmwareId, out var vmFirmware) ||
+                guestFirmware == Guid.Empty || guestFirmware != vmFirmware)
+                throw new VmAdoptionException("guest", "The guest reached over SSH is not this Hyper-V VM; nothing was changed in it.");
+            progress.Report("The guest's firmware id matches the Hyper-V VM");
+            File.Move(trial, keyFile, overwrite: true);
+            return new ReachedGuest(target with { IdentityFile = keyFile }, machineId, identity.Items.Count == 3 ? CodingAgents.FromAiTools(identity.Items[2]) : null);
+        }
+        finally
+        {
+            File.Delete(trial);
+        }
     }
 
     public const string IdentityCommand =
